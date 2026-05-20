@@ -40,7 +40,7 @@ type netAdapterEntry struct {
 // and returns those whose Name or InterfaceDescription contains "Wendy"
 // (case-insensitive), matching the linux/darwin filter convention.
 func discoverEthernet(ctx context.Context) ([]models.EthernetInterface, error) {
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", netAdapterPowershell)
+	cmd := exec.CommandContext(ctx, powershellExe, "-NoProfile", "-NonInteractive", "-Command", netAdapterPowershell)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("running Get-NetAdapter: %w", err)

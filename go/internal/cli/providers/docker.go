@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/models"
 )
 
@@ -267,6 +268,9 @@ func (p *DockerProvider) Run(ctx context.Context, app *BuiltApp, detach bool, ou
 	}
 
 	args := []string{"run", "--name", bc.ContainerName, "--label", "wendy.managed=true"}
+	for k, v := range appconfig.BuildEntitlementAnnotations(app.Entitlements) {
+		args = append(args, "--label", k+"="+v)
+	}
 	if detach {
 		args = append(args, "-d")
 	}

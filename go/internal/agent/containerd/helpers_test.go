@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -191,7 +192,7 @@ func TestGCTimestamp_IsUTC(t *testing.T) {
 }
 
 func TestWendyLabels_Basic(t *testing.T) {
-	labels := wendyLabels("myapp", "1.0.0", nil, 0)
+	labels := wendyLabels("myapp", "1.0.0", nil, nil)
 
 	if v, ok := labels[labelKeyAppVersion]; !ok {
 		t.Error("missing app version label")
@@ -207,7 +208,7 @@ func TestWendyLabels_Basic(t *testing.T) {
 
 func TestWendyLabels_WithRestartPolicyUnlessStopped(t *testing.T) {
 	rp := &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_UNLESS_STOPPED}
-	labels := wendyLabels("app", "2.0", rp, 0)
+	labels := wendyLabels("app", "2.0", rp, nil)
 
 	if v, ok := labels[labelKeyRestartPolicy]; !ok {
 		t.Error("missing restart policy label")
@@ -221,7 +222,7 @@ func TestWendyLabels_WithRestartPolicyOnFailure(t *testing.T) {
 		Mode:                agentpb.RestartPolicyMode_ON_FAILURE,
 		OnFailureMaxRetries: 3,
 	}
-	labels := wendyLabels("app", "1.0", rp, 0)
+	labels := wendyLabels("app", "1.0", rp, nil)
 
 	if v := labels[labelKeyRestartPolicy]; v != "on-failure:3" {
 		t.Errorf("restart policy = %q; want %q", v, "on-failure:3")
@@ -230,7 +231,7 @@ func TestWendyLabels_WithRestartPolicyOnFailure(t *testing.T) {
 
 func TestWendyLabels_WithRestartPolicyNo(t *testing.T) {
 	rp := &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_NO}
-	labels := wendyLabels("app", "1.0", rp, 0)
+	labels := wendyLabels("app", "1.0", rp, nil)
 
 	if v := labels[labelKeyRestartPolicy]; v != "no" {
 		t.Errorf("restart policy = %q; want %q", v, "no")
@@ -239,15 +240,16 @@ func TestWendyLabels_WithRestartPolicyNo(t *testing.T) {
 
 func TestWendyLabels_WithRestartPolicyDefault(t *testing.T) {
 	rp := &agentpb.RestartPolicy{Mode: agentpb.RestartPolicyMode_DEFAULT}
-	labels := wendyLabels("app", "1.0", rp, 0)
+	labels := wendyLabels("app", "1.0", rp, nil)
 
 	if v := labels[labelKeyRestartPolicy]; v != "unless-stopped" {
 		t.Errorf("restart policy = %q; want %q (DEFAULT maps to unless-stopped)", v, "unless-stopped")
 	}
 }
 
-func TestWendyLabels_WithMCPPort(t *testing.T) {
-	labels := wendyLabels("app", "1.0", nil, 3000)
+func TestWendyLabels_WithMCPEntitlement(t *testing.T) {
+	entitlements := []appconfig.Entitlement{{Type: appconfig.EntitlementMCP, Port: 3000}}
+	labels := wendyLabels("app", "1.0", nil, entitlements)
 	if v, ok := labels[labelKeyMCPPort]; !ok {
 		t.Error("missing mcp port label")
 	} else if v != "3000" {
@@ -256,9 +258,64 @@ func TestWendyLabels_WithMCPPort(t *testing.T) {
 }
 
 func TestWendyLabels_WithMCPPortZero(t *testing.T) {
-	labels := wendyLabels("app", "1.0", nil, 0)
+	entitlements := []appconfig.Entitlement{{Type: appconfig.EntitlementMCP, Port: 0}}
+	labels := wendyLabels("app", "1.0", nil, entitlements)
 	if _, ok := labels[labelKeyMCPPort]; ok {
 		t.Error("should not have mcp port label when port is 0")
+	}
+}
+
+func TestWendyLabels_EntitlementsStoredAsKeyValue(t *testing.T) {
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementNetwork, Mode: "host"},
+		{Type: appconfig.EntitlementGPU},
+	}
+	labels := wendyLabels("app", "1.0", nil, entitlements)
+
+	cases := []struct {
+		key     string
+		wantVal string
+	}{
+		{appconfig.EntitlementAnnotationKeyPrefix + appconfig.EntitlementNetwork, "mode=host"},
+		{appconfig.EntitlementAnnotationKeyPrefix + appconfig.EntitlementGPU, ""},
+	}
+	for _, tc := range cases {
+		raw, ok := labels[tc.key]
+		if !ok {
+			t.Fatalf("missing entitlement label %q", tc.key)
+		}
+		if raw != tc.wantVal {
+			t.Errorf("%q value = %q; want %q", tc.key, raw, tc.wantVal)
+		}
+	}
+}
+
+func TestWendyLabels_DuplicateEntitlementType(t *testing.T) {
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementPersist, Name: "data", Path: "/data"},
+		{Type: appconfig.EntitlementPersist, Name: "logs", Path: "/logs"},
+	}
+	labels := wendyLabels("app", "1.0", nil, entitlements)
+
+	for i, want := range entitlements {
+		key := fmt.Sprintf("%s%s.%d", appconfig.EntitlementAnnotationKeyPrefix, appconfig.EntitlementPersist, i)
+		raw, ok := labels[key]
+		if !ok {
+			t.Fatalf("missing entitlement label %q", key)
+		}
+		got := appconfig.ParseEntitlementAnnotation(appconfig.EntitlementPersist, raw)
+		if got.Name != want.Name || got.Path != want.Path {
+			t.Errorf("%q: got name=%q path=%q; want name=%q path=%q", key, got.Name, got.Path, want.Name, want.Path)
+		}
+	}
+}
+
+func TestWendyLabels_NoEntitlementsLabel(t *testing.T) {
+	labels := wendyLabels("app", "1.0", nil, nil)
+	for k := range labels {
+		if strings.HasPrefix(k, appconfig.EntitlementAnnotationKeyPrefix) {
+			t.Errorf("should not have entitlement label when entitlements are empty, got %q", k)
+		}
 	}
 }
 
@@ -274,5 +331,87 @@ func TestRestartPolicyToLabel_OnFailureNoRetries(t *testing.T) {
 	got := restartPolicyToLabel(rp)
 	if got != "on-failure" {
 		t.Errorf("restartPolicyToLabel = %q; want %q", got, "on-failure")
+	}
+}
+
+func TestParseEntitlementsFromAnnotations_Single(t *testing.T) {
+	annotations := map[string]string{
+		"sh.wendy/entitlement.network": "mode=host",
+		"sh.wendy/entitlement.gpu":     "",
+	}
+	got := parseEntitlementsFromAnnotations(annotations)
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 entitlements, got %d", len(got))
+	}
+	// Sorted alphabetically: gpu, network.
+	if got[0].Type != appconfig.EntitlementGPU {
+		t.Errorf("got[0].Type = %q; want %q", got[0].Type, appconfig.EntitlementGPU)
+	}
+	if got[1].Type != appconfig.EntitlementNetwork || got[1].Mode != "host" {
+		t.Errorf("got[1] = %+v; want type=network mode=host", got[1])
+	}
+}
+
+func TestParseEntitlementsFromAnnotations_MultipleOfSameType(t *testing.T) {
+	annotations := map[string]string{
+		"sh.wendy/entitlement.persist.0": "name=data,path=/data",
+		"sh.wendy/entitlement.persist.1": "name=logs,path=/logs",
+	}
+	got := parseEntitlementsFromAnnotations(annotations)
+
+	if len(got) != 2 {
+		t.Fatalf("want 2 entitlements, got %d", len(got))
+	}
+	if got[0].Name != "data" || got[0].Path != "/data" {
+		t.Errorf("got[0] = %+v; want name=data path=/data", got[0])
+	}
+	if got[1].Name != "logs" || got[1].Path != "/logs" {
+		t.Errorf("got[1] = %+v; want name=logs path=/logs", got[1])
+	}
+}
+
+func TestParseEntitlementsFromAnnotations_RoundTrip(t *testing.T) {
+	original := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementNetwork, Mode: "host"},
+		{Type: appconfig.EntitlementPersist, Name: "data", Path: "/data"},
+		{Type: appconfig.EntitlementPersist, Name: "logs", Path: "/logs"},
+		{Type: appconfig.EntitlementGPU},
+	}
+
+	labels := wendyLabels("app", "1.0", nil, original)
+	annotations := make(map[string]string)
+	for k, v := range labels {
+		if strings.HasPrefix(k, appconfig.EntitlementAnnotationKeyPrefix) {
+			annotations[k] = v
+		}
+	}
+
+	parsed := parseEntitlementsFromAnnotations(annotations)
+	if len(parsed) != len(original) {
+		t.Fatalf("round-trip: got %d entitlements, want %d", len(parsed), len(original))
+	}
+
+	byType := make(map[string][]appconfig.Entitlement)
+	for _, e := range parsed {
+		byType[e.Type] = append(byType[e.Type], e)
+	}
+	if len(byType[appconfig.EntitlementNetwork]) != 1 || byType[appconfig.EntitlementNetwork][0].Mode != "host" {
+		t.Errorf("network entitlement round-trip failed: %+v", byType[appconfig.EntitlementNetwork])
+	}
+	if len(byType[appconfig.EntitlementPersist]) != 2 {
+		t.Errorf("persist entitlement round-trip failed: %+v", byType[appconfig.EntitlementPersist])
+	}
+	if len(byType[appconfig.EntitlementGPU]) != 1 {
+		t.Errorf("gpu entitlement round-trip failed: %+v", byType[appconfig.EntitlementGPU])
+	}
+}
+
+func TestParseEntitlementsFromAnnotations_Empty(t *testing.T) {
+	if got := parseEntitlementsFromAnnotations(nil); len(got) != 0 {
+		t.Errorf("nil annotations: want empty, got %v", got)
+	}
+	if got := parseEntitlementsFromAnnotations(map[string]string{"unrelated": "value"}); len(got) != 0 {
+		t.Errorf("unrelated annotations: want empty, got %v", got)
 	}
 }

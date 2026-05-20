@@ -497,8 +497,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return fmt.Errorf("reading wendy.json warnings: %w", err)
 	}
 
-	// Debug mode requires host networking for remote debugger access
-	// (gdb/lldb for native apps, debugpy for Python apps).
+	// Debug mode requires host networking for remote debugger access.
 	if opts.debug {
 		appCfg.Debug = true
 		foundNetwork := false
@@ -529,7 +528,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 
 	// Provider-based run path.
 	if target.External != nil && target.Provider != nil {
-		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, opts)
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, appCfg.AppID, appCfg.Entitlements, opts)
 	}
 
 	// Devices without a reachable WendyOS agent can't execute containers.
@@ -570,7 +569,8 @@ func runComposeCommand(ctx context.Context, cwd string, opts runOptions) error {
 
 	if target.External != nil && target.Provider != nil {
 		// Docker Desktop provider: use docker compose directly.
-		return runWithProvider(ctx, target.Provider, *target.External, cwd, filepath.Base(cwd), opts)
+		// Compose projects have no wendy.json, so entitlements are nil.
+		return runWithProvider(ctx, target.Provider, *target.External, cwd, filepath.Base(cwd), nil, opts)
 	}
 
 	if target.Agent == nil {
@@ -743,7 +743,6 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	if err != nil {
 		return fmt.Errorf("marshaling app config: %w", err)
 	}
-
 	restartPolicy := resolveRestartPolicy(opts)
 
 	createReq := &agentpb.CreateContainerRequest{
@@ -934,7 +933,7 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 }
 
 // runWithProvider builds and runs via an external device provider.
-func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
+func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, entitlements []appconfig.Entitlement, opts runOptions) error {
 	projectType, err := resolveRunProjectType(projectPath, opts.buildType)
 	if err != nil {
 		return err
@@ -998,6 +997,7 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 		}
 	}
 
+	app.Entitlements = entitlements
 	cliLogln("Build completed.")
 
 	if opts.deploy {
@@ -1129,10 +1129,12 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	case "python":
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
 			cliLogln("No Dockerfile found. Generating one for Python project...")
-			if _, genErr := generatePythonDockerfile(cwd); genErr != nil {
+			if _, genErr := generatePythonDockerfile(cwd, opts.debug); genErr != nil {
 				return fmt.Errorf("generating Dockerfile: %w", genErr)
 			}
 			cliLogln("Generated Dockerfile.")
+		} else if opts.debug {
+			cliLogln("Note: --debug requires debugpy in the container image. Ensure your Dockerfile installs debugpy (e.g. RUN pip install debugpy).")
 		}
 	case "swift":
 		// Dockerfile exists; use the Docker build path.
@@ -1190,14 +1192,6 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	cliLogln("Build and push completed.")
 
-	// Inject debugpy for Python remote debugging.
-	if opts.debug && appCfg.Language == "python" {
-		cliLogln("Injecting debugpy for remote debugging...")
-		if err := injectDebugpy(ctx, registryAddr, registryImage, platform, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
-			return fmt.Errorf("injecting debugpy: %w", err)
-		}
-	}
-
 	// The agent pulls from localhost:<regPort>.
 	deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, repo)
 
@@ -1205,7 +1199,6 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	if err != nil {
 		return fmt.Errorf("marshaling app config: %w", err)
 	}
-
 	restartPolicy := resolveRestartPolicy(opts)
 
 	createReq := &agentpb.CreateContainerRequest{

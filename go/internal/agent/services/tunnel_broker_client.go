@@ -250,7 +250,6 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 	// gRPC -> TCP
 	go func() {
 		defer func() { done <- struct{}{} }()
-		defer tcpConn.Close()
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
@@ -262,6 +261,8 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 				}
 			}
 			if msg.HalfClose {
+				// Half-close: only close the write side so the TCP->gRPC
+				// goroutine can still read and forward the backend response.
 				if tc, ok := tcpConn.(*net.TCPConn); ok {
 					_ = tc.CloseWrite()
 				}

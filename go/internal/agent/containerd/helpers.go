@@ -4,13 +4,16 @@ package containerd
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/distribution/reference"
 
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -97,7 +100,7 @@ func gcTimestamp() string {
 
 // wendyLabels builds the standard set of containerd labels for a Wendy-managed
 // container. These labels are used to identify, filter, and manage containers.
-func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, mcpPort uint32) map[string]string {
+func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, entitlements []appconfig.Entitlement) map[string]string {
 	labels := map[string]string{
 		labelKeyAppVersion: version,
 	}
@@ -109,11 +112,82 @@ func wendyLabels(appName, version string, restartPolicy *agentpb.RestartPolicy, 
 		}
 	}
 
-	if mcpPort > 0 {
-		labels[labelKeyMCPPort] = strconv.FormatUint(uint64(mcpPort), 10)
+	for _, e := range entitlements {
+		if e.Type == appconfig.EntitlementMCP && e.Port > 0 {
+			labels[labelKeyMCPPort] = strconv.FormatUint(uint64(e.Port), 10)
+			break
+		}
+	}
+
+	for k, v := range appconfig.BuildEntitlementAnnotations(entitlements) {
+		labels[k] = v
 	}
 
 	return labels
+}
+
+// parseEntitlementsFromAnnotations reconstructs an entitlement list from OCI
+// manifest annotations or containerd container labels. It is the inverse of
+// buildEntitlementAnnotations / wendyLabels.
+// Keys have the form sh.wendy/entitlement.<type> (single) or
+// sh.wendy/entitlement.<type>.<index> (multiple of the same type). Values use
+// the comma-separated key=value format produced by appconfig.EntitlementAnnotationValue.
+func parseEntitlementsFromAnnotations(annotations map[string]string) []appconfig.Entitlement {
+	type indexedEnt struct {
+		entType string
+		idx     int
+		ent     appconfig.Entitlement
+	}
+
+	var indexed []indexedEnt
+	for k, v := range annotations {
+		if !strings.HasPrefix(k, appconfig.EntitlementAnnotationKeyPrefix) {
+			continue
+		}
+		suffix := k[len(appconfig.EntitlementAnnotationKeyPrefix):]
+
+		entType := suffix
+		idx := 0
+		if dot := strings.LastIndex(suffix, "."); dot >= 0 {
+			if n, err := strconv.Atoi(suffix[dot+1:]); err == nil {
+				entType = suffix[:dot]
+				idx = n
+			}
+		}
+
+		indexed = append(indexed, indexedEnt{
+			entType: entType,
+			idx:     idx,
+			ent:     parseEntitlementValue(entType, v),
+		})
+	}
+
+	sort.Slice(indexed, func(i, j int) bool {
+		if indexed[i].entType != indexed[j].entType {
+			return indexed[i].entType < indexed[j].entType
+		}
+		return indexed[i].idx < indexed[j].idx
+	})
+
+	result := make([]appconfig.Entitlement, len(indexed))
+	for i, ie := range indexed {
+		result[i] = ie.ent
+	}
+	return result
+}
+
+// parseEntitlementValue parses a single entitlement annotation value. It
+// accepts both the current JSON format ({"mode":"host"}) and the legacy
+// comma-separated format (mode=host) for backward compatibility.
+func parseEntitlementValue(entType, value string) appconfig.Entitlement {
+	if len(value) > 0 && value[0] == '{' {
+		var ent appconfig.Entitlement
+		if err := json.Unmarshal([]byte(value), &ent); err == nil {
+			ent.Type = entType
+			return ent
+		}
+	}
+	return appconfig.ParseEntitlementAnnotation(entType, value)
 }
 
 // restartPolicyToLabel converts a protobuf RestartPolicy to a label string.

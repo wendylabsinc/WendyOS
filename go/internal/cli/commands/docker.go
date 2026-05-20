@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -165,25 +164,10 @@ func detectBuildOptions(dir string) []BuildOption {
 	return options
 }
 
-// injectDebugpy builds a wrapper image on top of the given image that installs debugpy.
-func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform string, buildArgs map[string]string, streamOutput io.Writer, useMTLS bool) error {
-	tmpDir, err := os.MkdirTemp("", "wendy-debugpy-*")
-	if err != nil {
-		return fmt.Errorf("creating temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	dockerfile := fmt.Sprintf("FROM %s\nUSER root\nRUN pip install debugpy\n", registryImage)
-	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
-		return fmt.Errorf("writing debugpy Dockerfile: %w", err)
-	}
-
-	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, buildArgs, streamOutput, useMTLS)
-}
-
 // generatePythonDockerfile creates a Dockerfile for Python projects that do not already have one.
-// It returns the path to the generated Dockerfile.
-func generatePythonDockerfile(dir string) (string, error) {
+// It returns the path to the generated Dockerfile. When debug is true, debugpy is installed so
+// the agent can wrap the entrypoint with "-m debugpy" for remote debugging.
+func generatePythonDockerfile(dir string, debug bool) (string, error) {
 	dockerfilePath := filepath.Join(dir, "Dockerfile")
 
 	// Determine if requirements.txt exists.
@@ -208,6 +192,9 @@ func generatePythonDockerfile(dir string) (string, error) {
 		sb.WriteString("COPY requirements.txt .\n")
 		sb.WriteString("RUN pip install --no-cache-dir -r requirements.txt\n")
 	}
+	if debug {
+		sb.WriteString("RUN pip install --no-cache-dir debugpy\n")
+	}
 	sb.WriteString("COPY . .\n")
 	sb.WriteString(fmt.Sprintf("CMD [\"python\", \"%s\"]\n", entryPoint))
 
@@ -222,7 +209,7 @@ func generatePythonDockerfile(dir string) (string, error) {
 // directly to the device's registry using swift-container-plugin.
 // registryAddr is a pre-resolved host:port (e.g. "192.168.1.5:5000" or
 // "host.docker.internal:12345" when proxying).
-func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, useMTLS bool, toolchainStdout, toolchainStderr io.Writer) error {
+func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, architecture string, swiftUseMTLS bool, toolchainStdout, toolchainStderr io.Writer) error {
 	if err := ensureContainerPlugin(dir); err != nil {
 		return err
 	}
@@ -232,6 +219,8 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		return err
 	}
 
+	// registryAddr is always a plain-HTTP address: either the device's own
+	// unprovisioned registry or a local proxy that handles TLS on our behalf.
 	swiftArgs := []string{
 		"package",
 		"--swift-sdk=" + sdk,
@@ -242,10 +231,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 		"--repository=" + registryAddr + "/" + strings.ToLower(product),
 		"--architecture=" + architecture,
 	}
-
-	// Use insecure HTTP when the connection is not mTLS; the registry only
-	// speaks TLS when the device is provisioned and the CLI connected via mTLS.
-	if !useMTLS {
+	if !swiftUseMTLS {
 		swiftArgs = append(swiftArgs, "--allow-insecure-http=destination")
 	}
 
@@ -922,47 +908,30 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 	// Public images (e.g. python:3.11-slim) need no credentials; anonymous
 	// pull works fine with an empty auths map.
 	//
-	// We only replace config.json; everything else (cli-plugins, buildx builder
-	// instances, contexts) is linked from the original Docker config so that
-	// buildx and the "wendy" builder remain discoverable.
-	origDockerConfig := os.Getenv("DOCKER_CONFIG")
-	if origDockerConfig == "" {
-		origDockerConfig = filepath.Join(home, ".docker")
-	}
-	cleanDockerConfigDir := filepath.Join(userCache, "wendy", "docker-config")
-	if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
-		return fmt.Errorf("creating clean docker config directory: %w", err)
-	}
-	cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
-	if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
-		return fmt.Errorf("writing clean docker config: %w", err)
-	}
-	// Link subdirs that docker/buildx need to find plugins and builder state.
-	// On Windows os.Symlink requires Developer Mode or admin, so linkOrCopyDir
-	// falls back to a native directory junction and finally to copying.
-	//
-	// Symlinks and junctions transparently follow source updates, so we keep
-	// them across builds. A real (copied) directory is a snapshot that would
-	// go stale if the source changes (new builder, updated cli-plugin); refresh
-	// it on every build by removing it before relinking. Go reports junctions
-	// with ModeSymlink on Windows, so the same check works on both platforms.
-	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
-		src := filepath.Join(origDockerConfig, subdir)
-		dst := filepath.Join(cleanDockerConfigDir, subdir)
-		if _, err := os.Stat(src); err != nil {
-			continue
+	// On Windows, Docker Desktop's credential helper is always available and
+	// symlinks for builder-state lookup are unreliable in elevated processes,
+	// so we skip this override entirely and let docker use its normal config.
+	var cleanDockerConfigDir string
+	if runtime.GOOS != "windows" {
+		origDockerConfig := os.Getenv("DOCKER_CONFIG")
+		if origDockerConfig == "" {
+			origDockerConfig = filepath.Join(home, ".docker")
 		}
-		if info, err := os.Lstat(dst); err == nil {
-			if info.Mode()&fs.ModeSymlink != 0 {
-				continue
-			}
-			if err := os.RemoveAll(dst); err != nil {
-				fmt.Fprintf(os.Stderr, "[buildx] warning: refreshing %s in clean docker config failed: %v\n", subdir, err)
-				continue
-			}
+		cleanDockerConfigDir = filepath.Join(home, ".cache", "wendy", "docker-config")
+		if err := os.MkdirAll(cleanDockerConfigDir, 0o755); err != nil {
+			return fmt.Errorf("creating clean docker config directory: %w", err)
 		}
-		if err := linkOrCopyDir(src, dst); err != nil {
-			fmt.Fprintf(os.Stderr, "[buildx] warning: linking %s into clean docker config failed: %v\n", subdir, err)
+		cleanDockerConfigFile := filepath.Join(cleanDockerConfigDir, "config.json")
+		if err := os.WriteFile(cleanDockerConfigFile, []byte(`{"auths":{}}`), 0o644); err != nil {
+			return fmt.Errorf("writing clean docker config: %w", err)
+		}
+		// Symlink subdirs that docker/buildx need to find plugins and builder state.
+		for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+			dst := filepath.Join(cleanDockerConfigDir, subdir)
+			if _, err := os.Lstat(dst); err != nil {
+				// best-effort: ignore if source doesn't exist or symlink fails
+				_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+			}
 		}
 	}
 
@@ -1279,6 +1248,34 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 	srv := &http.Server{Handler: rp}
 	go func() { _ = srv.Serve(ln) }()
 	return &mtlsRegistryHTTPProxy{listener: ln, server: srv}, nil
+}
+
+// startMTLSRegistryProxy starts a local plain-TCP listener that tunnels each
+// accepted connection to target over mTLS using the CLI's client certificate.
+// This lets tools that cannot perform mTLS (e.g. swift-container-plugin) push
+// to provisioned devices through a localhost address with plain HTTP.
+func startMTLSRegistryProxy(ctx context.Context, target string) (*registryProxy, error) {
+	certInfo := loadCLICert()
+	if certInfo == nil {
+		return nil, fmt.Errorf("no CLI certificates available")
+	}
+	leafPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
+	if err != nil {
+		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
+	}
+	tlsCert, err := tls.X509KeyPair([]byte(leafPEM), []byte(certInfo.PemPrivateKey))
+	if err != nil {
+		return nil, fmt.Errorf("loading client certificate: %w", err)
+	}
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // device registries use self-signed certs; pinning is tracked separately
+		MinVersion:         tls.VersionTLS12,
+		Certificates:       []tls.Certificate{tlsCert},
+	}
+	dialer := &tls.Dialer{Config: tlsCfg}
+	return startRegistryProxyWithDialer(ctx, "127.0.0.1:0", func(ctx context.Context) (net.Conn, error) {
+		return dialer.DialContext(ctx, "tcp", target)
+	}, target)
 }
 
 // isLinkLocalIP reports whether the given IP string (possibly bracketed) is a

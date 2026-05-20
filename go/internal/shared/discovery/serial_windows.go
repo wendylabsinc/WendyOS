@@ -30,7 +30,7 @@ func ResolveESP32SerialPort() (string, error) {
 		vid, pid,
 	)
 
-	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+	cmd := exec.CommandContext(ctx, powershellExe, "-NoProfile", "-NonInteractive", "-Command", script)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("querying Win32_PnPEntity for ESP32 serial port: %w", err)

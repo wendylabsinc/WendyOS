@@ -407,20 +407,6 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		}
 	}
 
-	// Start D-Bus proxy if bluetooth entitlement is present.
-	var dbusProxyStarted bool
-	if c.proxyManager != nil && hasBluetooth(appCfg) {
-		if _, err := c.proxyManager.Start(ctx, appName); err != nil {
-			return fmt.Errorf("starting D-Bus proxy for %q: %w", appName, err)
-		}
-		dbusProxyStarted = true
-		defer func() {
-			if dbusProxyStarted {
-				_ = c.proxyManager.Stop(appName)
-			}
-		}()
-	}
-
 	// Try the local image store first. The device-local registry shares
 	// containerd's content store, so anything just pushed to it is already
 	// available via GetImage — pulling would just round-trip bytes over
@@ -444,6 +430,20 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		if err != nil {
 			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 		}
+	}
+
+	// Start D-Bus proxy if bluetooth entitlement is present.
+	var dbusProxyStarted bool
+	if c.proxyManager != nil && hasBluetooth(appCfg) {
+		if _, err := c.proxyManager.Start(ctx, appName); err != nil {
+			return fmt.Errorf("starting D-Bus proxy for %q: %w", appName, err)
+		}
+		dbusProxyStarted = true
+		defer func() {
+			if dbusProxyStarted {
+				_ = c.proxyManager.Stop(appName)
+			}
+		}()
 	}
 
 	// Unpack the image into the snapshotter if not already done.
@@ -529,15 +529,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 
 	report(&agentpb.CreateContainerProgress{Phase: agentpb.CreateContainerProgress_CREATING_CONTAINER})
 
-	// Build labels for the container.
-	var mcpPort uint32
-	for _, e := range appCfg.Entitlements {
-		if e.Type == appconfig.EntitlementMCP {
-			mcpPort = uint32(e.Port)
-			break
-		}
-	}
-	labels := wendyLabels(appName, version, req.GetRestartPolicy(), mcpPort)
+	labels := wendyLabels(appName, version, req.GetRestartPolicy(), appCfg.Entitlements)
 
 	// Serialize our custom OCI spec to JSON for WithSpecFromBytes.
 	specJSON, err := json.Marshal(spec)

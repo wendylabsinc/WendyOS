@@ -424,7 +424,7 @@ func buildPythonProject(dir, imageName, platform string) error {
 	generatedDockerfile := false
 	if _, err := os.Stat(dockerfilePath); os.IsNotExist(err) {
 		cliLogln("No Dockerfile found. Generating one for Python project...")
-		if _, genErr := generatePythonDockerfile(dir); genErr != nil {
+		if _, genErr := generatePythonDockerfile(dir, false); genErr != nil {
 			return fmt.Errorf("generating Dockerfile: %w", genErr)
 		}
 		generatedDockerfile = true

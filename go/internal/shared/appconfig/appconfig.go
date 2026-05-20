@@ -163,14 +163,15 @@ type PortMapping struct {
 
 // Entitlement represents a single entitlement entry in wendy.json.
 type Entitlement struct {
-	Type   string        `json:"type"`
-	Mode   string        `json:"mode,omitempty"`   // Network, Bluetooth, Video
-	Name   string        `json:"name,omitempty"`   // Persist
-	Path   string        `json:"path,omitempty"`   // Persist
-	Device string        `json:"device,omitempty"` // I2C
-	Pins   []int         `json:"pins,omitempty"`   // GPIO
-	Ports  []PortMapping `json:"ports,omitempty"`  // Network
-	Port   int           `json:"port,omitempty"`   // MCP
+	Type      string        `json:"type"`
+	Mode      string        `json:"mode,omitempty"`      // Network, Bluetooth, Video
+	Allowlist []string      `json:"allowlist,omitempty"` // Camera, Video
+	Name      string        `json:"name,omitempty"`      // Persist
+	Path      string        `json:"path,omitempty"`      // Persist
+	Device    string        `json:"device,omitempty"`    // I2C
+	Pins      []int         `json:"pins,omitempty"`      // GPIO
+	Ports     []PortMapping `json:"ports,omitempty"`     // Network
+	Port      int           `json:"port,omitempty"`      // MCP
 }
 
 // DeprecatedEntitlementReplacement reports the preferred replacement for a deprecated entitlement type.
