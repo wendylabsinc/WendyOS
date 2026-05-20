@@ -152,6 +152,7 @@ private struct ReportAggregateTestResult {
 
 private struct ReportTestObservation {
     var target: String
+    var route: TargetRoute
     var attempt: String
     var status: ReportTestStatus
 
@@ -507,6 +508,7 @@ private func loadAggregateTestResults(in aggregateURL: URL) throws -> [Aggregate
                     observations[pathKey, default: []].append(
                         ReportTestObservation(
                             target: targetName,
+                            route: try targetRoute(for: targetName, attemptURL: attemptURL),
                             attempt: attemptName,
                             status: status
                         )
@@ -1134,19 +1136,209 @@ private func renderObservations(_ observations: [ReportTestObservation]) -> Stri
     }
 
     var chunks: [String] = [
-        "<div class=\"test-body\"><section class=\"observations\" aria-label=\"Concrete observations\">",
-        "<div class=\"observation-row observation-header\"><span>Target</span><span>Attempt</span><span>Status</span><span>Duration</span></div>",
+        "<div class=\"test-body\"><section class=\"observations\" aria-label=\"Concrete observations\">"
     ]
     var previousTarget: String?
     for observation in observations.sorted(by: observationSort) {
-        let target = observation.target == previousTarget ? "" : observation.target
+        let isFirstTargetRow = observation.target != previousTarget
         previousTarget = observation.target
+        let target = isFirstTargetRow ? escapeHTML(observation.target) : ""
+        let route = isFirstTargetRow ? renderTargetRoute(observation.route, title: observation.target) : ""
         chunks.append(
-            "<div class=\"observation-row\"><span class=\"observation-target\">\(escapeHTML(target))</span><span class=\"observation-attempt\">\(escapeHTML(observation.attempt))</span><span class=\"badge \(observation.status.statusClass)\">\(observation.status.statusText)</span>\(observationDurationBadge(observation.duration))</div>"
+            "<div class=\"observation-row\"><span class=\"observation-target\">\(target)</span><span class=\"observation-route-cell\">\(route)</span><span class=\"observation-spacer\" aria-hidden=\"true\"></span><span class=\"observation-attempt\">\(escapeHTML(observation.attempt))</span><span class=\"badge \(observation.status.statusClass)\">\(observation.status.statusText)</span>\(observationDurationBadge(observation.duration))</div>"
         )
     }
     chunks.append("</section></div>")
     return chunks.joined(separator: "\n")
+}
+
+private func renderTargetRoute(_ route: TargetRoute, title: String) -> String {
+    guard let agent = route.agent else {
+        return "<span class=\"target-route\" title=\"\(escapeHTML(title))\">\(renderTargetLogo(route.cli))</span>"
+    }
+
+    return "<span class=\"target-route\" title=\"\(escapeHTML(title))\">\(renderTargetLogo(route.cli))<span class=\"target-route-arrow\" aria-hidden=\"true\">›</span>\(renderTargetLogo(agent))</span>"
+}
+
+private func targetRoute(for target: String, attemptURL: URL) throws -> TargetRoute {
+    let components = targetRouteComponents(for: target)
+    let info = try targetInfo(at: attemptURL)
+    let cliPlatform = info.cliOS.map(targetPlatformForOS) ?? targetPlatform(for: components.cli)
+    let agentPlatform = targetPlatformForAgent(
+        component: components.agent,
+        os: info.agentOS
+    )
+    return TargetRoute(cli: cliPlatform, agent: agentPlatform)
+}
+
+private func targetRouteComponents(for target: String) -> (cli: String, agent: String?) {
+    let separator = "-to-"
+    guard let range = target.range(of: separator) else {
+        return (target, nil)
+    }
+
+    return (String(target[..<range.lowerBound]), String(target[range.upperBound...]))
+}
+
+private func targetInfo(at attemptURL: URL) throws -> (cliOS: String?, agentOS: String?) {
+    let infoURL = attemptURL.appendingPathComponent("info.json")
+    guard FileManager.default.fileExists(atPath: infoURL.path) else {
+        return (nil, nil)
+    }
+
+    let data = try Data(contentsOf: infoURL)
+    guard
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let target = object["target"] as? [String: Any]
+    else {
+        return (nil, nil)
+    }
+
+    return (
+        nonEmptyString(target["cliOS"]),
+        nonEmptyString(target["agentOS"])
+    )
+}
+
+private func nonEmptyString(_ value: Any?) -> String? {
+    guard let string = value as? String, !string.isEmpty else {
+        return nil
+    }
+    return string
+}
+
+private func renderTargetLogo(_ platform: TargetPlatform) -> String {
+    "<span class=\"target-logo \(platform.cssClass)\" role=\"img\" aria-label=\"\(escapeHTML(platform.label))\">\(platform.symbol)</span>"
+}
+
+private func targetPlatformForAgent(component: String?, os: String?) -> TargetPlatform? {
+    guard component != nil || os != nil else {
+        return nil
+    }
+
+    if let component {
+        let hardwarePlatform = targetHardwarePlatform(for: component)
+        if hardwarePlatform != .unknown {
+            return hardwarePlatform
+        }
+    }
+    if let os {
+        return targetPlatformForOS(os)
+    }
+    if let component {
+        return targetPlatform(for: component)
+    }
+    return nil
+}
+
+private func targetPlatformForOS(_ value: String) -> TargetPlatform {
+    let normalized = value.lowercased()
+    if normalized.contains("macos") || normalized.contains("darwin") || normalized == "mac" {
+        return .apple
+    }
+    if normalized.contains("windows") || normalized == "win" {
+        return .windows
+    }
+    if normalized.contains("linux") || normalized.contains("ubuntu") || normalized.contains("debian")
+        || normalized.contains("wendyos")
+    {
+        return .linux
+    }
+    return .unknown
+}
+
+private func targetHardwarePlatform(for value: String) -> TargetPlatform {
+    let normalized = value.lowercased()
+    if normalized.contains("jetson") || normalized.contains("nvidia") {
+        return .nvidia
+    }
+    if normalized.contains("raspberry") || normalized.contains("raspi") {
+        return .raspberryPi
+    }
+    return .unknown
+}
+
+private func targetPlatform(for value: String) -> TargetPlatform {
+    let normalized = value.lowercased()
+    let hardwarePlatform = targetHardwarePlatform(for: value)
+    if hardwarePlatform != .unknown {
+        return hardwarePlatform
+    }
+    if normalized.contains("macos") || normalized.contains("darwin") || normalized.contains("mac") {
+        return .apple
+    }
+    if normalized.contains("windows") || normalized.contains("win") {
+        return .windows
+    }
+    if normalized.contains("linux") || normalized.contains("ubuntu") || normalized.contains("debian") {
+        return .linux
+    }
+    return .unknown
+}
+
+private struct TargetRoute {
+    var cli: TargetPlatform
+    var agent: TargetPlatform?
+}
+
+private enum TargetPlatform {
+    case apple
+    case linux
+    case nvidia
+    case raspberryPi
+    case windows
+    case unknown
+
+    var cssClass: String {
+        switch self {
+        case .apple:
+            return "apple"
+        case .linux:
+            return "linux"
+        case .nvidia:
+            return "nvidia"
+        case .raspberryPi:
+            return "raspberry-pi"
+        case .windows:
+            return "windows"
+        case .unknown:
+            return "unknown"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .apple:
+            return "Apple"
+        case .linux:
+            return "Linux"
+        case .nvidia:
+            return "NVIDIA Jetson"
+        case .raspberryPi:
+            return "Raspberry Pi"
+        case .windows:
+            return "Windows"
+        case .unknown:
+            return "Unknown target"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .apple:
+            return ""
+        case .linux:
+            return "🐧"
+        case .nvidia:
+            return "NV"
+        case .raspberryPi:
+            return "RPi"
+        case .windows:
+            return "⊞"
+        case .unknown:
+            return "?"
+        }
+    }
 }
 
 private func observationDurationBadge(_ duration: ReportTestDuration?) -> String {
