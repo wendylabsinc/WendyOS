@@ -1220,7 +1220,7 @@ private func renderTargetOutcomeBadges(_ counts: ReportTargetOutcomeCounts) -> S
 
     let includeCounts = buckets.count > 1 || (buckets.first?.count ?? 0) > 1
     return buckets.map { bucket in
-        let text = includeCounts ? "\(bucket.label) \(bucket.count)" : bucket.label
+        let text = includeCounts ? "\(bucket.label) (\(bucket.count))" : bucket.label
         return "<span class=\"badge \(bucket.className)\">\(text)</span>"
     }.joined()
 }
