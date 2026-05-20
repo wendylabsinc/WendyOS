@@ -128,40 +128,6 @@ public actor WendyE2ESession {
 
     // MARK: - Running Shell Commands
 
-    public func posixShell(_ command: String) async throws -> WendyE2EShellResult {
-        if self.verbose {
-            Self.printCommand(machine: self.machine.name, command: command)
-        }
-
-        let resetDirectories = self.resetDirectoriesForNextCommand()
-        let harnessPrefix = self.harnessPrefix(resetDirectories: resetDirectories)
-        let invocation = self.invocation(for: command, harnessPrefix: harnessPrefix)
-
-        return try await self.runShell(
-            command: command,
-            invocation: invocation,
-            harnessPrefix: harnessPrefix,
-            scriptShellName: Self.localShellName
-        )
-    }
-
-    public func powerShell(_ command: String) async throws -> WendyE2EShellResult {
-        if self.verbose {
-            Self.printCommand(machine: self.machine.name, command: command)
-        }
-
-        let resetDirectories = self.resetDirectoriesForNextCommand()
-        let harnessPrefix = self.powerShellHarnessPrefix(resetDirectories: resetDirectories)
-        let invocation = try self.powerShellInvocation(for: command, harnessPrefix: harnessPrefix)
-
-        return try await self.runShell(
-            command: command,
-            invocation: invocation,
-            harnessPrefix: harnessPrefix,
-            scriptShellName: Self.localPowerShellName
-        )
-    }
-
     public func sh(_ command: String) async throws {
         try await self.sh(posix: command, power: command)
     }
@@ -174,8 +140,9 @@ public actor WendyE2ESession {
     }
 
     public func sh(posix: String, power: String) async throws {
-        let result = try await self.defaultShell(posix: posix, power: power)
-        try result.requireSuccess()
+        try await self.sh(posix: posix, power: power) { result in
+            try result.requireSuccess()
+        }
     }
 
     public func sh<Result>(
@@ -183,7 +150,13 @@ public actor WendyE2ESession {
         power: String,
         body: @Sendable (_ result: WendyE2EShellResult) async throws -> Result
     ) async throws -> Result {
-        try await body(try await self.defaultShell(posix: posix, power: power))
+        let execution = try await self.runDefaultShell(posix: posix, power: power)
+        self.record(
+            execution.result,
+            harnessPrefix: execution.harnessPrefix,
+            scriptShellName: execution.scriptShellName
+        )
+        return try await body(execution.result)
     }
 
     public func pty(_ command: String) async throws {
@@ -197,15 +170,10 @@ public actor WendyE2ESession {
         try await self.pty(posix: command, power: command, body: body)
     }
 
-    // WARNING: The POSIX PTY implementation currently shells out to `script`.
-    // If parallel PTY runs become flaky/hang again, reintroduce the
-    // process-wide serializer from
-    // https://github.com/wendylabsinc/wendy-agent/commit/e8a448fa02e5d3ac9bf9c76282346e2092eab30a.
     public func pty(posix: String, power: String) async throws {
-        try await self.sh(
-            posix: Self.ptyPOSIXCommand(posix, os: self.machine.os),
-            power: Self.ptyPowerShellCommand(power, os: self.machine.os)
-        )
+        try await self.pty(posix: posix, power: power) { result in
+            try result.requireSuccess()
+        }
     }
 
     public func pty<Result>(
@@ -213,11 +181,13 @@ public actor WendyE2ESession {
         power: String,
         body: @Sendable (_ result: WendyE2EShellResult) async throws -> Result
     ) async throws -> Result {
-        try await self.sh(
-            posix: Self.ptyPOSIXCommand(posix, os: self.machine.os),
-            power: Self.ptyPowerShellCommand(power, os: self.machine.os),
-            body: body
+        let execution = try await self.runDefaultPTY(posix: posix, power: power)
+        self.record(
+            execution.result,
+            harnessPrefix: execution.harnessPrefix,
+            scriptShellName: execution.scriptShellName
         )
+        return try await body(execution.result)
     }
 
     // MARK: - Internal
@@ -265,13 +235,234 @@ public actor WendyE2ESession {
         return self.resetDirectoriesOnFirstCommand && !self.didRunCommand
     }
 
-    private func defaultShell(posix: String, power: String) async throws -> WendyE2EShellResult {
+    private func runDefaultShell(posix: String, power: String) async throws -> (
+        result: WendyE2EShellResult,
+        harnessPrefix: [String],
+        scriptShellName: String
+    ) {
         switch self.machine.os {
         case .windows:
-            try await self.powerShell(power)
+            if self.verbose {
+                Self.printCommand(machine: self.machine.name, command: power)
+            }
+            let resetDirectories = self.resetDirectoriesForNextCommand()
+            let harnessPrefix = self.powerShellHarnessPrefix(resetDirectories: resetDirectories)
+            let result = try await self.powerShell(power, harnessPrefix: harnessPrefix)
+            return (result, harnessPrefix, Self.localPowerShellName)
         case .macOS, .linux, .wendyOS:
-            try await self.posixShell(posix)
+            if self.verbose {
+                Self.printCommand(machine: self.machine.name, command: posix)
+            }
+            let resetDirectories = self.resetDirectoriesForNextCommand()
+            let harnessPrefix = self.harnessPrefix(resetDirectories: resetDirectories)
+            let result = try await self.posixShell(posix, harnessPrefix: harnessPrefix)
+            return (result, harnessPrefix, Self.localShellName)
         }
+    }
+
+    private func runDefaultPTY(posix: String, power: String) async throws -> (
+        result: WendyE2EShellResult,
+        harnessPrefix: [String],
+        scriptShellName: String
+    ) {
+        switch self.machine.os {
+        case .windows:
+            #if os(Windows)
+                if self.verbose {
+                    Self.printCommand(machine: self.machine.name, command: power)
+                }
+                let resetDirectories = self.resetDirectoriesForNextCommand()
+                let harnessPrefix = self.windowsCommandPromptHarnessPrefix(
+                    resetDirectories: resetDirectories
+                )
+                let result = try await self.powerPTY(power, harnessPrefix: harnessPrefix)
+                return (result, harnessPrefix, Self.lastPathComponent(Self.localCommandPromptPath))
+            #else
+                throw NSError(
+                    domain: "WendyE2ETesting.PTY",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Windows PTY execution is only available on Windows runners."]
+                )
+            #endif
+        case .macOS, .linux, .wendyOS:
+            if self.verbose {
+                Self.printCommand(machine: self.machine.name, command: posix)
+            }
+            let resetDirectories = self.resetDirectoriesForNextCommand()
+            let harnessPrefix = self.harnessPrefix(resetDirectories: resetDirectories)
+            let result = try await self.posixPTY(posix, harnessPrefix: harnessPrefix)
+            return (result, harnessPrefix, Self.localShellName)
+        }
+    }
+
+    private func record(
+        _ result: WendyE2EShellResult,
+        harnessPrefix: [String],
+        scriptShellName: String
+    ) {
+        self.recorder?.record(
+            session: self,
+            command: result.command,
+            processID: result.processID,
+            status: String(describing: result.status),
+            duration: result.duration,
+            standardOutput: result.stdout,
+            standardError: result.stderr,
+            harnessPrefix: harnessPrefix,
+            scriptShellName: scriptShellName
+        )
+    }
+
+    private func posixShell(
+        _ command: String,
+        harnessPrefix: [String]
+    ) async throws -> WendyE2EShellResult {
+        let start = ContinuousClock.now
+        let executable: String
+        let arguments: [String]
+        if self.machine.isLocal {
+            executable = Self.localShellPath
+            arguments = ["-lc", self.wrapped(command, harnessPrefix: harnessPrefix)]
+        } else {
+            let wrappedCommand = self.wrapped(command, harnessPrefix: harnessPrefix)
+            let loginShellCommand = "exec \"${SHELL:-/bin/sh}\" -lc \(Self.shellQuote(wrappedCommand))"
+            executable = Self.localSSHPath
+            arguments = [
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-T",
+                self.sshTarget(address: self.machine.address),
+                loginShellCommand,
+            ]
+        }
+        let output = try await Self.runProcess(
+            executable: executable,
+            arguments: arguments,
+            workingDirectory: nil
+        )
+        let duration = start.duration(to: .now)
+        return WendyE2EShellResult(
+            machine: self.machine,
+            command: command,
+            processID: output.processIdentifier,
+            status: WendyE2EShellStatus(output.terminationStatus),
+            duration: duration,
+            stdout: output.standardOutput,
+            stderr: output.standardError
+        )
+    }
+
+    private func powerShell(
+        _ command: String,
+        harnessPrefix: [String]
+    ) async throws -> WendyE2EShellResult {
+        guard self.machine.isLocal else {
+            throw WendyE2EMachineError.powerShellUnavailable(machine: self.description)
+        }
+
+        let start = ContinuousClock.now
+        let output = try await Self.runProcess(
+            executable: try Self.localPowerShellPath(machine: self.description),
+            arguments: [
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                self.powerShellWrapped(command, harnessPrefix: harnessPrefix),
+            ],
+            workingDirectory: nil
+        )
+        let duration = start.duration(to: .now)
+        return WendyE2EShellResult(
+            machine: self.machine,
+            command: command,
+            processID: output.processIdentifier,
+            status: WendyE2EShellStatus(output.terminationStatus),
+            duration: duration,
+            stdout: output.standardOutput,
+            stderr: output.standardError
+        )
+    }
+
+    // WARNING: The POSIX PTY implementation currently shells out to `script`.
+    // If parallel PTY runs become flaky/hang again, reintroduce the
+    // process-wide serializer from
+    // https://github.com/wendylabsinc/wendy-agent/commit/e8a448fa02e5d3ac9bf9c76282346e2092eab30a.
+    private func posixPTY(
+        _ command: String,
+        harnessPrefix: [String]
+    ) async throws -> WendyE2EShellResult {
+        let start = ContinuousClock.now
+        let wrappedCommand = Self.ptyPOSIXCommand(command, os: self.machine.os)
+        let executable: String
+        let arguments: [String]
+        if self.machine.isLocal {
+            executable = Self.localShellPath
+            arguments = ["-lc", self.wrapped(wrappedCommand, harnessPrefix: harnessPrefix)]
+        } else {
+            let wrapped = self.wrapped(wrappedCommand, harnessPrefix: harnessPrefix)
+            let loginShellCommand = "exec \"${SHELL:-/bin/sh}\" -lc \(Self.shellQuote(wrapped))"
+            executable = Self.localSSHPath
+            arguments = [
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no",
+                "-o", "UserKnownHostsFile=/dev/null",
+                "-o", "LogLevel=ERROR",
+                "-T",
+                self.sshTarget(address: self.machine.address),
+                loginShellCommand,
+            ]
+        }
+        let output = try await Self.runProcess(
+            executable: executable,
+            arguments: arguments,
+            workingDirectory: nil
+        )
+        let duration = start.duration(to: .now)
+        return WendyE2EShellResult(
+            machine: self.machine,
+            command: command,
+            processID: output.processIdentifier,
+            status: WendyE2EShellStatus(output.terminationStatus),
+            duration: duration,
+            stdout: output.standardOutput,
+            stderr: output.standardError
+        )
+    }
+
+    private func powerPTY(
+        _ command: String,
+        harnessPrefix: [String]
+    ) async throws -> WendyE2EShellResult {
+        #if os(Windows)
+            let scriptURL = try Self.writeCommandPromptScript(harnessPrefix + [command])
+            defer { try? FileManager.default.removeItem(at: scriptURL.deletingLastPathComponent()) }
+            let start = ContinuousClock.now
+            let output = try Self.invokeWithWindowsPTY(
+                executable: Self.localCommandPromptPath,
+                arguments: ["/D", "/C", scriptURL.path],
+                workingDirectory: nil
+            )
+            let duration = start.duration(to: .now)
+            return WendyE2EShellResult(
+                machine: self.machine,
+                command: command,
+                processID: output.processIdentifier,
+                status: WendyE2EShellStatus(output.terminationStatus),
+                duration: duration,
+                stdout: output.standardOutput,
+                stderr: output.standardError
+            )
+        #else
+            _ = command
+            _ = harnessPrefix
+            throw NSError(
+                domain: "WendyE2ETesting.PTY",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Windows PTY execution is only available on Windows runners."]
+            )
+        #endif
     }
 
     private static func ptyPOSIXCommand(_ command: String, os: WendyE2EMachineOS) -> String {
@@ -283,112 +474,6 @@ public actor WendyE2ESession {
         case .windows:
             return command
         }
-    }
-
-    private static func ptyPowerShellCommand(_ command: String, os: WendyE2EMachineOS) -> String {
-        switch os {
-        case .windows:
-            return "throw 'PTY execution is not supported on Windows yet.'"
-        case .macOS, .linux, .wendyOS:
-            return command
-        }
-    }
-
-    private func runShell(
-        command: String,
-        invocation: Invocation,
-        harnessPrefix: [String],
-        scriptShellName: String
-    ) async throws -> WendyE2EShellResult {
-        let start = ContinuousClock.now
-        let record = try await Self.invoke(invocation)
-        let duration = start.duration(to: .now)
-
-        self.recorder?.record(
-            session: self,
-            command: command,
-            processID: record.processIdentifier,
-            status: String(describing: record.terminationStatus),
-            duration: duration,
-            standardOutput: record.standardOutput,
-            standardError: record.standardError,
-            harnessPrefix: harnessPrefix,
-            scriptShellName: scriptShellName
-        )
-
-        return WendyE2EShellResult(
-            machine: self.machine,
-            command: command,
-            processID: record.processIdentifier,
-            status: WendyE2EShellStatus(record.terminationStatus),
-            duration: duration,
-            stdout: record.standardOutput,
-            stderr: record.standardError
-        )
-    }
-
-    private func invocation(for command: String, harnessPrefix: [String]) -> Invocation {
-        if self.machine.isLocal {
-            return self.localInvocation(for: command, harnessPrefix: harnessPrefix)
-        }
-
-        return self.sshInvocation(for: command, harnessPrefix: harnessPrefix)
-    }
-
-    private func localInvocation(for command: String, harnessPrefix: [String]) -> Invocation {
-        Invocation(
-            executable: Self.localShellPath,
-            arguments: ["-lc", self.wrapped(command, harnessPrefix: harnessPrefix)],
-            environment: .inherit,
-            workingDirectory: nil
-        )
-    }
-
-    private func sshInvocation(for command: String, harnessPrefix: [String]) -> Invocation {
-        let wrappedCommand = self.wrapped(command, harnessPrefix: harnessPrefix)
-        let loginShellCommand = "exec \"${SHELL:-/bin/sh}\" -lc \(Self.shellQuote(wrappedCommand))"
-
-        return Invocation(
-            executable: Self.localSSHPath,
-            arguments: [
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=no",
-                "-o",
-                "UserKnownHostsFile=/dev/null",
-                "-o",
-                "LogLevel=ERROR",
-                "-T",
-                self.sshTarget(address: self.machine.address),
-                loginShellCommand,
-            ],
-            environment: .inherit,
-            workingDirectory: nil
-        )
-    }
-
-    private func powerShellInvocation(
-        for command: String,
-        harnessPrefix: [String]
-    ) throws
-        -> Invocation
-    {
-        guard self.machine.isLocal else {
-            throw WendyE2EMachineError.powerShellUnavailable(machine: self.description)
-        }
-
-        return Invocation(
-            executable: try Self.localPowerShellPath(machine: self.description),
-            arguments: [
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                self.powerShellWrapped(command, harnessPrefix: harnessPrefix),
-            ],
-            environment: .inherit,
-            workingDirectory: nil
-        )
     }
 
     private static var localShellPath: String {
@@ -439,6 +524,13 @@ public actor WendyE2ESession {
         }
         return path
     }
+
+    #if os(Windows)
+        private static var localCommandPromptPath: String {
+            Self.findExecutable(named: ["cmd.exe", "cmd"])
+                ?? "C:\\Windows\\System32\\cmd.exe"
+        }
+    #endif
 
     private static var localSSHPath: String {
         Self.findExecutable(named: ["ssh", "ssh.exe"]) ?? "/usr/bin/ssh"
@@ -531,6 +623,35 @@ public actor WendyE2ESession {
 
         return parts
     }
+
+    #if os(Windows)
+        private func windowsCommandPromptHarnessPrefix(resetDirectories: Bool) -> [String] {
+            var parts = self.env.keys.sorted().map { key in
+                "set \"\(key)=\(Self.commandPromptEnvironmentValue(self.env[key] ?? ""))\""
+            }
+
+            let setupDirectories = self.setupDirectories()
+            if resetDirectories {
+                parts.append(
+                    contentsOf: setupDirectories.map { directory in
+                        "if exist \(Self.commandPromptQuote(directory)) rmdir /s /q \(Self.commandPromptQuote(directory))"
+                    }
+                )
+            }
+
+            parts.append(
+                contentsOf: setupDirectories.map { directory in
+                    "if not exist \(Self.commandPromptQuote(directory)) mkdir \(Self.commandPromptQuote(directory))"
+                }
+            )
+
+            if let workingDirectory = self.workingDirectory {
+                parts.append("cd /d \(Self.commandPromptQuote(workingDirectory))")
+            }
+
+            return parts
+        }
+    #endif
 
     private func shellPathValue(_ path: String) -> String {
         guard let reference = self.environmentPathReference(for: path) else {
@@ -795,6 +916,29 @@ public actor WendyE2ESession {
         "'" + value.replacingOccurrences(of: "'", with: "''") + "'"
     }
 
+    #if os(Windows)
+        private static func commandPromptEnvironmentValue(_ value: String) -> String {
+            value.replacingOccurrences(of: "$PATH", with: "%PATH%")
+        }
+
+        private static func commandPromptQuote(_ value: String) -> String {
+            "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+
+        private static func writeCommandPromptScript(_ commands: [String]) throws -> URL {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "wendy-e2e-pty-\(UUID().uuidString)",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let scriptURL = directory.appendingPathComponent("run.cmd", isDirectory: false)
+            let script = (["@echo off"] + commands + ["exit /b %ERRORLEVEL%"])
+                .joined(separator: "\r\n")
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            return scriptURL
+        }
+    #endif
+
     private static func firstExecutablePath(_ candidates: [String]) -> String? {
         candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
@@ -885,24 +1029,37 @@ public actor WendyE2ESession {
         return String(describing: value)
     }
 
-    private static func invoke(_ invocation: Invocation) async throws -> StringExecutionRecord {
+    private static func runProcess(
+        executable: String,
+        arguments: [String],
+        workingDirectory: FilePath?
+    ) async throws -> (
+        processIdentifier: String?,
+        terminationStatus: TerminationStatus,
+        standardOutput: String,
+        standardError: String
+    ) {
         #if os(Windows)
             // WORKAROUND: swift-subprocess can leave the Windows E2E test
             // process alive after Swift Testing has finished and written its
             // results. Use the native WinSDK process APIs here so hardware
             // runs return promptly instead of hanging in the harness teardown.
-            try self.invokeWithWinSDK(invocation)
+            return try Self.invokeWithWinSDK(
+                executable: executable,
+                arguments: arguments,
+                workingDirectory: workingDirectory
+            )
         #else
             let record = try await Subprocess.run(
-                .path(FilePath(invocation.executable)),
-                arguments: Arguments(invocation.arguments),
-                environment: invocation.environment,
-                workingDirectory: invocation.workingDirectory,
+                .path(FilePath(executable)),
+                arguments: Arguments(arguments),
+                environment: .inherit,
+                workingDirectory: workingDirectory,
                 output: StringOutput<UTF8>.string(limit: .max),
                 error: StringOutput<UTF8>.string(limit: .max)
             )
 
-            return StringExecutionRecord(
+            return (
                 processIdentifier: String(describing: record.processIdentifier),
                 terminationStatus: record.terminationStatus,
                 standardOutput: record.standardOutput ?? "",
@@ -912,11 +1069,211 @@ public actor WendyE2ESession {
     }
 
     #if os(Windows)
+        private static func invokeWithWindowsPTY(
+            executable: String,
+            arguments: [String],
+            workingDirectory: FilePath?
+        ) throws -> (
+            processIdentifier: String?,
+            terminationStatus: TerminationStatus,
+            standardOutput: String,
+            standardError: String
+        ) {
+            var inputRead: HANDLE?
+            var inputWrite: HANDLE?
+            var outputRead: HANDLE?
+            var outputWrite: HANDLE?
+
+            var security = SECURITY_ATTRIBUTES(
+                nLength: DWORD(MemoryLayout<SECURITY_ATTRIBUTES>.size),
+                lpSecurityDescriptor: nil,
+                bInheritHandle: true
+            )
+
+            guard CreatePipe(&inputRead, &inputWrite, &security, 0) else {
+                throw Self.windowsProcessError("CreatePipe failed for PTY input")
+            }
+            guard CreatePipe(&outputRead, &outputWrite, &security, 0) else {
+                if let inputRead { CloseHandle(inputRead) }
+                if let inputWrite { CloseHandle(inputWrite) }
+                throw Self.windowsProcessError("CreatePipe failed for PTY output")
+            }
+
+            var pseudoConsole: HPCON?
+            let size = COORD(X: SHORT(120), Y: SHORT(30))
+            guard CreatePseudoConsole(size, inputRead, outputWrite, DWORD(0), &pseudoConsole) == S_OK else {
+                if let inputRead { CloseHandle(inputRead) }
+                if let inputWrite { CloseHandle(inputWrite) }
+                if let outputRead { CloseHandle(outputRead) }
+                if let outputWrite { CloseHandle(outputWrite) }
+                throw Self.windowsProcessError("CreatePseudoConsole failed")
+            }
+
+            if let inputRead { CloseHandle(inputRead) }
+            if let outputWrite { CloseHandle(outputWrite) }
+            defer {
+                if let pseudoConsole {
+                    ClosePseudoConsole(pseudoConsole)
+                }
+                if let inputWrite { CloseHandle(inputWrite) }
+                if let outputRead { CloseHandle(outputRead) }
+            }
+
+            var attributeListSize: SIZE_T = 0
+            _ = InitializeProcThreadAttributeList(nil, DWORD(1), DWORD(0), &attributeListSize)
+            let attributeList = UnsafeMutableRawPointer.allocate(
+                byteCount: Int(attributeListSize),
+                alignment: MemoryLayout<Int>.alignment
+            )
+            defer { attributeList.deallocate() }
+
+            let processThreadAttributes = OpaquePointer(attributeList)
+            guard InitializeProcThreadAttributeList(
+                processThreadAttributes,
+                DWORD(1),
+                DWORD(0),
+                &attributeListSize
+            ) else {
+                throw Self.windowsProcessError("InitializeProcThreadAttributeList failed")
+            }
+            defer {
+                DeleteProcThreadAttributeList(processThreadAttributes)
+            }
+
+            guard UpdateProcThreadAttribute(
+                processThreadAttributes,
+                DWORD(0),
+                DWORD_PTR(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE),
+                pseudoConsole,
+                SIZE_T(MemoryLayout<HPCON>.size),
+                nil,
+                nil
+            ) else {
+                throw Self.windowsProcessError("UpdateProcThreadAttribute failed")
+            }
+
+            var startupInfo = STARTUPINFOEXW()
+            startupInfo.StartupInfo.cb = DWORD(MemoryLayout<STARTUPINFOEXW>.size)
+            startupInfo.StartupInfo.dwFlags = DWORD(STARTF_USESTDHANDLES)
+            startupInfo.StartupInfo.hStdInput = nil
+            startupInfo.StartupInfo.hStdOutput = nil
+            startupInfo.StartupInfo.hStdError = nil
+            startupInfo.lpAttributeList = processThreadAttributes
+
+            var processInfo = PROCESS_INFORMATION()
+            var commandLine =
+                Array(
+                    Self.windowsCommandLine(
+                        executable: executable,
+                        arguments: arguments
+                    ).utf16
+                ) + [0]
+
+            let created = try withUnsafeMutablePointer(to: &startupInfo) { startupInfoPointer in
+                try startupInfoPointer.withMemoryRebound(to: STARTUPINFOW.self, capacity: 1) {
+                    startupInfoBasePointer in
+                    try commandLine.withUnsafeMutableBufferPointer { commandLineBuffer in
+                        try Self.withOptionalWindowsString(
+                            workingDirectory.map { String(describing: $0) }
+                        ) { workingDirectory in
+                            CreateProcessW(
+                                nil,
+                                commandLineBuffer.baseAddress,
+                                nil,
+                                nil,
+                                true,
+                                DWORD(EXTENDED_STARTUPINFO_PRESENT),
+                                nil,
+                                workingDirectory,
+                                startupInfoBasePointer,
+                                &processInfo
+                            )
+                        }
+                    }
+                }
+            }
+
+            guard created else {
+                throw Self.windowsProcessError("CreateProcessW failed for PTY")
+            }
+            defer {
+                CloseHandle(processInfo.hThread)
+                CloseHandle(processInfo.hProcess)
+            }
+
+            WaitForSingleObject(processInfo.hProcess, INFINITE)
+
+            var exitCode: DWORD = 1
+            guard GetExitCodeProcess(processInfo.hProcess, &exitCode) else {
+                throw Self.windowsProcessError("GetExitCodeProcess failed")
+            }
+
+            if let inputWrite {
+                CloseHandle(inputWrite)
+            }
+            inputWrite = nil
+            if let pseudoConsole {
+                ClosePseudoConsole(pseudoConsole)
+            }
+            pseudoConsole = nil
+
+            let output = try Self.readWindowsPipe(outputRead)
+
+            return (
+                processIdentifier: String(processInfo.dwProcessId),
+                terminationStatus: .exited(TerminationStatus.Code(exitCode)),
+                standardOutput: output,
+                standardError: ""
+            )
+        }
+
+        private static func readWindowsPipe(_ handle: HANDLE?) throws -> String {
+            guard let handle else {
+                return ""
+            }
+
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while true {
+                var bytesRead: DWORD = 0
+                let ok = buffer.withUnsafeMutableBytes { bytes in
+                    ReadFile(
+                        handle,
+                        bytes.baseAddress,
+                        DWORD(bytes.count),
+                        &bytesRead,
+                        nil
+                    )
+                }
+
+                if !ok {
+                    let error = GetLastError()
+                    if error == ERROR_BROKEN_PIPE {
+                        break
+                    }
+                    throw Self.windowsProcessError("ReadFile failed for PTY output")
+                }
+
+                if bytesRead == 0 {
+                    break
+                }
+
+                data.append(buffer, count: Int(bytesRead))
+            }
+
+            return String(decoding: data, as: UTF8.self)
+        }
+
         private static func invokeWithWinSDK(
-            _ invocation: Invocation
-        ) throws
-            -> StringExecutionRecord
-        {
+            executable: String,
+            arguments: [String],
+            workingDirectory: FilePath?
+        ) throws -> (
+            processIdentifier: String?,
+            terminationStatus: TerminationStatus,
+            standardOutput: String,
+            standardError: String
+        ) {
             let fileManager = FileManager.default
             let directory = fileManager.temporaryDirectory.appendingPathComponent(
                 "wendy-e2e-subprocess-\(UUID().uuidString)",
@@ -949,15 +1306,15 @@ public actor WendyE2ESession {
             var commandLine =
                 Array(
                     Self.windowsCommandLine(
-                        executable: invocation.executable,
-                        arguments: invocation.arguments
+                        executable: executable,
+                        arguments: arguments
                     ).utf16
                 ) + [0]
 
-            let created = try invocation.executable.withCString(encodedAs: UTF16.self) { appName in
+            let created = try executable.withCString(encodedAs: UTF16.self) { appName in
                 try commandLine.withUnsafeMutableBufferPointer { commandLineBuffer in
                     try Self.withOptionalWindowsString(
-                        invocation.workingDirectory.map { String(describing: $0) }
+                        workingDirectory.map { String(describing: $0) }
                     ) { workingDirectory in
                         CreateProcessW(
                             appName,
@@ -997,7 +1354,7 @@ public actor WendyE2ESession {
             let stdout = try String(decoding: Data(contentsOf: stdoutURL), as: UTF8.self)
             let stderr = try String(decoding: Data(contentsOf: stderrURL), as: UTF8.self)
 
-            return StringExecutionRecord(
+            return (
                 processIdentifier: String(processInfo.dwProcessId),
                 terminationStatus: .exited(TerminationStatus.Code(exitCode)),
                 standardOutput: stdout,
@@ -1085,20 +1442,6 @@ public actor WendyE2ESession {
             return quoted
         }
     #endif
-}
-
-private struct StringExecutionRecord: Sendable {
-    let processIdentifier: String
-    let terminationStatus: TerminationStatus
-    let standardOutput: String
-    let standardError: String
-}
-
-private struct Invocation: Sendable {
-    let executable: String
-    let arguments: [String]
-    let environment: Subprocess.Environment
-    let workingDirectory: FilePath?
 }
 
 // MARK: - CustomStringConvertible

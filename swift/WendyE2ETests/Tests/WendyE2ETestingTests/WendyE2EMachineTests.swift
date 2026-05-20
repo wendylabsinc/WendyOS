@@ -68,27 +68,27 @@ struct `session` {
     @Test
     func `runs a simple shell command`() async throws {
         let session = try await WendyE2ESession.begin(
-            for: WendyE2EMachine(id: "local", name: "Local")
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux)
         )
-        let result = try await session.posixShell("printf 'wendy-machine-smoke'")
-
-        #expect(result.status.isSuccess)
-        #expect(result.stdout == "wendy-machine-smoke")
-        #expect(result.stderr == "")
+        try await session.sh("printf 'wendy-machine-smoke'") { result in
+            #expect(result.status.isSuccess)
+            #expect(result.stdout == "wendy-machine-smoke")
+            #expect(result.stderr == "")
+        }
     }
 
     @Test
     func `returns a rich shell result`() async throws {
         let session = try await WendyE2ESession.begin(
-            for: WendyE2EMachine(id: "local", name: "Local")
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux)
         )
-        let result = try await session.posixShell("printf 'wendy-machine-smoke'")
-
-        #expect(result.status.isSuccess)
-        #expect(!result.status.isFailure)
-        #expect(result.stdout == "wendy-machine-smoke")
-        #expect(result.stderr == "")
-        #expect(result.normalizedStdout == "wendy-machine-smoke")
+        try await session.sh("printf 'wendy-machine-smoke'") { result in
+            #expect(result.status.isSuccess)
+            #expect(!result.status.isFailure)
+            #expect(result.stdout == "wendy-machine-smoke")
+            #expect(result.stderr == "")
+            #expect(result.normalizedStdout == "wendy-machine-smoke")
+        }
     }
 
     @Test
@@ -98,13 +98,13 @@ struct `session` {
         }
 
         let session = try await WendyE2ESession.begin(
-            for: WendyE2EMachine(id: "local", name: "Local")
+            for: WendyE2EMachine(id: "local", name: "Local", os: .windows)
         )
-        let result = try await session.powerShell("Write-Output 'wendy-machine-smoke'")
-
-        #expect(result.status.isSuccess)
-        #expect(result.normalizedStdout == "wendy-machine-smoke\n")
-        #expect(result.stderr == "")
+        try await session.sh(posix: "", power: "Write-Output 'wendy-machine-smoke'") { result in
+            #expect(result.status.isSuccess)
+            #expect(result.normalizedStdout == "wendy-machine-smoke\n")
+            #expect(result.stderr == "")
+        }
     }
 
     @Test
@@ -114,7 +114,7 @@ struct `session` {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let machine = WendyE2EMachine(id: "local", name: "Local")
+        let machine = WendyE2EMachine(id: "local", name: "Local", os: .linux)
         let session = try await WendyE2ESession.begin(
             for: machine,
             workingDirectory: directory.path
@@ -140,18 +140,7 @@ struct `session` {
         )
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let wendy = binDirectory.appendingPathComponent("wendy")
-        try """
-        #!/bin/sh
-        printf 'HOME=%s\n' "$HOME"
-        printf 'WENDY_ANALYTICS=%s\n' "$WENDY_ANALYTICS"
-        """.write(to: wendy, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755],
-            ofItemAtPath: wendy.path
-        )
-
-        let machine = WendyE2EMachine(id: "local", name: "Local")
+        let machine = WendyE2EMachine(id: "local", name: "Local", os: .linux)
         let session = try await WendyE2ESession.begin(
             for: machine,
             workingDirectory: directory.path,
@@ -159,14 +148,17 @@ struct `session` {
                 "HOME": homeDirectory.path,
                 "PATH": "\(binDirectory.path):$PATH",
                 "WENDY_ANALYTICS": "false",
+                "WENDY_TEST_BIN": binDirectory.path,
             ]
         )
 
-        let result = try await session.posixShell("wendy")
-
-        #expect(result.status.isSuccess)
-        #expect(result.stdout == "HOME=\(homeDirectory.path)\nWENDY_ANALYTICS=false\n")
-        #expect(result.stderr == "")
+        try await session.sh(
+            "case \":$PATH:\" in *\":$WENDY_TEST_BIN:\"*) printf 'PATH=ok\n' ;; *) printf 'PATH=missing\n'; exit 1 ;; esac; printf 'HOME=%s\n' \"$HOME\"; printf 'WENDY_ANALYTICS=%s\n' \"$WENDY_ANALYTICS\""
+        ) { result in
+            #expect(result.status.isSuccess)
+            #expect(result.stdout == "PATH=ok\nHOME=\(homeDirectory.path)\nWENDY_ANALYTICS=false\n")
+            #expect(result.stderr == "")
+        }
     }
 
     @Test
@@ -222,7 +214,7 @@ struct `session` {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let session = try await WendyE2ESession.begin(
-            for: WendyE2EMachine(id: "local", name: "Local"),
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux),
             workingDirectory: workingDirectory.path,
             env: [
                 "HOME": homeDirectory.path,
@@ -230,7 +222,7 @@ struct `session` {
             ]
         )
 
-        try await session.sh("printf '%s' \"$PWD\"") { result in
+        try await session.sh("if pwd -W >/dev/null 2>&1; then pwd -W | tr -d '\n'; else printf '%s' \"$PWD\"; fi") { result in
             try result.requireSuccess()
 
             #expect(result.stdout == workingDirectory.path)
@@ -252,15 +244,14 @@ struct `session` {
             at: homeDirectory,
             withIntermediateDirectories: true
         )
-        try "stale".write(
-            to: homeDirectory.appendingPathComponent("stale"),
-            atomically: true,
-            encoding: .utf8
+        try FileManager.default.createDirectory(
+            at: homeDirectory.appendingPathComponent("stale", isDirectory: true),
+            withIntermediateDirectories: true
         )
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let session = try await WendyE2ESession.begin(
-            for: WendyE2EMachine(id: "local", name: "Local"),
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux),
             workingDirectory: workingDirectory.path,
             env: [
                 "HOME": homeDirectory.path,
@@ -287,11 +278,11 @@ struct `session` {
     @Test
     func `collected output API returns shell result`() async throws {
         try await Self.withTemporarySession { session, _ in
-            let result = try await session.posixShell("printf 'hello'")
-
-            #expect(result.status.isSuccess)
-            #expect(result.stdout == "hello")
-            #expect(result.stderr == "")
+            try await session.sh("printf 'hello'") { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stdout == "hello")
+                #expect(result.stderr == "")
+            }
         }
     }
 
@@ -325,7 +316,7 @@ struct `session` {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let machine = WendyE2EMachine(id: "local", name: "Local")
+        let machine = WendyE2EMachine(id: "local", name: "Local", os: .linux)
         let session = try await WendyE2ESession.begin(
             for: machine,
             workingDirectory: directory.path
@@ -338,7 +329,7 @@ struct `session` {
     @Test
     func `sh callback receives command output`() async throws {
         let session = try await WendyE2ESession.begin(
-            for: WendyE2EMachine(id: "local", name: "Local")
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux)
         )
 
         try await session.sh("printf 'hello'; printf 'oops' >&2") { result in
@@ -447,7 +438,7 @@ struct `session` {
     ) async throws -> Result {
         let directory = try Self.makeTemporaryDirectory()
         let session = try await WendyE2ESession.begin(
-            for: WendyE2EMachine(id: "local", name: "Local"),
+            for: WendyE2EMachine(id: "local", name: "Local", os: .linux),
             workingDirectory: directory.path
         )
 

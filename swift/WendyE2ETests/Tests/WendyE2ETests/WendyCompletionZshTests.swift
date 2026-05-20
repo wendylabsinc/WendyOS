@@ -41,10 +41,16 @@ struct `'wendy completion zsh'` {
         // shell-mismatched syntax, noisy comments, or truncated output.
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                wendy completion zsh
-                test ! -e "$HOME/.zshrc"
-                """
+                posix: """
+                    wendy completion zsh
+                    test ! -e "$HOME/.zshrc"
+                    """,
+                power: """
+                    wendy completion zsh
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.zshrc')) {
+                        throw '.zshrc should not exist'
+                    }
+                    """
             ) { result in
                 let stdout = result.stdout
 

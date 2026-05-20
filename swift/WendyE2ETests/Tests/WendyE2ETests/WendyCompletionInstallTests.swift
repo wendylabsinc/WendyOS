@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WendyE2ETesting
 
@@ -44,13 +45,28 @@ struct `'wendy completion install'` {
     func `installs completion for the detected shell`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                SHELL=/bin/zsh wendy completion install
-                test -f "$HOME/.zfunc/_wendy"
-                test -f "$HOME/.zshrc"
-                grep -q '#compdef wendy' "$HOME/.zfunc/_wendy"
-                grep -q 'wendy-completion' "$HOME/.zshrc"
-                """
+                posix: """
+                    SHELL=/bin/zsh wendy completion install
+                    test -f "$HOME/.zfunc/_wendy"
+                    test -f "$HOME/.zshrc"
+                    grep -q '#compdef wendy' "$HOME/.zfunc/_wendy"
+                    grep -q 'wendy-completion' "$HOME/.zshrc"
+                    """,
+                power: """
+                    wendy completion install
+                    $completionPath = Join-Path $env:HOME 'Documents/PowerShell/Completions/wendy.ps1'
+                    $profilePath = Join-Path $env:HOME 'Documents/PowerShell/Microsoft.PowerShell_profile.ps1'
+                    if (!(Test-Path -LiteralPath $completionPath -PathType Leaf)) {
+                        throw 'PowerShell completion should exist'
+                    }
+                    if (!(Test-Path -LiteralPath $profilePath -PathType Leaf)) {
+                        throw 'PowerShell profile should exist'
+                    }
+                    Select-String -LiteralPath $completionPath -Pattern 'Register-ArgumentCompleter' -Quiet | Out-Null
+                    if (!$?) { throw 'completion script should register completer' }
+                    Select-String -LiteralPath $profilePath -Pattern 'wendy.ps1' -Quiet | Out-Null
+                    if (!$?) { throw 'PowerShell profile should load completion script' }
+                    """
             ) { result in
                 let stderr = result.stderr
 
@@ -74,12 +90,25 @@ struct `'wendy completion install'` {
     func `uses the requested shell override`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                wendy completion install --shell fish
-                test -f "$HOME/.config/fish/completions/wendy.fish"
-                test ! -e "$HOME/.bashrc"
-                test ! -e "$HOME/.zshrc"
-                """
+                posix: """
+                    wendy completion install --shell fish
+                    test -f "$HOME/.config/fish/completions/wendy.fish"
+                    test ! -e "$HOME/.bashrc"
+                    test ! -e "$HOME/.zshrc"
+                    """,
+                power: """
+                    wendy completion install --shell fish
+                    $completionPath = Join-Path $env:HOME '.config/fish/completions/wendy.fish'
+                    if (!(Test-Path -LiteralPath $completionPath -PathType Leaf)) {
+                        throw 'fish completion should exist'
+                    }
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.bashrc')) {
+                        throw '.bashrc should not exist'
+                    }
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.zshrc')) {
+                        throw '.zshrc should not exist'
+                    }
+                    """
             ) { result in
 
                 #expect(result.status.isSuccess)
@@ -99,16 +128,26 @@ struct `'wendy completion install'` {
     func `prints install paths without writing files`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                wendy completion install --print-path --shell zsh
-                test ! -e "$HOME/.zfunc/_wendy"
-                test ! -e "$HOME/.zshrc"
-                """
+                posix: """
+                    wendy completion install --print-path --shell zsh
+                    test ! -e "$HOME/.zfunc/_wendy"
+                    test ! -e "$HOME/.zshrc"
+                    """,
+                power: """
+                    wendy completion install --print-path --shell zsh
+                    if (Test-Path -LiteralPath (Join-Path (Join-Path $env:HOME '.zfunc') '_wendy')) {
+                        throw '_wendy should not exist'
+                    }
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.zshrc')) {
+                        throw '.zshrc should not exist'
+                    }
+                    """
             ) { result in
+                let normalizedStdout = result.stdout.replacingOccurrences(of: "\\", with: "/")
 
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("/.zfunc/_wendy"))
-                #expect(result.stdout.contains("/.zshrc"))
+                #expect(normalizedStdout.contains("/.zfunc/_wendy"))
+                #expect(normalizedStdout.contains("/.zshrc"))
                 #expect(result.stderr == "")
             }
         }
@@ -122,11 +161,20 @@ struct `'wendy completion install'` {
     func `prints the script to stdout when requested`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                wendy completion install --stdout --shell zsh
-                test ! -e "$HOME/.zshrc"
-                test ! -d "$HOME/.zsh"
-                """
+                posix: """
+                    wendy completion install --stdout --shell zsh
+                    test ! -e "$HOME/.zshrc"
+                    test ! -d "$HOME/.zsh"
+                    """,
+                power: """
+                    wendy completion install --stdout --shell zsh
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.zshrc')) {
+                        throw '.zshrc should not exist'
+                    }
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.zsh')) {
+                        throw '.zsh should not exist'
+                    }
+                    """
             ) { result in
 
                 #expect(result.status.isSuccess)
@@ -148,18 +196,35 @@ struct `'wendy completion install'` {
         // rewrote user shell configuration unnecessarily.
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                SHELL=/bin/zsh wendy completion install
-                SHELL=/bin/zsh wendy completion install
-                test -f "$HOME/.zfunc/_wendy"
-                test "$(grep -c '^# wendy-completion$' "$HOME/.zshrc")" = 1
-                """
+                posix: """
+                    SHELL=/bin/zsh wendy completion install
+                    SHELL=/bin/zsh wendy completion install
+                    test -f "$HOME/.zfunc/_wendy"
+                    test "$(grep -c '^# wendy-completion$' "$HOME/.zshrc")" = 1
+                    """,
+                power: """
+                    wendy completion install
+                    wendy completion install
+                    $completionPath = Join-Path $env:HOME 'Documents/PowerShell/Completions/wendy.ps1'
+                    $profilePath = Join-Path $env:HOME 'Documents/PowerShell/Microsoft.PowerShell_profile.ps1'
+                    if (!(Test-Path -LiteralPath $completionPath -PathType Leaf)) {
+                        throw 'PowerShell completion should exist'
+                    }
+                    $profile = Get-Content -Raw -LiteralPath $profilePath
+                    if (([regex]::Matches($profile, '(?m)^# wendy-completion$')).Count -ne 1) {
+                        throw 'PowerShell profile should contain one managed marker'
+                    }
+                    """
             ) { result in
+                let normalizedStderr = result.stderr.replacingOccurrences(of: "\\", with: "/")
 
                 #expect(result.status.isSuccess)
                 #expect(result.stdout == "")
                 #expect(result.stderr.contains("Already configured"))
-                #expect(result.stderr.contains(".zfunc/_wendy"))
+                #expect(
+                    normalizedStderr.contains(".zfunc/_wendy")
+                        || normalizedStderr.contains("Completions/wendy.ps1")
+                )
             }
         }
     }

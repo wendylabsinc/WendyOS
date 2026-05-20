@@ -38,10 +38,17 @@ struct `'wendy completion fish'` {
     func `prints the fish completion script`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                wendy completion fish
-                test ! -e "$HOME/.config/fish/config.fish"
-                """
+                posix: """
+                    wendy completion fish
+                    test ! -e "$HOME/.config/fish/config.fish"
+                    """,
+                power: """
+                    wendy completion fish
+                    $configPath = Join-Path $env:HOME '.config/fish/config.fish'
+                    if (Test-Path -LiteralPath $configPath) {
+                        throw 'fish config should not exist'
+                    }
+                    """
             ) { result in
                 let stdout = result.stdout
 

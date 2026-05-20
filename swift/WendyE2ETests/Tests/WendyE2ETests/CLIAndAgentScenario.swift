@@ -65,8 +65,10 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
             let resetDirectoriesOnFirstCommand =
                 isolation == .perRun
                 && !WendyE2EEnvironment.parallel
-            let cliOS = WendyE2EEnvironment.cliOS ?? .current
-            let agentOS = WendyE2EEnvironment.agentOS ?? .current
+            let cliMachine = WendyE2EMachine.cli
+            let agentMachine = WendyE2EMachine.agent
+            let cliOS = cliMachine.os
+            let agentOS = agentMachine.os
             let cliSandbox = Self.roleSandbox(
                 role: "cli",
                 runDirectory: WendyE2EEnvironment.cliRunDirectory,
@@ -101,24 +103,6 @@ final class CLIAndAgentScenario: WendyE2EScenario, Sendable {
                 binDirectory: agentBinDirectory,
                 machineOS: agentOS
             )
-            let cliMachine = WendyE2EMachine(
-                id: "cli",
-                name: "CLI",
-                os: cliOS,
-                tags: [.cli],
-                user: WendyE2EEnvironment.cliUser,
-                address: WendyE2EEnvironment.cliAddress
-            )
-
-            let agentMachine = WendyE2EMachine(
-                id: "agent",
-                name: "Agent",
-                os: agentOS,
-                tags: [.agent],
-                user: WendyE2EEnvironment.agentUser,
-                address: WendyE2EEnvironment.agentAddress
-            )
-
             let cli = try await WendyE2ESession.begin(
                 for: cliMachine,
                 workingDirectory: cliSandbox.workingDirectory,

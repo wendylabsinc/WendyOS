@@ -57,12 +57,18 @@ struct `'wendy cache list'` {
     func `ignores unrelated files outside the cache root`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                mkdir -p "$HOME/.wendy"
-                printf '{"defaultDevice":"do-not-list"}\n' > "$HOME/.wendy/config.json"
-                printf 'project artifact\n' > unrelated-project-file.txt
-                wendy cache list
-                """
+                posix: """
+                    mkdir -p "$HOME/.wendy"
+                    printf '{"defaultDevice":"do-not-list"}\n' > "$HOME/.wendy/config.json"
+                    printf 'project artifact\n' > unrelated-project-file.txt
+                    wendy cache list
+                    """,
+                power: """
+                    New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultDevice":"do-not-list"}'
+                    Set-Content -LiteralPath 'unrelated-project-file.txt' -Value 'project artifact'
+                    wendy cache list
+                    """
             ) { result in
                 let stdout = result.stdout
 
@@ -85,12 +91,53 @@ struct `'wendy cache list'` {
             let cacheDirectory = cli.wendyCacheDirectory
 
             try await cli.sh(
-                """
-                mkdir -p "\(cacheDirectory)/unreadable"
-                chmod 000 "\(cacheDirectory)/unreadable"
-                trap 'chmod 700 "\(cacheDirectory)/unreadable" 2>/dev/null || true' EXIT
-                wendy cache list
-                """
+                posix: """
+                    mkdir -p "\(cacheDirectory)/unreadable"
+                    chmod 000 "\(cacheDirectory)/unreadable"
+                    trap 'chmod 700 "\(cacheDirectory)/unreadable" 2>/dev/null || true' EXIT
+                    wendy cache list
+                    """,
+                power: """
+                    $source = @'
+                    using System;
+                    using System.Runtime.InteropServices;
+                    using Microsoft.Win32.SafeHandles;
+                    public static class WendyE2EDirectoryLock {
+                        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+                        public static extern SafeFileHandle CreateFile(
+                            string name,
+                            uint access,
+                            uint share,
+                            IntPtr security,
+                            uint creation,
+                            uint flags,
+                            IntPtr templateFile);
+                    }
+                    '@
+                    Add-Type -TypeDefinition $source
+
+                    $cacheDirectory = Join-Path $env:LOCALAPPDATA 'wendy'
+                    $entry = Join-Path $cacheDirectory 'unreadable'
+                    New-Item -ItemType Directory -Force -Path $entry | Out-Null
+                    $handle = [WendyE2EDirectoryLock]::CreateFile(
+                        $entry,
+                        [uint32]1,
+                        [uint32]0,
+                        [IntPtr]::Zero,
+                        [uint32]3,
+                        [uint32]0x02000000,
+                        [IntPtr]::Zero)
+                    if ($handle.IsInvalid) {
+                        throw "locking cache entry failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+                    }
+                    try {
+                        wendy cache list
+                        $status = $LASTEXITCODE
+                    } finally {
+                        $handle.Dispose()
+                    }
+                    exit $status
+                    """
             ) { result in
 
                 #expect(!result.status.isSuccess)

@@ -38,10 +38,16 @@ struct `'wendy completion bash'` {
     func `prints the bash completion script`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                wendy completion bash
-                test ! -e "$HOME/.bashrc"
-                """
+                posix: """
+                    wendy completion bash
+                    test ! -e "$HOME/.bashrc"
+                    """,
+                power: """
+                    wendy completion bash
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.bashrc')) {
+                        throw '.bashrc should not exist'
+                    }
+                    """
             ) { result in
 
                 #expect(result.status.isSuccess)

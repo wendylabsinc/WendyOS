@@ -86,6 +86,28 @@ public struct WendyE2EMachine: Sendable, Equatable {
         )
     }
 
+    public static var cli: WendyE2EMachine {
+        WendyE2EMachine(
+            id: "cli",
+            name: "CLI",
+            os: WendyE2EEnvironment.cliOS ?? .current,
+            tags: [.cli],
+            user: WendyE2EEnvironment.cliUser,
+            address: WendyE2EEnvironment.cliAddress
+        )
+    }
+
+    public static var agent: WendyE2EMachine {
+        WendyE2EMachine(
+            id: "agent",
+            name: "Agent",
+            os: WendyE2EEnvironment.agentOS ?? .current,
+            tags: [.agent],
+            user: WendyE2EEnvironment.agentUser,
+            address: WendyE2EEnvironment.agentAddress
+        )
+    }
+
     // MARK: - Private
 
     private static var defaultAddress: String {
