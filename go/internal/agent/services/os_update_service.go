@@ -64,7 +64,6 @@ func (s *OSUpdateService) UpdateOS(req *agentpbv2.UpdateOSRequest, stream grpc.S
 	}
 
 	cmd := exec.CommandContext(stream.Context(), cmdName, "install", req.GetArtifactUrl())
-	cmd.Env = envWithPath("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

@@ -681,7 +681,6 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	}
 
 	cmd := exec.CommandContext(stream.Context(), cmdName, "install", req.GetArtifactUrl())
-	cmd.Env = envWithPath("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -808,20 +807,6 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	return nil
 }
 
-// envWithPath returns os.Environ() with the PATH entry replaced by the given value.
-// This ensures PATH is set exactly once (not duplicated), which matters because
-// getenv on Linux returns the first match — appending would leave the original in place.
-func envWithPath(path string) []string {
-	env := os.Environ()
-	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			env[i] = "PATH=" + path
-			return env
-		}
-	}
-	return append(env, "PATH="+path)
-}
-
 // resolveMenderBinary finds the mender-update binary. It checks PATH via
 // exec.LookPath and then probes absolute paths directly. The os.Stat fallback
 // is restricted to absolute paths to avoid accidentally executing a file from
@@ -865,7 +850,6 @@ func CommitMenderUpdate(logger *zap.Logger) {
 		return
 	}
 	cmd := exec.Command(binary, "commit")
-	cmd.Env = envWithPath("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		var exitErr *exec.ExitError

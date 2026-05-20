@@ -279,27 +279,9 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 	}
 	logger.Info("Wrote device name", zap.String("name", name), zap.String("path", deviceNamePath))
 
-	// Build an env with a full system PATH so scripts can find standard
-	// utilities (mkdir, logger, etc.) even when the agent runs under systemd
-	// with a restricted PATH.
-	env := os.Environ()
-	const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	replaced := false
-	for i, e := range env {
-		if strings.HasPrefix(e, "PATH=") {
-			env[i] = "PATH=" + systemPath
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		env = append(env, "PATH="+systemPath)
-	}
-
 	// generate-hostname.sh reads /etc/wendyos/device-name (which we just wrote)
 	// and derives wendyos-<name>, updating /etc/hostname and the running hostname.
-	hostnameScript := exec.Command("/usr/sbin/generate-hostname.sh")
-	hostnameScript.Env = env
+	hostnameScript := exec.Command("generate-hostname.sh")
 	if out, err := hostnameScript.CombinedOutput(); err != nil {
 		logger.Warn("generate-hostname.sh failed", zap.Error(err), zap.String("output", string(out)))
 	} else {
@@ -308,14 +290,14 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 
 	// update-mdns-uuid.sh is a first-boot placeholder replacer and is a no-op
 	// on a running device. Update the avahi service file directly instead.
-	updateAvahiDeviceName(logger, name, env)
+	updateAvahiDeviceName(logger, name)
 
 	return nil
 }
 
 // updateAvahiDeviceName rewrites the name/displayname/fqdn TXT records in the
 // avahi service file and reloads avahi-daemon so mDNS picks up the new name.
-func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
+func updateAvahiDeviceName(logger *zap.Logger, name string) {
 	const serviceFile = "/etc/avahi/services/wendyos-mdns.service"
 
 	data, err := os.ReadFile(serviceFile)
@@ -339,10 +321,7 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 	// --reload (SIGHUP) only refreshes service files; it does not re-read the
 	// hostname from gethostname(), so %h would stay stale. A full restart picks
 	// up both the new service file and the updated hostname.
-	// Use the absolute path: exec.Command resolves binaries from the calling
-	// process's PATH, not from cmd.Env, so bare "systemctl" would not be found.
-	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
-	restart.Env = env
+	restart := exec.Command("systemctl", "restart", "avahi-daemon")
 	if out, err := restart.CombinedOutput(); err != nil {
 		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
 	} else {
@@ -387,7 +366,7 @@ func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int) {
 			return
 		}
 
-		restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+		restart := exec.Command("systemctl", "restart", "avahi-daemon")
 		if out, err := restart.CombinedOutput(); err != nil {
 			logger.Warn("systemctl restart avahi-daemon failed after provisioning",
 				zap.Error(err), zap.String("output", string(out)))
