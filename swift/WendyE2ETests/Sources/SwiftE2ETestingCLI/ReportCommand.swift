@@ -64,13 +64,24 @@ struct ReportCommand: ParsableCommand {
             in: recordingURL,
             outputDirectoryURL: outputURL.deletingLastPathComponent()
         )
-        let files = try parseTests(
+        var files = try parseTests(
             in: testsURL,
             recordingURL: recordingURL,
             records: records,
             aiReviews: aiReviews,
             testResults: testResults
         )
+        if FileManager.default.fileExists(
+            atPath: recordingURL.appendingPathComponent("recording.md").path
+        ) {
+            files = files.compactMap { file in
+                let tests = file.tests.filter { !$0.commands.isEmpty || !$0.aiReviewMarkdown.isEmpty }
+                guard !tests.isEmpty else { return nil }
+                var file = file
+                file.tests = tests
+                return file
+            }
+        }
         try renderReport(
             templateURL: templateURL,
             recordingURL: recordingURL,
@@ -335,6 +346,16 @@ private func recordKey(for recordURL: URL, relativeTo recordingURL: URL) -> Stri
         let components = relative.split(separator: "/").map(String.init)
         if components.count >= 3 {
             return "\(components[components.count - 3]).\(components[components.count - 2])"
+        }
+        let attemptDirectory = recordURL.deletingLastPathComponent()
+        let targetDirectory = attemptDirectory.deletingLastPathComponent()
+        let testDirectory = targetDirectory.deletingLastPathComponent()
+        let suiteDirectory = testDirectory.deletingLastPathComponent()
+        if attemptDirectory.standardizedFileURL.path == recordingURL.standardizedFileURL.path,
+            !suiteDirectory.lastPathComponent.isEmpty,
+            !testDirectory.lastPathComponent.isEmpty
+        {
+            return "\(suiteDirectory.lastPathComponent).\(testDirectory.lastPathComponent)"
         }
         return recordURL.deletingLastPathComponent().lastPathComponent
     }
@@ -733,12 +754,21 @@ private func parseTests(
             let recordSuiteKey = recordFileStem(sourceURL)
             let recordTestKey = slug(tests[testIndex].name)
             let recordKey = "\(recordSuiteKey).\(recordTestKey)"
+            let directRecordName = "recording.md"
             let nestedRecordName = "\(recordSuiteKey)/\(recordTestKey)/recording.md"
             let legacyRecordName = "\(recordKey)/recording.md"
-            tests[testIndex].recordName =
+            if records[recordKey] != nil,
                 FileManager.default.fileExists(
-                    atPath: recordingURL.appendingPathComponent(nestedRecordName).path
-                ) ? nestedRecordName : legacyRecordName
+                    atPath: recordingURL.appendingPathComponent(directRecordName).path
+                )
+            {
+                tests[testIndex].recordName = directRecordName
+            } else {
+                tests[testIndex].recordName =
+                    FileManager.default.fileExists(
+                        atPath: recordingURL.appendingPathComponent(nestedRecordName).path
+                    ) ? nestedRecordName : legacyRecordName
+            }
             tests[testIndex].aiReview = aiReviews[recordKey]
             tests[testIndex].commands = records[recordKey, default: []].filter {
                 command in

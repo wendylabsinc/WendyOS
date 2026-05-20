@@ -136,25 +136,23 @@ review_single_run() {
   )
 }
 
-if [[ -d "$RUN_DIR/_runs" ]]; then
-  status=0
-  run_paths=()
-  shopt -s nullglob
-  for run_path in "$RUN_DIR/_runs"/*; do
-    [[ -d "$run_path" ]] || continue
-    run_paths+=("$run_path")
-    review_single_run "$run_path" || { step_status=$?; [[ "$status" -eq 0 ]] && status="$step_status"; }
-  done
-  shopt -u nullglob
+aggregate_observation_dirs() {
+  find "$RUN_DIR" -type f -name recording.md -print \
+    | while IFS= read -r record_path; do dirname "$record_path"; done \
+    | sort -u
+}
 
-  if [[ ${#run_paths[@]} -gt 0 ]]; then
-    (
-      cd "$PACKAGE_DIR"
-      swift run swift-e2e-testing aggregate \
-        --output-dir "$(dirname "$RUN_DIR")" \
-        "${run_paths[@]}"
-    )
-  fi
+is_aggregate_dir() {
+  [[ ! -d "$RUN_DIR/tests" && ! -f "$RUN_DIR/recording.md" ]] \
+    && [[ -n "$(find "$RUN_DIR" -type f -name recording.md -print -quit)" ]]
+}
+
+if is_aggregate_dir; then
+  status=0
+  while IFS= read -r observation_path; do
+    [[ -d "$observation_path" ]] || continue
+    review_single_run "$observation_path" || { step_status=$?; [[ "$status" -eq 0 ]] && status="$step_status"; }
+  done < <(aggregate_observation_dirs)
   exit "$status"
 fi
 

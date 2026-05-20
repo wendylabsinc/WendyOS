@@ -47,7 +47,12 @@ struct ReviewCommand: AsyncParsableCommand {
             in: recordingURL,
             outputDirectoryURL: runURL
         )
-        let tests = try parseReviewTests(in: testsURL, records: records, testResults: testResults)
+        var tests = try parseReviewTests(in: testsURL, records: records, testResults: testResults)
+        if FileManager.default.fileExists(
+            atPath: recordingURL.appendingPathComponent("recording.md").path
+        ) {
+            tests = tests.filter { $0.recordURL != nil }
+        }
         let reviewableTests = tests.filter {
             $0.requiresAgentReview(slowTestSeconds: slowTestSeconds)
         }
@@ -511,16 +516,42 @@ private func loadReviewRecords(in recordingURL: URL) throws -> [String: URL] {
     var records: [String: URL] = [:]
     for case let recordURL as URL in enumerator where recordURL.lastPathComponent == "recording.md"
     {
+        if let key = reviewRecordKeyFromRecordingHeader(recordURL) {
+            records[key] = recordURL
+        }
         let relative = reviewRelativePath(recordURL, base: recordingURL)
         let components = relative.split(separator: "/").map(String.init)
         if components.count >= 3 {
             records["\(components[components.count - 3]).\(components[components.count - 2])"] =
                 recordURL
         } else {
-            records[recordURL.deletingLastPathComponent().lastPathComponent] = recordURL
+            let attemptDirectory = recordURL.deletingLastPathComponent()
+            let targetDirectory = attemptDirectory.deletingLastPathComponent()
+            let testDirectory = targetDirectory.deletingLastPathComponent()
+            let suiteDirectory = testDirectory.deletingLastPathComponent()
+            if !suiteDirectory.lastPathComponent.isEmpty,
+                !testDirectory.lastPathComponent.isEmpty
+            {
+                records["\(suiteDirectory.lastPathComponent).\(testDirectory.lastPathComponent)"] =
+                    recordURL
+            } else {
+                records[recordURL.deletingLastPathComponent().lastPathComponent] = recordURL
+            }
         }
     }
     return records
+}
+
+private func reviewRecordKeyFromRecordingHeader(_ recordURL: URL) -> String? {
+    guard let text = try? String(contentsOf: recordURL, encoding: .utf8) else {
+        return nil
+    }
+    guard let sourcePath = reviewFirstMatch(#"(?m)^- Source: `([^`]+)`"#, in: text),
+        let testName = reviewFirstMatch(#"(?m)^- Test: `([^`]+)`"#, in: text)
+    else {
+        return nil
+    }
+    return "\(reviewRecordFileStem(URL(fileURLWithPath: sourcePath))).\(reviewSlug(testName))"
 }
 
 private func parseReviewTests(

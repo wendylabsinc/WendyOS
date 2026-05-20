@@ -72,14 +72,6 @@ struct AggregateCommand: ParsableCommand {
             throw ValidationError("Run directory does not exist: \(rawRunURL.path)")
         }
 
-        let rawRunsURL = aggregateRootURL.appendingPathComponent("_runs", isDirectory: true)
-        let rawRunCopyURL = rawRunsURL.appendingPathComponent(runID, isDirectory: true)
-        try FileManager.default.createDirectory(at: rawRunsURL, withIntermediateDirectories: true)
-        if rawRunURL.standardizedFileURL != rawRunCopyURL.standardizedFileURL {
-            try? FileManager.default.removeItem(at: rawRunCopyURL)
-            try copyItem(at: rawRunURL, to: rawRunCopyURL)
-        }
-
         let testsURL = rawRunURL.appendingPathComponent("tests", isDirectory: true)
         let testDirectories = try aggregateTestDirectories(in: testsURL)
         var mappedTests: [AggregateMappedTest] = []
@@ -115,7 +107,6 @@ struct AggregateCommand: ParsableCommand {
             workflowRunID: components.runID,
             targetName: components.targetName,
             attempt: components.attempt,
-            rawRunPath: aggregateRelativePath(rawRunCopyURL, base: aggregateRootURL),
             mappedTests: mappedTests
         )
     }
@@ -151,7 +142,6 @@ private struct AggregateMappedRun: Encodable {
     var workflowRunID: String
     var targetName: String
     var attempt: String
-    var rawRunPath: String
     var mappedTests: [AggregateMappedTest]
 
     enum CodingKeys: String, CodingKey {
@@ -160,7 +150,6 @@ private struct AggregateMappedRun: Encodable {
         case workflowRunID = "runId"
         case targetName
         case attempt
-        case rawRunPath
         case mappedTests
     }
 }

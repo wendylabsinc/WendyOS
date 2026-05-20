@@ -112,21 +112,34 @@ render_single_report() {
   return "$report_status"
 }
 
+relative_path() {
+  local target="$1"
+  local base="$2"
+  python3 - "$target" "$base" <<'PY'
+import os
+import sys
+print(os.path.relpath(sys.argv[1], sys.argv[2]))
+PY
+}
+
+aggregate_observation_dirs() {
+  find "$RUN_DIR" -type f -name recording.md -print \
+    | while IFS= read -r record_path; do dirname "$record_path"; done \
+    | sort -u
+}
+
 render_aggregate_index() {
   local index_path="$RUN_DIR/index.html"
   local links=()
-  local run_path run_name href
+  local observation_path label href
 
-  shopt -s nullglob
-  for run_path in "$RUN_DIR/_runs"/*; do
-    [[ -d "$run_path" ]] || continue
-    run_name="${run_path##*/}"
-    href="_runs/$run_name/report.html"
-    if [[ -f "$run_path/report.html" ]]; then
-      links+=("<li><a href=\"$(html_escape "$href")\">$(html_escape "$run_name")</a></li>")
-    fi
-  done
-  shopt -u nullglob
+  while IFS= read -r observation_path; do
+    [[ -d "$observation_path" ]] || continue
+    [[ -f "$observation_path/report.html" ]] || continue
+    label="$(relative_path "$observation_path" "$RUN_DIR")"
+    href="$(relative_path "$observation_path/report.html" "$RUN_DIR")"
+    links+=("<li><a href=\"$(html_escape "$href")\">$(html_escape "$label")</a></li>")
+  done < <(aggregate_observation_dirs)
 
   {
     echo "<!doctype html>"
@@ -144,14 +157,17 @@ render_aggregate_index() {
   echo "==> Wrote Swift E2E aggregate index: $index_path"
 }
 
-if [[ -d "$RUN_DIR/_runs" ]]; then
+is_aggregate_dir() {
+  [[ ! -d "$RUN_DIR/tests" && ! -f "$RUN_DIR/recording.md" ]] \
+    && [[ -n "$(find "$RUN_DIR" -type f -name recording.md -print -quit)" ]]
+}
+
+if is_aggregate_dir; then
   status=0
-  shopt -s nullglob
-  for run_path in "$RUN_DIR/_runs"/*; do
-    [[ -d "$run_path" ]] || continue
-    render_single_report "$run_path" || { step_status=$?; [[ "$status" -eq 0 ]] && status="$step_status"; }
-  done
-  shopt -u nullglob
+  while IFS= read -r observation_path; do
+    [[ -d "$observation_path" ]] || continue
+    render_single_report "$observation_path" || { step_status=$?; [[ "$status" -eq 0 ]] && status="$step_status"; }
+  done < <(aggregate_observation_dirs)
   if [[ "$status" -eq 0 ]]; then
     render_aggregate_index
   fi
