@@ -6,12 +6,15 @@ review that helps humans decide what to fix or investigate next.
 
 Guidelines:
 
-- Write one top-level `review.md` for the aggregate.
+- Always write both top-level files: `review.summary.md` and
+  `review.details.md`.
+- `review.summary.md` is rendered inline; keep it brutally concise.
+- `review.details.md` is linked from the report; use it for evidence, reasoning,
+  action items, and links to suite/test details.
 - Use `Status: fail` if the aggregate shows likely product regressions or broken
   required behavior.
 - Use `Status: concern` if the main findings are flakes, infrastructure issues,
   ambiguous failures, or follow-up-worthy test quality issues.
 - Use `Status: pass` only when there are no meaningful issues to highlight.
-- Highlight action items and link to suite/test paths where useful.
 - Prefer concise synthesis over copying every suite finding.
 - Do not edit source code, tests, xUnit files, or recordings.

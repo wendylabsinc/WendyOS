@@ -315,6 +315,7 @@ private struct ReportTestCase {
 private struct AIReview {
     var markdown: String
     var status: AIReviewStatus?
+    var detailsPath: String?
 }
 
 private struct AggregateAIReviews {
@@ -374,18 +375,30 @@ private func loadAggregateAIReviews(in aggregateURL: URL) throws -> AggregateAIR
     }
 
     var reviews = AggregateAIReviews(
-        root: try loadAIReview(at: aggregateURL.appendingPathComponent("review.md"))
+        root: try loadAIReview(
+            summaryURL: aggregateURL.appendingPathComponent("review.summary.md"),
+            detailsURL: aggregateURL.appendingPathComponent("review.details.md"),
+            aggregateURL: aggregateURL
+        )
     )
 
     for suiteURL in try directoryChildren(of: aggregateURL) {
         let suiteKey = suiteURL.lastPathComponent
-        if let suiteReview = try loadAIReview(at: suiteURL.appendingPathComponent("review.md")) {
+        if let suiteReview = try loadAIReview(
+            summaryURL: suiteURL.appendingPathComponent("review.summary.md"),
+            detailsURL: suiteURL.appendingPathComponent("review.details.md"),
+            aggregateURL: aggregateURL
+        ) {
             reviews.suites[suiteKey] = suiteReview
         }
 
         for testURL in try directoryChildren(of: suiteURL) {
             let testKey = testURL.lastPathComponent
-            if let testReview = try loadAIReview(at: testURL.appendingPathComponent("review.md")) {
+            if let testReview = try loadAIReview(
+                summaryURL: testURL.appendingPathComponent("review.summary.md"),
+                detailsURL: testURL.appendingPathComponent("review.details.md"),
+                aggregateURL: aggregateURL
+            ) {
                 reviews.tests[AggregatePathKey(suiteKey: suiteKey, testKey: testKey)] = testReview
             }
         }
@@ -394,20 +407,23 @@ private func loadAggregateAIReviews(in aggregateURL: URL) throws -> AggregateAIR
     return reviews
 }
 
-private func loadAIReview(at reviewURL: URL) throws -> AIReview? {
-    guard FileManager.default.fileExists(atPath: reviewURL.path) else {
+private func loadAIReview(summaryURL: URL, detailsURL: URL, aggregateURL: URL) throws -> AIReview? {
+    guard FileManager.default.fileExists(atPath: summaryURL.path) else {
         return nil
     }
 
-    let review = try String(contentsOf: reviewURL, encoding: .utf8)
+    let review = try String(contentsOf: summaryURL, encoding: .utf8)
         .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !review.isEmpty else {
         return nil
     }
 
+    let detailsPath = FileManager.default.fileExists(atPath: detailsURL.path)
+        ? relativePath(from: aggregateURL, to: detailsURL) : nil
     return AIReview(
         markdown: review,
-        status: parseAIReviewStatus(from: review)
+        status: parseAIReviewStatus(from: review),
+        detailsPath: detailsPath
     )
 }
 
@@ -1149,7 +1165,7 @@ private func renderScopedAIReview(_ review: AIReview?, className: String, headin
 
     return """
         <section class="\(className)">
-        <h4>\(escapeHTML(heading))\(renderAIReviewStatusDot(review.status))</h4>
+        <h4>\(escapeHTML(heading))\(renderAIReviewStatusDot(review.status))\(renderAIReviewDetailsLink(review.detailsPath))</h4>
         <div class="ai-review-markdown">\(renderMarkdown(review.markdown))</div>
         </section>
         """
@@ -1160,6 +1176,13 @@ private func renderAIReviewStatusDot(_ status: AIReviewStatus?) -> String {
         return ""
     }
     return "<span class=\"ai-status-dot \(status.rawValue)\" aria-label=\"\(escapeHTML(status.label))\"></span>"
+}
+
+private func renderAIReviewDetailsLink(_ detailsPath: String?) -> String {
+    guard let detailsPath else {
+        return ""
+    }
+    return "<a class=\"ai-review-details-link\" href=\"\(escapeHTML(detailsPath))\">Details</a>"
 }
 
 private func renderCards(files: [ReportTestFile]) -> String {

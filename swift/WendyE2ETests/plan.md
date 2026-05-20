@@ -355,8 +355,9 @@ Completed follow-up pieces:
   column using platform icons.
 - Expanded rows link directly to per-observation `recording.sh.txt` and
   `recording.md` via hover-only Shell and Record buttons.
-- Aggregate `review.md`, suite `review.md`, and test `review.md` are rendered as
-  Markdown in the report when present.
+- Aggregate, suite, and test AI review summaries are rendered as Markdown in
+  the report when `review.summary.md` is present, with links to
+  `review.details.md`.
 
 ### Iteration 5: generate aggregate AI reviews in two stages
 
@@ -394,11 +395,14 @@ Stage 1: suite-scoped review
 - Run one AI agent per suite, in parallel.
 - Keep all context for a suite in one agent session.
 - The suite prompt is responsible for deciding whether to write:
-  - zero or more per-test reviews at `<aggregate>/<suite>/<test>/review.md`
-  - an optional suite review at `<aggregate>/<suite>/review.md`
-- If nothing is noteworthy for a test, no per-test `review.md` should be
+  - zero or more per-test paired reviews at
+    `<aggregate>/<suite>/<test>/review.summary.md` and
+    `<aggregate>/<suite>/<test>/review.details.md`
+  - an optional paired suite review at `<aggregate>/<suite>/review.summary.md`
+    and `<aggregate>/<suite>/review.details.md`
+- If nothing is noteworthy for a test, neither per-test review file should be
   written.
-- If nothing is noteworthy for the suite as a whole, no suite `review.md`
+- If nothing is noteworthy for the suite as a whole, neither suite review file
   should be written.
 - Inputs should include:
   - suite source/tests and `// AI:` comments
@@ -408,25 +412,23 @@ Stage 1: suite-scoped review
   - relevant snippets or summaries from `recording.md` / `recording.sh.txt`
     where needed, without recursively scanning copied sandboxes
   - existing test/suite reviews when `--overwrite` is false
-- The suite prompt should ask for concise, actionable Markdown using the
-  existing convention:
+- The suite prompt should ask for two files when a review is warranted:
+  - `review.summary.md`: very concise inline summary, including `Status:`.
+  - `review.details.md`: supporting evidence and action items, including
+    `Status:`.
+- `review.summary.md` should be suitable for inline display, for example:
 
   ```md
   Status: concern
-
-  # Summary
-
-  ...
-
-  # Action Items
-
-  ...
+  Summary: macOS→Jetson flakes during tunnel setup.
+  Action: Inspect agent startup retry handling.
   ```
 
 Stage 2: report-level review
 
 - Run one AI agent after suite reviews complete.
-- The report prompt writes `<aggregate>/review.md`.
+- The report prompt writes `<aggregate>/review.summary.md` and
+  `<aggregate>/review.details.md`.
 - Inputs should include:
   - aggregate-wide status summary
   - failed/flaked/skipped target summaries

@@ -38,7 +38,7 @@ struct ReviewCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Tests at or above this duration are reviewed as slow-ish.")
     var slowTestSeconds = 5.0
 
-    @Flag(name: .long, help: "Overwrite existing review.md files.")
+    @Flag(name: .long, help: "Overwrite existing review files.")
     var overwrite = false
 
     mutating func run() async throws {
@@ -325,7 +325,8 @@ private struct AggregateReviewTest {
     var suiteKey: String
     var testKey: String
     var observations: [AggregateReviewObservation]
-    var existingReview: String?
+    var existingSummary: String?
+    var existingDetails: String?
 
     var hasReviewTrigger: Bool {
         !test.aiComments.isEmpty
@@ -339,7 +340,8 @@ private struct AggregateReviewSuite {
     var displayName: String
     var sourceURL: URL
     var tests: [AggregateReviewTest]
-    var existingReview: String?
+    var existingSummary: String?
+    var existingDetails: String?
 }
 
 private struct ReviewResultKey: Hashable {
@@ -704,8 +706,11 @@ private func loadAggregateReviewSuites(testsURL: URL, aggregateURL: URL) throws 
                         testURL: testURL,
                         aggregateURL: aggregateURL
                     ),
-                    existingReview: try aggregateReviewMarkdown(
-                        at: testURL.appendingPathComponent("review.md")
+                    existingSummary: try aggregateReviewMarkdown(
+                        at: testURL.appendingPathComponent("review.summary.md")
+                    ),
+                    existingDetails: try aggregateReviewMarkdown(
+                        at: testURL.appendingPathComponent("review.details.md")
                     )
                 )
             )
@@ -718,8 +723,11 @@ private func loadAggregateReviewSuites(testsURL: URL, aggregateURL: URL) throws 
                     displayName: displayName,
                     sourceURL: sourceURL,
                     tests: suiteTests.sorted { $0.test.funcLine < $1.test.funcLine },
-                    existingReview: try aggregateReviewMarkdown(
-                        at: suiteURL.appendingPathComponent("review.md")
+                    existingSummary: try aggregateReviewMarkdown(
+                        at: suiteURL.appendingPathComponent("review.summary.md")
+                    ),
+                    existingDetails: try aggregateReviewMarkdown(
+                        at: suiteURL.appendingPathComponent("review.details.md")
                     )
                 )
             )
@@ -842,19 +850,29 @@ private func aggregateSuitePrompt(
     lines.append("- Suite key: `\(suite.suiteKey)`")
     lines.append("- Suite name: `\(suite.displayName)`")
     lines.append("- Source: `\(suite.sourceURL.path)`")
-    lines.append("- Suite review path: `\(aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.md").path)`")
+    lines.append("- Suite summary path: `\(aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.summary.md").path)`")
+    lines.append("- Suite details path: `\(aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.details.md").path)`")
     lines.append("")
     lines.append("## Output contract")
     lines.append("")
     lines.append("Write only concern-level Markdown reviews. Do not write `Status: pass` files.")
-    lines.append("You may write per-test reviews at `<aggregate>/\(suite.suiteKey)/<test-key>/review.md`.")
-    lines.append("You may write one suite review at `<aggregate>/\(suite.suiteKey)/review.md`.")
-    lines.append("If nothing is noteworthy for a test or the suite, leave that review file absent.")
+    lines.append("For any noteworthy finding, always write both `review.summary.md` and `review.details.md` at that scope.")
+    lines.append("You may write per-test paired reviews at `<aggregate>/\(suite.suiteKey)/<test-key>/review.summary.md` and `review.details.md`.")
+    lines.append("You may write one paired suite review at `<aggregate>/\(suite.suiteKey)/review.summary.md` and `review.details.md`.")
+    lines.append("If nothing is noteworthy for a test or the suite, leave both files absent.")
     if !overwrite {
-        lines.append("If a non-empty existing review is still valid, leave it in place.")
+        lines.append("If non-empty existing summary/details files are still valid, leave them in place.")
     }
     lines.append("")
-    lines.append("Each review file should use:")
+    lines.append("Each `review.summary.md` should be very short and use:")
+    lines.append("")
+    lines.append("```md")
+    lines.append("Status: concern|fail")
+    lines.append("Summary: One sentence, ideally under 140 characters.")
+    lines.append("Action: One concise next step.")
+    lines.append("```")
+    lines.append("")
+    lines.append("Each `review.details.md` should use:")
     lines.append("")
     lines.append("```md")
     lines.append("Status: concern|fail")
@@ -899,39 +917,52 @@ private func aggregateReportPrompt(
     )
     lines.append("## Output contract")
     lines.append("")
-    lines.append("Write the top-level aggregate review to `\(aggregateURL.appendingPathComponent("review.md").path)`.")
-    lines.append("Use `Status: pass`, `Status: concern`, or `Status: fail`.")
-    lines.append("Highlight the most important results, action items, and links to relevant suite/test details.")
+    lines.append("Write both top-level files: `\(aggregateURL.appendingPathComponent("review.summary.md").path)` and `\(aggregateURL.appendingPathComponent("review.details.md").path)`.")
+    lines.append("Use `Status: pass`, `Status: concern`, or `Status: fail` in both files.")
+    lines.append("The summary file should be brutally concise; the details file should contain evidence, action items, and links to relevant suite/test details.")
     if !overwrite {
-        lines.append("If an existing top-level review is still valid, update it only when needed.")
+        lines.append("If existing top-level summary/details files are still valid, update them only when needed.")
     }
     lines.append("")
     lines.append("## Aggregate summary")
     lines.append("")
     for suite in suites {
         lines.append("### \(suite.displayName) (`\(suite.suiteKey)`)")
-        if let suiteReview = try aggregateReviewMarkdown(
-            at: aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.md")
+        if let suiteSummary = try aggregateReviewMarkdown(
+            at: aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.summary.md")
         ) {
-            lines.append("- Suite review:")
+            lines.append("- Suite review summary:")
             lines.append("  ```md")
-            lines.append(indent(suiteReview, prefix: "  "))
+            lines.append(indent(suiteSummary, prefix: "  "))
             lines.append("  ```")
         } else {
-            lines.append("- Suite review: `<none>`")
+            lines.append("- Suite review summary: `<none>`")
+        }
+        if let suiteDetails = try aggregateReviewMarkdown(
+            at: aggregateURL.appendingPathComponent(suite.suiteKey).appendingPathComponent("review.details.md")
+        ) {
+            lines.append("- Suite review details:")
+            lines.append("  ```md")
+            lines.append(indent(suiteDetails, prefix: "  "))
+            lines.append("  ```")
         }
         for test in suite.tests {
-            let reviewPath = aggregateURL
+            let testURL = aggregateURL
                 .appendingPathComponent(test.suiteKey)
                 .appendingPathComponent(test.testKey)
-                .appendingPathComponent("review.md")
             let failures = test.observations.filter(\.isFailed).count
             let flaked = aggregateReviewTargetOutcomeCounts(test.observations).flaked
             lines.append("- `\(test.test.name)` (`\(test.suiteKey)/\(test.testKey)`): observations=\(test.observations.count), failed=\(failures), flaked-targets=\(flaked)")
-            if let review = try aggregateReviewMarkdown(at: reviewPath) {
-                lines.append("  - Test review:")
+            if let summary = try aggregateReviewMarkdown(at: testURL.appendingPathComponent("review.summary.md")) {
+                lines.append("  - Test review summary:")
                 lines.append("    ```md")
-                lines.append(indent(review, prefix: "    "))
+                lines.append(indent(summary, prefix: "    "))
+                lines.append("    ```")
+            }
+            if let details = try aggregateReviewMarkdown(at: testURL.appendingPathComponent("review.details.md")) {
+                lines.append("  - Test review details:")
+                lines.append("    ```md")
+                lines.append(indent(details, prefix: "    "))
                 lines.append("    ```")
             }
         }
@@ -974,11 +1005,18 @@ private func appendAggregateReviewTest(
     lines.append("### \(test.test.suite) › \(test.test.name)")
     lines.append("- Test key: `\(test.suiteKey)/\(test.testKey)`")
     lines.append("- Source: `\(test.test.sourcePath):\(test.test.funcLine)`")
-    lines.append("- Review path: `\(aggregateURL.appendingPathComponent(test.suiteKey).appendingPathComponent(test.testKey).appendingPathComponent("review.md").path)`")
-    if let existingReview = test.existingReview {
-        lines.append("- Existing review:")
+    lines.append("- Summary path: `\(aggregateURL.appendingPathComponent(test.suiteKey).appendingPathComponent(test.testKey).appendingPathComponent("review.summary.md").path)`")
+    lines.append("- Details path: `\(aggregateURL.appendingPathComponent(test.suiteKey).appendingPathComponent(test.testKey).appendingPathComponent("review.details.md").path)`")
+    if let existingSummary = test.existingSummary {
+        lines.append("- Existing summary:")
         lines.append("  ```md")
-        lines.append(indent(existingReview, prefix: "  "))
+        lines.append(indent(existingSummary, prefix: "  "))
+        lines.append("  ```")
+    }
+    if let existingDetails = test.existingDetails {
+        lines.append("- Existing details:")
+        lines.append("  ```md")
+        lines.append(indent(existingDetails, prefix: "  "))
         lines.append("  ```")
     }
     if !test.test.aiComments.isEmpty {
@@ -1036,24 +1074,32 @@ private func aggregateReviewTargetOutcomeCounts(_ observations: [AggregateReview
 }
 
 private func removeExistingAggregateReviews(in aggregateURL: URL) throws {
+    removeAggregateReviewPair(in: aggregateURL)
     try? FileManager.default.removeItem(at: aggregateURL.appendingPathComponent("review.md"))
     for suiteURL in try aggregateReviewDirectoryChildren(of: aggregateURL) {
+        removeAggregateReviewPair(in: suiteURL)
         try? FileManager.default.removeItem(at: suiteURL.appendingPathComponent("review.md"))
         for testURL in try aggregateReviewDirectoryChildren(of: suiteURL) {
+            removeAggregateReviewPair(in: testURL)
             try? FileManager.default.removeItem(at: testURL.appendingPathComponent("review.md"))
         }
     }
+}
+
+private func removeAggregateReviewPair(in directoryURL: URL) {
+    try? FileManager.default.removeItem(at: directoryURL.appendingPathComponent("review.summary.md"))
+    try? FileManager.default.removeItem(at: directoryURL.appendingPathComponent("review.details.md"))
 }
 
 @discardableResult
 private func enforceAggregateSuiteReviewContract(in aggregateURL: URL) throws -> Int {
     var count = 0
     for suiteURL in try aggregateReviewDirectoryChildren(of: aggregateURL) {
-        if try enforceConcernReviewFile(at: suiteURL.appendingPathComponent("review.md")) {
+        if try enforceConcernReviewPair(in: suiteURL) {
             count += 1
         }
         for testURL in try aggregateReviewDirectoryChildren(of: suiteURL) {
-            if try enforceConcernReviewFile(at: testURL.appendingPathComponent("review.md")) {
+            if try enforceConcernReviewPair(in: testURL) {
                 count += 1
             }
         }
@@ -1062,18 +1108,32 @@ private func enforceAggregateSuiteReviewContract(in aggregateURL: URL) throws ->
 }
 
 private func enforceAggregateReportReviewContract(in aggregateURL: URL) throws {
-    let reviewURL = aggregateURL.appendingPathComponent("review.md")
-    guard let markdown = try aggregateReviewMarkdown(at: reviewURL) else { return }
-    guard let status = parseReviewStatus(from: markdown), ["pass", "concern", "fail"].contains(status) else {
-        try? FileManager.default.removeItem(at: reviewURL)
-        return
-    }
+    try enforceReviewPair(in: aggregateURL, allowedStatuses: ["pass", "concern", "fail"])
 }
 
-private func enforceConcernReviewFile(at reviewURL: URL) throws -> Bool {
-    guard let markdown = try aggregateReviewMarkdown(at: reviewURL) else { return false }
-    guard let status = parseReviewStatus(from: markdown), ["concern", "fail"].contains(status) else {
-        try? FileManager.default.removeItem(at: reviewURL)
+private func enforceConcernReviewPair(in directoryURL: URL) throws -> Bool {
+    try enforceReviewPair(in: directoryURL, allowedStatuses: ["concern", "fail"])
+}
+
+@discardableResult
+private func enforceReviewPair(in directoryURL: URL, allowedStatuses: Set<String>) throws -> Bool {
+    let summaryURL = directoryURL.appendingPathComponent("review.summary.md")
+    let detailsURL = directoryURL.appendingPathComponent("review.details.md")
+    let summary = try aggregateReviewMarkdown(at: summaryURL)
+    let details = try aggregateReviewMarkdown(at: detailsURL)
+    guard let summary, let details else {
+        if summary != nil || details != nil {
+            removeAggregateReviewPair(in: directoryURL)
+        }
+        return false
+    }
+    guard
+        let summaryStatus = parseReviewStatus(from: summary),
+        let detailsStatus = parseReviewStatus(from: details),
+        allowedStatuses.contains(summaryStatus),
+        allowedStatuses.contains(detailsStatus)
+    else {
+        removeAggregateReviewPair(in: directoryURL)
         return false
     }
     return true
