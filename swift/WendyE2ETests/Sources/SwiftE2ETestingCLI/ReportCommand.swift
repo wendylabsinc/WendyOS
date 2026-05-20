@@ -58,7 +58,6 @@ struct ReportCommand: ParsableCommand {
             files: files,
             outputURL: outputURL
         )
-        try writeAggregatePlaceholderPages(files: files, aggregateURL: runURL)
     }
 }
 
@@ -78,6 +77,11 @@ private struct CommandRun {
 private struct TestResultKey: Hashable {
     var suite: String
     var name: String
+}
+
+private struct AggregatePathKey: Hashable {
+    var suiteKey: String
+    var testKey: String
 }
 
 private struct ReportTestDuration {
@@ -143,6 +147,17 @@ private struct ReportTestDurationRange {
 private struct ReportAggregateTestResult {
     var targetOutcomes: ReportTargetOutcomeCounts
     var durationRange: ReportTestDurationRange?
+    var observations: [ReportTestObservation]
+}
+
+private struct ReportTestObservation {
+    var target: String
+    var attempt: String
+    var status: ReportTestStatus
+
+    var duration: ReportTestDuration? {
+        status.duration
+    }
 }
 
 private enum ReportTestStatus {
@@ -281,6 +296,7 @@ private struct ReportTestCase {
     var status: ReportTestStatus
     var targetOutcomes = ReportTargetOutcomeCounts()
     var durationRange: ReportTestDurationRange?
+    var observations: [ReportTestObservation] = []
     var nextLine = 0
     var aiItems: [String] = []
     var recordName = ""
@@ -468,36 +484,42 @@ private func parseXUnitResults(at resultURL: URL) throws -> [TestResultKey: Repo
     return parser.results
 }
 
-private func loadAggregateTestResults(in aggregateURL: URL) throws -> [TestResultKey: ReportAggregateTestResult] {
-    var observed: [TestResultKey: [String: [ReportTestStatus]]] = [:]
-    var durations: [TestResultKey: [Double]] = [:]
+private func loadAggregateTestResults(in aggregateURL: URL) throws -> [AggregatePathKey: ReportAggregateTestResult] {
+    var observed: [AggregatePathKey: [String: [ReportTestStatus]]] = [:]
+    var durations: [AggregatePathKey: [Double]] = [:]
+    var observations: [AggregatePathKey: [ReportTestObservation]] = [:]
 
     for suiteURL in try directoryChildren(of: aggregateURL) {
         let suiteKey = suiteURL.lastPathComponent
         for testURL in try directoryChildren(of: suiteURL) {
             let testKey = testURL.lastPathComponent
+            let pathKey = AggregatePathKey(suiteKey: suiteKey, testKey: testKey)
             for targetURL in try directoryChildren(of: testURL) {
                 let targetName = targetURL.lastPathComponent
                 for attemptURL in try directoryChildren(of: targetURL) {
-                    let resultURL = attemptURL.appendingPathComponent("test-results.xml")
-                    guard FileManager.default.fileExists(atPath: resultURL.path) else {
-                        continue
-                    }
-                    let results = try parseXUnitResults(at: resultURL)
-                    for (key, status) in results
-                    where slug(key.suite) == suiteKey && slug(key.name) == testKey
-                    {
-                        observed[key, default: [:]][targetName, default: []].append(status)
-                        if let duration = status.duration {
-                            durations[key, default: []].append(duration.seconds)
-                        }
+                    let attemptName = attemptURL.lastPathComponent
+                    let status = try aggregateObservationStatus(
+                        suiteKey: suiteKey,
+                        testKey: testKey,
+                        attemptURL: attemptURL
+                    )
+                    observed[pathKey, default: [:]][targetName, default: []].append(status)
+                    observations[pathKey, default: []].append(
+                        ReportTestObservation(
+                            target: targetName,
+                            attempt: attemptName,
+                            status: status
+                        )
+                    )
+                    if let duration = status.duration {
+                        durations[pathKey, default: []].append(duration.seconds)
                     }
                 }
             }
         }
     }
 
-    let keys = Set(observed.keys).union(durations.keys)
+    let keys = Set(observed.keys).union(durations.keys).union(observations.keys)
     return Dictionary(uniqueKeysWithValues: keys.map { key in
         var counts = ReportTargetOutcomeCounts()
         for statuses in observed[key, default: [:]].values {
@@ -507,10 +529,34 @@ private func loadAggregateTestResults(in aggregateURL: URL) throws -> [TestResul
             key,
             ReportAggregateTestResult(
                 targetOutcomes: counts,
-                durationRange: ReportTestDurationRange(durations[key, default: []])
+                durationRange: ReportTestDurationRange(durations[key, default: []]),
+                observations: observations[key, default: []].sorted(by: observationSort)
             )
         )
     })
+}
+
+private func aggregateObservationStatus(
+    suiteKey: String,
+    testKey: String,
+    attemptURL: URL
+) throws -> ReportTestStatus {
+    let resultURL = attemptURL.appendingPathComponent("test-results.xml")
+    guard FileManager.default.fileExists(atPath: resultURL.path) else {
+        return .unknown
+    }
+
+    let results = try parseXUnitResults(at: resultURL)
+    return results.first { key, _ in
+        slug(key.suite) == suiteKey && slug(key.name) == testKey
+    }?.value ?? .unknown
+}
+
+private func observationSort(_ lhs: ReportTestObservation, _ rhs: ReportTestObservation) -> Bool {
+    if lhs.target != rhs.target {
+        return lhs.target < rhs.target
+    }
+    return lhs.attempt < rhs.attempt
 }
 
 private func aggregateObservationFileURLs(in aggregateURL: URL, fileName: String) throws -> [URL] {
@@ -793,7 +839,7 @@ private func parseTests(
     recordingURL: URL,
     records: [String: [CommandRun]],
     aiReviews: [String: AIReview],
-    testResults: [TestResultKey: ReportAggregateTestResult]
+    testResults: [AggregatePathKey: ReportAggregateTestResult]
 ) throws -> [ReportTestFile] {
     let sourceURLs = try swiftTestFiles(in: testsURL)
     var files: [ReportTestFile] = []
@@ -865,10 +911,11 @@ private func parseTests(
                     && tests[testIndex].funcLine <= command.sourceLine
                     && command.sourceLine < nextLine
             }
-            let key = TestResultKey(suite: tests[testIndex].suite, name: tests[testIndex].name)
+            let key = AggregatePathKey(suiteKey: recordSuiteKey, testKey: recordTestKey)
             if let result = testResults[key] {
                 tests[testIndex].targetOutcomes = result.targetOutcomes
                 tests[testIndex].durationRange = result.durationRange
+                tests[testIndex].observations = result.observations
             }
         }
 
@@ -1044,15 +1091,15 @@ private func renderCards(files: [ReportTestFile]) -> String {
             let hasAIReview = test.aiReviewMarkdown.isEmpty ? "false" : "true"
             let aiBadge = hasAIReview == "true" ? renderAIReviewBadge(test.aiReview?.status) : ""
             let pathText = "\(test.suite) › \(test.name)"
-            let pagePath = aggregateTestPagePath(fileURL: file.url, testName: test.name)
 
             cards.append(
-                "<a class=\"test-details test-details-link\" data-test-status=\"\(statusClass)\" data-test-statuses=\"\(escapeHTML(statusClasses))\" data-has-ai=\"\(hasAI)\" data-has-ai-review=\"\(hasAIReview)\" href=\"\(escapeHTML(pagePath))\">"
+                "<details class=\"test-details\" data-test-status=\"\(statusClass)\" data-test-statuses=\"\(escapeHTML(statusClasses))\" data-has-ai=\"\(hasAI)\" data-has-ai-review=\"\(hasAIReview)\">"
             )
             cards.append(
-                "<span class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(outcomeBadges)</span>\(aggregateDurationBadge(test.durationRange))\(aiBadge)<span class=\"report-links\"></span></span>"
+                "<summary class=\"test-summary\"><span class=\"test-title\"><span class=\"test-path\">\(escapeHTML(pathText))</span>\(outcomeBadges)</span>\(aggregateDurationBadge(test.durationRange))\(aiBadge)<span class=\"report-links\"></span></summary>"
             )
-            cards.append("</a>")
+            cards.append(renderObservations(test.observations))
+            cards.append("</details>")
         }
 
         cards.append("</div></section>")
@@ -1081,52 +1128,41 @@ private func renderTargetOutcomeBadges(_ counts: ReportTargetOutcomeCounts) -> S
     }.joined()
 }
 
+private func renderObservations(_ observations: [ReportTestObservation]) -> String {
+    guard !observations.isEmpty else {
+        return "<div class=\"test-body\"><p class=\"note\">No concrete observations were found for this test.</p></div>"
+    }
+
+    var chunks: [String] = [
+        "<div class=\"test-body\"><section class=\"observations\" aria-label=\"Concrete observations\">",
+        "<div class=\"observation-row observation-header\"><span>Target</span><span>Attempt</span><span>Status</span><span>Duration</span></div>",
+    ]
+    var previousTarget: String?
+    for observation in observations.sorted(by: observationSort) {
+        let target = observation.target == previousTarget ? "" : observation.target
+        previousTarget = observation.target
+        chunks.append(
+            "<div class=\"observation-row\"><span class=\"observation-target\">\(escapeHTML(target))</span><span class=\"observation-attempt\">\(escapeHTML(observation.attempt))</span><span class=\"badge \(observation.status.statusClass)\">\(observation.status.statusText)</span>\(observationDurationBadge(observation.duration))</div>"
+        )
+    }
+    chunks.append("</section></div>")
+    return chunks.joined(separator: "\n")
+}
+
+private func observationDurationBadge(_ duration: ReportTestDuration?) -> String {
+    guard let duration else {
+        return "<span class=\"badge duration empty\" aria-hidden=\"true\"><span class=\"duration-bar\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\"></span></span>"
+    }
+
+    return "<span class=\"badge duration\" title=\"Test duration: \(escapeHTML(duration.formatted))\" style=\"--duration-bar-color: \(duration.color); --duration-bar-width: \(duration.barWidth)\"><span class=\"duration-bar\" aria-hidden=\"true\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\">\(escapeHTML(duration.formatted))</span></span>"
+}
+
 private func aggregateDurationBadge(_ duration: ReportTestDurationRange?) -> String {
     guard let duration else {
         return "<span class=\"badge duration empty\" aria-hidden=\"true\"><span class=\"duration-bar\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\"></span></span>"
     }
 
     return "<span class=\"badge duration\" title=\"Test duration: \(escapeHTML(duration.formatted))\" style=\"--duration-bar-left: \(duration.barLeft); --duration-bar-width: \(duration.barWidth); --duration-bar-color: \(duration.barColor)\"><span class=\"duration-bar\" aria-hidden=\"true\"><span class=\"duration-bar-fill\"></span></span><span class=\"duration-value\">\(escapeHTML(duration.formatted))</span></span>"
-}
-
-private func aggregateTestPagePath(fileURL: URL, testName: String) -> String {
-    "\(recordFileStem(fileURL))/\(slug(testName))/index.html"
-}
-
-private func writeAggregatePlaceholderPages(files: [ReportTestFile], aggregateURL: URL) throws {
-    for file in files {
-        for test in file.tests {
-            let relativePath = aggregateTestPagePath(fileURL: file.url, testName: test.name)
-            let pageURL = aggregateURL.appendingPathComponent(relativePath)
-            try FileManager.default.createDirectory(
-                at: pageURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let pathText = "\(test.suite) › \(test.name)"
-            let html = """
-                <!doctype html>
-                <html lang=\"en\">
-                <head>
-                  <meta charset=\"utf-8\" />
-                  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-                  <title>\(escapeHTML(pathText))</title>
-                </head>
-                <body>
-                  <main>
-                    <p><a href=\"../../index.html\">Back to report</a></p>
-                    <h1>\(escapeHTML(pathText))</h1>
-                    <p>Not implemented yet.</p>
-                  </main>
-                </body>
-                </html>
-                """
-            try html.write(
-                to: pageURL,
-                atomically: true,
-                encoding: .utf8
-            )
-        }
-    }
 }
 
 private func renderAIReviewBadge(_ status: AIReviewStatus?) -> String {
