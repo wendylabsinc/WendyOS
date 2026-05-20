@@ -188,7 +188,8 @@ Start by mapping the current raw run output onto the aggregate hierarchy without
 
 `report` should remain per-run in this iteration:
 
-- Keep rendering a `report.html` for each mapped run/attempt using the existing report renderer.
+- Keep a `_runs/<raw-run-id>/` adapter tree under the aggregate root so the existing per-run renderer and reviewer can operate without understanding cross-run structure yet.
+- Keep rendering a `report.html` for each copied raw run in `_runs/` using the existing report renderer.
 - Add a top-level aggregate `index.html` that links to the per-run reports.
 - Do not attempt a single unified aggregate report yet.
 
