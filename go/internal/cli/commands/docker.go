@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -98,27 +99,74 @@ func detectProjectType(dir string) (string, error) {
 	return "unknown", nil
 }
 
+// validDockerfileNameRe matches valid Dockerfile names: "Dockerfile" or
+// "Dockerfile" followed by a dot or hyphen and one or more safe characters.
+var validDockerfileNameRe = regexp.MustCompile(`^Dockerfile([.\-][a-zA-Z0-9._-]+)?$`)
+
+// validateDockerfileName returns an error when the base filename of name does
+// not follow the Dockerfile naming convention. This prevents filenames that
+// start with "-" from being misinterpreted as Docker CLI flags, and rejects
+// names with control characters or other unsafe content.
+func validateDockerfileName(name string) error {
+	base := filepath.Base(name)
+	if !validDockerfileNameRe.MatchString(base) {
+		return fmt.Errorf("invalid Dockerfile name %q: must be Dockerfile or Dockerfile.<variant>", base)
+	}
+	return nil
+}
+
+// confinedDockerfilePath resolves dockerfile relative to base, uses
+// filepath.EvalSymlinks on both the base and the joined path to neutralise
+// symlink-based escapes, then verifies (via filepath.Rel) that the resolved
+// target lies within base. Returns the resolved absolute path on success.
+func confinedDockerfilePath(base, dockerfile string) (string, error) {
+	absBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return "", fmt.Errorf("resolving project directory: %w", err)
+	}
+
+	joined, err := filepath.Abs(filepath.Join(absBase, dockerfile))
+	if err != nil {
+		return "", fmt.Errorf("resolving dockerfile path: %w", err)
+	}
+
+	// Check containment before EvalSymlinks so that a non-existent path still
+	// gets a clear "outside project" error rather than a confusing stat error.
+	rel, err := filepath.Rel(absBase, joined)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+	}
+
+	// Resolve symlinks and re-check to block symlink-based escapes.
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("dockerfile %q does not exist", dockerfile)
+		}
+		return "", fmt.Errorf("resolving dockerfile: %w", err)
+	}
+	rel, err = filepath.Rel(absBase, resolved)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+	}
+
+	return resolved, nil
+}
+
 // resolveDockerfile returns the Dockerfile filename to pass to docker build for
-// a docker-type project. If requested is non-empty it is validated (existence
-// and directory confinement) and returned. Otherwise all Dockerfiles in cwd are
-// detected: a single match is returned immediately; multiple matches trigger an
-// interactive picker or, in non-interactive mode, prefer the base "Dockerfile"
-// and fall back to the first variant found.
+// a docker-type project. If requested is non-empty it is validated (name format,
+// directory confinement, symlink resolution, existence) and returned unchanged.
+// Otherwise all Dockerfiles in cwd are detected: a single match is returned
+// immediately; multiple matches trigger an interactive picker or, in
+// non-interactive mode, prefer the base "Dockerfile" and fall back to the first
+// variant found.
 func resolveDockerfile(cwd, requested string, interactive bool) (string, error) {
 	if requested != "" {
-		abs, err := filepath.Abs(filepath.Join(cwd, requested))
-		if err != nil {
-			return "", fmt.Errorf("resolving dockerfile path: %w", err)
+		if err := validateDockerfileName(requested); err != nil {
+			return "", err
 		}
-		absCwd, err := filepath.Abs(cwd)
-		if err != nil {
-			return "", fmt.Errorf("resolving project directory: %w", err)
-		}
-		if !strings.HasPrefix(abs+string(filepath.Separator), absCwd+string(filepath.Separator)) {
-			return "", fmt.Errorf("dockerfile %q must be within the project directory", requested)
-		}
-		if _, err := os.Stat(abs); err != nil {
-			return "", fmt.Errorf("dockerfile %q: %w", requested, err)
+		if _, err := confinedDockerfilePath(cwd, requested); err != nil {
+			return "", err
 		}
 		return requested, nil
 	}
@@ -140,11 +188,11 @@ func resolveDockerfile(cwd, requested string, interactive bool) (string, error) 
 	if !interactive {
 		for _, opt := range dockerfiles {
 			if opt.File == "Dockerfile" {
-				cliLogln("Note: multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", opt.File)
+				cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", opt.File)
 				return opt.File, nil
 			}
 		}
-		cliLogln("Note: multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", dockerfiles[0].File)
+		cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", dockerfiles[0].File)
 		return dockerfiles[0].File, nil
 	}
 

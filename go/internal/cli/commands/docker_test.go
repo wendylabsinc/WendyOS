@@ -1318,3 +1318,64 @@ func TestResolveDockerfile_MultipleNonInteractiveVariantOnlyPrefersFirst(t *test
 		t.Fatal("got empty, want a Dockerfile variant")
 	}
 }
+
+func TestValidateDockerfileName(t *testing.T) {
+	valid := []string{"Dockerfile", "Dockerfile.prod", "Dockerfile.dev", "Dockerfile-prod", "Dockerfile.my.variant"}
+	for _, name := range valid {
+		if err := validateDockerfileName(name); err != nil {
+			t.Errorf("validateDockerfileName(%q) unexpected error: %v", name, err)
+		}
+	}
+	invalid := []string{"-flag", "dockerfile", "DOCKERFILE", "not-a-dockerfile", "Dockerfile/evil", ".hidden"}
+	for _, name := range invalid {
+		if err := validateDockerfileName(name); err == nil {
+			t.Errorf("validateDockerfileName(%q) expected error, got nil", name)
+		}
+	}
+}
+
+func TestConfinedDockerfilePath_Traversal(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := confinedDockerfilePath(dir, "../../etc/passwd"); err == nil {
+		t.Fatal("expected error for path traversal, got nil")
+	}
+}
+
+func TestConfinedDockerfilePath_NotExist(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := confinedDockerfilePath(dir, "Dockerfile.notexist"); err == nil {
+		t.Fatal("expected error for non-existent file, got nil")
+	}
+}
+
+func TestConfinedDockerfilePath_Valid(t *testing.T) {
+	dir := t.TempDir()
+	name := "Dockerfile.prod"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("FROM scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := confinedDockerfilePath(dir, name)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == "" {
+		t.Fatal("expected non-empty resolved path")
+	}
+}
+
+func TestConfinedDockerfilePath_SymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	target := t.TempDir()
+	// Create a Dockerfile in the target (outside dir).
+	if err := os.WriteFile(filepath.Join(target, "Dockerfile"), []byte("FROM scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Symlink inside dir pointing to target dir.
+	linkPath := filepath.Join(dir, "link")
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+	if _, err := confinedDockerfilePath(dir, "link/Dockerfile"); err == nil {
+		t.Fatal("expected error for symlink escape, got nil")
+	}
+}

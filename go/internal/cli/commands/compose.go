@@ -100,16 +100,11 @@ func composeBuildContext(svc composeService, projectDir string) (ctxDir, dockerf
 		}
 		df := "Dockerfile"
 		if bc.Dockerfile != "" {
-			absDockerfile, err := filepath.Abs(filepath.Join(ctxDir, bc.Dockerfile))
-			if err != nil {
-				return "", "", nil, fmt.Errorf("resolving dockerfile path: %w", err)
+			if err := validateDockerfileName(bc.Dockerfile); err != nil {
+				return "", "", nil, fmt.Errorf("compose dockerfile: %w", err)
 			}
-			absCtx, err := filepath.Abs(ctxDir)
-			if err != nil {
-				return "", "", nil, fmt.Errorf("resolving build context: %w", err)
-			}
-			if !strings.HasPrefix(absDockerfile+string(filepath.Separator), absCtx+string(filepath.Separator)) {
-				return "", "", nil, fmt.Errorf("dockerfile %q must be within the build context", bc.Dockerfile)
+			if _, err := confinedDockerfilePath(ctxDir, bc.Dockerfile); err != nil {
+				return "", "", nil, fmt.Errorf("compose dockerfile: %w", err)
 			}
 			df = bc.Dockerfile
 		}

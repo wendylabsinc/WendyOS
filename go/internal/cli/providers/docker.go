@@ -146,15 +146,24 @@ func (p *DockerProvider) BuildWithDockerfile(ctx context.Context, device models.
 	imageName := strings.ToLower(product) + ":latest"
 	args := []string{"build", "-t", imageName}
 	if dockerfile != "" {
-		abs, err := filepath.Abs(filepath.Join(projectPath, dockerfile))
-		if err != nil {
-			return nil, fmt.Errorf("resolving dockerfile path: %w", err)
-		}
-		absProject, err := filepath.Abs(projectPath)
+		absProject, err := filepath.EvalSymlinks(projectPath)
 		if err != nil {
 			return nil, fmt.Errorf("resolving project path: %w", err)
 		}
-		if !strings.HasPrefix(abs+string(filepath.Separator), absProject+string(filepath.Separator)) {
+		joined, err := filepath.Abs(filepath.Join(absProject, dockerfile))
+		if err != nil {
+			return nil, fmt.Errorf("resolving dockerfile path: %w", err)
+		}
+		rel, err := filepath.Rel(absProject, joined)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return nil, fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+		}
+		resolved, err := filepath.EvalSymlinks(joined)
+		if err != nil {
+			return nil, fmt.Errorf("dockerfile %q: %w", dockerfile, err)
+		}
+		rel, err = filepath.Rel(absProject, resolved)
+		if err != nil || strings.HasPrefix(rel, "..") {
 			return nil, fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
 		}
 		args = append(args, "-f", dockerfile)

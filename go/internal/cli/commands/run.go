@@ -480,19 +480,11 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		if opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
 			return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
 		}
-		absDockerfile, absErr := filepath.Abs(filepath.Join(cwd, opts.dockerfile))
-		absCwd, cwdErr := filepath.Abs(cwd)
-		if absErr != nil || cwdErr != nil {
-			return fmt.Errorf("resolving --dockerfile path")
+		if err := validateDockerfileName(opts.dockerfile); err != nil {
+			return fmt.Errorf("--dockerfile: %w", err)
 		}
-		if !strings.HasPrefix(absDockerfile+string(filepath.Separator), absCwd+string(filepath.Separator)) {
-			return fmt.Errorf("--dockerfile must be within the project directory")
-		}
-		if _, statErr := os.Stat(absDockerfile); statErr != nil {
-			if os.IsNotExist(statErr) {
-				return fmt.Errorf("--dockerfile %q does not exist in %s", opts.dockerfile, cwd)
-			}
-			return fmt.Errorf("checking --dockerfile: %w", statErr)
+		if _, err := confinedDockerfilePath(cwd, opts.dockerfile); err != nil {
+			return fmt.Errorf("--dockerfile: %w", err)
 		}
 		if opts.buildType == "" {
 			opts.buildType = "docker"
