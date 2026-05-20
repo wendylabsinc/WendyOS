@@ -195,16 +195,20 @@ struct `'wendy device info'` {
     /**
      When the CLI is not attached to an interactive terminal, `device info` behaves like `--json`: it avoids prompts and emits machine-readable output.
      */
-    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows))
+    @Test
     func `non-interactive mode prints JSON device information`() async throws {
         try await self.scenario.run { cli, agent in
             let agentAddress = agent.machine.address
 
             try await cli.sh(
-                """
-                mkdir -p "$HOME/.wendy"
-                printf '%s\n' '{"defaultDevice":"\(agentAddress)"}' > "$HOME/.wendy/config.json"
-                """
+                posix: """
+                    mkdir -p "$HOME/.wendy"
+                    printf '%s\n' '{"defaultDevice":"\(agentAddress)"}' > "$HOME/.wendy/config.json"
+                    """,
+                power: """
+                    New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultDevice":"\(agentAddress)"}'
+                    """
             )
 
             try await cli.sh("wendy device info") { result in
