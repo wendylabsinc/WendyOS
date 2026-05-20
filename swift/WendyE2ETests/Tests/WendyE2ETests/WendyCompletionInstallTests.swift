@@ -41,17 +41,32 @@ struct `'wendy completion install'` {
      the conventional location, and adds an idempotent source line to
      the shell rc file when that shell needs one.
      */
-    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows))
+    @Test
     func `installs completion for the detected shell`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                SHELL=/bin/zsh wendy completion install
-                test -f "$HOME/.zfunc/_wendy"
-                test -f "$HOME/.zshrc"
-                grep -q '#compdef wendy' "$HOME/.zfunc/_wendy"
-                grep -q 'wendy-completion' "$HOME/.zshrc"
-                """
+                posix: """
+                    SHELL=/bin/zsh wendy completion install
+                    test -f "$HOME/.zfunc/_wendy"
+                    test -f "$HOME/.zshrc"
+                    grep -q '#compdef wendy' "$HOME/.zfunc/_wendy"
+                    grep -q 'wendy-completion' "$HOME/.zshrc"
+                    """,
+                power: """
+                    wendy completion install
+                    $completionPath = Join-Path $env:HOME 'Documents/PowerShell/Completions/wendy.ps1'
+                    $profilePath = Join-Path $env:HOME 'Documents/PowerShell/Microsoft.PowerShell_profile.ps1'
+                    if (!(Test-Path -LiteralPath $completionPath -PathType Leaf)) {
+                        throw 'PowerShell completion should exist'
+                    }
+                    if (!(Test-Path -LiteralPath $profilePath -PathType Leaf)) {
+                        throw 'PowerShell profile should exist'
+                    }
+                    Select-String -LiteralPath $completionPath -Pattern 'Register-ArgumentCompleter' -Quiet | Out-Null
+                    if (!$?) { throw 'completion script should register completer' }
+                    Select-String -LiteralPath $profilePath -Pattern 'wendy.ps1' -Quiet | Out-Null
+                    if (!$?) { throw 'PowerShell profile should load completion script' }
+                    """
             ) { result in
                 let stderr = result.stderr
 
