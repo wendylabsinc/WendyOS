@@ -303,7 +303,7 @@ jobs:
 
   swift-e2e-aggregate:
     name: Aggregate Swift E2E Results
-    if: always()
+    if: ${{ always() && !cancelled() }}
     needs: swift-e2e-tests
     runs-on: [self-hosted, linux]
     timeout-minutes: 60
