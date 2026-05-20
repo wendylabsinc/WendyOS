@@ -66,7 +66,7 @@ when you need lower-level control:
   `<output-root>/<run-id>/tests`. They accept options such as `--filter`,
   `--agent-address`, `--agent-user`, and `--verbose`.
 - `Scripts/E2EReview.sh` and `Scripts/E2EReview.ps1` review tests that include
-  `// AI:` comments and write `ai-review.md` files into the run directory.
+  `// AI:` comments and write `review.md` files into the run directory.
 - `Scripts/E2EReport.sh` and `Scripts/E2EReport.ps1` render
   `<output-root>/<run-id>/report.html`.
 

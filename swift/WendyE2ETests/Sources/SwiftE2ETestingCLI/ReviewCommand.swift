@@ -29,7 +29,7 @@ struct ReviewCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Tests at or above this duration are reviewed as slow-ish.")
     var slowTestSeconds = 5.0
 
-    @Flag(name: .long, help: "Overwrite existing per-test ai-review.md files.")
+    @Flag(name: .long, help: "Overwrite existing per-test review.md files.")
     var overwrite = false
 
     mutating func run() async throws {
@@ -55,7 +55,7 @@ struct ReviewCommand: AsyncParsableCommand {
         if overwrite {
             try removeExistingPerTestReviews(in: recordingURL)
         }
-        try? FileManager.default.removeItem(at: runURL.appendingPathComponent("ai-review.md"))
+        try? FileManager.default.removeItem(at: runURL.appendingPathComponent("review.md"))
 
         guard !reviewableTests.isEmpty else {
             try removeEmptyReviewSummary(runURL: runURL)
@@ -226,7 +226,7 @@ private struct ReviewAgentRequest {
             "- `Progress: inspecting wendy-device-info.prints-human-readable-device-information recording.md`"
         )
         lines.append("- `Progress: checking device info implementation for terminal probe output`")
-        lines.append("- `Progress: writing concern for tests/<suite-key>/<test-key>/ai-review.md`")
+        lines.append("- `Progress: writing concern for tests/<suite-key>/<test-key>/review.md`")
         lines.append(
             "Print a progress line at least before each selected test and before writing each review file. Do not wait until the final summary to report progress."
         )
@@ -252,14 +252,14 @@ private struct ReviewAgentRequest {
             "Do not write any file for tests that are OK, expected, or purely informational."
         )
         lines.append(
-            "Do not write `Status: pass` reviews. A missing `ai-review.md` means no concern."
+            "Do not write `Status: pass` reviews. A missing `review.md` means no concern."
         )
         lines.append(
-            "Do not edit product code, tests, or generated recordings. Only create, replace, or remove per-test `ai-review.md` files under the E2E run directory."
+            "Do not edit product code, tests, or generated recordings. Only create, replace, or remove per-test `review.md` files under the E2E run directory."
         )
         if !overwrite {
             lines.append(
-                "If a non-empty `ai-review.md` already exists, leave it in place unless it is clearly stale or says the test passed."
+                "If a non-empty `review.md` already exists, leave it in place unless it is clearly stale or says the test passed."
             )
         }
         lines.append("")
@@ -308,7 +308,7 @@ private struct ReviewAgentRequest {
             if let recordURL = test.recordURL {
                 lines.append("- Recording path: `\(recordURL.path)`")
                 lines.append(
-                    "- Review path: `\(recordURL.deletingLastPathComponent().appendingPathComponent("ai-review.md").path)`"
+                    "- Review path: `\(recordURL.deletingLastPathComponent().appendingPathComponent("review.md").path)`"
                 )
             } else {
                 lines.append("- Recording path: `<missing>`")
@@ -840,7 +840,7 @@ private func removeExistingPerTestReviews(in recordingURL: URL) throws {
         )
     else { return }
 
-    for case let reviewURL as URL in enumerator where reviewURL.lastPathComponent == "ai-review.md"
+    for case let reviewURL as URL in enumerator where reviewURL.lastPathComponent == "review.md"
     {
         let recordURL = reviewURL.deletingLastPathComponent().appendingPathComponent("recording.md")
         guard FileManager.default.fileExists(atPath: recordURL.path) else { continue }
@@ -857,7 +857,7 @@ private func enforceConcernOnlyReviews(in recordingURL: URL) throws -> [ReviewFi
     else { return [] }
 
     var reviewFiles: [ReviewFile] = []
-    for case let reviewURL as URL in enumerator where reviewURL.lastPathComponent == "ai-review.md"
+    for case let reviewURL as URL in enumerator where reviewURL.lastPathComponent == "review.md"
     {
         let recordURL = reviewURL.deletingLastPathComponent().appendingPathComponent("recording.md")
         guard FileManager.default.fileExists(atPath: recordURL.path) else { continue }
@@ -912,7 +912,7 @@ private func reviewRelativePath(_ url: URL, base: URL) -> String {
 }
 
 private func removeEmptyReviewSummary(runURL: URL) throws {
-    try? FileManager.default.removeItem(at: runURL.appendingPathComponent("ai-review.md"))
+    try? FileManager.default.removeItem(at: runURL.appendingPathComponent("review.md"))
 }
 
 private func reviewRecordFileStem(_ sourceURL: URL) -> String {

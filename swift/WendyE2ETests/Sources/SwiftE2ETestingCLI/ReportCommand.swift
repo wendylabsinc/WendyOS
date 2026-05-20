@@ -277,7 +277,7 @@ private func loadAIReviews(in recordingURL: URL) throws -> [String: AIReview] {
 
     var reviews: [String: AIReview] = [:]
     for case let reviewURL as URL in enumerator
-    where reviewURL.lastPathComponent == "ai-review.md" {
+    where reviewURL.lastPathComponent == "review.md" {
         let recordURL = reviewURL.deletingLastPathComponent().appendingPathComponent("recording.md")
         guard FileManager.default.fileExists(atPath: recordURL.path) else {
             continue
@@ -412,7 +412,7 @@ private func isCommandRecord(_ url: URL) -> Bool {
     url.pathExtension == "md"
         && url.lastPathComponent != "README.md"
         && url.lastPathComponent != "index.md"
-        && url.lastPathComponent != "ai-review.md"
+        && url.lastPathComponent != "review.md"
 }
 
 private func loadTestResults(
@@ -956,7 +956,7 @@ private func renderCards(
             let recordURL = recordingURL.appendingPathComponent(test.recordName)
             let shellName = test.recordName.replacing(/\.md$/, with: ".sh.txt")
             let shellURL = recordingURL.appendingPathComponent(shellName)
-            let aiReviewName = test.recordName.replacing(/recording\.md$/, with: "ai-review.md")
+            let aiReviewName = test.recordName.replacing(/recording\.md$/, with: "review.md")
             let aiReviewURL = recordingURL.appendingPathComponent(aiReviewName)
             let recordLinks = [
                 FileManager.default.fileExists(atPath: aiReviewURL.path)

@@ -26,7 +26,7 @@ Options:
                     Legacy aliases claude-code/anthropic and openai are accepted.
   --model NAME       Provider model override. Use latest/default to let the
                      agent CLI choose its default model.
-  --overwrite        Overwrite existing per-test ai-review.md files.
+  --overwrite        Overwrite existing per-test review.md files.
   --help             Show this help message.
 
 Environment:
