@@ -942,6 +942,9 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 
 	// Resolve Swift product name from Package.swift.
 	if projectType == "swift" {
+		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+			return fmt.Errorf("`wendy build` for Swift packages is not supported on %s; provide a Dockerfile", runtime.GOOS)
+		}
 		if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 			return err
 		}
