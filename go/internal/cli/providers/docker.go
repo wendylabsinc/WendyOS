@@ -92,6 +92,12 @@ func (p *DockerProvider) CanBuild(projectPath string) bool {
 				return true
 			}
 		}
+	} else {
+		// Fallback when ReadDir fails: Stat the base Dockerfile so CanBuild
+		// doesn't silently return false in permission-denied / transient-error cases.
+		if _, statErr := os.Stat(filepath.Join(projectPath, "Dockerfile")); statErr == nil {
+			return true
+		}
 	}
 	return composeFile(projectPath) != ""
 }

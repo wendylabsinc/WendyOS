@@ -204,8 +204,11 @@ func resolveDetectedBuildOption(options []BuildOption, requestedType, requestedD
 
 	// --dockerfile selects a specific Dockerfile directly, bypassing type detection.
 	if strings.TrimSpace(requestedDockerfile) != "" {
+		// Normalise "./Dockerfile.prod" → "Dockerfile.prod" so the flag value
+		// matches the plain filenames stored in BuildOption.File.
+		normalizedDockerfile := filepath.Clean(requestedDockerfile)
 		for i := range options {
-			if options[i].Type == "docker" && options[i].File == requestedDockerfile {
+			if options[i].Type == "docker" && options[i].File == normalizedDockerfile {
 				return &options[i], nil
 			}
 		}

@@ -113,7 +113,7 @@ func validateDockerfileName(name string) error {
 		return fmt.Errorf("invalid Dockerfile name %q: .dockerignore files are not Dockerfiles", base)
 	}
 	if !validDockerfileNameRe.MatchString(base) {
-		return fmt.Errorf("invalid Dockerfile name %q: must be Dockerfile or Dockerfile.<variant>", base)
+		return fmt.Errorf("invalid Dockerfile name %q: must be Dockerfile, Dockerfile.<variant>, or Dockerfile-<variant>", base)
 	}
 	return nil
 }
