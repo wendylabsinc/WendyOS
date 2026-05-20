@@ -39,6 +39,11 @@ jobs:
     timeout-minutes: ${{ matrix.target.status == 'enabled' && 120 || 5 }}
     strategy:
       fail-fast: false
+      # GitHub concurrency groups keep only one pending job, so they cannot
+      # safely serialize three CLI routes to the same device within a matrix.
+      # Run the hardware matrix one route at a time to avoid device contention
+      # without losing pending matrix entries.
+      max-parallel: 1
       matrix:
         target:
           - id: macos-26-to-jetson-orin-nano
