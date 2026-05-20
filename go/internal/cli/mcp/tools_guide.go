@@ -34,7 +34,6 @@ Cloud-enrolled devices:
 - telemetry_logs / telemetry_metrics / telemetry_traces
 - hardware_capabilities
 - os_update
-- filesync_sync
 - provisioning_start / provisioning_status
 
 ## Deploying a workload
