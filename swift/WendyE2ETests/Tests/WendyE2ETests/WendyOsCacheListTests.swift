@@ -53,16 +53,22 @@ struct `'wendy os cache list'` {
      Configuration files, credentials, and project-local artifacts are not
      scanned or displayed.
      */
-    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows))
+    @Test
     func `ignores unrelated files outside the cache root`() async throws {
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                mkdir -p "$HOME/.wendy"
-                printf '{"defaultDevice":"do-not-list"}\n' > "$HOME/.wendy/config.json"
-                printf 'project artifact\n' > unrelated-project-file.txt
-                wendy os cache list
-                """
+                posix: """
+                    mkdir -p "$HOME/.wendy"
+                    printf '{"defaultDevice":"do-not-list"}\n' > "$HOME/.wendy/config.json"
+                    printf 'project artifact\n' > unrelated-project-file.txt
+                    wendy os cache list
+                    """,
+                power: """
+                    New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultDevice":"do-not-list"}'
+                    Set-Content -LiteralPath 'unrelated-project-file.txt' -Value 'project artifact'
+                    wendy os cache list
+                    """
             ) { result in
                 let stdout = result.stdout
 
