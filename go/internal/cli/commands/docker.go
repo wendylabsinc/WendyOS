@@ -99,13 +99,27 @@ func detectProjectType(dir string) (string, error) {
 }
 
 // resolveDockerfile returns the Dockerfile filename to pass to docker build for
-// a docker-type project. If requested is non-empty it is returned as-is (the
-// caller has already validated that the file exists). Otherwise all Dockerfiles
-// in cwd are detected: a single match is returned immediately; multiple matches
-// trigger an interactive picker or, in non-interactive mode, prefer the base
-// "Dockerfile" and fall back to the first variant found.
+// a docker-type project. If requested is non-empty it is validated (existence
+// and directory confinement) and returned. Otherwise all Dockerfiles in cwd are
+// detected: a single match is returned immediately; multiple matches trigger an
+// interactive picker or, in non-interactive mode, prefer the base "Dockerfile"
+// and fall back to the first variant found.
 func resolveDockerfile(cwd, requested string, interactive bool) (string, error) {
 	if requested != "" {
+		abs, err := filepath.Abs(filepath.Join(cwd, requested))
+		if err != nil {
+			return "", fmt.Errorf("resolving dockerfile path: %w", err)
+		}
+		absCwd, err := filepath.Abs(cwd)
+		if err != nil {
+			return "", fmt.Errorf("resolving project directory: %w", err)
+		}
+		if !strings.HasPrefix(abs+string(filepath.Separator), absCwd+string(filepath.Separator)) {
+			return "", fmt.Errorf("dockerfile %q must be within the project directory", requested)
+		}
+		if _, err := os.Stat(abs); err != nil {
+			return "", fmt.Errorf("dockerfile %q: %w", requested, err)
+		}
 		return requested, nil
 	}
 
@@ -126,9 +140,11 @@ func resolveDockerfile(cwd, requested string, interactive bool) (string, error) 
 	if !interactive {
 		for _, opt := range dockerfiles {
 			if opt.File == "Dockerfile" {
+				cliLogln("Note: multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", opt.File)
 				return opt.File, nil
 			}
 		}
+		cliLogln("Note: multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", dockerfiles[0].File)
 		return dockerfiles[0].File, nil
 	}
 

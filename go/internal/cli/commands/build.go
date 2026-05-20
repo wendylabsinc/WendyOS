@@ -52,6 +52,23 @@ func newBuildCmd() *cobra.Command {
 				return fmt.Errorf("getting working directory: %w", err)
 			}
 
+			if opts.dockerfile != "" {
+				absDockerfile, absErr := filepath.Abs(filepath.Join(cwd, opts.dockerfile))
+				absCwd, cwdErr := filepath.Abs(cwd)
+				if absErr != nil || cwdErr != nil {
+					return fmt.Errorf("resolving --dockerfile path")
+				}
+				if !strings.HasPrefix(absDockerfile+string(filepath.Separator), absCwd+string(filepath.Separator)) {
+					return fmt.Errorf("--dockerfile must be within the project directory")
+				}
+				if _, statErr := os.Stat(absDockerfile); statErr != nil {
+					if os.IsNotExist(statErr) {
+						return fmt.Errorf("--dockerfile %q does not exist in %s", opts.dockerfile, cwd)
+					}
+					return fmt.Errorf("checking --dockerfile: %w", statErr)
+				}
+			}
+
 			cfgPath := filepath.Join(cwd, "wendy.json")
 			appCfg, cfgErr := ensureAppConfig(cfgPath, false)
 			if cfgErr == nil {
@@ -226,9 +243,11 @@ func resolveDetectedBuildOption(options []BuildOption, requestedType, requestedD
 		if allDocker {
 			for i := range options {
 				if options[i].File == "Dockerfile" {
+					cliLogln("Note: multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", options[i].File)
 					return &options[i], nil
 				}
 			}
+			cliLogln("Note: multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", options[0].File)
 			return &options[0], nil
 		}
 	}
