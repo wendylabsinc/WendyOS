@@ -34,17 +34,23 @@ struct `'wendy completion zsh'` {
      Writes a valid zsh completion script to stdout. The command emits no
      stderr, exits successfully, and does not read or write shell rc files.
      */
-    @Test(.enabled(if: WendyE2EMachine.cli.os != .windows))
+    @Test
     func `prints the zsh completion script`() async throws {
         // AI: Skim the generated script for obvious zsh-completion quality
         // issues that substring assertions miss, such as broken function shape,
         // shell-mismatched syntax, noisy comments, or truncated output.
         try await self.scenario.run { cli, _ in
             try await cli.sh(
-                """
-                wendy completion zsh
-                test ! -e "$HOME/.zshrc"
-                """
+                posix: """
+                    wendy completion zsh
+                    test ! -e "$HOME/.zshrc"
+                    """,
+                power: """
+                    wendy completion zsh
+                    if (Test-Path -LiteralPath (Join-Path $env:HOME '.zshrc')) {
+                        throw '.zshrc should not exist'
+                    }
+                    """
             ) { result in
                 let stdout = result.stdout
 
