@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 	"go.uber.org/zap"
@@ -830,6 +831,9 @@ func TestImageRepo(t *testing.T) {
 		{"localhost:5000/org/app:v1", "org/app"},
 		{"registry.example.com/org/app", "org/app"},
 		{"org/app:v1", "org/app"},
+		// Digest references — the ':' in the SHA256 hash must not be treated as a tag separator.
+		{"192.168.1.1:5000/myapp@sha256:abc123", "myapp"},
+		{"localhost:5000/org/app@sha256:def456", "org/app"},
 	}
 	for _, tc := range tests {
 		if got := imageRepo(tc.name); got != tc.want {

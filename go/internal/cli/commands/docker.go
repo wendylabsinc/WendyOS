@@ -1849,17 +1849,17 @@ func manifestContentDigests(manifestBytes []byte) []string {
 	return digests
 }
 
-
 // annotateManifestWithEntitlements fetches the OCI image manifest at
 // registryAddr/repo:tag, adds sh.wendy/entitlement.* annotations for each
-// entitlement from the app config, and re-pushes the annotated manifest under
-// the same tag.  If the manifest is in Docker v2 format it is promoted to OCI
-// (by updating the top-level mediaType only) so that the annotations field is
-// standards-compliant and signable by OCI codesigning tooling (e.g. cosign).
+// entitlement, and re-pushes the annotated manifest under the same tag. If the
+// manifest is in Docker v2 format it is promoted to OCI (by updating the
+// top-level mediaType only) so that the annotations field is standards-compliant.
 //
-// The annotation format matches the sh.wendy/entitlement.* container-label
-// scheme: each entitlement type gets its own key, and the value is the JSON
-// of the entitlement object (minus the redundant "type" field).
+// Each annotation key is sh.wendy/entitlement.<type> and the value is the
+// comma-separated key=value encoding produced by appconfig.EntitlementAnnotationValue.
+// If a CLI certificate is available the annotations are also signed: the
+// signature and leaf certificate are stored in sh.wendy/signature and
+// sh.wendy/signature-cert respectively.
 func annotateManifestWithEntitlements(ctx context.Context, registryAddr, repo, tag string, entitlements []appconfig.Entitlement, useMTLS bool) error {
 	if len(entitlements) == 0 {
 		return nil

@@ -426,6 +426,11 @@ func imageRepo(name string) string {
 			name = name[idx+1:]
 		}
 	}
+	// Strip digest (@sha256:...) before stripping tag so the ':' in the digest
+	// hash does not get mistaken for a tag separator.
+	if idx := strings.Index(name, "@"); idx > 0 {
+		name = name[:idx]
+	}
 	// Strip tag: remove everything after the last ':' if it does not contain '/'.
 	if idx := strings.LastIndex(name, ":"); idx > 0 && !strings.Contains(name[idx:], "/") {
 		name = name[:idx]
@@ -466,7 +471,13 @@ func checkManifestSignature(annotations map[string]string, contentDigests []stri
 			}
 		}
 		if trustedPool != nil {
-			opts := x509.VerifyOptions{Roots: trustedPool}
+			opts := x509.VerifyOptions{
+				Roots: trustedPool,
+				// Signing certs are CLI client certificates; use ClientAuth so Go's
+				// chain verifier does not default to ServerAuth (which would reject
+				// certs minted for client authentication).
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			}
 			// Use the signing timestamp (if present) as CurrentTime so that a cert
 			// that was valid when the image was signed is not retroactively rejected
 			// after the cert expires.

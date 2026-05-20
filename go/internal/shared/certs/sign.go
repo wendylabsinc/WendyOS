@@ -67,17 +67,27 @@ func VerifyBytes(data []byte, sigB64 string, cert *x509.Certificate) error {
 	return nil
 }
 
-// ParseLeafCertificate decodes the first CERTIFICATE block from a PEM string.
+// ParseLeafCertificate decodes the first CERTIFICATE block from a PEM string,
+// skipping any non-CERTIFICATE blocks so callers can pass bundles with leading
+// headers or non-certificate entries.
 func ParseLeafCertificate(certPEM string) (*x509.Certificate, error) {
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("no CERTIFICATE block found in PEM")
+	rest := []byte(certPEM)
+	for len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing certificate: %w", err)
+		}
+		return cert, nil
 	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parsing certificate: %w", err)
-	}
-	return cert, nil
+	return nil, fmt.Errorf("no CERTIFICATE block found in PEM")
 }
 
 // SigningPayload builds the canonical byte payload that is signed and verified

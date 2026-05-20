@@ -162,4 +162,3 @@ func preAuthElevation() error {
 func elevationHint() string {
 	return "Administrator privileges are required for disk writing."
 }
-
