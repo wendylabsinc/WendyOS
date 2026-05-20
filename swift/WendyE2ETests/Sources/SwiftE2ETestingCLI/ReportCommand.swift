@@ -155,6 +155,8 @@ private struct ReportTestObservation {
     var route: TargetRoute
     var attempt: String
     var status: ReportTestStatus
+    var recordingPath: String?
+    var shellPath: String?
 
     var duration: ReportTestDuration? {
         status.duration
@@ -510,7 +512,17 @@ private func loadAggregateTestResults(in aggregateURL: URL) throws -> [Aggregate
                             target: targetName,
                             route: try targetRoute(for: targetName, attemptURL: attemptURL),
                             attempt: attemptName,
-                            status: status
+                            status: status,
+                            recordingPath: observationFilePath(
+                                fileName: "recording.md",
+                                attemptURL: attemptURL,
+                                aggregateURL: aggregateURL
+                            ),
+                            shellPath: observationFilePath(
+                                fileName: "recording.sh.txt",
+                                attemptURL: attemptURL,
+                                aggregateURL: aggregateURL
+                            )
                         )
                     )
                     if let duration = status.duration {
@@ -536,6 +548,14 @@ private func loadAggregateTestResults(in aggregateURL: URL) throws -> [Aggregate
             )
         )
     })
+}
+
+private func observationFilePath(fileName: String, attemptURL: URL, aggregateURL: URL) -> String? {
+    let fileURL = attemptURL.appendingPathComponent(fileName)
+    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        return nil
+    }
+    return relativePath(from: aggregateURL, to: fileURL)
 }
 
 private func aggregateObservationStatus(
@@ -1145,11 +1165,26 @@ private func renderObservations(_ observations: [ReportTestObservation]) -> Stri
         let target = isFirstTargetRow ? escapeHTML(observation.target) : ""
         let route = isFirstTargetRow ? renderTargetRoute(observation.route, title: observation.target) : ""
         chunks.append(
-            "<div class=\"observation-row\"><span class=\"observation-target\">\(target)</span><span class=\"observation-route-cell\">\(route)</span><span class=\"observation-spacer\" aria-hidden=\"true\"></span><span class=\"observation-attempt\">\(escapeHTML(observation.attempt))</span><span class=\"badge \(observation.status.statusClass)\">\(observation.status.statusText)</span>\(observationDurationBadge(observation.duration))</div>"
+            "<div class=\"observation-row\"><span class=\"observation-target\">\(target)</span><span class=\"observation-route-cell\">\(route)</span><span class=\"observation-spacer\" aria-hidden=\"true\"></span>\(renderObservationLinks(observation))<span class=\"observation-attempt\">\(escapeHTML(observation.attempt))</span><span class=\"badge \(observation.status.statusClass)\">\(observation.status.statusText)</span>\(observationDurationBadge(observation.duration))</div>"
         )
     }
     chunks.append("</section></div>")
     return chunks.joined(separator: "\n")
+}
+
+private func renderObservationLinks(_ observation: ReportTestObservation) -> String {
+    var links: [String] = []
+    if let shellPath = observation.shellPath {
+        links.append(
+            "<a class=\"observation-button\" href=\"\(escapeHTML(shellPath))\">Shell</a>"
+        )
+    }
+    if let recordingPath = observation.recordingPath {
+        links.append(
+            "<a class=\"observation-button\" href=\"\(escapeHTML(recordingPath))\">Record</a>"
+        )
+    }
+    return "<span class=\"observation-actions\">\(links.joined())</span>"
 }
 
 private func renderTargetRoute(_ route: TargetRoute, title: String) -> String {

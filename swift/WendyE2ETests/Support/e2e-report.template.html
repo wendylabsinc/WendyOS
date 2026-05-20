@@ -626,7 +626,7 @@
 
     .observation-row {
       display: grid;
-      grid-template-columns: max-content max-content minmax(18px, 1fr) 78px max-content 208px;
+      grid-template-columns: max-content max-content minmax(18px, 1fr) 112px 78px max-content 208px;
       gap: 10px;
       align-items: center;
       padding: 8px 12px;
@@ -643,6 +643,41 @@
     .observation-attempt {
       min-width: 0;
       overflow-wrap: anywhere;
+    }
+
+    .observation-actions {
+      display: inline-flex;
+      justify-content: flex-end;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .observation-button {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.4;
+      opacity: 0;
+      padding: 4px 9px;
+      pointer-events: none;
+      text-decoration: none;
+      transition: opacity .12s ease, border-color .12s ease, color .12s ease;
+    }
+
+    .observation-row:hover .observation-button,
+    .observation-row:focus-within .observation-button {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .observation-button:hover {
+      border-color: var(--blue);
+      color: var(--blue);
     }
 
     .target-route {
@@ -1038,10 +1073,15 @@
       }
       .observation-spacer,
       .observation-route-cell,
+      .observation-actions,
       .observation-row > .badge,
       .observation-row > .badge.duration {
         grid-column: 1 / -1;
         justify-self: start;
+      }
+      .observation-button {
+        opacity: 1;
+        pointer-events: auto;
       }
       .command-output { margin-left: 0; }
       .command-run-meta { margin-left: 0; }
