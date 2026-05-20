@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -100,37 +99,6 @@ func (s *ProvisioningService) ProvisioningInfo() (cloudHost string, orgID, asset
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.cloudHost, s.orgID, s.assetID, s.enrolled
-}
-
-// Enrolled reports whether the device is currently enrolled with a cloud organization.
-func (s *ProvisioningService) Enrolled() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.enrolled
-}
-
-// OrgID returns the organization ID the device is enrolled in, or 0 if not enrolled.
-func (s *ProvisioningService) OrgID() int32 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.orgID
-}
-
-// TrustedCAPool returns a certificate pool built from the provisioning CA chain.
-// Returns nil if the device is not enrolled or the chain PEM cannot be parsed.
-// The pool is used to validate that code-signing certificates chain to the org
-// that provisioned this device.
-func (s *ProvisioningService) TrustedCAPool() *x509.CertPool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.enrolled || s.chainPEM == "" {
-		return nil
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM([]byte(s.chainPEM)) {
-		return nil
-	}
-	return pool
 }
 
 // IsProvisioned checks whether the agent is enrolled with a cloud organization.

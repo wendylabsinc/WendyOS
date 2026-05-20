@@ -15,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"crypto/x509"
-
 	cgroupv1 "github.com/containerd/cgroups/v3/cgroup1/stats"
 	cgroupv2 "github.com/containerd/cgroups/v3/cgroup2/stats"
 	tasks "github.com/containerd/containerd/api/services/tasks/v1"
@@ -40,7 +38,6 @@ import (
 	localoci "github.com/wendylabsinc/wendy/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/internal/agent/services"
 	"github.com/wendylabsinc/wendy/internal/shared/appconfig"
-	"github.com/wendylabsinc/wendy/internal/shared/certs"
 	agentpb "github.com/wendylabsinc/wendy/proto/gen/agentpb"
 )
 
@@ -52,26 +49,17 @@ const DefaultAddress = "/run/containerd/containerd.sock"
 
 // Client wraps the containerd SDK client and implements services.ContainerdClient.
 type Client struct {
-	client        *containerd.Client
-	logger        *zap.Logger
-	namespace     string
-	mu            sync.Mutex
-	proxyManager  *dbusproxy.Manager    // nil if xdg-dbus-proxy is not available
-	trustedCAPool func() *x509.CertPool // nil return → unenrolled; non-nil → validate cert chain against pool
-	expectedOrgID func() int32          // returns 0 when org ID is unavailable or device is unenrolled
+	client       *containerd.Client
+	logger       *zap.Logger
+	namespace    string
+	mu           sync.Mutex
+	proxyManager *dbusproxy.Manager // nil if xdg-dbus-proxy is not available
 }
 
 // NewClient creates a new containerd SDK client connected to the given Unix
 // socket address. If address is empty, DefaultAddress is used.
 // proxyMgr may be nil if xdg-dbus-proxy is not available.
-// trustedCAPool is called at container-create time; a nil return means the
-// device is unenrolled and no chain validation is performed. A non-nil pool
-// means the device is enrolled and the manifest's signing cert must chain to
-// that pool (i.e., the org's provisioning CA).
-// expectedOrgID is called alongside trustedCAPool; a non-zero return adds an
-// explicit org-ID check on the cert CN, guarding against shared-CA scenarios
-// where chain validation alone does not enforce per-org isolation.
-func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager, trustedCAPool func() *x509.CertPool, expectedOrgID func() int32) (*Client, error) {
+func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) (*Client, error) {
 	if address == "" {
 		address = DefaultAddress
 	}
@@ -82,12 +70,10 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager, 
 	}
 
 	return &Client{
-		client:        c,
-		logger:        logger,
-		namespace:     "default",
-		proxyManager:  proxyMgr,
-		trustedCAPool: trustedCAPool,
-		expectedOrgID: expectedOrgID,
+		client:       c,
+		logger:       logger,
+		namespace:    "default",
+		proxyManager: proxyMgr,
 	}, nil
 }
 
@@ -354,172 +340,6 @@ func (c *Client) CreateContainer(ctx context.Context, req *agentpb.CreateContain
 	return c.CreateContainerWithProgress(ctx, req, appCfg, nil)
 }
 
-// readEntitlementsFromManifest reads sh.wendy/entitlement.* annotations from
-// the OCI image manifest stored in the content store. If a sh.wendy/signature
-// annotation is present the entitlement payload is verified; a failed
-// verification is treated as a hard error to prevent tampered entitlements.
-func (c *Client) readEntitlementsFromManifest(ctx context.Context, image containerd.Image) ([]appconfig.Entitlement, error) {
-	manifestBytes, err := content.ReadBlob(ctx, c.client.ContentStore(), image.Target())
-	if err != nil {
-		return nil, fmt.Errorf("reading manifest blob: %w", err)
-	}
-	var manifest struct {
-		Annotations map[string]string `json:"annotations"`
-		Config      struct {
-			Digest string `json:"digest"`
-		} `json:"config"`
-		Layers []struct {
-			Digest string `json:"digest"`
-		} `json:"layers"`
-		Manifests []struct {
-			Digest string `json:"digest"`
-		} `json:"manifests"`
-	}
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
-		return nil, fmt.Errorf("parsing manifest: %w", err)
-	}
-
-	var contentDigests []string
-	if manifest.Config.Digest != "" {
-		contentDigests = append(contentDigests, manifest.Config.Digest)
-	}
-	for _, l := range manifest.Layers {
-		if l.Digest != "" {
-			contentDigests = append(contentDigests, l.Digest)
-		}
-	}
-	for _, child := range manifest.Manifests {
-		if child.Digest != "" {
-			contentDigests = append(contentDigests, child.Digest)
-		}
-	}
-
-	var pool *x509.CertPool
-	if c.trustedCAPool != nil {
-		pool = c.trustedCAPool()
-	}
-	var orgID int32
-	if c.expectedOrgID != nil {
-		orgID = c.expectedOrgID()
-	}
-	if err := checkManifestSignature(manifest.Annotations, contentDigests, imageRepo(image.Name()), pool, orgID); err != nil {
-		return nil, err
-	}
-	if sig := manifest.Annotations[certs.AnnotationSignature]; sig != "" {
-		c.logger.Info("Entitlement annotations verified")
-	}
-	return parseEntitlementsFromAnnotations(manifest.Annotations), nil
-}
-
-// imageRepo strips the registry host and tag from a containerd image name,
-// returning just the repository path. For example:
-//
-//	"192.168.1.1:5000/myapp:latest" → "myapp"
-//	"localhost:5000/org/app:v1"     → "org/app"
-//	"myapp"                         → "myapp"
-func imageRepo(name string) string {
-	// Strip registry host: if the first path component contains ':' or '.' it is
-	// a host:port or DNS name, not part of the repo path.
-	if idx := strings.Index(name, "/"); idx > 0 {
-		prefix := name[:idx]
-		if strings.ContainsAny(prefix, ".:") || prefix == "localhost" {
-			name = name[idx+1:]
-		}
-	}
-	// Strip digest (@sha256:...) before stripping tag so the ':' in the digest
-	// hash does not get mistaken for a tag separator.
-	if idx := strings.Index(name, "@"); idx > 0 {
-		name = name[:idx]
-	}
-	// Strip tag: remove everything after the last ':' if it does not contain '/'.
-	if idx := strings.LastIndex(name, ":"); idx > 0 && !strings.Contains(name[idx:], "/") {
-		name = name[:idx]
-	}
-	return name
-}
-
-// checkManifestSignature verifies the sh.wendy/signature annotation if present,
-// and validates the signing cert against trustedPool. A non-nil trustedPool means
-// the device is enrolled: images without a valid signature from the org CA are rejected.
-// expectedRepo (when non-empty) is compared against the sh.wendy/signed.repo annotation
-// to prevent signed images from being redeployed under a different repository name.
-// expectedOrgID adds an explicit org-ID check on certs whose CN encodes the org
-// (format "wendy/<orgID>/..." or "sh/wendy/<orgID>/..."). This guards against
-// shared-CA scenarios where chain validation alone does not enforce per-org isolation.
-// User certs (CN "wendy/user/<userID>") carry no org ID in their CN; they rely on
-// chain validation only.
-func checkManifestSignature(annotations map[string]string, contentDigests []string, expectedRepo string, trustedPool *x509.CertPool, expectedOrgID int32) error {
-	sig := annotations[certs.AnnotationSignature]
-	certPEM := annotations[certs.AnnotationSignatureCert]
-	if sig != "" && certPEM != "" {
-		cert, parseErr := certs.ParseLeafCertificate(certPEM)
-		if parseErr != nil {
-			return fmt.Errorf("parsing signature certificate: %w", parseErr)
-		}
-		payload := certs.SigningPayload(contentDigests, annotations)
-		if verifyErr := certs.VerifyBytes(payload, sig, cert); verifyErr != nil {
-			return fmt.Errorf("entitlement signature verification failed: %w", verifyErr)
-		}
-		// Repo binding check (post-ECDSA so sh.wendy/signed.repo is trusted).
-		if expectedRepo != "" {
-			signedRepo := annotations[certs.AnnotationSignedRepo]
-			if signedRepo == "" {
-				return fmt.Errorf("image has no repository binding (sh.wendy/signed.repo missing)")
-			}
-			if signedRepo != expectedRepo {
-				return fmt.Errorf("image signed for repository %q, deployed as %q", signedRepo, expectedRepo)
-			}
-		}
-		if trustedPool != nil {
-			opts := x509.VerifyOptions{
-				Roots: trustedPool,
-				// Signing certs are CLI client certificates; use ClientAuth so Go's
-				// chain verifier does not default to ServerAuth (which would reject
-				// certs minted for client authentication).
-				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-			}
-			// Use the signing timestamp (if present) as CurrentTime so that a cert
-			// that was valid when the image was signed is not retroactively rejected
-			// after the cert expires.
-			if signedAtStr := annotations[certs.AnnotationSignedAt]; signedAtStr != "" {
-				if t, err := time.Parse(time.RFC3339, signedAtStr); err == nil {
-					opts.CurrentTime = t
-				}
-			}
-			if _, err := cert.Verify(opts); err != nil {
-				return fmt.Errorf("signing certificate not trusted by provisioning CA: %w", err)
-			}
-		}
-		if expectedOrgID != 0 {
-			if certOrg := certOrgID(cert.Subject.CommonName); certOrg != 0 && certOrg != expectedOrgID {
-				return fmt.Errorf("signing certificate is from org %d, device is enrolled in org %d", certOrg, expectedOrgID)
-			}
-		}
-		return nil
-	}
-	if trustedPool != nil {
-		return fmt.Errorf("device is enrolled but container image is unsigned")
-	}
-	return nil
-}
-
-// certOrgID extracts the numeric org ID from a Wendy cert common name.
-// Returns 0 for user certs (CN "wendy/user/<id>") or unrecognised formats.
-// Recognised formats: "wendy/<orgID>/<assetID>" and "sh/wendy/<orgID>/<assetID>".
-func certOrgID(cn string) int32 {
-	cn = strings.TrimPrefix(cn, "sh/")
-	cn = strings.TrimPrefix(cn, "wendy/")
-	parts := strings.SplitN(cn, "/", 2)
-	if len(parts) == 0 {
-		return 0
-	}
-	id, err := strconv.ParseInt(parts[0], 10, 32)
-	if err != nil {
-		return 0 // "user" prefix or other non-numeric component
-	}
-	return int32(id)
-}
-
 func toCreateContainerProgress(progress UnpackProgress) *agentpb.CreateContainerProgress {
 	switch progress.Phase {
 	case "start":
@@ -610,18 +430,6 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		if err != nil {
 			return fmt.Errorf("getting/pulling image %q: %w", imageName, err)
 		}
-	}
-
-	// Read entitlements from image manifest annotations. When present, these are
-	// the authoritative source (codesigned with the image) and override whatever
-	// was passed in app_config. This must happen before any entitlement-dependent
-	// setup (e.g. the D-Bus proxy below) so all decisions use the final set.
-	manifestEntitlements, readErr := c.readEntitlementsFromManifest(ctx, image)
-	if readErr != nil {
-		return fmt.Errorf("reading entitlements from manifest: %w", readErr)
-	}
-	if len(manifestEntitlements) > 0 {
-		appCfg.Entitlements = manifestEntitlements
 	}
 
 	// Start D-Bus proxy if bluetooth entitlement is present.
