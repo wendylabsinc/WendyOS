@@ -104,36 +104,45 @@ func EnsureSwiftVersion(ctx context.Context, stdout, stderr io.Writer) error {
 	return nil
 }
 
+// brewFormula is the tap-qualified Homebrew formula name for swiftly, pinning
+// it to the official tap to reduce dependency-confusion risk.
+const brewFormula = "swiftlang/swiftly/swiftly"
+
 func tryBrewInstallSwiftly(ctx context.Context, stdout, stderr io.Writer) error {
 	if currentOS != "darwin" {
 		return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
 	}
 	brewPath := ""
 	for _, p := range macOSBrewPaths {
-		if _, err := statFile(p); err == nil {
-			brewPath = p
-			break
+		info, err := statFile(p)
+		if err != nil {
+			continue
 		}
+		if info.Mode()&0002 != 0 {
+			continue // skip world-writable paths — likely not the legitimate brew binary
+		}
+		brewPath = p
+		break
 	}
 	if brewPath == "" {
 		return fmt.Errorf("swiftly is required but not installed; see https://swiftlang.github.io/swiftly for installation instructions")
 	}
-	confirmed, err := confirmFunc("swiftly is not installed. Install it now with Homebrew? (brew install swiftly)")
+	confirmed, err := confirmFunc("swiftly is not installed. Install it now via Homebrew? (brew install " + brewFormula + ")")
 	if err != nil {
 		return fmt.Errorf("swiftly is required but not installed (prompt failed: %w); see https://swiftlang.github.io/swiftly for installation instructions", err)
 	}
 	if !confirmed {
-		return fmt.Errorf("swiftly is required but not installed; run: brew install swiftly")
+		return fmt.Errorf("swiftly is required but not installed; run: brew install " + brewFormula)
 	}
-	fmt.Fprintln(stdout, "Installing swiftly via Homebrew...")
+	fmt.Fprintf(stdout, "Installing swiftly via Homebrew (brew install %s)...\n", brewFormula)
 	flushWriter(stdout)
-	cmd := execCommandContext(ctx, brewPath, "install", "swiftly")
+	cmd := execCommandContext(ctx, brewPath, "install", brewFormula)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		flushWriter(stdout)
 		flushWriter(stderr)
-		return fmt.Errorf("brew install swiftly: %w", err)
+		return fmt.Errorf("brew install %s: %w", brewFormula, err)
 	}
 	flushWriter(stdout)
 	flushWriter(stderr)

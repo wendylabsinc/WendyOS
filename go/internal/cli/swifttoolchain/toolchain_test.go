@@ -8,7 +8,32 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
+
+// testFileInfo is a minimal os.FileInfo implementation for statFile mocks.
+type testFileInfo struct{ mode os.FileMode }
+
+func (f testFileInfo) Name() string       { return "brew" }
+func (f testFileInfo) Size() int64        { return 0 }
+func (f testFileInfo) Mode() os.FileMode  { return f.mode }
+func (f testFileInfo) ModTime() time.Time { return time.Time{} }
+func (f testFileInfo) IsDir() bool        { return false }
+func (f testFileInfo) Sys() any           { return nil }
+
+// brewExists returns a statFile that reports the given paths as non-world-writable (mode 0755).
+func brewExists(paths ...string) func(string) (os.FileInfo, error) {
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		set[p] = true
+	}
+	return func(name string) (os.FileInfo, error) {
+		if set[name] {
+			return testFileInfo{mode: 0755}, nil
+		}
+		return nil, fmt.Errorf("not found")
+	}
+}
 
 func TestEnsureSwiftVersion_AlreadyInstalled(t *testing.T) {
 	original := execCommandContext
@@ -98,12 +123,7 @@ func TestEnsureSwiftVersion_SwiftlyNotFound_BrewConfirmed(t *testing.T) {
 	})
 
 	currentOS = "darwin"
-	statFile = func(name string) (os.FileInfo, error) {
-		if name == "/opt/homebrew/bin/brew" {
-			return os.Stat("/dev/null")
-		}
-		return nil, fmt.Errorf("not found")
-	}
+	statFile = brewExists("/opt/homebrew/bin/brew")
 	confirmFunc = func(question string) (bool, error) { return true, nil }
 
 	const fakeBrew = "/opt/homebrew/bin/brew"
@@ -136,7 +156,7 @@ func TestEnsureSwiftVersion_SwiftlyNotFound_BrewConfirmed(t *testing.T) {
 	brewCall := false
 	installCall := false
 	for _, c := range calls {
-		if c[0] == fakeBrew && len(c) >= 3 && c[1] == "install" && c[2] == "swiftly" {
+		if c[0] == fakeBrew && len(c) >= 3 && c[1] == "install" && c[2] == brewFormula {
 			brewCall = true
 		}
 		if c[0] == "swiftly" && len(c) >= 2 && c[1] == "install" {
@@ -164,12 +184,7 @@ func TestEnsureSwiftVersion_SwiftlyNotFound_BrewDeclined(t *testing.T) {
 	})
 
 	currentOS = "darwin"
-	statFile = func(name string) (os.FileInfo, error) {
-		if name == "/opt/homebrew/bin/brew" {
-			return os.Stat("/dev/null")
-		}
-		return nil, fmt.Errorf("not found")
-	}
+	statFile = brewExists("/opt/homebrew/bin/brew")
 	confirmFunc = func(question string) (bool, error) { return false, nil }
 
 	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -198,12 +213,7 @@ func TestEnsureSwiftVersion_SwiftlyNotFound_BrewFails(t *testing.T) {
 	})
 
 	currentOS = "darwin"
-	statFile = func(name string) (os.FileInfo, error) {
-		if name == "/opt/homebrew/bin/brew" {
-			return os.Stat("/dev/null")
-		}
-		return nil, fmt.Errorf("not found")
-	}
+	statFile = brewExists("/opt/homebrew/bin/brew")
 	confirmFunc = func(question string) (bool, error) { return true, nil }
 
 	execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
@@ -217,7 +227,7 @@ func TestEnsureSwiftVersion_SwiftlyNotFound_BrewFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("EnsureSwiftVersion() expected error when brew install fails, got nil")
 	}
-	if !strings.Contains(err.Error(), "brew install swiftly") {
+	if !strings.Contains(err.Error(), "brew install") {
 		t.Errorf("expected brew error message, got: %v", err)
 	}
 }
