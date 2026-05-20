@@ -74,9 +74,11 @@ struct AggregateCommand: ParsableCommand {
 
         let rawRunsURL = aggregateRootURL.appendingPathComponent("_runs", isDirectory: true)
         let rawRunCopyURL = rawRunsURL.appendingPathComponent(runID, isDirectory: true)
-        try? FileManager.default.removeItem(at: rawRunCopyURL)
         try FileManager.default.createDirectory(at: rawRunsURL, withIntermediateDirectories: true)
-        try copyItem(at: rawRunURL, to: rawRunCopyURL)
+        if rawRunURL.standardizedFileURL != rawRunCopyURL.standardizedFileURL {
+            try? FileManager.default.removeItem(at: rawRunCopyURL)
+            try copyItem(at: rawRunURL, to: rawRunCopyURL)
+        }
 
         let testsURL = rawRunURL.appendingPathComponent("tests", isDirectory: true)
         let testDirectories = try aggregateTestDirectories(in: testsURL)

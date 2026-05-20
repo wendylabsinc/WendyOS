@@ -73,32 +73,92 @@ fi
 
 RUN_DIR="$(absolute_existing_dir_path "$RUN_DIR")"
 PACKAGE_DIR="$(absolute_existing_dir_path "$PACKAGE_DIR")"
-REPORT_PATH="$RUN_DIR/report.html"
+html_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"
+  value="${value//</&lt;}"
+  value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"
+  printf "%s" "$value"
+}
 
-echo "==> Rendering Swift E2E HTML report"
-echo "    Package: $PACKAGE_DIR"
-echo "    Run dir: $RUN_DIR"
-echo "    Output:  $REPORT_PATH"
+render_single_report() {
+  local run_dir="$1"
+  local report_path="$run_dir/report.html"
 
-bash "$SCRIPT_DIR/E2ESanitizeXUnit.sh" --run-dir "$RUN_DIR"
+  echo "==> Rendering Swift E2E HTML report"
+  echo "    Package: $PACKAGE_DIR"
+  echo "    Run dir: $run_dir"
+  echo "    Output:  $report_path"
 
-set +e
-(
-  cd "$PACKAGE_DIR"
-  swift run swift-e2e-testing report --run-dir "$RUN_DIR"
-)
-REPORT_STATUS=$?
-set -e
+  bash "$SCRIPT_DIR/E2ESanitizeXUnit.sh" --run-dir "$run_dir"
 
-if [[ "$REPORT_STATUS" -eq 0 && -f "$REPORT_PATH" ]]; then
-  echo "==> Wrote Swift E2E HTML report: $REPORT_PATH"
-  exit 0
+  set +e
+  (
+    cd "$PACKAGE_DIR"
+    swift run swift-e2e-testing report --run-dir "$run_dir"
+  )
+  local report_status=$?
+  set -e
+
+  if [[ "$report_status" -eq 0 && -f "$report_path" ]]; then
+    echo "==> Wrote Swift E2E HTML report: $report_path"
+    return 0
+  fi
+
+  if [[ "$report_status" -eq 0 ]]; then
+    report_status=1
+  fi
+  return "$report_status"
+}
+
+render_aggregate_index() {
+  local index_path="$RUN_DIR/index.html"
+  local links=()
+  local run_path run_name href
+
+  shopt -s nullglob
+  for run_path in "$RUN_DIR/_runs"/*; do
+    [[ -d "$run_path" ]] || continue
+    run_name="${run_path##*/}"
+    href="_runs/$run_name/report.html"
+    if [[ -f "$run_path/report.html" ]]; then
+      links+=("<li><a href=\"$(html_escape "$href")\">$(html_escape "$run_name")</a></li>")
+    fi
+  done
+  shopt -u nullglob
+
+  {
+    echo "<!doctype html>"
+    echo "<html lang=\"en\">"
+    echo "<head><meta charset=\"utf-8\"><title>Swift E2E Aggregate</title></head>"
+    echo "<body>"
+    echo "<h1>Swift E2E Aggregate</h1>"
+    echo "<ul>"
+    printf '%s\n' "${links[@]}"
+    echo "</ul>"
+    echo "</body>"
+    echo "</html>"
+  } > "$index_path"
+
+  echo "==> Wrote Swift E2E aggregate index: $index_path"
+}
+
+if [[ -d "$RUN_DIR/_runs" ]]; then
+  status=0
+  shopt -s nullglob
+  for run_path in "$RUN_DIR/_runs"/*; do
+    [[ -d "$run_path" ]] || continue
+    render_single_report "$run_path" || { step_status=$?; [[ "$status" -eq 0 ]] && status="$step_status"; }
+  done
+  shopt -u nullglob
+  if [[ "$status" -eq 0 ]]; then
+    render_aggregate_index
+  fi
+  exit "$status"
 fi
 
-FAILURE_STATUS="$REPORT_STATUS"
-if [[ "$FAILURE_STATUS" -eq 0 ]]; then
-  FAILURE_STATUS=1
-fi
-
-echo "ERROR: Swift E2E HTML report generation failed." >&2
-exit "$FAILURE_STATUS"
+render_single_report "$RUN_DIR" || {
+  echo "ERROR: Swift E2E HTML report generation failed." >&2
+  exit $?
+}

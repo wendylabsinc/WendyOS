@@ -49,7 +49,7 @@ struct ReportCommand: ParsableCommand {
         let runURL = runDir.map { URL(fileURLWithPath: $0, isDirectory: true) }
         let recordingURL = try resolvedRecordingDirectory(
             recordingDir.map { URL(fileURLWithPath: $0, isDirectory: true) }
-                ?? runURL?.appendingPathComponent("tests", isDirectory: true)
+                ?? runURL.flatMap(defaultRecordingDirectory)
                 ?? latestRecordingDirectory(packageURL: packageURL)
         )
         let outputURL = URL(
@@ -380,6 +380,14 @@ private func parseRecord(at recordURL: URL, relativeTo recordingURL: URL) throws
 
 private func fenced(label: String, in text: String) -> String {
     firstMatch("### \(label)\\n\\n```text\\n([\\s\\S]*?)\\n```", in: text) ?? ""
+}
+
+private func defaultRecordingDirectory(runURL: URL) -> URL {
+    let nestedTestsURL = runURL.appendingPathComponent("tests", isDirectory: true)
+    if FileManager.default.fileExists(atPath: nestedTestsURL.path) {
+        return nestedTestsURL
+    }
+    return runURL
 }
 
 private func resolvedRecordingDirectory(_ url: URL) throws -> URL {

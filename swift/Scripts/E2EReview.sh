@@ -106,29 +106,56 @@ fi
 RUN_DIR="$(absolute_existing_dir_path "$RUN_DIR")"
 PACKAGE_DIR="$(absolute_existing_dir_path "$PACKAGE_DIR")"
 
-COMMAND_ARGS=(
-  "run" "swift-e2e-testing" "review"
-  "--run-dir" "$RUN_DIR"
-  "--provider" "$PROVIDER"
-)
+review_single_run() {
+  local run_dir="$1"
+  local command_args=(
+    "run" "swift-e2e-testing" "review"
+    "--run-dir" "$run_dir"
+    "--provider" "$PROVIDER"
+  )
 
-if [[ -n "$MODEL" ]]; then
-  COMMAND_ARGS+=("--model" "$MODEL")
-fi
-if [[ "$OVERWRITE" == "true" ]]; then
-  COMMAND_ARGS+=("--overwrite")
-fi
-COMMAND_ARGS+=("${EXTRA_ARGS[@]}")
+  if [[ -n "$MODEL" ]]; then
+    command_args+=("--model" "$MODEL")
+  fi
+  if [[ "$OVERWRITE" == "true" ]]; then
+    command_args+=("--overwrite")
+  fi
+  command_args+=("${EXTRA_ARGS[@]}")
 
-echo "==> Reviewing Swift E2E results"
-echo "    Package:  $PACKAGE_DIR"
-echo "    Run dir:  $RUN_DIR"
-echo "    Provider: $PROVIDER"
-if [[ -n "$MODEL" ]]; then
-  echo "    Model:    $MODEL"
+  echo "==> Reviewing Swift E2E results"
+  echo "    Package:  $PACKAGE_DIR"
+  echo "    Run dir:  $run_dir"
+  echo "    Provider: $PROVIDER"
+  if [[ -n "$MODEL" ]]; then
+    echo "    Model:    $MODEL"
+  fi
+
+  (
+    cd "$PACKAGE_DIR"
+    swift "${command_args[@]}"
+  )
+}
+
+if [[ -d "$RUN_DIR/_runs" ]]; then
+  status=0
+  run_paths=()
+  shopt -s nullglob
+  for run_path in "$RUN_DIR/_runs"/*; do
+    [[ -d "$run_path" ]] || continue
+    run_paths+=("$run_path")
+    review_single_run "$run_path" || { step_status=$?; [[ "$status" -eq 0 ]] && status="$step_status"; }
+  done
+  shopt -u nullglob
+
+  if [[ ${#run_paths[@]} -gt 0 ]]; then
+    (
+      cd "$PACKAGE_DIR"
+      swift run swift-e2e-testing aggregate \
+        --output-dir "$(dirname "$RUN_DIR")" \
+        "${run_paths[@]}"
+    )
+  fi
+  exit "$status"
 fi
 
-(
-  cd "$PACKAGE_DIR"
-  swift "${COMMAND_ARGS[@]}"
-)
+review_single_run "$RUN_DIR"

@@ -38,7 +38,7 @@ struct ReviewCommand: AsyncParsableCommand {
             fileURLWithPath: testsDir ?? defaultReviewTestsDir(packageURL: packageURL).path
         ).standardizedFileURL
         let runURL = URL(fileURLWithPath: runDir, isDirectory: true).standardizedFileURL
-        let recordingURL = runURL.appendingPathComponent("tests", isDirectory: true)
+        let recordingURL = defaultReviewRecordingDirectory(runURL: runURL)
         let repoURL = packageURL.deletingLastPathComponent().deletingLastPathComponent()
             .standardizedFileURL
 
@@ -485,6 +485,14 @@ private func defaultReviewTestsDir(packageURL: URL) -> URL {
         return e2eTestsURL
     }
     return packageURL.appendingPathComponent("Tests")
+}
+
+private func defaultReviewRecordingDirectory(runURL: URL) -> URL {
+    let nestedTestsURL = runURL.appendingPathComponent("tests", isDirectory: true)
+    if FileManager.default.fileExists(atPath: nestedTestsURL.path) {
+        return nestedTestsURL
+    }
+    return runURL
 }
 
 private func loadReviewRecords(in recordingURL: URL) throws -> [String: URL] {
