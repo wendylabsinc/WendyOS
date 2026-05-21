@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private var isQuitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        self.welcomeAndPermissions.configureLaunchAtLoginOnStartup()
+
         self.statusMenuController = StatusMenuController(
             wendyAgent: self.wendyAgent,
             delegate: self
