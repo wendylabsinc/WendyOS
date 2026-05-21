@@ -30,11 +30,11 @@ INSTALL_SWIFT_TOOLCHAIN=1
 INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
+CONFIGURE_POWER_SETTINGS=0
 SHOW_XCODE_MANUAL_STEP=1
 SHOW_MAC_NAME_MANUAL_STEP=0
 SHOW_REMOTE_LOGIN_MANUAL_STEP=0
 SHOW_SCREEN_SHARING_MANUAL_STEP=0
-SHOW_AC_SLEEP_MANUAL_STEP=0
 SHOW_SCREEN_LOCK_MANUAL_STEP=0
 SHOW_AUTO_LOGIN_MANUAL_STEP=0
 WALK_THROUGH_MANUAL_STEPS=0
@@ -278,10 +278,10 @@ EOF
     SHOW_SCREEN_SHARING_MANUAL_STEP=0
   fi
 
-  if ask_yes_no "Show manual step to disable sleep on AC?" "n"; then
-    SHOW_AC_SLEEP_MANUAL_STEP=1
+  if ask_yes_no "Disable macOS sleep on AC for unattended use?" "n"; then
+    CONFIGURE_POWER_SETTINGS=1
   else
-    SHOW_AC_SLEEP_MANUAL_STEP=0
+    CONFIGURE_POWER_SETTINGS=0
   fi
 
   if ask_yes_no "Show manual step to disable screen locking?" "n"; then
@@ -305,7 +305,7 @@ EOF
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary swift_summary direnv_summary
-  local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary github_runner_summary manual_steps_summary
+  local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary github_runner_summary power_settings_summary manual_steps_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
@@ -364,6 +364,12 @@ confirm_plan() {
     github_runner_summary="GitHub Actions runner will not be installed"
   fi
 
+  if (( CONFIGURE_POWER_SETTINGS )); then
+    power_settings_summary="AC sleep will be disabled with pmset; display sleep will be set to 10 minutes"
+  else
+    power_settings_summary="AC sleep settings will not be changed"
+  fi
+
   if has_macos_manual_steps; then
     if (( WALK_THROUGH_MANUAL_STEPS )); then
       manual_steps_summary="Selected manual macOS steps will be shown one at a time with confirmation prompts"
@@ -402,6 +408,7 @@ This script will configure this Mac by doing the following:
       ${direnv_summary}
       ${passwordless_sudo_summary}
       Bonjour/mDNS local hostname discovery
+      ${power_settings_summary}
       ${manual_steps_summary}
       ${git_summary}
 
@@ -734,6 +741,17 @@ configure_mdns() {
   ok "Bonjour/mDNS local hostname set to ${name}.local"
 }
 
+configure_power_settings() {
+  if (( ! CONFIGURE_POWER_SETTINGS )); then
+    ok "AC sleep settings not changed"
+    return 0
+  fi
+
+  info "Configuring macOS AC power settings for unattended use"
+  run_sudo pmset -c standby 0 hibernatemode 0 powernap 0 displaysleep 10 sleep 0 disksleep 0
+  ok "AC sleep disabled; display sleep set to 10 minutes"
+}
+
 install_wendy_cli() {
   if (( ! INSTALL_WENDY_CLI )); then
     ok "Wendy CLI not installed"
@@ -897,7 +915,7 @@ primary_ip() {
 }
 
 has_macos_manual_steps() {
-  (( SHOW_XCODE_MANUAL_STEP || INSTALL_WENDY_CLI || INSTALL_WENDY_AGENT || SHOW_MAC_NAME_MANUAL_STEP || SHOW_REMOTE_LOGIN_MANUAL_STEP || SHOW_SCREEN_SHARING_MANUAL_STEP || SHOW_AC_SLEEP_MANUAL_STEP || SHOW_SCREEN_LOCK_MANUAL_STEP || SHOW_AUTO_LOGIN_MANUAL_STEP || SETUP_GITHUB_RUNNER ))
+  (( SHOW_XCODE_MANUAL_STEP || INSTALL_WENDY_CLI || INSTALL_WENDY_AGENT || SHOW_MAC_NAME_MANUAL_STEP || SHOW_REMOTE_LOGIN_MANUAL_STEP || SHOW_SCREEN_SHARING_MANUAL_STEP || SHOW_SCREEN_LOCK_MANUAL_STEP || SHOW_AUTO_LOGIN_MANUAL_STEP || SETUP_GITHUB_RUNNER ))
 }
 
 manual_step() {
@@ -973,11 +991,6 @@ EOF
   if (( SHOW_SCREEN_SHARING_MANUAL_STEP )); then
     manual_step "  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
       System Settings → General → Sharing → Screen Sharing"
-  fi
-
-  if (( SHOW_AC_SLEEP_MANUAL_STEP )); then
-    manual_step "  • Disable ${STYLE_BOLD}sleep on AC${STYLE_RESET} if desired:
-      System Settings → Battery → Options → Prevent automatic sleeping on power adapter when the display is off → ${STYLE_BOLD}On${STYLE_RESET}"
   fi
 
   if (( SHOW_SCREEN_LOCK_MANUAL_STEP )); then
@@ -1066,6 +1079,7 @@ main() {
   configure_editor
   configure_direnv
   configure_mdns
+  configure_power_settings
   install_wendy_cli
   install_wendy_agent
   install_github_runner
