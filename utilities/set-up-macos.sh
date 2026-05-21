@@ -33,14 +33,12 @@ PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 
 if [[ -t 1 ]]; then
   STYLE_BOLD=$'\033[1m'
-  STYLE_CYAN=$'\033[36m'
   STYLE_RESET=$'\033[0m'
 else
   STYLE_BOLD=""
-  STYLE_CYAN=""
   STYLE_RESET=""
 fi
-readonly STYLE_BOLD STYLE_CYAN STYLE_RESET
+readonly STYLE_BOLD STYLE_RESET
 
 bold() { printf '%s%s%s\n' "$STYLE_BOLD" "$*" "$STYLE_RESET"; }
 info() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -690,32 +688,32 @@ Generated SSH public key:
 
 $(bold "Manual macOS steps")
 
-  • Download and install the latest ${STYLE_CYAN}Xcode${STYLE_RESET} from https://xcodereleases.com/.
+  • Download and install the latest ${STYLE_BOLD}Xcode${STYLE_RESET} from https://xcodereleases.com/.
     Open Xcode once after installing it so macOS can finish installing
     components and accepting license prompts.
 EOF
 
   cat <<EOF
 
-  • Review or change the Mac ${STYLE_CYAN}name${STYLE_RESET} and local ${STYLE_CYAN}hostname${STYLE_RESET} if desired:
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}About${STYLE_RESET} → ${STYLE_BOLD}Name${STYLE_RESET}
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Local hostname${STYLE_RESET} (at the bottom)
+  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
+      System Settings → General → About → Name
+      System Settings → General → Sharing → Local hostname (at the bottom)
 
-  • Enable ${STYLE_CYAN}Remote Login${STYLE_RESET} if you want SSH access:
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Remote Login${STYLE_RESET}
+  • Enable ${STYLE_BOLD}Remote Login${STYLE_RESET} if you want SSH access:
+      System Settings → General → Sharing → Remote Login
 
-  • Enable ${STYLE_CYAN}Screen Sharing${STYLE_RESET} if you want remote desktop access:
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Screen Sharing${STYLE_RESET}
+  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
+      System Settings → General → Sharing → Screen Sharing
 
-  • Adjust ${STYLE_CYAN}sleep${STYLE_RESET} and ${STYLE_CYAN}display sleep${STYLE_RESET} if desired:
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Displays${STYLE_RESET} → ${STYLE_BOLD}Advanced${STYLE_RESET} → Prevent automatic sleeping on power adapter when the display is off
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Lock Screen${STYLE_RESET} → Turn display off on power adapter when inactive
+  • Adjust ${STYLE_BOLD}sleep${STYLE_RESET} and ${STYLE_BOLD}display sleep${STYLE_RESET} if desired:
+      System Settings → Displays → Advanced → Prevent automatic sleeping on power adapter when the display is off
+      System Settings → Lock Screen → Turn display off on power adapter when inactive
 
-  • Adjust ${STYLE_CYAN}screen locking${STYLE_RESET} if desired:
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Lock Screen${STYLE_RESET} → Require password after screen saver begins or display is turned off
+  • Adjust ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
+      System Settings → Lock Screen → Require password after screen saver begins or display is turned off
 
-  • Enable ${STYLE_CYAN}automatic desktop login${STYLE_RESET} if desired:
-      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Users & Groups${STYLE_RESET} → Automatically log in as ${CURRENT_USER}
+  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
+      System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}
 
 EOF
 
