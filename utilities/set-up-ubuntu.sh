@@ -1005,8 +1005,8 @@ manual_step() {
   local message="$1"
 
   if (( WALK_THROUGH_MANUAL_STEPS )); then
-    printf '\n%s\n' "$message"
-    printf 'Press Return when done, or type s to skip: '
+    printf '\n%s\n\n' "$message"
+    printf 'Continue? [Return] '
     local answer
     read -r answer
     return 0

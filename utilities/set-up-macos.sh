@@ -699,10 +699,29 @@ manual_step() {
   local message="$1"
 
   if (( WALK_THROUGH_MANUAL_STEPS )); then
-    printf '\n%s\n' "$message"
-    printf 'Press Return when done, or type s to skip: '
+    printf '\n%s\n\n' "$message"
+    printf 'Continue? [Return] '
     local answer
     read -r answer
+    return 0
+  fi
+
+  printf '\n%s\n' "$message"
+}
+
+assisted_manual_step() {
+  local message="$1"
+  local command_to_run="$2"
+
+  if (( WALK_THROUGH_MANUAL_STEPS )); then
+    printf '\n%s\n\n' "$message"
+    printf 'Ready? [Return, s to skip] '
+    local answer
+    read -r answer
+    case "$answer" in
+      s|S|skip|SKIP) return 0 ;;
+    esac
+    eval "$command_to_run" || true
     return 0
   fi
 
@@ -715,14 +734,17 @@ run_manual_steps() {
 $(bold "Manual macOS steps")
 EOF
 
-  manual_step "  • Launch ${STYLE_BOLD}Xcode${STYLE_RESET} once and complete its first-run setup,
-    tour/wizard, component installation, and license prompts."
+  assisted_manual_step "  • I can open ${STYLE_BOLD}Xcode${STYLE_RESET} next. Please complete its first-run setup,
+    tour/wizard, component installation, and license prompts." \
+    "open -a \"$XCODE_APP_PATH\""
 
-  manual_step "  • Launch the installed ${STYLE_BOLD}wendy${STYLE_RESET} CLI once and approve Bluetooth
-    and any other macOS permissions it requests."
+  assisted_manual_step "  • I can launch the installed ${STYLE_BOLD}wendy${STYLE_RESET} CLI next. If a permission
+    dialog appears, approve Bluetooth and any other requested permissions." \
+    "command -v wendy >/dev/null 2>&1 && wendy --help >/dev/null 2>&1"
 
-  manual_step "  • Launch the installed ${STYLE_BOLD}Wendy agent${STYLE_RESET} app once and approve
-    permissions by following the instructions on its Welcome screen."
+  assisted_manual_step "  • I can launch the installed ${STYLE_BOLD}Wendy agent${STYLE_RESET} app next. Approve
+    permissions by following the instructions on its Welcome screen." \
+    "open -a WendyAgentMac || open -a 'Wendy Agent' || open -a wendy-agent"
 
   manual_step "  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
       System Settings → General → About → Name

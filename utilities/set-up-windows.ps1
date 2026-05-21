@@ -1142,7 +1142,26 @@ function Write-ManualStep {
   Write-Host ''
   Write-Host $Message
   if ($script:WalkThroughManualSteps) {
-    [void](Read-Host 'Press Enter when done, or type s to skip')
+    Write-Host ''
+    Write-Host 'Continue? [Enter] ' -NoNewline
+    [void][Console]::ReadLine()
+  }
+}
+
+function Write-AssistedManualStep {
+  param(
+    [Parameter(Mandatory)][string]$Message,
+    [Parameter(Mandatory)][scriptblock]$Action
+  )
+
+  Write-Host ''
+  Write-Host $Message
+  if ($script:WalkThroughManualSteps) {
+    Write-Host ''
+    Write-Host 'Ready? [Enter, s to skip] ' -NoNewline
+    $answer = [Console]::ReadLine()
+    if ($answer -match '^(s|skip)$') { return }
+    try { & $Action } catch { Write-Warn $_.Exception.Message }
   }
 }
 
@@ -1154,10 +1173,13 @@ function Write-ManualSteps {
     changes are loaded.
 '@
 
-  Write-ManualStep @'
-  - Launch Claude Code and Codex once and complete their sign-in or first-run
-    setup flows.
-'@
+  Write-AssistedManualStep @'
+  - I can launch Claude Code next. Complete its sign-in or first-run setup flow.
+'@ { if (Get-Command 'claude.exe' -ErrorAction SilentlyContinue) { Start-Process 'claude.exe' } }
+
+  Write-AssistedManualStep @'
+  - I can launch Codex next. Complete its sign-in or first-run setup flow.
+'@ { if (Get-Command 'codex.exe' -ErrorAction SilentlyContinue) { Start-Process 'codex.exe' } }
 
   if ($script:InstallDirenv) {
     Write-ManualStep @'
