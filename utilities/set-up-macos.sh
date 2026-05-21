@@ -33,7 +33,7 @@ PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 
 if [[ -t 1 ]]; then
   STYLE_BOLD=$'\033[1m'
-  STYLE_CYAN=$'\033[1;36m'
+  STYLE_CYAN=$'\033[36m'
   STYLE_RESET=$'\033[0m'
 else
   STYLE_BOLD=""
@@ -697,25 +697,25 @@ EOF
 
   cat <<EOF
 
-  • ${STYLE_BOLD}${STYLE_CYAN}Name / hostname${STYLE_RESET}: review or change the Mac name and local hostname if desired:
-      ${STYLE_CYAN}System Settings → General → About → Name${STYLE_RESET}
-      ${STYLE_CYAN}System Settings → General → Sharing → Local hostname${STYLE_RESET} (at the bottom)
+  • ${STYLE_CYAN}Name / hostname${STYLE_RESET} — review or change the Mac name and local hostname if desired:
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}About${STYLE_RESET} → ${STYLE_BOLD}Name${STYLE_RESET}
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Local hostname${STYLE_RESET} (at the bottom)
 
-  • ${STYLE_BOLD}${STYLE_CYAN}Remote Login${STYLE_RESET}: enable if you want SSH access:
-      ${STYLE_CYAN}System Settings → General → Sharing → Remote Login${STYLE_RESET}
+  • ${STYLE_CYAN}Remote Login${STYLE_RESET} — enable if you want SSH access:
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Remote Login${STYLE_RESET}
 
-  • ${STYLE_BOLD}${STYLE_CYAN}Screen Sharing${STYLE_RESET}: enable if you want remote desktop access:
-      ${STYLE_CYAN}System Settings → General → Sharing → Screen Sharing${STYLE_RESET}
+  • ${STYLE_CYAN}Screen Sharing${STYLE_RESET} — enable if you want remote desktop access:
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Screen Sharing${STYLE_RESET}
 
-  • ${STYLE_BOLD}${STYLE_CYAN}Sleep / display sleep${STYLE_RESET}: adjust if desired:
-      ${STYLE_CYAN}System Settings → Displays → Advanced${STYLE_RESET} → Prevent automatic sleeping on power adapter when the display is off
-      ${STYLE_CYAN}System Settings → Lock Screen${STYLE_RESET} → Turn display off on power adapter when inactive
+  • ${STYLE_CYAN}Sleep / display sleep${STYLE_RESET} — adjust if desired:
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Displays${STYLE_RESET} → ${STYLE_BOLD}Advanced${STYLE_RESET} → Prevent automatic sleeping on power adapter when the display is off
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Lock Screen${STYLE_RESET} → Turn display off on power adapter when inactive
 
-  • ${STYLE_BOLD}${STYLE_CYAN}Screen locking${STYLE_RESET}: adjust if desired:
-      ${STYLE_CYAN}System Settings → Lock Screen${STYLE_RESET} → Require password after screen saver begins or display is turned off
+  • ${STYLE_CYAN}Screen locking${STYLE_RESET} — adjust if desired:
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Lock Screen${STYLE_RESET} → Require password after screen saver begins or display is turned off
 
-  • ${STYLE_BOLD}${STYLE_CYAN}Automatic desktop login${STYLE_RESET}: enable if desired:
-      ${STYLE_CYAN}System Settings → Users & Groups${STYLE_RESET} → Automatically log in as ${CURRENT_USER}
+  • ${STYLE_CYAN}Automatic desktop login${STYLE_RESET} — enable if desired:
+      ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Users & Groups${STYLE_RESET} → Automatically log in as ${CURRENT_USER}
 
 EOF
 
