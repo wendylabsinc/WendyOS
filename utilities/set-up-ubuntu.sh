@@ -22,7 +22,13 @@ GIT_NAME=""
 GIT_EMAIL=""
 CONFIGURE_GIT=1
 SETUP_PASSWORDLESS_SUDO=0
+ENABLE_SSH_LOGIN=0
+INSTALL_DIRENV=0
+INSTALL_WENDY_CLI=0
 INSTALL_WENDY_AGENT=0
+SETUP_AUTO_LOGIN=0
+CONFIGURE_REMOTE_DESKTOP=0
+CONFIGURE_POWER_SETTINGS=0
 AUTHORIZED_LOGIN_KEYS=()
 PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 
@@ -143,7 +149,13 @@ EOF
       ;;
   esac
 
-  if ask_yes_no "Install additional SSH public keys into ${CURRENT_USER}'s authorized_keys?" "y"; then
+  if ask_yes_no "Enable SSH login via openssh-server?" "n"; then
+    ENABLE_SSH_LOGIN=1
+  else
+    ENABLE_SSH_LOGIN=0
+  fi
+
+  if ask_yes_no "Install additional SSH public keys into ${CURRENT_USER}'s authorized_keys?" "n"; then
     printf 'Paste one public key per prompt. Leave empty when done.\n'
     local key
     while true; do
@@ -160,20 +172,59 @@ EOF
     SETUP_PASSWORDLESS_SUDO=0
   fi
 
-  if ask_yes_no "Install wendy-agent?" "y"; then
+  if ask_yes_no "Install and configure direnv for repository-local developer tooling?" "n"; then
+    INSTALL_DIRENV=1
+  else
+    INSTALL_DIRENV=0
+  fi
+
+  if ask_yes_no "Install or update the Wendy CLI?" "n"; then
+    INSTALL_WENDY_CLI=1
+  else
+    INSTALL_WENDY_CLI=0
+  fi
+
+  if ask_yes_no "Install wendy-agent?" "n"; then
     INSTALL_WENDY_AGENT=1
   else
     INSTALL_WENDY_AGENT=0
   fi
+
+  if ask_yes_no "Enable automatic desktop login for ${CURRENT_USER} on startup?" "n"; then
+    SETUP_AUTO_LOGIN=1
+  else
+    SETUP_AUTO_LOGIN=0
+  fi
+
+  if ask_yes_no "Configure GNOME Remote Desktop when available?" "n"; then
+    CONFIGURE_REMOTE_DESKTOP=1
+  else
+    CONFIGURE_REMOTE_DESKTOP=0
+  fi
+
+  if ask_yes_no "Disable automatic sleep/blanking on AC power and screen locking?" "n"; then
+    CONFIGURE_POWER_SETTINGS=1
+  else
+    CONFIGURE_POWER_SETTINGS=0
+  fi
 }
 
 confirm_plan() {
-  local passwordless_sudo_summary git_summary ssh_key_summary wendy_agent_summary
+  local passwordless_sudo_summary git_summary ssh_key_summary wendy_cli_summary wendy_agent_summary direnv_summary
+  local ssh_summary ssh_package_summary auto_login_summary remote_desktop_summary power_settings_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
   else
     passwordless_sudo_summary="Passwordless sudo will not be changed"
+  fi
+
+  if (( ENABLE_SSH_LOGIN )); then
+    ssh_summary="SSH login via openssh-server will be enabled"
+    ssh_package_summary="OpenSSH server/client first, then git, curl, build-essential,"
+  else
+    ssh_summary="SSH login will not be changed"
+    ssh_package_summary="OpenSSH client, then git, curl, build-essential,"
   fi
 
   if (( CONFIGURE_GIT )); then
@@ -182,10 +233,40 @@ confirm_plan() {
     git_summary="Global git identity will not be changed"
   fi
 
+  if (( INSTALL_WENDY_CLI )); then
+    wendy_cli_summary="Wendy CLI will be installed using ${REPO_ROOT}/docs/cli.sh"
+  else
+    wendy_cli_summary="Wendy CLI will not be installed"
+  fi
+
   if (( INSTALL_WENDY_AGENT )); then
     wendy_agent_summary="wendy-agent will be installed using ${REPO_ROOT}/docs/agent.sh"
   else
     wendy_agent_summary="wendy-agent will not be installed"
+  fi
+
+  if (( SETUP_AUTO_LOGIN )); then
+    auto_login_summary="Automatic desktop login will be enabled for ${CURRENT_USER} when a supported display manager is available"
+  else
+    auto_login_summary="Automatic desktop login will not be changed"
+  fi
+
+  if (( INSTALL_DIRENV )); then
+    direnv_summary="direnv will be installed and its Bash hook will be configured"
+  else
+    direnv_summary="direnv will not be installed or configured"
+  fi
+
+  if (( CONFIGURE_REMOTE_DESKTOP )); then
+    remote_desktop_summary="GNOME Remote Desktop will be configured when available"
+  else
+    remote_desktop_summary="GNOME Remote Desktop will not be changed"
+  fi
+
+  if (( CONFIGURE_POWER_SETTINGS )); then
+    power_settings_summary="AC sleep/blanking and screen locking will be disabled"
+  else
+    power_settings_summary="Power and screen-lock settings will not be changed"
   fi
 
   if (( ${#AUTHORIZED_LOGIN_KEYS[@]} )); then
@@ -199,19 +280,22 @@ confirm_plan() {
 This script will configure this machine by doing the following:
 
   • Install packages:
-      OpenSSH server/client first, then git, curl, build-essential,
+      ${ssh_package_summary}
       golang, Swift via swiftly, Avahi/mDNS tools, and Neovim.
+      ${direnv_summary}
 
   • Configure:
-      SSH login via openssh-server as early as possible
+      ${ssh_summary}
       SSH key generation for ${CURRENT_USER}
       ${ssh_key_summary}
       Neovim as the default CLI editor
-      ${SCRIPT_DIR}/bin on ${CURRENT_USER}'s Bash PATH
+      ${direnv_summary}
       ${passwordless_sudo_summary}
       Avahi/mDNS discovery and name resolution
-      GNOME Remote Desktop and GUI power/screen-lock settings only if those
-      tools are already installed and available
+      ${remote_desktop_summary}
+      ${power_settings_summary}
+      ${auto_login_summary}
+      ${wendy_cli_summary}
       ${wendy_agent_summary}
       ${git_summary}
 
@@ -240,6 +324,11 @@ ask_for_password() {
 }
 
 install_ssh_packages() {
+  if (( ! ENABLE_SSH_LOGIN )); then
+    ok "OpenSSH server not installed"
+    return 0
+  fi
+
   info "Installing OpenSSH server/client first"
   run_sudo apt-get update
   run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -277,7 +366,8 @@ install_packages() {
     golang \
     libnss-mdns \
     mdns-scan \
-    neovim
+    neovim \
+    openssh-client
   ok "packages installed"
 }
 
@@ -360,26 +450,25 @@ configure_editor() {
   ok "Neovim is the default editor"
 }
 
-configure_wendy_utilities_path() {
-  info "Adding utilities bin directory to Bash PATH"
-
-  local bin_dir="${SCRIPT_DIR}/bin"
-  if [[ ! -d "$bin_dir" ]]; then
-    warn "${bin_dir} does not exist; adding it to PATH anyway."
+configure_direnv() {
+  if (( ! INSTALL_DIRENV )); then
+    ok "direnv not installed or configured"
+    return 0
   fi
+
+  info "Installing and configuring direnv"
+  run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y direnv
 
   run_as_user bash -c '
     set -euo pipefail
-    bin_dir="$1"
     bashrc="$HOME/.bashrc"
-    heading_line="# Wendy Utilities"
-    path_line="export PATH=\"${bin_dir}:\$PATH\""
+    hook_line="eval \"\$(direnv hook bash)\""
 
     touch "$bashrc"
-    grep -qxF "$path_line" "$bashrc" || printf "\n%s\n%s\n" "$heading_line" "$path_line" >> "$bashrc"
-  ' bash "$bin_dir"
+    grep -qxF "$hook_line" "$bashrc" || printf "\n%s\n" "$hook_line" >> "$bashrc"
+  '
 
-  ok "utilities bin directory is on the Bash PATH"
+  ok "direnv installed and shell hook configured"
 }
 
 configure_passwordless_sudo() {
@@ -396,6 +485,11 @@ configure_passwordless_sudo() {
 }
 
 configure_ssh() {
+  if (( ! ENABLE_SSH_LOGIN )); then
+    ok "SSH login not changed"
+    return 0
+  fi
+
   info "Enabling SSH login"
   run_sudo systemctl enable --now ssh
   ufw_allow_if_active OpenSSH
@@ -470,6 +564,11 @@ configure_avahi() {
 
 
 configure_remote_desktop() {
+  if (( ! CONFIGURE_REMOTE_DESKTOP )); then
+    ok "GNOME Remote Desktop not changed"
+    return 0
+  fi
+
   info "Configuring GNOME Remote Desktop sharing + control"
 
   if ! command -v grdctl >/dev/null 2>&1; then
@@ -534,7 +633,54 @@ configure_remote_desktop() {
   ok "GNOME Remote Desktop configured where supported"
 }
 
+configure_auto_login() {
+  if (( ! SETUP_AUTO_LOGIN )); then
+    ok "automatic desktop login not changed"
+    return 0
+  fi
+
+  info "Enabling automatic desktop login for ${CURRENT_USER}"
+
+  if [[ -f /etc/gdm3/custom.conf ]]; then
+    run_sudo cp -n /etc/gdm3/custom.conf /etc/gdm3/custom.conf.bak-before-autologin || true
+    run_sudo grep -q '^\[daemon\]' /etc/gdm3/custom.conf || printf '\n[daemon]\n' | run_sudo tee -a /etc/gdm3/custom.conf >/dev/null
+
+    if run_sudo grep -Eq '^#?AutomaticLoginEnable=' /etc/gdm3/custom.conf; then
+      run_sudo sed -i -E 's/^#?AutomaticLoginEnable=.*/AutomaticLoginEnable=true/' /etc/gdm3/custom.conf
+    else
+      run_sudo sed -i '/^\[daemon\]/a AutomaticLoginEnable=true' /etc/gdm3/custom.conf
+    fi
+
+    if run_sudo grep -Eq '^#?AutomaticLogin=' /etc/gdm3/custom.conf; then
+      run_sudo sed -i -E "s/^#?AutomaticLogin=.*/AutomaticLogin=${CURRENT_USER}/" /etc/gdm3/custom.conf
+    else
+      run_sudo sed -i "/^\[daemon\]/a AutomaticLogin=${CURRENT_USER}" /etc/gdm3/custom.conf
+    fi
+
+    ok "GDM automatic desktop login configured for next boot"
+    return 0
+  fi
+
+  if [[ -d /etc/lightdm ]]; then
+    run_sudo install -d -m 0755 /etc/lightdm/lightdm.conf.d
+    run_sudo tee /etc/lightdm/lightdm.conf.d/50-wendy-autologin.conf >/dev/null <<EOF
+[Seat:*]
+autologin-user=${CURRENT_USER}
+autologin-user-timeout=0
+EOF
+    ok "LightDM automatic desktop login configured for next boot"
+    return 0
+  fi
+
+  warn "No supported desktop login manager configuration was found; automatic desktop login was not changed."
+}
+
 configure_power_settings() {
+  if (( ! CONFIGURE_POWER_SETTINGS )); then
+    ok "power and lock settings not changed"
+    return 0
+  fi
+
   if ! command -v gsettings >/dev/null 2>&1; then
     warn "gsettings was not found; skipping GUI power/screen-lock configuration."
     return 0
@@ -721,6 +867,20 @@ EOF
   ok "AC power policy configured; screen locking disabled entirely"
 }
 
+install_wendy_cli() {
+  if (( ! INSTALL_WENDY_CLI )); then
+    ok "Wendy CLI not installed"
+    return 0
+  fi
+
+  local install_script="${REPO_ROOT}/docs/cli.sh"
+  [[ -f "$install_script" ]] || fail "Could not find ${install_script}"
+
+  info "Installing Wendy CLI"
+  run_sudo bash "$install_script" -y
+  ok "Wendy CLI installation complete"
+}
+
 install_wendy_agent() {
   if (( ! INSTALL_WENDY_AGENT )); then
     ok "wendy-agent not installed"
@@ -761,7 +921,7 @@ Useful connection details:
   Hostname:        $(hostname)
   mDNS name:       $(hostname).local
   Primary IP:      ${hostname_ip:-unknown}
-  SSH:             ssh ${CURRENT_USER}@$(hostname).local
+  SSH:             ssh ${CURRENT_USER}@$(hostname).local if SSH login was enabled
   Remote Desktop:  RDP to $(hostname).local if GNOME Remote Desktop was available
 
 Generated SSH public key:
@@ -784,10 +944,12 @@ main() {
   install_packages
   install_swiftly
   configure_editor
-  configure_wendy_utilities_path
+  configure_direnv
   configure_avahi
   configure_remote_desktop
+  configure_auto_login
   configure_power_settings
+  install_wendy_cli
   install_wendy_agent
   configure_git
   summary

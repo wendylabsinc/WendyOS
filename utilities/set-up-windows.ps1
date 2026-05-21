@@ -31,13 +31,17 @@ $script:GitEmail = ''
 $script:AuthorizedLoginKeys = [System.Collections.Generic.List[string]]::new()
 $script:InstallVisualStudioBuildTools = $true
 $script:InstallSwiftToolchain = $true
-$script:InstallWendyCli = $true
+$script:InstallWendyCli = $false
+$script:InstallDirenv = $false
+$script:EnableSshLogin = $false
+$script:SetupAutomaticLogin = $false
+$script:AutomaticLoginPassword = $null
 $script:ConfigureRemoteDesktop = $false
 $script:ConfigureTerminalDefaultPowerShell = $false
 $script:ConfigureSshDefaultPowerShell = $false
 $script:DisableAcSleep = $false
 $script:DisableScreenLocking = $false
-$script:EnableDeveloperMode = $true
+$script:EnableDeveloperMode = $false
 
 function Write-Bold { param([string]$Message) Write-Host $Message -ForegroundColor White }
 function Write-Info { param([string]$Message) Write-Host "`n==> $Message" -ForegroundColor Blue }
@@ -117,7 +121,9 @@ without creating duplicates.
     $script:ConfigureGit = $false
   }
 
-  if (Ask-YesNo "Install additional SSH public keys into $CurrentUserName's authorized_keys?" $true) {
+  $script:EnableSshLogin = Ask-YesNo 'Enable SSH login via OpenSSH Server?' $false
+
+  if (Ask-YesNo "Install additional SSH public keys into $CurrentUserName's authorized_keys?" $false) {
     Write-Host 'Paste one public key per prompt. Leave empty when done.'
     while ($true) {
       $key = Read-Host ('SSH public key {0}' -f ($script:AuthorizedLoginKeys.Count + 1))
@@ -128,8 +134,16 @@ without creating duplicates.
 
   $script:InstallVisualStudioBuildTools = Ask-YesNo 'Install Visual Studio Build Tools for C++/Swift builds?' $true
   $script:InstallSwiftToolchain = Ask-YesNo 'Install the Swift toolchain?' $true
-  $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $true
-  $script:EnableDeveloperMode = Ask-YesNo 'Enable Windows Developer Mode?' $true
+  $script:InstallDirenv = Ask-YesNo 'Install and configure direnv for repository-local developer tooling?' $false
+  $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $false
+  $script:EnableDeveloperMode = Ask-YesNo 'Enable Windows Developer Mode?' $false
+  if (Ask-YesNo 'Enable automatic Windows sign-in on startup? This stores your password in the registry.' $false) {
+    $script:SetupAutomaticLogin = $true
+    $script:AutomaticLoginPassword = Read-Host 'Windows account password for automatic sign-in' -AsSecureString
+    if (-not $script:AutomaticLoginPassword -or $script:AutomaticLoginPassword.Length -eq 0) {
+      Fail 'Automatic sign-in password cannot be empty.'
+    }
+  }
   $script:ConfigureRemoteDesktop = Ask-YesNo 'Enable Remote Desktop?' $false
   $script:ConfigureTerminalDefaultPowerShell = Ask-YesNo 'Make Windows Terminal open PowerShell by default?' $false
   $script:ConfigureSshDefaultPowerShell = Ask-YesNo 'Make SSH sessions start in PowerShell?' $false
@@ -159,25 +173,29 @@ function Confirm-Plan {
   $sleepSummary = if ($script:DisableAcSleep) { 'AC sleep will be disabled; display dimming/timeout will not be changed' } else { 'AC sleep and display timeout will not be changed' }
   $lockSummary = if ($script:DisableScreenLocking) { 'Screen locking will be disabled for the current user' } else { 'Screen locking will not be changed' }
   $developerModeSummary = if ($script:EnableDeveloperMode) { 'Windows Developer Mode will be enabled' } else { 'Windows Developer Mode will not be changed' }
+  $direnvSummary = if ($script:InstallDirenv) { 'direnv will be installed and its PowerShell hook will be configured' } else { 'direnv will not be installed or configured' }
+  $sshSummary = if ($script:EnableSshLogin) { 'SSH login via OpenSSH Server will be enabled' } else { 'SSH login will not be changed' }
+  $autoLoginSummary = if ($script:SetupAutomaticLogin) { 'Automatic Windows sign-in will be enabled; the password will be stored in the registry' } else { 'Automatic Windows sign-in will not be changed' }
 
   Write-Host @"
 
 This script will configure this machine by doing the following:
 
   - Install packages:
-      OpenSSH server/client first, then Git, Go, GNU Make, Neovim,
-      PowerShell 7,
+      OpenSSH client, then Git, Go, GNU Make, Neovim, PowerShell 7,
+      $direnvSummary
       $swiftSummary
       $vsSummary
 
   - Configure:
-      SSH login via OpenSSH Server as early as possible
+      $sshSummary
       SSH key generation for $CurrentUserName
       $sshKeySummary
       Neovim as the default CLI editor
-      $ScriptDir\bin on $CurrentUserName's user PATH
+      $direnvSummary
       $developerModeSummary
-      Network discovery services and firewall rules
+      Network discovery services and mDNS firewall rules will be enabled
+      $autoLoginSummary
       $rdpSummary
       $terminalSummary
       $sshShellSummary
@@ -187,7 +205,7 @@ This script will configure this machine by doing the following:
       $gitSummary
 
 This script does not install wendy-agent because the agent runs on Linux
-devices. It installs the Windows Wendy CLI instead.
+devices. It can install the Windows Wendy CLI when selected.
 "@
 
   if (-not (Ask-YesNo 'Continue?' $false)) {
@@ -314,9 +332,19 @@ function Add-WindowsCapabilityWithProgress {
 }
 
 function Install-OpenSshPackages {
-  Write-Info 'Installing OpenSSH server/client first'
+  if ($script:EnableSshLogin) {
+    Write-Info 'Installing OpenSSH server/client first'
+  } else {
+    Write-Info 'Installing OpenSSH client'
+  }
 
   Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Client~~~~0.0.1.0' -DisplayName 'OpenSSH Client'
+
+  if (-not $script:EnableSshLogin) {
+    Write-Ok 'OpenSSH client installed; OpenSSH Server not installed'
+    return
+  }
+
   Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Server~~~~0.0.1.0' -DisplayName 'OpenSSH Server'
 
   Set-Service -Name sshd -StartupType Automatic
@@ -348,6 +376,11 @@ function Enable-OpenSshFirewallRule {
 }
 
 function Test-LocalSshEndpoint {
+  if (-not $script:EnableSshLogin) {
+    Write-Ok 'local SSH listener not checked because SSH login was not enabled'
+    return
+  }
+
   Write-Info 'Checking local SSH listener'
 
   $service = Get-Service -Name sshd -ErrorAction SilentlyContinue
@@ -415,6 +448,11 @@ function Set-SshdConfigValue {
 }
 
 function Configure-Ssh {
+  if (-not $script:EnableSshLogin) {
+    Write-Ok 'SSH login not changed'
+    return
+  }
+
   Write-Info 'Enabling SSH login'
 
   $sshDir = Join-Path $env:ProgramData 'ssh'
@@ -752,16 +790,28 @@ function Configure-Editor {
   Write-Ok 'Neovim is the default editor for new shells'
 }
 
-function Configure-WendyUtilitiesPath {
-  Write-Info 'Adding utilities bin directory to the user PATH'
-
-  $binDir = Join-Path $ScriptDir 'bin'
-  if (-not (Test-Path $binDir)) {
-    Write-Warn "$binDir does not exist; adding it to PATH anyway."
+function Configure-Direnv {
+  if (-not $script:InstallDirenv) {
+    Write-Ok 'direnv not installed or configured'
+    return
   }
 
-  Add-UserPathEntry $binDir
-  Write-Ok 'utilities bin directory is on the user PATH'
+  Write-Info 'Installing and configuring direnv'
+  Install-WingetPackage -Id 'direnv.direnv' -Name 'direnv'
+
+  $profilePath = $PROFILE.CurrentUserAllHosts
+  $profileDir = Split-Path -Parent $profilePath
+  if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
+  if (-not (Test-Path $profilePath)) { New-Item -ItemType File -Path $profilePath -Force | Out-Null }
+
+  $hookLine = 'Invoke-Expression "$(direnv hook pwsh)"'
+  $existing = @(Get-Content -Path $profilePath -ErrorAction SilentlyContinue)
+  if ($existing -notcontains $hookLine) {
+    Add-Content -Path $profilePath -Value ''
+    Add-Content -Path $profilePath -Value $hookLine
+  }
+
+  Write-Ok "direnv installed and PowerShell hook configured in $profilePath"
 }
 
 function Configure-DeveloperMode {
@@ -816,6 +866,38 @@ function Configure-NetworkDiscovery {
   }
 
   Write-Ok 'network discovery and mDNS firewall rules enabled where supported'
+}
+
+function Configure-AutomaticLogin {
+  if (-not $script:SetupAutomaticLogin) {
+    Write-Ok 'automatic Windows sign-in not changed'
+    return
+  }
+
+  Write-Info 'Enabling automatic Windows sign-in'
+
+  $bstr = [IntPtr]::Zero
+  $plainPassword = $null
+  try {
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($script:AutomaticLoginPassword)
+    $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+
+    $domain = $env:COMPUTERNAME
+    if ($CurrentUser -like '*\*') {
+      $domain = ($CurrentUser -split '\\', 2)[0]
+    }
+
+    $winlogonPath = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    Set-ItemProperty -Path $winlogonPath -Name 'AutoAdminLogon' -Value '1'
+    Set-ItemProperty -Path $winlogonPath -Name 'DefaultUserName' -Value $CurrentUserName
+    Set-ItemProperty -Path $winlogonPath -Name 'DefaultDomainName' -Value $domain
+    Set-ItemProperty -Path $winlogonPath -Name 'DefaultPassword' -Value $plainPassword
+  } finally {
+    if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    $plainPassword = $null
+  }
+
+  Write-Ok 'automatic Windows sign-in configured for next boot'
 }
 
 function Configure-RemoteDesktopAccess {
@@ -939,8 +1021,8 @@ Useful connection details:
   Computer name:   $env:COMPUTERNAME
   mDNS name:       $env:COMPUTERNAME.local
   Primary IP:      $ipAddress
-  SSH by IP:       ssh $CurrentUserName@$ipAddress
-  SSH by name:     ssh $CurrentUserName@$env:COMPUTERNAME.local
+  SSH by IP:       ssh $CurrentUserName@$ipAddress if SSH login was enabled
+  SSH by name:     ssh $CurrentUserName@$env:COMPUTERNAME.local if SSH login was enabled
   Remote Desktop:  RDP to $ipAddress if Remote Desktop is supported/enabled
 
 If the .local name does not resolve from another machine, use the Primary IP.
@@ -967,9 +1049,10 @@ function Main {
   Configure-SshDefaultPowerShell
   Install-GnuMake
   Configure-Editor
-  Configure-WendyUtilitiesPath
+  Configure-Direnv
   Configure-DeveloperMode
   Configure-NetworkDiscovery
+  Configure-AutomaticLogin
   Configure-RemoteDesktopAccess
   Configure-PowerSettings
   Install-WendyCli

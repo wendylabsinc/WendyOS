@@ -65,26 +65,19 @@ go build -o wendy-agent ./cmd/wendy-agent
 
 ### Local Developer Tips
 
-#### Wendy CLI wrapper
+#### Repository-local Wendy CLI via direnv
 
-The repository includes a `utilities/bin/wendy` wrapper that finds the nearest
-`wendy-agent` checkout, rebuilds the Go CLI, and then runs it. Put
-`utilities/bin` on your `PATH` to quickly iterate on CLI changes without
-overwriting an installed `wendy`:
-
-```sh
-export PATH="/path/to/wendy-agent/utilities/bin:$PATH"
-```
-
-Then use `wendy` as usual from inside the repository:
+The repository includes a `.envrc` that creates a tiny local `wendy` shim in
+`.direnv/bin`. After allowing it once, `wendy` commands run from this checkout
+rebuild and execute the Go CLI without overwriting an installed `wendy`:
 
 ```sh
+direnv allow
 wendy run
 wendy discover --json
 ```
 
-Outside of a `wendy-agent` checkout, the wrapper falls back to the next
-installed `wendy` found on your `PATH`.
+Outside of this checkout, your normal installed `wendy` remains unchanged.
 
 You can still run the agent directly while developing it:
 
@@ -93,6 +86,20 @@ wendy-agent-dev() {
   (cd /path/to/wendy-agent/go && go run ./cmd/wendy-agent "$@")
 }
 ```
+
+#### macOS setup script
+
+For macOS development machines, this repository includes an interactive Homebrew
+setup script:
+
+```sh
+./utilities/set-up-macos.sh
+```
+
+It installs common development packages including Xcode Command Line Tools,
+configures Bonjour/mDNS, installs the Swift toolchain requested by
+`.swift-version`, and optionally configures SSH, automatic login, `direnv`, the
+Wendy CLI, and the macOS agent app.
 
 #### Ubuntu setup script
 
@@ -103,9 +110,9 @@ script:
 ./utilities/set-up-ubuntu.sh
 ```
 
-It installs common development packages, configures SSH and mDNS, installs the
-Swift toolchain requested by `.swift-version`, optionally installs
-`wendy-agent`, and adds `utilities/bin` to Bash `PATH`.
+It installs common development packages, configures mDNS, installs the Swift
+toolchain requested by `.swift-version`, and optionally configures SSH,
+automatic login, `direnv`, the Wendy CLI, and `wendy-agent`.
 
 #### Windows setup script
 
@@ -117,9 +124,9 @@ cd .\utilities
 powershell -ExecutionPolicy Bypass -File .\set-up-windows.ps1
 ```
 
-It installs common development packages including GNU Make, configures SSH and
-local discovery, installs the Swift toolchain when requested, and adds
-`utilities\bin` to the user `PATH`.
+It installs common development packages including GNU Make, configures local
+discovery, and optionally configures SSH, automatic sign-in, `direnv`, and the
+Swift toolchain.
 
 ## Setting Up the Device
 
