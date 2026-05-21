@@ -739,6 +739,9 @@ EOF
 
   cat <<EOF
 
+  • Review or change the local hostname if desired:
+      System Settings → General → Sharing → Local hostname (at the bottom)
+
   • Enable Remote Login if you want SSH access:
       System Settings → General → Sharing → Remote Login
 
