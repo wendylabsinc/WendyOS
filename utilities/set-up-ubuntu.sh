@@ -225,7 +225,7 @@ EOF
     CONFIGURE_REMOTE_DESKTOP=0
   fi
 
-  if ask_yes_no "Disable automatic sleep/blanking on AC power and screen locking?" "n"; then
+  if ask_yes_no "Disable automatic sleep on AC power and screen locking?" "n"; then
     CONFIGURE_POWER_SETTINGS=1
   else
     CONFIGURE_POWER_SETTINGS=0
@@ -299,7 +299,7 @@ confirm_plan() {
   fi
 
   if (( CONFIGURE_POWER_SETTINGS )); then
-    power_settings_summary="AC sleep/blanking and screen locking will be disabled"
+    power_settings_summary="AC sleep and screen locking will be disabled"
   else
     power_settings_summary="Power and screen-lock settings will not be changed"
   fi
@@ -776,7 +776,7 @@ configure_power_settings() {
     return 0
   fi
 
-  info "Disabling automatic sleep/blanking on AC power and screen locking entirely"
+  info "Disabling automatic sleep on AC power and screen locking entirely"
 
   run_sudo tee /usr/local/bin/ubuntu-ac-power-mode >/dev/null <<'EOF'
 #!/usr/bin/env bash
@@ -830,8 +830,6 @@ restore_default() {
 }
 
 save_defaults() {
-  save_default IDLE_DIM org.gnome.settings-daemon.plugins.power idle-dim
-  save_default IDLE_DELAY org.gnome.desktop.session idle-delay
 }
 
 is_on_ac_power() {
@@ -872,16 +870,10 @@ apply_ac_policy() {
   set_setting org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "nothing"
   set_setting org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
 
-  # GNOME does not expose AC-only keys for dimming or blanking, so this service
-  # applies those settings only while AC is connected and restores the previous
-  # values when the machine switches back to battery.
-  set_setting org.gnome.settings-daemon.plugins.power idle-dim false
-  set_setting org.gnome.desktop.session idle-delay "uint32 0"
 }
 
 apply_battery_policy() {
-  restore_default IDLE_DIM org.gnome.settings-daemon.plugins.power idle-dim
-  restore_default IDLE_DELAY org.gnome.desktop.session idle-delay
+  :
 }
 
 apply_current_policy() {
@@ -954,7 +946,7 @@ HandleLidSwitchExternalPower=ignore
 EOF
   run_sudo systemctl reload systemd-logind || run_sudo systemctl restart systemd-logind
 
-  ok "AC power policy configured; screen locking disabled entirely"
+  ok "AC sleep policy configured; screen locking disabled entirely"
 }
 
 install_wendy_cli() {

@@ -185,7 +185,7 @@ function Confirm-Plan {
   $rdpSummary = if ($script:ConfigureRemoteDesktop) { 'Remote Desktop will be enabled' } else { 'Remote Desktop will not be changed' }
   $terminalSummary = if ($script:ConfigureTerminalDefaultPowerShell) { 'Windows Terminal will open PowerShell by default' } else { 'Windows Terminal default profile will not be changed' }
   $sshShellSummary = if ($script:ConfigureSshDefaultPowerShell) { 'SSH sessions will start in PowerShell' } else { 'SSH default shell will not be changed' }
-  $sleepSummary = if ($script:DisableAcSleep) { 'AC sleep will be disabled; display dimming/timeout will not be changed' } else { 'AC sleep and display timeout will not be changed' }
+  $sleepSummary = if ($script:DisableAcSleep) { 'AC sleep will be disabled' } else { 'AC sleep will not be changed' }
   $lockSummary = if ($script:DisableScreenLocking) { 'Screen locking will be disabled for the current user' } else { 'Screen locking will not be changed' }
   $developerModeSummary = if ($script:EnableDeveloperMode) { 'Windows Developer Mode will be enabled' } else { 'Windows Developer Mode will not be changed' }
   $direnvSummary = if ($script:InstallDirenv) { 'direnv will be installed and its PowerShell hook will be configured' } else { 'direnv will not be installed or configured' }
@@ -995,9 +995,7 @@ function Configure-PowerSettings {
     Invoke-External 'powercfg.exe' @('/change', 'standby-timeout-ac', '0')
     Invoke-External 'powercfg.exe' @('/change', 'hibernate-timeout-ac', '0')
 
-    # Do not change monitor/display timeout settings here: the screen should
-    # still be allowed to dim or turn off on AC power.
-    Write-Ok 'AC sleep policy configured; display timeout unchanged'
+    Write-Ok 'AC sleep policy configured'
   } else {
     Write-Ok 'AC sleep policy not changed'
   }

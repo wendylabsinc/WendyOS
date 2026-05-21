@@ -16,6 +16,8 @@ SUDOERS_FILE="${SUDOERS_DIR}/90-${CURRENT_USER}-passwordless"
 readonly CURRENT_USER USER_HOME SUDOERS_DIR SUDOERS_FILE
 
 LOGIN_PASSWORD=""
+SUDO_ACCESS_CONFIRMED=0
+XCODE_APP_PATH=""
 GIT_NAME=""
 GIT_EMAIL=""
 CONFIGURE_GIT=1
@@ -319,6 +321,11 @@ EOF
 }
 
 ask_for_password() {
+  if (( SUDO_ACCESS_CONFIRMED )); then
+    ok "sudo access already confirmed"
+    return 0
+  fi
+
   printf '\nmacOS login password for %s: ' "$CURRENT_USER"
   read -rs LOGIN_PASSWORD
   printf '\n'
@@ -326,7 +333,105 @@ ask_for_password() {
 
   info "Checking sudo access"
   sudo_authenticate || fail "sudo authentication failed."
+  SUDO_ACCESS_CONFIRMED=1
   ok "sudo access confirmed"
+}
+
+find_xcode_app() {
+  local app
+  while IFS= read -r app; do
+    [[ -d "$app" ]] || continue
+    [[ -x "$app/Contents/Developer/usr/bin/xcodebuild" ]] || continue
+    printf '%s\n' "$app"
+    return 0
+  done < <(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print 2>/dev/null | sort -r)
+
+  return 1
+}
+
+find_xcode_archive() {
+  local downloads_dir="${USER_HOME}/Downloads"
+  [[ -d "$downloads_dir" ]] || return 1
+
+  find "$downloads_dir" -maxdepth 1 -type f \
+    \( -iname 'Xcode*.xip' -o -iname 'Xcode*.zip' \) \
+    -print | sort | tail -n 1
+}
+
+xcode_version() {
+  local app="$1" version=""
+  version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+  [[ -n "$version" ]] || version="$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
+  printf '%s\n' "${version:-unknown}"
+}
+
+install_xcode_archive() {
+  local archive="$1"
+  local tmp_dir app version destination lower_archive
+
+  info "Installing Xcode from ${archive}"
+  ask_for_password
+
+  tmp_dir="$(mktemp -d)"
+
+  lower_archive="$(printf '%s' "$archive" | tr '[:upper:]' '[:lower:]')"
+  case "$lower_archive" in
+    *.xip)
+      xip --expand "$archive" "$tmp_dir"
+      ;;
+    *.zip)
+      ditto -x -k "$archive" "$tmp_dir"
+      ;;
+    *)
+      fail "Unsupported Xcode archive type: ${archive}"
+      ;;
+  esac
+
+  app="$(find "$tmp_dir" -maxdepth 2 -type d -name 'Xcode*.app' -print | head -n 1)"
+  [[ -n "$app" ]] || fail "No Xcode.app was found inside ${archive}."
+
+  version="$(xcode_version "$app")"
+  [[ "$version" != "unknown" ]] || fail "Could not determine Xcode version from ${archive}."
+  destination="/Applications/Xcode-${version}.app"
+
+  [[ ! -e "$destination" ]] || fail "${destination} already exists, but no usable Xcode app was detected."
+
+  run_sudo mv "$app" "$destination"
+  run_sudo xattr -dr com.apple.quarantine "$destination" >/dev/null 2>&1 || true
+  run_sudo xcode-select -s "$destination/Contents/Developer" || true
+
+  XCODE_APP_PATH="$destination"
+  rm -rf "$tmp_dir"
+  ok "Xcode ${version} installed at ${destination}"
+}
+
+ensure_xcode_app() {
+  if XCODE_APP_PATH="$(find_xcode_app)"; then
+    ok "Xcode app found at ${XCODE_APP_PATH}"
+    return 0
+  fi
+
+  local archive
+  archive="$(find_xcode_archive || true)"
+  if [[ -z "$archive" ]]; then
+    fail "Xcode.app was not found in /Applications. Download the latest Xcode .xip or .zip from https://xcodereleases.com/ into ${USER_HOME}/Downloads, then rerun this script."
+  fi
+
+  install_xcode_archive "$archive"
+}
+
+download_xcode_metal_tooling() {
+  [[ -n "$XCODE_APP_PATH" ]] || XCODE_APP_PATH="$(find_xcode_app || true)"
+  if [[ -z "$XCODE_APP_PATH" ]]; then
+    warn "Xcode app was not found; skipping Metal tooling download."
+    return 0
+  fi
+
+  info "Downloading Metal tooling for Xcode"
+  run_sudo xcode-select -s "$XCODE_APP_PATH/Contents/Developer" || true
+  DEVELOPER_DIR="$XCODE_APP_PATH/Contents/Developer" \
+    xcodebuild -downloadComponent MetalToolchain || warn "Could not download Metal tooling automatically; finish Xcode first-launch setup and install it from Xcode if prompted."
+  ok "Metal tooling download step completed"
 }
 
 find_brew() {
@@ -719,9 +824,8 @@ Generated SSH public key:
 
 $(bold "Manual macOS steps")
 
-  • Download and install the latest ${STYLE_BOLD}Xcode${STYLE_RESET} from https://xcodereleases.com/.
-    Open Xcode once after installing it so macOS can finish installing
-    components and accepting license prompts.
+  • Launch ${STYLE_BOLD}Xcode${STYLE_RESET} once and complete its first-run setup,
+    tour/wizard, component installation, and license prompts.
 EOF
 
   cat <<EOF
@@ -736,9 +840,8 @@ EOF
   • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
       System Settings → General → Sharing → Screen Sharing
 
-  • Adjust ${STYLE_BOLD}sleep${STYLE_RESET} and ${STYLE_BOLD}display sleep${STYLE_RESET} if desired:
+  • Adjust ${STYLE_BOLD}sleep${STYLE_RESET} if desired:
       System Settings → Battery → Advanced → Prevent automatic sleeping on power adapter when the display is off
-      System Settings → Lock Screen → Turn display off on power adapter when inactive
 
   • Adjust ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
       System Settings → Lock Screen → Require password after screen saver begins or display is turned off
@@ -757,6 +860,7 @@ EOF
 
 main() {
   require_macos
+  ensure_xcode_app
   collect_configuration
   confirm_plan
   ask_for_password
@@ -764,6 +868,7 @@ main() {
   configure_ssh_keys
   configure_passwordless_sudo
   install_build_tools
+  download_xcode_metal_tooling
   install_homebrew
   configure_homebrew_shellenv
   install_packages
