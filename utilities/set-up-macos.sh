@@ -690,31 +690,31 @@ Generated SSH public key:
 
 $(bold "Manual macOS steps")
 
-  • Download and install the latest Xcode from https://xcodereleases.com/.
+  • Download and install the latest ${STYLE_CYAN}Xcode${STYLE_RESET} from https://xcodereleases.com/.
     Open Xcode once after installing it so macOS can finish installing
     components and accepting license prompts.
 EOF
 
   cat <<EOF
 
-  • ${STYLE_CYAN}Name / hostname${STYLE_RESET} — review or change the Mac name and local hostname if desired:
+  • Review or change the Mac ${STYLE_CYAN}name${STYLE_RESET} and local ${STYLE_CYAN}hostname${STYLE_RESET} if desired:
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}About${STYLE_RESET} → ${STYLE_BOLD}Name${STYLE_RESET}
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Local hostname${STYLE_RESET} (at the bottom)
 
-  • ${STYLE_CYAN}Remote Login${STYLE_RESET} — enable if you want SSH access:
+  • Enable ${STYLE_CYAN}Remote Login${STYLE_RESET} if you want SSH access:
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Remote Login${STYLE_RESET}
 
-  • ${STYLE_CYAN}Screen Sharing${STYLE_RESET} — enable if you want remote desktop access:
+  • Enable ${STYLE_CYAN}Screen Sharing${STYLE_RESET} if you want remote desktop access:
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}General${STYLE_RESET} → ${STYLE_BOLD}Sharing${STYLE_RESET} → ${STYLE_BOLD}Screen Sharing${STYLE_RESET}
 
-  • ${STYLE_CYAN}Sleep / display sleep${STYLE_RESET} — adjust if desired:
+  • Adjust ${STYLE_CYAN}sleep${STYLE_RESET} and ${STYLE_CYAN}display sleep${STYLE_RESET} if desired:
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Displays${STYLE_RESET} → ${STYLE_BOLD}Advanced${STYLE_RESET} → Prevent automatic sleeping on power adapter when the display is off
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Lock Screen${STYLE_RESET} → Turn display off on power adapter when inactive
 
-  • ${STYLE_CYAN}Screen locking${STYLE_RESET} — adjust if desired:
+  • Adjust ${STYLE_CYAN}screen locking${STYLE_RESET} if desired:
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Lock Screen${STYLE_RESET} → Require password after screen saver begins or display is turned off
 
-  • ${STYLE_CYAN}Automatic desktop login${STYLE_RESET} — enable if desired:
+  • Enable ${STYLE_CYAN}automatic desktop login${STYLE_RESET} if desired:
       ${STYLE_BOLD}System Settings${STYLE_RESET} → ${STYLE_BOLD}Users & Groups${STYLE_RESET} → Automatically log in as ${CURRENT_USER}
 
 EOF
