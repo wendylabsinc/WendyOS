@@ -663,7 +663,12 @@ configure_ssh() {
   fi
 
   info "Enabling SSH login via macOS Remote Login"
-  run_sudo systemsetup -setremotelogin on
+  if ! run_sudo systemsetup -setremotelogin on; then
+    warn "macOS blocked Remote Login automation. Grant Full Disk Access to your terminal app or enable it manually in System Settings > General > Sharing > Remote Login."
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" >/dev/null 2>&1 || true
+    open "x-apple.systempreferences:com.apple.preferences.sharing" >/dev/null 2>&1 || true
+    return 0
+  fi
 
   if [[ -x /usr/libexec/ApplicationFirewall/socketfilterfw ]]; then
     run_sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/libexec/sshd-keygen-wrapper >/dev/null 2>&1 || true
