@@ -1209,7 +1209,7 @@ function Configure-GitHubRunnerStartup {
       $taskName = 'GitHub Actions Runner'
       $action = New-ScheduledTaskAction -Execute $runCmd -WorkingDirectory $script:GitHubRunnerDir
       $trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
-      $principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel LeastPrivilege
+      $principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel Limited
       Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Description 'Run GitHub Actions self-hosted runner at user login.' -Force | Out-Null
       Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
       Write-Ok 'GitHub Actions runner login-session startup configured'
