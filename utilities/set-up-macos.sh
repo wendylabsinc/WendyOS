@@ -20,6 +20,7 @@ GIT_NAME=""
 GIT_EMAIL=""
 CONFIGURE_GIT=1
 SETUP_PASSWORDLESS_SUDO=0
+CONFIGURE_LOOPBACK_SSH=0
 INSTALL_WENDY_CLI=0
 INSTALL_WENDY_AGENT=0
 INSTALL_SWIFT_TOOLCHAIN=1
@@ -167,6 +168,12 @@ EOF
     SETUP_PASSWORDLESS_SUDO=0
   fi
 
+  if ask_yes_no "Enable passwordless loopback SSH for local automation?" "n"; then
+    CONFIGURE_LOOPBACK_SSH=1
+  else
+    CONFIGURE_LOOPBACK_SSH=0
+  fi
+
   if ask_yes_no "Install Xcode Command Line Tools for building native code?" "y"; then
     INSTALL_BUILD_TOOLS=1
   else
@@ -212,7 +219,7 @@ EOF
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary swift_summary build_tools_summary direnv_summary
-  local clone_summary wendy_cli_summary wendy_agent_summary
+  local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
@@ -224,6 +231,12 @@ confirm_plan() {
     git_summary="Global git user.name (${GIT_NAME}) and user.email (${GIT_EMAIL}) for ${CURRENT_USER}"
   else
     git_summary="Global git identity will not be changed"
+  fi
+
+  if (( CONFIGURE_LOOPBACK_SSH )); then
+    loopback_ssh_summary="Generated SSH key will be authorized for passwordless loopback SSH"
+  else
+    loopback_ssh_summary="Passwordless loopback SSH will not be configured"
   fi
 
   if (( INSTALL_BUILD_TOOLS )); then
@@ -284,6 +297,7 @@ This script will configure this Mac by doing the following:
   • Configure:
       SSH key generation for ${CURRENT_USER}
       ${ssh_key_summary}
+      ${loopback_ssh_summary}
       Neovim as the default CLI editor
       ${direnv_summary}
       ${passwordless_sudo_summary}
@@ -578,7 +592,7 @@ configure_ssh_keys() {
   local key key_type key_body authorized_keys generated_public_key
   authorized_keys="$USER_HOME/.ssh/authorized_keys"
   generated_public_key="$(cat "$USER_HOME/.ssh/id_ed25519.pub" 2>/dev/null || true)"
-  if [[ -n "$generated_public_key" ]]; then
+  if (( CONFIGURE_LOOPBACK_SSH )) && [[ -n "$generated_public_key" ]]; then
     AUTHORIZED_LOGIN_KEYS=("$generated_public_key" "${AUTHORIZED_LOGIN_KEYS[@]}")
   fi
 
@@ -597,19 +611,21 @@ configure_ssh_keys() {
     fi
   done
 
-  touch "$USER_HOME/.ssh/known_hosts"
-  chmod 644 "$USER_HOME/.ssh/known_hosts"
+  if (( CONFIGURE_LOOPBACK_SSH )); then
+    touch "$USER_HOME/.ssh/known_hosts"
+    chmod 644 "$USER_HOME/.ssh/known_hosts"
 
-  local host_alias
-  for host_alias in localhost 127.0.0.1 ::1 "$(hostname -s 2>/dev/null || true)" "$(hostname 2>/dev/null || true)"; do
-    [[ -n "$host_alias" ]] || continue
-    ssh-keygen -F "$host_alias" -f "$USER_HOME/.ssh/known_hosts" >/dev/null 2>&1 || \
-      ssh-keyscan -T 5 -H "$host_alias" >> "$USER_HOME/.ssh/known_hosts" 2>/dev/null || true
-  done
+    local host_alias
+    for host_alias in localhost 127.0.0.1 ::1 "$(hostname -s 2>/dev/null || true)" "$(hostname 2>/dev/null || true)"; do
+      [[ -n "$host_alias" ]] || continue
+      ssh-keygen -F "$host_alias" -f "$USER_HOME/.ssh/known_hosts" >/dev/null 2>&1 || \
+        ssh-keyscan -T 5 -H "$host_alias" >> "$USER_HOME/.ssh/known_hosts" 2>/dev/null || true
+    done
+    chmod 644 "$USER_HOME/.ssh/known_hosts"
+  fi
 
   chmod 700 "$USER_HOME/.ssh"
   chmod 600 "$authorized_keys"
-  chmod 644 "$USER_HOME/.ssh/known_hosts"
   ok "SSH keys configured"
 }
 
@@ -721,7 +737,7 @@ EOF
       System Settings → General → Sharing → Screen Sharing
 
   • Adjust ${STYLE_BOLD}sleep${STYLE_RESET} and ${STYLE_BOLD}display sleep${STYLE_RESET} if desired:
-      System Settings → Displays → Advanced → Prevent automatic sleeping on power adapter when the display is off
+      System Settings → Battery → Advanced → Prevent automatic sleeping on power adapter when the display is off
       System Settings → Lock Screen → Turn display off on power adapter when inactive
 
   • Adjust ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:

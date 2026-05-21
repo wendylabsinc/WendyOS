@@ -37,6 +37,7 @@ $script:InstallDirenv = $false
 $script:CloneRepository = $false
 $script:CloneDestination = ''
 $script:EnableSshLogin = $false
+$script:ConfigureLoopbackSsh = $false
 $script:SetupAutomaticLogin = $false
 $script:AutomaticLoginPassword = $null
 $script:ConfigureRemoteDesktop = $false
@@ -135,6 +136,8 @@ without creating duplicates.
     }
   }
 
+  $script:ConfigureLoopbackSsh = Ask-YesNo 'Enable passwordless loopback SSH for local automation?' $false
+
   $script:InstallVisualStudioBuildTools = Ask-YesNo 'Install Visual Studio Build Tools for C++/Swift builds?' $true
   $script:InstallSwiftToolchain = Ask-YesNo 'Install the Swift toolchain?' $true
   $script:InstallDirenv = Ask-YesNo 'Install and configure direnv for repository-local developer tooling?' $false
@@ -188,6 +191,7 @@ function Confirm-Plan {
   $direnvSummary = if ($script:InstallDirenv) { 'direnv will be installed and its PowerShell hook will be configured' } else { 'direnv will not be installed or configured' }
   $sshSummary = if ($script:EnableSshLogin) { 'SSH login via OpenSSH Server will be enabled' } else { 'SSH login will not be changed' }
   $autoLoginSummary = if ($script:SetupAutomaticLogin) { 'Automatic Windows sign-in will be enabled; the password will be stored in the registry' } else { 'Automatic Windows sign-in will not be changed' }
+  $loopbackSshSummary = if ($script:ConfigureLoopbackSsh) { 'Generated SSH key will be authorized for passwordless loopback SSH' } else { 'Passwordless loopback SSH will not be configured' }
   $cloneSummary = if ($script:CloneRepository) { "$WendyRepoUrl will be cloned to $($script:CloneDestination)" } else { 'Wendy repository will not be cloned' }
 
   Write-Host @"
@@ -204,6 +208,7 @@ This script will configure this machine by doing the following:
       $sshSummary
       SSH key generation for $CurrentUserName
       $sshKeySummary
+      $loopbackSshSummary
       Neovim as the default CLI editor
       $direnvSummary
       $developerModeSummary
@@ -546,7 +551,7 @@ function Configure-SshKeys {
   if (-not (Test-Path $authorizedKeys)) { New-Item -ItemType File -Path $authorizedKeys -Force | Out-Null }
 
   $keysToInstall = [System.Collections.Generic.List[string]]::new()
-  if (Test-Path $publicKey) {
+  if ($script:ConfigureLoopbackSsh -and (Test-Path $publicKey)) {
     $generatedPublicKey = (Get-Content -Path $publicKey -Raw).Trim()
     if (-not [string]::IsNullOrWhiteSpace($generatedPublicKey)) { $keysToInstall.Add($generatedPublicKey) }
   }
@@ -557,17 +562,19 @@ function Configure-SshKeys {
   }
   Protect-UserSshFile $authorizedKeys
 
-  $knownHosts = Join-Path $sshDir 'known_hosts'
-  if (-not (Test-Path $knownHosts)) { New-Item -ItemType File -Path $knownHosts -Force | Out-Null }
-  foreach ($hostAlias in @('localhost', '127.0.0.1', '::1', $env:COMPUTERNAME, "$env:COMPUTERNAME.local")) {
-    if ([string]::IsNullOrWhiteSpace($hostAlias)) { continue }
-    & ssh-keygen.exe -F $hostAlias -f $knownHosts *> $null
-    if ($LASTEXITCODE -ne 0) {
-      $scanOutput = & ssh-keyscan.exe -T 5 -H $hostAlias 2>$null
-      if ($LASTEXITCODE -eq 0 -and $scanOutput) { Add-Content -Path $knownHosts -Value $scanOutput -Encoding ascii }
+  if ($script:ConfigureLoopbackSsh) {
+    $knownHosts = Join-Path $sshDir 'known_hosts'
+    if (-not (Test-Path $knownHosts)) { New-Item -ItemType File -Path $knownHosts -Force | Out-Null }
+    foreach ($hostAlias in @('localhost', '127.0.0.1', '::1', $env:COMPUTERNAME, "$env:COMPUTERNAME.local")) {
+      if ([string]::IsNullOrWhiteSpace($hostAlias)) { continue }
+      & ssh-keygen.exe -F $hostAlias -f $knownHosts *> $null
+      if ($LASTEXITCODE -ne 0) {
+        $scanOutput = & ssh-keyscan.exe -T 5 -H $hostAlias 2>$null
+        if ($LASTEXITCODE -eq 0 -and $scanOutput) { Add-Content -Path $knownHosts -Value $scanOutput -Encoding ascii }
+      }
     }
+    Protect-UserSshFile $knownHosts
   }
-  Protect-UserSshFile $knownHosts
 
   if (Test-IsAdministrator -and $keysToInstall.Count -gt 0) {
     $adminKeys = Join-Path (Join-Path $env:ProgramData 'ssh') 'administrators_authorized_keys'
