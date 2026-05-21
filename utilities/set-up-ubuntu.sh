@@ -584,8 +584,12 @@ configure_ssh_keys() {
     chmod 600 "$HOME/.ssh/authorized_keys"
   '
 
-  local key key_type key_body
+  local key key_type key_body generated_public_key
   local authorized_keys="$USER_HOME/.ssh/authorized_keys"
+  generated_public_key="$(run_as_user bash -c 'cat "$HOME/.ssh/id_ed25519.pub" 2>/dev/null || true')"
+  if [[ -n "$generated_public_key" ]]; then
+    AUTHORIZED_LOGIN_KEYS=("$generated_public_key" "${AUTHORIZED_LOGIN_KEYS[@]}")
+  fi
 
   for key in "${AUTHORIZED_LOGIN_KEYS[@]}"; do
     key_type="$(awk '{print $1}' <<<"$key")"
@@ -602,8 +606,20 @@ configure_ssh_keys() {
     fi
   done
 
+  run_as_user touch "$USER_HOME/.ssh/known_hosts"
+  run_as_user chmod 644 "$USER_HOME/.ssh/known_hosts"
+
+  local host_alias
+  for host_alias in localhost 127.0.0.1 ::1 "$(hostname -s 2>/dev/null || true)" "$(hostname 2>/dev/null || true)"; do
+    [[ -n "$host_alias" ]] || continue
+    if ! run_as_user ssh-keygen -F "$host_alias" -f "$USER_HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+      ssh-keyscan -T 5 -H "$host_alias" 2>/dev/null | run_as_user tee -a "$USER_HOME/.ssh/known_hosts" >/dev/null || true
+    fi
+  done
+
   run_as_user chmod 700 "$USER_HOME/.ssh"
   run_as_user chmod 600 "$authorized_keys"
+  run_as_user chmod 644 "$USER_HOME/.ssh/known_hosts"
   ok "SSH keys configured"
 }
 

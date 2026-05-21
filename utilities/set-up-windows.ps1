@@ -545,15 +545,34 @@ function Configure-SshKeys {
   $authorizedKeys = Join-Path $sshDir 'authorized_keys'
   if (-not (Test-Path $authorizedKeys)) { New-Item -ItemType File -Path $authorizedKeys -Force | Out-Null }
 
-  foreach ($key in $script:AuthorizedLoginKeys) {
+  $keysToInstall = [System.Collections.Generic.List[string]]::new()
+  if (Test-Path $publicKey) {
+    $generatedPublicKey = (Get-Content -Path $publicKey -Raw).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($generatedPublicKey)) { $keysToInstall.Add($generatedPublicKey) }
+  }
+  foreach ($key in $script:AuthorizedLoginKeys) { $keysToInstall.Add($key) }
+
+  foreach ($key in $keysToInstall) {
     Add-AuthorizedKey -Path $authorizedKeys -Key $key
   }
   Protect-UserSshFile $authorizedKeys
 
-  if (Test-IsAdministrator -and $script:AuthorizedLoginKeys.Count -gt 0) {
+  $knownHosts = Join-Path $sshDir 'known_hosts'
+  if (-not (Test-Path $knownHosts)) { New-Item -ItemType File -Path $knownHosts -Force | Out-Null }
+  foreach ($hostAlias in @('localhost', '127.0.0.1', '::1', $env:COMPUTERNAME, "$env:COMPUTERNAME.local")) {
+    if ([string]::IsNullOrWhiteSpace($hostAlias)) { continue }
+    & ssh-keygen.exe -F $hostAlias -f $knownHosts *> $null
+    if ($LASTEXITCODE -ne 0) {
+      $scanOutput = & ssh-keyscan.exe -T 5 -H $hostAlias 2>$null
+      if ($LASTEXITCODE -eq 0 -and $scanOutput) { Add-Content -Path $knownHosts -Value $scanOutput -Encoding ascii }
+    }
+  }
+  Protect-UserSshFile $knownHosts
+
+  if (Test-IsAdministrator -and $keysToInstall.Count -gt 0) {
     $adminKeys = Join-Path (Join-Path $env:ProgramData 'ssh') 'administrators_authorized_keys'
     if (-not (Test-Path $adminKeys)) { New-Item -ItemType File -Path $adminKeys -Force | Out-Null }
-    foreach ($key in $script:AuthorizedLoginKeys) {
+    foreach ($key in $keysToInstall) {
       Add-AuthorizedKey -Path $adminKeys -Key $key
     }
     Protect-AdminAuthorizedKeysFile $adminKeys
