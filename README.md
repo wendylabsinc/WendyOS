@@ -38,7 +38,16 @@ The CLI is written in Go. To build from source:
 
 ```sh
 cd go
-go build -o wendy ./cmd/wendy
+make build-cli
+./bin/wendy --version
+```
+
+On Windows, the binary must have the `.exe` suffix:
+
+```powershell
+cd go
+go build -o bin\wendy.exe .\cmd\wendy
+.\bin\wendy.exe --version
 ```
 
 On macOS, CGO is required (for CoreBluetooth). It is enabled by default when
@@ -46,7 +55,7 @@ using the standard Go toolchain, but if you have explicitly disabled it:
 
 ```sh
 cd go
-CGO_ENABLED=1 go build -o wendy ./cmd/wendy
+CGO_ENABLED=1 make build-cli
 ```
 
 ### Agent (Go)
@@ -58,30 +67,73 @@ cd go
 go build -o wendy-agent ./cmd/wendy-agent
 ```
 
-### Local Developer Tip
+### Local Developer Tips
 
-Add a `wendy-dev` alias to your shell profile (`~/.zshrc` or `~/.bashrc`) so you can quickly iterate on CLI changes without overwriting your installed `wendy`:
+#### Repository-local Wendy CLI via direnv
 
-```sh
-wendy-dev() {
-  (cd /path/to/wendy-agent/go && go run ./cmd/wendy "$@")
-}
-```
-
-Then use `wendy-dev` anywhere you'd normally use `wendy`:
+The repository includes a `.envrc` that creates a tiny local `wendy` shim in
+`.direnv/bin`. After allowing it once, `wendy` commands run from this checkout
+rebuild and execute the Go CLI without overwriting an installed `wendy`:
 
 ```sh
-wendy-dev run
-wendy-dev discover --json
+direnv allow
+wendy run
+wendy discover --json
 ```
 
-You can do the same for the agent:
+Outside of this checkout, your normal installed `wendy` remains unchanged.
+
+You can still run the agent directly while developing it:
 
 ```sh
 wendy-agent-dev() {
   (cd /path/to/wendy-agent/go && go run ./cmd/wendy-agent "$@")
 }
 ```
+
+#### Setup scripts
+
+> **Warning**
+> These setup scripts are mostly intended for throw-away development, test, and
+> CI machines. The defaults avoid security-sensitive changes, so they can be run
+> on personal machines if you carefully review the plan and choose only the
+> options you actually want.
+
+Recommended flow: finish the OS first-run setup, enable the platform remote UI
+feature you need (Screen Sharing, Remote Desktop, etc.), connect remotely, and
+run the setup script from that session. When prompted, paste your public SSH keys
+into `authorized_keys` to enable passwordless SSH for future work, including AI
+coding agents.
+
+Run the interactive setup script directly. Add `--verbose` on macOS/Ubuntu or
+`-Verbose` on Windows when you want to see every command as it runs.
+
+
+macOS:
+
+```sh
+tmp="$(mktemp)" && trap 'rm -f "$tmp"' EXIT && curl -fsSL https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-macos.sh -o "$tmp" && bash "$tmp"
+```
+
+Ubuntu:
+
+```sh
+tmp="$(mktemp)" && trap 'rm -f "$tmp"' EXIT && curl -fsSL https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-ubuntu.sh -o "$tmp" && bash "$tmp"
+```
+
+Windows 11, from an elevated PowerShell session:
+
+```powershell
+$script = "$env:TEMP\set-up-windows.ps1"; iwr -UseBasicParsing https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-windows.ps1 -OutFile $script; powershell -ExecutionPolicy Bypass -File $script; Remove-Item $script
+```
+
+The scripts install common development tools including Git, Claude Code, and
+Codex, configure local discovery, and can optionally configure SSH keys,
+`direnv`, Swift, the Wendy CLI, a local clone of this repository, GitHub
+Actions self-hosted runners, and platform-specific conveniences such as remote
+access, automatic login, and `wendy-agent` where supported. On macOS, GitHub
+Actions runners are only offered as manual or user-login-session processes
+because TCC/privacy permissions require a logged-in user session.
 
 ## Setting Up the Device
 
