@@ -739,7 +739,8 @@ EOF
 
   cat <<EOF
 
-  • Review or change the local hostname if desired:
+  • Review or change the Mac name and local hostname if desired:
+      System Settings → General → About → Name
       System Settings → General → Sharing → Local hostname (at the bottom)
 
   • Enable Remote Login if you want SSH access:
