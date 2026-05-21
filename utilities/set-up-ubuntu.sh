@@ -262,7 +262,7 @@ EOF
     CONFIGURE_REMOTE_DESKTOP=0
   fi
 
-  if ask_yes_no "Disable automatic sleep on AC power and screen locking?" "n"; then
+  if ask_yes_no "Disable Ubuntu sleep on AC, set display idle to 10 minutes, and disable screen locking?" "n"; then
     CONFIGURE_POWER_SETTINGS=1
   else
     CONFIGURE_POWER_SETTINGS=0
@@ -352,9 +352,9 @@ confirm_plan() {
   fi
 
   if (( CONFIGURE_POWER_SETTINGS )); then
-    power_settings_summary="AC sleep and screen locking will be disabled"
+    power_settings_summary="AC sleep and screen locking will be disabled, display idle will be set to 10 minutes, and lid close on AC will be ignored"
   else
-    power_settings_summary="Power and screen-lock settings will not be changed"
+    power_settings_summary="Power settings will not be changed"
   fi
 
   if (( WALK_THROUGH_MANUAL_STEPS )); then
@@ -804,176 +804,43 @@ EOF
 
 configure_power_settings() {
   if (( ! CONFIGURE_POWER_SETTINGS )); then
-    ok "power and lock settings not changed"
+    ok "power settings not changed"
     return 0
   fi
 
   if ! command -v gsettings >/dev/null 2>&1; then
-    warn "gsettings was not found; skipping GUI power/screen-lock configuration."
+    warn "gsettings was not found; skipping GNOME power configuration."
     return 0
   fi
 
-  info "Disabling automatic sleep on AC power and screen locking entirely"
+  info "Configuring Ubuntu AC power settings for unattended use"
 
-  run_sudo tee /usr/local/bin/ubuntu-ac-power-mode >/dev/null <<'EOF'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-
-readonly CHECK_INTERVAL_SECONDS="${CHECK_INTERVAL_SECONDS:-30}"
-readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ubuntu-workstation-setup"
-readonly DEFAULTS_FILE="${STATE_DIR}/power-defaults.env"
-
-mkdir -p "$STATE_DIR"
-touch "$DEFAULTS_FILE"
-
-run_gsettings() {
-  if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]]; then
-    gsettings "$@"
-  elif command -v dbus-launch >/dev/null 2>&1; then
-    dbus-launch gsettings "$@"
-  else
-    gsettings "$@"
-  fi
-}
-
-setting_exists() {
-  run_gsettings range "$1" "$2" >/dev/null 2>&1
-}
-
-set_setting() {
-  local schema="$1" key="$2" value="$3"
-  setting_exists "$schema" "$key" || return 0
-  run_gsettings set "$schema" "$key" "$value"
-}
-
-save_default() {
-  local name="$1" schema="$2" key="$3" value
-  setting_exists "$schema" "$key" || return 0
-  grep -q "^${name}=" "$DEFAULTS_FILE" && return 0
-
-  value="$(run_gsettings get "$schema" "$key")"
-  printf '%s=%q\n' "$name" "$value" >> "$DEFAULTS_FILE"
-}
-
-restore_default() {
-  local name="$1" schema="$2" key="$3" value
-  setting_exists "$schema" "$key" || return 0
-
-  # shellcheck disable=SC1090
-  source "$DEFAULTS_FILE"
-  eval "value=\${${name}:-}"
-  [[ -n "${value:-}" ]] || return 0
-  run_gsettings set "$schema" "$key" "$value"
-}
-
-save_defaults() {
-}
-
-is_on_ac_power() {
-  local supply type online found_battery=0
-
-  for supply in /sys/class/power_supply/*; do
-    [[ -r "$supply/type" ]] || continue
-    type="$(<"$supply/type")"
-
-    if [[ "$type" == "Battery" ]]; then
-      found_battery=1
-      continue
-    fi
-
-    if [[ "$type" == "Mains" || "$type" == "USB" || "$type" == "USB_C" || "$type" == "USB_PD" ]]; then
-      online="$(<"$supply/online" 2>/dev/null || printf '0')"
-      [[ "$online" == "1" ]] && return 0
-    fi
-  done
-
-  # Desktops and VMs often have no battery; treat them as AC-powered.
-  (( found_battery == 0 ))
-}
-
-apply_screen_lock_policy() {
-  # Screen locking is disabled entirely for this user, regardless
-  # of power source. This includes automatic locking, lock-on-suspend, and the
-  # explicit GNOME lock-screen action where supported.
-  set_setting org.gnome.desktop.screensaver lock-enabled false
-  set_setting org.gnome.desktop.screensaver lock-delay "uint32 0"
-  set_setting org.gnome.desktop.screensaver ubuntu-lock-on-suspend false
-  set_setting org.gnome.desktop.lockdown disable-lock-screen true
-}
-
-apply_ac_policy() {
-  # AC-specific suspend behavior. Battery suspend settings are intentionally
-  # left at their Ubuntu/GNOME defaults.
-  set_setting org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "nothing"
-  set_setting org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
-
-}
-
-apply_battery_policy() {
-  :
-}
-
-apply_current_policy() {
-  save_defaults
-
-  if is_on_ac_power; then
-    apply_ac_policy
-  else
-    apply_battery_policy
-  fi
-
-  apply_screen_lock_policy
-}
-
-case "${1:-}" in
-  --once)
-    apply_current_policy
-    ;;
-  *)
-    while true; do
-      apply_current_policy
-      sleep "$CHECK_INTERVAL_SECONDS"
-    done
-    ;;
-esac
-EOF
-  run_sudo chmod 0755 /usr/local/bin/ubuntu-ac-power-mode
-
-  local uid runtime_dir session_bus user_unit_dir
+  local uid runtime_dir session_bus applied_gsettings=0
   uid="$(id -u "$CURRENT_USER")"
   runtime_dir="/run/user/${uid}"
   session_bus="unix:path=${runtime_dir}/bus"
-  user_unit_dir="$USER_HOME/.config/systemd/user"
-
-  run_as_user install -d -m 0755 "$user_unit_dir" "$user_unit_dir/default.target.wants"
-  run_as_user tee "$user_unit_dir/ubuntu-ac-power-mode.service" >/dev/null <<'EOF'
-[Unit]
-Description=Apply Ubuntu AC power policy
-After=graphical-session.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/ubuntu-ac-power-mode
-Restart=always
-RestartSec=5s
-
-[Install]
-WantedBy=default.target
-EOF
-  run_as_user ln -sfn ../ubuntu-ac-power-mode.service \
-    "$user_unit_dir/default.target.wants/ubuntu-ac-power-mode.service"
-
-  run_sudo loginctl enable-linger "$CURRENT_USER"
 
   if [[ -S "${runtime_dir}/bus" ]]; then
-    run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
-      /usr/local/bin/ubuntu-ac-power-mode --once
-    run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
-      systemctl --user daemon-reload
-    run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
-      systemctl --user enable --now ubuntu-ac-power-mode.service
+    run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" bash -c '
+      set -euo pipefail
+
+      set_if_exists() {
+        local schema="$1" key="$2" value="$3"
+        gsettings range "$schema" "$key" >/dev/null 2>&1 || return 0
+        gsettings set "$schema" "$key" "$value"
+      }
+
+      set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "'\''nothing'\''"
+      set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
+      set_if_exists org.gnome.desktop.session idle-delay "uint32 600"
+      set_if_exists org.gnome.desktop.screensaver lock-enabled false
+      set_if_exists org.gnome.desktop.screensaver lock-delay "uint32 0"
+      set_if_exists org.gnome.desktop.screensaver ubuntu-lock-on-suspend false
+      set_if_exists org.gnome.desktop.lockdown disable-lock-screen true
+    '
+    applied_gsettings=1
   else
-    warn "No active user session bus found; AC power policy service will start on the next login."
+    warn "No active GNOME user session bus found. Log in graphically as ${CURRENT_USER}, then rerun this script to apply GNOME power settings."
   fi
 
   run_sudo install -d -m 0755 /etc/systemd/logind.conf.d
@@ -983,7 +850,11 @@ HandleLidSwitchExternalPower=ignore
 EOF
   run_sudo systemctl reload systemd-logind || run_sudo systemctl restart systemd-logind
 
-  ok "AC sleep policy configured; screen locking disabled entirely"
+  if (( applied_gsettings )); then
+    ok "AC sleep disabled; display idle set to 10 minutes; screen locking disabled; lid close on AC ignored"
+  else
+    ok "lid close on AC ignored; GNOME power settings still need an active user session"
+  fi
 }
 
 install_wendy_cli() {
@@ -1200,8 +1071,8 @@ EOF
   fi
 
   if (( SETUP_AUTO_LOGIN || CONFIGURE_POWER_SETTINGS )); then
-    manual_step "  • Reboot or log out and back in once to verify automatic login,
-    power, and screen-lock settings."
+    manual_step "  • Reboot or log out and back in once to verify automatic login
+    and selected power settings."
   fi
 
   if (( SETUP_GITHUB_RUNNER )); then
