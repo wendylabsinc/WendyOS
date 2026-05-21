@@ -26,7 +26,7 @@ $CurrentUserName = [Environment]::UserName
 $UserProfile = [Environment]::GetFolderPath('UserProfile')
 $UserSid = $CurrentIdentity.User.Value
 
-$script:ConfigureGit = $true
+$script:ConfigureGit = $false
 $script:GitName = ''
 $script:GitEmail = ''
 $script:AuthorizedLoginKeys = [System.Collections.Generic.List[string]]::new()
@@ -112,7 +112,7 @@ keys, SSH settings, PATH entries, and git settings will be reused or updated
 without creating duplicates.
 '@
 
-  if (Ask-YesNo 'Configure global git identity?' $true) {
+  if (Ask-YesNo 'Configure global git identity?' $false) {
     $script:GitName = Read-Host 'Git user.name (leave empty to skip git configuration)'
     if ([string]::IsNullOrWhiteSpace($script:GitName)) {
       $script:ConfigureGit = $false

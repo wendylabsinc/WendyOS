@@ -20,7 +20,7 @@ SUDO_ACCESS_CONFIRMED=0
 XCODE_APP_PATH=""
 GIT_NAME=""
 GIT_EMAIL=""
-CONFIGURE_GIT=1
+CONFIGURE_GIT=0
 SETUP_PASSWORDLESS_SUDO=0
 CONFIGURE_LOOPBACK_SSH=0
 INSTALL_WENDY_CLI=0
@@ -128,14 +128,11 @@ without creating duplicates. Bash xtrace is enabled after password collection so
 you can see what is being called; password-specific calls are redacted.
 EOF
 
-  printf '\nConfigure global git identity? [Y/n] '
+  printf '\nConfigure global git identity? [y/N] '
   local answer
   read -r answer
-  case "${answer:-y}" in
-    n|N|no|NO)
-      CONFIGURE_GIT=0
-      ;;
-    *)
+  case "${answer:-n}" in
+    y|Y|yes|YES)
       printf 'Git user.name (leave empty to skip git configuration): '
       read -r GIT_NAME
       if [[ -z "$GIT_NAME" ]]; then
@@ -150,6 +147,9 @@ EOF
           CONFIGURE_GIT=1
         fi
       fi
+      ;;
+    *)
+      CONFIGURE_GIT=0
       ;;
   esac
 
