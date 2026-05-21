@@ -756,10 +756,10 @@ EOF
   manual_step "  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
       System Settings → General → Sharing → Screen Sharing"
 
-  manual_step "  • Adjust ${STYLE_BOLD}sleep${STYLE_RESET} if desired:
+  manual_step "  • Disable ${STYLE_BOLD}sleep on AC${STYLE_RESET} if desired:
       System Settings → Battery → Options → Prevent automatic sleeping on power adapter when the display is off → ${STYLE_BOLD}On${STYLE_RESET}"
 
-  manual_step "  • Adjust ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
+  manual_step "  • Disable ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
       System Settings → Lock Screen → Require password after screen saver begins or display is turned off → ${STYLE_BOLD}Never${STYLE_RESET}"
 
   manual_step "  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
