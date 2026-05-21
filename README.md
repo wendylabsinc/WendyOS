@@ -120,8 +120,9 @@ setup script:
 
 It installs common development packages including Git and Xcode Command Line
 Tools, configures Bonjour/mDNS, installs the Swift toolchain requested by
-`.swift-version`, and optionally configures SSH, automatic login, `direnv`, the
-Wendy CLI, the macOS agent app, and a local clone of this repository.
+`.swift-version`, prints manual steps for Xcode, SSH, Screen Sharing, and
+automatic login, and optionally configures `direnv`, the Wendy CLI, the macOS
+agent app, and a local clone of this repository.
 
 #### Ubuntu setup script
 

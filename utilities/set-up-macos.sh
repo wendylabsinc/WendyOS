@@ -20,8 +20,6 @@ GIT_NAME=""
 GIT_EMAIL=""
 CONFIGURE_GIT=1
 SETUP_PASSWORDLESS_SUDO=0
-SETUP_AUTO_LOGIN=0
-ENABLE_SSH_LOGIN=0
 INSTALL_WENDY_CLI=0
 INSTALL_WENDY_AGENT=0
 INSTALL_SWIFT_TOOLCHAIN=1
@@ -29,7 +27,6 @@ INSTALL_BUILD_TOOLS=1
 INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
-ENABLE_SCREEN_SHARING=0
 DISABLE_AC_SLEEP=0
 DISABLE_SCREEN_LOCKING=0
 BREW=""
@@ -146,12 +143,6 @@ EOF
       ;;
   esac
 
-  if ask_yes_no "Enable SSH login via macOS Remote Login?" "n"; then
-    ENABLE_SSH_LOGIN=1
-  else
-    ENABLE_SSH_LOGIN=0
-  fi
-
   if ask_yes_no "Install additional SSH public keys into ${CURRENT_USER}'s authorized_keys?" "n"; then
     printf 'Paste one public key per prompt. Leave empty when done.\n'
     local key
@@ -167,12 +158,6 @@ EOF
     SETUP_PASSWORDLESS_SUDO=1
   else
     SETUP_PASSWORDLESS_SUDO=0
-  fi
-
-  if ask_yes_no "Enable automatic desktop login for ${CURRENT_USER} on startup? This stores an obfuscated copy of your password." "n"; then
-    SETUP_AUTO_LOGIN=1
-  else
-    SETUP_AUTO_LOGIN=0
   fi
 
   if ask_yes_no "Install Xcode Command Line Tools for building native code?" "y"; then
@@ -215,12 +200,6 @@ EOF
     INSTALL_WENDY_AGENT=0
   fi
 
-  if ask_yes_no "Enable macOS Screen Sharing / Remote Management?" "n"; then
-    ENABLE_SCREEN_SHARING=1
-  else
-    ENABLE_SCREEN_SHARING=0
-  fi
-
   if ask_yes_no "Disable automatic sleep and display sleep on AC power?" "n"; then
     DISABLE_AC_SLEEP=1
   else
@@ -236,24 +215,12 @@ EOF
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary swift_summary build_tools_summary direnv_summary
-  local ssh_summary auto_login_summary clone_summary wendy_cli_summary wendy_agent_summary screen_sharing_summary sleep_summary lock_summary
+  local clone_summary wendy_cli_summary wendy_agent_summary sleep_summary lock_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
   else
     passwordless_sudo_summary="Passwordless sudo will not be changed"
-  fi
-
-  if (( ENABLE_SSH_LOGIN )); then
-    ssh_summary="SSH login via macOS Remote Login will be enabled"
-  else
-    ssh_summary="SSH login will not be changed"
-  fi
-
-  if (( SETUP_AUTO_LOGIN )); then
-    auto_login_summary="Automatic desktop login will be enabled for ${CURRENT_USER}; macOS stores an obfuscated password"
-  else
-    auto_login_summary="Automatic desktop login will not be changed"
   fi
 
   if (( CONFIGURE_GIT )); then
@@ -298,12 +265,6 @@ confirm_plan() {
     wendy_agent_summary="Wendy macOS agent app will not be installed"
   fi
 
-  if (( ENABLE_SCREEN_SHARING )); then
-    screen_sharing_summary="Screen Sharing / Remote Management will be enabled where supported"
-  else
-    screen_sharing_summary="Screen Sharing / Remote Management will not be changed"
-  fi
-
   if (( DISABLE_AC_SLEEP )); then
     sleep_summary="AC sleep and display sleep will be disabled"
   else
@@ -336,17 +297,15 @@ This script will configure this Mac by doing the following:
       ${wendy_agent_summary}
 
   • Configure:
-      ${ssh_summary}
       SSH key generation for ${CURRENT_USER}
       ${ssh_key_summary}
       Neovim as the default CLI editor
       ${direnv_summary}
       ${passwordless_sudo_summary}
       Bonjour/mDNS local hostname discovery
-      ${screen_sharing_summary}
+      Manual macOS steps for Xcode, Remote Login, Screen Sharing, and automatic login will be shown
       ${sleep_summary}
       ${lock_summary}
-      ${auto_login_summary}
       ${git_summary}
 
 You will be asked for your macOS login password once. It is used to run sudo
@@ -616,68 +575,6 @@ configure_passwordless_sudo() {
   ok "passwordless sudo enabled"
 }
 
-configure_auto_login() {
-  if (( ! SETUP_AUTO_LOGIN )); then
-    ok "automatic desktop login not changed"
-    return 0
-  fi
-
-  info "Enabling automatic desktop login for ${CURRENT_USER}"
-
-  if command -v fdesetup >/dev/null 2>&1 && fdesetup status 2>/dev/null | grep -q 'FileVault is On'; then
-    warn "FileVault is on; macOS may ignore automatic login until FileVault is disabled."
-  fi
-
-  local xtrace_was_enabled=0
-  if [[ $- == *x* ]]; then
-    xtrace_was_enabled=1
-    set +x
-  fi
-
-  printf '%s\0' "$LOGIN_PASSWORD" | run_sudo /usr/bin/perl -e '
-    use strict;
-    use warnings;
-    my @key = (0x7d, 0x89, 0x52, 0x23, 0xd2, 0xbc, 0xdd, 0xea, 0xa3, 0xb9, 0x1f);
-    local $/;
-    my $password = <STDIN>;
-    open my $fh, ">:raw", "/etc/kcpassword" or die "open /etc/kcpassword: $!";
-    for my $i (0 .. length($password) - 1) {
-      print {$fh} chr(ord(substr($password, $i, 1)) ^ $key[$i % @key]);
-    }
-    close $fh or die "close /etc/kcpassword: $!";
-  '
-
-  if (( xtrace_was_enabled )); then
-    set -x
-  fi
-
-  run_sudo chmod 0600 /etc/kcpassword
-  run_sudo defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser "$CURRENT_USER"
-  ok "automatic desktop login configured for next boot"
-}
-
-configure_ssh() {
-  if (( ! ENABLE_SSH_LOGIN )); then
-    ok "SSH login not changed"
-    return 0
-  fi
-
-  info "Enabling SSH login via macOS Remote Login"
-  if ! run_sudo systemsetup -setremotelogin on; then
-    warn "macOS blocked Remote Login automation. Grant Full Disk Access to your terminal app or enable it manually in System Settings > General > Sharing > Remote Login."
-    open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles" >/dev/null 2>&1 || true
-    open "x-apple.systempreferences:com.apple.preferences.sharing" >/dev/null 2>&1 || true
-    return 0
-  fi
-
-  if [[ -x /usr/libexec/ApplicationFirewall/socketfilterfw ]]; then
-    run_sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /usr/libexec/sshd-keygen-wrapper >/dev/null 2>&1 || true
-    run_sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /usr/libexec/sshd-keygen-wrapper >/dev/null 2>&1 || true
-  fi
-
-  ok "SSH login enabled"
-}
-
 configure_ssh_keys() {
   info "Generating SSH keys and installing authorized login keys"
 
@@ -733,23 +630,6 @@ configure_mdns() {
 
   run_sudo scutil --set LocalHostName "$name"
   ok "Bonjour/mDNS local hostname set to ${name}.local"
-}
-
-configure_screen_sharing() {
-  if (( ! ENABLE_SCREEN_SHARING )); then
-    ok "Screen Sharing / Remote Management not changed"
-    return 0
-  fi
-
-  info "Enabling Screen Sharing / Remote Management"
-  local kickstart="/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart"
-  if [[ ! -x "$kickstart" ]]; then
-    warn "Apple Remote Desktop kickstart tool was not found; enable Screen Sharing manually in System Settings."
-    return 0
-  fi
-
-  run_sudo "$kickstart" -activate -configure -access -on -restart -agent || warn "Could not enable Screen Sharing / Remote Management."
-  ok "Screen Sharing / Remote Management configured where supported"
 }
 
 configure_power_settings() {
@@ -850,6 +730,29 @@ Useful connection details:
 Generated SSH public key:
   ${public_key:-not available}
 
+$(bold "Manual macOS steps")
+
+  • Download and install the latest Xcode from https://xcodereleases.com/.
+    Open Xcode once after installing it so macOS can finish installing
+    components and accepting license prompts.
+EOF
+
+  cat <<EOF
+
+  • Enable Remote Login if you want SSH access:
+      System Settings → General → Sharing → Remote Login
+
+  • Enable Screen Sharing if you want remote desktop access:
+      System Settings → General → Sharing → Screen Sharing
+
+  • Enable automatic desktop login if desired:
+      System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}
+    FileVault may need to be disabled before macOS allows automatic login.
+
+EOF
+
+  cat <<EOF
+
 You may need to open a new terminal, log out and back in, or launch the Wendy
 macOS agent app once for shell PATH, editor, Swift, and app changes to appear.
 EOF
@@ -861,10 +764,8 @@ main() {
   confirm_plan
   ask_for_password
   enable_command_trace
-  configure_ssh
   configure_ssh_keys
   configure_passwordless_sudo
-  configure_auto_login
   install_build_tools
   install_homebrew
   configure_homebrew_shellenv
@@ -874,7 +775,6 @@ main() {
   configure_editor
   configure_direnv
   configure_mdns
-  configure_screen_sharing
   configure_power_settings
   install_wendy_cli
   install_wendy_agent
