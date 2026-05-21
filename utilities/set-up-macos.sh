@@ -31,12 +31,6 @@ INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
 CONFIGURE_POWER_SETTINGS=0
-SHOW_XCODE_MANUAL_STEP=1
-SHOW_MAC_NAME_MANUAL_STEP=0
-SHOW_REMOTE_LOGIN_MANUAL_STEP=0
-SHOW_SCREEN_SHARING_MANUAL_STEP=0
-SHOW_SCREEN_LOCK_MANUAL_STEP=0
-SHOW_AUTO_LOGIN_MANUAL_STEP=0
 WALK_THROUGH_MANUAL_STEPS=0
 BREW=""
 AUTHORIZED_LOGIN_KEYS=()
@@ -254,49 +248,13 @@ EOF
     SETUP_GITHUB_RUNNER=0
   fi
 
-  if ask_yes_no "Show Xcode first-run manual step?" "y"; then
-    SHOW_XCODE_MANUAL_STEP=1
-  else
-    SHOW_XCODE_MANUAL_STEP=0
-  fi
-
-  if ask_yes_no "Show manual step to review Mac name and local hostname?" "n"; then
-    SHOW_MAC_NAME_MANUAL_STEP=1
-  else
-    SHOW_MAC_NAME_MANUAL_STEP=0
-  fi
-
-  if ask_yes_no "Show manual step to enable Remote Login?" "n"; then
-    SHOW_REMOTE_LOGIN_MANUAL_STEP=1
-  else
-    SHOW_REMOTE_LOGIN_MANUAL_STEP=0
-  fi
-
-  if ask_yes_no "Show manual step to enable Screen Sharing?" "n"; then
-    SHOW_SCREEN_SHARING_MANUAL_STEP=1
-  else
-    SHOW_SCREEN_SHARING_MANUAL_STEP=0
-  fi
-
   if ask_yes_no "Disable macOS sleep on AC for unattended use?" "n"; then
     CONFIGURE_POWER_SETTINGS=1
   else
     CONFIGURE_POWER_SETTINGS=0
   fi
 
-  if ask_yes_no "Show manual step to disable screen locking?" "n"; then
-    SHOW_SCREEN_LOCK_MANUAL_STEP=1
-  else
-    SHOW_SCREEN_LOCK_MANUAL_STEP=0
-  fi
-
-  if ask_yes_no "Show manual step to enable automatic desktop login?" "n"; then
-    SHOW_AUTO_LOGIN_MANUAL_STEP=1
-  else
-    SHOW_AUTO_LOGIN_MANUAL_STEP=0
-  fi
-
-  if ask_yes_no "Walk through selected manual macOS setup steps interactively at the end?" "n"; then
+  if ask_yes_no "Walk through manual macOS setup steps interactively at the end?" "n"; then
     WALK_THROUGH_MANUAL_STEPS=1
   else
     WALK_THROUGH_MANUAL_STEPS=0
@@ -370,14 +328,10 @@ confirm_plan() {
     power_settings_summary="AC sleep settings will not be changed"
   fi
 
-  if has_macos_manual_steps; then
-    if (( WALK_THROUGH_MANUAL_STEPS )); then
-      manual_steps_summary="Selected manual macOS steps will be shown one at a time with confirmation prompts"
-    else
-      manual_steps_summary="Selected manual macOS steps will be printed at the end"
-    fi
+  if (( WALK_THROUGH_MANUAL_STEPS )); then
+    manual_steps_summary="Manual macOS steps will be shown one at a time with confirmation prompts"
   else
-    manual_steps_summary="No manual macOS steps were selected"
+    manual_steps_summary="Manual macOS steps will be printed at the end"
   fi
 
   if (( ${#AUTHORIZED_LOGIN_KEYS[@]} )); then
@@ -914,10 +868,6 @@ primary_ip() {
   return 1
 }
 
-has_macos_manual_steps() {
-  (( SHOW_XCODE_MANUAL_STEP || INSTALL_WENDY_CLI || INSTALL_WENDY_AGENT || SHOW_MAC_NAME_MANUAL_STEP || SHOW_REMOTE_LOGIN_MANUAL_STEP || SHOW_SCREEN_SHARING_MANUAL_STEP || SHOW_SCREEN_LOCK_MANUAL_STEP || SHOW_AUTO_LOGIN_MANUAL_STEP || SETUP_GITHUB_RUNNER ))
-}
-
 manual_step() {
   local message="$1"
 
@@ -952,18 +902,14 @@ assisted_manual_step() {
 }
 
 run_manual_steps() {
-  has_macos_manual_steps || return 0
-
   cat <<EOF
 
 $(bold "Manual macOS steps")
 EOF
 
-  if (( SHOW_XCODE_MANUAL_STEP )); then
-    assisted_manual_step "  • I can open ${STYLE_BOLD}Xcode${STYLE_RESET} next. Please complete its first-run setup,
+  assisted_manual_step "  • I can open ${STYLE_BOLD}Xcode${STYLE_RESET} next. Please complete its first-run setup,
     tour/wizard, component installation, and license prompts." \
-      "open -a \"$XCODE_APP_PATH\""
-  fi
+    "open -a \"$XCODE_APP_PATH\""
 
   if (( INSTALL_WENDY_CLI )); then
     assisted_manual_step "  • I can launch the installed ${STYLE_BOLD}wendy${STYLE_RESET} CLI next. If a permission
@@ -977,31 +923,21 @@ EOF
       "open -a WendyAgentMac || open -a 'Wendy Agent' || open -a wendy-agent"
   fi
 
-  if (( SHOW_MAC_NAME_MANUAL_STEP )); then
-    manual_step "  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
+  manual_step "  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
       System Settings → General → About → Name
       System Settings → General → Sharing → Local hostname (at the bottom)"
-  fi
 
-  if (( SHOW_REMOTE_LOGIN_MANUAL_STEP )); then
-    manual_step "  • Enable ${STYLE_BOLD}Remote Login${STYLE_RESET} if you want SSH access:
+  manual_step "  • Enable ${STYLE_BOLD}Remote Login${STYLE_RESET} if you want SSH access:
       System Settings → General → Sharing → Remote Login"
-  fi
 
-  if (( SHOW_SCREEN_SHARING_MANUAL_STEP )); then
-    manual_step "  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
+  manual_step "  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
       System Settings → General → Sharing → Screen Sharing"
-  fi
 
-  if (( SHOW_SCREEN_LOCK_MANUAL_STEP )); then
-    manual_step "  • Disable ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
+  manual_step "  • Disable ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
       System Settings → Lock Screen → Require password after screen saver begins or display is turned off → ${STYLE_BOLD}Never${STYLE_RESET}"
-  fi
 
-  if (( SHOW_AUTO_LOGIN_MANUAL_STEP )); then
-    manual_step "  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
+  manual_step "  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
       System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}"
-  fi
 
   if (( SETUP_GITHUB_RUNNER )); then
     if [[ "$GITHUB_RUNNER_RUN_MODE" == "login" ]]; then

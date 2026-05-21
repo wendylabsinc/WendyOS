@@ -615,7 +615,7 @@ function Configure-SshKeys {
       if ([string]::IsNullOrWhiteSpace($hostAlias)) { continue }
       & ssh-keygen.exe -F $hostAlias -f $knownHosts *> $null
       if ($LASTEXITCODE -ne 0) {
-        $scanOutput = & ssh-keyscan.exe -T 5 -H $hostAlias 2>$null
+        $scanOutput = & ssh-keyscan.exe -T 5 -H $hostAlias 2>$null | Where-Object { $_ -notmatch '^#' }
         if ($LASTEXITCODE -eq 0 -and $scanOutput) { Add-Content -Path $knownHosts -Value $scanOutput -Encoding ascii }
       }
     }
