@@ -139,7 +139,9 @@ without creating duplicates.
   $script:InstallSwiftToolchain = Ask-YesNo 'Install the Swift toolchain?' $true
   $script:InstallDirenv = Ask-YesNo 'Install and configure direnv for repository-local developer tooling?' $false
   $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $false
-  if (Ask-YesNo 'Clone the Wendy repository onto this machine?' $false) {
+  if (Test-Path (Join-Path $RepoRoot '.git')) {
+    $script:CloneRepository = $false
+  } elseif (Ask-YesNo 'Clone the Wendy repository onto this machine?' $false) {
     $script:CloneRepository = $true
     $defaultCloneDestination = Join-Path (Join-Path (Join-Path $UserProfile 'Projects') 'WendyLabs') 'wendy-agent'
     $cloneDestination = Read-Host "Clone destination [$defaultCloneDestination]"

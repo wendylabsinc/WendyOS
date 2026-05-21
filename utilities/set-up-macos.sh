@@ -181,7 +181,9 @@ EOF
     INSTALL_DIRENV=0
   fi
 
-  if ask_yes_no "Clone the Wendy repository onto this Mac?" "n"; then
+  if [[ -d "$REPO_ROOT/.git" ]]; then
+    CLONE_REPOSITORY=0
+  elif ask_yes_no "Clone the Wendy repository onto this Mac?" "n"; then
     CLONE_REPOSITORY=1
     local default_clone_destination="${USER_HOME}/Projects/WendyLabs/wendy-agent"
     printf 'Clone destination [%s]: ' "$default_clone_destination"
