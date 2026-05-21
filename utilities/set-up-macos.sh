@@ -30,6 +30,13 @@ INSTALL_SWIFT_TOOLCHAIN=1
 INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
+SHOW_XCODE_MANUAL_STEP=1
+SHOW_MAC_NAME_MANUAL_STEP=0
+SHOW_REMOTE_LOGIN_MANUAL_STEP=0
+SHOW_SCREEN_SHARING_MANUAL_STEP=0
+SHOW_AC_SLEEP_MANUAL_STEP=0
+SHOW_SCREEN_LOCK_MANUAL_STEP=0
+SHOW_AUTO_LOGIN_MANUAL_STEP=0
 WALK_THROUGH_MANUAL_STEPS=0
 BREW=""
 AUTHORIZED_LOGIN_KEYS=()
@@ -247,7 +254,49 @@ EOF
     SETUP_GITHUB_RUNNER=0
   fi
 
-  if ask_yes_no "Walk through manual macOS setup steps interactively at the end?" "n"; then
+  if ask_yes_no "Show Xcode first-run manual step?" "y"; then
+    SHOW_XCODE_MANUAL_STEP=1
+  else
+    SHOW_XCODE_MANUAL_STEP=0
+  fi
+
+  if ask_yes_no "Show manual step to review Mac name and local hostname?" "n"; then
+    SHOW_MAC_NAME_MANUAL_STEP=1
+  else
+    SHOW_MAC_NAME_MANUAL_STEP=0
+  fi
+
+  if ask_yes_no "Show manual step to enable Remote Login?" "n"; then
+    SHOW_REMOTE_LOGIN_MANUAL_STEP=1
+  else
+    SHOW_REMOTE_LOGIN_MANUAL_STEP=0
+  fi
+
+  if ask_yes_no "Show manual step to enable Screen Sharing?" "n"; then
+    SHOW_SCREEN_SHARING_MANUAL_STEP=1
+  else
+    SHOW_SCREEN_SHARING_MANUAL_STEP=0
+  fi
+
+  if ask_yes_no "Show manual step to disable sleep on AC?" "n"; then
+    SHOW_AC_SLEEP_MANUAL_STEP=1
+  else
+    SHOW_AC_SLEEP_MANUAL_STEP=0
+  fi
+
+  if ask_yes_no "Show manual step to disable screen locking?" "n"; then
+    SHOW_SCREEN_LOCK_MANUAL_STEP=1
+  else
+    SHOW_SCREEN_LOCK_MANUAL_STEP=0
+  fi
+
+  if ask_yes_no "Show manual step to enable automatic desktop login?" "n"; then
+    SHOW_AUTO_LOGIN_MANUAL_STEP=1
+  else
+    SHOW_AUTO_LOGIN_MANUAL_STEP=0
+  fi
+
+  if ask_yes_no "Walk through selected manual macOS setup steps interactively at the end?" "n"; then
     WALK_THROUGH_MANUAL_STEPS=1
   else
     WALK_THROUGH_MANUAL_STEPS=0
@@ -315,10 +364,14 @@ confirm_plan() {
     github_runner_summary="GitHub Actions runner will not be installed"
   fi
 
-  if (( WALK_THROUGH_MANUAL_STEPS )); then
-    manual_steps_summary="Manual macOS steps will be shown one at a time with confirmation prompts"
+  if has_macos_manual_steps; then
+    if (( WALK_THROUGH_MANUAL_STEPS )); then
+      manual_steps_summary="Selected manual macOS steps will be shown one at a time with confirmation prompts"
+    else
+      manual_steps_summary="Selected manual macOS steps will be printed at the end"
+    fi
   else
-    manual_steps_summary="Manual macOS steps will be printed at the end"
+    manual_steps_summary="No manual macOS steps were selected"
   fi
 
   if (( ${#AUTHORIZED_LOGIN_KEYS[@]} )); then
@@ -721,6 +774,14 @@ github_runner_is_configured() {
   [[ -f "$GITHUB_RUNNER_DIR/.runner" ]]
 }
 
+github_runner_launch_agent_label() {
+  printf 'com.github.actions.runner.%s\n' "$(printf '%s' "$GITHUB_RUNNER_DIR" | cksum | awk '{print $1}')"
+}
+
+github_runner_launch_agent_path() {
+  printf '%s/Library/LaunchAgents/%s.plist\n' "$USER_HOME" "$(github_runner_launch_agent_label)"
+}
+
 xml_escape() {
   local value="$1"
   value="${value//&/&amp;}"
@@ -746,8 +807,8 @@ configure_github_runner_startup() {
       info "Configuring GitHub Actions runner for the user login session"
       local uid label plist_path escaped_runner_dir
       uid="$(id -u "$CURRENT_USER")"
-      label="com.github.actions.runner.$(printf '%s' "$GITHUB_RUNNER_DIR" | cksum | awk '{print $1}')"
-      plist_path="$USER_HOME/Library/LaunchAgents/${label}.plist"
+      label="$(github_runner_launch_agent_label)"
+      plist_path="$(github_runner_launch_agent_path)"
       escaped_runner_dir="$(xml_escape "$GITHUB_RUNNER_DIR")"
       mkdir -p "$USER_HOME/Library/LaunchAgents"
       cat > "$plist_path" <<EOF
@@ -775,7 +836,8 @@ EOF
       launchctl bootout "gui/${uid}" "$plist_path" >/dev/null 2>&1 || true
       launchctl bootstrap "gui/${uid}" "$plist_path" >/dev/null 2>&1 || warn "Could not start the GitHub runner LaunchAgent now; it should start at the next login."
       launchctl enable "gui/${uid}/${label}" >/dev/null 2>&1 || true
-      ok "GitHub Actions runner login-session startup configured"
+      launchctl kickstart -k "gui/${uid}/${label}" >/dev/null 2>&1 || true
+      ok "GitHub Actions runner login-session startup configured at ${plist_path}"
       ;;
   esac
 }
@@ -834,6 +896,10 @@ primary_ip() {
   return 1
 }
 
+has_macos_manual_steps() {
+  (( SHOW_XCODE_MANUAL_STEP || INSTALL_WENDY_CLI || INSTALL_WENDY_AGENT || SHOW_MAC_NAME_MANUAL_STEP || SHOW_REMOTE_LOGIN_MANUAL_STEP || SHOW_SCREEN_SHARING_MANUAL_STEP || SHOW_AC_SLEEP_MANUAL_STEP || SHOW_SCREEN_LOCK_MANUAL_STEP || SHOW_AUTO_LOGIN_MANUAL_STEP || SETUP_GITHUB_RUNNER ))
+}
+
 manual_step() {
   local message="$1"
 
@@ -868,47 +934,85 @@ assisted_manual_step() {
 }
 
 run_manual_steps() {
+  has_macos_manual_steps || return 0
+
   cat <<EOF
 
 $(bold "Manual macOS steps")
 EOF
 
-  assisted_manual_step "  • I can open ${STYLE_BOLD}Xcode${STYLE_RESET} next. Please complete its first-run setup,
+  if (( SHOW_XCODE_MANUAL_STEP )); then
+    assisted_manual_step "  • I can open ${STYLE_BOLD}Xcode${STYLE_RESET} next. Please complete its first-run setup,
     tour/wizard, component installation, and license prompts." \
-    "open -a \"$XCODE_APP_PATH\""
+      "open -a \"$XCODE_APP_PATH\""
+  fi
 
-  assisted_manual_step "  • I can launch the installed ${STYLE_BOLD}wendy${STYLE_RESET} CLI next. If a permission
+  if (( INSTALL_WENDY_CLI )); then
+    assisted_manual_step "  • I can launch the installed ${STYLE_BOLD}wendy${STYLE_RESET} CLI next. If a permission
     dialog appears, approve Bluetooth and any other requested permissions." \
-    "command -v wendy >/dev/null 2>&1 && wendy --help >/dev/null 2>&1"
+      "command -v wendy >/dev/null 2>&1 && wendy --help >/dev/null 2>&1"
+  fi
 
-  assisted_manual_step "  • I can launch the installed ${STYLE_BOLD}Wendy agent${STYLE_RESET} app next. Approve
+  if (( INSTALL_WENDY_AGENT )); then
+    assisted_manual_step "  • I can launch the installed ${STYLE_BOLD}Wendy agent${STYLE_RESET} app next. Approve
     permissions by following the instructions on its Welcome screen." \
-    "open -a WendyAgentMac || open -a 'Wendy Agent' || open -a wendy-agent"
+      "open -a WendyAgentMac || open -a 'Wendy Agent' || open -a wendy-agent"
+  fi
 
-  manual_step "  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
+  if (( SHOW_MAC_NAME_MANUAL_STEP )); then
+    manual_step "  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
       System Settings → General → About → Name
       System Settings → General → Sharing → Local hostname (at the bottom)"
+  fi
 
-  manual_step "  • Enable ${STYLE_BOLD}Remote Login${STYLE_RESET} if you want SSH access:
+  if (( SHOW_REMOTE_LOGIN_MANUAL_STEP )); then
+    manual_step "  • Enable ${STYLE_BOLD}Remote Login${STYLE_RESET} if you want SSH access:
       System Settings → General → Sharing → Remote Login"
+  fi
 
-  manual_step "  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
+  if (( SHOW_SCREEN_SHARING_MANUAL_STEP )); then
+    manual_step "  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
       System Settings → General → Sharing → Screen Sharing"
+  fi
 
-  manual_step "  • Disable ${STYLE_BOLD}sleep on AC${STYLE_RESET} if desired:
+  if (( SHOW_AC_SLEEP_MANUAL_STEP )); then
+    manual_step "  • Disable ${STYLE_BOLD}sleep on AC${STYLE_RESET} if desired:
       System Settings → Battery → Options → Prevent automatic sleeping on power adapter when the display is off → ${STYLE_BOLD}On${STYLE_RESET}"
+  fi
 
-  manual_step "  • Disable ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
+  if (( SHOW_SCREEN_LOCK_MANUAL_STEP )); then
+    manual_step "  • Disable ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
       System Settings → Lock Screen → Require password after screen saver begins or display is turned off → ${STYLE_BOLD}Never${STYLE_RESET}"
+  fi
 
-  manual_step "  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
+  if (( SHOW_AUTO_LOGIN_MANUAL_STEP )); then
+    manual_step "  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
       System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}"
+  fi
 
   if (( SETUP_GITHUB_RUNNER )); then
-    manual_step "  • Register the ${STYLE_BOLD}GitHub Actions runner${STYLE_RESET} if it is not already registered:
-      cd "${GITHUB_RUNNER_DIR}"
+    if [[ "$GITHUB_RUNNER_RUN_MODE" == "login" ]]; then
+      if (( WALK_THROUGH_MANUAL_STEPS )); then
+        assisted_manual_step "  • Register the ${STYLE_BOLD}GitHub Actions runner${STYLE_RESET} if it is not already registered:
+      cd \"${GITHUB_RUNNER_DIR}\"
       ./config.sh --url https://github.com/OWNER/REPO --token TOKEN
-      Start it manually with ./run.sh, or rerun this setup script to enable login-session startup. Headless service mode is intentionally not used on macOS because TCC/privacy permissions require a logged-in user session."
+      Then return here. When you press Return, I will create, load, and start the user-session LaunchAgent:
+      $(github_runner_launch_agent_path)" \
+          "configure_github_runner_startup"
+      else
+        manual_step "  • Register the ${STYLE_BOLD}GitHub Actions runner${STYLE_RESET} if it is not already registered:
+      cd \"${GITHUB_RUNNER_DIR}\"
+      ./config.sh --url https://github.com/OWNER/REPO --token TOKEN
+      Then rerun this setup script to create, load, and start the user-session LaunchAgent:
+      $(github_runner_launch_agent_path)"
+      fi
+    else
+      manual_step "  • Register the ${STYLE_BOLD}GitHub Actions runner${STYLE_RESET} if it is not already registered:
+      cd \"${GITHUB_RUNNER_DIR}\"
+      ./config.sh --url https://github.com/OWNER/REPO --token TOKEN
+      Start it manually when needed with:
+      ./run.sh"
+    fi
   fi
 }
 
