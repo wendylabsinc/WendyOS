@@ -272,7 +272,7 @@ func buildServicesParallel(
 			if prog != nil {
 				buildOut = io.Discard
 			}
-			err := buildAndPushImage(ctx, contextDir, registryAddr, imageName, platform, buildArgs, buildOut, useMTLS)
+			err := buildAndPushImage(ctx, contextDir, registryAddr, imageName, platform, "", buildArgs, buildOut, useMTLS)
 			dur := time.Since(start)
 
 			if prog != nil {

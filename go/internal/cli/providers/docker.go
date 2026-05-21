@@ -81,14 +81,29 @@ func (p *DockerProvider) SupportedBuildTypes() []string {
 }
 
 func (p *DockerProvider) CanBuild(projectPath string) bool {
-	if _, err := os.Stat(filepath.Join(projectPath, "Dockerfile")); err == nil {
-		return true
+	entries, err := os.ReadDir(projectPath)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if (name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-")) && !strings.HasSuffix(name, ".dockerignore") {
+				return true
+			}
+		}
+	} else {
+		// Fallback when ReadDir fails: Stat the base Dockerfile so CanBuild
+		// doesn't silently return false in permission-denied / transient-error cases.
+		if _, statErr := os.Stat(filepath.Join(projectPath, "Dockerfile")); statErr == nil {
+			return true
+		}
 	}
 	return composeFile(projectPath) != ""
 }
 
 func (p *DockerProvider) Build(ctx context.Context, device models.ExternalDevice, projectPath, product string, debug bool) (*BuiltApp, error) {
-	return p.BuildWithType(ctx, device, projectPath, product, "", debug)
+	return p.BuildWithDockerfile(ctx, device, projectPath, product, "", "", debug)
 }
 
 // BuildWithType is the typed-build entry point. When buildType is "compose" or
@@ -96,6 +111,12 @@ func (p *DockerProvider) Build(ctx context.Context, device models.ExternalDevice
 // "docker", it builds the Dockerfile directly even if a compose file also
 // exists in the project root.
 func (p *DockerProvider) BuildWithType(ctx context.Context, device models.ExternalDevice, projectPath, product, buildType string, debug bool) (*BuiltApp, error) {
+	return p.BuildWithDockerfile(ctx, device, projectPath, product, buildType, "", debug)
+}
+
+// BuildWithDockerfile builds with an explicit Dockerfile name (e.g. Dockerfile.prod).
+// An empty dockerfile falls back to Docker's default resolution (i.e. "Dockerfile").
+func (p *DockerProvider) BuildWithDockerfile(ctx context.Context, device models.ExternalDevice, projectPath, product, buildType, dockerfile string, debug bool) (*BuiltApp, error) {
 	useCompose := false
 	cf := composeFile(projectPath)
 	switch buildType {
@@ -129,7 +150,32 @@ func (p *DockerProvider) BuildWithType(ctx context.Context, device models.Extern
 	}
 
 	imageName := strings.ToLower(product) + ":latest"
-	cmd := exec.CommandContext(ctx, "docker", "build", "-t", imageName, ".")
+	args := []string{"build", "-t", imageName}
+	if dockerfile != "" {
+		absProject, err := filepath.EvalSymlinks(projectPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolving project path: %w", err)
+		}
+		joined, err := filepath.Abs(filepath.Join(absProject, dockerfile))
+		if err != nil {
+			return nil, fmt.Errorf("resolving dockerfile path: %w", err)
+		}
+		rel, err := filepath.Rel(absProject, joined)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return nil, fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+		}
+		resolved, err := filepath.EvalSymlinks(joined)
+		if err != nil {
+			return nil, fmt.Errorf("dockerfile %q: %w", dockerfile, err)
+		}
+		rel, err = filepath.Rel(absProject, resolved)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			return nil, fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+		}
+		args = append(args, "-f", resolved)
+	}
+	args = append(args, ".")
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = projectPath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

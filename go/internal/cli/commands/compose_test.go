@@ -54,39 +54,64 @@ func TestComposeBuildContext(t *testing.T) {
 	}
 
 	t.Run("scalar build path", func(t *testing.T) {
+		proj := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(proj, "api"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		svc := parse(t, "services:\n  svc:\n    build: ./api\n")
-		ctxDir, df, args, err := composeBuildContext(svc, "/proj")
+		ctxDir, df, args, err := composeBuildContext(svc, proj)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if ctxDir != "/proj/api" || df != "Dockerfile" || args != nil {
+		if ctxDir != filepath.Join(proj, "api") || df != "Dockerfile" || args != nil {
 			t.Fatalf("got (%q,%q,%v)", ctxDir, df, args)
 		}
 	})
 
 	t.Run("mapping with custom dockerfile and args", func(t *testing.T) {
+		proj := t.TempDir()
+		svcDir := filepath.Join(proj, "svc")
+		if err := os.MkdirAll(svcDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(svcDir, "Dockerfile.dev"), []byte("FROM alpine\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		svc := parse(t, "services:\n  svc:\n    build:\n      context: ./svc\n      dockerfile: Dockerfile.dev\n      args:\n        FOO: bar\n")
-		ctxDir, df, args, err := composeBuildContext(svc, "/proj")
+		ctxDir, df, args, err := composeBuildContext(svc, proj)
 		if err != nil {
 			t.Fatalf("err: %v", err)
 		}
-		if ctxDir != "/proj/svc" || df != "Dockerfile.dev" || args["FOO"] != "bar" {
+		if ctxDir != svcDir || df != "Dockerfile.dev" || args["FOO"] != "bar" {
 			t.Fatalf("got (%q,%q,%v)", ctxDir, df, args)
 		}
 	})
 
 	t.Run("missing build returns empty", func(t *testing.T) {
+		proj := t.TempDir()
 		svc := parse(t, "services:\n  svc:\n    image: alpine\n")
-		ctxDir, df, _, err := composeBuildContext(svc, "/proj")
+		ctxDir, df, _, err := composeBuildContext(svc, proj)
 		if err != nil || ctxDir != "" || df != "" {
 			t.Fatalf("got (%q,%q,err=%v)", ctxDir, df, err)
 		}
 	})
 
 	t.Run("unsupported build kind errors", func(t *testing.T) {
+		proj := t.TempDir()
 		svc := parse(t, "services:\n  svc:\n    build: [./a, ./b]\n")
-		if _, _, _, err := composeBuildContext(svc, "/proj"); err == nil {
+		if _, _, _, err := composeBuildContext(svc, proj); err == nil {
 			t.Fatal("expected error for sequence build kind")
+		}
+	})
+
+	t.Run("dockerfile path traversal rejected", func(t *testing.T) {
+		proj := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(proj, "svc"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		svc := parse(t, "services:\n  svc:\n    build:\n      context: ./svc\n      dockerfile: ../../Dockerfile\n")
+		if _, _, _, err := composeBuildContext(svc, proj); err == nil {
+			t.Fatal("expected error for traversal dockerfile path")
 		}
 	})
 }

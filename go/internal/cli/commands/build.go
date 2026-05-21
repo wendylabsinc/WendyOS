@@ -26,7 +26,8 @@ type BuildResult struct {
 }
 
 type buildOptions struct {
-	buildType string
+	buildType  string
+	dockerfile string
 }
 
 func newBuildCmd() *cobra.Command {
@@ -37,9 +38,27 @@ func newBuildCmd() *cobra.Command {
 		Short: "Build the application in the current directory",
 		Long:  "Detects the project type and builds a Docker image for the target device architecture.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.dockerfile != "" && opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
+				return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
+			}
+			// --dockerfile implies a Docker build; prevent the provider from
+			// auto-selecting a Compose file when both markers are present.
+			if opts.dockerfile != "" && opts.buildType == "" {
+				opts.buildType = "docker"
+			}
+
 			cwd, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("getting working directory: %w", err)
+			}
+
+			if opts.dockerfile != "" {
+				if err := validateDockerfileName(opts.dockerfile); err != nil {
+					return fmt.Errorf("--dockerfile: %w", err)
+				}
+				if _, err := confinedDockerfilePath(cwd, opts.dockerfile); err != nil {
+					return fmt.Errorf("--dockerfile: %w", err)
+				}
 			}
 
 			cfgPath := filepath.Join(cwd, "wendy.json")
@@ -94,10 +113,34 @@ func newBuildCmd() *cobra.Command {
 					}
 				}
 
+				// For docker-type projects, resolve which Dockerfile to use before
+				// calling the provider — shows an interactive picker when multiple
+				// Dockerfiles exist and no --dockerfile flag was given.
+				if projectType == "docker" && opts.dockerfile == "" {
+					resolved, resolveErr := resolveDockerfile(cwd, "", isInteractiveTerminal())
+					if resolveErr != nil {
+						return resolveErr
+					}
+					opts.dockerfile = resolved
+					if resolved != "" && opts.buildType == "" {
+						opts.buildType = "docker"
+					}
+				}
+
 				cliLogln("Building with %s provider...", target.Provider.DisplayName())
-				app, err := target.Provider.Build(cmd.Context(), *target.External, cwd, product, false)
-				if err != nil {
-					return fmt.Errorf("provider build: %w", err)
+				var (
+					app      *providers.BuiltApp
+					buildErr error
+				)
+				if db, ok := target.Provider.(providers.DockerfileBuilder); ok && opts.dockerfile != "" {
+					app, buildErr = db.BuildWithDockerfile(cmd.Context(), *target.External, cwd, product, opts.buildType, opts.dockerfile, false)
+				} else if tb, ok := target.Provider.(providers.TypedBuilder); ok {
+					app, buildErr = tb.BuildWithType(cmd.Context(), *target.External, cwd, product, opts.buildType, false)
+				} else {
+					app, buildErr = target.Provider.Build(cmd.Context(), *target.External, cwd, product, false)
+				}
+				if buildErr != nil {
+					return fmt.Errorf("provider build: %w", buildErr)
 				}
 				cliSuccess("Build completed successfully (%s).", app.ProviderKey)
 				return nil
@@ -117,7 +160,7 @@ func newBuildCmd() *cobra.Command {
 				return fmt.Errorf("no supported build type found for this target; check that the project contains the right files")
 			}
 
-			selected, err := resolveDetectedBuildOption(options, opts.buildType)
+			selected, err := resolveDetectedBuildOption(options, opts.buildType, opts.dockerfile)
 			if err != nil {
 				return err
 			}
@@ -154,12 +197,26 @@ func newBuildCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when multiple project markers are present: docker, swift, or python")
+	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Dockerfile to build from (e.g. Dockerfile.prod); shows a selection menu when multiple Dockerfiles exist")
 
 	return cmd
 }
 
-func resolveDetectedBuildOption(options []BuildOption, requestedType string) (*BuildOption, error) {
+func resolveDetectedBuildOption(options []BuildOption, requestedType, requestedDockerfile string) (*BuildOption, error) {
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+
+	// --dockerfile selects a specific Dockerfile directly, bypassing type detection.
+	if strings.TrimSpace(requestedDockerfile) != "" {
+		// Normalise "./Dockerfile.prod" → "Dockerfile.prod" so the flag value
+		// matches the plain filenames stored in BuildOption.File.
+		normalizedDockerfile := filepath.Clean(requestedDockerfile)
+		for i := range options {
+			if options[i].Type == "docker" && options[i].File == normalizedDockerfile {
+				return &options[i], nil
+			}
+		}
+		return nil, fmt.Errorf("dockerfile %q not found; detected %s", requestedDockerfile, strings.Join(buildOptionLabels(options), ", "))
+	}
 
 	if strings.TrimSpace(requestedType) != "" {
 		return buildOptionForType(options, requestedType, interactive)
@@ -167,6 +224,30 @@ func resolveDetectedBuildOption(options []BuildOption, requestedType string) (*B
 
 	if preferred := preferredBuildOption(options, interactive); preferred != nil {
 		return preferred, nil
+	}
+
+	// Non-interactive (CI) fallback: when all detected options are Dockerfiles,
+	// prefer the base "Dockerfile" and fall back to the first variant rather than
+	// failing with "multiple build types detected". This mirrors the run-command
+	// behaviour and lets CI pipelines that omit --dockerfile build predictably.
+	if !interactive {
+		allDocker := len(options) > 0
+		for _, opt := range options {
+			if opt.Type != "docker" {
+				allDocker = false
+				break
+			}
+		}
+		if allDocker {
+			for i := range options {
+				if options[i].File == "Dockerfile" {
+					cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", options[i].File)
+					return &options[i], nil
+				}
+			}
+			cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", options[0].File)
+			return &options[0], nil
+		}
 	}
 
 	return pickBuildOption(options)

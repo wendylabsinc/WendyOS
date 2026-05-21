@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -61,8 +62,20 @@ func detectProjectType(dir string) (string, error) {
 			return "compose", nil
 		}
 	}
+	// Check base Dockerfile first (fast path), then any Dockerfile.* / Dockerfile-* variant.
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err == nil {
 		return "docker", nil
+	}
+	if entries, readErr := os.ReadDir(dir); readErr == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if (strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-")) && !strings.HasSuffix(name, ".dockerignore") {
+				return "docker", nil
+			}
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "Package.swift")); err == nil {
 		return "swift", nil
@@ -84,6 +97,136 @@ func detectProjectType(dir string) (string, error) {
 		return "python", nil
 	}
 	return "unknown", nil
+}
+
+// validDockerfileNameRe matches valid Dockerfile names: "Dockerfile" or
+// "Dockerfile" followed by a dot or hyphen and one or more safe characters.
+var validDockerfileNameRe = regexp.MustCompile(`^Dockerfile([.\-][a-zA-Z0-9][a-zA-Z0-9._-]*)?$`)
+
+// validateDockerfileName returns an error when the base filename of name does
+// not follow the Dockerfile naming convention. This prevents filenames that
+// start with "-" from being misinterpreted as Docker CLI flags, and rejects
+// names with control characters or other unsafe content.
+func validateDockerfileName(name string) error {
+	base := filepath.Base(name)
+	if strings.HasSuffix(base, ".dockerignore") {
+		return fmt.Errorf("invalid Dockerfile name %q: .dockerignore files are not Dockerfiles", base)
+	}
+	if !validDockerfileNameRe.MatchString(base) {
+		return fmt.Errorf("invalid Dockerfile name %q: must be Dockerfile, Dockerfile.<variant>, or Dockerfile-<variant>", base)
+	}
+	return nil
+}
+
+// confinedDockerfilePath resolves dockerfile relative to base, uses
+// filepath.EvalSymlinks on both the base and the joined path to neutralise
+// symlink-based escapes, then verifies (via filepath.Rel) that the resolved
+// target lies within base. Returns the resolved absolute path on success.
+func confinedDockerfilePath(base, dockerfile string) (string, error) {
+	absBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return "", fmt.Errorf("resolving project directory: %w", err)
+	}
+
+	joined, err := filepath.Abs(filepath.Join(absBase, dockerfile))
+	if err != nil {
+		return "", fmt.Errorf("resolving dockerfile path: %w", err)
+	}
+
+	// Check containment before EvalSymlinks so that a non-existent path still
+	// gets a clear "outside project" error rather than a confusing stat error.
+	rel, err := filepath.Rel(absBase, joined)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+	}
+
+	// Resolve symlinks and re-check to block symlink-based escapes.
+	resolved, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("dockerfile %q does not exist", dockerfile)
+		}
+		return "", fmt.Errorf("resolving dockerfile: %w", err)
+	}
+	rel, err = filepath.Rel(absBase, resolved)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+	}
+
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stating dockerfile: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("dockerfile %q is not a regular file", dockerfile)
+	}
+
+	return resolved, nil
+}
+
+// resolveDockerfile returns the Dockerfile filename to pass to docker build for
+// a docker-type project. If requested is non-empty it is validated (name format,
+// directory confinement, symlink resolution, existence) and returned unchanged.
+// Otherwise all Dockerfiles in cwd are detected: a single match is returned
+// immediately; multiple matches trigger an interactive picker or, in
+// non-interactive mode, prefer the base "Dockerfile" and fall back to the first
+// variant found.
+func resolveDockerfile(cwd, requested string, interactive bool) (string, error) {
+	if requested != "" {
+		if err := validateDockerfileName(requested); err != nil {
+			return "", err
+		}
+		if _, err := confinedDockerfilePath(cwd, requested); err != nil {
+			return "", err
+		}
+		return requested, nil
+	}
+
+	var dockerfiles []BuildOption
+	for _, opt := range detectBuildOptions(cwd) {
+		if opt.Type == "docker" {
+			dockerfiles = append(dockerfiles, opt)
+		}
+	}
+
+	confine := func(file string) (string, error) {
+		if _, err := confinedDockerfilePath(cwd, file); err != nil {
+			return "", err
+		}
+		return file, nil
+	}
+
+	if len(dockerfiles) <= 1 {
+		if len(dockerfiles) == 1 {
+			return confine(dockerfiles[0].File)
+		}
+		return "", nil
+	}
+
+	if !interactive {
+		for _, opt := range dockerfiles {
+			if opt.File == "Dockerfile" {
+				file, err := confine(opt.File)
+				if err != nil {
+					return "", err
+				}
+				cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", file)
+				return file, nil
+			}
+		}
+		file, err := confine(dockerfiles[0].File)
+		if err != nil {
+			return "", err
+		}
+		cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", file)
+		return file, nil
+	}
+
+	picked, err := pickBuildOptionWithTitle(dockerfiles, "Select a Dockerfile")
+	if err != nil {
+		return "", err
+	}
+	return confine(picked.File)
 }
 
 // BuildOption represents a detected build type in a project directory.
@@ -119,7 +262,7 @@ func detectBuildOptions(dir string) []BuildOption {
 				continue
 			}
 			name := e.Name()
-			if name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-") {
+			if (name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile.") || strings.HasPrefix(name, "Dockerfile-")) && !strings.HasSuffix(name, ".dockerignore") {
 				options = append(options, BuildOption{
 					Label: name,
 					Type:  "docker",
@@ -178,7 +321,7 @@ func injectDebugpy(ctx context.Context, registryAddr, registryImage, platform st
 		return fmt.Errorf("writing debugpy Dockerfile: %w", err)
 	}
 
-	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, buildArgs, streamOutput, useMTLS)
+	return buildAndPushImage(ctx, tmpDir, registryAddr, registryImage, platform, "", buildArgs, streamOutput, useMTLS)
 }
 
 // generatePythonDockerfile creates a Dockerfile for Python projects that do not already have one.
@@ -886,7 +1029,8 @@ func updateBuilderConfig(ctx context.Context, builderName, config string) error 
 // it directly to the given registry using docker buildx. The registry transport
 // is conditional: plain HTTP for plaintext devices, and TLS/mTLS for provisioned
 // devices when useMTLS is enabled. buildArgs is passed as --build-arg KEY=VALUE flags.
-func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform string, buildArgs map[string]string, streamOutput io.Writer, useMTLS bool) error {
+// dockerfile is passed as -f to docker buildx; an empty string uses the default Dockerfile.
+func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, platform, dockerfile string, buildArgs map[string]string, streamOutput io.Writer, useMTLS bool) error {
 	builder, effectiveAddr, err := ensureBuildxBuilder(ctx, registryAddr, useMTLS)
 	if err != nil {
 		return err
@@ -973,6 +1117,9 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		"buildx", "build",
 		"--builder", builder,
 		"--platform", platform,
+	}
+	if dockerfile != "" {
+		args = append(args, "-f", filepath.Join(dir, dockerfile))
 	}
 	if _, err := os.Stat(filepath.Join(cacheDir, "index.json")); err == nil {
 		args = append(args, "--cache-from", "type=local,src="+cacheDirSlash)
