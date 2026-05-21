@@ -38,3 +38,4 @@ go/local-pki-test
 
 # Superpowers planning docs (local dev tooling)
 docs/superpowers/
+.claude
