@@ -714,7 +714,7 @@ github_runner_asset_platform() {
 }
 
 github_runner_latest_tag() {
-  curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | awk -F '"' '/"tag_name"[[:space:]]*:/ { print $4; exit }'
+  curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | awk -F '"' '/"tag_name"[[:space:]]*:/ && !found { print $4; found = 1 }'
 }
 
 github_runner_is_configured() {
