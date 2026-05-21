@@ -1379,3 +1379,23 @@ func TestConfinedDockerfilePath_SymlinkEscape(t *testing.T) {
 		t.Fatal("expected error for symlink escape, got nil")
 	}
 }
+
+// TestResolveDockerfile_AutoSelectionRejectsSymlinkEscape verifies that the
+// auto-selection path (no explicit --dockerfile) applies confinement checks,
+// so a Dockerfile symlink pointing outside the project is rejected.
+func TestResolveDockerfile_AutoSelectionRejectsSymlinkEscape(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	// Create the real Dockerfile outside the project.
+	if err := os.WriteFile(filepath.Join(outside, "contents"), []byte("FROM scratch"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Place a Dockerfile.prod symlink inside the project pointing outside.
+	link := filepath.Join(dir, "Dockerfile.prod")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+	if _, err := resolveDockerfile(dir, "", false); err == nil {
+		t.Fatal("expected error for auto-selected symlink escape, got nil")
+	}
+}

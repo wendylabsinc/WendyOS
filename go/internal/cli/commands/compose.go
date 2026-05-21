@@ -100,9 +100,8 @@ func composeBuildContext(svc composeService, projectDir string) (ctxDir, dockerf
 		}
 		df := "Dockerfile"
 		if bc.Dockerfile != "" {
-			if err := validateDockerfileName(bc.Dockerfile); err != nil {
-				return "", "", nil, fmt.Errorf("compose dockerfile: %w", err)
-			}
+			// Docker Compose allows arbitrary dockerfile names (e.g. web.Dockerfile,
+			// Containerfile), so only the path-confinement check applies here.
 			if _, err := confinedDockerfilePath(ctxDir, bc.Dockerfile); err != nil {
 				return "", "", nil, fmt.Errorf("compose dockerfile: %w", err)
 			}

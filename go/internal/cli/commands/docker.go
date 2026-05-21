@@ -181,9 +181,16 @@ func resolveDockerfile(cwd, requested string, interactive bool) (string, error) 
 		}
 	}
 
+	confine := func(file string) (string, error) {
+		if _, err := confinedDockerfilePath(cwd, file); err != nil {
+			return "", err
+		}
+		return file, nil
+	}
+
 	if len(dockerfiles) <= 1 {
 		if len(dockerfiles) == 1 {
-			return dockerfiles[0].File, nil
+			return confine(dockerfiles[0].File)
 		}
 		return "", nil
 	}
@@ -191,19 +198,27 @@ func resolveDockerfile(cwd, requested string, interactive bool) (string, error) 
 	if !interactive {
 		for _, opt := range dockerfiles {
 			if opt.File == "Dockerfile" {
-				cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", opt.File)
-				return opt.File, nil
+				file, err := confine(opt.File)
+				if err != nil {
+					return "", err
+				}
+				cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", file)
+				return file, nil
 			}
 		}
-		cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", dockerfiles[0].File)
-		return dockerfiles[0].File, nil
+		file, err := confine(dockerfiles[0].File)
+		if err != nil {
+			return "", err
+		}
+		cliNotice("multiple Dockerfiles detected; using %q. Use --dockerfile to select explicitly.", file)
+		return file, nil
 	}
 
 	picked, err := pickBuildOptionWithTitle(dockerfiles, "Select a Dockerfile")
 	if err != nil {
 		return "", err
 	}
-	return picked.File, nil
+	return confine(picked.File)
 }
 
 // BuildOption represents a detected build type in a project directory.

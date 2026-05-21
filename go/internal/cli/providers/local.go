@@ -19,6 +19,8 @@ type localBuildContext struct {
 	cmd        *exec.Cmd
 }
 
+var _ DockerfileBuilder = (*LocalProvider)(nil)
+
 // LocalProvider builds and runs applications on the local machine.
 type LocalProvider struct{}
 
@@ -58,7 +60,7 @@ func (p *LocalProvider) CanBuild(projectPath string) bool {
 func (p *LocalProvider) Build(ctx context.Context, device models.ExternalDevice, projectPath, product string, debug bool) (*BuiltApp, error) {
 	// Determine build strategy based on project markers.
 	if _, err := os.Stat(filepath.Join(projectPath, "Dockerfile")); err == nil {
-		return p.buildDocker(ctx, projectPath, product, debug)
+		return p.buildDocker(ctx, projectPath, product, "", debug)
 	}
 	if _, err := os.Stat(filepath.Join(projectPath, "Package.swift")); err == nil {
 		return p.buildSwift(ctx, device, projectPath, product, debug)
@@ -75,9 +77,17 @@ func (p *LocalProvider) Build(ctx context.Context, device models.ExternalDevice,
 	return nil, fmt.Errorf("local provider: cannot determine build method for %s", projectPath)
 }
 
-func (p *LocalProvider) buildDocker(ctx context.Context, projectPath, product string, debug bool) (*BuiltApp, error) {
+func (p *LocalProvider) BuildWithDockerfile(ctx context.Context, device models.ExternalDevice, projectPath, product, buildType, dockerfile string, debug bool) (*BuiltApp, error) {
+	return p.buildDocker(ctx, projectPath, product, dockerfile, debug)
+}
+
+func (p *LocalProvider) buildDocker(ctx context.Context, projectPath, product, dockerfile string, debug bool) (*BuiltApp, error) {
 	imageName := strings.ToLower(product) + ":latest"
-	args := []string{"build", "-t", imageName, "."}
+	args := []string{"build", "-t", imageName}
+	if dockerfile != "" {
+		args = append(args, "-f", dockerfile)
+	}
+	args = append(args, ".")
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = projectPath
 	cmd.Stdout = os.Stdout
