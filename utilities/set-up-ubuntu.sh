@@ -6,7 +6,7 @@ if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
   exit 1
 fi
 
-readonly TRACE_COMMANDS="${TRACE_COMMANDS:-1}"
+TRACE_COMMANDS="${TRACE_COMMANDS:-0}"
 readonly WENDY_RAW_BASE="${WENDY_RAW_BASE:-https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main}"
 readonly WENDY_REPO_URL="${WENDY_REPO_URL:-https://github.com/wendylabsinc/wendy-agent.git}"
 
@@ -19,7 +19,6 @@ USER_HOME="$(getent passwd "$CURRENT_USER" | cut -d: -f6 || true)"
 SUDOERS_FILE="/etc/sudoers.d/90-${CURRENT_USER}-passwordless"
 readonly CURRENT_USER USER_HOME SUDOERS_FILE
 
-LOGIN_PASSWORD=""
 GIT_NAME=""
 GIT_EMAIL=""
 CONFIGURE_GIT=0
@@ -34,6 +33,7 @@ CLONE_DESTINATION=""
 SETUP_AUTO_LOGIN=0
 CONFIGURE_REMOTE_DESKTOP=0
 CONFIGURE_POWER_SETTINGS=0
+WALK_THROUGH_MANUAL_STEPS=0
 AUTHORIZED_LOGIN_KEYS=()
 PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 
@@ -56,27 +56,7 @@ enable_command_trace() {
   set -x
 }
 
-sudo_authenticate() {
-  sudo -n true 2>/dev/null && return 0
-
-  local xtrace_was_enabled=0
-  if [[ $- == *x* ]]; then
-    xtrace_was_enabled=1
-    set +x
-  fi
-
-  local status=0
-  sudo -S -v <<<"$LOGIN_PASSWORD" || status=$?
-
-  if (( xtrace_was_enabled )); then
-    set -x
-  fi
-
-  return "$status"
-}
-
 run_sudo() {
-  sudo_authenticate
   sudo "$@"
 }
 
@@ -106,6 +86,37 @@ ask_yes_no() {
       y|Y|yes|YES) return 0 ;;
       n|N|no|NO) return 1 ;;
       *) warn "Please answer yes or no." ;;
+    esac
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Options:
+  -v, --verbose   Show each command before it runs
+  -h, --help      Show this help message
+
+Environment:
+  TRACE_COMMANDS=1 also enables command tracing.
+EOF
+}
+
+parse_arguments() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -v|--verbose)
+        TRACE_COMMANDS=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        fail "Unknown option: $1"
+        ;;
     esac
   done
 }
@@ -230,11 +241,17 @@ EOF
   else
     CONFIGURE_POWER_SETTINGS=0
   fi
+
+  if ask_yes_no "Walk through manual Ubuntu setup steps interactively at the end?" "n"; then
+    WALK_THROUGH_MANUAL_STEPS=1
+  else
+    WALK_THROUGH_MANUAL_STEPS=0
+  fi
 }
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary wendy_cli_summary wendy_agent_summary direnv_summary
-  local ssh_summary ssh_package_summary loopback_ssh_summary auto_login_summary clone_summary remote_desktop_summary power_settings_summary
+  local ssh_summary ssh_package_summary loopback_ssh_summary auto_login_summary clone_summary remote_desktop_summary power_settings_summary manual_steps_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
@@ -304,6 +321,12 @@ confirm_plan() {
     power_settings_summary="Power and screen-lock settings will not be changed"
   fi
 
+  if (( WALK_THROUGH_MANUAL_STEPS )); then
+    manual_steps_summary="Manual Ubuntu steps will be shown one at a time with confirmation prompts"
+  else
+    manual_steps_summary="Manual Ubuntu steps will be printed at the end"
+  fi
+
   if (( ${#AUTHORIZED_LOGIN_KEYS[@]} )); then
     ssh_key_summary="${#AUTHORIZED_LOGIN_KEYS[@]} additional authorized SSH public key(s) for ${CURRENT_USER}"
   else
@@ -316,7 +339,8 @@ This script will configure this machine by doing the following:
 
   • Install packages:
       ${ssh_package_summary}
-      golang, Swift via swiftly, Avahi/mDNS tools, and Neovim.
+      golang, Swift via swiftly, Avahi/mDNS tools, Neovim,
+      Claude Code, and Codex.
       ${direnv_summary}
 
   • Configure:
@@ -331,13 +355,13 @@ This script will configure this machine by doing the following:
       ${remote_desktop_summary}
       ${power_settings_summary}
       ${auto_login_summary}
+      ${manual_steps_summary}
       ${clone_summary}
       ${wendy_cli_summary}
       ${wendy_agent_summary}
       ${git_summary}
 
-You will be asked for your Ubuntu login password once. It is used to run sudo
-commands and, when available, GNOME Remote Desktop credentials.
+sudo and other tools may ask for credentials when they need elevated access.
 EOF
 
   printf '\nContinue? [y/N] '
@@ -347,17 +371,6 @@ EOF
     y|Y|yes|YES) ;;
     *) echo "Aborted."; exit 0 ;;
   esac
-}
-
-ask_for_password() {
-  printf '\nUbuntu login password for %s: ' "$CURRENT_USER"
-  read -rs LOGIN_PASSWORD
-  printf '\n'
-  [[ -n "$LOGIN_PASSWORD" ]] || fail "Ubuntu login password cannot be empty; it is required for sudo."
-
-  info "Checking sudo access"
-  sudo_authenticate || fail "sudo authentication failed."
-  ok "sudo access confirmed"
 }
 
 install_ssh_packages() {
@@ -404,7 +417,14 @@ install_packages() {
     libnss-mdns \
     mdns-scan \
     neovim \
+    nodejs \
+    npm \
     openssh-client
+  info "Installing Claude Code and Codex"
+  run_sudo npm install -g \
+    @anthropic-ai/claude-code \
+    @openai/codex
+
   ok "packages installed"
 }
 
@@ -676,27 +696,7 @@ configure_remote_desktop() {
     return 0
   fi
 
-  local xtrace_was_enabled=0 set_credentials_status=0
-  if [[ $- == *x* ]]; then
-    xtrace_was_enabled=1
-    set +x
-  fi
-
-  printf '\033[2m$ sudo -H -u %q env XDG_RUNTIME_DIR=%q DBUS_SESSION_BUS_ADDRESS=%q grdctl rdp set-credentials %q <password>\033[0m\n' \
-    "$CURRENT_USER" "$runtime_dir" "$session_bus" "$CURRENT_USER" >&2
-
-  run_sudo -H -u "$CURRENT_USER" env \
-    XDG_RUNTIME_DIR="$runtime_dir" \
-    DBUS_SESSION_BUS_ADDRESS="$session_bus" \
-    grdctl rdp set-credentials "$CURRENT_USER" "$LOGIN_PASSWORD" || set_credentials_status=$?
-
-  if (( xtrace_was_enabled )); then
-    set -x
-  fi
-
-  if (( set_credentials_status != 0 )); then
-    warn "Could not set RDP credentials."
-  fi
+  warn "GNOME Remote Desktop credentials must be set manually in Settings before RDP login will work."
 
   run_sudo -H -u "$CURRENT_USER" env \
     XDG_RUNTIME_DIR="$runtime_dir" \
@@ -1001,6 +1001,53 @@ configure_git() {
   ok "git identity configured"
 }
 
+manual_step() {
+  local message="$1"
+
+  if (( WALK_THROUGH_MANUAL_STEPS )); then
+    printf '\n%s\n' "$message"
+    printf 'Press Return when done, or type s to skip: '
+    local answer
+    read -r answer
+    return 0
+  fi
+
+  printf '\n%s\n' "$message"
+}
+
+run_manual_steps() {
+  cat <<EOF
+
+$(bold "Manual Ubuntu steps")
+EOF
+
+  manual_step "  • Open a new terminal, or log out and back in, so PATH, editor,
+    Swift, and direnv shell changes are loaded."
+
+  manual_step "  • Launch Claude Code and Codex once and complete their sign-in or
+    first-run setup flows."
+
+  if (( INSTALL_DIRENV )); then
+    manual_step "  • If you use this checkout with direnv, run this once from the repo:
+      direnv allow"
+  fi
+
+  if (( CONFIGURE_REMOTE_DESKTOP )); then
+    manual_step "  • Set GNOME Remote Desktop credentials manually before RDP login:
+      Settings → System → Remote Desktop"
+  fi
+
+  if (( ENABLE_SSH_LOGIN )); then
+    manual_step "  • Verify SSH from another machine. Password login uses the Ubuntu
+    account password; key login works after your public keys are installed."
+  fi
+
+  if (( SETUP_AUTO_LOGIN || CONFIGURE_POWER_SETTINGS )); then
+    manual_step "  • Reboot or log out and back in once to verify automatic login,
+    power, and screen-lock settings."
+  fi
+}
+
 summary() {
   local hostname_ip public_key
   hostname_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -1020,16 +1067,16 @@ Useful connection details:
 
 Generated SSH public key:
   ${public_key:-not available}
-
-You may need to log out and back in for PATH/editor/session changes to appear.
 EOF
+
+  run_manual_steps
 }
 
 main() {
+  parse_arguments "$@"
   require_ubuntu
   collect_configuration
   confirm_plan
-  ask_for_password
   enable_command_trace
   install_ssh_packages
   configure_ssh

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly TRACE_COMMANDS="${TRACE_COMMANDS:-1}"
+TRACE_COMMANDS="${TRACE_COMMANDS:-0}"
 readonly WENDY_RAW_BASE="${WENDY_RAW_BASE:-https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main}"
 readonly WENDY_REPO_URL="${WENDY_REPO_URL:-https://github.com/wendylabsinc/wendy-agent.git}"
 
@@ -15,8 +15,6 @@ SUDOERS_DIR="/private/etc/sudoers.d"
 SUDOERS_FILE="${SUDOERS_DIR}/90-${CURRENT_USER}-passwordless"
 readonly CURRENT_USER USER_HOME SUDOERS_DIR SUDOERS_FILE
 
-LOGIN_PASSWORD=""
-SUDO_ACCESS_CONFIRMED=0
 XCODE_APP_PATH=""
 GIT_NAME=""
 GIT_EMAIL=""
@@ -62,27 +60,7 @@ enable_command_trace() {
   set -x
 }
 
-sudo_authenticate() {
-  sudo -n true 2>/dev/null && return 0
-
-  local xtrace_was_enabled=0
-  if [[ $- == *x* ]]; then
-    xtrace_was_enabled=1
-    set +x
-  fi
-
-  local status=0
-  sudo -S -v <<<"$LOGIN_PASSWORD" || status=$?
-
-  if (( xtrace_was_enabled )); then
-    set -x
-  fi
-
-  return "$status"
-}
-
 run_sudo() {
-  sudo_authenticate
   sudo "$@"
 }
 
@@ -102,6 +80,37 @@ ask_yes_no() {
       y|Y|yes|YES) return 0 ;;
       n|N|no|NO) return 1 ;;
       *) warn "Please answer yes or no." ;;
+    esac
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Options:
+  -v, --verbose   Show each command before it runs
+  -h, --help      Show this help message
+
+Environment:
+  TRACE_COMMANDS=1 also enables command tracing.
+EOF
+}
+
+parse_arguments() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -v|--verbose)
+        TRACE_COMMANDS=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        fail "Unknown option: $1"
+        ;;
     esac
   done
 }
@@ -289,7 +298,7 @@ This script will configure this Mac by doing the following:
 
   • Install developer tools and Homebrew packages:
       Xcode app is required and will be selected for command line builds.
-      Homebrew packages: git, curl, go, Neovim, and swiftly.
+      Homebrew packages: git, curl, go, Neovim, swiftly, Claude Code, and Codex.
       ${direnv_summary}
       ${swift_summary}
       ${clone_summary}
@@ -307,8 +316,8 @@ This script will configure this Mac by doing the following:
       ${manual_steps_summary}
       ${git_summary}
 
-You will be asked for your macOS login password once. It is used to run sudo
-commands. Homebrew is installed automatically if it is not already available.
+sudo and other tools may ask for credentials when they need elevated access.
+Homebrew is installed automatically if it is not already available.
 EOF
 
   printf '\nContinue? [y/N] '
@@ -318,23 +327,6 @@ EOF
     y|Y|yes|YES) ;;
     *) echo "Aborted."; exit 0 ;;
   esac
-}
-
-ask_for_password() {
-  if (( SUDO_ACCESS_CONFIRMED )); then
-    ok "sudo access already confirmed"
-    return 0
-  fi
-
-  printf '\nmacOS login password for %s: ' "$CURRENT_USER"
-  read -rs LOGIN_PASSWORD
-  printf '\n'
-  [[ -n "$LOGIN_PASSWORD" ]] || fail "macOS login password cannot be empty; it is required for sudo."
-
-  info "Checking sudo access"
-  sudo_authenticate || fail "sudo authentication failed."
-  SUDO_ACCESS_CONFIRMED=1
-  ok "sudo access confirmed"
 }
 
 find_xcode_app() {
@@ -449,6 +441,8 @@ install_packages() {
   brew_install_or_upgrade_formula go
   brew_install_or_upgrade_formula neovim
   brew_install_or_upgrade_formula swiftly
+  brew_install_or_upgrade_cask claude-code
+  brew_install_or_upgrade_cask codex
   ok "Homebrew packages installed"
 }
 
@@ -783,11 +777,11 @@ EOF
 }
 
 main() {
+  parse_arguments "$@"
   require_macos
   ensure_xcode_app
   collect_configuration
   confirm_plan
-  ask_for_password
   enable_command_trace
   configure_ssh_keys
   configure_passwordless_sudo

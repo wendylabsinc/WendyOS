@@ -101,7 +101,9 @@ run the setup script from that session. When prompted, paste your public SSH key
 into `authorized_keys` to enable passwordless SSH for future work, including AI
 coding agents.
 
-Run the interactive setup script directly:
+Run the interactive setup script directly. Add `--verbose` on macOS/Ubuntu or
+`-Verbose` on Windows when you want to see every command as it runs.
+
 
 macOS:
 
@@ -121,10 +123,11 @@ Windows 11, from an elevated PowerShell session:
 $script = "$env:TEMP\set-up-windows.ps1"; iwr -UseBasicParsing https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-windows.ps1 -OutFile $script; powershell -ExecutionPolicy Bypass -File $script; Remove-Item $script
 ```
 
-The scripts install common development tools including Git, configure local
-discovery, and can optionally configure SSH keys, `direnv`, Swift, the Wendy CLI,
-a local clone of this repository, and platform-specific conveniences such as
-remote access, automatic login, and `wendy-agent` where supported.
+The scripts install common development tools including Git, Claude Code, and
+Codex, configure local discovery, and can optionally configure SSH keys,
+`direnv`, Swift, the Wendy CLI, a local clone of this repository, and
+platform-specific conveniences such as remote access, automatic login, and
+`wendy-agent` where supported.
 
 ## Setting Up the Device
 

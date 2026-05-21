@@ -15,7 +15,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$TraceCommands = if ($env:TRACE_COMMANDS) { $env:TRACE_COMMANDS } else { '1' }
+$TraceCommands = if ($PSBoundParameters.ContainsKey('Verbose')) { '1' } elseif ($env:TRACE_COMMANDS) { $env:TRACE_COMMANDS } else { '0' }
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir '..')).Path
 $WendyRepoUrl = if ($env:WENDY_REPO_URL) { $env:WENDY_REPO_URL } else { 'https://github.com/wendylabsinc/wendy-agent.git' }
@@ -46,6 +46,7 @@ $script:ConfigureSshDefaultPowerShell = $false
 $script:DisableAcSleep = $false
 $script:DisableScreenLocking = $false
 $script:EnableDeveloperMode = $false
+$script:WalkThroughManualSteps = $false
 
 function Write-Bold { param([string]$Message) Write-Host $Message -ForegroundColor White }
 function Write-Info { param([string]$Message) Write-Host "`n==> $Message" -ForegroundColor Blue }
@@ -164,6 +165,7 @@ without creating duplicates.
   $script:ConfigureSshDefaultPowerShell = Ask-YesNo 'Make SSH sessions start in PowerShell?' $false
   $script:DisableAcSleep = Ask-YesNo 'Disable automatic sleep on AC power?' $false
   $script:DisableScreenLocking = Ask-YesNo 'Disable screen locking for the current user?' $false
+  $script:WalkThroughManualSteps = Ask-YesNo 'Walk through manual Windows setup steps interactively at the end?' $false
 }
 
 function Confirm-Plan {
@@ -193,6 +195,7 @@ function Confirm-Plan {
   $autoLoginSummary = if ($script:SetupAutomaticLogin) { 'Automatic Windows sign-in will be enabled; the password will be stored in the registry' } else { 'Automatic Windows sign-in will not be changed' }
   $loopbackSshSummary = if ($script:ConfigureLoopbackSsh) { 'Generated SSH key will be authorized for passwordless loopback SSH' } else { 'Passwordless loopback SSH will not be configured' }
   $cloneSummary = if ($script:CloneRepository) { "$WendyRepoUrl will be cloned to $($script:CloneDestination)" } else { 'Wendy repository will not be cloned' }
+  $manualStepsSummary = if ($script:WalkThroughManualSteps) { 'Manual Windows steps will be shown one at a time with confirmation prompts' } else { 'Manual Windows steps will be printed at the end' }
 
   Write-Host @"
 
@@ -200,6 +203,7 @@ This script will configure this machine by doing the following:
 
   - Install packages:
       OpenSSH client, then Git, Go, GNU Make, Neovim, PowerShell 7,
+      Node.js LTS, Claude Code, Codex,
       $direnvSummary
       $swiftSummary
       $vsSummary
@@ -220,6 +224,7 @@ This script will configure this machine by doing the following:
       $sshShellSummary
       $sleepSummary
       $lockSummary
+      $manualStepsSummary
       $wendySummary
       $gitSummary
 
@@ -599,6 +604,9 @@ function Install-Packages {
   Install-WingetPackage -Id 'GoLang.Go' -Name 'Go'
   Install-WingetPackage -Id 'Neovim.Neovim' -Name 'Neovim'
   Install-WingetPackage -Id 'Microsoft.PowerShell' -Name 'PowerShell 7'
+  Install-WingetPackage -Id 'OpenJS.NodeJS.LTS' -Name 'Node.js LTS'
+
+  Install-AiCodingTools
 
   if ($script:InstallVisualStudioBuildTools) {
     Install-WingetPackage `
@@ -613,6 +621,62 @@ function Install-Packages {
     Install-WingetPackage -Id 'Swift.Toolchain' -Name 'Swift toolchain'
   } else {
     Write-Ok 'Swift toolchain not installed'
+  }
+}
+
+function Test-CommandAvailable {
+  param([Parameter(Mandatory)][string]$Name)
+
+  return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+function Try-InstallWingetPackage {
+  param(
+    [Parameter(Mandatory)][string]$Id,
+    [Parameter(Mandatory)][string]$Name
+  )
+
+  try {
+    Install-WingetPackage -Id $Id -Name $Name
+    return $true
+  } catch {
+    Write-Warn "Could not install $Name with winget package ${Id}: $($_.Exception.Message)"
+    return $false
+  }
+}
+
+function Install-NpmGlobalPackage {
+  param(
+    [Parameter(Mandatory)][string]$Package,
+    [Parameter(Mandatory)][string]$Name
+  )
+
+  Write-Info "Installing $Name with npm"
+  Update-ProcessPath
+  Invoke-External 'npm.cmd' @('install', '--global', $Package)
+  Update-ProcessPath
+  Write-Ok "$Name installed"
+}
+
+function Install-AiCodingTools {
+  Write-Info 'Installing Claude Code and Codex'
+
+  if (-not (Test-CommandAvailable 'claude')) {
+    [void](Try-InstallWingetPackage -Id 'Anthropic.ClaudeCode' -Name 'Claude Code')
+  }
+  if (-not (Test-CommandAvailable 'claude')) {
+    Install-NpmGlobalPackage -Package '@anthropic-ai/claude-code' -Name 'Claude Code'
+  } else {
+    Write-Ok 'Claude Code is already installed'
+  }
+
+  if (-not (Test-CommandAvailable 'codex')) {
+    [void](Try-InstallWingetPackage -Id 'OpenAI.Codex' -Name 'Codex')
+  }
+  if (-not (Test-CommandAvailable 'codex')) {
+    Install-NpmGlobalPackage -Package '@openai/codex' -Name 'Codex'
+  } else {
+    Write-Ok 'Codex is already installed'
   }
 }
 
@@ -1072,6 +1136,59 @@ function Configure-Git {
   Write-Ok 'git identity configured'
 }
 
+function Write-ManualStep {
+  param([Parameter(Mandatory)][string]$Message)
+
+  Write-Host ''
+  Write-Host $Message
+  if ($script:WalkThroughManualSteps) {
+    [void](Read-Host 'Press Enter when done, or type s to skip')
+  }
+}
+
+function Write-ManualSteps {
+  Write-Bold "`nManual Windows steps"
+
+  Write-ManualStep @'
+  - Open a new terminal so PATH, editor, PowerShell profile, Swift, and direnv
+    changes are loaded.
+'@
+
+  Write-ManualStep @'
+  - Launch Claude Code and Codex once and complete their sign-in or first-run
+    setup flows.
+'@
+
+  if ($script:InstallDirenv) {
+    Write-ManualStep @'
+  - If you use this checkout with direnv, run this once from the repo:
+      direnv allow
+'@
+  }
+
+  if ($script:EnableSshLogin) {
+    Write-ManualStep @'
+  - Verify SSH from another machine. Password login uses the Windows account
+    password; Windows Hello PINs do not work over SSH. Key login works after
+    your public keys are installed.
+'@
+  }
+
+  if ($script:ConfigureRemoteDesktop) {
+    Write-ManualStep @'
+  - Verify Remote Desktop from another machine. Some Windows editions expose
+    the setting but do not accept inbound RDP sessions.
+'@
+  }
+
+  if ($script:SetupAutomaticLogin -or $script:DisableAcSleep -or $script:DisableScreenLocking) {
+    Write-ManualStep @'
+  - Reboot or sign out and back in once to verify automatic sign-in, power,
+    and screen-lock settings.
+'@
+  }
+}
+
 function Write-Summary {
   $ipAddress = Get-PrimaryIPv4Address
 
@@ -1098,9 +1215,9 @@ not work over SSH.
 
 Generated SSH public key:
   $($publicKey.Trim())
-
-Open a new terminal for PATH/editor/environment changes to appear.
 "@
+
+  Write-ManualSteps
 }
 
 function Main {
