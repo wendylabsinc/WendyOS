@@ -808,39 +808,48 @@ configure_power_settings() {
     return 0
   fi
 
-  if ! command -v gsettings >/dev/null 2>&1; then
-    warn "gsettings was not found; skipping GNOME power configuration."
-    return 0
-  fi
-
   info "Configuring Ubuntu AC power settings for unattended use"
 
-  local uid runtime_dir session_bus applied_gsettings=0
+  local uid runtime_dir session_bus user_unit_dir applied_gsettings=0
   uid="$(id -u "$CURRENT_USER")"
   runtime_dir="/run/user/${uid}"
   session_bus="unix:path=${runtime_dir}/bus"
+  user_unit_dir="$USER_HOME/.config/systemd/user"
 
   if [[ -S "${runtime_dir}/bus" ]]; then
-    run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" bash -c '
-      set -euo pipefail
+    run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" \
+      systemctl --user disable --now ubuntu-ac-power-mode.service >/dev/null 2>&1 || true
+  fi
+  run_as_user rm -f \
+    "$user_unit_dir/default.target.wants/ubuntu-ac-power-mode.service" \
+    "$user_unit_dir/ubuntu-ac-power-mode.service"
+  run_sudo rm -f /usr/local/bin/ubuntu-ac-power-mode
 
-      set_if_exists() {
-        local schema="$1" key="$2" value="$3"
-        gsettings range "$schema" "$key" >/dev/null 2>&1 || return 0
-        gsettings set "$schema" "$key" "$value"
-      }
+  if command -v gsettings >/dev/null 2>&1; then
+    if [[ -S "${runtime_dir}/bus" ]]; then
+      run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" bash -c '
+        set -euo pipefail
 
-      set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "'\''nothing'\''"
-      set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
-      set_if_exists org.gnome.desktop.session idle-delay "uint32 600"
-      set_if_exists org.gnome.desktop.screensaver lock-enabled false
-      set_if_exists org.gnome.desktop.screensaver lock-delay "uint32 0"
-      set_if_exists org.gnome.desktop.screensaver ubuntu-lock-on-suspend false
-      set_if_exists org.gnome.desktop.lockdown disable-lock-screen true
-    '
-    applied_gsettings=1
+        set_if_exists() {
+          local schema="$1" key="$2" value="$3"
+          gsettings range "$schema" "$key" >/dev/null 2>&1 || return 0
+          gsettings set "$schema" "$key" "$value"
+        }
+
+        set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "'\''nothing'\''"
+        set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
+        set_if_exists org.gnome.desktop.session idle-delay "uint32 600"
+        set_if_exists org.gnome.desktop.screensaver lock-enabled false
+        set_if_exists org.gnome.desktop.screensaver lock-delay "uint32 0"
+        set_if_exists org.gnome.desktop.screensaver ubuntu-lock-on-suspend false
+        set_if_exists org.gnome.desktop.lockdown disable-lock-screen true
+      '
+      applied_gsettings=1
+    else
+      warn "No active GNOME user session bus found. Log in graphically as ${CURRENT_USER}, then rerun this script to apply GNOME power settings."
+    fi
   else
-    warn "No active GNOME user session bus found. Log in graphically as ${CURRENT_USER}, then rerun this script to apply GNOME power settings."
+    warn "gsettings was not found; skipping GNOME power configuration."
   fi
 
   run_sudo install -d -m 0755 /etc/systemd/logind.conf.d
@@ -853,7 +862,7 @@ EOF
   if (( applied_gsettings )); then
     ok "AC sleep disabled; display idle set to 10 minutes; screen locking disabled; lid close on AC ignored"
   else
-    ok "lid close on AC ignored; GNOME power settings still need an active user session"
+    ok "legacy power helper removed; lid close on AC ignored; GNOME power settings still need an active user session"
   fi
 }
 
