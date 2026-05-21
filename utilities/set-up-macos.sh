@@ -30,6 +30,7 @@ INSTALL_BUILD_TOOLS=1
 INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
+WALK_THROUGH_MANUAL_STEPS=0
 BREW=""
 AUTHORIZED_LOGIN_KEYS=()
 PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
@@ -217,11 +218,17 @@ EOF
   else
     INSTALL_WENDY_AGENT=0
   fi
+
+  if ask_yes_no "Walk through manual macOS setup steps interactively at the end?" "n"; then
+    WALK_THROUGH_MANUAL_STEPS=1
+  else
+    WALK_THROUGH_MANUAL_STEPS=0
+  fi
 }
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary swift_summary build_tools_summary direnv_summary
-  local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary
+  local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary manual_steps_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
@@ -277,6 +284,12 @@ confirm_plan() {
     wendy_agent_summary="Wendy macOS agent app will not be installed"
   fi
 
+  if (( WALK_THROUGH_MANUAL_STEPS )); then
+    manual_steps_summary="Manual macOS steps will be shown one at a time with confirmation prompts"
+  else
+    manual_steps_summary="Manual macOS steps will be printed at the end"
+  fi
+
   if (( ${#AUTHORIZED_LOGIN_KEYS[@]} )); then
     ssh_key_summary="${#AUTHORIZED_LOGIN_KEYS[@]} additional authorized SSH public key(s) for ${CURRENT_USER}"
   else
@@ -304,7 +317,7 @@ This script will configure this Mac by doing the following:
       ${direnv_summary}
       ${passwordless_sudo_summary}
       Bonjour/mDNS local hostname discovery
-      Manual macOS steps for Xcode, Remote Login, Screen Sharing, automatic login, power, and screen-lock settings will be shown
+      ${manual_steps_summary}
       ${git_summary}
 
 You will be asked for your macOS login password once. It is used to run sudo
@@ -801,6 +814,55 @@ primary_ip() {
   return 1
 }
 
+manual_step() {
+  local message="$1"
+
+  if (( WALK_THROUGH_MANUAL_STEPS )); then
+    printf '\n%s\n' "$message"
+    printf 'Press Return when done, or type s to skip: '
+    local answer
+    read -r answer
+    return 0
+  fi
+
+  printf '\n%s\n' "$message"
+}
+
+run_manual_steps() {
+  cat <<EOF
+
+$(bold "Manual macOS steps")
+EOF
+
+  manual_step "  • Launch ${STYLE_BOLD}Xcode${STYLE_RESET} once and complete its first-run setup,
+    tour/wizard, component installation, and license prompts."
+
+  manual_step "  • Launch the installed ${STYLE_BOLD}wendy${STYLE_RESET} CLI once and approve Bluetooth
+    and any other macOS permissions it requests."
+
+  manual_step "  • Launch the installed ${STYLE_BOLD}Wendy agent${STYLE_RESET} app once and approve
+    permissions by following the instructions on its Welcome screen."
+
+  manual_step "  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
+      System Settings → General → About → Name
+      System Settings → General → Sharing → Local hostname (at the bottom)"
+
+  manual_step "  • Enable ${STYLE_BOLD}Remote Login${STYLE_RESET} if you want SSH access:
+      System Settings → General → Sharing → Remote Login"
+
+  manual_step "  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
+      System Settings → General → Sharing → Screen Sharing"
+
+  manual_step "  • Adjust ${STYLE_BOLD}sleep${STYLE_RESET} if desired:
+      System Settings → Battery → Advanced → Prevent automatic sleeping on power adapter when the display is off"
+
+  manual_step "  • Adjust ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
+      System Settings → Lock Screen → Require password after screen saver begins or display is turned off"
+
+  manual_step "  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
+      System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}"
+}
+
 summary() {
   local mdns_name ip public_key
   mdns_name="$(scutil --get LocalHostName 2>/dev/null || hostname -s)"
@@ -822,34 +884,9 @@ Useful connection details:
 Generated SSH public key:
   ${public_key:-not available}
 
-$(bold "Manual macOS steps")
-
-  • Launch ${STYLE_BOLD}Xcode${STYLE_RESET} once and complete its first-run setup,
-    tour/wizard, component installation, and license prompts.
 EOF
 
-  cat <<EOF
-
-  • Review or change the Mac ${STYLE_BOLD}name${STYLE_RESET} and local ${STYLE_BOLD}hostname${STYLE_RESET} if desired:
-      System Settings → General → About → Name
-      System Settings → General → Sharing → Local hostname (at the bottom)
-
-  • Enable ${STYLE_BOLD}Remote Login${STYLE_RESET} if you want SSH access:
-      System Settings → General → Sharing → Remote Login
-
-  • Enable ${STYLE_BOLD}Screen Sharing${STYLE_RESET} if you want remote desktop access:
-      System Settings → General → Sharing → Screen Sharing
-
-  • Adjust ${STYLE_BOLD}sleep${STYLE_RESET} if desired:
-      System Settings → Battery → Advanced → Prevent automatic sleeping on power adapter when the display is off
-
-  • Adjust ${STYLE_BOLD}screen locking${STYLE_RESET} if desired:
-      System Settings → Lock Screen → Require password after screen saver begins or display is turned off
-
-  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
-      System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}
-
-EOF
+  run_manual_steps
 
   cat <<EOF
 
