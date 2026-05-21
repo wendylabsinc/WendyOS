@@ -26,7 +26,6 @@ CONFIGURE_LOOPBACK_SSH=0
 INSTALL_WENDY_CLI=0
 INSTALL_WENDY_AGENT=0
 INSTALL_SWIFT_TOOLCHAIN=1
-INSTALL_BUILD_TOOLS=1
 INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
@@ -177,12 +176,6 @@ EOF
     CONFIGURE_LOOPBACK_SSH=0
   fi
 
-  if ask_yes_no "Install Xcode Command Line Tools for building native code?" "y"; then
-    INSTALL_BUILD_TOOLS=1
-  else
-    INSTALL_BUILD_TOOLS=0
-  fi
-
   if ask_yes_no "Install and configure direnv for repository-local developer tooling?" "n"; then
     INSTALL_DIRENV=1
   else
@@ -227,7 +220,7 @@ EOF
 }
 
 confirm_plan() {
-  local passwordless_sudo_summary git_summary ssh_key_summary swift_summary build_tools_summary direnv_summary
+  local passwordless_sudo_summary git_summary ssh_key_summary swift_summary direnv_summary
   local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary manual_steps_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
@@ -246,12 +239,6 @@ confirm_plan() {
     loopback_ssh_summary="Generated SSH key will be authorized for passwordless loopback SSH"
   else
     loopback_ssh_summary="Passwordless loopback SSH will not be configured"
-  fi
-
-  if (( INSTALL_BUILD_TOOLS )); then
-    build_tools_summary="Xcode Command Line Tools will be installed when missing"
-  else
-    build_tools_summary="Xcode Command Line Tools installation will be skipped"
   fi
 
   if (( INSTALL_DIRENV )); then
@@ -301,7 +288,7 @@ confirm_plan() {
 This script will configure this Mac by doing the following:
 
   • Install developer tools and Homebrew packages:
-      ${build_tools_summary}
+      Xcode app is required and will be selected for command line builds.
       Homebrew packages: git, curl, go, Neovim, and swiftly.
       ${direnv_summary}
       ${swift_summary}
@@ -362,75 +349,13 @@ find_xcode_app() {
   return 1
 }
 
-find_xcode_archive() {
-  local downloads_dir="${USER_HOME}/Downloads"
-  [[ -d "$downloads_dir" ]] || return 1
-
-  find "$downloads_dir" -maxdepth 1 -type f \
-    \( -iname 'Xcode*.xip' -o -iname 'Xcode*.zip' \) \
-    -print | sort | tail -n 1
-}
-
-xcode_version() {
-  local app="$1" version=""
-  version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
-  [[ -n "$version" ]] || version="$(defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
-  printf '%s\n' "${version:-unknown}"
-}
-
-install_xcode_archive() {
-  local archive="$1"
-  local tmp_dir app version destination lower_archive
-
-  info "Installing Xcode from ${archive}"
-  ask_for_password
-
-  tmp_dir="$(mktemp -d)"
-
-  lower_archive="$(printf '%s' "$archive" | tr '[:upper:]' '[:lower:]')"
-  case "$lower_archive" in
-    *.xip)
-      xip --expand "$archive" "$tmp_dir"
-      ;;
-    *.zip)
-      ditto -x -k "$archive" "$tmp_dir"
-      ;;
-    *)
-      fail "Unsupported Xcode archive type: ${archive}"
-      ;;
-  esac
-
-  app="$(find "$tmp_dir" -maxdepth 2 -type d -name 'Xcode*.app' -print | head -n 1)"
-  [[ -n "$app" ]] || fail "No Xcode.app was found inside ${archive}."
-
-  version="$(xcode_version "$app")"
-  [[ "$version" != "unknown" ]] || fail "Could not determine Xcode version from ${archive}."
-  destination="/Applications/Xcode-${version}.app"
-
-  [[ ! -e "$destination" ]] || fail "${destination} already exists, but no usable Xcode app was detected."
-
-  run_sudo mv "$app" "$destination"
-  run_sudo xattr -dr com.apple.quarantine "$destination" >/dev/null 2>&1 || true
-  run_sudo xcode-select -s "$destination/Contents/Developer" || true
-
-  XCODE_APP_PATH="$destination"
-  rm -rf "$tmp_dir"
-  ok "Xcode ${version} installed at ${destination}"
-}
-
 ensure_xcode_app() {
   if XCODE_APP_PATH="$(find_xcode_app)"; then
     ok "Xcode app found at ${XCODE_APP_PATH}"
     return 0
   fi
 
-  local archive
-  archive="$(find_xcode_archive || true)"
-  if [[ -z "$archive" ]]; then
-    fail "Xcode.app was not found in /Applications. Download the latest Xcode .xip or .zip from https://xcodereleases.com/ into ${USER_HOME}/Downloads, then rerun this script."
-  fi
-
-  install_xcode_archive "$archive"
+  fail "Xcode.app was not found in /Applications. Download Xcode from https://xcodereleases.com/, install it into /Applications, name it Xcode-x.y.z.app (for example, Xcode-16.2.app), then rerun this script."
 }
 
 download_xcode_metal_tooling() {
@@ -513,44 +438,6 @@ brew_install_or_upgrade_cask() {
     "$BREW" upgrade --cask "$cask" || true
   else
     "$BREW" install --cask "$cask"
-  fi
-}
-
-install_build_tools() {
-  if (( ! INSTALL_BUILD_TOOLS )); then
-    ok "Xcode Command Line Tools installation skipped"
-    return 0
-  fi
-
-  if xcode-select -p >/dev/null 2>&1; then
-    ok "Xcode Command Line Tools are already installed"
-    return 0
-  fi
-
-  info "Installing Xcode Command Line Tools"
-  run_sudo touch /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
-
-  local product
-  product="$(softwareupdate -l 2>/dev/null \
-    | awk -F'*' '/^ *\*/ {print $2}' \
-    | sed -E 's/^ *Label: //; s/^ *//; s/ *$//' \
-    | grep -E '^Command Line Tools' \
-    | tail -n 1 || true)"
-
-  if [[ -n "$product" ]]; then
-    run_sudo softwareupdate -i "$product" --verbose
-  else
-    warn "Could not find Command Line Tools in softwareupdate; opening Apple's installer prompt."
-    xcode-select --install || true
-    warn "Finish the Command Line Tools installer, then rerun this script."
-  fi
-
-  run_sudo rm -f /tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress
-
-  if xcode-select -p >/dev/null 2>&1; then
-    ok "Xcode Command Line Tools installed"
-  else
-    fail "Xcode Command Line Tools are still not installed."
   fi
 }
 
@@ -904,7 +791,6 @@ main() {
   enable_command_trace
   configure_ssh_keys
   configure_passwordless_sudo
-  install_build_tools
   download_xcode_metal_tooling
   install_homebrew
   configure_homebrew_shellenv
