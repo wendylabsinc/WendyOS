@@ -85,7 +85,7 @@ func (p *LocalProvider) buildDocker(ctx context.Context, projectPath, product, d
 	imageName := strings.ToLower(product) + ":latest"
 	args := []string{"build", "-t", imageName}
 	if dockerfile != "" {
-		args = append(args, "-f", dockerfile)
+		args = append(args, "-f", filepath.Join(projectPath, dockerfile))
 	}
 	args = append(args, ".")
 	cmd := exec.CommandContext(ctx, "docker", args...)

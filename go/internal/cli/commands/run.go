@@ -507,7 +507,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	// connecting to the target — so the picker shows regardless of whether
 	// we end up on the agent path or a provider path (Docker Desktop, etc.).
 	if projectType == "docker" && opts.dockerfile == "" {
-		resolved, err := resolveRunDockerfile(cwd, opts, !opts.yes && isInteractiveTerminal())
+		resolved, err := resolveDockerfile(cwd, opts.dockerfile, !opts.yes && isInteractiveTerminal())
 		if err != nil {
 			return err
 		}
@@ -977,11 +977,6 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 	return "", fmt.Errorf("build type %q is not available in %s", requestedType, dir)
 }
 
-// resolveRunDockerfile returns the Dockerfile for a docker-type project.
-// It delegates to the shared resolveDockerfile helper in docker.go.
-func resolveRunDockerfile(cwd string, opts runOptions, interactive bool) (string, error) {
-	return resolveDockerfile(cwd, opts.dockerfile, interactive)
-}
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, opts runOptions) error {
@@ -1219,8 +1214,6 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return err
 	}
 
-	dockerfile := opts.dockerfile
-
 	// Build and push the Docker image directly to the device's registry.
 	regPort := registryPort(agentOS)
 	// For link-local addresses (USB), a TCP proxy bridges the Docker VM
@@ -1235,7 +1228,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	registryImage := fmt.Sprintf("%s/%s:latest", registryAddr, repo)
 
 	cliLogln("Building and pushing Docker image for %s...", platform)
-	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, dockerfile, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
+	if err := buildAndPushImage(ctx, cwd, registryAddr, registryImage, platform, opts.dockerfile, buildArgs, os.Stdout, conn.IsMTLS); err != nil {
 		return fmt.Errorf("building and pushing Docker image: %w", err)
 	}
 	cliLogln("Build and push completed.")

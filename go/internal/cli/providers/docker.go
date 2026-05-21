@@ -172,7 +172,7 @@ func (p *DockerProvider) BuildWithDockerfile(ctx context.Context, device models.
 		if err != nil || strings.HasPrefix(rel, "..") {
 			return nil, fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
 		}
-		args = append(args, "-f", dockerfile)
+		args = append(args, "-f", resolved)
 	}
 	args = append(args, ".")
 	cmd := exec.CommandContext(ctx, "docker", args...)

@@ -101,7 +101,7 @@ func detectProjectType(dir string) (string, error) {
 
 // validDockerfileNameRe matches valid Dockerfile names: "Dockerfile" or
 // "Dockerfile" followed by a dot or hyphen and one or more safe characters.
-var validDockerfileNameRe = regexp.MustCompile(`^Dockerfile([.\-][a-zA-Z0-9._-]+)?$`)
+var validDockerfileNameRe = regexp.MustCompile(`^Dockerfile([.\-][a-zA-Z0-9][a-zA-Z0-9._-]*)?$`)
 
 // validateDockerfileName returns an error when the base filename of name does
 // not follow the Dockerfile naming convention. This prevents filenames that
@@ -151,6 +151,14 @@ func confinedDockerfilePath(base, dockerfile string) (string, error) {
 	rel, err = filepath.Rel(absBase, resolved)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+	}
+
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("stating dockerfile: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("dockerfile %q is not a regular file", dockerfile)
 	}
 
 	return resolved, nil
@@ -1111,7 +1119,7 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		"--platform", platform,
 	}
 	if dockerfile != "" {
-		args = append(args, "-f", dockerfile)
+		args = append(args, "-f", filepath.Join(dir, dockerfile))
 	}
 	if _, err := os.Stat(filepath.Join(cacheDir, "index.json")); err == nil {
 		args = append(args, "--cache-from", "type=local,src="+cacheDirSlash)

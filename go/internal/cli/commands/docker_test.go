@@ -496,9 +496,9 @@ func TestResolveRunDockerfile_SingleDockerfile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := resolveRunDockerfile(dir, runOptions{}, false)
+	got, err := resolveDockerfile(dir, "", false)
 	if err != nil {
-		t.Fatalf("resolveRunDockerfile: %v", err)
+		t.Fatalf("resolveDockerfile: %v", err)
 	}
 	if got != "Dockerfile.prod" {
 		t.Fatalf("got %q, want Dockerfile.prod", got)
@@ -513,9 +513,9 @@ func TestResolveRunDockerfile_ExplicitFlag(t *testing.T) {
 		}
 	}
 
-	got, err := resolveRunDockerfile(dir, runOptions{dockerfile: "Dockerfile.prod"}, false)
+	got, err := resolveDockerfile(dir, "Dockerfile.prod", false)
 	if err != nil {
-		t.Fatalf("resolveRunDockerfile: %v", err)
+		t.Fatalf("resolveDockerfile: %v", err)
 	}
 	if got != "Dockerfile.prod" {
 		t.Fatalf("got %q, want Dockerfile.prod", got)
@@ -530,9 +530,9 @@ func TestResolveRunDockerfile_MultipleNonInteractivePrefersBase(t *testing.T) {
 		}
 	}
 
-	got, err := resolveRunDockerfile(dir, runOptions{}, false)
+	got, err := resolveDockerfile(dir, "", false)
 	if err != nil {
-		t.Fatalf("resolveRunDockerfile: %v", err)
+		t.Fatalf("resolveDockerfile: %v", err)
 	}
 	if got != "Dockerfile" {
 		t.Fatalf("got %q, want Dockerfile", got)
@@ -1326,7 +1326,7 @@ func TestValidateDockerfileName(t *testing.T) {
 			t.Errorf("validateDockerfileName(%q) unexpected error: %v", name, err)
 		}
 	}
-	invalid := []string{"-flag", "dockerfile", "DOCKERFILE", "not-a-dockerfile", "Dockerfile/evil", ".hidden", "Dockerfile.dockerignore", "Dockerfile.prod.dockerignore"}
+	invalid := []string{"-flag", "dockerfile", "DOCKERFILE", "not-a-dockerfile", "Dockerfile/evil", ".hidden", "Dockerfile.dockerignore", "Dockerfile.prod.dockerignore", "Dockerfile.-prod", "Dockerfile..hidden", "Dockerfile-.prod"}
 	for _, name := range invalid {
 		if err := validateDockerfileName(name); err == nil {
 			t.Errorf("validateDockerfileName(%q) expected error, got nil", name)
