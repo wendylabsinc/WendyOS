@@ -27,13 +27,22 @@ INSTALL_BUILD_TOOLS=1
 INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
-DISABLE_AC_SLEEP=0
-DISABLE_SCREEN_LOCKING=0
 BREW=""
 AUTHORIZED_LOGIN_KEYS=()
 PS4='+ ${BASH_SOURCE##*/}:${LINENO}: '
 
-bold() { printf '\033[1m%s\033[0m\n' "$*"; }
+if [[ -t 1 ]]; then
+  STYLE_BOLD=$'\033[1m'
+  STYLE_CYAN=$'\033[1;36m'
+  STYLE_RESET=$'\033[0m'
+else
+  STYLE_BOLD=""
+  STYLE_CYAN=""
+  STYLE_RESET=""
+fi
+readonly STYLE_BOLD STYLE_CYAN STYLE_RESET
+
+bold() { printf '%s%s%s\n' "$STYLE_BOLD" "$*" "$STYLE_RESET"; }
 info() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
 ok() { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m! %s\033[0m\n' "$*"; }
@@ -199,23 +208,11 @@ EOF
   else
     INSTALL_WENDY_AGENT=0
   fi
-
-  if ask_yes_no "Disable automatic sleep and display sleep on AC power?" "n"; then
-    DISABLE_AC_SLEEP=1
-  else
-    DISABLE_AC_SLEEP=0
-  fi
-
-  if ask_yes_no "Disable screen locking for ${CURRENT_USER}?" "n"; then
-    DISABLE_SCREEN_LOCKING=1
-  else
-    DISABLE_SCREEN_LOCKING=0
-  fi
 }
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary swift_summary build_tools_summary direnv_summary
-  local clone_summary wendy_cli_summary wendy_agent_summary sleep_summary lock_summary
+  local clone_summary wendy_cli_summary wendy_agent_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
@@ -265,18 +262,6 @@ confirm_plan() {
     wendy_agent_summary="Wendy macOS agent app will not be installed"
   fi
 
-  if (( DISABLE_AC_SLEEP )); then
-    sleep_summary="AC sleep and display sleep will be disabled"
-  else
-    sleep_summary="AC sleep and display sleep will not be changed"
-  fi
-
-  if (( DISABLE_SCREEN_LOCKING )); then
-    lock_summary="Screen locking will be disabled for ${CURRENT_USER}"
-  else
-    lock_summary="Screen locking will not be changed"
-  fi
-
   if (( ${#AUTHORIZED_LOGIN_KEYS[@]} )); then
     ssh_key_summary="${#AUTHORIZED_LOGIN_KEYS[@]} additional authorized SSH public key(s) for ${CURRENT_USER}"
   else
@@ -303,9 +288,7 @@ This script will configure this Mac by doing the following:
       ${direnv_summary}
       ${passwordless_sudo_summary}
       Bonjour/mDNS local hostname discovery
-      Manual macOS steps for Xcode, Remote Login, Screen Sharing, and automatic login will be shown
-      ${sleep_summary}
-      ${lock_summary}
+      Manual macOS steps for Xcode, Remote Login, Screen Sharing, automatic login, power, and screen-lock settings will be shown
       ${git_summary}
 
 You will be asked for your macOS login password once. It is used to run sudo
@@ -632,33 +615,6 @@ configure_mdns() {
   ok "Bonjour/mDNS local hostname set to ${name}.local"
 }
 
-configure_power_settings() {
-  if (( ! DISABLE_AC_SLEEP && ! DISABLE_SCREEN_LOCKING )); then
-    ok "power and lock settings not changed"
-    return 0
-  fi
-
-  if (( DISABLE_AC_SLEEP )); then
-    info "Disabling automatic sleep and display sleep on AC power"
-    run_sudo pmset -c sleep 0
-    run_sudo pmset -c displaysleep 0
-    run_sudo pmset -c disksleep 0
-    ok "AC sleep policy configured"
-  else
-    ok "AC sleep policy not changed"
-  fi
-
-  if (( DISABLE_SCREEN_LOCKING )); then
-    info "Disabling screen locking for ${CURRENT_USER}"
-    defaults write com.apple.screensaver askForPassword -int 0
-    defaults write com.apple.screensaver askForPasswordDelay -int 0
-    killall cfprefsd >/dev/null 2>&1 || true
-    ok "screen locking disabled for ${CURRENT_USER}"
-  else
-    ok "screen locking not changed"
-  fi
-}
-
 install_wendy_cli() {
   if (( ! INSTALL_WENDY_CLI )); then
     ok "Wendy CLI not installed"
@@ -739,19 +695,25 @@ EOF
 
   cat <<EOF
 
-  • Review or change the Mac name and local hostname if desired:
-      System Settings → General → About → Name
-      System Settings → General → Sharing → Local hostname (at the bottom)
+  • ${STYLE_BOLD}${STYLE_CYAN}Name / hostname${STYLE_RESET}: review or change the Mac name and local hostname if desired:
+      ${STYLE_CYAN}System Settings → General → About → Name${STYLE_RESET}
+      ${STYLE_CYAN}System Settings → General → Sharing → Local hostname${STYLE_RESET} (at the bottom)
 
-  • Enable Remote Login if you want SSH access:
-      System Settings → General → Sharing → Remote Login
+  • ${STYLE_BOLD}${STYLE_CYAN}Remote Login${STYLE_RESET}: enable if you want SSH access:
+      ${STYLE_CYAN}System Settings → General → Sharing → Remote Login${STYLE_RESET}
 
-  • Enable Screen Sharing if you want remote desktop access:
-      System Settings → General → Sharing → Screen Sharing
+  • ${STYLE_BOLD}${STYLE_CYAN}Screen Sharing${STYLE_RESET}: enable if you want remote desktop access:
+      ${STYLE_CYAN}System Settings → General → Sharing → Screen Sharing${STYLE_RESET}
 
-  • Enable automatic desktop login if desired:
-      System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}
-    FileVault may need to be disabled before macOS allows automatic login.
+  • ${STYLE_BOLD}${STYLE_CYAN}Sleep / display sleep${STYLE_RESET}: adjust if desired:
+      ${STYLE_CYAN}System Settings → Displays → Advanced${STYLE_RESET} → Prevent automatic sleeping on power adapter when the display is off
+      ${STYLE_CYAN}System Settings → Lock Screen${STYLE_RESET} → Turn display off on power adapter when inactive
+
+  • ${STYLE_BOLD}${STYLE_CYAN}Screen locking${STYLE_RESET}: adjust if desired:
+      ${STYLE_CYAN}System Settings → Lock Screen${STYLE_RESET} → Require password after screen saver begins or display is turned off
+
+  • ${STYLE_BOLD}${STYLE_CYAN}Automatic desktop login${STYLE_RESET}: enable if desired:
+      ${STYLE_CYAN}System Settings → Users & Groups${STYLE_RESET} → Automatically log in as ${CURRENT_USER}
 
 EOF
 
@@ -779,7 +741,6 @@ main() {
   configure_editor
   configure_direnv
   configure_mdns
-  configure_power_settings
   install_wendy_cli
   install_wendy_agent
   configure_git
