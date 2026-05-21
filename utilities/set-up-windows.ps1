@@ -401,6 +401,16 @@ function Add-WindowsCapabilityWithProgress {
   }
 }
 
+function Test-OpenSshClientInstalled {
+  if (Get-Command 'ssh.exe' -ErrorAction SilentlyContinue) { return $true }
+  return (Test-Path (Join-Path $env:WINDIR 'System32\OpenSSH\ssh.exe'))
+}
+
+function Test-OpenSshServerInstalled {
+  if (Get-Service -Name sshd -ErrorAction SilentlyContinue) { return $true }
+  return (Test-Path (Join-Path $env:WINDIR 'System32\OpenSSH\sshd.exe'))
+}
+
 function Install-OpenSshPackages {
   if ($script:EnableSshLogin) {
     Write-Info 'Installing OpenSSH server/client first'
@@ -408,14 +418,22 @@ function Install-OpenSshPackages {
     Write-Info 'Installing OpenSSH client'
   }
 
-  Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Client~~~~0.0.1.0' -DisplayName 'OpenSSH Client'
+  if (Test-OpenSshClientInstalled) {
+    Write-Ok 'OpenSSH Client is already installed'
+  } else {
+    Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Client~~~~0.0.1.0' -DisplayName 'OpenSSH Client'
+  }
 
   if (-not $script:EnableSshLogin) {
     Write-Ok 'OpenSSH client installed; OpenSSH Server not installed'
     return
   }
 
-  Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Server~~~~0.0.1.0' -DisplayName 'OpenSSH Server'
+  if (Test-OpenSshServerInstalled) {
+    Write-Ok 'OpenSSH Server is already installed'
+  } else {
+    Add-WindowsCapabilityWithProgress -Name 'OpenSSH.Server~~~~0.0.1.0' -DisplayName 'OpenSSH Server'
+  }
 
   Set-Service -Name sshd -StartupType Automatic
   Start-Service -Name sshd -ErrorAction SilentlyContinue
@@ -830,8 +848,13 @@ function Find-PowerShellExecutable {
     if ($candidate -and (Test-Path $candidate)) { return $candidate }
   }
 
-  $command = Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue
-  if ($command) { return $command.Source }
+  $commands = @(Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue | Where-Object {
+    $_.Source -and $_.Source -notlike '*\Microsoft\WindowsApps\*'
+  })
+  if ($commands.Count -gt 0) { return $commands[0].Source }
+
+  $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  if (Test-Path $windowsPowerShell) { return $windowsPowerShell }
 
   return $null
 }
@@ -1344,12 +1367,22 @@ function Write-ManualSteps {
   }
 
   if ($script:SetupGitHubRunner) {
-    Write-ManualStep @"
+    if ($script:GitHubRunnerRunMode -eq 'manual') {
+      Write-ManualStep @"
   - Register the GitHub Actions runner if it is not already registered:
       cd "$($script:GitHubRunnerDir)"
       .\config.cmd --url https://github.com/OWNER/REPO --token TOKEN
-      Start it manually with .\run.cmd, or rerun this setup script to enable the selected startup mode.
+      Start it manually when needed with:
+      .\run.cmd
 "@
+    } else {
+      Write-AssistedManualStep @"
+  - Register the GitHub Actions runner if it is not already registered:
+      cd "$($script:GitHubRunnerDir)"
+      .\config.cmd --url https://github.com/OWNER/REPO --token TOKEN
+      Then return here. When you press Enter, I will configure and start the selected runner startup mode.
+"@ { Configure-GitHubRunnerStartup }
+    }
   }
 }
 
