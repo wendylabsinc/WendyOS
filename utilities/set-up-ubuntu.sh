@@ -839,6 +839,7 @@ configure_power_settings() {
         set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "'\''nothing'\''"
         set_if_exists org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
         set_if_exists org.gnome.desktop.session idle-delay "uint32 600"
+        set_if_exists org.gnome.settings-daemon.plugins.power idle-dim true
         set_if_exists org.gnome.desktop.screensaver lock-enabled false
         set_if_exists org.gnome.desktop.screensaver lock-delay "uint32 0"
         set_if_exists org.gnome.desktop.screensaver ubuntu-lock-on-suspend false
