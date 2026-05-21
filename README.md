@@ -89,6 +89,12 @@ wendy-agent-dev() {
 
 #### Setup script one-liners
 
+> **Warning**
+> These setup scripts are mostly intended for throw-away development, test, and
+> CI machines. The defaults avoid security-sensitive changes, so they can be run
+> on personal machines if you carefully review the plan and choose only the
+> options you actually want.
+
 To download and run the interactive setup script directly:
 
 macOS:
