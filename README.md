@@ -87,7 +87,7 @@ wendy-agent-dev() {
 }
 ```
 
-#### Setup script one-liners
+#### Setup scripts
 
 > **Warning**
 > These setup scripts are mostly intended for throw-away development, test, and
@@ -95,7 +95,13 @@ wendy-agent-dev() {
 > on personal machines if you carefully review the plan and choose only the
 > options you actually want.
 
-To download and run the interactive setup script directly:
+Recommended flow: finish the OS first-run setup, enable the platform remote UI
+feature you need (Screen Sharing, Remote Desktop, etc.), connect remotely, and
+run the setup script from that session. When prompted, paste your public SSH keys
+into `authorized_keys` to enable passwordless SSH for future work, including AI
+coding agents.
+
+Run the interactive setup script directly:
 
 macOS:
 
@@ -115,48 +121,10 @@ Windows 11, from an elevated PowerShell session:
 $script = "$env:TEMP\set-up-windows.ps1"; iwr -UseBasicParsing https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-windows.ps1 -OutFile $script; powershell -ExecutionPolicy Bypass -File $script; Remove-Item $script
 ```
 
-#### macOS setup script
-
-For macOS development machines, this repository includes an interactive Homebrew
-setup script:
-
-```sh
-./utilities/set-up-macos.sh
-```
-
-It installs common development packages including Git and Xcode Command Line
-Tools, configures Bonjour/mDNS, installs the Swift toolchain requested by
-`.swift-version`, prints manual steps for Xcode, SSH, Screen Sharing, and
-automatic login, and optionally configures `direnv`, the Wendy CLI, the macOS
-agent app, and a local clone of this repository.
-
-#### Ubuntu setup script
-
-For Ubuntu development devices, this repository includes an interactive setup
-script:
-
-```sh
-./utilities/set-up-ubuntu.sh
-```
-
-It installs common development packages including Git, configures mDNS, installs
-the Swift toolchain requested by `.swift-version`, and optionally configures SSH,
-automatic login, `direnv`, the Wendy CLI, `wendy-agent`, and a local clone of
-this repository.
-
-#### Windows setup script
-
-For Windows 11 development machines, run the interactive setup script from an
-elevated PowerShell session:
-
-```powershell
-cd .\utilities
-powershell -ExecutionPolicy Bypass -File .\set-up-windows.ps1
-```
-
-It installs common development packages including Git and GNU Make, configures
-local discovery, and optionally configures SSH, automatic sign-in, `direnv`, the
-Swift toolchain, and a local clone of this repository.
+The scripts install common development tools including Git, configure local
+discovery, and can optionally configure SSH keys, `direnv`, Swift, the Wendy CLI,
+a local clone of this repository, and platform-specific conveniences such as
+remote access, automatic login, and `wendy-agent` where supported.
 
 ## Setting Up the Device
 
