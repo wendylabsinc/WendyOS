@@ -373,10 +373,15 @@ function Add-WindowsCapabilityWithProgress {
     [Parameter(Mandatory)][string]$DisplayName
   )
 
-  $capability = Get-WindowsCapability -Online -Name $Name
-  if ($capability.State -eq 'Installed') {
-    Write-Ok "$DisplayName is already installed"
-    return
+  try {
+    $capability = Get-WindowsCapability -Online -Name $Name
+    if ($capability.State -eq 'Installed') {
+      Write-Ok "$DisplayName is already installed"
+      return
+    }
+  } catch {
+    Write-Warn "Could not query Windows capability $Name with Get-WindowsCapability: $($_.Exception.Message)"
+    Write-Warn 'Falling back to dism.exe /Add-Capability.'
   }
 
   Write-Host "Installing Windows capability $Name ($DisplayName)"
