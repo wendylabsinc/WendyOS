@@ -20,6 +20,7 @@ const netAdapterPowershell = `Get-NetAdapter | ForEach-Object {
   $adapter = $_
   $ip = (Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
   [PSCustomObject]@{
+    InterfaceIndex = $adapter.ifIndex
     Name = $adapter.Name
     InterfaceDescription = $adapter.InterfaceDescription
     MacAddress = $adapter.MacAddress
@@ -29,6 +30,7 @@ const netAdapterPowershell = `Get-NetAdapter | ForEach-Object {
 } | ConvertTo-Json -Compress`
 
 type netAdapterEntry struct {
+	InterfaceIndex       int    `json:"InterfaceIndex"`
 	Name                 string `json:"Name"`
 	InterfaceDescription string `json:"InterfaceDescription"`
 	MacAddress           string `json:"MacAddress"`
@@ -40,18 +42,30 @@ type netAdapterEntry struct {
 // and returns those whose Name or InterfaceDescription contains "Wendy"
 // (case-insensitive), matching the linux/darwin filter convention.
 func discoverEthernet(ctx context.Context) ([]models.EthernetInterface, error) {
+	entries, err := readNetAdapterEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ethernetInterfacesFromNetAdapterEntries(entries), nil
+}
+
+func readNetAdapterEntries(ctx context.Context) ([]netAdapterEntry, error) {
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", netAdapterPowershell)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("running Get-NetAdapter: %w", err)
 	}
-	return parseNetAdapterJSON(string(out)), nil
+	return parseNetAdapterEntriesJSON(string(out)), nil
 }
 
 // parseNetAdapterJSON parses the ConvertTo-Json output produced by
 // netAdapterPowershell and filters for Wendy interfaces. PowerShell omits the
 // outer array when there is exactly one result, so we normalize.
 func parseNetAdapterJSON(jsonOut string) []models.EthernetInterface {
+	return ethernetInterfacesFromNetAdapterEntries(parseNetAdapterEntriesJSON(jsonOut))
+}
+
+func parseNetAdapterEntriesJSON(jsonOut string) []netAdapterEntry {
 	trimmed := strings.TrimSpace(jsonOut)
 	if trimmed == "" {
 		return nil
@@ -64,7 +78,10 @@ func parseNetAdapterJSON(jsonOut string) []models.EthernetInterface {
 	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
 		return nil
 	}
+	return entries
+}
 
+func ethernetInterfacesFromNetAdapterEntries(entries []netAdapterEntry) []models.EthernetInterface {
 	var devices []models.EthernetInterface
 	for _, e := range entries {
 		nameL := strings.ToLower(e.Name + " " + e.InterfaceDescription)

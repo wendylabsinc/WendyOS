@@ -4,6 +4,7 @@ package discovery
 
 import (
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/mdns"
@@ -83,6 +84,8 @@ func TestParseAvahiResolveLine(t *testing.T) {
 		wantIP     string
 		wantPort   int
 		wantIsMTLS bool
+		wantIface  string
+		wantUSB    string
 	}{
 		{
 			name:       "valid resolved line with link-local IPv6",
@@ -92,6 +95,8 @@ func TestParseAvahiResolveLine(t *testing.T) {
 			wantIP:     "fe80::ffab:7cf6:ef:21c5%enp0s20f0u9",
 			wantPort:   50051,
 			wantIsMTLS: false,
+			wantIface:  "enp0s20f0u9",
+			wantUSB:    "enp0s20f0u9",
 		},
 		{
 			name:       "provisioned device with tls=true sets IsMTLS",
@@ -101,22 +106,25 @@ func TestParseAvahiResolveLine(t *testing.T) {
 			wantIP:     "192.168.1.20",
 			wantPort:   50052,
 			wantIsMTLS: true,
+			wantIface:  "eth0",
 		},
 		{
-			name:     "global IPv6 does not get zone ID",
-			line:     `=;eth0;IPv6;WendyOS\032device;_wendyos._udp;local;wendyos.local;2001:db8::1;50051;"wendyosdevice=abc123"`,
-			wantOK:   true,
-			wantID:   "abc123",
-			wantIP:   "2001:db8::1",
-			wantPort: 50051,
+			name:      "global IPv6 does not get zone ID",
+			line:      `=;eth0;IPv6;WendyOS\032device;_wendyos._udp;local;wendyos.local;2001:db8::1;50051;"wendyosdevice=abc123"`,
+			wantOK:    true,
+			wantID:    "abc123",
+			wantIP:    "2001:db8::1",
+			wantPort:  50051,
+			wantIface: "eth0",
 		},
 		{
-			name:     "IPv4 does not get zone ID",
-			line:     `=;eth0;IPv4;WendyOS\032device;_wendyos._udp;local;wendyos.local;192.168.1.10;50051;"wendyosdevice=abc123"`,
-			wantOK:   true,
-			wantID:   "abc123",
-			wantIP:   "192.168.1.10",
-			wantPort: 50051,
+			name:      "IPv4 does not get zone ID",
+			line:      `=;eth0;IPv4;WendyOS\032device;_wendyos._udp;local;wendyos.local;192.168.1.10;50051;"wendyosdevice=abc123"`,
+			wantOK:    true,
+			wantID:    "abc123",
+			wantIP:    "192.168.1.10",
+			wantPort:  50051,
+			wantIface: "eth0",
 		},
 		{
 			name:   "browse line (not resolved)",
@@ -155,6 +163,12 @@ func TestParseAvahiResolveLine(t *testing.T) {
 			}
 			if dev.IsMTLS != tt.wantIsMTLS {
 				t.Fatalf("IsMTLS = %v, want %v", dev.IsMTLS, tt.wantIsMTLS)
+			}
+			if dev.NetworkInterface != tt.wantIface {
+				t.Fatalf("NetworkInterface = %q, want %q", dev.NetworkInterface, tt.wantIface)
+			}
+			if tt.wantUSB != "" && !strings.HasPrefix(dev.USB, tt.wantUSB) {
+				t.Fatalf("USB = %q, want prefix %q", dev.USB, tt.wantUSB)
 			}
 			if !dev.IsWendyDevice {
 				t.Fatal("IsWendyDevice = false, want true")

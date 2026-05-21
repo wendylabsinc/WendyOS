@@ -440,6 +440,7 @@ func TestDiscoverCollectionJSON_AllArraysPresent(t *testing.T) {
 				IPAddress:     "192.168.1.10",
 				Port:          50051,
 				InterfaceType: "lan",
+				USB:           "enp0s20f0u9 480 Mbps",
 				IsWendyDevice: true,
 				AgentVersion:  "2026.01.01-120000",
 			},
@@ -498,13 +499,16 @@ func TestDiscoverCollectionJSON_AllArraysPresent(t *testing.T) {
 	// Verify LAN device fields.
 	lanArr := parsed["lanDevices"].([]interface{})
 	lan0 := lanArr[0].(map[string]interface{})
-	for _, f := range []string{"id", "displayName", "hostname", "ipAddress", "port", "isWendyDevice"} {
+	for _, f := range []string{"id", "displayName", "hostname", "ipAddress", "port", "usb", "isWendyDevice"} {
 		if _, ok := lan0[f]; !ok {
 			t.Errorf("lanDevices[0] missing field %q", f)
 		}
 	}
 	if lan0["ipAddress"] != "192.168.1.10" {
 		t.Errorf("lanDevices[0].ipAddress = %v; want 192.168.1.10", lan0["ipAddress"])
+	}
+	if lan0["usb"] != "enp0s20f0u9 480 Mbps" {
+		t.Errorf("lanDevices[0].usb = %v; want enp0s20f0u9 480 Mbps", lan0["usb"])
 	}
 
 	// Verify Bluetooth device fields.

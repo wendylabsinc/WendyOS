@@ -20,7 +20,7 @@ func TestLANDeviceFromMDNSEntryPrefersIPv4AndParsesTXT(t *testing.T) {
 		InfoFields: []string{"id=agent-id", "displayname=Prudent Lark", "tls=true"},
 	}
 
-	dev, ok := lanDeviceFromMDNSEntry(entry, nil)
+	dev, ok := lanDeviceFromMDNSEntry(entry, nil, windowsNetworkAdapterLookup{})
 	if !ok {
 		t.Fatal("lanDeviceFromMDNSEntry returned false")
 	}
@@ -59,7 +59,7 @@ func TestLANDeviceFromMDNSEntryUsesWendyOSDeviceID(t *testing.T) {
 		InfoFields: []string{"id=display-id", "wendyosdevice=device-id"},
 	}
 
-	dev, ok := lanDeviceFromMDNSEntry(entry, nil)
+	dev, ok := lanDeviceFromMDNSEntry(entry, nil, windowsNetworkAdapterLookup{})
 	if !ok {
 		t.Fatal("lanDeviceFromMDNSEntry returned false")
 	}
@@ -77,7 +77,7 @@ func TestLANDeviceFromMDNSEntryAddsIPv6LinkLocalZone(t *testing.T) {
 		Port:   50051,
 	}
 
-	dev, ok := lanDeviceFromMDNSEntry(entry, iface)
+	dev, ok := lanDeviceFromMDNSEntry(entry, iface, windowsNetworkAdapterLookup{})
 	if !ok {
 		t.Fatal("lanDeviceFromMDNSEntry returned false")
 	}
@@ -96,7 +96,7 @@ func TestLANDeviceFromMDNSEntryDoesNotZoneGlobalIPv6(t *testing.T) {
 		Port:   50051,
 	}
 
-	dev, ok := lanDeviceFromMDNSEntry(entry, iface)
+	dev, ok := lanDeviceFromMDNSEntry(entry, iface, windowsNetworkAdapterLookup{})
 	if !ok {
 		t.Fatal("lanDeviceFromMDNSEntry returned false")
 	}
@@ -112,7 +112,7 @@ func TestLANDeviceFromMDNSEntryFiltersWrongService(t *testing.T) {
 		Port: 1234,
 	}
 
-	_, ok := lanDeviceFromMDNSEntry(entry, nil)
+	_, ok := lanDeviceFromMDNSEntry(entry, nil, windowsNetworkAdapterLookup{})
 	if ok {
 		t.Fatal("lanDeviceFromMDNSEntry returned true for wrong service")
 	}
@@ -163,6 +163,35 @@ func TestParseNetAdapterJSONFiltersWendyByName(t *testing.T) {
 	}
 	if got[0] != want {
 		t.Fatalf("got %#v, want %#v", got[0], want)
+	}
+}
+
+func TestLANDeviceFromMDNSEntryUsesWindowsAdapterMetadataForUSB(t *testing.T) {
+	iface := &net.Interface{Index: 12, Name: "Ethernet 3"}
+	entry := &mdns.ServiceEntry{
+		Name:       "wendyos-prudent-lark._wendyos._udp.local.",
+		Host:       "wendyos-prudent-lark.local.",
+		AddrV4:     net.ParseIP("169.254.249.48"),
+		Port:       50051,
+		InfoFields: []string{"id=agent-id", "displayname=Prudent Lark"},
+	}
+	adapterLookup := windowsNetworkAdapterLookupFromEntries([]netAdapterEntry{{
+		InterfaceIndex:       12,
+		Name:                 "Ethernet 3",
+		InterfaceDescription: "Remote NDIS Compatible Device",
+		LinkSpeed:            "425 Mbps",
+	}})
+
+	dev, ok := lanDeviceFromMDNSEntry(entry, iface, adapterLookup)
+	if !ok {
+		t.Fatal("lanDeviceFromMDNSEntry returned false")
+	}
+	if dev.NetworkInterface != "Ethernet 3" {
+		t.Fatalf("NetworkInterface = %q, want Ethernet 3", dev.NetworkInterface)
+	}
+	wantUSB := "Remote NDIS Compatible Device (Ethernet 3) 425 Mbps"
+	if dev.USB != wantUSB {
+		t.Fatalf("USB = %q, want %q", dev.USB, wantUSB)
 	}
 }
 

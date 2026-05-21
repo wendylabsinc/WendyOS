@@ -15,6 +15,7 @@ type PickerItem struct {
 	Name        string
 	Description string // optional secondary text rendered dimmed
 	Type        string // "LAN", "Bluetooth", "External", etc.
+	USB         string // non-empty when the device is connected over USB
 	Address     string
 
 	// DedupKey is used for deduplication. If empty, Name is used.
@@ -284,6 +285,17 @@ var pickerColumnDefs = []pickerColumnDef{
 		},
 	},
 	{
+		title:    "USB",
+		minWidth: 5,
+		maxWidth: 5,
+		value: func(item PickerItem) string {
+			if item.USB == "" {
+				return ""
+			}
+			return "Yes"
+		},
+	},
+	{
 		title:    "Address",
 		minWidth: 14,
 		maxWidth: 28,
@@ -341,29 +353,7 @@ func (m *PickerModel) refreshTableWithCursorKey(cursorKey string) {
 	}
 
 	hasDefaultCol := m.OnSetDefault != nil
-	activeCols := pickerActiveColumns(m.items)
-	rows := pickerRows(m.items, activeCols, m.DefaultKey, hasDefaultCol)
-
-	var cols []bubbleTable.Column
-	if hasDefaultCol {
-		// Leading ★ column, then the data columns (offset by 1 in rows).
-		cols = append(cols, bubbleTable.Column{Title: "", Width: 3})
-		for i, def := range activeCols {
-			colIdx := i + 1 // rows have the star column at index 0
-			width := lipgloss.Width(def.title)
-			for _, row := range rows {
-				if colIdx < len(row) {
-					width = max(width, lipgloss.Width(row[colIdx]))
-				}
-			}
-			width += 2
-			width = max(width, def.minWidth)
-			width = min(width, def.maxWidth)
-			cols = append(cols, bubbleTable.Column{Title: def.title, Width: width})
-		}
-	} else {
-		cols = pickerColumns(rows, activeCols)
-	}
+	cols, rows := PickerTableData(m.items, m.DefaultKey, hasDefaultCol)
 	m.table.SetRows(nil)
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
@@ -384,8 +374,8 @@ func (m *PickerModel) refreshTableWithCursorKey(cursorKey string) {
 		}
 	}
 
-	m.table.SetWidth(pickerTableWidth(m.table.Columns()))
-	m.table.SetHeight(pickerTableHeight(len(rows), m.height))
+	m.table.SetWidth(PickerTableWidth(m.table.Columns()))
+	m.table.SetHeight(PickerTableHeight(len(rows), m.height))
 }
 
 // pickerItemKey returns the dedup key for an item (DedupKey, or Name if empty).
@@ -411,6 +401,13 @@ func pickerActiveColumns(items []PickerItem) []pickerColumnDef {
 		}
 	}
 	return active
+}
+
+// PickerTableData builds the shared picker table columns and rows for items.
+func PickerTableData(items []PickerItem, defaultKey string, hasDefaultCol bool) ([]bubbleTable.Column, []bubbleTable.Row) {
+	activeCols := pickerActiveColumns(items)
+	rows := pickerRows(items, activeCols, defaultKey, hasDefaultCol)
+	return pickerColumns(rows, activeCols, hasDefaultCol), rows
 }
 
 func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string, hasDefaultCol bool) []bubbleTable.Row {
@@ -441,25 +438,32 @@ func pickerRows(items []PickerItem, cols []pickerColumnDef, defaultKey string, h
 	return rows
 }
 
-func pickerColumns(rows []bubbleTable.Row, defs []pickerColumnDef) []bubbleTable.Column {
-	cols := make([]bubbleTable.Column, len(defs))
+func pickerColumns(rows []bubbleTable.Row, defs []pickerColumnDef, hasDefaultCol bool) []bubbleTable.Column {
+	cols := make([]bubbleTable.Column, 0, len(defs)+1)
+	offset := 0
+	if hasDefaultCol {
+		cols = append(cols, bubbleTable.Column{Title: "", Width: 3})
+		offset = 1
+	}
 	for i, def := range defs {
 		width := lipgloss.Width(def.title)
 		for _, row := range rows {
-			if i >= len(row) {
+			rowIdx := i + offset
+			if rowIdx >= len(row) {
 				continue
 			}
-			width = max(width, lipgloss.Width(row[i]))
+			width = max(width, lipgloss.Width(row[rowIdx]))
 		}
 		width += 2
 		width = max(width, def.minWidth)
 		width = min(width, def.maxWidth)
-		cols[i] = bubbleTable.Column{Title: def.title, Width: width}
+		cols = append(cols, bubbleTable.Column{Title: def.title, Width: width})
 	}
 	return cols
 }
 
-func pickerTableWidth(cols []bubbleTable.Column) int {
+// PickerTableWidth returns the rendered width for picker table columns.
+func PickerTableWidth(cols []bubbleTable.Column) int {
 	total := 0
 	for _, col := range cols {
 		total += col.Width + 2
@@ -467,7 +471,8 @@ func pickerTableWidth(cols []bubbleTable.Column) int {
 	return total
 }
 
-func pickerTableHeight(rowCount, windowHeight int) int {
+// PickerTableHeight returns the picker table height for the row count/window.
+func PickerTableHeight(rowCount, windowHeight int) int {
 	height := max(rowCount+1, 4)
 	if windowHeight > 0 {
 		return min(height, max(windowHeight-5, 4))

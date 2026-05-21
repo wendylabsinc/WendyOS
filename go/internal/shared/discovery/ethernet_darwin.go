@@ -16,40 +16,9 @@ import (
 // discoverEthernet enumerates network interfaces on macOS and returns those
 // whose display name or BSD name contains "Wendy" (USB-Ethernet gadget mode).
 func discoverEthernet(ctx context.Context) ([]models.EthernetInterface, error) {
-	// networksetup -listallhardwareports gives us display names mapped to BSD names.
-	// Output format:
-	//   Hardware Port: <display name>
-	//   Device: <bsd name>
-	//   Ethernet Address: <mac>
-	cmd := exec.CommandContext(ctx, "networksetup", "-listallhardwareports")
-	out, err := cmd.Output()
+	ports, err := darwinHardwarePorts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("running networksetup: %w", err)
-	}
-
-	type hwPort struct {
-		displayName string
-		bsdName     string
-		macAddress  string
-	}
-
-	var ports []hwPort
-	var current hwPort
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		switch {
-		case strings.HasPrefix(line, "Hardware Port:"):
-			current = hwPort{displayName: strings.TrimPrefix(line, "Hardware Port: ")}
-		case strings.HasPrefix(line, "Device:"):
-			current.bsdName = strings.TrimSpace(strings.TrimPrefix(line, "Device:"))
-		case strings.HasPrefix(line, "Ethernet Address:"):
-			current.macAddress = strings.TrimSpace(strings.TrimPrefix(line, "Ethernet Address:"))
-			if current.bsdName != "" {
-				ports = append(ports, current)
-			}
-			current = hwPort{}
-		}
+		return nil, err
 	}
 
 	// Filter for Wendy interfaces.
@@ -76,6 +45,61 @@ func discoverEthernet(ctx context.Context) ([]models.EthernetInterface, error) {
 		devices = append(devices, iface)
 	}
 	return devices, nil
+}
+
+type darwinHardwarePort struct {
+	displayName string
+	bsdName     string
+	macAddress  string
+}
+
+func darwinHardwarePorts(ctx context.Context) ([]darwinHardwarePort, error) {
+	cmd := exec.CommandContext(ctx, "networksetup", "-listallhardwareports")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("running networksetup: %w", err)
+	}
+	return parseDarwinHardwarePorts(string(out)), nil
+}
+
+func parseDarwinHardwarePorts(output string) []darwinHardwarePort {
+	var ports []darwinHardwarePort
+	var current darwinHardwarePort
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		switch {
+		case strings.HasPrefix(line, "Hardware Port:"):
+			current = darwinHardwarePort{displayName: strings.TrimSpace(strings.TrimPrefix(line, "Hardware Port:"))}
+		case strings.HasPrefix(line, "Device:"):
+			current.bsdName = strings.TrimSpace(strings.TrimPrefix(line, "Device:"))
+		case strings.HasPrefix(line, "Ethernet Address:"):
+			current.macAddress = strings.TrimSpace(strings.TrimPrefix(line, "Ethernet Address:"))
+			if current.bsdName != "" {
+				ports = append(ports, current)
+			}
+			current = darwinHardwarePort{}
+		}
+	}
+	return ports
+}
+
+func darwinInterfaceDisplayNameMap(ctx context.Context) map[string]string {
+	ports, err := darwinHardwarePorts(ctx)
+	if err != nil {
+		return nil
+	}
+	return darwinDisplayNamesByInterface(ports)
+}
+
+func darwinDisplayNamesByInterface(ports []darwinHardwarePort) map[string]string {
+	names := make(map[string]string, len(ports))
+	for _, port := range ports {
+		if port.bsdName != "" {
+			names[port.bsdName] = port.displayName
+		}
+	}
+	return names
 }
 
 func getInterfaceIP(ctx context.Context, bsdName string) string {

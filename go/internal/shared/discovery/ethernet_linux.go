@@ -49,18 +49,7 @@ func discoverEthernet(_ context.Context) ([]models.EthernetInterface, error) {
 			}
 		}
 
-		// Read link speed (in Mbps, -1 if link is down).
-		if data, err := os.ReadFile(filepath.Join(sysClassNet, name, "speed")); err == nil {
-			speedStr := strings.TrimSpace(string(data))
-			var mbps int
-			if _, scanErr := fmt.Sscanf(speedStr, "%d", &mbps); scanErr == nil && mbps > 0 {
-				if mbps >= 1000 {
-					iface.LinkSpeed = fmt.Sprintf("%d Gbps", mbps/1000)
-				} else {
-					iface.LinkSpeed = fmt.Sprintf("%d Mbps", mbps)
-				}
-			}
-		}
+		iface.LinkSpeed = linuxInterfaceLinkSpeed(name)
 
 		// Read IP address via Go's net package.
 		if netIface, err := net.InterfaceByName(name); err == nil {
@@ -77,4 +66,21 @@ func discoverEthernet(_ context.Context) ([]models.EthernetInterface, error) {
 		devices = append(devices, iface)
 	}
 	return devices, nil
+}
+
+func linuxInterfaceLinkSpeed(name string) string {
+	data, err := os.ReadFile(filepath.Join(sysClassNet, name, "speed"))
+	if err != nil {
+		return ""
+	}
+
+	speedStr := strings.TrimSpace(string(data))
+	var mbps int
+	if _, scanErr := fmt.Sscanf(speedStr, "%d", &mbps); scanErr != nil || mbps <= 0 {
+		return ""
+	}
+	if mbps >= 1000 {
+		return fmt.Sprintf("%d Gbps", mbps/1000)
+	}
+	return fmt.Sprintf("%d Mbps", mbps)
 }
