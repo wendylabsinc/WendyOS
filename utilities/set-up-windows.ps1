@@ -18,6 +18,7 @@ $ProgressPreference = 'SilentlyContinue'
 $TraceCommands = if ($env:TRACE_COMMANDS) { $env:TRACE_COMMANDS } else { '1' }
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir '..')).Path
+$WendyRepoUrl = if ($env:WENDY_REPO_URL) { $env:WENDY_REPO_URL } else { 'https://github.com/wendylabsinc/wendy-agent.git' }
 $CurrentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
 $CurrentPrincipal = [System.Security.Principal.WindowsPrincipal]::new($CurrentIdentity)
 $CurrentUser = $CurrentIdentity.Name
@@ -33,6 +34,8 @@ $script:InstallVisualStudioBuildTools = $true
 $script:InstallSwiftToolchain = $true
 $script:InstallWendyCli = $false
 $script:InstallDirenv = $false
+$script:CloneRepository = $false
+$script:CloneDestination = ''
 $script:EnableSshLogin = $false
 $script:SetupAutomaticLogin = $false
 $script:AutomaticLoginPassword = $null
@@ -136,6 +139,13 @@ without creating duplicates.
   $script:InstallSwiftToolchain = Ask-YesNo 'Install the Swift toolchain?' $true
   $script:InstallDirenv = Ask-YesNo 'Install and configure direnv for repository-local developer tooling?' $false
   $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $false
+  if (Ask-YesNo 'Clone the Wendy repository onto this machine?' $false) {
+    $script:CloneRepository = $true
+    $defaultCloneDestination = Join-Path (Join-Path (Join-Path $UserProfile 'Projects') 'WendyLabs') 'wendy-agent'
+    $cloneDestination = Read-Host "Clone destination [$defaultCloneDestination]"
+    if ([string]::IsNullOrWhiteSpace($cloneDestination)) { $cloneDestination = $defaultCloneDestination }
+    $script:CloneDestination = $cloneDestination
+  }
   $script:EnableDeveloperMode = Ask-YesNo 'Enable Windows Developer Mode?' $false
   if (Ask-YesNo 'Enable automatic Windows sign-in on startup? This stores your password in the registry.' $false) {
     $script:SetupAutomaticLogin = $true
@@ -176,6 +186,7 @@ function Confirm-Plan {
   $direnvSummary = if ($script:InstallDirenv) { 'direnv will be installed and its PowerShell hook will be configured' } else { 'direnv will not be installed or configured' }
   $sshSummary = if ($script:EnableSshLogin) { 'SSH login via OpenSSH Server will be enabled' } else { 'SSH login will not be changed' }
   $autoLoginSummary = if ($script:SetupAutomaticLogin) { 'Automatic Windows sign-in will be enabled; the password will be stored in the registry' } else { 'Automatic Windows sign-in will not be changed' }
+  $cloneSummary = if ($script:CloneRepository) { "$WendyRepoUrl will be cloned to $($script:CloneDestination)" } else { 'Wendy repository will not be cloned' }
 
   Write-Host @"
 
@@ -196,6 +207,7 @@ This script will configure this machine by doing the following:
       $developerModeSummary
       Network discovery services and mDNS firewall rules will be enabled
       $autoLoginSummary
+      $cloneSummary
       $rdpSummary
       $terminalSummary
       $sshShellSummary
@@ -740,6 +752,35 @@ function Set-JsonTopLevelStringProperty {
   Set-Content -Path $Path -Encoding utf8 -Value $settings
 }
 
+function Clone-Repository {
+  if (-not $script:CloneRepository) {
+    Write-Ok 'Wendy repository not cloned'
+    return
+  }
+
+  Write-Info 'Cloning Wendy repository'
+  Update-ProcessPath
+
+  $parent = Split-Path -Parent $script:CloneDestination
+  if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+
+  if (Test-Path (Join-Path $script:CloneDestination '.git')) {
+    Write-Ok "Wendy repository already exists at $($script:CloneDestination)"
+    return
+  }
+
+  if (Test-Path $script:CloneDestination) {
+    $existing = @(Get-ChildItem -LiteralPath $script:CloneDestination -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($existing.Count -gt 0) {
+      Write-Warn "$($script:CloneDestination) exists and is not an empty git checkout; skipping clone."
+      return
+    }
+  }
+
+  Invoke-External 'git' @('clone', $WendyRepoUrl, $script:CloneDestination)
+  Write-Ok "Wendy repository cloned to $($script:CloneDestination)"
+}
+
 function Configure-WindowsTerminalDefaultPowerShell {
   if (-not $script:ConfigureTerminalDefaultPowerShell) {
     Write-Ok 'Windows Terminal default profile not changed'
@@ -1045,6 +1086,7 @@ function Main {
   Configure-SshKeys
   Test-LocalSshEndpoint
   Install-Packages
+  Clone-Repository
   Configure-WindowsTerminalDefaultPowerShell
   Configure-SshDefaultPowerShell
   Install-GnuMake

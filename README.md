@@ -118,10 +118,10 @@ setup script:
 ./utilities/set-up-macos.sh
 ```
 
-It installs common development packages including Xcode Command Line Tools,
-configures Bonjour/mDNS, installs the Swift toolchain requested by
+It installs common development packages including Git and Xcode Command Line
+Tools, configures Bonjour/mDNS, installs the Swift toolchain requested by
 `.swift-version`, and optionally configures SSH, automatic login, `direnv`, the
-Wendy CLI, and the macOS agent app.
+Wendy CLI, the macOS agent app, and a local clone of this repository.
 
 #### Ubuntu setup script
 
@@ -132,9 +132,10 @@ script:
 ./utilities/set-up-ubuntu.sh
 ```
 
-It installs common development packages, configures mDNS, installs the Swift
-toolchain requested by `.swift-version`, and optionally configures SSH,
-automatic login, `direnv`, the Wendy CLI, and `wendy-agent`.
+It installs common development packages including Git, configures mDNS, installs
+the Swift toolchain requested by `.swift-version`, and optionally configures SSH,
+automatic login, `direnv`, the Wendy CLI, `wendy-agent`, and a local clone of
+this repository.
 
 #### Windows setup script
 
@@ -146,9 +147,9 @@ cd .\utilities
 powershell -ExecutionPolicy Bypass -File .\set-up-windows.ps1
 ```
 
-It installs common development packages including GNU Make, configures local
-discovery, and optionally configures SSH, automatic sign-in, `direnv`, and the
-Swift toolchain.
+It installs common development packages including Git and GNU Make, configures
+local discovery, and optionally configures SSH, automatic sign-in, `direnv`, the
+Swift toolchain, and a local clone of this repository.
 
 ## Setting Up the Device
 

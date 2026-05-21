@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 readonly TRACE_COMMANDS="${TRACE_COMMANDS:-1}"
 readonly WENDY_RAW_BASE="${WENDY_RAW_BASE:-https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main}"
+readonly WENDY_REPO_URL="${WENDY_REPO_URL:-https://github.com/wendylabsinc/wendy-agent.git}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
@@ -26,6 +27,8 @@ INSTALL_WENDY_AGENT=0
 INSTALL_SWIFT_TOOLCHAIN=1
 INSTALL_BUILD_TOOLS=1
 INSTALL_DIRENV=0
+CLONE_REPOSITORY=0
+CLONE_DESTINATION=""
 ENABLE_SCREEN_SHARING=0
 DISABLE_AC_SLEEP=0
 DISABLE_SCREEN_LOCKING=0
@@ -184,6 +187,16 @@ EOF
     INSTALL_DIRENV=0
   fi
 
+  if ask_yes_no "Clone the Wendy repository onto this Mac?" "n"; then
+    CLONE_REPOSITORY=1
+    local default_clone_destination="${USER_HOME}/Projects/WendyLabs/wendy-agent"
+    printf 'Clone destination [%s]: ' "$default_clone_destination"
+    read -r CLONE_DESTINATION
+    CLONE_DESTINATION="${CLONE_DESTINATION:-$default_clone_destination}"
+  else
+    CLONE_REPOSITORY=0
+  fi
+
   if ask_yes_no "Install the Swift toolchain requested by .swift-version using Homebrew swiftly?" "y"; then
     INSTALL_SWIFT_TOOLCHAIN=1
   else
@@ -223,7 +236,7 @@ EOF
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary swift_summary build_tools_summary direnv_summary
-  local ssh_summary auto_login_summary wendy_cli_summary wendy_agent_summary screen_sharing_summary sleep_summary lock_summary
+  local ssh_summary auto_login_summary clone_summary wendy_cli_summary wendy_agent_summary screen_sharing_summary sleep_summary lock_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
@@ -265,6 +278,12 @@ confirm_plan() {
     swift_summary="Swift will be installed using Homebrew swiftly and ${REPO_ROOT}/.swift-version when available"
   else
     swift_summary="Swift toolchain installation will be skipped"
+  fi
+
+  if (( CLONE_REPOSITORY )); then
+    clone_summary="${WENDY_REPO_URL} will be cloned to ${CLONE_DESTINATION}"
+  else
+    clone_summary="Wendy repository will not be cloned"
   fi
 
   if (( INSTALL_WENDY_CLI )); then
@@ -312,6 +331,7 @@ This script will configure this Mac by doing the following:
       Homebrew packages: git, curl, go, Neovim, and swiftly.
       ${direnv_summary}
       ${swift_summary}
+      ${clone_summary}
       ${wendy_cli_summary}
       ${wendy_agent_summary}
 
@@ -525,6 +545,31 @@ install_swift_toolchain() {
   fi
   swift --version | head -n 1
   ok "Swift toolchain is available"
+}
+
+clone_repository() {
+  if (( ! CLONE_REPOSITORY )); then
+    ok "Wendy repository not cloned"
+    return 0
+  fi
+
+  info "Cloning Wendy repository"
+  local parent_dir
+  parent_dir="$(dirname "$CLONE_DESTINATION")"
+  mkdir -p "$parent_dir"
+
+  if [[ -d "$CLONE_DESTINATION/.git" ]]; then
+    ok "Wendy repository already exists at ${CLONE_DESTINATION}"
+    return 0
+  fi
+
+  if [[ -e "$CLONE_DESTINATION" ]] && [[ -n "$(find "$CLONE_DESTINATION" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)" ]]; then
+    warn "${CLONE_DESTINATION} exists and is not an empty git checkout; skipping clone."
+    return 0
+  fi
+
+  git clone "$WENDY_REPO_URL" "$CLONE_DESTINATION"
+  ok "Wendy repository cloned to ${CLONE_DESTINATION}"
 }
 
 configure_editor() {
@@ -819,6 +864,7 @@ main() {
   install_homebrew
   configure_homebrew_shellenv
   install_packages
+  clone_repository
   install_swift_toolchain
   configure_editor
   configure_direnv
