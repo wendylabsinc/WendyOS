@@ -28,6 +28,9 @@ ENABLE_SSH_LOGIN=0
 INSTALL_DIRENV=0
 INSTALL_WENDY_CLI=0
 INSTALL_WENDY_AGENT=0
+SETUP_GITHUB_RUNNER=0
+GITHUB_RUNNER_DIR="${USER_HOME}/.github/actions-runner"
+GITHUB_RUNNER_RUN_MODE="manual"
 CLONE_REPOSITORY=0
 CLONE_DESTINATION=""
 SETUP_AUTO_LOGIN=0
@@ -224,6 +227,29 @@ EOF
     INSTALL_WENDY_AGENT=0
   fi
 
+  if ask_yes_no "Install GitHub Actions self-hosted runner?" "n"; then
+    SETUP_GITHUB_RUNNER=1
+    local default_runner_dir="~/.github/actions-runner/"
+    printf 'GitHub runner install location [%s]: ' "$default_runner_dir"
+    read -r GITHUB_RUNNER_DIR
+    GITHUB_RUNNER_DIR="${GITHUB_RUNNER_DIR:-$default_runner_dir}"
+    GITHUB_RUNNER_DIR="${GITHUB_RUNNER_DIR/#\~/$USER_HOME}"
+
+    while true; do
+      printf 'Run GitHub runner as headless service, user login session, or manual only? [manual/service/login] '
+      read -r GITHUB_RUNNER_RUN_MODE
+      GITHUB_RUNNER_RUN_MODE="${GITHUB_RUNNER_RUN_MODE:-manual}"
+      case "$GITHUB_RUNNER_RUN_MODE" in
+        service|daemon|headless) GITHUB_RUNNER_RUN_MODE="service"; break ;;
+        login|session|user) GITHUB_RUNNER_RUN_MODE="login"; break ;;
+        manual|nothing|none) GITHUB_RUNNER_RUN_MODE="manual"; break ;;
+        *) warn "Please answer service, login, or manual." ;;
+      esac
+    done
+  else
+    SETUP_GITHUB_RUNNER=0
+  fi
+
   if ask_yes_no "Enable automatic desktop login for ${CURRENT_USER} on startup?" "n"; then
     SETUP_AUTO_LOGIN=1
   else
@@ -250,7 +276,7 @@ EOF
 }
 
 confirm_plan() {
-  local passwordless_sudo_summary git_summary ssh_key_summary wendy_cli_summary wendy_agent_summary direnv_summary
+  local passwordless_sudo_summary git_summary ssh_key_summary wendy_cli_summary wendy_agent_summary github_runner_summary direnv_summary
   local ssh_summary ssh_package_summary loopback_ssh_summary auto_login_summary clone_summary remote_desktop_summary power_settings_summary manual_steps_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
@@ -289,6 +315,16 @@ confirm_plan() {
     wendy_agent_summary="wendy-agent will be installed using ${REPO_ROOT}/docs/agent.sh"
   else
     wendy_agent_summary="wendy-agent will not be installed"
+  fi
+
+  if (( SETUP_GITHUB_RUNNER )); then
+    case "$GITHUB_RUNNER_RUN_MODE" in
+      service) github_runner_summary="GitHub Actions runner will be installed at ${GITHUB_RUNNER_DIR} and set to run as a headless service after registration" ;;
+      login) github_runner_summary="GitHub Actions runner will be installed at ${GITHUB_RUNNER_DIR} and set to run in the user login session after registration" ;;
+      *) github_runner_summary="GitHub Actions runner will be installed at ${GITHUB_RUNNER_DIR} for manual runs" ;;
+    esac
+  else
+    github_runner_summary="GitHub Actions runner will not be installed"
   fi
 
   if (( CLONE_REPOSITORY )); then
@@ -359,6 +395,7 @@ This script will configure this machine by doing the following:
       ${clone_summary}
       ${wendy_cli_summary}
       ${wendy_agent_summary}
+      ${github_runner_summary}
       ${git_summary}
 
 sudo and other tools may ask for credentials when they need elevated access.
@@ -989,6 +1026,126 @@ install_wendy_agent() {
   ok "wendy-agent installation complete"
 }
 
+github_runner_asset_platform() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'linux-x64\n' ;;
+    aarch64|arm64) printf 'linux-arm64\n' ;;
+    armv7l|armv6l) printf 'linux-arm\n' ;;
+    *) fail "Unsupported Linux architecture for GitHub Actions runner: $(uname -m)" ;;
+  esac
+}
+
+github_runner_latest_tag() {
+  curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | awk -F '"' '/"tag_name"[[:space:]]*:/ { print $4; exit }'
+}
+
+github_runner_is_configured() {
+  [[ -f "$GITHUB_RUNNER_DIR/.runner" ]]
+}
+
+configure_github_runner_startup() {
+  case "$GITHUB_RUNNER_RUN_MODE" in
+    manual)
+      ok "GitHub Actions runner will be started manually"
+      ;;
+    service)
+      if ! github_runner_is_configured; then
+        warn "GitHub runner is installed but not registered. After running ./config.sh in ${GITHUB_RUNNER_DIR}, rerun this script or run: cd ${GITHUB_RUNNER_DIR} && sudo ./svc.sh install ${CURRENT_USER} && sudo ./svc.sh start"
+        return 0
+      fi
+      info "Configuring GitHub Actions runner as a headless service"
+      (cd "$GITHUB_RUNNER_DIR" && run_sudo ./svc.sh install "$CURRENT_USER" || true)
+      (cd "$GITHUB_RUNNER_DIR" && run_sudo ./svc.sh start)
+      ok "GitHub Actions runner service configured"
+      ;;
+    login)
+      if ! github_runner_is_configured; then
+        warn "GitHub runner is installed but not registered. After running ./config.sh in ${GITHUB_RUNNER_DIR}, rerun this script to enable login-session startup."
+        return 0
+      fi
+      info "Configuring GitHub Actions runner for the user login session"
+      local uid runtime_dir session_bus user_unit_dir wrapper unit_name
+      uid="$(id -u "$CURRENT_USER")"
+      runtime_dir="/run/user/${uid}"
+      session_bus="unix:path=${runtime_dir}/bus"
+      user_unit_dir="$USER_HOME/.config/systemd/user"
+      wrapper="$USER_HOME/.local/bin/github-actions-runner"
+      unit_name="github-actions-runner.service"
+
+      run_as_user install -d -m 0755 "$USER_HOME/.local/bin" "$user_unit_dir" "$user_unit_dir/default.target.wants"
+      run_as_user tee "$wrapper" >/dev/null <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+cd $(printf '%q' "$GITHUB_RUNNER_DIR")
+exec ./run.sh
+EOF
+      run_as_user chmod 0755 "$wrapper"
+      run_as_user tee "$user_unit_dir/$unit_name" >/dev/null <<EOF
+[Unit]
+Description=GitHub Actions self-hosted runner
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=${wrapper}
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
+EOF
+      run_as_user ln -sfn "../$unit_name" "$user_unit_dir/default.target.wants/$unit_name"
+
+      if [[ -S "${runtime_dir}/bus" ]]; then
+        run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" systemctl --user daemon-reload
+        run_as_user env XDG_RUNTIME_DIR="$runtime_dir" DBUS_SESSION_BUS_ADDRESS="$session_bus" systemctl --user enable --now "$unit_name"
+      else
+        warn "No active user session bus found; GitHub runner will start on the next login."
+      fi
+      ok "GitHub Actions runner login-session startup configured"
+      ;;
+  esac
+}
+
+install_github_runner() {
+  if (( ! SETUP_GITHUB_RUNNER )); then
+    ok "GitHub Actions runner not installed"
+    return 0
+  fi
+
+  info "Installing GitHub Actions self-hosted runner"
+  local platform
+  platform="$(github_runner_asset_platform)"
+
+  run_as_user bash -c '
+    set -Eeuo pipefail
+    runner_dir="$1"
+    platform="$2"
+    mkdir -p "$runner_dir"
+
+    if [[ ! -x "$runner_dir/bin/Runner.Listener" ]]; then
+      tag="$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | awk -F "\\\"" '\''/"tag_name"[[:space:]]*:/ { print $4; exit }'\'')"
+      [[ -n "$tag" ]] || { echo "Could not determine the latest GitHub Actions runner version." >&2; exit 1; }
+      version="${tag#v}"
+      archive="actions-runner-${platform}-${version}.tar.gz"
+      url="https://github.com/actions/runner/releases/download/${tag}/${archive}"
+      tmp_dir="$(mktemp -d)"
+      trap '\''rm -rf "$tmp_dir"'\'' EXIT
+      curl -fL "$url" -o "$tmp_dir/$archive"
+      tar -xzf "$tmp_dir/$archive" -C "$runner_dir"
+    fi
+
+    chmod +x "$runner_dir/config.sh" "$runner_dir/run.sh" 2>/dev/null || true
+  ' bash "$GITHUB_RUNNER_DIR" "$platform"
+
+  if [[ -x "$GITHUB_RUNNER_DIR/bin/installdependencies.sh" ]]; then
+    (cd "$GITHUB_RUNNER_DIR" && run_sudo ./bin/installdependencies.sh) || warn "Could not install optional GitHub runner dependencies automatically."
+  fi
+
+  configure_github_runner_startup
+  ok "GitHub Actions runner installed at ${GITHUB_RUNNER_DIR}"
+}
+
 configure_git() {
   if (( ! CONFIGURE_GIT )); then
     ok "git identity not changed"
@@ -1046,6 +1203,13 @@ EOF
     manual_step "  • Reboot or log out and back in once to verify automatic login,
     power, and screen-lock settings."
   fi
+
+  if (( SETUP_GITHUB_RUNNER )); then
+    manual_step "  • Register the GitHub Actions runner if it is not already registered:
+      cd "${GITHUB_RUNNER_DIR}"
+      ./config.sh --url https://github.com/OWNER/REPO --token TOKEN
+      Start it manually with ./run.sh, or rerun this setup script to enable the selected startup mode."
+  fi
 }
 
 summary() {
@@ -1093,6 +1257,7 @@ main() {
   configure_power_settings
   install_wendy_cli
   install_wendy_agent
+  install_github_runner
   configure_git
   summary
 }

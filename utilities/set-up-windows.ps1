@@ -34,6 +34,9 @@ $script:InstallVisualStudioBuildTools = $true
 $script:InstallSwiftToolchain = $true
 $script:InstallWendyCli = $false
 $script:InstallDirenv = $false
+$script:SetupGitHubRunner = $false
+$script:GitHubRunnerDir = Join-Path (Join-Path $UserProfile '.github') 'actions-runner'
+$script:GitHubRunnerRunMode = 'manual'
 $script:CloneRepository = $false
 $script:CloneDestination = ''
 $script:EnableSshLogin = $false
@@ -84,6 +87,19 @@ function Ask-YesNo {
       '^(y|yes)$' { return $true }
       '^(n|no)$' { return $false }
       default { Write-Warn 'Please answer yes or no.' }
+    }
+  }
+}
+
+function Read-GitHubRunnerRunMode {
+  while ($true) {
+    $answer = Read-Host 'Run GitHub runner as headless service, user login session, or manual only? [manual/service/login]'
+    if ([string]::IsNullOrWhiteSpace($answer)) { return 'manual' }
+    switch -Regex ($answer.Trim()) {
+      '^(service|daemon|headless)$' { return 'service' }
+      '^(login|session|user)$' { return 'login' }
+      '^(manual|nothing|none)$' { return 'manual' }
+      default { Write-Warn 'Please answer service, login, or manual.' }
     }
   }
 }
@@ -143,6 +159,21 @@ without creating duplicates.
   $script:InstallSwiftToolchain = Ask-YesNo 'Install the Swift toolchain?' $true
   $script:InstallDirenv = Ask-YesNo 'Install and configure direnv for repository-local developer tooling?' $false
   $script:InstallWendyCli = Ask-YesNo 'Install or update the Wendy CLI?' $false
+  if (Ask-YesNo 'Install GitHub Actions self-hosted runner?' $false) {
+    $script:SetupGitHubRunner = $true
+    $defaultRunnerDir = '~/.github/actions-runner/'
+    $runnerDir = Read-Host "GitHub runner install location [$defaultRunnerDir]"
+    if ([string]::IsNullOrWhiteSpace($runnerDir)) { $runnerDir = $defaultRunnerDir }
+    if ($runnerDir -eq '~') {
+      $runnerDir = $UserProfile
+    } elseif ($runnerDir.StartsWith('~/') -or $runnerDir.StartsWith('~\')) {
+      $runnerDir = Join-Path $UserProfile $runnerDir.Substring(2)
+    }
+    $script:GitHubRunnerDir = [Environment]::ExpandEnvironmentVariables($runnerDir)
+    $script:GitHubRunnerRunMode = Read-GitHubRunnerRunMode
+  } else {
+    $script:SetupGitHubRunner = $false
+  }
   if (Test-Path (Join-Path $RepoRoot '.git')) {
     $script:CloneRepository = $false
   } elseif (Ask-YesNo 'Clone the Wendy repository onto this machine?' $false) {
@@ -184,6 +215,15 @@ function Confirm-Plan {
   $vsSummary = if ($script:InstallVisualStudioBuildTools) { 'Visual Studio Build Tools will be installed' } else { 'Visual Studio Build Tools will not be installed' }
   $swiftSummary = if ($script:InstallSwiftToolchain) { 'Swift toolchain will be installed' } else { 'Swift toolchain will not be installed' }
   $wendySummary = if ($script:InstallWendyCli) { 'Wendy CLI will be installed or updated' } else { 'Wendy CLI will not be installed' }
+  $githubRunnerSummary = if ($script:SetupGitHubRunner) {
+    switch ($script:GitHubRunnerRunMode) {
+      'service' { "GitHub Actions runner will be installed at $($script:GitHubRunnerDir) and set to run as a headless service after registration" }
+      'login' { "GitHub Actions runner will be installed at $($script:GitHubRunnerDir) and set to run in the user login session after registration" }
+      default { "GitHub Actions runner will be installed at $($script:GitHubRunnerDir) for manual runs" }
+    }
+  } else {
+    'GitHub Actions runner will not be installed'
+  }
   $rdpSummary = if ($script:ConfigureRemoteDesktop) { 'Remote Desktop will be enabled' } else { 'Remote Desktop will not be changed' }
   $terminalSummary = if ($script:ConfigureTerminalDefaultPowerShell) { 'Windows Terminal will open PowerShell by default' } else { 'Windows Terminal default profile will not be changed' }
   $sshShellSummary = if ($script:ConfigureSshDefaultPowerShell) { 'SSH sessions will start in PowerShell' } else { 'SSH default shell will not be changed' }
@@ -226,6 +266,7 @@ This script will configure this machine by doing the following:
       $lockSummary
       $manualStepsSummary
       $wendySummary
+      $githubRunnerSummary
       $gitSummary
 
 This script does not install wendy-agent because the agent runs on Linux
@@ -1123,6 +1164,93 @@ function Install-WendyCli {
   Write-Ok "Wendy CLI installed to $installDir\wendy.exe"
 }
 
+function Get-GitHubRunnerPlatform {
+  switch ($env:PROCESSOR_ARCHITECTURE) {
+    'AMD64' { return 'win-x64' }
+    'ARM64' { return 'win-arm64' }
+    default { Fail "Unsupported Windows architecture for GitHub Actions runner: $env:PROCESSOR_ARCHITECTURE" }
+  }
+}
+
+function Test-GitHubRunnerConfigured {
+  return (Test-Path (Join-Path $script:GitHubRunnerDir '.runner'))
+}
+
+function Configure-GitHubRunnerStartup {
+  switch ($script:GitHubRunnerRunMode) {
+    'manual' {
+      Write-Ok 'GitHub Actions runner will be started manually'
+    }
+    'service' {
+      if (-not (Test-GitHubRunnerConfigured)) {
+        Write-Warn "GitHub runner is installed but not registered. After running config.cmd in $($script:GitHubRunnerDir), rerun this script or run svc.cmd install and svc.cmd start from that directory."
+        return
+      }
+
+      Write-Info 'Configuring GitHub Actions runner as a headless service'
+      $svcCmd = Join-Path $script:GitHubRunnerDir 'svc.cmd'
+      Push-Location $script:GitHubRunnerDir
+      try {
+        try { Invoke-External $svcCmd @('install') } catch { Write-Warn $_.Exception.Message }
+        Invoke-External $svcCmd @('start')
+      } finally {
+        Pop-Location
+      }
+      Write-Ok 'GitHub Actions runner service configured'
+    }
+    'login' {
+      if (-not (Test-GitHubRunnerConfigured)) {
+        Write-Warn "GitHub runner is installed but not registered. After running config.cmd in $($script:GitHubRunnerDir), rerun this script to enable login-session startup."
+        return
+      }
+
+      Write-Info 'Configuring GitHub Actions runner for the user login session'
+      $runCmd = Join-Path $script:GitHubRunnerDir 'run.cmd'
+      $taskName = 'GitHub Actions Runner'
+      $action = New-ScheduledTaskAction -Execute $runCmd -WorkingDirectory $script:GitHubRunnerDir
+      $trigger = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
+      $principal = New-ScheduledTaskPrincipal -UserId $CurrentUser -LogonType Interactive -RunLevel LeastPrivilege
+      Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Description 'Run GitHub Actions self-hosted runner at user login.' -Force | Out-Null
+      Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+      Write-Ok 'GitHub Actions runner login-session startup configured'
+    }
+  }
+}
+
+function Install-GitHubRunner {
+  if (-not $script:SetupGitHubRunner) {
+    Write-Ok 'GitHub Actions runner not installed'
+    return
+  }
+
+  Write-Info 'Installing GitHub Actions self-hosted runner'
+  New-Item -ItemType Directory -Path $script:GitHubRunnerDir -Force | Out-Null
+
+  $listener = Join-Path (Join-Path $script:GitHubRunnerDir 'bin') 'Runner.Listener.exe'
+  if (-not (Test-Path $listener)) {
+    $platform = Get-GitHubRunnerPlatform
+    $tag = (Invoke-RestMethod -Uri 'https://api.github.com/repos/actions/runner/releases/latest' -UseBasicParsing).tag_name
+    if ([string]::IsNullOrWhiteSpace($tag)) { Fail 'Could not determine the latest GitHub Actions runner version.' }
+
+    $version = $tag.TrimStart('v')
+    $archive = "actions-runner-$platform-$version.zip"
+    $url = "https://github.com/actions/runner/releases/download/$tag/$archive"
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("github-runner-$([System.Guid]::NewGuid())")
+    $zipPath = Join-Path $tempDir $archive
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    try {
+      Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+      Expand-Archive -Path $zipPath -DestinationPath $script:GitHubRunnerDir -Force
+    } finally {
+      Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+  }
+
+  Configure-GitHubRunnerStartup
+  Write-Ok "GitHub Actions runner installed at $($script:GitHubRunnerDir)"
+}
+
 function Configure-Git {
   if (-not $script:ConfigureGit) {
     Write-Ok 'git identity not changed'
@@ -1209,6 +1337,15 @@ function Write-ManualSteps {
     and screen-lock settings.
 '@
   }
+
+  if ($script:SetupGitHubRunner) {
+    Write-ManualStep @"
+  - Register the GitHub Actions runner if it is not already registered:
+      cd "$($script:GitHubRunnerDir)"
+      .\config.cmd --url https://github.com/OWNER/REPO --token TOKEN
+      Start it manually with .\run.cmd, or rerun this setup script to enable the selected startup mode.
+"@
+  }
 }
 
 function Write-Summary {
@@ -1263,6 +1400,7 @@ function Main {
   Configure-RemoteDesktopAccess
   Configure-PowerSettings
   Install-WendyCli
+  Install-GitHubRunner
   Configure-Git
   Write-Summary
 }

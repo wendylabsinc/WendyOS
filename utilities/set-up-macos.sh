@@ -23,6 +23,9 @@ SETUP_PASSWORDLESS_SUDO=0
 CONFIGURE_LOOPBACK_SSH=0
 INSTALL_WENDY_CLI=0
 INSTALL_WENDY_AGENT=0
+SETUP_GITHUB_RUNNER=0
+GITHUB_RUNNER_DIR="${USER_HOME}/.github/actions-runner"
+GITHUB_RUNNER_RUN_MODE="manual"
 INSTALL_SWIFT_TOOLCHAIN=1
 INSTALL_DIRENV=0
 CLONE_REPOSITORY=0
@@ -221,6 +224,29 @@ EOF
     INSTALL_WENDY_AGENT=0
   fi
 
+  if ask_yes_no "Install GitHub Actions self-hosted runner?" "n"; then
+    SETUP_GITHUB_RUNNER=1
+    local default_runner_dir="~/.github/actions-runner/"
+    printf 'GitHub runner install location [%s]: ' "$default_runner_dir"
+    read -r GITHUB_RUNNER_DIR
+    GITHUB_RUNNER_DIR="${GITHUB_RUNNER_DIR:-$default_runner_dir}"
+    GITHUB_RUNNER_DIR="${GITHUB_RUNNER_DIR/#\~/$USER_HOME}"
+
+    while true; do
+      printf 'Run GitHub runner in the user login session or manual only? [manual/login] '
+      read -r GITHUB_RUNNER_RUN_MODE
+      GITHUB_RUNNER_RUN_MODE="${GITHUB_RUNNER_RUN_MODE:-manual}"
+      case "$GITHUB_RUNNER_RUN_MODE" in
+        login|session|user) GITHUB_RUNNER_RUN_MODE="login"; break ;;
+        manual|nothing|none) GITHUB_RUNNER_RUN_MODE="manual"; break ;;
+        service|daemon|headless) warn "macOS GitHub runners must run in a logged-in user session for TCC/privacy permissions. Choose login or manual." ;;
+        *) warn "Please answer login or manual." ;;
+      esac
+    done
+  else
+    SETUP_GITHUB_RUNNER=0
+  fi
+
   if ask_yes_no "Walk through manual macOS setup steps interactively at the end?" "n"; then
     WALK_THROUGH_MANUAL_STEPS=1
   else
@@ -230,7 +256,7 @@ EOF
 
 confirm_plan() {
   local passwordless_sudo_summary git_summary ssh_key_summary swift_summary direnv_summary
-  local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary manual_steps_summary
+  local loopback_ssh_summary clone_summary wendy_cli_summary wendy_agent_summary github_runner_summary manual_steps_summary
 
   if (( SETUP_PASSWORDLESS_SUDO )); then
     passwordless_sudo_summary="Passwordless sudo will be enabled for ${CURRENT_USER}"
@@ -280,6 +306,15 @@ confirm_plan() {
     wendy_agent_summary="Wendy macOS agent app will not be installed"
   fi
 
+  if (( SETUP_GITHUB_RUNNER )); then
+    case "$GITHUB_RUNNER_RUN_MODE" in
+      login) github_runner_summary="GitHub Actions runner will be installed at ${GITHUB_RUNNER_DIR} and set to run in the user login session after registration" ;;
+      *) github_runner_summary="GitHub Actions runner will be installed at ${GITHUB_RUNNER_DIR} for manual runs in a logged-in user session" ;;
+    esac
+  else
+    github_runner_summary="GitHub Actions runner will not be installed"
+  fi
+
   if (( WALK_THROUGH_MANUAL_STEPS )); then
     manual_steps_summary="Manual macOS steps will be shown one at a time with confirmation prompts"
   else
@@ -304,6 +339,7 @@ This script will configure this Mac by doing the following:
       ${clone_summary}
       ${wendy_cli_summary}
       ${wendy_agent_summary}
+      ${github_runner_summary}
 
   • Configure:
       SSH key generation for ${CURRENT_USER}
@@ -669,6 +705,109 @@ install_wendy_agent() {
   ok "Wendy macOS agent app installed or updated"
 }
 
+github_runner_asset_platform() {
+  case "$(uname -m)" in
+    arm64) printf 'osx-arm64\n' ;;
+    x86_64) printf 'osx-x64\n' ;;
+    *) fail "Unsupported macOS architecture for GitHub Actions runner: $(uname -m)" ;;
+  esac
+}
+
+github_runner_latest_tag() {
+  curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | awk -F '"' '/"tag_name"[[:space:]]*:/ { print $4; exit }'
+}
+
+github_runner_is_configured() {
+  [[ -f "$GITHUB_RUNNER_DIR/.runner" ]]
+}
+
+xml_escape() {
+  local value="$1"
+  value="${value//&/&amp;}"
+  value="${value//</&lt;}"
+  value="${value//>/&gt;}"
+  value="${value//\"/&quot;}"
+  printf '%s' "$value"
+}
+
+configure_github_runner_startup() {
+  case "$GITHUB_RUNNER_RUN_MODE" in
+    manual)
+      ok "GitHub Actions runner will be started manually"
+      ;;
+    service|daemon|headless)
+      warn "macOS GitHub runners must run in a logged-in user session for TCC/privacy permissions; headless service mode is not configured."
+      ;;
+    login)
+      if ! github_runner_is_configured; then
+        warn "GitHub runner is installed but not registered. After running ./config.sh in ${GITHUB_RUNNER_DIR}, rerun this script to enable login-session startup."
+        return 0
+      fi
+      info "Configuring GitHub Actions runner for the user login session"
+      local uid label plist_path escaped_runner_dir
+      uid="$(id -u "$CURRENT_USER")"
+      label="com.github.actions.runner.$(printf '%s' "$GITHUB_RUNNER_DIR" | cksum | awk '{print $1}')"
+      plist_path="$USER_HOME/Library/LaunchAgents/${label}.plist"
+      escaped_runner_dir="$(xml_escape "$GITHUB_RUNNER_DIR")"
+      mkdir -p "$USER_HOME/Library/LaunchAgents"
+      cat > "$plist_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${escaped_runner_dir}/run.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${escaped_runner_dir}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>
+EOF
+      launchctl bootout "gui/${uid}" "$plist_path" >/dev/null 2>&1 || true
+      launchctl bootstrap "gui/${uid}" "$plist_path" >/dev/null 2>&1 || warn "Could not start the GitHub runner LaunchAgent now; it should start at the next login."
+      launchctl enable "gui/${uid}/${label}" >/dev/null 2>&1 || true
+      ok "GitHub Actions runner login-session startup configured"
+      ;;
+  esac
+}
+
+install_github_runner() {
+  if (( ! SETUP_GITHUB_RUNNER )); then
+    ok "GitHub Actions runner not installed"
+    return 0
+  fi
+
+  info "Installing GitHub Actions self-hosted runner"
+  mkdir -p "$GITHUB_RUNNER_DIR"
+
+  if [[ ! -x "$GITHUB_RUNNER_DIR/bin/Runner.Listener" ]]; then
+    local platform tag version archive url tmp_dir
+    platform="$(github_runner_asset_platform)"
+    tag="$(github_runner_latest_tag)"
+    [[ -n "$tag" ]] || fail "Could not determine the latest GitHub Actions runner version."
+    version="${tag#v}"
+    archive="actions-runner-${platform}-${version}.tar.gz"
+    url="https://github.com/actions/runner/releases/download/${tag}/${archive}"
+    tmp_dir="$(mktemp -d)"
+    curl -fL "$url" -o "$tmp_dir/$archive"
+    tar -xzf "$tmp_dir/$archive" -C "$GITHUB_RUNNER_DIR"
+    rm -rf "$tmp_dir"
+  fi
+
+  chmod +x "$GITHUB_RUNNER_DIR/config.sh" "$GITHUB_RUNNER_DIR/run.sh" 2>/dev/null || true
+  configure_github_runner_startup
+  ok "GitHub Actions runner installed at ${GITHUB_RUNNER_DIR}"
+}
+
 configure_git() {
   if (( ! CONFIGURE_GIT )); then
     ok "git identity not changed"
@@ -764,6 +903,13 @@ EOF
 
   manual_step "  • Enable ${STYLE_BOLD}automatic desktop login${STYLE_RESET} if desired:
       System Settings → Users & Groups → Automatically log in as ${CURRENT_USER}"
+
+  if (( SETUP_GITHUB_RUNNER )); then
+    manual_step "  • Register the ${STYLE_BOLD}GitHub Actions runner${STYLE_RESET} if it is not already registered:
+      cd "${GITHUB_RUNNER_DIR}"
+      ./config.sh --url https://github.com/OWNER/REPO --token TOKEN
+      Start it manually with ./run.sh, or rerun this setup script to enable login-session startup. Headless service mode is intentionally not used on macOS because TCC/privacy permissions require a logged-in user session."
+  fi
 }
 
 summary() {
@@ -818,6 +964,7 @@ main() {
   configure_mdns
   install_wendy_cli
   install_wendy_agent
+  install_github_runner
   configure_git
   summary
 }

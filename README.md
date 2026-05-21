@@ -125,9 +125,11 @@ $script = "$env:TEMP\set-up-windows.ps1"; iwr -UseBasicParsing https://raw.githu
 
 The scripts install common development tools including Git, Claude Code, and
 Codex, configure local discovery, and can optionally configure SSH keys,
-`direnv`, Swift, the Wendy CLI, a local clone of this repository, and
-platform-specific conveniences such as remote access, automatic login, and
-`wendy-agent` where supported.
+`direnv`, Swift, the Wendy CLI, a local clone of this repository, GitHub
+Actions self-hosted runners, and platform-specific conveniences such as remote
+access, automatic login, and `wendy-agent` where supported. On macOS, GitHub
+Actions runners are only offered as manual or user-login-session processes
+because TCC/privacy permissions require a logged-in user session.
 
 ## Setting Up the Device
 
