@@ -87,6 +87,28 @@ wendy-agent-dev() {
 }
 ```
 
+#### Setup script one-liners
+
+To download and run the interactive setup script directly:
+
+macOS:
+
+```sh
+tmp="$(mktemp)" && trap 'rm -f "$tmp"' EXIT && curl -fsSL https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-macos.sh -o "$tmp" && bash "$tmp"
+```
+
+Ubuntu:
+
+```sh
+tmp="$(mktemp)" && trap 'rm -f "$tmp"' EXIT && curl -fsSL https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-ubuntu.sh -o "$tmp" && bash "$tmp"
+```
+
+Windows 11, from an elevated PowerShell session:
+
+```powershell
+$script = "$env:TEMP\set-up-windows.ps1"; iwr -UseBasicParsing https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main/utilities/set-up-windows.ps1 -OutFile $script; powershell -ExecutionPolicy Bypass -File $script; Remove-Item $script
+```
+
 #### macOS setup script
 
 For macOS development machines, this repository includes an interactive Homebrew

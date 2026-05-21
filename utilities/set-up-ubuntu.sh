@@ -7,6 +7,7 @@ if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
 fi
 
 readonly TRACE_COMMANDS="${TRACE_COMMANDS:-1}"
+readonly WENDY_RAW_BASE="${WENDY_RAW_BASE:-https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
@@ -423,15 +424,25 @@ install_swiftly() {
     fi
 
     repo_root="$1"
+    raw_base="$2"
+    tmp_dir=""
+    cleanup() { [[ -z "$tmp_dir" ]] || rm -rf "$tmp_dir"; }
+    trap cleanup EXIT
+
     if [[ -f "$repo_root/.swift-version" ]]; then
       cd "$repo_root"
     else
-      echo "No .swift-version found at $repo_root; running swiftly install from the current directory."
+      tmp_dir="$(mktemp -d)"
+      if curl -fsSL "${raw_base}/.swift-version" -o "$tmp_dir/.swift-version"; then
+        cd "$tmp_dir"
+      else
+        echo "No .swift-version found at $repo_root and could not download one; running swiftly install from the current directory."
+      fi
     fi
 
     swiftly install
     swift --version | head -n 1
-  ' bash "$REPO_ROOT"
+  ' bash "$REPO_ROOT" "$WENDY_RAW_BASE"
   ok "Swift toolchain from .swift-version is available"
 }
 
@@ -874,10 +885,16 @@ install_wendy_cli() {
   fi
 
   local install_script="${REPO_ROOT}/docs/cli.sh"
-  [[ -f "$install_script" ]] || fail "Could not find ${install_script}"
+  local tmp_script=""
+  if [[ ! -f "$install_script" ]]; then
+    tmp_script="$(mktemp)"
+    curl -fsSL "${WENDY_RAW_BASE}/docs/cli.sh" -o "$tmp_script" || fail "Could not find ${install_script} or download docs/cli.sh"
+    install_script="$tmp_script"
+  fi
 
   info "Installing Wendy CLI"
   run_sudo bash "$install_script" -y
+  [[ -z "$tmp_script" ]] || rm -f "$tmp_script"
   ok "Wendy CLI installation complete"
 }
 
@@ -888,10 +905,16 @@ install_wendy_agent() {
   fi
 
   local install_script="${REPO_ROOT}/docs/agent.sh"
-  [[ -f "$install_script" ]] || fail "Could not find ${install_script}"
+  local tmp_script=""
+  if [[ ! -f "$install_script" ]]; then
+    tmp_script="$(mktemp)"
+    curl -fsSL "${WENDY_RAW_BASE}/docs/agent.sh" -o "$tmp_script" || fail "Could not find ${install_script} or download docs/agent.sh"
+    install_script="$tmp_script"
+  fi
 
   info "Installing wendy-agent"
   run_sudo bash "$install_script" -y
+  [[ -z "$tmp_script" ]] || rm -f "$tmp_script"
   ok "wendy-agent installation complete"
 }
 

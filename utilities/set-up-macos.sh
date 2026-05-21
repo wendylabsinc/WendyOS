@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 readonly TRACE_COMMANDS="${TRACE_COMMANDS:-1}"
+readonly WENDY_RAW_BASE="${WENDY_RAW_BASE:-https://raw.githubusercontent.com/wendylabsinc/wendy-agent/main}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
@@ -512,8 +513,15 @@ install_swift_toolchain() {
   if [[ -f "$REPO_ROOT/.swift-version" ]]; then
     (cd "$REPO_ROOT" && swiftly install)
   else
-    warn "No .swift-version found at ${REPO_ROOT}; installing swiftly's default Swift toolchain."
-    swiftly install
+    local tmp_dir=""
+    tmp_dir="$(mktemp -d)"
+    if curl -fsSL "${WENDY_RAW_BASE}/.swift-version" -o "$tmp_dir/.swift-version"; then
+      (cd "$tmp_dir" && swiftly install)
+    else
+      warn "No .swift-version found at ${REPO_ROOT} and could not download one; installing swiftly's default Swift toolchain."
+      swiftly install
+    fi
+    rm -rf "$tmp_dir"
   fi
   swift --version | head -n 1
   ok "Swift toolchain is available"
