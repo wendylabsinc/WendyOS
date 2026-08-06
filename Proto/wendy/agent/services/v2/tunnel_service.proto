@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package wendy.agent.services.v2;
+
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+// WendyTunnelService forwards authenticated client streams to the agent's
+// loopback interface. It is the LAN counterpart to the Cloud tunnel broker
+// and never accepts an arbitrary target host.
+service WendyTunnelService {
+  rpc Tunnel(stream DeviceTunnelRequest) returns (stream DeviceTunnelData);
+
+  // DatagramTunnel multiplexes many UDP flows and ICMP-echo pings over one
+  // stream, keyed by client-assigned flow_id. Unlike Tunnel, there is no
+  // open/session handshake: this is already a direct stream to one
+  // already-selected, already-authenticated agent (no broker rendezvous),
+  // so the first frame is just a normal datagram or icmp_request frame.
+  rpc DatagramTunnel(stream DeviceDatagramFrame) returns (stream DeviceDatagramFrame);
+}
+
+// First client message on a Tunnel stream: which agent-local port to connect.
+message DeviceTunnelOpen {
+  uint32 port = 1;
+}
+
+message DeviceTunnelData {
+  bytes payload = 1;
+  bool half_close = 2;
+}
+
+// Client → server framing: first message must be open; subsequent messages are
+// data frames.
+message DeviceTunnelRequest {
+  oneof content {
+    DeviceTunnelOpen open = 1;
+    DeviceTunnelData data = 2;
+  }
+}
+
+// Exactly one field set per frame, in either direction.
+message DeviceDatagramFrame {
+  oneof content {
+    DeviceDatagram        datagram     = 1;
+    DeviceIcmpEchoRequest icmp_request = 2;
+    DeviceIcmpEchoReply   icmp_reply   = 3;
+  }
+}
+
+message DeviceDatagram {
+  uint32 flow_id = 1;
+  uint32 port    = 2;  // destination port on the device's loopback interface
+  bytes  payload = 3;  // one UDP datagram, max 65507 bytes
+}
+
+message DeviceIcmpEchoRequest {
+  uint32 identifier = 1;
+  uint32 sequence   = 2;
+  bytes  payload    = 3;
+  uint64 originate_unix_ns = 4;
+}
+
+message DeviceIcmpEchoReply {
+  uint32 identifier = 1;         // copied from request
+  uint32 sequence   = 2;         // copied from request
+  bytes  payload    = 3;         // echoed verbatim
+  uint64 originate_unix_ns = 4;  // copied from request
+  uint64 agent_unix_ns     = 5;  // agent receive time
+}
