@@ -42,9 +42,14 @@ var errFlowCapReached = errors.New("datagram flow-table cap reached")
 // datagramRelay serves one DATAGRAM tunnel session: a flow table of connected
 // loopback UDP sockets keyed by client-assigned flow_id, plus inline ICMP echo
 // replies (the agent IS the pinged host; no ICMP socket is involved).
+type datagramTunnelStream interface {
+	Send(*cloudpb.TunnelData) error
+	Recv() (*cloudpb.TunnelData, error)
+}
+
 type datagramRelay struct {
 	logger      *zap.Logger
-	stream      agentTunnelStream
+	stream      datagramTunnelStream
 	idleTimeout time.Duration
 
 	sendMu sync.Mutex // gRPC streams do not allow concurrent Send
@@ -64,7 +69,7 @@ type datagramFlow struct {
 	lastActive time.Time // guarded by datagramRelay.mu
 }
 
-func newDatagramRelay(logger *zap.Logger, stream agentTunnelStream, idleTimeout time.Duration) *datagramRelay {
+func newDatagramRelay(logger *zap.Logger, stream datagramTunnelStream, idleTimeout time.Duration) *datagramRelay {
 	return &datagramRelay{
 		logger:      logger,
 		stream:      stream,
