@@ -23,6 +23,7 @@ func NewTunnelService(logger *zap.Logger) *TunnelService {
 // loopback and treats echo frames as application-level replies; it does not
 // open a raw ICMP socket.
 func (s *TunnelService) DatagramTunnel(stream agentpbv2.WendyTunnelService_DatagramTunnelServer) error {
+	s.logger.Info("device datagram tunnel accepted", clientAuditFields(stream.Context())...)
 	newDatagramRelay(s.logger, deviceFrameStream{stream: stream}, datagramFlowIdleTimeout).run(stream.Context())
 	return nil
 }
