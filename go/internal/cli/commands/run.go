@@ -3200,11 +3200,10 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return runBuildWithProgress(ctx, buildTitle, shouldDumpChunkDiffBuildLog(opts.chunking), build)
 	}
 
-	// The docker backend exports into a persistent per-app OCI layout DIRECTORY:
-	// BuildKit skips blobs already present there, so a warm rebuild writes only
-	// the changed layers instead of re-serializing the whole image (which costs
-	// seconds per GB of image on every iteration). Tar-only backends and the
-	// WENDY_CHUNK_EXPORT=tar escape hatch keep the legacy temp tar.
+	// Docker and BuildKit export into a persistent per-app OCI layout DIRECTORY.
+	// Their exporters skip blobs already present there, so a warm rebuild writes
+	// only changed layers instead of re-serializing the whole image. Apple
+	// Container and the WENDY_CHUNK_EXPORT=tar escape hatch keep the legacy tar.
 	exportMode := chunkExportPlan(opts.builder)
 	var layoutDir string
 	if exportMode == "dir" {
@@ -3233,7 +3232,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		}
 		defer releaseLayout()
 		build := func(buildCtx context.Context, stream, logw io.Writer) error {
-			return buildImageToOCILayoutDirWithDocker(buildCtx, cwd, dockerfile, platform, buildArgs, layoutDir, stream, logw)
+			return buildImageToOCILayoutDir(buildCtx, cwd, dockerfile, platform, buildArgs, opts.builder, layoutDir, stream, logw)
 		}
 
 		// Native fast path: for a Stagefile project whose deps inputs are
@@ -3254,7 +3253,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 			if st, ok := loadNativeState(layoutDir); ok && st.DepsHash == depsHash {
 				if done, rebuildErr := tryNativeRebuild(layoutDir, platform, cwd, sf, st); rebuildErr == nil && done {
 					nativeDone = true
-					cliLogln("App layer(s) rebuilt natively (deps unchanged; buildx skipped)")
+					cliLogln("App layer(s) rebuilt natively (deps unchanged; container builder skipped)")
 				}
 			}
 		}

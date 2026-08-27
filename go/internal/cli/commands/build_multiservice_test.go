@@ -23,7 +23,7 @@ import (
 // Coverage for WDY-2563: multi-service `wendy build` detection (a validated
 // wendy.json services map routes to runMultiServiceBuild instead of the
 // single-image detectBuildOptions path), --service/--max-concurrency
-// selection, the --dockerfile/--build-type/--builder buildkit refusals, and
+// selection, the --dockerfile/--build-type refusals, builder propagation, and
 // the no-push/no-deploy guarantee (buildServiceImage, the device-registry
 // seam, must never be invoked from this path).
 
@@ -179,12 +179,51 @@ func TestBuildCmd_MultiService_BuildsFromManifestOnly(t *testing.T) {
 			t.Errorf("service %s: imageName = %q, want %q", name, c.imageName, wantImage)
 		}
 		wantContext := filepath.Clean(filepath.Join(root, "./"+name))
-		if filepath.Clean(c.contextDir) != wantContext {
-			t.Errorf("service %s: contextDir = %q, want %q", name, c.contextDir, wantContext)
+		gotInfo, gotErr := os.Stat(c.contextDir)
+		wantInfo, wantErr := os.Stat(wantContext)
+		if gotErr != nil || wantErr != nil || !os.SameFile(gotInfo, wantInfo) {
+			t.Errorf("service %s: contextDir = %q, want directory %q (stat errors: got=%v want=%v)", name, c.contextDir, wantContext, gotErr, wantErr)
 		}
 	}
 	if !seen["api"] || !seen["worker"] {
 		t.Fatalf("expected both api and worker built, got %+v", seen)
+	}
+}
+
+func TestBuildCmd_MultiService_PropagatesBuildkitBuilder(t *testing.T) {
+	root := writeMultiServiceBuildProject(t, "myapp", map[string][]string{
+		"api":    nil,
+		"worker": nil,
+	})
+	chdirTo(t, root)
+	setupMultiServiceBuildCmdTest(t)
+
+	var mu sync.Mutex
+	var builders []string
+	stubLocalBuild(t, func(_ context.Context, builder, _, _, _, _ string, _, _ io.Writer) error {
+		mu.Lock()
+		builders = append(builders, builder)
+		mu.Unlock()
+		return nil
+	})
+
+	cmd := newBuildCmd()
+	cmd.SetArgs([]string{"--builder", "buildkit"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() = %v, want nil", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(builders) != 2 {
+		t.Fatalf("recorded %d builders, want one per service: %v", len(builders), builders)
+	}
+	for _, builder := range builders {
+		if builder != imageBuilderBuildkit {
+			t.Fatalf("builder = %q, want %q", builder, imageBuilderBuildkit)
+		}
 	}
 }
 
@@ -308,11 +347,6 @@ func TestBuildCmd_MultiService_RejectsSingleImageFlags(t *testing.T) {
 			name:       "build-type",
 			args:       []string{"--build-type", "docker"},
 			wantSubstr: "not supported for multi-service projects",
-		},
-		{
-			name:       "builder buildkit",
-			args:       []string{"--builder", "buildkit"},
-			wantSubstr: "--builder buildkit is not supported for multi-service builds",
 		},
 		{
 			name:       "max-concurrency negative",

@@ -71,6 +71,14 @@ wendy --device my-wendy.local run
 
 Wendy automatically checks for the `container` CLI and offers to install it via Homebrew if missing, and starts the `system` and `builder` services if they are not running.
 
+For builds deployed to a WendyOS device, `--builder buildkit` uses buildctl and
+exports an OCI image for Wendy's existing deployment path. If you explicitly
+start the optional Local Build Service from the Wendy menu-bar app, the CLI
+discovers its private socket automatically. `WENDY_BUILDKIT_HOST`,
+`BUILDKIT_HOST`, and buildctl's normal local-daemon default remain supported.
+This service only solves and caches builds; Apple `container` continues to run
+local Mac applications.
+
 If Apple Container reports an empty build context for a project under `/tmp` or
 `/private/tmp`, Wendy returns an error with the known workaround: move the
 project to a non-`/tmp` directory and retry.
@@ -162,7 +170,7 @@ On a **Windows host**, `wendy run` returns an actionable error for Swift project
 | `--no-restart` | Do not restart the container on exit. |
 | `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
-| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker` or `apple-container`. Cannot be combined with `--build-host`. |
+| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. Cannot be combined with `--build-host`. |
 | `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
 | `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
 | `--prefix <dir>` | Run from a project directory other than the current working directory. |

@@ -474,17 +474,16 @@ func resolveOCIExportBuilder(builder string) (string, error) {
 }
 
 // chunkExportPlan decides how the chunk-diff deploy exports the built image:
-// "dir" — persistent OCI layout directory (buildx tar=false, blob-deduped) —
-// for the docker backend, "tar" for backends that can only emit a tar
-// (apple-container, on-device buildctl), for the WENDY_CHUNK_EXPORT=tar
-// escape hatch, and for unknown builders (whose normalize error then surfaces
-// on the tar path exactly as before).
+// "dir" — persistent OCI layout directory (tar=false, blob-deduped) — for the
+// Docker and BuildKit backends, "tar" for Apple Container, for the
+// WENDY_CHUNK_EXPORT=tar escape hatch, and for unknown builders (whose
+// normalize error then surfaces on the tar path exactly as before).
 func chunkExportPlan(builder string) string {
 	if os.Getenv(chunkExportModeEnv) == "tar" {
 		return "tar"
 	}
 	normalized, err := resolveOCIExportBuilder(builder)
-	if err != nil || normalized != imageBuilderDocker {
+	if err != nil || (normalized != imageBuilderDocker && normalized != imageBuilderBuildkit) {
 		return "tar"
 	}
 	return "dir"
@@ -880,10 +879,12 @@ func isImageBuildFailure(err error) bool {
 	return errors.As(err, &bErr)
 }
 
-// buildkitOCIArgs builds the buildctl argument vector (excluding the leading
-// "buildctl") for a Dockerfile build that exports an OCI-layout tar to dest.
-// Build-arg keys are sorted for a reproducible command line.
-func buildkitOCIArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string, dest string) []string {
+// buildkitFrontendArgs builds the common buildctl argument vector (excluding
+// the leading "buildctl") for a Dockerfile solve. The caller appends the
+// exporter it needs: an OCI layout for device delivery, or the containerd
+// image store for a local Wendy runtime. Build-arg keys are sorted for a
+// reproducible command line.
+func buildkitFrontendArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string) []string {
 	args := []string{
 		"build",
 		"--frontend", "dockerfile.v0",
@@ -904,7 +905,23 @@ func buildkitOCIArgs(contextDir, dockerfileDir, dockerfileName, platform string,
 	for _, k := range keys {
 		args = append(args, "--opt", "build-arg:"+k+"="+buildArgs[k])
 	}
+	return args
+}
+
+// buildkitOCIArgs builds the buildctl argument vector (excluding the leading
+// "buildctl") for a Dockerfile build that exports an OCI-layout tar to dest.
+func buildkitOCIArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string, dest string) []string {
+	args := buildkitFrontendArgs(contextDir, dockerfileDir, dockerfileName, platform, buildArgs)
 	args = append(args, "--output", "type=oci,dest="+dest)
+	return args
+}
+
+// buildkitOCIDirArgs exports an uncompressed OCI layout directory. Reusing the
+// same directory lets BuildKit avoid retransmitting unchanged blobs and enables
+// Wendy's native app-layer fast path on subsequent watch iterations.
+func buildkitOCIDirArgs(contextDir, dockerfileDir, dockerfileName, platform string, buildArgs map[string]string, dest string) []string {
+	args := buildkitFrontendArgs(contextDir, dockerfileDir, dockerfileName, platform, buildArgs)
+	args = append(args, "--output", "type=oci,dest="+dest+",compression=uncompressed,tar=false")
 	return args
 }
 
@@ -924,12 +941,15 @@ func redactBuildctlArgsForLog(args []string) []string {
 	return out
 }
 
-// buildImageToOCILayoutWithBuildkit builds the image with buildctl against the
-// in-container buildkitd (its address comes from BUILDKIT_HOST in the container
-// env) and exports it as an OCI-layout tar at dest for the chunk-diff deploy
-// path. This is the no-Docker on-device builder; it mirrors the Apple-Container
-// backend's contract (produce the tar, no registry push).
+// buildImageToOCILayoutWithBuildkit builds the image with buildctl against an
+// explicit or auto-discovered Wendy BuildKit endpoint and exports it as an
+// OCI-layout tar at dest for the chunk-diff deploy path. This mirrors the
+// Apple-Container backend's contract (produce the tar, no registry push).
 func buildImageToOCILayoutWithBuildkit(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, dest string, stdout, stderr io.Writer) error {
+	return runBuildkitOCIExport(ctx, cwd, dockerfile, platform, buildArgs, dest, false, stdout, stderr)
+}
+
+func runBuildkitOCIExport(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, dest string, directory bool, stdout, stderr io.Writer) error {
 	dfDir := cwd
 	dfName := ""
 	if dockerfile != "" {
@@ -944,13 +964,20 @@ func buildImageToOCILayoutWithBuildkit(ctx context.Context, cwd, dockerfile, pla
 		return err
 	}
 	args := buildkitOCIArgs(cwd, dfDir, dfName, platform, buildArgs, dest)
+	if directory {
+		args = buildkitOCIDirArgs(cwd, dfDir, dfName, platform, buildArgs, dest)
+	}
+	args, err := buildkitCommandArgs(args)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(stderr, "[buildkit] starting OCI export: buildctl %s\n", strings.Join(redactBuildctlArgsForLog(args), " "))
 	// NOTE: redactBuildctlArgsForLog only masks values in the log line above.
 	// The unredacted `--opt build-arg:KEY=VALUE` tokens are still placed in
 	// buildctl's argv (below) and are visible in the host process table
 	// (/proc/<pid>/cmdline). Build args are NOT a secret channel — never pass
 	// credentials via --build-arg; use buildctl's `--secret` for those.
-	cmd := exec.CommandContext(ctx, "buildctl", args...)
+	cmd := localBuildkitCommandContext(ctx, "buildctl", args...)
 	cmd.Dir = cwd
 	// BuildKit writes its build progress to stderr, not stdout (see
 	// tui/buildrawjson.go); only stdout feeds the build parser (stream). Point
@@ -1017,6 +1044,36 @@ func buildImageToOCILayoutDirWithDocker(ctx context.Context, cwd, dockerfile, pl
 		fmt.Fprintf(stderr, "warning: could not prune OCI layout index (continuing; superseded entries accumulate until a successful prune): %v\n", err)
 	}
 	return nil
+}
+
+// buildImageToOCILayoutDirWithBuildkit gives managed BuildKit the same
+// persistent-layout contract as Docker buildx. The host-side filesync exporter
+// merges only changed blobs into destDir; the VM keeps its own solve cache.
+func buildImageToOCILayoutDirWithBuildkit(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, destDir string, stdout, stderr io.Writer) error {
+	if err := os.MkdirAll(destDir, 0o700); err != nil {
+		return fmt.Errorf("creating OCI layout directory: %w", err)
+	}
+	if err := runBuildkitOCIExport(ctx, cwd, dockerfile, platform, buildArgs, destDir, true, stdout, stderr); err != nil {
+		return err
+	}
+	if err := pruneOCILayoutDirIndex(destDir, platform); err != nil {
+		fmt.Fprintf(stderr, "warning: could not prune OCI layout index (continuing; superseded entries accumulate until a successful prune): %v\n", err)
+	}
+	return nil
+}
+
+func buildImageToOCILayoutDir(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, builder, destDir string, stdout, stderr io.Writer) error {
+	normalized, err := resolveOCIExportBuilder(builder)
+	if err != nil {
+		return err
+	}
+	if normalized == imageBuilderBuildkit {
+		return buildImageToOCILayoutDirWithBuildkit(ctx, cwd, dockerfile, platform, buildArgs, destDir, stdout, stderr)
+	}
+	if normalized != imageBuilderDocker {
+		return fmt.Errorf("builder %q does not support persistent OCI layout export", normalized)
+	}
+	return buildImageToOCILayoutDirWithDocker(ctx, cwd, dockerfile, platform, buildArgs, destDir, stdout, stderr)
 }
 
 // chunkLayoutDir is the persistent per-app OCI layout directory used by the
