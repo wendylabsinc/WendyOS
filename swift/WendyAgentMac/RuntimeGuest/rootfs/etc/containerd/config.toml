@@ -1,0 +1,6 @@
+version = 3
+root = "/var/lib/wendy-runtime/containerd"
+state = "/run/containerd"
+
+[grpc]
+  address = "/run/containerd/containerd.sock"

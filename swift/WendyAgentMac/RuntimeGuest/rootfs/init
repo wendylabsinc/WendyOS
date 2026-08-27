@@ -1,0 +1,81 @@
+#!/bin/sh
+set -eu
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /dev/pts /proc /sys /run /tmp /var/lib/wendy-runtime
+mount -t devpts devpts /dev/pts
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mkdir -p /sys/fs/cgroup
+mount -t cgroup2 cgroup2 /sys/fs/cgroup
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /tmp
+mdev -s
+
+# Alpine's virt kernel intentionally keeps some drivers modular. Load the VZ
+# devices and container networking/filesystem pieces before starting either
+# daemon. Missing names are harmless when that feature is built into the kernel.
+for module in virtio_pci virtio_blk virtio_net virtio_vsock vmw_vsock_virtio_transport \
+    overlay bridge br_netfilter nf_nat ip_tables; do
+    modprobe "$module" 2>/dev/null || true
+done
+
+echo "wendy-runtime: booting"
+
+# VZ exposes the persistent sparse disk as the first virtio block device. The
+# initramfs itself is memory-backed, so everything under this mount survives VM
+# restarts while OS/runtime binaries remain immutable.
+DATA_DEVICE=/dev/vda
+if ! blkid "$DATA_DEVICE" >/dev/null 2>&1; then
+    echo "wendy-runtime: formatting persistent data disk"
+    mkfs.ext4 -F -L wendy-runtime "$DATA_DEVICE"
+fi
+mount -t ext4 -o noatime "$DATA_DEVICE" /var/lib/wendy-runtime
+mkdir -p /var/lib/wendy-runtime/buildkit /var/lib/wendy-runtime/containerd
+
+hostname wendy-runtime
+ip link set lo up
+if ip link show eth0 >/dev/null 2>&1; then
+    ip link set eth0 up
+    timeout 15 udhcpc -q -n -t 5 -T 1 -i eth0 \
+        || echo "wendy-runtime: DHCP unavailable; local sockets remain usable"
+fi
+
+mkdir -p /run/containerd /run/buildkit
+containerd --config /etc/containerd/config.toml >/dev/console 2>&1 &
+CONTAINERD_PID=$!
+
+i=0
+while [ ! -S /run/containerd/containerd.sock ]; do
+    i=$((i + 1))
+    if [ "$i" -ge 100 ]; then
+        echo "wendy-runtime: containerd did not become ready"
+        poweroff -f
+    fi
+    sleep 0.05
+done
+
+buildkitd --config /etc/buildkit/buildkitd.toml >/dev/console 2>&1 &
+BUILDKIT_PID=$!
+/usr/local/libexec/wendy-runtime-guest-proxy \
+    --forward 6237=/run/buildkit/buildkitd.sock >/dev/console 2>&1 &
+PROXY_PID=$!
+
+echo "wendy-runtime: ready"
+
+shutdown() {
+    kill -TERM "$PROXY_PID" "$BUILDKIT_PID" "$CONTAINERD_PID" 2>/dev/null || true
+    wait "$PROXY_PID" "$BUILDKIT_PID" "$CONTAINERD_PID" 2>/dev/null || true
+    sync
+    umount /var/lib/wendy-runtime 2>/dev/null || true
+    poweroff -f
+}
+trap shutdown TERM INT
+
+while kill -0 "$PROXY_PID" "$BUILDKIT_PID" "$CONTAINERD_PID" 2>/dev/null; do
+    sleep 1
+done
+echo "wendy-runtime: a required service exited"
+shutdown
