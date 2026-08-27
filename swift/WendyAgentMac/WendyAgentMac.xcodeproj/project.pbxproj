@@ -8,10 +8,37 @@
 
 /* Begin PBXBuildFile section */
 		B00000000000000000000010 /* WendyAgentCore in Frameworks */ = {isa = PBXBuildFile; productRef = B00000000000000000000011 /* WendyAgentCore */; };
+		C00000000000000000000023 /* WendyAgentCore in Frameworks */ = {isa = PBXBuildFile; productRef = C00000000000000000000022 /* WendyAgentCore */; };
+		C00000000000000000000025 /* sh.wendy.WendyAgentMac.WendyNet.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = C00000000000000000000020 /* sh.wendy.WendyAgentMac.WendyNet.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		C0000000000000000000002C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B00000000000000000000008 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0000000000000000000002A;
+			remoteInfo = WendyNet;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		C00000000000000000000026 /* Embed System Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/SystemExtensions;
+			dstSubfolderSpec = 1;
+			files = (
+				C00000000000000000000025 /* sh.wendy.WendyAgentMac.WendyNet.systemextension in Embed System Extensions */,
+			);
+			name = "Embed System Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		B00000000000000000000004 /* WendyAgentMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WendyAgentMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C00000000000000000000020 /* sh.wendy.WendyAgentMac.WendyNet.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = sh.wendy.WendyAgentMac.WendyNet.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -31,6 +58,14 @@
 				"WendyAgentMac-Info.plist",
 			);
 			target = B00000000000000000000003 /* WendyAgentMac */;
+		};
+		C00000000000000000000030 /* Exceptions for "WendyNet" folder in "WendyNet" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				WendyNet.entitlements,
+			);
+			target = C0000000000000000000002A /* WendyNet */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -71,6 +106,14 @@
 			path = Configuration;
 			sourceTree = "<group>";
 		};
+		C00000000000000000000021 /* WendyNet */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C00000000000000000000030 /* Exceptions for "WendyNet" folder in "WendyNet" target */,
+			);
+			path = WendyNet;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +122,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				B00000000000000000000010 /* WendyAgentCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C00000000000000000000028 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C00000000000000000000023 /* WendyAgentCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -95,6 +146,7 @@
 				B36D0EDB2F8FE8C70070FEB2 /* Resources */,
 				B00000000000000000000005 /* Sources */,
 				B373CFB12F96576D00C31493 /* Support */,
+				C00000000000000000000021 /* WendyNet */,
 			);
 			sourceTree = "<group>";
 		};
@@ -102,6 +154,7 @@
 			isa = PBXGroup;
 			children = (
 				B00000000000000000000004 /* WendyAgentMac.app */,
+				C00000000000000000000020 /* sh.wendy.WendyAgentMac.WendyNet.systemextension */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -116,10 +169,12 @@
 				B00000000000000000000000 /* Sources */,
 				B00000000000000000000001 /* Frameworks */,
 				B00000000000000000000002 /* Resources */,
+				C00000000000000000000026 /* Embed System Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C0000000000000000000002B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				B00000000000000000000005 /* Sources */,
@@ -137,6 +192,29 @@
 			productReference = B00000000000000000000004 /* WendyAgentMac.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C0000000000000000000002A /* WendyNet */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0000000000000000000002D /* Build configuration list for PBXNativeTarget "WendyNet" */;
+			buildPhases = (
+				C00000000000000000000027 /* Sources */,
+				C00000000000000000000028 /* Frameworks */,
+				C00000000000000000000029 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C00000000000000000000021 /* WendyNet */,
+			);
+			name = WendyNet;
+			packageProductDependencies = (
+				C00000000000000000000022 /* WendyAgentCore */,
+			);
+			productName = WendyNet;
+			productReference = C00000000000000000000020 /* sh.wendy.WendyAgentMac.WendyNet.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -148,6 +226,9 @@
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
 					B00000000000000000000003 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					C0000000000000000000002A = {
 						CreatedOnToolsVersion = 26.3;
 					};
 				};
@@ -170,12 +251,20 @@
 			projectRoot = "";
 			targets = (
 				B00000000000000000000003 /* WendyAgentMac */,
+				C0000000000000000000002A /* WendyNet */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		B00000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C00000000000000000000029 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -192,7 +281,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C00000000000000000000027 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C0000000000000000000002B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0000000000000000000002A /* WendyNet */;
+			targetProxy = C0000000000000000000002C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		B0000000000000000000000C /* Debug */ = {
@@ -229,6 +333,52 @@
 			};
 			name = Release;
 		};
+		C0000000000000000000002E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = B373D0972F9B594D00C31493 /* Configuration */;
+			baseConfigurationReferenceRelativePath = Default.xcconfig;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_ENTITLEMENTS = WendyNet/WendyNet.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 3YVC792H3S;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WendyNet/Info.plist;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.wendy.WendyAgentMac.WendyNet;
+				PRODUCT_MODULE_NAME = WendyNet;
+				PRODUCT_NAME = "$(PRODUCT_BUNDLE_IDENTIFIER)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		C0000000000000000000002F /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = B373D0972F9B594D00C31493 /* Configuration */;
+			baseConfigurationReferenceRelativePath = Default.xcconfig;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_ENTITLEMENTS = WendyNet/WendyNet.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				DEVELOPMENT_TEAM = 3YVC792H3S;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WendyNet/Info.plist;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = sh.wendy.WendyAgentMac.WendyNet;
+				PRODUCT_MODULE_NAME = WendyNet;
+				PRODUCT_NAME = "$(PRODUCT_BUNDLE_IDENTIFIER)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -250,6 +400,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		C0000000000000000000002D /* Build configuration list for PBXNativeTarget "WendyNet" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0000000000000000000002E /* Debug */,
+				C0000000000000000000002F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -261,6 +420,11 @@
 
 /* Begin XCSwiftPackageProductDependency section */
 		B00000000000000000000011 /* WendyAgentCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B00000000000000000000012 /* XCLocalSwiftPackageReference "../WendyAgentCore" */;
+			productName = WendyAgentCore;
+		};
+		C00000000000000000000022 /* WendyAgentCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = B00000000000000000000012 /* XCLocalSwiftPackageReference "../WendyAgentCore" */;
 			productName = WendyAgentCore;
