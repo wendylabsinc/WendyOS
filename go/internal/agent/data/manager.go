@@ -1130,6 +1130,17 @@ func (m *Manager) EndDownload(id string) {
 // RecordApplication validates and stamps an entitled application's record.
 // It returns buffered or recorded; protocol-level validation happens before it.
 func (m *Manager) RecordApplication(appID string, record ApplicationRecord) (string, error) {
+	return m.recordApplication(appID, record, true)
+}
+
+// RecordCampaignApplication uses the same journal and timestamping as app
+// records, but the agent evaluates its campaign trigger synchronously against
+// the current revision rather than broadcasting it to every campaign.
+func (m *Manager) RecordCampaignApplication(appID string, record ApplicationRecord) (string, error) {
+	return m.recordApplication(appID, record, false)
+}
+
+func (m *Manager) recordApplication(appID string, record ApplicationRecord, observe bool) (string, error) {
 	// The receipt is sampled BEFORE m.mu is taken. It is the agent's statement
 	// of when this record arrived, so any wait for the lock belongs outside it:
 	// stamped after the wait, a record that queued behind a seal or another
@@ -1198,7 +1209,7 @@ func (m *Manager) RecordApplication(appID string, record ApplicationRecord) (str
 	m.evictPreRoll(receipt)
 	observer := m.appObserver
 	m.mu.Unlock()
-	if observer != nil {
+	if observer != nil && observe {
 		observer(appID, record)
 	}
 	if recorded {

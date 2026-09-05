@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -176,23 +177,22 @@ type CampaignPrivacy struct {
 	Revision string `json:"revision,omitempty" yaml:"revision,omitempty"`
 }
 
-// NotifyOnEpisodeCommitted is the only notification event campaign version 1
-// supports: fire when an episode this campaign captured is committed.
+// NotifyOnEpisodeCommitted carries notification intent to cloud ingestion.
 const NotifyOnEpisodeCommitted = "episode_committed"
+
+// NotifyOnDetection sends an immediate agent-originated webhook notification.
+const NotifyOnDetection = "detection"
 
 // ErrUnsupportedNotifyOn marks a notify.on value this schema version does not
 // support, so callers can identify the rejection with errors.Is.
-var ErrUnsupportedNotifyOn = errors.New("notify.on must be " + NotifyOnEpisodeCommitted)
+var ErrUnsupportedNotifyOn = errors.New("notify.on must be " + NotifyOnEpisodeCommitted + " or " + NotifyOnDetection)
 
-// CampaignNotify is an optional, device-inert notification policy. The device
-// attaches no behavior to it: the block rides verbatim in the committed
-// episode manifest (and therefore in the manifest JSON the cloud ingest
-// service receives), and the cloud decides whether and whom to notify. No
-// device-side network activity ever results from this block.
+// CampaignNotify selects immediate agent delivery for inference detections or
+// the existing manifest-carried cloud ingest intent for committed episodes.
 type CampaignNotify struct {
-	// On names the event to notify on. NotifyOnEpisodeCommitted is the only
-	// supported value.
-	On string `json:"on" yaml:"on"`
+	// On is episode_committed or detection. Webhook applies only to detection.
+	On      string `json:"on" yaml:"on"`
+	Webhook string `json:"webhook,omitempty" yaml:"webhook,omitempty"`
 	// UnknownKeys lists keys inside the notify block this schema version does
 	// not know. Unlike the rest of the campaign document, which rejects
 	// unknown fields, the notify block is read by the cloud rather than the
@@ -217,6 +217,10 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 			if err := node.Content[i+1].Decode(&n.On); err != nil {
 				return fmt.Errorf("notify.on: %w", err)
 			}
+		case "webhook":
+			if err := node.Content[i+1].Decode(&n.Webhook); err != nil {
+				return err
+			}
 		default:
 			n.UnknownKeys = append(n.UnknownKeys, key)
 		}
@@ -228,21 +232,23 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 // triggers; it does not require the configured sensors or network destination
 // to be online at deployment time.
 type Campaign struct {
-	Version           int               `json:"version" yaml:"version"`
-	Name              string            `json:"name" yaml:"name"`
-	Fleet             string            `json:"fleet,omitempty" yaml:"fleet,omitempty"`
-	Sources           []CampaignSource  `json:"sources" yaml:"sources"`
-	Capture           CampaignCapture   `json:"capture" yaml:"capture"`
-	Upload            CampaignUpload    `json:"upload" yaml:"upload"`
-	Retention         CampaignRetention `json:"retention,omitempty" yaml:"retention,omitempty"`
-	Export            CampaignExport    `json:"export" yaml:"export"`
-	Models            map[string]string `json:"models" yaml:"models,omitempty"`
-	Privacy           []CampaignPrivacy `json:"privacy" yaml:"privacy,omitempty"`
-	Notify            *CampaignNotify   `json:"notify,omitempty" yaml:"notify,omitempty"`
-	State             string            `json:"state" yaml:"-"`
-	Revision          string            `json:"revision" yaml:"-"`
-	DeployedUnixNanos int64             `json:"deployed_unix_nanos" yaml:"-"`
-	Warnings          []string          `json:"warnings" yaml:"-"`
+	Inference         *CampaignInference `json:"inference,omitempty" yaml:"inference,omitempty"`
+	InferenceStatus   *InferenceStatus   `json:"inference_status,omitempty" yaml:"-"`
+	Version           int                `json:"version" yaml:"version"`
+	Name              string             `json:"name" yaml:"name"`
+	Fleet             string             `json:"fleet,omitempty" yaml:"fleet,omitempty"`
+	Sources           []CampaignSource   `json:"sources" yaml:"sources"`
+	Capture           CampaignCapture    `json:"capture" yaml:"capture"`
+	Upload            CampaignUpload     `json:"upload" yaml:"upload"`
+	Retention         CampaignRetention  `json:"retention,omitempty" yaml:"retention,omitempty"`
+	Export            CampaignExport     `json:"export" yaml:"export"`
+	Models            map[string]string  `json:"models" yaml:"models,omitempty"`
+	Privacy           []CampaignPrivacy  `json:"privacy" yaml:"privacy,omitempty"`
+	Notify            *CampaignNotify    `json:"notify,omitempty" yaml:"notify,omitempty"`
+	State             string             `json:"state" yaml:"-"`
+	Revision          string             `json:"revision" yaml:"-"`
+	DeployedUnixNanos int64              `json:"deployed_unix_nanos" yaml:"-"`
+	Warnings          []string           `json:"warnings" yaml:"-"`
 }
 
 func ParseCampaign(contents []byte) (Campaign, error) {
@@ -288,7 +294,7 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 // identity operators and the fleet backend use to tell "the plan changed" from
 // "the same plan was redeployed", so what feeds it is part of the on-device
 // schema and changes only with this number.
-const revisionSchema = 1
+const revisionSchema = 2
 
 // planDigestInput is the exact, enumerated set of author-declared plan fields
 // the revision digest covers.
@@ -372,7 +378,14 @@ func (c Campaign) planDigestInput() map[string]any {
 		// Only the fields this schema version knows. UnknownKeys is deploy-time
 		// state a newer cloud may add and is deliberately excluded, exactly as
 		// it is excluded from the stored plan.
-		plan["notify"] = map[string]any{"on": c.Notify.On}
+		plan["notify"] = map[string]any{"on": c.Notify.On, "webhook": c.Notify.Webhook}
+	}
+	if i := c.Inference; i != nil {
+		plan["inference"] = map[string]any{
+			"model": i.Model, "revision": i.Revision, "labels": i.Labels,
+			"threshold": i.Threshold, "rate": i.Rate, "event": i.Event,
+			"clear_after": i.ClearAfter, "cooldown": i.Cooldown, "enabled": i.Enabled,
+		}
 	}
 	return plan
 }
@@ -476,7 +489,39 @@ func (c Campaign) validate() error {
 			return fmt.Errorf("privacy[%d].name is required", i)
 		}
 	}
-	if c.Notify != nil && c.Notify.On != NotifyOnEpisodeCommitted {
+	if err := c.Inference.validate(); err != nil {
+		return err
+	}
+	if c.Inference != nil {
+		camera := false
+		matched := false
+		for _, source := range c.Sources {
+			camera = camera || source.Camera != ""
+		}
+		for _, trigger := range c.Capture.Triggers {
+			matched = matched || trigger.Event == c.Inference.Event
+		}
+		if !camera || !matched {
+			return errors.New("inference requires a camera source and a capture trigger matching inference.event")
+		}
+	}
+	if c.Notify != nil && c.Notify.On == NotifyOnDetection {
+		if len(c.Notify.UnknownKeys) > 0 {
+			return fmt.Errorf("unknown detection notification fields: %s", strings.Join(c.Notify.UnknownKeys, ", "))
+		}
+		if c.Inference == nil {
+			return errors.New("notify.on: detection requires inference")
+		}
+
+		endpoint, err := url.Parse(c.Notify.Webhook)
+		if err != nil || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || len(c.Notify.Webhook) > 2048 {
+			return errors.New("notify.webhook must be an absolute HTTP(S) URL without userinfo or fragment, at most 2048 bytes")
+		}
+	} else if c.Notify != nil && c.Notify.Webhook != "" {
+		return errors.New("notify.webhook requires notify.on: detection")
+	}
+
+	if c.Notify != nil && c.Notify.On != NotifyOnEpisodeCommitted && c.Notify.On != NotifyOnDetection {
 		return fmt.Errorf("notify.on %q is not supported: %w", c.Notify.On, ErrUnsupportedNotifyOn)
 	}
 	return nil
@@ -711,6 +756,22 @@ func (m *Manager) resolveCampaignSources(campaign Campaign, degradeROS2 bool) ([
 				selected[id] = true
 			}
 		case requested.Camera != "":
+			if strings.TrimSpace(requested.Camera) == "*" {
+				matched := false
+				for _, source := range all {
+					if source.Kind == "camera" && source.Healthy {
+						matched = true
+						selected[source.ID] = true
+						if requested.Capture != nil {
+							captures[source.ID] = requested.Capture
+						}
+					}
+				}
+				if !matched {
+					return nil, nil, nil, nil, errors.New("no healthy cameras are available for camera: *")
+				}
+				continue
+			}
 			id, err := resolveCameraSelector(all, requested.Camera)
 			if err != nil {
 				return nil, nil, nil, nil, err
@@ -758,6 +819,19 @@ func (m *Manager) ResolveCampaignCameraSources(campaign Campaign) ([]Source, err
 		}
 		if !loaded {
 			all, loaded = m.Sources(context.Background()), true
+		}
+		if strings.TrimSpace(requested.Camera) == "*" {
+			matched := false
+			for _, source := range all {
+				if source.Kind == "camera" && source.Healthy {
+					matched = true
+					cameras = append(cameras, Source{ID: source.ID, Kind: "camera", Capture: requested.Capture})
+				}
+			}
+			if !matched {
+				return nil, errors.New("no healthy cameras are available for camera: *")
+			}
+			continue
 		}
 		id, err := resolveCameraSelector(all, requested.Camera)
 		if err != nil {
