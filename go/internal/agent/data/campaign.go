@@ -183,15 +183,19 @@ const NotifyOnEpisodeCommitted = "episode_committed"
 // NotifyOnDetection sends an immediate agent-originated webhook notification.
 const NotifyOnDetection = "detection"
 
+// NotifyOnEvent sends a webhook when a named event is emitted.
+const NotifyOnEvent = "event"
+
 // ErrUnsupportedNotifyOn marks a notify.on value this schema version does not
 // support, so callers can identify the rejection with errors.Is.
-var ErrUnsupportedNotifyOn = errors.New("notify.on must be " + NotifyOnEpisodeCommitted + " or " + NotifyOnDetection)
+var ErrUnsupportedNotifyOn = errors.New("notify.on must be " + NotifyOnEpisodeCommitted + ", " + NotifyOnDetection + " or " + NotifyOnEvent)
 
 // CampaignNotify selects immediate agent delivery for inference detections or
 // the existing manifest-carried cloud ingest intent for committed episodes.
 type CampaignNotify struct {
-	// On is episode_committed or detection. Webhook applies only to detection.
+	// On is episode_committed, detection or event. Event selects an exact event name.
 	On      string `json:"on" yaml:"on"`
+	Event   string `json:"event,omitempty" yaml:"event,omitempty"`
 	Webhook string `json:"webhook,omitempty" yaml:"webhook,omitempty"`
 	// UnknownKeys lists keys inside the notify block this schema version does
 	// not know. Unlike the rest of the campaign document, which rejects
@@ -216,6 +220,10 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 		case "on":
 			if err := node.Content[i+1].Decode(&n.On); err != nil {
 				return fmt.Errorf("notify.on: %w", err)
+			}
+		case "event":
+			if err := node.Content[i+1].Decode(&n.Event); err != nil {
+				return err
 			}
 		case "webhook":
 			if err := node.Content[i+1].Decode(&n.Webhook); err != nil {
@@ -378,7 +386,7 @@ func (c Campaign) planDigestInput() map[string]any {
 		// Only the fields this schema version knows. UnknownKeys is deploy-time
 		// state a newer cloud may add and is deliberately excluded, exactly as
 		// it is excluded from the stored plan.
-		plan["notify"] = map[string]any{"on": c.Notify.On, "webhook": c.Notify.Webhook}
+		plan["notify"] = map[string]any{"on": c.Notify.On, "webhook": c.Notify.Webhook, "event": c.Notify.Event}
 	}
 	if i := c.Inference; i != nil {
 		plan["inference"] = map[string]any{
@@ -505,11 +513,11 @@ func (c Campaign) validate() error {
 			return errors.New("inference requires a camera source and a capture trigger matching inference.event")
 		}
 	}
-	if c.Notify != nil && c.Notify.On == NotifyOnDetection {
+	if c.Notify != nil && (c.Notify.On == NotifyOnDetection || c.Notify.On == NotifyOnEvent) {
 		if len(c.Notify.UnknownKeys) > 0 {
-			return fmt.Errorf("unknown detection notification fields: %s", strings.Join(c.Notify.UnknownKeys, ", "))
+			return fmt.Errorf("unknown immediate notification fields: %s", strings.Join(c.Notify.UnknownKeys, ", "))
 		}
-		if c.Inference == nil {
+		if c.Notify.On == NotifyOnDetection && c.Inference == nil {
 			return errors.New("notify.on: detection requires inference")
 		}
 
@@ -518,10 +526,19 @@ func (c Campaign) validate() error {
 			return errors.New("notify.webhook must be an absolute HTTP(S) URL without userinfo or fragment, at most 2048 bytes")
 		}
 	} else if c.Notify != nil && c.Notify.Webhook != "" {
-		return errors.New("notify.webhook requires notify.on: detection")
+		return errors.New("notify.webhook requires notify.on: detection or event")
 	}
 
-	if c.Notify != nil && c.Notify.On != NotifyOnEpisodeCommitted && c.Notify.On != NotifyOnDetection {
+	if c.Notify != nil {
+		if c.Notify.On == NotifyOnEvent && !inferenceEventRE.MatchString(c.Notify.Event) {
+			return errors.New("notify.event must use 1..128 letters, numbers, dots, hyphens or underscores")
+		}
+		if c.Notify.On != NotifyOnEvent && c.Notify.Event != "" {
+			return errors.New("notify.event requires notify.on: event")
+		}
+	}
+
+	if c.Notify != nil && c.Notify.On != NotifyOnEpisodeCommitted && c.Notify.On != NotifyOnDetection && c.Notify.On != NotifyOnEvent {
 		return fmt.Errorf("notify.on %q is not supported: %w", c.Notify.On, ErrUnsupportedNotifyOn)
 	}
 	return nil

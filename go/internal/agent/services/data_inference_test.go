@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"gopkg.in/yaml.v3"
 	"os"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ func inferenceTestYAML(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	raw = []byte(strings.ReplaceAll(string(raw), "buffer: 10s", "buffer: 0s\n  drain: 0s"))
-	raw = []byte(strings.ReplaceAll(string(raw), "  on: episode_committed", "  on: detection\n  webhook: https://notifications.example/detections"))
+	raw = []byte(strings.ReplaceAll(string(raw), "  on: episode_committed", "  on: event\n  event: person_detected\n  webhook: https://notifications.example/detections"))
 	return raw
 }
 
@@ -399,5 +400,103 @@ func TestAgentInferenceNotificationRetryKeepsIdentity(t *testing.T) {
 	}
 	if job.status.NotificationError != "" {
 		t.Fatalf("successful retry must clear notification error: %s", job.status.NotificationError)
+	}
+}
+
+func TestAgentInferenceNamedEventFiltersModelDetections(t *testing.T) {
+	service, factory, sender, _ := newInferenceTestService(t, false)
+	raw := strings.ReplaceAll(string(inferenceTestYAML(t)), "  event: person_detected\n  webhook:", "  event: other_event\n  webhook:")
+	if _, err := service.CampaignDeploy(context.Background(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: []byte(raw)}); err != nil {
+		t.Fatal(err)
+	}
+	var session *inferenceTestSession
+	for {
+		session = receiveInference(t, factory.sessions)
+		// A session from the first deployment may have started before redeploy.
+		select {
+		case <-session.closed:
+			continue
+		default:
+		}
+		service.inference.mu.Lock()
+		job := service.inference.jobs["people-all-cameras"]
+		ready := job != nil && job.campaign.Notify.Event == "other_event"
+		service.inference.mu.Unlock()
+		if ready {
+			break
+		}
+		receiveInference(t, session.closed)
+	}
+	input := receiveInference(t, session.inputs)
+	session.results <- inference.Result{Type: "prediction", SourceID: input.SourceID, Generation: input.Generation, Detections: []inference.Detection{{Label: "person", Score: .99, Box: [4]float64{1, 2, 3, 4}}}}
+	deadline := time.Now().Add(3 * time.Second)
+	for len(service.manager.ActiveEpisodeKeys()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(service.manager.ActiveEpisodeKeys()) == 0 {
+		t.Fatal("model event was not processed")
+	}
+	select {
+	case request := <-sender.requests:
+		t.Fatalf("nonmatching model event notified: %+v", request)
+	case <-time.After(100 * time.Millisecond):
+	}
+	service.observeApplicationRecord("test-app", data.ApplicationRecord{Version: 1, Type: "prediction", Name: "other_event"})
+	service.observeApplicationRecord("test-app", data.ApplicationRecord{Version: 1, Type: "event", Name: "unrelated"})
+	service.observeApplicationRecord("test-app", data.ApplicationRecord{Version: 1, Type: "event", Name: "other_event"})
+	request := receiveInference(t, sender.requests)
+	if request.Event != "other_event" {
+		t.Fatalf("wrong event: %+v", request)
+	}
+	select {
+	case extra := <-sender.requests:
+		t.Fatalf("unexpected notification: %+v", extra)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestAgentInferenceEventNotificationWithoutModelOrUpload(t *testing.T) {
+	manager, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaign, err := data.ParseCampaign(inferenceTestYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaign.Inference = nil
+	campaign.Upload.When = "manual"
+	campaign.Capture.Triggers[0].Event = "record_requested"
+	raw, err := yaml.Marshal(campaign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.DeployCampaign(raw); err != nil {
+		t.Fatal(err)
+	}
+	service := NewDataService(manager)
+	sender := &inferenceTestSender{requests: make(chan DetectionNotification, 8)}
+	stop := service.StartCampaignInference(context.Background(), nil, sender)
+	defer stop()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		service.inference.mu.Lock()
+		ready := service.inference.jobs[campaign.Name] != nil
+		service.inference.mu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("notification job not restored")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// No matching capture trigger: this named event still sends its notification.
+	service.observeApplicationRecord("test-app", data.ApplicationRecord{Version: 1, Type: "event", Name: "person_detected"})
+	if request := receiveInference(t, sender.requests); request.Event != "person_detected" {
+		t.Fatalf("wrong event: %+v", request)
+	}
+	if len(manager.ActiveEpisodeKeys()) != 0 {
+		t.Fatal("notification created an episode")
 	}
 }

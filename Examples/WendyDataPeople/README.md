@@ -65,9 +65,15 @@ For an immediate alert independent of cloud ingestion, use a webhook:
 
 ```yaml
 notify:
-  on: detection
+  on: event
+  event: person_detected
   webhook: https://your-notification-service.example/hooks/people
 ```
+
+`notify.event` matches the event name exactly. This works for agent model events
+and application events, independently of capture triggers or an active recording.
+Use `upload: {when: manual}` to keep episodes local without automatic uploads.
+`on: detection` remains available for all appearances from the campaign's model.
 
 The agent POSTs JSON containing `id`, `event`, `campaign`, `source_id`, `model`,
 `model_revision`, and `count`. Configure an endpoint that accepts this format and
@@ -77,7 +83,8 @@ are not followed. The model worker never receives the webhook URL.
 
 There are three bounded attempts using the same `Idempotency-Key` header; the
 receiver should deduplicate that key. Failed attempts and queue overflow are
-visible in `inference_status.notification_error` and agent logs. Webhook delivery
+visible in agent logs and, for enabled model campaigns,
+`inference_status.notification_error`. Webhook delivery
 has no persistent outbox. Recording failures do not suppress webhook alerts, and
 webhook failures do not stop detection. The direct Cloud notification API is not
 used here because it requires a registered application identity; campaigns do

@@ -181,3 +181,51 @@ func TestInferenceSettingsChangeCampaignRevision(t *testing.T) {
 		})
 	}
 }
+
+func TestNamedEventNotificationValidation(t *testing.T) {
+	raw, err := os.ReadFile("../../../../Examples/WendyDataPeople/campaign.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"person_detected", "door.open", "person-left"} {
+		configured := strings.ReplaceAll(string(raw), "  on: episode_committed", "  on: event\n  event: "+event+"\n  webhook: https://notify.example/events")
+		campaign, err := ParseCampaign([]byte(configured))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if campaign.Notify.Event != event {
+			t.Fatal("event name was not preserved")
+		}
+	}
+	for _, notify := range []string{
+		"  on: event\n  webhook: https://notify.example/events",
+		"  on: event\n  event: person detected\n  webhook: https://notify.example/events",
+		"  on: event\n  event: person_detected",
+		"  on: episode_committed\n  event: person_detected",
+		"  on: detection\n  event: person_detected\n  webhook: https://notify.example/events",
+	} {
+		if _, err := ParseCampaign([]byte(strings.ReplaceAll(string(raw), "  on: episode_committed", notify))); err == nil {
+			t.Fatalf("accepted invalid notification: %s", notify)
+		}
+	}
+}
+
+func TestNotificationSettingsChangeCampaignRevision(t *testing.T) {
+	raw := strings.ReplaceAll(string(peopleCampaign(t)), "  on: episode_committed", "  on: event\n  event: person_detected\n  webhook: https://notify.example/events")
+	base, err := ParseCampaign([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range [][2]string{
+		{"  event: person_detected\n  webhook:", "  event: door.open\n  webhook:"},
+		{"https://notify.example/events", "https://notify.example/alerts"},
+	} {
+		changed, err := ParseCampaign([]byte(strings.ReplaceAll(raw, change[0], change[1])))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed.Revision == base.Revision {
+			t.Fatal("notification plan change did not change revision")
+		}
+	}
+}

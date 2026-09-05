@@ -462,6 +462,10 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 		return nil, status.Error(codes.FailedPrecondition, "agent campaign inference runtime is unavailable")
 	}
 
+	if parsed.Notify != nil && parsed.Notify.On == data.NotifyOnEvent && s.inference == nil {
+		return nil, status.Error(codes.FailedPrecondition, "agent campaign notification runtime is unavailable")
+	}
+
 	campaign, err := s.manager.DeployCampaign(req.GetCampaignYaml())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -554,7 +558,7 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 		calibrationRevisions[identity] = source.Calibration
 	}
 	notify := campaign.Notify
-	if notify != nil && notify.On == data.NotifyOnDetection {
+	if notify != nil && (notify.On == data.NotifyOnDetection || notify.On == data.NotifyOnEvent) {
 		notify = nil
 	}
 	models := map[string]string{}
@@ -625,7 +629,13 @@ func (s *DataService) observeApplicationRecord(_ string, record data.Application
 		return
 	}
 	for _, campaign := range campaigns {
-		if campaign.State != "armed" || activeKeys[campaign.Name] {
+		if campaign.State != "armed" {
+			continue
+		}
+		if s.inference != nil {
+			s.inference.notifyEvent(campaign, record)
+		}
+		if activeKeys[campaign.Name] {
 			continue
 		}
 		reason, expression, matched := campaign.Match(record)

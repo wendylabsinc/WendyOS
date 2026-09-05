@@ -38,5 +38,6 @@ notify:
   # Notify through Wendy Cloud when the detection episode is committed.
   on: episode_committed
   # For an immediate alert to your notification service, replace the above with:
-  # on: detection
+  # on: event
+  # event: person_detected
   # webhook: https://your-notification-service.example/hooks/people

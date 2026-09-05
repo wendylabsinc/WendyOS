@@ -35,6 +35,7 @@ type campaignInferenceJob struct {
 	campaign       data.Campaign
 	cancel         context.CancelFunc
 	done           chan struct{}
+	queue          chan DetectionNotification
 	mu             sync.Mutex
 	status         data.InferenceStatus
 	generations    map[string]uint64
@@ -88,7 +89,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 	}
 	wanted := map[string]data.Campaign{}
 	for _, campaign := range campaigns {
-		if campaign.State == "armed" && campaign.Inference.IsEnabled() {
+		if campaign.State == "armed" && (campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
 			wanted[campaign.Name] = campaign
 		}
 	}
@@ -114,7 +115,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 			continue
 		}
 		child, cancel := context.WithCancel(ctx)
-		job := &campaignInferenceJob{owner: m, campaign: campaign, cancel: cancel, done: make(chan struct{}), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
+		job := &campaignInferenceJob{owner: m, campaign: campaign, cancel: cancel, done: make(chan struct{}), queue: make(chan DetectionNotification, 16), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
 		m.jobs[name] = job
 		go job.supervise(child)
 	}
@@ -154,6 +155,15 @@ func (j *campaignInferenceJob) sourceState(source, state string) {
 
 func (j *campaignInferenceJob) supervise(ctx context.Context) {
 	defer close(j.done)
+	ctx, cancel := context.WithCancel(ctx)
+	notifyDone := make(chan struct{})
+	go func() { defer close(notifyDone); j.notifications(ctx, j.queue) }()
+	defer func() { cancel(); <-notifyDone }()
+	if !j.campaign.Inference.IsEnabled() {
+		j.setState("disabled", nil)
+		<-ctx.Done()
+		return
+	}
 	for ctx.Err() == nil {
 		j.setState("loading", nil)
 		err := j.run(ctx)
@@ -196,10 +206,6 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			<-source.done
 		}
 	}()
-	notifications := make(chan DetectionNotification, 16)
-	notifyDone := make(chan struct{})
-	go func() { defer close(notifyDone); j.notifications(ctx, notifications) }()
-	defer func() { cancel(); <-notifyDone }()
 	presence := map[string]*inferencePresence{}
 	reconcile := func() {
 		ids, _, _, resolveErr := j.owner.service.manager.ResolveCampaignSources(j.campaign)
@@ -306,10 +312,10 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			if triggerErr != nil {
 				j.owner.service.manager.Warnf("campaign %q detection could not start an episode: %v", j.campaign.Name, triggerErr)
 			}
-			if j.campaign.Notify != nil && j.campaign.Notify.On == data.NotifyOnDetection {
+			if j.campaign.Notify != nil && (j.campaign.Notify.On == data.NotifyOnDetection || j.campaign.Notify.On == data.NotifyOnEvent && j.campaign.Notify.Event == record.Name) {
 				request := detectionNotification(j.campaign, result.SourceID, len(detections))
 				select {
-				case notifications <- request:
+				case j.queue <- request:
 				default:
 					j.notificationError(errors.New("notification queue full; detection notification dropped"))
 				}
@@ -500,4 +506,24 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	}
 	_, err = s.triggerCampaign(ctx, campaign, "event:"+campaign.Inference.Event, "event:"+campaign.Inference.Event)
 	return true, err
+}
+
+// notifyEvent routes application events independently of episode capture triggers.
+// Native model events use their owning job directly and bypass the global observer.
+func (m *campaignInferenceManager) notifyEvent(campaign data.Campaign, record data.ApplicationRecord) {
+	if campaign.Notify == nil || campaign.Notify.On != data.NotifyOnEvent || record.Type != "event" || record.Name != campaign.Notify.Event {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[campaign.Name]
+	if job == nil || job.campaign.Revision != campaign.Revision {
+		return
+	}
+	request := DetectionNotification{ID: uuid.NewString(), Event: record.Name, Campaign: campaign.Name, Model: record.Model}
+	select {
+	case job.queue <- request:
+	default:
+		job.notificationError(errors.New("notification queue full; event notification dropped"))
+	}
 }
