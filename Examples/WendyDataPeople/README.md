@@ -5,6 +5,9 @@ feed wendy-agent knows about**. The agent owns the model runtime, camera
 subscriptions, detection events, episode capture and notifications. Users supply
 only YAML: no application, Python environment or continuously running CLI.
 
+With no file argument, the CLI opens a picker for `.yaml` and `.yml` files in the
+current directory. Scripts and `--json` invocations must pass a file explicitly.
+
 ```sh
 wendy --device <device> data campaign deploy campaign.yaml
 wendy --device <device> data campaign inspect people-all-cameras
