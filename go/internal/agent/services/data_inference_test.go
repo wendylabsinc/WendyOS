@@ -110,7 +110,7 @@ func inferenceTestYAML(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	raw = []byte(strings.ReplaceAll(string(raw), "buffer: 10s", "buffer: 0s\n  drain: 0s"))
-	raw = []byte(strings.ReplaceAll(string(raw), "  on: episode_committed", "  on: event\n  event: person_detected\n  webhook: https://notifications.example/detections"))
+	raw = []byte(strings.ReplaceAll(string(raw), "  on: event\n  event: person_detected", "  on: event\n  event: person_detected\n  webhook: https://notifications.example/detections"))
 	return raw
 }
 
@@ -338,6 +338,7 @@ func TestAgentInferenceCloudCommitNotificationStaysInManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw = []byte(strings.ReplaceAll(string(raw), "  on: event\n  event: person_detected", "  on: episode_committed"))
 	if _, err := service.CampaignDeploy(context.Background(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: raw}); err != nil {
 		t.Fatal(err)
 	}

@@ -55,13 +55,28 @@ an existing episode share that recording; immediate webhook mode can send an
 alert for each camera without opening duplicate recordings. A new camera joins subsequent episodes; an episode in progress keeps
 its original source set.
 
-The example uses `notify.on: episode_committed`: the episode manifest carries
-notification intent to Wendy Cloud ingestion, which sends the alert after the
-detection recording is committed and uploaded. This requires the existing cloud
-ingest notification service and a connected/enrolled device; the agent does not
-send an immediate Cloud notification from this setting.
+The example uses `notify.on: event` with `event: person_detected` to send an
+immediate Wendy Cloud notification to organization owners and admins. It uses
+`campaign:people-all-cameras` as its Cloud notification source and the device's
+enrollment credentials. No application container or webhook is required.
 
-For an immediate alert independent of cloud ingestion, use a webhook:
+On the first detection, Cloud registers this campaign source with notifications
+disabled. In Cloud, open Apps → people-all-cameras → Wendy Notifications and
+enable notification sending as an organization owner or admin. Subsequent
+appearances send alerts. The first event is not replayed after enabling the grant.
+The grant covers this named campaign across enrolled devices in the organization;
+each device registers its own source assignment when it emits a matching event.
+
+The Cloud server must include campaign source registration support (WDY-2939).
+This agent branch uses the v1 notification API served by Cloud main; Cloud dev's
+v2 API requires an agent with the matching API and enrollment identity contract.
+Cloud failures are visible in logs and `inference_status.notification_error`.
+
+`notify.on: episode_committed` is still available as manifest-carried intent for
+a separate ingestion service. It does not send an immediate notification, and
+Cloud main/dev do not implement an episode-ingestion notification consumer here.
+
+For direct delivery to your own notification service, add a webhook:
 
 ```yaml
 notify:
@@ -86,9 +101,11 @@ receiver should deduplicate that key. Failed attempts and queue overflow are
 visible in agent logs and, for enabled model campaigns,
 `inference_status.notification_error`. Webhook delivery
 has no persistent outbox. Recording failures do not suppress webhook alerts, and
-webhook failures do not stop detection. The direct Cloud notification API is not
-used here because it requires a registered application identity; campaigns do
-not invent an application to bypass that requirement.
+webhook failures do not stop detection.
+
+Cloud delivery uses the same bounded queue and event UUID. Permission failures and
+`ALREADY_EXISTS` stop retries; transient failures retain bounded retries. Cloud
+registration never grants notification permission automatically.
 
 Episodes contain prediction and detection records in `events.jsonl` and the
 model revision in the manifest. The input ledger records the encoded samples
