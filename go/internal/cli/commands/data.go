@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -71,27 +72,40 @@ func newDataCampaignCmd() *cobra.Command {
 }
 
 func newDataCampaignDeployCmd() *cobra.Command {
-	return &cobra.Command{Use: "deploy <campaign.yaml>", Short: "Validate, persist, and arm a campaign on the connected device", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	var skipCloudRegistration bool
+	command := &cobra.Command{Use: "deploy <campaign.yaml>", Short: "Validate, persist, and arm a campaign on the connected device", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		contents, err := os.ReadFile(args[0])
 		if err != nil {
 			return fmt.Errorf("reading campaign: %w", err)
 		}
-		return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
-			campaign, err := client.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
-			if err != nil {
-				return err
-			}
-			if jsonOutput {
-				_, err = cmd.OutOrStdout().Write(campaign.GetPlanJson())
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Campaign %s: %s (revision %s)\n", campaign.GetName(), campaign.GetState(), shortRevision(campaign.GetRevision()))
-			for _, warning := range campaign.GetWarnings() {
-				fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", warning)
-			}
-			return nil
-		})
+		plan, err := data.ParseCampaign(contents)
+		if err != nil {
+			return err
+		}
+		conn, err := connectToAgent(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		if err := registerCloudApps(cmd.Context(), conn, []string{"campaign:" + plan.Name}, skipCloudRegistration); err != nil {
+			return err
+		}
+		campaign, err := conn.DataService.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(campaign.GetPlanJson())
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Campaign %s: %s (revision %s)\n", campaign.GetName(), campaign.GetState(), shortRevision(campaign.GetRevision()))
+		for _, warning := range campaign.GetWarnings() {
+			fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", warning)
+		}
+		return nil
 	}}
+	command.Flags().BoolVar(&skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering the campaign in Cloud (offline use)")
+	return command
 }
 
 func newDataCampaignListCmd() *cobra.Command {

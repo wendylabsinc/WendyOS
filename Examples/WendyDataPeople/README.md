@@ -60,14 +60,26 @@ immediate Wendy Cloud notification to organization owners and admins. It uses
 `campaign:people-all-cameras` as its Cloud notification source and the device's
 enrollment credentials. No application container or webhook is required.
 
-On the first detection, Cloud registers this campaign source with notifications
-disabled. In Cloud, open Apps → people-all-cameras → Wendy Notifications and
-enable notification sending as an organization owner or admin. Subsequent
-appearances send alerts. The first event is not replayed after enabling the grant.
-The grant covers this named campaign across enrolled devices in the organization;
-each device registers its own source assignment when it emits a matching event.
+On a Cloud-enrolled device, `wendy data campaign deploy` registers
+`campaign:people-all-cameras` and its device assignment before arming the plan.
+It appears in Cloud Apps immediately, without waiting for a detection. Open
+Apps → people-all-cameras → Wendy Notifications and enable notification sending
+as an organization owner or admin. Events emitted while the grant is disabled
+are rejected and are not replayed after enabling it. The grant covers this named
+campaign across assigned devices in the organization; each CLI deployment
+registers its target device without changing an existing grant or stopped state.
 
-The Cloud server must include campaign source registration support (WDY-2939).
+The CLI uses your saved operator session for the device's enrolled Cloud host
+and organization. Run `wendy auth login` first. Unenrolled devices can deploy
+locally; `--skip-cloud-registration` also allows an explicit offline deployment
+on an enrolled device. Rerun without the flag to register once connected. A failed
+registration stops deployment; a later device failure may leave its registered
+Cloud entry. `wendy run` performs the same registration for ordinary apps using
+their `wendy.json` app ID, including Compose and multi-service deployments.
+
+The Cloud server must include `AppService.RegisterAppDeployment` (WDY-2939).
+Older CLI deployments can still register campaigns on their first signed event,
+with sending disabled.
 This agent branch uses the v1 notification API served by Cloud main; Cloud dev's
 v2 API requires an agent with the matching API and enrollment identity contract.
 Cloud failures are visible in logs and `inference_status.notification_error`.
