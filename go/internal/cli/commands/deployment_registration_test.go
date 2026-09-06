@@ -6,6 +6,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -119,29 +120,48 @@ func TestSkipCloudRegistrationDoesNotContactDevice(t *testing.T) {
 
 type deploymentCloudServer struct {
 	cloudpb.UnimplementedAppServiceServer
-	requests []*cloudpb.RegisterAppDeploymentRequest
+	mu       sync.Mutex
+	requests []*cloudpb.UpsertAppRequest
+	apps     map[string]*cloudpb.App
 	err      error
 }
 
-func (s *deploymentCloudServer) RegisterAppDeployment(ctx context.Context, request *cloudpb.RegisterAppDeploymentRequest) (*cloudpb.App, error) {
+func (s *deploymentCloudServer) GetApp(ctx context.Context, request *cloudpb.GetAppRequest) (*cloudpb.App, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	md, _ := metadata.FromIncomingContext(ctx)
+	if len(md.Get("x-wendy-client-cert")) == 0 {
+		return nil, status.Error(codes.Unauthenticated, "missing operator metadata")
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	if app := s.apps[request.GetId()]; app != nil {
+		return app, nil
+	}
+	return nil, status.Error(codes.NotFound, "app not found")
+}
+
+func (s *deploymentCloudServer) UpsertApp(ctx context.Context, request *cloudpb.UpsertAppRequest) (*cloudpb.App, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	md, _ := metadata.FromIncomingContext(ctx)
 	if len(md.Get("x-wendy-client-cert")) == 0 {
 		return nil, status.Error(codes.Unauthenticated, "missing operator metadata")
 	}
 	s.requests = append(s.requests, request)
-	if s.err != nil {
-		return nil, s.err
-	}
-	return &cloudpb.App{Id: request.GetId(), OrganizationId: request.GetOrganizationId()}, nil
+	app := &cloudpb.App{Id: request.GetId(), OrganizationId: request.GetOrganizationId(), Name: request.GetName()}
+	s.apps[request.GetId()] = app
+	return app, nil
 }
 
-func TestCloudRegistrationSendsAppAndDeviceIdentity(t *testing.T) {
+func TestCloudRegistrationUsesExistingCatalogRPCs(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := grpc.NewServer()
-	implementation := &deploymentCloudServer{}
+	implementation := &deploymentCloudServer{apps: make(map[string]*cloudpb.App)}
 	cloudpb.RegisterAppServiceServer(server, implementation)
 	go server.Serve(listener)
 	t.Cleanup(server.Stop)
@@ -151,23 +171,28 @@ func TestCloudRegistrationSendsAppAndDeviceIdentity(t *testing.T) {
 	auth.Certificates = auth.Certificates[1:]
 	device := registrationDevice()
 	device.CloudHost = auth.CloudGRPC
-	for _, id := range []string{"app", "campaign:people"} {
+	for _, id := range []string{"app", "campaign:people", "app", "campaign:people"} {
 		if err := registerAppsWithCloud(context.Background(), &auth, device, []string{id}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	implementation.mu.Lock()
 	if len(implementation.requests) != 2 {
-		t.Fatalf("requests: %d", len(implementation.requests))
+		t.Fatalf("upsert calls = %d; existing apps should be preserved", len(implementation.requests))
 	}
 	for i, req := range implementation.requests {
-		if req.GetOrganizationId() != 42 || req.GetAssetId() != 9 || req.GetId() != []string{"app", "campaign:people"}[i] {
-			t.Fatalf("wrong Cloud registration: %v", req)
+		if req.GetOrganizationId() != 42 || req.GetId() != []string{"app", "campaign:people"}[i] || req.GetName() != []string{"app", "people"}[i] {
+			t.Fatalf("wrong Cloud catalog registration: %v", req)
 		}
 	}
-	// An older Cloud must fail explicitly, rather than ignore an optional field
-	// and report a registration that never created a device assignment.
-	implementation.err = status.Error(codes.Unimplemented, "upgrade Cloud")
-	if err := registerAppsWithCloud(context.Background(), &auth, device, []string{"app"}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("old Cloud failure hidden: %v", err)
+	implementation.err = status.Error(codes.PermissionDenied, "not an organization member")
+	implementation.mu.Unlock()
+	if err := registerAppsWithCloud(context.Background(), &auth, device, []string{"new-app"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("catalog access failure hidden: %v", err)
+	}
+	implementation.mu.Lock()
+	defer implementation.mu.Unlock()
+	if len(implementation.requests) != 2 {
+		t.Fatal("upsert attempted after a catalog access denial")
 	}
 }

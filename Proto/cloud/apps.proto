@@ -6,9 +6,6 @@ import "google/protobuf/timestamp.proto";
 
 service AppService {
   rpc UpsertApp(UpsertAppRequest) returns (App);
-  // Register a CLI deployment before starting code on an enrolled device.
-  // Requires operator app-create and deployment-create permission. Never grants notifications.
-  rpc RegisterAppDeployment(RegisterAppDeploymentRequest) returns (App);
   rpc GetApp(GetAppRequest) returns (App);
   rpc UpdateApp(UpdateAppRequest) returns (App);
   rpc DeleteApp(DeleteAppRequest) returns (DeleteAppResponse);
@@ -69,16 +66,4 @@ message ListAppsRequest {
 message ListAppsResponse {
   repeated App apps = 1;
   int32 total = 2;
-}
-
-// Creates the app and its device assignment if missing, atomically. Both must
-// belong to organization_id. Existing app metadata, notification grants, releases,
-// and desired states are preserved, including stopped/absent assignments.
-// Campaigns use the reserved app ID "campaign:<campaign-name>".
-message RegisterAppDeploymentRequest {
-  string id = 1;
-  int32 organization_id = 2;
-  int32 asset_id = 3;
-  string name = 4;
-  string details = 5;
 }

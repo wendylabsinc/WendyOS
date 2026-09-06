@@ -11,6 +11,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type deploymentProvisioningClient interface {
@@ -101,17 +103,24 @@ func registerAppsWithCloud(ctx context.Context, auth *config.AuthConfig, device 
 	}
 	client := cloudpb.NewAppServiceClient(conn)
 	for _, id := range appIDs {
-		app, err := client.RegisterAppDeployment(cloudCtx, &cloudpb.RegisterAppDeploymentRequest{
-			Id: id, OrganizationId: device.GetOrganizationId(), AssetId: device.GetAssetId(),
-			Name: strings.TrimPrefix(id, "campaign:"),
+		// Keep operator-edited metadata and grants on an existing app. UpsertApp
+		// is needed only when the catalog entry does not exist yet.
+		app, err := client.GetApp(cloudCtx, &cloudpb.GetAppRequest{
+			Id: id, OrganizationId: device.GetOrganizationId(),
 		})
+		if status.Code(err) == codes.NotFound {
+			name := strings.TrimPrefix(id, "campaign:")
+			app, err = client.UpsertApp(cloudCtx, &cloudpb.UpsertAppRequest{
+				Id: id, OrganizationId: device.GetOrganizationId(), Name: &name,
+			})
+		}
 		if err != nil {
 			return fmt.Errorf("registering %s: %w", id, err)
 		}
 		if app.GetId() != id || app.GetOrganizationId() != device.GetOrganizationId() {
 			return fmt.Errorf("Cloud returned a different app identity for %s", id)
 		}
-		cliLogln("Registered %s in Cloud (organization %d, device %d).", id, device.GetOrganizationId(), device.GetAssetId())
+		cliLogln("Registered %s in Cloud Apps (organization %d).", id, device.GetOrganizationId())
 		if !app.GetCanSendNotifications() {
 			cliLogln("Notifications for %s are disabled; an owner or admin can enable its grant in the Cloud app settings.", id)
 		}

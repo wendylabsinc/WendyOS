@@ -64,13 +64,15 @@ immediate Wendy Cloud notification to organization owners and admins. It uses
 enrollment credentials. No application container or webhook is required.
 
 On a Cloud-enrolled device, `wendy data campaign deploy` registers
-`campaign:people-all-cameras` and its device assignment before arming the plan.
+`campaign:people-all-cameras` in Cloud Apps before arming the plan. It uses the
+existing `GetApp`/`UpsertApp` RPCs and leaves an existing entry unchanged.
 It appears in Cloud Apps immediately, without waiting for a detection. Open
 Apps → people-all-cameras → Wendy Notifications and enable notification sending
 as an organization owner or admin. Events emitted while the grant is disabled
 are rejected and are not replayed after enabling it. The grant covers this named
-campaign across assigned devices in the organization; each CLI deployment
-registers its target device without changing an existing grant or stopped state.
+campaign across assigned devices in the organization. Its first authenticated
+event registers the device assignment without changing an existing grant or
+stopped state; if the grant is already enabled, that first event can deliver.
 
 The CLI uses your saved operator session for the device's enrolled Cloud host
 and organization. Run `wendy auth login` first. Unenrolled devices can deploy
@@ -78,11 +80,14 @@ locally; `--skip-cloud-registration` also allows an explicit offline deployment
 on an enrolled device. Rerun without the flag to register once connected. A failed
 registration stops deployment; a later device failure may leave its registered
 Cloud entry. `wendy run` performs the same registration for ordinary apps using
-their `wendy.json` app ID, including Compose and multi-service deployments.
+their `wendy.json` app ID, including Compose and multi-service deployments. This
+only registers their catalog entries; ordinary app device assignments still come
+from the existing Cloud deployment workflow, and locally uploaded ordinary apps
+need that assignment before notifications are allowed.
 
-The Cloud server must include `AppService.RegisterAppDeployment` (WDY-2939).
-Older CLI deployments can still register campaigns on their first signed event,
-with sending disabled.
+Catalog registration uses existing Cloud APIs. Campaign event delivery requires
+the companion Cloud implementation (WDY-2939). Without CLI registration, a first
+signed campaign event can also create a missing app, with sending disabled.
 This agent branch uses the v1 notification API served by Cloud main; Cloud dev's
 v2 API requires an agent with the matching API and enrollment identity contract.
 Cloud failures are visible in logs and `inference_status.notification_error`.

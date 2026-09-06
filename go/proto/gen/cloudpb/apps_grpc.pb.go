@@ -19,12 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AppService_UpsertApp_FullMethodName             = "/wendycloud.v1.AppService/UpsertApp"
-	AppService_RegisterAppDeployment_FullMethodName = "/wendycloud.v1.AppService/RegisterAppDeployment"
-	AppService_GetApp_FullMethodName                = "/wendycloud.v1.AppService/GetApp"
-	AppService_UpdateApp_FullMethodName             = "/wendycloud.v1.AppService/UpdateApp"
-	AppService_DeleteApp_FullMethodName             = "/wendycloud.v1.AppService/DeleteApp"
-	AppService_ListApps_FullMethodName              = "/wendycloud.v1.AppService/ListApps"
+	AppService_UpsertApp_FullMethodName = "/wendycloud.v1.AppService/UpsertApp"
+	AppService_GetApp_FullMethodName    = "/wendycloud.v1.AppService/GetApp"
+	AppService_UpdateApp_FullMethodName = "/wendycloud.v1.AppService/UpdateApp"
+	AppService_DeleteApp_FullMethodName = "/wendycloud.v1.AppService/DeleteApp"
+	AppService_ListApps_FullMethodName  = "/wendycloud.v1.AppService/ListApps"
 )
 
 // AppServiceClient is the client API for AppService service.
@@ -32,9 +31,6 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type AppServiceClient interface {
 	UpsertApp(ctx context.Context, in *UpsertAppRequest, opts ...grpc.CallOption) (*App, error)
-	// Register a CLI deployment before starting code on an enrolled device.
-	// Requires operator app-create and deployment-create permission. Never grants notifications.
-	RegisterAppDeployment(ctx context.Context, in *RegisterAppDeploymentRequest, opts ...grpc.CallOption) (*App, error)
 	GetApp(ctx context.Context, in *GetAppRequest, opts ...grpc.CallOption) (*App, error)
 	UpdateApp(ctx context.Context, in *UpdateAppRequest, opts ...grpc.CallOption) (*App, error)
 	DeleteApp(ctx context.Context, in *DeleteAppRequest, opts ...grpc.CallOption) (*DeleteAppResponse, error)
@@ -53,16 +49,6 @@ func (c *appServiceClient) UpsertApp(ctx context.Context, in *UpsertAppRequest, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(App)
 	err := c.cc.Invoke(ctx, AppService_UpsertApp_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *appServiceClient) RegisterAppDeployment(ctx context.Context, in *RegisterAppDeploymentRequest, opts ...grpc.CallOption) (*App, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(App)
-	err := c.cc.Invoke(ctx, AppService_RegisterAppDeployment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -114,9 +100,6 @@ func (c *appServiceClient) ListApps(ctx context.Context, in *ListAppsRequest, op
 // for forward compatibility.
 type AppServiceServer interface {
 	UpsertApp(context.Context, *UpsertAppRequest) (*App, error)
-	// Register a CLI deployment before starting code on an enrolled device.
-	// Requires operator app-create and deployment-create permission. Never grants notifications.
-	RegisterAppDeployment(context.Context, *RegisterAppDeploymentRequest) (*App, error)
 	GetApp(context.Context, *GetAppRequest) (*App, error)
 	UpdateApp(context.Context, *UpdateAppRequest) (*App, error)
 	DeleteApp(context.Context, *DeleteAppRequest) (*DeleteAppResponse, error)
@@ -133,9 +116,6 @@ type UnimplementedAppServiceServer struct{}
 
 func (UnimplementedAppServiceServer) UpsertApp(context.Context, *UpsertAppRequest) (*App, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpsertApp not implemented")
-}
-func (UnimplementedAppServiceServer) RegisterAppDeployment(context.Context, *RegisterAppDeploymentRequest) (*App, error) {
-	return nil, status.Error(codes.Unimplemented, "method RegisterAppDeployment not implemented")
 }
 func (UnimplementedAppServiceServer) GetApp(context.Context, *GetAppRequest) (*App, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetApp not implemented")
@@ -184,24 +164,6 @@ func _AppService_UpsertApp_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AppServiceServer).UpsertApp(ctx, req.(*UpsertAppRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AppService_RegisterAppDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RegisterAppDeploymentRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AppServiceServer).RegisterAppDeployment(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AppService_RegisterAppDeployment_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AppServiceServer).RegisterAppDeployment(ctx, req.(*RegisterAppDeploymentRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -288,10 +250,6 @@ var AppService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpsertApp",
 			Handler:    _AppService_UpsertApp_Handler,
-		},
-		{
-			MethodName: "RegisterAppDeployment",
-			Handler:    _AppService_RegisterAppDeployment_Handler,
 		},
 		{
 			MethodName: "GetApp",

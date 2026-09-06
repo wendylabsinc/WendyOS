@@ -531,86 +531,6 @@ func (x *ListAppsResponse) GetTotal() int32 {
 	return 0
 }
 
-// Creates the app and its device assignment if missing, atomically. Both must
-// belong to organization_id. Existing app metadata, notification grants, releases,
-// and desired states are preserved, including stopped/absent assignments.
-// Campaigns use the reserved app ID "campaign:<campaign-name>".
-type RegisterAppDeploymentRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	OrganizationId int32                  `protobuf:"varint,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	AssetId        int32                  `protobuf:"varint,3,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
-	Name           string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	Details        string                 `protobuf:"bytes,5,opt,name=details,proto3" json:"details,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *RegisterAppDeploymentRequest) Reset() {
-	*x = RegisterAppDeploymentRequest{}
-	mi := &file_cloud_apps_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RegisterAppDeploymentRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RegisterAppDeploymentRequest) ProtoMessage() {}
-
-func (x *RegisterAppDeploymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_cloud_apps_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RegisterAppDeploymentRequest.ProtoReflect.Descriptor instead.
-func (*RegisterAppDeploymentRequest) Descriptor() ([]byte, []int) {
-	return file_cloud_apps_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *RegisterAppDeploymentRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *RegisterAppDeploymentRequest) GetOrganizationId() int32 {
-	if x != nil {
-		return x.OrganizationId
-	}
-	return 0
-}
-
-func (x *RegisterAppDeploymentRequest) GetAssetId() int32 {
-	if x != nil {
-		return x.AssetId
-	}
-	return 0
-}
-
-func (x *RegisterAppDeploymentRequest) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *RegisterAppDeploymentRequest) GetDetails() string {
-	if x != nil {
-		return x.Details
-	}
-	return ""
-}
-
 var File_cloud_apps_proto protoreflect.FileDescriptor
 
 const file_cloud_apps_proto_rawDesc = "" +
@@ -662,17 +582,10 @@ const file_cloud_apps_proto_rawDesc = "" +
 	"\a_filter\"P\n" +
 	"\x10ListAppsResponse\x12&\n" +
 	"\x04apps\x18\x01 \x03(\v2\x12.wendycloud.v1.AppR\x04apps\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total\"\xa0\x01\n" +
-	"\x1cRegisterAppDeploymentRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
-	"\x0forganization_id\x18\x02 \x01(\x05R\x0eorganizationId\x12\x19\n" +
-	"\basset_id\x18\x03 \x01(\x05R\aassetId\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04name\x12\x18\n" +
-	"\adetails\x18\x05 \x01(\tR\adetails2\xc3\x03\n" +
+	"\x05total\x18\x02 \x01(\x05R\x05total2\xe9\x02\n" +
 	"\n" +
 	"AppService\x12@\n" +
-	"\tUpsertApp\x12\x1f.wendycloud.v1.UpsertAppRequest\x1a\x12.wendycloud.v1.App\x12X\n" +
-	"\x15RegisterAppDeployment\x12+.wendycloud.v1.RegisterAppDeploymentRequest\x1a\x12.wendycloud.v1.App\x12:\n" +
+	"\tUpsertApp\x12\x1f.wendycloud.v1.UpsertAppRequest\x1a\x12.wendycloud.v1.App\x12:\n" +
 	"\x06GetApp\x12\x1c.wendycloud.v1.GetAppRequest\x1a\x12.wendycloud.v1.App\x12@\n" +
 	"\tUpdateApp\x12\x1f.wendycloud.v1.UpdateAppRequest\x1a\x12.wendycloud.v1.App\x12N\n" +
 	"\tDeleteApp\x12\x1f.wendycloud.v1.DeleteAppRequest\x1a .wendycloud.v1.DeleteAppResponse\x12K\n" +
@@ -690,37 +603,34 @@ func file_cloud_apps_proto_rawDescGZIP() []byte {
 	return file_cloud_apps_proto_rawDescData
 }
 
-var file_cloud_apps_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_cloud_apps_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_cloud_apps_proto_goTypes = []any{
-	(*App)(nil),                          // 0: wendycloud.v1.App
-	(*UpsertAppRequest)(nil),             // 1: wendycloud.v1.UpsertAppRequest
-	(*GetAppRequest)(nil),                // 2: wendycloud.v1.GetAppRequest
-	(*UpdateAppRequest)(nil),             // 3: wendycloud.v1.UpdateAppRequest
-	(*DeleteAppRequest)(nil),             // 4: wendycloud.v1.DeleteAppRequest
-	(*DeleteAppResponse)(nil),            // 5: wendycloud.v1.DeleteAppResponse
-	(*ListAppsRequest)(nil),              // 6: wendycloud.v1.ListAppsRequest
-	(*ListAppsResponse)(nil),             // 7: wendycloud.v1.ListAppsResponse
-	(*RegisterAppDeploymentRequest)(nil), // 8: wendycloud.v1.RegisterAppDeploymentRequest
-	(*timestamppb.Timestamp)(nil),        // 9: google.protobuf.Timestamp
+	(*App)(nil),                   // 0: wendycloud.v1.App
+	(*UpsertAppRequest)(nil),      // 1: wendycloud.v1.UpsertAppRequest
+	(*GetAppRequest)(nil),         // 2: wendycloud.v1.GetAppRequest
+	(*UpdateAppRequest)(nil),      // 3: wendycloud.v1.UpdateAppRequest
+	(*DeleteAppRequest)(nil),      // 4: wendycloud.v1.DeleteAppRequest
+	(*DeleteAppResponse)(nil),     // 5: wendycloud.v1.DeleteAppResponse
+	(*ListAppsRequest)(nil),       // 6: wendycloud.v1.ListAppsRequest
+	(*ListAppsResponse)(nil),      // 7: wendycloud.v1.ListAppsResponse
+	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
 }
 var file_cloud_apps_proto_depIdxs = []int32{
-	9, // 0: wendycloud.v1.App.created_at:type_name -> google.protobuf.Timestamp
-	9, // 1: wendycloud.v1.App.updated_at:type_name -> google.protobuf.Timestamp
+	8, // 0: wendycloud.v1.App.created_at:type_name -> google.protobuf.Timestamp
+	8, // 1: wendycloud.v1.App.updated_at:type_name -> google.protobuf.Timestamp
 	0, // 2: wendycloud.v1.ListAppsResponse.apps:type_name -> wendycloud.v1.App
 	1, // 3: wendycloud.v1.AppService.UpsertApp:input_type -> wendycloud.v1.UpsertAppRequest
-	8, // 4: wendycloud.v1.AppService.RegisterAppDeployment:input_type -> wendycloud.v1.RegisterAppDeploymentRequest
-	2, // 5: wendycloud.v1.AppService.GetApp:input_type -> wendycloud.v1.GetAppRequest
-	3, // 6: wendycloud.v1.AppService.UpdateApp:input_type -> wendycloud.v1.UpdateAppRequest
-	4, // 7: wendycloud.v1.AppService.DeleteApp:input_type -> wendycloud.v1.DeleteAppRequest
-	6, // 8: wendycloud.v1.AppService.ListApps:input_type -> wendycloud.v1.ListAppsRequest
-	0, // 9: wendycloud.v1.AppService.UpsertApp:output_type -> wendycloud.v1.App
-	0, // 10: wendycloud.v1.AppService.RegisterAppDeployment:output_type -> wendycloud.v1.App
-	0, // 11: wendycloud.v1.AppService.GetApp:output_type -> wendycloud.v1.App
-	0, // 12: wendycloud.v1.AppService.UpdateApp:output_type -> wendycloud.v1.App
-	5, // 13: wendycloud.v1.AppService.DeleteApp:output_type -> wendycloud.v1.DeleteAppResponse
-	7, // 14: wendycloud.v1.AppService.ListApps:output_type -> wendycloud.v1.ListAppsResponse
-	9, // [9:15] is the sub-list for method output_type
-	3, // [3:9] is the sub-list for method input_type
+	2, // 4: wendycloud.v1.AppService.GetApp:input_type -> wendycloud.v1.GetAppRequest
+	3, // 5: wendycloud.v1.AppService.UpdateApp:input_type -> wendycloud.v1.UpdateAppRequest
+	4, // 6: wendycloud.v1.AppService.DeleteApp:input_type -> wendycloud.v1.DeleteAppRequest
+	6, // 7: wendycloud.v1.AppService.ListApps:input_type -> wendycloud.v1.ListAppsRequest
+	0, // 8: wendycloud.v1.AppService.UpsertApp:output_type -> wendycloud.v1.App
+	0, // 9: wendycloud.v1.AppService.GetApp:output_type -> wendycloud.v1.App
+	0, // 10: wendycloud.v1.AppService.UpdateApp:output_type -> wendycloud.v1.App
+	5, // 11: wendycloud.v1.AppService.DeleteApp:output_type -> wendycloud.v1.DeleteAppResponse
+	7, // 12: wendycloud.v1.AppService.ListApps:output_type -> wendycloud.v1.ListAppsResponse
+	8, // [8:13] is the sub-list for method output_type
+	3, // [3:8] is the sub-list for method input_type
 	3, // [3:3] is the sub-list for extension type_name
 	3, // [3:3] is the sub-list for extension extendee
 	0, // [0:3] is the sub-list for field type_name
@@ -740,7 +650,7 @@ func file_cloud_apps_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cloud_apps_proto_rawDesc), len(file_cloud_apps_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
