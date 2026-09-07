@@ -90,7 +90,8 @@ devices first. Select one explicitly with `--device` (as above), or set
 | `WENDY_PLATFORM` | `nvidia-jetson` \| `generic` | Platform tier derived from the device type |
 | `WENDY_DEBUG` | `true` \| `false` | Set when `--debug` is passed |
 | `WENDY_DEVICE_TYPE` | e.g. `jetson-agx-orin` | Raw device type; absent when unknown |
-| `WENDY_HAS_GPU` | `true` \| `false` | Absent on older agents |
+| `WENDY_HAS_GPU` | `true` \| `false` (hardware presence) | Absent on older agents |
+| `WENDY_HAS_CUDA` | `true` \| `false` (host CUDA support) | Falls back only to an explicit NVIDIA vendor on older agents |
 | `WENDY_GPU_VENDOR` | e.g. `nvidia`, `qualcomm` | Absent when no GPU is reported |
 | `WENDY_JETPACK_VERSION` | e.g. `6.0` | Jetson only |
 | `WENDY_JETPACK_MAJOR` | e.g. `6`, `7` | Jetson only; JetPack major for per-generation base-image selection |
@@ -413,3 +414,10 @@ process to reap. Attached watch hooks are owned and reaped by the watch session.
 `wendy run` optionally includes a detached **ML-DSA65** signature with every `RunContainer` call. The agent verifies the signature over the SHA256 digest of the OCI image config before assembling or starting the container.
 
 Set `WENDY_IMAGE_SIGNATURE_PATH` to the path of the detached signature file; when the variable is unset or points to an empty file, no signature is sent. Verification is currently dormant on the agent side (the per-org publisher key is not yet wired in), so omitting the signature does not block container creation today. Once the publisher key is provisioned, sending an unsigned or tampered image causes the agent to refuse the run.
+
+CUDA-selecting Dockerfiles must use `WENDY_HAS_CUDA`. `WENDY_HAS_GPU`
+reports hardware presence, including Broadcom and other GPUs without CUDA.
+Device info exposes `gpuCapabilities.computeBackends` (`cuda`, `rocm`, `metal`);
+an empty list means no supported backend was detected, while an absent capability
+object means an older agent. `containerStorage` identifies the filesystem used by
+containerd; the existing disk scalar fields continue to describe the root filesystem.

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -17,8 +18,10 @@ import (
 
 type DeviceInfoService struct {
 	agentpbv2.UnimplementedWendyDeviceInfoServiceServer
-	logger             *zap.Logger
-	hardwareDiscoverer HardwareDiscoverer
+	logger                   *zap.Logger
+	hardwareDiscoverer       HardwareDiscoverer
+	discoverGPUs             func() []gpudiscovery.Device
+	discoverContainerStorage func() (partitionUsage, bool)
 }
 
 func NewDeviceInfoService(logger *zap.Logger, hd HardwareDiscoverer) *DeviceInfoService {
@@ -44,7 +47,12 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 		resp.DeviceType = &v
 	}
 
-	gpuInfo := detectGPUInfo()
+	gpuProbe := s.discoverGPUs
+	if gpuProbe == nil {
+		gpuProbe = gpudiscovery.Host
+	}
+	gpuInfo := detectGPUInfoFrom(gpuProbe())
+	resp.GpuCapabilities = &agentpbv2.GpuCapabilities{ComputeBackends: gpuInfo.computeBackends}
 	resp.HasGpu = &gpuInfo.hasGPU
 	if gpuInfo.vendor != "" {
 		resp.GpuVendor = &gpuInfo.vendor
@@ -62,6 +70,14 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 	if usage, ok := rootDiskUsage(); ok {
 		resp.DiskUsedBytes = &usage.usedBytes
 		resp.DiskTotalBytes = &usage.totalBytes
+	}
+
+	storageProbe := s.discoverContainerStorage
+	if storageProbe == nil {
+		storageProbe = containerStorageUsage
+	}
+	if p, ok := storageProbe(); ok {
+		resp.ContainerStorage = &agentpbv2.DiskPartition{Mountpoint: p.mountpoint, Filesystem: p.filesystem, Device: p.device, UsedBytes: p.usedBytes, TotalBytes: p.totalBytes}
 	}
 
 	resp.MemTotalBytes, resp.CpuCount = hostMemAndCPUCount()

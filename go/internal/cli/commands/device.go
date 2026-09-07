@@ -230,6 +230,8 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			var memTotalBytes int64
 			var cpuCount uint32
 			var partitions []*agentpb.DiskPartition
+			var containerStorage *agentpb.DiskPartition
+			var gpuCapabilities *agentpb.GpuCapabilities
 			var netInterfaces []*agentpb.NetworkInterface
 			var hasGPU bool
 			var providerInfo *providers.ProviderDeviceInfo
@@ -273,6 +275,8 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				memTotalBytes = resp.GetMemTotalBytes()
 				cpuCount = resp.GetCpuCount()
 				partitions = resp.GetPartitions()
+				containerStorage = resp.GetContainerStorage()
+				gpuCapabilities = resp.GetGpuCapabilities()
 				netInterfaces = resp.GetNetworkInterfaces()
 				battery = resp.GetBattery()
 			} else if target.External != nil && target.Provider != nil {
@@ -339,6 +343,12 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if cpuCount > 0 {
 					out["cpuCount"] = cpuCount
 				}
+				if containerStorage != nil {
+					out["containerStorage"] = map[string]any{"mountpoint": containerStorage.GetMountpoint(), "filesystem": containerStorage.GetFilesystem(), "device": containerStorage.GetDevice(), "usedBytes": containerStorage.GetUsedBytes(), "totalBytes": containerStorage.GetTotalBytes()}
+				}
+				if gpuCapabilities != nil {
+					out["gpuCapabilities"] = map[string]any{"computeBackends": append([]string{}, gpuCapabilities.GetComputeBackends()...)}
+				}
 				if len(partitions) > 0 {
 					parts := make([]map[string]any, len(partitions))
 					for i, p := range partitions {
@@ -352,7 +362,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 					}
 					out["partitions"] = parts
 				}
-				if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes); ok {
+				if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes, containerStorage); ok {
 					out["diskWarning"] = map[string]any{
 						"mountpoint":       alert.Mountpoint,
 						"usedPercent":      alert.UsedPercent,
@@ -421,16 +431,23 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			if storageMedium != "" {
 				fmt.Printf("%s %s\n", tui.Dim("Storage:"), tui.Value(storageMedium))
 			}
-			if len(partitions) > 0 {
-				fmt.Print(formatPartitionTable(partitions))
+			if len(partitions) > 0 || containerStorage != nil {
+				fmt.Print(formatPartitionTable(partitions, containerStorage))
 			} else if diskUsedBytes != nil && diskTotalBytes != nil {
 				fmt.Printf("%s %s\n", tui.Dim("Disk Usage:"), tui.Value(formatDiskUsage(*diskUsedBytes, *diskTotalBytes)))
 			}
-			if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes); ok {
+			if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes, containerStorage); ok {
 				fmt.Println(tui.WarningMessage(diskUsageWarningText(alert)))
 			}
 			if len(netInterfaces) > 0 {
 				fmt.Print(formatNetworkInterfaces(netInterfaces))
+			}
+			if gpuCapabilities != nil {
+				backends := strings.Join(gpuCapabilities.GetComputeBackends(), ", ")
+				if backends == "" {
+					backends = "none detected"
+				}
+				fmt.Printf("%s %s\n", tui.Dim("GPU Compute:"), tui.Value(backends))
 			}
 			if hasGPU {
 				vendor := gpuVendor

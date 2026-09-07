@@ -140,7 +140,8 @@ Docker for local provider runs.
 | `WENDY_PLATFORM` | `nvidia-jetson` \| `generic` | Platform tier derived from the device type |
 | `WENDY_DEBUG` | `true` \| `false` | Set when `--debug` is passed. [`wendy project optimize`](project/optimize.md) flags it when it's declared (`ARG`/`ENV`) but no `RUN` step branches on it — gate your optimization level on it so debug builds aren't shipped to release. |
 | `WENDY_DEVICE_TYPE` | e.g. `jetson-agx-orin` | Raw device type; absent when unknown |
-| `WENDY_HAS_GPU` | `true` \| `false` | Absent on older agents |
+| `WENDY_HAS_GPU` | `true` \| `false` (hardware presence) | Absent on older agents |
+| `WENDY_HAS_CUDA` | `true` \| `false` (host CUDA support) | Falls back only to an explicit NVIDIA vendor on older agents |
 | `WENDY_GPU_VENDOR` | e.g. `nvidia`, `qualcomm` | Absent when no GPU is reported |
 | `WENDY_JETPACK_VERSION` | e.g. `6.0` | Jetson only |
 | `WENDY_JETPACK_MAJOR` | e.g. `6`, `7` | Jetson only; JetPack major for per-generation base-image selection |
@@ -200,3 +201,10 @@ Delegating a build to another device is a [`wendy run`](run.md#remote-build-host
 The reason is that the two commands mean different things by "build". `wendy run --build-host` has a target device: the build host builds the image and pushes it straight into *that* device's registry over the mesh. `wendy build` has no target — it leaves an image behind on the machine that built it — so a remote build would deposit the image on the build host and nowhere useful, which is worse than not offering the flag.
 
 Use `wendy run --build-host <device>` instead. To make a device willing to accept builds in the first place, see [`wendy device build-host`](device/build-host.md).
+
+CUDA-selecting Dockerfiles must use `WENDY_HAS_CUDA`. `WENDY_HAS_GPU`
+reports hardware presence, including Broadcom and other GPUs without CUDA.
+Device info exposes `gpuCapabilities.computeBackends` (`cuda`, `rocm`, `metal`);
+an empty list means no supported backend was detected, while an absent capability
+object means an older agent. `containerStorage` identifies the filesystem used by
+containerd; the existing disk scalar fields continue to describe the root filesystem.

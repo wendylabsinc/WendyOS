@@ -7,6 +7,27 @@ import WendyAgentGRPC
 
 @Suite("HardwareInventory parsing")
 struct HardwareInventoryParsingTests {
+    @Test("device metadata distinguishes Metal capability from legacy absence")
+    func metalMetadata() async throws {
+        let service = AgentService(
+            gpuDiscovery: GPUDiscovery(devices: {
+                [.init(name: "Apple GPU", vendor: "apple", computeBackends: ["metal"])]
+            }),
+            reportedVersion: { "test" }
+        )
+        let response = try await service.getAgentVersion(
+            request: ServerRequest(
+                metadata: [:],
+                message: Wendy_Agent_Services_V1_GetAgentVersionRequest()
+            ),
+            context: makeHardwareContext()
+        ).message
+        #expect(response.hasGpu_p)
+        #expect(response.gpuVendor == "apple")
+        #expect(response.hasGpuCapabilities)
+        #expect(response.gpuCapabilities.computeBackends == ["metal"])
+    }
+
     @Test("parses GPU from SPDisplaysDataType")
     func parsesGPU() {
         let json = Data(

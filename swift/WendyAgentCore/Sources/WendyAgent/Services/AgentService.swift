@@ -5,6 +5,8 @@ import WendyAgentGRPC
 
 struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     var hardware: any HardwareDiscovering = HardwareInventory()
+    var gpuDiscovery = GPUDiscovery()
+    var reportedVersion: @Sendable () -> String = { WendyAgent.version }
     var hostname: any HostnameSetting = ScutilHostname()
     var wifi: any WiFiManaging = WiFiController()
     var bluetooth: any BluetoothManaging = BluetoothScanner()
@@ -84,7 +86,7 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_GetAgentVersionResponse> {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         var response = Wendy_Agent_Services_V1_GetAgentVersionResponse()
-        response.version = WendyAgent.version
+        response.version = reportedVersion()
         response.os = "darwin"
         response.osVersion =
             "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
@@ -96,6 +98,12 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         response.memTotalBytes = Int64(clamping: ProcessInfo.processInfo.physicalMemory)
         response.cpuCount = UInt32(clamping: ProcessInfo.processInfo.activeProcessorCount)
         response.binarySha256 = self.binarySHA256
+        let devices = gpuDiscovery.devices()
+        response.hasGpu_p = !devices.isEmpty
+        if let device = devices.first { response.gpuVendor = device.vendor }
+        var capabilities = Wendy_Agent_Services_V1_GpuCapabilities()
+        capabilities.computeBackends = Array(Set(devices.flatMap(\.computeBackends))).sorted()
+        response.gpuCapabilities = capabilities
         return ServerResponse(message: response)
     }
 

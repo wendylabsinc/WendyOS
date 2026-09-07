@@ -73,8 +73,29 @@ func TestApplyDeviceBuildArgHints_DerivesJetpackMajor(t *testing.T) {
 func TestApplyDeviceBuildArgHints_OmitsUnreportedHints(t *testing.T) {
 	buildArgs := map[string]string{}
 	applyDeviceBuildArgHints(buildArgs, &agentpb.GetAgentVersionResponse{})
-	if len(buildArgs) != 0 {
-		t.Fatalf("expected no hints set for empty response, got %v", buildArgs)
+	if len(buildArgs) != 1 || buildArgs["WENDY_HAS_CUDA"] != "false" {
+		t.Fatalf("expected conservative CUDA hint for empty response, got %v", buildArgs)
+	}
+}
+
+func TestCUDAHintCapabilitiesAndLegacyFallback(t *testing.T) {
+	for _, tc := range []struct {
+		vendor string
+		caps   *agentpb.GpuCapabilities
+		want   string
+	}{
+		{"broadcom", &agentpb.GpuCapabilities{}, "false"},
+		{"nvidia", &agentpb.GpuCapabilities{}, "false"},
+		{"nvidia", &agentpb.GpuCapabilities{ComputeBackends: []string{"cuda"}}, "true"},
+		{"amd", &agentpb.GpuCapabilities{ComputeBackends: []string{"rocm"}}, "false"},
+		{"apple", &agentpb.GpuCapabilities{ComputeBackends: []string{"metal"}}, "false"},
+		{"nvidia", nil, "true"}, {"", nil, "false"},
+	} {
+		args := map[string]string{}
+		applyDeviceBuildArgHints(args, &agentpb.GetAgentVersionResponse{GpuVendor: &tc.vendor, GpuCapabilities: tc.caps})
+		if args["WENDY_HAS_CUDA"] != tc.want {
+			t.Fatalf("%s %+v: %v", tc.vendor, tc.caps, args)
+		}
 	}
 }
 
