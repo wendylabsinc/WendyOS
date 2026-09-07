@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -63,7 +64,7 @@ func ctxWithLeaf(leaf *x509.Certificate) context.Context {
 
 func TestCheckMTLS_OrgEnforcement(t *testing.T) {
 	logger := zap.NewNop()
-	const expectedOrg int32 = 7
+	expectedScope := certs.Scope{OrgID: 7}
 
 	tests := []struct {
 		name     string
@@ -160,7 +161,7 @@ func TestCheckMTLS_OrgEnforcement(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := ctxWithLeaf(tc.leaf)
-			err := CheckMTLS(ctx, logger, expectedOrg, tc.mode)
+			err := CheckMTLS(ctx, logger, expectedScope, tc.mode)
 			if got := status.Code(err); got != tc.wantCode {
 				t.Fatalf("CheckMTLS code = %v (err=%v); want %v", got, err, tc.wantCode)
 			}
@@ -173,7 +174,7 @@ func TestCheckMTLS_NoPeerCertificates(t *testing.T) {
 	ctx := peer.NewContext(context.Background(), &peer.Peer{
 		AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: nil}},
 	})
-	err := CheckMTLS(ctx, logger, 7, OrgModeGrace)
+	err := CheckMTLS(ctx, logger, certs.Scope{OrgID: 7}, OrgModeGrace)
 	if got := status.Code(err); got != codes.Unauthenticated {
 		t.Fatalf("CheckMTLS code = %v (err=%v); want Unauthenticated", got, err)
 	}
@@ -217,5 +218,121 @@ func TestOrgModeString(t *testing.T) {
 		if got := tc.mode.String(); got != tc.want {
 			t.Fatalf("OrgMode(%d).String() = %q; want %q", tc.mode, got, tc.want)
 		}
+	}
+}
+
+const testTenant = "6f1b7d3c-6b7e-4a2f-9c1e-2b4a8d5e0f31"
+const otherTenant = "00000000-0000-4000-8000-000000000000"
+
+// TestCheckMTLS_TenantEnforcement covers what WDY-2968 changed: a peer whose
+// only identity is a tenant SPIFFE principal is a recognised caller, compared
+// against this device's own tenant. The three-way split matters — a tenant that
+// differs is refused under every mode, while a tenant that simply cannot be
+// compared with this device's is the rotation window grace exists for.
+func TestCheckMTLS_TenantEnforcement(t *testing.T) {
+	logger := zap.NewNop()
+	deviceTenant := certs.Scope{TenantUUID: testTenant}
+	deviceOrg := certs.Scope{OrgID: 7}
+
+	principal := func(t *testing.T, tenant, rest string) *x509.Certificate {
+		return buildLeaf(leafOptions{
+			uris: []*url.URL{mustParseURL(t, "spiffe://wendy.sh/tenant/"+tenant+"/"+rest)},
+		})
+	}
+
+	tests := []struct {
+		name     string
+		leaf     *x509.Certificate
+		expected certs.Scope
+		mode     OrgMode
+		wantCode codes.Code // codes.OK means "allowed"
+	}{
+		{
+			// The bug: before this, an operator leaf renewed by pki-core had no
+			// urn:wendy SAN, so strict answered PermissionDenied on every RPC.
+			name:     "same tenant, operator principal, strict",
+			leaf:     principal(t, testTenant, "operator/auth0|abc"),
+			expected: deviceTenant,
+			mode:     OrgModeStrict,
+			wantCode: codes.OK,
+		},
+		{
+			name:     "same tenant, cloud-relayed user principal, strict",
+			leaf:     principal(t, testTenant, "service/user-5"),
+			expected: deviceTenant,
+			mode:     OrgModeStrict,
+			wantCode: codes.OK,
+		},
+		{
+			name:     "different tenant is refused under strict",
+			leaf:     principal(t, otherTenant, "operator/auth0|abc"),
+			expected: deviceTenant,
+			mode:     OrgModeStrict,
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			// Grace forgives an identity it cannot read, never one it can read
+			// and that says someone else.
+			name:     "different tenant is refused under grace too",
+			leaf:     principal(t, otherTenant, "operator/auth0|abc"),
+			expected: deviceTenant,
+			mode:     OrgModeGrace,
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "incomparable scopes are refused under strict",
+			leaf:     principal(t, testTenant, "operator/auth0|abc"),
+			expected: deviceOrg,
+			mode:     OrgModeStrict,
+			wantCode: codes.PermissionDenied,
+		},
+		{
+			name:     "incomparable scopes are allowed under grace",
+			leaf:     principal(t, testTenant, "operator/auth0|abc"),
+			expected: deviceOrg,
+			mode:     OrgModeGrace,
+			wantCode: codes.OK,
+		},
+		{
+			// A transitional leaf carries both SANs, so an old-chain device can
+			// still compare the org it understands.
+			name: "transitional leaf matches an org-only device",
+			leaf: buildLeaf(leafOptions{uris: []*url.URL{
+				mustParseURL(t, "spiffe://wendy.sh/tenant/"+testTenant+"/service/asset-42"),
+				mustParseURL(t, "urn:wendy:org:7:asset:42"),
+			}}),
+			expected: deviceOrg,
+			mode:     OrgModeStrict,
+			wantCode: codes.OK,
+		},
+		{
+			name:     "off skips the check entirely",
+			leaf:     principal(t, otherTenant, "operator/auth0|abc"),
+			expected: deviceTenant,
+			mode:     OrgModeOff,
+			wantCode: codes.OK,
+		},
+		{
+			name:     "a malformed principal is anomalous, refused under grace",
+			leaf:     principal(t, "not-a-uuid", "operator/auth0|abc"),
+			expected: deviceTenant,
+			mode:     OrgModeGrace,
+			wantCode: codes.PermissionDenied,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckMTLS(ctxWithLeaf(tc.leaf), logger, tc.expected, tc.mode)
+			if tc.wantCode == codes.OK {
+				if err != nil {
+					t.Fatalf("CheckMTLS = %v, want allowed", err)
+				}
+				return
+			}
+			if got := status.Code(err); got != tc.wantCode {
+				t.Fatalf("CheckMTLS code = %v (%v), want %v", got, err, tc.wantCode)
+			}
+		})
 	}
 }

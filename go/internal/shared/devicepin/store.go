@@ -106,11 +106,27 @@ func Open(dir string) (*Store, error) {
 // mismatch — so any change to it still forces the write through.
 func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error {
 	identity, ok, err := certs.IdentityFromCert(leaf)
-	if err != nil || !ok || identity.EntityType != "asset" {
+	if err != nil || !ok || identity.EntityType != certs.EntityAsset {
 		return nil
 	}
 
 	key := identity.IdentityKey()
+	// A device that moves onto a pki-core chain keeps its pin. Its leaf is filed
+	// under the SPIFFE principal now, but the entry recorded before the cutover
+	// is filed under the urn:wendy URN — and a transitional leaf carries both, so
+	// this is the one moment the two names are provably the same device. Carry
+	// the entry over under the new name instead of silently starting a fresh
+	// TOFU, which is what an attacker substituting the device would look like.
+	renamed := false
+	if legacy := identity.LegacyURN(); key != legacy && legacy != "" {
+		if _, pinnedNow := s.devices[key]; !pinnedNow {
+			if prior, hadLegacy := s.devices[legacy]; hadLegacy {
+				s.devices[key] = prior
+				delete(s.devices, legacy)
+				renamed = true
+			}
+		}
+	}
 	fingerprint := spkiFingerprint(leaf)
 	notAfter := leaf.NotAfter.UTC().Format(time.RFC3339)
 
@@ -125,7 +141,7 @@ func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 		}
 	}
 
-	unchanged := pinned &&
+	unchanged := pinned && !renamed &&
 		existing.SPKIFingerprint == fingerprint &&
 		existing.NotAfter == notAfter &&
 		existing.DisplayName == displayName

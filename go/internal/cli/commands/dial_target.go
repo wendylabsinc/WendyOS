@@ -148,9 +148,7 @@ func newDialTargetCandidates(pinKey string, addrs []string) dialTarget {
 		return target
 	}
 	target.PinnedKey = key
-	if pin.AssetID != "" {
-		target.Expected = &certs.WendyIdentity{OrgID: int32(pin.OrgID), EntityType: "asset", EntityID: pin.AssetID}
-	}
+	target.Expected = expectedIdentityForPin(pin)
 	return target
 }
 
@@ -220,10 +218,30 @@ func isLoopbackHost(host string) bool {
 // device's names — hostname, mesh name, or display name — is honoured here.
 func expectedIdentityFor(pinKey string) *certs.WendyIdentity {
 	pin, _, ok := governingPin(pinKey)
-	if !ok || pin.AssetID == "" {
+	if !ok {
 		return nil
 	}
-	return &certs.WendyIdentity{OrgID: int32(pin.OrgID), EntityType: "asset", EntityID: pin.AssetID}
+	return expectedIdentityForPin(pin)
+}
+
+// expectedIdentityForPin turns a stored pin into the identity a handshake must
+// match, or nil when the pin names no device.
+//
+// A recorded tenant SPIFFE principal is preferred over the (org, asset) pair:
+// certs.WendyIdentity.SameEntity compares principals when both sides carry one,
+// and a pki-core-issued leaf carries no org at all, so comparing the pair alone
+// would compare an id against a blank org and refuse the very device the pin
+// was written from.
+func expectedIdentityForPin(pin config.DevicePin) *certs.WendyIdentity {
+	if pin.Principal != "" {
+		if id, err := certs.ParsePrincipal(pin.Principal); err == nil {
+			return &id
+		}
+	}
+	if pin.AssetID == "" {
+		return nil
+	}
+	return &certs.WendyIdentity{OrgID: int32(pin.OrgID), EntityType: certs.EntityAsset, EntityID: pin.AssetID}
 }
 
 // pinCandidateKeys returns the keys a pin for pinKey may have been recorded

@@ -241,3 +241,27 @@ func TestNewSignerRejectsNonOperatorPrincipal(t *testing.T) {
 		t.Fatal("newSigner accepted a non-operator principal")
 	}
 }
+
+// A cloud-relayed session spells the same human "service/user-<id>" rather than
+// "operator/<sub>" (AAA contract D17). Refusing it was WDY-2968's spelling bug:
+// both are operator identities and both must sign.
+func TestNewSignerAcceptsRelayedUserPrincipal(t *testing.T) {
+	auth, _, _ := testAuth(t)
+	auth.Certificates[0].PrincipalURI = "spiffe://wendy.sh/tenant/" + testTenant + "/service/user-42"
+	signer, err := newSigner(auth)
+	if err != nil {
+		t.Fatalf("newSigner: %v", err)
+	}
+	if signer.tenantUUID != testTenant {
+		t.Fatalf("tenantUUID = %q, want %q", signer.tenantUUID, testTenant)
+	}
+}
+
+// A device leaf is not an actor that may sign a privileged cloud mutation.
+func TestNewSignerRejectsDevicePrincipal(t *testing.T) {
+	auth, _, _ := testAuth(t)
+	auth.Certificates[0].PrincipalURI = "spiffe://wendy.sh/tenant/" + testTenant + "/device/thor-1"
+	if _, err := newSigner(auth); err == nil {
+		t.Fatal("newSigner accepted a device principal as an operator")
+	}
+}

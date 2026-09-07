@@ -83,9 +83,9 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 // extraOpts; those run after the mandatory mTLS check.
 // logger may be nil; when provided, rejected client certificates are logged at WARN level.
 // notBeforeFloor is forwarded to NewTLSConfig; see its documentation for details.
-// expectedOrgID and orgMode are forwarded to the mandatory mTLS interceptors, which
-// enforce organization-equality between the connecting client cert and this device.
-func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time, expectedOrgID int32, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
+// expected and orgMode are forwarded to the mandatory mTLS interceptors, which
+// enforce tenant-equality between the connecting client cert and this device.
+func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
 	tlsConfig, err := NewTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor)
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
@@ -96,8 +96,8 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		grpc.Creds(creds),
 		// mTLS interceptors are mandatory: they run before any caller-provided interceptors
 		// so that no handler can be reached without a verified client certificate.
-		grpc.ChainUnaryInterceptor(interceptor.UnaryMTLSInterceptor(logger, expectedOrgID, orgMode)),
-		grpc.ChainStreamInterceptor(interceptor.StreamMTLSInterceptor(logger, expectedOrgID, orgMode)),
+		grpc.ChainUnaryInterceptor(interceptor.UnaryMTLSInterceptor(logger, expected, orgMode)),
+		grpc.ChainStreamInterceptor(interceptor.StreamMTLSInterceptor(logger, expected, orgMode)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
@@ -174,12 +174,22 @@ func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*
 // could otherwise impersonate the mDNS-advertised target and MITM the
 // connection. The returned config's VerifyPeerCertificate runs the normal
 // chain check first, then requires the peer leaf to parse as a wendy asset
-// identity matching wantOrgID and wantAssetID exactly.
-func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, wantOrgID int32, wantAssetID string) (*tls.Config, error) {
+// identity with id wantAssetID, in this device's own tenant.
+//
+// The tenant is read off certPEM — this device's own leaf — rather than passed
+// in: the invariant a mesh dial enforces is "the same tenant I am in", and both
+// callers were already passing their own org. Deriving it here means a device
+// whose certificate has moved from a urn:wendy org to a pki-core tenant SPIFFE
+// principal compares like with like without either caller learning about it.
+// A device that cannot determine its own tenant skips the tenant half of the
+// check (the asset id still pins), mirroring the interceptor's grace behaviour
+// rather than bricking mesh on an unidentifiable leaf.
+func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, wantAssetID string) (*tls.Config, error) {
 	base, err := NewClientTLSConfig(certPEM, chainPEM, keyPEM, logger)
 	if err != nil {
 		return nil, err
 	}
+	ownScope, haveOwnScope := certs.ScopeFromCertPEM(certPEM)
 	chainVerify := base.VerifyPeerCertificate
 	pinnedVerify := func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 		if err := chainVerify(rawCerts, verifiedChains); err != nil {
@@ -199,12 +209,22 @@ func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *z
 		if !found {
 			return errors.New("mtls: peer certificate carries no wendy identity")
 		}
-		if ident.EntityType != "asset" {
-			return fmt.Errorf("mtls: expected peer asset %s in org %d, got entity type %q", wantAssetID, wantOrgID, ident.EntityType)
+		if ident.EntityType != certs.EntityAsset {
+			return fmt.Errorf("mtls: expected peer asset %s in %s, got entity type %q", wantAssetID, ownScope, ident.EntityType)
 		}
-		if ident.OrgID != wantOrgID || ident.EntityID != wantAssetID {
-			return fmt.Errorf("mtls: expected peer asset %s in org %d, got asset %s in org %d",
-				wantAssetID, wantOrgID, ident.EntityID, ident.OrgID)
+		// wantAssetID is the int32 cloud asset id the mesh addresses peers by
+		// (mDNS TXT "assetid" → meshDialLAN). A device enrolled directly against
+		// pki-core over ACME is named "device/<deviceID>" instead and has no
+		// such id, so it cannot be reached over the mesh LAN path at all — the
+		// gap is in mesh addressing, not here, and closing it means teaching
+		// discovery to advertise the principal (WDY-2968 follow-up).
+		if ident.EntityID != wantAssetID {
+			return fmt.Errorf("mtls: expected peer asset %s in %s, got asset %s in %s",
+				wantAssetID, ownScope, ident.EntityID, ident.Scope())
+		}
+		if haveOwnScope && !ident.Scope().Matches(ownScope) {
+			return fmt.Errorf("mtls: expected peer asset %s in %s, got asset %s in %s",
+				wantAssetID, ownScope, ident.EntityID, ident.Scope())
 		}
 		return nil
 	}

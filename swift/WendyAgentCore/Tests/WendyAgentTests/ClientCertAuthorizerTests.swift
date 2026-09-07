@@ -118,7 +118,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: ca.pem,
-            deviceOrg: 7
+            deviceScope: .init(tenantUUID: nil, orgID: 7)
         )
         #expect(authorized)
     }
@@ -131,7 +131,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: ca.pem,
-            deviceOrg: 7,
+            deviceScope: .init(tenantUUID: nil, orgID: 7),
             mode: .strict
         )
         #expect(!authorized)
@@ -146,7 +146,7 @@ struct ClientCertAuthorizerTests {
             let authorized = await ClientCertAuthorizer.isAuthorized(
                 peerCertificatesDER: [try Self.der(client)],
                 trustRootsPEM: ca.pem,
-                deviceOrg: 7,
+                deviceScope: .init(tenantUUID: nil, orgID: 7),
                 mode: mode
             )
             #expect(authorized, "mode \(mode.name) should accept a matching org URN")
@@ -162,7 +162,7 @@ struct ClientCertAuthorizerTests {
             let authorized = await ClientCertAuthorizer.isAuthorized(
                 peerCertificatesDER: [try Self.der(client)],
                 trustRootsPEM: ca.pem,
-                deviceOrg: 7,
+                deviceScope: .init(tenantUUID: nil, orgID: 7),
                 mode: mode
             )
             #expect(!authorized, "mode \(mode.name) must reject a mismatched org URN")
@@ -179,7 +179,7 @@ struct ClientCertAuthorizerTests {
             let authorized = await ClientCertAuthorizer.isAuthorized(
                 peerCertificatesDER: [try Self.der(client)],
                 trustRootsPEM: ca.pem,
-                deviceOrg: 7,
+                deviceScope: .init(tenantUUID: nil, orgID: 7),
                 mode: .off
             )
             #expect(authorized)
@@ -195,7 +195,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: deviceCA.pem,
-            deviceOrg: 7,
+            deviceScope: .init(tenantUUID: nil, orgID: 7),
             mode: .off
         )
         #expect(!authorized)
@@ -209,7 +209,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: ca.pem,
-            deviceOrg: nil
+            deviceScope: nil
         )
         #expect(!authorized)
     }
@@ -222,7 +222,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: ca.pem,
-            deviceOrg: 7
+            deviceScope: .init(tenantUUID: nil, orgID: 7)
         )
         #expect(authorized)
     }
@@ -235,7 +235,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: ca.pem,
-            deviceOrg: 7
+            deviceScope: .init(tenantUUID: nil, orgID: 7)
         )
         #expect(!authorized)
     }
@@ -250,7 +250,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: deviceCA.pem,
-            deviceOrg: 7
+            deviceScope: .init(tenantUUID: nil, orgID: 7)
         )
         #expect(!authorized)
     }
@@ -268,7 +268,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client), try Self.der(rogueCA.certificate)],
             trustRootsPEM: deviceCA.pem,
-            deviceOrg: 7
+            deviceScope: .init(tenantUUID: nil, orgID: 7)
         )
         #expect(!authorized)
     }
@@ -286,14 +286,14 @@ struct ClientCertAuthorizerTests {
         let rejectsTrusted = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(trusted)],
             trustRootsPEM: ca.pem,
-            deviceOrg: nil
+            deviceScope: nil
         )
         #expect(!rejectsTrusted)
 
         let rejectsUntrusted = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(untrusted)],
             trustRootsPEM: ca.pem,
-            deviceOrg: nil
+            deviceScope: nil
         )
         #expect(!rejectsUntrusted)
     }
@@ -304,7 +304,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [],
             trustRootsPEM: ca.pem,
-            deviceOrg: 7
+            deviceScope: .init(tenantUUID: nil, orgID: 7)
         )
         #expect(!authorized)
     }
@@ -316,7 +316,7 @@ struct ClientCertAuthorizerTests {
         let authorized = await ClientCertAuthorizer.isAuthorized(
             peerCertificatesDER: [try Self.der(client)],
             trustRootsPEM: "",
-            deviceOrg: 7
+            deviceScope: .init(tenantUUID: nil, orgID: 7)
         )
         #expect(!authorized)
     }
@@ -326,6 +326,6 @@ struct ClientCertAuthorizerTests {
         let ca = try Self.makeCA()
         let leaf = try Self.makeLeaf(org: 12, asset: 34, ca: ca)
         let pem = try leaf.serializeAsPEM().pemString
-        #expect(ClientCertAuthorizer.organizationID(fromLeafPEM: pem) == 12)
+        #expect(ClientCertAuthorizer.scope(fromLeafPEM: pem) == .init(tenantUUID: nil, orgID: 12))
     }
 }

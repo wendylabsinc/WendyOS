@@ -19,13 +19,32 @@ Subject CommonName:
 
 | Entity | URI SAN format |
 |--------|---------------|
-| User (CLI) | `urn:wendy:org:‹orgID›:user:‹userID›` |
-| Device / agent | `urn:wendy:org:‹orgID›:asset:‹assetID›` |
+| Operator (pki-core identity endpoint) | `spiffe://wendy.sh/tenant/‹uuid›/operator/‹sub›` |
+| User (CLI, cloud-relayed) | `spiffe://wendy.sh/tenant/‹uuid›/service/user-‹userID›` |
+| Device / agent (cloud-relayed) | `spiffe://wendy.sh/tenant/‹uuid›/service/asset-‹assetID›` |
+| Device (ACME / EST, direct) | `spiffe://wendy.sh/tenant/‹uuid›/device/‹deviceID›` |
+| User (CLI) — legacy chain | `urn:wendy:org:‹orgID›:user:‹userID›` |
+| Device / agent — legacy chain | `urn:wendy:org:‹orgID›:asset:‹assetID›` |
 
-The URI SAN is what `IdentityFromCert` (Go) and `OrgIdentity.identity(fromLeaf:)`
-(Swift) resolve first. The CommonName (`sh/wendy/‹org›/‹asset›` or
-`wendy/user/‹uid›`) is retained for backward compatibility but is treated as
-the fallback when no URI SAN is present.
+The **tenant SPIFFE principal is the identity**. It is what `IdentityFromCert`
+(Go) and `OrgIdentity.identity(fromLeaf:)` (Swift) resolve first, because it is
+the only identity pki-core carries across a renewal: the renew path replaces a
+CSR's URI SAN list wholesale with the principal read off the presented
+certificate, so a renewed leaf comes back with its `urn:wendy:org:…` SAN gone.
+
+The `urn:wendy:org:…` SAN is read second and only as a legacy old-chain
+identity. On a transitional leaf that carries both, the principal decides *who*
+the caller is and the URN contributes only its organisation, so a peer that can
+still compare nothing but organisations keeps working. The CommonName
+(`sh/wendy/‹org›/‹asset›` or `wendy/user/‹uid›`) is the last fallback, used only
+when no URI SAN is present.
+
+Two identities are compared in whichever vocabulary they share: tenant UUIDs
+when both carry one, organisations when both carry one. A pair with no shared
+vocabulary — a SPIFFE-only caller against an old-chain device, or the reverse —
+is **not** a match, because no mapping exists between a tenant UUID and an
+int32 organisation and answering "close enough" is exactly what a cross-tenant
+caller would need.
 
 Legacy tokens that carry no `org_id` claim (user enrollment only) produce a
 CSR with a CommonName only — no URI SAN — so existing enrollments continue to
@@ -75,7 +94,7 @@ The CLI verifies device server certificates on all mTLS connections (BLE, LAN gR
 
 ## Device identity pinning (default device)
 
-On the first successful connection to a hostname, the CLI records that hostname's identity in `~/.wendy/config.json` under `devicePins`: the **organisation**, the **cloud host** that issued its certificate, and the **asset id** from the device certificate's `urn:wendy:org:<org>:asset:<assetID>` URI SAN. Every later connection to that hostname is checked against the pin — this is what feeds `ServerVerifyOpts.ExpectedIdentity` above, so a wrong device is rejected during the TLS handshake itself, not after.
+On the first successful connection to a hostname, the CLI records that hostname's identity in `~/.wendy/config.json` under `devicePins`: the **organisation**, the **cloud host** that issued its certificate, and the **asset id** from the device certificate's identity SAN (the name of its tenant SPIFFE principal, or the legacy `urn:wendy:org:<org>:asset:<assetID>` URN on an old chain), and that **principal** when it has one. Every later connection to that hostname is checked against the pin — this is what feeds `ServerVerifyOpts.ExpectedIdentity` above, so a wrong device is rejected during the TLS handshake itself, not after.
 
 The pin is deliberately not a certificate fingerprint — a device legitimately rotates and re-enrolls certificates, and that must not look like an attack. What trips it is a change of *who* is answering:
 
@@ -93,12 +112,13 @@ The asset id is read only from a certificate that passed chain and org verificat
 
 ```sh
 wendy device unpin <hostname>
+wendy device unpin spiffe://wendy.sh/tenant/<uuid>/device/<id>
 wendy device unpin urn:wendy:org:<org>:asset:<id>
 ```
 
 This clears the local pin only — it never dials the device, so it works even when the device is offline, wiped, or gone. The next successful connection to that hostname records a fresh pin from scratch. Naming a device explicitly with `wendy device set-default <hostname>` has the same clearing effect, since typing the hostname is itself the user asserting "I mean that device."
 
-Both forms are accepted because the two stores are keyed differently. The identity-change refusals above name a hostname, and the hostname form clears it. The **SPKI** refusal (point 4 above) can only name the certificate identity URN, because that is what `known_devices.json` is keyed by and there is often no hostname to offer: `wendy device list` and the device picker dial the device's IP, and an agent that never advertises `orgid` in its mDNS records leaves nothing locally that maps a name to an asset. Copy the URN out of the refusal and pass it back — it clears the SPKI entry and any `devicePins` entry naming the same asset.
+Both forms are accepted because the two stores are keyed differently. The identity-change refusals above name a hostname, and the hostname form clears it (a pin records its device's principal on the first connect after the SPIFFE cutover, which is how the hostname form still reaches the SPKI entry). The **SPKI** refusal (point 4 above) can only name the certificate identity, because that is what `known_devices.json` is keyed by — the tenant SPIFFE principal for a pki-core-issued device, the legacy URN for an old chain and there is often no hostname to offer: `wendy device list` and the device picker dial the device's IP, and an agent that never advertises `orgid` in its mDNS records leaves nothing locally that maps a name to an asset. Copy the identity out of the refusal and pass it back — it clears the SPKI entry and any `devicePins` entry naming the same asset.
 
 Unpinning by hostname also clears pins filed under the device's *other* names (the cloud roster's asset name, its mesh name), because one device is legitimately pinned under several — but only when those pins name the same organisation and asset. Those alternate names come from mDNS, which is unauthenticated, so a pin naming a *different* asset is a different device's pin and is left alone. Whatever is cleared is printed, one line per entry, so an unpin never removes trust state silently.
 

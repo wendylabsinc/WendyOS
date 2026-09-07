@@ -6,59 +6,187 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 const wendyOrgURNPrefix = "urn:wendy:org:"
 
-// WendyIdentity holds the Wendy org and entity identity extracted from a certificate.
-type WendyIdentity struct {
+// tenantSPIFFEPrefix is the trust domain and tenant path pki-core mints every
+// current-chain leaf under: "spiffe://wendy.sh/tenant/<uuid>/<kind>/<name>".
+const tenantSPIFFEPrefix = "spiffe://wendy.sh/tenant/"
+
+// Principal kinds pki-core mints under a tenant, per the AAA contract §4.2/D17:
+// operator (a human), service (a service account — a machine user privileged
+// exactly as a human), device (a device leaf), signer (code signing, not an
+// actor). Cloud additionally spells its relayed leaves "service/user-<id>" and
+// "service/asset-<id>", which parse into the same user/asset entity types the
+// legacy URN produced.
+const (
+	kindOperator = "operator"
+	kindService  = "service"
+	kindDevice   = "device"
+	kindSigner   = "signer"
+)
+
+// EntityType values a WendyIdentity can carry. "signer" exists so a code-signing
+// leaf parses into something nameable and is then refused by the actor gates,
+// rather than being mistaken for an operator.
+const (
+	EntityUser   = "user"
+	EntityAsset  = "asset"
+	EntitySigner = "signer"
+)
+
+// Scope is the tenant an identity belongs to.
+//
+// pki-core is the identity authority and scopes everything it mints by tenant
+// UUID; the int32 org survives only on old-chain certificates that predate
+// tenant SPIFFE SANs. Both are carried because a transitional leaf presents
+// both SANs, and a comparison is only meaningful between two scopes expressed
+// in the same terms.
+type Scope struct {
+	TenantUUID string
 	OrgID      int32
-	EntityType string // "user" or "asset"
-	EntityID   string // numeric ID as string
 }
 
-// IdentityKey returns the canonical URN string used as a pin-store key.
+// Known reports whether this scope names anything at all.
+func (s Scope) Known() bool { return s.TenantUUID != "" || s.OrgID > 0 }
+
+// Matches reports whether two scopes provably name the same tenant.
+//
+// Tenant UUIDs are compared when both sides have one; otherwise the legacy org
+// is compared when both sides have one. A scope pair with no shared vocabulary
+// — a SPIFFE-only peer against an org-only expectation — is NOT a match: there
+// is no mapping between a tenant UUID and an int32 org, and answering "equal"
+// on an unprovable pair is exactly the silent disarming this replaces.
+func (s Scope) Matches(o Scope) bool {
+	if s.TenantUUID != "" && o.TenantUUID != "" {
+		return s.TenantUUID == o.TenantUUID
+	}
+	if s.OrgID > 0 && o.OrgID > 0 {
+		return s.OrgID == o.OrgID
+	}
+	return false
+}
+
+// Comparable reports whether two scopes are expressed in a shared vocabulary.
+//
+// It is what separates "a different tenant" from "no way to tell": Matches
+// returns false for both, but only the first is a cross-tenant attempt. A
+// caller that offers a migration grace period needs to forgive the second
+// without forgiving the first.
+func (s Scope) Comparable(o Scope) bool {
+	return (s.TenantUUID != "" && o.TenantUUID != "") || (s.OrgID > 0 && o.OrgID > 0)
+}
+
+// String renders a scope for logs. Neither half is PII.
+func (s Scope) String() string {
+	switch {
+	case s.TenantUUID != "" && s.OrgID > 0:
+		return fmt.Sprintf("tenant %s (org %d)", s.TenantUUID, s.OrgID)
+	case s.TenantUUID != "":
+		return "tenant " + s.TenantUUID
+	case s.OrgID > 0:
+		return fmt.Sprintf("org %d", s.OrgID)
+	default:
+		return "no scope"
+	}
+}
+
+// WendyIdentity holds the identity extracted from a certificate.
+//
+// Principal/TenantUUID are the authoritative pair — the tenant SPIFFE SAN
+// pki-core stamps on every leaf it issues or renews. OrgID/EntityType/EntityID
+// are the legacy urn:wendy reading, present only on old chains and on the
+// transitional leaves cloud mints carrying both SANs.
+type WendyIdentity struct {
+	OrgID      int32
+	EntityType string // "user", "asset" or "signer"
+	EntityID   string // user/asset id, or the device id for a device principal
+	TenantUUID string // pki-core tenant; "" on an old-chain certificate
+	Principal  string // full spiffe:// URI; "" on an old-chain certificate
+}
+
+// Scope returns the tenant this identity belongs to.
+func (w WendyIdentity) Scope() Scope {
+	return Scope{TenantUUID: w.TenantUUID, OrgID: w.OrgID}
+}
+
+// IdentityKey returns the canonical string used as a pin-store key: the SPIFFE
+// principal when the certificate carries one, and the legacy URN otherwise.
+//
+// The principal is the durable choice — pki-core carries it across every
+// renewal by construction, whereas the URN is dropped by any renewal — so a pin
+// filed under it survives the certificate lifecycle the URN does not.
 func (w WendyIdentity) IdentityKey() string {
+	if w.Principal != "" {
+		return w.Principal
+	}
+	return w.LegacyURN()
+}
+
+// LegacyURN returns the urn:wendy identity URN this identity would have carried
+// on an old chain, or "" when it has no legacy org reading. It is what a pin
+// written before the SPIFFE cutover is filed under.
+func (w WendyIdentity) LegacyURN() string {
+	if w.OrgID <= 0 || w.EntityType == "" || w.EntityID == "" {
+		return ""
+	}
 	return fmt.Sprintf("urn:wendy:org:%d:%s:%s", w.OrgID, w.EntityType, w.EntityID)
 }
 
-// UserURN returns the canonical Wendy identity URN for a user:
-// "urn:wendy:org:<org>:user:<userID>". This is the URI SAN a user (CLI)
-// certificate carries as its authoritative identity.
+// SameEntity reports whether two identities provably name the same principal.
+//
+// Principals are compared when both sides have one; otherwise the legacy
+// scope+type+id triple must match. As with Scope.Matches, a pair with no shared
+// vocabulary is not a match.
+func (w WendyIdentity) SameEntity(o WendyIdentity) bool {
+	if w.Principal != "" && o.Principal != "" {
+		return w.Principal == o.Principal
+	}
+	if w.EntityType != o.EntityType || w.EntityID == "" || w.EntityID != o.EntityID {
+		return false
+	}
+	return w.Scope().Matches(o.Scope())
+}
+
+// UserURN returns the legacy Wendy identity URN for a user:
+// "urn:wendy:org:<org>:user:<userID>".
 func UserURN(orgID int32, userID string) string {
-	return WendyIdentity{OrgID: orgID, EntityType: "user", EntityID: userID}.IdentityKey()
+	return WendyIdentity{OrgID: orgID, EntityType: EntityUser, EntityID: userID}.LegacyURN()
 }
 
-// AssetURN returns the canonical Wendy identity URN for an asset:
-// "urn:wendy:org:<org>:asset:<assetID>". This is the URI SAN a device (agent)
-// certificate carries as its authoritative identity.
+// AssetURN returns the legacy Wendy identity URN for an asset:
+// "urn:wendy:org:<org>:asset:<assetID>".
 func AssetURN(orgID, assetID int32) string {
-	return WendyIdentity{OrgID: orgID, EntityType: "asset", EntityID: strconv.Itoa(int(assetID))}.IdentityKey()
+	return WendyIdentity{OrgID: orgID, EntityType: EntityAsset, EntityID: strconv.Itoa(int(assetID))}.LegacyURN()
 }
 
-// tenantSPIFFEPrefix is the trust domain and tenant path Wendy Cloud mints
-// under. Cloud relays every client leaf through pki-core's "service-identity"
-// profile, so the principal kind is always "service" — never "device", which
-// pki-core would refuse for a profile-kind mismatch.
-const tenantSPIFFEPrefix = "spiffe://wendy.sh/tenant/"
-
-// AssetSPIFFEURI returns the canonical tenant SPIFFE principal for a device:
+// AssetSPIFFEURI returns the tenant SPIFFE principal cloud mints for a device
+// it relays through the service-identity profile:
 // "spiffe://wendy.sh/tenant/<tenantUUID>/service/asset-<assetID>".
 //
 // Cloud refuses to sign a grant unless the CSR carries exactly this URI SAN
-// (WDY-2498/WDY-2584), and pki-core then binds the grant principal to it. It is
-// carried *alongside* the urn:wendy AssetURN, not instead of it: the urn is what
-// the agent's own org gate reads out of a peer certificate, so dropping it would
-// silently disarm org-equality enforcement.
+// (WDY-2498/WDY-2584). A device enrolled directly against pki-core over
+// ACME/EST gets "device/<deviceID>" instead; both parse to an asset entity.
 func AssetSPIFFEURI(tenantUUID string, assetID int32) string {
 	return tenantSPIFFEPrefix + tenantUUID + "/service/asset-" + strconv.Itoa(int(assetID))
 }
 
-// UserSPIFFEURI returns the canonical tenant SPIFFE principal for an operator:
-// "spiffe://wendy.sh/tenant/<tenantUUID>/service/user-<userID>". See
-// AssetSPIFFEURI for why the kind is "service" and why it does not replace UserURN.
+// UserSPIFFEURI returns the tenant SPIFFE principal cloud mints for a user:
+// "spiffe://wendy.sh/tenant/<tenantUUID>/service/user-<userID>". A cert issued
+// by pki-core's own operator identity endpoint carries "operator/<sub>"; both
+// parse to a user entity.
 func UserSPIFFEURI(tenantUUID, userID string) string {
 	return tenantSPIFFEPrefix + tenantUUID + "/service/user-" + userID
+}
+
+// DeviceSPIFFEURI returns the tenant SPIFFE principal pki-core stamps on a leaf
+// enrolled over ACME or EST: "spiffe://wendy.sh/tenant/<tenantUUID>/device/<deviceID>".
+// The device id is path-shaped and may carry slashes.
+func DeviceSPIFFEURI(tenantUUID, deviceID string) string {
+	return tenantSPIFFEPrefix + tenantUUID + "/" + kindDevice + "/" + deviceID
 }
 
 // TenantPrincipalFromCert returns the tenant SPIFFE principal a leaf carries,
@@ -83,44 +211,140 @@ func TenantPrincipalFromCert(leaf *x509.Certificate) (string, bool) {
 	return found, found != ""
 }
 
-// ParseIdentityURN parses a canonical Wendy identity URN —
-// "urn:wendy:org:<org>:(user|asset):<id>", the exact string IdentityKey
-// produces — back into a WendyIdentity.
+// ParsePrincipal parses a tenant SPIFFE principal —
+// "spiffe://wendy.sh/tenant/<uuid>/<kind>/<name>" — into a WendyIdentity.
 //
-// It exists because that URN is user-facing: it is the key the device pin store
-// is filed under and the key an SPKI refusal prints, so `wendy device unpin`
-// has to accept it as an argument. Parsing goes through the same
-// parseWendyOrgURN the certificate path uses, so what the CLI accepts from a
-// user and what it reads out of a certificate can never drift apart — a second
-// hand-rolled parser here would be a second definition of what a Wendy identity
-// is.
-func ParseIdentityURN(urn string) (WendyIdentity, error) {
-	return parseWendyOrgURN(strings.TrimSpace(urn))
+// Every kind pki-core mints is accepted, because the parser is the one place
+// that decides what a Wendy identity is and a kind it refuses is an actor no
+// gate can see. The name of a device principal is path-shaped and keeps its
+// slashes; cloud's "service/user-<id>" and "service/asset-<id>" spellings are
+// unwrapped to the user/asset entity types the rest of the code compares on.
+func ParsePrincipal(principal string) (WendyIdentity, error) {
+	rest, ok := strings.CutPrefix(principal, tenantSPIFFEPrefix)
+	if !ok {
+		return WendyIdentity{}, fmt.Errorf("not a wendy tenant SPIFFE principal: %s", principal)
+	}
+	tenant, kindAndName, ok := strings.Cut(rest, "/")
+	if !ok {
+		return WendyIdentity{}, fmt.Errorf("SPIFFE principal has no kind: %s", principal)
+	}
+	// pki-core routes by the tenant UUID and compares it canonically, so a
+	// non-canonical spelling of the same tenant is a different string to every
+	// downstream comparison. Reject it here rather than let two spellings of one
+	// tenant fail to match each other.
+	if parsed, err := uuid.Parse(tenant); err != nil || parsed.String() != tenant {
+		return WendyIdentity{}, fmt.Errorf("SPIFFE principal has non-canonical tenant UUID: %s", principal)
+	}
+	kind, name, ok := strings.Cut(kindAndName, "/")
+	if !ok || name == "" {
+		return WendyIdentity{}, fmt.Errorf("SPIFFE principal has no name: %s", principal)
+	}
+
+	id := WendyIdentity{TenantUUID: tenant, Principal: principal, EntityID: name}
+	switch kind {
+	case kindOperator:
+		id.EntityType = EntityUser
+	case kindDevice:
+		id.EntityType = EntityAsset
+	case kindSigner:
+		id.EntityType = EntitySigner
+	case kindService:
+		// A service account is a machine user (AAA contract D17). Cloud encodes
+		// the entity it relayed in the name; anything else is a plain service
+		// account and reads as a user.
+		switch {
+		case strings.HasPrefix(name, "asset-"):
+			id.EntityType, id.EntityID = EntityAsset, strings.TrimPrefix(name, "asset-")
+		case strings.HasPrefix(name, "user-"):
+			id.EntityType, id.EntityID = EntityUser, strings.TrimPrefix(name, "user-")
+		default:
+			id.EntityType = EntityUser
+		}
+		if id.EntityID == "" {
+			return WendyIdentity{}, fmt.Errorf("SPIFFE principal has empty entity id: %s", principal)
+		}
+	default:
+		return WendyIdentity{}, fmt.Errorf("unknown SPIFFE principal kind %q: %s", kind, principal)
+	}
+	return id, nil
 }
 
-// IdentityFromCert extracts the Wendy org+entity identity from a certificate.
+// ParseIdentityURN parses either identity string a refusal can print — a tenant
+// SPIFFE principal or a legacy "urn:wendy:org:<org>:(user|asset):<id>" URN —
+// back into a WendyIdentity.
 //
-// Resolution order:
-//  1. SAN URI beginning with "urn:wendy:org:" (authoritative; exactly one allowed)
-//  2. CommonName "sh/wendy/<org>/<asset>" (legacy fallback)
-//  3. No identity: returns (zero, false, nil)
+// It exists because those strings are user-facing: one of them is the key the
+// device pin store is filed under and the key an SPKI refusal prints, so
+// `wendy device unpin` has to accept it as an argument. Both forms go through
+// the same parsers the certificate path uses, so what the CLI accepts from a
+// user and what it reads out of a certificate can never drift apart.
+func ParseIdentityURN(urn string) (WendyIdentity, error) {
+	s := strings.TrimSpace(urn)
+	if strings.HasPrefix(s, tenantSPIFFEPrefix) {
+		return ParsePrincipal(s)
+	}
+	return parseWendyOrgURN(s)
+}
+
+// IdentityFromCert extracts the Wendy identity from a certificate.
+//
+// Resolution order, SPIFFE first:
+//
+//  1. The tenant SPIFFE SAN "spiffe://wendy.sh/tenant/<uuid>/<kind>/<name>" —
+//     authoritative, exactly one allowed. This is what pki-core stamps on
+//     everything it issues and re-stamps on everything it renews.
+//  2. SAN URI "urn:wendy:org:<org>:..." — legacy old-chain reading, exactly one
+//     allowed. When a leaf carries both (the transitional shape cloud mints),
+//     the URN contributes only its org, so an old-chain peer comparing orgs
+//     still matches; the principal decides who the caller is.
+//  3. CommonName "sh/wendy/<org>/<asset>" — legacy old-chain fallback.
+//  4. No identity: returns (zero, false, nil).
 func IdentityFromCert(leaf *x509.Certificate) (WendyIdentity, bool, error) {
-	var wendyURNs []string
+	var principals, wendyURNs []string
 	for _, u := range leaf.URIs {
-		raw := u.String()
-		if strings.HasPrefix(raw, wendyOrgURNPrefix) {
+		switch raw := u.String(); {
+		case strings.HasPrefix(raw, tenantSPIFFEPrefix):
+			principals = append(principals, raw)
+		case strings.HasPrefix(raw, wendyOrgURNPrefix):
 			wendyURNs = append(wendyURNs, raw)
 		}
+	}
+	if len(principals) > 1 {
+		return WendyIdentity{}, false, fmt.Errorf("certificate contains %d tenant SPIFFE principals; expected at most one", len(principals))
 	}
 	if len(wendyURNs) > 1 {
 		return WendyIdentity{}, false, fmt.Errorf("certificate contains %d wendy org URNs; expected at most one", len(wendyURNs))
 	}
+
+	var legacy WendyIdentity
 	if len(wendyURNs) == 1 {
-		id, err := parseWendyOrgURN(wendyURNs[0])
+		parsed, err := parseWendyOrgURN(wendyURNs[0])
 		if err != nil {
 			return WendyIdentity{}, false, err
 		}
+		legacy = parsed
+	}
+
+	if len(principals) == 1 {
+		id, err := ParsePrincipal(principals[0])
+		if err != nil {
+			return WendyIdentity{}, false, err
+		}
+		// The legacy URN survives only as the org it names, so a peer that can
+		// still only compare orgs keeps working against this leaf — but only
+		// when the two SANs agree about which entity this is. A leaf whose URN
+		// names a different entity than its principal is misissued; the
+		// principal is authoritative, so the contradictory legacy claim
+		// contributes nothing rather than lending its org to an entity it does
+		// not describe.
+		if legacy.EntityType == "" || (legacy.EntityType == id.EntityType && legacy.EntityID == id.EntityID) {
+			id.OrgID = legacy.OrgID
+		}
 		return id, true, nil
+	}
+
+	if legacy.EntityType != "" {
+		return legacy, true, nil
 	}
 
 	cn := leaf.Subject.CommonName
@@ -135,11 +359,14 @@ func IdentityFromCert(leaf *x509.Certificate) (WendyIdentity, bool, error) {
 	return WendyIdentity{}, false, nil
 }
 
-// OrgFromClientCert extracts the org ID from a certificate. It is a wrapper
-// around IdentityFromCert that drops entity type and ID.
-func OrgFromClientCert(leaf *x509.Certificate) (orgID int32, hasOrg bool, err error) {
+// ScopeFromCert extracts the tenant scope a certificate belongs to. It is a
+// wrapper around IdentityFromCert that drops the entity.
+func ScopeFromCert(leaf *x509.Certificate) (scope Scope, known bool, err error) {
 	id, ok, err := IdentityFromCert(leaf)
-	return id.OrgID, ok, err
+	if err != nil || !ok {
+		return Scope{}, false, err
+	}
+	return id.Scope(), id.Scope().Known(), nil
 }
 
 // parseWendyOrgURN parses "urn:wendy:org:<org>:(user|asset):<id>" into a WendyIdentity.
@@ -159,7 +386,7 @@ func parseWendyOrgURN(uri string) (WendyIdentity, error) {
 		return WendyIdentity{}, fmt.Errorf("organization ID must be positive, got %d", orgID)
 	}
 	entityType := parts[4]
-	if entityType != "user" && entityType != "asset" {
+	if entityType != EntityUser && entityType != EntityAsset {
 		return WendyIdentity{}, fmt.Errorf("unknown entity type in wendy URN %q: %s", uri, entityType)
 	}
 	if parts[5] == "" {
@@ -185,5 +412,26 @@ func parseShWendyCN(cn string) (WendyIdentity, error) {
 	if parts[3] == "" {
 		return WendyIdentity{}, fmt.Errorf("empty asset ID in CommonName: %s", cn)
 	}
-	return WendyIdentity{OrgID: int32(orgID), EntityType: "asset", EntityID: parts[3]}, nil
+	return WendyIdentity{OrgID: int32(orgID), EntityType: EntityAsset, EntityID: parts[3]}, nil
+}
+
+// ScopeFromCertPEM parses a PEM-encoded leaf (ML-DSA aware, via
+// ParseCertsFromPEM) and returns the tenant scope it belongs to, or
+// (zero, false) when the PEM is unparseable or carries no identity.
+//
+// It is how a device answers "which tenant am I?" about its own certificate,
+// which is the value every peer's scope is compared against.
+func ScopeFromCertPEM(certPEM string) (Scope, bool) {
+	if certPEM == "" {
+		return Scope{}, false
+	}
+	parsed, err := ParseCertsFromPEM([]byte(certPEM))
+	if err != nil || len(parsed) == 0 {
+		return Scope{}, false
+	}
+	scope, known, err := ScopeFromCert(parsed[0])
+	if err != nil {
+		return Scope{}, false
+	}
+	return scope, known
 }

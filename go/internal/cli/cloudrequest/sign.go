@@ -12,11 +12,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
@@ -94,24 +93,27 @@ func newSigner(auth *config.AuthConfig) (*Signer, error) {
 	}, nil
 }
 
+// operatorTenant reads the tenant a session's principal belongs to.
+//
+// It used to insist on the kind "operator", which is what the AAA contract
+// §5.2 says pki-core's own identity endpoint stamps — but cloud relays its
+// leaves through the service-identity profile and stamps "service/user-<id>",
+// so a cloud-issued session was refused here for spelling. Both are legitimate
+// human-operator identities under the contract (D17 makes a service account a
+// normal user behind a different front door), so both are accepted and
+// certs.ParsePrincipal is the single place that decides so.
+//
+// A device or code-signing principal is still refused: neither is an actor
+// that may sign a privileged cloud mutation.
 func operatorTenant(principal string) (string, error) {
-	u, err := url.Parse(principal)
-	if err != nil || u.Scheme != "spiffe" || u.Host != "wendy.sh" || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("operator certificate has invalid principal URI %q", principal)
+	id, err := certs.ParsePrincipal(principal)
+	if err != nil {
+		return "", fmt.Errorf("operator certificate has invalid principal URI %q: %w", principal, err)
 	}
-	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
-	if len(parts) != 4 || parts[0] != "tenant" || parts[1] == "" || parts[2] != "operator" || parts[3] == "" {
-		return "", fmt.Errorf("operator certificate has invalid principal URI %q", principal)
+	if id.EntityType != certs.EntityUser {
+		return "", fmt.Errorf("operator certificate principal %q is a %s, not an operator", principal, id.EntityType)
 	}
-	tenant, err := url.PathUnescape(parts[1])
-	if err != nil || tenant == "" {
-		return "", fmt.Errorf("operator certificate has invalid tenant in principal URI %q", principal)
-	}
-	tenantID, err := uuid.Parse(tenant)
-	if err != nil || tenantID.String() != tenant {
-		return "", fmt.Errorf("operator certificate has non-canonical tenant UUID in principal URI %q", principal)
-	}
-	return tenant, nil
+	return id.TenantUUID, nil
 }
 
 func (s *Signer) unaryClientInterceptor() grpc.UnaryClientInterceptor {

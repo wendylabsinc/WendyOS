@@ -59,12 +59,13 @@ type clearedPin struct {
 // exactly when a pin most needs clearing.
 func newDeviceUnpinCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unpin <hostname|identity-urn>",
+		Use:   "unpin <hostname|identity>",
 		Short: "Clear the recorded identity pin for a device",
 		Long: "Clear the recorded identity pin for a device, so the next connection to it\n" +
 			"records a fresh identity instead of being challenged against the old one.\n" +
-			"Accepts either the hostname you connect to or the identity URN a refusal\n" +
-			"prints (urn:wendy:org:<org>:asset:<id>).\n" +
+			"Accepts either the hostname you connect to or the identity a refusal\n" +
+			"prints (spiffe://wendy.sh/tenant/<uuid>/device/<id>, or the legacy\n" +
+			"urn:wendy:org:<org>:asset:<id>).\n" +
 			"Use this after a legitimate reflash, factory reset, or re-enrollment —\n" +
 			"anything that made 'wendy device unpin' the CLI's own suggestion.",
 		Args: cobra.ExactArgs(1),
@@ -77,9 +78,10 @@ func newDeviceUnpinCmd() *cobra.Command {
 			}
 
 			var cleared []clearedPin
-			// Detect the URN form by parsing it, not by guessing at its shape: a
-			// hostname is never six colon-separated fields beginning
-			// "urn:wendy:org", and certs owns what a well-formed identity is.
+			// Detect the identity form by parsing it, not by guessing at its
+			// shape: a hostname is never a spiffe:// URI nor six colon-separated
+			// fields beginning "urn:wendy:org", and certs owns what a well-formed
+			// identity is.
 			if identity, urnErr := certs.ParseIdentityURN(target); urnErr == nil {
 				cleared = clearPinsForIdentity(cfg, identity)
 			} else {
@@ -243,13 +245,21 @@ func clearPinsGoverning(cfg *config.Config, pinKey string) []clearedPin {
 // configPinIdentityKey is the SPKI store key a config pin names, or "" for a
 // legacy pin written before asset ids were recorded — which names an
 // organisation and a cloud, not a device, and so identifies no SPKI entry.
+//
+// A recorded principal wins: the SPKI store files a pki-core-issued device
+// under its tenant SPIFFE principal, and the (org, asset) pair cannot be turned
+// back into one without the tenant. That is the whole reason DevicePin carries
+// it.
 func configPinIdentityKey(pin config.DevicePin) string {
+	if pin.Principal != "" {
+		return pin.Principal
+	}
 	if pin.AssetID == "" {
 		return ""
 	}
 	return certs.WendyIdentity{
 		OrgID:      int32(pin.OrgID),
-		EntityType: "asset",
+		EntityType: certs.EntityAsset,
 		EntityID:   pin.AssetID,
 	}.IdentityKey()
 }
@@ -289,7 +299,7 @@ func cachedIdentityKey(pinKey string) string {
 	}
 	return certs.WendyIdentity{
 		OrgID:      entry.OrgID,
-		EntityType: "asset",
+		EntityType: certs.EntityAsset,
 		EntityID:   strconv.Itoa(int(entry.AssetID)),
 	}.IdentityKey()
 }

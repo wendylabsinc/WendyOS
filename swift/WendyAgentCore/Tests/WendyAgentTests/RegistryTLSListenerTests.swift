@@ -108,7 +108,7 @@ struct RegistryTLSListenerTests {
                     chainPEM: ca.pem,
                     keyBacking: .softwarePEM(device.keyPEM),
                     seKey: nil,
-                    deviceOrg: deviceOrg,
+                    deviceScope: .init(tenantUUID: nil, orgID: deviceOrg),
                     orgMode: .grace
                 ),
                 routes: .pushAndPull,

@@ -256,7 +256,7 @@ func dialBoundContext(ctx context.Context) (sctx context.Context, cancel context
 // stream; once established the stream survives past ctx, and Close on the
 // returned conn tears it down.
 //
-// deviceID pins the expected peer identity (org + asset ID) on the TLS
+// deviceID pins the expected peer identity (tenant + asset ID) on the TLS
 // handshake itself: hostport comes from discoverOnLAN, which trusts an
 // unauthenticated mDNS TXT record (assetid) to pick the peer to dial. Without
 // pinning, chain validity alone would let any other device holding a cert
@@ -265,7 +265,7 @@ func dialBoundContext(ctx context.Context) (sctx context.Context, cancel context
 func (d *MeshDialer) meshDialLAN(ctx context.Context, hostport string, deviceID int32, port uint16) (net.Conn, error) {
 	ident := d.identity()
 	tlsCfg, err := mtls.NewClientTLSConfigExpectingPeer(ident.certPEM, ident.chainPEM, ident.keyPEM, d.logger,
-		ident.orgID, strconv.Itoa(int(deviceID)))
+		strconv.Itoa(int(deviceID)))
 	if err != nil {
 		return nil, fmt.Errorf("mesh: client TLS config: %w", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -120,16 +121,16 @@ func (f *ctxAwareMeshDialStream) Send(d *agentpbv2.MeshDialData) error {
 	}
 }
 
-// testOrgID is the device's own org used by newMeshServiceForTest; every
+// testScope is the device's own tenant used by newMeshServiceForTest; every
 // existing fixture cert in this file carries "urn:wendy:org:7:...", so this
-// must stay 7 for the pre-existing tests to keep passing under the new
-// same-org check.
-const testOrgID = 7
+// must stay org 7 for the pre-existing tests to keep passing under the
+// same-tenant check.
+var testScope = certs.Scope{OrgID: 7}
 
 func newMeshServiceForTest(t *testing.T) (*MeshService, string) {
 	t.Helper()
 	dir := t.TempDir()
-	return NewMeshService(zap.NewNop(), dir, testOrgID), dir
+	return NewMeshService(zap.NewNop(), dir, testScope), dir
 }
 
 func TestMeshDialRejectsUserCert(t *testing.T) {
@@ -157,14 +158,14 @@ func TestMeshDialRejectsCrossOrgAsset(t *testing.T) {
 
 // TestMeshDialSkipsOrgCheckWhenDeviceOrgUnknown mirrors the mTLS
 // interceptor's grace behavior: main.go forces org enforcement off when this
-// device could not determine its own org from its certificate (expectedOrgID
-// <= 0), because there is nothing meaningful to compare against. MeshService
-// must skip its own-org check in that case rather than reject every caller —
+// device could not determine its own tenant from its certificate (an unknown
+// Scope), because there is nothing meaningful to compare against. MeshService
+// must skip its own-tenant check in that case rather than reject every caller —
 // the request must still fail on other grounds (port 0) to prove the org gate
 // was skipped, not that the whole call short-circuited to success.
 func TestMeshDialSkipsOrgCheckWhenDeviceOrgUnknown(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewMeshService(zap.NewNop(), dir, 0)
+	svc := NewMeshService(zap.NewNop(), dir, certs.Scope{})
 	in := make(chan *agentpbv2.MeshDialMessage, 1)
 	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 0}}}
 	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:42:asset:215")), in: in}

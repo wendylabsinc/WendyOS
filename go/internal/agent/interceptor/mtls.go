@@ -90,13 +90,15 @@ func peerAddr(ctx context.Context) string {
 // Subject CN is intentionally omitted from per-call logs to satisfy data-minimisation
 // requirements — it may contain a username or device identifier.
 //
-// Organization enforcement: after the certificate is structurally validated, the
-// caller's organization (extracted from the leaf via certs.OrgFromClientCert) is
-// compared against expectedOrgID under the given mode. This prevents a validly-issued
-// user cert from one organization being accepted by a device belonging to another
-// (cross-tenant access). Only org IDs (ints, non-PII), the serial, and the remote
-// address are logged — never the CN/subject, which may carry a username.
-func CheckMTLS(ctx context.Context, logger *zap.Logger, expectedOrgID int32, mode OrgMode) error {
+// Tenant enforcement: after the certificate is structurally validated, the
+// caller's tenant scope (extracted from the leaf via certs.ScopeFromCert — the
+// tenant SPIFFE principal pki-core stamps, or the legacy org URN on an old
+// chain) is compared against expected under the given mode. This prevents a
+// validly-issued user cert from one tenant being accepted by a device belonging
+// to another (cross-tenant access). Only the scope (a tenant UUID or an org id,
+// neither PII), the serial, and the remote address are logged — never the
+// CN/subject, which may carry a username.
+func CheckMTLS(ctx context.Context, logger *zap.Logger, expected certs.Scope, mode OrgMode) error {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.AuthInfo == nil {
 		logger.Warn("rejected unauthenticated gRPC caller",
@@ -150,40 +152,66 @@ func CheckMTLS(ctx context.Context, logger *zap.Logger, expectedOrgID int32, mod
 		zap.String("serial", leaf.SerialNumber.String()),
 	)
 
-	// Organization-equality enforcement. OrgModeOff disables the check entirely,
-	// preserving pre-WDY-1535 behaviour. For grace/strict we extract the cert's org
-	// and compare it to this device's org (expectedOrgID).
+	// Tenant-equality enforcement. OrgModeOff disables the check entirely,
+	// preserving pre-WDY-1535 behaviour. For grace/strict we extract the cert's
+	// scope and compare it to this device's own (expected).
 	if mode == OrgModeOff {
 		return nil
 	}
-	org, hasOrg, err := certs.OrgFromClientCert(leaf)
+	scope, known, err := certs.ScopeFromCert(leaf)
 	switch {
 	case err != nil:
-		// An org claim was present but malformed/ambiguous/non-positive. This is
-		// anomalous; reject in BOTH grace and strict. The CN/subject is not logged.
-		logger.Warn("rejected cert with undeterminable organization",
+		// An identity claim was present but malformed/ambiguous/non-positive.
+		// This is anomalous; reject in BOTH grace and strict. The CN/subject is
+		// not logged.
+		logger.Warn("rejected cert with undeterminable tenant",
 			zap.String("remote", peerAddr(ctx)),
 			zap.String("serial", leaf.SerialNumber.String()),
 			zap.Error(err))
-		return status.Errorf(codes.PermissionDenied, "certificate organization could not be determined")
-	case hasOrg && org == expectedOrgID:
+		return status.Errorf(codes.PermissionDenied, "certificate tenant could not be determined")
+	case known && scope.Matches(expected):
 		return nil
-	case hasOrg && org != expectedOrgID:
-		logger.Warn("rejected cert from non-permitted organization",
+	case known && scope.Comparable(expected):
+		// A different tenant, said in terms this device can check. Refused in
+		// grace as well as strict: grace forgives an identity it cannot read,
+		// never one it can read and that says someone else.
+		logger.Warn("rejected cert from non-permitted tenant",
 			zap.String("remote", peerAddr(ctx)),
 			zap.String("serial", leaf.SerialNumber.String()),
-			zap.Int32("presentedOrg", org),
-			zap.Int32("expectedOrg", expectedOrgID))
-		return status.Errorf(codes.PermissionDenied, "certificate organization not permitted")
-	default:
-		// !hasOrg: a legacy cert with no org identity.
+			zap.String("presented", scope.String()),
+			zap.String("expected", expected.String()))
+		return status.Errorf(codes.PermissionDenied, "certificate tenant not permitted")
+	case known:
+		// The caller named a tenant this device has no way to compare against
+		// its own — a SPIFFE-only caller reaching a device still on an
+		// old-chain certificate, or the reverse. There is no mapping between a
+		// tenant UUID and an int32 org, so this is unprovable rather than
+		// wrong, and it is exactly the state a fleet passes through while its
+		// certificates rotate. Strict refuses it; grace is the knob for the
+		// rotation window.
 		if mode == OrgModeStrict {
-			logger.Warn("rejected cert with no organization identity under strict mode",
+			logger.Warn("rejected cert whose tenant cannot be compared with this device's under strict mode",
+				zap.String("remote", peerAddr(ctx)),
+				zap.String("serial", leaf.SerialNumber.String()),
+				zap.String("presented", scope.String()),
+				zap.String("expected", expected.String()))
+			return status.Errorf(codes.PermissionDenied, "certificate tenant not permitted")
+		}
+		logger.Warn("client certificate names a tenant this device cannot compare with its own; allowed under grace mode (set WENDY_MTLS_ORG_ENFORCEMENT=strict once certificates have rotated)",
+			zap.String("remote", peerAddr(ctx)),
+			zap.String("serial", leaf.SerialNumber.String()),
+			zap.String("presented", scope.String()),
+			zap.String("expected", expected.String()))
+		return nil
+	default:
+		// !known: a legacy cert with no identity at all.
+		if mode == OrgModeStrict {
+			logger.Warn("rejected cert with no tenant identity under strict mode",
 				zap.String("remote", peerAddr(ctx)),
 				zap.String("serial", leaf.SerialNumber.String()))
-			return status.Errorf(codes.PermissionDenied, "certificate organization identity required")
+			return status.Errorf(codes.PermissionDenied, "certificate tenant identity required")
 		}
-		logger.Warn("client certificate has no organization identity; allowed under grace mode (set WENDY_MTLS_ORG_ENFORCEMENT=strict after cert rotation)",
+		logger.Warn("client certificate has no tenant identity; allowed under grace mode (set WENDY_MTLS_ORG_ENFORCEMENT=strict after cert rotation)",
 			zap.String("remote", peerAddr(ctx)),
 			zap.String("serial", leaf.SerialNumber.String()))
 		return nil
@@ -191,10 +219,10 @@ func CheckMTLS(ctx context.Context, logger *zap.Logger, expectedOrgID int32, mod
 }
 
 // UnaryMTLSInterceptor rejects unary calls that do not carry verified mTLS peer
-// credentials or whose client organization is not permitted under the given mode.
-func UnaryMTLSInterceptor(logger *zap.Logger, expectedOrgID int32, mode OrgMode) grpc.UnaryServerInterceptor {
+// credentials or whose client tenant is not permitted under the given mode.
+func UnaryMTLSInterceptor(logger *zap.Logger, expected certs.Scope, mode OrgMode) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if err := CheckMTLS(ctx, logger, expectedOrgID, mode); err != nil {
+		if err := CheckMTLS(ctx, logger, expected, mode); err != nil {
 			return nil, err
 		}
 		return handler(ctx, req)
@@ -203,9 +231,9 @@ func UnaryMTLSInterceptor(logger *zap.Logger, expectedOrgID int32, mode OrgMode)
 
 // StreamMTLSInterceptor rejects streaming calls that do not carry verified mTLS peer
 // credentials or whose client organization is not permitted under the given mode.
-func StreamMTLSInterceptor(logger *zap.Logger, expectedOrgID int32, mode OrgMode) grpc.StreamServerInterceptor {
+func StreamMTLSInterceptor(logger *zap.Logger, expected certs.Scope, mode OrgMode) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		if err := CheckMTLS(ss.Context(), logger, expectedOrgID, mode); err != nil {
+		if err := CheckMTLS(ss.Context(), logger, expected, mode); err != nil {
 			return err
 		}
 		return handler(srv, ss)

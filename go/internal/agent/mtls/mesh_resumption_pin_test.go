@@ -146,13 +146,14 @@ func TestNewClientTLSConfigExpectingPeerRejectsPinMismatchOnResume(t *testing.T)
 	peerCert := meshPeerCert(t, ca, caKey, "urn:wendy:org:7:asset:100")
 	addr := startMeshPeerServer(t, peerCert)
 
-	// The dialing side's own identity is irrelevant to peer pinning; the bare
-	// server above never requests a client certificate.
-	ownCertPEM, ownKeyPEM := testLeafCertificate(t, "dialer")
+	// The dialing side's own identity supplies the expected tenant (org 7,
+	// matching the server); the bare server above never requests a client
+	// certificate, so the cert itself is never presented.
+	ownCertPEM, ownKeyPEM := testLeafCertificate(t, "sh/wendy/7/1")
 
 	cache := tls.NewLRUClientSessionCache(4)
 
-	cfgX, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, 7, "100")
+	cfgX, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, "100")
 	if err != nil {
 		t.Fatalf("NewClientTLSConfigExpectingPeer(asset 100): %v", err)
 	}
@@ -188,7 +189,7 @@ func TestNewClientTLSConfigExpectingPeerRejectsPinMismatchOnResume(t *testing.T)
 	// server's real identity (asset 100, refreshed by dial 2's post-handshake
 	// ticket), so the server will happily accept resumption; the fix must
 	// catch the pin mismatch in VerifyConnection and fail the handshake.
-	cfgY, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, 7, "999")
+	cfgY, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, "999")
 	if err != nil {
 		t.Fatalf("NewClientTLSConfigExpectingPeer(asset 999): %v", err)
 	}

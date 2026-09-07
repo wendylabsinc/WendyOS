@@ -34,24 +34,25 @@ type MeshService struct {
 	agentpbv2.UnimplementedWendyMeshServiceServer
 	logger           *zap.Logger
 	meshDisabledPath string
-	// expectedOrgID is this device's own org, used to enforce that a MeshDial
-	// caller belongs to the same org even when the server's mTLS org
-	// interceptor is disabled (WENDY_MTLS_ORG_ENFORCEMENT=off). <= 0 means the
-	// device could not determine its own org; see assetIdentityFromContext.
-	expectedOrgID int32
+	// expectedScope is this device's own tenant, used to enforce that a MeshDial
+	// caller belongs to the same tenant even when the server's mTLS
+	// interceptor is disabled (WENDY_MTLS_ORG_ENFORCEMENT=off). An unknown
+	// scope means the device could not identify itself; see
+	// assetIdentityFromContext.
+	expectedScope certs.Scope
 	dialLocal     func(addr string, timeout time.Duration) (net.Conn, error) // swapped in tests
 }
 
 // NewMeshService builds the serving side of the LAN-direct mesh path.
-// expectedOrgID is this device's own org (the same value passed to
-// mtls.NewServer as expectedOrg); pass <= 0 when the device cannot determine
-// its own org (main.go forces mTLS org enforcement off in that case too) —
-// MeshService then skips its own-org check rather than reject every caller.
-func NewMeshService(logger *zap.Logger, configPath string, expectedOrgID int32) *MeshService {
+// expectedScope is this device's own tenant (the same value passed to
+// mtls.NewServer); pass a zero Scope when the device cannot identify itself
+// (main.go forces mTLS enforcement off in that case too) — MeshService then
+// skips its own-tenant check rather than reject every caller.
+func NewMeshService(logger *zap.Logger, configPath string, expectedScope certs.Scope) *MeshService {
 	return &MeshService{
 		logger:           logger,
 		meshDisabledPath: filepath.Join(configPath, meshDisabledFile),
-		expectedOrgID:    expectedOrgID,
+		expectedScope:    expectedScope,
 		dialLocal: func(addr string, timeout time.Duration) (net.Conn, error) {
 			return net.DialTimeout("tcp", addr, timeout)
 		},
@@ -115,15 +116,15 @@ func (s *MeshService) assetIdentityFromContext(ctx context.Context) (certs.Wendy
 	if err != nil || !found {
 		return certs.WendyIdentity{}, status.Error(codes.PermissionDenied, "client certificate carries no wendy identity")
 	}
-	if ident.EntityType != "asset" {
+	if ident.EntityType != certs.EntityAsset {
 		return certs.WendyIdentity{}, status.Error(codes.PermissionDenied, "mesh dial requires an asset certificate")
 	}
-	// expectedOrgID <= 0 means this device could not determine its own org
-	// (main.go forces mTLS org enforcement off for the same reason): there is
+	// An unknown expectedScope means this device could not identify itself
+	// (main.go forces mTLS enforcement off for the same reason): there is
 	// nothing meaningful to compare against, so skip the check rather than
 	// reject every caller. Still requires the asset check above.
-	if s.expectedOrgID > 0 && ident.OrgID != s.expectedOrgID {
-		return certs.WendyIdentity{}, status.Error(codes.PermissionDenied, "mesh dial requires a same-organization asset certificate")
+	if s.expectedScope.Known() && !ident.Scope().Matches(s.expectedScope) {
+		return certs.WendyIdentity{}, status.Error(codes.PermissionDenied, "mesh dial requires a same-tenant asset certificate")
 	}
 	return ident, nil
 }
