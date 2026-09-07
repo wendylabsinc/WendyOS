@@ -440,7 +440,9 @@ struct ContainerServiceTests {
                     directory: appDirectory.path,
                     binaryName: "sleep.sh",
                     args: [],
-                    currentDirectory: appDirectory.path
+                    currentDirectory: appDirectory.path,
+                    executablePath: appDirectory.appendingPathComponent("sleep.sh").path,
+                    environment: [:]
                 )
         )
 

@@ -144,7 +144,9 @@ type FileSyncEntry struct {
 
 // RunConfig holds runtime configuration applied when the app is started.
 type RunConfig struct {
-	Args []string `json:"args,omitempty"`
+	Command string   `json:"command,omitempty"`
+	Cwd     string   `json:"cwd,omitempty"`
+	Args    []string `json:"args,omitempty"`
 }
 
 // ROS2Config holds ROS 2 runtime configuration for a container.
@@ -617,6 +619,11 @@ func ValidateReadiness(prefix string, r *ReadinessConfig) error {
 
 // Validate checks the AppConfig for required fields and valid entitlement types.
 func (c *AppConfig) Validate() error {
+	if c.Run != nil {
+		if err := c.validateNativeRun(); err != nil {
+			return err
+		}
+	}
 	if err := ValidateAppID(c.AppID); err != nil {
 		return err
 	}

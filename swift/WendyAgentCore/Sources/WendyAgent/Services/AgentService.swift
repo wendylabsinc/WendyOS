@@ -88,6 +88,7 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         var response = Wendy_Agent_Services_V1_GetAgentVersionResponse()
         response.version = reportedVersion()
         response.os = "darwin"
+        response.featureset.append("native-process-v1")
         response.osVersion =
             "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         #if arch(arm64)

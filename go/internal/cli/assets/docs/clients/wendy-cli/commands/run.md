@@ -428,3 +428,38 @@ checks every five seconds while streaming logs. Browser opening and host
 `postStart` commands run once readiness succeeds. Stopping the service,
 canceling the session, or replacing a watch deployment cancels its probes.
 Detached and create-only runs continue to skip host readiness and hooks.
+
+
+## Native commands on Mac
+
+A single native Darwin app can name a target executable directly:
+
+```json
+{
+  "appId": "sh.example.chat",
+  "platform": "darwin",
+  "files": [{"path": "launcher.py"}, {"path": "data"}],
+  "run": {"command": "/usr/bin/python3", "args": ["../launcher.py"], "cwd": "data"},
+  "env": {"MAX_MODEL": "HuggingFaceTB/SmolLM2-135M-Instruct"}
+}
+```
+
+`run.command` is an absolute executable on the target or an executable relative
+ to the synced app directory. Relative scripts must have executable permission.
+`run.cwd` defaults to the app directory and must stay inside it, including after
+symlink resolution. Arguments are passed directly; shell expressions are literal
+unless you explicitly choose a shell executable. The CLI selects this mode before
+project detection and rejects conflicting build flags and non-Darwin targets.
+
+The target must advertise `native-process-v1`; update Wendy Agent for Mac if the
+CLI requests it. Declared files, `wendy.json`, an optional `sandbox.sb`, and the
+configured Brewfile (or auto-detected `Brewfile.wendy`) use native file sync.
+Homebrew installation completes before the agent validates the executable.
+Request environment values apply to native command, SwiftPM, and Xcode launches;
+agent identity and telemetry settings take precedence. `WENDY_APP_ID` identifies
+the app. Keep runtime data outside the synced source directory, for example under
+`~/Library/Application Support/<appId>/runtime/`, to retain it across file sync.
+
+Attached watch compares the command, working directory, arguments, effective
+environment, files, configuration, and restart policy. Unchanged running commands
+remain running. Host hooks and browser opening wait for readiness.

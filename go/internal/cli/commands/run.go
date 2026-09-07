@@ -59,7 +59,7 @@ func rejectUnsupportedMacRunProject(projectType, platform string) error {
 		return errors.New(macPlatformMismatchMessage(platform))
 	}
 	switch projectType {
-	case "swift", "xcode", "docker", "python", "compose", "multi-service":
+	case "swift", "xcode", "docker", "python", "compose", "multi-service", "native-process":
 		return nil
 	default:
 		return fmt.Errorf("unable to detect project type for a Mac target: %q", projectType)
@@ -1019,6 +1019,10 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		}
 	}
 
+	if projectType == "native-process" && target.Agent == nil {
+		return fmt.Errorf("run.command requires a native Darwin agent target")
+	}
+
 	// Provider-based run path.
 	if target.External != nil && target.Provider != nil {
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "provider targets"); err != nil {
@@ -1171,6 +1175,13 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		return fmt.Errorf("marshaling app config: %w", err)
 	}
 	createReq.AppConfig = appConfigData
+	if createReq.Env == nil {
+		createReq.Env = mergeEnvEntries(resolveServiceEnv(appCfg), opts.env)
+	}
+	createReq.RestartPolicy = resolveRestartPolicy(opts)
+	if appCfg.Run != nil && appCfg.Run.Cwd != "" {
+		createReq.WorkingDir = appCfg.Run.Cwd
+	}
 
 	if appCfg.Brewfile != "" {
 		cliLogln("Will apply Brewfile on target Mac.")
@@ -1532,6 +1543,12 @@ func assembleSwiftPMSyncEntries(binaryPath, cwd string, appCfg *appconfig.AppCon
 }
 
 func resolveRunProjectType(dir, requestedType string) (string, error) {
+	if cfg, err := appconfig.LoadFromFile(filepath.Join(dir, "wendy.json")); err == nil && cfg.Run != nil && cfg.Run.Command != "" {
+		if requestedType != "" {
+			return "", fmt.Errorf("run.command cannot be combined with --build-type")
+		}
+		return "native-process", nil
+	}
 	if strings.TrimSpace(requestedType) == "" {
 		return detectProjectType(dir)
 	}
@@ -1955,6 +1972,13 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 
 	if isContainerPlatform(platform) && projectType != "compose" {
 		printMissingNetworkWarnings(appCfg)
+	}
+
+	if appCfg.Run != nil && appCfg.Run.Command != "" {
+		if !strings.EqualFold(agentOS, "darwin") || platformOS(platform) != "darwin" {
+			return fmt.Errorf("run.command requires a native Darwin agent target")
+		}
+		return runNativeCommandWithAgent(ctx, conn, cwd, appCfg, opts, versionResp)
 	}
 
 	// Xcode projects: always use the local-build + file-sync path (darwin only).
