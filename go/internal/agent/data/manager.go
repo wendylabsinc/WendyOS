@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
-	"golang.org/x/sys/unix"
 )
 
 const DefaultRoot = "/var/lib/wendy-agent/data/episodes"
@@ -733,12 +732,10 @@ func (m *Manager) queryAndAttachConsensus(ctx context.Context, a *activeEpisode,
 }
 
 func (m *Manager) enforceQuota() error {
-	var stat unix.Statfs_t
-	if err := unix.Statfs(m.root, &stat); err != nil {
+	total, free, err := filesystemSpace(m.root)
+	if err != nil {
 		return fmt.Errorf("data filesystem quota: %w", err)
 	}
-	total := int64(stat.Blocks) * int64(stat.Bsize)
-	free := int64(stat.Bavail) * int64(stat.Bsize)
 	quota := total / 5
 	if quota > m.maxQuota {
 		quota = m.maxQuota
