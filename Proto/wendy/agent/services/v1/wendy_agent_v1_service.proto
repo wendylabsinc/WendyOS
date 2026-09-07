@@ -242,6 +242,11 @@ message GetAgentVersionResponse {
     // mains-powered devices and on agents predating this field, so `wendy
     // device info` shows no battery line for either.
     optional BatteryStats battery = 22;
+    // Filesystem containing /var/lib/containerd. Absent when inspection fails.
+    optional DiskPartition container_storage = 23;
+    // Present with an empty list when no supported compute backend was detected.
+    // Absent on older agents. Hardware presence remains has_gpu.
+    optional GpuCapabilities gpu_capabilities = 24;
 }
 
 // A network interface on the device and the IP addresses assigned to it.
@@ -689,4 +694,8 @@ message SetHostnameRequest {
 message SetHostnameResponse {
     // The hostname that was applied.
     string hostname = 1;
+}
+
+message GpuCapabilities {
+    repeated string compute_backends = 1; // cuda, rocm, metal
 }

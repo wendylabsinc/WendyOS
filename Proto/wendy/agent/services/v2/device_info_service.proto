@@ -36,6 +36,10 @@ message GetDeviceInfoResponse {
     // Number of online logical CPU cores, from /proc/stat. Zero when the
     // agent cannot read it.
     uint32 cpu_count = 17;
+    // Filesystem containing /var/lib/containerd. Absent when inspection fails.
+    optional DiskPartition container_storage = 18;
+    // Empty means no supported compute backend detected; absent means older agent.
+    optional GpuCapabilities gpu_capabilities = 19;
 }
 
 // Usage information for a single mounted filesystem.
@@ -65,4 +69,8 @@ message ListHardwareCapabilitiesResponse {
         string description = 3;
         map<string, string> properties = 4;
     }
+}
+
+message GpuCapabilities {
+    repeated string compute_backends = 1; // cuda, rocm, metal
 }

@@ -658,6 +658,27 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   /// Clears the value of `battery`. Subsequent reads from it will return its default value.
   public mutating func clearBattery() {_uniqueStorage()._battery = nil}
 
+  /// Filesystem containing /var/lib/containerd. Absent when inspection fails.
+  public var containerStorage: Wendy_Agent_Services_V1_DiskPartition {
+    get {_storage._containerStorage ?? Wendy_Agent_Services_V1_DiskPartition()}
+    set {_uniqueStorage()._containerStorage = newValue}
+  }
+  /// Returns true if `containerStorage` has been explicitly set.
+  public var hasContainerStorage: Bool {_storage._containerStorage != nil}
+  /// Clears the value of `containerStorage`. Subsequent reads from it will return its default value.
+  public mutating func clearContainerStorage() {_uniqueStorage()._containerStorage = nil}
+
+  /// Present with an empty list when no supported compute backend was detected.
+  /// Absent on older agents. Hardware presence remains has_gpu.
+  public var gpuCapabilities: Wendy_Agent_Services_V1_GpuCapabilities {
+    get {_storage._gpuCapabilities ?? Wendy_Agent_Services_V1_GpuCapabilities()}
+    set {_uniqueStorage()._gpuCapabilities = newValue}
+  }
+  /// Returns true if `gpuCapabilities` has been explicitly set.
+  public var hasGpuCapabilities: Bool {_storage._gpuCapabilities != nil}
+  /// Clears the value of `gpuCapabilities`. Subsequent reads from it will return its default value.
+  public mutating func clearGpuCapabilities() {_uniqueStorage()._gpuCapabilities = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -1814,6 +1835,19 @@ public nonisolated struct Wendy_Agent_Services_V1_SetHostnameResponse: Sendable 
   public init() {}
 }
 
+public nonisolated struct Wendy_Agent_Services_V1_GpuCapabilities: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// cuda, rocm, metal
+  public var computeBackends: [String] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "wendy.agent.services.v1"
@@ -2545,7 +2579,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}container_storage\0\u{3}gpu_capabilities\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -2570,6 +2604,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
     var _binarySha256: String = String()
     var _hostname: String = String()
     var _battery: BatteryStats? = nil
+    var _containerStorage: Wendy_Agent_Services_V1_DiskPartition? = nil
+    var _gpuCapabilities: Wendy_Agent_Services_V1_GpuCapabilities? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2602,6 +2638,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       _binarySha256 = source._binarySha256
       _hostname = source._hostname
       _battery = source._battery
+      _containerStorage = source._containerStorage
+      _gpuCapabilities = source._gpuCapabilities
     }
   }
 
@@ -2642,6 +2680,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         case 20: try { try decoder.decodeSingularStringField(value: &_storage._binarySha256) }()
         case 21: try { try decoder.decodeSingularStringField(value: &_storage._hostname) }()
         case 22: try { try decoder.decodeSingularMessageField(value: &_storage._battery) }()
+        case 23: try { try decoder.decodeSingularMessageField(value: &_storage._containerStorage) }()
+        case 24: try { try decoder.decodeSingularMessageField(value: &_storage._gpuCapabilities) }()
         default: break
         }
       }
@@ -2720,6 +2760,12 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       try { if let v = _storage._battery {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 22)
       } }()
+      try { if let v = _storage._containerStorage {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 23)
+      } }()
+      try { if let v = _storage._gpuCapabilities {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 24)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -2751,6 +2797,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         if _storage._binarySha256 != rhs_storage._binarySha256 {return false}
         if _storage._hostname != rhs_storage._hostname {return false}
         if _storage._battery != rhs_storage._battery {return false}
+        if _storage._containerStorage != rhs_storage._containerStorage {return false}
+        if _storage._gpuCapabilities != rhs_storage._gpuCapabilities {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -4651,6 +4699,36 @@ nonisolated extension Wendy_Agent_Services_V1_SetHostnameResponse: SwiftProtobuf
 
   public static func ==(lhs: Wendy_Agent_Services_V1_SetHostnameResponse, rhs: Wendy_Agent_Services_V1_SetHostnameResponse) -> Bool {
     if lhs.hostname != rhs.hostname {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_GpuCapabilities: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GpuCapabilities"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}compute_backends\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedStringField(value: &self.computeBackends) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.computeBackends.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.computeBackends, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_GpuCapabilities, rhs: Wendy_Agent_Services_V1_GpuCapabilities) -> Bool {
+    if lhs.computeBackends != rhs.computeBackends {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
