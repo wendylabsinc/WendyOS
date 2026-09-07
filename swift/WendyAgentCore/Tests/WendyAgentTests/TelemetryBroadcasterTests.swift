@@ -45,6 +45,61 @@ struct TelemetryBroadcasterTests {
         #expect(await broadcaster.logSubscriberCountForTesting() == 0)
     }
 
+    @Test(
+        "a quiet stream sends empty heartbeats, then delivers data and cleans up",
+        .timeLimit(.minutes(1))
+    )
+    func quietHeartbeats() async throws {
+        let broadcaster = TelemetryBroadcaster()
+        let service = TelemetryService(
+            broadcaster: broadcaster,
+            logHeartbeatInterval: .milliseconds(10)
+        )
+        let writer = SignalingTelemetryWriter()
+        var responses = writer.events.makeAsyncIterator()
+        let task = Task {
+            try await service.streamLogs(
+                request: Wendy_Agent_Services_V1_StreamLogsRequest(),
+                response: RPCWriter(wrapping: writer),
+                context: makeTelemetryServerContext(method: "StreamLogs")
+            )
+        }
+        let heartbeat = try #require(await responses.next())
+        #expect(!heartbeat.hasLogs)
+        #expect(!heartbeat.isHistory)
+        await broadcaster.broadcastLogs(logRequest(marker: "after-silence"))
+        while let response = await responses.next() {
+            if response.hasLogs {
+                #expect(response.logs.resourceLogs.first?.schemaURL == "after-silence")
+                #expect(!response.isHistory)
+                break
+            }
+        }
+        task.cancel()
+        try await task.value
+        #expect(await broadcaster.logSubscriberCountForTesting() == 0)
+    }
+
+    @Test("heartbeat write failure propagates and unsubscribes", .timeLimit(.minutes(1)))
+    func heartbeatFailure() async {
+        let broadcaster = TelemetryBroadcaster()
+        let service = TelemetryService(
+            broadcaster: broadcaster,
+            logHeartbeatInterval: .milliseconds(10)
+        )
+        do {
+            try await service.streamLogs(
+                request: Wendy_Agent_Services_V1_StreamLogsRequest(),
+                response: RPCWriter(wrapping: FailingTelemetryWriter()),
+                context: makeTelemetryServerContext(method: "StreamLogs")
+            )
+            Issue.record("expected write failure")
+        } catch {
+            #expect(error is RPCError)
+        }
+        #expect(await broadcaster.logSubscriberCountForTesting() == 0)
+    }
+
     private func logRequest(
         marker: String
     ) -> Opentelemetry_Proto_Collector_Logs_V1_ExportLogsServiceRequest {
@@ -90,4 +145,14 @@ private func makeTelemetryServerContext(method: String) -> ServerContext {
         localPeer: "in-process:test",
         cancellation: .init()
     )
+}
+
+private struct FailingTelemetryWriter: RPCWriterProtocol {
+    typealias Element = Wendy_Agent_Services_V1_StreamLogsResponse
+    func write(_ element: Element) async throws {
+        throw RPCError(code: .unavailable, message: "connection lost")
+    }
+    func write(contentsOf elements: some Sequence<Element>) async throws {
+        throw RPCError(code: .unavailable, message: "connection lost")
+    }
 }

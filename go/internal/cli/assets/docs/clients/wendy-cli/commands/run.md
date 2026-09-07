@@ -463,3 +463,18 @@ the app. Keep runtime data outside the synced source directory, for example unde
 Attached watch compares the command, working directory, arguments, effective
 environment, files, configuration, and restart policy. Unchanged running commands
 remain running. Host hooks and browser opening wait for readiness.
+
+
+## Diagnosing an interrupted log stream
+
+Quiet log subscriptions receive an empty transport heartbeat every 15 seconds.
+The CLI and MCP omit these messages from logs, history transitions, and batch
+counts. Go agent gRPC keepalive acknowledgements allow 20 seconds. A stream that
+ends with a connection error still reports that error.
+
+For a recurrence, record the CLI, agent, and OS versions, timestamps, device
+address, direct WiFi or cloud route, and the exact gRPC error. Capture agent and
+cloud tunnel logs for the same interval; compare an idle subscription with one
+that emits a new log after ten minutes. Check WiFi roaming, link loss, NAT/proxy
+idle limits, and HTTP/2 GOAWAY/keepalive diagnostics before assigning a cause.
+The original direct-WiFi failure has no confirmed transport root cause.
