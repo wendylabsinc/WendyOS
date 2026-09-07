@@ -60,7 +60,15 @@ The network entitlement controls how your application accesses the network.
 | Mode | Description |
 |------|-------------|
 | `host` | Application shares the host's network stack. The container uses the same network interfaces, IP addresses, and ports as the host device. Required for HTTP servers and any network services that need to accept incoming connections. |
+| `bridge` | Private network namespace with outbound connectivity, including DNS and downloads, through NAT. Ports are not published on the device's LAN address. |
 | `none` | Application runs in an isolated network namespace with no network access. Use this for applications that should be completely offline, such as data processing tasks that don't need external connectivity. |
+
+Omitting the network entitlement gives an ordinary container only loopback.
+Declare `none` explicitly when that is intentional; otherwise `wendy run` warns
+before building. Declaring a network entitlement with no `mode` currently means
+`host`; choose a mode explicitly. Isolated service groups receive their CNI bridge.
+With `shared-network` (or `shared-ipc`), secondary services inherit the primary
+service's network namespace, so set networking on the primary service or at app level.
 
 <Callout type="info">
   **Web Servers**: If you're building a web server or any application that accepts incoming connections, you need `"mode": "host"` to make your service accessible from other devices on the network.

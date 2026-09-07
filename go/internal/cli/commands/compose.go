@@ -782,10 +782,10 @@ func composeAppConfig(projectName, serviceName string, svc composeService, numSe
 	var entitlements []appconfig.Entitlement
 
 	// Network entitlement.
-	if svc.NetworkMode == "host" {
+	if svc.NetworkMode == "host" || svc.NetworkMode == "none" || svc.NetworkMode == "bridge" {
 		entitlements = append(entitlements, appconfig.Entitlement{
 			Type: appconfig.EntitlementNetwork,
-			Mode: "host",
+			Mode: svc.NetworkMode,
 		})
 	} else if len(svc.Ports) > 0 {
 		var ports []appconfig.PortMapping
@@ -1233,6 +1233,15 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 			return err
 		}
 	}
+	networkOrder, err := serviceOrder(cfg)
+	if err != nil {
+		return err
+	}
+	networkConfigs := make([]*appconfig.AppConfig, 0, len(networkOrder))
+	for _, name := range networkOrder {
+		networkConfigs = append(networkConfigs, svcCfgs[name])
+	}
+	printMissingNetworkWarnings(networkConfigs...)
 	serviceEnvs := make(map[string][]string, len(cfg.Services))
 	for name, svc := range cfg.Services {
 		var serviceConfig *appconfig.ServiceConfig

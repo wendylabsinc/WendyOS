@@ -369,6 +369,15 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	if err != nil {
 		return err
 	}
+	networkOrder, err := serviceTopoOrder(services)
+	if err != nil {
+		return err
+	}
+	networkConfigs := make([]*appconfig.AppConfig, 0, len(networkOrder))
+	for _, name := range networkOrder {
+		networkConfigs = append(networkConfigs, multiServiceCreateConfig(appCfg, name, services[name]))
+	}
+	printMissingNetworkWarnings(networkConfigs...)
 	portConfigs := []*appconfig.AppConfig{appCfg}
 	for name, svc := range services {
 		portConfigs = append(portConfigs, multiServiceCreateConfig(appCfg, name, svc))
