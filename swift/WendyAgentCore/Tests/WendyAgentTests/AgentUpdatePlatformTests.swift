@@ -161,13 +161,36 @@ struct AgentUpdateLockTests {
     }
 }
 
+@Suite("AgentExecutableDigest")
+struct AgentExecutableDigestTests {
+    @Test("hashes the executable bytes the CLI extracts from the update ZIP")
+    func hashesFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "AgentExecutableDigestTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let executable = root.appendingPathComponent("WendyAgentMac")
+        try Data("hello".utf8).write(to: executable)
+
+        #expect(
+            AgentExecutableDigest.sha256(at: executable)
+                == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        )
+        #expect(AgentExecutableDigest.sha256(at: nil).isEmpty)
+        #expect(AgentExecutableDigest.sha256(at: root.appendingPathComponent("missing")).isEmpty)
+    }
+}
+
 @Suite("AgentRelauncher.scheduleTermination timings")
 struct AgentRelauncherTerminationTimingTests {
-    @Test("the hard-exit watchdog outlasts a multi-app teardown but stays inside the CLI's wait")
+    @Test("the hard-exit watchdog quickly backs up the update-specific AppKit quit")
     func hardExitDelayBounds() {
-        #expect(AgentRelauncher.hardExitDelay == .seconds(45))
-        // Two containerized apps stop sequentially at ~10 s + ~5 s each.
-        #expect(AgentRelauncher.hardExitDelay > .seconds(35))
+        #expect(AgentRelauncher.hardExitDelay == .seconds(10))
         // The CLI polls a darwin agent for 60 s after the update ack.
         #expect(AgentRelauncher.hardExitDelay < .seconds(60))
     }
@@ -193,7 +216,7 @@ struct AgentRelauncherMakeArgumentsTests {
         #expect(script.contains(#"while /bin/kill -0 "$1" 2>/dev/null; do"#))
         #expect(script.contains("/bin/sleep 0.5"))
         #expect(script.contains(#"[ "$i" -ge 600 ] && exit 1"#))
-        #expect(script.contains(#"exec /usr/bin/open "$2""#))
+        #expect(script.contains(#"exec /usr/bin/open -n "$2""#))
 
         // $0 is a placeholder positional arg (script name); $1/$2 are pid/path.
         #expect(arguments[2] == "wendy-agent-relaunch")

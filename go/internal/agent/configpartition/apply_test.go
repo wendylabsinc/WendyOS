@@ -294,6 +294,7 @@ func TestValidDeviceName(t *testing.T) {
 		"has space",                             // space
 		strings.Repeat("a", maxDeviceNameLen+1), // one over the cap
 		"valid_but_underscore",                  // underscore not allowed
+		"trailing-hyphen-",                      // trailing hyphen -> invalid derived hostname
 	}
 	for _, name := range invalid {
 		if validDeviceName(name) {

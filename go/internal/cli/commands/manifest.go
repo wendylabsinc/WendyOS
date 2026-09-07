@@ -165,10 +165,12 @@ type deviceInfo struct {
 // imageInfo describes a downloadable OS image.
 type imageInfo struct {
 	DownloadURL string
+	Checksum    string
 	ImageSize   int64
 	Version     string
 	BmapURL     string
 	ZstURL      string
+	ZstChecksum string
 	// Storage is the resolved manifest variant ("sd"/"nvme"/""), used to keep
 	// the on-disk cache keyed per variant so an SD download and an NVMe download
 	// of the same device+version never collide on one cache file.
@@ -367,6 +369,13 @@ func getImageInfo(dm *deviceManifest, ver, storage string) (*imageInfo, error) {
 		ImageSize:   t.imageSize,
 		Version:     ver,
 		Storage:     storage,
+	}
+	// Select checksums from the same artifact triple, including legacy fallback.
+	info.Checksum, info.ZstChecksum = v.Checksum, v.ZstChecksum
+	if storage == "nvme" && v.NVMEPath != "" {
+		info.Checksum, info.ZstChecksum = v.NVMEChecksum, v.NVMEZstChecksum
+	} else if storage == "sd" && v.SDPath != "" {
+		info.Checksum, info.ZstChecksum = v.SDChecksum, v.SDZstChecksum
 	}
 	if t.bmapPath != "" {
 		info.BmapURL = gcsBaseURL + "/" + t.bmapPath

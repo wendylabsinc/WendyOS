@@ -34,7 +34,8 @@ type MDNSService struct {
 // then "id" then falls back to the resolved display name; mTLS is signaled
 // by tls=="true"; assetid/orgid are accepted only when they parse as
 // positive integers (0 or unparseable stays the zero value, meaning
-// unknown/unprovisioned); and "name" becomes the friendly mesh name.
+// unknown/unprovisioned); "name" becomes the friendly mesh name; and
+// "devicetype" is the agent's board id, kept until a probe verifies it.
 //
 // A sighting that carries neither a hostname nor a usable displayname TXT
 // record falls back to the DNS-SD instance name for both the display name and
@@ -82,6 +83,12 @@ func lanDeviceFromService(svc MDNSService) models.LANDevice {
 	}
 	if v, ok := svc.TXTRecords["name"]; ok {
 		dev.MeshName = v
+	}
+	// The agent stamps its board id here so a sighting can be classified
+	// before any probe -- in particular a local VM, whose announcement may
+	// carry an address nothing on the host can reach.
+	if v, ok := svc.TXTRecords["devicetype"]; ok {
+		dev.DeviceType = v
 	}
 	return dev
 }

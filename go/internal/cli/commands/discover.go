@@ -39,14 +39,7 @@ func newDiscoverCmd() *cobra.Command {
 		Short: "Discover local and cloud WendyOS devices",
 		Long:  "Continuously discover WendyOS devices in Local and Cloud tabs until Ctrl+C. Use --timeout to scan local devices once for a fixed duration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := discovery.DiscoveryOptions{
-				// The continuous TUI path streams LAN devices directly via
-				// lanStreamFn/startLANStream and never reads opts.LAN, so
-				// setting it unconditionally here only affects the JSON and
-				// one-shot paths below — both want the CLI's cache+probe LAN
-				// collection instead of the old mDNS-only confirmation.
-				LAN: cliLANStreamOptions(),
-			}
+			var opts discovery.DiscoveryOptions
 
 			switch discoverType {
 			case "usb":
@@ -70,11 +63,17 @@ func newDiscoverCmd() *cobra.Command {
 
 			timeoutSet := cmd.Flags().Changed("timeout")
 
+			// Only the JSON and one-shot paths read opts.LAN; the continuous
+			// TUI streams LAN devices itself (startLANStream). Both want the
+			// CLI's cache+probe collection, and building it here rather than
+			// up front spares the TUI a second simulator filter, whose
+			// learners would dial every booting VM twice.
 			if jsonOutput {
 				if !timeoutSet {
 					timeout = 5 * time.Second
 				}
 				opts.Timeout = timeout
+				opts.LAN = cliLANStreamOptions(cmd.Context())
 				// JSON output always lists every target so scripts/MCP keep the
 				// full set regardless of WENDY_SHOW_LOCAL_DEVICES.
 				return discoverJSON(cmd.Context(), opts)
@@ -82,6 +81,7 @@ func newDiscoverCmd() *cobra.Command {
 
 			if timeoutSet {
 				opts.Timeout = timeout
+				opts.LAN = cliLANStreamOptions(cmd.Context())
 				return discoverOnce(cmd.Context(), opts, providers.ShowLocalDevices())
 			}
 			return discoverContinuous(cmd.Context(), opts, providers.ShowLocalDevices())
@@ -129,7 +129,7 @@ func shouldIncludeExternal(opts discovery.DiscoveryOptions) bool {
 }
 
 func discoverJSON(ctx context.Context, opts discovery.DiscoveryOptions) error {
-	collection, err := discoverWithUSBDirect(ctx, opts)
+	collection, err := discoverLocalTargets(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
 	}
@@ -158,7 +158,7 @@ func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions, includeL
 	includeExternal := shouldIncludeExternal(opts)
 
 	work := func() tea.Msg {
-		collection, err := discoverWithUSBDirect(ctx, opts)
+		collection, err := discoverLocalTargets(ctx, opts)
 		if err == nil {
 			annotateLANUSBFromEthernet(collection)
 			sortLANDevicesForDiscover(collection.LANDevices)
@@ -222,8 +222,13 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 		cfg = nil
 	}
 	cloudAuth := devicePickerInitialAuth(cfg)
+	var createReq *errCreateSimulator
+	// Which tab to open on. Only a create changes it, so the user lands back
+	// where they pressed the key rather than on Local.
+	openOn := devicePickerLocalTab
 	for {
-		err := discoverContinuousWithCloudAuth(ctx, opts, includeLocal, cloudAuth, defaultOrgForCloudAuth(cfg, cloudAuth))
+		err := discoverContinuousWithCloudAuth(ctx, opts, includeLocal, cloudAuth, defaultOrgForCloudAuth(cfg, cloudAuth), openOn)
+		openOn = devicePickerLocalTab
 		switch {
 		case errors.Is(err, errDevicePickerLogin):
 			if err := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); err != nil {
@@ -234,6 +239,20 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 				return fmt.Errorf("loading config after login: %w", err)
 			}
 			cloudAuth = devicePickerInitialAuth(cfg)
+		case errors.As(err, &createReq):
+			// The TUI is gone by now, so the prompt and the download's own
+			// progress program have the terminal to themselves. Same helper the
+			// run picker uses, so "c" does the same thing in both views.
+			name := createReq.name
+			createReq = nil
+			if createErr := createSimulator(name); createErr != nil {
+				if errors.Is(createErr, ErrUserCancelled) {
+					openOn = devicePickerSimulatorTab
+					continue
+				}
+				return createErr
+			}
+			openOn = devicePickerSimulatorTab
 		case errors.Is(err, errDevicePickerSwitchOrg):
 			cfg, err = config.Load()
 			if err != nil {
@@ -267,13 +286,13 @@ func defaultOrgForCloudAuth(cfg *config.Config, auth *config.AuthConfig) int32 {
 	return 0
 }
 
-func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.DiscoveryOptions, includeLocal bool, cloudAuth *config.AuthConfig, defaultOrg int32) error {
+func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.DiscoveryOptions, includeLocal bool, cloudAuth *config.AuthConfig, defaultOrg int32, openOn devicePickerTab) error {
 	opts.Timeout = 3 * time.Second // per-scan timeout
 	discoverCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	local := newDiscoverModel(discoverCtx, opts, includeLocal)
-	m := newDiscoverTabsModel(discoverCtx, local, cloudAuth, defaultOrg)
+	m := newDiscoverTabsModel(discoverCtx, local, cloudAuth, defaultOrg, openOn)
 	// Alt screen: the table grows to fill the window, and the alternate
 	// buffer restores the user's terminal content when the TUI exits.
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -290,6 +309,8 @@ func discoverContinuousWithCloudAuth(ctx context.Context, opts discovery.Discove
 		return errDevicePickerLogin
 	case devicePickerSwitchOrg:
 		return errDevicePickerSwitchOrg
+	case devicePickerCreateVM:
+		return &errCreateSimulator{name: dm.createVMName}
 	}
 	return nil
 }
@@ -450,7 +471,7 @@ func (m discoverModel) scanEthernet() tea.Cmd {
 // model just mirrors whatever it reports. Prober must be set: with a nil
 // Prober a cached row can never be confirmed offline.
 func (m discoverModel) startLANStream() tea.Cmd {
-	events := lanStreamFn(m.ctx, discovery.StreamOptions{UseCache: true, Prober: lanProber})
+	events := lanStreamFn(m.ctx, cliLANStreamOptions(m.ctx))
 	return waitLANEvent(events)
 }
 
@@ -588,6 +609,13 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delay := m.ethernetInterval.delay(env.DiscoverEthernetInterval())
 		return m, delayThen(delay, m.scanEthernet())
 	case lanEventMsg:
+		if msg.ev.Kind == discovery.LANRetracted {
+			// Listed, then found to be one of this machine's VMs: it belongs
+			// on the Simulator tab, not here.
+			m.removeLANDevice(discoverycache.Key(msg.ev.Device.ID, msg.ev.Device.DisplayName))
+			m.refreshTable()
+			return m, waitLANEvent(msg.ch)
+		}
 		// A superseded identity is this same device under a stale,
 		// connect-minted hostname key; dropping it keeps one row per device.
 		if msg.ev.Supersedes != "" {
@@ -951,6 +979,8 @@ var deviceTypeNames = map[string]string{
 	"jetson-orin-nano": "Jetson Orin Nano",
 	"jetson-agx-thor":  "Jetson AGX Thor",
 	"x86_64":           "x86-64",
+	"vm-arm64":         "ARM64 VM",
+	"vm-x86-64":        "x86-64 VM",
 }
 
 func humanReadableDeviceType(dt string) string {
@@ -1260,6 +1290,32 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			defaultDevice: defaultDevice,
 		})
 	}
+	for _, d := range collection.Simulators {
+		// The one-shot table has no Simulator tab, so the type column is what
+		// tells a VM apart from a device on the network.
+		const deviceType = "Simulator"
+		address := preferredLANAddress(d)
+		items = append(items, discoverTableItem{
+			picker: tui.PickerItem{
+				Name:          discovery.SanitiseDisplayName(d.DisplayName),
+				Type:          deviceType,
+				Address:       address,
+				AgentVersion:  discovery.SanitiseDisplayName(d.AgentVersion),
+				AgentOutdated: agentBehindCLI(version.Version, d.AgentVersion),
+				OS:            d.OS,
+				OSVersion:     d.OSVersion,
+				DedupKey:      d.ID,
+				SortKey:       deviceSortKey(d.DisplayName, ""),
+			},
+			info: discoverDeviceInfo{
+				Name:    d.DisplayName,
+				Type:    deviceType,
+				Address: address,
+				Version: d.AgentVersion,
+			},
+			defaultDevice: d.ID,
+		})
+	}
 	for _, d := range collection.ExternalDevices {
 		// Wendy Lite devices are merged with BLE Lite in MergedDevices().
 		if d.ProviderKey == "wendy-lite" {
@@ -1506,3 +1562,10 @@ func copyToClipboard(text string) error {
 	}
 	return fmt.Errorf("no clipboard tool found; install one of: %s", strings.Join(names, ", "))
 }
+
+// errCreateSimulator asks the discover loop to create a VM and come back. Not a
+// sentinel: the name travels with it, and the TUI has to be gone before the
+// download starts so its progress program can own the terminal.
+type errCreateSimulator struct{ name string }
+
+func (e *errCreateSimulator) Error() string { return "create simulator " + e.name }

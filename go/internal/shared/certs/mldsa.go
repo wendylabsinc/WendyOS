@@ -164,6 +164,29 @@ func ParseCertsFromPEM(chainPEM []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
+// AppendChainToPool adds every certificate in chainPEM to pool and returns how
+// many were added.
+//
+// It exists because x509.CertPool.AppendCertsFromPEM silently drops the
+// certificates pki-core issues: those carry trailing bytes after the outer
+// ASN.1 SEQUENCE, so x509.ParseCertificate rejects them (see
+// ParseCertsFromPEM). AppendCertsFromPEM then reports false, and callers that
+// treated false as fatal refused every ML-DSA chain outright rather than
+// merely failing to trust it. Use this instead of AppendCertsFromPEM for any
+// Wendy-issued chain, and treat a zero count — not a boolean — as the empty
+// case.
+func AppendChainToPool(pool *x509.CertPool, chainPEM string) int {
+	if chainPEM == "" {
+		return 0
+	}
+	// ParseCertsFromPEM skips what it cannot parse and never returns an error.
+	parsed, _ := ParseCertsFromPEM([]byte(chainPEM))
+	for _, cert := range parsed {
+		pool.AddCert(cert)
+	}
+	return len(parsed)
+}
+
 func mldsaCertSigAlgOID(cert *x509.Certificate) (asn1.ObjectIdentifier, error) {
 	var outer mldsaCertOuter
 	if _, err := asn1.Unmarshal(cert.Raw, &outer); err != nil {

@@ -257,8 +257,8 @@ func applyWendyConf(logger *zap.Logger, cfgDir string) {
 // characters for the name; longer names produce an invalid hostname label.
 const maxDeviceNameLen = 55
 
-// validDeviceName reports whether name satisfies the WendyOS device name rules:
-// starts with a lowercase letter, followed by 2–54 lowercase letters, digits, or hyphens.
+// validDeviceName: letter-led, 3-55 chars of [a-z0-9-], no trailing hyphen so the
+// derived "wendyos-<name>" stays a valid DNS label. Mirrors is_valid_device_name.
 func validDeviceName(name string) bool {
 	if len(name) < 3 || len(name) > maxDeviceNameLen {
 		return false
@@ -275,12 +275,12 @@ func validDeviceName(name string) bool {
 			return false
 		}
 	}
-	return true
+	return name[len(name)-1] != '-'
 }
 
 func applyDeviceName(logger *zap.Logger, name string) error {
 	if !validDeviceName(name) {
-		return fmt.Errorf("invalid device name %q: must match ^[a-z][a-z0-9-]{2,54}$", name)
+		return fmt.Errorf("invalid device name %q: must match ^[a-z][a-z0-9-]{1,53}[a-z0-9]$", name)
 	}
 
 	const deviceNamePath = "/etc/wendyos/device-name"
@@ -291,6 +291,18 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 		return fmt.Errorf("writing device name: %w", err)
 	}
 	logger.Info("Wrote device name", zap.String("name", name), zap.String("path", deviceNamePath))
+
+	// A device-name apply is a deliberate re-identification, so clear any explicit
+	// rename — it outranks device-name (hostname.go, update-mdns-uuid.sh) and would
+	// otherwise override this name on the next boot.
+	const explicitHostnamePath = "/etc/wendy-agent/hostname"
+	if err := os.Remove(explicitHostnamePath); err == nil {
+		logger.Info("Cleared explicit hostname so the device name takes effect",
+			zap.String("path", explicitHostnamePath))
+	} else if !os.IsNotExist(err) {
+		logger.Warn("Could not clear explicit hostname; it will keep overriding the device name",
+			zap.String("path", explicitHostnamePath), zap.Error(err))
+	}
 
 	// Build an env with a full system PATH so scripts can find standard
 	// utilities (mkdir, logger, etc.) even when the agent runs under systemd

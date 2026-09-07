@@ -33,11 +33,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             )
 
             // Registered before start() so the services the agent builds at
-            // startup capture it. Invoked from a detached task after the
-            // update RPC has returned, so stop()'s drain cannot deadlock on
-            // the still-open update stream.
+            // startup capture it. A self-update must end this process without
+            // running the ordinary Quit teardown: deployed apps should survive
+            // and be adopted by the replacement agent, and draining the gRPC
+            // server here can wait on the update RPC that triggered the quit.
             await self.wendyAgent.setAgentTerminationHandler { [weak self] in
-                await self?.performQuit()
+                await self?.performUpdateQuit()
             }
 
             do {
@@ -69,9 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         self.performQuit()
     }
 
-    /// Shuts the agent down and terminates the app. Shared by the Quit menu
-    /// item and the agent's post-update termination handler; re-entrant calls
-    /// are ignored.
+    /// Shuts the agent down and terminates the app after an explicit user Quit.
     private func performQuit() {
         guard !self.isQuitting else { return }
         self.isQuitting = true
@@ -81,6 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             await self.wendyAgent.stop()
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    /// Ends only the agent app after a committed self-update. The detached
+    /// relaunch watcher opens the freshly-installed bundle once this PID exits.
+    private func performUpdateQuit() {
+        NSApplication.shared.terminate(nil)
     }
 
     func windowWillClose(_ notification: Notification) {

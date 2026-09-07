@@ -64,6 +64,6 @@ See [Install wendy-agent on Linux](/docs/installation/linux).
 | GPU | Status |
 |-----|--------|
 | NVIDIA (CUDA) | Supported — Jetson and x86 systems with NVIDIA GPUs, via the `gpu` entitlement |
-| AMD (ROCm) | In progress |
+| AMD (ROCm) | Supported on compatible x86 Linux hosts with `amdgpu`, via the `gpu` entitlement |
 
 See [GPU Access](/docs/hardware/gpu).

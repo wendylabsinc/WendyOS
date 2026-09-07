@@ -34,6 +34,8 @@ func newCameraCmd() *cobra.Command {
 		newCameraLoginCmd(),
 		newCameraForgetCmd(),
 		newCameraTestCmd(),
+		newCameraControlsCmd(),
+		newCameraSetControlCmd(),
 	)
 	return cmd
 }

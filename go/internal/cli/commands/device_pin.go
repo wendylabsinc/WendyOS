@@ -66,6 +66,11 @@ func enforceDevicePin(hostname string, conn *grpcclient.AgentConnection) error {
 	if conn == nil {
 		return nil
 	}
+	// No key, no pin: the caller reached something whose address is not an
+	// identity, such as a VM behind a loopback forward.
+	if hostname == "" {
+		return nil
+	}
 	return enforceDeviceIdentity(hostname, observeDeviceIdentity(conn))
 }
 

@@ -176,12 +176,39 @@ func governingPin(pinKey string) (config.DevicePin, string, bool) {
 // means. A resolved IP is deliberately never used as a key — it changes on
 // ordinary DHCP churn — but an address the user typed as a literal IP is the
 // name they asked for, so it keys a pin like any other host.
+// Loopback gets no special case. It used to: local VMs all answer on 127.0.0.1,
+// so two of them collide on one key. But every alternative was worse -- an
+// empty key reads as "unpinned" and disarms the guard against reaching a
+// previously-authenticated host over plaintext, and a port-qualified key
+// orphans the pins existing users already hold under the bare host. Known VM
+// aliases instead use their own vm:<name> key (see connectSimulatorAgent),
+// leaving typed IP addresses governed by their existing pins.
 func pinKeyForAddr(addr string) string {
+	// SplitHostPort accepts non-numeric service names, so vm:dev would
+	// otherwise become just "vm" when set-default/unpin derives its key.
+	if name, matched, err := simulatorName(addr); err == nil && matched {
+		return vmDeviceIDPrefix + name
+	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return strings.TrimSpace(addr)
 	}
 	return host
+}
+
+// isLoopbackHost reports whether host names this machine. "localhost" is
+// matched by name because net.ParseIP does not resolve it, and it is the form
+// people actually type at a forwarded port.
+func isLoopbackHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // expectedIdentityFor returns the asset identity pinned for pinKey, or nil when

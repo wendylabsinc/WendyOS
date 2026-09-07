@@ -150,6 +150,10 @@ func main() {
 	// renamed.
 	services.ReassertHostnameAdvertisement(logger)
 
+	// Advertise the board id, so `wendy discover` can tell a local VM from a
+	// device on the sighting alone. A no-op once the record is in place.
+	services.EnsureDeviceTypeAdvertisement(logger)
+
 	// Time sync: apply config-partition floor immediately, then start
 	// background Roughtime + multicast sync.
 	timesyncMgr := timesync.NewManager(logger, configPath)

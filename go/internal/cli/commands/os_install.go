@@ -1884,6 +1884,21 @@ func isGzipFile(path string) bool {
 	return err == nil && magic[0] == 0x1f && magic[1] == 0x8b
 }
 
+// VM downloads and content-addressed cache entries have extensionless format
+// names (.img/.image). Identify ZIP containers by their signature as well.
+func isZipFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return false
+	}
+	return string(magic[:]) == "PK\x03\x04" || string(magic[:]) == "PK\x05\x06" || string(magic[:]) == "PK\x07\x08"
+}
+
 // openOSImageStream resolves the cached file for deviceKey+img, then returns
 // a streaming reader over the image bytes. The caller must Close it.
 func openOSImageStream(deviceKey string, img *imageInfo) (*imageStream, error) {
@@ -1891,23 +1906,14 @@ func openOSImageStream(deviceKey string, img *imageInfo) (*imageStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasSuffix(strings.ToLower(cachePath), ".zip") {
-		return streamZipImageEntry(cachePath)
-	}
-	if isGzipFile(cachePath) {
-		return streamGzipImage(cachePath)
-	}
-	if isZstdFile(cachePath) {
-		return streamZstdImage(cachePath)
-	}
-	return openRawImageStream(cachePath)
+	return openLocalImageStream(cachePath)
 }
 
 // openLocalImageStream opens an arbitrary local file for streaming.
-// If the path ends in .zip it finds the first image entry inside it.
-// Otherwise it opens the file directly as a reader.
+// ZIP, gzip and zstd are detected by content, independently of cache filenames.
+// ZIP archives yield their first image entry; other files are raw disk images.
 func openLocalImageStream(imagePath string) (*imageStream, error) {
-	if strings.HasSuffix(strings.ToLower(imagePath), ".zip") {
+	if strings.HasSuffix(strings.ToLower(imagePath), ".zip") || isZipFile(imagePath) {
 		return streamZipImageEntry(imagePath)
 	}
 	if isGzipFile(imagePath) {

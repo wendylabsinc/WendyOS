@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestIsAvailable(t *testing.T) {
@@ -41,6 +43,40 @@ func TestStopAll_Empty(t *testing.T) {
 	m := NewManager(nil)
 	// Should not panic with no processes.
 	m.StopAll()
+}
+
+func TestStopAllPreservesSocketDirectoryForRunningContainerMount(t *testing.T) {
+	socketDir := filepath.Join(t.TempDir(), "mounted-proxy")
+	if err := os.Mkdir(socketDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(zap.NewNop())
+	m.processes["app"] = &proxyProcess{socketDir: socketDir}
+
+	m.StopAll()
+
+	if _, err := os.Stat(socketDir); err != nil {
+		t.Fatalf("StopAll removed bind-mounted socket directory: %v", err)
+	}
+	if len(m.processes) != 0 {
+		t.Fatalf("StopAll left %d tracked processes, want 0", len(m.processes))
+	}
+}
+
+func TestStopRemovesSocketDirectoryAtContainerLifecycleEnd(t *testing.T) {
+	socketDir := filepath.Join(t.TempDir(), "stopped-proxy")
+	if err := os.Mkdir(socketDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(zap.NewNop())
+	m.processes["app"] = &proxyProcess{socketDir: socketDir}
+
+	if err := m.Stop("app"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(socketDir); !os.IsNotExist(err) {
+		t.Fatalf("Stop kept socket directory, stat error = %v", err)
+	}
 }
 
 func TestSocketDirContainsAppID(t *testing.T) {

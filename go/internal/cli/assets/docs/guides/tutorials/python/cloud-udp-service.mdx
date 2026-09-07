@@ -1,0 +1,210 @@
+---
+title: Reach a UDP Service Through Wendy Cloud
+description: Deploy a Python UDP echo server, forward a local UDP port through Wendy Cloud, and check an end-to-end reply.
+language: python
+---
+
+This tutorial sends a UDP message from your development machine to a Python service on a remote WendyOS device. Wendy Cloud forwards the message and the reply through an authenticated tunnel.
+
+## Prerequisites
+
+- The [Wendy CLI](/docs/installation/developer-machine-setup) and Python 3 on your development machine.
+- A Linux WendyOS device [enrolled in Wendy Cloud](/docs/cloud) and online.
+- A signed-in account with access to that device.
+- CLI, cloud broker, and device agent versions that support UDP tunnels and cloud ping.
+- A working container build setup for `wendy run`, as described in [developer machine setup](/docs/installation/developer-machine-setup).
+
+The commands use `remote-device` as the enrolled device name. Replace it with your device's name. Use an available UDP port 9000 on both your machine and the device.
+
+## Check cloud connectivity
+
+Sign in and find the device:
+
+```bash
+wendy auth login
+wendy --json cloud discover
+```
+
+Send three echo requests to its agent:
+
+```bash
+wendy cloud ping --device remote-device --count 3
+```
+
+A successful check reports replies, round-trip times, and `3 sent, 3 received, 0% loss`.
+
+Cloud ping checks the path through the broker to the Wendy agent. It does not use privileged ICMP sockets and does not check your application's UDP port. You will test that port after deploying the server.
+
+## Create the echo server
+
+Create a project directory:
+
+```bash
+mkdir cloud-udp-echo
+cd cloud-udp-echo
+```
+
+Save this as `server.py`:
+
+```python
+import socket
+
+
+def main():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as server:
+        server.bind(("127.0.0.1", 9000))
+        print("UDP echo server listening on 127.0.0.1:9000", flush=True)
+
+        while True:
+            payload, peer = server.recvfrom(4096)
+            server.sendto(payload, peer)
+            print(f"Echoed {len(payload)} bytes", flush=True)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+The server echoes each datagram unchanged. Keep test messages below 4096 bytes, the receive-buffer size in this example.
+
+Save this as `Dockerfile`:
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+COPY server.py .
+CMD ["python", "server.py"]
+```
+
+Save this as `wendy.json`:
+
+```json
+{
+  "$schema": "https://wendy.dev/schemas/wendy.json",
+  "appId": "cloud-udp-echo",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" }
+  ]
+}
+```
+
+The tunnel reaches `127.0.0.1:9000` on the device. Explicit host networking lets the container bind that same loopback address. The server can receive tunnel traffic without listening on the device's LAN address. The current port-mapping schema has no UDP protocol field, so this example uses host networking without a `ports` entry.
+
+## Deploy the server
+
+Run this from the project directory:
+
+```bash
+wendy run --device remote-device --detach
+wendy --json device apps list --device remote-device
+```
+
+Find `cloud-udp-echo` with `runningState` set to `RUNNING`. Detached deployment returns after starting the container and does not wait for an application readiness probe.
+
+## Open the UDP tunnel
+
+In a separate terminal, run:
+
+```bash
+wendy cloud tunnel 9000:9000/udp --device remote-device
+```
+
+The first port is local and the second is on the device. The `/udp` suffix selects UDP; omitting it selects TCP.
+
+Wait for the forwarding message, then leave this command running. It listens on `127.0.0.1:9000` on your development machine and forwards datagrams to the remote service.
+
+## Send a message and check the reply
+
+Save this as `client.py` in your project directory:
+
+```python
+import secrets
+import socket
+import sys
+import time
+
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 9000
+payload = f"hello from Wendy {secrets.token_hex(8)}".encode()
+
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+    client.settimeout(5)
+    client.connect(("127.0.0.1", port))
+    started = time.monotonic()
+    client.send(payload)
+
+    try:
+        reply = client.recv(4096)
+    except TimeoutError:
+        raise SystemExit("No reply within 5 seconds. Check the tunnel and server.")
+
+    if reply != payload:
+        raise SystemExit(f"Unexpected reply: {reply!r}")
+
+    elapsed_ms = (time.monotonic() - started) * 1000
+    print(f"Matched {len(reply)} bytes in {elapsed_ms:.1f} ms")
+    print(reply.decode())
+```
+
+Run it from your project terminal:
+
+```bash
+python3 client.py
+```
+
+You should see a matching reply, with a different random value and timing on each run:
+
+```text
+Matched 33 bytes in 42.7 ms
+hello from Wendy 1234567890abcdef
+```
+
+The matching random value checks that this request reached an echo server and returned through the tunnel. To check activity on the intended device, open its app logs in another terminal, then run the client again:
+
+```bash
+wendy device logs --app cloud-udp-echo --device remote-device
+```
+
+The server should log `Echoed 33 bytes` for that request. Press Ctrl+C to stop viewing logs.
+
+## Use a different local port
+
+If UDP port 9000 is already in use on your development machine, stop the tunnel and use another local port:
+
+```bash
+wendy cloud tunnel 19000:9000/udp --device remote-device
+```
+
+Run the client against that port:
+
+```bash
+python3 client.py 19000
+```
+
+The server still listens on device port 9000. Changing the local port does not require a redeploy.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Cloud ping receives no replies | Check that the device is online and your session can access it. If the command reports unsupported datagrams, update the relevant CLI, agent, or broker component. |
+| Ping succeeds but the client times out | Check that the app is running, the tunnel includes `/udp`, and the server uses the `network` entitlement with `mode: "host"`. Ping does not check the application port. |
+| The tunnel reports that an address is in use | Choose a different local UDP port and pass it to `client.py`. |
+| The app exits with an address-in-use error | Another process on the device is using UDP port 9000. Stop that process or change the server port and the tunnel's remote port. |
+| A reply differs from the message | Check that the chosen device port belongs to this echo server and that the message fits its receive buffer. |
+
+UDP does not provide application-level acknowledgements or retries. This client sends once and fails after five seconds; run it again after checking the server and tunnel.
+
+## Clean up
+
+Press Ctrl+C in the tunnel terminal. This closes the local forward and leaves the app running on the device.
+
+Remove the tutorial app and its image:
+
+```bash
+wendy device apps remove cloud-udp-echo --force --cleanup --device remote-device
+```
+
+See the [cloud tunnel reference](/docs/advanced/clients/wendy-cli/commands/cloud/tunnel) for the full command syntax.

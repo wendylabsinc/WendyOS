@@ -251,6 +251,7 @@ func NewRootCmd() *cobra.Command {
 		// Manage
 		projectCmd,
 		deviceCmd,
+		newVMCmd(),
 		fleetCmd,
 		// Cloud
 		cloudCmd,

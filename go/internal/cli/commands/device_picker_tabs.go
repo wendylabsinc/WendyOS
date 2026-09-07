@@ -13,29 +13,30 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
-type devicePickerTab int
-
-const (
-	devicePickerLocalTab devicePickerTab = iota
-	devicePickerCloudTab
-)
-
-type devicePickerAction int
-
-const (
-	devicePickerNoAction devicePickerAction = iota
-	devicePickerLogin
-	devicePickerSwitchOrg
-)
-
 // Child messages are tagged so background commands keep updating the correct
 // page after the user changes tabs.
 type devicePickerLocalMsg struct{ msg tea.Msg }
+type devicePickerSimulatorMsg struct{ msg tea.Msg }
 type devicePickerCloudMsg struct{ msg tea.Msg }
 type devicePickerOrgMsg struct{ name string }
 
+// devicePickerChoice is what the user picked, tagged by the tab that owned the
+// selection. Tab is authoritative: a child keeps whatever it selected on an
+// earlier visit, so checking payloads in a fixed order would let one tab's
+// leftover beat the tab the user actually confirmed on.
+type devicePickerChoice struct {
+	Tab       devicePickerTab
+	Local     *tui.PickerItem
+	Simulator *simulatorChoice
+	Cloud     *cloudpb.Asset
+}
+
 type devicePickerModel struct {
 	local        tui.PickerModel
+	sim          simulatorPickerModel
+	simStarted   bool
+	chosen       devicePickerTab
+	hasChosen    bool
 	cloud        cloudDiscoverModel
 	cloudAuth    *config.AuthConfig
 	cloudOrg     string
@@ -50,6 +51,7 @@ type devicePickerModel struct {
 func newDevicePickerModel(ctx context.Context, local tui.PickerModel, auth *config.AuthConfig, defaultOrg int32) devicePickerModel {
 	m := devicePickerModel{
 		local:      local,
+		sim:        newSimulatorPickerModel(ctx),
 		cloudAuth:  auth,
 		defaultOrg: defaultOrg,
 	}
@@ -72,15 +74,26 @@ func tagDevicePickerCmd(cmd tea.Cmd, tab devicePickerTab) tea.Cmd {
 			}
 			return tagged
 		}
-		if tab == devicePickerCloudTab {
+		switch tab {
+		case devicePickerCloudTab:
 			return devicePickerCloudMsg{msg: msg}
+		case devicePickerSimulatorTab:
+			return devicePickerSimulatorMsg{msg: msg}
+		default:
+			return devicePickerLocalMsg{msg: msg}
 		}
-		return devicePickerLocalMsg{msg: msg}
 	}
 }
 
 func (m devicePickerModel) Init() tea.Cmd {
+	// The simulator list is not started here: it polls the VM store, and doing
+	// that for a tab nobody opened is both wasted I/O and lock contention with
+	// any concurrent `vm start`.
 	return tagDevicePickerCmd(m.local.Init(), devicePickerLocalTab)
+}
+
+func (m devicePickerModel) startSimulatorCmd() tea.Cmd {
+	return tagDevicePickerCmd(m.sim.Init(), devicePickerSimulatorTab)
 }
 
 func (m devicePickerModel) startCloudCmd() tea.Cmd {
@@ -115,6 +128,7 @@ func (m devicePickerModel) updateLocal(msg tea.Msg) (devicePickerModel, tea.Cmd)
 	updated, cmd := m.local.Update(msg)
 	m.local = updated.(tui.PickerModel)
 	if m.local.Selected() != nil {
+		m.chosen, m.hasChosen = devicePickerLocalTab, true
 		return m, tea.Quit
 	}
 	if m.local.Cancelled() {
@@ -124,10 +138,25 @@ func (m devicePickerModel) updateLocal(msg tea.Msg) (devicePickerModel, tea.Cmd)
 	return m, tagDevicePickerCmd(cmd, devicePickerLocalTab)
 }
 
+func (m devicePickerModel) updateSimulator(msg tea.Msg) (devicePickerModel, tea.Cmd) {
+	updated, cmd := m.sim.Update(msg)
+	m.sim = updated
+	if m.sim.selected() != nil {
+		m.chosen, m.hasChosen = devicePickerSimulatorTab, true
+		return m, tea.Quit
+	}
+	if m.sim.cancelled() {
+		m.cancelled = true
+		return m, tea.Quit
+	}
+	return m, tagDevicePickerCmd(cmd, devicePickerSimulatorTab)
+}
+
 func (m devicePickerModel) updateCloud(msg tea.Msg) (devicePickerModel, tea.Cmd) {
 	updated, cmd := m.cloud.Update(msg)
 	m.cloud = updated.(cloudDiscoverModel)
 	if m.cloud.selected != nil {
+		m.chosen, m.hasChosen = devicePickerCloudTab, true
 		return m, tea.Quit
 	}
 	if m.cloud.quitting {
@@ -141,6 +170,8 @@ func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case devicePickerLocalMsg:
 		return m.updateLocal(msg.msg)
+	case devicePickerSimulatorMsg:
+		return m.updateSimulator(msg.msg)
 	case devicePickerCloudMsg:
 		if m.cloudAuth == nil {
 			return m, nil
@@ -151,25 +182,36 @@ func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
+		var cmds []tea.Cmd
 		local, localCmd := m.updateLocal(msg)
 		m = local
-		if m.cloudAuth == nil {
-			return m, localCmd
+		cmds = append(cmds, localCmd)
+		sim, simCmd := m.updateSimulator(msg)
+		m = sim
+		cmds = append(cmds, simCmd)
+		// Accumulated rather than early-returned: the old shape bailed out
+		// before the second child when there was no cloud auth, which would
+		// leave the simulator table unsized.
+		if m.cloudAuth != nil {
+			cloud, cloudCmd := m.updateCloud(msg)
+			m = cloud
+			cmds = append(cmds, cloudCmd)
 		}
-		cloud, cloudCmd := m.updateCloud(msg)
-		m = cloud
-		return m, tea.Batch(localCmd, cloudCmd)
+		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab", "shift+tab":
-			if m.active == devicePickerLocalTab {
-				m.active = devicePickerCloudTab
-				if m.cloudAuth != nil && !m.cloudStarted {
-					m.cloudStarted = true
-					return m, m.startCloudCmd()
-				}
-			} else {
-				m.active = devicePickerLocalTab
+			m.active = cycleTab(deviceTabOrder(), m.active, tabCycleDelta(msg.String()))
+			// Latched rather than keyed off "arrived from Local": with
+			// wrap-around, Cloud is reachable from either neighbour and
+			// discovery must still start exactly once.
+			if m.active == devicePickerCloudTab && m.cloudAuth != nil && !m.cloudStarted {
+				m.cloudStarted = true
+				return m, m.startCloudCmd()
+			}
+			if m.active == devicePickerSimulatorTab && !m.simStarted {
+				m.simStarted = true
+				return m, m.startSimulatorCmd()
 			}
 			return m, nil
 		case "o":
@@ -189,13 +231,17 @@ func (m devicePickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if m.active == devicePickerCloudTab {
+		switch m.active {
+		case devicePickerCloudTab:
 			if m.cloudAuth == nil {
 				return m, nil
 			}
 			return m.updateCloud(msg)
+		case devicePickerSimulatorTab:
+			return m.updateSimulator(msg)
+		default:
+			return m.updateLocal(msg)
 		}
-		return m.updateLocal(msg)
 	}
 	return m, nil
 }
@@ -207,14 +253,17 @@ var (
 )
 
 func (m devicePickerModel) View() string {
-	if m.cancelled || m.action != devicePickerNoAction || m.selectedLocal() != nil || m.selectedCloud() != nil {
+	if m.cancelled || m.action != devicePickerNoAction || m.hasChosen {
 		return ""
 	}
 
-	header := deviceTabsHeader(m.active, m.windowWidth)
+	header := deviceTabsHeader(m.active, deviceTabOrder(), m.windowWidth)
 
-	if m.active == devicePickerLocalTab {
+	switch m.active {
+	case devicePickerLocalTab:
 		return header + "\n\n" + m.local.View()
+	case devicePickerSimulatorTab:
+		return header + "\n\n" + m.sim.View()
 	}
 
 	var body strings.Builder
@@ -235,21 +284,6 @@ func (m devicePickerModel) View() string {
 	return body.String()
 }
 
-func deviceTabsHeader(active devicePickerTab, width int) string {
-	local := devicePickerTabInactive.Render("Local")
-	cloud := devicePickerTabInactive.Render("Cloud")
-	if active == devicePickerLocalTab {
-		local = devicePickerTabActive.Render("Local")
-	} else {
-		cloud = devicePickerTabActive.Render("Cloud")
-	}
-	header := local + devicePickerTabInactive.Render(" | ") + cloud + devicePickerTabInactive.Render("  (tab switch)")
-	if width > 0 {
-		header = tui.CropANSIView(header, 0, width)
-	}
-	return header
-}
-
 func deviceCloudOrgLabel(auth *config.AuthConfig, name string, defaultOrg int32) string {
 	orgID := cloudAuthOrgID(auth)
 	label := fmt.Sprintf("Organization: org %d", orgID)
@@ -260,6 +294,24 @@ func deviceCloudOrgLabel(auth *config.AuthConfig, name string, defaultOrg int32)
 		label += "  ✦ default"
 	}
 	return label + "  (o switch)"
+}
+
+// choice reports the confirmed selection. ok is false when the picker exited
+// without one: cancelled, or quit to log in or switch org.
+func (m devicePickerModel) choice() (devicePickerChoice, bool) {
+	if !m.hasChosen || m.cancelled || m.action != devicePickerNoAction {
+		return devicePickerChoice{}, false
+	}
+	c := devicePickerChoice{Tab: m.chosen}
+	switch m.chosen {
+	case devicePickerSimulatorTab:
+		c.Simulator = m.sim.selected()
+	case devicePickerCloudTab:
+		c.Cloud = m.selectedCloud()
+	default:
+		c.Local = m.selectedLocal()
+	}
+	return c, true
 }
 
 func (m devicePickerModel) selectedLocal() *tui.PickerItem {

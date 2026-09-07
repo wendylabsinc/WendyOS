@@ -194,3 +194,13 @@ func assertValidPassthroughURL(t *testing.T, target, wantPath string) {
 		t.Fatal("endpoint is empty — passthrough resolver would reject this target")
 	}
 }
+
+func TestCloseOnANilConnectionDoesNotPanic(t *testing.T) {
+	// `wendy os update` defers Close on a variable that ensureAgentUpToDate
+	// sets to nil when a post-restart reconnect fails; without a nil-receiver
+	// guard the deferred cleanup panics and hides the real error.
+	var conn *AgentConnection
+	if err := conn.Close(); err != nil {
+		t.Errorf("Close() on a nil connection = %v, want nil", err)
+	}
+}

@@ -28,8 +28,13 @@ public actor WendyAgent {
     public private(set) var status: WendyAgentStatus = .idle
     public private(set) var apps: [WendyAppInfo] = []
 
+    /// Snapshotted before any RPC service starts so post-update verification
+    /// describes the executable this process actually mapped.
+    private let runningExecutableSHA256: String
+
     public init(configuration: WendyAgentConfiguration = .init()) {
         self.configuration = configuration
+        self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
     }
 
     public func start() async throws {
@@ -336,6 +341,7 @@ public actor WendyAgent {
 
         let services: [any RegistrableRPCService] = [
             AgentService(
+                binarySHA256: self.runningExecutableSHA256,
                 updateLock: self.agentUpdateLock,
                 updateDependencies: .init(
                     relauncher: AgentRelauncher(terminate: self.agentTerminationHandler)

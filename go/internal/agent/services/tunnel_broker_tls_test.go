@@ -84,3 +84,32 @@ func TestBrokerTLSConfig_MalformedChainErrors(t *testing.T) {
 		t.Fatal("expected error for a malformed CA chain, got nil")
 	}
 }
+
+// TestBrokerTLSConfig_TrailingBytesChainAccepted is the regression guard for the
+// pki-core enrollment chain (WDY-2339). Those certificates carry trailing bytes
+// after the outer ASN.1 SEQUENCE, so x509.CertPool.AppendCertsFromPEM drops them
+// and reports false. brokerTLSConfig read that false as fatal, which meant a
+// device enrolled against pki-core came up provisioned and unable to build a
+// broker connection at all — the chain was not merely untrusted, the dial never
+// happened.
+func TestBrokerTLSConfig_TrailingBytesChainAccepted(t *testing.T) {
+	certPEM, keyPEM := ecdsaCertKeyPEM(t)
+
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		t.Fatal("generated cert is not valid PEM")
+	}
+	der := append(append([]byte{}, block.Bytes...), 0x00, 0x00)
+	chainPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if x509.NewCertPool().AppendCertsFromPEM(chainPEM) {
+		t.Fatal("AppendCertsFromPEM accepted a trailing-bytes chain; this guard no longer tests anything")
+	}
+
+	cfg, err := brokerTLSConfig(zap.NewNop(), certPEM, keyPEM, string(chainPEM))
+	if err != nil {
+		t.Fatalf("brokerTLSConfig rejected a pki-core chain: %v", err)
+	}
+	if cfg.VerifyConnection == nil {
+		t.Fatal("expected a VerifyConnection callback pinning the chain")
+	}
+}

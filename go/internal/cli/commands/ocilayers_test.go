@@ -516,19 +516,12 @@ func TestChunkLayoutDir(t *testing.T) {
 	}
 }
 
-func TestOCIDeploymentCacheKeySeparatesAppAndPlatform(t *testing.T) {
-	if got, want := ociDeploymentCacheKey("Com.Wendy.App", "LINUX/ARM64"), "com.wendy.app\x00linux/arm64"; got != want {
-		t.Fatalf("ociDeploymentCacheKey = %q, want %q", got, want)
-	}
-	if ociDeploymentCacheKey("ab", "c") == ociDeploymentCacheKey("a", "bc") {
-		t.Fatal("app/platform boundary must be unambiguous")
-	}
-}
-
 // Independent OCI solves must overlap. This is the regression test for the
 // process-wide build.lock queue: both fake buildx commands must start before
-// either is allowed to finish. It also verifies they receive distinct local
-// cache destinations, which is the safety condition for concurrent exporters.
+// either is allowed to finish. It also verifies they receive distinct OCI output
+// layout destinations — with the cache now embedded inline in each app's own
+// layout dir, distinct per-app output dirs are the safety condition for
+// concurrent exporters (the old separate per-app local cache dirs are gone).
 func TestBuildxOCIExportAllowsIndependentConcurrentSolves(t *testing.T) {
 	isolateBuildLockDir(t)
 	originalLock := buildLock
@@ -545,13 +538,13 @@ func TestBuildxOCIExportAllowsIndependentConcurrentSolves(t *testing.T) {
 	allowFinish := make(chan struct{})
 	originalRun := runBuildxOCIExportCommand
 	runBuildxOCIExportCommand = func(_ context.Context, _ string, args, _ []string, _, _ io.Writer) error {
-		cacheDest := ""
+		outputDest := ""
 		for _, arg := range args {
-			if strings.HasPrefix(arg, "type=local,dest=") {
-				cacheDest = arg
+			if strings.HasPrefix(arg, "type=oci,dest=") {
+				outputDest = arg
 			}
 		}
-		entered <- cacheDest
+		entered <- outputDest
 		<-allowFinish
 		return nil
 	}
@@ -566,15 +559,15 @@ func TestBuildxOCIExportAllowsIndependentConcurrentSolves(t *testing.T) {
 	for i, app := range []string{"app-a", "app-b"} {
 		dest := filepath.Join(t.TempDir(), fmt.Sprintf("layout-%d", i))
 		go func(app, dest string) {
-			results <- buildImageWithBuildxOCIExport(context.Background(), cwd, "Dockerfile", "linux/arm64", nil, dest, true, ociDeploymentCacheKey(app, "linux/arm64"), io.Discard, io.Discard)
+			results <- buildImageWithBuildxOCIExport(context.Background(), cwd, "Dockerfile", "linux/arm64", nil, dest, true, io.Discard, io.Discard)
 		}(app, dest)
 	}
 
-	cacheDests := map[string]bool{}
+	outputDests := map[string]bool{}
 	for range 2 {
 		select {
 		case dest := <-entered:
-			cacheDests[dest] = true
+			outputDests[dest] = true
 		case <-time.After(2 * time.Second):
 			close(allowFinish)
 			t.Fatal("independent OCI solve was still queued behind the first")
@@ -586,14 +579,14 @@ func TestBuildxOCIExportAllowsIndependentConcurrentSolves(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(cacheDests) != 2 {
-		t.Fatalf("concurrent solves used %d cache destinations, want 2: %v", len(cacheDests), cacheDests)
+	if len(outputDests) != 2 {
+		t.Fatalf("concurrent solves used %d output destinations, want 2: %v", len(outputDests), outputDests)
 	}
 }
 
 func TestBuildxOCIExportArgs(t *testing.T) {
 	t.Run("dir mode, no cache index, sorted build args", func(t *testing.T) {
-		got := buildxOCIExportArgs("wendy-oci", "linux/arm64", "/proj/Dockerfile", "", "/c/buildx", "/dest/layout", true,
+		got := buildxOCIExportArgs("wendy-oci", "linux/arm64", "/proj/Dockerfile", "", "/dest/layout", true,
 			map[string]string{"ZED": "2", "ALPHA": "1"})
 		want := []string{
 			"buildx", "build",
@@ -601,7 +594,7 @@ func TestBuildxOCIExportArgs(t *testing.T) {
 			"--platform", "linux/arm64",
 			"--progress", "plain",
 			"-f", "/proj/Dockerfile",
-			"--cache-to", "type=local,dest=/c/buildx,compression=uncompressed",
+			"--cache-to", "type=inline",
 			"--build-arg", "ALPHA=1",
 			"--build-arg", "ZED=2",
 			"--output", "type=oci,dest=/dest/layout,compression=uncompressed,tar=false",
@@ -612,14 +605,14 @@ func TestBuildxOCIExportArgs(t *testing.T) {
 		}
 	})
 	t.Run("tar mode with cache index, no dockerfile", func(t *testing.T) {
-		got := buildxOCIExportArgs("wendy-oci", "linux/arm64", "", "/c/legacy", "/c/buildx", "/tmp/image.tar", false, nil)
+		got := buildxOCIExportArgs("wendy-oci", "linux/arm64", "", "/c/prev-layout", "/tmp/image.tar", false, nil)
 		want := []string{
 			"buildx", "build",
 			"--builder", "wendy-oci",
 			"--platform", "linux/arm64",
 			"--progress", "plain",
-			"--cache-from", "type=local,src=/c/legacy",
-			"--cache-to", "type=local,dest=/c/buildx,compression=uncompressed",
+			"--cache-from", "type=local,src=/c/prev-layout",
+			"--cache-to", "type=inline",
 			"--output", "type=oci,dest=/tmp/image.tar,compression=uncompressed",
 			".",
 		}
@@ -627,17 +620,6 @@ func TestBuildxOCIExportArgs(t *testing.T) {
 			t.Fatalf("args mismatch:\n got  %q\n want %q", got, want)
 		}
 	})
-}
-
-func TestLegacyOCICacheKey(t *testing.T) {
-	key := ociDeploymentCacheKey("RobotKit-Yolo-Fruits", "linux/arm64")
-	got, ok := legacyOCICacheKey(key)
-	if !ok || got != "robotkit-yolo-fruits" {
-		t.Fatalf("legacyOCICacheKey(%q) = %q, %v", key, got, ok)
-	}
-	if _, ok := legacyOCICacheKey("ordinary-cache-key"); ok {
-		t.Fatal("ordinary cache key must not be treated as a migrated OCI key")
-	}
 }
 
 // readOCILayoutLayers must reference layer blobs by their byte range in the

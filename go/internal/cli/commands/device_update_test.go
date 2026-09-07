@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -16,6 +17,25 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
+
+func makeMacAgentZIP(t *testing.T, entries map[string][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, contents := range entries {
+		entry, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("zip.Create(%q): %v", name, err)
+		}
+		if _, err := entry.Write(contents); err != nil {
+			t.Fatalf("writing %q: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("closing zip: %v", err)
+	}
+	return buf.Bytes()
+}
 
 // fakeUpdateAgentStream satisfies agentpb.WendyAgentService_UpdateAgentClient
 // (a grpc.BidiStreamingClient[UpdateAgentRequest, UpdateAgentResponse]) via
@@ -99,6 +119,42 @@ func TestIsZipArchive(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDarwinAgentExecutableSHA256(t *testing.T) {
+	t.Run("hashes the executable inside the app bundle", func(t *testing.T) {
+		archive := makeMacAgentZIP(t, map[string][]byte{
+			"WendyAgentMac.app/Contents/Info.plist":          []byte("plist"),
+			"WendyAgentMac.app/Contents/MacOS/WendyAgentMac": []byte("hello"),
+		})
+		got, err := darwinAgentExecutableSHA256(archive)
+		if err != nil {
+			t.Fatalf("darwinAgentExecutableSHA256() error = %v", err)
+		}
+		const want = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+		if got != want {
+			t.Fatalf("darwinAgentExecutableSHA256() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("rejects an archive without the agent executable", func(t *testing.T) {
+		archive := makeMacAgentZIP(t, map[string][]byte{
+			"WendyAgentMac.app/Contents/Info.plist": []byte("plist"),
+		})
+		if _, err := darwinAgentExecutableSHA256(archive); err == nil {
+			t.Fatal("darwinAgentExecutableSHA256() error = nil, want missing executable error")
+		}
+	})
+
+	t.Run("rejects ambiguous app bundles", func(t *testing.T) {
+		archive := makeMacAgentZIP(t, map[string][]byte{
+			"WendyAgentMac.app/Contents/MacOS/WendyAgentMac": []byte("one"),
+			"Other.app/Contents/MacOS/WendyAgentMac":         []byte("two"),
+		})
+		if _, err := darwinAgentExecutableSHA256(archive); err == nil {
+			t.Fatal("darwinAgentExecutableSHA256() error = nil, want ambiguity error")
+		}
+	})
 }
 
 func TestCheckLocalAgentArtifact(t *testing.T) {
@@ -422,34 +478,36 @@ func TestAgentUpdateVerified(t *testing.T) {
 // evaluateAgentUpdateOutcome precedence: a reported binary hash compared to
 // the uploaded one is definitive in both directions (it is what makes dev
 // pushes provable, since dev builds share identical version strings); version
-// comparison is only the fallback for agents that cannot report a hash; with
-// nothing to compare, a reachable agent is accepted.
+// comparison is only the fallback for agents that cannot report a hash unless
+// the caller requires hash proof (the macOS restart-verification path).
 func TestEvaluateAgentUpdateOutcome(t *testing.T) {
 	resp := func(ver, hash string) *agentpb.GetAgentVersionResponse {
 		return &agentpb.GetAgentVersionResponse{Version: ver, BinarySha256: hash}
 	}
 	tests := []struct {
-		name       string
-		resp       *agentpb.GetAgentVersionResponse
-		uploaded   string
-		expected   string
-		wantErr    bool
-		wantSubstr string
+		name        string
+		resp        *agentpb.GetAgentVersionResponse
+		uploaded    string
+		expected    string
+		requireHash bool
+		wantErr     bool
+		wantSubstr  string
 	}{
-		{"hash match verifies", resp("2026.07.01-223311", "aabb01"), "aabb01", "2026.07.01-223311", false, ""},
-		{"hash match proves a dev-over-dev push", resp("dev", "cafe02"), "cafe02", "", false, ""},
-		{"hash match is definitive even against an older-looking version", resp("2026.06.30-120000", "cafe03"), "cafe03", "2026.07.01-223311", false, ""},
-		{"hash comparison ignores case", resp("dev", "CAFE04"), "cafe04", "", false, ""},
-		{"hash mismatch fails even when versions agree", resp("2026.07.01-223311", "aaaa05"), "bbbb06", "2026.07.01-223311", true, "not running the binary"},
-		{"no reported hash falls back to version pass", resp("2026.07.01-223311", ""), "aabb07", "2026.07.01-223311", false, ""},
-		{"no reported hash falls back to version fail", resp("2026.06.30-120000", ""), "aabb08", "2026.07.01-223311", true, "2026.06.30-120000"},
-		{"no uploaded hash falls back to version", resp("2026.07.01-223311", "aabb09"), "", "2026.07.01-223311", false, ""},
-		{"dev reported against a release expectation fails", resp("dev", ""), "", "2026.07.01-223311", true, "dev"},
-		{"nothing to compare accepts a reachable agent", resp("dev", ""), "", "", false, ""},
+		{"hash match verifies", resp("2026.07.01-223311", "aabb01"), "aabb01", "2026.07.01-223311", false, false, ""},
+		{"hash match proves a dev-over-dev push", resp("dev", "cafe02"), "cafe02", "", true, false, ""},
+		{"hash match is definitive even against an older-looking version", resp("2026.06.30-120000", "cafe03"), "cafe03", "2026.07.01-223311", true, false, ""},
+		{"hash comparison ignores case", resp("dev", "CAFE04"), "cafe04", "", true, false, ""},
+		{"hash mismatch fails even when versions agree", resp("2026.07.01-223311", "aaaa05"), "bbbb06", "2026.07.01-223311", true, true, "not running the binary"},
+		{"no reported hash falls back to version pass", resp("2026.07.01-223311", ""), "aabb07", "2026.07.01-223311", false, false, ""},
+		{"required hash rejects the still-running old mac agent", resp("dev", ""), "aabb07", "", true, true, "restart was not verified"},
+		{"no reported hash falls back to version fail", resp("2026.06.30-120000", ""), "aabb08", "2026.07.01-223311", false, true, "2026.06.30-120000"},
+		{"no uploaded hash falls back to version", resp("2026.07.01-223311", "aabb09"), "", "2026.07.01-223311", false, false, ""},
+		{"dev reported against a release expectation fails", resp("dev", ""), "", "2026.07.01-223311", false, true, "dev"},
+		{"nothing to compare accepts a reachable agent", resp("dev", ""), "", "", false, false, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := evaluateAgentUpdateOutcome(tc.resp, tc.uploaded, tc.expected)
+			err := evaluateAgentUpdateOutcome(tc.resp, tc.uploaded, tc.expected, tc.requireHash)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("evaluateAgentUpdateOutcome() error = %v, wantErr %v", err, tc.wantErr)
 			}

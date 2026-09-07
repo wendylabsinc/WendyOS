@@ -1,0 +1,267 @@
+---
+title: Analyze Raw Camera Frames
+description: Read uncompressed camera frames with Python while keeping a live preview, and inspect their pixel values without losing frame boundaries
+language: python
+---
+
+Build a small Python program that reads raw camera frames from the Wendy CLI and prints their minimum, maximum, and mean signal values. The program runs on your development machine. A second Wendy viewer can keep showing the camera while the program reads from the same capture.
+
+This walkthrough uses an ordinary YUYV camera image to measure brightness. The reader also accepts UYVY, GREY, and Y16 and chooses its decoder from the format Wendy actually reports. Y16 values are raw 16-bit samples. Converting them to temperature requires the camera's own format and calibration information.
+
+## Prerequisites
+
+- A macOS or Linux development machine with Python 3.10 or newer and the Wendy CLI.
+- A reachable WendyOS device with a recent agent that supports raw camera streaming.
+- A local USB camera with a supported raw capture mode. Use a camera and resolution where Wendy captures raw video rather than MJPEG or native H.264.
+- GStreamer on the development machine if you want the preview window.
+
+The Python program uses only the standard library. It does not deploy an app, so no Docker build or app entitlement is needed.
+
+Raw delivery depends on the capture pipeline. The `--raw` flag requests raw delivery; it does not force the camera into a different capture mode. Wendy reports an error when raw frames are unavailable.
+
+## 1. Select and inspect the camera
+
+```bash
+wendy device set-default
+wendy device camera list
+```
+
+The examples use camera `0`. Replace it with the ID of your USB camera.
+
+First check whether its default capture offers raw frames:
+
+```bash
+wendy device camera view --id 0 --raw --stdout > /dev/null
+```
+
+The frame bytes go to `/dev/null`. The terminal should show a layout announcement like this illustrative 640 by 480 YUYV example:
+
+```text
+raw frames: 640x480 YUYV, 1280 bytes per line, 614400 bytes per frame
+```
+
+Press Ctrl+C after the announcement. Your dimensions and format may differ. If the command reports that raw frames are unavailable, use the troubleshooting section before proceeding.
+
+Never send raw stdout directly to a terminal, and do not merge stderr into it with `2>&1`. The bytes have no text encoding or file header. Stderr carries the layout and diagnostic messages.
+
+## 2. Create the reader
+
+Create a local working directory:
+
+```bash
+mkdir raw-camera-demo
+cd raw-camera-demo
+```
+
+Save the following as `read_raw.py`. It starts the Wendy CLI, reads the layout from `raw-camera.log`, and collects 30 frames or stops after 15 seconds. It keeps at most one frame in memory and treats a partial frame as an error.
+
+```python
+import argparse
+import os
+import re
+import selectors
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+LAYOUT = re.compile(
+    r"raw frames: (\d+)x(\d+) (.{4}), (\d+) bytes per line, "
+    r"(\d+) bytes per frame"
+)
+BYTES_PER_PIXEL = {"YUYV": 2, "UYVY": 2, "GREY": 1, "Y16 ": 2}
+MAX_FRAME_BYTES = 4 * 1024 * 1024 - 64 * 1024
+
+
+def wait_for_layout(process, log_path, deadline):
+    while time.monotonic() < deadline:
+        match = LAYOUT.search(log_path.read_text(errors="replace"))
+        if match:
+            width, height, fourcc, stride, size = match.groups()
+            width, height, stride, size = map(int, (width, height, stride, size))
+            if fourcc not in BYTES_PER_PIXEL:
+                raise ValueError(f"Unsupported format: {fourcc!r}")
+            if width < 1 or height < 1 or stride < width * BYTES_PER_PIXEL[fourcc]:
+                raise ValueError("Invalid dimensions or row stride")
+            if size != stride * height or not 0 < size <= MAX_FRAME_BYTES:
+                raise ValueError("Invalid or oversized frame")
+            if fourcc in ("YUYV", "UYVY") and width % 2:
+                raise ValueError("Packed YUV needs an even image width")
+            return width, height, fourcc, stride, size
+        if process.poll() is not None:
+            raise RuntimeError("Wendy exited before reporting a raw layout")
+        time.sleep(0.05)
+    raise TimeoutError("No raw layout arrived before the deadline")
+
+
+def read_exact(stream, size, deadline):
+    frame = bytearray()
+    with selectors.DefaultSelector() as selector:
+        selector.register(stream, selectors.EVENT_READ)
+        while len(frame) < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                raise TimeoutError(f"Timed out with {len(frame)} of {size} bytes")
+            chunk = os.read(stream.fileno(), min(65536, size - len(frame)))
+            if not chunk:
+                raise EOFError(f"Stream ended with {len(frame)} of {size} bytes")
+            frame.extend(chunk)
+    return frame
+
+
+def pixel_values(frame, width, height, fourcc, stride):
+    active_bytes = width * BYTES_PER_PIXEL[fourcc]
+    for row_number in range(height):
+        start = row_number * stride
+        row = memoryview(frame)[start : start + active_bytes]
+        if fourcc == "Y16 ":
+            for (value,) in struct.iter_unpack("<H", row):
+                yield value
+        elif fourcc == "YUYV":
+            yield from row[0::2]
+        elif fourcc == "UYVY":
+            yield from row[1::2]
+        else:
+            yield from row
+
+
+def stop(process):
+    if process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--id", type=int, required=True)
+    parser.add_argument("--frames", type=int, default=30)
+    parser.add_argument("--seconds", type=float, default=15)
+    parser.add_argument("--width", type=int, default=0)
+    parser.add_argument("--height", type=int, default=0)
+    args = parser.parse_args()
+    if args.frames < 1 or not 0 < args.seconds <= 60:
+        parser.error("Use a positive frame count and a deadline above 0 and up to 60 seconds")
+    if min(args.id, args.width, args.height) < 0:
+        parser.error("Camera ID and dimensions must be nonnegative")
+
+    log_path = Path("raw-camera.log")
+    command = [
+        "wendy", "device", "camera", "view", "--id", str(args.id),
+        "--width", str(args.width), "--height", str(args.height),
+        "--raw", "--stdout",
+    ]
+    with log_path.open("wb") as log:
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=log, bufsize=0,
+        )
+        try:
+            deadline = time.monotonic() + args.seconds
+            width, height, fourcc, stride, size = wait_for_layout(
+                process, log_path, deadline
+            )
+            print(f"{width}x{height} {fourcc!r}, stride={stride}, frame={size}")
+            print("frame,min,max,mean")
+            for number in range(1, args.frames + 1):
+                frame = read_exact(process.stdout, size, deadline)
+                low, high, total, count = 65535, 0, 0, 0
+                for value in pixel_values(frame, width, height, fourcc, stride):
+                    low, high = min(low, value), max(high, value)
+                    total += value
+                    count += 1
+                print(f"{number},{low},{high},{total / count:.2f}", flush=True)
+                del frame
+            return 0
+        except (EOFError, OSError, RuntimeError, TimeoutError, ValueError) as error:
+            print(f"Capture stopped: {error}. See {log_path}.", file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            return 130
+        finally:
+            stop(process)
+            process.stdout.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+The raw CLI output concatenates complete frames. A pipe read can still return only part of one frame, so `read_exact` keeps reading until it has `stride * height` bytes. The decoder skips any padding at the end of each row and explicitly reads Y16 as little-endian data.
+
+## 3. Analyze a short capture
+
+```bash
+python3 read_raw.py --id 0
+```
+
+For YUYV or UYVY, the values are the 8-bit Y channel, which represents image brightness. GREY reports 8-bit grayscale values. Y16 reports unsigned 16-bit samples without interpreting their units.
+
+Expect one layout line, a CSV header, and one statistics row for each captured frame. A successful run exits after 30 frames. If the camera is slow to start or delivers fewer frames, the deadline stops the process and the command exits with an error instead of waiting indefinitely.
+
+Move an object through the scene or change the lighting during a second run. The signal statistics should respond to the image. Automatic exposure can compensate for a lighting change, so this is an observation of the captured image, not a calibrated light measurement.
+
+You can request fewer frames and allow more startup time:
+
+```bash
+python3 read_raw.py --id 0 --frames 10 --seconds 30
+```
+
+## 4. Keep a preview open
+
+In another terminal, open the same camera with its default capture settings:
+
+```bash
+wendy device camera view --id 0
+```
+
+Then rerun `read_raw.py` in the first terminal. The preview receives encoded video while Python receives the raw frames from the shared capture. Use the same device, camera, and requested dimensions in both commands.
+
+If you selected a supported size explicitly, pass it to both consumers. For example, only if your camera supports raw delivery at 640 by 480:
+
+```bash
+wendy device camera view --id 0 --width 640 --height 480
+```
+
+In the other terminal:
+
+```bash
+python3 read_raw.py --id 0 --width 640 --height 480
+```
+
+Close existing viewers before changing the capture size. A running shared capture determines the format available to its subscribers.
+
+## Troubleshooting
+
+### Wendy reports that raw frames are unavailable
+
+Read `raw-camera.log` for the reason. Cameras captured as MJPEG or native H.264 do not offer raw frames. CSI ISP pipelines and cameras shared through PipeWire also do not offer this raw tap. IP cameras deliver encoded video.
+
+Use a local camera and a size at which Wendy selects a supported packed raw format. Supported formats are YUYV, UYVY, GREY, and Y16. There is no CLI flag to force the raw pixel format. Requesting `--raw` on a webcam whose chosen pipeline uses MJPEG will still fail even if its hardware also advertises some raw modes.
+
+### The raw frame exceeds the size limit
+
+Choose a smaller supported resolution. Each raw frame must fit within 4 MiB minus 64 KiB. For example, a tightly packed 1280 by 720 YUYV frame fits; a 1920 by 1080 YUYV frame exceeds this limit.
+
+### The reader times out or reports a partial frame
+
+Check `raw-camera.log` for connection, capture, or format errors. Confirm that the camera remains connected and the CLI targets the expected device. Increase `--seconds` up to 60 if startup is slow. The program never analyzes an incomplete frame.
+
+### A thermal image produces unexpected values
+
+Some thermal cameras append or prepend metadata rows to the picture. Wendy preserves those rows in raw delivery. This simple analyzer includes every reported row, so its statistics are not meaningful for picture brightness until you exclude metadata according to the camera's format. Do not treat YUYV bytes or Y16 counts as degrees Celsius. Temperature decoding and calibration are separate, camera-specific work.
+
+### The command is missing or the agent reports an unimplemented method
+
+Update the CLI and device agent to versions that support raw streaming. See the [CLI installation guide](/docs/installation/developer-machine-setup) and [device update command](/docs/advanced/clients/wendy-cli/commands/device/update).
+
+## Cleanup
+
+The reader terminates its Wendy subprocess when it finishes, fails, or receives Ctrl+C. Stop the separate preview with Ctrl+C. The program leaves only `read_raw.py` and `raw-camera.log` in the working directory and makes no persistent camera control changes.
+
+Keep the script for later captures, or remove the local `raw-camera-demo` directory when you no longer need it. For exposure adjustments before measuring pixels, see [Adjust Camera Exposure](/docs/guides/camera-exposure).

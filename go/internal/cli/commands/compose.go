@@ -1234,6 +1234,13 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 		}
 	}
 	svcLifecycleCfgs := composeServiceLifecycleConfigs(svcCfgs, companion)
+	portConfigs := []*appconfig.AppConfig{companion}
+	for _, svc := range svcCfgs {
+		portConfigs = append(portConfigs, svc)
+	}
+	if err := prepareVMAppPorts(ctx, conn, portConfigs...); err != nil {
+		return err
+	}
 
 	// App-level lifecycle fallback: only a companion wendy.json can declare
 	// top-level HTTP/readiness/hooks for a compose project (x-wendy is

@@ -167,6 +167,10 @@ type DevicesCollection struct {
 	BluetoothDevices   []BluetoothDevice   `json:"bluetoothDevices"`
 	EthernetInterfaces []EthernetInterface `json:"ethernetDevices"`
 	ExternalDevices    []ExternalDevice    `json:"externalDevices,omitempty"`
+	// Simulators are the VMs this machine runs itself. Listed apart from
+	// LANDevices: they are reached like a LAN device but are not one, and a
+	// reader that wants devices on the network must not have to filter them.
+	Simulators []LANDevice `json:"simulators,omitempty"`
 }
 
 // DiscoveredDevice represents a single physical device that may have been
@@ -372,7 +376,8 @@ func (c *DevicesCollection) IsEmpty() bool {
 		len(c.LANDevices) == 0 &&
 		len(c.BluetoothDevices) == 0 &&
 		len(c.EthernetInterfaces) == 0 &&
-		len(c.ExternalDevices) == 0
+		len(c.ExternalDevices) == 0 &&
+		len(c.Simulators) == 0
 }
 
 // ToJSON returns a pretty-printed JSON representation of the collection.

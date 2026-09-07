@@ -369,6 +369,13 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	if err != nil {
 		return err
 	}
+	portConfigs := []*appconfig.AppConfig{appCfg}
+	for name, svc := range services {
+		portConfigs = append(portConfigs, multiServiceCreateConfig(appCfg, name, svc))
+	}
+	if err := prepareVMAppPorts(ctx, conn, portConfigs...); err != nil {
+		return err
+	}
 
 	versionResp, err := agentVersionForRun(ctx, conn)
 	if err != nil {
