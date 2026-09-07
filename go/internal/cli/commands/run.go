@@ -1246,8 +1246,13 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
 	go func() {
-		<-sigCh
+		select {
+		case <-sigCh:
+		case <-runCtx.Done():
+			return
+		}
 		cliLogln("\nStopping container...")
 		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
 			AppName: appCfg.ContainerName(),
@@ -1255,6 +1260,9 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		runCancel()
 	}()
 
+	runner := &serviceHookRunner{conn: conn, opts: opts}
+	defer func() { runCancel(); runner.reap() }()
+	hookFired := false
 	for {
 		resp, recvErr := stream.Recv()
 		if recvErr == io.EOF {
@@ -1265,6 +1273,10 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 				break
 			}
 			return fmt.Errorf("receiving container output: %w", recvErr)
+		}
+		if resp.GetStarted() != nil && !hookFired {
+			hookFired = true
+			runner.startAsync(runCtx, appCfg)
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
 			_, _ = os.Stdout.Write(out.GetData())
@@ -2474,8 +2486,9 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 
 	// Announce + post-start hook, gated on readiness; the hook is tied to runCtx
 	// so Ctrl+C kills it.
-	var postStartCmd *exec.Cmd
-	postStartCmd = runPostStartIfReady(runCtx, runCtx, conn, appCfg, runOptions{})
+	runner := &serviceHookRunner{conn: conn, opts: opts}
+	defer func() { runCancel(); runner.reap() }()
+	hookFired := false
 
 	gotFirstResponse := false
 	// Set when the stream ends on a genuine failure (as opposed to a clean
@@ -2518,6 +2531,10 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			break
 		}
 		gotFirstResponse = true
+		if resp.GetStarted() != nil && !hookFired {
+			hookFired = true
+			runner.startAsync(runCtx, appCfg)
+		}
 		if out := resp.GetStdoutOutput(); out != nil {
 			_, _ = os.Stdout.Write(out.GetData())
 		}
@@ -2529,9 +2546,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	// Cancel runCtx to terminate the postStart hook if it's still running,
 	// then wait for it to exit so we don't leave orphan processes.
 	runCancel()
-	if postStartCmd != nil {
-		_ = postStartCmd.Wait()
-	}
+	runner.reap()
 	if runErr != nil {
 		return runErr
 	}
@@ -2769,7 +2784,7 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 		return nil
 	}
 
-	err := waitForReadiness(ctx, readiness, hookHost)
+	err := waitForAttachedReadiness(ctx, conn, appCfg, hookHost)
 	rp("  ↳ runcontainer: readiness wait")
 	if err != nil {
 		if ctx.Err() == nil {
@@ -2813,6 +2828,9 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 // wait on or kill. Returns nil when no cli command is configured (regardless
 // of whether openURL was fired).
 func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostname, serviceName string) *exec.Cmd {
+	if ctx.Err() != nil {
+		return nil
+	}
 	if appCfg.Hooks == nil || appCfg.Hooks.PostStart == nil {
 		return nil
 	}
@@ -2830,6 +2848,9 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 	}
 
 	if hook.CLI == "" {
+		return nil
+	}
+	if ctx.Err() != nil {
 		return nil
 	}
 
@@ -2917,13 +2938,8 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 	// hooks. They have completely different causes when one is slow.
 	rc := phaseTimer()
 	hookCtx, hookCancel := context.WithCancel(ctx)
-	var postStartCmd *exec.Cmd
-	defer func() {
-		hookCancel()
-		if postStartCmd != nil {
-			_ = postStartCmd.Wait()
-		}
-	}()
+	runner := &serviceHookRunner{conn: conn, opts: opts}
+	defer func() { hookCancel(); runner.reap() }()
 	hookFired := false
 	for {
 		resp, err := stream.Recv()
@@ -2957,7 +2973,7 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 					opts.watchState.reapCommand(cmd)
 					return nil
 				}
-				postStartCmd = runPostStartIfReady(ctx, hookCtx, conn, appCfg, runOptions{})
+				runner.startAsync(hookCtx, appCfg)
 			}
 			continue
 		}

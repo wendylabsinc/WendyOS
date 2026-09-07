@@ -1639,6 +1639,8 @@ func composeStartWatch(ctx context.Context, conn *grpcclient.AgentConnection, or
 // owns Ctrl+C handling and cancels runCtx after stopping the services.
 func composeStartAndStream(runCtx context.Context, runCancel context.CancelFunc, conn *grpcclient.AgentConnection, ordered []string, svcCfgs, svcLifecycleCfgs map[string]*appconfig.AppConfig, appLevelCfg *appconfig.AppConfig, stdoutWriters, stderrWriters map[string]*serviceLogWriter, opts runOptions) error {
 	runner := &serviceHookRunner{conn: conn, opts: opts}
+	appHookCtx, appHookCancel := context.WithCancel(runCtx)
+	defer appHookCancel()
 	var appName string
 	if len(ordered) > 0 && svcCfgs[ordered[0]] != nil {
 		appName = svcCfgs[ordered[0]].AppID
@@ -1662,6 +1664,9 @@ func composeStartAndStream(runCtx context.Context, runCancel context.CancelFunc,
 		wg.Add(1)
 		go func(serviceName, containerID string, svcCfg, lifecycleCfg *appconfig.AppConfig) {
 			defer wg.Done()
+			serviceCtx, serviceCancel := context.WithCancel(runCtx)
+			defer serviceCancel()
+			defer appHookCancel()
 			markStarted := sync.OnceFunc(startedWg.Done)
 			defer markStarted()
 			outW := stdoutWriters[serviceName]
@@ -1743,7 +1748,7 @@ func composeStartAndStream(runCtx context.Context, runCancel context.CancelFunc,
 					// slow or failing probe never stalls this log loop.
 					hookFired = true
 					markStarted()
-					runner.startAsync(runCtx, lifecycleCfg)
+					runner.startAsync(serviceCtx, lifecycleCfg)
 				}
 				if out := resp.GetStdoutOutput(); out != nil {
 					outW.Write(out.GetData())
@@ -1768,7 +1773,7 @@ func composeStartAndStream(runCtx context.Context, runCancel context.CancelFunc,
 	runner.spawn(func() {
 		startedWg.Wait()
 		if runCtx.Err() == nil {
-			runner.runOne(runCtx, runCtx, appLevelCfg)
+			runner.runOne(appHookCtx, runCtx, appLevelCfg)
 		}
 	})
 

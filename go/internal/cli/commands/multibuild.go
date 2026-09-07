@@ -1136,6 +1136,9 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 	defer runCancel()
 
 	runner := &serviceHookRunner{conn: conn, opts: opts}
+	defer func() { runCancel(); runner.reap() }()
+	appHookCtx, appHookCancel := context.WithCancel(runCtx)
+	defer appHookCancel()
 
 	// Ctrl+C stops all services. The watch loop owns the signal for the whole
 	// session and leaves the group running when it stops, so a watch cycle must
@@ -1218,7 +1221,7 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 		for _, name := range preservedLifecycle {
 			runner.startAsync(runCtx, svcLifecycleCfgs[name])
 		}
-		runner.startAsync(runCtx, appLevelCfg)
+		runner.startAsync(appHookCtx, appLevelCfg)
 		if len(ordered) > 0 {
 			cliLogln("App group %s started (%d services).", appID, len(ordered))
 		}
@@ -1269,10 +1272,13 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 		// failing probe never delays creating/starting the next service — the
 		// sequential Started-ack ordering above is load-bearing for
 		// shared-ipc/shared-network joins and must not be disturbed (WDY-1271).
-		runner.startAsync(runCtx, svcLifecycleCfgs[name])
+		serviceCtx, serviceCancel := context.WithCancel(runCtx)
+		runner.startAsync(serviceCtx, svcLifecycleCfgs[name])
 		wg.Add(1)
 		go func(name string, stream agentpb.WendyContainerService_StartContainerClient) {
 			defer wg.Done()
+			defer serviceCancel()
+			defer appHookCancel()
 			for {
 				resp, recvErr := stream.Recv()
 				if recvErr == io.EOF {
@@ -1304,7 +1310,7 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 
 	// Every service has started: fire the app-level fallback (nil on subset
 	// runs). Async, for the same non-blocking reason as the per-service hooks.
-	runner.startAsync(runCtx, appLevelCfg)
+	runner.startAsync(appHookCtx, appLevelCfg)
 
 	go func() {
 		wg.Wait()
