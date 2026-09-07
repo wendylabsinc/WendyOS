@@ -1382,7 +1382,7 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		UserArgs:      userArgs,
 		// Service env from wendy.json (mesh: MESH_PEERS etc.) plus any fleet-injected
 		// env (discovery peers). Fleet env is appended last so it wins on key clash.
-		Env: append(resolveServiceEnv(appCfg), opts.env...),
+		Env: mergeEnvEntries(resolveServiceEnv(appCfg), opts.env),
 	}
 
 	return startAndStreamContainer(ctx, conn, appCfg, createReq, opts)
@@ -2030,7 +2030,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// wendy.json env plus --env and fleet-injected env, appended last so they win
 	// on key clash. Feeds the remote-build path below, the fingerprint, and
 	// whichever local deploy path runs.
-	deployEnv := append(resolveServiceEnv(appCfg), opts.env...)
+	deployEnv := mergeEnvEntries(resolveServiceEnv(appCfg), opts.env)
 
 	// Remote build: hand the build to another WendyOS device, which pushes the
 	// finished image straight into this device's registry over the mesh. Placed
@@ -2316,6 +2316,29 @@ func sortedEnvEntries(env map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// mergeEnvEntries applies already-expanded environments in precedence order.
+// CLI values are literal, including empty values; repeated keys use the last
+// value. Sorting and deduplication make fingerprints describe the actual env.
+func mergeEnvEntries(layers ...[]string) []string {
+	merged := map[string]string{}
+	for _, entries := range layers {
+		for _, entry := range entries {
+			if key, value, ok := strings.Cut(entry, "="); ok {
+				merged[key] = value
+			}
+		}
+	}
+	return sortedEnvEntries(merged)
+}
+
+func effectiveServiceEnvs(appCfg *appconfig.AppConfig, services map[string]*appconfig.ServiceConfig, overrides []string) map[string][]string {
+	envs := make(map[string][]string, len(services))
+	for name, svc := range services {
+		envs[name] = mergeEnvEntries(expandServiceEnv(appCfg, svc), overrides)
+	}
+	return envs
 }
 
 // expandServiceEnv resolves the env for one service of a multi-service app:

@@ -95,7 +95,7 @@ func TestComputeServicePlansRunsServicesConcurrently(t *testing.T) {
 
 	done := make(chan map[string]servicePlan, 1)
 	go func() {
-		done <- computeServicePlans(root, "linux/arm64", "", &appconfig.AppConfig{AppID: "app"}, services, nil)
+		done <- computeServicePlans(root, "linux/arm64", "", nil, services, nil)
 	}()
 
 	select {
@@ -133,7 +133,7 @@ func TestComputeServicePlansOmitsServicesItCannotPlan(t *testing.T) {
 		return "Dockerfile", nil
 	}
 
-	plans := computeServicePlans(root, "linux/arm64", "", &appconfig.AppConfig{AppID: "app"}, services, nil)
+	plans := computeServicePlans(root, "linux/arm64", "", nil, services, nil)
 
 	if _, ok := plans["svc00"]; ok {
 		t.Error("svc00 could not be resolved; it must not get a plan")

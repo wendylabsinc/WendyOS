@@ -158,7 +158,7 @@ type servicePlan struct {
 // plan as "don't skip this service, and don't reuse anything for it", so the
 // real error surfaces from the build path instead of aborting the whole group
 // during planning.
-func computeServicePlans(cwd, platform, gpuArch string, appCfg *appconfig.AppConfig, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) map[string]servicePlan {
+func computeServicePlans(cwd, platform, gpuArch string, serviceEnvs map[string][]string, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) map[string]servicePlan {
 	var mu sync.Mutex
 	plans := make(map[string]servicePlan, len(services))
 
@@ -174,7 +174,7 @@ func computeServicePlans(cwd, platform, gpuArch string, appCfg *appconfig.AppCon
 			if err != nil {
 				return
 			}
-			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, buildArgs, expandServiceEnv(appCfg, svc))
+			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, buildArgs, serviceEnvs[name])
 			if err != nil {
 				return
 			}
@@ -274,7 +274,7 @@ func deviceContainerNames(ctx context.Context, conn *grpcclient.AgentConnection)
 // that consult the device happen here. The resolved build files are returned
 // alongside so the build path can reuse them instead of resolving (and, for a
 // Stagefile, recompiling) every service a second time in the same run.
-func planServicePushSkips(ctx context.Context, conn *grpcclient.AgentConnection, cwd, appID, deviceKey, platform string, appCfg *appconfig.AppConfig, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) (skip map[string]bool, hashes, dockerfiles map[string]string) {
+func planServicePushSkips(ctx context.Context, conn *grpcclient.AgentConnection, cwd, appID, deviceKey, platform string, serviceEnvs map[string][]string, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) (skip map[string]bool, hashes, dockerfiles map[string]string) {
 	skip = map[string]bool{}
 	hashes = map[string]string{}
 	dockerfiles = map[string]string{}
@@ -282,7 +282,7 @@ func planServicePushSkips(ctx context.Context, conn *grpcclient.AgentConnection,
 		return skip, hashes, dockerfiles
 	}
 
-	plans := computeServicePlans(cwd, platform, serviceGPUArch(ctx, cwd, services, conn), appCfg, services, buildArgs, sfOpts...)
+	plans := computeServicePlans(cwd, platform, serviceGPUArch(ctx, cwd, services, conn), serviceEnvs, services, buildArgs, sfOpts...)
 	present := deviceContainerNames(ctx, conn)
 	type candidate struct {
 		name string
@@ -428,7 +428,8 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	// fail closed because they do not provide a verifiable content identity.
 	deviceKey := deviceFingerprintKey(versionResp)
 	sfOpts := debugStagefileOptions(opts.debug)
-	skip, hashes, dockerfiles := planServicePushSkips(ctx, conn, cwd, appCfg.AppID, deviceKey, platform, appCfg, services, buildArgs, sfOpts...)
+	serviceEnvs := effectiveServiceEnvs(appCfg, services, opts.env)
+	skip, hashes, dockerfiles := planServicePushSkips(ctx, conn, cwd, appCfg.AppID, deviceKey, platform, serviceEnvs, services, buildArgs, sfOpts...)
 
 	// Build the full per-service create configs before selecting watch work: a
 	// service is unchanged only when both its image inputs and its effective
@@ -445,12 +446,12 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	if opts.watchState != nil {
 		states := deviceContainerStates(ctx, conn)
 		candidates := map[string]watchServiceCandidate{}
-		for name, svc := range services {
+		for name := range services {
 			buildHash, planned := hashes[name]
 			if !planned {
 				continue
 			}
-			desiredHash, err := multiServiceWatchHash(buildHash, svcCfgs[name], expandServiceEnv(appCfg, svc), resolveRestartPolicy(opts))
+			desiredHash, err := multiServiceWatchHash(buildHash, svcCfgs[name], serviceEnvs[name], resolveRestartPolicy(opts))
 			if err != nil {
 				continue
 			}
@@ -540,7 +541,6 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 
 	createService := func(name string) error {
-		svc := services[name]
 		deviceImage := fmt.Sprintf("localhost:%d/%s-%s:latest", regPort,
 			strings.ToLower(appCfg.AppID), strings.ToLower(name))
 
@@ -556,7 +556,7 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 			AppName:       serviceCfg.ContainerName(),
 			AppConfig:     appConfigData,
 			RestartPolicy: restartPolicy,
-			Env:           expandServiceEnv(appCfg, svc),
+			Env:           serviceEnvs[name],
 		}
 
 		cliLogln("Creating container for service %s...", name)
