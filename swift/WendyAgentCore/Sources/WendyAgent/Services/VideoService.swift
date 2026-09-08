@@ -1,12 +1,128 @@
 import GRPCCore
+import GRPCProtobuf
 import WendyAgentGRPC
 
-actor VideoService: Wendy_Agent_Services_V1_WendyVideoService.ServiceProtocol {
+actor VideoService: RegistrableRPCService {
     private let camera: any CameraManaging
     private var devicesByID: [UInt32: CameraDeviceInfo] = [:]
 
     init(camera: any CameraManaging = AVCaptureCameraManager()) {
         self.camera = camera
+    }
+
+    nonisolated func registerMethods<Transport>(
+        with router: inout RPCRouter<Transport>
+    ) where Transport: ServerTransport {
+        router.registerHandler(
+            forMethod: Self.method("ListVideoDevices"),
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_ListVideoDevicesRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_ListVideoDevicesResponse>()
+        ) { request, context in
+            let response = try await self.listVideoDevices(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
+        router.registerHandler(
+            forMethod: Self.method("StreamVideo", type: .serverStreaming),
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_StreamVideoRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_VideoFrame>()
+        ) { request, context in
+            try await self.streamVideo(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+        }
+        router.registerHandler(
+            forMethod: Self.method("SetCameraCredentials"),
+            deserializer: ProtobufDeserializer<
+                Wendy_Agent_Services_V1_SetCameraCredentialsRequest
+            >(),
+            serializer: ProtobufSerializer<
+                Wendy_Agent_Services_V1_SetCameraCredentialsResponse
+            >()
+        ) { request, context in
+            let response = try await self.setCameraCredentials(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
+        router.registerHandler(
+            forMethod: Self.method("ForgetCamera"),
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_ForgetCameraRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_ForgetCameraResponse>()
+        ) { request, context in
+            let response = try await self.forgetCamera(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
+        router.registerHandler(
+            forMethod: Self.method("RefreshCameras"),
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_RefreshCamerasRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_RefreshCamerasResponse>()
+        ) { request, context in
+            let response = try await self.refreshCameras(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
+        router.registerHandler(
+            forMethod: Self.method("TestCameraCredentials"),
+            deserializer: ProtobufDeserializer<
+                Wendy_Agent_Services_V1_TestCameraCredentialsRequest
+            >(),
+            serializer: ProtobufSerializer<
+                Wendy_Agent_Services_V1_TestCameraCredentialsResponse
+            >()
+        ) { request, context in
+            let response = try await self.testCameraCredentials(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
+        router.registerHandler(
+            forMethod: Self.method("GetCameraControls"),
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_GetCameraControlsRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_GetCameraControlsResponse>()
+        ) { request, context in
+            let response = try await self.getCameraControls(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
+        router.registerHandler(
+            forMethod: Self.method("SetCameraControls"),
+            deserializer: ProtobufDeserializer<Wendy_Agent_Services_V1_SetCameraControlsRequest>(),
+            serializer: ProtobufSerializer<Wendy_Agent_Services_V1_SetCameraControlsResponse>()
+        ) { request, context in
+            let response = try await self.setCameraControls(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
+        router.registerHandler(
+            forMethod: Self.method("ResetCameraControls"),
+            deserializer: ProtobufDeserializer<
+                Wendy_Agent_Services_V1_ResetCameraControlsRequest
+            >(),
+            serializer: ProtobufSerializer<
+                Wendy_Agent_Services_V1_ResetCameraControlsResponse
+            >()
+        ) { request, context in
+            let response = try await self.resetCameraControls(
+                request: ServerRequest(stream: request),
+                context: context
+            )
+            return StreamingServerResponse(single: response)
+        }
     }
 
     func listVideoDevices(
@@ -153,6 +269,17 @@ actor VideoService: Wendy_Agent_Services_V1_WendyVideoService.ServiceProtocol {
         case .videoToolbox:
             return RPCError(code: .internalError, message: error.description)
         }
+    }
+
+    private static func method(
+        _ name: String,
+        type: MethodDescriptor.RPCType = .unary
+    ) -> MethodDescriptor {
+        MethodDescriptor(
+            fullyQualifiedService: "wendy.agent.services.v1.WendyVideoService",
+            method: name,
+            type: type
+        )
     }
 
     private static func unsupportedNetworkCameras() -> RPCError {
