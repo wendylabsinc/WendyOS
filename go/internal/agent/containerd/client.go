@@ -1762,9 +1762,9 @@ func (c *Client) applyNvidiaCDISpec(spec *localoci.Spec, cdiSpec *cdi.CDISpecifi
 // a GPU-entitled container's stored spec, persists the spec when any of them
 // have moved, and refuses the start when any of them are gone.
 //
-// The repair half is best-effort: a failure to read or write the spec leaves the
-// container exactly as it was and lets the start proceed, because a start that
-// used to work must not begin failing on account of a repair step.
+// Metadata-only annotation upgrades are best-effort. Once the stored bindings
+// are known to be wrong, a failed repair write must refuse the start rather
+// than hand those bindings to the runtime.
 //
 // The refusal half is not best-effort. A device that no longer exists cannot be
 // repaired, and starting the app regardless is what produces a crash loop whose
@@ -1793,8 +1793,26 @@ func (c *Client) refreshGPUDeviceNumbersForStart(ctx context.Context, container 
 
 	refresh := localoci.RefreshHostDeviceNumbers(&spec)
 
+	// Do not persist a mixed generation when any required source is unresolved.
+
+	if len(refresh.Errors) > 0 {
+		return fmt.Errorf("resolving host devices for %s: %w", appName, errors.Join(refresh.Errors...))
+	}
+
+	if len(refresh.Missing) > 0 {
+		// A device that is gone cannot be re-pointed, so the repair path ends
+		// here and the preflight begins.
+		c.logger.Warn("Refusing to start: container names host devices that no longer exist",
+			zap.String("app_name", appName), zap.Strings("devices", refresh.Missing))
+		return fmt.Errorf("%w: %s names %s, absent on this host",
+			ErrDeviceUnavailable, appName, strings.Join(refresh.Missing, ", "))
+	}
+
 	if refresh.SpecModified() {
 		if perr := c.persistRefreshedSpec(ctx, container, info, &spec, appName); perr != nil {
+			if refresh.Changed() {
+				return fmt.Errorf("persisting required device repair for %s: %w", appName, perr)
+			}
 			c.logger.Warn("Could not persist refreshed device numbers; starting with the stored spec",
 				zap.String("app_name", appName), zap.Error(perr))
 		} else if refresh.Changed() {
@@ -1810,18 +1828,6 @@ func (c *Client) refreshGPUDeviceNumbersForStart(ctx context.Context, container 
 		}
 	}
 
-	if len(refresh.Errors) > 0 {
-		return fmt.Errorf("resolving host devices for %s: %w", appName, errors.Join(refresh.Errors...))
-	}
-
-	if len(refresh.Missing) > 0 {
-		// A device that is gone cannot be re-pointed, so the repair path ends
-		// here and the preflight begins.
-		c.logger.Warn("Refusing to start: container names host devices that no longer exist",
-			zap.String("app_name", appName), zap.Strings("devices", refresh.Missing))
-		return fmt.Errorf("%w: %s names %s, absent on this host",
-			ErrDeviceUnavailable, appName, strings.Join(refresh.Missing, ", "))
-	}
 	return nil
 }
 
@@ -1832,14 +1838,16 @@ func (c *Client) refreshGPUDeviceNumbersForStart(ctx context.Context, container 
 // keeps its snapshot, and with it anything the app has written to its own
 // filesystem.
 func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.Container, info containers.Container, spec *localoci.Spec, appName string) error {
-	newSpecJSON, err := json.Marshal(spec)
+	newSpecJSON, err := marshalRefreshedDeviceSpec(info.Spec.GetValue(), spec)
 	if err != nil {
 		return fmt.Errorf("encoding refreshed spec for %q: %w", appName, err)
 	}
-	return container.Update(ctx, func(ctx context.Context, _ *containerd.Client, ctr *containers.Container) error {
-		ctr.Spec = &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: newSpecJSON}
-		return nil
-	})
+	// A field mask preserves labels/snapshot metadata updated by another
+	// lifecycle operation since Info was read.
+	_, err = c.client.ContainerService().Update(ctx, containers.Container{
+		ID: container.ID(), Spec: &anypb.Any{TypeUrl: info.Spec.GetTypeUrl(), Value: newSpecJSON},
+	}, "spec")
+	return err
 }
 
 // HasGPUEntitlement implements services.GPUDeviceReporter. It reads the
