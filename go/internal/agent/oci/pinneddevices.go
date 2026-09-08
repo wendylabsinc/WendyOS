@@ -196,16 +196,23 @@ func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 // never the bind-mounted, cgroup-only ones, which is precisely why the record
 // exists.
 func unionWithDeviceList(recorded []PinnedDevice, spec *Spec) []PinnedDevice {
-	pinned := make(map[string]bool, len(recorded))
-	for _, p := range recorded {
-		pinned[p.Path] = true
+	indices := make(map[string]int, len(recorded))
+	pins := append([]PinnedDevice(nil), recorded...)
+	for i, p := range pins {
+		indices[p.Path] = i
 	}
-	pins := recorded
 	for _, dev := range spec.Linux.Devices {
-		if dev.Path == "" || pinned[dev.Path] {
+		if dev.Path == "" {
 			continue
 		}
-		pinned[dev.Path] = true
+		if i, ok := indices[dev.Path]; ok {
+			// The finalized device entry is authoritative. CDI and entitlements
+			// may record different pairs before device deduplication keeps the
+			// first entry; a newer annotation must not conceal that stale entry.
+			pins[i].Type, pins[i].Major, pins[i].Minor = dev.Type, dev.Major, dev.Minor
+			continue
+		}
+		indices[dev.Path] = len(pins)
 		pins = append(pins, PinnedDevice{Path: dev.Path, Type: dev.Type, Major: dev.Major, Minor: dev.Minor})
 	}
 	return pins

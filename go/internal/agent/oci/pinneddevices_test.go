@@ -278,3 +278,19 @@ func TestRefreshHostDeviceNumbers_RecordCompletedOnlyOnce(t *testing.T) {
 		t.Errorf("second refresh reported SpecModified = true (%+v); want no further writes", second)
 	}
 }
+
+func TestRefreshHostDeviceNumbers_AnnotationCannotHideStaleEntry(t *testing.T) {
+	withStubbedStat(t, map[string][2]int64{"/dev/nvidia-uvm": {498, 0}})
+	spec := pinnedSpec()
+	// CDI's explicit pair is stale; the entitlement discovers the current pair.
+	addExactDeviceNodes(spec, []nvidiaDeviceNode{{path: "/dev/nvidia-uvm", major: 497, minor: 0}})
+	addExactDeviceNodes(spec, []nvidiaDeviceNode{{path: "/dev/nvidia-uvm", major: 498, minor: 0}})
+	DedupeDevices(spec)
+	result := RefreshHostDeviceNumbers(spec)
+	if !result.Changed() || spec.Linux.Devices[0].Major != 498 {
+		t.Fatalf("stale finalized entry survived refresh: %+v; result=%+v", spec.Linux.Devices[0], result)
+	}
+	if again := RefreshHostDeviceNumbers(spec); again.SpecModified() {
+		t.Fatalf("second refresh should be unchanged: %+v", again)
+	}
+}
