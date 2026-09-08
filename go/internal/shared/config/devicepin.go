@@ -31,6 +31,14 @@ type DevicePin struct {
 	CloudGRPC string `json:"cloudGRPC"`
 	AssetID   string `json:"assetId,omitempty"`
 	Source    string `json:"source,omitempty"`
+	// Principal is the tenant SPIFFE principal the device's certificate
+	// carries, when it has one. It is recorded — not compared — because it is
+	// the key the SPKI pin store files the device under, and `wendy device
+	// unpin <hostname>` has no other way to reach that entry: the (org, asset)
+	// pair a legacy pin holds cannot be turned back into a principal without
+	// the tenant. Empty for an old-chain device and for pins written before
+	// the SPIFFE cutover; backfilled on the next successful connect.
+	Principal string `json:"principal,omitempty"`
 }
 
 // PinVerdict is the result of comparing an observed device identity against the
@@ -108,18 +116,18 @@ func (c *Config) PinSource(hostname string) string {
 
 // SetDevicePinFrom records a pin and where it came from. A cloud-sourced write
 // is authoritative and overwrites whatever was there.
-func (c *Config) SetDevicePinFrom(hostname string, orgID int, cloudGRPC, assetID, source string) {
+func (c *Config) SetDevicePinFrom(hostname string, orgID int, cloudGRPC, assetID, principal, source string) {
 	if c.DevicePins == nil {
 		c.DevicePins = make(map[string]DevicePin)
 	}
 	c.DevicePins[normalizePinHost(hostname)] = DevicePin{
-		OrgID: orgID, CloudGRPC: cloudGRPC, AssetID: assetID, Source: source,
+		OrgID: orgID, CloudGRPC: cloudGRPC, AssetID: assetID, Principal: principal, Source: source,
 	}
 }
 
 // SetDevicePin records (or replaces) the pin for a hostname.
-func (c *Config) SetDevicePin(hostname string, orgID int, cloudGRPC, assetID string) {
-	c.SetDevicePinFrom(hostname, orgID, cloudGRPC, assetID, PinSourceLAN)
+func (c *Config) SetDevicePin(hostname string, orgID int, cloudGRPC, assetID, principal string) {
+	c.SetDevicePinFrom(hostname, orgID, cloudGRPC, assetID, principal, PinSourceLAN)
 }
 
 // ClearDevicePin drops the pin for a hostname. It is for the case where the

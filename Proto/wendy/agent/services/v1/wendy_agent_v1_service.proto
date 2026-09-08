@@ -225,11 +225,9 @@ message GetAgentVersionResponse {
     // even when version strings cannot distinguish builds (dev builds).
     // Empty when the agent cannot hash its own executable.
     //
-    // Only comparable to the update payload on platforms where that payload
-    // IS the executable (linux). The darwin payload is an app-bundle zip, so
-    // its hash can never match this field — the CLI must skip the comparison
-    // there, and a future darwin implementation should instead persist and
-    // report the hash of the update payload it committed.
+    // Linux uploads the executable directly. The Darwin payload is an
+    // app-bundle ZIP, so its updater extracts and hashes Contents/MacOS before
+    // comparing it with this field.
     string binary_sha256 = 20;
     // Device hostname (gethostname(2)). The CLI uses it to identify a device
     // reached over the USB well-known link-local address, where no mDNS TXT

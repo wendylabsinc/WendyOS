@@ -101,7 +101,7 @@ type BlockingPinError interface {
 // returned by BuildServerVerifyConnection.
 type ServerVerifyOpts struct {
 	ChainPEM      string     // required: PEM-encoded CA chain for ML-DSA-aware chain verification
-	ExpectedOrgID int32      // 0 = accept any org (still extracted for pinning key)
+	ExpectedOrgID int32      // 0 = accept any org (still extracted for pinning key); never compared against a pki-core leaf, which carries no org
 	PinStore      PinChecker // nil = skip pinning
 	// ExpectedIdentity, when non-nil, requires the server leaf to carry an
 	// "asset" Wendy identity whose org and entity id match it exactly. This is
@@ -162,6 +162,29 @@ func ParseCertsFromPEM(chainPEM []byte) ([]*x509.Certificate, error) {
 		certs = append(certs, cert)
 	}
 	return certs, nil
+}
+
+// AppendChainToPool adds every certificate in chainPEM to pool and returns how
+// many were added.
+//
+// It exists because x509.CertPool.AppendCertsFromPEM silently drops the
+// certificates pki-core issues: those carry trailing bytes after the outer
+// ASN.1 SEQUENCE, so x509.ParseCertificate rejects them (see
+// ParseCertsFromPEM). AppendCertsFromPEM then reports false, and callers that
+// treated false as fatal refused every ML-DSA chain outright rather than
+// merely failing to trust it. Use this instead of AppendCertsFromPEM for any
+// Wendy-issued chain, and treat a zero count — not a boolean — as the empty
+// case.
+func AppendChainToPool(pool *x509.CertPool, chainPEM string) int {
+	if chainPEM == "" {
+		return 0
+	}
+	// ParseCertsFromPEM skips what it cannot parse and never returns an error.
+	parsed, _ := ParseCertsFromPEM([]byte(chainPEM))
+	for _, cert := range parsed {
+		pool.AddCert(cert)
+	}
+	return len(parsed)
 }
 
 func mldsaCertSigAlgOID(cert *x509.Certificate) (asn1.ObjectIdentifier, error) {
@@ -289,7 +312,14 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		// belongs to a different org. A cert with no Wendy identity (e.g. a legacy
 		// device not yet re-provisioned) is accepted, mirroring the server-side
 		// OrgModeGrace behaviour in interceptor/mtls.go.
-		if hasIdentity && opts.ExpectedOrgID != 0 && identity.OrgID != opts.ExpectedOrgID {
+		// identity.OrgID == 0 is a pki-core-issued leaf: it carries a tenant
+		// SPIFFE principal and no urn:wendy org, so there is no org to compare
+		// against this session's. Refusing it here would break every renewed or
+		// ACME-enrolled device against a session that knows only an int org, and
+		// asserting a match would be a claim neither side can support. The
+		// tenant-scoped checks that DO apply to such a leaf are Step 2b's
+		// principal pin below and the agent-side interceptor.
+		if hasIdentity && opts.ExpectedOrgID != 0 && identity.OrgID != 0 && identity.OrgID != opts.ExpectedOrgID {
 			return &OrgMismatchError{Want: opts.ExpectedOrgID, Got: identity.OrgID}
 		}
 
@@ -297,14 +327,18 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		// so a cross-org impostor still reports OrgMismatchError, whose remedy
 		// (fetch that org's cert) differs from this one's (wrong device).
 		if opts.ExpectedIdentity != nil {
-			if !hasIdentity || identity.EntityType != "asset" {
+			if !hasIdentity || identity.EntityType != EntityAsset {
 				return &IdentityMismatchError{
 					WantOrg:   opts.ExpectedIdentity.OrgID,
 					WantAsset: opts.ExpectedIdentity.EntityID,
 					GotOrg:    identity.OrgID,
 				}
 			}
-			if identity.OrgID != opts.ExpectedIdentity.OrgID || identity.EntityID != opts.ExpectedIdentity.EntityID {
+			// SameEntity compares principals when both sides have one and falls
+			// back to the legacy scope+id triple otherwise, so a pin recorded
+			// before the SPIFFE cutover and one recorded after each compare in
+			// their own terms rather than across them.
+			if !identity.SameEntity(*opts.ExpectedIdentity) {
 				return &IdentityMismatchError{
 					WantOrg:   opts.ExpectedIdentity.OrgID,
 					WantAsset: opts.ExpectedIdentity.EntityID,
@@ -319,7 +353,7 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		// what it just verified has failed at bookkeeping, and dropping an
 		// otherwise fully verified connection over that would turn a read-only
 		// config directory into a total loss of device access.
-		if opts.PinStore != nil && hasIdentity && identity.EntityType == "asset" {
+		if opts.PinStore != nil && hasIdentity && identity.EntityType == EntityAsset {
 			displayName := leaf.Subject.CommonName
 			if displayName == "" {
 				displayName = identity.IdentityKey()

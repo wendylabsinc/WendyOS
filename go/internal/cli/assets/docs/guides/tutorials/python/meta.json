@@ -7,6 +7,11 @@
     "web-app",
     "webcam-streaming",
     "yolov8-webcam-detection",
+    "robot-camera-opencv",
+    "raw-camera-frames",
+    "amd-rocm-pytorch",
+    "g1-mujoco-simulation",
+    "cloud-udp-service",
     "audio",
     "bluetooth-discovery"
   ]

@@ -27,17 +27,20 @@ The `wendy-agent` is a container daemon (similar to `dockerd`/`containerd`):
 
 ## Building WendyOS (Yocto)
 
-WendyOS images are built with Yocto. Three meta layers exist:
+WendyOS images are built with Yocto, from one repo (`WendyOS-Builder`) whose
+sub-layers cover each target. Every board builds `wendyos-image`; the board id
+selects the machine.
 
-| Layer | Target | Image |
-|-------|--------|-------|
-| `meta-wendyos-jetson` | NVIDIA Jetson | `edgeos-image` |
-| `meta-wendyos-virtual` | ARM64 VM | `edgeos-vm-image` |
-| `meta-wendyos-rpi` | Raspberry Pi 4/5 | `edgeos-rpi-image` |
+| Sub-layer | Target | Board id |
+|-----------|--------|----------|
+| `meta-tegra-extensions*` | NVIDIA Jetson | `jetson-*` |
+| `meta-rpi-extensions` | Raspberry Pi 3/4/5 | `rpi*` |
+| `meta-x86-extensions` | Generic x86_64 PC | `generic-x86-64` |
+| `meta-vm-extensions` | ARM64 and x86-64 VMs | `vm-arm64`, `vm-x86-64` |
 
-Quick build (any layer):
+Quick build (any board):
 ```bash
-cd meta-wendyos-<target>
+cd WendyOS-Builder
 ./bootstrap.sh
 source ./repos/poky/oe-init-build-env build
 bitbake <image-name>
@@ -57,8 +60,8 @@ The `wendy-agent` repository includes an E2E test suite in `swift/WendyE2ETests/
 ### Running E2E Tests
 ```bash
 # Start the VM
-cd meta-wendyos-virtual
-./scripts/setup-dev-vm.sh create && ./scripts/setup-dev-vm.sh start
+wendy vm create dev --image wendyos-image-vm-arm64-wendyos.rootfs.wic --disk 16
+wendy vm start dev
 
 # Deploy a test app first (required for container tests)
 cd wendy-agent/Examples/HelloWorld
@@ -66,7 +69,7 @@ wendy run --json --device localhost:50051  # --json for non-interactive output
 
 # Run E2E tests with fast path (CRITICAL for performance)
 cd wendy-agent/E2ETests
-E2E_USE_EXISTING_VM=true E2E_VM_PATH=/path/to/meta-wendyos-virtual swift test
+E2E_USE_EXISTING_VM=true swift test
 ```
 
 **Important**: Always set `E2E_USE_EXISTING_VM=true` when the VM is already running. This skips shell script checks and reduces test time from ~5s/test to ~0.01s/test.

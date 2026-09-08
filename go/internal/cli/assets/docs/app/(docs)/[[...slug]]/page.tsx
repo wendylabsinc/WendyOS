@@ -14,28 +14,39 @@ type PageProps = {
   params: Promise<PageParams>;
 };
 
-// Pages with a bespoke OpenGraph card, keyed by page slug. Anything not listed
-// here falls back to the shared `ogImage`.
+// OpenGraph cards keyed by page slug.
 const pageOgImages: Record<string, string> = {
   'installation/wendyos-nvidia-jetson-agx-thor': '/images/opengraph-thor.png',
   'integrations/ros2': '/images/opengraph-ros2.png',
 };
 
-function getLegacyRedirect(slug?: string[]) {
-  const redirects: Record<string, string> = {
-    'installation/wendyos-nvidia-jetson': '/installation/wendyos-nvidia-jetson-orin-nano/',
-    'installation/wendy-agent-linux': '/installation/linux/',
-    'installation/ubuntu': '/installation/linux/',
-  };
+const tutorialOgImages: Record<string, string> = {
+  'guides/camera-exposure': '/images/og-tutorial-camera-exposure.png',
+  'guides/fleet-deployment': '/images/og-tutorial-fleet-deployment.png',
+  'guides/tutorials/python/amd-rocm-pytorch': '/images/og-tutorial-amd-rocm-pytorch.png',
+  'guides/tutorials/python/robot-camera-opencv': '/images/og-tutorial-robot-camera-opencv.png',
+  'guides/tutorials/python/g1-mujoco-simulation': '/images/og-tutorial-g1-mujoco-simulation.png',
+  'guides/tutorials/python/raw-camera-frames': '/images/og-tutorial-raw-camera-frames.png',
+  'guides/tutorials/python/cloud-udp-service': '/images/og-tutorial-cloud-udp-service.png',
+};
 
-  return redirects[slug?.join('/') ?? ''];
+const legacyRedirects: Record<string, string> = {
+  'installation/wendyos-nvidia-jetson': '/installation/wendyos-nvidia-jetson-orin-nano/',
+  'installation/wendy-agent-linux': '/installation/linux/',
+  'installation/ubuntu': '/installation/linux/',
+  'guides/tutorials/camera-exposure': '/guides/camera-exposure/',
+  'guides/tutorials/fleet-deployment': '/guides/fleet-deployment/',
+};
+
+function getLegacyRedirect(slug?: string[]) {
+  return legacyRedirects[slug?.join('/') ?? ''];
 }
 
 export default async function Page(props: PageProps) {
   const params = await props.params;
   const redirect = getLegacyRedirect(params.slug);
   if (redirect) {
-    permanentRedirect(withBasePath(redirect));
+    permanentRedirect(redirect);
   }
 
   const page = source.getPage(params.slug);
@@ -59,36 +70,55 @@ export default async function Page(props: PageProps) {
 }
 
 export function generateStaticParams() {
-  return source.generateParams();
+  const pages = source.generateParams();
+  const pageSlugs = new Set(pages.map(({ slug }) => slug?.join('/') ?? ''));
+  const redirectPages = Object.keys(legacyRedirects)
+    .filter((slug) => !pageSlugs.has(slug))
+    .map((slug) => ({ slug: slug.split('/') }));
+
+  return [...pages, ...redirectPages];
 }
 
 export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const params = await props.params;
-  const slug = params.slug?.join('/');
   const redirect = getLegacyRedirect(params.slug);
-  if (redirect) {
-    const isLegacyJetsonRoute = slug === 'installation/wendyos-nvidia-jetson';
-    return {
-      title: isLegacyJetsonRoute ? 'NVIDIA Jetson Orin Nano' : 'Linux',
-      description: isLegacyJetsonRoute
-        ? 'Install WendyOS on an NVIDIA Jetson Orin Nano.'
-        : 'Install wendy-agent on a Linux machine.',
-    };
-  }
-
-  const page = source.getPage(params.slug);
+  const pageSlug = redirect ? redirect.split('/').filter(Boolean) : params.slug;
+  const slug = pageSlug?.join('/');
+  const page = source.getPage(pageSlug);
   if (!page) notFound();
 
-  const pageOgImage = slug && slug in pageOgImages ? withBasePath(pageOgImages[slug]) : ogImage;
+  const tutorialOgImage = slug ? tutorialOgImages[slug] : undefined;
+  const pageOgImage = tutorialOgImage
+    ? {
+        url: withBasePath(tutorialOgImage),
+        width: 1200,
+        height: 630,
+        type: 'image/png',
+        alt: page.data.title,
+      }
+    : slug && slug in pageOgImages
+      ? withBasePath(pageOgImages[slug])
+      : ogImage;
+  const pageUrl = withBasePath(page.url.endsWith('/') ? page.url : `${page.url}/`);
 
   return {
     title: page.data.title,
     description: page.data.description,
+    alternates: {
+      canonical: pageUrl,
+    },
     openGraph: {
+      type: 'website',
+      siteName: 'WendyOS Docs',
+      title: page.data.title,
+      description: page.data.description,
+      url: pageUrl,
       images: pageOgImage,
     },
     twitter: {
       card: 'summary_large_image',
+      title: page.data.title,
+      description: page.data.description,
       images: pageOgImage,
     },
   };

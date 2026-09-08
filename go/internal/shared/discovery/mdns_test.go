@@ -341,3 +341,16 @@ func TestBrowseMDNSServicesTimeoutCap(t *testing.T) {
 		t.Fatalf("returned after %v, want close to the %v timeout", elapsed, timeout)
 	}
 }
+
+// A VM's agent advertises its board in a devicetype TXT record, so a sighting
+// can be classified before -- or instead of -- an agent probe: a user-mode VM's
+// announcement leaks onto the LAN with an address nothing can reach.
+func TestLANDeviceFromServiceReadsDeviceTypeTXTRecord(t *testing.T) {
+	svc := MDNSService{Hostname: "wendyos-gentle-forest.local", TXTRecords: map[string]string{"devicetype": "vm-arm64"}}
+	if got := lanDeviceFromService(svc).DeviceType; got != "vm-arm64" {
+		t.Fatalf("DeviceType = %q, want vm-arm64 from the devicetype TXT record", got)
+	}
+	if got := lanDeviceFromService(MDNSService{Hostname: "orin.local"}).DeviceType; got != "" {
+		t.Fatalf("DeviceType = %q with no devicetype record, want empty", got)
+	}
+}

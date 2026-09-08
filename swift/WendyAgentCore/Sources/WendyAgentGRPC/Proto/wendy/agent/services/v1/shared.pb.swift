@@ -114,6 +114,58 @@ public nonisolated enum AppRunningState: SwiftProtobuf.Enum, Swift.CaseIterable 
 
 }
 
+/// Charge state of a system battery, as reported by the kernel.
+public nonisolated enum BatteryState: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+
+  /// kernel reports "Unknown", or no status file
+  case unknown // = 0
+  case charging // = 1
+  case discharging // = 2
+  case full // = 3
+
+  /// Present on a charger but deliberately not charging (e.g. a charge
+  /// threshold is holding the pack below 100%). Distinct from FULL.
+  case notCharging // = 4
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .unknown
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unknown
+    case 1: self = .charging
+    case 2: self = .discharging
+    case 3: self = .full
+    case 4: self = .notCharging
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .unknown: return 0
+    case .charging: return 1
+    case .discharging: return 2
+    case .full: return 3
+    case .notCharging: return 4
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [BatteryState] = [
+    .unknown,
+    .charging,
+    .discharging,
+    .full,
+    .notCharging,
+  ]
+
+}
+
 public nonisolated struct RestartPolicy: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -186,6 +238,38 @@ public nonisolated struct AppContainer: Sendable {
   public init() {}
 }
 
+/// BatteryStats is the device's aggregate system-battery state. It is only ever
+/// set for devices that actually have a battery: consumers must treat its
+/// absence as "mains-powered" and show nothing, never as 0%.
+public nonisolated struct BatteryStats: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// Charge level, 0-100, across every system battery on the device.
+  public var percent: Double = 0
+
+  public var state: BatteryState = .unknown
+
+  /// Estimated seconds until empty (discharging) or until full (charging).
+  /// Absent whenever the kernel reports no usable charge/discharge rate — a
+  /// missing estimate is reported as missing rather than extrapolated.
+  public var secondsRemaining: Int64 {
+    get {_secondsRemaining ?? 0}
+    set {_secondsRemaining = newValue}
+  }
+  /// Returns true if `secondsRemaining` has been explicitly set.
+  public var hasSecondsRemaining: Bool {self._secondsRemaining != nil}
+  /// Clears the value of `secondsRemaining`. Subsequent reads from it will return its default value.
+  public mutating func clearSecondsRemaining() {self._secondsRemaining = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _secondsRemaining: Int64? = nil
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 nonisolated extension RestartPolicyMode: SwiftProtobuf._ProtoNameProviding {
@@ -194,6 +278,10 @@ nonisolated extension RestartPolicyMode: SwiftProtobuf._ProtoNameProviding {
 
 nonisolated extension AppRunningState: SwiftProtobuf._ProtoNameProviding {
   public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0STOPPED\0\u{1}RUNNING\0\u{1}CRASH_LOOPING\0")
+}
+
+nonisolated extension BatteryState: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0BATTERY_STATE_UNKNOWN\0\u{1}BATTERY_STATE_CHARGING\0\u{1}BATTERY_STATE_DISCHARGING\0\u{1}BATTERY_STATE_FULL\0\u{1}BATTERY_STATE_NOT_CHARGING\0")
 }
 
 nonisolated extension RestartPolicy: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -331,6 +419,50 @@ nonisolated extension AppContainer: SwiftProtobuf.Message, SwiftProtobuf._Messag
     if lhs.exitCode != rhs.exitCode {return false}
     if lhs.terminationReason != rhs.terminationReason {return false}
     if lhs.httpPort != rhs.httpPort {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension BatteryStats: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = "BatteryStats"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}percent\0\u{1}state\0\u{3}seconds_remaining\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularDoubleField(value: &self.percent) }()
+      case 2: try { try decoder.decodeSingularEnumField(value: &self.state) }()
+      case 3: try { try decoder.decodeSingularInt64Field(value: &self._secondsRemaining) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if self.percent.bitPattern != 0 {
+      try visitor.visitSingularDoubleField(value: self.percent, fieldNumber: 1)
+    }
+    if self.state != .unknown {
+      try visitor.visitSingularEnumField(value: self.state, fieldNumber: 2)
+    }
+    try { if let v = self._secondsRemaining {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 3)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: BatteryStats, rhs: BatteryStats) -> Bool {
+    if lhs.percent != rhs.percent {return false}
+    if lhs.state != rhs.state {return false}
+    if lhs._secondsRemaining != rhs._secondsRemaining {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

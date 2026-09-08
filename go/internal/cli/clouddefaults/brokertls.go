@@ -64,7 +64,7 @@ func BrokerTLSConfig(cert config.CertificateInfo, brokerURL string) (*tls.Config
 		// signed by the Wendy CA, not a public CA. Skip hostname verification but
 		// validate the chain against the stored Wendy CA bundle.
 		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM([]byte(cert.PemCertificateChain)) {
+		if certs.AppendChainToPool(caPool, cert.PemCertificateChain) == 0 {
 			return nil, fmt.Errorf("no valid CA certificates in PemCertificateChain")
 		}
 		tlsCfg.InsecureSkipVerify = true //nolint:gosec // Hostname verification is intentionally skipped for non-standard broker endpoints; VerifyConnection validates the chain against the Wendy CA.

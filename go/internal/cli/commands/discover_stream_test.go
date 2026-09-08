@@ -99,7 +99,7 @@ func searchLANEventMsg(cmd tea.Cmd) (lanEventMsg, bool) {
 // exists (deleted with its last caller), so any accidental reintroduction of
 // a call to it fails the build, not just this test.
 func TestCLILANStreamOptions_UsesCacheAndProber(t *testing.T) {
-	opts := cliLANStreamOptions()
+	opts := cliLANStreamOptions(context.Background())
 	if !opts.UseCache {
 		t.Error("UseCache = false; want true so cached rows appear instantly")
 	}

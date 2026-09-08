@@ -16,19 +16,26 @@ import X509
 /// verified path to a trusted root; it never assumes the peer-presented
 /// certificates are valid. It fails closed: any parse or verification failure
 /// returns `false`.
+///
+/// "Organization" here means the tenant a certificate belongs to: the tenant
+/// SPIFFE principal pki-core stamps, or the legacy `urn:wendy:org` on an old
+/// chain. See `OrgIdentity.Scope`.
 enum ClientCertAuthorizer {
     /// How the org-equality gate treats the connecting client certificate,
     /// mirroring the Go agent's `interceptor.OrgMode`.
     enum OrgEnforcementMode: Sendable, Equatable {
         /// No org check: any client whose chain verifies is accepted.
         case off
-        /// Enforce org-equality for certs that carry an org identity, but allow
-        /// legacy certs that carry no org identity. This is the default and lets
-        /// today's `wendy` CLI user cert (`wendy/user/<uid>`, no org claim)
-        /// connect while cert rotation to org-bearing URNs completes.
+        /// Enforce tenant-equality for certs that carry an identity, but allow
+        /// legacy certs that carry none — and certs whose tenant this device has
+        /// no way to compare with its own, which is the state a fleet passes
+        /// through while its certificates rotate onto pki-core chains. This is
+        /// the default and lets today's `wendy` CLI user cert
+        /// (`wendy/user/<uid>`, no claim) connect meanwhile.
         case grace
-        /// Enforce org-equality AND require every client cert to carry an org
-        /// identity; a legacy no-org cert is rejected.
+        /// Enforce tenant-equality AND require every client cert to carry a
+        /// tenant this device can compare with its own; a legacy no-identity
+        /// cert, and one naming an incomparable tenant, are both rejected.
         case strict
 
         var name: String {
@@ -59,18 +66,18 @@ enum ClientCertAuthorizer {
     ///   - peerCertificatesDER: The peer-presented certificate chain, DER-encoded,
     ///     leaf first (the order NIOSSL delivers them in).
     ///   - trustRootsPEM: The device's CA chain (PEM), used as the trust anchors.
-    ///   - deviceOrg: This device's organization id, or `nil` if it could not be
+    ///   - deviceScope: This device's own tenant, or `nil` if it could not be
     ///     determined from the device's own certificate. When `nil` (and the mode
-    ///     is not `.off`), every client is rejected (fail closed): org-equality is
-    ///     the sole cross-org barrier and is never silently dropped.
+    ///     is not `.off`), every client is rejected (fail closed): tenant-equality
+    ///     is the sole cross-tenant barrier and is never silently dropped.
     ///   - mode: The org-enforcement mode (default `.grace`). See
     ///     ``OrgEnforcementMode``.
-    /// - Returns: `true` iff the chain verifies to a trusted root AND the org
+    /// - Returns: `true` iff the chain verifies to a trusted root AND the tenant
     ///   policy for `mode` is satisfied.
     static func isAuthorized(
         peerCertificatesDER: [[UInt8]],
         trustRootsPEM: String,
-        deviceOrg: Int32?,
+        deviceScope: OrgIdentity.Scope?,
         mode: OrgEnforcementMode = .grace
     ) async -> Bool {
         // Parse trust anchors from the device CA chain. Without any anchors we
@@ -93,44 +100,51 @@ enum ClientCertAuthorizer {
         )
         guard case .validCertificate = result else { return false }
 
-        // `.off` opts out of org enforcement entirely: any client whose chain
+        // `.off` opts out of tenant enforcement entirely: any client whose chain
         // verifies to a trusted root is accepted.
         if mode == .off { return true }
 
-        // Additional layer: org-equality. Because the PKI shares CA roots across
-        // organizations, chain verification alone would let a validly provisioned
-        // entity from another org connect — org-equality is the sole cross-org
-        // barrier. If the device's own org is unknown we reject every client (in
-        // grace and strict) rather than silently dropping that barrier: a device
-        // with an unparseable cert becomes unreachable over mTLS, the safe
-        // failure mode. Re-provision to recover.
-        guard let deviceOrg else { return false }
+        // Additional layer: tenant-equality. Because the PKI shares CA roots
+        // across organizations, chain verification alone would let a validly
+        // provisioned entity from another tenant connect — tenant-equality is
+        // the sole cross-tenant barrier. If the device's own tenant is unknown
+        // we reject every client (in grace and strict) rather than silently
+        // dropping that barrier: a device with an unparseable cert becomes
+        // unreachable over mTLS, the safe failure mode. Re-provision to recover.
+        guard let deviceScope else { return false }
 
-        // Extract the client's org claim. A present-but-malformed claim (thrown
+        // Extract the client's claim. A present-but-malformed claim (thrown
         // error) is anomalous and rejected under every mode.
-        let clientOrg: Int32?
+        let clientScope: OrgIdentity.Scope?
         do {
-            clientOrg = try OrgIdentity.organizationID(fromLeaf: leaf)
+            clientScope = try OrgIdentity.scope(fromLeaf: leaf)
         } catch {
             return false
         }
 
-        guard let clientOrg else {
-            // A legacy cert carrying no org identity (e.g. the CLI's user cert).
+        guard let clientScope else {
+            // A legacy cert carrying no identity (e.g. the CLI's user cert).
             // Allowed under grace, rejected under strict.
             return mode == .grace
         }
 
-        // Org claim present: it must equal the device's org.
-        return clientOrg == deviceOrg
+        if clientScope.matches(deviceScope) { return true }
+        // A different tenant, said in terms this device can check, is refused
+        // under grace as well as strict: grace forgives an identity it cannot
+        // read, never one it can read and that says someone else.
+        if clientScope.comparable(with: deviceScope) { return false }
+        // Otherwise the client named a tenant with no shared vocabulary — a
+        // SPIFFE-only caller reaching a device still on an old chain, or the
+        // reverse. Unprovable rather than wrong, and exactly the rotation
+        // window grace exists for.
+        return mode == .grace
     }
 
-    /// The organization id encoded in the common name of the leaf certificate of
-    /// the given PEM, or `nil` if it can't be parsed. Used to derive the device's
-    /// own org from its issued certificate when building the mTLS server.
-    static func organizationID(fromLeafPEM pem: String) -> Int32? {
+    /// This device's own tenant, read from the leaf certificate of the given
+    /// PEM, or `nil` if it can't be parsed. Used when building the mTLS server.
+    static func scope(fromLeafPEM pem: String) -> OrgIdentity.Scope? {
         guard let leaf = Self.parseCertificates(pem: pem).first else { return nil }
-        return (try? OrgIdentity.organizationID(fromLeaf: leaf)) ?? nil
+        return (try? OrgIdentity.scope(fromLeaf: leaf)) ?? nil
     }
 
     /// Parses zero or more PEM `CERTIFICATE` blocks into certificates, ignoring

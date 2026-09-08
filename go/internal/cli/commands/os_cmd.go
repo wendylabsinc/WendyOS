@@ -293,6 +293,13 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 			if err := requireReflashableOSVersion(versionResp.GetOsVersion()); err != nil {
 				return err
 			}
+			// Same rule for a local artifact path: a device reached over loopback
+			// sits behind a port forward, and the only address this side could
+			// advertise is one that inside the guest is the guest.
+			if len(args) > 0 && isLoopbackHost(conn.Host) {
+				return fmt.Errorf("%s reaches this machine over loopback, so it cannot fetch a locally served artifact; "+
+					"pass --pr or --artifact-url and let the device download it directly", conn.Host)
+			}
 
 			// Step 2: Ensure the agent is at the latest release before updating the OS.
 			conn, err = ensureAgentUpToDate(ctx, conn, versionResp, nightly)
@@ -391,7 +398,10 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				defer cleanup()
 				artifactURL = servedURL
 				fmt.Printf("Serving artifact at: %s\n", artifactURL)
-			} else if artifactURL != "" && !deviceHasWiFi(ctx, conn) {
+				// A device on loopback has a port forward between us and it, so it
+				// has no WiFi to report yet is not offline: it reaches the internet
+				// through the host's NAT and can fetch the artifact itself.
+			} else if artifactURL != "" && !isLoopbackHost(conn.Host) && !deviceHasWiFi(ctx, conn) {
 				// Device has no WiFi connection — it cannot reach GCP directly.
 				// Download the artifact on the Mac and serve it over a local HTTP
 				// server so the device can fetch it from the Mac instead.
@@ -1312,14 +1322,13 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 
 	fmt.Printf("Updating agent: %s → %s\n", agentVer, latestVer)
-	addr := hostPort(conn.Host, defaultAgentPort)
 	if err := performAgentUpdate(ctx, conn, osName, arch, nightly); err != nil {
 		return nil, fmt.Errorf("agent update failed: %w", err)
 	}
 	conn.Close()
 
 	fmt.Print("Waiting for agent to restart...")
-	newConn, err := waitForAgentRestart(ctx, addr)
+	newConn, err := reconnectAgentAfterRestart(ctx, conn)
 	if err != nil {
 		return nil, fmt.Errorf("agent did not come back after update: %w", err)
 	}

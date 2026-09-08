@@ -1,0 +1,190 @@
+---
+title: Adjust Camera Exposure
+description: Inspect a camera's controls, fix an overexposed picture, save the settings, and restore the defaults
+---
+
+import { withBasePath } from '@/lib/shared';
+
+Use the Wendy CLI to adjust a USB camera while watching its live feed. You will inspect the controls the camera supports, try a shorter exposure, save the result, and check that it survives a stream reconnect.
+
+The silent clips below show a real Logitech C920 connected to a Jetson Orin Nano, using a current Wendy CLI and device agent with camera control support. The recording demonstrates temporary changes with `--no-persist`. Saving settings and restoring defaults are covered afterward.
+
+## Prerequisites
+
+- A reachable WendyOS device with a USB camera attached.
+- A recent Wendy CLI and device agent with camera control support.
+- GStreamer on your development machine for the preview window.
+- A scene with a bright area, such as a desk lamp beside an object with visible detail.
+
+The same commands work with local CSI cameras that expose V4L2 controls. Network cameras do not expose these controls through Wendy. The CLI talks to the device agent directly, so this tutorial does not need an app or a camera entitlement.
+
+## 1. Select the camera
+
+Choose your WendyOS device, then list its cameras:
+
+```bash
+wendy device set-default
+wendy device camera list
+```
+
+Find the USB camera in the table. The commands below use camera `0`. Replace `0` with its current ID throughout the tutorial.
+
+Open a preview in this terminal:
+
+```bash
+wendy device camera view --id 0
+```
+
+Leave the window open. Arrange the scene so you can see whether the bright area has lost detail. Make control changes from a second terminal.
+
+## 2. Inspect and record the controls
+
+In the second terminal, run:
+
+```bash
+wendy device camera controls 0
+wendy device camera controls 0 --json > camera-controls-before.json
+```
+
+The table shows each control's name, current value, range, driver default, and whether it is mutable. The JSON also includes the step size. A valid numeric setting must fit the range and step reported by this camera.
+
+Look for `auto_exposure`, `exposure_time_absolute`, and `backlight_compensation`. Some cameras also expose `gain`, white balance, focus, or zoom controls. Their names and ranges come from the driver; they are not a fixed list shared by every camera.
+
+An exposure control may show `Mutable: no` while automatic exposure is enabled. The mode must change before the manual exposure value can take effect.
+
+<figure>
+  <video
+    width="1920" height="1080" autoPlay loop muted playsInline controls preload="metadata"
+    poster={withBasePath('/images/guides/camera-exposure-inspect.webp')}
+    aria-label="Inspect the Logitech C920's camera controls alongside its live view of a whale plushie"
+    style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+  >
+    <source src="/videos/guides/camera-exposure-inspect.mp4" type="video/mp4" />
+    Your browser does not support embedded video.
+  </video>
+  <figcaption>Inspect the C920's available controls while keeping its live view open.</figcaption>
+</figure>
+
+## 3. Try a shorter exposure
+
+This example uses the common V4L2 controls shown below, with `auto_exposure=1` selecting manual exposure. Use it only if your camera exposes these names and accepts the values. If its exposure range or step excludes `20`, choose a supported value below the current exposure instead. If it lacks `backlight_compensation`, omit that assignment.
+
+```bash
+wendy device camera set-control 0 auto_exposure=1 exposure_time_absolute=20 backlight_compensation=0 --no-persist
+wendy device camera controls 0
+```
+
+Wendy applies the mode control before the exposure control. Each assignment reports whether it was applied. An unsupported name or value produces a failure for that control; read the result before judging the picture.
+
+Compare the live view with the original scene. A shorter exposure should reduce the washed-out area, though it can also darken the surrounding objects. If the image becomes too dark, increase the exposure to another supported value:
+
+```bash
+wendy device camera set-control 0 exposure_time_absolute=100 --no-persist
+```
+
+In the recorded C920 scene, requesting `20` makes the whale plushie too dark, and increasing the request to `100` brings its detail back. These values are examples for this camera and lighting. Use the range and step from your camera; the hardware may round a requested value, so inspect the controls afterward. Keep the light and camera position fixed while comparing values.
+
+<figure>
+  <video
+    width="1920" height="1080" autoPlay loop muted playsInline controls preload="metadata"
+    poster={withBasePath('/images/guides/camera-exposure-adjust.webp')}
+    aria-label="Set the C920 to manual exposure at 20, then increase exposure to 100 to recover detail in the whale plushie"
+    style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+  >
+    <source src="/videos/guides/camera-exposure-adjust.mp4" type="video/mp4" />
+    Your browser does not support embedded video.
+  </video>
+  <figcaption>Compare two temporary manual exposure settings against the same live scene.</figcaption>
+</figure>
+
+`--no-persist` applies a setting without adding it to Wendy's saved settings. It does not clear a setting saved during an earlier session, and it does not promise the driver will immediately restore its old value when the command ends.
+
+To return this C920 to automatic exposure for another comparison, use:
+
+```bash
+wendy device camera set-control 0 auto_exposure=3 --no-persist
+```
+
+The automatic mode value is camera-specific. This command changes the live mode and does not clear previously saved settings; those settings can be reapplied when the capture pipeline starts again.
+
+<figure>
+  <video
+    width="1920" height="1080" autoPlay loop muted playsInline controls preload="metadata"
+    poster={withBasePath('/images/guides/camera-exposure-automatic.webp')}
+    aria-label="Return the C920 to automatic exposure with auto_exposure set to 3 without changing saved settings"
+    style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+  >
+    <source src="/videos/guides/camera-exposure-automatic.mp4" type="video/mp4" />
+    Your browser does not support embedded video.
+  </video>
+  <figcaption>Return to automatic exposure for a live comparison using <code>--no-persist</code>.</figcaption>
+</figure>
+
+## 4. Save the chosen settings
+
+Repeat the complete set of assignments that produced the picture you want, this time without `--no-persist`. For example, to save the exposure request of `100` used in the clip:
+
+```bash
+wendy device camera set-control 0 auto_exposure=1 exposure_time_absolute=100 backlight_compensation=0
+```
+
+Wendy saves successfully applied controls on the device and reapplies them when its capture pipeline starts again. The saved settings also survive an agent restart.
+
+To check a reconnect, stop the preview with Ctrl+C. Close any other Wendy viewers of this camera so the shared capture can stop. Then open it again:
+
+```bash
+wendy device camera view --id 0
+```
+
+In the second terminal, inspect the controls again:
+
+```bash
+wendy device camera controls 0
+```
+
+The saved values should be present, and the same scene should retain the detail you saw before closing the preview. This check establishes the result on your camera; a successful command alone does not show that the image improved.
+
+## 5. Restore the defaults
+
+To stop saving the settings changed in this tutorial and ask the driver to restore their defaults:
+
+```bash
+wendy device camera set-control 0 --reset auto_exposure,exposure_time_absolute,backlight_compensation
+wendy device camera controls 0
+```
+
+Omit any names your camera does not expose. A reset clears the saved setting even if the driver cannot apply its default immediately, for example when a mode makes a control inactive. Read the per-control results.
+
+To reset all currently mutable controls and forget their saved values, use:
+
+```bash
+wendy device camera set-control 0 --reset-all
+```
+
+Driver defaults can differ from the settings you started with. If the camera had already been tuned, consult `camera-controls-before.json` and explicitly reapply the previous values you want to keep. The snapshot records values, not whether they were previously persisted.
+
+Stop the preview with Ctrl+C when you finish. You can delete `camera-controls-before.json` once you no longer need the record.
+
+## Troubleshooting
+
+### The command is missing or the agent reports an unimplemented method
+
+Both the CLI and the device agent need camera control support. Check the [CLI installation guide](/docs/installation/developer-machine-setup) and [device update command](/docs/advanced/clients/wendy-cli/commands/device/update), then retry the control listing.
+
+### A value is rejected or the control is not mutable
+
+Run `wendy device camera controls 0 --json` again. Check the exact name, minimum, maximum, and step. For manual exposure, change the automatic-exposure mode first or include the mode and exposure assignments in the same command. A read-only control cannot be changed.
+
+### The picture does not change
+
+Confirm that the preview and control commands target the same device and camera ID. Check each assignment's result, then read the controls back. Another application can also change the camera's settings. Close that application while tuning if it keeps overriding your values.
+
+### The camera is busy
+
+Wendy viewers share the agent's capture, but an application opening the camera directly can prevent access. Stop the application holding the camera and retry.
+
+### The camera ID changed after a reboot or USB move
+
+List the cameras again before changing controls. Numeric IDs follow `/dev/videoN` enumeration, and Wendy currently saves controls against that path. Saved values do not follow a USB camera to a different device number.
+
+For preview commands, `wendy device camera list --json` also reports a `stable_id` when available. Copy the full value into `wendy device camera view --stable-id '<value>'` to select that camera at stream startup. A `by-id:` value can survive a move between USB ports; a `by-path:` value identifies the port. Control commands still use the current numeric ID.

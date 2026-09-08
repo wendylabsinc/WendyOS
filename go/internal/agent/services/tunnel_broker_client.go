@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
@@ -171,7 +172,7 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 	if err != nil {
 		caPool = x509.NewCertPool()
 	}
-	if chainPEM != "" && !caPool.AppendCertsFromPEM([]byte(chainPEM)) {
+	if chainPEM != "" && certs.AppendChainToPool(caPool, chainPEM) == 0 {
 		return nil, fmt.Errorf("no valid CA certificates in chainPEM")
 	}
 	tlsCfg := &tls.Config{

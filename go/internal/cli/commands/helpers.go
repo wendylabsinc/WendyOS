@@ -600,7 +600,7 @@ var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, 
 }
 
 var discoverLANDevices = func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
-	return discovery.CollectLAN(ctx, cliLANStreamOptions(), timeout)
+	return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 }
 
 var isInteractiveTerminalFn = func() bool {
@@ -803,13 +803,15 @@ func lanRowState(ev discovery.LANEvent) (probe tui.ProbeState, insecure bool) {
 
 // cliLANStreamOptions is the CLI's single definition of how a LAN scan should
 // run: read/write the on-disk cache (so a device seen in a prior run appears
-// instantly) and confirm every candidate with lanProber (an agent probe),
-// never a bare mDNS sighting. Every CLI surface that collects LAN devices —
-// one-shot/JSON discover, MCP's device_list, fleet commands, and the batch
-// helpers below — shares this so they all get the same cache+probe
-// acceleration.
-func cliLANStreamOptions() discovery.StreamOptions {
-	return discovery.StreamOptions{UseCache: true, Prober: lanProber}
+// instantly), confirm every candidate with lanProber (an agent probe), never a
+// bare mDNS sighting, and keep this machine's own VMs out of the list (see
+// simulatorFilter). Every CLI surface that collects LAN devices — the discover
+// TUI, the run picker, one-shot/JSON discover, MCP's device_list, fleet
+// commands, and the batch helpers below — shares this so they all get the
+// same cache+probe acceleration and the same idea of what a device is. ctx
+// bounds the filter's background learning; pass the session's.
+func cliLANStreamOptions(ctx context.Context) discovery.StreamOptions {
+	return discovery.StreamOptions{UseCache: true, Prober: lanProber, Exclude: newSimulatorFilter(ctx)}
 }
 
 // SelectedDevice represents either a gRPC agent, BLE device, or an external provider device.
@@ -1115,6 +1117,24 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		return conn, nil
 	}
 
+	// Keep the alias intact, including when it comes from the saved default.
+	device := deviceFlag
+	if device == "" {
+		loaded, err := config.Load()
+		if err != nil {
+			return nil, err
+		}
+		device = loaded.DefaultDevice
+	}
+	if name, matched, err := simulatorName(device); err != nil {
+		return nil, err
+	} else if matched {
+		picked, err := connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, cfg.suppressUpdateCheck)
+		if err != nil {
+			return nil, err
+		}
+		return picked.Agent, nil
+	}
 	addr, pinKey, isDefault, err := resolveDeviceAddress()
 	if err == nil {
 		// The name the user asked for, used both to talk about this device and
@@ -1344,6 +1364,12 @@ func pinKeyForLANDevice(d *models.LANDevice) string {
 // pin first) or `wendy device unpin <host>` is the way back — a re-pin has to be
 // an act aimed at a specific device, not a row in a list mDNS filled in.
 func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, addr string, suppressUpdateCheck bool) (*SelectedDevice, error) {
+	if name, matched, err := simulatorName(d.LAN.ID); err != nil {
+		return nil, err
+	} else if matched {
+		// Re-resolve the live record; discovery may predate a port change.
+		return connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, suppressUpdateCheck)
+	}
 	mtls := d.LAN.IsMTLS
 	conn, err := connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls })
 	if err != nil {
@@ -2368,7 +2394,7 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 				}
 			}
 			conn.Close()
-			certRejected := isCertRejectionError(probeErr)
+			certRejected := isCertRejectionError(cand, probeErr)
 			if certRejected {
 				w.anyCertRejection = true
 			}
@@ -2532,11 +2558,22 @@ func rotateCertsForOrg(certs []config.CertificateInfo, orgID int32) []config.Cer
 // Matches "remote error: tls:" (server sent an alert) and other cert-specific
 // signals; deliberately excludes "tls: first record does not look like a TLS
 // handshake" (plaintext server probed with TLS) and plain transport errors.
-func isCertRejectionError(err error) bool {
+// addr is the endpoint the probe was aimed at: over loopback the verdict has
+// one extra exclusion, described below.
+func isCertRejectionError(addr string, err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
+	// A handshake ending in EOF got no TLS alert back, so nothing rejected
+	// anything: something accepted the connection and closed it. A port forward
+	// does exactly that when the far side is not listening -- QEMU's user-mode
+	// networking accepts on the host and only then finds the guest port closed.
+	// Only over loopback: elsewhere an EOF may be an on-path reset, and reading
+	// that as "not a TLS endpoint" would re-offer the plaintext rung.
+	if isLoopbackHost(addr) && strings.Contains(msg, "handshake failed: EOF") {
+		return false
+	}
 	// A plaintext (unprovisioned) agent probed with TLS reports "first record
 	// does not look like a TLS handshake", which gRPC wraps inside its
 	// "authentication handshake failed" envelope. That is NOT a cert rejection —
@@ -2726,7 +2763,6 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 
 	arch := resp.GetCpuArchitecture()
 	osName := resp.GetOs()
-	addr := hostPort(conn.Host, defaultAgentPort)
 
 	if err := performAgentUpdate(ctx, conn, osName, arch, false); err != nil {
 		fmt.Fprintf(os.Stderr, "Update failed: %v\nContinuing with existing connection.\n", err)
@@ -2736,7 +2772,7 @@ func checkAndOfferUpdate(ctx context.Context, conn *grpcclient.AgentConnection) 
 	conn.Close()
 
 	fmt.Fprintf(os.Stderr, "Waiting for agent to restart...")
-	newConn, err := waitForAgentRestart(ctx, addr)
+	newConn, err := reconnectAgentAfterRestart(ctx, conn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, " failed.\n")
 		return nil, fmt.Errorf("agent did not come back after update: %w", err)
@@ -3121,6 +3157,12 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 	}
 
 	rt := phaseTimer()
+
+	if name, matched, err := simulatorName(device); err != nil {
+		return nil, err
+	} else if matched {
+		return connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, cfg.suppressUpdateCheck)
+	}
 
 	// Check if the device flag matches a known provider key.
 	if device != "" {
@@ -3730,49 +3772,24 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	p := tea.NewProgram(newDevicePickerModel(discoverCtx, picker, cloudAuth, defaultOrgID))
 
 	sendLANItem := func(dev models.LANDevice, insecure bool, probe tui.ProbeState) {
-		devCopy := dev
-		// While the probe is still in flight the Agent/OS columns show a
-		// spinner, so suppress the no-access hint until we actually know the
-		// probe failed.
-		hint := ""
-		if probe != tui.ProbePending {
-			hint = lanNoAccessHint(&devCopy, dev.AgentVersion)
-		}
-		p.Send(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{{
-			Name:          dev.DisplayName,
-			Type:          "LAN",
-			USB:           dev.USB,
-			Address:       preferredLANAddress(dev),
-			AgentVersion:  dev.AgentVersion,
-			AgentOutdated: agentBehindCLI(version.Version, dev.AgentVersion),
-			OS:            dev.OS,
-			OSVersion:     dev.OSVersion,
-			Provisioned:   lanProvisionedDisplay(&devCopy),
-			Hint:          hint,
-			Probe:         probe,
-			DedupKey:      deviceDedupKey(dev.HostKey(), dev.DisplayName),
-			SortKey:       deviceSortKey(dev.DisplayName, dev.USB),
-			Insecure:      insecure,
-			Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
-				DisplayName:     dev.DisplayName,
-				AgentVersion:    dev.AgentVersion,
-				OS:              dev.OS,
-				OSVersion:       dev.OSVersion,
-				CPUArchitecture: dev.CPUArchitecture,
-				LAN:             &devCopy,
-			}},
-		}}}})
+		p.Send(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(dev, insecure, probe)}}})
 	}
 	// Streaming LAN discovery — cached rows appear instantly, live sightings
 	// and probe outcomes follow, and the engine itself handles offline
 	// detection and retry (see discovery.StreamLAN). Prober must be set: with
 	// a nil Prober a cached row can never be confirmed offline.
-	events := lanStreamFn(discoverCtx, discovery.StreamOptions{UseCache: true, Prober: lanProber})
+	events := lanStreamFn(discoverCtx, cliLANStreamOptions(discoverCtx))
 	go func() {
 		// ev.Supersedes needs no handling here: picker rows dedup by hostname
 		// (deviceDedupKey/HostKey), so a superseded connect-minted row and the
 		// TXT-id row that replaces it are already the same row.
 		for ev := range events {
+			if ev.Kind == discovery.LANRetracted {
+				// Listed, then found to be one of this machine's VMs: it
+				// belongs on the Simulator tab, not here.
+				p.Send(devicePickerLocalMsg{msg: lanPickerRemoveMsg(ev.Device)})
+				continue
+			}
 			probe, insecure := lanRowState(ev)
 			sendLANItem(ev.Device, insecure, probe)
 		}
@@ -3870,16 +3887,71 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	if dm.cancelled {
 		return nil, ErrUserCancelled
 	}
-	if asset := dm.selectedCloud(); asset != nil {
-		cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
-		conn, err := connectCloudAsset(ctx, cloudAuth, asset, dm.cloud.brokerURL)
+	choice, ok := dm.choice()
+	if !ok {
+		return nil, fmt.Errorf("no device selected")
+	}
+	switch choice.Tab {
+	case devicePickerCloudTab:
+		cliLogln("Connecting to %s via cloud tunnel...", choice.Cloud.GetName())
+		conn, err := connectCloudAsset(ctx, cloudAuth, choice.Cloud, dm.cloud.brokerURL)
 		if err != nil {
 			return nil, err
 		}
 		return &SelectedDevice{Agent: conn}, nil
+	case devicePickerSimulatorTab:
+		return connectSimulatorChoiceFn(ctx, choice.Simulator, suppressUpdateCheck)
+	default:
+		return connectLocalPickerChoice(ctx, choice.Local, suppressUpdateCheck)
 	}
+}
 
-	sel := dm.selectedLocal()
+// lanPickerItem is the run picker's row for a LAN device.
+func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tui.PickerItem {
+	devCopy := dev
+	// While the probe is still in flight the Agent/OS columns show a
+	// spinner, so suppress the no-access hint until we actually know the
+	// probe failed.
+	hint := ""
+	if probe != tui.ProbePending {
+		hint = lanNoAccessHint(&devCopy, dev.AgentVersion)
+	}
+	return tui.PickerItem{
+		Name:          dev.DisplayName,
+		Type:          "LAN",
+		USB:           dev.USB,
+		Address:       preferredLANAddress(dev),
+		AgentVersion:  dev.AgentVersion,
+		AgentOutdated: agentBehindCLI(version.Version, dev.AgentVersion),
+		OS:            dev.OS,
+		OSVersion:     dev.OSVersion,
+		Provisioned:   lanProvisionedDisplay(&devCopy),
+		Hint:          hint,
+		Probe:         probe,
+		DedupKey:      deviceDedupKey(dev.HostKey(), dev.DisplayName),
+		SortKey:       deviceSortKey(dev.DisplayName, dev.USB),
+		Insecure:      insecure,
+		Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
+			DisplayName:     dev.DisplayName,
+			AgentVersion:    dev.AgentVersion,
+			OS:              dev.OS,
+			OSVersion:       dev.OSVersion,
+			CPUArchitecture: dev.CPUArchitecture,
+			LAN:             &devCopy,
+		}},
+	}
+}
+
+// lanPickerRemoveMsg takes back the row lanPickerItem built for dev, under the
+// same key it was added with.
+func lanPickerRemoveMsg(dev models.LANDevice) tui.PickerRemoveMsg {
+	return tui.PickerRemoveMsg{Key: deviceDedupKey(dev.HostKey(), dev.DisplayName)}
+}
+
+// connectLocalPickerChoice turns a Local-tab selection into a connection. Lifted
+// verbatim out of pickDeviceWithCloudAuth so the three-way dispatch above stays
+// readable on one screen.
+func connectLocalPickerChoice(ctx context.Context, sel *tui.PickerItem, suppressUpdateCheck bool) (*SelectedDevice, error) {
 	if sel == nil {
 		return nil, fmt.Errorf("no device selected")
 	}

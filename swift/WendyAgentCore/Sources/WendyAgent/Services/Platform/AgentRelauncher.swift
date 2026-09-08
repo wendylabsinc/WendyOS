@@ -15,18 +15,10 @@ struct AgentRelauncher: AgentRelaunchScheduling {
     /// Injected by the app target (clean quit path); nil ⇒ exit(0).
     let terminate: (@Sendable () async -> Void)?
 
-    /// How long the graceful quit gets before the process is forced down.
-    /// Two bounds pin this value:
-    ///  - It must outlast a real teardown: `WendyAgent.stop()` stops running
-    ///    apps *sequentially*, and a containerized app can cost ~10 s (the
-    ///    `docker stop` timeout) plus a ~5 s attached wait, so two running
-    ///    apps already need ~30-35 s. The old 15 s hard-killed every update on
-    ///    a device that was actually running something.
-    ///  - It must stay comfortably inside the CLI's darwin agent-restart wait
-    ///    (`darwinAgentRestartTimeout`, 60 s, polled from the update ack):
-    ///    exiting at 45 s still leaves the relaunched app time to come back up
-    ///    before the CLI gives up on it.
-    static let hardExitDelay: Duration = .seconds(45)
+    /// The app target's update-specific termination path does not stop deployed
+    /// apps; they survive the agent process and are adopted after relaunch. This
+    /// is only a watchdog for AppKit failing to terminate promptly.
+    static let hardExitDelay: Duration = .seconds(10)
 
     /// How long the gRPC ack gets to flush to the client before the graceful
     /// quit tears the connection down.
@@ -60,7 +52,7 @@ struct AgentRelauncher: AgentRelaunchScheduling {
               /bin/sleep 0.5
               i=$((i+1)); [ "$i" -ge 600 ] && exit 1
             done
-            exec /usr/bin/open "$2"
+            exec /usr/bin/open -n "$2"
             """
         return ["-c", script, "wendy-agent-relaunch", String(pid), bundlePath]
     }

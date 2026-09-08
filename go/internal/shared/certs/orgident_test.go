@@ -17,7 +17,7 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 	return u
 }
 
-func TestOrgFromClientCert(t *testing.T) {
+func TestScopeFromCert(t *testing.T) {
 	tests := []struct {
 		name       string
 		cn         string
@@ -154,22 +154,22 @@ func TestOrgFromClientCert(t *testing.T) {
 				cert.URIs = append(cert.URIs, mustParseURL(t, raw))
 			}
 
-			org, hasOrg, err := OrgFromClientCert(cert)
+			scope, hasOrg, err := ScopeFromCert(cert)
 
 			if tc.wantErr {
 				if err == nil {
-					t.Errorf("OrgFromClientCert() error = nil, want non-nil")
+					t.Errorf("ScopeFromCert() error = nil, want non-nil")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("OrgFromClientCert() unexpected error: %v", err)
+				t.Fatalf("ScopeFromCert() unexpected error: %v", err)
 			}
-			if org != tc.wantOrg {
-				t.Errorf("OrgFromClientCert() orgID = %d, want %d", org, tc.wantOrg)
+			if scope.OrgID != tc.wantOrg {
+				t.Errorf("ScopeFromCert() orgID = %d, want %d", scope.OrgID, tc.wantOrg)
 			}
 			if hasOrg != tc.wantHasOrg {
-				t.Errorf("OrgFromClientCert() hasOrg = %v, want %v", hasOrg, tc.wantHasOrg)
+				t.Errorf("ScopeFromCert() known = %v, want %v", hasOrg, tc.wantHasOrg)
 			}
 		})
 	}
@@ -248,7 +248,7 @@ func TestIdentityFromCert(t *testing.T) {
 	}
 }
 
-func TestOrgFromClientCert_StillWorks(t *testing.T) {
+func TestScopeFromCert_LegacyURN(t *testing.T) {
 	mustParseURI := func(raw string) *url.URL {
 		u, err := url.Parse(raw)
 		if err != nil {
@@ -259,8 +259,8 @@ func TestOrgFromClientCert_StillWorks(t *testing.T) {
 	cert := &x509.Certificate{
 		URIs: []*url.URL{mustParseURI("urn:wendy:org:7:asset:42")},
 	}
-	orgID, ok, err := OrgFromClientCert(cert)
-	if err != nil || !ok || orgID != 7 {
-		t.Errorf("OrgFromClientCert() = %d, %v, %v; want 7, true, nil", orgID, ok, err)
+	scope, ok, err := ScopeFromCert(cert)
+	if err != nil || !ok || scope != (Scope{OrgID: 7}) {
+		t.Errorf("ScopeFromCert() = %+v, %v, %v; want {OrgID:7}, true, nil", scope, ok, err)
 	}
 }

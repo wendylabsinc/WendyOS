@@ -8,6 +8,8 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     var hostname: any HostnameSetting = ScutilHostname()
     var wifi: any WiFiManaging = WiFiController()
     var bluetooth: any BluetoothManaging = BluetoothScanner()
+    /// Digest of the executable mapped by this process, captured at startup.
+    var binarySHA256: String = ""
     /// Serializes agent self-updates. Held by `WendyAgent` (not created here)
     /// so the same lock survives the service rebuilds that provisioning
     /// transitions perform.
@@ -93,6 +95,7 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         #endif
         response.memTotalBytes = Int64(clamping: ProcessInfo.processInfo.physicalMemory)
         response.cpuCount = UInt32(clamping: ProcessInfo.processInfo.activeProcessorCount)
+        response.binarySha256 = self.binarySHA256
         return ServerResponse(message: response)
     }
 

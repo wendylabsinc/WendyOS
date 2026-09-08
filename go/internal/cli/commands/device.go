@@ -1,7 +1,9 @@
 package commands
 
 import (
+	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"syscall"
@@ -146,7 +149,6 @@ func newDevicePushAgentCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
-			addr := hostPort(conn.Host, defaultAgentPort)
 
 			h := sha256.Sum256(binaryData)
 			sha256Hex := hex.EncodeToString(h[:])
@@ -163,7 +165,7 @@ func newDevicePushAgentCmd() *cobra.Command {
 			conn.Close()
 
 			fmt.Fprint(os.Stderr, "Waiting for agent to restart...")
-			newConn, err := waitForAgentRestart(ctx, addr)
+			newConn, err := reconnectAgentAfterRestart(ctx, conn)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, " failed.")
 				return fmt.Errorf("agent did not come back after update: %w", err)
@@ -1997,7 +1999,17 @@ func reconnectAgentAfterRestart(ctx context.Context, conn *grpcclient.AgentConne
 	if conn != nil && conn.Reconnect != nil {
 		return conn.Reconnect(ctx)
 	}
-	return waitForAgentRestart(ctx, hostPort(conn.Host, defaultAgentPort))
+	if conn == nil {
+		return nil, fmt.Errorf("cannot reconnect without the original device")
+	}
+	if conn.SimulatorName != "" {
+		return waitForSimulatorAgent(ctx, conn.SimulatorName, conn.Addr, 60*time.Second)
+	}
+	addr := conn.Addr
+	if addr == "" {
+		addr = hostPort(conn.Host, defaultAgentPort)
+	}
+	return waitForAgentRestart(ctx, addr)
 }
 
 // osUpdateOutcome reports what `device update`'s OS-update step did, so the
@@ -2406,9 +2418,17 @@ func newDeviceUpdateCmd() *cobra.Command {
 			// Hash the binary we're about to upload. Skipped when already
 			// current: no binary was downloaded and no upload happens.
 			var sha256Hash string
+			var verificationSHA string
 			if !agentAlreadyCurrent {
 				h := sha256.Sum256(binaryData)
 				sha256Hash = hex.EncodeToString(h[:])
+				verificationSHA = sha256Hash
+				if strings.EqualFold(preUpdateVersion.GetOs(), "darwin") {
+					verificationSHA, err = darwinAgentExecutableSHA256(binaryData)
+					if err != nil {
+						return fmt.Errorf("inspecting macOS agent bundle: %w", err)
+					}
+				}
 			}
 
 			if agentAlreadyCurrent {
@@ -2458,17 +2478,18 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// swap landed — always check what the device actually runs
 				// before claiming success (a silent no-op or rollback still
 				// reports the old binary here). The darwin artifact is an
-				// app-bundle ZIP, so its hash can never equal a hash of the
-				// running executable: skip the hash comparison there and let
-				// the version check carry the verdict. The verify window
+				// app-bundle ZIP, so compare the executable inside that ZIP with
+				// the executable hash snapshotted by the Mac agent at launch. This
+				// proves both the swap and the restart; older agents leave it empty.
+				// The verify window
 				// matches the restart budget so a mismatch re-poll can
 				// outlast a lingering old agent.
-				verifySHA := sha256Hash
-				if strings.EqualFold(preUpdateVersion.GetOs(), "darwin") {
-					verifySHA = ""
-				}
-				verified, verifyErr := verifyAgentAfterUpdate(ctx, conn.AgentService, verifySHA, expectedAgentVersion,
-					agentVerifyWaitOptions{Timeout: agentRestartTimeoutFor(preUpdateVersion.GetOs())})
+				requireHash := strings.EqualFold(preUpdateVersion.GetOs(), "darwin")
+				verified, verifyErr := verifyAgentAfterUpdate(ctx, conn.AgentService, verificationSHA, expectedAgentVersion,
+					agentVerifyWaitOptions{
+						Timeout:     agentRestartTimeoutFor(preUpdateVersion.GetOs()),
+						RequireHash: requireHash,
+					})
 				if verifyErr != nil {
 					return verifyErr
 				}
@@ -2604,6 +2625,46 @@ func checkELFArchitecture(data []byte, deviceArch string) error {
 // magic "PK\x03\x04" (what ditto -c -k produces).
 func isZipArchive(data []byte) bool {
 	return len(data) >= 4 && data[0] == 'P' && data[1] == 'K' && data[2] == 0x03 && data[3] == 0x04
+}
+
+// darwinAgentExecutableSHA256 extracts and hashes the executable the Mac agent
+// will launch from the uploaded app-bundle ZIP. The relaunched agent reports
+// the hash of its mapped executable, making even same-version dev updates
+// distinguishable from the process that performed the on-disk replacement.
+func darwinAgentExecutableSHA256(data []byte) (string, error) {
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("opening ZIP: %w", err)
+	}
+
+	var executable *zip.File
+	for _, file := range archive.File {
+		name := path.Clean(strings.TrimPrefix(file.Name, "./"))
+		parts := strings.Split(name, "/")
+		if len(parts) != 4 || !strings.HasSuffix(parts[0], ".app") ||
+			parts[1] != "Contents" || parts[2] != "MacOS" || parts[3] != "WendyAgentMac" {
+			continue
+		}
+		if executable != nil {
+			return "", errors.New("ZIP contains more than one WendyAgentMac executable")
+		}
+		executable = file
+	}
+	if executable == nil {
+		return "", errors.New("ZIP does not contain a top-level WendyAgentMac.app executable")
+	}
+
+	reader, err := executable.Open()
+	if err != nil {
+		return "", fmt.Errorf("opening WendyAgentMac executable: %w", err)
+	}
+	defer reader.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, reader); err != nil {
+		return "", fmt.Errorf("hashing WendyAgentMac executable: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // isELFBinary reports whether data begins with the ELF magic (0x7f 'E' 'L'
@@ -2909,6 +2970,10 @@ func agentUpdateVerified(reported, expected string) bool {
 type agentVerifyWaitOptions struct {
 	Timeout      time.Duration
 	PollInterval time.Duration
+	// RequireHash refuses the version-only fallback. macOS uses this because
+	// its executable digest is what proves a new process started, even
+	// when two dev bundles carry the same version string.
+	RequireHash bool
 }
 
 const (
@@ -2920,10 +2985,10 @@ const (
 // against what the update uploaded. A reported binary hash compared to the
 // uploaded one is definitive in both directions — it is what makes dev pushes
 // provable, since dev builds share identical version strings. Version
-// comparison is only the fallback for agents that cannot report a hash (the
-// mac agent, pre-hash releases), and with nothing to compare a reachable
-// agent is accepted.
-func evaluateAgentUpdateOutcome(resp *agentpb.GetAgentVersionResponse, uploadedSHA256, expectedVersion string) error {
+// comparison is only the fallback for agents that cannot report a hash. When
+// requireHash is true (macOS), an empty hash means the old process or a broken
+// replacement answered and is not accepted.
+func evaluateAgentUpdateOutcome(resp *agentpb.GetAgentVersionResponse, uploadedSHA256, expectedVersion string, requireHash bool) error {
 	reportedHash := resp.GetBinarySha256()
 	if reportedHash != "" && uploadedSHA256 != "" {
 		if strings.EqualFold(reportedHash, uploadedSHA256) {
@@ -2932,6 +2997,9 @@ func evaluateAgentUpdateOutcome(resp *agentpb.GetAgentVersionResponse, uploadedS
 		return fmt.Errorf("the device is not running the binary that was uploaded "+
 			"(running sha256 %s, uploaded %s); the update did not apply — re-run 'wendy device update'",
 			reportedHash, uploadedSHA256)
+	}
+	if requireHash {
+		return fmt.Errorf("the updated agent did not report its executable hash; restart was not verified — re-run 'wendy device update'")
 	}
 	if agentUpdateVerified(resp.GetVersion(), expectedVersion) {
 		return nil
@@ -2944,8 +3012,7 @@ func evaluateAgentUpdateOutcome(resp *agentpb.GetAgentVersionResponse, uploadedS
 // agentVerifyResult is what verifyAgentAfterUpdate learned about the agent
 // that answered. HashVerified reports whether the running binary's hash was
 // actually compared and matched — callers must not claim cryptographic proof
-// without it, since a hash-less agent (mac, pre-hash releases) passes the
-// version fallback vacuously.
+// without it, since a hash-less pre-hash agent can pass the version fallback.
 type agentVerifyResult struct {
 	Version      string
 	HashVerified bool
@@ -2974,7 +3041,7 @@ func verifyAgentAfterUpdate(ctx context.Context, agentService agentpb.WendyAgent
 	for {
 		resp, err := agentService.GetAgentVersion(waitCtx, &agentpb.GetAgentVersionRequest{})
 		if err == nil {
-			if verdict := evaluateAgentUpdateOutcome(resp, uploadedSHA256, expectedVersion); verdict != nil {
+			if verdict := evaluateAgentUpdateOutcome(resp, uploadedSHA256, expectedVersion, opts.RequireHash); verdict != nil {
 				lastVerdictErr = verdict
 			} else {
 				return agentVerifyResult{
@@ -3008,6 +3075,12 @@ func updatedAgentReconnectFunc(ctx context.Context, previous *grpcclient.AgentCo
 	if previous != nil && previous.Reconnect != nil {
 		return previous.Reconnect
 	}
+	if previous != nil && previous.SimulatorName != "" {
+		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
+			conn, _, err := connectSimulatorAgent(waitCtx, previous.SimulatorName, previous.Addr)
+			return conn, err
+		}
+	}
 
 	if cloudCfg, ok := cloudDeviceConfigFromContext(ctx); ok {
 		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
@@ -3022,7 +3095,10 @@ func updatedAgentReconnectFunc(ctx context.Context, previous *grpcclient.AgentCo
 	}
 
 	if previous != nil && previous.Host != "" {
-		addr := hostPort(previous.Host, defaultAgentPort)
+		addr := previous.Addr
+		if addr == "" {
+			addr = hostPort(previous.Host, defaultAgentPort)
+		}
 		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
 			return connectResolvedAgentWithProvisionedHint(waitCtx, previous.Host, addr, false, func() bool { return false })
 		}

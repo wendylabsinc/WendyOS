@@ -620,6 +620,44 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
     set {_uniqueStorage()._cpuCount = newValue}
   }
 
+  /// Hex SHA-256 of the executable this agent process was started from.
+  /// Lets an updater confirm an uploaded binary is what actually runs,
+  /// even when version strings cannot distinguish builds (dev builds).
+  /// Empty when the agent cannot hash its own executable.
+  ///
+  /// Linux uploads the executable directly. The Darwin payload is an
+  /// app-bundle ZIP, so its updater extracts and hashes Contents/MacOS before
+  /// comparing it with this field.
+  public var binarySha256: String {
+    get {_storage._binarySha256}
+    set {_uniqueStorage()._binarySha256 = newValue}
+  }
+
+  /// Device hostname (gethostname(2)). The CLI uses it to identify a device
+  /// reached over the USB well-known link-local address, where no mDNS TXT
+  /// records are available. Empty on agents predating this field.
+  ///
+  /// Numbered 21, not 20: this field was authored on PR #1621 against 20,
+  /// which binary_sha256 above had already taken on main. The battery field
+  /// below was deliberately started at 22 to leave 21 free for exactly this
+  /// renumber, so no wire number is reused across the two merges.
+  public var hostname: String {
+    get {_storage._hostname}
+    set {_uniqueStorage()._hostname = newValue}
+  }
+
+  /// Aggregate system-battery state, from /sys/class/power_supply. Absent on
+  /// mains-powered devices and on agents predating this field, so `wendy
+  /// device info` shows no battery line for either.
+  public var battery: BatteryStats {
+    get {_storage._battery ?? BatteryStats()}
+    set {_uniqueStorage()._battery = newValue}
+  }
+  /// Returns true if `battery` has been explicitly set.
+  public var hasBattery: Bool {_storage._battery != nil}
+  /// Clears the value of `battery`. Subsequent reads from it will return its default value.
+  public mutating func clearBattery() {_uniqueStorage()._battery = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -2507,7 +2545,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -2529,6 +2567,9 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
     var _networkInterfaces: [Wendy_Agent_Services_V1_NetworkInterface] = []
     var _memTotalBytes: Int64 = 0
     var _cpuCount: UInt32 = 0
+    var _binarySha256: String = String()
+    var _hostname: String = String()
+    var _battery: BatteryStats? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2558,6 +2599,9 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       _networkInterfaces = source._networkInterfaces
       _memTotalBytes = source._memTotalBytes
       _cpuCount = source._cpuCount
+      _binarySha256 = source._binarySha256
+      _hostname = source._hostname
+      _battery = source._battery
     }
   }
 
@@ -2595,6 +2639,9 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         case 17: try { try decoder.decodeRepeatedMessageField(value: &_storage._networkInterfaces) }()
         case 18: try { try decoder.decodeSingularInt64Field(value: &_storage._memTotalBytes) }()
         case 19: try { try decoder.decodeSingularUInt32Field(value: &_storage._cpuCount) }()
+        case 20: try { try decoder.decodeSingularStringField(value: &_storage._binarySha256) }()
+        case 21: try { try decoder.decodeSingularStringField(value: &_storage._hostname) }()
+        case 22: try { try decoder.decodeSingularMessageField(value: &_storage._battery) }()
         default: break
         }
       }
@@ -2664,6 +2711,15 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
       if _storage._cpuCount != 0 {
         try visitor.visitSingularUInt32Field(value: _storage._cpuCount, fieldNumber: 19)
       }
+      if !_storage._binarySha256.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._binarySha256, fieldNumber: 20)
+      }
+      if !_storage._hostname.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._hostname, fieldNumber: 21)
+      }
+      try { if let v = _storage._battery {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 22)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -2692,6 +2748,9 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         if _storage._networkInterfaces != rhs_storage._networkInterfaces {return false}
         if _storage._memTotalBytes != rhs_storage._memTotalBytes {return false}
         if _storage._cpuCount != rhs_storage._cpuCount {return false}
+        if _storage._binarySha256 != rhs_storage._binarySha256 {return false}
+        if _storage._hostname != rhs_storage._hostname {return false}
+        if _storage._battery != rhs_storage._battery {return false}
         return true
       }
       if !storagesAreEqual {return false}

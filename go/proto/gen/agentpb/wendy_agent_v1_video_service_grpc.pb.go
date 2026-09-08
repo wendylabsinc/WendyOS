@@ -25,6 +25,9 @@ const (
 	WendyVideoService_ForgetCamera_FullMethodName          = "/wendy.agent.services.v1.WendyVideoService/ForgetCamera"
 	WendyVideoService_RefreshCameras_FullMethodName        = "/wendy.agent.services.v1.WendyVideoService/RefreshCameras"
 	WendyVideoService_TestCameraCredentials_FullMethodName = "/wendy.agent.services.v1.WendyVideoService/TestCameraCredentials"
+	WendyVideoService_GetCameraControls_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/GetCameraControls"
+	WendyVideoService_SetCameraControls_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/SetCameraControls"
+	WendyVideoService_ResetCameraControls_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/ResetCameraControls"
 )
 
 // WendyVideoServiceClient is the client API for WendyVideoService service.
@@ -37,6 +40,12 @@ type WendyVideoServiceClient interface {
 	ForgetCamera(ctx context.Context, in *ForgetCameraRequest, opts ...grpc.CallOption) (*ForgetCameraResponse, error)
 	RefreshCameras(ctx context.Context, in *RefreshCamerasRequest, opts ...grpc.CallOption) (*RefreshCamerasResponse, error)
 	TestCameraCredentials(ctx context.Context, in *TestCameraCredentialsRequest, opts ...grpc.CallOption) (*TestCameraCredentialsResponse, error)
+	// GetCameraControls reports the tunable V4L2 controls of a local (USB/CSI)
+	// camera with their current value and range. SetCameraControls sets them.
+	// Both reject network cameras: an RTSP camera exposes no V4L2 controls here.
+	GetCameraControls(ctx context.Context, in *GetCameraControlsRequest, opts ...grpc.CallOption) (*GetCameraControlsResponse, error)
+	SetCameraControls(ctx context.Context, in *SetCameraControlsRequest, opts ...grpc.CallOption) (*SetCameraControlsResponse, error)
+	ResetCameraControls(ctx context.Context, in *ResetCameraControlsRequest, opts ...grpc.CallOption) (*ResetCameraControlsResponse, error)
 }
 
 type wendyVideoServiceClient struct {
@@ -116,6 +125,36 @@ func (c *wendyVideoServiceClient) TestCameraCredentials(ctx context.Context, in 
 	return out, nil
 }
 
+func (c *wendyVideoServiceClient) GetCameraControls(ctx context.Context, in *GetCameraControlsRequest, opts ...grpc.CallOption) (*GetCameraControlsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetCameraControlsResponse)
+	err := c.cc.Invoke(ctx, WendyVideoService_GetCameraControls_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyVideoServiceClient) SetCameraControls(ctx context.Context, in *SetCameraControlsRequest, opts ...grpc.CallOption) (*SetCameraControlsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetCameraControlsResponse)
+	err := c.cc.Invoke(ctx, WendyVideoService_SetCameraControls_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyVideoServiceClient) ResetCameraControls(ctx context.Context, in *ResetCameraControlsRequest, opts ...grpc.CallOption) (*ResetCameraControlsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResetCameraControlsResponse)
+	err := c.cc.Invoke(ctx, WendyVideoService_ResetCameraControls_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WendyVideoServiceServer is the server API for WendyVideoService service.
 // All implementations must embed UnimplementedWendyVideoServiceServer
 // for forward compatibility.
@@ -126,6 +165,12 @@ type WendyVideoServiceServer interface {
 	ForgetCamera(context.Context, *ForgetCameraRequest) (*ForgetCameraResponse, error)
 	RefreshCameras(context.Context, *RefreshCamerasRequest) (*RefreshCamerasResponse, error)
 	TestCameraCredentials(context.Context, *TestCameraCredentialsRequest) (*TestCameraCredentialsResponse, error)
+	// GetCameraControls reports the tunable V4L2 controls of a local (USB/CSI)
+	// camera with their current value and range. SetCameraControls sets them.
+	// Both reject network cameras: an RTSP camera exposes no V4L2 controls here.
+	GetCameraControls(context.Context, *GetCameraControlsRequest) (*GetCameraControlsResponse, error)
+	SetCameraControls(context.Context, *SetCameraControlsRequest) (*SetCameraControlsResponse, error)
+	ResetCameraControls(context.Context, *ResetCameraControlsRequest) (*ResetCameraControlsResponse, error)
 	mustEmbedUnimplementedWendyVideoServiceServer()
 }
 
@@ -153,6 +198,15 @@ func (UnimplementedWendyVideoServiceServer) RefreshCameras(context.Context, *Ref
 }
 func (UnimplementedWendyVideoServiceServer) TestCameraCredentials(context.Context, *TestCameraCredentialsRequest) (*TestCameraCredentialsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TestCameraCredentials not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) GetCameraControls(context.Context, *GetCameraControlsRequest) (*GetCameraControlsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCameraControls not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) SetCameraControls(context.Context, *SetCameraControlsRequest) (*SetCameraControlsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetCameraControls not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) ResetCameraControls(context.Context, *ResetCameraControlsRequest) (*ResetCameraControlsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResetCameraControls not implemented")
 }
 func (UnimplementedWendyVideoServiceServer) mustEmbedUnimplementedWendyVideoServiceServer() {}
 func (UnimplementedWendyVideoServiceServer) testEmbeddedByValue()                           {}
@@ -276,6 +330,60 @@ func _WendyVideoService_TestCameraCredentials_Handler(srv interface{}, ctx conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendyVideoService_GetCameraControls_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCameraControlsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).GetCameraControls(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_GetCameraControls_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).GetCameraControls(ctx, req.(*GetCameraControlsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyVideoService_SetCameraControls_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetCameraControlsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).SetCameraControls(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_SetCameraControls_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).SetCameraControls(ctx, req.(*SetCameraControlsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyVideoService_ResetCameraControls_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResetCameraControlsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).ResetCameraControls(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_ResetCameraControls_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).ResetCameraControls(ctx, req.(*ResetCameraControlsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WendyVideoService_ServiceDesc is the grpc.ServiceDesc for WendyVideoService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -302,6 +410,18 @@ var WendyVideoService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TestCameraCredentials",
 			Handler:    _WendyVideoService_TestCameraCredentials_Handler,
+		},
+		{
+			MethodName: "GetCameraControls",
+			Handler:    _WendyVideoService_GetCameraControls_Handler,
+		},
+		{
+			MethodName: "SetCameraControls",
+			Handler:    _WendyVideoService_SetCameraControls_Handler,
+		},
+		{
+			MethodName: "ResetCameraControls",
+			Handler:    _WendyVideoService_ResetCameraControls_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

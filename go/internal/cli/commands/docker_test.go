@@ -151,7 +151,7 @@ func TestBuildImageToOCILayoutWithAppleContainer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err = buildImageToOCILayout(ctx, cwd, "Dockerfile", "linux/arm64",
-		map[string]string{"A": "1"}, imageBuilderAppleContainer, dest, "test-cache", io.Discard, io.Discard)
+		map[string]string{"A": "1"}, imageBuilderAppleContainer, dest, io.Discard, io.Discard)
 	if err != nil {
 		t.Fatalf("buildImageToOCILayout(apple-container): %v", err)
 	}

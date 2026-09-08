@@ -634,7 +634,7 @@ func (s *CloudNotificationSender) connectionFor(
 	// SECURITY: The enrollment chain is controlled by Wendy Cloud and is also
 	// used by the existing telemetry flusher. Adding it supports direct local
 	// broker deployments whose server certificate uses the Wendy development CA.
-	if chainPEM != "" && !roots.AppendCertsFromPEM([]byte(chainPEM)) {
+	if chainPEM != "" && certs.AppendChainToPool(roots, chainPEM) == 0 {
 		return nil, fmt.Errorf("parse Wendy enrollment CA chain")
 	}
 	connection, err := grpc.NewClient(

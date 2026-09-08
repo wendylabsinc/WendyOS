@@ -128,7 +128,20 @@ func newAudioSetDefaultCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "set-default",
 		Short: "Set the default audio device",
-		RunE: func(cmd *cobra.Command, args []string) error {
+		Long: "Set the default audio device. When --id is omitted in an interactive terminal, " +
+			"choose a device from the audio device list.",
+		Example: "  wendy device audio set-default\n" +
+			"  wendy device audio set-default --id 42",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			idSet := cmd.Flags().Changed("id")
+			if shouldOpenAudioSetDefaultTUI(idSet, isInteractiveTerminal(), jsonOutput) {
+				return runAudioTUI(cmd)
+			}
+			if !idSet {
+				return fmt.Errorf("required flag(s) \"id\" not set")
+			}
+
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
 			if err != nil {
@@ -153,9 +166,12 @@ func newAudioSetDefaultCmd() *cobra.Command {
 	}
 
 	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Audio device ID")
-	_ = cmd.MarkFlagRequired("id")
 
 	return cmd
+}
+
+func shouldOpenAudioSetDefaultTUI(idSet, interactive, json bool) bool {
+	return !idSet && interactive && !json
 }
 
 func newAudioMonitorCmd() *cobra.Command {

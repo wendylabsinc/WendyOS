@@ -150,6 +150,10 @@ func main() {
 	// renamed.
 	services.ReassertHostnameAdvertisement(logger)
 
+	// Advertise the board id, so `wendy discover` can tell a local VM from a
+	// device on the sighting alone. A no-op once the record is in place.
+	services.EnsureDeviceTypeAdvertisement(logger)
+
 	// Time sync: apply config-partition floor immediately, then start
 	// background Roughtime + multicast sync.
 	timesyncMgr := timesync.NewManager(logger, configPath)
@@ -532,8 +536,8 @@ func main() {
 	buildContextLocks := services.NewBuildContextLockSet()
 
 	registerAllServices := func(srv *grpc.Server) {
-		// MeshService's own-org check (assetIdentityFromContext / MeshDial)
-		// must reflect this device's *current* org, not a value captured once
+		// MeshService's own-tenant check (assetIdentityFromContext / MeshDial)
+		// must reflect this device's *current* tenant, not a value captured once
 		// at process start: a live BLE-provisioning event updates
 		// provisioningSvc's state without restarting the agent, and a stale
 		// org (e.g. 0/unknown from an unprovisioned boot) would silently
@@ -542,11 +546,10 @@ func main() {
 		// runs at most once per concrete server (plaintext agentServer, the
 		// local control socket, and the mTLS server), so this is at most a
 		// handful of cheap constructions over the process lifetime, not a hot
-		// path. orgID == 0 (never provisioned) intentionally matches the mTLS
-		// org interceptor's grace behavior: MeshService skips the org-equality
-		// check rather than reject every caller.
-		_, orgID, _, _ := provisioningSvc.ProvisioningInfo()
-		meshSvc := services.NewMeshService(logger, configPath, orgID)
+		// path. An unknown scope (never provisioned) intentionally matches the
+		// mTLS interceptor's grace behavior: MeshService skips the
+		// tenant-equality check rather than reject every caller.
+		meshSvc := services.NewMeshService(logger, configPath, deviceScope(provisioningSvc))
 		buildSvc := services.NewBuildService(logger, services.BuildServiceOptions{
 			ConfigPath:   configPath,
 			Chunks:       buildChunkSource,
@@ -563,9 +566,8 @@ func main() {
 			// spoofing gap this helper was written for.
 			PushTLS: func(targetAssetID int32) (*tls.Config, error) {
 				certPEM, chainPEM, keyData := provisioningSvc.ProvisioningCerts()
-				_, pushOrgID, _, _ := provisioningSvc.ProvisioningInfo()
 				return mtls.NewClientTLSConfigExpectingPeer(certPEM, chainPEM, string(keyData), logger,
-					pushOrgID, strconv.FormatInt(int64(targetAssetID), 10))
+					strconv.FormatInt(int64(targetAssetID), 10))
 			},
 		})
 
@@ -618,24 +620,29 @@ func main() {
 		// startMTLSServer is also invoked from inside the OnProvisioned callback,
 		// where taking the provisioning mutex would risk re-entrancy (see the comment
 		// at the startTunnelBroker closure). Both call sites already pass certPEM.
-		expectedOrg, haveOrg := deviceOrgFromCertPEM(certPEM)
+		expectedScope, haveScope := certs.ScopeFromCertPEM(certPEM)
 		effectiveMode := orgMode
-		if orgMode != interceptor.OrgModeOff && !haveOrg {
-			// Fail safe: the device cannot determine its own org, so it cannot
-			// meaningfully compare a client's org against it. Rather than brick the
+		if orgMode != interceptor.OrgModeOff && !haveScope {
+			// Fail safe: the device cannot determine its own tenant, so it cannot
+			// meaningfully compare a client's tenant against it. Rather than brick the
 			// device (rejecting all clients) or silently enforce against an unknown
-			// self-org, disable enforcement for this server and log loudly.
-			logger.Error("cannot determine device organization from own certificate; mTLS org enforcement DISABLED for this server",
+			// self-tenant, disable enforcement for this server and log loudly.
+			//
+			// A pki-core-issued leaf reaches here with a tenant SPIFFE principal
+			// and no urn:wendy org, which certs.ScopeFromCertPEM reads as a known
+			// scope — so an ACME-enrolled or renewed device no longer trips this
+			// branch and no longer disarms enforcement fleet-wide (WDY-2968).
+			logger.Error("cannot determine device tenant from own certificate; mTLS enforcement DISABLED for this server",
 				zap.String("configuredMode", orgMode.String()))
 			effectiveMode = interceptor.OrgModeOff
 		}
 		if effectiveMode != interceptor.OrgModeOff {
-			logger.Info("mTLS server enforcing org",
-				zap.Int32("org", expectedOrg),
+			logger.Info("mTLS server enforcing tenant",
+				zap.String("scope", expectedScope.String()),
 				zap.String("mode", effectiveMode.String()))
 		}
 
-		srv, err := mtls.NewServer(certPEM, chainPEM, keyPEM, logger, floor, expectedOrg, effectiveMode,
+		srv, err := mtls.NewServer(certPEM, chainPEM, keyPEM, logger, floor, expectedScope, effectiveMode,
 			// UnaryMTLSInterceptor and StreamMTLSInterceptor are embedded inside
 			// mtls.NewServer and run before these caller-provided interceptors.
 			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
@@ -1055,37 +1062,22 @@ func certNotBeforeFloor(certPEM string) time.Time {
 	return cert.NotBefore
 }
 
-// deviceOrgFromCertPEM parses the device's own leaf certificate (ML-DSA aware,
-// mirroring certNotBeforeFloor) and extracts its organization ID via
-// certs.OrgFromClientCert. It returns (org, true) when an org identity is present
-// and valid, and (0, false) on any parse/extract error or when the cert carries no
-// org identity. The caller treats (0, false) as "device org unknown".
-func deviceOrgFromCertPEM(certPEM string) (int32, bool) {
-	if certPEM == "" {
-		return 0, false
+// deviceScope reports the tenant this device's own current leaf belongs to,
+// falling back to the legacy org the provisioning record carries when the
+// certificate names no tenant at all.
+//
+// The certificate is the identity source, so it is read fresh on every call:
+// a BLE provisioning event or a pki-core renewal replaces it without
+// restarting the agent, and a scope captured at boot would outlive it.
+func deviceScope(provisioningSvc *services.ProvisioningService) certs.Scope {
+	certPEM, _, _ := provisioningSvc.ProvisioningCerts()
+	if scope, ok := certs.ScopeFromCertPEM(certPEM); ok {
+		return scope
 	}
-	block, _ := pem.Decode([]byte(certPEM))
-	if block == nil {
-		return 0, false
-	}
-	// ML-DSA certs from pki-core have trailing ASN.1 bytes that cause
-	// x509.ParseCertificate to fail. Strip them with the same fallback used by
-	// certNotBeforeFloor and internal/agent/mtls/mldsa_verify.go.
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		var raw asn1.RawValue
-		if _, asn1Err := asn1.Unmarshal(block.Bytes, &raw); asn1Err == nil {
-			cert, err = x509.ParseCertificate(raw.FullBytes)
-		}
-	}
-	if err != nil {
-		return 0, false
-	}
-	org, hasOrg, err := certs.OrgFromClientCert(cert)
-	if err != nil || !hasOrg {
-		return 0, false
-	}
-	return org, true
+	// An unprovisioned device reports org 0, which Scope.Known reads as
+	// "unidentified" — the same grace the mTLS interceptor applies.
+	_, orgID, _, _ := provisioningSvc.ProvisioningInfo()
+	return certs.Scope{OrgID: orgID}
 }
 
 // ensureCNIBinDir (re)creates agentcontainerd.CNIBinDir with "bridge" and

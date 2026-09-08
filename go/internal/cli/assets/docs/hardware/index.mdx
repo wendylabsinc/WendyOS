@@ -41,10 +41,11 @@ wendy run
 | Speaker or audio output | `audio` | Playback, alerts, voice responses |
 | Bluetooth adapter | `bluetooth` | BLE devices, Bluetooth sensors, paired accessories |
 | NVIDIA GPU | `gpu` | CUDA, ML inference, accelerated computer vision (Jetson and x86 NVIDIA GPUs) |
+| AMD GPU | `gpu` | ROCm compute on supported x86 Linux hosts |
 | Web servers or network APIs | `network` | Serving HTTP, WebSockets, or accepting inbound connections |
 
 <Callout type="info">
-  AMD GPU (ROCm) support is in progress. Today the `gpu` entitlement accelerates NVIDIA GPUs via CUDA. See [GPU Access](/docs/hardware/gpu).
+  For AMD GPU setup and a computation check, follow [Run PyTorch on an AMD GPU](/docs/guides/tutorials/python/amd-rocm-pytorch). See [GPU Access](/docs/hardware/gpu) for host and container requirements.
 </Callout>
 
 ## Feature Guides

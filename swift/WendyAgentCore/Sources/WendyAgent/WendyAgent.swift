@@ -28,8 +28,13 @@ public actor WendyAgent {
     public private(set) var status: WendyAgentStatus = .idle
     public private(set) var apps: [WendyAppInfo] = []
 
+    /// Snapshotted before any RPC service starts so post-update verification
+    /// describes the executable this process actually mapped.
+    private let runningExecutableSHA256: String
+
     public init(configuration: WendyAgentConfiguration = .init()) {
         self.configuration = configuration
+        self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
     }
 
     public func start() async throws {
@@ -336,6 +341,7 @@ public actor WendyAgent {
 
         let services: [any RegistrableRPCService] = [
             AgentService(
+                binarySHA256: self.runningExecutableSHA256,
                 updateLock: self.agentUpdateLock,
                 updateDependencies: .init(
                     relauncher: AgentRelauncher(terminate: self.agentTerminationHandler)
@@ -498,16 +504,16 @@ public actor WendyAgent {
         let key = try tlsPrivateKeySource(certs.keyBacking, seKey: certs.seKey)
 
         let trustRootsPEM = certs.chainPEM
-        let deviceOrg = ClientCertAuthorizer.organizationID(fromLeafPEM: certs.certPEM)
-        if deviceOrg == nil {
+        let deviceScope = ClientCertAuthorizer.scope(fromLeafPEM: certs.certPEM)
+        if deviceScope == nil {
             self.logger.error(
-                "Could not determine device organization from its own certificate; mTLS will reject all clients (fail closed). Re-provision the device to recover."
+                "Could not determine device tenant from its own certificate; mTLS will reject all clients (fail closed). Re-provision the device to recover."
             )
         }
 
-        // Org-enforcement mode (WENDY_MTLS_ORG_ENFORCEMENT: off|grace|strict).
-        // Defaults to grace so today's CLI user certs — which carry no org claim
-        // — can connect while cert rotation to org-bearing URNs completes.
+        // Enforcement mode (WENDY_MTLS_ORG_ENFORCEMENT: off|grace|strict).
+        // Defaults to grace so today's CLI user certs — which carry no claim at
+        // all — can connect while certificates rotate onto pki-core chains.
         let rawOrgEnforcement = ProcessInfo.processInfo.environment["WENDY_MTLS_ORG_ENFORCEMENT"]
         let (orgMode, recognized) = ClientCertAuthorizer.OrgEnforcementMode.parse(rawOrgEnforcement)
         if !recognized {
@@ -536,7 +542,7 @@ public actor WendyAgent {
                 let authorized = await ClientCertAuthorizer.isAuthorized(
                     peerCertificatesDER: ders,
                     trustRootsPEM: trustRootsPEM,
-                    deviceOrg: deviceOrg,
+                    deviceScope: deviceScope,
                     mode: orgMode
                 )
                 promise.succeed(authorized ? .certificateVerified(.init(nil)) : .failed)

@@ -4,6 +4,7 @@
     "wendyos-nvidia-jetson-orin-nano",
     "wendyos-nvidia-jetson-agx-thor",
     "wendyos-raspberry-pi-5",
+    "wendyos-virtual-machine",
     "linux",
     "wendy-agent-macos",
     "wendy-agent-unitree-g1",

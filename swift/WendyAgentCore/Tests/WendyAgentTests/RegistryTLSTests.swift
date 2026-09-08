@@ -24,7 +24,7 @@ struct RegistryTLSTests {
             environment: ["WENDY_MTLS_ORG_ENFORCEMENT": "strict"],
             logger: Self.logger
         )
-        #expect(config.deviceOrg == 7)
+        #expect(config.deviceScope == .init(tenantUUID: nil, orgID: 7))
         #expect(config.orgMode == .strict)
 
         let defaulted = RegistryTLS.makeConfiguration(
@@ -44,7 +44,7 @@ struct RegistryTLSTests {
             chainPEM: ca.pem,
             keyBacking: .softwarePEM(device.keyPEM),
             seKey: nil,
-            deviceOrg: 1,
+            deviceScope: .init(tenantUUID: nil, orgID: 1),
             orgMode: .grace
         )
         let channel = try RegistryTLS.channelConfiguration(config)
@@ -58,7 +58,7 @@ struct RegistryTLSTests {
             chainPEM: "not a chain",
             keyBacking: .softwarePEM("not a key"),
             seKey: nil,
-            deviceOrg: 1,
+            deviceScope: .init(tenantUUID: nil, orgID: 1),
             orgMode: .grace
         )
         #expect(throws: (any Error).self) {

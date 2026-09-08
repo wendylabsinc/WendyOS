@@ -9,6 +9,12 @@ service WendyVideoService {
     rpc ForgetCamera(ForgetCameraRequest) returns (ForgetCameraResponse);
     rpc RefreshCameras(RefreshCamerasRequest) returns (RefreshCamerasResponse);
     rpc TestCameraCredentials(TestCameraCredentialsRequest) returns (TestCameraCredentialsResponse);
+    // GetCameraControls reports the tunable V4L2 controls of a local (USB/CSI)
+    // camera with their current value and range. SetCameraControls sets them.
+    // Both reject network cameras: an RTSP camera exposes no V4L2 controls here.
+    rpc GetCameraControls(GetCameraControlsRequest) returns (GetCameraControlsResponse);
+    rpc SetCameraControls(SetCameraControlsRequest) returns (SetCameraControlsResponse);
+    rpc ResetCameraControls(ResetCameraControlsRequest) returns (ResetCameraControlsResponse);
 }
 
 message VideoDevice {
@@ -169,4 +175,80 @@ message VideoFrame {
     uint64     timestamp_ns = 2; // wall-clock timestamp in nanoseconds
     VideoCodec codec        = 3; // codec used; default 0 = H264
     RawFormat  raw_format   = 4; // set on VIDEO_CODEC_RAW frames only
+}
+
+// A tunable V4L2 control on a local camera -- exposure, gain, white balance and
+// the like. The agent owns the /dev/videoN node (StreamVideo multiplexes it),
+// so it is the only place these can be set to stick: a second process cannot,
+// and a setting made out of band is lost the next time the pipeline reopens the
+// device. The motivating case is a scene the camera's auto-exposure gets wrong
+// -- a flame or lamp that blows out to white -- where forcing manual exposure
+// keeps the highlight from clipping.
+message CameraControl {
+    string name          = 1; // stable slug, e.g. "auto_exposure", "exposure_time_absolute", "brightness", "gain", "backlight_compensation"
+    int32  value         = 2; // the driver's current value
+    int32  minimum       = 3; // inclusive
+    int32  maximum       = 4; // inclusive
+    int32  step          = 5;
+    int32  default_value = 6;
+    bool   mutable       = 7; // false when the driver reports it read-only or disabled right now
+}
+
+// What a caller ASKS for. Deliberately not CameraControl: that message answers
+// "what does the driver report", and five of its seven fields are the driver's
+// answer rather than the caller's request. One message doing both jobs means a
+// writer fills in minimum/maximum/step/default/mutable that the server then
+// ignores -- the comments carry the contract instead of the types.
+message CameraControlSetting {
+    string name  = 1;
+    int32  value = 2;
+}
+message GetCameraControlsRequest {
+    uint32 device_id = 1; // numeric suffix N in /dev/videoN; the reserved network-camera band is rejected
+}
+
+message GetCameraControlsResponse {
+    repeated CameraControl controls = 1;
+}
+
+message SetCameraControlsRequest {
+    uint32 device_id = 1;
+    repeated CameraControlSetting controls = 2;
+    // Re-apply these whenever the capture pipeline reopens the device, and
+    // across agent restarts, so a stream reconnect or a reboot does not revert
+    // to the firmware default. When false the values are applied once, now.
+    bool persist = 3;
+}
+
+message SetCameraControlsResponse {
+    repeated CameraControlResult results = 1;
+}
+
+// Put controls back to the driver's own defaults and STOP persisting them.
+//
+// A separate RPC rather than a flag on Set, because it is a different verb:
+// Set says "make it this", Reset says "forget I ever said anything". It changes
+// the persisted state as well as the value, so a caller that models it as
+// "set to the default" would leave the control pinned to that default forever
+// -- which is the thing being undone.
+//
+// The default comes from the driver (QUERYCTRL), so the camera answers rather
+// than the caller having to know.
+message ResetCameraControlsRequest {
+    uint32 device_id = 1;
+    // Controls to reset by name. EMPTY MEANS EVERY PERSISTED CONTROL, which is
+    // the useful case after a tuning session went wrong: the caller wants the
+    // camera back as it shipped and should not have to enumerate what it
+    // changed to get there.
+    repeated string names = 2;
+}
+
+message ResetCameraControlsResponse {
+    repeated CameraControlResult results = 1;
+}
+
+message CameraControlResult {
+    string name    = 1;
+    bool   applied = 2;
+    string detail  = 3; // when not applied, why -- e.g. "unknown control" or the errno text
 }

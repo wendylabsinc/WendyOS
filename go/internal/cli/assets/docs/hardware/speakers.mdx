@@ -27,6 +27,12 @@ Choose the speaker or output device ID, then set it as default:
 wendy device audio set-default --id 2
 ```
 
+In an interactive terminal, omit `--id` to choose from the audio device list:
+
+```bash
+wendy device audio set-default
+```
+
 The selected output becomes the default sink, which is what apps play through unless they name a device explicitly.
 
 Device IDs come from the audio graph and are **not stable across reconnects** — a speaker that sleeps and wakes, or switches profile, comes back under a different ID. List the devices again rather than reusing an ID you saw earlier.

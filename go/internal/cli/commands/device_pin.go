@@ -6,6 +6,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -40,10 +41,14 @@ type observedDeviceIdentity struct {
 	mTLS bool
 	// orgID is the organisation of the CLI certificate that authenticated.
 	orgID int
-	// assetID is the device's cloud asset id from the verified server cert's
-	// "urn:wendy:org:<org>:asset:<assetID>" SAN. Empty when the agent's
-	// certificate carries no asset identity (legacy certs).
+	// assetID is the device's asset id from the verified server cert — the
+	// name of its tenant SPIFFE principal, or the legacy
+	// "urn:wendy:org:<org>:asset:<assetID>" SAN on an old chain. Empty when the
+	// agent's certificate carries no asset identity.
 	assetID string
+	// principal is the full tenant SPIFFE principal, when the cert carries one.
+	// Recorded into the pin so an unpin can reach the SPKI entry it keys.
+	principal string
 }
 
 // observeDeviceIdentity reads what conn proved about the device it reached.
@@ -54,8 +59,9 @@ func observeDeviceIdentity(conn *grpcclient.AgentConnection) observedDeviceIdent
 	obs := observedDeviceIdentity{mTLS: true, orgID: conn.CertInfo.OrganizationID}
 	// Only an "asset" entity is a device; a "user" URN on a server cert would
 	// be a misissued certificate, and pinning it would be meaningless.
-	if id, ok := conn.ObservedServerIdentity(); ok && id.EntityType == "asset" {
+	if id, ok := conn.ObservedServerIdentity(); ok && id.EntityType == certs.EntityAsset {
 		obs.assetID = id.EntityID
+		obs.principal = id.Principal
 	}
 	return obs
 }
@@ -64,6 +70,11 @@ func observeDeviceIdentity(conn *grpcclient.AgentConnection) observedDeviceIdent
 // freshly connected device (WDY-1149) and records or challenges it.
 func enforceDevicePin(hostname string, conn *grpcclient.AgentConnection) error {
 	if conn == nil {
+		return nil
+	}
+	// No key, no pin: the caller reached something whose address is not an
+	// identity, such as a VM behind a loopback forward.
+	if hostname == "" {
 		return nil
 	}
 	return enforceDeviceIdentity(hostname, observeDeviceIdentity(conn))
@@ -104,11 +115,19 @@ func enforceDeviceIdentity(hostname string, obs observedDeviceIdentity) error {
 	cloud := cloudGRPCForOrg(cfg, obs.orgID)
 	switch cfg.EvaluateDevicePin(hostname, obs.orgID, cloud, obs.assetID) {
 	case config.PinMatch:
+		// Backfill the principal into a pin that matches but predates the SPIFFE
+		// cutover. Same silent upgrade as PinAdoptAsset: nothing about the trust
+		// decision changes, the pin just gains the key an unpin needs to find
+		// the device's SPKI entry.
+		if prev, ok := cfg.DevicePinFor(hostname); ok && prev.Principal == "" && obs.principal != "" {
+			cfg.SetDevicePinFrom(hostname, prev.OrgID, prev.CloudGRPC, prev.AssetID, obs.principal, cfg.PinSource(hostname))
+			_ = config.Save(cfg)
+		}
 		return nil
 	case config.PinFirstUse, config.PinAdoptAsset:
 		// PinAdoptAsset is a pin written before asset ids were recorded: org and
 		// cloud already match, so this is a silent upgrade, not a challenge.
-		cfg.SetDevicePin(hostname, obs.orgID, cloud, obs.assetID)
+		cfg.SetDevicePin(hostname, obs.orgID, cloud, obs.assetID, obs.principal)
 		_ = config.Save(cfg)
 		return nil
 	default: // config.PinMismatch

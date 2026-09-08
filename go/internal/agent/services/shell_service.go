@@ -133,7 +133,7 @@ func clientAuditFields(ctx context.Context) []zap.Field {
 	fields = append(fields, zap.String("cert_serial", cert.SerialNumber.String()))
 	if ident, found, err := certs.IdentityFromCert(cert); err == nil && found {
 		fields = append(fields,
-			zap.Int32("org_id", ident.OrgID),
+			zap.String("scope", ident.Scope().String()),
 			zap.String("entity_type", ident.EntityType),
 			zap.String("entity_id", ident.EntityID),
 		)

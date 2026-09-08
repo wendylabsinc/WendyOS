@@ -1,100 +1,86 @@
 # WendyOS Yocto Meta Layers Reference
 
-WendyOS has three Yocto meta layers for different hardware targets:
+WendyOS builds from one repo, `WendyOS-Builder`, whose sub-layers cover each
+target. Every board builds `wendyos-image`; the board id selects the machine.
 
-| Layer | Target | Location |
-|-------|--------|----------|
-| `meta-wendyos-jetson` | NVIDIA Jetson (Orin Nano) | Production devices with Mender OTA |
-| `meta-wendyos-virtual` | ARM64 VM (Apple Silicon, QEMU) | Development/testing |
-| `meta-wendyos-rpi` | Raspberry Pi 4/5 | Edge devices without GPU |
+| Sub-layer | Target | Board id |
+|-----------|--------|----------|
+| `meta-tegra-extensions*` | NVIDIA Jetson (Orin, Thor) | `jetson-*` |
+| `meta-rpi-extensions` | Raspberry Pi 3/4/5 | `rpi*` |
+| `meta-x86-extensions` | Generic x86_64 PC | `generic-x86-64` |
+| `meta-vm-extensions` | ARM64 and x86-64 VMs | `vm-arm64`, `vm-x86-64` |
 
 ## Common Structure
 
-All layers follow the same pattern:
+Shared recipes live at the repo root; each sub-layer adds only what its target
+needs.
 
 ```
-meta-wendyos-<target>/
+WendyOS-Builder/
 ├── conf/
-│   ├── layer.conf                 # Layer registration
-│   ├── distro/<distro>.conf       # Distro configuration
-│   ├── machine/<machine>.conf     # Machine configurations
-│   └── template/
-│       ├── bblayers.conf          # Layer dependencies
-│       └── local.conf             # Build settings
-├── recipes-core/
-│   ├── images/<image>.bb          # Main image recipe
-│   ├── packagegroups/             # Package groups
-│   ├── edgeos-identity/           # Device UUID/hostname
-│   ├── edgeos-agent/              # wendy-agent service
-│   ├── edgeos-motd/               # Login banner
-│   └── systemd-mount-containerd/  # Persistent storage
-├── wic/<target>.wks               # Disk partition layout
-├── scripts/docker/                # Docker build environment
-├── bootstrap.sh                   # Environment setup
-└── CLAUDE.md                      # AI context
+│   ├── distro/wendyos.conf        # The distro, and its per-target includes
+│   ├── machine/<machine>.conf     # One per board
+│   └── template/boards/<board-id>/ # bblayers.conf, local.conf, repos.overrides
+├── recipes-core/                  # wendyos-identity, wendyos-agent, images, ...
+├── meta-<target>-extensions/      # Per-target recipes, bbappends and wic files
+└── bootstrap.sh                   # Clones the upstream layer tree
 ```
 
-## Quick Start (Any Layer)
+## Quick Start (Any Board)
 
 ```bash
-cd meta-wendyos-<target>
-./bootstrap.sh
-source ./repos/poky/oe-init-build-env build
-bitbake <image-name>
+make setup BOARD=<board-id>
+make build MACHINE=<machine>
 ```
 
 ## Layer-Specific Details
 
-### Jetson (`meta-wendyos-jetson`)
+### Jetson (`meta-tegra-extensions*`)
 
-- **Distro**: `edgeos`
-- **Machines**: `jetson-orin-nano-devkit-edgeos`, `jetson-orin-nano-devkit-nvme-edgeos`
-- **Image**: `edgeos-image`
-- **Features**: Mender OTA, NVIDIA Container Toolkit, CUDA/TensorRT, USB Gadget
-- **Dependencies**: meta-tegra, meta-mender
+- **Board ids**: `jetson-orin-nano-sd`, `jetson-orin-nano-nvme`, `jetson-agx-orin`,
+  `jetson-agx-orin-emmc`, `jetson-agx-thor`
+- **Features**: NVIDIA Container Toolkit, CUDA/TensorRT, USB gadget, A/B OTA
+- **Dependencies**: meta-tegra, meta-tegra-community, meta-security
 
-```bash
-bitbake edgeos-image
-```
+### Virtual (`meta-vm-extensions`)
 
-### Virtual (`meta-wendyos-virtual`)
+Lives in WendyOS-Builder, not a separate repo.
 
-- **Distro**: `edgeos-vm`
-- **Machine**: `wendyos-vm-arm64`
-- **Image**: `edgeos-vm-image`
-- **Features**: QEMU/UTM compatible, Lima integration
-- **Output**: `.wic.qcow2`, `.wic.vmdk`
+- **Machines**: `vm-arm64-wendyos` (board id `vm-arm64`) and
+  `vm-x86-64-wendyos` (`vm-x86-64`)
+- **Image**: `wendyos-image`
+- **Output**: `.wic` (UEFI: ESP + GRUB + A/B rootfs slots + growable `/data`)
+- **Features**: virtio only, plus the A/B OTA stack via the grubenv connector.
+  No USB gadget, no camera/audio/Bluetooth/GPU
 
 ```bash
-bitbake edgeos-vm-image
+make setup BOARD=vm-arm64
+make build MACHINE=vm-arm64-wendyos
 ```
 
-### Raspberry Pi (`meta-wendyos-rpi`)
+Run the result with `wendy vm` — see the *WendyOS in a Virtual Machine*
+installation guide.
 
-- **Distro**: `edgeos-rpi`
-- **Machines**: `raspberrypi4-64-edgeos`, `raspberrypi5-edgeos`
-- **Image**: `edgeos-rpi-image`
-- **Features**: I2C, SPI, serial console enabled
-- **Output**: `.wic.bz2`, `.wic.bmap`, `.sdimg` (Mender A/B)
+### Raspberry Pi (`meta-rpi-extensions`)
 
-```bash
-bitbake edgeos-rpi-image
-```
+- **Board ids**: `rpi3-sd`, `rpi4-sd`, `rpi5-sd`, `rpi5-nvme`
+- **Features**: I2C, SPI, serial console, USB gadget, A/B OTA
+- **Output**: `.sdimg` / `.wic` plus `.wic.bmap`
 
 ## Common Recipes
 
-### edgeos-identity
+### wendyos-identity
 
 Generates unique device identity on first boot:
-- UUID: `/etc/edgeos/device-uuid`
-- Name: `/etc/edgeos/device-name` (e.g., "brave-falcon")
+- UUID: `/etc/wendyos/device-uuid`
+- Name: `/etc/wendyos/device-name` (e.g., "brave-falcon")
 - Sets hostname to device name
 - Registers with Avahi mDNS
 
-### edgeos-agent
+### wendyos-agent
 
-Downloads and installs wendy-agent from GitHub releases:
-- Binary: `/opt/wendyos/bin/wendy-agent`
+Installs wendy-agent from its GitHub release tarball:
+- Binary: `/opt/wendyos/bin/wendy-agent`, symlinked from `/usr/local/bin/wendy-agent`
 - Auto-updater via systemd timer
 - Data: `/var/lib/wendy-agent`
 
@@ -110,7 +96,7 @@ Bind mounts `/data/containerd` to `/var/lib/containerd` for persistent container
 | p1 | Root A (active) |
 | p2 | Root B (OTA fallback) |
 | p11 | Boot/EFI |
-| p17 | Mender data (expandable) |
+| p17 | `/data` (expandable) |
 
 ### VM/RPi
 | Partition | Mount | Size |
@@ -192,8 +178,7 @@ SSTATE_DIR = "/home/dev/sstate-cache"
 
 Machine config needs KMACHINE mapping:
 ```bitbake
-KMACHINE:wendyos-vm-arm64 = "qemuarm64"
-KBRANCH:wendyos-vm-arm64 = "v6.6/standard/qemuarm64"
+KMACHINE:vm-arm64-wendyos = "genericarm64"
 ```
 
 ### containerd storage not persisting

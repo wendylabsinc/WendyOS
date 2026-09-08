@@ -40,16 +40,16 @@ func GenerateKeyPair() (privateKeyPEM string, err error) {
 //
 // identityURIs are placed in the CSR as URI Subject Alternative Names; empty
 // strings are skipped, so passing none (or only "") omits the SAN entirely
-// (e.g. test fixtures). Callers pass the canonical Wendy identity URN — build
-// it with UserURN ("urn:wendy:org:<org>:user:<userID>") for CLI/user
-// certificates and AssetURN ("urn:wendy:org:<org>:asset:<assetID>") for
-// device/agent certificates. This is the authoritative identity
-// IdentityFromCert prefers over the legacy CommonName.
+// (e.g. test fixtures).
 //
-// A second URI is added for grant-relayed issuance: the tenant SPIFFE
-// principal from AssetSPIFFEURI/UserSPIFFEURI, which cloud requires the CSR to
-// carry before it will sign a relay grant (WDY-2498). Both SANs travel
-// together — see AssetSPIFFEURI for why the urn cannot simply be replaced.
+// Callers pass the tenant SPIFFE principal — AssetSPIFFEURI/UserSPIFFEURI —
+// which cloud requires the CSR to carry before it will sign a relay grant
+// (WDY-2498) and which is the identity IdentityFromCert resolves first.
+//
+// A legacy urn:wendy URN (UserURN/AssetURN) still travels alongside it on the
+// cloud-relayed path, so a peer running an older agent — one that reads nothing
+// but the URN — can still identify the holder. It is inert on anything pki-core
+// renews, which strips it; nothing should be built to depend on it.
 //
 // Only URI SANs are ever emitted. Never add a dNSName here: "service-identity"
 // is the one pki-core profile that consults the tenant domain allow-list, and

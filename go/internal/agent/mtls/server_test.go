@@ -297,11 +297,12 @@ func testPeerLeafRaw(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey
 // exactly the expected asset in the expected org.
 func TestNewClientTLSConfigExpectingPeerPinsIdentity(t *testing.T) {
 	ca, caKey, chainPEM := testCAKeyPair(t)
-	// The config's own identity (used for the client cert we present); its
-	// content is irrelevant to peer verification.
-	ownCertPEM, ownKeyPEM := testLeafCertificate(t, "dialer")
+	// The config's own identity supplies the expected tenant: the peer's scope
+	// is compared against the scope of the certificate we ourselves present, so
+	// the dialer has to be an org-7 asset for the org half of the pin to bite.
+	ownCertPEM, ownKeyPEM := testLeafCertificate(t, "sh/wendy/7/1")
 
-	cfg, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, 7, "215")
+	cfg, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, "215")
 	if err != nil {
 		t.Fatalf("NewClientTLSConfigExpectingPeer: %v", err)
 	}

@@ -308,6 +308,7 @@ type v4l2ExtControl [20]byte
 
 func (c *v4l2ExtControl) setID(id uint32)  { *(*uint32)(unsafe.Pointer(&c[0])) = id }
 func (c *v4l2ExtControl) setValue(v int32) { *(*int32)(unsafe.Pointer(&c[12])) = v }
+func (c *v4l2ExtControl) value() int32     { return *(*int32)(unsafe.Pointer(&c[12])) }
 
 // v4l2ExtControls is a fixed-size array matching struct v4l2_ext_controls
 // (32 bytes): which@0, count@4, error_idx@8, request_fd@12, reserved@16, and a
@@ -643,6 +644,23 @@ type VideoService struct {
 	readTegraRelease func() ([]byte, error)
 	dumpBootSlots    func(context.Context) ([]byte, error)
 
+	// Tunable V4L2 controls (exposure/gain/white balance) for local cameras.
+	// controls persists desired values so they survive a pipeline reopen and an
+	// agent restart; applyLocalControls/queryLocalControls are seams so the two
+	// RPCs are testable without a real /dev/video node (see camera_controls.go).
+	controls           *cameraControlStore
+	applyLocalControls func(path string, ctrls []controlValue) ([]*agentpb.CameraControlResult, error)
+	queryLocalControls func(path string) ([]*agentpb.CameraControl, error)
+	// controlIndexFor resolves a control name to its CID by asking the camera.
+	// A seam for the same reason as the two above: the tests must not need a
+	// real /dev/videoN to exercise name resolution.
+	controlIndexFor func(path string) (map[string]uint32, error)
+	// controlDefaultsFor reads the driver's own default for each named control.
+	// A seam for the same reason: ResetCameraControls has to ask the hardware
+	// what "default" means, and its behaviour -- including that it forgets a
+	// stored control even when the write fails -- must be testable without one.
+	controlDefaultsFor func(path string, names []string) (map[string]int32, error)
+
 	ctx    context.Context    // cancelled on Shutdown; hub contexts are derived from this
 	cancel context.CancelFunc // cancels ctx
 	wg     sync.WaitGroup     // tracks active runProducer goroutines
@@ -702,6 +720,14 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, rosRuntime ...ROS2
 	}
 	if err := svc.credentials.Load(); err != nil {
 		logger.Warn("loading network camera credentials failed", zap.Error(err))
+	}
+	svc.controls = newCameraControlStore(cameraControlsPath)
+	svc.applyLocalControls = applyCameraControlsV4L2
+	svc.controlDefaultsFor = cameraControlDefaults
+	svc.queryLocalControls = queryCameraControlsV4L2
+	svc.controlIndexFor = cameraControlIndex
+	if err := svc.controls.Load(); err != nil {
+		logger.Warn("loading camera controls failed", zap.Error(err))
 	}
 	svc.discoverer = ipcam.NewDiscoverer(svc.registry, logger)
 	svc.links = ipcam.NewLinkManager(svc.registry, logger)
@@ -1302,6 +1328,10 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 	} else {
 		transport, _ := s.classifyTransport(filepath.Base(path))
 		libcameraID := s.lookupLibcameraID(ctx, transport)
+
+		// Re-assert any persisted exposure/gain before the pipeline opens the
+		// node, so a stream reconnect does not revert to the firmware default.
+		s.applyStoredCameraControls(path)
 
 		// CSI/ribbon sensors emit raw Bayer/RGB, not encoded H.264 — skip the native
 		// V4L2 H.264 path entirely and capture via GStreamer (libcamerasrc, or
@@ -2028,7 +2058,7 @@ func (s *VideoService) setV4L2KeyframeInterval(fd, gop int) {
 		{"V4L2_CID_MPEG_VIDEO_H264_I_PERIOD", v4l2CIDH264IPeriod},
 		{"V4L2_CID_MPEG_VIDEO_GOP_SIZE", v4l2CIDGOPSize},
 	} {
-		errno := setV4L2ExtControl(fd, ctl.id, int32(gop))
+		errno := setV4L2ExtControl(fd, ctl.id, int32(gop), v4l2CtrlClassCodec)
 		if errno == 0 {
 			s.logger.Info("V4L2 keyframe interval set",
 				zap.String("control", ctl.name), zap.Int("frames", gop))
@@ -2045,7 +2075,7 @@ func (s *VideoService) setV4L2KeyframeInterval(fd, gop int) {
 // returning the raw errno (0 on success). The inner v4l2_ext_control is reached
 // only through a uintptr stored inside the outer struct, where the garbage
 // collector cannot see it, so it is pinned for the duration of the syscall.
-func setV4L2ExtControl(fd int, controlID uint32, value int32) unix.Errno {
+func setV4L2ExtControl(fd int, controlID uint32, value int32, which uint32) unix.Errno {
 	var ctrl v4l2ExtControl
 	ctrl.setID(controlID)
 	ctrl.setValue(value)
@@ -2055,7 +2085,7 @@ func setV4L2ExtControl(fd int, controlID uint32, value int32) unix.Errno {
 	defer pinner.Unpin()
 
 	var ctrls v4l2ExtControls
-	ctrls.setWhich(v4l2CtrlClassCodec) // classic API: all controls share this class
+	ctrls.setWhich(which)
 	ctrls.setCount(1)
 	ctrls.setControlsPtr(uintptr(unsafe.Pointer(&ctrl)))
 

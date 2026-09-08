@@ -470,7 +470,7 @@ func TestPickerPinKeyMatchesDeviceFlagKey(t *testing.T) {
 	}
 
 	cfg := &config.Config{}
-	cfg.SetDevicePin(pinKeyForLANDevice(lan), 7, "grpc.a.sh:443", "42")
+	cfg.SetDevicePin(pinKeyForLANDevice(lan), 7, "grpc.a.sh:443", "42", "")
 	if _, ok := cfg.DevicePinFor(flagKey); !ok {
 		t.Fatalf("a pin recorded for the picked device (key %q) is invisible to --device %q (key %q): pins under %v",
 			pinKeyForLANDevice(lan), deviceFlag, flagKey, cfg.DevicePins)
@@ -694,7 +694,7 @@ func TestDefaultDeviceNameForPrefersPinKey(t *testing.T) {
 	// The consequence, stated directly: the pin the picker just wrote has to be
 	// visible to every later connect keyed on the saved default.
 	cfg := &config.Config{}
-	cfg.SetDevicePin(picked.PinKey, 7, "grpc.a.sh:443", "42")
+	cfg.SetDevicePin(picked.PinKey, 7, "grpc.a.sh:443", "42", "")
 	if _, ok := cfg.DevicePinFor(pinKeyForAddr(got)); !ok {
 		t.Fatalf("the pin recorded under %q is invisible to a default of %q: every later connect keys on a name no pin was filed under, and enforcement is off",
 			picked.PinKey, got)

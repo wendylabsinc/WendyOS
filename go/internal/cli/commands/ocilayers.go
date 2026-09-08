@@ -974,7 +974,7 @@ func buildImageToOCILayoutWithBuildkit(ctx context.Context, cwd, dockerfile, pla
 // otherwise it runs `docker buildx build` with `--output type=oci,dest=<dest>`.
 // It mirrors the flag/cache/env setup of buildAndPushImage but skips registry
 // push entirely.
-func buildImageToOCILayout(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, builder, dest, cacheKey string, stdout, stderr io.Writer) error {
+func buildImageToOCILayout(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, builder, dest string, stdout, stderr io.Writer) error {
 	normalized, err := resolveOCIExportBuilder(builder)
 	if err != nil {
 		return err
@@ -986,7 +986,7 @@ func buildImageToOCILayout(ctx context.Context, cwd, dockerfile, platform string
 		return buildImageToOCILayoutWithBuildkit(ctx, cwd, dockerfile, platform, buildArgs, dest, stdout, stderr)
 	}
 
-	return buildImageWithBuildxOCIExport(ctx, cwd, dockerfile, platform, buildArgs, dest, false, cacheKey, stdout, stderr)
+	return buildImageWithBuildxOCIExport(ctx, cwd, dockerfile, platform, buildArgs, dest, false, stdout, stderr)
 }
 
 // buildImageToOCILayoutDirWithDocker builds with the shared buildx builder and
@@ -994,7 +994,7 @@ func buildImageToOCILayout(ctx context.Context, cwd, dockerfile, platform string
 // the tar export, BuildKit skips blobs already present at dest, so a warm
 // persistent directory turns the per-build export cost from O(image size)
 // into O(changed bytes). Callers own dest's lifecycle (locking and GC).
-func buildImageToOCILayoutDirWithDocker(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, destDir, cacheKey string, stdout, stderr io.Writer) error {
+func buildImageToOCILayoutDirWithDocker(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, destDir string, stdout, stderr io.Writer) error {
 	// 0700: image layers/config can embed build-time material, and the legacy
 	// temp-tar this replaces lived in a MkdirTemp (0700) dir. Restricting the
 	// top-level dir gates traversal regardless of the modes BuildKit gives the
@@ -1002,7 +1002,7 @@ func buildImageToOCILayoutDirWithDocker(ctx context.Context, cwd, dockerfile, pl
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return fmt.Errorf("creating OCI layout directory: %w", err)
 	}
-	if err := buildImageWithBuildxOCIExport(ctx, cwd, dockerfile, platform, buildArgs, destDir, true, cacheKey, stdout, stderr); err != nil {
+	if err := buildImageWithBuildxOCIExport(ctx, cwd, dockerfile, platform, buildArgs, destDir, true, stdout, stderr); err != nil {
 		return err
 	}
 	// The export appended this build's manifest; drop every older entry so
@@ -1027,34 +1027,12 @@ func chunkLayoutDir(userCacheDir, appID, platform string) string {
 		sanitizeCacheKey(appID)+"-"+sanitizeCacheKey(platform))
 }
 
-// ociDeploymentCacheKey identifies the local BuildKit cache written by one
-// independently deployable app/service on one target platform. The separator
-// makes the mapping unambiguous before buildxCacheSubdir hashes it ("ab"+"c"
-// cannot collide with "a"+"bc"). Different keys may be exported concurrently;
-// callers serialize the matching OCI layout directory for the same key.
-func ociDeploymentCacheKey(appID, platform string) string {
-	return strings.ToLower(strings.TrimSpace(appID)) + "\x00" + strings.ToLower(strings.TrimSpace(platform))
-}
-
-// legacyOCICacheKey recovers the pre-platform cache key from a current OCI
-// deployment key. It is used only as a read-through migration source: new
-// exports always remain platform-isolated, while the first build after an
-// upgrade can still consume gigabytes of valid dependency cache accumulated
-// under the former app-only namespace.
-func legacyOCICacheKey(cacheKey string) (string, bool) {
-	appID, platform, ok := strings.Cut(cacheKey, "\x00")
-	if !ok || appID == "" || platform == "" {
-		return "", false
-	}
-	return appID, true
-}
-
 // buildxOCIExportArgs assembles the `docker buildx build` argument vector for
 // an OCI export (tar or layout-dir). Pure function for testability; build-arg
 // keys are sorted for a reproducible command line.
-func buildxOCIExportArgs(builder, platform, dockerfile, cacheFromDir, cacheToDir, dest string, tarFalse bool, buildArgs map[string]string) []string {
-	// buildkitd inside the Linux VM appends "/index.json" to the cache src/dest,
-	// so pass forward-slash paths to avoid mixed-separator warnings on Windows.
+func buildxOCIExportArgs(builder, platform, dockerfile, cacheFromDir, dest string, tarFalse bool, buildArgs map[string]string) []string {
+	// buildkitd inside the Linux VM appends "/index.json" to the cache src, so
+	// pass forward-slash paths to avoid mixed-separator warnings on Windows.
 	args := []string{
 		"buildx", "build",
 		"--builder", builder,
@@ -1067,7 +1045,13 @@ func buildxOCIExportArgs(builder, platform, dockerfile, cacheFromDir, cacheToDir
 	if cacheFromDir != "" {
 		args = append(args, "--cache-from", "type=local,src="+filepath.ToSlash(cacheFromDir))
 	}
-	args = append(args, "--cache-to", "type=local,dest="+filepath.ToSlash(cacheToDir)+",compression=uncompressed")
+	// Embed the rebuild cache INTO the exported image (inline) rather than a
+	// separate local cache store. The persistent OCI layout at dest then doubles
+	// as the cache source (--cache-from the layout on the next build), so each
+	// layer is stored once instead of in both a buildx cache dir and the deploy
+	// layout. Inline is min-mode, matching the old default-mode local export, so
+	// warm-rebuild reuse is unchanged.
+	args = append(args, "--cache-to", "type=inline")
 	keys := make([]string, 0, len(buildArgs))
 	for k := range buildArgs {
 		keys = append(keys, k)
@@ -1107,7 +1091,7 @@ var (
 	}
 )
 
-func buildImageWithBuildxOCIExport(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, dest string, tarFalse bool, cacheKey string, stdout, stderr io.Writer) error {
+func buildImageWithBuildxOCIExport(ctx context.Context, cwd, dockerfile, platform string, buildArgs map[string]string, dest string, tarFalse bool, stdout, stderr io.Writer) error {
 	// Sub-phase timing (gated on WENDY_TIMING) to split the "build (oci export)"
 	// phase into lock acquisition, builder verification (the buildx inspect
 	// calls), and the actual buildx solve.
@@ -1131,19 +1115,6 @@ func buildImageWithBuildxOCIExport(ctx context.Context, cwd, dockerfile, platfor
 	}
 	submark("  build: ensure builder (inspects)")
 
-	userCache, err := os.UserCacheDir()
-	if err != nil {
-		return fmt.Errorf("finding user cache directory: %w", err)
-	}
-	// Every independently runnable deployment gets an isolated local cache.
-	// BuildKit's local cache exporter is not safe for concurrent writers; this
-	// is what lets the stable OCI builder run solves concurrently without
-	// trading the old global queue for cache corruption.
-	cacheDir := buildxLocalCacheDir(userCache, cacheKey)
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return fmt.Errorf("creating cache directory: %w", err)
-	}
-
 	// Mirror the clean DOCKER_CONFIG setup from buildAndPushImage (non-Windows).
 	cleanDockerConfigDir, err := ensureCleanDockerConfig()
 	if err != nil {
@@ -1157,17 +1128,21 @@ func buildImageWithBuildxOCIExport(ctx context.Context, cwd, dockerfile, platfor
 			return err
 		}
 	}
+	// The persistent OCI layout at dest doubles as the rebuild cache: on a warm
+	// build it already holds the previous image with inline cache metadata, which
+	// we import via --cache-from. A cold build (no layout yet) or the ephemeral
+	// tar-export escape hatch (dest is a tar file, not a layout dir) simply has no
+	// cache source and relies on the builder's own store. This replaces the
+	// separate per-app buildx local cache, whose isolation existed ONLY because
+	// BuildKit's local cache EXPORTER is not concurrency-safe (WDY-1689/1711); the
+	// inline exporter writes only into the per-app layout dir callers serialize.
 	cacheFromDir := ""
-	if _, statErr := os.Stat(filepath.Join(cacheDir, "index.json")); statErr == nil {
-		cacheFromDir = cacheDir
-	} else if legacyKey, ok := legacyOCICacheKey(cacheKey); ok {
-		legacyDir := buildxLocalCacheDir(userCache, legacyKey)
-		if _, legacyErr := os.Stat(filepath.Join(legacyDir, "index.json")); legacyErr == nil {
-			cacheFromDir = legacyDir
-			fmt.Fprintf(stderr, "[buildx] importing legacy cache %s into platform-scoped cache\n", legacyDir)
+	if dest != "" {
+		if _, statErr := os.Stat(filepath.Join(dest, "index.json")); statErr == nil {
+			cacheFromDir = dest
 		}
 	}
-	args := buildxOCIExportArgs(buildxBuilder, platform, resolvedDockerfile, cacheFromDir, cacheDir, dest, tarFalse, buildArgs)
+	args := buildxOCIExportArgs(buildxBuilder, platform, resolvedDockerfile, cacheFromDir, dest, tarFalse, buildArgs)
 
 	submark("  build: setup (cache/env)")
 

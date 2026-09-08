@@ -63,7 +63,9 @@ type AgentConnection struct {
 	// Addr is the full host:port this connection dialed — the endpoint that
 	// actually answered, mTLS port included. Empty for unix-socket and
 	// pre-built (NewFromConn) connections.
-	Addr           string
+	Addr string
+	// SimulatorName retains the VM pin identity independently of its loopback endpoint.
+	SimulatorName  string
 	IsMTLS         bool                    // true when connected via mutual TLS
 	IsSessionProxy bool                    // true when Conn reaches a local session broker retaining the mTLS transport
 	CertInfo       *config.CertificateInfo // cert used to establish mTLS; nil for plaintext
@@ -481,7 +483,14 @@ func hostFromAddress(address string) string {
 }
 
 // Close closes the underlying gRPC connection.
+//
+// Safe on a nil receiver: callers defer Close on a connection variable that a
+// later reconnect may set back to nil, and a failed reconnect must surface its
+// own error rather than a panic from the deferred cleanup.
 func (c *AgentConnection) Close() error {
+	if c == nil {
+		return nil
+	}
 	var errs []error
 	if c.Conn != nil {
 		errs = append(errs, c.Conn.Close())
