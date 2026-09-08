@@ -349,6 +349,7 @@ public actor WendyAgent {
             ),
             containerService,
             AudioService(),
+            VideoService(),
             provisioningService,
             TelemetryService(broadcaster: broadcaster),
             FileSyncService(appsBase: appsBase),
