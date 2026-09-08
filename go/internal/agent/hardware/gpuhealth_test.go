@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A probe on a host with no accelerator must decline to answer rather than
@@ -83,5 +84,69 @@ func TestTruncate_KeepsDetailBounded(t *testing.T) {
 	}
 	if strings.Contains(got, "\n") {
 		t.Error("detail kept a newline; it goes into a single-line property")
+	}
+}
+
+func TestGPUProbeLimiter_CancellationBoundsOutstandingWork(t *testing.T) {
+	limiter := gpuProbeLimiter{slots: make(chan struct{}, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	defer close(release)
+	result := make(chan GPUDriverHealth, 1)
+	go func() {
+		result <- limiter.run(ctx, "nvidia", "open", func(context.Context) GPUDriverHealth {
+			close(entered)
+			<-release
+			defer close(finished)
+			return GPUDriverHealth{Status: driverStatusResponding}
+		})
+	}()
+	<-entered
+	cancel()
+	select {
+	case h := <-result:
+		if h.Status != driverStatusUnknown {
+			t.Fatalf("cancelled probe: %+v", h)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked caller")
+	}
+	h := limiter.run(context.Background(), "nvidia", "open", func(context.Context) GPUDriverHealth { t.Error("started a second worker"); return GPUDriverHealth{} })
+	if h.Status != driverStatusUnknown || !strings.Contains(h.Detail, "in progress") {
+		t.Fatalf("busy probe: %+v", h)
+	}
+}
+
+func TestGPUProbeLimiter_Deadline(t *testing.T) {
+	limiter := gpuProbeLimiter{slots: make(chan struct{}, 1)}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	h := limiter.run(ctx, "nvidia", "query", func(ctx context.Context) GPUDriverHealth {
+		<-ctx.Done()
+		return GPUDriverHealth{Status: driverStatusUnknown}
+	})
+	if h.Status != driverStatusUnknown {
+		t.Fatalf("deadline: %+v", h)
+	}
+}
+
+func TestProbeNvidiaSMI_ReportsQueryErrorsWithoutDiagnosingDriver(t *testing.T) {
+	for _, tc := range []struct{ name, script, status, detail string }{
+		{"success", "printf '8.7\\n8.0\\n'", driverStatusResponding, "CUDA execution not tested"},
+		{"mixed", "printf '8.7\\nN/A\\n'", driverStatusUnknown, "incomplete"},
+		{"unsupported", "echo 'unsupported query field' >&2; exit 2", driverStatusUnknown, "unsupported query field"},
+		{"empty", "exit 0", driverStatusUnknown, "incomplete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "nvidia-smi")
+			if err := os.WriteFile(path, []byte("#!/bin/sh\n"+tc.script+"\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			h := probeNvidiaSMI(context.Background(), path)
+			if h.Status != tc.status || !strings.Contains(h.Detail, tc.detail) {
+				t.Fatalf("probe: %+v", h)
+			}
+		})
 	}
 }

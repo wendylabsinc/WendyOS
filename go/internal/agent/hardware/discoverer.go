@@ -141,8 +141,10 @@ func gpuDriverDescription(h GPUDriverHealth) string {
 		return h.Vendor + " driver responding"
 	case driverStatusNotResponding:
 		return h.Vendor + " driver NOT responding (hardware present)"
-	default:
+	case driverStatusAbsent:
 		return h.Vendor + " driver nodes absent"
+	default:
+		return h.Vendor + " driver probe inconclusive"
 	}
 }
 
