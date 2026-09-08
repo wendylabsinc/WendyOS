@@ -143,9 +143,10 @@ mkdir -p /data/wendy-agent/episodes && systemctl restart wendyos-agent"
   header `EnvoyCertMetadataExtractor` reads) carrying the identity the enrolled
   asset certificate asserts. That header is attached only when this override is
   in effect.
-- `WENDY_DATA_DIR` moves the episode store off the root partition (default
-  `/var/lib/wendy-agent/data/episodes`) onto the larger data partition. Worth
-  doing on any device whose root partition is a few gigabytes.
+- `WENDY_DATA_DIR` explicitly selects the episode store. Agents default to
+  `/data/wendy-agent/data/episodes` when `/data` exists. Older agents defaulted
+  to `/var/lib/wendy-agent/data/episodes` on the root partition and need this
+  override to use the larger data partition.
 - `WENDY_DATA_MAX_BYTES` and `WENDY_DATA_RESERVE_BYTES` bound that store. The
   enforced quota is the smaller of a fifth of the store's filesystem and
   `WENDY_DATA_MAX_BYTES` (default 50 GiB), and eviction preserves

@@ -103,8 +103,11 @@ systemctl status var-lib-containerd.mount home.mount
 ## Wendy Data storage
 
 `WENDY_DATA_DIR` sets the root directory for the device-local Episode store.
-The production default is `/var/lib/wendy-agent/data/episodes`. Set it in the
-agent service environment when Episodes should live on a larger data volume:
+When `/data` exists, the default is `/data/wendy-agent/data/episodes`, so WendyOS
+records to its persistent data partition and computes the quota and free-space
+reserve from that filesystem. Hosts without `/data` default to
+`/var/lib/wendy-agent/data/episodes`. Override the location in the agent service
+environment when needed:
 
 ```sh
 WENDY_DATA_DIR=/data/wendy-agent/data/episodes wendy-agent
@@ -112,5 +115,5 @@ WENDY_DATA_DIR=/data/wendy-agent/data/episodes wendy-agent
 
 The agent creates the directory on startup. Unprivileged developer agents that
 cannot create the production default fall back to their platform user
-configuration directory. WendyOS services should set an explicit path on the
-persistent `/data` partition when the root filesystem is small.
+configuration directory. Existing episodes are not moved automatically; set
+`WENDY_DATA_DIR` to their previous location to continue accessing an older store.

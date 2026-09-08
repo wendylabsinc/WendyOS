@@ -22,6 +22,22 @@ import (
 
 const DefaultRoot = "/var/lib/wendy-agent/data/episodes"
 
+// defaultRoot prefers WendyOS's persistent data volume. Generic Linux installs
+// without /data keep their existing location; an explicit root always wins.
+func defaultRoot(dataVolume string) (string, error) {
+	info, err := os.Stat(dataVolume)
+	if errors.Is(err, os.ErrNotExist) {
+		return DefaultRoot, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("checking data volume %s: %w", dataVolume, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("data volume %s is not a directory", dataVolume)
+	}
+	return filepath.Join(dataVolume, "wendy-agent", "data", "episodes"), nil
+}
+
 const (
 	preRollWindow = 5 * time.Minute
 	preRollLimit  = 50 << 20
@@ -262,7 +278,11 @@ const consensusQueryTimeout = 5 * time.Second
 func NewManager(root string) (*Manager, error) {
 	implicitRoot := root == ""
 	if root == "" {
-		root = DefaultRoot
+		var err error
+		root, err = defaultRoot("/data")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		if !implicitRoot || !errors.Is(err, os.ErrPermission) {
@@ -803,7 +823,7 @@ func (m *Manager) enforceQuota() error {
 		free += c.size
 	}
 	if used > quota || free < reserve {
-		return fmt.Errorf("data store holds %d bytes against a %d byte quota and cannot preserve %d bytes free", used, quota, reserve)
+		return fmt.Errorf("data store %s holds %d bytes against a %d byte quota; its filesystem has %d bytes available and must preserve %d bytes free", m.root, used, quota, free, reserve)
 	}
 	return nil
 }
