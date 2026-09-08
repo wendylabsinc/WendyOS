@@ -192,13 +192,18 @@ func applyGPU(spec *Spec) {
 		return
 	}
 
+	boardInfo := boardDetect()
+	if boardInfo.IsRaspberryPi() && len(discoverNvidiaDeviceNodes()) == 0 {
+		applyVCIO(spec)
+		return
+	}
+
 	// Add the nvidia group GID for device access.
 	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, nvidiaGroupGID)
 	// Jetson's integrated GPU also requires the host render group. Resolve the
 	// live GID instead of assuming a distro-specific value (104 on the G1's
 	// JetPack 6 image). Group membership alone exposes no additional node: the
 	// exact GPU devices and cgroup rules below remain the access boundary.
-	boardInfo := boardDetect()
 	if boardInfo.IsJetson() {
 		if gid, ok := lookupRenderGID(); ok {
 			spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)

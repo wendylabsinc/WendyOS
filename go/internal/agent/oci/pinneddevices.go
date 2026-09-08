@@ -30,6 +30,8 @@ type DeviceRefresh struct {
 	// Updated describes each device whose pinned pair no longer matched the
 	// host and was rewritten, as "path (old -> new)".
 	Updated []string
+	// Removed names legacy synthetic devices dropped during platform migration.
+	Removed []string
 	// Missing names the pinned devices that no longer exist on the host at all.
 	// Their numbers are left alone: there is nothing to re-resolve them to, and
 	// a device that is genuinely gone is a different problem from one that
@@ -45,7 +47,7 @@ type DeviceRefresh struct {
 }
 
 // Changed reports whether any device number was repaired.
-func (r DeviceRefresh) Changed() bool { return len(r.Updated) > 0 }
+func (r DeviceRefresh) Changed() bool { return len(r.Updated) > 0 || len(r.Removed) > 0 }
 
 // SpecModified reports whether the spec needs persisting — a repaired number,
 // or a record that was completed on the way.
@@ -140,6 +142,8 @@ func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 	if spec == nil || spec.Linux == nil {
 		return out
 	}
+
+	out.Removed = removePiNVIDIAFallback(spec)
 
 	// The record is the only way to reach a cgroup-only pin, but device entries
 	// carry their own path, so union the two rather than trusting the record to
@@ -257,4 +261,62 @@ func updateCgroupRule(spec *Spec, pin PinnedDevice, major, minor int64, claimed 
 		Allow: true, Type: pin.Type, Major: &maj, Minor: &min, Access: "rw",
 	})
 	claimed[len(spec.Linux.Resources.Devices)-1] = true
+}
+
+// Older agents added five synthetic NVIDIA entries even on a Pi whose GPU
+// entitlement only supplied VideoCore access. Remove that exact legacy shape;
+// real NVIDIA devices (including an external GPU on a Pi) are left intact.
+func removePiNVIDIAFallback(spec *Spec) []string {
+	if !boardDetect().IsRaspberryPi() || len(discoverNvidiaDeviceNodes()) != 0 {
+		return nil
+	}
+	paths := map[string]bool{
+		"/dev/nvidia0": true, "/dev/nvidiactl": true, "/dev/nvidia-uvm": true,
+		"/dev/nvidia-uvm-tools": true, "/dev/nvidia-modeset": true,
+	}
+	found := make(map[string]bool)
+	for _, d := range spec.Linux.Devices {
+		if paths[d.Path] {
+			if d.Type != "c" || d.Major != 195 || d.Minor != 0 {
+				return nil
+			}
+			found[d.Path] = true
+		} else if d.Type == "c" && d.Major == 195 {
+			return nil
+		}
+	}
+	if len(found) != len(paths) {
+		return nil
+	}
+	var removed []string
+	devices := spec.Linux.Devices[:0]
+	for _, d := range spec.Linux.Devices {
+		if paths[d.Path] {
+			removed = append(removed, d.Path)
+		} else {
+			devices = append(devices, d)
+		}
+	}
+	spec.Linux.Devices = devices
+	if spec.Linux.Resources != nil {
+		rules := spec.Linux.Resources.Devices[:0]
+		for _, rule := range spec.Linux.Resources.Devices {
+			if rule.Allow && rule.Type == "c" && rule.Major != nil && *rule.Major == 195 && rule.Minor == nil && rule.Access == "rw" {
+				continue
+			}
+			rules = append(rules, rule)
+		}
+		spec.Linux.Resources.Devices = rules
+	}
+	pins := decodePinnedDevices(spec)
+	kept := pins[:0]
+	for _, pin := range pins {
+		if !paths[pin.Path] {
+			kept = append(kept, pin)
+		}
+	}
+	delete(spec.Annotations, pinnedDevicesAnnotation)
+	encodePinnedDevices(spec, kept)
+	sort.Strings(removed)
+	return removed
 }

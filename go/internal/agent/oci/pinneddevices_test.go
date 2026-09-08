@@ -3,6 +3,7 @@ package oci
 import (
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -292,5 +293,39 @@ func TestRefreshHostDeviceNumbers_AnnotationCannotHideStaleEntry(t *testing.T) {
 	}
 	if again := RefreshHostDeviceNumbers(spec); again.SpecModified() {
 		t.Fatalf("second refresh should be unchanged: %+v", again)
+	}
+}
+
+func TestRefreshHostDeviceNumbers_PiLegacyFallback(t *testing.T) {
+	source := installFakeVCIO(t, 249)
+	origGlobs, origKfd := nvidiaDeviceGlobs, kfdDevicePath
+	t.Cleanup(func() { nvidiaDeviceGlobs = origGlobs; kfdDevicePath = origKfd })
+	nvidiaDeviceGlobs = []string{filepath.Join(t.TempDir(), "no-nvidia-*")}
+	kfdDevicePath = filepath.Join(t.TempDir(), "no-kfd")
+	withStubbedStat(t, map[string][2]int64{})
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	applyGPU(spec)
+	if len(spec.Linux.Devices) != 0 {
+		t.Fatalf("Pi injected NVIDIA entries: %+v", spec.Linux.Devices)
+	}
+	if m, ok := mountForDest(spec, "/dev/vcio"); !ok || m.Source != source {
+		t.Fatal("missing VideoCore mount")
+	}
+	// Reconstruct the old agent's synthetic fallback in an existing container.
+	for _, path := range []string{"/dev/nvidia0", "/dev/nvidiactl", "/dev/nvidia-uvm", "/dev/nvidia-uvm-tools", "/dev/nvidia-modeset"} {
+		spec.Linux.Devices = append(spec.Linux.Devices, LinuxDevice{Path: path, Type: "c", Major: 195})
+		RecordPinnedDevice(spec, path, "c", 195, 0)
+	}
+	maj := int64(195)
+	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{Allow: true, Type: "c", Major: &maj, Access: "rw"})
+	result := RefreshHostDeviceNumbers(spec)
+	if len(result.Missing) != 0 || len(result.Removed) != 5 || !result.SpecModified() {
+		t.Fatalf("migration: %+v", result)
+	}
+	if hasMajorRule(spec, 195) || !hasMajorRule(spec, 249) {
+		t.Fatal("migration changed the wrong grants")
+	}
+	if again := RefreshHostDeviceNumbers(spec); again.SpecModified() {
+		t.Fatalf("migration not idempotent: %+v", again)
 	}
 }

@@ -1789,7 +1789,8 @@ func (c *Client) refreshGPUDeviceNumbersForStart(ctx context.Context, container 
 				zap.String("app_name", appName), zap.Error(perr))
 		} else if refresh.Changed() {
 			c.logger.Info("Re-resolved stale host device numbers before start",
-				zap.String("app_name", appName), zap.Strings("devices", refresh.Updated))
+				zap.String("app_name", appName), zap.Strings("devices", refresh.Updated),
+				zap.Strings("removed_legacy_devices", refresh.Removed))
 		} else {
 			// One-time upgrade for a container created before pins were
 			// recorded: nothing moved, but its cgroup-only devices now have a
