@@ -1800,6 +1800,10 @@ func (c *Client) refreshGPUDeviceNumbersForStart(ctx context.Context, container 
 		}
 	}
 
+	if len(refresh.Errors) > 0 {
+		return fmt.Errorf("resolving host devices for %s: %w", appName, errors.Join(refresh.Errors...))
+	}
+
 	if len(refresh.Missing) > 0 {
 		// A device that is gone cannot be re-pointed, so the repair path ends
 		// here and the preflight begins.

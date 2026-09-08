@@ -184,3 +184,19 @@ func TestApplyCDIDevice_ExplicitOnlyNodeSurvivesRefresh(t *testing.T) {
 		t.Fatalf("explicit node changed: %+v", result)
 	}
 }
+
+func TestApplyCDIDevice_SymlinkSurvivesRefresh(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "device")
+	if err := os.Symlink(os.DevNull, path); err != nil {
+		t.Fatal(err)
+	}
+	spec := emptySpec()
+	cdiSpec := &CDISpecification{Devices: []CDIDevice{{Name: "all", ContainerEdits: CDIContainerEdits{DeviceNodes: []CDIDeviceNode{{Path: path, Type: "c"}}}}}}
+	if err := ApplyCDIDevice(spec, cdiSpec, "all"); err != nil {
+		t.Fatal(err)
+	}
+	result := oci.RefreshHostDeviceNumbers(spec)
+	if len(result.Errors) > 0 || len(result.Missing) > 0 || result.Changed() {
+		t.Fatalf("valid mapping rejected: %+v", result)
+	}
+}

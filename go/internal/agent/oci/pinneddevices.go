@@ -2,7 +2,9 @@ package oci
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"sort"
@@ -26,10 +28,13 @@ type PinnedDevice struct {
 	// for annotations written by older agents.
 	HostPath string `json:"hostPath,omitempty"`
 	// Static preserves an explicitly numbered CDI node with no host source.
-	Static bool   `json:"static,omitempty"`
-	Type   string `json:"type"`
-	Major  int64  `json:"major"`
-	Minor  int64  `json:"minor"`
+	Static bool `json:"static,omitempty"`
+	// NoFollow keeps entitlement bindings restricted to real device nodes.
+	// CDI and legacy device entries may resolve trusted host symlinks.
+	NoFollow bool   `json:"noFollow,omitempty"`
+	Type     string `json:"type"`
+	Major    int64  `json:"major"`
+	Minor    int64  `json:"minor"`
 }
 
 // DeviceRefresh reports what RefreshHostDeviceNumbers found.
@@ -46,6 +51,8 @@ type DeviceRefresh struct {
 	// a device that is genuinely gone is a different problem from one that
 	// moved.
 	Missing []string
+	// Errors retains non-absence failures such as permissions and wrong types.
+	Errors []error
 	// RecordCompleted reports that the pin record was written or extended even
 	// though no number moved — the upgrade path for a container created before
 	// pins were recorded. Without it such a container would keep deriving its
@@ -75,7 +82,7 @@ func (r DeviceRefresh) SpecModified() bool { return r.Changed() || r.RecordCompl
 // the old coverage rather than losing it; a site that pins only a cgroup rule
 // has no such safety net.
 func RecordPinnedDevice(spec *Spec, path, devType string, major, minor int64) {
-	RecordPinnedDeviceMapping(spec, PinnedDevice{Path: path, Type: devType, Major: major, Minor: minor})
+	RecordPinnedDeviceMapping(spec, PinnedDevice{Path: path, Type: devType, Major: major, Minor: minor, NoFollow: true})
 }
 
 // RecordPinnedDeviceMapping preserves source provenance separately from the
@@ -189,9 +196,13 @@ func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 		if pin.Static {
 			continue
 		}
-		major, minor, err := statDeviceNode(pin.sourcePath())
+		major, minor, err := resolvePinnedDevice(*pin)
 		if err != nil {
-			out.Missing = append(out.Missing, pin.sourcePath())
+			if errors.Is(err, os.ErrNotExist) {
+				out.Missing = append(out.Missing, pin.sourcePath())
+			} else {
+				out.Errors = append(out.Errors, fmt.Errorf("device %s from %s: %w", pin.Path, pin.sourcePath(), err))
+			}
 			continue
 		}
 		if major == pin.Major && minor == pin.Minor {

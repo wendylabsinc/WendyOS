@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 )
@@ -183,23 +182,13 @@ func resolveDeviceNumbers(node *CDIDeviceNode) (major, minor int, err error) {
 		return *node.Major, *node.Minor, nil
 	}
 
-	devicePath := node.EffectiveHostPath()
-
-	var st syscall.Stat_t
-	if statErr := syscall.Stat(devicePath, &st); statErr != nil {
-		return 0, 0, &CDIError{Message: fmt.Sprintf("resolving device numbers for %s: %v", devicePath, statErr)}
+	deviceType := node.Type
+	if deviceType == "" {
+		deviceType = "c"
 	}
-
-	major, minor = deviceNumbersFromRdev(uint64(st.Rdev))
-	return major, minor, nil
-}
-
-// deviceNumbersFromRdev splits a stat(2) rdev into its major/minor halves.
-//
-// On Linux: major = (rdev >> 8) & 0xfff, minor = (rdev & 0xff) | ((rdev >> 12) & 0xfff00)
-// On macOS: major = (rdev >> 24) & 0xff, minor = rdev & 0xffffff
-func deviceNumbersFromRdev(rdev uint64) (major, minor int) {
-	major = int((rdev >> 8) & 0xfff)
-	minor = int((rdev & 0xff) | ((rdev >> 12) & 0xfff00))
-	return major, minor
+	maj, min, resolveErr := oci.ResolveDeviceNode(node.EffectiveHostPath(), deviceType, true)
+	if resolveErr != nil {
+		return 0, 0, fmt.Errorf("resolving device numbers for %s: %w", node.EffectiveHostPath(), resolveErr)
+	}
+	return int(maj), int(min), nil
 }

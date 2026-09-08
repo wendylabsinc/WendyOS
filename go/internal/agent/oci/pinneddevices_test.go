@@ -2,7 +2,7 @@ package oci
 
 import (
 	"encoding/json"
-	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -12,14 +12,16 @@ import (
 func withStubbedStat(t *testing.T, nodes map[string][2]int64) {
 	t.Helper()
 	orig := statDeviceNode
-	t.Cleanup(func() { statDeviceNode = orig })
+	origResolve := resolvePinnedDevice
+	t.Cleanup(func() { statDeviceNode = orig; resolvePinnedDevice = origResolve })
 	statDeviceNode = func(p string) (int64, int64, error) {
 		n, ok := nodes[p]
 		if !ok {
-			return 0, 0, errors.New("no such device")
+			return 0, 0, os.ErrNotExist
 		}
 		return n[0], n[1], nil
 	}
+	resolvePinnedDevice = func(pin PinnedDevice) (int64, int64, error) { return statDeviceNode(pin.sourcePath()) }
 }
 
 func pinnedSpec() *Spec {
@@ -387,5 +389,34 @@ func TestRefreshHostDeviceNumbers_DoesNotInventAccess(t *testing.T) {
 	}
 	if len(spec.Linux.Resources.Devices) != 2 || *spec.Linux.Resources.Devices[1].Major != 498 {
 		t.Fatal("deny policy not preserved")
+	}
+}
+
+func TestRefreshHostDeviceNumbers_RejectsRegularFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "device")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	spec := pinnedSpec()
+	addExactDeviceNodes(spec, []nvidiaDeviceNode{{path: path, major: 497}})
+	result := RefreshHostDeviceNumbers(spec)
+	if len(result.Errors) != 1 || len(result.Missing) != 0 || spec.Linux.Devices[0].Major != 497 {
+		t.Fatalf("invalid node not distinguished: %+v", result)
+	}
+}
+
+func TestResolveDeviceNode_SymlinkAndTypePolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "device")
+	if err := os.Symlink(os.DevNull, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ResolveDeviceNode(path, "c", true); err != nil {
+		t.Fatalf("CDI symlink rejected: %v", err)
+	}
+	if _, _, err := ResolveDeviceNode(path, "c", false); err == nil {
+		t.Fatal("entitlement symlink accepted")
+	}
+	if _, _, err := ResolveDeviceNode(path, "b", true); err == nil {
+		t.Fatal("character node accepted as block device")
 	}
 }
