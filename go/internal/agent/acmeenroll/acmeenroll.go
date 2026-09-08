@@ -152,7 +152,10 @@ func Enroll(ctx context.Context, cfg Config, accountKeyPath string, deviceKeyPEM
 		return "", "", fmt.Errorf("decoding EAB HMAC key (pki-core encodes it as hex): %w", err)
 	}
 
-	csrPEM, err := certs.GenerateCSR(deviceKeyPEM, cfg.DeviceID, nil, x509.ExtKeyUsageClientAuth)
+	// The same enrolled identity authenticates outbound connections and serves
+	// the agent's TLS API. The issuer's device profile must permit both roles.
+	csrPEM, err := certs.GenerateCSR(deviceKeyPEM, cfg.DeviceID, nil,
+		x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth)
 	if err != nil {
 		return "", "", fmt.Errorf("building device CSR: %w", err)
 	}

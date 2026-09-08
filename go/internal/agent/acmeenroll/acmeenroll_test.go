@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -49,6 +50,7 @@ type fakeACME struct {
 	eabMACOK      bool
 	orderIDs      []map[string]string
 	finalizeOK    bool
+	finalizeCSR   *x509.CertificateRequest
 	wrongKey      bool
 	wrongIdentity bool
 	getOnlyCert   bool
@@ -115,6 +117,7 @@ func (f *fakeACME) handler(base string) http.Handler {
 			return
 		}
 		if !f.wrongKey {
+			f.finalizeCSR = csr
 			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			if err != nil {
 				f.t.Error(err)
@@ -306,6 +309,23 @@ func TestEnroll(t *testing.T) {
 	}
 	if !f.finalizeOK {
 		t.Error("finalize was never reached")
+	}
+	if f.finalizeCSR == nil {
+		t.Fatal("finalize did not receive a CSR")
+	}
+	if err := f.finalizeCSR.CheckSignature(); err != nil {
+		t.Fatalf("finalize CSR signature: %v", err)
+	}
+	var usages []asn1.ObjectIdentifier
+	for _, ext := range f.finalizeCSR.Extensions {
+		if ext.Id.Equal(asn1.ObjectIdentifier{2, 5, 29, 37}) {
+			if rest, err := asn1.Unmarshal(ext.Value, &usages); err != nil || len(rest) != 0 {
+				t.Fatalf("decoding requested key usages: %v", err)
+			}
+		}
+	}
+	if len(usages) != 2 || !usages[0].Equal(asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 2}) || !usages[1].Equal(asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}) {
+		t.Fatalf("ACME CSR key usages = %v, want clientAuth and serverAuth", usages)
 	}
 
 	if got := countPEM(certPEM); got != 1 {
