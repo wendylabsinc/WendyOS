@@ -1,9 +1,11 @@
 package oci
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -417,5 +419,67 @@ func TestResolveDeviceNode_SymlinkAndTypePolicy(t *testing.T) {
 	}
 	if _, _, err := ResolveDeviceNode(path, "b", true); err == nil {
 		t.Fatal("character node accepted as block device")
+	}
+}
+
+func TestRefreshHostDeviceNumbers_PartialRefreshMustNotMergePermissions(t *testing.T) {
+	nodes := map[string][2]int64{"/dev/a": {498, 0}}
+	withStubbedStat(t, nodes)
+	s := pinnedSpec()
+	for i, path := range []string{"/dev/a", "/dev/b"} {
+		maj := int64(497 + i)
+		s.Linux.Devices = append(s.Linux.Devices, LinuxDevice{Path: path, Type: "c", Major: maj})
+		RecordPinnedDevice(s, path, "c", maj, 0)
+		access := "r"
+		if i == 1 {
+			access = "rw"
+		}
+		s.Linux.Resources.Devices = append(s.Linux.Resources.Devices, LinuxDeviceCgroup{Allow: true, Type: "c", Major: new(maj), Minor: new(int64(0)), Access: access})
+	}
+	before, _ := json.Marshal(s)
+	first := RefreshHostDeviceNumbers(s)
+	after, _ := json.Marshal(s)
+	if first.SpecModified() || !bytes.Equal(before, after) {
+		t.Fatal("failed refresh changed the spec")
+	}
+	if len(first.Missing) != 1 {
+		t.Fatalf("expected missing b: %+v", first)
+	}
+	// Once b returns, resolve the original coherent generation.
+	nodes["/dev/b"] = [2]int64{499, 0}
+	recovered := RefreshHostDeviceNumbers(s)
+	if len(recovered.Errors) != 0 || len(recovered.Missing) != 0 || !recovered.Changed() {
+		t.Fatalf("recovery failed: %+v", recovered)
+	}
+	for _, r := range s.Linux.Resources.Devices {
+		if r.Allow && *r.Major == 498 && r.Access == "rw" {
+			t.Fatal("read-only a gained write access from temporarily missing b")
+		}
+	}
+}
+
+func TestRefreshHostDeviceNumbers_MixedGenerationPinsMustNotMergePermissions(t *testing.T) {
+	withStubbedStat(t, map[string][2]int64{"/dev/a": {498, 0}, "/dev/b": {499, 0}})
+	s := pinnedSpec()
+	for i, path := range []string{"/dev/a", "/dev/b"} {
+		old := int64(497 + i)
+		s.Linux.Devices = append(s.Linux.Devices, LinuxDevice{Path: path, Type: "c", Major: old})
+		// CDI kept its old device entry; entitlement recorded a current pair.
+		RecordPinnedDevice(s, path, "c", old+1, 0)
+		access := "r"
+		if i == 1 {
+			access = "rw"
+		}
+		s.Linux.Resources.Devices = append(s.Linux.Resources.Devices, LinuxDeviceCgroup{Allow: true, Type: "c", Major: new(old), Minor: new(int64(0)), Access: access})
+		s.Linux.Resources.Devices = append(s.Linux.Resources.Devices, LinuxDeviceCgroup{Allow: true, Type: "c", Major: new(old + 1), Minor: new(int64(0)), Access: access})
+	}
+	before, _ := json.Marshal(s)
+	result := RefreshHostDeviceNumbers(s)
+	after, _ := json.Marshal(s)
+	if len(result.Errors) != 1 || !strings.Contains(result.Errors[0].Error(), "ambiguous device rule ownership") {
+		t.Fatalf("expected actionable ambiguity error: %+v", result)
+	}
+	if result.SpecModified() || !bytes.Equal(before, after) {
+		t.Fatal("ambiguous refresh changed the spec")
 	}
 }

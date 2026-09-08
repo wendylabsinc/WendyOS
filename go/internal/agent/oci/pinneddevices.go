@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -165,7 +166,30 @@ func encodePinnedDevices(spec *Spec, pins []PinnedDevice) {
 // Specs written before pins were recorded fall back to the device list, so a
 // container created by an older agent is still repairable without a redeploy,
 // and picks up a pin record on its first refresh.
+// A failed refresh leaves the caller's device configuration untouched.
 func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
+	if spec == nil || spec.Linux == nil {
+		return DeviceRefresh{}
+	}
+	candidate := *spec
+	linux := *spec.Linux
+	candidate.Linux = &linux
+	linux.Devices = slices.Clone(linux.Devices)
+	candidate.Annotations = maps.Clone(spec.Annotations)
+	if linux.Resources != nil {
+		resources := *linux.Resources
+		resources.Devices = slices.Clone(resources.Devices)
+		linux.Resources = &resources
+	}
+	result := refreshHostDeviceNumbers(&candidate)
+	if len(result.Errors) > 0 || len(result.Missing) > 0 {
+		return DeviceRefresh{Errors: result.Errors, Missing: result.Missing}
+	}
+	*spec = candidate
+	return result
+}
+
+func refreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 	var out DeviceRefresh
 	if spec == nil || spec.Linux == nil {
 		return out
@@ -212,7 +236,12 @@ func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 		changed = true
 	}
 
-	out.RulesChanged = reconcileDeviceRules(spec, original, pins, recorded)
+	var ruleErr error
+	out.RulesChanged, ruleErr = reconcileDeviceRules(spec, original, pins, recorded)
+	if ruleErr != nil {
+		out.Errors = append(out.Errors, ruleErr)
+		return out
+	}
 	changed = changed || out.RulesChanged
 
 	// Re-encode when anything moved, and also when the union found pins the
@@ -276,12 +305,13 @@ func pairFor(pin PinnedDevice) devicePair { return devicePair{pin.Type, pin.Majo
 // Reconcile from the original rule set so swaps, aliases, duplicate grants and
 // split read/write rules cannot consume each other's updates. Preserve rule
 // order and policy; never invent access for a device that had no allowance.
-func reconcileDeviceRules(spec *Spec, original, resolved, recorded []PinnedDevice) bool {
+func reconcileDeviceRules(spec *Spec, original, resolved, recorded []PinnedDevice) (bool, error) {
 	if spec.Linux.Resources == nil {
-		return false
+		return false, nil
 	}
 	targets := make(map[devicePair][]devicePair)
 	byPath := make(map[string]devicePair)
+	originalByPath := make(map[string]devicePair)
 	add := func(old, next devicePair) {
 		if !slices.Contains(targets[old], next) {
 			targets[old] = append(targets[old], next)
@@ -291,12 +321,24 @@ func reconcileDeviceRules(spec *Spec, original, resolved, recorded []PinnedDevic
 		next := pairFor(resolved[i])
 		add(pairFor(pin), next)
 		byPath[pin.Path] = next
+		originalByPath[pin.Path] = pairFor(pin)
 	}
 	// An earlier provisioner can leave a second rule using the numbers kept in
 	// the annotation rather than in the finalized device entry.
 	for _, pin := range recorded {
 		if next, ok := byPath[pin.Path]; ok {
-			add(pairFor(pin), next)
+			old := pairFor(pin)
+			// A newer annotation can reuse another device's old number.
+			// Numeric rules cannot identify their owner in that case. True
+			// aliases within the finalized device list remain supported.
+			if old != originalByPath[pin.Path] {
+				for _, target := range targets[old] {
+					if target != next {
+						return false, fmt.Errorf("ambiguous device rule ownership for %s at %s %d:%d; recreate the container from current device provisioning", pin.Path, old.Type, old.Major, old.Minor)
+					}
+				}
+			}
+			add(old, next)
 		}
 	}
 	oldRules := spec.Linux.Resources.Devices
@@ -330,10 +372,10 @@ func reconcileDeviceRules(spec *Spec, original, resolved, recorded []PinnedDevic
 		}
 	}
 	if reflect.DeepEqual(oldRules, rules) {
-		return false
+		return false, nil
 	}
 	spec.Linux.Resources.Devices = rules
-	return true
+	return true, nil
 }
 
 // Older agents added five synthetic NVIDIA entries even on a Pi whose GPU
