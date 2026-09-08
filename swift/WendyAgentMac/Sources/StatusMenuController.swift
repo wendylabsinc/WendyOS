@@ -136,6 +136,14 @@ final class StatusMenuController: NSObject {
             )
             settingsItem.target = self
             self.menu.addItem(settingsItem)
+
+            let cancelItem = NSMenuItem(
+                title: "Cancel Wendy Mesh",
+                action: #selector(self.cancelMeshVPNSelected),
+                keyEquivalent: ""
+            )
+            cancelItem.target = self
+            self.menu.addItem(cancelItem)
         }
 
         self.menu.addItem(.separator())
@@ -326,6 +334,11 @@ final class StatusMenuController: NSObject {
             self,
             didSetMeshVPNEnabled: self.meshVPNStatus != .connected
         )
+    }
+
+    @objc
+    private func cancelMeshVPNSelected() {
+        self.delegate?.statusMenuController(self, didSetMeshVPNEnabled: false)
     }
 
     @objc

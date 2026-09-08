@@ -60,6 +60,10 @@ final class MeshVPNController: NSObject, ObservableObject {
                 self.status = .needsApproval
             }
             guard installationResult == .ready else { return }
+            guard UserDefaults.standard.bool(forKey: autoConnectKey) else {
+                status = .disabled
+                return
+            }
             status = .connecting
             let manager = try await configureManager(session: session)
             if manager.connection.status == .disconnected || manager.connection.status == .invalid {
