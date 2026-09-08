@@ -231,8 +231,8 @@ type gpuInfo struct {
 // that question, see hardware.ProbeGPUDriver, which is reported through the gpu
 // capability's driver_status.
 //
-// gpuArch is the exception here: it comes from an nvidia-smi query, so a blank
-// value on a host that reports vendor "nvidia" means the driver did not answer.
+// gpuArch comes from an nvidia-smi query. A blank value can mean the tool or
+// query is unavailable; it is not by itself evidence of a driver failure.
 func detectGPUInfo() gpuInfo {
 	info := gpuInfo{}
 

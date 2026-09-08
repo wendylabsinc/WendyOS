@@ -1821,8 +1821,8 @@ func (c *Client) refreshGPUDeviceNumbersForStart(ctx context.Context, container 
 				zap.Strings("removed_legacy_devices", refresh.Removed))
 		} else {
 			// One-time upgrade for a container created before pins were
-			// recorded: nothing moved, but its cgroup-only devices now have a
-			// path attached and become repairable.
+			// recorded: its device entries now have explicit provenance.
+			// Legacy cgroup-only bindings cannot be inferred from that list.
 			c.logger.Info("Recorded pinned device paths for an existing container",
 				zap.String("app_name", appName))
 		}
@@ -1833,10 +1833,9 @@ func (c *Client) refreshGPUDeviceNumbersForStart(ctx context.Context, container 
 
 // persistRefreshedSpec writes a repaired spec back to the container record. The
 // record is updated in place rather than through delete+recreate (as
-// refreshSecondaryNamespaces does) because there is no task yet at this point
-// and containerd's full-record update accepts a new spec — so the container
-// keeps its snapshot, and with it anything the app has written to its own
-// filesystem.
+// refreshSecondaryNamespaces does). Containerd accepts a spec update without
+// replacing the container's snapshot. Any stale task is cleaned up later in
+// startContainer, before NewTask consumes the repaired configuration.
 func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.Container, info containers.Container, spec *localoci.Spec, appName string) error {
 	newSpecJSON, err := marshalRefreshedDeviceSpec(info.Spec.GetValue(), spec)
 	if err != nil {
@@ -1986,7 +1985,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// the spec pins the major/minor pairs the host had when the container was
 	// created, and several of the majors an accelerator depends on — Jetson's
 	// nvgpu and nvidia-uvm nodes, AMD's /dev/kfd — are allocated dynamically at
-	// module load, so they are stable for a boot rather than for the life of a
+	// module load, so they are stable for a registration rather than for the life of a
 	// container definition. Re-resolve them here, before NewTask consumes the
 	// spec, so a container whose numbers have gone stale is repaired by an
 	// ordinary restart instead of needing a reboot or a redeploy.

@@ -147,9 +147,8 @@ func TestRefreshHostDeviceNumbers_UnionsRecordWithDeviceList(t *testing.T) {
 	}
 }
 
-// Wildcard rules are the deliberate choice for hotplug-heavy classes (video,
-// USB, input): they cannot go stale, and rewriting them would narrow a grant
-// that was meant to be broad.
+// Fixed-major wildcard rules for video, USB and input must remain broad.
+// This does not establish that wildcard grants to dynamic majors stay valid.
 func TestRefreshHostDeviceNumbers_LeavesWildcardRules(t *testing.T) {
 	withStubbedStat(t, map[string][2]int64{"/dev/kfd": {510, 0}})
 

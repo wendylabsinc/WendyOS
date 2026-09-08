@@ -25,14 +25,9 @@ const (
 	// gpuMinRestartDelay floors the delay before restarting a container that
 	// holds a gpu entitlement, including its first restart after a crash.
 	//
-	// A GPU app that dies hard — a segfault, an OOM kill, anything that skips
-	// its CUDA teardown — leaves the driver holding the context it was using.
-	// Restarting instantly asks the driver for a fresh context before it has
-	// reaped the dead one, and a driver that refuses returns "no device": the
-	// app crashes again, on a tighter loop, for a reason that has nothing to do
-	// with the app. A few seconds of patience costs a GPU app very little (they
-	// take longer than this to load their weights) and takes the retry out of
-	// the window where the driver is still cleaning up.
+	// This is a recovery-policy floor, measured from observing the app down.
+	// It provides a settling interval but does not diagnose a driver fault or
+	// guarantee that GPU teardown has completed.
 	gpuMinRestartDelay = 10 * time.Second
 	// restartStabilityWindow is how long a container must be observed RUNNING
 	// continuously before its backoff resets. It is deliberately much longer

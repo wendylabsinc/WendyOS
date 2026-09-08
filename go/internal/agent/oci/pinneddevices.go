@@ -53,12 +53,9 @@ type DeviceRefresh struct {
 	Missing []string
 	// Errors retains non-absence failures such as permissions and wrong types.
 	Errors []error
-	// RecordCompleted reports that the pin record was written or extended even
-	// though no number moved — the upgrade path for a container created before
-	// pins were recorded. Without it such a container would keep deriving its
-	// pins from the device list on every start and never gain a record for its
-	// cgroup-only devices, because the caller persists on Changed() alone and
-	// nothing had changed.
+	// RecordCompleted reports a metadata-only provenance upgrade. Legacy
+	// device entries supply their paths, but unrecorded cgroup-only bindings
+	// do not: those containers still require recreation to gain provenance.
 	RecordCompleted bool
 }
 
@@ -152,7 +149,7 @@ func encodePinnedDevices(spec *Spec, pins []PinnedDevice) {
 // the host taken when the container was created. Several of the device majors
 // an AI box depends on — Jetson's nvgpu and nvidia-uvm nodes, AMD's /dev/kfd —
 // are allocated from the kernel's dynamic pool at module load, so they are
-// stable for a boot rather than for the life of a container definition. A
+// stable for a registration rather than for the life of a container definition. A
 // container definition outlives a boot: containerd persists it and recreates
 // only the task. A spec can therefore name a number the running kernel has
 // since moved, which from inside the container is indistinguishable from the
