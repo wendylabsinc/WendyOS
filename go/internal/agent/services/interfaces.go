@@ -180,6 +180,17 @@ type AppStateRebuilder interface {
 	RebuildAppStateCaches(ctx context.Context)
 }
 
+// GPUDeviceReporter is the optional capability a ContainerdClient may provide to
+// report whether a container was created with a gpu entitlement. The container
+// monitor type-asserts for it and treats every container as non-GPU when the
+// client does not implement it. Kept separate from ContainerdClient so the
+// large interface and its mocks stay untouched (mirrors GroupRestarter).
+type GPUDeviceReporter interface {
+	// HasGPUEntitlement reads the persisted entitlement. Lookup errors must not
+	// be cached as a negative answer; the monitor retries them on a later tick.
+	HasGPUEntitlement(ctx context.Context, appName string) (bool, error)
+}
+
 // PortExposureProber is the optional capability to scan running host-network
 // apps for publicly-bound listening ports and log a warning for each new
 // exposure. The container monitor calls it once per health tick; the

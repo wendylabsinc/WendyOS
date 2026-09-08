@@ -192,13 +192,18 @@ func applyGPU(spec *Spec) {
 		return
 	}
 
+	boardInfo := boardDetect()
+	if boardInfo.IsRaspberryPi() && len(discoverNvidiaDeviceNodes()) == 0 {
+		applyVCIO(spec)
+		return
+	}
+
 	// Add the nvidia group GID for device access.
 	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, nvidiaGroupGID)
 	// Jetson's integrated GPU also requires the host render group. Resolve the
 	// live GID instead of assuming a distro-specific value (104 on the G1's
 	// JetPack 6 image). Group membership alone exposes no additional node: the
 	// exact GPU devices and cgroup rules below remain the access boundary.
-	boardInfo := boardDetect()
 	if boardInfo.IsJetson() {
 		if gid, ok := lookupRenderGID(); ok {
 			spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)
@@ -410,6 +415,9 @@ func addExactDeviceNodes(spec *Spec, nodes []nvidiaDeviceNode) {
 			Major: n.major,
 			Minor: n.minor,
 		})
+		// Record where this pair came from so a later boot can re-resolve it;
+		// these majors are dynamically allocated (see the WDY-1804 note above).
+		RecordPinnedDevice(spec, n.path, "c", n.major, n.minor)
 		key := [2]int64{n.major, n.minor}
 		if seen[key] {
 			continue
@@ -1282,6 +1290,10 @@ func addScopedCharDevice(spec *Spec, devPath string) (major, minor int64, err er
 		Minor:  &min,
 		Access: "rw",
 	})
+	// This path pins numbers in a cgroup rule and nowhere else — the bind mount
+	// carries no numbers, so without this record the rule is an anonymous
+	// triple that nothing can ever re-resolve. See pinnedDevicesAnnotation.
+	RecordPinnedDevice(spec, devPath, "c", major, minor)
 	return major, minor, nil
 }
 

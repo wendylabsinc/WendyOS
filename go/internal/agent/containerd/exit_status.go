@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,19 @@ const (
 	exitReasonOOMKilled         = "oom_killed"         // the cgroup OOM killer fired
 	exitReasonStartFailed       = "start_failed"       // the task never started (image/OCI error)
 	exitReasonEntitlementDenied = "entitlement_denied" // start blocked by a missing/denied entitlement
+	exitReasonDeviceUnavailable = "device_unavailable" // hardware the app asked for is not present on the host
 )
+
+// ErrDeviceUnavailable marks a start refused because hardware the container was
+// built around is not on the host any more.
+//
+// It exists to keep this failure out of the "crashed" bucket. Without it, an app
+// whose GPU has gone starts normally and dies inside the CUDA runtime, so what
+// reaches an operator is exit 139 and a rising failure count — indistinguishable
+// from a null-pointer bug in the app itself, and diagnosable only by reading the
+// container's own logs and recognising a driver error message. Refusing the
+// start and naming the reason turns that into a fact the app list can show.
+var ErrDeviceUnavailable = errors.New("device unavailable")
 
 // exitCodeDidNotStart is stored as the exit code when a container failed before
 // its task ran, so callers can distinguish "failed to start" from "exited 0".
@@ -55,6 +68,9 @@ var entitlementErrorMarkers = []string{"applying entitlements", "entitlement req
 // start failure. Note: the reason is a display/diagnostic label, never an
 // authorization decision.
 func classifyStartError(err error) string {
+	if errors.Is(err, ErrDeviceUnavailable) {
+		return exitReasonDeviceUnavailable
+	}
 	if err != nil {
 		msg := strings.ToLower(err.Error())
 		for _, marker := range entitlementErrorMarkers {

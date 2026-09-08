@@ -219,6 +219,20 @@ type gpuInfo struct {
 	gpuArch        string
 }
 
+// detectGPUInfo reports what accelerator hardware this board *has*. It is a
+// presence check, not a health check, and hasGPU in particular is satisfied on a
+// Jetson by a file on disk — true whether the driver is healthy, wedged, or
+// never loaded.
+//
+// That is deliberate and must stay so: hasGPU is a board fact that reaches image
+// builds as WENDY_HAS_GPU, so tying it to the driver's current mood would change
+// how an image is built because of a transient condition. It does mean the flag
+// is easy to read as "the GPU is fine" when it says nothing of the sort — for
+// that question, see hardware.ProbeGPUDriver, which is reported through the gpu
+// capability's driver_status.
+//
+// gpuArch comes from an nvidia-smi query. A blank value can mean the tool or
+// query is unavailable; it is not by itself evidence of a driver failure.
 func detectGPUInfo() gpuInfo {
 	info := gpuInfo{}
 

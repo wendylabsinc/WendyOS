@@ -39,7 +39,7 @@ func (d *SystemHardwareDiscoverer) Discover(ctx context.Context, categoryFilter 
 	}
 
 	discoverers := []discoverer{
-		{"gpu", d.discoverGPU},
+		{"gpu", func() []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability { return d.discoverGPU(ctx) }},
 		{"usb", d.discoverUSB},
 		{"i2c", d.discoverI2C},
 		{"spi", d.discoverSPI},
@@ -62,8 +62,15 @@ func (d *SystemHardwareDiscoverer) Discover(ctx context.Context, categoryFilter 
 	return caps, nil
 }
 
-// discoverGPU checks for NVIDIA and DRM GPU devices.
-func (d *SystemHardwareDiscoverer) discoverGPU() []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
+// discoverGPU checks for NVIDIA and DRM GPU devices, and reports whether the
+// accelerator's driver is actually answering.
+//
+// The driver entry is the point of the probe: every other signal here — and the
+// has-GPU flag on device info — reports that hardware is *present*, which stays
+// true while a driver is wedged or not loaded. Someone asking "is the GPU all
+// right" has, until now, had nothing to read but presence, and has reasonably
+// concluded from it that the hardware was fine.
+func (d *SystemHardwareDiscoverer) discoverGPU(ctx context.Context) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
 	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
 
 	// NVIDIA devices.
@@ -102,7 +109,43 @@ func (d *SystemHardwareDiscoverer) discoverGPU() []*agentpb.ListHardwareCapabili
 		}
 	}
 
+	if health, ok := ProbeGPUDriver(ctx); ok {
+		props := map[string]string{
+			"vendor":        health.Vendor,
+			"driver_status": health.Status,
+			"probe":         health.Probe,
+		}
+		if health.Detail != "" {
+			props["detail"] = health.Detail
+		}
+		caps = append(caps, &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{
+			Category:    "gpu",
+			Description: gpuDriverDescription(health),
+			Properties:  props,
+		})
+		d.logger.Info("GPU driver probe",
+			zap.String("vendor", health.Vendor),
+			zap.String("driver_status", health.Status),
+			zap.String("probe", health.Probe),
+			zap.String("detail", health.Detail))
+	}
+
 	return caps
+}
+
+// gpuDriverDescription phrases the verdict for a human reading a capability
+// list, where "responding" alone would be ambiguous about what responded.
+func gpuDriverDescription(h GPUDriverHealth) string {
+	switch h.Status {
+	case driverStatusResponding:
+		return h.Vendor + " driver responding"
+	case driverStatusNotResponding:
+		return h.Vendor + " driver NOT responding (hardware present)"
+	case driverStatusAbsent:
+		return h.Vendor + " driver nodes absent"
+	default:
+		return h.Vendor + " driver probe inconclusive"
+	}
 }
 
 // discoverUSB enumerates USB devices from sysfs.

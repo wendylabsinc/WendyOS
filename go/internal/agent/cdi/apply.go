@@ -1,12 +1,27 @@
 package cdi
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"strings"
-	"syscall"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 )
+
+// ErrDevicesUnresolved reports that a CDI device exists but one or more of the
+// host device nodes it names could not be resolved. It marks the difference
+// between provisioning that is absent — normal on a host without nvidia-ctk,
+// and survivable, since the gpu entitlement injects NVIDIA nodes by itself —
+// and provisioning that is present and broken, which yields a container
+// holding devices that point at nothing.
+var ErrDevicesUnresolved = errors.New("CDI device nodes could not be resolved on this host")
+
+// ErrDeviceNotFound reports that a CDI spec does not carry a device under the
+// requested name. It is distinct from a device that exists but cannot be
+// applied: callers probe well-known names ("all") and must be able to tell an
+// expected miss from real provisioning trouble.
+var ErrDeviceNotFound = errors.New("device not found in CDI spec")
 
 // ApplyCDIDevice applies a named CDI device from a CDI specification to an OCI spec.
 // It adds device nodes, mounts, environment variables, and hooks.
@@ -20,25 +35,43 @@ func ApplyCDIDevice(spec *oci.Spec, cdiSpec *CDISpecification, deviceName string
 		}
 	}
 	if device == nil {
-		return &CDIError{Message: fmt.Sprintf("device '%s' not found in CDI spec", deviceName)}
+		return fmt.Errorf("device %q: %w", deviceName, ErrDeviceNotFound)
 	}
 
 	// Apply global container edits if present.
+	var errs []error
 	if cdiSpec.ContainerEdits != nil {
-		applyContainerEdits(spec, cdiSpec.ContainerEdits)
+		errs = append(errs, applyContainerEdits(spec, cdiSpec.ContainerEdits))
 	}
 
 	// Apply device-specific container edits.
 	edits := &device.ContainerEdits
-	applyContainerEdits(spec, edits)
+	errs = append(errs, applyContainerEdits(spec, edits))
 
-	return nil
+	// Edits are applied even when some nodes fail to resolve, so a caller that
+	// treats device provisioning as best-effort (a display-only app) still gets
+	// the library mounts and env. A caller that cannot function without the
+	// device (a gpu entitlement) must fail on this error rather than start a
+	// container that is missing the hardware it asked for.
+	return errors.Join(errs...)
 }
 
-func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) {
+func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) error {
+	var errs []error
+
 	// 1. Add device nodes.
 	for _, node := range edits.DeviceNodes {
-		major, minor := resolveDeviceNumbers(&node)
+		major, minor, err := resolveDeviceNumbers(&node)
+		if err != nil {
+			// Never substitute a placeholder pair for a node we could not
+			// resolve. Returning 0,0 here (the previous behaviour) injected a
+			// container device pointing at nothing plus a cgroup rule allowing
+			// it, so a GPU app started cleanly and then died at its first CUDA
+			// call with nothing in the log naming the cause. Skip the node and
+			// report it instead.
+			errs = append(errs, fmt.Errorf("%w: %w", ErrDevicesUnresolved, err))
+			continue
+		}
 
 		deviceType := node.Type
 		if deviceType == "" {
@@ -52,6 +85,17 @@ func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) {
 			Minor: int64(minor),
 		}
 		spec.Linux.Devices = append(spec.Linux.Devices, ociDevice)
+		// Record where this pair came from, so a boot that renumbers the device
+		// can be repaired instead of leaving the container pointing at nothing.
+		// An explicitly numbered node without a host source is valid CDI.
+		// Only mark it static if absent at provisioning; an existing host
+		// device must still be refreshed and checked on subsequent starts.
+		_, sourceErr := os.Stat(node.EffectiveHostPath())
+		static := node.HostPath == "" && node.Major != nil && node.Minor != nil && os.IsNotExist(sourceErr)
+		oci.RecordPinnedDeviceMapping(spec, oci.PinnedDevice{
+			Path: node.Path, HostPath: node.EffectiveHostPath(), Type: deviceType,
+			Major: int64(major), Minor: int64(minor), Static: static,
+		})
 
 		// Add cgroup device allowance.
 		if spec.Linux.Resources == nil {
@@ -121,29 +165,30 @@ func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) {
 			spec.Hooks.Poststop = append(spec.Hooks.Poststop, ociHook)
 		}
 	}
+
+	return errors.Join(errs...)
 }
 
 // resolveDeviceNumbers returns major/minor numbers for a CDI device node.
 // If the CDI spec provides them, those are used; otherwise, stat(2) is called
 // on the host path.
-func resolveDeviceNumbers(node *CDIDeviceNode) (major, minor int) {
+//
+// A stat failure is an error, never a (0, 0) result: the numbers land in the
+// container's OCI spec, and a spec that names a device by a number pair the
+// host does not have is indistinguishable, from inside the container, from
+// having no GPU at all.
+func resolveDeviceNumbers(node *CDIDeviceNode) (major, minor int, err error) {
 	if node.Major != nil && node.Minor != nil {
-		return *node.Major, *node.Minor
+		return *node.Major, *node.Minor, nil
 	}
 
-	devicePath := node.EffectiveHostPath()
-
-	var st syscall.Stat_t
-	if err := syscall.Stat(devicePath, &st); err != nil {
-		return 0, 0
+	deviceType := node.Type
+	if deviceType == "" {
+		deviceType = "c"
 	}
-
-	// Extract major/minor from st.Rdev.
-	// On Linux: major = (rdev >> 8) & 0xfff, minor = (rdev & 0xff) | ((rdev >> 12) & 0xfff00)
-	// On macOS: major = (rdev >> 24) & 0xff, minor = rdev & 0xffffff
-	rdev := uint64(st.Rdev)
-	major = int((rdev >> 8) & 0xfff)
-	minor = int((rdev & 0xff) | ((rdev >> 12) & 0xfff00))
-
-	return major, minor
+	maj, min, resolveErr := oci.ResolveDeviceNode(node.EffectiveHostPath(), deviceType, true)
+	if resolveErr != nil {
+		return 0, 0, fmt.Errorf("resolving device numbers for %s: %w", node.EffectiveHostPath(), resolveErr)
+	}
+	return int(maj), int(min), nil
 }

@@ -10,6 +10,11 @@ type Spec struct {
 	Mounts     []Mount  `json:"mounts,omitempty"`
 	Linux      *Linux   `json:"linux,omitempty"`
 	Hooks      *Hooks   `json:"hooks,omitempty"`
+	// Annotations is the standard OCI annotations map. The agent uses it to
+	// record which host path each pinned device number came from — see
+	// pinnedDevicesAnnotation — so a stale number can be re-resolved later.
+	// Runtimes pass unknown annotations through untouched.
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // Hooks contains OCI lifecycle hooks.
