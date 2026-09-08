@@ -29,6 +29,7 @@ swift package --allow-writing-to-package-directory generate-grpc-code-from-proto
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_container_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_audio_service.proto" \
+    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_video_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto" \
