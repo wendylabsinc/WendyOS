@@ -329,3 +329,63 @@ func TestRefreshHostDeviceNumbers_PiLegacyFallback(t *testing.T) {
 		t.Fatalf("migration not idempotent: %+v", again)
 	}
 }
+
+func TestRefreshHostDeviceNumbers_ReconcilesCompletePolicy(t *testing.T) {
+	cases := []struct {
+		name          string
+		before, after map[string][2]int64
+	}{
+		{"duplicates", map[string][2]int64{"/dev/a": {497, 0}}, map[string][2]int64{"/dev/a": {498, 0}}},
+		{"split alias", map[string][2]int64{"/dev/a": {497, 0}, "/dev/b": {497, 0}}, map[string][2]int64{"/dev/a": {498, 0}, "/dev/b": {497, 0}}},
+		{"swap", map[string][2]int64{"/dev/a": {497, 0}, "/dev/b": {498, 0}}, map[string][2]int64{"/dev/a": {498, 0}, "/dev/b": {497, 0}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withStubbedStat(t, tc.after)
+			spec := pinnedSpec()
+			// Repeated independent provisioners also produce split read/write rules.
+			for path, pair := range tc.before {
+				spec.Linux.Devices = append(spec.Linux.Devices, LinuxDevice{Path: path, Type: "c", Major: pair[0], Minor: pair[1]})
+				RecordPinnedDevice(spec, path, "c", pair[0], pair[1])
+				for _, access := range []string{"r", "w", "r"} {
+					spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{Allow: true, Type: "c", Major: new(pair[0]), Minor: new(pair[1]), Access: access})
+				}
+			}
+			RefreshHostDeviceNumbers(spec)
+			wanted := map[[2]int64]bool{}
+			for _, pair := range tc.after {
+				wanted[pair] = true
+				if !ruleFor(t, spec, pair[0], pair[1]) {
+					t.Fatalf("lost allowance for %v", pair)
+				}
+			}
+			for _, rule := range spec.Linux.Resources.Devices {
+				if !wanted[[2]int64{*rule.Major, *rule.Minor}] {
+					t.Fatalf("stale rule: %+v", rule)
+				}
+				if rule.Access != "r" && rule.Access != "w" {
+					t.Fatalf("invented permission: %+v", rule)
+				}
+			}
+			if again := RefreshHostDeviceNumbers(spec); again.SpecModified() {
+				t.Fatalf("not idempotent: %+v", again)
+			}
+		})
+	}
+}
+
+func TestRefreshHostDeviceNumbers_DoesNotInventAccess(t *testing.T) {
+	withStubbedStat(t, map[string][2]int64{"/dev/a": {498, 0}})
+	spec := pinnedSpec()
+	spec.Linux.Devices = []LinuxDevice{{Path: "/dev/a", Type: "c", Major: 497}}
+	spec.Linux.Resources.Devices = []LinuxDeviceCgroup{{Allow: false, Access: "rwm"}, {Allow: false, Type: "c", Major: new(int64(497)), Minor: new(int64(0)), Access: "w"}}
+	RefreshHostDeviceNumbers(spec)
+	for _, rule := range spec.Linux.Resources.Devices {
+		if rule.Allow {
+			t.Fatal("created an allowance")
+		}
+	}
+	if len(spec.Linux.Resources.Devices) != 2 || *spec.Linux.Resources.Devices[1].Major != 498 {
+		t.Fatal("deny policy not preserved")
+	}
+}

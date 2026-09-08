@@ -3,6 +3,8 @@ package oci
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"slices"
 	"sort"
 )
 
@@ -37,6 +39,8 @@ type DeviceRefresh struct {
 	Updated []string
 	// Removed names legacy synthetic devices dropped during platform migration.
 	Removed []string
+	// RulesChanged reports a repair to device access rules.
+	RulesChanged bool
 	// Missing names the pinned devices that no longer exist on the host at all.
 	// Their numbers are left alone: there is nothing to re-resolve them to, and
 	// a device that is genuinely gone is a different problem from one that
@@ -52,7 +56,9 @@ type DeviceRefresh struct {
 }
 
 // Changed reports whether any device number was repaired.
-func (r DeviceRefresh) Changed() bool { return len(r.Updated) > 0 || len(r.Removed) > 0 }
+func (r DeviceRefresh) Changed() bool {
+	return len(r.Updated) > 0 || len(r.Removed) > 0 || r.RulesChanged
+}
 
 // SpecModified reports whether the spec needs persisting — a repaired number,
 // or a record that was completed on the way.
@@ -169,15 +175,13 @@ func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 	// and keeps an injection site that forgets to record from silently dropping
 	// out of coverage.
 	recorded := decodePinnedDevices(spec)
-	pins := unionWithDeviceList(recorded, spec)
+	original := unionWithDeviceList(recorded, spec)
+	pins := append([]PinnedDevice(nil), original...)
 	if len(pins) == 0 {
 		return out
 	}
-	recordIncomplete := len(pins) != len(recorded)
+	recordIncomplete := !slices.Equal(original, recorded)
 
-	// Rules already rewritten this pass, so two pins that shared a rule and now
-	// disagree cannot both claim it.
-	claimed := make(map[int]bool)
 	changed := false
 
 	for i := range pins {
@@ -196,10 +200,12 @@ func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 
 		out.Updated = append(out.Updated, fmt.Sprintf("%s (%d:%d -> %d:%d)", pin.Path, pin.Major, pin.Minor, major, minor))
 		updateDeviceEntry(spec, pin.Path, major, minor)
-		updateCgroupRule(spec, *pin, major, minor, claimed)
 		pin.Major, pin.Minor = major, minor
 		changed = true
 	}
+
+	out.RulesChanged = reconcileDeviceRules(spec, original, pins, recorded)
+	changed = changed || out.RulesChanged
 
 	// Re-encode when anything moved, and also when the union found pins the
 	// record was missing — that is the chance to complete it, so a later
@@ -252,36 +258,74 @@ func updateDeviceEntry(spec *Spec, path string, major, minor int64) {
 	}
 }
 
-// updateCgroupRule re-points the allow rule that matches pin's old numbers.
-// Wildcard rules (a whole major, no minor) are left alone: they are the
-// deliberate choice made for hotplug-heavy classes like video and USB, and they
-// cannot go stale.
-func updateCgroupRule(spec *Spec, pin PinnedDevice, major, minor int64, claimed map[int]bool) {
-	if spec.Linux.Resources == nil {
-		return
-	}
-	for i := range spec.Linux.Resources.Devices {
-		rule := &spec.Linux.Resources.Devices[i]
-		if claimed[i] || rule.Major == nil || rule.Minor == nil {
-			continue
-		}
-		if rule.Type != pin.Type || *rule.Major != pin.Major || *rule.Minor != pin.Minor {
-			continue
-		}
-		maj, min := major, minor
-		rule.Major, rule.Minor = &maj, &min
-		claimed[i] = true
-		return
-	}
+type devicePair struct {
+	Type         string
+	Major, Minor int64
+}
 
-	// The pin had no rule of its own — it shared one with a device that has
-	// since moved elsewhere, and that rule is now spoken for. Add the rule this
-	// device needs rather than leaving it unauthorized.
-	maj, min := major, minor
-	spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, LinuxDeviceCgroup{
-		Allow: true, Type: pin.Type, Major: &maj, Minor: &min, Access: "rw",
-	})
-	claimed[len(spec.Linux.Resources.Devices)-1] = true
+func pairFor(pin PinnedDevice) devicePair { return devicePair{pin.Type, pin.Major, pin.Minor} }
+
+// Reconcile from the original rule set so swaps, aliases, duplicate grants and
+// split read/write rules cannot consume each other's updates. Preserve rule
+// order and policy; never invent access for a device that had no allowance.
+func reconcileDeviceRules(spec *Spec, original, resolved, recorded []PinnedDevice) bool {
+	if spec.Linux.Resources == nil {
+		return false
+	}
+	targets := make(map[devicePair][]devicePair)
+	byPath := make(map[string]devicePair)
+	add := func(old, next devicePair) {
+		if !slices.Contains(targets[old], next) {
+			targets[old] = append(targets[old], next)
+		}
+	}
+	for i, pin := range original {
+		next := pairFor(resolved[i])
+		add(pairFor(pin), next)
+		byPath[pin.Path] = next
+	}
+	// An earlier provisioner can leave a second rule using the numbers kept in
+	// the annotation rather than in the finalized device entry.
+	for _, pin := range recorded {
+		if next, ok := byPath[pin.Path]; ok {
+			add(pairFor(pin), next)
+		}
+	}
+	oldRules := spec.Linux.Resources.Devices
+	var rules []LinuxDeviceCgroup
+	for _, rule := range oldRules {
+		if rule.Major != nil && rule.Minor != nil {
+			next, ok := targets[devicePair{rule.Type, *rule.Major, *rule.Minor}]
+			if ok {
+				for _, pair := range next {
+					replacement := rule
+					replacement.Major, replacement.Minor = new(pair.Major), new(pair.Minor)
+					rules = append(rules, replacement)
+				}
+				continue
+			}
+		}
+		rules = append(rules, rule)
+		// Preserve whole-class grants. If a known device moves outside one, carry
+		// only that device's existing access forward, never the entire new major.
+		if rule.Major != nil && rule.Minor == nil {
+			var added []devicePair
+			for i, pin := range original {
+				next := pairFor(resolved[i])
+				if rule.Type == pin.Type && *rule.Major == pin.Major && next.Major != pin.Major && !slices.Contains(added, next) {
+					replacement := rule
+					replacement.Major, replacement.Minor = new(next.Major), new(next.Minor)
+					rules = append(rules, replacement)
+					added = append(added, next)
+				}
+			}
+		}
+	}
+	if reflect.DeepEqual(oldRules, rules) {
+		return false
+	}
+	spec.Linux.Resources.Devices = rules
+	return true
 }
 
 // Older agents added five synthetic NVIDIA entries even on a Pi whose GPU
