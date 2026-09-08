@@ -338,8 +338,10 @@ public actor WendyAgent {
             }
         )
         let info = await provisioningService.provisioningInfo()
+        // When enrolled, run mTLS on `port + 1`; otherwise plaintext on `port`.
+        let certs = info.enrolled ? await provisioningService.provisioningCerts() : nil
 
-        let services: [any RegistrableRPCService] = [
+        var services: [any RegistrableRPCService] = [
             AgentService(
                 binarySHA256: self.runningExecutableSHA256,
                 updateLock: self.agentUpdateLock,
@@ -349,14 +351,17 @@ public actor WendyAgent {
             ),
             containerService,
             AudioService(),
-            VideoService(),
             provisioningService,
             TelemetryService(broadcaster: broadcaster),
             FileSyncService(appsBase: appsBase),
         ]
+        if certs != nil {
+            // SECURITY: camera enumeration and live video are registered only on
+            // the mTLS server, whose ClientCertAuthorizer validates the caller's
+            // certificate chain and organization before dispatching any RPC.
+            services.append(VideoService())
+        }
 
-        // When enrolled, run mTLS on `port + 1`; otherwise plaintext on `port`.
-        let certs = info.enrolled ? await provisioningService.provisioningCerts() : nil
         let (server, isMTLS) = try self.makeMainServer(services: services, certs: certs)
         self.mainServerIsMTLS = isMTLS
         let boundPort = isMTLS ? self.configuration.port + 1 : self.configuration.port
