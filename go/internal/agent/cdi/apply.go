@@ -3,6 +3,7 @@ package cdi
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 
@@ -87,7 +88,15 @@ func applyContainerEdits(spec *oci.Spec, edits *CDIContainerEdits) error {
 		spec.Linux.Devices = append(spec.Linux.Devices, ociDevice)
 		// Record where this pair came from, so a boot that renumbers the device
 		// can be repaired instead of leaving the container pointing at nothing.
-		oci.RecordPinnedDevice(spec, node.Path, deviceType, int64(major), int64(minor))
+		// An explicitly numbered node without a host source is valid CDI.
+		// Only mark it static if absent at provisioning; an existing host
+		// device must still be refreshed and checked on subsequent starts.
+		_, sourceErr := os.Stat(node.EffectiveHostPath())
+		static := node.HostPath == "" && node.Major != nil && node.Minor != nil && os.IsNotExist(sourceErr)
+		oci.RecordPinnedDeviceMapping(spec, oci.PinnedDevice{
+			Path: node.Path, HostPath: node.EffectiveHostPath(), Type: deviceType,
+			Major: int64(major), Minor: int64(minor), Static: static,
+		})
 
 		// Add cgroup device allowance.
 		if spec.Linux.Resources == nil {

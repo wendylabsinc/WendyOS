@@ -1,6 +1,7 @@
 package cdi
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -140,5 +141,46 @@ func TestApplyCDIDevice_UnresolvedNodesAreDistinguishableFromAMissingDevice(t *t
 	notFound := ApplyCDIDevice(emptySpec(), cdiSpec, "igpu0")
 	if errors.Is(notFound, ErrDevicesUnresolved) {
 		t.Error("a missing device name reported as ErrDevicesUnresolved; that would fail creates on hosts with no NVIDIA provisioning")
+	}
+}
+
+func TestApplyCDIDevice_RefreshUsesHostSource(t *testing.T) {
+	spec := emptySpec()
+	path := filepath.Join(t.TempDir(), "container-only-name")
+	cdiSpec := &CDISpecification{Devices: []CDIDevice{{Name: "all", ContainerEdits: CDIContainerEdits{
+		DeviceNodes: []CDIDeviceNode{{Path: path, HostPath: os.DevNull, Type: "c"}},
+	}}}}
+	if err := ApplyCDIDevice(spec, cdiSpec, "all"); err != nil {
+		t.Fatal(err)
+	}
+	// The annotation must survive containerd's JSON round trip.
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored oci.Spec
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	result := oci.RefreshHostDeviceNumbers(&restored)
+	if len(result.Missing) > 0 {
+		t.Fatalf("valid host source rejected: %+v", result)
+	}
+	if restored.Linux.Devices[0].Path != path {
+		t.Fatal("container destination changed")
+	}
+}
+
+func TestApplyCDIDevice_ExplicitOnlyNodeSurvivesRefresh(t *testing.T) {
+	spec := emptySpec()
+	major, minor := 195, 0
+	cdiSpec := &CDISpecification{Devices: []CDIDevice{{Name: "all", ContainerEdits: CDIContainerEdits{
+		DeviceNodes: []CDIDeviceNode{{Path: filepath.Join(t.TempDir(), "synthetic"), Type: "c", Major: &major, Minor: &minor}},
+	}}}}
+	if err := ApplyCDIDevice(spec, cdiSpec, "all"); err != nil {
+		t.Fatal(err)
+	}
+	if result := oci.RefreshHostDeviceNumbers(spec); len(result.Missing) > 0 || result.Changed() {
+		t.Fatalf("explicit node changed: %+v", result)
 	}
 }

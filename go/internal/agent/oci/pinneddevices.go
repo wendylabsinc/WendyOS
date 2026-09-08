@@ -19,10 +19,15 @@ const pinnedDevicesAnnotation = "sh.wendy/pinned-devices"
 
 // PinnedDevice is one host device node whose numbers this spec has pinned.
 type PinnedDevice struct {
-	Path  string `json:"path"`
-	Type  string `json:"type"`
-	Major int64  `json:"major"`
-	Minor int64  `json:"minor"`
+	Path string `json:"path"`
+	// HostPath may differ from the container destination. Empty means Path
+	// for annotations written by older agents.
+	HostPath string `json:"hostPath,omitempty"`
+	// Static preserves an explicitly numbered CDI node with no host source.
+	Static bool   `json:"static,omitempty"`
+	Type   string `json:"type"`
+	Major  int64  `json:"major"`
+	Minor  int64  `json:"minor"`
 }
 
 // DeviceRefresh reports what RefreshHostDeviceNumbers found.
@@ -64,18 +69,31 @@ func (r DeviceRefresh) SpecModified() bool { return r.Changed() || r.RecordCompl
 // the old coverage rather than losing it; a site that pins only a cgroup rule
 // has no such safety net.
 func RecordPinnedDevice(spec *Spec, path, devType string, major, minor int64) {
-	if spec == nil || path == "" {
+	RecordPinnedDeviceMapping(spec, PinnedDevice{Path: path, Type: devType, Major: major, Minor: minor})
+}
+
+// RecordPinnedDeviceMapping preserves source provenance separately from the
+// container path. As with DedupeDevices, the first provisioner's mapping wins.
+func RecordPinnedDeviceMapping(spec *Spec, pin PinnedDevice) {
+	if spec == nil || pin.Path == "" {
 		return
 	}
 	pins := decodePinnedDevices(spec)
 	for i := range pins {
-		if pins[i].Path == path {
-			pins[i].Type, pins[i].Major, pins[i].Minor = devType, major, minor
+		if pins[i].Path == pin.Path {
+			pins[i].Type, pins[i].Major, pins[i].Minor = pin.Type, pin.Major, pin.Minor
 			encodePinnedDevices(spec, pins)
 			return
 		}
 	}
-	encodePinnedDevices(spec, append(pins, PinnedDevice{Path: path, Type: devType, Major: major, Minor: minor}))
+	encodePinnedDevices(spec, append(pins, pin))
+}
+
+func (p PinnedDevice) sourcePath() string {
+	if p.HostPath != "" {
+		return p.HostPath
+	}
+	return p.Path
 }
 
 // decodePinnedDevices returns the recorded pins, or nil when the spec carries
@@ -164,9 +182,12 @@ func RefreshHostDeviceNumbers(spec *Spec) DeviceRefresh {
 
 	for i := range pins {
 		pin := &pins[i]
-		major, minor, err := statDeviceNode(pin.Path)
+		if pin.Static {
+			continue
+		}
+		major, minor, err := statDeviceNode(pin.sourcePath())
 		if err != nil {
-			out.Missing = append(out.Missing, pin.Path)
+			out.Missing = append(out.Missing, pin.sourcePath())
 			continue
 		}
 		if major == pin.Major && minor == pin.Minor {
