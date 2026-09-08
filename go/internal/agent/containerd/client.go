@@ -1722,12 +1722,22 @@ func (c *Client) applyNvidiaCDI(spec *localoci.Spec) error {
 		return fmt.Errorf("no NVIDIA CDI spec and no usable L4T CSV files: %w", err)
 	}
 
+	return c.applyNvidiaCDISpec(spec, cdiSpec, specPath)
+}
+
+func (c *Client) applyNvidiaCDISpec(spec *localoci.Spec, cdiSpec *cdi.CDISpecification, specPath string) error {
 	// nvidia-ctk in CSV mode generates a device named "all".
 	// Try that first, then fall back to the first device in the spec.
 	allErr := cdi.ApplyCDIDevice(spec, cdiSpec, "all")
 	if allErr == nil {
 		c.logger.Info("Applied NVIDIA CDI spec", zap.String("cdi_spec_path", specPath))
 		return nil
+	}
+	// A provisioning error can follow partial edits. Only a missing name is
+	// safe to retry with a different selection; otherwise preserve the cause
+	// and avoid applying mounts or hooks twice.
+	if !errors.Is(allErr, cdi.ErrDeviceNotFound) {
+		return fmt.Errorf("applying NVIDIA CDI device %q from %s: %w", "all", specPath, allErr)
 	}
 	if len(cdiSpec.Devices) > 0 {
 		first := cdiSpec.Devices[0].Name
