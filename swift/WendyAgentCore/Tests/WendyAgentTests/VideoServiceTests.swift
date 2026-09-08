@@ -169,6 +169,52 @@ struct VideoServiceAdapterTests {
     }
 
     @Test
+    func `limits concurrent capture sessions`() async throws {
+        let camera = CameraDeviceInfo(
+            id: 0,
+            uniqueID: "camera-0",
+            name: "Built-in Camera",
+            isExternal: false
+        )
+        let probe = VideoStreamTerminationProbe()
+        let service = VideoService(
+            camera: WaitingCameraManager(device: camera, probe: probe)
+        )
+        let firstResponse = try await makeStreamResponse(service: service)
+        let secondResponse = try await makeStreamResponse(service: service)
+        let firstWriter = VideoCollectingWriter<Wendy_Agent_Services_V1_VideoFrame>()
+        let secondWriter = VideoCollectingWriter<Wendy_Agent_Services_V1_VideoFrame>()
+        let firstProducer = Task {
+            try await firstResponse.accepted.get().producer(RPCWriter(wrapping: firstWriter))
+        }
+        let secondProducer = Task {
+            try await secondResponse.accepted.get().producer(RPCWriter(wrapping: secondWriter))
+        }
+        #expect(await probe.waitUntilStarted(count: 2))
+
+        let thirdResponse = try await makeStreamResponse(service: service)
+        let thirdWriter = VideoCollectingWriter<Wendy_Agent_Services_V1_VideoFrame>()
+        do {
+            _ = try await thirdResponse.accepted.get().producer(RPCWriter(wrapping: thirdWriter))
+            Issue.record("Expected the concurrent stream limit to reject a third session")
+        } catch let error as RPCError {
+            #expect(error.code == .resourceExhausted)
+        } catch {
+            Issue.record("Expected RPCError, got \(error)")
+        }
+
+        firstProducer.cancel()
+        secondProducer.cancel()
+        let bothTerminated = await probe.waitUntilTerminated(count: 2)
+        if !bothTerminated {
+            probe.finishAll()
+        }
+        _ = await firstProducer.result
+        _ = await secondProducer.result
+        #expect(bothTerminated)
+    }
+
+    @Test
     func `maps camera access denial onto the stream`() async throws {
         let camera = CameraDeviceInfo(
             id: 0,
@@ -292,36 +338,46 @@ private struct WaitingCameraManager: CameraManaging {
 
 private final class VideoStreamTerminationProbe: @unchecked Sendable {
     private let lock = NSLock()
-    private var started = false
-    private var terminated = false
-    private var continuation: AsyncThrowingStream<EncodedCameraFrame, any Error>.Continuation?
+    private var startedCount = 0
+    private var terminatedCount = 0
+    private var continuations:
+        [UUID:
+            AsyncThrowingStream<EncodedCameraFrame, any Error>.Continuation] = [:]
 
     func stream() -> AsyncThrowingStream<EncodedCameraFrame, any Error> {
-        AsyncThrowingStream { continuation in
+        let id = UUID()
+        return AsyncThrowingStream { continuation in
             lock.withLock {
-                started = true
-                self.continuation = continuation
+                startedCount += 1
+                continuations[id] = continuation
             }
             continuation.onTermination = { [weak self] _ in
                 self?.lock.withLock {
-                    self?.terminated = true
-                    self?.continuation = nil
+                    self?.terminatedCount += 1
+                    self?.continuations[id] = nil
                 }
             }
         }
     }
 
     func finish() {
-        let continuation = lock.withLock { self.continuation }
+        let continuation = lock.withLock { continuations.values.first }
         continuation?.finish()
     }
 
-    func waitUntilStarted() async -> Bool {
-        await waitUntil { self.started }
+    func finishAll() {
+        let continuations = lock.withLock { Array(self.continuations.values) }
+        for continuation in continuations {
+            continuation.finish()
+        }
     }
 
-    func waitUntilTerminated() async -> Bool {
-        await waitUntil { self.terminated }
+    func waitUntilStarted(count: Int = 1) async -> Bool {
+        await waitUntil { self.startedCount >= count }
+    }
+
+    func waitUntilTerminated(count: Int = 1) async -> Bool {
+        await waitUntil { self.terminatedCount >= count }
     }
 
     private func waitUntil(_ predicate: @escaping @Sendable () -> Bool) async -> Bool {
@@ -350,6 +406,18 @@ private final class VideoCollectingWriter<Element: Sendable>: RPCWriterProtocol,
     func snapshot() -> [Element] {
         queue.sync { elements }
     }
+}
+
+private func makeStreamResponse(
+    service: VideoService
+) async throws -> StreamingServerResponse<Wendy_Agent_Services_V1_VideoFrame> {
+    try await service.streamVideo(
+        request: ServerRequest(
+            metadata: [:],
+            message: Wendy_Agent_Services_V1_StreamVideoRequest()
+        ),
+        context: makeVideoContext(method: "StreamVideo")
+    )
 }
 
 private func expectVideoRPCError(

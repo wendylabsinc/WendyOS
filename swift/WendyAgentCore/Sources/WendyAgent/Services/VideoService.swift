@@ -1,10 +1,15 @@
 import GRPCCore
 import GRPCProtobuf
+import Logging
 import WendyAgentGRPC
 
 actor VideoService: RegistrableRPCService {
+    private static let maxConcurrentStreams = 2
+
     private let camera: any CameraManaging
+    private let logger = Logger(label: "sh.wendy.agent.video")
     private var devicesByID: [UInt32: CameraDeviceInfo] = [:]
+    private var activeStreamCount = 0
 
     init(camera: any CameraManaging = AVCaptureCameraManager()) {
         self.camera = camera
@@ -162,7 +167,9 @@ actor VideoService: RegistrableRPCService {
 
         let device = try await device(id: message.deviceID)
         let camera = self.camera
+        let remotePeer = context.remotePeer
         return StreamingServerResponse { writer in
+            try await self.reserveStream(device: device, remotePeer: remotePeer)
             do {
                 for try await frame in camera.frames(for: device) {
                     var proto = Wendy_Agent_Services_V1_VideoFrame()
@@ -171,10 +178,15 @@ actor VideoService: RegistrableRPCService {
                     proto.codec = .h264
                     try await writer.write(proto)
                 }
-            } catch let error as CameraCaptureError {
-                throw Self.rpcError(for: error)
+                await self.releaseStream(device: device, remotePeer: remotePeer)
+                return Metadata()
+            } catch {
+                await self.releaseStream(device: device, remotePeer: remotePeer)
+                if let error = error as? CameraCaptureError {
+                    throw Self.rpcError(for: error)
+                }
+                throw error
             }
-            return Metadata()
         }
     }
 
@@ -228,6 +240,42 @@ actor VideoService: RegistrableRPCService {
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_ResetCameraControlsResponse> {
         throw Self.unsupportedV4L2Controls()
+    }
+
+    private func reserveStream(
+        device: CameraDeviceInfo,
+        remotePeer: String
+    ) throws {
+        guard activeStreamCount < Self.maxConcurrentStreams else {
+            throw RPCError(
+                code: .resourceExhausted,
+                message: "This Mac is already serving the maximum number of camera streams."
+            )
+        }
+        activeStreamCount += 1
+        logger.info(
+            "Camera stream started",
+            metadata: [
+                "camera_id": "\(device.id)",
+                "camera_name": "\(device.name)",
+                "remote_peer": "\(remotePeer)",
+            ]
+        )
+    }
+
+    private func releaseStream(
+        device: CameraDeviceInfo,
+        remotePeer: String
+    ) {
+        activeStreamCount -= 1
+        logger.info(
+            "Camera stream stopped",
+            metadata: [
+                "camera_id": "\(device.id)",
+                "camera_name": "\(device.name)",
+                "remote_peer": "\(remotePeer)",
+            ]
+        )
     }
 
     private func discoverDevices() async -> [CameraDeviceInfo] {
