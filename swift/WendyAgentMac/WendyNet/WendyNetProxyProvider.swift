@@ -505,8 +505,8 @@ actor UDPWriteQueue {
     }
 
     private func write(_ data: Data, _ endpoint: Network.NWEndpoint) {
-        flow.writeDatagrams([(data, endpoint)]) { [weak self] _ in
-            Task { await self?.writeCompleted() }
+        flow.writeDatagrams([(data, endpoint)]) { [self] _ in
+            Task { await self.writeCompleted() }
         }
     }
 
