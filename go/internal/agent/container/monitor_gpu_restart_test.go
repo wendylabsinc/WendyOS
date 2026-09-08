@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,13 +14,18 @@ import (
 // GPU-entitled.
 type gpuFakeContainerd struct {
 	fakeContainerd
-	gpu   map[string]bool
-	calls int
+	gpu    map[string]bool
+	calls  int
+	err    error
+	lookup func(string) (bool, error)
 }
 
-func (f *gpuFakeContainerd) HasGPUEntitlement(_ context.Context, appName string) bool {
+func (f *gpuFakeContainerd) HasGPUEntitlement(_ context.Context, appName string) (bool, error) {
 	f.calls++
-	return f.gpu[appName]
+	if f.lookup != nil {
+		return f.lookup(appName)
+	}
+	return f.gpu[appName], f.err
 }
 
 // A GPU container must not be restarted the instant it is seen down, however
@@ -144,5 +150,53 @@ func TestPlanRestarts_DownSinceClearedWhenRunning(t *testing.T) {
 
 	if got := m.planRestarts(stopped); len(got) != 0 {
 		t.Fatalf("planRestarts = %v on the first tick of a fresh crash; want none (DownSince must have been cleared while running)", got)
+	}
+}
+
+func TestResolveGPUEntitlements_DirectReregistration(t *testing.T) {
+	fake := &gpuFakeContainerd{gpu: map[string]bool{"app": false}}
+	m := newMonitorWithClient(fake)
+	m.Register("app", RestartUnlessStopped, 0)
+	m.resolveGPUEntitlements(context.Background())
+	fake.gpu["app"] = true
+	m.Register("app", RestartUnlessStopped, 0)
+	m.resolveGPUEntitlements(context.Background())
+	if !m.gpuEntitled["app"] {
+		t.Fatal("new registration retains old non-GPU classification")
+	}
+}
+
+func TestResolveGPUEntitlements_IgnoresPreviousRegistrationLookup(t *testing.T) {
+	fake := &gpuFakeContainerd{gpu: map[string]bool{"app": true}}
+	m := newMonitorWithClient(fake)
+	m.Register("app", RestartUnlessStopped, 0)
+	fake.lookup = func(string) (bool, error) {
+		m.Unregister("app")
+		m.Register("app", RestartUnlessStopped, 0)
+		return false, nil
+	}
+	m.resolveGPUEntitlements(context.Background())
+	if _, cached := m.gpuEntitled["app"]; cached {
+		t.Fatal("old lookup applied to new registration")
+	}
+	fake.lookup = nil
+	m.resolveGPUEntitlements(context.Background())
+	if !m.gpuEntitled["app"] {
+		t.Fatal("new registration was not resolved")
+	}
+}
+
+func TestResolveGPUEntitlements_RetriesLookupFailure(t *testing.T) {
+	fake := &gpuFakeContainerd{gpu: map[string]bool{"app": true}, err: errors.New("temporarily unavailable")}
+	m := newMonitorWithClient(fake)
+	m.Register("app", RestartUnlessStopped, 0)
+	m.resolveGPUEntitlements(context.Background())
+	if _, cached := m.gpuEntitled["app"]; cached {
+		t.Fatal("error cached as non-GPU")
+	}
+	fake.err = nil
+	m.resolveGPUEntitlements(context.Background())
+	if !m.gpuEntitled["app"] || fake.calls != 2 {
+		t.Fatal("lookup was not retried")
 	}
 }

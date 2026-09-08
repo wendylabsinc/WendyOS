@@ -186,12 +186,9 @@ type AppStateRebuilder interface {
 // client does not implement it. Kept separate from ContainerdClient so the
 // large interface and its mocks stay untouched (mirrors GroupRestarter).
 type GPUDeviceReporter interface {
-	// HasGPUEntitlement reports whether the named container holds a gpu
-	// entitlement, read from the labels written at create time. A container it
-	// cannot resolve is reported as non-GPU: the answer only ever relaxes or
-	// tightens a restart delay, so guessing "no" costs a few seconds of
-	// caution at most and never blocks a restart.
-	HasGPUEntitlement(ctx context.Context, appName string) bool
+	// HasGPUEntitlement reads the persisted entitlement. Lookup errors must not
+	// be cached as a negative answer; the monitor retries them on a later tick.
+	HasGPUEntitlement(ctx context.Context, appName string) (bool, error)
 }
 
 // PortExposureProber is the optional capability to scan running host-network

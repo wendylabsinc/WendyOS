@@ -201,6 +201,7 @@ func (m *ContainerMonitor) Register(appName string, policy RestartPolicy, maxRet
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	delete(m.gpuEntitled, appName)
 	m.states[appName] = &containerState{
 		RestartPolicy: policy,
 		MaxRetries:    maxRetries,
@@ -709,21 +710,23 @@ func (m *ContainerMonitor) resolveGPUEntitlements(ctx context.Context) {
 	}
 
 	m.mu.Lock()
-	var unresolved []string
-	for name := range m.states {
+	unresolved := make(map[string]*containerState)
+	for name, state := range m.states {
 		if _, known := m.gpuEntitled[name]; !known {
-			unresolved = append(unresolved, name)
+			unresolved[name] = state
 		}
 	}
 	m.mu.Unlock()
 
-	for _, name := range unresolved {
-		hasGPU := reporter.HasGPUEntitlement(ctx, name)
+	for name, registration := range unresolved {
+		hasGPU, err := reporter.HasGPUEntitlement(ctx, name)
+		if err != nil {
+			continue // A transient lookup failure is not a permanent non-GPU answer.
+		}
 		m.mu.Lock()
-		// Only record an answer for a container that is still registered: an
-		// Unregister between the snapshot above and this line means the entry
-		// it belonged to is gone, and re-adding it here would leak.
-		if _, stillRegistered := m.states[name]; stillRegistered {
+		// Register replaces the state pointer. Never commit a lookup from a
+		// previous registration, even if its name has already been reused.
+		if m.states[name] == registration {
 			m.gpuEntitled[name] = hasGPU
 		}
 		m.mu.Unlock()

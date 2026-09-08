@@ -1846,17 +1846,17 @@ func (c *Client) persistRefreshedSpec(ctx context.Context, container containerd.
 // entitlements from the container's own labels (written at create time), so it
 // answers for a container that is currently down — which is exactly when the
 // monitor asks.
-func (c *Client) HasGPUEntitlement(ctx context.Context, appName string) bool {
+func (c *Client) HasGPUEntitlement(ctx context.Context, appName string) (bool, error) {
 	ctx = c.withNamespace(ctx)
 	container, err := c.client.LoadContainer(ctx, appName)
 	if err != nil {
-		return false
+		return false, err
 	}
 	labels, err := container.Labels(ctx)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return hasGPUEntitlement(parseEntitlementsFromAnnotations(labels))
+	return hasGPUEntitlement(parseEntitlementsFromAnnotations(labels)), nil
 }
 
 // hasGPUEntitlement reports whether a gpu entitlement is present.
