@@ -19,24 +19,22 @@ func NewProvisioningServiceV2(v1 *ProvisioningService) *ProvisioningServiceV2 {
 }
 
 func (s *ProvisioningServiceV2) IsProvisioned(ctx context.Context, _ *agentpbv2.IsProvisionedRequest) (*agentpbv2.IsProvisionedResponse, error) {
-	resp, err := s.v1.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
-	if err != nil {
-		return nil, err
-	}
-	if resp.GetNotProvisioned() != nil {
+	s.v1.mu.Lock()
+	defer s.v1.mu.Unlock()
+	if !s.v1.enrolled {
 		return &agentpbv2.IsProvisionedResponse{
 			ResponseType: &agentpbv2.IsProvisionedResponse_NotProvisioned{
 				NotProvisioned: &agentpbv2.NotProvisionedResponse{},
 			},
 		}, nil
 	}
-	p := resp.GetProvisioned()
 	return &agentpbv2.IsProvisionedResponse{
 		ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{
 			Provisioned: &agentpbv2.ProvisionedResponse{
-				CloudHost:      p.CloudHost,
-				OrganizationId: p.OrganizationId,
-				AssetId:        p.AssetId,
+				CloudHost:      s.v1.cloudHost,
+				OrganizationId: s.v1.orgID,
+				AssetId:        s.v1.assetID,
+				PrincipalUri:   s.v1.principalURI,
 			},
 		},
 	}, nil

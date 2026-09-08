@@ -1,8 +1,10 @@
 # `wendy auth refresh-certs`
 
-Renews the mTLS certificate of every stored auth session directly against
-[pki-core](../../../../pki/)'s renew frontend. Cloud is not in this path: it
-neither mints the certificate nor relays the request.
+Refreshes the mTLS certificate of every stored auth session directly against
+[pki-core](../../../../pki/). OIDC sessions use their refresh token and PKI
+identity endpoint to obtain a fresh operator certificate. Certificate-only
+sessions use the renew frontend described below. Cloud does not relay either
+request.
 
 A renewal is a re-issue, not a re-key of the same certificate: the CLI generates
 a new key pair, builds a CSR for it, and posts the CSR to the renew frontend
@@ -23,10 +25,11 @@ wendy auth refresh-certs
 ## The renew frontend
 
 `WENDY_PKI_RENEW_ENDPOINT` names pki-core's renew frontend, e.g.
-`https://renew.pki.example:8451/v1/renew`. Nothing is derived from the cloud
-endpoint. When it is unset there is no renew frontend configured — a supported
-state, in which the CLI never renews on its own and this command reports that
-nothing is configured to renew against.
+`https://renew.pki.example:8451/v1/renew`, and overrides deployment defaults.
+Sessions using `identity.dev.pki.wendy.sh`, or certificate-only sessions using
+`api.dev.wendy.sh:443`, default to `https://renew.dev.pki.wendy.sh/v1/renew`.
+Custom deployments still require the override; a custom identity endpoint is
+never replaced by the Cloud dev default.
 
 ## It also runs by itself
 

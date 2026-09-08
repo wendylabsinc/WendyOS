@@ -310,3 +310,49 @@ func TestRenewStatusMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestRenewEndpointUsesKnownDeployment(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		auth           *config.AuthConfig
+		override, want string
+	}{
+		{name: "dev certificate session", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443"}, want: "https://renew.dev.pki.wendy.sh/v1/renew"},
+		{name: "identity deployment", auth: &config.AuthConfig{PKIEndpoint: "https://identity.dev.pki.wendy.sh/v1/identity/certificate"}, want: "https://renew.dev.pki.wendy.sh/v1/renew"},
+		{name: "explicit override", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443"}, override: " https://renew.example/v1/renew ", want: "https://renew.example/v1/renew"},
+		{name: "custom PKI", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", PKIEndpoint: "https://identity.example/v1/identity/certificate"}},
+		{name: "unknown deployment", auth: &config.AuthConfig{CloudGRPC: "api.example:443"}},
+		{name: "lookalike host", auth: &config.AuthConfig{PKIEndpoint: "https://identity.dev.pki.wendy.sh.example/v1/identity/certificate"}},
+		{name: "no session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(renewEndpointEnv, tc.override)
+			if got := renewEndpoint(tc.auth); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnsureFreshCertificateUsesDevRenewEndpoint(t *testing.T) {
+	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	stubPreflight(t, now, "")
+	origLeaf := leafNotAfterFn
+	leafNotAfterFn = func(string) (time.Time, error) { return now.Add(time.Minute), nil }
+	t.Cleanup(func() { leafNotAfterFn = origLeaf })
+	origRenew := renewViaPKICore
+	var endpoint string
+	renewViaPKICore = func(_ context.Context, e string, _ *config.AuthConfig) (string, string, string, error) {
+		endpoint = e
+		return "leaf", "chain", "key", nil
+	}
+	t.Cleanup(func() { renewViaPKICore = origRenew })
+	auth := authWithLeaf()
+	auth.CloudGRPC = "api.dev.wendy.sh:443"
+	if err := ensureFreshCertificate(context.Background(), auth); err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "https://renew.dev.pki.wendy.sh/v1/renew" {
+		t.Fatalf("unexpected renewal endpoint %q", endpoint)
+	}
+}

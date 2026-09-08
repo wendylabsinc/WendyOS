@@ -58,3 +58,18 @@ func TestAuthPickerItems(t *testing.T) {
 		t.Errorf("item 1 env = %q, want local:50051", items2[1].Type)
 	}
 }
+
+func TestAuthPickerItemsDeduplicatesLegacyAndOperatorSessions(t *testing.T) {
+	cfg := &config.Config{Auth: []config.AuthConfig{
+		{CloudDashboard: "https://cloud.dev.wendy.sh", CloudGRPC: "api.dev.wendy.sh:443", Certificates: []config.CertificateInfo{{OrganizationID: 0}}},
+		{CloudDashboard: "https://cloud.dev.wendy.sh", CloudGRPC: "api.dev.wendy.sh:443", OAuthIssuer: "https://auth.dev.wendy.sh/realms/acme", Certificates: []config.CertificateInfo{{OrganizationID: 0}}},
+	}}
+
+	items := authPickerItems(cfg, nil)
+	if len(items) != 1 {
+		t.Fatalf("legacy/operator duplicate produced %d picker rows, want 1", len(items))
+	}
+	if got := items[0].Value; got != "api.dev.wendy.sh:443::0" {
+		t.Fatalf("picker key = %v", got)
+	}
+}

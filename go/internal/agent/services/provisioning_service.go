@@ -31,13 +31,15 @@ import (
 // new writes never populate it — the private key lives exclusively in
 // device-key.pem (mode 0o400) and is never written to provisioning.json.
 type provisioningState struct {
-	Enrolled  bool   `json:"enrolled"`
-	CloudHost string `json:"cloudHost,omitempty"`
-	OrgID     int32  `json:"orgId,omitempty"`
-	AssetID   int32  `json:"assetId,omitempty"`
-	KeyPEM    string `json:"keyPem,omitempty"` // read-only: migration only; never written
-	CertPEM   string `json:"certPem,omitempty"`
-	ChainPEM  string `json:"chainPem,omitempty"`
+	Enrolled         bool   `json:"enrolled"`
+	CloudHost        string `json:"cloudHost,omitempty"`
+	OrgID            int32  `json:"orgId,omitempty"`
+	AssetID          int32  `json:"assetId,omitempty"`
+	KeyPEM           string `json:"keyPem,omitempty"` // read-only: migration only; never written
+	CertPEM          string `json:"certPem,omitempty"`
+	ChainPEM         string `json:"chainPem,omitempty"`
+	PrincipalURI     string `json:"principalURI,omitempty"`
+	ACMEDirectoryURL string `json:"acmeDirectoryURL,omitempty"`
 }
 
 type CloudDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error)
@@ -109,6 +111,7 @@ type ProvisioningService struct {
 	keyPEM          []byte // stored as []byte so it can be zeroed on rotation/shutdown
 	certPEM         string
 	chainPEM        string
+	principalURI    string
 	CloudDialer     CloudDialer
 	OnProvisioned   OnProvisionedFunc
 	OnUnprovisioned OnUnprovisionedFunc
@@ -266,6 +269,19 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		CertPEM:   certPEM,
 		ChainPEM:  chainPEM,
 	}
+	complete, err := s.persistProvisioning(state, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	locked = false
+	s.mu.Unlock()
+	complete()
+	return &agentpb.StartProvisioningResponse{}, nil
+}
+
+// persistProvisioning runs with mu held. The returned callback must run after
+// releasing mu, and only after the complete state is durable.
+func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyPEM []byte) (func(), error) {
 	if err := s.saveState(state); err != nil {
 		s.logger.Error("Failed to persist provisioning state", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "failed to save provisioning state: %v", err)
@@ -276,13 +292,14 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 	s.cloudHost = state.CloudHost
 	s.orgID = state.OrgID
 	s.assetID = state.AssetID
+	s.principalURI = state.PrincipalURI
 	s.keyPEM = keyPEM
-	s.certPEM = certPEM
-	s.chainPEM = chainPEM
+	s.certPEM = state.CertPEM
+	s.chainPEM = state.ChainPEM
 
 	// Write individual PEM files so the container registry can mount and use them.
 	// string(keyPEM) creates a temporary copy; filesystem write cannot be avoided.
-	if err := s.writePEMFiles(string(keyPEM), certPEM, chainPEM); err != nil {
+	if err := s.writePEMFiles(string(keyPEM), state.CertPEM, state.ChainPEM); err != nil {
 		s.logger.Error("Failed to write PEM files for registry", zap.Error(err))
 		// Non-fatal: provisioning.json is the source of truth.
 	}
@@ -301,12 +318,11 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		cbKeyPEM = make([]byte, len(keyPEM))
 		copy(cbKeyPEM, keyPEM)
 	}
-	locked = false
-	s.mu.Unlock()
-	if cb != nil {
-		cb(certPEM, chainPEM, cbKeyPEM)
-	}
-	return &agentpb.StartProvisioningResponse{}, nil
+	return func() {
+		if cb != nil {
+			cb(state.CertPEM, state.ChainPEM, cbKeyPEM)
+		}
+	}, nil
 }
 
 // Unprovision resets the device to an unprovisioned state. It deletes the
@@ -345,6 +361,7 @@ func (s *ProvisioningService) Unprovision(_ context.Context, _ *agentpb.Unprovis
 	s.cloudHost = ""
 	s.orgID = 0
 	s.assetID = 0
+	s.principalURI = ""
 	s.keyPEM = nil
 	s.certPEM = ""
 	s.chainPEM = ""
@@ -378,6 +395,7 @@ func (s *ProvisioningService) clearStateFiles() error {
 		filepath.Join(s.configPath, "device.pem"),
 		filepath.Join(s.configPath, "ca.pem"),
 		filepath.Join(s.configPath, ".provisioned"),
+		filepath.Join(s.configPath, "acme-account-key.pem"),
 	}
 	for _, f := range files {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
@@ -412,6 +430,7 @@ func (s *ProvisioningService) loadState() {
 	s.cloudHost = state.CloudHost
 	s.orgID = state.OrgID
 	s.assetID = state.AssetID
+	s.principalURI = state.PrincipalURI
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
 

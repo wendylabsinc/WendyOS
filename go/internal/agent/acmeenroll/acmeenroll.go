@@ -18,16 +18,24 @@
 package acmeenroll
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"golang.org/x/crypto/acme"
 
@@ -56,7 +64,10 @@ type Config struct {
 	EABHMACKey string `json:"eabHMACKey"`
 }
 
-func (c Config) validate() error {
+func (c Config) validate() error { return c.Validate() }
+
+// Validate checks enrollment material without registering an ACME account.
+func (c Config) Validate() error {
 	var missing []string
 	for _, f := range []struct {
 		name, value string
@@ -73,7 +84,49 @@ func (c Config) validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("acme enrollment config is missing %s", strings.Join(missing, ", "))
 	}
+	if _, err := c.PrincipalURI(); err != nil {
+		return err
+	}
+	if _, err := hex.DecodeString(c.EABHMACKey); err != nil {
+		return errors.New("EAB HMAC key must be hex-encoded")
+	}
 	return nil
+}
+
+// PrincipalURI returns the device identity expected from this tenant's ACME
+// endpoint. Validate the endpoint before sending its single-use credential.
+func (c Config) PrincipalURI() (string, error) {
+	u, err := url.Parse(c.DirectoryURL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("invalid ACME directory URL")
+	}
+	loopback := u.Hostname() == "localhost"
+	if ip := net.ParseIP(u.Hostname()); ip != nil {
+		loopback = ip.IsLoopback()
+	}
+	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+		return "", errors.New("ACME directory must use HTTPS (HTTP is allowed only for loopback development servers)")
+	}
+	parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+	if len(parts) != 3 || parts[1] != "acme" || parts[2] != "directory" {
+		return "", errors.New("ACME directory URL must have the path /<tenant-uuid>/acme/directory")
+	}
+	tenant, err := uuid.Parse(parts[0])
+	if err != nil || tenant.String() != parts[0] {
+		return "", errors.New("ACME directory URL must contain a canonical tenant UUID")
+	}
+	// Match PKI's device-name contract, including names such as fleet/box-01.
+	for _, segment := range strings.Split(c.DeviceID, "/") {
+		if len(segment) == 0 || len(segment) > 64 || segment == "." || segment == ".." {
+			return "", errors.New("invalid ACME device ID: each path segment must contain 1–64 letters, digits, dots, underscores or hyphens, excluding . and ..")
+		}
+		for _, ch := range segment {
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '.' || ch == '_' || ch == '-') {
+				return "", errors.New("invalid ACME device ID: use letters, digits, dots, underscores, hyphens and path separators")
+			}
+		}
+	}
+	return "spiffe://wendy.sh/tenant/" + tenant.String() + "/device/" + c.DeviceID, nil
 }
 
 // Enroll registers the device's ACME account against the staged EAB, orders a
@@ -99,6 +152,15 @@ func Enroll(ctx context.Context, cfg Config, accountKeyPath string, deviceKeyPEM
 		return "", "", fmt.Errorf("decoding EAB HMAC key (pki-core encodes it as hex): %w", err)
 	}
 
+	csrPEM, err := certs.GenerateCSR(deviceKeyPEM, cfg.DeviceID, nil, x509.ExtKeyUsageClientAuth)
+	if err != nil {
+		return "", "", fmt.Errorf("building device CSR: %w", err)
+	}
+	csrBlock, _ := pem.Decode([]byte(csrPEM))
+	if csrBlock == nil {
+		return "", "", errors.New("device CSR is not valid PEM")
+	}
+
 	// The account key is created before anything is spent so a write failure
 	// cannot burn the single-use EAB.
 	accountKey, err := loadOrCreateAccountKey(accountKeyPath)
@@ -122,23 +184,87 @@ func Enroll(ctx context.Context, cfg Config, accountKeyPath string, deviceKeyPEM
 		return "", "", fmt.Errorf("ACME order is %q, want %q: this device's profile requires an attestation challenge, which is not implemented", order.Status, acme.StatusReady)
 	}
 
-	csrPEM, err := certs.GenerateCSR(deviceKeyPEM, cfg.DeviceID, nil, x509.ExtKeyUsageClientAuth)
-	if err != nil {
-		return "", "", fmt.Errorf("building device CSR: %w", err)
+	ders, certURL, err := client.CreateOrderCert(ctx, order.FinalizeURL, csrBlock.Bytes, true)
+	// CreateOrderCert also downloads the issued certificate using POST-as-GET.
+	// PKI currently exposes that public resource as GET only. A nonempty
+	// certURL means finalization succeeded; never retry a finalize failure here.
+	var problem *acme.Error
+	if certURL != "" && errors.As(err, &problem) && (problem.StatusCode == http.StatusNotFound || problem.StatusCode == http.StatusMethodNotAllowed) {
+		ders, err = fetchPKICertificate(ctx, cfg.DirectoryURL, certURL)
 	}
-	csrBlock, _ := pem.Decode([]byte(csrPEM))
-	if csrBlock == nil {
-		return "", "", errors.New("device CSR is not valid PEM")
-	}
-
-	ders, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csrBlock.Bytes, true)
 	if err != nil {
+		if certURL != "" {
+			return "", "", fmt.Errorf("downloading issued ACME certificate: %w", err)
+		}
 		return "", "", fmt.Errorf("finalizing ACME order: %w", err)
 	}
 	if len(ders) == 0 {
 		return "", "", errors.New("ACME server returned no certificate")
 	}
-	return encodeCerts(ders[:1]), encodeCerts(ders[1:]), nil
+	certPEM = encodeCerts(ders[:1])
+	// Only parse the leaf: PKI's intermediate chain may use ML-DSA, which
+	// crypto/x509 cannot parse. Keep that chain opaque for transport.
+	if _, err := tls.X509KeyPair([]byte(certPEM), deviceKeyPEM); err != nil {
+		return "", "", fmt.Errorf("ACME certificate does not match the device key: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(ders[0])
+	if err != nil {
+		return "", "", fmt.Errorf("parsing ACME device certificate: %w", err)
+	}
+	principal, ok := certs.TenantPrincipalFromCert(leaf)
+	expected, _ := cfg.PrincipalURI() // validated before account registration
+	if !ok || principal != expected {
+		return "", "", fmt.Errorf("ACME certificate does not identify the expected device %s", expected)
+	}
+	return certPEM, encodeCerts(ders[1:]), nil
+}
+
+// fetchPKICertificate implements PKI's documented GET certificate endpoint.
+// Restrict the compatibility request to the selected tenant on the same origin.
+func fetchPKICertificate(ctx context.Context, directory, certURL string) ([][]byte, error) {
+	dir, err := url.Parse(directory)
+	if err != nil {
+		return nil, errors.New("invalid ACME directory URL")
+	}
+	u, err := url.Parse(certURL)
+	prefix := strings.TrimSuffix(dir.Path, "/directory") + "/cert/"
+	if err != nil || u.Scheme != dir.Scheme || u.Host != dir.Host || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !strings.HasPrefix(u.EscapedPath(), prefix) || strings.TrimPrefix(u.EscapedPath(), prefix) == "" {
+		return nil, errors.New("PKI certificate URL is outside the selected tenant's certificate endpoint")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("PKI certificate download returned HTTP %d", resp.StatusCode)
+	}
+	const maxChainBytes = 256 * 1024
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxChainBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxChainBytes {
+		return nil, errors.New("PKI certificate chain exceeds 256 KiB")
+	}
+	var chain [][]byte
+	for len(bytes.TrimSpace(data)) > 0 {
+		block, rest := pem.Decode(data)
+		if block == nil || block.Type != "CERTIFICATE" || len(chain) >= 10 {
+			return nil, errors.New("invalid PKI certificate chain")
+		}
+		chain = append(chain, block.Bytes)
+		data = rest
+	}
+	if len(chain) == 0 {
+		return nil, errors.New("PKI returned an empty certificate chain")
+	}
+	return chain, nil
 }
 
 func encodeCerts(ders [][]byte) string {

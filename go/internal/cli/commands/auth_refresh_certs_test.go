@@ -172,3 +172,21 @@ func TestRenewalRefusalsOfferRelogin(t *testing.T) {
 		})
 	}
 }
+
+func TestRefreshCertsForAuthUsesDevRenewEndpoint(t *testing.T) {
+	t.Setenv(renewEndpointEnv, "")
+	orig := renewViaPKICore
+	var endpoint string
+	renewViaPKICore = func(_ context.Context, e string, _ *config.AuthConfig) (string, string, string, error) {
+		endpoint = e
+		return "leaf", "chain", "key", nil
+	}
+	t.Cleanup(func() { renewViaPKICore = orig })
+	auth := &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", Certificates: []config.CertificateInfo{{PemCertificate: leafWithURIs(t, testTenantPrincipal)}}}
+	if err := refreshCertsForAuth(cancelledCtx(t), auth); err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "https://renew.dev.pki.wendy.sh/v1/renew" {
+		t.Fatalf("unexpected renewal endpoint %q", endpoint)
+	}
+}

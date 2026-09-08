@@ -663,9 +663,9 @@ func dialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
-// withCloudRequestSigning installs the pki-core operator-certificate signer
-// for OIDC sessions. The bootstrap paths that construct their own connection
-// use this helper too, so all Cloud mutations share one wire contract.
+// withCloudRequestSigning installs the pki-core operator-certificate signer.
+// The bootstrap paths that construct their own connection use this helper too,
+// so all Cloud mutations share one wire contract.
 func withCloudRequestSigning(auth *config.AuthConfig, options ...grpc.DialOption) ([]grpc.DialOption, error) {
 	signingOption, err := cloudrequest.DialOption(auth)
 	if err != nil {

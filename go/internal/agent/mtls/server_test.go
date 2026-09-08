@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -12,6 +13,57 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPKIDeviceTLSRequiresSameTenantOnFullAndResumedSessions(t *testing.T) {
+	for _, deviceName := range []string{"sim", "fleet/sim"} {
+		t.Run(deviceName, func(t *testing.T) {
+			const tenant = "11111111-1111-4111-8111-111111111111"
+			certPEM, keyPEM := testLeafCertificate(t, "device")
+			block, _ := pem.Decode([]byte(certPEM))
+			leaf, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keyBlock, _ := pem.Decode([]byte(keyPEM))
+			key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			principal, _ := url.Parse("spiffe://wendy.sh/tenant/" + tenant + "/device/" + deviceName)
+			leaf.URIs = []*url.URL{principal}
+			der, err := x509.CreateCertificate(rand.Reader, leaf, leaf, &key.PublicKey, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+			caPEM, _ := testCACertificate(t, "root")
+			cfg, err := NewTLSConfig(certPEM, caPEM, keyPEM, nil, time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.VerifyConnection == nil {
+				t.Fatal("PKI tenant gate was not installed")
+			}
+			for _, resumed := range []bool{false, true} {
+				for _, tc := range []struct {
+					principal string
+					wantErr   bool
+				}{
+					{"spiffe://wendy.sh/tenant/" + tenant + "/operator/alice", false},
+					{"spiffe://wendy.sh/tenant/" + tenant + "/device/peer", false},
+					{"spiffe://wendy.sh/tenant/22222222-2222-4222-8222-222222222222/operator/alice", true},
+					{"urn:wendy:org:7:user:alice", true},
+				} {
+					u, _ := url.Parse(tc.principal)
+					cs := tls.ConnectionState{DidResume: resumed, PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{u}}}}
+					if err := cfg.VerifyConnection(cs); (err != nil) != tc.wantErr {
+						t.Errorf("principal=%s resumed=%v error=%v", tc.principal, resumed, err)
+					}
+				}
+			}
+		})
+	}
+}
 
 // testLeafCertificate generates a proper leaf (end-entity) certificate for testing.
 func testLeafCertificate(t *testing.T, commonName string) (certPEM, keyPEM string) {

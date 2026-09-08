@@ -292,6 +292,13 @@ func formatError(err error) error {
 		}
 		return fmt.Errorf("%sCould not connect to device. Is it powered on and connected to the network?", prefix)
 	case strings.Contains(msg, "code = Unavailable"):
+		// Cloud and PKI services can return actionable dependency failures.
+		// Keep that explanation instead of replacing it with a generic outage.
+		if isPKICoreCall || isCloudCall {
+			if desc, ok := grpcDesc(msg); ok {
+				return fmt.Errorf("%s%s", prefix, desc)
+			}
+		}
 		if isPKICoreCall {
 			return fmt.Errorf("%sLocal pki-core is unavailable.", prefix)
 		}

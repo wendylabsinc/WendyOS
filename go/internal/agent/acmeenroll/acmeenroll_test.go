@@ -13,9 +13,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +27,7 @@ import (
 )
 
 const (
+	testTenantID = "13a72725-dfe3-4425-bd04-b253d2036089"
 	testDeviceID = "dev-01"
 	testEABKeyID = "6f1d0e2c-0000-4000-8000-000000000001"
 	// testEABHMACKey is hex, as pki-core hands it out. The fake server MACs
@@ -42,17 +45,21 @@ type fakeACME struct {
 	orderState string
 	accounts   int
 	// Captured for assertions.
-	eabKID     string
-	eabMACOK   bool
-	orderIDs   []map[string]string
-	finalizeOK bool
+	eabKID        string
+	eabMACOK      bool
+	orderIDs      []map[string]string
+	finalizeOK    bool
+	wrongKey      bool
+	wrongIdentity bool
+	getOnlyCert   bool
+	certGets      int
 }
 
 func (f *fakeACME) handler(base string) http.Handler {
 	mux := http.NewServeMux()
 	nonce := func(w http.ResponseWriter) { w.Header().Set("Replay-Nonce", "bm9uY2U") }
 
-	mux.HandleFunc("/acme/directory", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/"+testTenantID+"/acme/directory", func(w http.ResponseWriter, r *http.Request) {
 		nonce(w)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"newNonce":   base + "/acme/new-nonce",
@@ -102,17 +109,48 @@ func (f *fakeACME) handler(base string) http.Handler {
 		if err != nil {
 			f.t.Errorf("finalize CSR is not base64url: %v", err)
 		}
-		if _, err := x509.ParseCertificateRequest(der); err != nil {
+		csr, err := x509.ParseCertificateRequest(der)
+		if err != nil {
 			f.t.Errorf("finalize CSR does not parse: %v", err)
+			return
+		}
+		if !f.wrongKey {
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				f.t.Error(err)
+				return
+			}
+			deviceID := testDeviceID
+			if f.wrongIdentity {
+				deviceID = "another-device"
+			}
+			principal, _ := url.Parse("spiffe://wendy.sh/tenant/" + testTenantID + "/device/" + deviceID)
+			tmpl := &x509.Certificate{
+				SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "leaf"},
+				NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
+				URIs: []*url.URL{principal},
+			}
+			f.leaf, err = x509.CreateCertificate(rand.Reader, tmpl, tmpl, csr.PublicKey, key)
+			if err != nil {
+				f.t.Error(err)
+				return
+			}
 		}
 		f.finalizeOK = true
 		w.Header().Set("Location", base+"/acme/order/1")
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":      "valid",
-			"certificate": base + "/acme/cert/1",
+			"certificate": base + "/" + testTenantID + "/acme/cert/1",
 		})
 	})
-	mux.HandleFunc("/acme/cert/1", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/"+testTenantID+"/acme/cert/1", func(w http.ResponseWriter, r *http.Request) {
+		if f.getOnlyCert && r.Method != http.MethodGet {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == http.MethodGet {
+			f.certGets++
+		}
 		nonce(w)
 		w.Header().Set("Content-Type", "application/pem-certificate-chain")
 		w.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.leaf}))
@@ -229,7 +267,7 @@ func startFake(t *testing.T, orderState string) (*fakeACME, string) {
 	srv.Config.Handler = f.handler(base)
 	srv.Start()
 	t.Cleanup(srv.Close)
-	return f, base + "/acme/directory"
+	return f, base + "/" + testTenantID + "/acme/directory"
 }
 
 func testConfig(directoryURL string) Config {
@@ -314,6 +352,37 @@ func TestEnrollRejectsOrderNeedingAttestation(t *testing.T) {
 	}
 }
 
+func TestEnrollRejectsCertificateForAnotherDevice(t *testing.T) {
+	for _, wrongKey := range []bool{false, true} {
+		t.Run(fmt.Sprint("wrongKey=", wrongKey), func(t *testing.T) {
+			f, dirURL := startFake(t, "ready")
+			f.wrongKey = wrongKey
+			f.wrongIdentity = !wrongKey
+			deviceKey, err := certs.GenerateKeyPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			leaf, chain, err := Enroll(context.Background(), testConfig(dirURL), filepath.Join(t.TempDir(), "account.pem"), []byte(deviceKey))
+			if err == nil || leaf != "" || chain != "" {
+				t.Fatalf("mismatched certificate accepted: error=%v", err)
+			}
+		})
+	}
+}
+
+func TestPrincipalURIRejectsInvalidDirectory(t *testing.T) {
+	for _, directory := range []string{
+		"http://pki.example/" + testTenantID + "/acme/directory",
+		"https://pki.example/not-a-tenant/acme/directory",
+		"https://pki.example/" + testTenantID + "/acme/directory?tenant=other",
+		"https://user:secret@pki.example/" + testTenantID + "/acme/directory",
+	} {
+		if _, err := testConfig(directory).PrincipalURI(); err == nil {
+			t.Errorf("accepted directory %q", directory)
+		}
+	}
+}
+
 func TestConfigValidateNamesEveryMissingField(t *testing.T) {
 	err := Config{}.validate()
 	if err == nil {
@@ -335,5 +404,39 @@ func countPEM(s string) int {
 			return n
 		}
 		n++
+	}
+}
+
+func TestPrincipalURIDeviceNames(t *testing.T) {
+	for _, name := range []string{"sim", "fleet-a/box-01", strings.Repeat("a", 64)} {
+		cfg := testConfig("https://acme.example/" + testTenantID + "/acme/directory")
+		cfg.DeviceID = name
+		got, err := cfg.PrincipalURI()
+		if err != nil || got != "spiffe://wendy.sh/tenant/"+testTenantID+"/device/"+name {
+			t.Fatalf("name=%q, principal=%q, error=%v", name, got, err)
+		}
+	}
+	for _, name := range []string{"", "/sim", "sim/", "fleet//sim", ".", "..", "fleet/../sim", "sim box", "sim?", "sim#", "sim%2fbox", "sím", strings.Repeat("a", 65)} {
+		cfg := testConfig("https://acme.example/" + testTenantID + "/acme/directory")
+		cfg.DeviceID = name
+		if _, err := cfg.PrincipalURI(); err == nil {
+			t.Errorf("accepted invalid name %q", name)
+		}
+	}
+}
+
+func TestEnrollDownloadsPKIGetOnlyCertificate(t *testing.T) {
+	f, dirURL := startFake(t, "ready")
+	f.getOnlyCert = true
+	key, err := certs.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, _, err := Enroll(context.Background(), testConfig(dirURL), filepath.Join(t.TempDir(), "account.pem"), []byte(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf == "" || !f.finalizeOK || f.certGets != 1 {
+		t.Fatal("GET certificate download did not complete after finalization")
 	}
 }

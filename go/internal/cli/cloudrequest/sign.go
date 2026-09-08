@@ -18,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -41,8 +42,8 @@ type Signer struct {
 	random     io.Reader
 }
 
-// DialOption returns a unary interceptor option for an OIDC session that has
-// a pki-core operator certificate. Legacy/token-only sessions return nil so
+// DialOption returns a unary interceptor option for a session that has a
+// pki-core operator certificate. Legacy/token-only sessions return nil so
 // read-only RPCs continue to work; Cloud will reject their privileged writes.
 func DialOption(auth *config.AuthConfig) (grpc.DialOption, error) {
 	signer, err := newSigner(auth)
@@ -56,10 +57,16 @@ func DialOption(auth *config.AuthConfig) (grpc.DialOption, error) {
 }
 
 func newSigner(auth *config.AuthConfig) (*Signer, error) {
-	if auth == nil || auth.OAuthIssuer == "" || len(auth.Certificates) == 0 {
+	if auth == nil || len(auth.Certificates) == 0 {
 		return nil, nil
 	}
 	certInfo := auth.Certificates[0]
+	// Operator identity is a property of the certificate, not of the login
+	// mechanism that happened to obtain it. In particular, imported/migrated
+	// operator credentials may not carry the OAuthIssuer bookkeeping field.
+	if certInfo.PrincipalURI == "" {
+		return nil, nil
+	}
 	tenantUUID, err := operatorTenant(certInfo.PrincipalURI)
 	if err != nil {
 		return nil, fmt.Errorf("loading Cloud request-signing identity: %w", err)
@@ -119,6 +126,14 @@ func operatorTenant(principal string) (string, error) {
 func (s *Signer) unaryClientInterceptor() grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		resource, required, err := signedResource(method, req)
+		if method == cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName {
+			in, ok := req.(*cloudpbv2.EnrollDeviceRequest)
+			if !ok {
+				return requestTypeError(method, req)
+			}
+			resource = "org/" + s.tenantUUID + "/device/" + in.GetDeviceId()
+			required = true
+		}
 		if err != nil {
 			return err
 		}
@@ -197,7 +212,38 @@ func (s *Signer) sign(operation, resource string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encoding request descriptor: %w", err)
 	}
-	header, err := canonicalJSON(map[string]any{"alg": "ES256", "x5c": s.x5c})
+	// Cloud validates only x5c[0] through PKI, which owns the issuer chain.
+	// Sending the ML-DSA intermediates here can exceed the broker's 16 KiB
+	// HTTP/2 header limit once the JWS and OAuth bearer are combined.
+	return s.signPayload(payload, s.x5c[:1])
+}
+
+// EnrollmentRequest signs PKI's enrollment authority separately from the Cloud
+// RPC descriptor. PKI verifies this JWS against the tenant's Operator Authority.
+func EnrollmentRequest(auth *config.AuthConfig, deviceID string) ([]byte, error) {
+	s, err := newSigner(auth)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, fmt.Errorf("device enrollment requires an operator certificate")
+	}
+	now := s.now().Unix()
+	payload, err := canonicalJSON(map[string]any{
+		"tenant": s.tenantUUID, "device_id": deviceID, "device_class": "B",
+		"iat": now, "exp": now + 300, "jti": uuid.NewString(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	// This artifact is carried in the protobuf body, not HTTP metadata. Keep
+	// the full chain for PKI's enrollment signature verifier.
+	jws, err := s.signPayload(payload, s.x5c)
+	return []byte(jws), err
+}
+
+func (s *Signer) signPayload(payload []byte, chain []string) (string, error) {
+	header, err := canonicalJSON(map[string]any{"alg": "ES256", "x5c": chain})
 	if err != nil {
 		return "", fmt.Errorf("encoding JWS header: %w", err)
 	}

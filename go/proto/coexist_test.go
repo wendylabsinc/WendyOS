@@ -21,6 +21,7 @@ func TestCloudV1AndV2Coexist(t *testing.T) {
 	for _, name := range []string{
 		"wendycloud.v1.NotificationService",
 		"wendycloud.v2.NotificationService",
+		"wendycloud.v2.DeviceEnrollmentService",
 	} {
 		if _, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(name)); err != nil {
 			t.Errorf("%s not registered: %v", name, err)

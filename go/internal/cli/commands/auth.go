@@ -684,7 +684,7 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 		return errCertNotPKIIssued
 	}
 
-	endpoint := renewEndpoint()
+	endpoint := renewEndpoint(auth)
 	if endpoint == "" {
 		return errNoRenewEndpoint
 	}
@@ -822,7 +822,7 @@ func newAuthStatusCmd() *cobra.Command {
 					case info.Expired:
 						fmt.Fprintln(out, tui.ErrorMessage(fmt.Sprintf("  Certificate expired on %s", expiryStr)))
 					case info.ExpiringSoon:
-						remaining := time.Until(info.ExpiresAt).Round(time.Hour)
+						remaining := time.Until(info.ExpiresAt).Truncate(time.Second)
 						fmt.Fprintln(out, tui.WarningMessage(fmt.Sprintf("  Certificate expires %s (in %s)", expiryStr, remaining)))
 					default:
 						fmt.Fprintln(out, tui.SuccessMessage(fmt.Sprintf("  Certificate valid until %s", expiryStr)))

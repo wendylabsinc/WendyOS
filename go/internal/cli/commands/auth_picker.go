@@ -92,11 +92,26 @@ func resolveAuthOrgNames(cfg *config.Config) map[int32]string {
 // DedupKey and Value carry the session key so each (endpoint, org) pair is a
 // distinct row even when multiple orgs share the same gRPC endpoint.
 func authPickerItems(cfg *config.Config, orgNames map[int32]string) []tui.PickerItem {
-	items := make([]tui.PickerItem, 0, len(cfg.Auth))
+	// A legacy login and its operator/OIDC replacement can share the same
+	// endpoint and certificate org ID. They intentionally have the same picker
+	// key, so retain the operator-capable row rather than letting the stale
+	// legacy row win by insertion order.
+	preferred := make(map[string]*config.AuthConfig, len(cfg.Auth))
+	order := make([]string, 0, len(cfg.Auth))
 	for i := range cfg.Auth {
 		a := &cfg.Auth[i]
 		key := authSessionKey(a)
+		if _, exists := preferred[key]; !exists {
+			order = append(order, key)
+		}
+		if current := preferred[key]; current == nil || (current.OAuthIssuer == "" && a.OAuthIssuer != "") {
+			preferred[key] = a
+		}
+	}
 
+	items := make([]tui.PickerItem, 0, len(preferred))
+	for _, key := range order {
+		a := preferred[key]
 		name := a.CloudGRPC
 		idStr := ""
 		if len(a.Certificates) > 0 {
@@ -214,13 +229,20 @@ func pickAuthSession(cfg *config.Config) (*config.AuthConfig, error) {
 		return nil, fmt.Errorf("no organisation selected")
 	}
 	selectedKey := pm.Selected().Value.(string)
+	var selected *config.AuthConfig
 	for i := range cfg.Auth {
 		if authSessionKey(&cfg.Auth[i]) == selectedKey {
-			if len(cfg.Auth[i].Certificates) == 0 && !cfg.Auth[i].HasAPIKey() {
-				return nil, fmt.Errorf("auth session has no certificates or API token; re-run 'wendy auth login'")
+			candidate := &cfg.Auth[i]
+			if selected == nil || (selected.OAuthIssuer == "" && candidate.OAuthIssuer != "") {
+				selected = candidate
 			}
-			return &cfg.Auth[i], nil
 		}
+	}
+	if selected != nil {
+		if len(selected.Certificates) == 0 && !selected.HasAPIKey() {
+			return nil, fmt.Errorf("auth session has no certificates or API token; re-run 'wendy auth login'")
+		}
+		return selected, nil
 	}
 	return nil, fmt.Errorf("selected session no longer exists")
 }

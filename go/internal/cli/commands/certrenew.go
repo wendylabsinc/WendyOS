@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -43,10 +44,8 @@ const (
 	// renewEndpointEnv names pki-core's renew frontend, e.g.
 	// "https://renew.pki.example:8451/v1/renew".
 	//
-	// There is deliberately NO derivation from the cloud endpoint. Guessing a
-	// host and port from another service's address is what sent enrollment
-	// tokens to the wrong place in cleartext (WDY-2799); an unset endpoint here
-	// means "no renew frontend configured", which is a supported state.
+	// Custom deployments require an explicit endpoint. Known Wendy deployments
+	// use the documented renewal URL, never a host/port inferred by substitution.
 	renewEndpointEnv = "WENDY_PKI_RENEW_ENDPOINT"
 
 	renewRequestTimeout = 15 * time.Second
@@ -135,9 +134,29 @@ func certNeedsRenewal(notAfter, now time.Time) bool {
 	return notAfter.Sub(now) < renewLeadTime
 }
 
-// renewEndpoint resolves the configured renew frontend, or "" when none is set.
-func renewEndpoint() string {
-	return strings.TrimSpace(os.Getenv(renewEndpointEnv))
+// renewEndpoint resolves the explicit override or a documented deployment URL.
+func renewEndpoint(auth *config.AuthConfig) string {
+	if endpoint := strings.TrimSpace(os.Getenv(renewEndpointEnv)); endpoint != "" {
+		return endpoint
+	}
+	if auth == nil {
+		return ""
+	}
+	const devRenewEndpoint = "https://renew.dev.pki.wendy.sh/v1/renew"
+	if auth.PKIEndpoint != "" {
+		u, err := url.Parse(auth.PKIEndpoint)
+		if err == nil && u.Scheme == "https" && u.Host == "identity.dev.pki.wendy.sh" && u.User == nil {
+			return devRenewEndpoint
+		}
+		// An explicit custom PKI deployment takes precedence over Cloud defaults.
+		return ""
+	}
+	// Imported operator certificates may have no OIDC/identity configuration.
+	// The known dev API still identifies the deployment to renew them against.
+	if auth.CloudGRPC == "api.dev.wendy.sh:443" {
+		return devRenewEndpoint
+	}
+	return ""
 }
 
 // splitLeafAndChain splits a PEM bundle into its first certificate and the
@@ -322,7 +341,7 @@ func ensureFreshCertificate(ctx context.Context, auth *config.AuthConfig) error 
 		return nil
 	}
 
-	endpoint := renewEndpoint()
+	endpoint := renewEndpoint(auth)
 	if endpoint == "" {
 		if timeNowFn().After(notAfter) {
 			// Nothing to renew against and the certificate is already dead: say so

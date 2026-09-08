@@ -184,3 +184,68 @@ func TestDefaultAuthLookup(t *testing.T) {
 		t.Fatal("stale default should return ok=false")
 	}
 }
+
+func TestResolveAuthPrefersOperatorSessionOverLegacyDuplicate(t *testing.T) {
+	legacy := AuthConfig{
+		CloudGRPC:    "api.dev.wendy.sh:443",
+		APIKey:       "legacy-token",
+		Certificates: []CertificateInfo{{OrganizationID: 0}},
+	}
+	operator := AuthConfig{
+		CloudGRPC:    "api.dev.wendy.sh:443",
+		APIKey:       "operator-token",
+		OAuthIssuer:  "https://auth.dev.wendy.sh/realms/acme",
+		Certificates: []CertificateInfo{{OrganizationID: 0, PrincipalURI: "spiffe://wendy.sh/tenant/tenant/operator/user"}},
+	}
+	cfg := &Config{
+		DefaultCloudGRPC: "api.dev.wendy.sh:443",
+		Auth:             []AuthConfig{legacy, operator},
+	}
+
+	auth, err := ResolveAuth(cfg, "", nil)
+	if err != nil {
+		t.Fatalf("ResolveAuth: %v", err)
+	}
+	if auth.OAuthIssuer != operator.OAuthIssuer {
+		t.Fatalf("resolved legacy duplicate instead of operator session: %#v", auth)
+	}
+
+	auth, err = ResolveAuth(cfg, "api.dev.wendy.sh:443", nil)
+	if err != nil {
+		t.Fatalf("ResolveAuth with endpoint: %v", err)
+	}
+	if auth.OAuthIssuer != operator.OAuthIssuer {
+		t.Fatalf("endpoint resolved legacy duplicate instead of operator session: %#v", auth)
+	}
+}
+
+func TestResolveAuthDefaultOrgPrefersOperatorSessionOverLegacyDuplicate(t *testing.T) {
+	cfg := &Config{
+		DefaultOrgID: 7,
+		Auth: []AuthConfig{
+			{CloudGRPC: "api.dev.wendy.sh:443", Certificates: []CertificateInfo{{OrganizationID: 7}}},
+			{CloudGRPC: "api.dev.wendy.sh:443", OAuthIssuer: "https://auth.dev.wendy.sh/realms/acme", Certificates: []CertificateInfo{{OrganizationID: 7}}},
+		},
+	}
+	auth, err := ResolveAuth(cfg, "", nil)
+	if err != nil {
+		t.Fatalf("ResolveAuth: %v", err)
+	}
+	if auth.OAuthIssuer == "" {
+		t.Fatal("default org resolved legacy duplicate instead of operator session")
+	}
+}
+
+func TestResolveAuthPreferenceDoesNotChangeSelectedOrg(t *testing.T) {
+	cfg := &Config{Auth: []AuthConfig{
+		{CloudGRPC: "prod:443", Certificates: []CertificateInfo{{OrganizationID: 9}}},
+		{CloudGRPC: "prod:443", OAuthIssuer: "https://auth.wendy.sh/realms/other", Certificates: []CertificateInfo{{OrganizationID: 2}}},
+	}}
+	auth, err := ResolveAuth(cfg, "prod:443", nil)
+	if err != nil {
+		t.Fatalf("ResolveAuth: %v", err)
+	}
+	if got := auth.Certificates[0].OrganizationID; got != 9 {
+		t.Fatalf("operator preference changed selected org to %d, want first org 9", got)
+	}
+}

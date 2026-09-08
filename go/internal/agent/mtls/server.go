@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
@@ -73,6 +74,36 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 	// Session resumption: stamp the client cert window into tickets and
 	// decline stale ones (see session_ticket.go for the security rationale).
 	wireSessionTicketChecks(cfg, notBeforeFloor, time.Now)
+	// Direct PKI device certificates carry a tenant SPIFFE identity instead
+	// of a legacy numeric org. Keep tenant enforcement active even when the
+	// legacy org interceptor has no numeric identity to compare. VerifyConnection
+	// runs for resumed sessions as well as full certificate handshakes.
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return nil, fmt.Errorf("parsing device certificate: %w", err)
+	}
+	if own, ok := certs.TenantPrincipalFromCert(leaf); ok {
+		parts := strings.Split(own, "/")
+		if len(parts) >= 7 && parts[5] == "device" {
+			tenantPrefix := strings.Join(parts[:5], "/") + "/"
+			previous := cfg.VerifyConnection
+			cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+				if previous != nil {
+					if err := previous(cs); err != nil {
+						return err
+					}
+				}
+				if len(cs.PeerCertificates) == 0 {
+					return fmt.Errorf("client certificate is required")
+				}
+				peer, ok := certs.TenantPrincipalFromCert(cs.PeerCertificates[0])
+				if !ok || !strings.HasPrefix(peer, tenantPrefix) {
+					return fmt.Errorf("client certificate does not belong to the device's PKI tenant")
+				}
+				return nil
+			}
+		}
+	}
 	return cfg, nil
 }
 

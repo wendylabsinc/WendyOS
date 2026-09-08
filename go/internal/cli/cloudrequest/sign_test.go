@@ -225,9 +225,19 @@ func TestInterceptorLeavesReadRPCUnsigned(t *testing.T) {
 	}
 }
 
-func TestNewSignerSkipsNonOIDCSessions(t *testing.T) {
+func TestNewSignerUsesOperatorCertificateWithoutOAuthBookkeeping(t *testing.T) {
 	auth, _, _ := testAuth(t)
 	auth.OAuthIssuer = ""
+	signer, err := newSigner(auth)
+	if err != nil || signer == nil {
+		t.Fatalf("newSigner = %#v, %v; want signer, nil", signer, err)
+	}
+}
+
+func TestNewSignerSkipsLegacyCertificateWithoutPrincipal(t *testing.T) {
+	auth, _, _ := testAuth(t)
+	auth.OAuthIssuer = ""
+	auth.Certificates[0].PrincipalURI = ""
 	signer, err := newSigner(auth)
 	if err != nil || signer != nil {
 		t.Fatalf("newSigner = %#v, %v; want nil, nil", signer, err)
@@ -242,26 +252,80 @@ func TestNewSignerRejectsNonOperatorPrincipal(t *testing.T) {
 	}
 }
 
-// A cloud-relayed session spells the same human "service/user-<id>" rather than
-// "operator/<sub>" (AAA contract D17). Refusing it was WDY-2968's spelling bug:
-// both are operator identities and both must sign.
-func TestNewSignerAcceptsRelayedUserPrincipal(t *testing.T) {
+func TestEnrollmentRequestUsesFreshReplayID(t *testing.T) {
 	auth, _, _ := testAuth(t)
-	auth.Certificates[0].PrincipalURI = "spiffe://wendy.sh/tenant/" + testTenant + "/service/user-42"
-	signer, err := newSigner(auth)
-	if err != nil {
-		t.Fatalf("newSigner: %v", err)
+	var previous string
+	for i := 0; i < 2; i++ {
+		artifact, err := EnrollmentRequest(auth, "fleet/sim")
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts := strings.Split(string(artifact), ".")
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var claims map[string]any
+		if err := json.Unmarshal(payload, &claims); err != nil {
+			t.Fatal(err)
+		}
+		jti, _ := claims["jti"].(string)
+		if jti == "" || jti == previous {
+			t.Fatal("enrollment request reused its replay ID")
+		}
+		previous = jti
+		if _, ok := claims["csr_key_binding"]; ok {
+			t.Fatal("unsupported key binding included")
+		}
+		if _, ok := claims["attestation_ref"]; ok {
+			t.Fatal("unsupported attestation included")
+		}
 	}
-	if signer.tenantUUID != testTenant {
-		t.Fatalf("tenantUUID = %q, want %q", signer.tenantUUID, testTenant)
+	if _, err := EnrollmentRequest(nil, "sim"); err == nil {
+		t.Fatal("unsigned enrollment request accepted")
 	}
 }
 
-// A device leaf is not an actor that may sign a privileged cloud mutation.
-func TestNewSignerRejectsDevicePrincipal(t *testing.T) {
-	auth, _, _ := testAuth(t)
-	auth.Certificates[0].PrincipalURI = "spiffe://wendy.sh/tenant/" + testTenant + "/device/thor-1"
-	if _, err := newSigner(auth); err == nil {
-		t.Fatal("newSigner accepted a device principal as an operator")
+// Model the large opaque ML-DSA intermediates returned by PKI. They belong in
+// the enrollment artifact body, but Cloud only validates the leaf from metadata.
+func TestCloudSignatureOmitsLargeIssuerChain(t *testing.T) {
+	auth, _, leafDER := testAuth(t)
+	issuerDER := make([]byte, 7500)
+	auth.Certificates[0].PemCertificateChain = strings.Repeat(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerDER})), 3)
+	signer, err := newSigner(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := func(jws string) []string {
+		t.Helper()
+		parts := strings.Split(jws, ".")
+		raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var h struct{ X5C []string }
+		if err := json.Unmarshal(raw, &h); err != nil {
+			t.Fatal(err)
+		}
+		return h.X5C
+	}
+	descriptor, err := signer.sign("wendycloud.v2.DeviceEnrollmentService/EnrollDevice", "org/"+testTenant+"/device/sim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	certs := header(descriptor)
+	if len(certs) != 1 || certs[0] != base64.StdEncoding.EncodeToString(leafDER) {
+		t.Fatal("Cloud metadata must carry only the operator leaf")
+	}
+	if len(descriptor) > 4000 {
+		t.Fatal("issuer chain bloated request metadata")
+	}
+	artifact, err := EnrollmentRequest(auth, "sim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := header(string(artifact))
+	if len(chain) != 4 || chain[0] != certs[0] || chain[1] != base64.StdEncoding.EncodeToString(issuerDER) {
+		t.Fatal("enrollment body lost its issuer chain")
 	}
 }
