@@ -36,10 +36,12 @@ const (
 	rateLimitLogInterval = 10 * time.Second
 )
 
-// errFlowCapReached is returned by flow() when a brand-new flow_id would push
-// the session over maxFlowsPerSession. It never applies to an already-open
-// flow_id (that path is just a write to an existing socket, not a new fd).
-var errFlowCapReached = errors.New("datagram flow-table cap reached")
+// Flow-cap errors apply only to a brand-new flow_id. Reusing an open flow is a
+// write to an existing socket and consumes no additional slot.
+var (
+	errFlowCapReached       = errors.New("datagram session flow-table cap reached")
+	errGlobalFlowCapReached = errors.New("datagram global flow-table cap reached")
+)
 
 // datagramRelay serves one DATAGRAM tunnel session: a flow table of connected
 // loopback UDP sockets keyed by client-assigned flow_id, plus inline ICMP echo
@@ -47,6 +49,12 @@ var errFlowCapReached = errors.New("datagram flow-table cap reached")
 type datagramTunnelStream interface {
 	Send(*cloudpb.TunnelData) error
 	Recv() (*cloudpb.TunnelData, error)
+}
+
+type datagramRelayOption func(*datagramRelay)
+
+func withDatagramFlowSlots(slots chan struct{}) datagramRelayOption {
+	return func(relay *datagramRelay) { relay.flowSlots = slots }
 }
 
 type datagramRelay struct {
@@ -59,14 +67,16 @@ type datagramRelay struct {
 	mu    sync.Mutex
 	flows map[uint32]*datagramFlow
 
-	lastOversizeLog     time.Time
-	lastOversizeEchoLog time.Time
-	lastEchoRateLog     time.Time
-	lastFlowCapLog      time.Time
-	lastDialFailLog     time.Time
-	lastInvalidPortLog  time.Time
-	echoWindowStart     time.Time
-	echoWindowCount     int
+	lastOversizeLog      time.Time
+	lastOversizeEchoLog  time.Time
+	lastEchoRateLog      time.Time
+	lastFlowCapLog       time.Time
+	lastGlobalFlowCapLog time.Time
+	lastDialFailLog      time.Time
+	lastInvalidPortLog   time.Time
+	echoWindowStart      time.Time
+	echoWindowCount      int
+	flowSlots            chan struct{}
 }
 
 type datagramFlow struct {
@@ -75,13 +85,19 @@ type datagramFlow struct {
 	lastActive time.Time // guarded by datagramRelay.mu
 }
 
-func newDatagramRelay(logger *zap.Logger, stream datagramTunnelStream, idleTimeout time.Duration) *datagramRelay {
-	return &datagramRelay{
+func newDatagramRelay(logger *zap.Logger, stream datagramTunnelStream, idleTimeout time.Duration,
+	options ...datagramRelayOption,
+) *datagramRelay {
+	relay := &datagramRelay{
 		logger:      logger,
 		stream:      stream,
 		idleTimeout: idleTimeout,
 		flows:       make(map[uint32]*datagramFlow),
 	}
+	for _, option := range options {
+		option(relay)
+	}
+	return relay
 }
 
 func (r *datagramRelay) activeFlows() int {
@@ -212,6 +228,16 @@ func (r *datagramRelay) handleDatagram(ctx context.Context, d *cloudpb.TunnelDat
 			r.mu.Unlock()
 			return
 		}
+		if errors.Is(err, errGlobalFlowCapReached) {
+			r.mu.Lock()
+			if time.Since(r.lastGlobalFlowCapLog) > rateLimitLogInterval {
+				r.lastGlobalFlowCapLog = time.Now()
+				r.logger.Warn("dropping datagram: global flow-table cap reached",
+					zap.Uint32("flow_id", d.GetFlowId()), zap.Int("max_flows", cap(r.flowSlots)))
+			}
+			r.mu.Unlock()
+			return
+		}
 		r.mu.Lock()
 		if time.Since(r.lastDialFailLog) > rateLimitLogInterval {
 			r.lastDialFailLog = time.Now()
@@ -236,6 +262,9 @@ func (r *datagramRelay) flow(ctx context.Context, flowID, port uint32) (*datagra
 	if len(r.flows) >= maxFlowsPerSession {
 		return nil, errFlowCapReached
 	}
+	if !r.acquireFlowSlot() {
+		return nil, errGlobalFlowCapReached
+	}
 	// SECURITY: Choosing any valid loopback UDP port is intentional for this
 	// authenticated, same-org diagnostic forward, analogous to an SSH local
 	// forward. Agent-side mTLS plus the fixed host is the authorization boundary;
@@ -244,12 +273,31 @@ func (r *datagramRelay) flow(ctx context.Context, flowID, port uint32) (*datagra
 	// authorization when they require a narrower caller set.
 	conn, err := net.DialUDP("udp", nil, datagramLoopbackAddr(port))
 	if err != nil {
+		r.releaseFlowSlot()
 		return nil, err
 	}
 	f := &datagramFlow{conn: conn, port: port, lastActive: time.Now()}
 	r.flows[flowID] = f
 	go r.readFlow(ctx, flowID, f)
 	return f, nil
+}
+
+func (r *datagramRelay) acquireFlowSlot() bool {
+	if r.flowSlots == nil {
+		return true
+	}
+	select {
+	case r.flowSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *datagramRelay) releaseFlowSlot() {
+	if r.flowSlots != nil {
+		<-r.flowSlots
+	}
 }
 
 func datagramLoopbackAddr(port uint32) *net.UDPAddr {
@@ -289,6 +337,7 @@ func (r *datagramRelay) closeFlow(flowID uint32) {
 	r.mu.Unlock()
 	if ok {
 		_ = f.conn.Close()
+		r.releaseFlowSlot()
 	}
 }
 
@@ -313,5 +362,6 @@ func (r *datagramRelay) closeAll() {
 	r.mu.Unlock()
 	for _, f := range flows {
 		_ = f.conn.Close()
+		r.releaseFlowSlot()
 	}
 }

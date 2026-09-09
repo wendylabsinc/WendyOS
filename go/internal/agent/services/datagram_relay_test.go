@@ -186,6 +186,29 @@ func TestDatagramRelayFlowCap(t *testing.T) {
 	}
 }
 
+func TestDatagramRelayGlobalFlowCap(t *testing.T) {
+	ctx := context.Background()
+	flowSlots := make(chan struct{}, 1)
+	first := newDatagramRelay(zap.NewNop(), newFakeAgentStream(ctx), time.Minute,
+		withDatagramFlowSlots(flowSlots))
+	second := newDatagramRelay(zap.NewNop(), newFakeAgentStream(ctx), time.Minute,
+		withDatagramFlowSlots(flowSlots))
+	t.Cleanup(first.closeAll)
+	t.Cleanup(second.closeAll)
+
+	if _, err := first.flow(ctx, 1, 9); err != nil {
+		t.Fatalf("first flow: unexpected error: %v", err)
+	}
+	if _, err := second.flow(ctx, 2, 9); !errors.Is(err, errGlobalFlowCapReached) {
+		t.Fatalf("flow beyond global cap: err = %v, want errGlobalFlowCapReached", err)
+	}
+
+	first.closeFlow(1)
+	if _, err := second.flow(ctx, 2, 9); err != nil {
+		t.Fatalf("flow after global slot release: unexpected error: %v", err)
+	}
+}
+
 func TestDatagramRelayDropsOversized(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

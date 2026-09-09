@@ -9,24 +9,29 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
-// maxConcurrentDatagramSessions combines with maxFlowsPerSession to cap this
-// service at 2,048 UDP sockets. Sessions themselves may be long-lived because
-// an active Companion port forward is expected to run until explicitly stopped;
-// idle flow sockets still expire after datagramFlowIdleTimeout.
-const maxConcurrentDatagramSessions = 8
+// Sessions may be long-lived because an active Companion port forward is
+// expected to run until explicitly stopped. Bound both dimensions instead:
+// idle flow sockets expire after datagramFlowIdleTimeout, each session gets the
+// relay's 256-flow cap, and all LAN sessions share a smaller process-wide cap.
+const (
+	maxConcurrentDatagramSessions = 8
+	maxConcurrentDatagramFlows    = 512
+)
 
 // TunnelService exposes authenticated LAN datagram sessions. The TCP Tunnel
 // method in the shared wire contract is intentionally left unimplemented.
 type TunnelService struct {
 	agentpbv2.UnimplementedWendyTunnelServiceServer
-	logger   *zap.Logger
-	sessions chan struct{}
+	logger    *zap.Logger
+	sessions  chan struct{}
+	flowSlots chan struct{}
 }
 
 func NewTunnelService(logger *zap.Logger) *TunnelService {
 	return &TunnelService{
-		logger:   logger,
-		sessions: make(chan struct{}, maxConcurrentDatagramSessions),
+		logger:    logger,
+		sessions:  make(chan struct{}, maxConcurrentDatagramSessions),
+		flowSlots: make(chan struct{}, maxConcurrentDatagramFlows),
 	}
 }
 
@@ -46,7 +51,8 @@ func (s *TunnelService) DatagramTunnel(stream agentpbv2.WendyTunnelService_Datag
 	// certificate serial, and parsed org/entity IDs when available. It never
 	// records certificate subjects, free-form caller input, or frame payloads.
 	s.logger.Info("device datagram tunnel accepted", clientAuditFields(stream.Context())...)
-	newDatagramRelay(s.logger, &deviceFrameStream{stream: stream}, datagramFlowIdleTimeout).run(stream.Context())
+	newDatagramRelay(s.logger, &deviceFrameStream{stream: stream}, datagramFlowIdleTimeout,
+		withDatagramFlowSlots(s.flowSlots)).run(stream.Context())
 	return nil
 }
 
