@@ -1,0 +1,6 @@
+{
+  "appId": "mojo-hello-world",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": []
+}
