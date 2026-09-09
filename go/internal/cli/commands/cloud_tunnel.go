@@ -22,6 +22,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -127,6 +128,14 @@ func detachedTunnelContext(dialCtx context.Context) (tunnelCtx context.Context, 
 }
 
 func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
+	return connectCloudDiscoveryDevice(ctx, auth, cloudDiscoveryDevice{cloudAssetMetadata: asset, legacy: asset, key: fmt.Sprint(asset.GetId())}, brokerURL)
+}
+
+func connectCloudAssetV2(ctx context.Context, auth *config.AuthConfig, asset *cloudpbv2.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
+	return connectCloudDiscoveryDevice(ctx, auth, cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: asset.GetId()}, brokerURL)
+}
+
+func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
 	brokerConn, err := clouddefaults.DialBroker(auth, brokerURL)
 	if err != nil {
 		return nil, err
@@ -155,7 +164,7 @@ func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *clou
 	// Provisioned agents serve mTLS on agentPort+1 (50052) for remote clients; the
 	// plaintext port (50051) is shut down after provisioning. (On-device containers
 	// with the admin entitlement can reach the agent via the local unix socket.)
-	tunnelConn, err := openBrokerTunnel(tunnelCtx, brokerConn, auth, asset.GetId(), defaultAgentPort+1)
+	tunnelConn, err := asset.openTunnel(tunnelCtx, brokerConn, auth, defaultAgentPort+1)
 	if err != nil {
 		return nil, fmt.Errorf("opening cloud tunnel to %s: %w", asset.GetName(), err)
 	}
@@ -212,14 +221,14 @@ func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *clou
 	agentConn.IsMTLS = true
 	agentConn.CertInfo = &cert
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
-		return openBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), uint32(port))
+		return asset.openTunnel(ctx, brokerConn, auth, uint32(port))
 	}
 	// Pin reconnect to this exact asset (by id) so a post-restart reconnect
 	// can't drift to a different cloud device — the asset name may be empty or
 	// ambiguous, and re-running device discovery while the agent is mid-restart
 	// can match whichever other device happens to be reachable.
 	agentConn.Reconnect = func(rctx context.Context) (*grpcclient.AgentConnection, error) {
-		return waitForCloudAgentRestart(rctx, auth, asset, brokerURL)
+		return asset.reconnect(rctx, auth, brokerURL)
 	}
 	agentConn.ExtraClosers = append(agentConn.ExtraClosers, closeFunc(closeTunnel), brokerConn, closeFunc(tunnelCancel))
 	cleanupBroker = false
@@ -229,10 +238,16 @@ func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *clou
 }
 
 func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
+	return waitForCloudDeviceRestart(ctx, asset.GetName(), fmt.Sprint(asset.GetId()), func(ctx context.Context) (*grpcclient.AgentConnection, error) {
+		return connectCloudAsset(ctx, auth, asset, brokerURL)
+	})
+}
+
+func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	restartErr := func() error {
-		return fmt.Errorf("timed out waiting for %s (id=%d) to restart", asset.GetName(), asset.GetId())
+		return fmt.Errorf("timed out waiting for %s (id=%s) to restart", name, id)
 	}
 	// Give the agent a moment to begin shutdown.
 	select {
@@ -247,7 +262,7 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 		default:
 		}
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, 10*time.Second)
-		conn, err := connectCloudAsset(attemptCtx, auth, asset, brokerURL)
+		conn, err := connect(attemptCtx)
 		if err != nil {
 			attemptCancel()
 			select {
@@ -298,38 +313,67 @@ func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *co
 		return nil, fmt.Errorf("sending tunnel open: %w", err)
 	}
 
-	local, remote := net.Pipe()
+	return pipeBrokerTunnel(func() ([]byte, bool, error) {
+		msg, err := stream.Recv()
+		if err != nil {
+			return nil, false, err
+		}
+		return msg.Payload, msg.HalfClose, nil
+	}, func(payload []byte, halfClose bool) error {
+		return stream.Send(&cloudpb.ClientTunnelMessage{Content: &cloudpb.ClientTunnelMessage_Data{Data: &cloudpb.TunnelData{Payload: payload, HalfClose: halfClose}}})
+	}, stream.CloseSend), nil
+}
 
+func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32) (net.Conn, error) {
+	if d.legacy != nil {
+		return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
+	}
+	cloudCtx, err := cloudContext(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := cloudpbv2.NewTunnelBrokerServiceClient(brokerConn).ClientTunnel(cloudCtx)
+	if err != nil {
+		return nil, fmt.Errorf("opening tunnel stream: %w", err)
+	}
+	if err := stream.Send(&cloudpbv2.ClientTunnelMessage{Content: &cloudpbv2.ClientTunnelMessage_Open{Open: &cloudpbv2.ClientTunnelOpen{AssetId: d.key, Host: "localhost", Port: remotePort}}}); err != nil {
+		return nil, fmt.Errorf("sending tunnel open: %w", err)
+	}
+	return pipeBrokerTunnel(func() ([]byte, bool, error) {
+		msg, err := stream.Recv()
+		if err != nil {
+			return nil, false, err
+		}
+		return msg.Payload, msg.HalfClose, nil
+	}, func(payload []byte, halfClose bool) error {
+		return stream.Send(&cloudpbv2.ClientTunnelMessage{Content: &cloudpbv2.ClientTunnelMessage_Data{Data: &cloudpbv2.TunnelData{Payload: payload, HalfClose: halfClose}}})
+	}, stream.CloseSend), nil
+}
+
+func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {
+	local, remote := net.Pipe()
 	go func() {
 		defer remote.Close()
 		for {
-			msg, err := stream.Recv()
+			payload, halfClose, err := recv()
 			if err != nil {
-				if tlsDebug := os.Getenv("WENDY_TLS_DEBUG") != ""; tlsDebug {
+				if os.Getenv("WENDY_TLS_DEBUG") != "" {
 					fmt.Fprintf(os.Stderr, "[tunnel-debug] broker stream closed: %v\n", err)
 				}
 				break
 			}
-			if len(msg.Payload) > 0 {
-				if _, err := remote.Write(msg.Payload); err != nil {
+			if len(payload) > 0 {
+				if _, err := remote.Write(payload); err != nil {
 					break
 				}
 			}
-			if msg.HalfClose {
+			if halfClose {
 				break
 			}
 		}
 	}()
-
-	go runTunnelUplink(remote, func(payload []byte, halfClose bool) error {
-		return stream.Send(&cloudpb.ClientTunnelMessage{
-			Content: &cloudpb.ClientTunnelMessage_Data{
-				Data: &cloudpb.TunnelData{Payload: payload, HalfClose: halfClose},
-			},
-		})
-	}, stream.CloseSend)
-
-	return local, nil
+	go runTunnelUplink(remote, send, closeSend)
+	return local
 }
 
 // tunnelUplinkQueueSlots bounds the uplink queue: reads are ≤256KiB, so 128

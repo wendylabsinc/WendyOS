@@ -3893,6 +3893,14 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	}
 	switch choice.Tab {
 	case devicePickerCloudTab:
+		if choice.CloudV2 != nil {
+			cliLogln("Connecting to %s via cloud tunnel...", choice.CloudV2.GetName())
+			conn, err := connectCloudAssetV2(ctx, cloudAuth, choice.CloudV2, dm.cloud.brokerURL)
+			if err != nil {
+				return nil, err
+			}
+			return &SelectedDevice{Agent: conn}, nil
+		}
 		cliLogln("Connecting to %s via cloud tunnel...", choice.Cloud.GetName())
 		conn, err := connectCloudAsset(ctx, cloudAuth, choice.Cloud, dm.cloud.brokerURL)
 		if err != nil {

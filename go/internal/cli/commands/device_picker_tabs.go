@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 // Child messages are tagged so background commands keep updating the correct
@@ -29,6 +30,7 @@ type devicePickerChoice struct {
 	Local     *tui.PickerItem
 	Simulator *simulatorChoice
 	Cloud     *cloudpb.Asset
+	CloudV2   *cloudpbv2.Asset
 }
 
 type devicePickerModel struct {
@@ -155,7 +157,7 @@ func (m devicePickerModel) updateSimulator(msg tea.Msg) (devicePickerModel, tea.
 func (m devicePickerModel) updateCloud(msg tea.Msg) (devicePickerModel, tea.Cmd) {
 	updated, cmd := m.cloud.Update(msg)
 	m.cloud = updated.(cloudDiscoverModel)
-	if m.cloud.selected != nil {
+	if m.cloud.selected != nil || m.cloud.selectedV2 != nil {
 		m.chosen, m.hasChosen = devicePickerCloudTab, true
 		return m, tea.Quit
 	}
@@ -308,6 +310,7 @@ func (m devicePickerModel) choice() (devicePickerChoice, bool) {
 		c.Simulator = m.sim.selected()
 	case devicePickerCloudTab:
 		c.Cloud = m.selectedCloud()
+		c.CloudV2 = m.cloud.selectedV2
 	default:
 		c.Local = m.selectedLocal()
 	}

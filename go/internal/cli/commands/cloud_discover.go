@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 const cloudDiscoverRefreshInterval = 10 * time.Second
@@ -61,13 +62,14 @@ func newCloudDiscoverCmd() *cobra.Command {
 
 // cloudScanMsg carries a refreshed list of cloud assets.
 type cloudScanMsg struct {
-	assets []*cloudpb.Asset
-	err    error
+	assets  []*cloudpb.Asset
+	devices []cloudDiscoveryDevice
+	err     error
 }
 
 // cloudAssetVersionMsg carries fetched version metadata for a single cloud asset.
 type cloudAssetVersionMsg struct {
-	assetID int32
+	assetID string
 	resp    *agentpb.GetAgentVersionResponse // nil on error
 }
 
@@ -77,9 +79,9 @@ type cloudDiscoverModel struct {
 	brokerURL      string
 	all            bool
 	pickerMode     bool
-	assets         []*cloudpb.Asset
-	versions       map[int32]*agentpb.GetAgentVersionResponse
-	versionPending map[int32]bool
+	devices        []cloudDiscoveryDevice
+	versions       map[string]*agentpb.GetAgentVersionResponse
+	versionPending map[string]bool
 	versionSem     chan struct{}
 	table          tui.BubbleTable
 	quitting       bool
@@ -87,6 +89,7 @@ type cloudDiscoverModel struct {
 	flashIsError   bool
 	updatingName   string
 	selected       *cloudpb.Asset
+	selectedV2     *cloudpbv2.Asset
 	windowWidth    int
 	windowHeight   int
 	err            error
@@ -101,12 +104,12 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 		all:            all,
 		pickerMode:     pickerMode,
 		table:          newDiscoverTable(true),
-		versions:       make(map[int32]*agentpb.GetAgentVersionResponse),
-		versionPending: make(map[int32]bool),
+		versions:       make(map[string]*agentpb.GetAgentVersionResponse),
+		versionPending: make(map[string]bool),
 		versionSem:     make(chan struct{}, 5),
 	}
 	if initialAssets != nil {
-		m.assets = initialAssets
+		m.devices = legacyDiscoveryDevices(initialAssets)
 		m.hasResults = true
 	}
 	m.refreshTable()
@@ -116,8 +119,8 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 func (m cloudDiscoverModel) Init() tea.Cmd {
 	if m.hasResults {
 		cmds := []tea.Cmd{delayThen(cloudDiscoverRefreshInterval, m.scanCmd())}
-		for _, a := range m.assets {
-			id := a.GetId()
+		for _, a := range m.devices {
+			id := a.key
 			if !m.versionPending[id] {
 				if _, cached := m.versions[id]; !cached {
 					m.versionPending[id] = true
@@ -135,16 +138,8 @@ func (m cloudDiscoverModel) scanCmd() tea.Cmd {
 	auth := m.auth
 	onlineOnly := !m.all
 	return func() tea.Msg {
-		assets, err := fetchCloudAssetsFiltered(ctx, auth, onlineOnly)
-		if err == nil {
-			// This refreshes every cloudDiscoverRefreshInterval (10s) while the
-			// TUI is open, so this reseeds on every tick — wasteful, but
-			// best-effort and cheap enough (one config read + conditional
-			// write) not to special-case out of the picker's one true asset
-			// roster fetch.
-			seedPinsFromAssetsBestEffort(auth, assets)
-		}
-		return cloudScanMsg{assets: assets, err: err}
+		devices, err := fetchCloudDiscoveryDevices(ctx, auth, onlineOnly)
+		return cloudScanMsg{devices: devices, err: err}
 	}
 }
 
@@ -162,15 +157,18 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = msg.err
 		} else {
-			m.assets = msg.assets
+			m.devices = msg.devices
+			if msg.assets != nil {
+				m.devices = legacyDiscoveryDevices(msg.assets)
+			}
 			m.err = nil
 			m.refreshTable()
 		}
 		m.hasResults = true
 		var cmds []tea.Cmd
 		cmds = append(cmds, delayThen(cloudDiscoverRefreshInterval, m.scanCmd()))
-		for _, a := range m.assets {
-			id := a.GetId()
+		for _, a := range m.devices {
+			id := a.key
 			if !m.versionPending[id] {
 				if _, cached := m.versions[id]; !cached {
 					m.versionPending[id] = true
@@ -195,21 +193,22 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "enter":
 			cursor := m.table.Cursor()
-			if len(m.assets) == 0 || cursor < 0 || cursor >= len(m.assets) {
+			if len(m.devices) == 0 || cursor < 0 || cursor >= len(m.devices) {
 				return m, nil
 			}
 			if m.pickerMode {
-				m.selected = m.assets[cursor]
+				m.selected = m.devices[cursor].legacy
+				m.selectedV2 = m.devices[cursor].v2
 				return m, tea.Quit
 			}
-			info := cloudDeviceInfoFromAsset(m.assets[cursor], m.versions[m.assets[cursor].GetId()])
+			info := m.devices[cursor].info(m.versions[m.devices[cursor].key])
 			m.flashMessage, m.flashIsError = copyDeviceJSON(info)
 			return m, clearFlashAfter(5 * time.Second)
 		case "a":
-			if len(m.assets) > 0 {
-				infos := make([]discoverDeviceInfo, 0, len(m.assets))
-				for _, a := range m.assets {
-					infos = append(infos, cloudDeviceInfoFromAsset(a, m.versions[a.GetId()]))
+			if len(m.devices) > 0 {
+				infos := make([]any, 0, len(m.devices))
+				for _, a := range m.devices {
+					infos = append(infos, a.info(m.versions[a.key]))
 				}
 				m.flashMessage, m.flashIsError = copyDeviceJSON(infos)
 				if !m.flashIsError {
@@ -223,10 +222,10 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			cursor := m.table.Cursor()
-			if len(m.assets) == 0 || cursor < 0 || cursor >= len(m.assets) {
+			if len(m.devices) == 0 || cursor < 0 || cursor >= len(m.devices) {
 				return m, nil
 			}
-			asset := m.assets[cursor]
+			asset := m.devices[cursor]
 			m.updatingName = asset.GetName()
 			m.flashMessage = "Checking " + asset.GetName() + "..."
 			m.flashIsError = false
@@ -237,6 +236,10 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case discoverUpdateDoneMsg:
+		key := msg.cloudAssetKey
+		if key == "" {
+			key = fmt.Sprint(msg.assetID)
+		}
 		m.updatingName = ""
 		m.flashMessage, m.flashIsError = discoverUpdateFlash(msg)
 		switch {
@@ -246,13 +249,13 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// No update happened, but the probe behind the note is fresher than
 			// the cached row.
 			if msg.version != nil {
-				m.versions[msg.assetID] = msg.version
-				m.versionPending[msg.assetID] = false
+				m.versions[key] = msg.version
+				m.versionPending[key] = false
 			}
 		default:
 			// Invalidate cached version so the table shows fresh data after update.
-			delete(m.versions, msg.assetID)
-			delete(m.versionPending, msg.assetID)
+			delete(m.versions, key)
+			delete(m.versionPending, key)
 		}
 		return m, clearFlashAfter(10 * time.Second)
 
@@ -264,7 +267,7 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m cloudDiscoverModel) View() string {
-	if m.quitting || m.selected != nil {
+	if m.quitting || m.selected != nil || m.selectedV2 != nil {
 		return ""
 	}
 
@@ -295,11 +298,11 @@ func (m cloudDiscoverModel) View() string {
 	if m.err != nil {
 		sb.WriteString(m.viewLine(fmt.Sprintf("Error: %v", m.err)) + "\n")
 	}
-	if len(m.assets) > 0 {
+	if len(m.devices) > 0 {
 		sb.WriteString(m.table.View() + "\n")
 		// Cloud rows carry no provisioned/default markers, so the legend exists
 		// only to explain a warning glyph that is actually present.
-		if legend := tui.DeviceWarningLegend(cloudLegendItems(m.assets, m.versions)); legend != "" {
+		if legend := tui.DeviceWarningLegend(cloudDiscoveryLegendItems(m.devices, m.versions)); legend != "" {
 			sb.WriteString(m.viewLine(dimStyle.Render("  "+legend)) + "\n")
 		}
 	} else if m.err == nil {
@@ -328,7 +331,7 @@ func (m cloudDiscoverModel) View() string {
 }
 
 func (m *cloudDiscoverModel) refreshTable() {
-	rows := cloudDiscoverTableRows(m.assets, m.versions)
+	rows := cloudDiscoveryTableRows(m.devices, m.versions)
 	m.table.SetColumns(discoverTableColumns(rows))
 	m.table.SetRows(rows)
 	if len(rows) > 0 && m.table.Cursor() < 0 {
@@ -346,6 +349,13 @@ func (m cloudDiscoverModel) viewLine(line string) string {
 }
 
 func cloudDiscoverTableRows(assets []*cloudpb.Asset, versions map[int32]*agentpb.GetAgentVersionResponse) []bubbleTable.Row {
+	byID := make(map[string]*agentpb.GetAgentVersionResponse, len(versions))
+	for id, ver := range versions {
+		byID[fmt.Sprint(id)] = ver
+	}
+	return cloudDiscoveryTableRows(legacyDiscoveryDevices(assets), byID)
+}
+func cloudDiscoveryTableRows(assets []cloudDiscoveryDevice, versions map[string]*agentpb.GetAgentVersionResponse) []bubbleTable.Row {
 	rows := make([]bubbleTable.Row, 0, len(assets))
 	for _, a := range assets {
 		devType := humanReadableDeviceType(a.GetDeviceType())
@@ -353,7 +363,7 @@ func cloudDiscoverTableRows(assets []*cloudpb.Asset, versions map[int32]*agentpb
 			devType = humanReadableOSType(a.GetOsType(), a.GetArchitecture())
 		}
 		ver := "—"
-		if v := versions[a.GetId()]; v != nil {
+		if v := versions[a.key]; v != nil {
 			ver = v.GetVersion()
 			if agentBehindCLI(version.Version, ver) {
 				ver += " " + tui.GlyphOutdated
@@ -372,9 +382,16 @@ func cloudDiscoverTableRows(assets []*cloudpb.Asset, versions map[int32]*agentpb
 
 // cloudLegendItems reduces cloud rows to the fields the shared legend reads.
 func cloudLegendItems(assets []*cloudpb.Asset, versions map[int32]*agentpb.GetAgentVersionResponse) []tui.PickerItem {
+	byID := make(map[string]*agentpb.GetAgentVersionResponse, len(versions))
+	for id, ver := range versions {
+		byID[fmt.Sprint(id)] = ver
+	}
+	return cloudDiscoveryLegendItems(legacyDiscoveryDevices(assets), byID)
+}
+func cloudDiscoveryLegendItems(assets []cloudDiscoveryDevice, versions map[string]*agentpb.GetAgentVersionResponse) []tui.PickerItem {
 	items := make([]tui.PickerItem, 0, len(assets))
 	for _, a := range assets {
-		v := versions[a.GetId()]
+		v := versions[a.key]
 		if v == nil {
 			continue
 		}
@@ -410,11 +427,11 @@ func cloudDeviceInfoFromAsset(a *cloudpb.Asset, ver *agentpb.GetAgentVersionResp
 
 const cloudVersionFetchTimeout = 15 * time.Second
 
-func (m cloudDiscoverModel) fetchVersionCmd(asset *cloudpb.Asset) tea.Cmd {
+func (m cloudDiscoverModel) fetchVersionCmd(asset cloudDiscoveryDevice) tea.Cmd {
 	ctx := m.ctx
 	auth := m.auth
 	brokerURL := m.brokerURL
-	id := asset.GetId()
+	id := asset.key
 	sem := m.versionSem
 	return func() tea.Msg {
 		select {
@@ -426,7 +443,7 @@ func (m cloudDiscoverModel) fetchVersionCmd(asset *cloudpb.Asset) tea.Cmd {
 
 		fetchCtx, cancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
 		defer cancel()
-		conn, err := connectCloudAsset(fetchCtx, auth, asset, brokerURL)
+		conn, err := asset.connect(fetchCtx, auth, brokerURL)
 		if err != nil {
 			return cloudAssetVersionMsg{assetID: id}
 		}
@@ -439,29 +456,29 @@ func (m cloudDiscoverModel) fetchVersionCmd(asset *cloudpb.Asset) tea.Cmd {
 	}
 }
 
-func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
+func (m cloudDiscoverModel) startCloudUpdateCmd(asset cloudDiscoveryDevice) tea.Cmd {
 	ctx := m.ctx
 	auth := m.auth
 	brokerURL := m.brokerURL
 	name := asset.GetName()
 	arch := asset.GetArchitecture()
-	id := asset.GetId()
+	id := asset.key
 
 	return func() tea.Msg {
 		latestVer, _, err := resolveAgentVersion(false)
 		if err != nil {
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("resolving agent version: %w", err)}
 		}
 
-		conn, err := connectCloudAsset(ctx, auth, asset, brokerURL)
+		conn, err := asset.connect(ctx, auth, brokerURL)
 		if err != nil {
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("connecting to device: %w", err)}
 		}
 
 		resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 		if err != nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("querying device: %w", err)}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("querying device: %w", err)}
 		}
 		// Prefer the architecture reported by the running agent; fall back to cloud metadata.
 		if cpuArch := resp.GetCpuArchitecture(); cpuArch != "" {
@@ -469,23 +486,23 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 		}
 		if note := agentAlreadyAtReleaseNote(name, resp.GetVersion(), latestVer); note != "" {
 			conn.Close()
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, note: note, version: resp}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, note: note, version: resp}
 		}
 
 		if arch == "" {
 			conn.Close()
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("device did not report CPU architecture")}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("device did not report CPU architecture")}
 		}
 		osName := resp.GetOs()
 
 		binaryData, actualVer, _, err := resolveAgentArtifact(osName, arch, false)
 		if err != nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("resolving agent binary: %w", err)}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("resolving agent binary: %w", err)}
 		}
 		if err := checkDarwinArtifactVersion(osName, latestVer, actualVer); err != nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: err}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: err}
 		}
 
 		h := sha256.Sum256(binaryData)
@@ -493,35 +510,31 @@ func (m cloudDiscoverModel) startCloudUpdateCmd(asset *cloudpb.Asset) tea.Cmd {
 
 		if err := deviceUpdateUpload(ctx, conn.AgentService, binaryData, sha256Hash); err != nil {
 			conn.Close()
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("uploading: %w", err)}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("uploading: %w", err)}
 		}
 		conn.Close() // agent is restarting
 
-		newConn, err := waitForCloudAgentRestart(ctx, auth, asset, brokerURL)
+		newConn, err := asset.reconnect(ctx, auth, brokerURL)
 		if err != nil {
-			return discoverUpdateDoneMsg{assetID: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
+			return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name, err: fmt.Errorf("waiting for restart: %w", err)}
 		}
 		newConn.Close()
-		return discoverUpdateDoneMsg{assetID: id, deviceName: name}
+		return discoverUpdateDoneMsg{cloudAssetKey: id, deviceName: name}
 	}
 }
 
 func cloudDiscoverJSON(ctx context.Context, auth *config.AuthConfig, all bool) error {
-	assets, err := fetchCloudAssetsFiltered(ctx, auth, !all)
+	devices, err := fetchCloudDiscoveryDevices(ctx, auth, !all)
 	if err != nil {
 		return err
 	}
-	seedPinsFromAssetsBestEffort(auth, assets)
-	infos := make([]discoverDeviceInfo, 0, len(assets))
-	for _, a := range assets {
-		infos = append(infos, cloudDeviceInfoFromAsset(a, nil))
+	infos := make([]any, 0, len(devices))
+	for _, d := range devices {
+		infos = append(infos, d.info(nil))
 	}
-	data, err := json.MarshalIndent(infos, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(data))
-	return nil
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(infos)
 }
 
 // fetchCloudAssetsFiltered retrieves compute-device assets for the org.

@@ -460,3 +460,22 @@ func TestEnrollDownloadsPKIGetOnlyCertificate(t *testing.T) {
 		t.Fatal("GET certificate download did not complete after finalization")
 	}
 }
+
+func TestPKICertificateGETRestrictsDestination(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; http.Error(w, "no", http.StatusNotFound) }))
+	defer srv.Close()
+	directory := srv.URL + "/" + testTenantID + "/acme/directory"
+	for _, certURL := range []string{srv.URL + "/other/acme/cert/1", srv.URL + "/" + testTenantID + "/acme/order/1", srv.URL + "/" + testTenantID + "/acme/cert/1?secret=value", "https://other.example/" + testTenantID + "/acme/cert/1"} {
+		if _, err := fetchPKICertificate(context.Background(), directory, certURL); err == nil {
+			t.Fatal("unexpected certificate destination accepted")
+		}
+	}
+	if calls != 0 {
+		t.Fatal("GET reached an untrusted certificate endpoint")
+	}
+	_, err := fetchPKICertificate(context.Background(), directory, srv.URL+"/"+testTenantID+"/acme/cert/1")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404") || calls != 1 {
+		t.Fatalf("missing certificate download error: %v", err)
+	}
+}
