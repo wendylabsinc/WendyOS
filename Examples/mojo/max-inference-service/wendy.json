@@ -1,0 +1,10 @@
+{
+  "appId": "max-embeddings",
+  "platform": "linux",
+  "version": "0.1.0",
+  "entitlements": [{ "type": "network" }],
+  "readiness": {
+    "tcpSocket": { "port": 8000 },
+    "timeoutSeconds": 600
+  }
+}

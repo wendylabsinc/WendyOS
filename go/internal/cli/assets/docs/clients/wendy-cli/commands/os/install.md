@@ -54,8 +54,8 @@ and the serial console is active. They are for testing the PR on hardware —
 **never flash a PR image to a production device.** Artifacts are deleted when
 the PR is closed.
 
-`--pr` is supported for Linux disk-image devices and for Jetson recovery — Orin
-(Nano/AGX) and AGX Thor. PR builds publish recovery flashpacks into the
+`--pr` is supported for Linux disk-image devices, for Jetson recovery (Orin
+Nano/AGX and AGX Thor) and for the Dragonwing IQ-8275 EDL flash. PR builds publish recovery flashpacks into the
 `pr/<N>/` sandbox, so `--pr` can drive a full recovery install (QSPI+storage for
 Orin, QSPI+NVMe for Thor) as well as `--pr --rootfs-only` raw imaging on Orin. It
 is not supported for ESP32 targets (Wendy Lite firmware is not built by the
@@ -207,7 +207,7 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--nightly` | false | Use nightly/pre-release builds |
-| `--pr` | — | Install from wendyos-builder PR #N (mutually exclusive with `--nightly`, `--version`, positional path; Linux disk-image devices only) |
+| `--pr` | — | Install from wendyos-builder PR #N (mutually exclusive with `--nightly`, `--version`, positional path; not supported for ESP32 targets) |
 | `--device-type` | — | Device type from manifest (Linux targets only, e.g. `raspberry-pi-5`; not supported for ESP32 targets: `esp32-c5`, `esp32-c6`, `esp32-c61`, `esp32-p4`, `esp32-s3`) |
 | `--version` | latest | WendyOS version to install (Linux only) |
 | `--drive` | interactive | Target drive path (e.g. `/dev/disk4`) |

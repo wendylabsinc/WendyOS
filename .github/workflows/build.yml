@@ -16,6 +16,10 @@ on:
         description: "Publish artifacts and create a stable release"
         type: boolean
         default: false
+      skip_integration_tests:
+        description: "Skip macOS hardware integration tests"
+        type: boolean
+        default: false
 
 concurrency:
   group: build-${{ github.ref }}
@@ -577,6 +581,8 @@ jobs:
           # USB access for Jetson recovery flashing (`wendy os install`).
           install -m644 packaging/linux/udev/70-wendy-jetson.rules \
             pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-jetson.rules
+          install -m644 packaging/linux/udev/70-wendy-qualcomm.rules \
+            pkgroot/wendy/usr/lib/udev/rules.d/70-wendy-qualcomm.rules
           # libusb is statically linked into wendy (LGPL-2.1): ship its notice.
           install -m644 NOTICE pkgroot/wendy/usr/share/doc/wendy/NOTICE
           install -m755 ./wendy-agent-linux-${{ matrix.goarch }}/wendy-agent \
@@ -710,6 +716,7 @@ jobs:
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*ca-certificates"
           dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
+          dpkg-deb -c "$WENDY_DEB" | grep "usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
           dpkg-deb -c "$WENDY_DEB" | grep "usr/share/doc/wendy/NOTICE" > /dev/null
           dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*containerd"
           dpkg-deb -I "$WENDY_AGENT_DEB" | grep -E "Depends:.*dbus"
@@ -728,6 +735,7 @@ jobs:
           rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^ca-certificates" > /dev/null
           rpm -qp --requires "$WENDY_AGENT_RPM" | grep "^avahi" > /dev/null
           rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-jetson.rules" > /dev/null
+          rpm -qpl "$WENDY_RPM" | grep "/usr/lib/udev/rules.d/70-wendy-qualcomm.rules" > /dev/null
           rpm -qpl "$WENDY_RPM" | grep "/usr/share/doc/wendy/NOTICE" > /dev/null
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendy-agent.service" > /dev/null
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/default/wendy-agent" > /dev/null
@@ -1015,6 +1023,7 @@ jobs:
 
   integration-tests:
     name: Integration Tests (macOS, stable gate)
+    if: github.event_name != 'workflow_dispatch' || !inputs.skip_integration_tests
     uses: ./.github/workflows/integration-tests.yml
     with:
       platform: macos

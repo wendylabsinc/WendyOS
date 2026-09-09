@@ -1,0 +1,157 @@
+---
+title: Run a MAX graph on CPU and GPU
+description: Compile a small MAX 26.5 graph and check its output on a WendyOS device
+language: mojo
+---
+
+[MAX](https://max.modular.com/stable/get-started/) is Modular's platform for running AI models. It compiles computations for supported CPUs and GPUs and provides a server for exposing models through an API. On WendyOS, it lets you run inference locally on your device.
+
+MAX's Python graph API describes the computation, while its runtime handles compilation and execution. This is useful when building a custom model or checking how an operation behaves on different processors. In this tutorial, Python defines `relu(lhs + rhs)`, MAX runs it, and NumPy checks the result. No model weights or account are needed. See Modular's [model development overview](https://max.modular.com/stable/develop/) for how graphs fit into larger models.
+
+Start with the CPU path, then run the same computation on a supported NVIDIA GPU. Selecting `gpu` explicitly fails if MAX cannot find an accelerator; the example never silently switches to CPU.
+
+## Prerequisites
+
+1. Install the [Wendy CLI](/docs/installation/developer-machine-setup) and start Docker on your development machine.
+2. Connect a 64-bit Linux WendyOS device with a supported ARM64 or x86-64 CPU over USB or your network. See [CPU requirements](https://mojolang.org/docs/requirements/#hardware).
+3. Ensure your development machine has internet access to build the container.
+4. For the GPU step, check your board and driver against the [MAX requirements](https://max.modular.com/stable/packages/) and [Mojo GPU requirements](https://mojolang.org/docs/requirements/#gpu-compatibility).
+
+The image pins **MAX 26.5.0** and NumPy 2.4.3 on Python 3.12. You do not need to install MAX on the device host or on your development machine.
+
+Use your [default Wendy device](/docs/guides/tutorials/mojo/hello-world#choose-a-default-device). Create a project folder named `max-graph` and run the commands below from that folder.
+
+For GPU execution, run `wendy device info` to inspect the GPU and CUDA version; an Orin Nano reports `sm_87`.
+
+## Define and verify the graph
+
+Create `graph.py`:
+
+```python
+import os
+from importlib.metadata import version
+
+import numpy as np
+from max.driver import Accelerator, Buffer, CPU, accelerator_count
+from max.dtype import DType
+from max.engine import InferenceSession
+from max.graph import Graph, TensorType, ops
+
+
+def main():
+    target = os.environ.get("MAX_DEVICE", "cpu")
+    if target == "cpu":
+        device = CPU()
+    elif target == "gpu":
+        if accelerator_count() == 0:
+            raise RuntimeError("MAX_DEVICE=gpu requires a supported GPU and Wendy's gpu entitlement")
+        device = Accelerator(0)
+    else:
+        raise ValueError("MAX_DEVICE must be cpu or gpu")
+
+    print(f"MAX {version('max')}; device={target}", flush=True)
+    tensor_type = TensorType(DType.float32, shape=[4], device=device)
+    with Graph("relu_sum", input_types=[tensor_type, tensor_type]) as graph:
+        graph.output(ops.relu(graph.inputs[0] + graph.inputs[1]))
+
+    session = InferenceSession(devices=[device])
+    model = session.init(session.compile(graph))
+    lhs = np.array([-2.0, 1.0, 3.0, -4.0], dtype=np.float32)
+    rhs = np.array([1.0, 2.0, -5.0, 8.0], dtype=np.float32)
+    result = model.execute(
+        Buffer.from_numpy(lhs).to(device),
+        Buffer.from_numpy(rhs).to(device),
+    )[0].to_numpy()
+    np.testing.assert_allclose(result, np.maximum(lhs + rhs, 0))
+    print(f"relu(lhs + rhs) = {result.tolist()}", flush=True)
+    print("PASS: MAX matches NumPy", flush=True)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+`TensorType` describes each input's dtype, shape, and device. The graph records the addition and ReLU without computing values. `session.compile()` compiles it, `session.init()` prepares an executable model, and `model.execute()` runs it with real buffers. `.to(device)` places inputs on the selected processor; `.to_numpy()` copies the output to host memory for verification.
+
+The arithmetic has an exact expected output: adding the arrays gives `[-1, 3, -2, 4]`, and ReLU replaces negative values with zero.
+
+## Package the app
+
+Create `Dockerfile`:
+
+```dockerfile
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libedit2 libnuma1 && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir max==26.5.0 numpy==2.4.3
+WORKDIR /app
+COPY graph.py .
+ENV MAX_DEVICE=cpu
+CMD ["python", "-u", "graph.py"]
+```
+
+Create `wendy.json`:
+
+```json
+{
+  "appId": "max-graph",
+  "platform": "linux",
+  "version": "0.1.0",
+  "entitlements": []
+}
+```
+
+The CPU computation needs no device entitlements or network access at runtime.
+
+## Run on the CPU
+
+```bash
+wendy run --no-restart
+```
+
+Wendy builds for the target device's architecture, transfers the image, and runs the app. Expected application output:
+
+```text
+MAX 26.5.0; device=cpu
+relu(lhs + rhs) = [0.0, 3.0, 0.0, 4.0]
+PASS: MAX matches NumPy
+```
+
+This is a finite computation. Wendy normally restarts apps unless you stop them; `--no-restart` lets this one exit after the assertion. It can then appear as stopped in `wendy device apps list`. Look for the result and `PASS` line to confirm the calculation succeeded.
+
+## Run on the GPU
+
+Replace `wendy.json` with:
+
+```json
+{
+  "appId": "max-graph",
+  "platform": "linux",
+  "version": "0.1.0",
+  "entitlements": [{ "type": "gpu" }]
+}
+```
+
+Then redeploy with the GPU selected:
+
+```bash
+wendy run --no-restart --env MAX_DEVICE=gpu
+```
+
+The first line should now report `device=gpu`, followed by the same numbers and `PASS`. The `gpu` entitlement makes the device's GPU resources available inside the container. `MAX_DEVICE` is an environment variable consumed by this example, not a built-in MAX setting.
+
+<Callout type="info">
+  This four-element graph is a correctness check, not a benchmark. Compilation and data transfers dominate such a small workload. It does not demonstrate a GPU speedup or guarantee that a larger model fits your device.
+</Callout>
+
+## Troubleshooting
+
+- **No accelerator found:** confirm the `gpu` entitlement is present and inspect `wendy device info`. CPU success does not establish GPU compatibility.
+- **CUDA or PTX compilation error:** compare your driver/toolkit with [Modular's GPU requirements](https://mojolang.org/docs/requirements/#gpu-compatibility). Older Jetson software may require a compatible `ptxas` inside the container and `MODULAR_NVPTX_COMPILER_PATH` pointing to it. A host path is not automatically a container path; adding the entitlement cannot upgrade a driver.
+- **Shape or dtype error after editing:** keep the declared `TensorType` in sync with the NumPy arrays. This example uses four `float32` values per input.
+
+## Next steps
+
+- Run a real model with the [MAX embedding service](/docs/guides/tutorials/mojo/max-inference-service).
+- Explore Modular's [graph guide](https://max.modular.com/stable/develop/graph/) and [buffer API](https://max.modular.com/stable/api/python/generated/max.driver.Buffer/).
