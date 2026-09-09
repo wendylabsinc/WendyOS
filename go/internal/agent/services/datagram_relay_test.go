@@ -199,13 +199,26 @@ func TestDatagramRelayGlobalFlowCap(t *testing.T) {
 	if _, err := first.flow(ctx, 1, 9); err != nil {
 		t.Fatalf("first flow: unexpected error: %v", err)
 	}
+	if got := len(flowSlots); got != 1 {
+		t.Fatalf("slots after first flow = %d, want 1", got)
+	}
 	if _, err := second.flow(ctx, 2, 9); !errors.Is(err, errGlobalFlowCapReached) {
 		t.Fatalf("flow beyond global cap: err = %v, want errGlobalFlowCapReached", err)
 	}
+	if got := len(flowSlots); got != 1 {
+		t.Fatalf("slots after rejected flow = %d, want 1", got)
+	}
 
 	first.closeFlow(1)
+	if got := len(flowSlots); got != 0 {
+		t.Fatalf("slots after flow cleanup = %d, want 0", got)
+	}
 	if _, err := second.flow(ctx, 2, 9); err != nil {
 		t.Fatalf("flow after global slot release: unexpected error: %v", err)
+	}
+	second.closeAll()
+	if got := len(flowSlots); got != 0 {
+		t.Fatalf("slots after session cleanup = %d, want 0", got)
 	}
 }
 
