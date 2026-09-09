@@ -9,6 +9,10 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
+// maxConcurrentDatagramSessions combines with maxFlowsPerSession to cap this
+// service at 2,048 UDP sockets. Sessions themselves may be long-lived because
+// an active Companion port forward is expected to run until explicitly stopped;
+// idle flow sockets still expire after datagramFlowIdleTimeout.
 const maxConcurrentDatagramSessions = 8
 
 // TunnelService exposes authenticated LAN datagram sessions. The TCP Tunnel
@@ -38,6 +42,9 @@ func (s *TunnelService) DatagramTunnel(stream agentpbv2.WendyTunnelService_Datag
 		return status.Error(codes.ResourceExhausted, "too many active datagram tunnel sessions")
 	}
 
+	// SECURITY: The established audit helper records the remote address,
+	// certificate serial, and parsed org/entity IDs when available. It never
+	// records certificate subjects, free-form caller input, or frame payloads.
 	s.logger.Info("device datagram tunnel accepted", clientAuditFields(stream.Context())...)
 	newDatagramRelay(s.logger, &deviceFrameStream{stream: stream}, datagramFlowIdleTimeout).run(stream.Context())
 	return nil

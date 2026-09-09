@@ -17,6 +17,8 @@ const (
 	// sockets; the client edge owns the primary (60s) flow lifetime.
 	datagramFlowIdleTimeout = 2 * time.Minute
 	maxUDPPayload           = 65507
+	maxEchoRepliesPerSecond = 100
+	echoRateWindow          = time.Second
 
 	// maxFlowsPerSession bounds how many concurrent UDP sockets (each backed
 	// by its own goroutine) one datagram session will open. flow_id is
@@ -59,9 +61,12 @@ type datagramRelay struct {
 
 	lastOversizeLog     time.Time
 	lastOversizeEchoLog time.Time
+	lastEchoRateLog     time.Time
 	lastFlowCapLog      time.Time
 	lastDialFailLog     time.Time
 	lastInvalidPortLog  time.Time
+	echoWindowStart     time.Time
+	echoWindowCount     int
 }
 
 type datagramFlow struct {
@@ -134,15 +139,31 @@ func (r *datagramRelay) run(ctx context.Context) {
 }
 
 func (r *datagramRelay) handleEcho(req *cloudpb.IcmpEchoRequest) {
+	now := time.Now()
+	r.mu.Lock()
 	if len(req.GetPayload()) > maxUDPPayload {
-		r.mu.Lock()
-		if time.Since(r.lastOversizeEchoLog) > rateLimitLogInterval {
-			r.lastOversizeEchoLog = time.Now()
+		if now.Sub(r.lastOversizeEchoLog) > rateLimitLogInterval {
+			r.lastOversizeEchoLog = now
 			r.logger.Warn("dropping oversized tunnel echo request", zap.Int("size", len(req.GetPayload())))
 		}
 		r.mu.Unlock()
 		return
 	}
+	if r.echoWindowStart.IsZero() || now.Sub(r.echoWindowStart) >= echoRateWindow {
+		r.echoWindowStart = now
+		r.echoWindowCount = 0
+	}
+	if r.echoWindowCount >= maxEchoRepliesPerSecond {
+		if now.Sub(r.lastEchoRateLog) > rateLimitLogInterval {
+			r.lastEchoRateLog = now
+			r.logger.Warn("dropping rate-limited tunnel echo request",
+				zap.Int("max_per_second", maxEchoRepliesPerSecond))
+		}
+		r.mu.Unlock()
+		return
+	}
+	r.echoWindowCount++
+	r.mu.Unlock()
 
 	err := r.send(&cloudpb.TunnelData{IcmpReply: &cloudpb.IcmpEchoReply{
 		Identifier:      req.GetIdentifier(),
@@ -215,9 +236,12 @@ func (r *datagramRelay) flow(ctx context.Context, flowID, port uint32) (*datagra
 	if len(r.flows) >= maxFlowsPerSession {
 		return nil, errFlowCapReached
 	}
-	// SECURITY: authenticated clients intentionally select any valid UDP port,
-	// but never the destination host. Keeping that policy server-side prevents
-	// a modified client from turning this diagnostic tunnel into a LAN relay.
+	// SECURITY: Choosing any valid loopback UDP port is intentional for this
+	// authenticated, same-org diagnostic forward, analogous to an SSH local
+	// forward. Agent-side mTLS plus the fixed host is the authorization boundary;
+	// a static port allowlist would exclude the app-defined ports covered by the
+	// product contract. Services on loopback must still perform their own
+	// authorization when they require a narrower caller set.
 	conn, err := net.DialUDP("udp", nil, datagramLoopbackAddr(port))
 	if err != nil {
 		return nil, err

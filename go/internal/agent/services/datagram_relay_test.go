@@ -211,6 +211,27 @@ func TestDatagramRelayDropsOversized(t *testing.T) {
 	}
 }
 
+func TestDatagramRelayRateLimitsEchoReplies(t *testing.T) {
+	stream := newFakeAgentStream(context.Background())
+	stream.out = make(chan *cloudpb.TunnelData, maxEchoRepliesPerSecond+1)
+	relay := newDatagramRelay(zap.NewNop(), stream, time.Minute)
+
+	for sequence := 0; sequence < maxEchoRepliesPerSecond+1; sequence++ {
+		relay.handleEcho(&cloudpb.IcmpEchoRequest{Sequence: uint32(sequence)})
+	}
+	if got := len(stream.out); got != maxEchoRepliesPerSecond {
+		t.Fatalf("echo replies = %d, want rate-limited %d", got, maxEchoRepliesPerSecond)
+	}
+
+	relay.mu.Lock()
+	relay.echoWindowStart = time.Now().Add(-echoRateWindow)
+	relay.mu.Unlock()
+	relay.handleEcho(&cloudpb.IcmpEchoRequest{Sequence: maxEchoRepliesPerSecond + 1})
+	if got := len(stream.out); got != maxEchoRepliesPerSecond+1 {
+		t.Fatalf("echo replies after window reset = %d, want %d", got, maxEchoRepliesPerSecond+1)
+	}
+}
+
 func TestDatagramRelayDropsInvalidPorts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
