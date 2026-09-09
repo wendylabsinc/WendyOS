@@ -99,7 +99,7 @@ Whichever path supplies it, the name must be a valid DNS label — it starts wit
 device name "Fleet A Box 01" cannot be used: name may only contain lowercase letters, digits, and hyphens
 ```
 
-A name already taken by another device in your organization is refused too — compared without regard to case, and checked before any credential is minted, so nothing is spent and you can re-run straight away with a different `--name`.
+A name already taken by another device in your organization is refused too, compared without regard to case. That check happens before any credential is minted, so nothing is spent and you can fix the conflict and re-run immediately. The error names which device holds the name and what to do about it — usually renaming that device or choosing another name.
 
 ## Flags
 

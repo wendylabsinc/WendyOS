@@ -116,16 +116,21 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		Name:                 name,
 	})
 	if err != nil {
-		// Cloud validates the name and checks for a collision BEFORE relaying
-		// to pki-core, so these two refusals cost nothing and are worth naming:
-		// the operator can retry immediately with a different name.
+		// Cloud validates and checks its unique indexes BEFORE relaying to
+		// pki-core, so a refusal here costs nothing — and that is the one thing
+		// worth saying, because the operator's assumption about a single-use
+		// credential is otherwise that they just burned one.
+		//
+		// Everything else is left to cloud's own message, which is appended
+		// verbatim: it names the constraint and the remedy, and it knows things
+		// this side does not. In particular ALREADY_EXISTS covers TWO indexes —
+		// the device name and the pki_device_name binding — whose remedies
+		// differ, and the status code alone cannot tell them apart. Restating a
+		// remedy here would be a guess printed ahead of the accurate one.
 		switch status.Code(err) {
-		case codes.AlreadyExists:
-			return fmt.Errorf("the name %q is already taken by another device in your organization "+
-				"(names are compared without regard to case). Nothing was minted — re-run with a different --name: %w", name, err)
-		case codes.InvalidArgument:
-			return fmt.Errorf("cloud refused the enrollment request: %w "+
-				"(nothing was minted)", err)
+		case codes.AlreadyExists, codes.InvalidArgument:
+			return fmt.Errorf("cloud refused this enrollment before minting anything, "+
+				"so no enrollment credential was spent: %w", err)
 		}
 		return fmt.Errorf("requesting enrollment credential: %w", err)
 	}
