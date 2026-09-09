@@ -101,6 +101,8 @@ device name "Fleet A Box 01" cannot be used: name may only contain lowercase let
 
 A name already taken by another device in your organization is refused too, compared without regard to case. That check happens before any credential is minted, so nothing is spent and you can fix the conflict and re-run immediately. The error names which device holds the name and what to do about it — usually renaming that device or choosing another name.
 
+> **Colliding with your own abandoned attempt.** An enrollment that never finished still leaves a device registered under the name it claimed, so re-running with the same name collides with that row rather than with a real device. When the holder looks like one of those — a device binding but no enrollment credential — the error says so and names the asset to delete. Deleting it and retrying is the fix; you are not competing with a colleague's device.
+
 ## Flags
 
 | Flag | Default | Description |
