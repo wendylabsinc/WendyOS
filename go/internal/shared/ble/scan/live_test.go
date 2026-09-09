@@ -3,6 +3,8 @@ package scan
 import (
 	"context"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -62,16 +64,53 @@ func TestLiveScan(t *testing.T) {
 // splitCommaList is a test-only reader for WENDY_BLE_LIVE_SERVICES. The
 // production comma parser lives in the darwin file, which is not built
 // everywhere.
+//
+// Entries are trimmed here so "180F, 180A" reads as two UUIDs rather than one
+// with a leading space. CanonicalUUID trims again downstream, so this is not
+// what makes the filter work — it keeps the logged filter honest and stops the
+// values this test hands to Options.Services depending on that later trim.
 func splitCommaList(s string) []string {
 	var out []string
 	start := 0
 	for i := 0; i <= len(s); i++ {
 		if i == len(s) || s[i] == ',' {
-			if part := s[start:i]; part != "" {
+			// Trim before the empty check, so a whitespace-only entry is
+			// dropped instead of becoming "".
+			if part := strings.TrimSpace(s[start:i]); part != "" {
 				out = append(out, part)
 			}
 			start = i + 1
 		}
 	}
 	return out
+}
+
+// TestSplitCommaList runs everywhere, unlike TestLiveScan above: it is the only
+// thing that checks the env var reader without a radio present.
+func TestSplitCommaList(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"no spaces", "180F,180A", []string{"180F", "180A"}},
+		{"space after comma", "180F, 180A", []string{"180F", "180A"}},
+		{"spaces everywhere", "  180F , 180A  ", []string{"180F", "180A"}},
+		{"whitespace-only entry", "180F, ,180A", []string{"180F", "180A"}},
+		{"single entry", "180F", []string{"180F"}},
+		{"trailing comma", "180F,", []string{"180F"}},
+		{"full 128-bit form", "0000180F-0000-1000-8000-00805F9B34FB, 180A",
+			[]string{"0000180F-0000-1000-8000-00805F9B34FB", "180A"}},
+		{"empty", "", nil},
+		{"only a comma", ",", nil},
+		{"only whitespace", "   ", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := splitCommaList(tt.in); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("splitCommaList(%q) = %#v, want %#v", tt.in, got, tt.want)
+			}
+		})
+	}
 }

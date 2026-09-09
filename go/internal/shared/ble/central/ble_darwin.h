@@ -15,6 +15,7 @@ typedef enum {
     WENDY_BLE_ERR_READ_FAILED = 6,
     WENDY_BLE_ERR_L2CAP_FAILED = 7,
     WENDY_BLE_ERR_DISCONNECTED = 8,
+    WENDY_BLE_ERR_SUBSCRIBE_FAILED = 9,
 } WendyBLEError;
 
 // Opaque handle to a BLE connection

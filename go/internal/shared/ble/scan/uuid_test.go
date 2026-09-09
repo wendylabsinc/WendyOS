@@ -112,6 +112,40 @@ func TestCanonicalUUIDs(t *testing.T) {
 	}
 }
 
+func TestIsCanonicalUUID(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"uppercase canonical", "0000180F-0000-1000-8000-00805F9B34FB", true},
+		{"lowercase canonical", "7565e9eb-4c20-4b67-9272-d708b397b631", true},
+		{"the real filter constant", "4E57454E-4459-0002-0000-000000000000", true},
+		{
+			// The regression this exists for: a 36-character value carrying a
+			// quote passed the old len==36 check and broke out of the PowerShell
+			// literal. It must be rejected.
+			name: "quote-injection payload of the right length",
+			in:   "4E57454E-4459-0002-0000-00000000000'",
+			want: false,
+		},
+		{"too short", "0000180F-0000-1000-8000-00805F9B34F", false},
+		{"too long", "0000180F-0000-1000-8000-00805F9B34FBB", false},
+		{"dashless 32-char form is not canonical", "7565E9EB4C204B679272D708B397B631", false},
+		{"hyphen in the wrong position", "0000180F0-000-1000-8000-00805F9B34FB", false},
+		{"non-hex character in a hex position", "0000180Z-0000-1000-8000-00805F9B34FB", false},
+		{"empty", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCanonicalUUID(tt.in); got != tt.want {
+				t.Errorf("isCanonicalUUID(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestMatchesServices(t *testing.T) {
 	agent := CanonicalUUID("7565e9eb-4c20-4b67-9272-d708b397b631")
 	other := CanonicalUUID("180F")
