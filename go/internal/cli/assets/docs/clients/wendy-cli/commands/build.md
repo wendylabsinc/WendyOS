@@ -8,7 +8,7 @@ The build command is mainly used to verify your app can build/compile.
 |---|---|---|
 | `--build-type` | auto-detected | Build type to use when multiple project markers are present: `docker`, `swift`, or `python`. |
 | `--dockerfile` | auto-detected | Build file to build from: a `Dockerfile`, `Containerfile`, a dot/hyphen variant of either (`Dockerfile.prod`), or a Stagefile (`prod.stagefile.yaml`). A bare filename in the project directory, not a path. Shows a selection menu when multiple build files exist — see [Selecting a build file](#selecting-a-build-file). |
-| `--builder` | auto | Image builder to force for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. |
+| `--builder` | auto | Image builder to force for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. `buildkit` runs the verification build in a containerd-backed BuildKit worker. |
 | `--gpu-arch` | from the device | GPU architecture a Stagefile `cuda:` stage targets; taken from the device when one is selected. |
 | `--debug` | `false` | Build compiled languages unoptimized instead of the release default — see below. |
 | `--service <name>` | all services | Build only the named service and its dependencies (multi-service projects) — see [Multi-service manifests](#multi-service-manifests). |
@@ -65,7 +65,7 @@ wendy build --service api
 
 Up to 4 service images build in parallel by default. Override with `--max-concurrency <n>`; `0` restores the default limit of 4.
 
-`--builder`, `--gpu-arch`, and `--debug` behave exactly as in a single-image build, applied per service — with one exception: `--builder buildkit` is not supported for multi-service builds, only `docker` and `apple-container`. As with single-image builds, `wendy build` passes no build-args, so a hand-written Dockerfile's `ARG WENDY_PLATFORM` / `ARG WENDY_DEBUG` take their declared defaults here.
+`--builder`, `--gpu-arch`, and `--debug` behave exactly as in a single-image build and are applied per service. Docker loads each result into its local image store, Apple Container uses its implicit store, and BuildKit stores each verification result in its private worker. As with single-image builds, `wendy build` passes no build-args, so a hand-written Dockerfile's `ARG WENDY_PLATFORM` / `ARG WENDY_DEBUG` take their declared defaults here.
 
 With no device selected, the target platform defaults to `linux/arm64`; selecting a device uses that device's own platform instead, same as single-image builds.
 
@@ -102,7 +102,7 @@ Everything in the `Dockerfile.generated*` namespace is a build artifact: it is e
 
 | Manifest | Required host | Notes |
 |---|---|---|
-| `wendy.json` `services` map | Docker Desktop or Apple `container` on Apple silicon macOS | Local build only — no push, no device required; each service resolves and builds independently with `--builder docker` or `--builder apple-container` (`buildkit` is not supported here). See [Multi-service manifests](#multi-service-manifests) |
+| `wendy.json` `services` map | Docker Desktop, Apple `container` on Apple silicon macOS, or a containerd-backed BuildKit daemon | Local build only — no push, no device required; each service resolves and builds independently with `--builder docker`, `--builder apple-container`, or `--builder buildkit`. See [Multi-service manifests](#multi-service-manifests) |
 | `<name>.stagefile.yaml` | Same as `Dockerfile` | Compiled to `Dockerfile.generated[.<variant>]` and then built through the Dockerfile path, so every builder below applies unchanged |
 | `Dockerfile` / `Containerfile` | Docker Desktop, Apple `container` on Apple silicon macOS, or WendyOS | Local Docker builds use `docker buildx`; `--device apple-container` uses `container build`; WendyOS device builds can select `--builder docker` or `--builder apple-container` |
 | `Package.swift` | macOS or Linux | Requires a host Swift toolchain |
@@ -126,6 +126,22 @@ wendy --device my-wendy.local build
 ```
 
 Wendy automatically checks for the `container` CLI and offers to install it via Homebrew if missing, and starts the `system` and `builder` services if they are not running.
+
+To bypass both Docker and Apple Container explicitly, select the `buildkit`
+backend. If the optional Local Build Service is running from the Wendy menu-bar
+app, Wendy uses its socket at `<Wendy cache>/runtime/buildkitd.sock`. You can
+target another BuildKit daemon by setting the endpoint explicitly:
+
+```sh
+WENDY_BUILDKIT_HOST=unix:///path/to/buildkitd.sock \
+  wendy build --builder buildkit
+```
+
+The verification result is committed to that worker's private containerd
+store; it is not used to run Mac applications. Apple `container` remains the
+primary Mac application runtime. `BUILDKIT_HOST` and buildctl's normal local
+daemon default are also honored; the Wendy-prefixed variable takes precedence.
+The host must have `buildctl` installed.
 
 If Apple Container reports an empty build context for a project under `/tmp` or
 `/private/tmp`, Wendy returns an error with the known workaround: move the
