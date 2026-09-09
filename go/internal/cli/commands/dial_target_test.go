@@ -86,11 +86,11 @@ func TestPinCandidateKeysAddsMeshThenDisplayName(t *testing.T) {
 		ID:          "dev-1",
 		DisplayName: "calm-zinnia",
 		Hostname:    "wendyos-calm-zinnia.local",
-		MeshName:    "calm-zinnia.acme.cloud.wendy.dev",
+		MeshName:    "calm-zinnia.acme.mesh.wendy.internal",
 	})
 
 	got := pinCandidateKeys("wendyos-calm-zinnia.local")
-	want := []string{"wendyos-calm-zinnia.local", "calm-zinnia.acme.cloud.wendy.dev", "calm-zinnia"}
+	want := []string{"wendyos-calm-zinnia.local", "calm-zinnia.acme.mesh.wendy.internal", "calm-zinnia"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("pinCandidateKeys = %q, want %q (dialled key, then mesh name, then display name)", got, want)
 	}
@@ -118,10 +118,10 @@ func TestExpectedIdentityForFindsPinUnderMeshName(t *testing.T) {
 		ID:          "dev-1",
 		DisplayName: "calm-zinnia",
 		Hostname:    "wendyos-calm-zinnia.local",
-		MeshName:    "calm-zinnia.acme.cloud.wendy.dev",
+		MeshName:    "calm-zinnia.acme.mesh.wendy.internal",
 	})
 	setPinConfig(t, map[string]config.DevicePin{
-		"calm-zinnia.acme.cloud.wendy.dev": {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud},
+		"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud},
 	})
 
 	got := expectedIdentityFor("wendyos-calm-zinnia.local")
@@ -146,15 +146,15 @@ func TestLookupPinCloudBeatsEarlierLAN(t *testing.T) {
 		ID:          "dev-1",
 		DisplayName: "calm-zinnia",
 		Hostname:    "wendyos-calm-zinnia.local",
-		MeshName:    "calm-zinnia.acme.cloud.wendy.dev",
+		MeshName:    "calm-zinnia.acme.mesh.wendy.internal",
 	}
 
 	t.Run("cloud under display name beats lan under the dialled key", func(t *testing.T) {
 		setPinCache(t, entry)
 		setPinConfig(t, map[string]config.DevicePin{
-			"wendyos-calm-zinnia":              {OrgID: 7, AssetID: "1", Source: config.PinSourceLAN},
-			"calm-zinnia.acme.cloud.wendy.dev": {OrgID: 7, AssetID: "2", Source: config.PinSourceLAN},
-			"calm-zinnia":                      {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud},
+			"wendyos-calm-zinnia":                  {OrgID: 7, AssetID: "1", Source: config.PinSourceLAN},
+			"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "2", Source: config.PinSourceLAN},
+			"calm-zinnia":                          {OrgID: 7, AssetID: "42", Source: config.PinSourceCloud},
 		})
 		cfg, err := loadConfigForPinFn()
 		if err != nil {
@@ -176,9 +176,9 @@ func TestLookupPinCloudBeatsEarlierLAN(t *testing.T) {
 	t.Run("equal sources keep the earliest candidate", func(t *testing.T) {
 		setPinCache(t, entry)
 		setPinConfig(t, map[string]config.DevicePin{
-			"wendyos-calm-zinnia":              {OrgID: 7, AssetID: "1", Source: config.PinSourceLAN},
-			"calm-zinnia.acme.cloud.wendy.dev": {OrgID: 7, AssetID: "2", Source: config.PinSourceLAN},
-			"calm-zinnia":                      {OrgID: 7, AssetID: "3", Source: config.PinSourceLAN},
+			"wendyos-calm-zinnia":                  {OrgID: 7, AssetID: "1", Source: config.PinSourceLAN},
+			"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "2", Source: config.PinSourceLAN},
+			"calm-zinnia":                          {OrgID: 7, AssetID: "3", Source: config.PinSourceLAN},
 		})
 		cfg, err := loadConfigForPinFn()
 		if err != nil {
@@ -249,8 +249,8 @@ func TestLookupPinCloudBeatsEarlierLAN(t *testing.T) {
 	t.Run("first cloud pin wins over a later cloud pin", func(t *testing.T) {
 		setPinCache(t, entry)
 		setPinConfig(t, map[string]config.DevicePin{
-			"calm-zinnia.acme.cloud.wendy.dev": {OrgID: 7, AssetID: "2", Source: config.PinSourceCloud},
-			"calm-zinnia":                      {OrgID: 7, AssetID: "3", Source: config.PinSourceCloud},
+			"calm-zinnia.acme.mesh.wendy.internal": {OrgID: 7, AssetID: "2", Source: config.PinSourceCloud},
+			"calm-zinnia":                          {OrgID: 7, AssetID: "3", Source: config.PinSourceCloud},
 		})
 		cfg, err := loadConfigForPinFn()
 		if err != nil {
@@ -261,7 +261,7 @@ func TestLookupPinCloudBeatsEarlierLAN(t *testing.T) {
 		if !ok {
 			t.Fatal("lookupPin found nothing despite two matching cloud pins")
 		}
-		if key != "calm-zinnia.acme.cloud.wendy.dev" || pin.AssetID != "2" {
+		if key != "calm-zinnia.acme.mesh.wendy.internal" || pin.AssetID != "2" {
 			t.Fatalf("lookupPin = %+v under %q, want the mesh-name cloud pin (asset 2); it is the earlier candidate", pin, key)
 		}
 	})
@@ -310,10 +310,10 @@ func TestPinnedAnyCandidate(t *testing.T) {
 		ID:          "dev-1",
 		DisplayName: "calm-zinnia",
 		Hostname:    "wendyos-calm-zinnia.local",
-		MeshName:    "calm-zinnia.acme.cloud.wendy.dev",
+		MeshName:    "calm-zinnia.acme.mesh.wendy.internal",
 	})
 
-	for _, key := range []string{"wendyos-calm-zinnia", "calm-zinnia.acme.cloud.wendy.dev", "calm-zinnia"} {
+	for _, key := range []string{"wendyos-calm-zinnia", "calm-zinnia.acme.mesh.wendy.internal", "calm-zinnia"} {
 		t.Run("pinned under "+key, func(t *testing.T) {
 			setPinConfig(t, map[string]config.DevicePin{key: {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443"}})
 			if !newDialTarget("wendyos-calm-zinnia.local", "10.0.0.9:50051").pinned() {

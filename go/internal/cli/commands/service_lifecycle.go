@@ -53,16 +53,17 @@ type serviceHookRunner struct {
 // The dial target for both readiness and the hook is resolveHookHost's
 // result, not r.conn.Host directly — same reasoning as run.go's
 // single-container path (see resolveHookHost): a cloud connection's Host is
-// the tunnel's unresolvable asset name, and an IPv6-literal Host may be a
-// rotating temporary address, so both prefer the agent-reported IP when one
-// is available. resolveHookHost's announceReachableURL call also replaces
+// the tunnel's unresolvable asset name, while an IPv6-literal Host may be a
+// rotating temporary address. IPv6 can prefer an agent-reported IP; cloud
+// requires a verified mesh route because a reported LAN address is not
+// necessarily reachable. resolveHookHost's announceReachableURL call replaces
 // the old readiness-gated announce call below — it now runs before the
 // readiness wait (not after a successful one), which mirrors run.go's
 // documented tradeoff: the "App reachable at" line prints regardless of
 // whether this service's probe later fails, in exchange for a probe that can
-// actually reach a cloud device at all. A cfg with no usable host (a cloud
-// conn with no reported IP) skips readiness and the hook entirely instead of
-// dialing a dead asset name.
+// actually reach a device at all. An active desktop VPN supplies the stable
+// mesh hostname for cloud; without it, readiness and the hook are skipped
+// instead of dialing a dead asset name or private device LAN address.
 func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.AppConfig) {
 	if cfg == nil {
 		return
@@ -88,12 +89,12 @@ func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.
 		// cfg.ServiceName is "" for the app-level fallback config (see
 		// appLevelLifecycleConfig); containerDisplayName falls back to the
 		// bare AppID in that case rather than printing a dangling "for :".
-		cliNotice("Skipping postStart hook for %s: no routable device address reported; open the app manually once the device IP is known.", containerDisplayName(cfg))
+		cliNotice("Skipping postStart hook for %s: Wendy Mesh is not active; connect the desktop VPN to reach this cloud device.", containerDisplayName(cfg))
 		return
 	}
 
 	readinessSucceeded := true
-	if err := waitForReadiness(ctx, readiness, hookHost); err != nil {
+	if err := waitForReadiness(ctx, readiness, hookHost, cloudHTTPReadinessPort(r.conn, cfg, readiness)); err != nil {
 		if ctx.Err() != nil {
 			// Canceled (e.g. Ctrl+C, or the run ending) — stay silent and skip
 			// the hook entirely; this is not a readiness failure to report.

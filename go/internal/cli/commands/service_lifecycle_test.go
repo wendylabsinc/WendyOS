@@ -274,15 +274,10 @@ func TestServiceHookRunner_FiresAfterReadiness(t *testing.T) {
 	}
 }
 
-// TestServiceHookRunner_CloudSwapsHostForReadinessAndHook verifies that a
-// cloud connection (conn.Reconnect != nil) — whose Host is the unresolvable
-// cloud asset name — gets both its readiness probe and its postStart hook
-// pointed at the agent-reported IP instead, mirroring the single-container
-// fix in run.go's resolveHookHost. Before this fix, service_lifecycle.go had
-// no swap at all: runOne dialed r.conn.Host directly for both readiness and
-// the hook, which is fine for LAN but always fails against a cloud asset
-// name.
-func TestServiceHookRunner_CloudSwapsHostForReadinessAndHook(t *testing.T) {
+// TestServiceHookRunner_CloudRejectsReportedLANIP verifies that a cloud
+// control tunnel does not make an agent-reported address reachable. Without
+// an active mesh route, readiness and postStart are skipped.
+func TestServiceHookRunner_CloudRejectsReportedLANIP(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to start listener: %v", err)
@@ -318,17 +313,13 @@ func TestServiceHookRunner_CloudSwapsHostForReadinessAndHook(t *testing.T) {
 	r.runOne(context.Background(), context.Background(), cfg)
 	elapsed := time.Since(start)
 
-	// The real listener answers almost instantly; dialing the unresolvable
-	// asset name would instead burn the full 5s TimeoutSeconds.
+	// Neither the listener nor the asset name should be dialed; the cloud
+	// lifecycle work must be skipped immediately without an active mesh route.
 	if elapsed > 2*time.Second {
-		t.Errorf("took %v, expected near-instant readiness against the reported IP (probe likely dialed %q instead)", elapsed, conn.Host)
+		t.Errorf("took %v, expected cloud lifecycle work to skip immediately", elapsed)
 	}
-	if len(*calls) != 1 {
-		t.Fatalf("browserOpen calls = %v, want exactly 1", *calls)
-	}
-	want := "http://127.0.0.1:9/worker"
-	if (*calls)[0] != want {
-		t.Errorf("openURL = %q, want %q", (*calls)[0], want)
+	if len(*calls) != 0 {
+		t.Errorf("browserOpen calls = %v, want none without an active mesh route", *calls)
 	}
 	if containerFake.listContainersCalls != 0 {
 		t.Errorf("ListContainers called despite readiness succeeding (unexpected warning path)")

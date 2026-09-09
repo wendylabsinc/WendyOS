@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2515,7 +2517,7 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 // waitForReadiness polls the readiness probe until it passes or the context is
 // cancelled. Returns nil on success, the parent context error on cancellation,
 // or a timeout error if the probe deadline expires.
-func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string) error {
+func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int) error {
 	if cfg == nil || cfg.TCPSocket == nil {
 		return nil
 	}
@@ -2532,13 +2534,47 @@ func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostn
 	defer cancel()
 
 	dialer := net.Dialer{Timeout: 2 * time.Second}
+	var httpClient *http.Client
+	var httpURL string
+	if httpPort != 0 && httpPort == cfg.TCPSocket.Port {
+		httpURL = "http://" + addr
+		transport := &http.Transport{
+			Proxy:             nil,
+			DialContext:       dialer.DialContext,
+			DisableKeepAlives: true,
+		}
+		defer transport.CloseIdleConnections()
+		httpClient = &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		conn, err := dialer.DialContext(probeCtx, "tcp", addr)
+		var err error
+		if httpClient != nil {
+			var req *http.Request
+			req, err = http.NewRequestWithContext(probeCtx, http.MethodHead, httpURL, nil)
+			if err == nil {
+				// A raw connect can linger after the local side closes when it crosses
+				// the mesh cloud relay. That empty connection can monopolize a
+				// single-threaded HTTP server and make the browser request time out.
+				// A complete HTTP probe with connection-close semantics lets the
+				// application finish the request before postStart opens the browser.
+				req.Close = true
+				var resp *http.Response
+				resp, err = httpClient.Do(req)
+				if err == nil {
+					err = resp.Body.Close()
+				}
+			}
+		} else {
+			var conn net.Conn
+			conn, err = dialer.DialContext(probeCtx, "tcp", addr)
+			if err == nil {
+				err = conn.Close()
+			}
+		}
 		if err == nil {
-			conn.Close()
 			cliLogln("Ready.")
 			return nil
 		}
@@ -2553,6 +2589,21 @@ func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostn
 		case <-ticker.C:
 		}
 	}
+}
+
+// cloudHTTPReadinessPort selects a request-level readiness probe only for an
+// HTTP entitlement reached through the cloud mesh. Direct TCP readiness keeps
+// its documented connect-only semantics, while mesh HTTP avoids leaving an
+// empty relayed connection in front of the real browser request.
+func cloudHTTPReadinessPort(conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, readiness *appconfig.ReadinessConfig) int {
+	if conn == nil || conn.Reconnect == nil || readiness == nil || readiness.TCPSocket == nil {
+		return 0
+	}
+	port, ok := httpEntitlementPort(appCfg.Entitlements)
+	if !ok || port != readiness.TCPSocket.Port {
+		return 0
+	}
+	return port
 }
 
 func shellCommand() (string, []string) {
@@ -2602,12 +2653,21 @@ var browserOpen = browseropen.Open
 // silent on any error or when no reachable address can be determined.
 // Returns the device IP the printed URL uses, or "" when nothing was announced.
 func announceReachableURL(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) string {
+	ip := reportedReachableIP(ctx, conn, appCfg)
+	announceReachableURLForHost(appCfg, ip)
+	return ip
+}
+
+// reportedReachableIP asks the agent for a candidate address only when the app
+// has a URL or port worth surfacing. Keeping this guard here preserves the
+// hook-less cloud fast path: it must not issue an otherwise pointless RPC.
+func reportedReachableIP(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) string {
 	var hookURL string
 	if appCfg.Hooks != nil && appCfg.Hooks.PostStart != nil {
 		hookURL = appCfg.Hooks.PostStart.OpenURL
 	}
 	readiness := effectiveReadiness(appCfg)
-	httpPort, hasHTTPPort := httpEntitlementPort(appCfg.Entitlements)
+	_, hasHTTPPort := httpEntitlementPort(appCfg.Entitlements)
 	hasPort := hasHTTPPort || (readiness != nil && readiness.TCPSocket != nil && readiness.TCPSocket.Port != 0)
 	if hookURL == "" && !hasPort {
 		return ""
@@ -2621,21 +2681,61 @@ func announceReachableURL(ctx context.Context, conn *grpcclient.AgentConnection,
 	if name, err := userVMForConnection(conn); err == nil && name != "" {
 		ip = "127.0.0.1"
 	}
-	url := reachableAppURL(hookURL, appCfg.AppID, appCfg.ServiceName, ip, httpPort, readiness)
-	if url == "" {
-		return ""
-	}
-	cliLogln("App reachable at %s", tui.Value(url))
 	return ip
 }
 
+// announceReachableURLForHost prints the app URL for a host already selected
+// by the lifecycle routing logic. That host may be an agent-reported IP or the
+// stable mesh name exposed by the desktop VPN.
+func announceReachableURLForHost(appCfg *appconfig.AppConfig, host string) {
+	if host == "" {
+		return
+	}
+	var hookURL string
+	if appCfg.Hooks != nil && appCfg.Hooks.PostStart != nil {
+		hookURL = appCfg.Hooks.PostStart.OpenURL
+	}
+	readiness := effectiveReadiness(appCfg)
+	httpPort, _ := httpEntitlementPort(appCfg.Entitlements)
+	url := reachableAppURL(hookURL, appCfg.AppID, appCfg.ServiceName, host, httpPort, readiness)
+	if url == "" {
+		return
+	}
+	cliLogln("App reachable at %s", tui.Value(url))
+}
+
+var meshServicePrefix = netip.MustParsePrefix("10.99.0.0/16")
+
+// activeMeshHost returns conn.MeshHost only when the operating-system resolver
+// maps it into Wendy's mesh service CIDR. The desktop VPN owns that DNS answer,
+// so this distinguishes an active VPN from a merely known cloud asset without
+// coupling the CLI to macOS or to the desktop app's process state.
+func activeMeshHost(ctx context.Context, conn *grpcclient.AgentConnection) string {
+	if conn.MeshHost == "" {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	addrs, err := osLookupHostFn(lookupCtx, conn.MeshHost)
+	if err != nil {
+		return ""
+	}
+	for _, raw := range addrs {
+		addr, err := netip.ParseAddr(raw)
+		if err == nil && meshServicePrefix.Contains(addr.Unmap()) {
+			return conn.MeshHost
+		}
+	}
+	return ""
+}
+
 // resolveHookHost returns the host the developer-side readiness probe and
-// postStart hook should target. conn.Host is perfect for LAN connections, but
-// a cloud tunnel sets it to the ASSET NAME (cloud_tunnel.go: agentConn.Host =
-// asset.GetName()), which does not resolve from this machine — and an IPv6
-// literal needs the agent-reported IP too, since it is often an RFC 4941
-// temporary (privacy) address that rotates away. In both cases prefer the
-// routable IP the agent reports via GetAgentVersion (announceReachableURL).
+// postStart hook should target. When the desktop VPN is active, its stable mesh
+// hostname wins: cloud-reported interface IPs are often private and unreachable
+// from the developer's current network. A cloud connection without an active
+// mesh route is not assumed reachable: agent-reported interface addresses are
+// commonly private LAN addresses. IPv6 and LAN connections retain the existing
+// fallback behavior.
 //
 // conn.Reconnect != nil is the cloud marker: it is the sole assignment
 // (cloud_tunnel.go, on the connection cloud_tunnel.go builds) for a
@@ -2643,17 +2743,21 @@ func announceReachableURL(ctx context.Context, conn *grpcclient.AgentConnection,
 // alone. conn.Addr can't be used instead — it is empty for NewFromConn
 // conns, cloud tunnels included.
 //
-// ok=false means no usable host exists (a cloud conn with no reported IP):
-// the caller must skip host-side probes/hooks with guidance instead of
-// dialing a dead asset name.
+// ok=false means no active mesh route exists for a cloud connection; callers
+// skip host-side probes/hooks with guidance instead of dialing either the cloud
+// asset's display name or an unverified device LAN address.
 func resolveHookHost(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host string, ok bool) {
-	ip := announceReachableURL(ctx, conn, appCfg)
-	isCloud := conn.Reconnect != nil
-	if ip != "" && (isCloud || isIPv6Literal(conn.Host)) {
-		return ip, true
+	if meshHost := activeMeshHost(ctx, conn); meshHost != "" {
+		announceReachableURLForHost(appCfg, meshHost)
+		return meshHost, true
 	}
-	if isCloud && ip == "" {
+	isCloud := conn.Reconnect != nil
+	if isCloud {
 		return "", false
+	}
+	ip := announceReachableURL(ctx, conn, appCfg)
+	if ip != "" && isIPv6Literal(conn.Host) {
+		return ip, true
 	}
 	return conn.Host, true
 }
@@ -2718,10 +2822,9 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 	// http-entitlement-synthesized) and no postStart hook (explicit or
 	// http-entitlement-synthesized) has nothing for this function to do.
 	// Returning before resolveHookHost matters specifically for cloud
-	// connections: resolveHookHost's isCloud branch would otherwise still run
-	// and, since announceReachableURL short-circuits to "" without ever
-	// querying the agent when there's no hookURL/port to build a URL from,
-	// report "no reported IP" and print a "Skipping postStart hook" notice
+	// connections: resolveHookHost would otherwise still run and, since neither
+	// mesh nor reported-IP resolution is relevant without a hook or port,
+	// potentially print a "Skipping postStart hook" notice
 	// for a hook that was never configured. Mirrors
 	// service_lifecycle.go's serviceHookRunner.runOne guard.
 	if readiness == nil && hooks == nil {
@@ -2738,11 +2841,11 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 	// user watches for regardless of when the probe finishes.
 	hookHost, hostOK := resolveHookHost(ctx, conn, appCfg)
 	if !hostOK {
-		cliNotice("Skipping postStart hook: no routable device address reported; open the app manually once the device IP is known.")
+		cliNotice("Skipping postStart hook: Wendy Mesh is not active; connect the desktop VPN to reach this cloud device.")
 		return nil
 	}
 
-	err := waitForReadiness(ctx, readiness, hookHost)
+	err := waitForReadiness(ctx, readiness, hookHost, cloudHTTPReadinessPort(conn, appCfg, readiness))
 	rp("  ↳ runcontainer: readiness wait")
 	if err != nil {
 		if ctx.Err() == nil {
