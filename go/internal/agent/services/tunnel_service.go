@@ -2,20 +2,28 @@ package services
 
 import (
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
+const maxConcurrentDatagramSessions = 8
+
 // TunnelService exposes authenticated LAN datagram sessions. The TCP Tunnel
 // method in the shared wire contract is intentionally left unimplemented.
 type TunnelService struct {
 	agentpbv2.UnimplementedWendyTunnelServiceServer
-	logger *zap.Logger
+	logger   *zap.Logger
+	sessions chan struct{}
 }
 
 func NewTunnelService(logger *zap.Logger) *TunnelService {
-	return &TunnelService{logger: logger}
+	return &TunnelService{
+		logger:   logger,
+		sessions: make(chan struct{}, maxConcurrentDatagramSessions),
+	}
 }
 
 // DatagramTunnel serves one multiplexed UDP + ICMP-echo session for a LAN
@@ -23,8 +31,15 @@ func NewTunnelService(logger *zap.Logger) *TunnelService {
 // loopback and treats echo frames as application-level replies; it does not
 // open a raw ICMP socket.
 func (s *TunnelService) DatagramTunnel(stream agentpbv2.WendyTunnelService_DatagramTunnelServer) error {
+	select {
+	case s.sessions <- struct{}{}:
+		defer func() { <-s.sessions }()
+	default:
+		return status.Error(codes.ResourceExhausted, "too many active datagram tunnel sessions")
+	}
+
 	s.logger.Info("device datagram tunnel accepted", clientAuditFields(stream.Context())...)
-	newDatagramRelay(s.logger, deviceFrameStream{stream: stream}, datagramFlowIdleTimeout).run(stream.Context())
+	newDatagramRelay(s.logger, &deviceFrameStream{stream: stream}, datagramFlowIdleTimeout).run(stream.Context())
 	return nil
 }
 
@@ -35,7 +50,7 @@ type deviceFrameStream struct {
 	stream agentpbv2.WendyTunnelService_DatagramTunnelServer
 }
 
-func (d deviceFrameStream) Send(msg *cloudpb.TunnelData) error {
+func (d *deviceFrameStream) Send(msg *cloudpb.TunnelData) error {
 	frame := &agentpbv2.DeviceDatagramFrame{}
 	switch {
 	case msg.GetDatagram() != nil:
@@ -60,7 +75,7 @@ func (d deviceFrameStream) Send(msg *cloudpb.TunnelData) error {
 	return d.stream.Send(frame)
 }
 
-func (d deviceFrameStream) Recv() (*cloudpb.TunnelData, error) {
+func (d *deviceFrameStream) Recv() (*cloudpb.TunnelData, error) {
 	frame, err := d.stream.Recv()
 	if err != nil {
 		return nil, err

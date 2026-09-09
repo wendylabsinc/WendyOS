@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -83,6 +85,46 @@ func TestTunnelServiceDatagramTunnelEchoesICMP(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for icmp reply")
+	}
+}
+
+func TestTunnelServiceLimitsConcurrentDatagramSessions(t *testing.T) {
+	svc := NewTunnelService(zap.NewNop())
+	svc.sessions = make(chan struct{}, 1)
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	defer cancelFirst()
+	first := newFakeDeviceDatagramStream(firstCtx)
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- svc.DatagramTunnel(first) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for len(svc.sessions) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("first session did not acquire its slot")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	second := newFakeDeviceDatagramStream(context.Background())
+	if got := status.Code(svc.DatagramTunnel(second)); got != codes.ResourceExhausted {
+		t.Fatalf("second session status = %v, want %v", got, codes.ResourceExhausted)
+	}
+
+	cancelFirst()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first session returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("first session did not release its slot")
+	}
+
+	third := newFakeDeviceDatagramStream(context.Background())
+	close(third.in)
+	if err := svc.DatagramTunnel(third); err != nil {
+		t.Fatalf("session after release returned error: %v", err)
 	}
 }
 

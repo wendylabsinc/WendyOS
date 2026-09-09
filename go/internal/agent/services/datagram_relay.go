@@ -29,8 +29,8 @@ const (
 	maxFlowsPerSession = 256
 
 	// rateLimitLogInterval bounds how often a single client can force a log
-	// line for the same recurring condition (oversize datagram, flow-table
-	// cap, dial failure) — mirrors the pre-existing lastOversizeLog pattern.
+	// line for the same recurring condition (oversize frame, invalid port,
+	// flow-table cap, dial failure).
 	rateLimitLogInterval = 10 * time.Second
 )
 
@@ -57,10 +57,11 @@ type datagramRelay struct {
 	mu    sync.Mutex
 	flows map[uint32]*datagramFlow
 
-	lastOversizeLog    time.Time
-	lastFlowCapLog     time.Time
-	lastDialFailLog    time.Time
-	lastInvalidPortLog time.Time
+	lastOversizeLog     time.Time
+	lastOversizeEchoLog time.Time
+	lastFlowCapLog      time.Time
+	lastDialFailLog     time.Time
+	lastInvalidPortLog  time.Time
 }
 
 type datagramFlow struct {
@@ -133,6 +134,16 @@ func (r *datagramRelay) run(ctx context.Context) {
 }
 
 func (r *datagramRelay) handleEcho(req *cloudpb.IcmpEchoRequest) {
+	if len(req.GetPayload()) > maxUDPPayload {
+		r.mu.Lock()
+		if time.Since(r.lastOversizeEchoLog) > rateLimitLogInterval {
+			r.lastOversizeEchoLog = time.Now()
+			r.logger.Warn("dropping oversized tunnel echo request", zap.Int("size", len(req.GetPayload())))
+		}
+		r.mu.Unlock()
+		return
+	}
+
 	err := r.send(&cloudpb.TunnelData{IcmpReply: &cloudpb.IcmpEchoReply{
 		Identifier:      req.GetIdentifier(),
 		Sequence:        req.GetSequence(),
@@ -204,8 +215,10 @@ func (r *datagramRelay) flow(ctx context.Context, flowID, port uint32) (*datagra
 	if len(r.flows) >= maxFlowsPerSession {
 		return nil, errFlowCapReached
 	}
-	conn, err := net.DialUDP("udp",
-		nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(port)})
+	// SECURITY: authenticated clients intentionally select any valid UDP port,
+	// but never the destination host. Keeping that policy server-side prevents
+	// a modified client from turning this diagnostic tunnel into a LAN relay.
+	conn, err := net.DialUDP("udp", nil, datagramLoopbackAddr(port))
 	if err != nil {
 		return nil, err
 	}
@@ -213,6 +226,10 @@ func (r *datagramRelay) flow(ctx context.Context, flowID, port uint32) (*datagra
 	r.flows[flowID] = f
 	go r.readFlow(ctx, flowID, f)
 	return f, nil
+}
+
+func datagramLoopbackAddr(port uint32) *net.UDPAddr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(port)}
 }
 
 // readFlow pumps device→client datagrams for one flow until its socket closes.
