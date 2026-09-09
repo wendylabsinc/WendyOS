@@ -9,8 +9,10 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -67,10 +69,10 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return err
 	}
 	// The device id is a v4 UUID, and is deliberately unrelated to the name.
-	// The two are different kinds of key: the name is unique WITHIN the tenant
-	// and is what devices are addressed and discovered by, so it stays
-	// changeable with `wendy device rename`; this id is globally unique, is
-	// fixed at mint and is carried by every certificate the device is ever
+	// The two are different kinds of key: the name is unique within the
+	// organization and is what devices are addressed and discovered by, so it
+	// stays changeable with `wendy device rename`; this id is globally unique,
+	// is fixed at mint and is carried by every certificate the device is ever
 	// issued, so tying it to a name that can be reassigned would be a mistake.
 	deviceID := uuid.NewString()
 
@@ -114,6 +116,17 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		Name:                 name,
 	})
 	if err != nil {
+		// Cloud validates the name and checks for a collision BEFORE relaying
+		// to pki-core, so these two refusals cost nothing and are worth naming:
+		// the operator can retry immediately with a different name.
+		switch status.Code(err) {
+		case codes.AlreadyExists:
+			return fmt.Errorf("the name %q is already taken by another device in your organization "+
+				"(names are compared without regard to case). Nothing was minted — re-run with a different --name: %w", name, err)
+		case codes.InvalidArgument:
+			return fmt.Errorf("cloud refused the enrollment request: %w "+
+				"(nothing was minted)", err)
+		}
 		return fmt.Errorf("requesting enrollment credential: %w", err)
 	}
 

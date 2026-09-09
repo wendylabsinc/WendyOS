@@ -103,9 +103,19 @@ type EnrollDeviceRequest struct {
 	// never minted, and that device's image pulls would be denied forever with nothing to show
 	// why. On mismatch cloud refuses and reports both values rather than "correcting" either.
 	EnrollmentRequestJws []byte `protobuf:"bytes,3,opt,name=enrollment_request_jws,json=enrollmentRequestJws,proto3" json:"enrollment_request_jws,omitempty"`
-	// Display name and free-text details for the asset row. Cosmetic; unlike device_id they can
-	// be changed later and mean nothing to pki-core.
-	Name          string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	// The name this device is DISCOVERED by, and required (WDY-3016, sem ruling 2026-09-09).
+	//
+	// Unlike device_id it can be changed later and it means nothing to pki-core -- but it is not
+	// cosmetic. wendyos resolves a device by name, so it is unique within the organization and
+	// compared without regard to case. It must be a single lowercase DNS label,
+	// ^[a-z][a-z0-9-]{0,62}$ with no trailing hyphen: the same rule the device's own hostname
+	// obeys, because a device whose hostname and cloud row disagree is one an operator cannot
+	// find by either name.
+	//
+	// Cloud validates this and checks for a collision BEFORE relaying to pki-core, so a rejected
+	// name burns no enrollment credential. A collision is ALREADY_EXISTS.
+	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	// Free-text details for the asset row. Cosmetic, and genuinely so.
 	Details       string `protobuf:"bytes,5,opt,name=details,proto3" json:"details,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

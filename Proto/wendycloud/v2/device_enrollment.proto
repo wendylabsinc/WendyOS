@@ -78,9 +78,20 @@ message EnrollDeviceRequest {
   // why. On mismatch cloud refuses and reports both values rather than "correcting" either.
   bytes enrollment_request_jws = 3;
 
-  // Display name and free-text details for the asset row. Cosmetic; unlike device_id they can
-  // be changed later and mean nothing to pki-core.
+  // The name this device is DISCOVERED by, and required (WDY-3016, sem ruling 2026-09-09).
+  //
+  // Unlike device_id it can be changed later and it means nothing to pki-core -- but it is not
+  // cosmetic. wendyos resolves a device by name, so it is unique within the organization and
+  // compared without regard to case. It must be a single lowercase DNS label,
+  // ^[a-z][a-z0-9-]{0,62}$ with no trailing hyphen: the same rule the device's own hostname
+  // obeys, because a device whose hostname and cloud row disagree is one an operator cannot
+  // find by either name.
+  //
+  // Cloud validates this and checks for a collision BEFORE relaying to pki-core, so a rejected
+  // name burns no enrollment credential. A collision is ALREADY_EXISTS.
   string name = 4;
+
+  // Free-text details for the asset row. Cosmetic, and genuinely so.
   string details = 5;
 }
 

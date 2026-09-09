@@ -54,8 +54,8 @@ operator is the root of trust at first touch. Wendy ships no factory birth key.
 No certificate and no private key ever travels through this command.
 
 > **The device's name and its identity are not the same thing.** The **name**
-> is unique *within your tenant* and is what you address and discover the
-> device by; it can be changed later with `wendy device rename`. The
+> is unique *within your organization* and is what you address and discover
+> the device by; it can be changed later with `wendy device rename`. The
 > **DeviceID** is a globally unique UUID minted at enrollment, is fixed at
 > mint, and is carried by every certificate the device is ever issued — it
 > cannot be changed afterwards. It is deliberately not derived from the name: a
@@ -76,7 +76,7 @@ No certificate and no private key ever travels through this command.
 > been redeemed cannot be reused — run `wendy device enroll` again for a fresh
 > one.
 
-The enrolled device is registered in Wendy Cloud under a human-readable **name**, unique within your tenant. It is the key `wendy cloud discover`, `wendy cloud tunnel --device` and `--device` lookups resolve, and `wendy device rename` changes it later. The command resolves it as follows:
+The enrolled device is registered in Wendy Cloud under a human-readable **name**, unique within your organization. It is the key `wendy cloud discover`, `wendy cloud tunnel --device` and `--device` lookups resolve, and `wendy device rename` changes it later. The command resolves it as follows:
 
 1. **`--name <name>`** — always wins when provided.
 2. **Hostname default** — when `--name` is omitted and the device is reachable by hostname (e.g. `playful-reed.local`), the name defaults to that hostname with any `.local` suffix stripped (so `playful-reed.local` → `playful-reed`).
@@ -98,6 +98,8 @@ Whichever path supplies it, the name must be a valid DNS label — it starts wit
 ```
 device name "Fleet A Box 01" cannot be used: name may only contain lowercase letters, digits, and hyphens
 ```
+
+A name already taken by another device in your organization is refused too — compared without regard to case, and checked before any credential is minted, so nothing is spent and you can re-run straight away with a different `--name`.
 
 ## Flags
 
