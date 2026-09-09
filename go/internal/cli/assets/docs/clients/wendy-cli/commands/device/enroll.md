@@ -54,13 +54,14 @@ operator is the root of trust at first touch. Wendy ships no factory birth key.
 No certificate and no private key ever travels through this command.
 
 > **The device's name and its identity are not the same thing.** The **name**
-> is cosmetic and can be changed later with `wendy device rename`. The
-> **DeviceID** is a UUID minted at enrollment, is fixed at mint, and is carried
-> by every certificate the device is ever issued — it cannot be changed
-> afterwards. It is deliberately not derived from the name: a permanent
-> identity must not be tied to a renameable label. The command prints the
-> DeviceID before enrolling, and it is the only time you see it alongside the
-> name you chose.
+> is unique *within your tenant* and is what you address and discover the
+> device by; it can be changed later with `wendy device rename`. The
+> **DeviceID** is a globally unique UUID minted at enrollment, is fixed at
+> mint, and is carried by every certificate the device is ever issued — it
+> cannot be changed afterwards. It is deliberately not derived from the name: a
+> permanent identity must not be tied to a name that can be reassigned. The
+> command prints the DeviceID before enrolling, and it is the only time you see
+> it alongside the name you chose.
 
 > **Class B only, today.** The command requests a class B credential: an EAB
 > with no attestation challenge. Class A (hardware attestation) and class C
@@ -75,7 +76,7 @@ No certificate and no private key ever travels through this command.
 > been redeemed cannot be reused — run `wendy device enroll` again for a fresh
 > one.
 
-The enrolled device is registered in Wendy Cloud under a human-readable **name**. The name can be changed later with `wendy device rename`, so the command resolves it as follows:
+The enrolled device is registered in Wendy Cloud under a human-readable **name**, unique within your tenant. It is the key `wendy cloud discover`, `wendy cloud tunnel --device` and `--device` lookups resolve, and `wendy device rename` changes it later. The command resolves it as follows:
 
 1. **`--name <name>`** — always wins when provided.
 2. **Hostname default** — when `--name` is omitted and the device is reachable by hostname (e.g. `playful-reed.local`), the name defaults to that hostname with any `.local` suffix stripped (so `playful-reed.local` → `playful-reed`).
@@ -92,7 +93,11 @@ The enrolled device is registered in Wendy Cloud under a human-readable **name**
 
    In an interactive terminal it prompts for a name with no default and errors if you leave it blank.
 
-> **Naming an unnamed device:** A device enrolled without a usable name shows up with an empty name in [`wendy cloud discover`](../cloud/discover.md). You can still address it by its numeric asset ID — see [`wendy cloud tunnel --device <id>`](../cloud/tunnel.md).
+Whichever path supplies it, the name must be a valid DNS label — it starts with a lowercase letter, contains only lowercase letters, digits and hyphens, does not end with a hyphen, and is at most 63 characters. This is the same rule `wendy device rename` enforces, because that command writes one string to both the cloud asset name and the device's mDNS `.local` hostname; a name only one of the two would accept would leave the device unaddressable. A name that fails the rule is rejected before anything is minted:
+
+```
+device name "Fleet A Box 01" cannot be used: name may only contain lowercase letters, digits, and hyphens
+```
 
 ## Flags
 

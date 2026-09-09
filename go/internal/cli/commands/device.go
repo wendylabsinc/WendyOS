@@ -849,32 +849,41 @@ func defaultEnrollmentName(host string) string {
 	return strings.TrimSuffix(h, ".local")
 }
 
-// resolveEnrollmentName settles the device's display name: an explicit --name
-// wins, otherwise the hostname with any .local suffix stripped, otherwise a
-// prompt. A bare IP address yields no default, so a name has to be given.
+// resolveEnrollmentName settles the device's name: an explicit --name wins,
+// otherwise the hostname with any .local suffix stripped, otherwise a prompt.
+// A bare IP address yields no default, so a name has to be given.
+//
+// Every path lands on one validation, because the name is the tenant-scoped
+// key devices are addressed by and `wendy device rename` writes the same
+// string to both the cloud asset name and the mDNS hostname. Minting a name
+// rename would refuse would leave a device nothing can address, so both
+// commands share rename's rule rather than growing a second one.
 func resolveEnrollmentName(host, name string) (string, error) {
-	if name != "" {
-		return name, nil
-	}
-	defaultName := defaultEnrollmentName(host)
-	if !isInteractiveTerminal() {
-		if defaultName == "" {
-			return "", fmt.Errorf("device name is required; pass --name when not running interactively")
+	if name == "" {
+		defaultName := defaultEnrollmentName(host)
+		if !isInteractiveTerminal() {
+			if defaultName == "" {
+				return "", fmt.Errorf("device name is required; pass --name when not running interactively")
+			}
+			name = defaultName
+		} else {
+			prompt := "Device name"
+			if defaultName != "" {
+				prompt = fmt.Sprintf("Device name [%s]", defaultName)
+			}
+			fmt.Printf("%s: ", prompt)
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			name = strings.TrimSpace(line)
+			if name == "" {
+				name = defaultName
+			}
+			if name == "" {
+				return "", fmt.Errorf("device name is required")
+			}
 		}
-		return defaultName, nil
 	}
-	prompt := "Device name"
-	if defaultName != "" {
-		prompt = fmt.Sprintf("Device name [%s]", defaultName)
-	}
-	fmt.Printf("%s: ", prompt)
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	name = strings.TrimSpace(line)
-	if name == "" {
-		name = defaultName
-	}
-	if name == "" {
-		return "", fmt.Errorf("device name is required")
+	if err := validateHostnameArg(name); err != nil {
+		return "", fmt.Errorf("device name %q cannot be used: %w", name, err)
 	}
 	return name, nil
 }

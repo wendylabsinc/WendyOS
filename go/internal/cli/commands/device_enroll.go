@@ -67,9 +67,11 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return err
 	}
 	// The device id is a v4 UUID, and is deliberately unrelated to the name.
-	// The name is cosmetic and can be changed later with `wendy device rename`;
-	// this id is fixed at mint and is carried by every certificate the device
-	// is ever issued, so tying it to a renameable label would be a mistake.
+	// The two are different kinds of key: the name is unique WITHIN the tenant
+	// and is what devices are addressed and discovered by, so it stays
+	// changeable with `wendy device rename`; this id is globally unique, is
+	// fixed at mint and is carried by every certificate the device is ever
+	// issued, so tying it to a name that can be reassigned would be a mistake.
 	deviceID := uuid.NewString()
 
 	signer, err := cloudrequest.NewEnrollmentSigner(auth)

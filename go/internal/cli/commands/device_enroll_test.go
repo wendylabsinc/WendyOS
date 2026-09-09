@@ -54,3 +54,50 @@ func TestACMEDirectoryURL(t *testing.T) {
 		t.Errorf("acmeDirectoryURL with a malformed endpoint: want an error")
 	}
 }
+
+// The enrollment name is the tenant-scoped key devices are addressed by, and
+// `wendy device rename` writes one string to both the cloud asset name and the
+// mDNS hostname. So enroll has to accept exactly what rename accepts —
+// including on the hostname-default path, which is where a non-label name
+// would otherwise slip in without anyone typing it.
+func TestResolveEnrollmentNameSharesRenamesRule(t *testing.T) {
+	original := isInteractiveTerminalFn
+	isInteractiveTerminalFn = func() bool { return false }
+	t.Cleanup(func() { isInteractiveTerminalFn = original })
+
+	tests := []struct {
+		name    string
+		host    string
+		flag    string
+		want    string
+		wantErr bool
+	}{
+		{name: "explicit name", flag: "box-01", want: "box-01"},
+		{name: "hostname default", host: "playful-reed.local", want: "playful-reed"},
+		{name: "uppercase and spaces rejected", flag: "Fleet A Box 01", wantErr: true},
+		{name: "trailing hyphen rejected", flag: "box-", wantErr: true},
+		{name: "non-label hostname default rejected", host: "Wendy-Box.local", wantErr: true},
+		{name: "bare IP with no name", host: "192.168.1.50", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveEnrollmentName(tt.host, tt.flag)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveEnrollmentName(%q, %q) = %q, want an error", tt.host, tt.flag, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveEnrollmentName(%q, %q): %v", tt.host, tt.flag, err)
+			}
+			if got != tt.want {
+				t.Errorf("resolveEnrollmentName(%q, %q) = %q, want %q", tt.host, tt.flag, got, tt.want)
+			}
+			// One rule, not two: whatever enroll returns, rename must take.
+			if err := validateHostnameArg(got); err != nil {
+				t.Errorf("enroll accepted %q but rename rejects it: %v", got, err)
+			}
+		})
+	}
+}
