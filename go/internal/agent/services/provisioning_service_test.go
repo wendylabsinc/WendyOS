@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -521,4 +522,43 @@ func TestStartProvisioningCSRCarriesTenantSPIFFESAN(t *testing.T) {
 			t.Fatalf("CSR URI SANs = %q, want only [urn:wendy:org:7:asset:42]", uris)
 		}
 	})
+}
+
+// TestStartProvisioningWithStagedACMENeverDialsTheRelay is the regression that
+// matters most about the two enrollment legs: a staged credential means the
+// device enrolls itself against pki-core, and silently falling back to the
+// cloud relay would defeat the whole point while still looking like success.
+func TestStartProvisioningWithStagedACMENeverDialsTheRelay(t *testing.T) {
+	svc, tmpDir := newTestProvisioningService(t)
+	defer os.RemoveAll(tmpDir)
+
+	dialed := false
+	svc.CloudDialer = func(ctx context.Context, addr string) (*grpc.ClientConn, error) {
+		dialed = true
+		return nil, fmt.Errorf("the relay must not be dialled for a staged ACME credential")
+	}
+
+	// The directory is unreachable, so this fails — that is fine. What is
+	// asserted is which path it took, and that the operator is told the
+	// credential is gone.
+	_, err := svc.StartProvisioning(context.Background(), &agentpb.StartProvisioningRequest{
+		Acme: &agentpb.AcmeEnrollment{
+			DirectoryUrl: "https://127.0.0.1:1/acme/directory",
+			DeviceId:     "box-01",
+			EabKeyId:     "11111111-1111-1111-1111-111111111111",
+			EabHmacKey:   "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+		},
+	})
+	if err == nil {
+		t.Fatal("StartProvisioning succeeded against an unreachable ACME directory")
+	}
+	if dialed {
+		t.Error("the cloud relay was dialled even though an ACME credential was staged")
+	}
+	if !strings.Contains(err.Error(), "single-use") {
+		t.Errorf("error does not tell the operator the credential is spent: %v", err)
+	}
+	if _, _, _, enrolled := svc.ProvisioningInfo(); enrolled {
+		t.Error("a failed ACME enrollment left the agent marked as provisioned")
+	}
 }

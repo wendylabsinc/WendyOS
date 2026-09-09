@@ -19,6 +19,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -187,9 +188,15 @@ func TestSignedResourcesMatchCloudContract(t *testing.T) {
 		{cloudpb.AssetService_DeleteAsset_FullMethodName, &cloudpb.DeleteAssetRequest{Id: 42}, "asset/42"},
 		{cloudpb.CertificateService_RevokeCertificate_FullMethodName, &cloudpb.RevokeCertificateRequest{CertificateId: 43}, "certificate/43"},
 		{cloudpb.CertificateService_CreateAssetEnrollmentToken_FullMethodName, &cloudpb.CreateAssetEnrollmentTokenRequest{OrganizationId: 7, Name: "pi-5"}, "org/7/enroll-asset-name/pi-5"},
+		// Cloud builds this one as org/<tenant>/device/<device_id> and compares
+		// it byte for byte; a multi-segment device id keeps its slashes.
+		{cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName,
+			&cloudpbv2.EnrollDeviceRequest{DeviceId: "fleet-a/box-01"},
+			"org/" + testTenant + "/device/fleet-a/box-01"},
 	}
+	signer := &Signer{tenantUUID: testTenant}
 	for _, tt := range tests {
-		got, required, err := signedResource(tt.method, tt.req)
+		got, required, err := signer.signedResource(tt.method, tt.req)
 		if err != nil {
 			t.Errorf("signedResource(%s): %v", tt.method, err)
 			continue

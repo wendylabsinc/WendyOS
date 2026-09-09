@@ -33,7 +33,33 @@ message StartProvisioningRequest {
     string enrollment_token = 2;
     string cloud_host = 3;
     int32 asset_id = 4;
+
+    // Set by "wendy device enroll" on the approved path. Leaving it unset
+    // keeps the legacy cloud-relay behaviour, so an older CLI talking to a
+    // newer agent is unaffected.
+    AcmeEnrollment acme = 5;
 }
+
+// AcmeEnrollment is a device enrollment credential minted by Wendy Cloud's
+// DeviceEnrollmentService and staged here for the agent to redeem ITSELF
+// against pki-core. When it is set the four legacy fields above are unused:
+// no certificate and no private key crosses this RPC, and the agent obtains
+// its own leaf over ACME rather than being handed one.
+message AcmeEnrollment {
+    // The tenant's ACME directory,
+    // https://<host>/<tenant-uuid>/acme/directory. The tenant is a canonical
+    // lower-case UUID and rides inside this URL, so there is no tenant field.
+    string directory_url = 1;
+    // Stamped into the issued SPIFFE identity server-side. It must equal the
+    // DeviceID bound to the EAB row or newOrder returns 403.
+    string device_id = 2;
+    // The EAB key row id, used as the ACME JWS "kid". Single use.
+    string eab_key_id = 3;
+    // HEX-encoded, not the base64url every other ACME CA hands out. Relayed
+    // verbatim; the agent decodes it.
+    string eab_hmac_key = 4;
+}
+
 
 message StartProvisioningResponse {}
 

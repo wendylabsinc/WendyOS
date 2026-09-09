@@ -15,6 +15,14 @@ import (
 // on multiple name matches, since callers here (offline re-checks, the mcp
 // package which cannot import commands) just need a single best-effort
 // lookup, not the CLI's ambiguity-reporting UX.
+//
+// Callers must pass a COMPUTE-DEVICE-ONLY list. Cloud scopes device-name
+// uniqueness to compute devices (WDY-3016), so a building or vehicle asset may
+// legally share a device's name and would shadow it in this first-match scan.
+// Both callers already ask cloud for that filter --
+// commands.fetchCloudAssetsFiltered and mcp.mcpListCloudAssets each set
+// ListAssetsRequest.IsComputeDevice, so there is no client-side filter here to
+// go stale; a future caller that lists assets unfiltered has to filter first.
 func FindAssetByNameOrID(assets []*cloudpb.Asset, needle string) *cloudpb.Asset {
 	if needle == "" {
 		return nil

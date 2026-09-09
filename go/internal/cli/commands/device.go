@@ -849,113 +849,43 @@ func defaultEnrollmentName(host string) string {
 	return strings.TrimSuffix(h, ".local")
 }
 
-func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32) error {
-	if len(auth.Certificates) == 0 {
-		return fmt.Errorf("selected auth entry has no certificates; re-run 'wendy auth login'")
-	}
-
+// resolveEnrollmentName settles the device's name: an explicit --name wins,
+// otherwise the hostname with any .local suffix stripped, otherwise a prompt.
+// A bare IP address yields no default, so a name has to be given.
+//
+// Every path lands on one validation, because the name is the tenant-scoped
+// key devices are addressed by and `wendy device rename` writes the same
+// string to both the cloud asset name and the mDNS hostname. Minting a name
+// rename would refuse would leave a device nothing can address, so both
+// commands share rename's rule rather than growing a second one.
+func resolveEnrollmentName(host, name string) (string, error) {
 	if name == "" {
-		defaultName := defaultEnrollmentName(conn.Host)
+		defaultName := defaultEnrollmentName(host)
 		if !isInteractiveTerminal() {
-			if defaultName != "" {
-				name = defaultName
-			} else {
-				return fmt.Errorf("device name is required; pass --name when not running interactively")
+			if defaultName == "" {
+				return "", fmt.Errorf("device name is required; pass --name when not running interactively")
 			}
+			name = defaultName
 		} else {
 			prompt := "Device name"
 			if defaultName != "" {
 				prompt = fmt.Sprintf("Device name [%s]", defaultName)
 			}
 			fmt.Printf("%s: ", prompt)
-			reader := bufio.NewReader(os.Stdin)
-			line, _ := reader.ReadString('\n')
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 			name = strings.TrimSpace(line)
 			if name == "" {
 				name = defaultName
 			}
 			if name == "" {
-				return fmt.Errorf("device name is required")
+				return "", fmt.Errorf("device name is required")
 			}
 		}
 	}
-
-	if auth == nil || len(auth.Certificates) == 0 {
-		return fmt.Errorf("missing authentication certificate in selected auth entry")
+	if err := validateHostnameArg(name); err != nil {
+		return "", fmt.Errorf("device name %q cannot be used: %w", name, err)
 	}
-	cert := auth.Certificates[0]
-
-	var cloudTransport grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		keyPEM, err := cert.PrivateKeyPEM()
-		if err != nil {
-			return fmt.Errorf("loading client key: %w", err)
-		}
-		tlsCfg, err := certs.LoadTLSConfig(
-			cert.PemCertificate,
-			cert.PemCertificateChain,
-			keyPEM,
-			"",
-		)
-		if err != nil {
-			return fmt.Errorf("loading TLS config: %w", err)
-		}
-		cloudTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		cloudTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-	dialOptions, err := withCloudRequestSigning(auth, cloudTransport)
-	if err != nil {
-		return err
-	}
-	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
-	if err != nil {
-		return fmt.Errorf("connecting to cloud: %w", err)
-	}
-	defer cloudConn.Close()
-
-	tokenCtx, err := cloudContext(ctx, auth)
-	if err != nil {
-		return err
-	}
-
-	var org OrgResolution
-	if orgOverride != 0 {
-		// Explicit --org: use it directly (the cloud rejects it if the caller
-		// isn't a member), skipping org listing and the interactive picker.
-		org = OrgResolution{ID: orgOverride, Name: fmt.Sprintf("org %d", orgOverride)}
-	} else {
-		var orgErr error
-		org, orgErr = resolveOrg(ctx, auth, false)
-		if orgErr != nil {
-			return fmt.Errorf("resolving organization: %w", orgErr)
-		}
-	}
-
-	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
-	tokenResp, err := certClient.CreateAssetEnrollmentToken(tokenCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
-		OrganizationId: org.ID,
-		Name:           name,
-		TtlSeconds:     600,
-	})
-	if err != nil {
-		return fmt.Errorf("creating enrollment token: %w", err)
-	}
-
-	fmt.Println("Enrolling device...")
-	_, err = conn.ProvisioningService.StartProvisioning(ctx, &agentpb.StartProvisioningRequest{
-		OrganizationId:  tokenResp.GetOrganizationId(),
-		AssetId:         tokenResp.GetAssetId(),
-		EnrollmentToken: tokenResp.GetEnrollmentToken(),
-		CloudHost:       auth.CloudGRPC,
-	})
-	if err != nil {
-		return fmt.Errorf("enrolling device: %w", err)
-	}
-
-	fmt.Printf("Device enrolled (org: %s / ID: %d, asset: %d).\n",
-		org.Name, tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
-	return nil
+	return name, nil
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {

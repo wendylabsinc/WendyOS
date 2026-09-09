@@ -15,9 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -118,7 +121,7 @@ func operatorTenant(principal string) (string, error) {
 
 func (s *Signer) unaryClientInterceptor() grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		resource, required, err := signedResource(method, req)
+		resource, required, err := s.signedResource(method, req)
 		if err != nil {
 			return err
 		}
@@ -140,7 +143,7 @@ func (s *Signer) unaryClientInterceptor() grpc.UnaryClientInterceptor {
 	}
 }
 
-func signedResource(method string, req any) (string, bool, error) {
+func (s *Signer) signedResource(method string, req any) (string, bool, error) {
 	switch strings.TrimPrefix(method, "/") {
 	case "wendycloud.v1.AssetService/UpdateAsset":
 		in, ok := req.(*cloudpb.UpdateAssetRequest)
@@ -166,6 +169,16 @@ func signedResource(method string, req any) (string, bool, error) {
 			return "", true, requestTypeError(method, req)
 		}
 		return fmt.Sprintf("org/%d/enroll-asset-name/%s", in.GetOrganizationId(), in.GetName()), true, nil
+	case "wendycloud.v2.DeviceEnrollmentService/EnrollDevice":
+		in, ok := req.(*cloudpbv2.EnrollDeviceRequest)
+		if !ok {
+			return "", true, requestTypeError(method, req)
+		}
+		// Cloud compares this byte for byte against
+		// "org/<tenant>/device/<device_id>" with the tenant lower-cased and the
+		// device id exactly as it sits in the protobuf field — separators and
+		// all, so a multi-segment id keeps its slashes.
+		return fmt.Sprintf("org/%s/device/%s", strings.ToLower(s.tenantUUID), in.GetDeviceId()), true, nil
 	default:
 		return "", false, nil
 	}
@@ -226,4 +239,118 @@ func canonicalJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(strings.TrimSuffix(b.String(), "\n")), nil
+}
+
+// enrollmentRequestTTL is the lifetime stamped on an enrollment request. It is
+// the operator's window to get the request relayed, not the credential's own
+// lifetime. pki-core refuses a window wider than 24h and treats exp as a hard
+// deadline with no skew, so this stays short.
+const enrollmentRequestTTL = 10 * time.Minute
+
+// NewEnrollmentSigner returns the signer for an operator-signed enrollment
+// request. Unlike the request-signature interceptor, which stays silent for
+// sessions that cannot sign, enrolling a device REQUIRES an operator identity:
+// the operator's signature is the whole authority pki-core verifies, so a
+// session that cannot produce one has to say so rather than send something
+// cloud will refuse.
+func NewEnrollmentSigner(auth *config.AuthConfig) (*Signer, error) {
+	signer, err := newSigner(auth)
+	if err != nil {
+		return nil, err
+	}
+	if signer == nil {
+		return nil, fmt.Errorf("this session has no pki-core operator certificate; run 'wendy auth login' with an OIDC issuer")
+	}
+	return signer, nil
+}
+
+// Tenant is the operator's tenant UUID, read from its certificate's SPIFFE
+// principal.
+func (s *Signer) Tenant() string { return s.tenantUUID }
+
+// SignEnrollmentRequest builds the compact JWS that authorizes enrolling one
+// device, as pki-core's fabric relay expects it under the artifact kind
+// "enrollment-request+jws".
+//
+// This is deliberately a SECOND signature, not a reuse of the request
+// signature the interceptor attaches. Same operator, same key, two scopes: the
+// request signature authorizes the RPC, this one authorizes the enrollment
+// itself, and collapsing them would either widen the request signature into an
+// enrollment authority or narrow the enrollment artifact into a transport
+// detail.
+//
+// The returned bytes are the artifact. They must reach pki-core BYTE-IDENTICAL
+// — every hop relays them unchanged, because any re-serialization invalidates
+// the signature.
+func (s *Signer) SignEnrollmentRequest(deviceID string, class DeviceClass) ([]byte, error) {
+	if deviceID == "" {
+		return nil, fmt.Errorf("enrollment request needs a device id")
+	}
+	letter, err := class.letter()
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().Unix()
+	// csr_key_binding and attestation_ref are deliberately absent: pki-core
+	// refuses an enrollment request carrying either, rather than minting a
+	// credential it cannot yet bind.
+	payload, err := canonicalJSON(map[string]any{
+		"device_class": letter,
+		"device_id":    deviceID,
+		"exp":          now + int64(enrollmentRequestTTL/time.Second),
+		"iat":          now,
+		// Single-use at the far end: pki-core burns the jti before it mints,
+		// so a failed mint cannot be retried with this request.
+		"jti": uuid.NewString(),
+		// Must string-equal the tenant cloud puts on the relay envelope.
+		"tenant": s.tenantUUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding enrollment request: %w", err)
+	}
+	// x5c entries are base64-STANDARD per RFC 7515 4.1.6, leaf first — which
+	// is what the request-signature header already carries.
+	header, err := canonicalJSON(map[string]any{"alg": "ES256", "x5c": s.x5c})
+	if err != nil {
+		return nil, fmt.Errorf("encoding enrollment JWS header: %w", err)
+	}
+	signingInput := base64.RawURLEncoding.EncodeToString(header) + "." +
+		base64.RawURLEncoding.EncodeToString(payload)
+	digest := sha256.Sum256([]byte(signingInput))
+	r, ss, err := ecdsa.Sign(s.random, s.privateKey, digest[:])
+	if err != nil {
+		return nil, fmt.Errorf("signing enrollment request: %w", err)
+	}
+	// Raw fixed-width r||s, not DER: JWS ECDSA signature encoding.
+	signature := make([]byte, 64)
+	r.FillBytes(signature[:32])
+	ss.FillBytes(signature[32:])
+	return []byte(signingInput + "." + base64.RawURLEncoding.EncodeToString(signature)), nil
+}
+
+// DeviceClass is the device tier pki-core maps to a credential kind. Cloud
+// sends the class and pki-core derives the profile; nothing here picks one.
+type DeviceClass int
+
+const (
+	// DeviceClassA demands hardware attestation at redemption.
+	DeviceClassA DeviceClass = 1
+	// DeviceClassB is an EAB with no attestation challenge.
+	DeviceClassB DeviceClass = 2
+	// DeviceClassC is an EST enrollment token for hardware that cannot run an
+	// ACME client.
+	DeviceClassC DeviceClass = 3
+)
+
+func (c DeviceClass) letter() (string, error) {
+	switch c {
+	case DeviceClassA:
+		return "A", nil
+	case DeviceClassB:
+		return "B", nil
+	case DeviceClassC:
+		return "C", nil
+	default:
+		return "", fmt.Errorf("unknown device class %d", int(c))
+	}
 }

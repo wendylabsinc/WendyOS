@@ -121,12 +121,18 @@ done
 # wire contract until the fleet has crossed over (WDY-2824). Paths match
 # service-protos exactly so a re-copy is a plain cp and the imports need no
 # rewriting.
+#
+# device_enrollment.proto is the exception to "copied from service-protos": it
+# is cloud-owned by design (its own header says so) and lives only in the cloud
+# repo at cloud-proto/device_enrollment.proto. Re-copy it from there, not from
+# service-protos, or the file will look deleted upstream.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
     "wendycloud/v2/apps.proto"
     "wendycloud/v2/assets.proto"
     "wendycloud/v2/certificates.proto"
     "wendycloud/v2/deployments.proto"
+    "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/organizations.proto"

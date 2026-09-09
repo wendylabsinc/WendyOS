@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/acmeenroll"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/enrolltoken"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -77,6 +78,12 @@ func DefaultCloudDialer(ctx context.Context, addr string) (*grpc.ClientConn, err
 // host downgrade (WDY-2799). A local pki-core is still reachable by naming its
 // port explicitly ("localhost:50051") alongside WENDY_CLOUD_INSECURE.
 const defaultCloudPort = "443"
+
+// acmeAccountKeyFileName holds the ACME account key. It is deliberately NOT in
+// clearStateFiles: an EAB is single-use, so a surviving account key is what
+// lets a re-enroll re-register idempotently instead of needing a fresh
+// credential. Deleting it is the unrecoverable direction.
+const acmeAccountKeyFileName = "acme-account-key.pem"
 
 func certificateServiceAddr(cloudHost string) string {
 	if _, _, err := net.SplitHostPort(cloudHost); err == nil {
@@ -186,6 +193,7 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		zap.Int32("org_id", req.GetOrganizationId()),
 		zap.String("cloud_host", req.GetCloudHost()),
 		zap.Int32("asset_id", req.GetAssetId()),
+		zap.String("device_id", req.GetAcme().GetDeviceId()),
 	)
 
 	// Reuse the device's existing private key if present, otherwise generate a new one.
@@ -194,64 +202,20 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		return nil, status.Errorf(codes.Internal, "failed to load or generate key pair: %v", err)
 	}
 
-	// Generate CSR using org and asset as common name. The device identity acts
-	// as both a TLS client (to the cloud) and a TLS server (agent gRPC and tunnel
-	// endpoints), so request both EKUs.
-	commonName := fmt.Sprintf("sh/wendy/%d/%d", req.GetOrganizationId(), req.GetAssetId())
-	identityURIs := []string{certs.AssetURN(req.GetOrganizationId(), req.GetAssetId())}
-	// Cloud will not sign a relay grant unless the CSR carries the tenant
-	// SPIFFE principal too. The tenant comes from the enrollment token, and is
-	// absent for orgs with no pki tenant — then we enroll exactly as before.
-	if spiffeURI, ok := enrolltoken.TenantSPIFFEURIFromToken(req.GetEnrollmentToken()); ok {
-		identityURIs = append(identityURIs, spiffeURI)
+	// Two ways to obtain the leaf, and only the source differs: everything
+	// below — persistence, in-memory state, PEM files, the callback — is the
+	// same either way. With a staged credential the device enrolls itself
+	// against pki-core and no certificate ever passes through the CLI; without
+	// one it is the legacy cloud relay, kept working for older callers.
+	var certPEM, chainPEM string
+	if acmeCred := req.GetAcme(); acmeCred != nil {
+		certPEM, chainPEM, err = s.enrollViaACME(ctx, acmeCred, keyPEM)
+	} else {
+		certPEM, chainPEM, err = s.enrollViaCloud(ctx, req, keyPEM)
 	}
-	csrPEM, err := certs.GenerateCSR(keyPEM, commonName, identityURIs,
-		x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate CSR: %v", err)
+		return nil, err
 	}
-
-	// Connect to the cloud gRPC server.
-	cloudAddr := certificateServiceAddr(req.GetCloudHost())
-	if cloudDialInsecure() {
-		// The enrollment token is a bearer credential. If someone has opted out
-		// of TLS, say so loudly and name the host it is being sent to, so a
-		// stray environment variable on a real device is visible in the logs.
-		s.logger.Warn("Enrollment dial is PLAINTEXT: the enrollment token will be sent in cleartext",
-			zap.String("env", cloudInsecureEnv),
-			zap.String("addr", cloudAddr),
-		)
-	}
-	cloudConn, err := s.CloudDialer(ctx, cloudAddr)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "connecting to cloud: %v", err)
-	}
-	defer cloudConn.Close()
-
-	// Send the CSR to the cloud for certificate issuance.
-	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
-	issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
-		PemCsr:          csrPEM,
-		EnrollmentToken: req.GetEnrollmentToken(),
-	})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "issuing certificate from cloud: %v", err)
-	}
-
-	// Check for error in the response.
-	if issueResp.GetError() != nil {
-		certErr := issueResp.GetError()
-		return nil, status.Errorf(codes.Internal, "cloud certificate issuance failed: %s", certErr.GetMessage())
-	}
-
-	// Extract certificate material from the response.
-	cert := issueResp.GetCertificate()
-	if cert == nil {
-		return nil, status.Error(codes.Internal, "cloud returned empty certificate")
-	}
-
-	certPEM := cert.GetPemCertificate()
-	chainPEM := cert.GetPemCertificateChain()
 
 	// Build the state struct from the request/cert values WITHOUT first mutating
 	// s.* fields. Only apply the state to s.* after saveState succeeds so that a
@@ -307,6 +271,92 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		cb(certPEM, chainPEM, cbKeyPEM)
 	}
 	return &agentpb.StartProvisioningResponse{}, nil
+}
+
+// enrollViaACME redeems a staged EAB against pki-core's ACME frontend. The
+// device signs its own CSR with a key that never leaves it, and pki-core
+// stamps the identity: nothing the device asserts in the CSR is honoured
+// beyond the public key.
+func (s *ProvisioningService) enrollViaACME(ctx context.Context, cred *agentpb.AcmeEnrollment, keyPEM []byte) (string, string, error) {
+	certPEM, chainPEM, err := acmeenroll.Enroll(ctx, acmeenroll.Config{
+		DirectoryURL: cred.GetDirectoryUrl(),
+		DeviceID:     cred.GetDeviceId(),
+		// Both are relayed verbatim from pki-core; acmeenroll hex-decodes the
+		// HMAC key itself, so decoding here would break the MAC.
+		EABKeyID:   cred.GetEabKeyId(),
+		EABHMACKey: cred.GetEabHmacKey(),
+	}, filepath.Join(s.configPath, acmeAccountKeyFileName), keyPEM)
+	if err != nil {
+		// An EAB is single use. Say so on every failure, because the remedy is
+		// always a fresh "wendy device enroll" rather than a retry of this RPC.
+		return "", "", status.Errorf(codes.Internal,
+			"enrolling against pki-core over ACME: %v (the staged credential is single-use and is now spent; run 'wendy device enroll' again for a fresh one)", err)
+	}
+	return certPEM, chainPEM, nil
+}
+
+// enrollViaCloud is the legacy relay: the device sends a CSR to Wendy Cloud's
+// CertificateService and is handed a leaf. Superseded by enrollViaACME and
+// kept only so an older CLI keeps working (WDY-2943).
+func (s *ProvisioningService) enrollViaCloud(ctx context.Context, req *agentpb.StartProvisioningRequest, keyPEM []byte) (string, string, error) {
+
+	// Generate CSR using org and asset as common name. The device identity acts
+	// as both a TLS client (to the cloud) and a TLS server (agent gRPC and tunnel
+	// endpoints), so request both EKUs.
+	commonName := fmt.Sprintf("sh/wendy/%d/%d", req.GetOrganizationId(), req.GetAssetId())
+	identityURIs := []string{certs.AssetURN(req.GetOrganizationId(), req.GetAssetId())}
+	// Cloud will not sign a relay grant unless the CSR carries the tenant
+	// SPIFFE principal too. The tenant comes from the enrollment token, and is
+	// absent for orgs with no pki tenant — then we enroll exactly as before.
+	if spiffeURI, ok := enrolltoken.TenantSPIFFEURIFromToken(req.GetEnrollmentToken()); ok {
+		identityURIs = append(identityURIs, spiffeURI)
+	}
+	csrPEM, err := certs.GenerateCSR(keyPEM, commonName, identityURIs,
+		x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth)
+	if err != nil {
+		return "", "", status.Errorf(codes.Internal, "failed to generate CSR: %v", err)
+	}
+
+	// Connect to the cloud gRPC server.
+	cloudAddr := certificateServiceAddr(req.GetCloudHost())
+	if cloudDialInsecure() {
+		// The enrollment token is a bearer credential. If someone has opted out
+		// of TLS, say so loudly and name the host it is being sent to, so a
+		// stray environment variable on a real device is visible in the logs.
+		s.logger.Warn("Enrollment dial is PLAINTEXT: the enrollment token will be sent in cleartext",
+			zap.String("env", cloudInsecureEnv),
+			zap.String("addr", cloudAddr),
+		)
+	}
+	cloudConn, err := s.CloudDialer(ctx, cloudAddr)
+	if err != nil {
+		return "", "", status.Errorf(codes.Internal, "connecting to cloud: %v", err)
+	}
+	defer cloudConn.Close()
+
+	// Send the CSR to the cloud for certificate issuance.
+	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
+	issueResp, err := certClient.IssueCertificate(ctx, &cloudpb.IssueCertificateRequest{
+		PemCsr:          csrPEM,
+		EnrollmentToken: req.GetEnrollmentToken(),
+	})
+	if err != nil {
+		return "", "", status.Errorf(codes.Internal, "issuing certificate from cloud: %v", err)
+	}
+
+	// Check for error in the response.
+	if issueResp.GetError() != nil {
+		certErr := issueResp.GetError()
+		return "", "", status.Errorf(codes.Internal, "cloud certificate issuance failed: %s", certErr.GetMessage())
+	}
+
+	// Extract certificate material from the response.
+	cert := issueResp.GetCertificate()
+	if cert == nil {
+		return "", "", status.Error(codes.Internal, "cloud returned empty certificate")
+	}
+
+	return cert.GetPemCertificate(), cert.GetPemCertificateChain(), nil
 }
 
 // Unprovision resets the device to an unprovisioned state. It deletes the

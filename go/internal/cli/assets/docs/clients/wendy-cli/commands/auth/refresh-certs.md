@@ -28,6 +28,10 @@ endpoint. When it is unset there is no renew frontend configured — a supported
 state, in which the CLI never renews on its own and this command reports that
 nothing is configured to renew against.
 
+For Wendy's own environments the frontend is `https://renew.dev.pki.wendy.sh/v1/renew` on
+dev, and the same host without the `dev.` label on production once that
+environment is online.
+
 ## It also runs by itself
 
 The CLI renews ahead of expiry without being asked: when an auth session is
