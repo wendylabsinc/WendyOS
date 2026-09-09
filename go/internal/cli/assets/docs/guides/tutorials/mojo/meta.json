@@ -1,0 +1,10 @@
+{
+  "title": "Mojo and MAX",
+  "language": "mojo",
+  "pages": [
+    "hello-world",
+    "simple-web-server",
+    "max-graph",
+    "max-inference-service"
+  ]
+}

@@ -1,0 +1,197 @@
+---
+title: Simple Web Server with Mojo 1.0
+description: Start a Python HTTP server from a compiled Mojo entry point on WendyOS
+language: mojo
+---
+
+Create a long-running app that starts in Mojo and responds to HTTP requests on your WendyOS device. Mojo supplies the greeting and port; Python's standard library handles HTTP routing and responses. This demonstrates [calling Python from Mojo](https://mojolang.org/docs/manual/python/python-from-mojo/).
+
+## Prerequisites
+
+1. Install the [Wendy CLI](/docs/installation/developer-machine-setup) on your development machine.
+2. Install and start Docker on your development machine.
+3. Connect a 64-bit ARM WendyOS device, such as an NVIDIA Jetson Orin Nano, over USB or your network.
+4. Ensure the build machine has internet access to download the base image and packages.
+5. Check that port `8080` is available on your device.
+
+Mojo 1.0.0 and Python 3.12 are installed inside the container. The app runs on the CPU and needs no GPU entitlement.
+
+Use your [default Wendy device](/docs/guides/tutorials/mojo/hello-world#choose-a-default-device). Create a project folder named `mojo-simple-web-server` and run the commands below from that folder.
+
+## Create the Mojo entry point
+
+Create `main.mojo`:
+
+```mojo title="main.mojo"
+from std.python import Python
+
+
+def main() raises:
+    Python.add_to_path(".")
+    var server = Python.import_module("http_bridge")
+    server.serve("Hello from Mojo 1.0!", 8080)
+```
+
+`Python.add_to_path(".")` makes the module in the app's working directory importable. `Python.import_module()` returns the module object, and `serve()` enters the server loop. The `raises` declaration allows Python errors to propagate out of `main()`.
+
+## Add the Python HTTP bridge
+
+Create `http_bridge.py` in the same directory:
+
+```python title="http_bridge.py"
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
+
+
+def serve(message: str, port: int) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            path = urlsplit(self.path).path
+            if path == "/":
+                status, payload = 200, {"message": message}
+            elif path == "/health":
+                status, payload = 200, {"status": "ok"}
+            else:
+                status, payload = 404, {"error": "not found"}
+
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    with ThreadingHTTPServer(("0.0.0.0", port), Handler) as server:
+        print(f"Mojo-configured HTTP server listening on port {port}", flush=True)
+        server.serve_forever()
+```
+
+The root route returns the message passed from Mojo. `/health` returns a simple health response, and other paths return HTTP 404. Binding to `0.0.0.0` lets your development machine reach the server over the device's network interfaces.
+
+<Callout type="info">
+  This small teaching server has no authentication. Use it on a trusted local network; choose an appropriate web server and access controls before exposing an application publicly.
+</Callout>
+
+## Add the container build
+
+Create `Dockerfile`:
+
+```dockerfile title="Dockerfile"
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libedit2 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir mojo==1.0.0
+
+COPY main.mojo http_bridge.py ./
+RUN mojo --version && mojo build main.mojo -o /app/server
+
+EXPOSE 8080
+CMD ["/app/server"]
+```
+
+The container starts the compiled Mojo binary. Its Python interpreter and `http_bridge.py` stay in the image because `mojo build` does not bundle imported Python modules into the executable. Python runs through CPython at runtime. See the [Python interoperability guide](https://mojolang.org/docs/manual/python/python-from-mojo/) for these runtime requirements.
+
+Create `.dockerignore`:
+
+```text title=".dockerignore"
+.git
+.venv
+__pycache__
+*.pyc
+.DS_Store
+server
+```
+
+## Configure Wendy
+
+Create `wendy.json`:
+
+```json title="wendy.json"
+{
+  "appId": "mojo-simple-web-server",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": [
+    { "type": "network" }
+  ],
+  "readiness": {
+    "tcpSocket": { "port": 8080 },
+    "timeoutSeconds": 30
+  }
+}
+```
+
+The network entitlement makes the server reachable on the device. The readiness probe waits for port `8080` to accept connections.
+
+## Run on WendyOS
+
+```bash
+wendy json validate
+wendy run
+```
+
+Wendy builds the image for the target device's architecture, deploys it, and streams the server logs. Wait for:
+
+```text
+Mojo-configured HTTP server listening on port 8080
+```
+
+Keep this terminal open while testing. An attached `wendy run` stops the application when you press Ctrl+C.
+
+## Test the HTTP endpoints
+
+Open another terminal on your development machine. Replace `your-device.local` in the URLs below with the device hostname shown by Wendy:
+
+```bash
+curl --fail "http://your-device.local:8080/"
+```
+
+Expected JSON:
+
+```json
+{"message": "Hello from Mojo 1.0!"}
+```
+
+Test the health endpoint:
+
+```bash
+curl --fail "http://your-device.local:8080/health"
+```
+
+```json
+{"status": "ok"}
+```
+
+Confirm an unknown route returns HTTP 404:
+
+```bash
+curl -i "http://your-device.local:8080/missing"
+```
+
+List apps to check that `mojo-simple-web-server` is running:
+
+```bash
+wendy device apps list
+```
+
+If requests fail, check the hostname, the server logs, and whether another app already uses port `8080`. To change ports, update the Mojo `serve()` call, Dockerfile `EXPOSE`, Wendy readiness probe, and request URLs together.
+
+## Stop the app
+
+Press Ctrl+C in the terminal running `wendy run`, or stop it explicitly:
+
+```bash
+wendy device apps stop mojo-simple-web-server
+```
+
+## Next steps
+
+- Change the message in `main.mojo` and run the deployment command again.
+- Add routes in `http_bridge.py` using the same response pattern.
+- Follow [MAX Graph](/docs/guides/tutorials/mojo/max-graph) and [MAX Inference Service](/docs/guides/tutorials/mojo/max-inference-service) to run graphs and serve text embeddings from your device.

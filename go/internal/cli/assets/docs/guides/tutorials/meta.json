@@ -1,11 +1,12 @@
 {
   "title": "Tutorials",
-  "description": "Build Wendy applications in Python, Swift, C++, Rust, and TypeScript",
+  "description": "Build Wendy applications in Python, Swift, C++, Rust, TypeScript, and Mojo",
   "pages": [
     "python",
     "swift",
     "cpp",
     "rust",
-    "typescript"
+    "typescript",
+    "mojo"
   ]
 }
