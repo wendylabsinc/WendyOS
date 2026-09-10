@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -262,5 +263,76 @@ func TestOrgFromClientCert_StillWorks(t *testing.T) {
 	orgID, ok, err := OrgFromClientCert(cert)
 	if err != nil || !ok || orgID != 7 {
 		t.Errorf("OrgFromClientCert() = %d, %v, %v; want 7, true, nil", orgID, ok, err)
+	}
+}
+
+func TestDeviceSPIFFEURI(t *testing.T) {
+	const tenant = "022b7284-f7f3-4d86-b844-d105a7c06d9e"
+	// A multi-segment device name is first-class: pki-core's own convention
+	// for a Wendy device is "sh/wendy/<org>/<asset>".
+	got := DeviceSPIFFEURI(tenant, "sh/wendy/2/408")
+	want := "spiffe://wendy.sh/tenant/" + tenant + "/device/sh/wendy/2/408"
+	if got != want {
+		t.Errorf("DeviceSPIFFEURI = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(got, TenantSPIFFEPrefix) {
+		t.Errorf("%q does not start with the tenant prefix", got)
+	}
+}
+
+func TestParseDeviceSPIFFEURI(t *testing.T) {
+	const tenant = "022b7284-f7f3-4d86-b844-d105a7c06d9e"
+
+	tenantGot, name, err := ParseDeviceSPIFFEURI(DeviceSPIFFEURI(tenant, "sh/wendy/2/408"))
+	if err != nil {
+		t.Fatalf("ParseDeviceSPIFFEURI: %v", err)
+	}
+	if tenantGot != tenant {
+		t.Errorf("tenant = %q, want %q", tenantGot, tenant)
+	}
+	if name != "sh/wendy/2/408" {
+		t.Errorf("name = %q, want the whole multi-segment name", name)
+	}
+
+	// A service or operator principal must be an error and not a miss:
+	// accepting one where a device identity is required is the mistake this
+	// parser exists to prevent, and the data platform's ingest interceptor
+	// rejects any kind but "device" anyway.
+	for _, bad := range []string{
+		"spiffe://wendy.sh/tenant/" + tenant + "/service/asset-408",
+		"spiffe://wendy.sh/tenant/" + tenant + "/operator/martien",
+		"urn:wendy:org:2:asset:408",
+		"spiffe://wendy.sh/tenant/" + tenant,
+		"spiffe://wendy.sh/tenant/" + tenant + "/device/",
+		"spiffe://wendy.sh/tenant//device/x",
+	} {
+		if _, _, err := ParseDeviceSPIFFEURI(bad); err == nil {
+			t.Errorf("ParseDeviceSPIFFEURI(%q) = nil error, want a refusal", bad)
+		}
+	}
+}
+
+func TestTenantSPIFFEURIs(t *testing.T) {
+	const tenant = "022b7284-f7f3-4d86-b844-d105a7c06d9e"
+	leaf := &x509.Certificate{URIs: []*url.URL{
+		mustParseURL(t, "urn:wendy:org:2:asset:408"),
+		mustParseURL(t, DeviceSPIFFEURI(tenant, "sh/wendy/2/408")),
+		mustParseURL(t, "spiffe://wendy.sh/tenant/"+tenant+"/service/asset-408"),
+	}}
+	got := TenantSPIFFEURIs(leaf)
+	if len(got) != 2 {
+		t.Fatalf("TenantSPIFFEURIs returned %d SANs, want the 2 tenant ones: %v", len(got), got)
+	}
+	if got[0] != DeviceSPIFFEURI(tenant, "sh/wendy/2/408") {
+		t.Errorf("order was not preserved: %v", got)
+	}
+	// The urn form is not a tenant SPIFFE URI and must not be reported as one.
+	for _, u := range got {
+		if strings.HasPrefix(u, "urn:") {
+			t.Errorf("the urn SAN leaked into the SPIFFE list: %v", got)
+		}
+	}
+	if TenantSPIFFEURIs(&x509.Certificate{}) != nil {
+		t.Error("a certificate with no SANs must yield nil")
 	}
 }

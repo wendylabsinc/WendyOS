@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/pkienroll"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
@@ -117,6 +118,18 @@ type DataTransferWorker struct {
 	// disabled and Run says so once. Enrollment still provides the asset
 	// identity and client certificate; this is only the destination.
 	ingestHost string
+	// pkiIdentity, when set, is the device's pki-core identity: a leaf whose
+	// only URI Subject Alternative Name is
+	// spiffe://wendy.sh/tenant/<tenant>/device/<name>. The data platform's
+	// ingest interceptor prefers that principal and rejects any SPIFFE kind
+	// other than "device"; Wendy Cloud's interceptors, by contrast, read only
+	// the legacy Wendy organization URN that the enrolled asset certificate
+	// carries (see certs.AssetURN). So this identity is used HERE and nowhere
+	// else, and the asset certificate stays what every cloud dialer presents.
+	// When no pki identity is stored the worker behaves exactly as before,
+	// presenting the asset certificate, which the ingest surface still accepts
+	// as a legacy identity.
+	pkiIdentity pkiIdentityReader
 	// onWiFi reports whether the device is currently on Wi-Fi, gating campaigns
 	// whose upload.when is "wifi". When nil, no network-type signal is wired and
 	// "wifi" is treated as "always" (see resolveShouldUpload).
@@ -188,6 +201,54 @@ func contextSleeper(ctx context.Context) func(time.Duration) {
 	}
 }
 
+// pkiIdentityReader reads the device's stored pki-core identity.
+// *pkienroll.Store implements it; tests substitute a stub. ErrNoIdentity (or
+// any error) means "no pki identity", which is a supported state and not a
+// failure.
+type pkiIdentityReader interface {
+	Load() (pkienroll.Material, error)
+}
+
+// SetPKIIdentity gives the worker a pki-core device identity to present to the
+// data platform in preference to the enrolled asset certificate. Passing nil
+// restores the previous behaviour.
+func (w *DataTransferWorker) SetPKIIdentity(r pkiIdentityReader) { w.pkiIdentity = r }
+
+// identitySource names which of the device's two identities a dial used. It
+// exists so the choice is testable and so the log says which certificate was
+// presented — a question that is otherwise unanswerable after the fact.
+type identitySource string
+
+const (
+	identitySourcePKI   identitySource = "pki-core-spiffe"
+	identitySourceAsset identitySource = "cloud-asset-urn"
+)
+
+// ingestIdentity picks the client certificate for an ingest dial: the pki-core
+// device identity when one is stored, otherwise the enrolled asset
+// certificate.
+//
+// The fallback is unconditional and silent by design. A device that has not
+// been enrolled against pki-core must keep uploading exactly as it does today,
+// so an absent pki identity is not a warning; and a stored-but-unreadable one
+// is reported rather than papered over, because that is a real fault.
+//
+// The caller owns keyData and must zero it.
+func (w *DataTransferWorker) ingestIdentity() (certPEM, chainPEM string, keyData []byte, source identitySource, err error) {
+	if w.pkiIdentity != nil {
+		material, loadErr := w.pkiIdentity.Load()
+		switch {
+		case loadErr == nil && material.LeafPEM != "" && len(material.KeyData) > 0:
+			return material.LeafPEM, material.ChainPEM, material.KeyData, identitySourcePKI, nil
+		case loadErr != nil && !errors.Is(loadErr, pkienroll.ErrNoIdentity):
+			w.logger.Warn("data transfer worker: pki identity is present but unreadable; "+
+				"falling back to the enrolled asset certificate", zap.Error(loadErr))
+		}
+	}
+	certPEM, chainPEM, keyData = w.provisioningSvc.ProvisioningCerts()
+	return certPEM, chainPEM, keyData, identitySourceAsset, nil
+}
+
 // dialFactory is the production ingestClientFactory: it waits for provisioning,
 // dials the cloud over mTLS, and returns a DataIngestService client.
 func (w *DataTransferWorker) dialFactory(ctx context.Context) (cloudpb.DataIngestServiceClient, func(), error) {
@@ -197,11 +258,16 @@ func (w *DataTransferWorker) dialFactory(ctx context.Context) (cloudpb.DataInges
 	if w.ingestHost == "" {
 		return nil, nil, errors.New("data transfer worker: no ingest endpoint configured")
 	}
-	certPEM, chainPEM, keyData := w.provisioningSvc.ProvisioningCerts()
-	// The identity is the enrolled asset certificate, presented in the TLS
-	// handshake and read by the service from the validated leaf. Nothing else
-	// is sent: no header, nothing from the environment, nothing an app on the
-	// device can influence.
+	certPEM, chainPEM, keyData, source, err := w.ingestIdentity()
+	if err != nil {
+		return nil, nil, err
+	}
+	// The identity is a client certificate, presented in the TLS handshake and
+	// read by the service from the validated leaf. Nothing else is sent: no
+	// header, nothing from the environment, nothing an app on the device can
+	// influence. The server side is verified against the system roots either
+	// way, which is unchanged: the ingest endpoint presents a publicly trusted
+	// certificate.
 	conn, err := func() (*grpc.ClientConn, error) {
 		defer zeroBytes(keyData)
 		return dialCloudMTLS(w.ingestHost, certPEM, chainPEM, keyData)
@@ -209,6 +275,8 @@ func (w *DataTransferWorker) dialFactory(ctx context.Context) (cloudpb.DataInges
 	if err != nil {
 		return nil, nil, err
 	}
+	w.logger.Debug("data transfer worker: dialled ingest",
+		zap.String("host", w.ingestHost), zap.String("identity", string(source)))
 	return cloudpb.NewDataIngestServiceClient(conn), func() { _ = conn.Close() }, nil
 }
 
