@@ -329,6 +329,21 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The device's SECOND identity: a pki-core device certificate whose only
+	// Uniform Resource Identifier Subject Alternative Name is
+	// spiffe://wendy.sh/tenant/<tenant>/device/<name>. It is presented to the
+	// Wendy Data Platform's ingest endpoint and to nothing else; every cloud
+	// dialer keeps presenting the enrolled asset certificate, because Wendy
+	// Cloud's interceptors read only the urn:wendy:org: form.
+	//
+	// Built here, before registerAllServices, because StagePKIEnrollment on
+	// WendyProvisioningService hands it a token over the wire and every
+	// listener that serves StartProvisioning serves that method too. The
+	// startup pass over an already-staged file runs further down, once the
+	// rest of the agent is assembled.
+	pkiEnrollment := services.NewPKIEnrollment(logger, configPath, provisioningSvc)
+	provisioningSvcV2.WithPKIEnrollment(ctx, pkiEnrollment)
+
 	// The video service is constructed before the app socket managers because it
 	// owns the camera producer the sensor sockets subscribe apps to, and every
 	// per-app sensor socket must be built with that provider already registered.
@@ -953,24 +968,18 @@ func main() {
 	// coming up locally (mDNS discovery still works unenrolled).
 	go provisioningSvc.ApplyEnrollmentFile(context.Background())
 
-	// The device's SECOND identity: a pki-core device certificate whose only
-	// URI Subject Alternative Name is
-	// spiffe://wendy.sh/tenant/<tenant>/device/<name>. It is presented to the
-	// Wendy Data Platform's ingest endpoint and to nothing else; every cloud
-	// dialer keeps presenting the enrolled asset certificate above, because
-	// Wendy Cloud's interceptors read only the urn:wendy:org: form. Enrolment
-	// is driven by a token staged at <configPath>/pki-enrollment.json, exactly
-	// as enrollment.json drives the cloud enrolment above, and is a no-op when
-	// no such file exists.
-	pkiEnrollment := services.NewPKIEnrollment(logger, configPath, provisioningSvc)
+	// Redeem a pki-core enrollment token staged at
+	// <configPath>/pki-enrollment.json, exactly as enrollment.json drives the
+	// cloud enrolment above, and a no-op when no such file exists. The manager
+	// itself was built next to ctx, because StagePKIEnrollment also hands it
+	// tokens over the wire.
 	go func() {
-		pkiEnrollment.ApplyStagedFile(context.Background())
+		pkiEnrollment.ApplyStagedFile(ctx)
 		// Renewal starts after enrolment so a device enrolled on this boot
 		// does not wait for a restart to be renewable. A device with no pki
-		// identity gets no renewer, which is the ordinary case.
-		if renewer := pkiEnrollment.Renewer(); renewer != nil {
-			renewer.Run(ctx)
-		}
+		// identity gets no renewer, which is the ordinary case; a device
+		// enrolled later over StagePKIEnrollment starts one then.
+		pkiEnrollment.EnsureRenewer(ctx)
 	}()
 
 	// Restore audio peripherals paired before the last reboot. Nothing else
