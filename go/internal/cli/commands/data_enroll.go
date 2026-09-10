@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/pkienroll"
-	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/enrolltoken"
 )
@@ -131,7 +130,7 @@ func stagePKIEnrollment(configPath, tenant, token, deviceID, csrEndpoint, enviro
 	if err != nil {
 		return "", fmt.Errorf("encoding pki enrollment file: %w", err)
 	}
-	path := filepath.Join(configPath, services.PKIEnrollmentFileName)
+	path := filepath.Join(configPath, pkienroll.StagedFileName)
 	if err := atomicfile.Write(path, append(data, '\n'), 0o600); err != nil {
 		return "", fmt.Errorf("writing %s: %w", path, err)
 	}

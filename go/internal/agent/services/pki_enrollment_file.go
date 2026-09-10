@@ -31,7 +31,7 @@ import (
 // The two files never overlap: enrollment.json carries a Wendy Cloud asset
 // token and produces the Certificate Authority Service (CAS) triple, this one
 // carries a pki-core enrollment token and produces the pki-core triple.
-const PKIEnrollmentFileName = "pki-enrollment.json"
+const PKIEnrollmentFileName = pkienroll.StagedFileName
 
 // stagedPKIEnrollment is the on-disk shape. Only token is always required:
 // tenantUUID may instead come from the token's own tenant_uuid claim, and

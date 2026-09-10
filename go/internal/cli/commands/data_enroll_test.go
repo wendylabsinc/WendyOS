@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/services"
+	"github.com/wendylabsinc/wendy/go/internal/agent/pkienroll"
 )
 
 func runDataEnroll(t *testing.T, args ...string) (string, error) {
@@ -25,7 +25,7 @@ func runDataEnroll(t *testing.T, args ...string) (string, error) {
 
 func readStaged(t *testing.T, dir string) map[string]string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, services.PKIEnrollmentFileName))
+	data, err := os.ReadFile(filepath.Join(dir, pkienroll.StagedFileName))
 	if err != nil {
 		t.Fatalf("reading staged file: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestDataEnrollStagesTheCredential(t *testing.T) {
 	}
 
 	if runtime.GOOS != "windows" {
-		info, err := os.Stat(filepath.Join(dir, services.PKIEnrollmentFileName))
+		info, err := os.Stat(filepath.Join(dir, pkienroll.StagedFileName))
 		if err != nil {
 			t.Fatalf("stat staged file: %v", err)
 		}
@@ -107,7 +107,7 @@ func TestDataEnrollRequiresATenantForAnOpaqueToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("want an error naming --tenant")
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, services.PKIEnrollmentFileName)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(dir, pkienroll.StagedFileName)); !os.IsNotExist(statErr) {
 		t.Error("a file was staged despite the refusal")
 	}
 }
