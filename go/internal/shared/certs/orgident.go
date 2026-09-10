@@ -36,6 +36,74 @@ func AssetURN(orgID, assetID int32) string {
 	return WendyIdentity{OrgID: orgID, EntityType: "asset", EntityID: strconv.Itoa(int(assetID))}.IdentityKey()
 }
 
+// TenantSPIFFEPrefix is the trust domain and tenant path every pki-core
+// principal is minted under. Taken from the tenantSPIFFEPrefix constant on
+// origin/sem/wdy-2899-acme-enrollment, exported here because the device
+// enrolment client has to recognise the prefix as well as build it.
+//
+// Note the kind that follows the tenant segment differs by issuance path, and
+// the difference is load-bearing. Wendy Cloud relays a client leaf through
+// pki-core's "service-identity" profile, so a cloud-minted principal is
+// ".../service/asset-<id>". A leaf enrolled directly against pki-core's device
+// profile is ".../device/<name>", and the Wendy Data Platform's ingest
+// interceptor rejects any kind other than "device" outright. The two are
+// separate identities on separate certificates, not two spellings of one.
+const TenantSPIFFEPrefix = "spiffe://wendy.sh/tenant/"
+
+// spiffeDeviceKind is the principal kind pki-core stamps for a leaf issued
+// from one of its device tiers.
+const spiffeDeviceKind = "device"
+
+// DeviceSPIFFEURI returns the canonical pki-core device principal:
+// "spiffe://wendy.sh/tenant/<tenantUUID>/device/<deviceName>".
+//
+// It is built here only so the agent can state what it expects and compare.
+// pki-core stamps this SAN server-side from the enrollment token's device_id
+// and discards whatever URI SANs the CSR carried, so nothing the device puts in
+// a CSR can influence the issued identity. deviceName may be multi-segment
+// (for example "sh/wendy/2/408"); each "/"-separated segment must match
+// ^[A-Za-z0-9._-]{1,64}$.
+func DeviceSPIFFEURI(tenantUUID, deviceName string) string {
+	return TenantSPIFFEPrefix + tenantUUID + "/" + spiffeDeviceKind + "/" + deviceName
+}
+
+// ParseDeviceSPIFFEURI splits a pki-core device principal back into its tenant
+// UUID and device name. A principal of any other kind ("service", "operator")
+// is an error rather than a miss, because accepting one where a device identity
+// is required is precisely the mistake this function exists to prevent.
+func ParseDeviceSPIFFEURI(uri string) (tenantUUID, deviceName string, err error) {
+	rest, ok := strings.CutPrefix(uri, TenantSPIFFEPrefix)
+	if !ok {
+		return "", "", fmt.Errorf("not a tenant SPIFFE URI: %s", uri)
+	}
+	tenantUUID, rest, ok = strings.Cut(rest, "/")
+	if !ok || tenantUUID == "" {
+		return "", "", fmt.Errorf("tenant SPIFFE URI carries no tenant segment: %s", uri)
+	}
+	kind, name, ok := strings.Cut(rest, "/")
+	if !ok || name == "" {
+		return "", "", fmt.Errorf("tenant SPIFFE URI carries no %s name: %s", spiffeDeviceKind, uri)
+	}
+	if kind != spiffeDeviceKind {
+		return "", "", fmt.Errorf("tenant SPIFFE URI is a %q principal, not a %s: %s", kind, spiffeDeviceKind, uri)
+	}
+	return tenantUUID, name, nil
+}
+
+// TenantSPIFFEURIs returns every tenant SPIFFE URI SAN on leaf, in the order
+// the certificate carries them. Callers that require a single identity check
+// the length themselves so they can report how many were found.
+func TenantSPIFFEURIs(leaf *x509.Certificate) []string {
+	var out []string
+	for _, u := range leaf.URIs {
+		raw := u.String()
+		if strings.HasPrefix(raw, TenantSPIFFEPrefix) {
+			out = append(out, raw)
+		}
+	}
+	return out
+}
+
 // ParseIdentityURN parses a canonical Wendy identity URN —
 // "urn:wendy:org:<org>:(user|asset):<id>", the exact string IdentityKey
 // produces — back into a WendyIdentity.

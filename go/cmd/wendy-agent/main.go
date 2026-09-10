@@ -953,6 +953,26 @@ func main() {
 	// coming up locally (mDNS discovery still works unenrolled).
 	go provisioningSvc.ApplyEnrollmentFile(context.Background())
 
+	// The device's SECOND identity: a pki-core device certificate whose only
+	// URI Subject Alternative Name is
+	// spiffe://wendy.sh/tenant/<tenant>/device/<name>. It is presented to the
+	// Wendy Data Platform's ingest endpoint and to nothing else; every cloud
+	// dialer keeps presenting the enrolled asset certificate above, because
+	// Wendy Cloud's interceptors read only the urn:wendy:org: form. Enrolment
+	// is driven by a token staged at <configPath>/pki-enrollment.json, exactly
+	// as enrollment.json drives the cloud enrolment above, and is a no-op when
+	// no such file exists.
+	pkiEnrollment := services.NewPKIEnrollment(logger, configPath, provisioningSvc)
+	go func() {
+		pkiEnrollment.ApplyStagedFile(context.Background())
+		// Renewal starts after enrolment so a device enrolled on this boot
+		// does not wait for a restart to be renewable. A device with no pki
+		// identity gets no renewer, which is the ordinary case.
+		if renewer := pkiEnrollment.Renewer(); renewer != nil {
+			renewer.Run(ctx)
+		}
+	}()
+
 	// Restore audio peripherals paired before the last reboot. Nothing else
 	// does: BlueZ only reconnects after a link supervision timeout and has no
 	// startup path, and a speaker that was already powered when the host went
@@ -1050,6 +1070,11 @@ func main() {
 	// and gating on it would silently leave every sealed episode unuploaded
 	// until the quota evicted it.
 	dataTransferWorker := services.NewDataTransferWorker(logger, dataManager, provisioningSvc)
+	// Present the pki-core device identity to the ingest endpoint when one is
+	// stored. The store is read per dial, so a device enrolled after the agent
+	// came up switches identity on its next upload pass without a restart, and
+	// a device with no pki identity keeps presenting the asset certificate.
+	dataTransferWorker.SetPKIIdentity(pkiEnrollment.Store())
 	// WENDY_DATA_INGEST_URL names the DataIngestService endpoint episode uploads
 	// dial (ingest.data.wendy.sh in dev). There is no fallback: the enrolled
 	// cloud host does not serve DataIngestService. Unset disables uploads, the
