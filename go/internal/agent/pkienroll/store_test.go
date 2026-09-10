@@ -278,3 +278,24 @@ func TestRenewerDoesNothingWithoutMetadata(t *testing.T) {
 		t.Fatal("Run did not return with no tenant configured")
 	}
 }
+
+// A renewal that returns a leaf alone must not leave the previous chain in
+// place: an intermediate that does not sign the new leaf fails the handshake.
+func TestStoreSaveDropsStaleChain(t *testing.T) {
+	s := NewStore(t.TempDir())
+	if err := s.Save(Result{LeafPEM: "leaf-1", ChainPEM: "chain-1"}); err != nil {
+		t.Fatalf("Save with chain: %v", err)
+	}
+	if _, err := os.Stat(s.ChainPath()); err != nil {
+		t.Fatalf("chain not written: %v", err)
+	}
+	if err := s.Save(Result{LeafPEM: "leaf-2"}); err != nil {
+		t.Fatalf("Save without chain: %v", err)
+	}
+	if _, err := os.Stat(s.ChainPath()); !os.IsNotExist(err) {
+		t.Fatalf("stale chain still present after leaf-only Save (err=%v)", err)
+	}
+	if err := s.Save(Result{LeafPEM: "leaf-3"}); err != nil {
+		t.Fatalf("Save without chain when none exists: %v", err)
+	}
+}
