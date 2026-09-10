@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -95,13 +96,13 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 		return nil, err
 	}
 
-	asset, err := pickCloudDevice(ctx, auth, deviceName, brokerURL)
+	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err
 	}
 	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
 
-	return connectCloudAsset(ctx, auth, asset, brokerURL)
+	return asset.connect(ctx, auth, brokerURL)
 }
 
 // detachedTunnelContext returns the context to open a connection-scoped broker
@@ -136,14 +137,20 @@ func connectCloudAssetV2(ctx context.Context, auth *config.AuthConfig, asset *cl
 }
 
 func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, asset cloudDiscoveryDevice, brokerURL string) (*grpcclient.AgentConnection, error) {
-	brokerConn, err := clouddefaults.DialBroker(auth, brokerURL)
-	if err != nil {
-		return nil, err
+	var brokerConn *grpc.ClientConn
+	if asset.legacy != nil {
+		var err error
+		brokerConn, err = clouddefaults.DialBroker(auth, brokerURL)
+		if err != nil {
+			return nil, err
+		}
+	} else if brokerURL != "" {
+		return nil, fmt.Errorf("Cloud selects the authorized relay; --broker-url is supported only for legacy sessions")
 	}
 
 	cleanupBroker := true
 	defer func() {
-		if cleanupBroker {
+		if cleanupBroker && brokerConn != nil {
 			_ = brokerConn.Close()
 		}
 	}()
@@ -177,7 +184,7 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		closeTunnel()
 		return nil, fmt.Errorf("loading client key: %w", err)
 	}
-	x509Cert, err := tls.X509KeyPair([]byte(cert.PemCertificate), []byte(keyPEM))
+	x509Cert, err := certs.TLSKeyPair(cert.PemCertificate, cert.PemCertificateChain, keyPEM)
 	if err != nil {
 		closeTunnel()
 		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
@@ -230,7 +237,10 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	agentConn.Reconnect = func(rctx context.Context) (*grpcclient.AgentConnection, error) {
 		return asset.reconnect(rctx, auth, brokerURL)
 	}
-	agentConn.ExtraClosers = append(agentConn.ExtraClosers, closeFunc(closeTunnel), brokerConn, closeFunc(tunnelCancel))
+	agentConn.ExtraClosers = append(agentConn.ExtraClosers, closeFunc(closeTunnel), closeFunc(tunnelCancel))
+	if brokerConn != nil {
+		agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
+	}
 	cleanupBroker = false
 	tunnelHandoff()
 	handedOff = true
@@ -328,26 +338,33 @@ func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.C
 	if d.legacy != nil {
 		return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
 	}
+	service := ""
+	switch remotePort {
+	case 50052:
+		service = "wendy-agent"
+	case 22:
+		service = "ssh"
+	default:
+		return nil, fmt.Errorf("Cloud's authorized tunnel catalog has no service for port %d", remotePort)
+	}
+	signer, err := tunnelPrincipalSigner(auth)
+	if err != nil {
+		return nil, err
+	}
 	cloudCtx, err := cloudContext(ctx, auth)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := cloudpbv2.NewTunnelBrokerServiceClient(brokerConn).ClientTunnel(cloudCtx)
+	conn, err := dialCloudGRPC(auth)
 	if err != nil {
-		return nil, fmt.Errorf("opening tunnel stream: %w", err)
+		return nil, err
 	}
-	if err := stream.Send(&cloudpbv2.ClientTunnelMessage{Content: &cloudpbv2.ClientTunnelMessage_Open{Open: &cloudpbv2.ClientTunnelOpen{AssetId: d.key, Host: "localhost", Port: remotePort}}}); err != nil {
-		return nil, fmt.Errorf("sending tunnel open: %w", err)
+	defer conn.Close()
+	issuer, err := cloudrelay.Issuer(auth.CloudGRPC, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
+	if err != nil {
+		return nil, err
 	}
-	return pipeBrokerTunnel(func() ([]byte, bool, error) {
-		msg, err := stream.Recv()
-		if err != nil {
-			return nil, false, err
-		}
-		return msg.Payload, msg.HalfClose, nil
-	}, func(payload []byte, halfClose bool) error {
-		return stream.Send(&cloudpbv2.ClientTunnelMessage{Content: &cloudpbv2.ClientTunnelMessage_Data{Data: &cloudpbv2.TunnelData{Payload: payload, HalfClose: halfClose}}})
-	}, stream.CloseSend), nil
+	return cloudrelay.OpenTCP(ctx, cloudCtx, conn, &cloudrelay.Verifier{Issuer: issuer}, d.key, service, signer)
 }
 
 func pipeBrokerTunnel(recv func() ([]byte, bool, error), send func([]byte, bool) error, closeSend func() error) net.Conn {

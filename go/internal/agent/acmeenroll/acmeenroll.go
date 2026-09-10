@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
@@ -134,8 +135,10 @@ func (c Config) PrincipalURI() (string, error) {
 // intermediates below it, both PEM-encoded. chainPEM is empty when the server
 // returns a leaf alone.
 //
-// accountKeyPath is the persisted ACME account key; it is created on first call
-// and reused afterwards. deviceKeyPEM is the device's own long-lived key, whose
+// accountKeyPath is the legacy account key location. New keys are stored beside
+// it in a .d directory, scoped to the directory URL and device name so changing
+// names after a failed enrollment cannot reuse another device's account.
+// deviceKeyPEM is the device's own long-lived key, whose
 // public half ends up in the issued certificate.
 //
 // TODO(WDY-2899): the tunnel broker dial deliberately presents leaf-only
@@ -164,24 +167,27 @@ func Enroll(ctx context.Context, cfg Config, accountKeyPath string, deviceKeyPEM
 		return "", "", errors.New("device CSR is not valid PEM")
 	}
 
-	// The account key is created before anything is spent so a write failure
-	// cannot burn the single-use EAB.
-	accountKey, err := loadOrCreateAccountKey(accountKeyPath)
+	scopedPath := scopedAccountKeyPath(accountKeyPath, cfg)
+	keyPath := scopedPath
+	if _, err := os.Stat(scopedPath); os.IsNotExist(err) {
+		if _, err := os.Stat(accountKeyPath); err == nil {
+			// Preserve retries with a pre-upgrade account and already-spent EAB.
+			keyPath = accountKeyPath
+		}
+	}
+	client, order, err := createDeviceOrder(ctx, cfg, keyPath, hmacKey)
+	var accountProblem *acme.Error
+	if keyPath == accountKeyPath && errors.As(err, &accountProblem) &&
+		accountProblem.StatusCode == http.StatusForbidden &&
+		accountProblem.ProblemType == "urn:ietf:params:acme:error:unauthorized" &&
+		accountProblem.Detail == "order identifier does not match the account's authorized device" {
+		// PKI returned the old account without consuming the new EAB. Keep
+		// its key for retries of that identity, and use a separate account for
+		// this name. Never rotate keys on network errors or other refusals.
+		client, order, err = createDeviceOrder(ctx, cfg, scopedPath, hmacKey)
+	}
 	if err != nil {
 		return "", "", err
-	}
-
-	client := &acme.Client{Key: accountKey, DirectoryURL: cfg.DirectoryURL}
-	account := &acme.Account{
-		ExternalAccountBinding: &acme.ExternalAccountBinding{KID: cfg.EABKeyID, Key: hmacKey},
-	}
-	if _, err := client.Register(ctx, account, acme.AcceptTOS); err != nil && !errors.Is(err, acme.ErrAccountAlreadyExists) {
-		return "", "", fmt.Errorf("registering ACME account: %w", err)
-	}
-
-	order, err := client.AuthorizeOrder(ctx, []acme.AuthzID{{Type: permanentIdentifier, Value: cfg.DeviceID}})
-	if err != nil {
-		return "", "", fmt.Errorf("creating ACME order for device %q: %w", cfg.DeviceID, err)
 	}
 	if order.Status != acme.StatusReady {
 		return "", "", fmt.Errorf("ACME order is %q, want %q: this device's profile requires an attestation challenge, which is not implemented", order.Status, acme.StatusReady)
@@ -219,7 +225,41 @@ func Enroll(ctx context.Context, cfg Config, accountKeyPath string, deviceKeyPEM
 	if !ok || principal != expected {
 		return "", "", fmt.Errorf("ACME certificate does not identify the expected device %s", expected)
 	}
+	// Enrollment switches the agent to mTLS. Reject an issuer profile that
+	// would lock out inbound clients or prevent outbound authentication before
+	// provisioning persists this certificate and closes the plaintext server.
+	clientAuth, serverAuth := false, false
+	for _, usage := range leaf.ExtKeyUsage {
+		clientAuth = clientAuth || usage == x509.ExtKeyUsageClientAuth
+		serverAuth = serverAuth || usage == x509.ExtKeyUsageServerAuth
+	}
+	if !clientAuth || !serverAuth {
+		return "", "", errors.New("ACME device certificate must explicitly permit clientAuth and serverAuth; correct the PKI device profile and reissue the certificate")
+	}
 	return certPEM, encodeCerts(ders[1:]), nil
+}
+
+func scopedAccountKeyPath(base string, cfg Config) string {
+	scope := sha256.Sum256([]byte(cfg.DirectoryURL + "\x00" + cfg.DeviceID))
+	return filepath.Join(base+".d", hex.EncodeToString(scope[:])+".pem")
+}
+
+func createDeviceOrder(ctx context.Context, cfg Config, keyPath string, hmacKey []byte) (*acme.Client, *acme.Order, error) {
+	// Persist before spending the single-use EAB, so a disk error cannot burn it.
+	key, err := loadOrCreateAccountKey(keyPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	client := &acme.Client{Key: key, DirectoryURL: cfg.DirectoryURL}
+	account := &acme.Account{ExternalAccountBinding: &acme.ExternalAccountBinding{KID: cfg.EABKeyID, Key: hmacKey}}
+	if _, err := client.Register(ctx, account, acme.AcceptTOS); err != nil && !errors.Is(err, acme.ErrAccountAlreadyExists) {
+		return nil, nil, fmt.Errorf("registering ACME account: %w", err)
+	}
+	order, err := client.AuthorizeOrder(ctx, []acme.AuthzID{{Type: permanentIdentifier, Value: cfg.DeviceID}})
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating ACME order for device %q: %w", cfg.DeviceID, err)
+	}
+	return client, order, nil
 }
 
 // fetchPKICertificate implements PKI's documented GET certificate endpoint.

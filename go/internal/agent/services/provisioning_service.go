@@ -147,6 +147,13 @@ func (s *ProvisioningService) ProvisioningInfo() (cloudHost string, orgID, asset
 	return s.cloudHost, s.orgID, s.assetID, s.enrolled
 }
 
+// ProvisioningPrincipal returns the PKI identity, empty for legacy enrollment.
+func (s *ProvisioningService) ProvisioningPrincipal() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.principalURI
+}
+
 // IsProvisioned checks whether the agent is enrolled with a cloud organization.
 func (s *ProvisioningService) IsProvisioned(_ context.Context, _ *agentpb.IsProvisionedRequest) (*agentpb.IsProvisionedResponse, error) {
 	s.mu.Lock()
@@ -401,6 +408,12 @@ func (s *ProvisioningService) clearStateFiles() error {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("removing %s: %w", f, err)
 		}
+	}
+	if err := os.RemoveAll(filepath.Join(s.configPath, "cloud-relay")); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(filepath.Join(s.configPath, "acme-account-key.pem.d")); err != nil {
+		return fmt.Errorf("removing scoped ACME account keys: %w", err)
 	}
 	return nil
 }

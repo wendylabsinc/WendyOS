@@ -2,8 +2,11 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"io"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -152,4 +155,95 @@ func (d cloudDiscoveryDevice) connect(ctx context.Context, auth *config.AuthConf
 
 func (d cloudDiscoveryDevice) reconnect(ctx context.Context, auth *config.AuthConfig, brokerURL string) (*grpcclient.AgentConnection, error) {
 	return waitForCloudDeviceRestart(ctx, d.GetName(), d.key, func(ctx context.Context) (*grpcclient.AgentConnection, error) { return d.connect(ctx, auth, brokerURL) })
+}
+
+// pickCloudDiscoveryDevice keeps UUID identities intact through selection.
+func pickCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, name, brokerURL string) (cloudDiscoveryDevice, error) {
+	if len(auth.Certificates) == 0 {
+		return cloudDiscoveryDevice{}, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
+	}
+	if auth.Certificates[0].PrincipalURI == "" {
+		a, err := pickCloudDevice(ctx, auth, name, brokerURL)
+		if err != nil {
+			return cloudDiscoveryDevice{}, err
+		}
+		return legacyDiscoveryDevices([]*cloudpb.Asset{a})[0], nil
+	}
+	devices, err := fetchCloudDiscoveryDevices(ctx, auth, true)
+	if err != nil {
+		return cloudDiscoveryDevice{}, err
+	}
+	if name == "" && len(devices) > 1 && isInteractiveTerminal() {
+		m := newCloudDiscoverModel(ctx, auth, brokerURL, false, true, nil)
+		m.devices = devices
+		m.hasResults = true
+		m.refreshTable()
+		final, err := tea.NewProgram(m).Run()
+		if err != nil {
+			return cloudDiscoveryDevice{}, err
+		}
+		picked := final.(cloudDiscoverModel)
+		if picked.selectedV2 == nil {
+			return cloudDiscoveryDevice{}, ErrUserCancelled
+		}
+		a := picked.selectedV2
+		return cloudDiscoveryDevice{cloudAssetMetadata: a, v2: a, key: a.GetId()}, nil
+	}
+	d, err := resolveCloudDiscoveryDevice(devices, name)
+	if err == nil {
+		if name == "" {
+			noteImplicitDevice(d.GetName(), implicitSoleCloudDevice)
+		}
+		return d, nil
+	}
+	var missing *errCloudDeviceNotFound
+	if errors.Is(err, errNoCloudDevicesEnrolled) || errors.As(err, &missing) {
+		all, fetchErr := fetchCloudDiscoveryDevices(ctx, auth, false)
+		if fetchErr == nil {
+			if name == "" && len(all) > 0 {
+				return cloudDiscoveryDevice{}, fmt.Errorf("all %d enrolled devices are currently reported offline; check the agents' Cloud presence logs ('wendy cloud discover --all --json' lists enrolled devices)", len(all))
+			}
+			if _, e := resolveCloudDiscoveryDevice(all, name); e == nil {
+				return cloudDiscoveryDevice{}, fmt.Errorf("device %q is enrolled but currently reported offline; check its Cloud presence logs", name)
+			}
+		}
+	}
+	return cloudDiscoveryDevice{}, err
+}
+func resolveCloudDiscoveryDevice(devices []cloudDiscoveryDevice, name string) (cloudDiscoveryDevice, error) {
+	if len(devices) == 0 {
+		if name != "" {
+			return cloudDiscoveryDevice{}, &errCloudDeviceNotFound{name: name}
+		}
+		return cloudDiscoveryDevice{}, errNoCloudDevicesEnrolled
+	}
+	if name != "" {
+		// Prefer a UUID match, so duplicate display names never hide an exact ID.
+		for _, d := range devices {
+			if strings.EqualFold(d.key, strings.TrimSpace(name)) {
+				return d, nil
+			}
+		}
+		var match *cloudDiscoveryDevice
+		for i := range devices {
+			if strings.EqualFold(devices[i].GetName(), name) {
+				if match != nil {
+					return cloudDiscoveryDevice{}, fmt.Errorf("multiple devices match %q; use a device UUID", name)
+				}
+				match = &devices[i]
+			}
+		}
+		if match != nil {
+			return *match, nil
+		}
+		return cloudDiscoveryDevice{}, &errCloudDeviceNotFound{name: name}
+	}
+	if len(devices) == 1 {
+		return devices[0], nil
+	}
+	var names []string
+	for _, d := range devices {
+		names = append(names, d.key+"="+d.GetName())
+	}
+	return cloudDiscoveryDevice{}, fmt.Errorf("multiple cloud devices found; rerun with --device <id|name> (%s)", strings.Join(names, ", "))
 }

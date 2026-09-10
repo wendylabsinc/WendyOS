@@ -2565,13 +2565,14 @@ func isCertRejectionError(addr string, err error) bool {
 		return false
 	}
 	msg := err.Error()
-	// A handshake ending in EOF got no TLS alert back, so nothing rejected
-	// anything: something accepted the connection and closed it. A port forward
+	// A handshake ending in EOF or a connection reset got no TLS alert back:
+	// something accepted the connection and closed it. A port forward
 	// does exactly that when the far side is not listening -- QEMU's user-mode
 	// networking accepts on the host and only then finds the guest port closed.
-	// Only over loopback: elsewhere an EOF may be an on-path reset, and reading
+	// Only over loopback: elsewhere a close may be an on-path reset, and reading
 	// that as "not a TLS endpoint" would re-offer the plaintext rung.
-	if isLoopbackHost(addr) && strings.Contains(msg, "handshake failed: EOF") {
+	if isLoopbackHost(addr) && (strings.Contains(msg, "handshake failed: EOF") ||
+		strings.Contains(msg, "handshake failed: read tcp ") && strings.Contains(msg, "read: connection reset by peer")) {
 		return false
 	}
 	// A plaintext (unprovisioned) agent probed with TLS reports "first record

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,15 +47,20 @@ type fakeACME struct {
 	orderState string
 	accounts   int
 	// Captured for assertions.
-	eabKID        string
-	eabMACOK      bool
-	orderIDs      []map[string]string
-	finalizeOK    bool
-	finalizeCSR   *x509.CertificateRequest
-	wrongKey      bool
-	wrongIdentity bool
-	getOnlyCert   bool
-	certGets      int
+	eabKID             string
+	eabMACOK           bool
+	orderIDs           []map[string]string
+	finalizeOK         bool
+	finalizeCSR        *x509.CertificateRequest
+	wrongKey           bool
+	wrongIdentity      bool
+	getOnlyCert        bool
+	certGets           int
+	extKeyUsage        []x509.ExtKeyUsage
+	accountJWK         string
+	rejectFirstAccount bool
+	rejectedJWK        string
+	orderErrorDetail   string
 }
 
 func (f *fakeACME) handler(base string) http.Handler {
@@ -77,6 +83,9 @@ func (f *fakeACME) handler(base string) http.Handler {
 	mux.HandleFunc("/acme/new-account", func(w http.ResponseWriter, r *http.Request) {
 		nonce(w)
 		f.checkEAB(r)
+		if f.rejectFirstAccount && f.rejectedJWK == "" {
+			f.rejectedJWK = f.accountJWK
+		}
 		w.Header().Set("Location", base+"/acme/account/1")
 		f.accounts++
 		status := http.StatusCreated
@@ -94,6 +103,16 @@ func (f *fakeACME) handler(base string) http.Handler {
 		}
 		decodePayload(f.t, r, &body)
 		f.orderIDs = body.Identifiers
+		if f.orderErrorDetail != "" || f.rejectedJWK != "" && f.accountJWK == f.rejectedJWK {
+			detail := f.orderErrorDetail
+			if detail == "" {
+				detail = "order identifier does not match the account's authorized device"
+			}
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"type": "urn:ietf:params:acme:error:unauthorized", "detail": detail,
+			})
+			return
+		}
 		w.Header().Set("Location", base+"/acme/order/1")
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"status":      f.orderState,
@@ -123,7 +142,7 @@ func (f *fakeACME) handler(base string) http.Handler {
 				f.t.Error(err)
 				return
 			}
-			deviceID := testDeviceID
+			deviceID := f.orderIDs[0]["value"]
 			if f.wrongIdentity {
 				deviceID = "another-device"
 			}
@@ -131,7 +150,8 @@ func (f *fakeACME) handler(base string) http.Handler {
 			tmpl := &x509.Certificate{
 				SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "leaf"},
 				NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour),
-				URIs: []*url.URL{principal},
+				URIs:        []*url.URL{principal},
+				ExtKeyUsage: f.extKeyUsage,
 			}
 			f.leaf, err = x509.CreateCertificate(rand.Reader, tmpl, tmpl, csr.PublicKey, key)
 			if err != nil {
@@ -179,6 +199,7 @@ func (f *fakeACME) checkEAB(r *http.Request) {
 		f.t.Error("new-account carried no externalAccountBinding")
 		return
 	}
+	f.accountJWK = acct.EAB.Payload
 
 	var protected struct {
 		Alg string `json:"alg"`
@@ -257,10 +278,11 @@ func selfSigned(t *testing.T, cn string) []byte {
 func startFake(t *testing.T, orderState string) (*fakeACME, string) {
 	t.Helper()
 	f := &fakeACME{
-		t:          t,
-		leaf:       selfSigned(t, "leaf"),
-		issuer:     selfSigned(t, "issuer"),
-		orderState: orderState,
+		t:           t,
+		leaf:        selfSigned(t, "leaf"),
+		issuer:      selfSigned(t, "issuer"),
+		orderState:  orderState,
+		extKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 	}
 	// The handler needs its own base URL to build absolute directory links, so
 	// the server is wired up after the listener has an address but before it
@@ -343,19 +365,122 @@ func TestEnroll(t *testing.T) {
 	}
 
 	// The account key must survive so the single-use EAB is not needed again.
-	stored, err := loadOrCreateAccountKey(keyPath)
+	stored, err := loadOrCreateAccountKey(scopedAccountKeyPath(keyPath, testConfig(dirURL)))
 	if err != nil {
 		t.Fatalf("re-loading account key: %v", err)
 	}
 	if _, _, err := Enroll(context.Background(), testConfig(dirURL), keyPath, []byte(deviceKey)); err != nil {
 		t.Fatalf("second Enroll (account already exists): %v", err)
 	}
-	again, err := loadOrCreateAccountKey(keyPath)
+	again, err := loadOrCreateAccountKey(scopedAccountKeyPath(keyPath, testConfig(dirURL)))
 	if err != nil {
 		t.Fatalf("re-loading account key: %v", err)
 	}
 	if !stored.Equal(again) {
 		t.Error("account key changed between enrollments; the EAB cannot be reused to register a new one")
+	}
+}
+
+func TestEnrollMigratesLegacyAccountBoundToAnotherDevice(t *testing.T) {
+	f, directory := startFake(t, "ready")
+	f.rejectFirstAccount = true
+	base := filepath.Join(t.TempDir(), "account.pem")
+	legacy, err := loadOrCreateAccountKey(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceKey, err := certs.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(directory)
+	if _, _, err := Enroll(context.Background(), cfg, base, []byte(deviceKey)); err != nil {
+		t.Fatal(err)
+	}
+	if f.accounts != 2 {
+		t.Fatalf("registered %d times, want legacy then scoped", f.accounts)
+	}
+	currentJWK := f.accountJWK
+	if currentJWK == f.rejectedJWK {
+		t.Fatal("reused the account bound to another device")
+	}
+	if _, _, err := Enroll(context.Background(), cfg, base, []byte(deviceKey)); err != nil {
+		t.Fatal(err)
+	}
+	if f.accounts != 3 || f.accountJWK != currentJWK {
+		t.Fatal("retry did not reuse the scoped account")
+	}
+	unchanged, err := loadOrCreateAccountKey(base)
+	if err != nil || !legacy.Equal(unchanged) {
+		t.Fatal("legacy account was replaced")
+	}
+}
+
+func TestEnrollKeepsLegacyAccountOnOtherRefusal(t *testing.T) {
+	f, directory := startFake(t, "ready")
+	f.orderErrorDetail = "device enrollment is disabled"
+	base := filepath.Join(t.TempDir(), "account.pem")
+	if _, err := loadOrCreateAccountKey(base); err != nil {
+		t.Fatal(err)
+	}
+	deviceKey, err := certs.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(directory)
+	if _, _, err := Enroll(context.Background(), cfg, base, []byte(deviceKey)); err == nil {
+		t.Fatal("accepted refusal")
+	}
+	if f.accounts != 1 {
+		t.Fatal("retried an unrelated refusal")
+	}
+	if _, err := os.Stat(scopedAccountKeyPath(base, cfg)); !os.IsNotExist(err) {
+		t.Fatal("created a replacement account")
+	}
+}
+
+func TestEnrollReusesLegacyAccountForSameDevice(t *testing.T) {
+	f, directory := startFake(t, "ready")
+	base := filepath.Join(t.TempDir(), "account.pem")
+	if _, err := loadOrCreateAccountKey(base); err != nil {
+		t.Fatal(err)
+	}
+	deviceKey, err := certs.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(directory)
+	for range 2 {
+		if _, _, err := Enroll(context.Background(), cfg, base, []byte(deviceKey)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.accounts != 2 {
+		t.Fatal("retried registration despite a usable legacy account")
+	}
+	if _, err := os.Stat(scopedAccountKeyPath(base, cfg)); !os.IsNotExist(err) {
+		t.Fatal("replaced a usable legacy account")
+	}
+}
+
+func TestEnrollScopesAccountsToDeviceName(t *testing.T) {
+	f, directory := startFake(t, "ready")
+	base := filepath.Join(t.TempDir(), "account.pem")
+	deviceKey, err := certs.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(directory)
+	if _, _, err := Enroll(context.Background(), cfg, base, []byte(deviceKey)); err != nil {
+		t.Fatal(err)
+	}
+	firstJWK := f.accountJWK
+	cfg.DeviceID = "second-device"
+	if _, _, err := Enroll(context.Background(), cfg, base, []byte(deviceKey)); err != nil {
+		t.Fatal(err)
+	}
+	if f.accountJWK == firstJWK {
+		t.Fatal("different device name reused the account key")
 	}
 }
 
@@ -385,6 +510,32 @@ func TestEnrollRejectsCertificateForAnotherDevice(t *testing.T) {
 			leaf, chain, err := Enroll(context.Background(), testConfig(dirURL), filepath.Join(t.TempDir(), "account.pem"), []byte(deviceKey))
 			if err == nil || leaf != "" || chain != "" {
 				t.Fatalf("mismatched certificate accepted: error=%v", err)
+			}
+		})
+	}
+}
+
+func TestEnrollRejectsUnusableAuthenticationUsages(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		usages []x509.ExtKeyUsage
+	}{
+		{"client only", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}},
+		{"server only", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}},
+		{"missing", nil},
+		{"any", []x509.ExtKeyUsage{x509.ExtKeyUsageAny}},
+		{"code signing", []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, dirURL := startFake(t, "ready")
+			f.extKeyUsage = tc.usages
+			deviceKey, err := certs.GenerateKeyPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			leaf, chain, err := Enroll(context.Background(), testConfig(dirURL), filepath.Join(t.TempDir(), "account.pem"), []byte(deviceKey))
+			if err == nil || !strings.Contains(err.Error(), "correct the PKI device profile") || leaf != "" || chain != "" {
+				t.Fatalf("unusable certificate accepted: leaf=%t chain=%t err=%v", leaf != "", chain != "", err)
 			}
 		})
 	}

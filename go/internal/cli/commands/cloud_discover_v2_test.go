@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"strings"
 	"testing"
@@ -180,7 +179,7 @@ func (s *discoveryV2Broker) ClientTunnel(stream grpc.BidiStreamingServer[cloudpb
 	}
 }
 
-func TestCloudDiscoveryV2TunnelPreservesUUIDAndPayload(t *testing.T) {
+func TestCloudDiscoveryV2DoesNotUseRetiredRelay(t *testing.T) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -200,30 +199,16 @@ func TestCloudDiscoveryV2TunnelPreservesUUIDAndPayload(t *testing.T) {
 	defer cancel()
 	id := "00000000-0000-4000-8000-000000000042"
 	d := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: id}, key: id}
-	tunnel, err := d.openTunnel(ctx, conn, auth, 50052)
-	if err != nil {
-		t.Fatal(err)
+	_, err = d.openTunnel(ctx, conn, auth, 50052)
+	if err == nil || !strings.Contains(err.Error(), "ML-DSA operator request-signing certificate") {
+		t.Fatalf("unexpected signing capability result: %v", err)
 	}
-	defer tunnel.Close()
-	_ = tunnel.SetDeadline(time.Now().Add(5 * time.Second))
 	select {
-	case open := <-broker.opened:
-		if open.GetAssetId() != id || open.GetPort() != 50052 || open.GetHost() != "localhost" {
-			t.Fatalf("bad v2 target: %v", open)
-		}
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
+	case <-broker.opened:
+		t.Fatal("PKI session contacted the retired UUID relay RPC")
+	default:
 	}
-	if _, err := tunnel.Write([]byte("hello")); err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 5)
-	if _, err := io.ReadFull(tunnel, buf); err != nil {
-		t.Fatal(err)
-	}
-	if string(buf) != "hello" {
-		t.Fatalf("tunnel payload = %q", buf)
-	}
+
 }
 
 func (s *discoveryV2Server) ListAssets(req *cloudpbv2.ListAssetsRequest, stream grpc.ServerStreamingServer[cloudpbv2.ListAssetsResponse]) error {
@@ -352,5 +337,34 @@ func TestCloudDiscoverJSONLegacy(t *testing.T) {
 	}
 	if len(infos) != 1 || infos[0].ID != 77 {
 		t.Fatalf("unexpected legacy results: %s", out)
+	}
+}
+
+func TestCloudPickerUsesV2AndPreservesUUID(t *testing.T) {
+	auth := discoveryV2Auth(t, 1, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	devices, err := fetchCloudDiscoveryDevices(ctx, auth, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := pickCloudDiscoveryDevice(ctx, auth, devices[0].key, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.v2 == nil || selected.key != devices[0].key || selected.legacy != nil {
+		t.Fatal("lost UUID or selected legacy API")
+	}
+	_, err = pickCloudDiscoveryDevice(ctx, auth, "unknown", "")
+	if err == nil {
+		t.Fatal("selected unrelated asset")
+	}
+	duplicates := []cloudDiscoveryDevice{selected, selected}
+	duplicates[1].key = "other"
+	if _, err = resolveCloudDiscoveryDevice(duplicates, selected.GetName()); err == nil {
+		t.Fatal("accepted ambiguous name")
+	}
+	if got, err := resolveCloudDiscoveryDevice(duplicates, selected.key); err != nil || got.key != selected.key {
+		t.Fatal("exact UUID did not resolve")
 	}
 }

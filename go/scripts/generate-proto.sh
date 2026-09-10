@@ -246,3 +246,16 @@ protoc \
     wendy_com_tunnel_service.proto
 
 echo "Proto generation complete!"
+
+# Cloud-authorized relay contract (service-protos fe42be2). Crypto domain
+# separators remain v1; the RPC package and UUID asset identifiers are v2.
+RELAY_PKG="$MODULE/go/proto/gen/relaypb"
+AUTH_PKG="$MODULE/go/proto/gen/wendyauthpb"
+protoc --proto_path="$PROTO_DIR" \
+    --go_out="$GO_DIR" --go_opt=module="$MODULE/go" \
+    --go_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
+    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
+    --go-grpc_out="$GO_DIR" --go-grpc_opt=module="$MODULE/go" \
+    --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
+    --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
+    wendycloud/tunnel/v2/tunnel.proto wendyauth/v1/envelope.proto

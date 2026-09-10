@@ -766,6 +766,15 @@ func newDeviceEnrollCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
+			auth, err := resolveAuthEntry(cloudGRPC)
+			if err != nil {
+				return err
+			}
+			auth, err = prepareEnrollmentAuth(ctx, auth)
+			if err != nil {
+				return err
+			}
+
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
 			if err != nil {
 				return err
@@ -773,11 +782,6 @@ func newDeviceEnrollCmd() *cobra.Command {
 			defer conn.Close()
 
 			promptWifiIfNeeded(ctx, conn)
-
-			auth, err := pickAuthEntry(cloudGRPC)
-			if err != nil {
-				return err
-			}
 
 			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
 		},
@@ -883,19 +887,22 @@ func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string
 
 func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
 	if auth == nil || len(auth.Certificates) == 0 {
-		return fmt.Errorf("selected auth entry has no certificates; re-run 'wendy auth login'")
+		return validateEnrollmentCertificate(auth)
 	}
 	acmeDirectoryURL := ""
 	if len(acmeDirectoryURLs) > 0 {
 		acmeDirectoryURL = acmeDirectoryURLs[0]
 	}
+	if auth.OAuthIssuer == "" && acmeDirectoryURL != "" {
+		return fmt.Errorf("--acme-directory-url requires an OIDC login session")
+	}
+	if err := validateEnrollmentCertificate(auth); err != nil {
+		return err
+	}
 	// Only the new login flow uses direct PKI enrollment. Imported certificates
 	// and legacy sessions retain the Cloud enrollment contract.
 	if auth.OAuthIssuer != "" {
 		return runOIDCEnrollDevice(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
-	}
-	if acmeDirectoryURL != "" {
-		return fmt.Errorf("--acme-directory-url requires an OIDC login session")
 	}
 
 	name, err := enrollmentDeviceName(conn, name)
@@ -952,6 +959,9 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		Name:           name,
 		TtlSeconds:     600,
 	})
+	if status.Code(err) == codes.Unimplemented {
+		return fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
+	}
 	if err != nil {
 		return fmt.Errorf("creating enrollment token: %w", err)
 	}
@@ -973,6 +983,22 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
+	auth, err := resolveAuthEntry(cloudGRPC)
+	if err != nil {
+		return nil, err
+	}
+	// Renew while the certificate is still valid. This shared picker has no
+	// caller context; renewal applies its own request timeout. Enrollment uses
+	// prepareEnrollmentAuth instead so expiry can trigger login before work.
+	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
+		reportStaleCertificate(rerr)
+	}
+	return auth, nil
+}
+
+// resolveAuthEntry selects a session without renewing or warning, so enrollment
+// can handle expired credentials before connecting to a device or prompting.
+func resolveAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
@@ -988,23 +1014,7 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	if isInteractiveTerminal() {
 		pick = pickAuthSessionFn
 	}
-	auth, err := config.ResolveAuth(cfg, cloudGRPC, pick)
-	if err != nil {
-		return nil, err
-	}
-	// Pre-flight: renew the client certificate before it expires rather than
-	// after something rejects it (WDY-2829). pki-core renews only while the
-	// presented certificate is still valid, so this is the last point at which
-	// the cheap path is still available. A nil return means "carry on" —
-	// including when no renew frontend is configured.
-	//
-	// The renewal gets its own bounded context rather than the caller's: this
-	// helper is on 13 call paths that do not share a context parameter, and the
-	// request already carries its own timeout.
-	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
-		reportStaleCertificate(rerr)
-	}
-	return auth, nil
+	return config.ResolveAuth(cfg, cloudGRPC, pick)
 }
 
 // reportStaleCertificate prints why the stored certificate could not be renewed

@@ -1,0 +1,21 @@
+syntax = "proto3";
+package wendyauth.v1;
+
+// Common envelope carried on every fabric message (contract §11.2).
+// Transport identity (workload_identity) names the SERVICE only; principal
+// authority — when present — rides in signed_artifact and is verified by the
+// handler, never derived from the transport.
+message Envelope {
+  string proto_version   = 1;   // base-protocol semver
+  string msg_type        = 2;   // discriminates payload for routing/audit
+  string tenant          = 3;   // pki_tenant_uuid / realm scope ("" = platform)
+  string correlation_id  = 4;   // end-to-end trace id (REQUIRED); feeds W5 audit
+  bytes  payload         = 5;   // the typed method message
+  SignedArtifact signed_artifact = 6;  // OPTIONAL end-to-end principal authority
+}
+
+// An independently-verifiable signed authority artifact (token / SET / grant).
+message SignedArtifact {
+  string kind  = 1;   // e.g. "set+jwt", "wendy-auth-token"
+  bytes  value = 2;   // the serialized signed object
+}

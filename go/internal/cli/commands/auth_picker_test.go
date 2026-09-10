@@ -26,7 +26,7 @@ func TestAuthPickerItems(t *testing.T) {
 	}}
 
 	// With org names resolved: Name shows the org name, Description shows the org ID.
-	withNames := map[int32]string{7: "Acme Corp", 1: "Dev Env"}
+	withNames := map[string]string{"prod:443::7": "Acme Corp", "local:50051::1": "Dev Env"}
 	items := authPickerItems(cfg, withNames)
 	if len(items) != 2 {
 		t.Fatalf("want 2 items, got %d", len(items))
@@ -48,7 +48,7 @@ func TestAuthPickerItems(t *testing.T) {
 	}
 
 	// Without org names: falls back to "org N".
-	noNames := map[int32]string{}
+	noNames := map[string]string{}
 	items2 := authPickerItems(cfg, noNames)
 	if items2[0].Name != "org 7" {
 		t.Errorf("item 0 fallback name = %q, want org 7", items2[0].Name)

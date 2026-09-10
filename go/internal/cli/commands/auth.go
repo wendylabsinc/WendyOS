@@ -893,7 +893,7 @@ func matchAuthSelector(cfg *config.Config, selector string) (*config.AuthConfig,
 	if orgID, err := strconv.Atoi(selector); err == nil {
 		for i := range cfg.Auth {
 			for _, c := range cfg.Auth[i].Certificates {
-				if c.OrganizationID == orgID {
+				if c.OrganizationID == orgID && c.TenantUUID() == "" {
 					matches = append(matches, &cfg.Auth[i])
 					break
 				}
@@ -903,7 +903,7 @@ func matchAuthSelector(cfg *config.Config, selector string) (*config.AuthConfig,
 		q := strings.ToLower(selector)
 		for i := range cfg.Auth {
 			if strings.Contains(strings.ToLower(cfg.Auth[i].CloudGRPC), q) ||
-				strings.Contains(strings.ToLower(cfg.Auth[i].CloudDashboard), q) {
+				strings.Contains(strings.ToLower(cfg.Auth[i].CloudDashboard), q) || (len(cfg.Auth[i].Certificates) > 0 && strings.EqualFold(cfg.Auth[i].Certificates[0].TenantUUID(), selector)) {
 				matches = append(matches, &cfg.Auth[i])
 			}
 		}
@@ -997,6 +997,10 @@ func newAuthUseCmd() *cobra.Command {
 			// first — silently overriding the org the user just selected.
 			cfg.DefaultCloudGRPC = chosen.CloudGRPC
 			cfg.DefaultOrgID = int32(chosen.Certificates[0].OrganizationID)
+			cfg.DefaultTenantUUID = chosen.Certificates[0].TenantUUID()
+			if cfg.DefaultTenantUUID != "" {
+				cfg.DefaultOrgID = 0
+			}
 			if err := config.Save(cfg); err != nil {
 				return fmt.Errorf("saving config: %w", err)
 			}
@@ -1019,6 +1023,7 @@ func newAuthDefaultCmd() *cobra.Command {
 			if clear {
 				cfg.DefaultCloudGRPC = ""
 				cfg.DefaultOrgID = 0
+				cfg.DefaultTenantUUID = ""
 				if err := config.Save(cfg); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
@@ -1044,6 +1049,7 @@ func newAuthDefaultCmd() *cobra.Command {
 				// Only a stale org default remains (its session is gone).
 				fmt.Println(tui.WarningMessage(fmt.Sprintf("Default session for org %d no longer exists; clearing it.", cfg.DefaultOrgID)))
 				cfg.DefaultOrgID = 0
+				cfg.DefaultTenantUUID = ""
 				if err := config.Save(cfg); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
@@ -1054,6 +1060,7 @@ func newAuthDefaultCmd() *cobra.Command {
 				fmt.Println(tui.WarningMessage(fmt.Sprintf("Default session %s no longer exists; clearing it.", cfg.DefaultCloudGRPC)))
 				cfg.DefaultCloudGRPC = ""
 				cfg.DefaultOrgID = 0
+				cfg.DefaultTenantUUID = ""
 				if err := config.Save(cfg); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}

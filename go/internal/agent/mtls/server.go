@@ -31,21 +31,13 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
 
-	// Only include the leaf cert in the TLS certificate — not the chain.
-	// Go's TLS library calls x509.ParseCertificate on every cert sent in the
-	// handshake, and ML-DSA chain certs (from pki-core) cause parse failures
-	// on the receiving client. The chain is used below only for the CA pool.
-	leafPEM, err := certs.LeafCertificatePEM(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
-	}
-	cert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	cert, err := certs.TLSKeyPair(certPEM, chainPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading X509 key pair: %w", err)
 	}
 
 	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM([]byte(chainPEM))
+	certs.AppendChainToPool(caPool, chainPEM)
 	caCerts, err := parseCertsFromPEM([]byte(chainPEM))
 	if err != nil {
 		return nil, fmt.Errorf("parsing chain PEM: %w", err)

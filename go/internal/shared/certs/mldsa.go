@@ -253,7 +253,7 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		return nil, fmt.Errorf("chain PEM is required to verify device server certificate")
 	}
 	caPool := x509.NewCertPool()
-	caPool.AppendCertsFromPEM([]byte(opts.ChainPEM))
+	AppendChainToPool(caPool, opts.ChainPEM)
 	caCerts, err := ParseCertsFromPEM([]byte(opts.ChainPEM))
 	if err != nil {
 		return nil, fmt.Errorf("parsing chain PEM: %w", err)
@@ -299,7 +299,13 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 				return stdErr
 			}
 			if mldsaErr := verifyMLDSAServerCert(leaf, caCerts); mldsaErr != nil {
-				return mldsaErr
+				if len(cs.PeerCertificates) < 2 {
+					return mldsaErr
+				}
+				now := time.Now()
+				if err := VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now); err != nil {
+					return err
+				}
 			}
 		}
 

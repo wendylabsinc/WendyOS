@@ -41,6 +41,12 @@ func TestACMEProvisioningPersistsIdentityWithoutCredentials(t *testing.T) {
 		if err := os.WriteFile(path, []byte("account-key"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.MkdirAll(path+".d", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path+".d", "scoped.pem"), []byte("scoped-key"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		return "leaf", "chain", nil
 	})
 	called := false
@@ -83,6 +89,9 @@ func TestACMEProvisioningPersistsIdentityWithoutCredentials(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "acme-account-key.pem")); !os.IsNotExist(err) {
 		t.Fatal("unprovision retained the ACME account key")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "acme-account-key.pem.d")); !os.IsNotExist(err) {
+		t.Fatal("unprovision retained scoped ACME account keys")
 	}
 }
 

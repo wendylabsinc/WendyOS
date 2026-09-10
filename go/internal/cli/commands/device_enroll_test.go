@@ -12,21 +12,53 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 type enrollmentTokenServer struct {
 	cloudpb.UnimplementedCertificateServiceServer
 	request *cloudpb.CreateAssetEnrollmentTokenRequest
 	headers metadata.MD
+	err     error
 }
 
 func (s *enrollmentTokenServer) CreateAssetEnrollmentToken(ctx context.Context, req *cloudpb.CreateAssetEnrollmentTokenRequest) (*cloudpb.CreateAssetEnrollmentTokenResponse, error) {
 	s.request = req
 	s.headers, _ = metadata.FromIncomingContext(ctx)
+	if s.err != nil {
+		return nil, s.err
+	}
 	return &cloudpb.CreateAssetEnrollmentTokenResponse{
 		OrganizationId: 42, AssetId: 99, EnrollmentToken: "enrollment-token",
 	}, nil
+}
+
+func TestRunEnrollDeviceUnsupportedLegacyAPIExplainsOIDCLogin(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	cloudpb.RegisterCertificateServiceServer(server, &enrollmentTokenServer{
+		err: status.Error(codes.Unimplemented, "Requested RPC isn't implemented by this server."),
+	})
+	go server.Serve(lis) //nolint:errcheck
+	t.Cleanup(server.Stop)
+	auth := fakeAuth(t)
+	auth.CloudGRPC = lis.Addr().String()
+	provisioning := &enrollmentProvisioningClient{}
+	conn := &grpcclient.AgentConnection{ProvisioningService: provisioning}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = runEnrollDevice(ctx, conn, auth, "sim", 0)
+	if status.Code(err) != codes.Unimplemented || !strings.Contains(err.Error(), "wendy auth login --email <your-email>") {
+		t.Fatalf("expected actionable legacy API error, got %v", err)
+	}
+	if provisioning.request != nil {
+		t.Fatal("must not provision after Cloud rejects enrollment")
+	}
 }
 
 type enrollmentProvisioningClient struct {

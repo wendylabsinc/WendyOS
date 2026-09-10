@@ -74,6 +74,9 @@ func cloudAuthForOrg(cfg *config.Config, orgID int32) *config.AuthConfig {
 // org switches immediately. Selecting an unauthenticated org starts login and
 // requires that the chosen org's certificate be present afterwards.
 func switchCloudOrganization(ctx context.Context, cfg *config.Config) (*config.AuthConfig, *config.Config, error) {
+	if auth := devicePickerInitialAuth(cfg); auth != nil && len(auth.Certificates) > 0 && auth.Certificates[0].TenantUUID() != "" {
+		return switchCloudOrganizationV2(ctx, cfg, auth)
+	}
 	accessible, err := accessibleCloudOrganizations(ctx, cfg)
 	if err != nil {
 		return nil, cfg, err

@@ -11,6 +11,7 @@ import (
 	circlSign "github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/timefmt"
 	"go.uber.org/zap"
 )
@@ -215,9 +216,11 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 
 		// Build an intermediates pool from the rest of the chain presented by the client.
 		intermediates := x509.NewCertPool()
+		var peerCAs []*x509.Certificate
 		for _, rawCert := range rawCerts[1:] {
 			if intermediate, parseErr := x509.ParseCertificate(rawCert); parseErr == nil {
 				intermediates.AddCert(intermediate)
+				peerCAs = append(peerCAs, intermediate)
 			}
 		}
 
@@ -245,6 +248,9 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 				return stdErr
 			}
 			mldsaErr := verifyMLDSAClientCert(leaf, caCerts, realNow, effectiveNow)
+			if mldsaErr != nil && len(peerCAs) > 0 {
+				mldsaErr = certs.VerifyPeerCertificateChain(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
+			}
 			if mldsaErr != nil {
 				logCertRejection(logger, leaf, mldsaErr, realNow, effectiveNow)
 				return mldsaErr

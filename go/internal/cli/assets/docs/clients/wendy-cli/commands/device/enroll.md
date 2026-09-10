@@ -14,7 +14,9 @@ wendy device enroll [--name <name>] [--cloud-grpc <endpoint>] [flags]
 
 ## Description
 
-`wendy device enroll` creates an enrollment token using your stored auth session, then has the connected agent fetch its certificate. Run [`wendy cloud login`](../cloud/login.md) first.
+`wendy device enroll` uses your stored auth session to enroll the connected agent and obtain its certificate. Sign in first with `wendy auth login --email <your-email>` for OIDC enrollment.
+
+Before connecting to the device, enrollment checks your certificate and attempts renewal if it is nearing expiry. If it has already expired, an interactive OIDC session offers to sign in again and then continue enrollment using the same realm and Cloud endpoints. Legacy sessions, non-interactive runs, and `--json` runs stop with login instructions. You do not need to log out first.
 
 › **Certificate identity:** The CSR submitted during provisioning always
 › includes the device's authoritative Wendy identity as a URI Subject

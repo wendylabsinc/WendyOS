@@ -156,6 +156,15 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
+			auth, err := resolveAuthEntry(cloudGRPC)
+			if err != nil {
+				return err
+			}
+			auth, err = prepareEnrollmentAuth(ctx, auth)
+			if err != nil {
+				return err
+			}
+
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
 			if err != nil {
 				return err
@@ -163,11 +172,6 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 			defer conn.Close()
 
 			promptWifiIfNeeded(ctx, conn)
-
-			auth, err := pickAuthEntry(cloudGRPC)
-			if err != nil {
-				return err
-			}
 
 			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
 		},

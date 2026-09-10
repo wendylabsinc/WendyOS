@@ -2,19 +2,19 @@ package services
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -105,8 +105,13 @@ func (f *CloudFlusher) Run(ctx context.Context) {
 			return
 		}
 
+		endpoint, err := telemetryCloudEndpoint(cloudHost, f.provisioningSvc.ProvisioningPrincipal(), os.Getenv("WENDY_TELEMETRY_URL"), os.Getenv("WENDY_DEVICE_CLOUD_URL"))
+		if err != nil {
+			f.logger.Warn("cloud flusher: invalid endpoint", zap.Error(err))
+			return
+		}
 		certPEM, chainPEM, keyData := f.provisioningSvc.ProvisioningCerts()
-		conn, err := f.dial(ctx, cloudHost, certPEM, chainPEM, keyData)
+		conn, err := f.dial(ctx, endpoint, certPEM, chainPEM, keyData)
 		if err != nil {
 			f.logger.Warn("cloud flusher: dial failed", zap.Error(err))
 			f.sleep(ctx, attempt)
@@ -122,7 +127,7 @@ func (f *CloudFlusher) Run(ctx context.Context) {
 		conn.Close()
 
 		if err != nil {
-			f.logger.Warn("cloud flusher: flush failed", zap.Error(err))
+			f.logger.Warn("cloud flusher: flush failed", zap.String("endpoint", endpoint), zap.Error(err))
 			f.sleep(ctx, attempt)
 			if attempt < 6 { // 2^6 = 64s > 60s cap; further increments have no effect
 				attempt++
@@ -153,41 +158,8 @@ func (f *CloudFlusher) sleep(ctx context.Context, attempt int) {
 // dial establishes a TLS 1.3 gRPC connection. keyData is zeroed on return as
 // best-effort protection; crypto/tls may retain additional internal copies.
 func (f *CloudFlusher) dial(ctx context.Context, host, certPEM, chainPEM string, keyData []byte) (*grpc.ClientConn, error) {
-	host = normalizeCloudHost(host)
-	defer func() {
-		for i := range keyData {
-			keyData[i] = 0
-		}
-	}()
-	// Build client cert PEM bundle: leaf cert + intermediate chain so that
-	// servers can verify the full chain without trusting the leaf directly.
-	certBundle := []byte(certPEM)
-	if chainPEM != "" {
-		certBundle = append(certBundle, '\n')
-		certBundle = append(certBundle, []byte(chainPEM)...)
-	}
-	cert, err := tls.X509KeyPair(certBundle, keyData)
-	if err != nil {
-		return nil, fmt.Errorf("cloud flusher: parse key pair: %w", err)
-	}
-
-	caPool, err := x509.SystemCertPool()
-	if err != nil {
-		caPool = x509.NewCertPool()
-	}
-	certs.AppendChainToPool(caPool, chainPEM)
-
-	tlsCfg := &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{cert},
-		RootCAs:      caPool,
-	}
-
-	conn, err := grpc.NewClient(host, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
+	defer clear(keyData)
+	return cloudrelay.DialCloud(normalizeCloudHost(host), certPEM, chainPEM, keyData)
 }
 
 // runOnce performs a single flush pass over all three OTLP signals. For each
@@ -203,24 +175,30 @@ func (f *CloudFlusher) runOnce(ctx context.Context, logs collogspb.LogsServiceCl
 	if err := f.flushSignal(SignalLogs, func(msg proto.Message) error {
 		req := msg.(*collogspb.ExportLogsServiceRequest)
 		sanitizeLogs(req)
-		_, err := logs.Export(ctx, req)
-		return err
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_, err := logs.Export(callCtx, req)
+		return telemetryExportError(err, "logs")
 	}); err != nil {
 		return err
 	}
 	if err := f.flushSignal(SignalMetrics, func(msg proto.Message) error {
 		req := msg.(*colmetricspb.ExportMetricsServiceRequest)
 		sanitizeMetrics(req)
-		_, err := metrics.Export(ctx, req)
-		return err
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_, err := metrics.Export(callCtx, req)
+		return telemetryExportError(err, "metrics")
 	}); err != nil {
 		return err
 	}
 	return f.flushSignal(SignalTraces, func(msg proto.Message) error {
 		req := msg.(*coltracepb.ExportTraceServiceRequest)
 		sanitizeTraces(req)
-		_, err := traces.Export(ctx, req)
-		return err
+		callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_, err := traces.Export(callCtx, req)
+		return telemetryExportError(err, "traces")
 	})
 }
 
@@ -249,4 +227,20 @@ func (f *CloudFlusher) flushSignal(sig SignalType, export func(proto.Message) er
 		return fmt.Errorf("cloud flusher: save %s cursor: %w", sig, err)
 	}
 	return nil
+}
+
+func telemetryCloudEndpoint(cloudHost, principal, override, deviceOverride string) (string, error) {
+	if override != "" {
+		return cloudrelay.DeviceEndpoint(cloudHost, override)
+	}
+	if principal != "" {
+		return cloudrelay.DeviceEndpoint(cloudHost, deviceOverride)
+	}
+	return normalizeCloudHost(cloudHost), nil
+}
+func telemetryExportError(err error, signal string) error {
+	if status.Code(err) == codes.Unimplemented {
+		return fmt.Errorf("Cloud endpoint does not expose the OpenTelemetry %s Export service; verify the Cloud collector deployment or WENDY_TELEMETRY_URL: %w", signal, err)
+	}
+	return err
 }

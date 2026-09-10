@@ -399,16 +399,24 @@ func TestNewClientTLSConfigExpectingPeerPinsIdentity(t *testing.T) {
 	})
 }
 
-func TestNewTLSConfigServesOnlyLeafCertificate(t *testing.T) {
+func TestNewTLSConfigServesNormalizedIssuerChain(t *testing.T) {
 	leafPEM, keyPEM := testLeafCertificate(t, "leaf")
 	chainPEM, _ := testCACertificate(t, "chain")
+	block, _ := pem.Decode([]byte(chainPEM))
+	block.Bytes = append(block.Bytes, 0, 0)
+	chainPEM = string(pem.EncodeToMemory(block))
 
 	tlsConfig, err := NewTLSConfig(leafPEM+"\n"+chainPEM, chainPEM, keyPEM, nil, time.Time{})
 	if err != nil {
 		t.Fatalf("NewTLSConfig() error = %v", err)
 	}
 
-	if got := len(tlsConfig.Certificates[0].Certificate); got != 1 {
-		t.Fatalf("served certificate chain length = %d; want 1", got)
+	if got := len(tlsConfig.Certificates[0].Certificate); got != 2 {
+		t.Fatalf("served certificate chain length = %d; want leaf and issuer", got)
+	}
+	for _, der := range tlsConfig.Certificates[0].Certificate {
+		if _, err := x509.ParseCertificate(der); err != nil {
+			t.Fatalf("TLS peer cannot parse transmitted certificate: %v", err)
+		}
 	}
 }

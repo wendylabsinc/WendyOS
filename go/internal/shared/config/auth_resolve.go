@@ -24,14 +24,25 @@ func (c *Config) DefaultAuth() (*AuthConfig, bool) {
 	if c == nil || c.DefaultCloudGRPC == "" {
 		return nil, false
 	}
+	if c.DefaultTenantUUID != "" {
+		for i := range c.Auth {
+			a := &c.Auth[i]
+			if a.CloudGRPC == c.DefaultCloudGRPC && len(a.Certificates) > 0 && a.Certificates[0].TenantUUID() == c.DefaultTenantUUID {
+				return a, true
+			}
+		}
+	}
 	var preferred *AuthConfig
-	selectedOrg := 0
+	selectedOrg := ""
 	for i := range c.Auth {
 		if c.Auth[i].CloudGRPC == c.DefaultCloudGRPC {
-			if preferred == nil {
-				selectedOrg = authEntryOrgID(c.Auth[i])
+			if selectedOrg == "0" && len(c.Auth[i].Certificates) > 0 && c.Auth[i].Certificates[0].TenantUUID() != "" {
+				preferred = nil
 			}
-			if authEntryOrgID(c.Auth[i]) != selectedOrg {
+			if preferred == nil {
+				selectedOrg = c.Auth[i].OrganizationKey()
+			}
+			if c.Auth[i].OrganizationKey() != selectedOrg {
 				continue
 			}
 			preferred = preferAuth(preferred, &c.Auth[i])
@@ -65,6 +76,11 @@ func ResolveAuth(cfg *Config, cloudGRPC string, pick SessionPicker) (*AuthConfig
 	if cfg == nil || len(cfg.Auth) == 0 {
 		return nil, ErrNotLoggedIn
 	}
+	if cfg.DefaultTenantUUID != "" && (cloudGRPC == "" || cloudGRPC == cfg.DefaultCloudGRPC) {
+		if auth, ok := cfg.DefaultAuth(); ok && len(auth.Certificates) > 0 && auth.Certificates[0].TenantUUID() == cfg.DefaultTenantUUID {
+			return authWithCerts(auth)
+		}
+	}
 	if cloudGRPC != "" {
 		// Several orgs can share one endpoint (multiple orgs on the production
 		// cloud). The flag alone cannot name an org, so among the endpoint's
@@ -91,9 +107,17 @@ func ResolveAuth(cfg *Config, cloudGRPC string, pick SessionPicker) (*AuthConfig
 			}
 		}
 		var preferred *AuthConfig
-		selectedOrg := authEntryOrgID(*matches[0])
+		selectedOrg := matches[0].OrganizationKey()
+		if selectedOrg == "0" {
+			for _, m := range matches {
+				if len(m.Certificates) > 0 && m.Certificates[0].TenantUUID() != "" {
+					selectedOrg = m.OrganizationKey()
+					break
+				}
+			}
+		}
 		for _, match := range matches {
-			if authEntryOrgID(*match) != selectedOrg {
+			if match.OrganizationKey() != selectedOrg {
 				continue
 			}
 			preferred = preferAuth(preferred, match)

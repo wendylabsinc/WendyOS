@@ -13,9 +13,11 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
@@ -82,7 +84,13 @@ func (c *TunnelBrokerClient) Run(ctx context.Context) {
 	}
 }
 
-func (c *TunnelBrokerClient) runOnce(ctx context.Context) error {
+func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
+	defer func() {
+		if status.Code(retErr) == codes.Unimplemented {
+			retErr = fmt.Errorf("cloud endpoint %s does not implement %s; agent and cloud presence protocols are incompatible: %w",
+				c.url, cloudpb.TunnelBrokerService_RegisterPresence_FullMethodName, retErr)
+		}
+	}()
 	dialOpts, devMD, err := c.buildDialOpts()
 	if err != nil {
 		return err
@@ -105,8 +113,10 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) error {
 		return err
 	}
 
-	c.logger.Info("registered presence with broker",
-		zap.String("url", c.url), zap.Int32("asset_id", c.assetID))
+	// Opening a gRPC stream does not prove the server accepted the RPC. The
+	// first Recv may still return Unimplemented or an authentication refusal.
+	c.logger.Debug("opened broker presence stream; awaiting server response",
+		zap.String("url", c.url))
 
 	hbTicker := time.NewTicker(brokerHeartbeatInterval)
 	defer hbTicker.Stop()

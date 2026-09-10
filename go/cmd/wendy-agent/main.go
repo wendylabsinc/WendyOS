@@ -46,6 +46,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbgadget"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -501,6 +502,23 @@ func main() {
 			defer wg.Done()
 			cloudHost, orgID, assetID, enrolled := provisioningSvc.ProvisioningInfo()
 			if !enrolled {
+				return
+			}
+			if principal := provisioningSvc.ProvisioningPrincipal(); principal != "" {
+				endpoint, err := cloudrelay.DeviceEndpoint(cloudHost, os.Getenv("WENDY_DEVICE_CLOUD_URL"))
+				if err != nil {
+					logger.Error("invalid device Cloud endpoint", zap.Error(err))
+					return
+				}
+				issuer, err := cloudrelay.Issuer(cloudHost, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
+				if err != nil {
+					logger.Error("invalid Cloud grant issuer", zap.Error(err))
+					return
+				}
+				client := &cloudrelay.Agent{Endpoint: endpoint, Verifier: &cloudrelay.Verifier{Issuer: issuer},
+					StateDir: filepath.Join(configPath, "cloud-relay"), Credentials: provisioningSvc.ProvisioningCerts,
+					Logger: logger, MTLSPort: mtlsPortNum}
+				client.Run(ctx)
 				return
 			}
 			brokerURL := os.Getenv("WENDY_BROKER_URL")
