@@ -86,9 +86,10 @@ type GetDeviceInfoResponse struct {
 	// agent cannot read it.
 	CpuCount uint32 `protobuf:"varint,17,opt,name=cpu_count,json=cpuCount,proto3" json:"cpu_count,omitempty"`
 	// Filesystem containing /var/lib/containerd. Absent when inspection fails.
-	ContainerStorage *DiskPartition `protobuf:"bytes,18,opt,name=container_storage,json=containerStorage,proto3,oneof" json:"container_storage,omitempty"`
+	// 18-19 are reserved for the NPU fields landing alongside this change.
+	ContainerStorage *DiskPartition `protobuf:"bytes,20,opt,name=container_storage,json=containerStorage,proto3,oneof" json:"container_storage,omitempty"`
 	// Empty means no supported compute backend detected; absent means older agent.
-	GpuCapabilities *GpuCapabilities `protobuf:"bytes,19,opt,name=gpu_capabilities,json=gpuCapabilities,proto3,oneof" json:"gpu_capabilities,omitempty"`
+	GpuCapabilities *GpuCapabilities `protobuf:"bytes,21,opt,name=gpu_capabilities,json=gpuCapabilities,proto3,oneof" json:"gpu_capabilities,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -427,8 +428,10 @@ func (x *ListHardwareCapabilitiesResponse) GetCapabilities() []*ListHardwareCapa
 }
 
 type GpuCapabilities struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ComputeBackends []string               `protobuf:"bytes,1,rep,name=compute_backends,json=computeBackends,proto3" json:"compute_backends,omitempty"` // cuda, rocm, metal
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Host compute backends an app can use: cuda, rocm, metal, or qnn (the
+	// Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing).
+	ComputeBackends []string `protobuf:"bytes,1,rep,name=compute_backends,json=computeBackends,proto3" json:"compute_backends,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -571,9 +574,9 @@ const file_wendy_agent_services_v2_device_info_service_proto_rawDesc = "" +
 	"\bgpu_arch\x18\x0f \x01(\tH\tR\agpuArch\x88\x01\x01\x12&\n" +
 	"\x0fmem_total_bytes\x18\x10 \x01(\x03R\rmemTotalBytes\x12\x1b\n" +
 	"\tcpu_count\x18\x11 \x01(\rR\bcpuCount\x12X\n" +
-	"\x11container_storage\x18\x12 \x01(\v2&.wendy.agent.services.v2.DiskPartitionH\n" +
+	"\x11container_storage\x18\x14 \x01(\v2&.wendy.agent.services.v2.DiskPartitionH\n" +
 	"R\x10containerStorage\x88\x01\x01\x12X\n" +
-	"\x10gpu_capabilities\x18\x13 \x01(\v2(.wendy.agent.services.v2.GpuCapabilitiesH\vR\x0fgpuCapabilities\x88\x01\x01B\r\n" +
+	"\x10gpu_capabilities\x18\x15 \x01(\v2(.wendy.agent.services.v2.GpuCapabilitiesH\vR\x0fgpuCapabilities\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +

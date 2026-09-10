@@ -742,10 +742,11 @@ type GetAgentVersionResponse struct {
 	// device info` shows no battery line for either.
 	Battery *BatteryStats `protobuf:"bytes,22,opt,name=battery,proto3,oneof" json:"battery,omitempty"`
 	// Filesystem containing /var/lib/containerd. Absent when inspection fails.
-	ContainerStorage *DiskPartition `protobuf:"bytes,23,opt,name=container_storage,json=containerStorage,proto3,oneof" json:"container_storage,omitempty"`
+	// 23-24 are reserved for the NPU fields landing alongside this change.
+	ContainerStorage *DiskPartition `protobuf:"bytes,25,opt,name=container_storage,json=containerStorage,proto3,oneof" json:"container_storage,omitempty"`
 	// Present with an empty list when no supported compute backend was detected.
 	// Absent on older agents. Hardware presence remains has_gpu.
-	GpuCapabilities *GpuCapabilities `protobuf:"bytes,24,opt,name=gpu_capabilities,json=gpuCapabilities,proto3,oneof" json:"gpu_capabilities,omitempty"`
+	GpuCapabilities *GpuCapabilities `protobuf:"bytes,26,opt,name=gpu_capabilities,json=gpuCapabilities,proto3,oneof" json:"gpu_capabilities,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -3089,8 +3090,10 @@ func (x *SetHostnameResponse) GetHostname() string {
 }
 
 type GpuCapabilities struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ComputeBackends []string               `protobuf:"bytes,1,rep,name=compute_backends,json=computeBackends,proto3" json:"compute_backends,omitempty"` // cuda, rocm, metal
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Host compute backends an app can use: cuda, rocm, metal, or qnn (the
+	// Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing).
+	ComputeBackends []string `protobuf:"bytes,1,rep,name=compute_backends,json=computeBackends,proto3" json:"compute_backends,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4432,8 +4435,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\rbinary_sha256\x18\x14 \x01(\tR\fbinarySha256\x12\x1a\n" +
 	"\bhostname\x18\x15 \x01(\tR\bhostname\x12,\n" +
 	"\abattery\x18\x16 \x01(\v2\r.BatteryStatsH\vR\abattery\x88\x01\x01\x12X\n" +
-	"\x11container_storage\x18\x17 \x01(\v2&.wendy.agent.services.v1.DiskPartitionH\fR\x10containerStorage\x88\x01\x01\x12X\n" +
-	"\x10gpu_capabilities\x18\x18 \x01(\v2(.wendy.agent.services.v1.GpuCapabilitiesH\rR\x0fgpuCapabilities\x88\x01\x01B\r\n" +
+	"\x11container_storage\x18\x19 \x01(\v2&.wendy.agent.services.v1.DiskPartitionH\fR\x10containerStorage\x88\x01\x01\x12X\n" +
+	"\x10gpu_capabilities\x18\x1a \x01(\v2(.wendy.agent.services.v1.GpuCapabilitiesH\rR\x0fgpuCapabilities\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +

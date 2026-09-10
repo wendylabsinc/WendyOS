@@ -659,6 +659,7 @@ public nonisolated struct Wendy_Agent_Services_V1_GetAgentVersionResponse: @unch
   public mutating func clearBattery() {_uniqueStorage()._battery = nil}
 
   /// Filesystem containing /var/lib/containerd. Absent when inspection fails.
+  /// 23-24 are reserved for the NPU fields landing alongside this change.
   public var containerStorage: Wendy_Agent_Services_V1_DiskPartition {
     get {_storage._containerStorage ?? Wendy_Agent_Services_V1_DiskPartition()}
     set {_uniqueStorage()._containerStorage = newValue}
@@ -1840,7 +1841,8 @@ public nonisolated struct Wendy_Agent_Services_V1_GpuCapabilities: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// cuda, rocm, metal
+  /// Host compute backends an app can use: cuda, rocm, metal, or qnn (the
+  /// Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing).
   public var computeBackends: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -2579,7 +2581,7 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionRequest: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetAgentVersionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{3}container_storage\0\u{3}gpu_capabilities\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}storage_medium\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}network_interfaces\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}binary_sha256\0\u{1}hostname\0\u{1}battery\0\u{4}\u{3}container_storage\0\u{3}gpu_capabilities\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -2680,8 +2682,8 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         case 20: try { try decoder.decodeSingularStringField(value: &_storage._binarySha256) }()
         case 21: try { try decoder.decodeSingularStringField(value: &_storage._hostname) }()
         case 22: try { try decoder.decodeSingularMessageField(value: &_storage._battery) }()
-        case 23: try { try decoder.decodeSingularMessageField(value: &_storage._containerStorage) }()
-        case 24: try { try decoder.decodeSingularMessageField(value: &_storage._gpuCapabilities) }()
+        case 25: try { try decoder.decodeSingularMessageField(value: &_storage._containerStorage) }()
+        case 26: try { try decoder.decodeSingularMessageField(value: &_storage._gpuCapabilities) }()
         default: break
         }
       }
@@ -2761,10 +2763,10 @@ nonisolated extension Wendy_Agent_Services_V1_GetAgentVersionResponse: SwiftProt
         try visitor.visitSingularMessageField(value: v, fieldNumber: 22)
       } }()
       try { if let v = _storage._containerStorage {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 23)
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 25)
       } }()
       try { if let v = _storage._gpuCapabilities {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 24)
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 26)
       } }()
     }
     try unknownFields.traverse(visitor: &visitor)

@@ -170,6 +170,7 @@ public nonisolated struct Wendy_Agent_Services_V2_GetDeviceInfoResponse: @unchec
   }
 
   /// Filesystem containing /var/lib/containerd. Absent when inspection fails.
+  /// 18-19 are reserved for the NPU fields landing alongside this change.
   public var containerStorage: Wendy_Agent_Services_V2_DiskPartition {
     get {_storage._containerStorage ?? Wendy_Agent_Services_V2_DiskPartition()}
     set {_uniqueStorage()._containerStorage = newValue}
@@ -278,7 +279,8 @@ public nonisolated struct Wendy_Agent_Services_V2_GpuCapabilities: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  /// cuda, rocm, metal
+  /// Host compute backends an app can use: cuda, rocm, metal, or qnn (the
+  /// Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing).
   public var computeBackends: [String] = []
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
@@ -311,7 +313,7 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoRequest: SwiftProtobu
 
 nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".GetDeviceInfoResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{3}container_storage\0\u{3}gpu_capabilities\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}version\0\u{3}os_version\0\u{1}os\0\u{3}cpu_architecture\0\u{3}public_key\0\u{1}featureset\0\u{3}device_type\0\u{3}has_gpu\0\u{3}gpu_vendor\0\u{3}jetpack_version\0\u{3}cuda_version\0\u{3}disk_used_bytes\0\u{3}disk_total_bytes\0\u{1}partitions\0\u{3}gpu_arch\0\u{3}mem_total_bytes\0\u{3}cpu_count\0\u{4}\u{3}container_storage\0\u{3}gpu_capabilities\0")
 
   fileprivate class _StorageClass {
     var _version: String = String()
@@ -397,8 +399,8 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtob
         case 15: try { try decoder.decodeSingularStringField(value: &_storage._gpuArch) }()
         case 16: try { try decoder.decodeSingularInt64Field(value: &_storage._memTotalBytes) }()
         case 17: try { try decoder.decodeSingularUInt32Field(value: &_storage._cpuCount) }()
-        case 18: try { try decoder.decodeSingularMessageField(value: &_storage._containerStorage) }()
-        case 19: try { try decoder.decodeSingularMessageField(value: &_storage._gpuCapabilities) }()
+        case 20: try { try decoder.decodeSingularMessageField(value: &_storage._containerStorage) }()
+        case 21: try { try decoder.decodeSingularMessageField(value: &_storage._gpuCapabilities) }()
         default: break
         }
       }
@@ -463,10 +465,10 @@ nonisolated extension Wendy_Agent_Services_V2_GetDeviceInfoResponse: SwiftProtob
         try visitor.visitSingularUInt32Field(value: _storage._cpuCount, fieldNumber: 17)
       }
       try { if let v = _storage._containerStorage {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 18)
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 20)
       } }()
       try { if let v = _storage._gpuCapabilities {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 19)
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 21)
       } }()
     }
     try unknownFields.traverse(visitor: &visitor)

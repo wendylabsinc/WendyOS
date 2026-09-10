@@ -37,9 +37,10 @@ message GetDeviceInfoResponse {
     // agent cannot read it.
     uint32 cpu_count = 17;
     // Filesystem containing /var/lib/containerd. Absent when inspection fails.
-    optional DiskPartition container_storage = 18;
+    // 18-19 are reserved for the NPU fields landing alongside this change.
+    optional DiskPartition container_storage = 20;
     // Empty means no supported compute backend detected; absent means older agent.
-    optional GpuCapabilities gpu_capabilities = 19;
+    optional GpuCapabilities gpu_capabilities = 21;
 }
 
 // Usage information for a single mounted filesystem.
@@ -72,5 +73,7 @@ message ListHardwareCapabilitiesResponse {
 }
 
 message GpuCapabilities {
-    repeated string compute_backends = 1; // cuda, rocm, metal
+    // Host compute backends an app can use: cuda, rocm, metal, or qnn (the
+    // Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing).
+    repeated string compute_backends = 1;
 }
