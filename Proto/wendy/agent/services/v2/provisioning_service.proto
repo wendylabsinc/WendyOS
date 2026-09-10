@@ -9,6 +9,26 @@ service WendyProvisioningService {
     // stored enrollment certificates and provisioning state, then restarts the
     // agent so it comes back up serving plaintext on the unprovisioned port.
     rpc Unprovision(UnprovisionRequest) returns (UnprovisionResponse);
+    // StagePKIEnrollment hands the agent a single-use pki-core enrollment
+    // token and redeems it immediately, producing the device's SECOND
+    // identity: a certificate whose only Uniform Resource Identifier Subject
+    // Alternative Name is spiffe://wendy.sh/tenant/<tenant>/device/<name>,
+    // presented to the Wendy Data Platform ingest endpoint and to nothing
+    // else. StartProvisioning above is the exact analogue for the Wendy Cloud
+    // identity, and this method is deliberately its neighbour: both are the
+    // remote face of a staged credential file the agent otherwise reads at
+    // startup, and both are one-shot.
+    //
+    // It exists because a WendyOS device has no shell. The staged file
+    // (/etc/wendy-agent/pki-enrollment.json) can be written by an installer
+    // running on the device, and by nothing else; every device already in the
+    // field can only be reached over this surface.
+    //
+    // The response never echoes the token. It reports the issued SPIFFE
+    // identity on success, and otherwise says why: DEFERRED when the device is
+    // not enrolled with Wendy Cloud yet (the token is kept and retried),
+    // REFUSED when pki-core rejected the credential (a retry cannot help).
+    rpc StagePKIEnrollment(StagePKIEnrollmentRequest) returns (StagePKIEnrollmentResponse);
 }
 
 message IsProvisionedRequest {}
@@ -40,3 +60,60 @@ message StartProvisioningResponse {}
 message UnprovisionRequest {}
 
 message UnprovisionResponse {}
+
+message StagePKIEnrollmentRequest {
+    // tenant_uuid is the canonical lowercase pki-core tenant. It may be empty
+    // when the token is a Wendy JavaScript Object Notation Web Token carrying
+    // a tenant_uuid claim, which the agent prefers over this field.
+    string tenant_uuid = 1;
+    // token is the single-use pki-core enrollment token. Required.
+    string token = 2;
+    // device_id must equal the device_id the token was minted with, byte for
+    // byte; the SPIFFE device name is fixed at minting and nothing the device
+    // says can change it. Empty means "use the certificate signing request
+    // Common Name", which is sh/wendy/<org>/<asset>.
+    string device_id = 3;
+    // csr_endpoint overrides the derived pki-core certificate signing request
+    // frontend URL, e.g. for a local pki-core.
+    string csr_endpoint = 4;
+    // environment is "dev" or "prod" and selects the derived frontend host
+    // when csr_endpoint is empty. An unrecognised value means production,
+    // because guessing "dev" is what sends a production device to a dev
+    // certificate authority.
+    string environment = 5;
+}
+
+message StagePKIEnrollmentResponse {
+    enum Status {
+        STATUS_UNSPECIFIED = 0;
+        // ENROLLED: a leaf was issued and stored; spiffe_uri names it.
+        STATUS_ENROLLED = 1;
+        // ALREADY_ENROLLED: the device already holds a pki-core identity, so
+        // the token was discarded unredeemed. Renewal keeps that identity
+        // alive; re-enrolling would discard the renewal lineage pki-core
+        // tracks against it.
+        STATUS_ALREADY_ENROLLED = 2;
+        // DEFERRED: the device is not enrolled with Wendy Cloud yet, so no
+        // certificate Common Name can be built. The token stays staged and is
+        // retried on the next agent start.
+        STATUS_DEFERRED = 3;
+        // REFUSED: pki-core rejected the credential, or returned an identity
+        // this device must not store. The token is spent; mint a fresh one.
+        STATUS_REFUSED = 4;
+        // FAILED: anything else - a malformed request, no tenant, a network
+        // error, a storage error.
+        STATUS_FAILED = 5;
+    }
+    Status status = 1;
+    // staged_path is where the credential file was written.
+    string staged_path = 2;
+    // spiffe_uri is the issued principal. Set on ENROLLED, and on
+    // ALREADY_ENROLLED when the existing leaf could be read.
+    string spiffe_uri = 3;
+    // device_name is the SPIFFE name pki-core stamped.
+    string device_name = 4;
+    // not_after is the leaf's expiry, Unix seconds. Zero when unknown.
+    int64 not_after_unix = 5;
+    // reason explains a non-ENROLLED status in words a person can act on.
+    string reason = 6;
+}

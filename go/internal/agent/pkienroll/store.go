@@ -203,3 +203,27 @@ func (s *Store) Save(result Result) error {
 	}
 	return nil
 }
+
+// SPIFFEURI returns the tenant SPIFFE Uniform Resource Identifier on the stored
+// leaf. It reads the certificate rather than the metadata file, because the
+// metadata records what was enrolled and the certificate records what the
+// device actually presents; after a renewal only the second is guaranteed
+// current. ErrNoIdentity when nothing is stored.
+func (s *Store) SPIFFEURI() (string, error) {
+	material, err := s.Load()
+	if err != nil {
+		return "", err
+	}
+	parsed, err := certs.ParseCertsFromPEM([]byte(material.LeafPEM))
+	if err != nil {
+		return "", fmt.Errorf("parsing stored pki identity leaf: %w", err)
+	}
+	if len(parsed) == 0 {
+		return "", ErrNoIdentity
+	}
+	uris := certs.TenantSPIFFEURIs(parsed[0])
+	if len(uris) == 0 {
+		return "", fmt.Errorf("the stored pki identity leaf carries no tenant SPIFFE URI")
+	}
+	return uris[0], nil
+}
