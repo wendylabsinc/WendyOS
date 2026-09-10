@@ -2602,3 +2602,97 @@ func TestApplyEntitlements_HTTPIsNoOp(t *testing.T) {
 		t.Errorf("http entitlement mutated the OCI spec; want no-op.\nbase: %+v\nspec: %+v", base, spec)
 	}
 }
+
+func TestApplySensors_MountsOnlyPrivateSensorSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "wendy-sensors-oci-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	listener, err := net.Listen("unix", filepath.Join(dir, "sensors.sock"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID:        "test",
+		Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementSensorRead}},
+	}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{SensorSocketDir: dir}); err != nil {
+		t.Fatalf("ApplyEntitlements: %v", err)
+	}
+	mount, ok := mountForDest(spec, "/run/wendy/sensors")
+	if !ok || mount.Source != dir || !slices.Contains(mount.Options, "ro") {
+		t.Fatalf("sensor mount = %+v, found=%v", mount, ok)
+	}
+	if !hasEnv(spec, "WENDY_SENSOR_SOCKET=/run/wendy/sensors/sensors.sock") {
+		t.Fatal("sensor-read entitlement did not inject WENDY_SENSOR_SOCKET")
+	}
+	if !hasGID(spec, appSystemAPIGroupGID) {
+		t.Fatal("sensor-read entitlement did not grant the private socket group")
+	}
+	// The whole point of the narrow grant: no admin socket, no data socket, and
+	// above all no raw device nodes. An app that reaches sensors through the
+	// harness must not also be handed /dev/videoN.
+	if hasMount(spec, "/run/wendy/agent") || hasEnv(spec, "WENDY_AGENT_SOCKET=") {
+		t.Error("sensor-read entitlement exposed the admin control socket")
+	}
+	if hasMount(spec, "/run/wendy/data") || hasEnv(spec, "WENDY_DATA_SOCKET=") {
+		t.Error("sensor-read entitlement exposed the data socket")
+	}
+	if len(spec.Linux.Devices) != 0 {
+		t.Errorf("sensor-read entitlement added device nodes: %+v", spec.Linux.Devices)
+	}
+	// The default spec's deny-all rule is expected; an ALLOW rule is not.
+	if spec.Linux.Resources != nil {
+		for _, rule := range spec.Linux.Resources.Devices {
+			if rule.Allow {
+				t.Errorf("sensor-read entitlement added an allow device cgroup rule: %+v", rule)
+			}
+		}
+	}
+}
+
+func TestApplySensors_AbsentWithoutEntitlement(t *testing.T) {
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{AppID: "test"}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{SensorSocketDir: t.TempDir()}); err != nil {
+		t.Fatalf("ApplyEntitlements: %v", err)
+	}
+	if hasMount(spec, "/run/wendy/sensors") || hasEnv(spec, "WENDY_SENSOR_SOCKET=") {
+		t.Fatal("app without the sensor-read entitlement received sensor access")
+	}
+}
+
+// TestApplySensors_DoesNotDisplaceCameraEntitlement keeps the raw path intact:
+// the new first-class path is additive, and an app that wants the device node
+// still gets it (and can hold both grants).
+func TestApplySensors_DoesNotDisplaceCameraEntitlement(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "wendy-sensors-oci-both-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	listener, err := net.Listen("unix", filepath.Join(dir, "sensors.sock"))
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{AppID: "test", Entitlements: []appconfig.Entitlement{
+		{Type: appconfig.EntitlementSensorRead},
+		{Type: appconfig.EntitlementCamera},
+	}}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{SensorSocketDir: dir}); err != nil {
+		t.Fatalf("ApplyEntitlements: %v", err)
+	}
+	if !hasEnv(spec, "WENDY_SENSOR_SOCKET=/run/wendy/sensors/sensors.sock") {
+		t.Error("sensor socket missing when combined with the camera entitlement")
+	}
+	if spec.Linux.Resources == nil || len(spec.Linux.Resources.Devices) == 0 {
+		t.Error("camera entitlement stopped granting device access")
+	}
+}

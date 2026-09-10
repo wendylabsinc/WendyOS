@@ -58,6 +58,13 @@ type ApplyOptions struct {
 	// resolver in the host network namespace. When empty, host networking keeps
 	// the compatibility fallback of bind-mounting the host resolver file.
 	HostResolvConfPath string
+	// DataSocketDir is an app-private directory containing only data.sock, the
+	// episode-write grant's socket.
+	DataSocketDir string
+	// SensorSocketDir is an app-private directory prepared by
+	// AppSensorSocketManager containing only sensors.sock, which serves the
+	// read-only SensorService and nothing else.
+	SensorSocketDir string
 }
 
 // ApplyEntitlements modifies an OCI spec in-place based on app config entitlements.
@@ -118,6 +125,10 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			}
 		case appconfig.EntitlementNotifications:
 			applySystemAPI(spec, opts.SystemAPISocketDir)
+		case appconfig.EntitlementEpisodeWrite:
+			applyDataSocket(spec, opts.DataSocketDir)
+		case appconfig.EntitlementSensorRead:
+			applySensorSocket(spec, opts.SensorSocketDir)
 		case appconfig.EntitlementAdmin:
 			applyAdmin(spec)
 		case appconfig.EntitlementBuild:
@@ -125,6 +136,56 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 		}
 	}
 	return nil
+}
+
+func applyDataSocket(spec *Spec, hostDirectory string) {
+	if hostDirectory == "" {
+		return
+	}
+	const containerDirectory = "/run/wendy/data"
+	socketPath := filepath.Join(hostDirectory, "data.sock")
+	fi, err := os.Lstat(socketPath)
+	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return
+	}
+	spec.Mounts = append(spec.Mounts, Mount{Destination: containerDirectory, Source: hostDirectory, Type: "bind", Options: []string{"rbind", "nosuid", "noexec", "ro"}})
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, appSystemAPIGroupGID)
+	spec.Process.Env = append(spec.Process.Env, "WENDY_DATA_SOCKET="+containerDirectory+"/data.sock")
+}
+
+// applySensorSocket mounts the app's private sensor directory. Like the System
+// API and data sockets, the directory is mounted rather than the socket inode so
+// the agent can recreate the socket under a running container.
+//
+// This is the narrow model-input grant behind the sensor-read entitlement: the
+// mount carries one socket serving only wendy.agent.apps.v1.SensorService, so
+// the app can subscribe to sensor streams and do nothing else. It adds NO
+// device nodes and no device cgroup rules — an app that wants the raw
+// /dev/videoN node still asks for the camera entitlement, and gets the
+// single-holder semantics that come with it. Writing into the recorded dataset
+// is the separate episode-write grant and its own socket.
+func applySensorSocket(spec *Spec, hostDirectory string) {
+	if hostDirectory == "" {
+		return
+	}
+	const containerDirectory = "/run/wendy/sensors"
+	const containerSocket = containerDirectory + "/sensors.sock"
+	socketPath := filepath.Join(hostDirectory, "sensors.sock")
+	fi, err := os.Lstat(socketPath)
+	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return
+	}
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: containerDirectory,
+		Source:      hostDirectory,
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec", "ro"},
+	})
+	spec.Process.User.AdditionalGids = appendUnique(
+		spec.Process.User.AdditionalGids,
+		appSystemAPIGroupGID,
+	)
+	spec.Process.Env = append(spec.Process.Env, "WENDY_SENSOR_SOCKET="+containerSocket)
 }
 
 // SetDeviceCapabilities adds standard device capabilities plus the cgroup

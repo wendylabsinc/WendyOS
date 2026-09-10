@@ -516,6 +516,46 @@ on their next call without a redeploy.
 > **Security:** `notifications` exposes only entitled app-facing APIs. It does
 > not expose `WENDY_AGENT_SOCKET` or any app/device administration RPC.
 
+### `episode-write`
+
+Allows an app to write into the device's recorded dataset: it submits structured
+events and predictions to the episode recorder through an app-private Unix
+socket.
+
+```json
+{ "type": "episode-write" }
+```
+
+The agent mounts `/run/wendy/data` read-only and injects
+`WENDY_DATA_SOCKET=/run/wendy/data/data.sock`. The protocol accepts records up
+to 64 KiB and acknowledges them as `buffered`, `recorded`, or `rejected`.
+Buffered records provide application pre-roll and can trigger deployed Wendy
+Data campaigns — which is why the grant is stronger than plain logging, since
+triggers match on application event names and prediction attributes, so an app
+holding it can start recordings. The socket is restored from container labels
+after agent restart; the entitlement never exposes the administrative agent
+socket, and grants no sensor read access.
+
+### `sensor-read`
+
+Allows an app to subscribe, read-only, to agent-hosted sensor streams through a
+separate app-private Unix socket. In practice it is permission to see the
+cameras and microphones the allowlist names.
+
+```json
+{ "type": "sensor-read", "allowlist": ["v4l2:/dev/video0"] }
+```
+
+The `allowlist` is required and must name at least one source id, written
+exactly as `wendy data sources` reports it. Omitting it is rejected rather than
+read as "every source", so the grant cannot silently widen as new source kinds
+become subscribable. The agent mounts `/run/wendy/sensors` read-only and injects
+`WENDY_SENSOR_SOCKET=/run/wendy/sensors/sensors.sock`, serving only
+`wendy.agent.apps.v1.SensorService`. It grants no device nodes — raw device
+access is the separate `camera` entitlement — and no write access to the
+recorded dataset, which is `episode-write`. See
+[entitlements](../device/entitlements.md) for the full boundary.
+
 ### `admin`
 
 Grants the container the wendy-agent's **full gRPC over a local unix socket** (`/run/wendy/agent.sock`, exposed as `WENDY_AGENT_SOCKET`) — with **no authentication**.

@@ -5,7 +5,7 @@
 # This is the only campaign the example needs. It works with the app
 # running, on a single-camera device, because the app no longer opens the
 # camera: it subscribes to the same producer this campaign's capture
-# adapter consumes (the sensors entitlement, see wendysensors.py). The
+# adapter consumes (the sensor-read entitlement, see wendysensors.py). The
 # earlier telemetry-only variant existed solely to work around the
 # device-conflict that arrangement removes.
 version: 1

@@ -348,6 +348,28 @@
         },
         {
           "properties": {
+            "type": { "const": "episode-write" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Write into the device's recorded dataset: submit structured event and prediction records to the episode recorder over the app-private data socket (WENDY_DATA_SOCKET). Stronger than plain logging, because campaign triggers match on application event names and prediction attributes, so an app holding this can start recordings. Grants no sensor read access and never exposes the administrative agent socket."
+        },
+        {
+          "properties": {
+            "type": { "const": "sensor-read" },
+            "allowlist": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "minItems": 1,
+              "description": "Sensor source ids this app may subscribe to, as reported by `wendy data sources` (for example \"v4l2:/dev/video0\"). Required and non-empty: an unnamed grant would cover every source the device can multiplex today and every source kind that becomes subscribable later."
+            }
+          },
+          "required": ["type", "allowlist"],
+          "additionalProperties": false,
+          "description": "Read-only: subscribe to agent-hosted sensor streams over the app-private sensor socket (WENDY_SENSOR_SOCKET), receiving identified samples that the active episode records under the same identifiers. In practice this is permission to see the cameras and microphones the allowlist names. Grants no device nodes, no write access to the recorded dataset, and never exposes the administrative agent socket."
+        },
+        {
+          "properties": {
             "type": { "const": "admin" }
           },
           "required": ["type"],

@@ -378,6 +378,18 @@ func entitlementsContain(entitlements []appconfig.Entitlement, entitlementType s
 	return false
 }
 
+// entitlementOfType returns the entitlement of a given type together with its
+// fields, for grants whose configuration matters (the sensors allowlist) and not
+// only their presence.
+func entitlementOfType(entitlements []appconfig.Entitlement, entitlementType string) (appconfig.Entitlement, bool) {
+	for _, entitlement := range entitlements {
+		if entitlement.Type == entitlementType {
+			return entitlement, true
+		}
+	}
+	return appconfig.Entitlement{}, false
+}
+
 // parseEntitlementsFromAnnotations reconstructs an entitlement list from OCI
 // manifest annotations or containerd container labels. It is the inverse of
 // buildEntitlementAnnotations / wendyLabels.
