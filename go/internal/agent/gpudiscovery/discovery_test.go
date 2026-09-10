@@ -27,6 +27,10 @@ func TestDiscoverVendorsAndCompute(t *testing.T) {
 		{"broadcom", "", "vc4", "", []string{}},
 		{"arm", "", "panfrost", "", []string{}},
 		{"qualcomm", "", "msm", "", []string{}},
+		// Dragonwing: the Hexagon NPU is reachable once a non-secure FastRPC
+		// node exists; the root-only -secure node alone proves nothing.
+		{"qualcomm", "", "msm_dpu", "/dev/fastrpc-cdsp", []string{"qnn"}},
+		{"qualcomm", "", "kgsl", "/dev/fastrpc-cdsp-secure", []string{}},
 		{"vivante", "", "etnaviv", "", []string{}},
 		{"intel", "0x8086", "i915", "", []string{}},
 		{"nvidia", "0x10de", "nvidia", "/dev/nvidiactl", []string{"cuda"}},

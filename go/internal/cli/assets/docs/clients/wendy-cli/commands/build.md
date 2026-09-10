@@ -204,7 +204,7 @@ Use `wendy run --build-host <device>` instead. To make a device willing to accep
 
 CUDA-selecting Dockerfiles must use `WENDY_HAS_CUDA`. `WENDY_HAS_GPU`
 reports hardware presence, including Broadcom and other GPUs without CUDA.
-Device info exposes `gpuCapabilities.computeBackends` (`cuda`, `rocm`, `metal`);
+Device info exposes `gpuCapabilities.computeBackends` (`cuda`, `rocm`, `metal`, `qnn`);
 an empty list means no supported backend was detected, while an absent capability
 object means an older agent. `containerStorage` identifies the filesystem used by
 containerd; the existing disk scalar fields continue to describe the root filesystem.

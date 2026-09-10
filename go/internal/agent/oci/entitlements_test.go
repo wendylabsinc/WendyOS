@@ -2602,3 +2602,108 @@ func TestApplyEntitlements_HTTPIsNoOp(t *testing.T) {
 		t.Errorf("http entitlement mutated the OCI spec; want no-op.\nbase: %+v\nspec: %+v", base, spec)
 	}
 }
+
+// installFakeQualcommDevTree stands in for a Qualcomm SoC such as the Dragonwing
+// IQ-8275: an Adreno GPU behind the msm DRM driver, so a render node and no
+// vendor control node (no /dev/kfd, no /dev/nvidia*). It pins the Qualcomm
+// probe so the suite needs no Qualcomm sysfs tree.
+func installFakeQualcommDevTree(t *testing.T, renderNodes map[string][2]int64) string {
+	t.Helper()
+	dev := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dev, "dri"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	renderNums := map[string][2]int64{}
+	for name, nums := range renderNodes {
+		p := filepath.Join(dev, "dri", name)
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		renderNums[p] = nums
+	}
+
+	origKFD := kfdDevicePath
+	origQualcomm := qualcommGPUPresent
+	origRenderGlobs := renderDeviceGlobs
+	origStatChar := statCharDevice
+	origRender := lookupRenderGID
+	t.Cleanup(func() {
+		kfdDevicePath = origKFD
+		qualcommGPUPresent = origQualcomm
+		renderDeviceGlobs = origRenderGlobs
+		statCharDevice = origStatChar
+		lookupRenderGID = origRender
+	})
+
+	kfdDevicePath = filepath.Join(dev, "absent-kfd")
+	qualcommGPUPresent = func() bool { return true }
+	renderDeviceGlobs = []string{filepath.Join(dev, "dri", "renderD*")}
+	statCharDevice = func(p string) (int64, int64, error) {
+		if nums, ok := renderNums[p]; ok {
+			return nums[0], nums[1], nil
+		}
+		return 0, 0, fmt.Errorf("%s is not a character device node", p)
+	}
+	lookupRenderGID = func() (uint32, bool) { return 107, true }
+	return dev
+}
+
+// TestApplyGPU_QualcommExposesRenderNodeOnly is the load-bearing Dragonwing
+// test: on a Qualcomm host the gpu entitlement must grant the Adreno render
+// node (what mesa, OpenCL and Vulkan open) with an exact major:minor rule and
+// the render/video groups, keep the display card node behind the display
+// entitlement, and NOT fall through to the NVIDIA static-node fallback, which
+// would mknod bogus major-195 nodes into the container.
+func TestApplyGPU_QualcommExposesRenderNodeOnly(t *testing.T) {
+	dev := installFakeQualcommDevTree(t, map[string][2]int64{"renderD128": {226, 128}, "card0": {226, 0}})
+
+	spec := gpuSpec(t)
+
+	if _, ok := deviceForPath(spec, filepath.Join(dev, "dri", "renderD128")); !ok {
+		t.Error("Qualcomm GPU entitlement did not add the DRM render node")
+	}
+	if !hasExactDeviceRule(spec, 226, 128) {
+		t.Error("Qualcomm GPU entitlement did not allow the render node major:minor")
+	}
+	if _, ok := deviceForPath(spec, filepath.Join(dev, "dri", "card0")); ok {
+		t.Error("Qualcomm GPU entitlement granted the display card node")
+	}
+
+	if !hasGID(spec, 107) {
+		t.Error("Qualcomm GPU entitlement did not add the render GID")
+	}
+	if !hasGID(spec, videoGroupGID) {
+		t.Error("Qualcomm GPU entitlement did not add the video GID")
+	}
+
+	if hasMajorRule(spec, 195) {
+		t.Error("Qualcomm host must not get the NVIDIA major-195 fallback rule")
+	}
+	for _, d := range spec.Linux.Devices {
+		if strings.Contains(d.Path, "nvidia") {
+			t.Errorf("Qualcomm host must not get NVIDIA device nodes, got %q", d.Path)
+		}
+	}
+	for _, e := range spec.Process.Env {
+		if strings.HasPrefix(e, "NVIDIA_") {
+			t.Errorf("Qualcomm host must not get NVIDIA env vars, got %q", e)
+		}
+	}
+}
+
+// TestApplyGPU_QualcommWithoutRenderNodeAddsNoDevices keeps the entitlement
+// inert on a Qualcomm host whose render node has not appeared yet: no device
+// grants, and still no NVIDIA fallback.
+func TestApplyGPU_QualcommWithoutRenderNodeAddsNoDevices(t *testing.T) {
+	installFakeQualcommDevTree(t, nil)
+
+	base := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec := gpuSpec(t)
+
+	if len(spec.Linux.Devices) != len(base.Linux.Devices) {
+		t.Errorf("devices changed with no render node: %d -> %d", len(base.Linux.Devices), len(spec.Linux.Devices))
+	}
+	if hasMajorRule(spec, 195) {
+		t.Error("Qualcomm host must not get the NVIDIA major-195 fallback rule")
+	}
+}

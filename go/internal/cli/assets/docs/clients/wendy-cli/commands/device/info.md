@@ -34,7 +34,8 @@ On GPU-capable devices, the following GPU fields are included. Each is omitted f
 | `gpuVendor` | `GPU:` | GPU vendor (e.g. `nvidia`, `qualcomm`); shown as `unknown` in human-readable output when a GPU is present but the vendor is unreported. |
 | `jetpackVersion` | `JetPack:` | JetPack/L4T version string (Jetson only). |
 | `cudaVersion` | `CUDA:` | CUDA toolkit version (e.g. `12.6`). |
-| `gpuArch` | `GPU Arch:` | GPU architecture identifier. Format is vendor-specific (e.g. `sm_87` for NVIDIA). |
+| `gpuArch` | `GPU Arch:` | GPU architecture identifier. Format is vendor-specific (e.g. `sm_87` for NVIDIA, `a623` for a Qualcomm Adreno). |
+| `gpuCapabilities.computeBackends` | `GPU Compute:` | Host compute backends an app can use: `cuda`, `rocm`, `metal`, or `qnn` (the Qualcomm Hexagon NPU over FastRPC on Dragonwing). An empty list prints `none detected`; the object is absent on older agents. |
 
 `wendy device info` reports static GPU *metadata* (vendor, architecture, toolkit versions). For **live** GPU utilization, memory, temperature, and power draw, use [`wendy device top`](top.md).
 

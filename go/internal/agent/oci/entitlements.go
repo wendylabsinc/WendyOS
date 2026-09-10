@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
@@ -191,6 +193,14 @@ func applyGPU(spec *Spec) {
 		applyAMDGPU(spec)
 		return
 	}
+	// A Qualcomm SoC (Dragonwing) has neither /dev/kfd nor /dev/nvidia*, so it
+	// would otherwise fall into the NVIDIA static fallback below and receive
+	// bogus major-195 nodes while the render node its GPU userspace needs is
+	// never granted. Branch on the live DRM driver instead.
+	if qualcommGPUPresent() {
+		applyQualcommGPU(spec)
+		return
+	}
 
 	// Add the nvidia group GID for device access.
 	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, nvidiaGroupGID)
@@ -307,6 +317,33 @@ func applyAMDGPU(spec *Spec) {
 
 	// The GPU is the DRM render node. Grant renderD* exactly (mknod'd into the
 	// container from the live major:minor), the same mechanism as the Jetson iGPU.
+	addExactDeviceNodes(spec, discoverRenderDeviceNodes())
+}
+
+// qualcommGPUPresent reports whether the host GPU is a Qualcomm Adreno behind
+// the msm DRM driver (the Dragonwing IQ-8275 and its kin), using the same
+// discovery device metadata reports from. Behind a var so tests can pin the
+// answer without a Qualcomm sysfs tree.
+var qualcommGPUPresent = func() bool {
+	return slices.ContainsFunc(gpudiscovery.Host(), func(d gpudiscovery.Device) bool {
+		return d.Vendor == "qualcomm"
+	})
+}
+
+// applyQualcommGPU wires up Adreno GPU access on a Qualcomm SoC. The GPU
+// userspace (mesa freedreno/turnip, OpenCL, Vulkan) opens the DRM render node;
+// there is no vendor control node like /dev/nvidiactl or /dev/kfd. card* stays
+// behind the display entitlement, matching the AMD and Jetson paths. The
+// Hexagon NPU is a separate accelerator reached over FastRPC and belongs to
+// the npu entitlement, not this one.
+func applyQualcommGPU(spec *Spec) {
+	// renderD* is group-owned by "render" (and "video" on some images). Add
+	// both; the exact device node and cgroup rule below remain the real access
+	// boundary, so group membership alone reaches nothing.
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, videoGroupGID)
+	if gid, ok := lookupRenderGID(); ok {
+		spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)
+	}
 	addExactDeviceNodes(spec, discoverRenderDeviceNodes())
 }
 
