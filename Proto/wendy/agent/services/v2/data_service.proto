@@ -1,0 +1,91 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+// DataService owns the single device-local episode recorder. Canonical times
+// are signed CLOCK_BOOTTIME nanoseconds relative to the recording request.
+//
+// CONTROL PLANE ONLY. This service is registered on the agent's device mutual
+// Transport Layer Security server, alongside the provisioning, WiFi, container
+// and update services, and is never exposed to applications. An app reaches the
+// agent solely through a per-app private unix socket, which serves the
+// app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
+// any method below callable by an application.
+//
+// The four Campaign methods in particular are command-line-facing: they are
+// what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
+// campaign inspect` and `wendy data campaign trigger` call over that mutually
+// authenticated channel. They are operator commands for managing capture
+// campaigns on a device, not an application programming interface for apps.
+service DataService {
+  rpc Sources(DataSourcesRequest) returns (DataSourcesResponse);
+  rpc Start(DataStartRequest) returns (DataEpisode);
+  rpc Stop(DataStopRequest) returns (DataEpisode);
+  rpc Status(DataStatusRequest) returns (DataStatusResponse);
+  rpc Episodes(DataEpisodesRequest) returns (DataEpisodesResponse);
+  rpc Inspect(DataInspectRequest) returns (DataInspectResponse);
+  rpc Download(DataDownloadRequest) returns (stream DataDownloadChunk);
+  rpc CampaignDeploy(DataCampaignDeployRequest) returns (DataCampaign);
+  rpc Campaigns(DataCampaignsRequest) returns (DataCampaignsResponse);
+  rpc CampaignInspect(DataCampaignInspectRequest) returns (DataCampaign);
+  rpc CampaignTrigger(DataCampaignTriggerRequest) returns (DataEpisode);
+}
+
+message DataSource {
+  string id = 1;
+  string kind = 2;
+  string clock_domain = 3;
+  bool healthy = 4;
+  string detail = 5;
+}
+message DataSourcesRequest {}
+message DataSourcesResponse { repeated DataSource sources = 1; }
+
+message DataCalibration { string source = 1; bytes contents = 2; string filename = 3; }
+message DataStartRequest {
+  string name = 1;
+  repeated string sources = 2;
+  repeated string exclude_sources = 3;
+  int64 require_utc_uncertainty_nanos = 4;
+  repeated DataCalibration calibrations = 5;
+}
+message DataStopRequest {}
+message DataStatusRequest {}
+message DataEpisodesRequest {}
+message DataInspectRequest { string episode = 1; bool verify = 2; }
+message DataDownloadRequest { string episode = 1; string path = 2; int64 offset = 3; }
+
+message DataEpisode {
+  string id = 1;
+  string name = 2;
+  string state = 3;
+  int64 started_unix_nanos = 4;
+  int64 size_bytes = 5;
+  string boot_id = 6;
+}
+message DataStatusResponse { DataEpisode active = 1; }
+message DataEpisodesResponse { repeated DataEpisode episodes = 1; }
+message DataInspectResponse { bytes manifest_json = 1; repeated string verification_errors = 2; }
+message DataDownloadChunk {
+  string path = 1;
+  int64 offset = 2;
+  bytes data = 3;
+  int64 size = 4;
+  string sha256 = 5;
+  bool eof = 6;
+}
+
+message DataCampaignDeployRequest { bytes campaign_yaml = 1; }
+message DataCampaignsRequest {}
+message DataCampaignInspectRequest { string name = 1; }
+message DataCampaignTriggerRequest { string name = 1; string reason = 2; }
+message DataCampaign {
+  string name = 1;
+  string fleet = 2;
+  string state = 3;
+  string revision = 4;
+  int64 deployed_unix_nanos = 5;
+  bytes plan_json = 6;
+  repeated string warnings = 7;
+}
+message DataCampaignsResponse { repeated DataCampaign campaigns = 1; }

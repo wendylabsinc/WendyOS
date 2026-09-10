@@ -56,12 +56,32 @@ V2_AGENT_PROTOS=(
     "wendy/agent/services/v2/ros2_service.proto"
     "wendy/agent/services/v2/timesync_service.proto"
     "wendy/agent/services/v2/build_service.proto"
+    "wendy/agent/services/v2/data_service.proto"
 )
 
 V2_AGENT_M_OPTS=""
 for p in "${V2_AGENT_PROTOS[@]}"; do
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=M${p}=${V2_AGENT_PKG}"
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=M${p}=${V2_AGENT_PKG}"
+done
+
+# ---- Wendy Agent app-facing protos ----
+#
+# These are served to entitled applications over a per-app private unix socket
+# and are deliberately a separate proto package (and therefore a separate Go
+# package) from the control-plane wendy/agent/services protos above. Keeping
+# them apart is what makes the app trust boundary structural: control-plane
+# definitions cannot end up on an app socket by accident.
+APPS_PKG="$MODULE/go/proto/gen/appspb/v1"
+
+APPS_PROTOS=(
+    "wendy/agent/apps/v1/sensor_service.proto"
+)
+
+APPS_M_OPTS=""
+for p in "${APPS_PROTOS[@]}"; do
+    APPS_M_OPTS="$APPS_M_OPTS --go_opt=M${p}=${APPS_PKG}"
+    APPS_M_OPTS="$APPS_M_OPTS --go-grpc_opt=M${p}=${APPS_PKG}"
 done
 
 # ---- OpenTelemetry protos ----
@@ -102,6 +122,7 @@ CLOUD_PROTOS=(
     "cloud/apps.proto"
     "cloud/assets.proto"
     "cloud/certificates.proto"
+    "cloud/data_ingest.proto"
     "cloud/deployments.proto"
     "cloud/mesh.proto"
     "cloud/notifications.proto"
@@ -130,7 +151,7 @@ for p in "${SYSTEM_PROTOS[@]}"; do
 done
 
 # All M opts combined for cross-package imports
-ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $SYSTEM_M_OPTS"
+ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $APPS_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $SYSTEM_M_OPTS"
 
 echo "Generating Wendy Agent protos..."
 mkdir -p "$GEN_DIR/agentpb"
@@ -153,6 +174,17 @@ protoc \
     --go-grpc_out="$GEN_DIR/agentpb/v2" \
     --go-grpc_opt=module="$V2_AGENT_PKG" \
     "${V2_AGENT_PROTOS[@]}"
+
+echo "Generating Wendy Agent app-facing protos..."
+mkdir -p "$GEN_DIR/appspb/v1"
+protoc \
+    --proto_path="$PROTO_DIR" \
+    --go_out="$GEN_DIR/appspb/v1" \
+    --go_opt=module="$APPS_PKG" \
+    $ALL_M_OPTS \
+    --go-grpc_out="$GEN_DIR/appspb/v1" \
+    --go-grpc_opt=module="$APPS_PKG" \
+    "${APPS_PROTOS[@]}"
 
 echo "Generating Wendy Cloud protos..."
 mkdir -p "$GEN_DIR/cloudpb"

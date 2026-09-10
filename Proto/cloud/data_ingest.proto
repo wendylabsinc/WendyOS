@@ -1,0 +1,225 @@
+syntax = "proto3";
+
+package wendycloud.data.v1;
+
+// DataIngestService receives sealed episode captures from device transfer
+// workers (the WendyOS "Wendy Data" capture engine) and serves the episode
+// catalog to readers (dashboard, BI, training pipelines).
+//
+// Upload protocol (mirrors the device DataService chunked Download in
+// reverse):
+//   1. BeginEpisodeUpload(manifest) registers the episode in the catalog as
+//      `uploading` and returns per-file committed offsets. Idempotent: safe
+//      to call on every transfer-worker retry; already-stored files report
+//      their full size so the worker skips them.
+//   2. UploadEpisodeChunk streams file chunks (at most 1 MiB of data per
+//      chunk, sequential offsets per file, eof on the last chunk). Each
+//      chunk is acknowledged with the received (spooled) offset and the
+//      committed (durably stored in object storage) offset.
+//   3. CommitEpisode verifies the SHA-256 of every stored object against
+//      the manifest and flips the catalog state to `complete`, or `failed`
+//      with per-file detail on any mismatch.
+//
+// Authentication:
+//   - Begin/Upload/Commit require a device asset identity (mTLS client
+//     certificate SAN). Uploads are scoped to the asserted org and asset; a
+//     manifest whose org_id or asset_id differs from the certificate
+//     identity is rejected with PERMISSION_DENIED.
+//   - QueryEpisodes/GetEpisode are read RPCs for users and services; the
+//     serving implementation defines the accepted credential.
+service DataIngestService {
+  // Registers (or re-registers) an episode upload. Idempotent.
+  rpc BeginEpisodeUpload(BeginEpisodeUploadRequest) returns (BeginEpisodeUploadResponse);
+
+  // Streams file chunks for an episode registered via BeginEpisodeUpload.
+  // Chunks for one file must arrive in offset order; files may be
+  // interleaved. Every chunk is acknowledged in order.
+  rpc UploadEpisodeChunk(stream EpisodeChunk) returns (stream EpisodeChunkAck);
+
+  // Verifies stored objects against the manifest checksums and finalizes
+  // the episode.
+  rpc CommitEpisode(CommitEpisodeRequest) returns (CommitEpisodeResponse);
+
+  // Catalog queries. Episodes are returned with per-file retrieval URLs
+  // (short-lived signed object-storage URLs).
+  rpc QueryEpisodes(QueryEpisodesRequest) returns (QueryEpisodesResponse);
+  rpc GetEpisode(GetEpisodeRequest) returns (Episode);
+}
+
+// Catalog lifecycle of an uploaded episode.
+enum EpisodeState {
+  EPISODE_STATE_UNSPECIFIED = 0;
+  EPISODE_STATE_UPLOADING = 1;
+  EPISODE_STATE_COMPLETE = 2;
+  EPISODE_STATE_FAILED = 3;
+}
+
+// Compact typed projection of the device episode manifest (manifest v2).
+// The full manifest JSON rides in attributes_json for fidelity; the typed
+// fields are what the catalog indexes on.
+message EpisodeManifest {
+  string episode_id = 1;
+
+  // Must match the certificate identity of the uploading device.
+  uint64 org_id = 2;
+  uint64 asset_id = 3;
+
+  string campaign = 4;
+  string campaign_revision = 5;
+  // Trigger reason (e.g. "manual", "campaign-trigger", or the fired
+  // expression such as "model.uncertainty > 0.65").
+  string trigger = 6;
+
+  // Canonical episode timeline: signed CLOCK_BOOTTIME nanoseconds.
+  int64 started_boottime_nanos = 7;
+  int64 stopped_boottime_nanos = 8;
+
+  // UTC correlation: wall-clock start plus the bounded UTC offset interval
+  // from the device's clock-sandwich observations. system_clock_status is
+  // the device's own verdict ("ok", "conflict", ...); a "conflict" episode
+  // is flagged in the catalog, never silently resolved.
+  int64 started_unix_nanos = 9;
+  int64 utc_offset_lower_nanos = 10;
+  int64 utc_offset_upper_nanos = 11;
+  string system_clock_status = 12;
+
+  repeated EpisodeFileManifest files = 13;
+
+  // The complete device manifest JSON (manifest v2), stored verbatim in the
+  // catalog attributes column.
+  bytes attributes_json = 14;
+}
+
+// One file of an episode, as declared by the device manifest.
+message EpisodeFileManifest {
+  // Relative path within the episode directory, e.g. "front/000001.jpg" or
+  // "manifest.json". Also the object name suffix in storage.
+  string path = 1;
+  uint64 size_bytes = 2;
+  // Lowercase hex SHA-256 of the file contents; the commit-time contract.
+  string sha256 = 3;
+  string media_type = 4;
+  // Device capture format label, e.g. "jpeg", "mcap", "jsonl".
+  string format = 5;
+  string source_id = 6;
+  // Capture time range on the canonical episode timeline, when known.
+  int64 time_range_start_nanos = 7;
+  int64 time_range_end_nanos = 8;
+  // Source-clock to canonical-clock mapping summary JSON, when present.
+  bytes clock_mapping_json = 9;
+}
+
+message BeginEpisodeUploadRequest {
+  EpisodeManifest manifest = 1;
+}
+
+message FileUploadState {
+  string path = 1;
+  // Bytes durably stored in object storage for this file: 0 (not stored or
+  // partially stored; restart from 0) or the full file size (stored; skip).
+  int64 committed_offset = 2;
+}
+
+message BeginEpisodeUploadResponse {
+  EpisodeState state = 1;
+  repeated FileUploadState files = 2;
+}
+
+message EpisodeChunk {
+  string episode_id = 1;
+  string path = 2;
+  // Byte offset of this chunk within the file; must equal the number of
+  // bytes already sent for the file (sequential, no gaps).
+  int64 offset = 3;
+  // At most 1 MiB per chunk.
+  bytes data = 4;
+  // True on the last chunk of the file; the server then persists the file
+  // to object storage.
+  bool eof = 5;
+}
+
+message EpisodeChunkAck {
+  string path = 1;
+  // Contiguous bytes received (spooled server-side, not yet durable).
+  int64 received_offset = 2;
+  // Bytes durably stored in object storage. Stays 0 until the eof chunk is
+  // persisted, then equals the file size. Never claims durability that
+  // does not exist.
+  int64 committed_offset = 3;
+}
+
+message CommitEpisodeRequest {
+  string episode_id = 1;
+}
+
+// Per-file checksum verification outcome, reported on commit.
+message FileVerification {
+  string path = 1;
+  bool ok = 2;
+  string expected_sha256 = 3;
+  string actual_sha256 = 4;
+  // Human-readable detail on failure (missing object, size mismatch, ...).
+  string detail = 5;
+}
+
+message CommitEpisodeResponse {
+  EpisodeState state = 1;
+  repeated FileVerification files = 2;
+}
+
+message QueryEpisodesRequest {
+  // Organization scope. With certificate-identity credentials this must
+  // match the caller's organization; with the PoC static read token it
+  // selects the organization to read (chosen debt until user auth carries
+  // org membership).
+  uint64 org_id = 1;
+
+  // Optional filters; zero values mean "no filter".
+  uint64 asset_id = 2;
+  string campaign = 3;
+  EpisodeState state = 4;
+  int64 started_after_unix_nanos = 5;
+  int64 started_before_unix_nanos = 6;
+
+  // Maximum episodes returned, newest first. Zero means the server default.
+  uint32 limit = 7;
+}
+
+message QueryEpisodesResponse {
+  repeated Episode episodes = 1;
+}
+
+message GetEpisodeRequest {
+  uint64 org_id = 1;
+  string episode_id = 2;
+}
+
+// A catalog row plus its files.
+message Episode {
+  string episode_id = 1;
+  uint64 org_id = 2;
+  uint64 asset_id = 3;
+  string campaign = 4;
+  string trigger = 5;
+  int64 started_unix_nanos = 6;
+  int64 ended_unix_nanos = 7;
+  EpisodeState state = 8;
+  uint64 size_bytes = 9;
+  // Clock correlation summary JSON (UTC offset bounds, clock status).
+  bytes clock_correlation_json = 10;
+  // Full device manifest JSON as uploaded.
+  bytes attributes_json = 11;
+  int64 updated_unix_nanos = 12;
+  repeated EpisodeFileInfo files = 13;
+}
+
+message EpisodeFileInfo {
+  string path = 1;
+  string source_id = 2;
+  string media_type = 3;
+  uint64 size_bytes = 4;
+  string sha256 = 5;
+  // Short-lived retrieval URL for the stored object (signed in production,
+  // direct in local development).
+  string retrieval_url = 6;
+}
