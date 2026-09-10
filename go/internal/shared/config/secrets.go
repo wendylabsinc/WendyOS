@@ -166,6 +166,21 @@ func (a AuthConfig) OAuthDPoPKey() (string, error) {
 	return resolveSecret(a.DPoPPrivateKey)
 }
 
+// InvalidateCachedSecrets forces subsequent reads to consult the credential
+// store. Use after reloading a session under the refresh lock: another process
+// can rotate a secret while its stored Keychain reference remains unchanged.
+// This only clears the in-process cache; it does not delete stored credentials.
+func (a AuthConfig) InvalidateCachedSecrets() {
+	secretMu.Lock()
+	defer secretMu.Unlock()
+	for _, ref := range []string{a.APIKey, a.RefreshToken, a.DPoPPrivateKey} {
+		delete(secretCache, ref)
+	}
+	for _, cert := range a.Certificates {
+		delete(secretCache, cert.PemPrivateKey)
+	}
+}
+
 // dehydrateEnabled reports whether Save should move inline secrets into the
 // platform store. WENDY_SECRET_STORE=file forces inline writes (and
 // de-migration); everything else uses the platform default.

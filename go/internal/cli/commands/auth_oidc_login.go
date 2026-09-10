@@ -531,6 +531,19 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	if err == nil && time.Until(expiresAt) > 90*time.Second {
 		return nil
 	}
+	unlock, err := acquireAuthRefreshLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := reloadOAuthSession(auth); err != nil {
+		return err
+	}
+	// The process that held the lock may already have consumed our old token.
+	expiresAt, err = time.Parse(time.RFC3339, auth.OAuthExpiresAt)
+	if err == nil && time.Until(expiresAt) > 90*time.Second {
+		return nil
+	}
 	refreshToken, err := auth.OAuthRefreshToken()
 	if err != nil {
 		return fmt.Errorf("loading OAuth refresh token: %w", err)
@@ -582,7 +595,7 @@ func persistOAuthSession(auth *config.AuthConfig) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	for i := range cfg.Auth {
-		if cfg.Auth[i].CloudGRPC == auth.CloudGRPC && cfg.Auth[i].OAuthIssuer == auth.OAuthIssuer {
+		if sameOAuthSession(&cfg.Auth[i], auth) {
 			cfg.Auth[i] = *auth
 			if err := config.Save(cfg); err != nil {
 				return fmt.Errorf("saving refreshed OAuth session: %w", err)

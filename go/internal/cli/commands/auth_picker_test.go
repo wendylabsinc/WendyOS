@@ -3,10 +3,40 @@
 package commands
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
+
+func TestAuthPickerSeparatesOIDCTenantsWithZeroLegacyOrgID(t *testing.T) {
+	cfg := &config.Config{}
+	for i, tenant := range []string{testOperatorTenant, "11111111-1111-4111-8111-111111111111"} {
+		cfg.AddAuth(config.AuthConfig{
+			CloudGRPC: "cloud:443", OAuthIssuer: fmt.Sprintf("https://auth.example/realms/%d", i),
+			Certificates: []config.CertificateInfo{{
+				PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test",
+			}},
+		})
+	}
+	items := authPickerItems(cfg, nil)
+	if len(items) != 2 || items[0].DedupKey == items[1].DedupKey {
+		t.Fatalf("OIDC tenants collapsed into one session: %+v", items)
+	}
+	load := seedConfig(t, cfg)
+	if err := persistSessionDefault(items[1].Value.(string)); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"", "cloud:443"} {
+		selected, err := config.ResolveAuth(load(), endpoint, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if authSessionKey(selected) != items[1].DedupKey {
+			t.Fatal("persisted selection resolved the wrong OIDC realm")
+		}
+	}
+}
 
 func TestAuthSessionLabel(t *testing.T) {
 	withOrg := &config.AuthConfig{CloudGRPC: "prod:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}

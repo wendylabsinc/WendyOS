@@ -41,6 +41,8 @@ func discoveryV2Auth(t *testing.T, count int32, fail bool) *config.AuthConfig {
 	t.Cleanup(srv.Stop)
 	auth := oidcEnrollmentAuth(t)
 	auth.CloudGRPC = lis.Addr().String()
+	// Direct PKI login carries a tenant UUID, with no legacy numeric org ID.
+	auth.Certificates[0].OrganizationID = 0
 	return auth
 }
 
@@ -268,6 +270,7 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 			t.Cleanup(srv.Stop)
 			auth := oidcEnrollmentAuth(t)
 			auth.CloudGRPC = lis.Addr().String()
+			auth.Certificates[0].OrganizationID = 0
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			var callErr error

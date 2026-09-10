@@ -68,6 +68,10 @@ func certXFCC(cert config.CertificateInfo) string {
 
 func cloudContext(ctx context.Context, auth *config.AuthConfig) (context.Context, error) {
 	if auth.OAuthIssuer != "" {
+		// Discovery can build several RPC contexts concurrently from one auth
+		// entry. Refresh a local snapshot rather than mutating shared state.
+		local := *auth
+		auth = &local
 		if err := ensureOAuthAccessToken(ctx, auth); err != nil {
 			return nil, err
 		}

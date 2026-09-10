@@ -559,6 +559,13 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 // no entry could be refreshed, so callers that retry a connection afterwards
 // do not retry with the same stale certificates.
 func refreshAllCerts(ctx context.Context) error {
+	// OIDC certificate refresh consumes the same rotating token family as API
+	// refresh. Keep the lock through the final Save, including partial failures.
+	unlock, err := acquireAuthRefreshLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -566,6 +573,9 @@ func refreshAllCerts(ctx context.Context) error {
 
 	if len(cfg.Auth) == 0 {
 		return fmt.Errorf("not logged in; run 'wendy auth login' first")
+	}
+	for i := range cfg.Auth {
+		cfg.Auth[i].InvalidateCachedSecrets()
 	}
 
 	refreshed := 0

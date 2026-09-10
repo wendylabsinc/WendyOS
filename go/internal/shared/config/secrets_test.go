@@ -78,6 +78,35 @@ func TestAccessorsInlineValues(t *testing.T) {
 	}
 }
 
+func TestInvalidateCachedSecretsAfterExternalRotation(t *testing.T) {
+	store := newFakeStore()
+	useFakeStore(t, store)
+	refs := []string{"api", "refresh", "key", "cert-key"}
+	for _, account := range refs {
+		_ = store.Put(account, []byte("old-"+account))
+		if _, err := resolveSecret(refPrefixV1 + account); err != nil {
+			t.Fatal(err)
+		}
+		// A different process updates the Keychain; this process's memoized
+		// value and the reference in config.json remain unchanged.
+		_ = store.Put(account, []byte("new-"+account))
+	}
+	auth := AuthConfig{
+		APIKey: refPrefixV1 + "api", RefreshToken: refPrefixV1 + "refresh", DPoPPrivateKey: refPrefixV1 + "key",
+		Certificates: []CertificateInfo{{PemPrivateKey: refPrefixV1 + "cert-key"}},
+	}
+	auth.InvalidateCachedSecrets()
+	for _, account := range refs {
+		got, err := resolveSecret(refPrefixV1 + account)
+		if err != nil || got != "new-"+account {
+			t.Fatalf("stale cached %s after reload: %v", account, err)
+		}
+	}
+	if len(store.deletes) != 0 {
+		t.Fatal("cache invalidation must not delete credentials")
+	}
+}
+
 func TestAccessorsResolveRefsMemoized(t *testing.T) {
 	store := newFakeStore()
 	store.m["key-abc"] = []byte("PEMDATA")
