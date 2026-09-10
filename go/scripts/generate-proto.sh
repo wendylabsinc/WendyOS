@@ -56,6 +56,7 @@ V2_AGENT_PROTOS=(
     "wendy/agent/services/v2/ros2_service.proto"
     "wendy/agent/services/v2/timesync_service.proto"
     "wendy/agent/services/v2/build_service.proto"
+    "wendy/agent/services/v2/tunnel_service.proto"
 )
 
 V2_AGENT_M_OPTS=""

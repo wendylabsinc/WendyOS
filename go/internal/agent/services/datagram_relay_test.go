@@ -186,6 +186,42 @@ func TestDatagramRelayFlowCap(t *testing.T) {
 	}
 }
 
+func TestDatagramRelayGlobalFlowCap(t *testing.T) {
+	ctx := context.Background()
+	flowSlots := make(chan struct{}, 1)
+	first := newDatagramRelay(zap.NewNop(), newFakeAgentStream(ctx), time.Minute,
+		withDatagramFlowSlots(flowSlots))
+	second := newDatagramRelay(zap.NewNop(), newFakeAgentStream(ctx), time.Minute,
+		withDatagramFlowSlots(flowSlots))
+	t.Cleanup(first.closeAll)
+	t.Cleanup(second.closeAll)
+
+	if _, err := first.flow(ctx, 1, 9); err != nil {
+		t.Fatalf("first flow: unexpected error: %v", err)
+	}
+	if got := len(flowSlots); got != 1 {
+		t.Fatalf("slots after first flow = %d, want 1", got)
+	}
+	if _, err := second.flow(ctx, 2, 9); !errors.Is(err, errGlobalFlowCapReached) {
+		t.Fatalf("flow beyond global cap: err = %v, want errGlobalFlowCapReached", err)
+	}
+	if got := len(flowSlots); got != 1 {
+		t.Fatalf("slots after rejected flow = %d, want 1", got)
+	}
+
+	first.closeFlow(1)
+	if got := len(flowSlots); got != 0 {
+		t.Fatalf("slots after flow cleanup = %d, want 0", got)
+	}
+	if _, err := second.flow(ctx, 2, 9); err != nil {
+		t.Fatalf("flow after global slot release: unexpected error: %v", err)
+	}
+	second.closeAll()
+	if got := len(flowSlots); got != 0 {
+		t.Fatalf("slots after session cleanup = %d, want 0", got)
+	}
+}
+
 func TestDatagramRelayDropsOversized(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -196,14 +232,71 @@ func TestDatagramRelayDropsOversized(t *testing.T) {
 	stream.in <- &cloudpb.TunnelData{Datagram: &cloudpb.TunnelDatagram{
 		FlowId: 1, Port: 9, Payload: make([]byte, maxUDPPayload+1),
 	}}
-	// Follow with a valid echo; if the oversized frame had opened a flow or
-	// crashed the loop, this would not come back.
-	stream.in <- &cloudpb.TunnelData{IcmpRequest: &cloudpb.IcmpEchoRequest{Identifier: 1, Sequence: 1}}
+	stream.in <- &cloudpb.TunnelData{IcmpRequest: &cloudpb.IcmpEchoRequest{
+		Identifier: 1, Sequence: 1, Payload: make([]byte, maxUDPPayload+1),
+	}}
+	// Follow with a valid echo; if either oversized frame opened a flow or
+	// broke the loop, this would not come back.
+	stream.in <- &cloudpb.TunnelData{IcmpRequest: &cloudpb.IcmpEchoRequest{Identifier: 1, Sequence: 2}}
 	reply := awaitFrame(t, stream)
-	if reply.GetIcmpReply() == nil {
-		t.Fatalf("relay loop broken after oversized datagram: %+v", reply)
+	if reply.GetIcmpReply() == nil || reply.GetIcmpReply().GetSequence() != 2 {
+		t.Fatalf("relay loop broken after oversized frame: %+v", reply)
 	}
 	if relay.activeFlows() != 0 {
 		t.Fatalf("oversized datagram opened a flow")
+	}
+}
+
+func TestDatagramRelayRateLimitsEchoReplies(t *testing.T) {
+	stream := newFakeAgentStream(context.Background())
+	stream.out = make(chan *cloudpb.TunnelData, maxEchoRepliesPerSecond+1)
+	relay := newDatagramRelay(zap.NewNop(), stream, time.Minute)
+
+	for sequence := 0; sequence < maxEchoRepliesPerSecond+1; sequence++ {
+		relay.handleEcho(&cloudpb.IcmpEchoRequest{Sequence: uint32(sequence)})
+	}
+	if got := len(stream.out); got != maxEchoRepliesPerSecond {
+		t.Fatalf("echo replies = %d, want rate-limited %d", got, maxEchoRepliesPerSecond)
+	}
+
+	relay.mu.Lock()
+	relay.echoWindowStart = time.Now().Add(-echoRateWindow)
+	relay.mu.Unlock()
+	relay.handleEcho(&cloudpb.IcmpEchoRequest{Sequence: maxEchoRepliesPerSecond + 1})
+	if got := len(stream.out); got != maxEchoRepliesPerSecond+1 {
+		t.Fatalf("echo replies after window reset = %d, want %d", got, maxEchoRepliesPerSecond+1)
+	}
+}
+
+func TestDatagramRelayDropsInvalidPorts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := newFakeAgentStream(ctx)
+	relay := newDatagramRelay(zap.NewNop(), stream, time.Minute)
+	go relay.run(ctx)
+
+	for i, port := range []uint32{0, 65536} {
+		stream.in <- &cloudpb.TunnelData{Datagram: &cloudpb.TunnelDatagram{
+			FlowId: uint32(i + 1), Port: port, Payload: []byte("invalid"),
+		}}
+	}
+	stream.in <- &cloudpb.TunnelData{IcmpRequest: &cloudpb.IcmpEchoRequest{Identifier: 1, Sequence: 3}}
+
+	reply := awaitFrame(t, stream)
+	if reply.GetIcmpReply() == nil {
+		t.Fatalf("relay loop broken after invalid ports: %+v", reply)
+	}
+	if relay.activeFlows() != 0 {
+		t.Fatalf("invalid port opened a flow")
+	}
+}
+
+func TestDatagramRelayDestinationIsIPv4Loopback(t *testing.T) {
+	addr := datagramLoopbackAddr(5353)
+	if !addr.IP.Equal(net.IPv4(127, 0, 0, 1)) || addr.IP.To4() == nil {
+		t.Fatalf("destination IP = %v, want IPv4 loopback", addr.IP)
+	}
+	if addr.Port != 5353 {
+		t.Fatalf("destination port = %d, want 5353", addr.Port)
 	}
 }
