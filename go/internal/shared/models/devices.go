@@ -19,7 +19,7 @@ const (
 	InterfaceExternal  InterfaceType = "external"
 )
 
-// ESP32 USB identifiers (Espressif ESP32-C6).
+// ESP32 USB identifiers (Espressif ESP32 board).
 const (
 	ESP32VendorID  = "0x303a"
 	ESP32ProductID = "0x1001"
@@ -37,7 +37,6 @@ type USBDevice struct {
 	Hostname          string `json:"hostname,omitempty"`
 	AgentVersion      string `json:"agentVersion,omitempty"`
 	IsWendyDevice     bool   `json:"isWendyDevice"`
-	IsESP32           bool   `json:"isESP32,omitempty"`
 }
 
 func (d USBDevice) HumanReadable() string {

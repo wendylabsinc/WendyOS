@@ -8,8 +8,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
+	"github.com/wendylabsinc/wendy/go/internal/shared/ble/permission"
+	"github.com/wendylabsinc/wendy/go/internal/shared/ble/scan"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -36,7 +37,7 @@ func NewRootCmd() *cobra.Command {
 			// avoids config/analytics writes (and an update check) as root, and
 			// keeps the first-run banner out of the helper's captured output.
 			switch cmd.Name() {
-			case "__ble-check", "__session-broker", "__usb-setup", "__t234-write", "open-browser":
+			case permission.CheckArg, "__session-broker", "__usb-setup", "__t234-write", "open-browser":
 				return nil
 			}
 
@@ -190,15 +191,18 @@ func NewRootCmd() *cobra.Command {
 	// completion group wiring below stays consistent.
 	completionCmd.GroupID = "settings"
 
-	// Hidden command used by a subprocess to test CoreBluetooth access.
+	// Hidden command used by a subprocess to test BLE availability.
 	// The main process spawns a child process that runs this command so
 	// the child gets a fresh Obj-C runtime and can safely probe
 	// CoreBluetooth without risking SIGABRT in the long-lived parent.
+	// scan.RunBLECheck is what permission.Preflight re-execs into via this
+	// command — the legacy discovery.RunBLECheck this command used to call
+	// backed the now-disabled discoverBluetooth and is unused.
 	bleCheckCmd := &cobra.Command{
-		Use:    "__ble-check",
+		Use:    permission.CheckArg,
 		Hidden: true,
 		Run: func(cmd *cobra.Command, args []string) {
-			os.Exit(discovery.RunBLECheck())
+			os.Exit(scan.RunBLECheck())
 		},
 	}
 

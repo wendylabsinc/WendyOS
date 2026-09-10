@@ -323,7 +323,9 @@ func (c *Connection) L2CAPRecv(timeoutSeconds int) ([]byte, error) {
 	if nRead == 0 {
 		return nil, fmt.Errorf("connection closed by peer")
 	}
-	return buf[:nRead], nil
+	result := make([]byte, nRead)
+	copy(result, buf[:nRead])
+	return result, nil
 }
 
 // Close releases both halves. It is idempotent: the fd is cleared, so a second

@@ -3522,6 +3522,14 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 		existing.Provisioned = incoming.Provisioned
 		existing.Hint = incoming.Hint
 	}
+	// A Wendy Lite row has no LAN probe to speak for it: each of its transports
+	// reports its own mTLS state, and pickerSelection connects over the
+	// highest-ranked one (Externals[0], kept sorted above). Recompute from that
+	// transport so the warning describes the connection we would actually make,
+	// whichever order the transports were discovered in.
+	if md.LAN == nil && len(md.Externals) > 0 {
+		existing.Insecure = liteExternalInsecure(md.Externals[0])
+	}
 	// The no-access hint must stay consistent with the version cell no matter
 	// which transport supplied the version: AgentVersion is carried over from
 	// earlier LAN probes or backfilled from BLE above, and a hint claiming
@@ -3575,6 +3583,16 @@ func hideLocalProviders(excludes map[string]bool) map[string]bool {
 	return merged
 }
 
+// liteExternalInsecure reports whether a Wendy Lite transport will run without
+// mTLS. The Lite firmware advertises mtls=false until it is enrolled (see the
+// wendy-com doc), and connectClient dials such a device with ConnectInsecure (or ConnectViaBLEInsecure for BLE) —
+// so the row deserves the same warning a plaintext WendyOS device gets. Only an
+// explicit "false" counts: a serial row carries no mtls key at all, and an
+// absent key is not evidence of an unsecured connection.
+func liteExternalInsecure(dev *models.ExternalDevice) bool {
+	return dev != nil && dev.ConnectionInfo["mtls"] == "false"
+}
+
 // unflashedLiteDedupKey keys a board with no Wendy Lite firmware by its port
 // rather than its synthetic display name, so the row it gets once it identifies
 // itself can supersede it.
@@ -3589,9 +3607,10 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 	if prov.Key() == "wendy-lite" {
 		item := tui.PickerItem{
 			Name:         dev.DisplayName,
-			DedupKey:     dev.DisplayName,
+			DedupKey:     dev.ConnectionInfo["deviceId"],
 			Type:         dev.ConnectionType() + " (Lite)",
 			Address:      dev.ConnectionInfo["ip"],
+			Insecure:     liteExternalInsecure(dev),
 			AgentVersion: dev.AgentVersion,
 			OS:           dev.OS,
 			OSVersion:    dev.OSVersion,
@@ -3646,11 +3665,33 @@ func providerPollDelay(elapsed time.Duration) time.Duration {
 // from the start of each scan (with a 500ms minimum gap, so slow scans don't
 // stretch the period). If the stream fails to start or closes while the
 // picker is still open, discovery falls back to polling.
+//
+// Both paths deliver a whole set of devices per send, and both are additive
+// only: the picker merges them with tui.PickerAddMsg, so a device that drops
+// out of a later snapshot stays on screen. Removal would need PickerSetMsg,
+// which replaces the picker's entire list — and one of these runs per
+// provider into a shared picker, so each would clobber the others' rows.
+//
+// discoverModel (the `wendy discover` TUI) applies the same stream-else-poll
+// choice, but its own way and with one deliberate difference: it does not fall
+// back to polling when a stream closes, because DiscoverDevices cannot see BLE
+// (see waitExternalSnapshot). The two are not shared code — this owns a
+// goroutine and a send callback where that is a bubbletea message loop, and
+// they scan different provider sets (AvailableProviders here so the picker only
+// offers targets that can build, AllProviders there so discovery reports
+// hardware regardless of toolchain) with different cadences and, as above,
+// different accumulation semantics.
 func discoverProviderForPicker(ctx context.Context, prov providers.DeviceProvider, send func([]tui.PickerItem)) {
 	if cd, ok := prov.(providers.ContinuousDiscoverer); ok {
 		if ch, err := cd.DiscoverDevicesContinuous(ctx); err == nil {
-			for dev := range ch {
-				send([]tui.PickerItem{externalProviderPickerItem(prov, &dev)})
+			for devices := range ch {
+				items := make([]tui.PickerItem, 0, len(devices))
+				for i := range devices {
+					items = append(items, externalProviderPickerItem(prov, &devices[i]))
+				}
+				if len(items) > 0 {
+					send(items)
+				}
 			}
 			if ctx.Err() != nil {
 				return

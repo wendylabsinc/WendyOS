@@ -19,6 +19,28 @@ import (
 
 const escapeChar = 0x10 // CTRL-P, aka DLE (Data Link Escape)
 
+// WendyCom frame header: magic, version, four reserved bytes, then a 16-bit
+// big-endian body length. directLink owns this framing — the cloud tunnel does
+// not use it, because there the broker frames instead.
+const (
+	headerMagic   = 0xA5
+	headerVersion = 0x02
+	headerSize    = 8
+)
+
+// maxTLSRecordSize is the largest TLS record we allow ourselves to emit. The
+// device rejects any record whose plaintext exceeds its
+// MBEDTLS_SSL_IN_CONTENT_LEN and has no way to ask for a smaller one — TLS can
+// negotiate this (RFC 6066, RFC 8449) but crypto/tls implements neither
+// extension — so bounding our own writes is the only control available.
+//
+// It has to be enforced rather than assumed: crypto/tls sizes a record at
+// min(len(write), maxPayload), and maxPayload jumps from one TCP segment to 16
+// KiB once a connection has carried 128 KiB. Without a cap, an oversized
+// message would succeed on a fresh session and kill the link on a long-lived
+// one.
+const maxTLSRecordSize = 8192
+
 // directLink frames WendyComMessages with the 8-byte link header over a
 // direct connection (TCP-TLS or serial). The header channel byte stays 0:
 // direct links always use the default channel.
@@ -26,6 +48,18 @@ type directLink struct {
 	conn     io.ReadWriteCloser
 	isSerial bool
 	writeMu  sync.Mutex // serializes frames across command goroutines
+}
+
+// newDirectLink frames WendyCom over an established byte stream: TCP-TLS, or
+// TLS over a BLE L2CAP channel.
+func newDirectLink(conn io.ReadWriteCloser) *directLink {
+	return &directLink{conn: conn}
+}
+
+// newSerialLink frames WendyCom over a serial port, which needs escaping and a
+// smaller chunk than a network transport.
+func newSerialLink(port serial.Port) *directLink {
+	return &directLink{conn: port, isSerial: true}
 }
 
 // linkHandshake switches a serial device into WendyCom mode; on TCP-TLS there
@@ -153,7 +187,14 @@ func (l *directLink) send(req *wendypb.WendyComMessage) error {
 	l.writeMu.Lock()
 	defer l.writeMu.Unlock()
 	for len(msg) > 0 {
-		n, err := l.conn.Write(msg)
+		// A record never spans more than one Write, so capping the write caps
+		// the record. Serial is exempt: it carries no TLS, and its payload has
+		// already been escape-expanded above.
+		end := len(msg)
+		if !l.isSerial && end > maxTLSRecordSize {
+			end = maxTLSRecordSize
+		}
+		n, err := l.conn.Write(msg[:end])
 		if err != nil {
 			return fmt.Errorf("send: %w", err)
 		}
@@ -174,7 +215,7 @@ func (l *directLink) recv(timeout time.Duration) (*wendypb.WendyComMessage, erro
 	return msg, nil
 }
 
-func (l *directLink) maxChunk() int {
+func (l *directLink) preferredChunkSize() int {
 	if l.isSerial {
 		return chunkSizeForSerial
 	}
