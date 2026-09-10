@@ -192,6 +192,11 @@ func (s *Store) Save(result Result) error {
 		if err := atomicfile.Write(s.ChainPath(), []byte(result.ChainPEM), certMode); err != nil {
 			return fmt.Errorf("writing pki identity chain: %w", err)
 		}
+	} else if err := os.Remove(s.ChainPath()); err != nil && !os.IsNotExist(err) {
+		// A leaf-only issuance must not inherit the previous chain: an
+		// intermediate that does not sign the new leaf fails the handshake in
+		// a way that looks like a server-side refusal.
+		return fmt.Errorf("removing stale pki identity chain: %w", err)
 	}
 	if err := atomicfile.Write(s.LeafPath(), []byte(result.LeafPEM), certMode); err != nil {
 		return fmt.Errorf("writing pki identity leaf: %w", err)
