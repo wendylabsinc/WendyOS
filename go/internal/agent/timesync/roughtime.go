@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/internal/shared/roughtime"
 	"go.uber.org/zap"
 )
 
@@ -23,7 +22,7 @@ func (m *Manager) RunDirect(ctx context.Context) {
 	attempt := 0
 	for {
 		qCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result, err := roughtime.Query(qCtx, Servers)
+		result, err := QueryConsensus(qCtx, Servers)
 		cancel()
 		if err != nil {
 			if m.logger != nil {
@@ -43,11 +42,18 @@ func (m *Manager) RunDirect(ctx context.Context) {
 		attempt = 0
 		if m.logger != nil {
 			m.logger.Info("timesync: synced via Roughtime",
-				zap.String("server", result.Server),
-				zap.Time("midpoint", result.Midpoint),
-				zap.Duration("radius", result.Radius))
+				zap.Int("quorum", result.Quorum),
+				zap.String("confidence", result.Confidence),
+				zap.Duration("uncertainty", time.Duration((result.UpperOffsetNanos-result.LowerOffsetNanos)/2)))
 		}
-		m.Apply(result.Midpoint)
+		m.RecordConsensus(result)
+		// Clock discipline is deliberately separate from observation. Only a
+		// verified quorum may advance an obviously stale wall clock.
+		if result.Confidence == "verified" {
+			boot, _ := bootTimeNanos()
+			mid := result.LowerOffsetNanos + (result.UpperOffsetNanos-result.LowerOffsetNanos)/2
+			m.Apply(time.Unix(0, boot+mid))
+		}
 
 		// Re-query every 6 hours.
 		select {
