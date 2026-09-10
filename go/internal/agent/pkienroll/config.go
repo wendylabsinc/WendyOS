@@ -74,3 +74,10 @@ func withScheme(v string) string {
 	}
 	return "https://" + v
 }
+
+// StagedFileName is the credential file, relative to the agent's config
+// directory, that hands the agent an enrollment token once. It is defined here
+// rather than in the services package because the wendy CLI writes it and the
+// CLI is cross-compiled for Windows, where the services package (which pulls in
+// the audio and data managers) does not build.
+const StagedFileName = "pki-enrollment.json"
