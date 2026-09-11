@@ -17,6 +17,31 @@ type Claims struct {
 	AssetID        int32  `json:"asset_id"`
 	UserID         string `json:"user_id"`
 	Type           string `json:"type"`
+	// TenantUUID is the org's pki-core tenant, as a lowercase canonical UUID.
+	// It is OPTIONAL: cloud omits it for organizations with no pki tenant,
+	// which is the normal state for the local and GCP CAS backends. Absence
+	// means "the caller has to be told the tenant another way", never an error
+	// (WDY-2584).
+	//
+	// The field and this reasoning are taken from
+	// origin/sem/wdy-2899-acme-enrollment, which introduced the claim.
+	TenantUUID string `json:"tenant_uuid"`
+}
+
+// TenantUUIDFromToken returns the tenant_uuid claim carried by an enrollment
+// token, and whether one was there at all.
+//
+// ok=false covers two ordinary states and does not distinguish them, because a
+// caller can do nothing different about either: a Wendy-minted token for an org
+// with no pki tenant, and a token that is not a Wendy JWT in the first place
+// (pki-core's own enrollment tokens are opaque values with no claims to read).
+// Both mean "take the tenant from the enrol input instead".
+func TenantUUIDFromToken(token string) (tenantUUID string, ok bool) {
+	c, err := Parse(token)
+	if err != nil || c.TenantUUID == "" {
+		return "", false
+	}
+	return c.TenantUUID, true
 }
 
 // Parse decodes the base64url JSON payload (the second dot-separated segment)

@@ -41,6 +41,14 @@ type fakeLoopback struct {
 	credChanged        []uint32
 	removed            []uint32
 	shutdownCalled     bool
+
+	// Auxiliary-node state backs the two-plane camera data path. auxNext is the
+	// number the next allocation hands out; auxErr forces the band-exhausted
+	// path; auxCreated and auxRemoved record the calls.
+	auxNext    int
+	auxErr     error
+	auxCreated []int
+	auxRemoved []int
 }
 
 func newFakeLoopback() *fakeLoopback {
@@ -49,6 +57,33 @@ func newFakeLoopback() *fakeLoopback {
 		acquireCount: make(map[uint32]int),
 		releaseCount: make(map[uint32]int),
 	}
+}
+
+func (f *fakeLoopback) AllocateAuxNodeNumber() (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.auxErr != nil {
+		return 0, f.auxErr
+	}
+	if f.auxNext == 0 {
+		f.auxNext = 255
+	}
+	nr := f.auxNext
+	f.auxNext--
+	return nr, nil
+}
+
+func (f *fakeLoopback) EnsureAuxNode(_ context.Context, nr int, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.auxCreated = append(f.auxCreated, nr)
+	return nil
+}
+
+func (f *fakeLoopback) RemoveAuxNode(nr int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.auxRemoved = append(f.auxRemoved, nr)
 }
 
 func (f *fakeLoopback) Available() error {

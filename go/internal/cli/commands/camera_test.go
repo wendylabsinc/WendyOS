@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -727,5 +728,98 @@ func TestH264FeedBuffer_TakeBlocksUntilPush(t *testing.T) {
 	}
 	if !bytes.Equal(data, idr) {
 		t.Errorf("take = %v, want %v", data, idr)
+	}
+}
+
+// producerRestartedError is the status the agent returns to a parameter-less
+// viewer whose camera an episode capture took over.
+func producerRestartedError(t *testing.T) error {
+	t.Helper()
+	return streamreason.New(codes.Unavailable,
+		"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream",
+		streamreason.CameraProducerRestarted, nil)
+}
+
+// Capture takeover ends a parameter-less viewer's stream on purpose: a new
+// producer means a new sequence parameter set, and splicing both into one
+// timeline would corrupt the decode. `camera view` is parameter-less by
+// default, so it must rejoin rather than leave the operator with a dead
+// window.
+func TestCameraViewRejoinsAfterAProducerRestart(t *testing.T) {
+	opens := 0
+	open := func() (videoStream, error) {
+		opens++
+		if opens == 1 {
+			return &mockVideoStream{err: producerRestartedError(t)}, nil
+		}
+		return &mockVideoStream{frames: []*agentpb.VideoFrame{{Data: []byte("frame")}}}, nil
+	}
+	var played [][]byte
+	play := func(stream videoStream) error {
+		for {
+			frame, err := stream.Recv()
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				// The real playback paths wrap the receive error; the rejoin
+				// decision must see through that wrapping.
+				return fmt.Errorf("receiving video: %w", err)
+			}
+			played = append(played, frame.GetData())
+		}
+	}
+
+	if err := streamCameraRejoiningRestarts(context.Background(), open, play); err != nil {
+		t.Fatalf("streamCameraRejoiningRestarts: %v", err)
+	}
+	if opens != 2 {
+		t.Fatalf("streams opened = %d, want 2 (the original and the rejoin)", opens)
+	}
+	if len(played) != 1 || string(played[0]) != "frame" {
+		t.Fatalf("frames played = %q, want the one frame from the replacement stream", played)
+	}
+}
+
+// Any other error ends the viewer as before: only the restart is recoverable.
+func TestCameraViewDoesNotRejoinOnOtherErrors(t *testing.T) {
+	opens := 0
+	open := func() (videoStream, error) {
+		opens++
+		return &mockVideoStream{err: status.Error(codes.Unavailable, "device gone")}, nil
+	}
+	play := func(stream videoStream) error {
+		_, err := stream.Recv()
+		return err
+	}
+	if err := streamCameraRejoiningRestarts(context.Background(), open, play); err == nil {
+		t.Fatal("a plain Unavailable was swallowed")
+	}
+	if opens != 1 {
+		t.Fatalf("streams opened = %d, want 1: only a producer restart is rejoined", opens)
+	}
+}
+
+// A device that keeps restarting its producer is busy recording. Say so rather
+// than reconnecting forever.
+func TestCameraViewGivesUpAfterRepeatedRestarts(t *testing.T) {
+	opens := 0
+	open := func() (videoStream, error) {
+		opens++
+		return &mockVideoStream{err: producerRestartedError(t)}, nil
+	}
+	play := func(stream videoStream) error {
+		_, err := stream.Recv()
+		return err
+	}
+	err := streamCameraRejoiningRestarts(context.Background(), open, play)
+	if err == nil {
+		t.Fatal("the viewer rejoined forever instead of reporting a busy device")
+	}
+	if !strings.Contains(err.Error(), "busy recording") {
+		t.Fatalf("error does not say the device is busy recording: %v", err)
+	}
+	if opens != cameraRejoinAttempts {
+		t.Fatalf("streams opened = %d, want %d", opens, cameraRejoinAttempts)
 	}
 }

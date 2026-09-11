@@ -321,10 +321,30 @@ func SetAlsaVolume(ctx context.Context, card uint64, percent uint32) (uint32, er
 	return actual, nil
 }
 
+// arecordPeriodTimeArg and arecordBufferTimeArg bound how much audio arecord
+// lets accumulate in the device buffer before handing it over. Without them
+// arecord takes the driver's default, which MEASURED on a Jetson Orin Nano with
+// a Logitech C920 microphone left 208 ms of backlog ahead of every read: the
+// samples a caller stamps are already a fifth of a second old, and no honest
+// uncertainty can be published over a delay that large. Ten millisecond periods
+// four deep is the conventional xrun-safe low-latency shape and caps the
+// backlog at 40 ms.
+//
+// The units are time rather than frames deliberately. sampleRate is a
+// parameter, so a frame count would bound the backlog differently at every
+// rate, while a time bound holds at all of them.
+const (
+	arecordPeriodTimeArg = "--period-time=10000" // 10 ms periods
+	arecordBufferTimeArg = "--buffer-time=40000" // four periods, 40 ms of device buffer
+)
+
 // ArecordCommand builds an arecord invocation that emits raw s16le PCM on
 // stdout from device (an ALSA -D argument, e.g. "plughw:0,0"), matching
 // pw-record's output shape so a caller can treat either source the same way
 // once the process is running.
+//
+// pw-record takes its latency from startCapture's latency argument; arecord has
+// no equivalent and silently ignores it, so this path carries its own bound.
 func ArecordCommand(ctx context.Context, device string, sampleRate, channels uint32) *exec.Cmd {
 	return exec.CommandContext(ctx, "arecord",
 		"-q",
@@ -333,6 +353,8 @@ func ArecordCommand(ctx context.Context, device string, sampleRate, channels uin
 		"-r", strconv.FormatUint(uint64(sampleRate), 10),
 		"-c", strconv.FormatUint(uint64(channels), 10),
 		"-t", "raw",
+		arecordPeriodTimeArg,
+		arecordBufferTimeArg,
 		"-",
 	)
 }

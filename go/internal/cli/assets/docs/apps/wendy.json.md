@@ -516,6 +516,26 @@ on their next call without a redeploy.
 > **Security:** `notifications` exposes only entitled app-facing APIs. It does
 > not expose `WENDY_AGENT_SOCKET` or any app/device administration RPC.
 
+### `episode-write`
+
+Allows an app to write into the device's recorded dataset: it submits structured
+events and predictions to the episode recorder through an app-private Unix
+socket.
+
+```json
+{ "type": "episode-write" }
+```
+
+The agent mounts `/run/wendy/data` read-only and injects
+`WENDY_DATA_SOCKET=/run/wendy/data/data.sock`. The protocol accepts records up
+to 64 KiB and acknowledges them as `buffered`, `recorded`, or `rejected`.
+Buffered records provide application pre-roll and can trigger deployed Wendy
+Data campaigns — which is why the grant is stronger than plain logging, since
+triggers match on application event names and prediction attributes, so an app
+holding it can start recordings. The socket is restored from container labels
+after agent restart; the entitlement never exposes the administrative agent
+socket, and grants no sensor read access.
+
 ### `admin`
 
 Grants the container the wendy-agent's **full gRPC over a local unix socket** (`/run/wendy/agent.sock`, exposed as `WENDY_AGENT_SOCKET`) — with **no authentication**.

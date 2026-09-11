@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/configpartition"
 	"github.com/wendylabsinc/wendy/go/internal/agent/container"
 	agentcontainerd "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
+	agentdata "github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostexec"
@@ -296,11 +298,31 @@ func main() {
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
 	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
 	telemetrySvcV2 := services.NewTelemetryServiceV2(logger, broadcaster, telemetryBuf)
+	dataRoot := os.Getenv("WENDY_DATA_DIR")
+	dataManager, err := agentdata.NewManager(dataRoot)
+	if err != nil {
+		logger.Fatal("Failed to initialize episode data manager", zap.Error(err))
+	}
+	dataManager.SetConsensusProvider(func(ctx context.Context) (timesync.Consensus, error) {
+		return timesync.QueryConsensus(ctx, timesync.Servers)
+	})
+	dataManager.SetWarnLogger(func(msg string) { logger.Warn(msg) })
+	// Episode store bounds. The enforced quota is the smaller of a fifth of the
+	// data filesystem and this cap, and eviction preserves the reserve as free
+	// space. A device whose data partition wants different bounds sets these
+	// rather than being stuck with the built-in numbers.
+	dataManager.SetQuota(
+		envBytes(logger, "WENDY_DATA_MAX_BYTES", agentdata.DefaultMaxQuotaBytes, 1),
+		envBytes(logger, "WENDY_DATA_RESERVE_BYTES", agentdata.DefaultReserveBytes, 0),
+	)
+	dataSvc := services.NewDataService(dataManager)
+	dataSvc.SetAudioService(audioSvc)
 	// ROS 2 inspection requires the containerd-backed sidecar runtime; the
 	// service is only registered when containerd connected (WDY-1332).
 	var ros2Svc *services.ROS2Service
 	if ctrdClient != nil {
 		ros2Svc = services.NewROS2Service(logger, ctrdClient, agentcontainerd.ROS2BagDir)
+		dataSvc.SetROS2Service(ros2Svc)
 	}
 
 	// OTEL receivers.
@@ -311,10 +333,42 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The device's SECOND identity: a pki-core device certificate whose only
+	// Uniform Resource Identifier Subject Alternative Name is
+	// spiffe://wendy.sh/tenant/<tenant>/device/<name>. It is presented to the
+	// Wendy Data Platform's ingest endpoint and to nothing else; every cloud
+	// dialer keeps presenting the enrolled asset certificate, because Wendy
+	// Cloud's interceptors read only the urn:wendy:org: form.
+	//
+	// Built here, before registerAllServices, because StagePKIEnrollment on
+	// WendyProvisioningService hands it a token over the wire and every
+	// listener that serves StartProvisioning serves that method too. The
+	// startup pass over an already-staged file runs further down, once the
+	// rest of the agent is assembled.
+	pkiEnrollment := services.NewPKIEnrollment(logger, configPath, provisioningSvc)
+	provisioningSvcV2.WithPKIEnrollment(ctx, pkiEnrollment)
+
+	// The video service is constructed before the app socket managers because it
+	// owns the camera producer the sensor sockets subscribe apps to, and every
+	// per-app sensor socket must be built with that provider already registered.
+	var videoROSRuntime []services.ROS2Runtime
+	if ctrdClient != nil {
+		videoROSRuntime = append(videoROSRuntime, ctrdClient)
+	}
+	videoSvc := services.NewVideoService(ctx, logger, videoROSRuntime...)
+	dataSvc.SetVideoService(videoSvc)
+	// Arm pre-roll for campaigns deployed in a previous agent lifetime so their
+	// next trigger opens BEFORE the trigger instant, not only campaigns deployed
+	// during this run.
+	dataSvc.ReconcileArming(ctx)
+	defer videoSvc.Shutdown()
+
 	notificationSender := services.NewCloudNotificationSender(logger, provisioningSvc)
 	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
+	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)
 	if ctrdClient != nil {
 		ctrdClient.SetAppSystemAPISocketProvider(systemAPISocketManager)
+		ctrdClient.SetAppDataSocketProvider(appDataSocketManager)
 		ctrdClient.RestoreAppSystemAPISockets(ctx)
 	}
 
@@ -323,12 +377,6 @@ func main() {
 
 	startROS2BatteryMonitor(ctx, logger, configPath)
 
-	var videoROSRuntime []services.ROS2Runtime
-	if ctrdClient != nil {
-		videoROSRuntime = append(videoROSRuntime, ctrdClient)
-	}
-	videoSvc := services.NewVideoService(ctx, logger, videoROSRuntime...)
-	defer videoSvc.Shutdown()
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.
 	videoSvc.StartDiscovery()
@@ -589,6 +637,7 @@ func main() {
 		agentpbv2.RegisterWendyProvisioningServiceServer(srv, provisioningSvcV2)
 		agentpbv2.RegisterWendyAudioServiceServer(srv, audioSvcV2)
 		agentpbv2.RegisterWendyTelemetryServiceServer(srv, telemetrySvcV2)
+		agentpbv2.RegisterDataServiceServer(srv, dataSvc)
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)
 		if ros2Svc != nil {
@@ -923,6 +972,20 @@ func main() {
 	// coming up locally (mDNS discovery still works unenrolled).
 	go provisioningSvc.ApplyEnrollmentFile(context.Background())
 
+	// Redeem a pki-core enrollment token staged at
+	// <configPath>/pki-enrollment.json, exactly as enrollment.json drives the
+	// cloud enrolment above, and a no-op when no such file exists. The manager
+	// itself was built next to ctx, because StagePKIEnrollment also hands it
+	// tokens over the wire.
+	go func() {
+		pkiEnrollment.ApplyStagedFile(ctx)
+		// Renewal starts after enrolment so a device enrolled on this boot
+		// does not wait for a restart to be renewable. A device with no pki
+		// identity gets no renewer, which is the ordinary case; a device
+		// enrolled later over StagePKIEnrollment starts one then.
+		pkiEnrollment.EnsureRenewer(ctx)
+	}()
+
 	// Restore audio peripherals paired before the last reboot. Nothing else
 	// does: BlueZ only reconnects after a link supervision timeout and has no
 	// startup path, and a speaker that was already powered when the host went
@@ -989,6 +1052,20 @@ func main() {
 	}()
 
 	cloudFlusher := services.NewCloudFlusherWithProvisioning(logger, telemetryBuf, provisioningSvc)
+	// WENDY_DATA_TELEMETRY_URL redirects OpenTelemetry Protocol (OTLP) exports
+	// to a different collector endpoint. The broker's OTLP handler has sinks for
+	// Loki, Prometheus and Tempo but none for the data platform's store, so
+	// telemetry sent there does not reach ClickHouse; pointing the flusher at
+	// the wendy-data ingest service lands the same frames in
+	// telemetry_metrics, telemetry_logs and telemetry_traces. Unlike
+	// WENDY_DATA_INGEST_URL below this keeps its fallback to the enrolled cloud
+	// host, which does serve these routes. Identity is the enrolled asset
+	// certificate presented in the TLS handshake; no request header carries it.
+	if v := os.Getenv("WENDY_DATA_TELEMETRY_URL"); v != "" {
+		cloudFlusher.SetTelemetryHostOverride(v)
+		logger.Info("cloud flusher: telemetry endpoint override set",
+			zap.String("url", v))
+	}
 	if telemetryBuf.DiskEnabled() {
 		wg.Add(1)
 		go func() {
@@ -996,6 +1073,38 @@ func main() {
 			cloudFlusher.Run(ctx)
 		}()
 	}
+
+	// Episode transfer worker: uploads sealed episodes to the cloud ingest
+	// service over the same asset mTLS identity as the telemetry flusher. Its
+	// queue is the episode store the data manager owns, which NewManager above
+	// created (the agent exits when it cannot), so the only start condition is
+	// provisioning completion, which Run waits for itself. It is deliberately
+	// NOT gated on telemetry disk buffering: that reports on a different store,
+	// and gating on it would silently leave every sealed episode unuploaded
+	// until the quota evicted it.
+	dataTransferWorker := services.NewDataTransferWorker(logger, dataManager, provisioningSvc)
+	// Present the pki-core device identity to the ingest endpoint when one is
+	// stored. The store is read per dial, so a device enrolled after the agent
+	// came up switches identity on its next upload pass without a restart, and
+	// a device with no pki identity keeps presenting the asset certificate.
+	dataTransferWorker.SetPKIIdentity(pkiEnrollment.Store())
+	// WENDY_DATA_INGEST_URL names the DataIngestService endpoint episode uploads
+	// dial (ingest.data.wendy.sh in dev). There is no fallback: the enrolled
+	// cloud host does not serve DataIngestService. Unset disables uploads, the
+	// worker says so once, and sealed episodes stay queued on the device.
+	// Identity is the enrolled asset certificate presented in the TLS
+	// handshake; no request header carries it.
+	if v := os.Getenv("WENDY_DATA_INGEST_URL"); v != "" {
+		dataTransferWorker.SetIngestEndpoint(v)
+		logger.Info("data transfer worker: ingest endpoint", zap.String("url", v))
+	} else {
+		logger.Error("data transfer worker: WENDY_DATA_INGEST_URL is not set; episode uploads are disabled")
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dataTransferWorker.Run(ctx)
+	}()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -1222,4 +1331,30 @@ func handleUtilityCommand(args []string) (bool, int) {
 
 	fmt.Printf("Opening %s in default browser...\n", rawURL)
 	return true, 0
+}
+
+// envBytes reads a byte count from the environment, falling back to fallback
+// when the variable is unset. A value that is present but unusable is reported
+// rather than silently ignored: a device configured with a bad quota should
+// learn that its configuration did not take.
+//
+// minimum is the smallest value the setting accepts. It exists because the two
+// callers disagree about zero: a reserve of zero is a real choice ("keep no
+// headroom"), while a maximum quota of zero is not a store that holds nothing,
+// it is a value SetQuota discards in favour of the default. Accepting zero for
+// the quota therefore produced a device running on 50 GiB while its operator
+// believed they had capped it, with nothing logged either way.
+func envBytes(logger *zap.Logger, name string, fallback, minimum int64) int64 {
+	raw, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || v < minimum {
+		logger.Warn("ignoring unusable byte count in environment; using the default",
+			zap.String("variable", name), zap.String("value", raw),
+			zap.Int64("minimum", minimum), zap.Int64("default", fallback))
+		return fallback
+	}
+	return v
 }

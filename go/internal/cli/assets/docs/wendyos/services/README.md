@@ -99,3 +99,30 @@ journalctl -fu wendyos-agent.service
 # Check mount targets
 systemctl status var-lib-containerd.mount home.mount
 ```
+
+## Wendy Data storage
+
+`WENDY_DATA_INGEST_URL` is the cloud DataIngestService endpoint sealed episodes are
+uploaded to (`ingest.data.wendy.sh` for the dev data platform). It is required for
+uploads: the enrolled cloud host does not serve this service, so there is no
+fallback. Without it the agent logs once at startup that uploads are disabled and
+sealed episodes stay queued in the local store, bounded by its quota. The device
+authenticates with its enrolled asset certificate in the TLS handshake; no request
+header carries identity.
+
+`WENDY_DATA_TELEMETRY_URL` optionally redirects OpenTelemetry exports to the same
+platform so device telemetry lands in its ClickHouse store. Unset, telemetry goes
+to the enrolled cloud host as before.
+
+`WENDY_DATA_DIR` sets the root directory for the device-local Episode store.
+The production default is `/var/lib/wendy-agent/data/episodes`. Set it in the
+agent service environment when Episodes should live on a larger data volume:
+
+```sh
+WENDY_DATA_DIR=/data/wendy-agent/data/episodes wendy-agent
+```
+
+The agent creates the directory on startup. Unprivileged developer agents that
+cannot create the production default fall back to their platform user
+configuration directory. WendyOS services should set an explicit path on the
+persistent `/data` partition when the root filesystem is small.

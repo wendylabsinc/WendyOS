@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -404,6 +405,29 @@ func TestWendyLabels_EntitlementsStoredAsKeyValue(t *testing.T) {
 	}
 }
 
+func TestWendyLabels_TypeOnlyEntitlementsUseNonEmptyValues(t *testing.T) {
+	entitlements := []appconfig.Entitlement{
+		{Type: appconfig.EntitlementCamera},
+		{Type: appconfig.EntitlementNotifications},
+	}
+	labels := wendyLabels("app", "", "1.0", nil, entitlements, "", nil)
+
+	for _, entitlement := range entitlements {
+		key := appconfig.EntitlementAnnotationKeyPrefix + entitlement.Type
+		raw, ok := labels[key]
+		if !ok {
+			t.Fatalf("missing entitlement label %q", key)
+		}
+		if raw == "" {
+			t.Fatalf("entitlement label %q has an empty value; containerd drops empty-valued labels", key)
+		}
+		got := appconfig.ParseEntitlementAnnotation(entitlement.Type, raw)
+		if got.Type != entitlement.Type {
+			t.Fatalf("parsed entitlement type = %q, want %q", got.Type, entitlement.Type)
+		}
+	}
+}
+
 func TestWendyLabels_DuplicateEntitlementType(t *testing.T) {
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementPersist, Name: "data", Path: "/data"},
@@ -732,5 +756,65 @@ func TestContainerArgs_DoesNotMutateImageConfig(t *testing.T) {
 	}
 	if len(cfg.Entrypoint) != 1 || cfg.Entrypoint[0] != "/app/server" {
 		t.Fatalf("image config entrypoint mutated: %q", cfg.Entrypoint)
+	}
+}
+
+// dropEmptyLabelValues mimics containerd's bolt metadata store, which silently
+// deletes any label whose value is the empty string when a container record is
+// written (boltutil writeMap). Tests that assert labels survive a container
+// create must round-trip through this, not just through the in-memory map.
+func dropEmptyLabelValues(labels map[string]string) map[string]string {
+	persisted := make(map[string]string, len(labels))
+	for k, v := range labels {
+		if v == "" {
+			continue
+		}
+		persisted[k] = v
+	}
+	return persisted
+}
+
+// TestChunkDiffCreateLabels_RoundTripThroughContainerd covers the label set a
+// chunk-diff deploy produces end to end: the CLI marshals the AppConfig
+// (deployByChunkDiff), the agent's RunContainer handler unmarshals it, and
+// CreateContainerWithProgress builds the container labels via wendyLabels.
+// containerd then persists them, dropping empty-valued labels. Restart
+// reconciliation (RestoreAppSystemAPISockets) reconstructs entitlements from
+// what actually survives that store, so every entitlement — including type-only
+// ones like camera and episode-write, whose annotation value used to encode as
+// "" — must round-trip through parseEntitlementsFromAnnotations.
+func TestChunkDiffCreateLabels_RoundTripThroughContainerd(t *testing.T) {
+	appConfigJSON := []byte(`{
+		"appId": "sh.wendy.examples.flightrecorder",
+		"version": "1.0.0",
+		"entitlements": [
+			{"type": "camera"},
+			{"type": "episode-write"},
+			{"type": "serial", "device": "ttyACM0"}
+		]
+	}`)
+	var cfg appconfig.AppConfig
+	if err := json.Unmarshal(appConfigJSON, &cfg); err != nil {
+		t.Fatalf("unmarshaling app config: %v", err)
+	}
+
+	labels := wendyLabels(cfg.AppID, "", cfg.Version, nil, cfg.Entitlements, cfg.Isolation, nil)
+	persisted := dropEmptyLabelValues(labels)
+
+	got := parseEntitlementsFromAnnotations(persisted)
+	for _, want := range []string{
+		appconfig.EntitlementCamera,
+		appconfig.EntitlementEpisodeWrite,
+		appconfig.EntitlementSerial,
+	} {
+		if !entitlementsContain(got, want) {
+			t.Errorf("entitlement %q did not survive the containerd label round-trip; persisted labels: %v", want, persisted)
+		}
+	}
+	// The other half: an entitlement carrying a payload must keep it, not just
+	// survive as a bare type.
+	serial, ok := entitlementOfType(got, appconfig.EntitlementSerial)
+	if !ok || serial.Device != "ttyACM0" {
+		t.Errorf("serial device did not survive the round-trip: %+v", serial)
 	}
 }

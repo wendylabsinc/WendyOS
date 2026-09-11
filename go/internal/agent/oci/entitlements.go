@@ -54,6 +54,9 @@ type ApplyOptions struct {
 	// SystemAPISocketDir is the app-specific host directory prepared by
 	// AppSystemAPISocketManager. It contains only the narrow System API socket.
 	SystemAPISocketDir string
+	// DataSocketDir is an app-private directory containing only data.sock, the
+	// episode-write grant's socket.
+	DataSocketDir string
 	// HostResolvConfPath is a wendy-managed resolv.conf that points at a live
 	// resolver in the host network namespace. When empty, host networking keeps
 	// the compatibility fallback of bind-mounting the host resolver file.
@@ -118,6 +121,8 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			}
 		case appconfig.EntitlementNotifications:
 			applySystemAPI(spec, opts.SystemAPISocketDir)
+		case appconfig.EntitlementEpisodeWrite:
+			applyDataSocket(spec, opts.DataSocketDir)
 		case appconfig.EntitlementAdmin:
 			applyAdmin(spec)
 		case appconfig.EntitlementBuild:
@@ -125,6 +130,21 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 		}
 	}
 	return nil
+}
+
+func applyDataSocket(spec *Spec, hostDirectory string) {
+	if hostDirectory == "" {
+		return
+	}
+	const containerDirectory = "/run/wendy/data"
+	socketPath := filepath.Join(hostDirectory, "data.sock")
+	fi, err := os.Lstat(socketPath)
+	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return
+	}
+	spec.Mounts = append(spec.Mounts, Mount{Destination: containerDirectory, Source: hostDirectory, Type: "bind", Options: []string{"rbind", "nosuid", "noexec", "ro"}})
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, appSystemAPIGroupGID)
+	spec.Process.Env = append(spec.Process.Env, "WENDY_DATA_SOCKET="+containerDirectory+"/data.sock")
 }
 
 // SetDeviceCapabilities adds standard device capabilities plus the cgroup

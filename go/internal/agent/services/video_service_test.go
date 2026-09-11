@@ -823,13 +823,13 @@ func TestDeviceHub_GetOrCreateHub_RejectsParamMismatch(t *testing.T) {
 	req1 := &agentpb.StreamVideoRequest{Width: 1280, Height: 720, Framerate: 30}
 	req2 := &agentpb.StreamVideoRequest{Width: 640, Height: 480, Framerate: 30}
 
-	h, id, _, err := svc.getOrCreateHub(ctx, "/dev/video0", req1)
+	h, id, _, err := svc.getOrCreateHub(ctx, "/dev/video0", req1, hubHolderStreamClient)
 	if err != nil {
 		t.Fatalf("first getOrCreateHub failed: %v", err)
 	}
 	defer h.unsubscribe(id)
 
-	_, _, _, err = svc.getOrCreateHub(ctx, "/dev/video0", req2)
+	_, _, _, err = svc.getOrCreateHub(ctx, "/dev/video0", req2, hubHolderStreamClient)
 	if err == nil {
 		t.Fatal("expected error for mismatched params, got nil")
 	}

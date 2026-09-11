@@ -62,6 +62,162 @@ class ReviewError(RuntimeError):
     """A deterministic security-review failure that must fail the check."""
 
 
+# Paths whose contents no human wrote and no reviewer can act on. They are
+# excluded from the byte budget and from the diff the model reads.
+#
+# WHY THIS EXISTS. The budget is a guard against a partial review: a diff that
+# does not fit is rejected outright rather than truncated, so that nobody
+# mistakes a review of the first half for a review. Regenerated protobuf stubs
+# defeat that guard from the other side. A single `go/proto/gen/**` refresh runs
+# to tens of thousands of bytes of code that is a mechanical function of the
+# .proto files in the same pull request, so a change with a few hand-written
+# lines exceeded the limit and received no review at all. Excluding them keeps
+# the reviewer on the lines a person actually wrote, which are also the lines
+# the .proto diff itself still shows.
+DEFAULT_GENERATED_GLOBS = (
+    "go/proto/gen/**",
+    "*.pb.go",
+    "*_grpc.pb.go",
+)
+GITATTRIBUTES_NAME = ".gitattributes"
+LINGUIST_GENERATED = "linguist-generated"
+DIFF_SECTION_RE = re.compile(r"^diff --git ", re.MULTILINE)
+
+
+def _glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Translate one gitattributes/gitignore-style path glob into a regex.
+
+    Git's rules, as far as they matter here: a pattern with no slash matches the
+    basename at any depth, a trailing slash means "everything under it", `**`
+    crosses directory separators and a single `*` does not.
+    """
+    pattern = pattern.strip().lstrip("/")
+    if pattern.endswith("/"):
+        pattern += "**"
+    if "/" not in pattern.rstrip("*"):
+        pattern = "**/" + pattern
+    out: list[str] = []
+    index = 0
+    while index < len(pattern):
+        if pattern.startswith("**/", index):
+            out.append("(?:.*/)?")
+            index += 3
+        elif pattern.startswith("**", index):
+            out.append(".*")
+            index += 2
+        elif pattern[index] == "*":
+            out.append("[^/]*")
+            index += 1
+        elif pattern[index] == "?":
+            out.append("[^/]")
+            index += 1
+        else:
+            out.append(re.escape(pattern[index]))
+            index += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def gitattributes_generated_globs(text: str) -> tuple[str, ...]:
+    """Read the patterns a .gitattributes marks linguist-generated.
+
+    Parsed here rather than shelled out to `git check-attr` so the rule is the
+    same one a reader of the file sees, and so the script stays runnable outside
+    a checkout (its own tests included).
+    """
+    globs: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split()
+        pattern, attributes = fields[0], fields[1:]
+        for attribute in attributes:
+            name, _, value = attribute.partition("=")
+            if name.lstrip("-!") != LINGUIST_GENERATED:
+                continue
+            # "-attr" and "attr=false" unset it; a bare name or "=true" sets it.
+            if name.startswith("-") or value.lower() in {"false", "0"}:
+                break
+            globs.append(pattern)
+            break
+    return tuple(globs)
+
+
+def generated_globs(repo_root: str | pathlib.Path | None = None) -> tuple[str, ...]:
+    """The built-in conventions plus whatever .gitattributes marks generated."""
+    root = pathlib.Path(repo_root) if repo_root is not None else pathlib.Path.cwd()
+    attributes = root / GITATTRIBUTES_NAME
+    from_file: tuple[str, ...] = ()
+    if attributes.is_file():
+        from_file = gitattributes_generated_globs(
+            attributes.read_text(encoding="utf-8", errors="replace")
+        )
+    return tuple(dict.fromkeys(DEFAULT_GENERATED_GLOBS + from_file))
+
+
+def is_generated_path(path: str, globs: tuple[str, ...]) -> bool:
+    path = path.strip().lstrip("/")
+    return any(_glob_to_regex(pattern).match(path) for pattern in globs)
+
+
+def _section_path(section: str) -> str:
+    """The path a single `diff --git` section is about.
+
+    Read off the `+++ b/` line where there is one, because it survives paths
+    containing spaces, which the `diff --git a/x b/x` header does not. A
+    deletion falls back to `--- a/`, and a binary or mode-only change to the
+    header, parsed on the assumption both halves name the same path.
+    """
+    lines = section.split("\n")
+    for line in lines:
+        if line.startswith("+++ b/"):
+            return line[len("+++ b/") :].strip()
+    for line in lines:
+        if line.startswith("--- a/"):
+            return line[len("--- a/") :].strip()
+    header = lines[0][len("diff --git ") :].strip() if lines else ""
+    match = re.fullmatch(r'"?a/(.+?)"? "?b/\1"?', header)
+    if match:
+        return match.group(1)
+    _, _, second = header.partition(" b/")
+    return second.strip().strip('"')
+
+
+def split_diff_sections(diff_text: str) -> list[tuple[str, str]]:
+    """Split a unified diff into (path, section) pairs that rejoin exactly."""
+    starts = [match.start() for match in DIFF_SECTION_RE.finditer(diff_text)]
+    if not starts:
+        return [("", diff_text)] if diff_text else []
+    sections: list[tuple[str, str]] = []
+    if starts[0] > 0:
+        sections.append(("", diff_text[: starts[0]]))
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else len(diff_text)
+        section = diff_text[start:end]
+        sections.append((_section_path(section), section))
+    return sections
+
+
+def partition_generated(
+    diff_text: str, globs: tuple[str, ...] | None = None
+) -> tuple[str, list[str]]:
+    """Return (reviewable diff, paths excluded as generated)."""
+    if globs is None:
+        globs = generated_globs()
+    kept: list[str] = []
+    excluded: list[str] = []
+    for path, section in split_diff_sections(diff_text):
+        if path and is_generated_path(path, globs):
+            excluded.append(path)
+            continue
+        kept.append(section)
+    return "".join(kept), excluded
+
+
+def reviewable_diff(diff_text: str, globs: tuple[str, ...] | None = None) -> str:
+    return partition_generated(diff_text, globs)[0]
+
+
 def _load_json(path: str | pathlib.Path) -> Any:
     return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
 
@@ -106,6 +262,7 @@ def build_input_manifest(
     expected_pr_number: int,
     expected_head_sha: str,
     max_diff_bytes: int = MAX_DIFF_BYTES,
+    globs: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ReviewError("PR metadata must be a JSON object")
@@ -152,34 +309,57 @@ def build_input_manifest(
         )
 
     byte_count = len(diff_bytes)
+    # The budget is spent on lines a person wrote. Generated files are dropped
+    # from the count and from the reviewed diff, so a protobuf regeneration
+    # cannot push a hand-written change past the limit and out of review; the
+    # full diff's size and digest are still recorded, so the exclusion is
+    # visible rather than silent.
+    reviewable_text, generated_paths = partition_generated(diff_text, globs)
+    reviewable_bytes = len(reviewable_text.encode("utf-8"))
     manifest = {
         "additions": additions,
         "changed_files": changed_files,
         "deletions": deletions,
         "diff_bytes": byte_count,
         "diff_characters": len(diff_text),
+        "generated_bytes_excluded": byte_count - reviewable_bytes,
+        "generated_files_excluded": len(generated_paths),
         "head_sha": head_sha.lower(),
         "max_diff_bytes": max_diff_bytes,
         "pr_number": number,
-        "prepared_bytes": byte_count if byte_count <= max_diff_bytes else 0,
+        "prepared_bytes": reviewable_bytes if reviewable_bytes <= max_diff_bytes else 0,
+        "reviewable_bytes": reviewable_bytes,
+        "reviewed_files": changed_files - len(generated_paths),
         "sha256": hashlib.sha256(diff_bytes).hexdigest(),
-        "truncation": "none" if byte_count <= max_diff_bytes else "rejected",
+        "truncation": "none" if reviewable_bytes <= max_diff_bytes else "rejected",
     }
-    if byte_count > max_diff_bytes:
+    if reviewable_bytes > max_diff_bytes:
         raise ReviewError(
             "PR diff is too large for one complete AI review: "
-            f"{byte_count:,} bytes across {changed_files} files exceeds the "
-            f"{max_diff_bytes:,}-byte limit. Split the PR; no partial review was performed."
+            f"{reviewable_bytes:,} hand-written bytes across "
+            f"{changed_files - len(generated_paths)} files exceeds the "
+            f"{max_diff_bytes:,}-byte limit "
+            f"({len(generated_paths)} generated file(s) already excluded). "
+            "Split the PR; no partial review was performed."
         )
     return manifest
 
 
 def coverage_text(manifest: dict[str, Any], *, reviewed: bool) -> str:
-    byte_count = manifest["diff_bytes"] if reviewed else manifest["prepared_bytes"]
+    reviewable = manifest.get("reviewable_bytes", manifest["diff_bytes"])
+    byte_count = reviewable if reviewed else manifest["prepared_bytes"]
+    reviewed_files = manifest.get("reviewed_files", manifest["changed_files"])
     verb = "reviewed" if reviewed else "prepared for review"
+    excluded = manifest.get("generated_files_excluded", 0)
+    generated = ""
+    if excluded:
+        generated = (
+            f" {excluded} generated file(s) excluded "
+            f"({manifest.get('generated_bytes_excluded', 0):,} bytes);"
+        )
     return (
-        f"**Input coverage:** {manifest['changed_files']}/{manifest['changed_files']} changed files; "
-        f"{byte_count:,}/{manifest['diff_bytes']:,} bytes {verb}; "
+        f"**Input coverage:** {reviewed_files}/{manifest['changed_files']} changed files; "
+        f"{byte_count:,}/{manifest['diff_bytes']:,} bytes {verb};{generated} "
         f"diff SHA-256 `{manifest['sha256']}`; truncation: {manifest['truncation']}."
     )
 
@@ -781,7 +961,14 @@ def command_review(args: argparse.Namespace) -> None:
 
     metadata = _load_json(args.metadata)
     manifest = _load_json(args.manifest)
-    diff = pathlib.Path(args.diff).read_text(encoding="utf-8")
+    # Filtered with the same rule prepare-input costed, so the model reads
+    # exactly the bytes the budget was spent on.
+    diff = reviewable_diff(pathlib.Path(args.diff).read_text(encoding="utf-8"))
+    if not diff.strip():
+        diff = (
+            "(Every changed file in this pull request is a generated file "
+            "excluded from review. There are no hand-written changes to assess.)"
+        )
     previous_review = pathlib.Path(args.previous).read_text(encoding="utf-8")
     client = anthropic.Anthropic()
 
