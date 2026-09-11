@@ -5,9 +5,12 @@ import WendyAgentGRPC
 
 /// One encoded H.264 access unit in Annex-B framing (start-code delimited),
 /// with SPS/PPS prepended on keyframes so the stream is self-describing.
-struct CameraFrame: Sendable {
+struct CameraFrame: Equatable, Sendable {
     var annexB: Data
     var isKeyframe: Bool
+    /// Capture presentation time, for consumers that carry timestamps on the
+    /// wire (`WendyVideoService`). Sensor channels ignore it.
+    var timestampNanoseconds: UInt64 = 0
 }
 
 /// Produces H.264 camera frames. Injectable so `SensorService` can be tested
@@ -15,6 +18,23 @@ struct CameraFrame: Sendable {
 protocol CameraCapturing: Sendable {
     func frames() -> AsyncThrowingStream<CameraFrame, any Error>
     func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor?
+}
+
+/// A camera as `WendyVideoService` presents it: a small numeric ID (position
+/// in the deterministic enumeration order), the AVFoundation unique ID it maps
+/// back to, and the display name.
+struct CameraDeviceInfo: Equatable, Sendable {
+    let id: UInt32
+    let uniqueID: String
+    let name: String
+    let isExternal: Bool
+}
+
+/// Enumerates cameras and opens an encoded stream on a chosen one. Injectable
+/// so `WendyVideoService` can be tested without hardware.
+protocol CameraManaging: Sendable {
+    func devices() async -> [CameraDeviceInfo]
+    func frames(for device: CameraDeviceInfo) -> AsyncThrowingStream<CameraFrame, any Error>
 }
 
 /// Converts a VideoToolbox AVCC bitstream (repeated 4-byte big-endian length +
@@ -26,26 +46,36 @@ protocol CameraCapturing: Sendable {
 /// tested without hardware. A truncated trailing length prefix is dropped rather
 /// than trusted, so a malformed buffer can never over-read.
 func annexBFromAVCC(_ avcc: Data, sps: [Data], pps: [Data], isKeyframe: Bool) -> Data {
+    annexBFromAVCC(avcc, nalUnitHeaderLength: 4, parameterSets: sps + pps, isKeyframe: isKeyframe)
+}
+
+/// The general form: VideoToolbox reports the NAL length-prefix width with the
+/// parameter sets (1–4 bytes; 4 in practice), and the caller passes the
+/// parameter sets in the order they should precede a keyframe.
+func annexBFromAVCC(
+    _ avcc: Data,
+    nalUnitHeaderLength: Int,
+    parameterSets: [Data],
+    isKeyframe: Bool
+) -> Data {
+    guard (1...4).contains(nalUnitHeaderLength) else { return Data() }
+
     let startCode = Data([0, 0, 0, 1])
     var out = Data()
     if isKeyframe {
-        for set in sps {
-            out += startCode
-            out += set
-        }
-        for set in pps {
+        for set in parameterSets {
             out += startCode
             out += set
         }
     }
 
     var index = avcc.startIndex
-    while index + 4 <= avcc.endIndex {
+    while index + nalUnitHeaderLength <= avcc.endIndex {
         var length = 0
-        for offset in 0..<4 {
+        for offset in 0..<nalUnitHeaderLength {
             length = (length << 8) | Int(avcc[index + offset])
         }
-        index += 4
+        index += nalUnitHeaderLength
         guard length > 0, index + length <= avcc.endIndex else { break }
         out += startCode
         out += avcc[index..<index + length]
@@ -55,14 +85,78 @@ func annexBFromAVCC(_ avcc: Data, sps: [Data], pps: [Data], isKeyframe: Bool) ->
 }
 
 enum CameraError: Error, CustomStringConvertible {
+    case accessDenied
     case noDevice
+    case deviceNotFound
+    case cannotAddInput
+    case cannotAddOutput
     case vtStatus(String, OSStatus)
 
     var description: String {
         switch self {
+        case .accessDenied: return "Camera access is not allowed for Wendy Agent."
         case .noDevice: return "No default video capture device available."
+        case .deviceNotFound: return "The selected camera is no longer available."
+        case .cannotAddInput:
+            return "The selected camera could not be added to the capture session."
+        case .cannotAddOutput:
+            return "The camera encoder output could not be added to the capture session."
         case .vtStatus(let action, let status):
             return "VideoToolbox \(action) failed (OSStatus \(status))."
+        }
+    }
+}
+
+/// Camera enumeration and per-device streaming for `WendyVideoService`, on the
+/// same capture pipeline `SensorService` uses for its default-camera channel.
+struct AVCaptureCameraManager: CameraManaging {
+    var averageBitRate: Int32 = 4_000_000
+
+    func devices() async -> [CameraDeviceInfo] {
+        await BlockingExecutor.run {
+            Self.captureDevices().enumerated().map { index, device in
+                CameraDeviceInfo(
+                    id: UInt32(index),
+                    uniqueID: device.uniqueID,
+                    name: device.localizedName,
+                    isExternal: device.deviceType == .external
+                )
+            }
+        }
+    }
+
+    func frames(for device: CameraDeviceInfo) -> AsyncThrowingStream<CameraFrame, any Error> {
+        let bitRate = averageBitRate
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let session = CameraCaptureSession(bitRate: bitRate, deviceUniqueID: device.uniqueID)
+            do {
+                try session.start(continuation: continuation)
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
+            continuation.onTermination = { _ in session.stop() }
+        }
+    }
+
+    /// Built-in, Continuity, and external cameras, ordered deterministically:
+    /// the system default first, then by display name, then by unique ID, so a
+    /// numeric camera ID stays stable across calls while the set is unchanged.
+    static func captureDevices() -> [AVCaptureDevice] {
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInWideAngleCamera, .continuityCamera, .external],
+            mediaType: .video,
+            position: .unspecified
+        )
+        let defaultID = AVCaptureDevice.default(for: .video)?.uniqueID
+        return session.devices.sorted { left, right in
+            if left.uniqueID == defaultID { return true }
+            if right.uniqueID == defaultID { return false }
+            if left.localizedName != right.localizedName {
+                return left.localizedName.localizedStandardCompare(right.localizedName)
+                    == .orderedAscending
+            }
+            return left.uniqueID < right.uniqueID
         }
     }
 }
@@ -133,6 +227,9 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private let videoOutput = AVCaptureVideoDataOutput()
     private let queue = DispatchQueue(label: "wendy.sensor.camera")
     private let bitRate: Int32
+    /// `nil` selects the system default camera (sensor channel); a value picks
+    /// the camera `WendyVideoService` was asked for.
+    private let deviceUniqueID: String?
     private let lock = NSLock()
 
     private var compressionSession: VTCompressionSession?
@@ -140,8 +237,9 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private var forceNextKeyframe = false
     private var isFirstFrame = true
 
-    init(bitRate: Int32) {
+    init(bitRate: Int32, deviceUniqueID: String? = nil) {
         self.bitRate = bitRate
+        self.deviceUniqueID = deviceUniqueID
         super.init()
     }
 
@@ -150,18 +248,38 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
     ) throws {
         self.continuation = continuation
 
-        guard let device = AVCaptureDevice.default(for: .video) else { throw CameraError.noDevice }
+        // Never trigger the system permission prompt from a capture request:
+        // the user grants camera access in the app's onboarding.
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            throw CameraError.accessDenied
+        }
+        let device: AVCaptureDevice
+        if let deviceUniqueID {
+            guard
+                let selected = AVCaptureCameraManager.captureDevices().first(where: {
+                    $0.uniqueID == deviceUniqueID
+                })
+            else { throw CameraError.deviceNotFound }
+            device = selected
+        } else {
+            guard let fallback = AVCaptureDevice.default(for: .video) else {
+                throw CameraError.noDevice
+            }
+            device = fallback
+        }
         let input = try AVCaptureDeviceInput(device: device)
 
         captureSession.beginConfiguration()
-        if captureSession.canAddInput(input) { captureSession.addInput(input) }
+        defer { captureSession.commitConfiguration() }
+        guard captureSession.canAddInput(input) else { throw CameraError.cannotAddInput }
+        captureSession.addInput(input)
         videoOutput.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(self, queue: queue)
-        if captureSession.canAddOutput(videoOutput) { captureSession.addOutput(videoOutput) }
-        captureSession.commitConfiguration()
+        guard captureSession.canAddOutput(videoOutput) else { throw CameraError.cannotAddOutput }
+        captureSession.addOutput(videoOutput)
 
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         try makeCompressionSession(width: dims.width, height: dims.height)
@@ -306,9 +424,14 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
         else { return }
 
         let avcc = Data(bytes: pointer, count: totalLength)
+        let presentation = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let timestampNanoseconds: UInt64 =
+            presentation.isNumeric && presentation.seconds >= 0
+            ? UInt64(presentation.seconds * 1_000_000_000) : 0
         let frame = CameraFrame(
             annexB: annexBFromAVCC(avcc, sps: sps, pps: pps, isKeyframe: isKeyframe),
-            isKeyframe: isKeyframe
+            isKeyframe: isKeyframe,
+            timestampNanoseconds: timestampNanoseconds
         )
 
         switch continuation.yield(frame) {
