@@ -39,6 +39,12 @@ def decision(**overrides: Any) -> dict:
     return result
 
 
+def model_decision(**overrides: Any) -> dict:
+    result = decision(locations=[{"evidence_id": 2}])
+    result.update(overrides)
+    return result
+
+
 class InputTests(unittest.TestCase):
     def validate(self, raw: bytes, meta: dict | None = None):
         return api_review.validate_input(meta or metadata(), raw, REPO, 42, HEAD_SHA, BASE_SHA)
@@ -215,13 +221,14 @@ class EvidenceRenderingTests(unittest.TestCase):
             "@@ -0,0 +1 @@\n+second file\n"
         )
         numbered = api_review.numbered_diff(raw)
-        for label in ("- [base:11] old", "+ [head:21] new", "+ [head:22] extra",
-                      "- [base:30] before", "+ [head:41] after", "+ [head:1] second file"):
-            self.assertIn(label, numbered)
-        self.assertNotIn("[head:20]", numbered)
-        self.assertNotIn("[base:10]", numbered)
+        for sign, side, line, text in (("-", "base", 11, "old"), ("+", "head", 21, "new"),
+                                       ("+", "head", 22, "extra"), ("-", "base", 30, "before"),
+                                       ("+", "head", 41, "after"), ("+", "head", 1, "second file")):
+            self.assertRegex(numbered, re.escape(sign) + rf" \[evidence:\d+ {side}:{line}\] " + text)
+        self.assertNotIn(" head:20]", numbered)
+        self.assertNotIn(" base:10]", numbered)
         # Removing only generated labels reconstructs the exact complete patch.
-        self.assertEqual(re.sub(r"^([+-]) \[(?:head|base):\d+\] ", r"\1", numbered, flags=re.MULTILINE), raw)
+        self.assertEqual(re.sub(r"^([+-]) \[evidence:\d+ (?:head|base):\d+\] ", r"\1", numbered, flags=re.MULTILINE), raw)
 
     def test_unicode_crlf_and_no_newline_markers_survive(self):
         raw = (
@@ -229,9 +236,49 @@ class EvidenceRenderingTests(unittest.TestCase):
             "@@ -1 +1 @@\n-café\r\n+π\r\n\\ No newline at end of file\n"
         )
         numbered = api_review.numbered_diff(raw)
-        self.assertIn("- [base:1] café\r\n", numbered)
-        self.assertIn("+ [head:1] π\r\n", numbered)
+        self.assertIn("- [evidence:1 base:1] café\r\n", numbered)
+        self.assertIn("+ [evidence:2 head:1] π\r\n", numbered)
         self.assertTrue(numbered.endswith("\\ No newline at end of file\n"))
+
+
+class EvidenceResolutionTests(unittest.TestCase):
+    def setUp(self):
+        self.parsed = api_review.parse_diff(diff().decode())
+        self.evidence = api_review.evidence_catalog(self.parsed)
+
+    def test_catalog_contains_only_exact_changed_line_candidates(self):
+        self.assertEqual(self.evidence, {
+            1: {"path": "go/network.go", "side": "base", "line": 5, "end_line": 5},
+            2: {"path": "go/network.go", "side": "head", "line": 5, "end_line": 5},
+        })
+        location = api_review.model_schema(self.evidence)["properties"]["decisions"]["items"]["properties"]["locations"]["items"]
+        self.assertEqual(location["required"], ["evidence_id"])
+        self.assertEqual(location["properties"]["evidence_id"], {"type": "integer", "enum": [1, 2]})
+        self.assertFalse(location["additionalProperties"])
+
+    def test_resolving_ids_preserves_model_payload_and_public_location_contract(self):
+        original = {"risk": "high", "decisions": [model_decision(locations=[{"evidence_id": 1}, {"evidence_id": 2}])]}
+        snapshot = json.dumps(original, sort_keys=True)
+        resolved = api_review.resolve_evidence(original, self.evidence)
+        self.assertEqual(resolved["decisions"][0]["locations"], [self.evidence[1], self.evidence[2]])
+        self.assertEqual(json.dumps(original, sort_keys=True), snapshot)
+        api_review.validate_payload(resolved, self.parsed)
+        resolved["decisions"][0]["locations"][0]["line"] = 100
+        self.assertEqual(self.evidence[1]["line"], 5)
+
+    def test_invalid_unknown_and_extra_field_references_fail_closed(self):
+        references = [{"evidence_id": value} for value in (0, -1, 3, 999, True, "2", 2.0, None)]
+        references += [{}, {"evidence_id": 2, "path": "go/injected.go"}, {"path": "go/network.go", "side": "head", "line": 5, "end_line": 5}]
+        for reference in references:
+            with self.subTest(reference=reference), self.assertRaises(api_review.ReviewError):
+                api_review.resolve_evidence({"risk": "high", "decisions": [model_decision(locations=[reference])]}, self.evidence)
+
+    def test_structural_candidates_resolve_to_file_level_locations(self):
+        parsed = api_review.parse_diff("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n")
+        evidence = api_review.evidence_catalog(parsed)
+        resolved = api_review.resolve_evidence({"risk": "mid", "decisions": [model_decision(category="cli")]}, evidence)
+        self.assertEqual(resolved["decisions"][0]["locations"], [{"path": "run.sh", "side": "head", "line": 0, "end_line": 0}])
+        api_review.validate_payload(resolved, parsed)
 
 
 class ModelTests(unittest.TestCase):
@@ -258,7 +305,8 @@ class ModelTests(unittest.TestCase):
         schema = output_format["schema"]
         self.assertFalse(schema["additionalProperties"])
         location = schema["properties"]["decisions"]["items"]["properties"]["locations"]["items"]
-        self.assertEqual(set(location["required"]), {"path", "side", "line", "end_line"})
+        self.assertEqual(set(location["required"]), {"evidence_id"})
+        self.assertEqual(location["properties"]["evidence_id"]["enum"], [1, 2])
         self.assertFalse(location["additionalProperties"])
         self.assertNotIn("tools", create.call_args.kwargs)
 
@@ -274,33 +322,30 @@ class ModelTests(unittest.TestCase):
         self.assertNotIn("secret-sk-test-key", str(caught.exception))
 
     def test_invalid_location_schema_is_repaired_against_the_entire_same_batch(self):
-        malformed = decision()
-        del malformed["locations"][0]["end_line"]
+        malformed = model_decision(locations=[{}])
         original = {"risk": "high", "decisions": [malformed]}
-        corrected = {"risk": "high", "decisions": [decision()]}
+        corrected = {"risk": "high", "decisions": [model_decision()]}
         result, create = self.call_model(error=[self.message(original), self.message(corrected)])
-        self.assertEqual(result, corrected)
+        self.assertEqual(result, {"risk": "high", "decisions": [decision()]})
         self.assertEqual(create.call_count, 2)
         first, repair = [json.loads(call.kwargs["messages"][0]["content"]) for call in create.call_args_list]
         self.assertEqual({key: value for key, value in repair.items() if key != "response_repair"}, first)
         self.assertEqual(repair["diff"].encode(), diff())
         self.assertEqual(json.loads(repair["response_repair"]["previous_response"]), original)
         self.assertIn("decisions[0].locations[0]", repair["response_repair"]["validation_error"])
-        self.assertIn("end_line", repair["response_repair"]["validation_error"])
+        self.assertIn("evidence_id", repair["response_repair"]["validation_error"])
         self.assertEqual(create.call_args_list[0].kwargs["model"], create.call_args_list[1].kwargs["model"])
         self.assertNotIn("tools", create.call_args.kwargs)
 
     def test_invalid_evidence_can_be_corrected_but_not_accepted_unchanged(self):
-        malformed = decision(locations=[{"path": "go/network.go", "side": "head", "line": 4, "end_line": 4}])
+        malformed = model_decision(locations=[{"evidence_id": 999}])
         original = {"risk": "high", "decisions": [malformed]}
-        corrected = {"risk": "high", "decisions": [decision()]}
+        corrected = {"risk": "high", "decisions": [model_decision()]}
         result, create = self.call_model(error=[self.message(original), self.message(corrected)])
-        self.assertEqual(result, corrected)
+        self.assertEqual(result, {"risk": "high", "decisions": [decision()]})
         prompt = json.loads(create.call_args.kwargs["messages"][0]["content"])
-        self.assertIn("outside the changed lines", prompt["response_repair"]["validation_error"])
-        evidence = json.loads(prompt["response_repair"]["validation_error"].split("Evidence: ", 1)[1])
-        self.assertEqual(evidence["requested"], malformed["locations"][0])
-        self.assertEqual(evidence["allowed_ranges"], [[5, 5]])
+        self.assertIn("evidence", prompt["response_repair"]["validation_error"])
+        self.assertIn("decisions[0].locations[0]", prompt["response_repair"]["validation_error"])
 
     def test_invalid_json_gets_one_complete_response_repair(self):
         result, create = self.call_model(error=[self.message('```json\n{"risk":"low","decisions":[]}\n```'), self.message({"risk": "low", "decisions": []})])
@@ -309,9 +354,10 @@ class ModelTests(unittest.TestCase):
 
     def test_repair_remains_strict_and_is_bounded_to_one_attempt(self):
         for malformed in (
-            decision(locations=[{"path": "go/another-batch.go", "side": "head", "line": 5, "end_line": 5}]),
-            decision(locations=[{"path": "go/network.go", "side": "head", "line": 5}]),
-            decision(accepted=True),
+            model_decision(locations=[{"evidence_id": 999}]),
+            model_decision(locations=[{"evidence_id": True}]),
+            model_decision(locations=[{}]),
+            model_decision(accepted=True),
         ):
             with self.subTest(malformed=malformed):
                 message = self.message({"risk": "high", "decisions": [malformed]})
@@ -323,20 +369,21 @@ class ModelTests(unittest.TestCase):
                 self.assertEqual(create.call_count, 2)
 
     def test_repair_cannot_drop_decisions_change_valid_decisions_or_lower_risk(self):
-        malformed = decision(title="Second decision")
-        del malformed["locations"][0]["end_line"]
-        original = {"risk": "high", "decisions": [decision(), malformed]}
-        corrected_second = decision(title="Second decision")
+        malformed = model_decision(title="Second decision", locations=[{}])
+        original = {"risk": "high", "decisions": [model_decision(), malformed]}
+        corrected_second = model_decision(title="Second decision")
         for corrected, expected in (
-            ({"risk": "high", "decisions": [decision()]}, "dropped"),
-            ({"risk": "low", "decisions": [decision(), corrected_second]}, "lowered"),
-            ({"risk": "high", "decisions": [decision(title="Unrelated replacement"), corrected_second]}, "already-valid"),
+            ({"risk": "high", "decisions": []}, "dropped"),
+            ({"risk": "high", "decisions": [model_decision()]}, "dropped"),
+            ({"risk": "low", "decisions": [model_decision(), corrected_second]}, "lowered"),
+            ({"risk": "high", "decisions": [model_decision(title="Unrelated replacement"), corrected_second]}, "already-valid"),
+            ({"risk": "high", "decisions": [model_decision(locations=[{"evidence_id": 1}]), corrected_second]}, "already-valid"),
         ):
             with self.subTest(expected=expected), self.assertRaisesRegex(api_review.ReviewError, expected):
                 self.call_model(error=[self.message(original), self.message(corrected)])
-        corrected = {"risk": "high", "decisions": [decision(), corrected_second]}
+        corrected = {"risk": "high", "decisions": [model_decision(), corrected_second]}
         result, _ = self.call_model(error=[self.message(original), self.message(corrected)])
-        self.assertEqual(result, corrected)
+        self.assertEqual(result, {"risk": "high", "decisions": [decision(), decision(title="Second decision")]})
 
     def test_repair_provider_failure_is_closed_and_redacts_secrets(self):
         with self.assertRaises(api_review.ReviewError) as caught:
