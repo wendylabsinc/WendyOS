@@ -396,14 +396,12 @@ func (a *ros2DataAdapter) startOne(ctx context.Context, session data.CaptureSess
 	case result := <-c.recordDone:
 		cancel()
 		<-c.samplerDone
-		clockFile.Close()
-		return nil, fmt.Errorf("rosbag2 exited before recording (code %d): %s", result.code, summarizeROS2Output(result.err, result.output))
+		return nil, errors.Join(fmt.Errorf("rosbag2 exited before recording (code %d): %s", result.code, summarizeROS2Output(result.err, result.output)), clockFile.Close())
 	case <-ctx.Done():
 		cancel()
 		result := <-c.recordDone
 		<-c.samplerDone
-		clockFile.Close()
-		return nil, errors.Join(ctx.Err(), result.err)
+		return nil, errors.Join(ctx.Err(), result.err, clockFile.Close())
 	case <-time.After(750 * time.Millisecond):
 		return c, nil
 	}
@@ -645,8 +643,7 @@ func copyCaptureDirectory(source, destination string) error {
 		}
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 		if err != nil {
-			in.Close()
-			return err
+			return errors.Join(err, in.Close())
 		}
 		_, copyErr := io.Copy(out, in)
 		if syncErr := out.Sync(); copyErr == nil {
@@ -655,7 +652,10 @@ func copyCaptureDirectory(source, destination string) error {
 		if closeErr := out.Close(); copyErr == nil {
 			copyErr = closeErr
 		}
-		in.Close()
+		// The read side's close error is not meaningful for a file opened
+		// read-only, so it stays discarded; the write side's is the one that can
+		// report a failed flush of the copied rosbag.
+		_ = in.Close()
 		return copyErr
 	})
 }

@@ -316,7 +316,7 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	}
 	c := &cameraCapture{
 		source: a.source, session: session, dir: dir, hub: a.hub, subID: a.subID, frames: a.frames,
-		rejoin: rejoin, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel,
+		rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel,
 		done: make(chan struct{}), ready: make(chan error, 1), mode: "continuous", rateCap: rateCap,
 		notes: notes, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
 	}
