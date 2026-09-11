@@ -614,6 +614,7 @@ func (m *Manager) ApplyCaptureResults(key string, results []CaptureResult) error
 			}
 			stats.Count = result.Count
 			stats.Drops = result.Drops
+			stats.ArmedDrops = result.ArmedDrops
 			if result.DropAccounting != "" {
 				stats.DropAccounting = result.DropAccounting
 			}
