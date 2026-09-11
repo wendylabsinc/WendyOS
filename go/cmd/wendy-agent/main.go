@@ -36,6 +36,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostexec"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
+	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
@@ -364,6 +365,8 @@ func main() {
 	defer videoSvc.Shutdown()
 
 	notificationSender := services.NewCloudNotificationSender(logger, provisioningSvc)
+	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory()}, &services.CampaignWebhookSender{})
+	defer stopInference()
 	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
 	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)
 	if ctrdClient != nil {

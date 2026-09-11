@@ -1,0 +1,43 @@
+version: 1
+name: people-all-cameras
+
+sources:
+  # All healthy camera feeds known to wendy-agent, including cameras added
+  # after deployment. Unavailable cameras are reported by campaign inspect.
+  - camera: "*"
+    capture:
+      mode: continuous
+
+inference:
+  # A Hugging Face model name or https://huggingface.co/<owner>/<repository>.
+  # The agent installs and runs the model. No application or Python is needed.
+  model: facebook/detr-resnet-50
+  revision: 1d5f47bd3bdd2c4bbfa585418ffe6da5028b4c0b
+  labels: [person]
+  threshold: 0.9
+  rate: 1
+  event: person_detected
+  clear_after: 5s
+  cooldown: 30s
+  enabled: true
+
+capture:
+  buffer: 10s
+  after_trigger: 10s
+  triggers:
+    - event: person_detected
+
+upload:
+  when: always
+retention:
+  local_quota: 5GiB
+export:
+  annotation: cvat
+
+notify:
+  # Notify through Wendy Cloud when the detection episode is committed.
+  on: episode_committed
+  # For an immediate alert to your notification service, replace the above with:
+  # on: event
+  # event: person_detected
+  # webhook: https://your-notification-service.example/hooks/people

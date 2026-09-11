@@ -1,0 +1,22 @@
+[project]
+name = "wendy-agent-inference"
+version = "1.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "av==16.1.0",
+  "torch==2.8.0",
+  "torchvision==0.23.0",
+  "transformers==4.57.6",
+  "timm==1.0.29",
+  "Pillow==11.3.0",
+  "numpy==2.2.6",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

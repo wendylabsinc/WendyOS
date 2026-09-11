@@ -54,6 +54,9 @@ func dataStatusError(err error) error {
 }
 
 type DataService struct {
+	inference    *campaignInferenceManager
+	video        inferenceVideo
+	deploymentMu sync.Mutex
 	agentpbv2.UnimplementedDataServiceServer
 	manager   *data.Manager
 	adapterMu sync.RWMutex
@@ -117,6 +120,11 @@ func (s *DataService) addAdapter(adapter dataCaptureAdapter) {
 // including camera pre-roll (the camera adapter can be armed for campaigns that
 // request a buffer).
 func (s *DataService) SetVideoService(video *VideoService) {
+	if video != nil {
+		s.video = video
+	} else {
+		s.video = nil
+	}
 	adapter := newCameraDataAdapter(video)
 	s.addAdapter(adapter)
 	if arming, ok := adapter.(dataArmingAdapter); ok {
@@ -386,11 +394,25 @@ func campaignMessage(campaign data.Campaign) (*agentpbv2.DataCampaign, error) {
 }
 
 func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampaignDeployRequest) (*agentpbv2.DataCampaign, error) {
+	s.deploymentMu.Lock()
+	defer s.deploymentMu.Unlock()
+	parsed, parseErr := data.ParseCampaign(req.GetCampaignYaml())
+	if parseErr != nil {
+		return nil, status.Error(codes.InvalidArgument, parseErr.Error())
+	}
+	if parsed.Inference.IsEnabled() && (s.inference == nil || s.video == nil) {
+		return nil, status.Error(codes.FailedPrecondition, "agent campaign inference runtime is unavailable")
+	}
+
+	if parsed.Notify != nil && parsed.Notify.On == data.NotifyOnEvent && s.inference == nil {
+		return nil, status.Error(codes.FailedPrecondition, "agent campaign notification runtime is unavailable")
+	}
+
 	campaign, err := s.manager.DeployCampaign(req.GetCampaignYaml())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	message, err := campaignMessage(campaign)
+	message, err := s.campaignMessage(campaign)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -398,6 +420,12 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 	// opens BEFORE the trigger instant. Arming subscribes to camera hubs, so it
 	// runs off the request path.
 	go s.armCampaign(campaign)
+	if s.inference != nil {
+		select {
+		case s.inference.wake <- struct{}{}:
+		default:
+		}
+	}
 	return message, nil
 }
 
@@ -408,7 +436,7 @@ func (s *DataService) Campaigns(context.Context, *agentpbv2.DataCampaignsRequest
 	}
 	response := &agentpbv2.DataCampaignsResponse{}
 	for _, campaign := range campaigns {
-		message, err := campaignMessage(campaign)
+		message, err := s.campaignMessage(campaign)
 		if err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
@@ -422,7 +450,7 @@ func (s *DataService) CampaignInspect(_ context.Context, req *agentpbv2.DataCamp
 	if err != nil {
 		return nil, dataStatusError(err)
 	}
-	message, err := campaignMessage(campaign)
+	message, err := s.campaignMessage(campaign)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -464,15 +492,26 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 		}
 		calibrationRevisions[identity] = source.Calibration
 	}
+	notify := campaign.Notify
+	if notify != nil && (notify.On == data.NotifyOnDetection || notify.On == data.NotifyOnEvent) {
+		notify = nil
+	}
+	models := map[string]string{}
+	for name, version := range campaign.Models {
+		models[name] = version
+	}
+	if campaign.Inference != nil {
+		models[campaign.Inference.Model] = campaign.Inference.Revision
+	}
 	episode, err := s.startCapture(ctx, data.StartOptions{
 		Name:                 campaign.Name,
 		Sources:              sources,
 		SourceCaptures:       captures,
 		PreRollDuration:      campaign.BufferDuration(),
 		DrainDuration:        campaign.DrainDuration(),
-		Trigger:              data.EpisodeTrigger{Reason: reason, CampaignName: campaign.Name, CampaignRevision: campaign.Revision, Expression: expression, Notify: campaign.Notify},
+		Trigger:              data.EpisodeTrigger{Reason: reason, CampaignName: campaign.Name, CampaignRevision: campaign.Revision, Expression: expression, Notify: notify},
 		CollectorVersion:     version.Version,
-		ModelVersions:        campaign.Models,
+		ModelVersions:        models,
 		RequestedTopics:      topics,
 		CalibrationRevisions: calibrationRevisions,
 		Privacy:              privacy,
@@ -523,7 +562,13 @@ func (s *DataService) observeApplicationRecord(_ string, record data.Application
 		return
 	}
 	for _, campaign := range campaigns {
-		if campaign.State != "armed" || activeKeys[campaign.Name] {
+		if campaign.State != "armed" {
+			continue
+		}
+		if s.inference != nil {
+			s.inference.notifyEvent(campaign, record)
+		}
+		if activeKeys[campaign.Name] {
 			continue
 		}
 		reason, expression, matched := campaign.Match(record)

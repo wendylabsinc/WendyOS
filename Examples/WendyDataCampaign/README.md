@@ -1,5 +1,8 @@
 # Wendy Data campaign
 
+For YAML-only Hugging Face detection on every agent camera with automatic
+recording and cloud notifications, see [WendyDataPeople](../WendyDataPeople/README.md).
+
 A campaign is a durable, device-local flight-recorder plan. Deploying the file
 validates it and arms its application event and model-uncertainty triggers:
 
