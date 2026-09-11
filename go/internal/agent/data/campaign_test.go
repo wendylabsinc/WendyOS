@@ -388,12 +388,19 @@ upload: {when: wifi, destination: example-episodes}
 export: {annotation: cvat}
 `
 
-// drainDigestPinRevision is the SHA-256 of drainDigestPinYAML's canonical plan,
-// recorded before capture.drain was added. Every deployed campaign is
-// identified by this digest, so a drain-less plan must keep hashing to exactly
-// the same value; that is what the omitempty tag on CampaignCapture.Drain buys.
-// Changing this constant to match new output would be defeating the test.
-const drainDigestPinRevision = "bbb81df5f017616a7c3156f7aaeb064ed00e632ae01546cfce265610a4129e23"
+// drainDigestPinRevision is the SHA-256 of drainDigestPinYAML's canonical
+// plan. Every deployed campaign is identified by this digest, so a plan whose
+// text has not changed must keep hashing to exactly the same value; changing
+// this constant to match new output is defeating the test.
+//
+// It was re-pinned exactly once, when the digest stopped covering a
+// marshalled Campaign struct and started covering the enumerated list of
+// author-declared plan fields in planDigestInput. That change is the whole
+// point: under the old scheme every campaign on the fleet changed revision
+// whenever an agent release added a field to the struct, and TestCampaign
+// RevisionIgnoresUnrelatedStructFields is the guard that it cannot happen
+// again. Re-pinning is allowed only alongside a revisionSchema bump.
+const drainDigestPinRevision = "db663ad55675808849a6dfe0a869ada20a008d0ccd5155cac860a3aac049a458"
 
 func TestCampaignDrainValidation(t *testing.T) {
 	withDrain := func(drain string) []byte {
@@ -428,11 +435,11 @@ func TestCampaignDrainValidation(t *testing.T) {
 	if accepted.DrainDuration() != maxSealDrain {
 		t.Fatalf("capture.drain 30s gives %s, want %s", accepted.DrainDuration(), maxSealDrain)
 	}
-	// The digest pin. A campaign that says nothing about the drain must hash
-	// exactly as it did before the field existed, or every already-deployed
-	// campaign silently changes revision on upgrade.
+	// The digest pin. A campaign whose text has not changed must keep hashing
+	// to the same value, or every already-deployed campaign silently changes
+	// revision on upgrade.
 	if base.Revision != drainDigestPinRevision {
-		t.Fatalf("a drain-less campaign now hashes to %s, want the pre-existing %s: capture.drain must stay omitempty", base.Revision, drainDigestPinRevision)
+		t.Fatalf("a drain-less campaign now hashes to %s, want the pinned %s", base.Revision, drainDigestPinRevision)
 	}
 	// A declared drain is part of the plan and must change the digest.
 	if optedOut.Revision == base.Revision {

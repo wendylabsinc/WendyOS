@@ -308,8 +308,8 @@ func main() {
 	// space. A device whose data partition wants different bounds sets these
 	// rather than being stuck with the built-in numbers.
 	dataManager.SetQuota(
-		envBytes(logger, "WENDY_DATA_MAX_BYTES", agentdata.DefaultMaxQuotaBytes),
-		envBytes(logger, "WENDY_DATA_RESERVE_BYTES", agentdata.DefaultReserveBytes),
+		envBytes(logger, "WENDY_DATA_MAX_BYTES", agentdata.DefaultMaxQuotaBytes, 1),
+		envBytes(logger, "WENDY_DATA_RESERVE_BYTES", agentdata.DefaultReserveBytes, 0),
 	)
 	dataSvc := services.NewDataService(dataManager)
 	dataSvc.SetAudioService(audioSvc)
@@ -1333,15 +1333,23 @@ func handleUtilityCommand(args []string) (bool, int) {
 // when the variable is unset. A value that is present but unusable is reported
 // rather than silently ignored: a device configured with a bad quota should
 // learn that its configuration did not take.
-func envBytes(logger *zap.Logger, name string, fallback int64) int64 {
+//
+// minimum is the smallest value the setting accepts. It exists because the two
+// callers disagree about zero: a reserve of zero is a real choice ("keep no
+// headroom"), while a maximum quota of zero is not a store that holds nothing,
+// it is a value SetQuota discards in favour of the default. Accepting zero for
+// the quota therefore produced a device running on 50 GiB while its operator
+// believed they had capped it, with nothing logged either way.
+func envBytes(logger *zap.Logger, name string, fallback, minimum int64) int64 {
 	raw, ok := os.LookupEnv(name)
 	if !ok || strings.TrimSpace(raw) == "" {
 		return fallback
 	}
 	v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if err != nil || v < 0 {
+	if err != nil || v < minimum {
 		logger.Warn("ignoring unusable byte count in environment; using the default",
-			zap.String("variable", name), zap.String("value", raw), zap.Int64("default", fallback))
+			zap.String("variable", name), zap.String("value", raw),
+			zap.Int64("minimum", minimum), zap.Int64("default", fallback))
 		return fallback
 	}
 	return v

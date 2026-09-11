@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -141,9 +143,7 @@ type CampaignCapture struct {
 	Buffer string `json:"buffer" yaml:"buffer"`
 	// Drain holds the episode open for late application records after its
 	// capture adapters stop. An empty value takes DefaultSealDrain; "0s" opts
-	// out. The omitempty tag is load-bearing: planOnly is marshalled to JSON to
-	// compute Revision, so a field rendered on every campaign would change the
-	// revision digest of every already-deployed campaign.
+	// out.
 	Drain        string            `json:"drain,omitempty" yaml:"drain,omitempty"`
 	AfterTrigger string            `json:"after_trigger" yaml:"after_trigger"`
 	Triggers     []CampaignTrigger `json:"triggers" yaml:"triggers"`
@@ -252,9 +252,18 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	if err := decoder.Decode(&campaign); err != nil {
 		return Campaign{}, fmt.Errorf("parsing campaign YAML: %w", err)
 	}
+	// Only a clean end of input proves there was no second document. Testing
+	// for a nil error accepted anything that failed to parse, so a plan with a
+	// malformed second document deployed with the second document silently
+	// dropped, and the operator's whole intent for it went nowhere with no
+	// error anywhere. Any other error is that second document failing to
+	// parse, and is reported as such.
 	var trailing any
-	if err := decoder.Decode(&trailing); err == nil {
+	switch err := decoder.Decode(&trailing); {
+	case err == nil:
 		return Campaign{}, errors.New("campaign YAML must contain exactly one document")
+	case !errors.Is(err, io.EOF):
+		return Campaign{}, fmt.Errorf("campaign YAML must contain exactly one document; the text after the first one does not parse: %w", err)
 	}
 	if err := campaign.validate(); err != nil {
 		return Campaign{}, err
@@ -266,7 +275,7 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	if campaign.Privacy == nil {
 		campaign.Privacy = []CampaignPrivacy{}
 	}
-	canonical, err := json.Marshal(campaign.planOnly())
+	canonical, err := json.Marshal(campaign.planDigestInput())
 	if err != nil {
 		return Campaign{}, err
 	}
@@ -275,12 +284,97 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	return campaign, nil
 }
 
-// planOnly strips deployment state before hashing. The author-declared
-// schema version and every plan field, including per-source capture policy,
-// upload policy, and retention, feed the revision digest.
-func (c Campaign) planOnly() Campaign {
-	c.State, c.Revision, c.DeployedUnixNanos, c.Warnings = "", "", 0, nil
-	return c
+// revisionSchema versions the field list below. A campaign's revision is the
+// identity operators and the fleet backend use to tell "the plan changed" from
+// "the same plan was redeployed", so what feeds it is part of the on-device
+// schema and changes only with this number.
+const revisionSchema = 1
+
+// planDigestInput is the exact, enumerated set of author-declared plan fields
+// the revision digest covers.
+//
+// It is an explicit map rather than a marshalled Campaign struct. Hashing the
+// struct meant the digest covered every field the struct would ever have, so
+// adding an unrelated field to Campaign in a later agent release changed the
+// revision of every already-deployed campaign on every device that took the
+// upgrade: an operator saw plans they had not touched appear to have been
+// edited, and the fleet backend saw a fleet-wide plan change that never
+// happened. The digest now covers what the author wrote and nothing else, so a
+// new field is invisible to it until it is added here deliberately.
+//
+// The map is marshalled with encoding/json, which sorts object keys, so the
+// encoding is deterministic without an ordering convention of its own.
+//
+// Adding a field here is a schema change: bump revisionSchema with it. Note
+// that this fix itself moves every existing campaign to a new revision once,
+// because the digest no longer covers the struct's zero-valued fields.
+func (c Campaign) planDigestInput() map[string]any {
+	sources := make([]map[string]any, 0, len(c.Sources))
+	for _, source := range c.Sources {
+		entry := map[string]any{
+			"camera":               source.Camera,
+			"audio":                source.Audio,
+			"ros2":                 source.ROS2,
+			"telemetry":            source.Telemetry,
+			"calibration_revision": source.Calibration,
+		}
+		if capture := source.Capture; capture != nil {
+			entry["capture"] = map[string]any{
+				"mode":           capture.Mode,
+				"interval":       capture.Interval,
+				"rate":           capture.Rate,
+				"pre":            capture.Pre,
+				"post":           capture.Post,
+				"trigger":        capture.Trigger,
+				"fragment":       capture.Fragment,
+				"max_resolution": capture.MaxResolution,
+			}
+		}
+		sources = append(sources, entry)
+	}
+	triggers := make([]map[string]any, 0, len(c.Capture.Triggers))
+	for _, trigger := range c.Capture.Triggers {
+		triggers = append(triggers, map[string]any{
+			"event":             trigger.Event,
+			"model_uncertainty": trigger.ModelUncertainty,
+		})
+	}
+	privacy := make([]map[string]any, 0, len(c.Privacy))
+	for _, transform := range c.Privacy {
+		privacy = append(privacy, map[string]any{
+			"name":     transform.Name,
+			"revision": transform.Revision,
+		})
+	}
+	plan := map[string]any{
+		"revision_schema": revisionSchema,
+		"version":         c.Version,
+		"name":            c.Name,
+		"fleet":           c.Fleet,
+		"sources":         sources,
+		"capture": map[string]any{
+			"buffer":        c.Capture.Buffer,
+			"drain":         c.Capture.Drain,
+			"after_trigger": c.Capture.AfterTrigger,
+			"triggers":      triggers,
+		},
+		"upload": map[string]any{
+			"when":        c.Upload.When,
+			"destination": c.Upload.Destination,
+			"max_rate":    c.Upload.MaxRate,
+		},
+		"retention": map[string]any{"local_quota": c.Retention.LocalQuota},
+		"export":    map[string]any{"annotation": c.Export.Annotation},
+		"models":    c.Models,
+		"privacy":   privacy,
+	}
+	if c.Notify != nil {
+		// Only the fields this schema version knows. UnknownKeys is deploy-time
+		// state a newer cloud may add and is deliberately excluded, exactly as
+		// it is excluded from the stored plan.
+		plan["notify"] = map[string]any{"on": c.Notify.On}
+	}
+	return plan
 }
 
 func (c Campaign) validate() error {
@@ -297,14 +391,29 @@ func (c Campaign) validate() error {
 		return errors.New("campaign must define at least one source")
 	}
 	for i, source := range c.Sources {
+		// A selector that is present but holds nothing but whitespace is
+		// rejected outright rather than counted as absent. Validation trimmed
+		// before testing while resolution did not, so `camera: "  "` beside a
+		// real audio selector validated as a one-kind source and then took the
+		// camera branch at resolution, where an empty selector substring-matched
+		// every camera detail on the device and the audio source was never
+		// resolved at all. The plan recorded a camera the author did not choose
+		// and dropped the microphone they did.
+		for _, selector := range []struct{ field, value string }{
+			{"camera", source.Camera}, {"audio", source.Audio}, {"ros2", source.ROS2},
+		} {
+			if selector.value != "" && strings.TrimSpace(selector.value) == "" {
+				return fmt.Errorf("sources[%d].%s is blank; remove the key or name a source", i, selector.field)
+			}
+		}
 		kinds := 0
-		if strings.TrimSpace(source.Camera) != "" {
+		if source.Camera != "" {
 			kinds++
 		}
-		if strings.TrimSpace(source.Audio) != "" {
+		if source.Audio != "" {
 			kinds++
 		}
-		if strings.TrimSpace(source.ROS2) != "" {
+		if source.ROS2 != "" {
 			kinds++
 		}
 		if source.Telemetry {
@@ -448,6 +557,9 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 		return Campaign{}, err
 	}
 	campaign.DeployedUnixNanos = time.Now().UnixNano()
+	if absent := m.unpublishedROS2Selectors(campaign); len(absent) > 0 {
+		campaign.Warnings = append(campaign.Warnings, "no healthy ROS 2 graph currently publishes these selectors; the campaign still deploys, and a trigger records its other sources and marks the absent one in the episode manifest: "+strings.Join(absent, ", "))
+	}
 	if campaign.BufferDuration() > 0 {
 		for _, source := range campaign.Sources {
 			if source.Audio != "" || source.ROS2 != "" {
@@ -483,11 +595,20 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 		return Campaign{}, err
 	}
 	b = append(b, '\n')
-	tmp := filepath.Join(dir, campaign.Name+".json.tmp")
-	if err := os.WriteFile(tmp, b, 0o640); err != nil {
-		return Campaign{}, err
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, campaign.Name+".json")); err != nil {
+	// Serialized, and written through atomicfile.
+	//
+	// Two deploys of the same campaign name used to race on one fixed
+	// temporary filename, <name>.json.tmp: both opened it, both wrote into it,
+	// and the file that was renamed into place held one plan's bytes overlaid
+	// with the other's. A campaign plan that is a blend of two deploys is not
+	// something either operator asked for, and nothing downstream can detect
+	// it, because the result is still valid JSON. atomicfile takes a unique
+	// temporary name per write and fsyncs the file and the directory, so the
+	// loser of the race is overwritten whole rather than interleaved, and a
+	// power cut cannot leave an empty plan behind.
+	m.campaignMu.Lock()
+	defer m.campaignMu.Unlock()
+	if err := atomicfile.Write(filepath.Join(dir, campaign.Name+".json"), b, 0o640); err != nil {
 		return Campaign{}, err
 	}
 	return campaign, nil
@@ -538,10 +659,35 @@ func (m *Manager) Campaigns() ([]Campaign, error) {
 // ROS 2 and telemetry policies are not plumbed because those adapters
 // implement only continuous capture (deployment warns).
 func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string, map[string]*SourceCapture, error) {
+	ids, topics, captures, _, err := m.resolveCampaignSources(campaign, false)
+	return ids, topics, captures, err
+}
+
+// ResolveCampaignSourcesDegrading is ResolveCampaignSources with one selector
+// class downgraded from a failure to a report: a Robot Operating System 2
+// (ROS 2) topic that nobody is publishing at the moment of the trigger.
+//
+// Aborting the whole episode for it was the wrong trade. A ROS 2 node that has
+// not come up yet, or that restarts between triggers, took the camera, the
+// telemetry and the application records of the triggering event down with it,
+// and the operator was left with no episode at all rather than an episode
+// missing one source. The unresolved selectors come back as unhealthy Source
+// entries so the caller can record them in the manifest, where the episode says
+// plainly which source was absent and why.
+func (m *Manager) ResolveCampaignSourcesDegrading(campaign Campaign) ([]string, []string, map[string]*SourceCapture, []Source, error) {
+	return m.resolveCampaignSources(campaign, true)
+}
+
+// ROS2AbsentDetail explains a ROS 2 source entry that names a selector nothing
+// published when the episode opened.
+const ROS2AbsentDetail = "no healthy ROS 2 graph published this selector when the episode was triggered; the episode recorded its other sources"
+
+func (m *Manager) resolveCampaignSources(campaign Campaign, degradeROS2 bool) ([]string, []string, map[string]*SourceCapture, []Source, error) {
 	all := m.Sources(context.Background())
 	selected := map[string]bool{"applications": true}
 	captures := map[string]*SourceCapture{}
 	var topics []string
+	var unresolved []Source
 	for _, requested := range campaign.Sources {
 		switch {
 		case requested.Telemetry:
@@ -550,7 +696,16 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 			topics = append(topics, requested.ROS2)
 			ids, err := resolveROS2Selector(all, requested.ROS2)
 			if err != nil {
-				return nil, nil, nil, err
+				if !degradeROS2 {
+					return nil, nil, nil, nil, err
+				}
+				unresolved = append(unresolved, Source{
+					ID:      ROS2SourcePrefix + strings.TrimPrefix(requested.ROS2, ROS2SourcePrefix),
+					Kind:    "ros2",
+					Healthy: false,
+					Detail:  ROS2AbsentDetail + ": " + err.Error(),
+				})
+				continue
 			}
 			for _, id := range ids {
 				selected[id] = true
@@ -558,7 +713,7 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 		case requested.Camera != "":
 			id, err := resolveCameraSelector(all, requested.Camera)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			selected[id] = true
 			if requested.Capture != nil {
@@ -567,7 +722,7 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 		case requested.Audio != "":
 			id, err := resolveKindSelector(all, "audio", requested.Audio)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			selected[id] = true
 			if requested.Capture != nil {
@@ -581,7 +736,36 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 	}
 	sort.Strings(ids)
 	sort.Strings(topics)
-	return ids, topics, captures, nil
+	return ids, topics, captures, unresolved, nil
+}
+
+// ResolveCampaignCameraSources resolves only a campaign's camera selectors,
+// independently of every other selector in the plan.
+//
+// Arming pre-roll needs the camera sources and nothing else, so it must not be
+// held hostage by an unrelated selector: resolving the whole plan meant that one
+// ROS 2 topic that had not been published yet silently disarmed the camera ring
+// for the entire campaign, and the first trigger then opened with no pre-roll at
+// all. An unresolvable camera selector is still an error, because that one names
+// the source arming is about.
+func (m *Manager) ResolveCampaignCameraSources(campaign Campaign) ([]Source, error) {
+	var cameras []Source
+	var all []Source
+	loaded := false
+	for _, requested := range campaign.Sources {
+		if requested.Camera == "" {
+			continue
+		}
+		if !loaded {
+			all, loaded = m.Sources(context.Background()), true
+		}
+		id, err := resolveCameraSelector(all, requested.Camera)
+		if err != nil {
+			return nil, err
+		}
+		cameras = append(cameras, Source{ID: id, Kind: "camera", Capture: requested.Capture})
+	}
+	return cameras, nil
 }
 
 // resolveROS2Selector maps a campaign `ros2:` selector onto discovered source
@@ -703,6 +887,36 @@ func (m *Manager) checkDeployableAudioSources(campaign Campaign) error {
 		return fmt.Errorf("audio source %q does not name a healthy capture source on this device", requested.Audio)
 	}
 	return nil
+}
+
+// unpublishedROS2Selectors names the campaign's ROS 2 selectors that no healthy
+// graph publishes right now.
+//
+// It WARNS where checkDeployableAudioSources refuses, and the asymmetry is
+// deliberate. An audio selector that does not resolve names a capture device
+// that either exists on the board or does not, so deploy is the last moment an
+// operator can be told. A ROS 2 topic is published by a node that legitimately
+// comes and goes: a plan is routinely deployed before the node that publishes
+// its topic is running, so refusing here would make correct plans undeployable.
+// The trigger degrades rather than aborting (see
+// ResolveCampaignSourcesDegrading), so the warning is the operator's early
+// notice, not the last line of defence.
+func (m *Manager) unpublishedROS2Selectors(campaign Campaign) []string {
+	var absent []string
+	var all []Source
+	loaded := false
+	for _, requested := range campaign.Sources {
+		if requested.ROS2 == "" {
+			continue
+		}
+		if !loaded {
+			all, loaded = m.Sources(context.Background()), true
+		}
+		if _, err := resolveROS2Selector(all, requested.ROS2); err != nil {
+			absent = append(absent, strconv.Quote(requested.ROS2))
+		}
+	}
+	return absent
 }
 
 // matchUnhealthySource finds an unhealthy source of the given kind that the

@@ -1,6 +1,7 @@
 package data
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"golang.org/x/sys/unix"
 )
 
@@ -73,9 +75,14 @@ var (
 const AdHocEpisodeKey = ""
 
 type Manager struct {
-	mu     sync.Mutex
-	root   string
-	active map[string]*activeEpisode
+	mu sync.Mutex
+	// campaignMu serializes campaign plan writes. It is separate from mu
+	// because deploying a plan touches no episode state and must not queue
+	// behind (or block) recording, and because DeployCampaign resolves audio
+	// sources through Sources, which takes mu itself.
+	campaignMu sync.Mutex
+	root       string
+	active     map[string]*activeEpisode
 	// sealing holds episodes that have stopped capturing and are inside their
 	// post-seal drain. They still receive application records, but they no
 	// longer hold their campaign key: an episode whose cameras are already off
@@ -103,6 +110,13 @@ type Manager struct {
 	sourceProvider func(context.Context) []Source
 	appObserver    func(string, ApplicationRecord)
 	warn           func(string)
+	// deferredWarnings holds warnings raised before a logger was attached.
+	// NewManager recovers crash-interrupted episodes, and quarantining or
+	// deleting one is precisely the kind of event an operator must see, but
+	// the agent can only call SetWarnLogger once NewManager has returned. They
+	// are replayed there rather than discarded, and capped so a store full of
+	// damaged partials cannot grow this without bound.
+	deferredWarnings []string
 	// maxQuota and reserve bound the episode store. They default to
 	// DefaultMaxQuotaBytes and DefaultReserveBytes and are overridden through
 	// SetQuota, which is how the agent applies its configuration and how the
@@ -131,9 +145,20 @@ func (m *Manager) SetQuota(maxQuota, reserve int64) {
 // that has not been uploaded yet) to the agent's logger.
 func (m *Manager) SetWarnLogger(warn func(string)) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.warn = warn
+	deferred := m.deferredWarnings
+	m.deferredWarnings = nil
+	m.mu.Unlock()
+	if warn == nil {
+		return
+	}
+	for _, message := range deferred {
+		warn(message)
+	}
 }
+
+// maxDeferredWarnings caps the pre-logger warning buffer.
+const maxDeferredWarnings = 64
 
 // Warnf routes an operational warning through the manager's configured logger.
 // Unlike the internal warnf it takes the lock, so it is safe to call from a
@@ -148,9 +173,14 @@ func (m *Manager) Warnf(format string, args ...any) {
 }
 
 func (m *Manager) warnf(format string, args ...any) {
-	if m.warn != nil {
-		m.warn(fmt.Sprintf(format, args...))
+	message := fmt.Sprintf(format, args...)
+	if m.warn == nil {
+		if len(m.deferredWarnings) < maxDeferredWarnings {
+			m.deferredWarnings = append(m.deferredWarnings, message)
+		}
+		return
 	}
+	m.warn(message)
 }
 
 // SetSourceProvider adds device-backed sources discovered by capture adapters.
@@ -172,6 +202,30 @@ func (m *Manager) Sources(ctx context.Context) []Source {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// sourceDiscoveryTimeout bounds the source provider on the episode start path.
+// Discovery is out-of-process for some adapters (the ROS 2 one shells out to
+// `ros2 topic list -t` inside a container), and an adapter that hangs must
+// cost a starting episode a bounded delay rather than blocking it forever.
+// Sources the provider misses inside the budget simply cannot be selected,
+// which surfaces as the ordinary "unknown or unhealthy source" refusal.
+const sourceDiscoveryTimeout = 3 * time.Second
+
+// discoverSources snapshots the built-in and adapter sources for an episode
+// start. It MUST be called without m.mu held: the provider is foreign code
+// that may call back into the manager.
+func (m *Manager) discoverSources() []Source {
+	m.mu.Lock()
+	provider := m.sourceProvider
+	m.mu.Unlock()
+	out := DiscoverSources()
+	if provider == nil {
+		return out
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), sourceDiscoveryTimeout)
+	defer cancel()
+	return append(out, provider(ctx)...)
 }
 
 type bufferedRecord struct {
@@ -253,6 +307,33 @@ type activeEpisode struct {
 	// awaitConsensus reports that the episode's opening Roughtime consensus was
 	// moved off the start path and is still to be attached (see Start).
 	awaitConsensus bool
+	// telemetryLost counts consecutive telemetry rows the 1 Hz sampler could
+	// not write, and telemetryWarnAt rate-limits the warning about them. Both
+	// are touched only by the sampler goroutine, under m.mu.
+	telemetryLost   uint64
+	telemetryWarnAt time.Time
+}
+
+// telemetryWarnInterval bounds how often a failing telemetry write warns. A
+// disk that is full fails every second; one line per second in the agent log
+// buries everything else and is no more informative than one per minute.
+const telemetryWarnInterval = time.Minute
+
+// noteTelemetryDropLocked records one lost telemetry row on the episode's
+// telemetry source. Callers hold m.mu.
+func (a *activeEpisode) noteTelemetryDropLocked() {
+	for i := range a.manifest.Sources {
+		if a.manifest.Sources[i].Source.ID != "telemetry" {
+			continue
+		}
+		drops := uint64(1)
+		if a.manifest.Sources[i].Drops != nil {
+			drops = *a.manifest.Sources[i].Drops + 1
+		}
+		a.manifest.Sources[i].Drops = &drops
+		a.manifest.Sources[i].DropAccounting = "exact"
+		return
+	}
 }
 
 // consensusQueryTimeout bounds one Roughtime consensus query. It is the budget
@@ -349,16 +430,31 @@ func observeUTC(origin int64, _ string, source string) (UTCObservation, error) {
 // may record one active episode at a time, and one ad-hoc (campaign-less)
 // episode may record beside them.
 func (m *Manager) Start(opts StartOptions) (Manifest, error) {
+	key := opts.Trigger.CampaignName
+	// Two things happen before the lock is taken, both of which used to happen
+	// under it. Scanning the store walks every file of every sealed episode,
+	// and the source provider is an out-of-process question: the ROS 2 adapter
+	// answers it by running `ros2 topic list -t` in a container. Holding m.mu
+	// across either stalled every record, status query and adapter callback on
+	// the device; holding it across the provider could also deadlock outright,
+	// because a provider is entitled to call Warnf, Status or ActiveSession,
+	// all of which take the same mutex. Sources() has always called the
+	// provider without the lock for exactly this reason.
+	scan, err := scanEpisodeStore(m.root)
+	if err != nil {
+		return Manifest{}, err
+	}
+	discovered := m.discoverSources()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	key := opts.Trigger.CampaignName
 	if m.active[key] != nil {
 		if key == AdHocEpisodeKey {
 			return Manifest{}, errors.New("an episode is already active")
 		}
 		return Manifest{}, fmt.Errorf("an episode is already active for campaign %s", key)
 	}
-	if err := m.enforceQuota(); err != nil {
+	if err := m.enforceQuotaLocked(scan); err != nil {
 		return Manifest{}, err
 	}
 	origin, err := readBootTime()
@@ -404,10 +500,6 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 	if err := os.Mkdir(dir, 0o750); err != nil {
 		return Manifest{}, err
 	}
-	discovered := DiscoverSources()
-	if m.sourceProvider != nil {
-		discovered = append(discovered, m.sourceProvider(context.Background())...)
-	}
 	selected, err := selectSources(discovered, opts.Sources, opts.ExcludeSources)
 	if err != nil {
 		_ = os.Remove(dir)
@@ -449,7 +541,7 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 	}
 	manifest := Manifest{Version: ManifestVersion, ID: id, Name: opts.Name, State: "recording", Device: deviceIdentity(currentBootID), CanonicalClock: "CLOCK_BOOTTIME", BootID: currentBootID, RequestBootNanos: origin, StartedUnixNanos: time.Now().UnixNano(), Trigger: trigger, CollectorVersion: collectorVersion, ModelVersions: modelVersions, RequestedTopics: requestedTopics, UTCObservations: []UTCObservation{obs}, PreRollAccounting: "exact", SystemClockStatus: "system_reported", Calibrations: []Calibration{}, Privacy: privacy, Upload: upload, Labeling: labeling, Files: []File{}, ModelIO: newModelIO()}
 	if consensus != nil {
-		manifest.Roughtime = append(manifest.Roughtime, *consensus)
+		recordConsensus(dir, &manifest, *consensus)
 		manifest.SystemClockStatus = clockAgreement(obs, *consensus)
 	}
 	for _, s := range selected {
@@ -460,6 +552,12 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 			requestedOffset = -preRollWindow.Nanoseconds()
 		}
 		manifest.Sources = append(manifest.Sources, SourceStats{Source: s, RequestedOffset: requestedOffset, DropAccounting: "unavailable"})
+	}
+	// Sources the plan named and the device could not resolve are recorded as
+	// present-in-the-plan, absent-in-the-episode rather than omitted, so a
+	// degraded episode never reads as one that was never asked for them.
+	for _, s := range opts.UnresolvedSources {
+		manifest.Sources = append(manifest.Sources, SourceStats{Source: s, DropAccounting: "source_absent_at_trigger"})
 	}
 	for source, contents := range opts.Calibrations {
 		name := safeName(source) + ".calibration"
@@ -681,9 +779,29 @@ func (m *Manager) sampleEpisode(ctx context.Context, a *activeEpisode) {
 				continue
 			}
 			sample := map[string]any{"episode_nanos": now - a.manifest.RequestBootNanos, "agent_receipt_boottime_nanos": now, "values": telemetryValues()}
+			// A row lost to a full disk or an I/O error used to vanish
+			// silently: the sampler took the next tick and the manifest went on
+			// saying drop_accounting "unavailable", so an episode with an hour
+			// of missing telemetry was indistinguishable from a complete one.
+			// The loss is now counted on the telemetry source (which is what
+			// drops and drop_accounting are for), carried into the next row
+			// that does land, and warned about at a bounded rate.
+			if lost := a.telemetryLost; lost > 0 {
+				sample["rows_lost_before"] = lost
+			}
 			b, _ := json.Marshal(sample)
-			if err = appendJSONL(filepath.Join(a.dir, "telemetry.jsonl"), b); err == nil {
-				m.mu.Lock()
+			err = appendJSONL(filepath.Join(a.dir, "telemetry.jsonl"), b)
+			m.mu.Lock()
+			if err != nil {
+				a.telemetryLost++
+				a.noteTelemetryDropLocked()
+				warn := a.telemetryWarnAt.IsZero() || time.Since(a.telemetryWarnAt) >= telemetryWarnInterval
+				if warn {
+					a.telemetryWarnAt = time.Now()
+					m.warnf("episode %s: writing a telemetry row failed (%v); %d row(s) lost so far and counted as telemetry drops", a.manifest.ID, err, a.telemetryLost)
+				}
+			} else {
+				a.telemetryLost = 0
 				if m.active[a.key] == a {
 					for i := range a.manifest.Sources {
 						if a.manifest.Sources[i].Source.ID == "telemetry" {
@@ -691,8 +809,8 @@ func (m *Manager) sampleEpisode(ctx context.Context, a *activeEpisode) {
 						}
 					}
 				}
-				m.mu.Unlock()
 			}
+			m.mu.Unlock()
 		case <-clockTicker.C:
 			m.queryAndAttachConsensus(ctx, a, false)
 		}
@@ -718,7 +836,7 @@ func (m *Manager) queryAndAttachConsensus(ctx context.Context, a *activeEpisode,
 	if m.active[a.key] != a {
 		return
 	}
-	a.manifest.Roughtime = append(a.manifest.Roughtime, c)
+	recordConsensus(a.dir, &a.manifest, c)
 	if opening {
 		a.awaitConsensus = false
 		if len(a.manifest.UTCObservations) > 0 {
@@ -728,7 +846,159 @@ func (m *Manager) queryAndAttachConsensus(ctx context.Context, a *activeEpisode,
 	_ = writeManifest(a.dir, a.manifest)
 }
 
-func (m *Manager) enforceQuota() error {
+// evictionCandidate is one sealed or quarantined episode directory the quota
+// may remove, with everything the decision needs already read off disk.
+type evictionCandidate struct {
+	path          string
+	started, size int64
+	id, campaign  string
+	tier          int
+	// quarantined marks a directory recovery could not read, kept under
+	// <id>.unrecoverable. It carries no manifest, so it is described by its
+	// directory name and evicted first.
+	quarantined bool
+}
+
+// storeScan is one pass over the episode store: every directory's byte total
+// and, for the sealed ones, the manifest fields eviction sorts on.
+//
+// It is deliberately a free function taking a root rather than a method taking
+// the manager lock. Scanning means reading every sealed episode's manifest and
+// walking every file in the store, which on a full device is thousands of stat
+// calls, and Start used to do all of it with m.mu held: every application
+// record, every capture-adapter callback and every status query on the device
+// blocked behind one episode's start. The scan needs no manager state, so it
+// runs before the lock is taken and only the decision is made under it.
+type storeScan struct {
+	used       int64
+	candidates []evictionCandidate
+	// partialBytes is what the in-flight .partial directories occupy. They are
+	// counted toward the quota (they are real bytes on the same filesystem)
+	// but are never eviction candidates: an episode that is still recording
+	// must not have its directory pulled out from under it.
+	partialBytes int64
+	// readFailures names the directories whose manifest could not be read.
+	readFailures []string
+}
+
+func dirBytes(dir string) int64 {
+	var size int64
+	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, e error) error {
+		if e == nil && !d.IsDir() {
+			if info, x := d.Info(); x == nil {
+				size += info.Size()
+			}
+		}
+		return nil
+	})
+	return size
+}
+
+// unrecoverableSuffix marks a crash-interrupted episode directory that
+// recovery could neither read nor repair. See quarantinePartial.
+const unrecoverableSuffix = ".unrecoverable"
+
+func scanEpisodeStore(root string) (storeScan, error) {
+	var scan storeScan
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return scan, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		size := dirBytes(dir)
+		scan.used += size
+		switch {
+		case strings.HasSuffix(e.Name(), ".partial"):
+			scan.partialBytes += size
+			continue
+		case strings.HasSuffix(e.Name(), unrecoverableSuffix):
+			// A quarantined directory holds bytes that can never be read,
+			// uploaded or labeled. Counting them without ever evicting them
+			// would let one damaged episode wedge the quota permanently, so it
+			// is the first thing to go and the warning says so.
+			started := int64(0)
+			if info, statErr := e.Info(); statErr == nil {
+				started = info.ModTime().UnixNano()
+			}
+			scan.candidates = append(scan.candidates, evictionCandidate{
+				path: dir, started: started, size: size,
+				id: strings.TrimSuffix(e.Name(), unrecoverableSuffix), tier: 0, quarantined: true,
+			})
+			continue
+		}
+		mf, err := readManifest(dir)
+		if err != nil {
+			scan.readFailures = append(scan.readFailures, e.Name())
+			continue
+		}
+		scan.candidates = append(scan.candidates, evictionCandidate{
+			path: dir, started: mf.StartedUnixNanos, size: size,
+			id: mf.ID, campaign: mf.Trigger.CampaignName, tier: evictionTier(mf.Upload.State),
+		})
+	}
+	return scan, nil
+}
+
+// recordConsensus files one Roughtime consensus round: the full round, with
+// its nonce and raw signed responses, is appended to the episode's evidence
+// sidecar, and the manifest keeps only the bounds.
+//
+// The manifest is rewritten in full on every round. Keeping the raw evidence
+// in it meant a day-long episode, which queries Roughtime every five minutes,
+// rewrote a manifest that had grown by several kilobytes of base64 per round,
+// and by the end the clock evidence was larger than everything else in the
+// file put together. The sidecar is sealed and checksummed exactly like every
+// other episode file, so nothing is lost: the bytes needed to independently
+// reverify a round are still in the episode, they are just not in the file a
+// consumer reads to find out when the episode started.
+//
+// The manifest keeps the first round and the most recent one, which are the
+// two a consumer actually reads: the bound the episode opened with, and the
+// bound it currently holds. RoughtimeRounds says how many the sidecar has.
+func recordConsensus(dir string, mf *Manifest, c timesync.Consensus) {
+	if err := appendRoughtimeEvidence(dir, c); err != nil {
+		// The bounds still reach the manifest: losing the ability to reverify
+		// a round is not a reason to also lose the round.
+		mf.RecoveryActions = append(mf.RecoveryActions, "roughtime evidence sidecar write failed: "+err.Error())
+	} else {
+		mf.RoughtimeEvidenceLog = RoughtimeEvidenceFile
+	}
+	mf.RoughtimeRounds++
+	bounds := c
+	bounds.Evidence = nil
+	switch len(mf.Roughtime) {
+	case 0:
+		mf.Roughtime = []timesync.Consensus{bounds}
+	case 1:
+		mf.Roughtime = append(mf.Roughtime, bounds)
+	default:
+		mf.Roughtime[len(mf.Roughtime)-1] = bounds
+	}
+}
+
+func appendRoughtimeEvidence(dir string, c timesync.Consensus) error {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, RoughtimeEvidenceFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return syncFile(f)
+}
+
+// enforceQuotaLocked evicts against an already-taken store scan. Callers hold
+// m.mu; the scan itself was taken without it.
+func (m *Manager) enforceQuotaLocked(scan storeScan) error {
 	var stat unix.Statfs_t
 	if err := unix.Statfs(m.root, &stat); err != nil {
 		return fmt.Errorf("data filesystem quota: %w", err)
@@ -740,40 +1010,16 @@ func (m *Manager) enforceQuota() error {
 		quota = m.maxQuota
 	}
 	reserve := m.reserve
-	type candidate struct {
-		path          string
-		started, size int64
-		id, campaign  string
-		tier          int
+	used := scan.used
+	for _, name := range scan.readFailures {
+		m.warnf("episode %s has an unreadable manifest; its bytes count against the data quota but it can never be uploaded or evicted by state", name)
 	}
-	var candidates []candidate
-	var used int64
-	entries, err := os.ReadDir(m.root)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if !e.IsDir() || strings.HasSuffix(e.Name(), ".partial") {
+	candidates := make([]evictionCandidate, 0, len(scan.candidates))
+	for _, c := range scan.candidates {
+		if !c.quarantined && m.downloads[c.id] > 0 {
 			continue
 		}
-		dir := filepath.Join(m.root, e.Name())
-		mf, err := readManifest(dir)
-		if err != nil {
-			continue
-		}
-		var size int64
-		_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, e error) error {
-			if e == nil && !d.IsDir() {
-				if info, x := d.Info(); x == nil {
-					size += info.Size()
-				}
-			}
-			return nil
-		})
-		used += size
-		if m.downloads[mf.ID] == 0 {
-			candidates = append(candidates, candidate{dir, mf.StartedUnixNanos, size, mf.ID, mf.Trigger.CampaignName, evictionTier(mf.Upload.State)})
-		}
+		candidates = append(candidates, c)
 	}
 	// Lower tier is evicted first; within a tier the oldest goes first.
 	sort.Slice(candidates, func(i, j int) bool {
@@ -786,10 +1032,12 @@ func (m *Manager) enforceQuota() error {
 		if used <= quota && free >= reserve {
 			break
 		}
-		switch c.tier {
-		case 2:
+		switch {
+		case c.quarantined:
+			m.warnf("evicting quarantined episode %s, which recovery could not read, to preserve the data quota", c.id)
+		case c.tier == 2:
 			m.warnf("evicting episode %s (campaign %s) before its upload completed to preserve the data quota", c.id, c.campaign)
-		case 1:
+		case c.tier == 1:
 			m.warnf("evicting episode %s (campaign %s), which failed to upload and was never retried, to preserve the data quota", c.id, c.campaign)
 		}
 		if err := os.RemoveAll(c.path); err != nil {
@@ -799,6 +1047,9 @@ func (m *Manager) enforceQuota() error {
 		free += c.size
 	}
 	if used > quota || free < reserve {
+		if scan.partialBytes > 0 {
+			return fmt.Errorf("data store holds %d bytes (%d of them in episodes still recording) against a %d byte quota and cannot preserve %d bytes free", used, scan.partialBytes, quota, reserve)
+		}
 		return fmt.Errorf("data store holds %d bytes against a %d byte quota and cannot preserve %d bytes free", used, quota, reserve)
 	}
 	return nil
@@ -992,6 +1243,11 @@ func (m *Manager) preRollLostInWindowLocked(origin int64, requested time.Duratio
 // a record can only reach a window it was physically present for. The offset
 // arithmetic still uses the stamp, so ActualOffset keeps its meaning and
 // offsets stay within [-window, 0].
+// The flush opens events.jsonl once and fsyncs it once, rather than reopening
+// and fsyncing per record. Every record in the ring is written in the same
+// call, so the intermediate syncs bought no durability that the final one does
+// not: they only forced up to preRollLimit worth of separate disk barriers
+// onto the start path, with m.mu held, before the first frame was captured.
 func (m *Manager) flushPreRoll(dir string, origin int64, requested time.Duration) (uint64, *int64, error) {
 	window := preRollWindow
 	if requested > 0 && requested < window {
@@ -1000,6 +1256,12 @@ func (m *Manager) flushPreRoll(dir string, origin int64, requested time.Duration
 	cutoff := origin - window.Nanoseconds()
 	var count uint64
 	var earliest *int64
+	var events *os.File
+	defer func() {
+		if events != nil {
+			_ = events.Close()
+		}
+	}()
 	for _, r := range m.preRoll {
 		if r.receiptNanos < cutoff || r.receiptNanos > origin || r.bootNanos < cutoff || r.bootNanos > origin {
 			continue
@@ -1015,13 +1277,32 @@ func (m *Manager) flushPreRoll(dir string, origin int64, requested time.Duration
 			earliest = &value
 		}
 		b, _ := json.Marshal(stored)
-		if err := appendJSONL(filepath.Join(dir, "events.jsonl"), b); err != nil {
+		if events == nil {
+			f, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				return count, earliest, err
+			}
+			events = f
+		}
+		if _, err := events.Write(append(b, '\n')); err != nil {
 			return count, earliest, err
 		}
 		count++
 	}
+	if events == nil {
+		return count, earliest, nil
+	}
+	if err := syncFile(events); err != nil {
+		return count, earliest, err
+	}
 	return count, earliest, nil
 }
+
+// syncFile is the fsync every JSONL append goes through. It is a variable so a
+// test can count the disk barriers one operation costs, which is the only way
+// to hold the pre-roll flush to a single fsync rather than one per record.
+var syncFile = func(f *os.File) error { return f.Sync() }
+
 func appendJSONL(path string, b []byte) error {
 	f, e := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 	if e != nil {
@@ -1031,7 +1312,7 @@ func appendJSONL(path string, b []byte) error {
 	if _, e = f.Write(append(b, '\n')); e != nil {
 		return e
 	}
-	return f.Sync()
+	return syncFile(f)
 }
 func abs64(v int64) int64 {
 	if v < 0 {
@@ -1097,6 +1378,27 @@ func (m *Manager) beginSeal(key string, drain bool) (*activeEpisode, error) {
 	m.mu.Unlock()
 	if a.done != nil {
 		<-a.done
+	}
+	// Stamp when capture actually ended, here, rather than letting the seal's
+	// stopped_episode_nanos stand for it. The drain below is a window for late
+	// application records, not recording time: nothing is captured during it,
+	// so a consumer computing episode length from stopped_episode_nanos
+	// over-reported every drained episode by the whole drain. Both numbers are
+	// now in the manifest and each means what it says.
+	//
+	// The stillOpenLocked check is the same fence finalize relies on, and it is
+	// load-bearing rather than defensive. A concurrent Stop and Interrupt can
+	// both leave the block above holding this episode; the one that reaches
+	// finalize first detaches it under this mutex and then seals it with the
+	// mutex released, so writing to the manifest here after that detachment
+	// would race the seal's own reads. Once the episode is detached it is not
+	// ours to stamp, and the seal has already read the clock itself.
+	if now, timeErr := readBootTime(); timeErr == nil {
+		m.mu.Lock()
+		if m.stillOpenLocked(a) {
+			a.manifest.CaptureStoppedEpisodeNS = now - a.manifest.RequestBootNanos
+		}
+		m.mu.Unlock()
 	}
 	if !drain || !a.wantsDrain() {
 		return a, nil
@@ -1172,8 +1474,9 @@ var sealMux = muxPlayableClips
 //     second Stop or Interrupt can claim it.
 //  2. With the lock released the episode's clock is read, its ledger is
 //     flushed, and its bytes are muxed and hashed. Nothing else can reach the
-//     episode by then, and enforceQuota skips ".partial" directories, so the
-//     store cannot evict it mid-seal either.
+//     episode by then, and the quota counts a ".partial" directory's bytes but
+//     never offers one as an eviction candidate, so the store cannot evict it
+//     mid-seal either.
 //  3. The lock is retaken to write the manifest and rename the directory out
 //     of ".partial", which is what publishes the episode to every path that
 //     walks the store.
@@ -1221,9 +1524,9 @@ func (m *Manager) sealDetached(a *activeEpisode, consensus func(context.Context)
 		c, queryErr := consensus(ctx)
 		cancel()
 		if queryErr == nil {
-			a.manifest.Roughtime = append(a.manifest.Roughtime, c)
-			if len(a.manifest.UTCObservations) > 0 && clockAgreement(a.manifest.UTCObservations[len(a.manifest.UTCObservations)-1], c) == "conflict" {
-				a.manifest.SystemClockStatus = "conflict"
+			recordConsensus(a.dir, &a.manifest, c)
+			if len(a.manifest.UTCObservations) > 0 && clockAgreement(a.manifest.UTCObservations[len(a.manifest.UTCObservations)-1], c) == ClockStatusConflict {
+				a.manifest.SystemClockStatus = ClockStatusConflict
 			}
 		}
 	}
@@ -1280,9 +1583,21 @@ func (m *Manager) forgetLocked(a *activeEpisode) {
 	}
 }
 
+// EpisodeStateDraining is the state Status reports for an episode that has
+// stopped capturing and is serving its post-seal drain. It never reaches a
+// manifest on disk: a drained episode seals as "complete" or "interrupted"
+// like any other. It exists so that a status query during the drain says the
+// episode is finishing rather than that nothing is happening, which is what
+// "no active episode" claimed while Stop was still sleeping.
+const EpisodeStateDraining = "draining"
+
 // Status reports one active episode for status displays: the ad-hoc episode
-// when present, otherwise the earliest-started campaign episode. Use
-// ActiveEpisodeKeys and ActiveSession to enumerate concurrent episodes.
+// when present, otherwise the earliest-started campaign episode. An episode
+// serving its post-seal drain is reported with State EpisodeStateDraining once
+// no capturing episode is left, so the seal is visible rather than looking
+// like an idle device. Use ActiveEpisodeKeys and ActiveSession to enumerate
+// concurrent episodes; those deliberately exclude draining ones, because a
+// draining episode's campaign is free to start its next episode.
 func (m *Manager) Status() *Manifest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1296,10 +1611,20 @@ func (m *Manager) Status() *Manifest {
 			earliest = a
 		}
 	}
+	if earliest != nil {
+		v := snapshotManifest(earliest.manifest)
+		return &v
+	}
+	for _, a := range m.sealing {
+		if earliest == nil || a.manifest.StartedUnixNanos < earliest.manifest.StartedUnixNanos {
+			earliest = a
+		}
+	}
 	if earliest == nil {
 		return nil
 	}
 	v := snapshotManifest(earliest.manifest)
+	v.State = EpisodeStateDraining
 	return &v
 }
 
@@ -1509,7 +1834,12 @@ func (m *Manager) OpenFile(id, rel string, offset int64) (*os.File, File, error)
 }
 
 func (m *Manager) episodeDir(id string) (string, error) {
-	if id == "" || safeName(id) != id {
+	// "." and ".." survive safeName untouched, because it preserves dots so
+	// that identifiers and calibration filenames keep theirs. Joined onto the
+	// root they name the store itself and its parent, so an RPC asking to
+	// inspect or download episode ".." was reading outside the episode store
+	// entirely. Neither is a generated identifier, so both are simply refused.
+	if id == "" || id == "." || id == ".." || safeName(id) != id {
 		return "", ErrInvalidEpisodeID
 	}
 	p := filepath.Join(m.root, id)
@@ -1522,6 +1852,16 @@ func (m *Manager) episodeDir(id string) (string, error) {
 	return p, nil
 }
 
+// recoverPartials repairs every crash-interrupted episode directory left in
+// the store, and is the only thing standing between a power cut and a
+// permanently unreadable episode.
+//
+// No single damaged directory may stop the agent from starting. Failing
+// NewManager over one unreadable partial bricked data capture on the device
+// until somebody logged in and deleted a directory by hand, and the episode
+// that caused it was unreadable either way. A directory that cannot be
+// repaired is therefore quarantined under <id>.unrecoverable and named in a
+// warning, and recovery moves on to the next one.
 func (m *Manager) recoverPartials() error {
 	entries, err := os.ReadDir(m.root)
 	if err != nil {
@@ -1532,52 +1872,87 @@ func (m *Manager) recoverPartials() error {
 			continue
 		}
 		dir := filepath.Join(m.root, e.Name())
-		mf, err := readManifest(dir)
-		if err != nil {
-			continue
-		}
-		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
-			if walkErr == nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".jsonl") {
-				truncateJSONL(path)
-			}
-			return nil
-		})
-		reason := "agent_restart"
-		if current := bootID(); mf.BootID != "" && mf.BootID != current {
-			reason = "reboot"
-		}
-		mf.State, mf.Interruption = "interrupted", reason
-		mf.RecoveryActions = append(mf.RecoveryActions, "truncated incomplete JSONL tail", "recomputed sealed-file checksums")
-		// The summary counters are folded in memory and written only at seal, so
-		// an interrupted episode arrives here with all of them at zero while its
-		// ledger and outcome log are intact on disk. Publishing those zeros would
-		// be a manifest that lies about what the model consumed, so recompute
-		// them from the files that survived rather than annotating the lie.
-		reconciled, reconcileErr := reconcileModelIO(dir, &mf)
-		if reconcileErr != nil {
-			return fmt.Errorf("recovering episode %s: reconciling model input/outcome accounting: %w", mf.ID, reconcileErr)
-		}
-		if reconciled {
-			mf.RecoveryActions = append(mf.RecoveryActions, "recomputed model input/outcome counters from "+ModelInputLedgerFile+" and "+mf.ModelIO.OutcomeLog)
-		}
-		// Recovery is the other path that seals an episode, so it derives the
-		// same playable clips; the truncated index tails above were already
-		// cut, and the muxer counts a partial trailing line as unusable
-		// rather than guessing at it.
-		mf.PlayableNotes = muxPlayableClips(dir)
-		mf.Files, err = sealFiles(dir)
-		if err != nil {
-			return fmt.Errorf("recovering episode %s: %w", mf.ID, err)
-		}
-		associateFileSources(mf.Files, mf.Sources)
-		if err := writeManifest(dir, mf); err != nil {
-			return err
-		}
-		if err := os.Rename(dir, strings.TrimSuffix(dir, ".partial")); err != nil {
-			return err
+		if err := m.recoverPartial(dir); err != nil {
+			m.warnf("episode %s could not be recovered (%v); quarantining it", strings.TrimSuffix(e.Name(), ".partial"), err)
+			m.quarantinePartial(dir)
 		}
 	}
 	return nil
+}
+
+// quarantinePartial takes an unrepairable directory out of the recovery path.
+// A directory with no manifest at all is deleted rather than kept: it was
+// created between Mkdir and the first manifest write, so it holds no episode
+// and there is nothing in it to salvage. Anything else is renamed, so the
+// bytes stay on disk for an operator to look at, stop being retried on every
+// agent start, and become visible to (and evictable by) the quota.
+func (m *Manager) quarantinePartial(dir string) {
+	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); errors.Is(err, os.ErrNotExist) {
+		if err := os.RemoveAll(dir); err != nil {
+			m.warnf("removing empty episode directory %s failed: %v", filepath.Base(dir), err)
+		}
+		return
+	}
+	target := strings.TrimSuffix(dir, ".partial") + unrecoverableSuffix
+	if err := os.Rename(dir, target); err != nil {
+		m.warnf("quarantining episode directory %s failed: %v", filepath.Base(dir), err)
+	}
+}
+
+func (m *Manager) recoverPartial(dir string) error {
+	mf, err := readManifest(dir)
+	if err != nil {
+		return fmt.Errorf("reading manifest: %w", err)
+	}
+	// A manifest that already says "complete" was fully sealed: its files were
+	// checksummed and listed, and the crash landed in the one instruction
+	// between writing that manifest and renaming the directory. Rerunning
+	// recovery over it would relabel a complete episode as interrupted and
+	// blame a reboot for a rename, so the only thing left to do is the rename.
+	if mf.State == "complete" {
+		return os.Rename(dir, strings.TrimSuffix(dir, ".partial"))
+	}
+	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr == nil && !d.IsDir() && strings.HasSuffix(d.Name(), ".jsonl") {
+			truncateJSONL(path)
+		}
+		return nil
+	})
+	reason := "agent_restart"
+	if current := bootID(); mf.BootID != "" && mf.BootID != current {
+		reason = "reboot"
+	}
+	mf.State, mf.Interruption = "interrupted", reason
+	mf.RecoveryActions = append(mf.RecoveryActions, "truncated incomplete JSONL tail", "recomputed sealed-file checksums")
+	// The summary counters are folded in memory and written only at seal, so
+	// an interrupted episode arrives here with all of them at zero while its
+	// ledger and outcome log are intact on disk. Publishing those zeros would
+	// be a manifest that lies about what the model consumed, so recompute
+	// them from the files that survived rather than annotating the lie.
+	reconciled, reconcileErr := reconcileModelIO(dir, &mf)
+	if reconcileErr != nil {
+		return fmt.Errorf("reconciling model input/outcome accounting: %w", reconcileErr)
+	}
+	if reconciled {
+		mf.RecoveryActions = append(mf.RecoveryActions, "recomputed model input/outcome counters from "+ModelInputLedgerFile+" and "+mf.ModelIO.OutcomeLog)
+	}
+	for _, note := range mf.ModelIO.RecoveryNotes {
+		m.warnf("episode %s: %s", mf.ID, note)
+	}
+	// Recovery is the other path that seals an episode, so it derives the
+	// same playable clips; the truncated index tails above were already
+	// cut, and the muxer counts a partial trailing line as unusable
+	// rather than guessing at it.
+	mf.PlayableNotes = muxPlayableClips(dir)
+	mf.Files, err = sealFiles(dir)
+	if err != nil {
+		return fmt.Errorf("sealing files: %w", err)
+	}
+	associateFileSources(mf.Files, mf.Sources)
+	if err := writeManifest(dir, mf); err != nil {
+		return fmt.Errorf("writing manifest: %w", err)
+	}
+	return os.Rename(dir, strings.TrimSuffix(dir, ".partial"))
 }
 
 func selectSources(all []Source, include, exclude []string) ([]Source, error) {
@@ -1810,17 +2185,22 @@ func associateFileSources(files []File, sources []SourceStats) {
 	}
 }
 
+// writeManifest replaces the episode manifest durably.
+//
+// It goes through atomicfile rather than a bare WriteFile plus Rename: the
+// previous version fsynced neither the temporary file nor the directory, so a
+// device that lost power just after the rename could come back with the
+// manifest entry pointing at a file whose contents had never left the page
+// cache. On embedded hardware that loses power without warning, which is what
+// this package records on, a zero-length manifest makes the whole episode
+// unreadable even though every payload byte survived.
 func writeManifest(dir string, m Manifest) error {
 	b, e := json.MarshalIndent(m, "", "  ")
 	if e != nil {
 		return e
 	}
 	b = append(b, '\n')
-	tmp := filepath.Join(dir, "manifest.json.tmp")
-	if e = os.WriteFile(tmp, b, 0o640); e != nil {
-		return e
-	}
-	return os.Rename(tmp, filepath.Join(dir, "manifest.json"))
+	return atomicfile.Write(filepath.Join(dir, "manifest.json"), b, 0o640)
 }
 func readManifest(dir string) (Manifest, error) {
 	var m Manifest
@@ -1831,25 +2211,78 @@ func readManifest(dir string) (Manifest, error) {
 	e = json.Unmarshal(b, &m)
 	return m, e
 }
+
+// truncateJSONLChunk is how much of a JSONL tail is read at a time when
+// hunting for the last complete line. One read covers any line this package
+// writes; a file whose tail holds no newline within a chunk is scanned
+// backwards a chunk at a time rather than in one allocation.
+const truncateJSONLChunk = 64 << 10
+
+// truncateJSONL cuts a torn trailing line off a crash-interrupted JSONL file.
+//
+// It scans backwards in bounded chunks instead of reading the file into
+// memory. The previous implementation did os.ReadFile followed by string(b),
+// which holds two copies of the whole file at once: an episode that recorded a
+// multi-gigabyte telemetry or event log made recovery allocate twice its size
+// on a device that has a few hundred megabytes of RAM, and the agent was
+// killed by the out-of-memory killer at exactly the moment it was trying to
+// repair itself.
 func truncateJSONL(p string) {
-	b, e := os.ReadFile(p)
-	if e != nil {
+	f, err := os.Open(p)
+	if err != nil {
 		return
 	}
-	i := strings.LastIndexByte(string(b), '\n')
-	if i < 0 {
-		_ = os.Truncate(p, 0)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
 		return
 	}
-	_ = os.Truncate(p, int64(i+1))
+	size := info.Size()
+	if size == 0 {
+		return
+	}
+	buf := make([]byte, truncateJSONLChunk)
+	for end := size; end > 0; {
+		start := end - int64(len(buf))
+		if start < 0 {
+			start = 0
+		}
+		chunk := buf[:end-start]
+		if _, err := f.ReadAt(chunk, start); err != nil {
+			return
+		}
+		if i := bytes.LastIndexByte(chunk, '\n'); i >= 0 {
+			if keep := start + int64(i) + 1; keep != size {
+				_ = os.Truncate(p, keep)
+			}
+			return
+		}
+		end = start
+	}
+	// No newline anywhere: the file holds nothing but a torn first line.
+	_ = os.Truncate(p, 0)
 }
 
+// clockAgreement judges the device's system clock against a Roughtime
+// consensus. It returns one of the ClockStatus constants in model.go.
+//
+// An unbounded system observation has no interval to compare: observeUTC
+// leaves both offset bounds at zero when adjtimex reports the clock
+// unsynchronized. Comparing that empty interval against a real consensus
+// declared a conflict on every episode recorded by every device without a
+// synced clock, which is most of them at first boot, and a conflict that no
+// evidence supports is worse than no status at all. Such an episode reports
+// roughtime_only: the consensus is its sole UTC evidence, and the system clock
+// is not disagreeing with it, it is simply saying nothing.
 func clockAgreement(system UTCObservation, consensus timesync.Consensus) string {
 	if consensus.Confidence == "unbounded" {
-		return "system_reported"
+		return ClockStatusSystemReported
+	}
+	if system.Confidence == "unbounded" {
+		return ClockStatusRoughtimeOnly
 	}
 	if system.OffsetUpperNanos < consensus.LowerOffsetNanos || consensus.UpperOffsetNanos < system.OffsetLowerNanos {
-		return "conflict"
+		return ClockStatusConflict
 	}
-	return "agreement"
+	return ClockStatusAgreement
 }
