@@ -996,7 +996,18 @@ type QueryEpisodesRequest struct {
 	StartedAfterUnixNanos  int64        `protobuf:"varint,5,opt,name=started_after_unix_nanos,json=startedAfterUnixNanos,proto3" json:"started_after_unix_nanos,omitempty"`
 	StartedBeforeUnixNanos int64        `protobuf:"varint,6,opt,name=started_before_unix_nanos,json=startedBeforeUnixNanos,proto3" json:"started_before_unix_nanos,omitempty"`
 	// Maximum episodes returned, newest first. Zero means the server default.
-	Limit         uint32 `protobuf:"varint,7,opt,name=limit,proto3" json:"limit,omitempty"`
+	Limit uint32 `protobuf:"varint,7,opt,name=limit,proto3" json:"limit,omitempty"`
+	// Opaque continuation token from a previous QueryEpisodesResponse's
+	// next_page_token. Empty asks for the first page, which is what every client
+	// that predates this field sends. Clients must treat the value as opaque:
+	// its contents are the server's to define and to change.
+	//
+	// Additive and not yet load bearing: the catalog read path lives outside this
+	// service, and the ingest answers this RPC with UNIMPLEMENTED, so nothing on
+	// a device reads or writes this field today. It is declared now so the shape
+	// is right before any client depends on it; retrofitting pagination onto a
+	// deployed query is the expensive version of this change.
+	PageToken     string `protobuf:"bytes,8,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1080,9 +1091,21 @@ func (x *QueryEpisodesRequest) GetLimit() uint32 {
 	return 0
 }
 
+func (x *QueryEpisodesRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
 type QueryEpisodesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Episodes      []*Episode             `protobuf:"bytes,1,rep,name=episodes,proto3" json:"episodes,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Episodes []*Episode             `protobuf:"bytes,1,rep,name=episodes,proto3" json:"episodes,omitempty"`
+	// Token to pass as the next request's page_token. EMPTY means this is the
+	// last page, which is the only value a server that does not paginate ever
+	// sends; a client must therefore stop on empty rather than on a short page,
+	// because a full page with no token is also the last one.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1122,6 +1145,13 @@ func (x *QueryEpisodesResponse) GetEpisodes() []*Episode {
 		return x.Episodes
 	}
 	return nil
+}
+
+func (x *QueryEpisodesResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
 }
 
 type GetEpisodeRequest struct {
@@ -1452,7 +1482,7 @@ var File_cloud_data_ingest_proto protoreflect.FileDescriptor
 
 const file_cloud_data_ingest_proto_rawDesc = "" +
 	"\n" +
-	"\x17cloud/data_ingest.proto\x12\x12wendycloud.data.v1\"\xaf\x04\n" +
+	"\x17cloud/data_ingest.proto\x12\x12wendycloud.data.v1\"\xbb\x04\n" +
 	"\x0fEpisodeManifest\x12\x1d\n" +
 	"\n" +
 	"episode_id\x18\x01 \x01(\tR\tepisodeId\x12\x1a\n" +
@@ -1467,7 +1497,7 @@ const file_cloud_data_ingest_proto_rawDesc = "" +
 	"\x16utc_offset_upper_nanos\x18\v \x01(\x03R\x13utcOffsetUpperNanos\x12.\n" +
 	"\x13system_clock_status\x18\f \x01(\tR\x11systemClockStatus\x12'\n" +
 	"\x0fattributes_json\x18\x0e \x01(\fR\x0eattributesJson\x12=\n" +
-	"\x05files\x18\r \x03(\v2'.wendycloud.data.v1.EpisodeFileManifestR\x05files\"\x81\x03\n" +
+	"\x05files\x18\r \x03(\v2'.wendycloud.data.v1.EpisodeFileManifestR\x05filesJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04\"\x81\x03\n" +
 	"\x13EpisodeFileManifest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1d\n" +
 	"\n" +
@@ -1514,7 +1544,7 @@ const file_cloud_data_ingest_proto_rawDesc = "" +
 	"\x06detail\x18\x05 \x01(\tR\x06detail\"\x8b\x01\n" +
 	"\x15CommitEpisodeResponse\x126\n" +
 	"\x05state\x18\x01 \x01(\x0e2 .wendycloud.data.v1.EpisodeStateR\x05state\x12:\n" +
-	"\x05files\x18\x02 \x03(\v2$.wendycloud.data.v1.FileVerificationR\x05files\"\xa6\x02\n" +
+	"\x05files\x18\x02 \x03(\v2$.wendycloud.data.v1.FileVerificationR\x05files\"\xc5\x02\n" +
 	"\x14QueryEpisodesRequest\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x19\n" +
 	"\basset_id\x18\x02 \x01(\tR\aassetId\x12\x1a\n" +
@@ -1522,9 +1552,12 @@ const file_cloud_data_ingest_proto_rawDesc = "" +
 	"\x05state\x18\x04 \x01(\x0e2 .wendycloud.data.v1.EpisodeStateR\x05state\x127\n" +
 	"\x18started_after_unix_nanos\x18\x05 \x01(\x03R\x15startedAfterUnixNanos\x129\n" +
 	"\x19started_before_unix_nanos\x18\x06 \x01(\x03R\x16startedBeforeUnixNanos\x12\x14\n" +
-	"\x05limit\x18\a \x01(\rR\x05limit\"P\n" +
+	"\x05limit\x18\a \x01(\rR\x05limit\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\b \x01(\tR\tpageToken\"x\n" +
 	"\x15QueryEpisodesResponse\x127\n" +
-	"\bepisodes\x18\x01 \x03(\v2\x1b.wendycloud.data.v1.EpisodeR\bepisodes\"I\n" +
+	"\bepisodes\x18\x01 \x03(\v2\x1b.wendycloud.data.v1.EpisodeR\bepisodes\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"I\n" +
 	"\x11GetEpisodeRequest\x12\x15\n" +
 	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x1d\n" +
 	"\n" +
