@@ -94,18 +94,39 @@ func newDiscoverCmd() *cobra.Command {
 	return cmd
 }
 
-// discoverExternalDevices queries registered providers for their devices. This
-// uses AllProviders (not just available ones) so devices are discoverable even
-// when the build toolchain isn't installed. Unless includeLocal is set (see
-// providers.ShowLocalDevices), local run targets (this machine, Docker/OrbStack,
-// Apple Container) are skipped so the table lists separate WendyOS devices by
-// default.
-func discoverExternalDevices(ctx context.Context, includeLocal bool) []models.ExternalDevice {
-	var all []models.ExternalDevice
-	for _, p := range providers.AllProviders() {
+// externalProvidersFn is a seam over providers.AllProviders so tests can supply
+// fakes; production never reassigns it (the same convention as lanStreamFn).
+// It covers only which providers are scanned — externalProviderDisplayName
+// still reads the real registry, so a test with fake providers should assert on
+// device rows rather than on rendered Type labels.
+var externalProvidersFn = providers.AllProviders
+
+// externalDiscoveryProviders returns the providers `wendy discover` scans, in
+// registration order: every registered provider (not just the available ones,
+// so devices are discoverable even when the build toolchain isn't installed),
+// minus local run targets (this machine, Docker/OrbStack, Apple Container)
+// unless includeLocal — see providers.ShowLocalDevices — so the table lists
+// separate WendyOS devices by default.
+//
+// The single definition is shared by the JSON, one-shot and continuous paths so
+// they can never disagree about which providers exist.
+func externalDiscoveryProviders(includeLocal bool) []providers.DeviceProvider {
+	all := externalProvidersFn()
+	kept := make([]providers.DeviceProvider, 0, len(all))
+	for _, p := range all {
 		if !includeLocal && providers.IsLocalProviderKey(p.Key()) {
 			continue
 		}
+		kept = append(kept, p)
+	}
+	return kept
+}
+
+// discoverExternalDevices queries providers for their devices in one shot. The
+// continuous TUI does not use this — see discoverModel.startExternalStream.
+func discoverExternalDevices(ctx context.Context, includeLocal bool) []models.ExternalDevice {
+	var all []models.ExternalDevice
+	for _, p := range externalDiscoveryProviders(includeLocal) {
 		devices, err := p.DiscoverDevices(ctx)
 		if err != nil {
 			continue
@@ -325,7 +346,42 @@ type btScanMsg struct {
 	devices []models.BluetoothDevice
 	err     error
 }
-type extScanMsg struct{ devices []models.ExternalDevice }
+
+// External discovery runs one independent cmd chain per provider, so every
+// message names the provider it belongs to — the provider value itself, so
+// Update can re-arm without a key-to-provider lookup. A provider implementing
+// providers.ContinuousDiscoverer is consumed as a stream (Start/Snapshot/End),
+// everything else is polled (extScanMsg); see discoverModel.Init.
+
+// extScanMsg carries one provider's DiscoverDevices snapshot (polling path).
+type extScanMsg struct {
+	provider providers.DeviceProvider
+	devices  []models.ExternalDevice
+}
+
+// extStreamStartMsg reports that a provider's continuous discovery started. It
+// carries no devices: the first snapshot may be a long way off — a provider with
+// nothing to report emits nothing at all (see MicroWendyProvider.streamDevices,
+// which never emits an empty union) — and the TUI needs to know the stream is
+// live before then.
+type extStreamStartMsg struct {
+	provider providers.DeviceProvider
+	ch       <-chan []models.ExternalDevice
+}
+
+// extStreamSnapshotMsg carries one snapshot off a provider's stream, plus the
+// channel it came from so Update can re-arm the wait (mirrors lanEventMsg).
+type extStreamSnapshotMsg struct {
+	provider providers.DeviceProvider
+	devices  []models.ExternalDevice
+	ch       <-chan []models.ExternalDevice
+}
+
+// extStreamEndMsg reports that a provider's stream is over — it never started,
+// or it closed. Discovery for that provider stops there: the rows it found stay
+// listed, and nothing takes over. The two causes share one message because they
+// call for the same thing, doing nothing.
+type extStreamEndMsg struct{ provider providers.DeviceProvider }
 
 // lanEventMsg carries one event off the LAN discovery stream (see
 // discovery.StreamLAN), plus the channel it came from so Update can re-arm
@@ -345,6 +401,28 @@ func waitLANEvent(ch <-chan discovery.LANEvent) tea.Cmd {
 			return nil
 		}
 		return lanEventMsg{ev: ev, ch: ch}
+	}
+}
+
+// waitExternalSnapshot returns a tea.Cmd that blocks for the next snapshot on
+// ch, reporting a close as extStreamEndMsg — explicitly, rather than the nil
+// message waitLANEvent returns, so the model stops counting this provider as a
+// live BLE source (see discoverModel.bleWarningLine).
+//
+// A close ends discovery for this provider: nothing takes over. The
+// ContinuousDiscoverer doc suggests falling back to DiscoverDevices, and
+// discoverProviderForPicker does, but that call cannot see BLE at all (see
+// MicroWendyProvider.DiscoverDevices) — for a BLE-capable provider the
+// "fallback" would discard the coverage the stream existed to provide, and buy
+// back a scan whose every cycle costs a 3s browse and an idle wait. Keeping the
+// rows the stream already found is the better trade.
+func waitExternalSnapshot(p providers.DeviceProvider, ch <-chan []models.ExternalDevice) tea.Cmd {
+	return func() tea.Msg {
+		devices, ok := <-ch
+		if !ok {
+			return extStreamEndMsg{provider: p}
+		}
+		return extStreamSnapshotMsg{provider: p, devices: devices, ch: ch}
 	}
 }
 
@@ -404,7 +482,6 @@ type discoverModel struct {
 	bleSeen            map[string]time.Time // device ID -> time last seen in a BLE scan
 	usbInterval        increasingRefreshInterval
 	ethernetInterval   increasingRefreshInterval
-	externalInterval   increasingRefreshInterval
 	table              tui.BubbleTable
 	quitting           bool
 	hasResults         bool
@@ -419,6 +496,19 @@ type discoverModel struct {
 	spinner            spinner.Model             // animates Agent/OS cells while LAN probes run
 	probe              map[string]tui.ProbeState // LAN display name (lowercased) -> probe state
 	includeLocal       bool                      // surface local run targets hidden by default
+
+	// External discovery state, one entry per provider. extProviders fixes the
+	// set (and its order) for the model's lifetime; the maps are keyed by
+	// provider key.
+	//
+	// The maps are shared across model copies, as bleSeen and probe are, and
+	// only Update touches them — so access stays single-threaded. The rule that
+	// keeps it that way: no tea.Cmd closure may read them. The scan/stream cmds
+	// capture m by value and touch only m.ctx.
+	extProviders []providers.DeviceProvider
+	extDevices   map[string][]models.ExternalDevice    // latest snapshot per provider
+	extStreaming map[string]bool                       // provider has a live continuous stream
+	extIntervals map[string]*increasingRefreshInterval // poll ramp, per polled provider
 }
 
 func newDiscoverModel(ctx context.Context, opts discovery.DiscoveryOptions, includeLocal bool) discoverModel {
@@ -434,6 +524,20 @@ func newDiscoverModel(ctx context.Context, opts discovery.DiscoveryOptions, incl
 		// cells (matches tui.newProbeSpinner).
 		spinner: spinner.New(spinner.WithSpinner(spinner.Dot)),
 		probe:   make(map[string]tui.ProbeState),
+		// Always non-nil: Update writes to these unconditionally, and a write to
+		// a nil map panics.
+		extDevices:   make(map[string][]models.ExternalDevice),
+		extStreaming: make(map[string]bool),
+		extIntervals: make(map[string]*increasingRefreshInterval),
+	}
+	if m.includeExternal {
+		m.extProviders = externalDiscoveryProviders(includeLocal)
+		for _, p := range m.extProviders {
+			// Pre-populated so a provider's ramp is addressable before its first
+			// poll — every provider has its own, because N cmd chains sharing one
+			// would each advance the same counter and reach the ceiling early.
+			m.extIntervals[p.Key()] = &increasingRefreshInterval{}
+		}
 	}
 	m.refreshTable()
 	return m
@@ -484,9 +588,33 @@ func (m discoverModel) scanBluetooth() tea.Cmd {
 	}
 }
 
-func (m discoverModel) scanExternal() tea.Cmd {
+// startExternalStream starts one provider's continuous discovery, yielding
+// extStreamStartMsg or, if it cannot start, extStreamEndMsg. It deliberately
+// does not wait on the channel: a provider with nothing to report emits nothing
+// at all, so waiting here would leave "the stream is live" and "the stream never
+// started" indistinguishable.
+func (m discoverModel) startExternalStream(p providers.DeviceProvider, cd providers.ContinuousDiscoverer) tea.Cmd {
+	ctx := m.ctx
 	return func() tea.Msg {
-		return extScanMsg{devices: discoverExternalDevices(m.ctx, m.includeLocal)}
+		ch, err := cd.DiscoverDevicesContinuous(ctx)
+		if err != nil {
+			return extStreamEndMsg{provider: p}
+		}
+		return extStreamStartMsg{provider: p, ch: ch}
+	}
+}
+
+// scanExternalProvider runs one DiscoverDevices scan. An error yields no
+// devices, matching discoverExternalDevices's behaviour of skipping a provider
+// whose scan failed.
+func (m discoverModel) scanExternalProvider(p providers.DeviceProvider) tea.Cmd {
+	ctx := m.ctx
+	return func() tea.Msg {
+		devices, err := p.DiscoverDevices(ctx)
+		if err != nil {
+			devices = nil
+		}
+		return extScanMsg{provider: p, devices: devices}
 	}
 }
 
@@ -504,8 +632,16 @@ func (m discoverModel) Init() tea.Cmd {
 	if m.shouldDiscover(models.InterfaceBluetooth) {
 		cmds = append(cmds, m.scanBluetooth())
 	}
-	if m.includeExternal {
-		cmds = append(cmds, m.scanExternal())
+	// Each provider gets its own cmd chain, and its transport is decided here,
+	// once: a stream for a ContinuousDiscoverer, polling for everything else.
+	// Neither ever falls back to the other (see waitExternalSnapshot). The type
+	// assertion is free, so it belongs here rather than inside a cmd.
+	for _, p := range m.extProviders {
+		if cd, ok := p.(providers.ContinuousDiscoverer); ok {
+			cmds = append(cmds, m.startExternalStream(p, cd))
+			continue
+		}
+		cmds = append(cmds, m.scanExternalProvider(p))
 	}
 	cmds = append(cmds, m.spinner.Tick)
 	return tea.Batch(cmds...)
@@ -685,11 +821,30 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bleWarning = ""
 		return m, m.scanBluetooth()
 	case extScanMsg:
-		m.collection.ExternalDevices = msg.devices
+		m.setExternalDevices(msg.provider, msg.devices)
 		m.hasResults = true
 		m.refreshTable()
-		delay := m.externalInterval.delay(env.DiscoverExternalInterval())
-		return m, delayThen(delay, m.scanExternal())
+		return m, delayThen(m.externalDelay(msg.provider), m.scanExternalProvider(msg.provider))
+	case extStreamStartMsg:
+		m.extStreaming[msg.provider.Key()] = true
+		// No devices to render yet, but a scan has reported back — that is all
+		// hasResults means, and with a stream it is the only signal that ever
+		// arrives when nothing is found.
+		m.hasResults = true
+		return m, waitExternalSnapshot(msg.provider, msg.ch)
+	case extStreamSnapshotMsg:
+		m.setExternalDevices(msg.provider, msg.devices)
+		m.hasResults = true
+		m.refreshTable()
+		return m, waitExternalSnapshot(msg.provider, msg.ch)
+	case extStreamEndMsg:
+		m.extStreaming[msg.provider.Key()] = false
+		m.hasResults = true
+		// The last snapshot stays: nothing replaces a stream that ended, so
+		// clearing here would just delete devices that are probably still there.
+		// refreshTable anyway — the Bluetooth warning may become visible again.
+		m.refreshTable()
+		return m, nil
 	case flashClearMsg:
 		m.flashMessage = ""
 		m.flashIsError = false
@@ -737,8 +892,8 @@ func (m discoverModel) View() string {
 		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, d set default, x unset default, q quit")) + "\n")
 	}
 
-	if m.bleWarning != "" {
-		sb.WriteString(m.viewLine(dimStyle.Render("  Bluetooth: "+m.bleWarning)) + "\n")
+	if warning := m.bleWarningLine(); warning != "" {
+		sb.WriteString(m.viewLine(dimStyle.Render("  Bluetooth: "+warning)) + "\n")
 	}
 
 	sb.WriteString("\n")
@@ -812,6 +967,65 @@ func (m *discoverModel) removeLANDevice(key string) {
 		}
 	}
 	delete(m.probe, key)
+}
+
+// setExternalDevices replaces one provider's contribution to the device list
+// and rebuilds collection.ExternalDevices from every provider's latest
+// snapshot, so one provider reporting never reorders or drops another's rows.
+//
+// The result is a fresh slice, not one appended to in place: the collection
+// must not share a backing array with a provider's own snapshot (a provider is
+// free to reuse its buffer) nor with a previous refresh's slice, which
+// MergedDevices takes pointers into.
+func (m *discoverModel) setExternalDevices(p providers.DeviceProvider, devices []models.ExternalDevice) {
+	m.extDevices[p.Key()] = devices
+
+	total := 0
+	for _, prov := range m.extProviders {
+		total += len(m.extDevices[prov.Key()])
+	}
+	all := make([]models.ExternalDevice, 0, total)
+	for _, prov := range m.extProviders {
+		all = append(all, m.extDevices[prov.Key()]...)
+	}
+	m.collection.ExternalDevices = all
+}
+
+// externalDelay returns how long to wait before polling p again, ramping that
+// provider's own interval toward env.DiscoverExternalInterval().
+func (m *discoverModel) externalDelay(p providers.DeviceProvider) time.Duration {
+	key := p.Key()
+	interval := m.extIntervals[key]
+	if interval == nil {
+		interval = &increasingRefreshInterval{}
+		m.extIntervals[key] = interval
+	}
+	return interval.delay(env.DiscoverExternalInterval())
+}
+
+// anyContinuousStreamLive reports whether any provider is currently streaming
+// discovery results.
+func (m discoverModel) anyContinuousStreamLive() bool {
+	for _, live := range m.extStreaming {
+		if live {
+			return true
+		}
+	}
+	return false
+}
+
+// bleWarningLine returns the Bluetooth warning to render, or "" while a
+// continuous provider stream is live. Those are the providers whose transports
+// have no end of their own — mDNS and Bluetooth (see
+// providers.ContinuousDiscoverer) — and today the wendy-lite stream is the
+// CLI's only working BLE scan, so reporting the retired legacy scanner as a gap
+// would be actively misleading: BLE rows would be listed under a warning saying
+// Bluetooth discovery is disabled.
+func (m discoverModel) bleWarningLine() string {
+	if m.anyContinuousStreamLive() {
+		return ""
+	}
+	return m.bleWarning
 }
 
 func (m *discoverModel) refreshTable() {
@@ -973,15 +1187,16 @@ var (
 )
 
 var deviceTypeNames = map[string]string{
-	"raspberry-pi-3":   "Raspberry Pi 3",
-	"raspberry-pi-4":   "Raspberry Pi 4",
-	"raspberry-pi-5":   "Raspberry Pi 5",
-	"jetson-agx-orin":  "Jetson AGX Orin",
-	"jetson-orin-nano": "Jetson Orin Nano",
-	"jetson-agx-thor":  "Jetson AGX Thor",
-	"x86_64":           "x86-64",
-	"vm-arm64":         "ARM64 VM",
-	"vm-x86-64":        "x86-64 VM",
+	"raspberry-pi-3":     "Raspberry Pi 3",
+	"raspberry-pi-4":     "Raspberry Pi 4",
+	"raspberry-pi-5":     "Raspberry Pi 5",
+	"jetson-agx-orin":    "Jetson AGX Orin",
+	"jetson-orin-nano":   "Jetson Orin Nano",
+	"jetson-agx-thor":    "Jetson AGX Thor",
+	"dragonwing-iq-8275": "Dragonwing IQ-8275",
+	"x86_64":             "x86-64",
+	"vm-arm64":           "ARM64 VM",
+	"vm-x86-64":          "x86-64 VM",
 }
 
 func humanReadableDeviceType(dt string) string {
@@ -1222,9 +1437,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 
 	for _, d := range collection.USBDevices {
 		deviceType := "USB"
-		if d.IsESP32 {
-			deviceType = "ESP32"
-		}
 		items = append(items, discoverTableItem{
 			picker: tui.PickerItem{
 				Name:          discovery.SanitiseDisplayName(d.DisplayName),

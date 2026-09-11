@@ -17,6 +17,44 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
+// TestLanDialCandidatesIncludesEverySightedAddress proves the picker connect
+// path supplies the dial ladder with every interface a multi-homed device was
+// seen at (models.LANDevice.Addresses), not just the primary — the discovery
+// half of the fix. The ladder end is proven by TestLadderWalksEveryCandidateAddress.
+func TestLanDialCandidatesIncludesEverySightedAddress(t *testing.T) {
+	dev := models.LANDevice{
+		DisplayName: "orin",
+		Hostname:    "orin.local",
+		IPAddress:   "192.168.1.69",
+		// A WiFi IPv4 (primary) plus a USB link-local IPv4 the CLI may be the
+		// only path actually reachable.
+		Addresses: []string{"192.168.1.69", "169.254.1.2"},
+		Port:      50051,
+	}
+
+	cands := lanDialCandidates(dev)
+
+	wantAddrs := []string{"192.168.1.69", "169.254.1.2"}
+	for _, want := range wantAddrs {
+		found := false
+		for _, c := range cands {
+			host, _, err := net.SplitHostPort(c)
+			if err == nil && host == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("address %s was dropped from the dial candidates %v", want, cands)
+		}
+	}
+	// A single-address device must still work (fall back to the primary path).
+	single := lanDialCandidates(models.LANDevice{Hostname: "n.local", IPAddress: "10.0.0.5", Port: 50051})
+	if len(single) == 0 {
+		t.Fatal("single-address device produced no dial candidates")
+	}
+}
+
 // TestPinnedUnreachableDoesNotBlameThePin is the bug report, in test form.
 //
 // A pinned device on a rotating-DHCP network moves to a new address. Every mTLS

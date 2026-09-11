@@ -179,6 +179,12 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	if resp.GpuArch != nil {
 		info["gpu_arch"] = resp.GetGpuArch()
 	}
+	if resp.HasNpu != nil {
+		info["has_npu"] = resp.GetHasNpu()
+	}
+	if resp.NpuVendor != nil {
+		info["npu_vendor"] = resp.GetNpuVendor()
+	}
 	return okResult(info), nil
 }
 

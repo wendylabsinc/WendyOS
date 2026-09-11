@@ -1,0 +1,125 @@
+---
+title: Hello World in Mojo 1.0
+description: Compile a Mojo 1.0 program in a container and run it on a WendyOS device
+language: mojo
+---
+
+Build a small Mojo program, send it to your WendyOS device, and check its output. The app prints a greeting, evaluates a four-element vector expression on the CPU, and exits.
+
+The Dockerfile pins **Mojo 1.0.0** and installs the compiler inside the build container. Your development machine does not need a Mojo installation.
+
+## Prerequisites
+
+1. Install the [Wendy CLI](/docs/installation/developer-machine-setup) on your development machine.
+2. Install and start Docker on your development machine.
+3. Connect a 64-bit ARM WendyOS device, such as an NVIDIA Jetson Orin Nano, over USB or your network.
+4. Ensure the build machine has internet access to download the base image and packages.
+
+This tutorial uses the CPU. It does not require a GPU entitlement or MAX.
+
+## Choose a default device
+
+Run `wendy discover`, highlight your device with the arrow keys, and press `d` to make it the default. Press Ctrl+C to leave discovery. Wendy remembers this choice for subsequent commands.
+
+If you already know the hostname, you can set it directly in one line:
+
+```bash
+wendy device set-default <hostname>
+```
+
+## Write the program
+
+Create a project folder named `mojo-hello-world` and run the commands below from that folder. Add `main.mojo`:
+
+```mojo title="main.mojo"
+def main():
+    print("Hello from Mojo 1.0 on WendyOS!")
+    var values = SIMD[DType.int32, 4](1, 2, 3, 4)
+    var result = values * 2 + 1
+    print("SIMD result:", result)
+```
+
+Mojo 1.0 uses `def` to declare functions and `var` to declare variables. The no-argument `main()` function is the program's entry point. See the [Mojo getting started guide](https://mojolang.org/docs/manual/get-started/) for the language basics.
+
+`SIMD[DType.int32, 4]` holds four 32-bit integers. Multiplication and addition apply to every element, producing `[3, 5, 7, 9]`. This introduces the [SIMD type](https://mojolang.org/docs/std/builtin/simd/SIMD/); the example does not measure performance.
+
+## Add the container build
+
+Create `Dockerfile`:
+
+```dockerfile title="Dockerfile"
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential libedit2 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir mojo==1.0.0
+
+COPY main.mojo .
+RUN mojo --version && mojo build main.mojo -o /app/hello
+
+CMD ["/app/hello"]
+```
+
+The compiler runs during the image build. Starting the container executes the compiled `/app/hello` program. The image keeps the compiler and its libraries to make this first example easy to inspect.
+
+Create `.dockerignore` to keep local development files out of the build context:
+
+```text title=".dockerignore"
+.git
+.venv
+__pycache__
+*.pyc
+.DS_Store
+hello
+```
+
+## Configure Wendy
+
+Create `wendy.json`:
+
+```json title="wendy.json"
+{
+  "appId": "mojo-hello-world",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": []
+}
+```
+
+The app needs no device capabilities. Its Dockerfile supplies the Mojo toolchain.
+
+## Build and run on WendyOS
+
+Validate the configuration, then deploy:
+
+```bash
+wendy json validate
+wendy run --no-restart
+```
+
+Wendy selects the target device's architecture, builds the Docker image, transfers it, and starts the app. The first build downloads the compiler and base image, so it takes longer than subsequent builds.
+
+Expected application output:
+
+```text
+Hello from Mojo 1.0 on WendyOS!
+SIMD result: [3, 5, 7, 9]
+```
+
+Wendy normally restarts apps unless you stop them. `--no-restart` lets this program finish after printing, so a stopped state is expected when you list apps:
+
+```bash
+wendy device apps list
+```
+
+Check the application output and successful exit; an app does not have to stay running to have completed its work. Run the same `wendy run` command again to rebuild and repeat it.
+
+If an older agent stalls while diffing image layers, cancel the deployment and repeat the `wendy run` command with `--chunking off` to use the standard image transfer path.
+
+## Next steps
+
+- Build a [Simple Web Server](/docs/guides/tutorials/mojo/simple-web-server) that stays running and calls Python from Mojo.
+- Run a [MAX Graph](/docs/guides/tutorials/mojo/max-graph) on your device's CPU.

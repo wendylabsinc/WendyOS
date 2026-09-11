@@ -55,7 +55,10 @@ func discoverUSB(ctx context.Context) ([]models.USBDevice, error) {
 }
 
 // collectUSBDevices recursively walks the USB tree (hubs contain child items)
-// and collects devices whose name contains "Wendy".
+// and collects devices whose name contains "Wendy", excluding Espressif
+// ESP32 boards (by VID:PID) even when their name also matches — those are
+// Wendy Lite boards, listed separately via serial/WendyCom discovery, and
+// must never appear here too.
 func collectUSBDevices(items []spUSBItem, devices *[]models.USBDevice) {
 	for _, item := range items {
 		// Recurse into hubs first.
@@ -66,19 +69,14 @@ func collectUSBDevices(items []spUSBItem, devices *[]models.USBDevice) {
 		isWendy := strings.Contains(strings.ToLower(item.Name), "wendy")
 		isESP32 := isESP32Device(item.VendorID, item.ProductID)
 
-		if !isWendy && !isESP32 {
+		if !isWendy || isESP32 {
 			continue
 		}
 
 		dev := models.USBDevice{
 			Name:          item.Name,
 			DisplayName:   item.Name,
-			IsWendyDevice: isWendy || isESP32,
-			IsESP32:       isESP32,
-		}
-
-		if isESP32 {
-			dev.DisplayName = "ESP32-C6"
+			IsWendyDevice: isWendy,
 		}
 
 		// vendor_id may contain a suffix like "0x05ac  (Apple Inc.)"
@@ -105,7 +103,7 @@ func collectUSBDevices(items []spUSBItem, devices *[]models.USBDevice) {
 	}
 }
 
-// isESP32Device checks if the VID/PID matches an Espressif ESP32-C6.
+// isESP32Device checks if the VID/PID matches an Espressif ESP32 board.
 func isESP32Device(vendorID, productID string) bool {
 	vidFields := strings.Fields(vendorID)
 	if len(vidFields) == 0 {

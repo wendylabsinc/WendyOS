@@ -23,6 +23,7 @@ type fakeCloudAssetServer struct {
 	// a query with OnlineOnly unset/false — models a transport failure on
 	// pickCloudAsset's offline-inclusive re-query.
 	offlineErr error
+	pageSize   int                          // when nonzero, emulate server-side pagination
 	req        *cloudpb.ListAssetsRequest   // last request, kept for existing single-request assertions
 	reqs       []*cloudpb.ListAssetsRequest // every request received, in order
 }
@@ -37,12 +38,57 @@ func (s *fakeCloudAssetServer) ListAssets(req *cloudpb.ListAssetsRequest, stream
 	if !req.GetOnlineOnly() {
 		assets = s.offlineAssets
 	}
+	var total int32
+	if s.pageSize > 0 {
+		total = int32(len(assets))
+		start := min(int(req.GetOffset()), len(assets))
+		end := min(start+s.pageSize, len(assets))
+		assets = assets[start:end]
+	}
 	for _, a := range assets {
-		if err := stream.Send(&cloudpb.ListAssetsResponse{Asset: a}); err != nil {
+		if err := stream.Send(&cloudpb.ListAssetsResponse{Asset: a, Total: total}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func TestMCPListCloudAssetsPaginates(t *testing.T) {
+	for _, onlineOnly := range []bool{true, false} {
+		name := "all enrolled devices"
+		if onlineOnly {
+			name = "online devices"
+		}
+		t.Run(name, func(t *testing.T) {
+			assets := []*cloudpb.Asset{{Id: 1}, {Id: 2}, {Id: 3}, {Id: 4}, {Id: 5}}
+			fake := &fakeCloudAssetServer{assets: assets, offlineAssets: assets, pageSize: 2}
+			auth := &config.AuthConfig{
+				CloudGRPC:    startFakeCloudAssetServer(t, fake),
+				Certificates: []config.CertificateInfo{{OrganizationID: 7}},
+			}
+			got, err := mcpListCloudAssets(context.Background(), auth, "test-filter", onlineOnly)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(assets) {
+				t.Fatalf("got %d assets, want all %d", len(got), len(assets))
+			}
+			for i, asset := range got {
+				if asset.GetId() != assets[i].GetId() {
+					t.Fatalf("asset %d = %d, want %d", i, asset.GetId(), assets[i].GetId())
+				}
+			}
+			if len(fake.reqs) != 3 {
+				t.Fatalf("made %d requests, want 3 pages", len(fake.reqs))
+			}
+			for i, req := range fake.reqs {
+				if req.GetOffset() != int32(i*2) || req.GetOrganizationId() != 7 ||
+					req.GetFilter() != "test-filter" || req.GetOnlineOnly() != onlineOnly || !req.GetIsComputeDevice() {
+					t.Errorf("page %d lost its offset or filters: %v", i, req)
+				}
+			}
+		})
+	}
 }
 
 func startFakeCloudAssetServer(t *testing.T, svc *fakeCloudAssetServer) string {

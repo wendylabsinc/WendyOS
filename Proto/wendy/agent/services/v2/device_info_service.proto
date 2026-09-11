@@ -36,6 +36,10 @@ message GetDeviceInfoResponse {
     // Number of online logical CPU cores, from /proc/stat. Zero when the
     // agent cannot read it.
     uint32 cpu_count = 17;
+    // Whether the device has an on-SoC neural accelerator the agent can reach.
+    optional bool has_npu = 18;
+    // NPU vendor identifier (e.g. "qualcomm"). Only present when has_npu is true.
+    optional string npu_vendor = 19;
 }
 
 // Usage information for a single mounted filesystem.

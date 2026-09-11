@@ -177,6 +177,7 @@ func shouldOpenAudioSetDefaultTUI(idSet, interactive, json bool) bool {
 func newAudioMonitorCmd() *cobra.Command {
 	var deviceID uint32
 	var rateHz uint32
+	var all bool
 
 	cmd := &cobra.Command{
 		Use:   "monitor",
@@ -188,6 +189,30 @@ func newAudioMonitorCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
+
+			// Resolve the device the same way `listen` does: the agent's
+			// auto-select (DeviceId == 0) picks the first ALSA capture device,
+			// which on some platforms (e.g. Jetson) is a virtual routing
+			// endpoint that fails to open ("Device or resource busy"). Pick a
+			// usable mic — including the loopback sensor-link mic — instead.
+			if deviceID == 0 {
+				listResp, err := conn.AudioService.ListAudioDevices(ctx, &agentpb.ListAudioDevicesRequest{})
+				if err != nil {
+					return fmt.Errorf("listing audio devices: %w", err)
+				}
+				interactive := term.IsTerminal(int(os.Stdin.Fd()))
+				id, chosen, err := resolveListenDeviceID(listResp.GetDevices(), deviceID, all, interactive, pickAudioDevice)
+				if err != nil {
+					if errors.Is(err, ErrUserCancelled) {
+						return nil
+					}
+					return err
+				}
+				deviceID = id
+				if chosen != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Using %s — %s\n", chosen.GetName(), chosen.GetDescription())
+				}
+			}
 
 			stream, err := conn.AudioService.StreamAudioLevels(ctx, &agentpb.StreamAudioLevelsRequest{
 				DeviceId:     deviceID,
@@ -236,8 +261,9 @@ func newAudioMonitorCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Audio device ID")
+	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Audio device ID (default: auto-select or pick a microphone)")
 	cmd.Flags().Uint32Var(&rateHz, "rate", 10, "Update rate in Hz")
+	cmd.Flags().BoolVar(&all, "all", false, "Also offer unusable capture endpoints (HDMI/dummy/routing FIFOs); loopback mics are already auto-selected")
 
 	return cmd
 }
@@ -319,8 +345,8 @@ func newAudioListenCmd() *cobra.Command {
 	cmd.Flags().Uint32Var(&sampleRate, "sample-rate", 16000, "Sample rate in Hz")
 	cmd.Flags().Uint32Var(&channels, "channels", 1, "Number of audio channels")
 	cmd.Flags().BoolVar(&stdout, "stdout", false, "Write raw PCM to stdout instead of playing")
-	cmd.Flags().BoolVar(&all, "all", false, "Include virtual/dummy capture devices when selecting a microphone")
-	cmd.Flags().Uint32Var(&bufferMs, "buffer-ms", 30, "Playback jitter-buffer target in ms; lower = less latency, more prone to dropouts")
+	cmd.Flags().BoolVar(&all, "all", false, "Also offer unusable capture endpoints (HDMI/dummy/routing FIFOs); loopback mics are already auto-selected")
+	cmd.Flags().Uint32Var(&bufferMs, "buffer-ms", 150, "Playback jitter-buffer target in ms; lower = less latency, more prone to dropouts")
 
 	return cmd
 }

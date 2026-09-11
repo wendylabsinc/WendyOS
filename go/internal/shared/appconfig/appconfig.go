@@ -36,6 +36,7 @@ const (
 	EntitlementBluetooth = "bluetooth"
 	EntitlementVideo     = "video"
 	EntitlementGPU       = "gpu"
+	EntitlementNPU       = "npu"
 	EntitlementPersist   = "persist"
 	EntitlementAudio     = "audio"
 	EntitlementCamera    = "camera"
@@ -72,6 +73,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementBluetooth,
 	EntitlementVideo,
 	EntitlementGPU,
+	EntitlementNPU,
 	EntitlementPersist,
 	EntitlementAudio,
 	EntitlementCamera,
@@ -108,6 +110,7 @@ var allowedKeys = map[string][]string{
 	EntitlementBluetooth:     {"type", "mode"},
 	EntitlementVideo:         {"type", "mode", "allowlist"},
 	EntitlementGPU:           {"type"},
+	EntitlementNPU:           {"type"},
 	EntitlementPersist:       {"type", "name", "path"},
 	EntitlementAudio:         {"type"},
 	EntitlementCamera:        {"type", "mode", "allowlist", "user", "password"},

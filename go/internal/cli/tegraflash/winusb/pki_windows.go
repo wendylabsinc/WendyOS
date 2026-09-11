@@ -7,14 +7,13 @@ package winusb
 // a keypair + self-signed cert are generated locally, the catalog is signed with
 // it, and the (public) certificate is placed in the machine's Trusted Root and
 // Trusted Publisher stores so Windows accepts the package. The private key never
-// leaves this machine and is only capable of validating this one package.
+// leaves this machine. Previously staged packages retain their signing trust.
 //
 // This is the v1 (early-access) trust mechanism. The v2 endgame replaces it with
 // a Microsoft attestation-signed package (no local cert, no Root-store write).
 
 import (
 	"fmt"
-	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -22,13 +21,13 @@ import (
 
 // keyContainerName is the machine key container holding the signing key. Fixed so
 // a re-run reuses it rather than littering new containers.
-const keyContainerName = "WendyLabsJetsonWinUSB"
+const keyContainerName = "WendyLabsUSBFlashing"
 
 // certSubject / certFriendlyName identify the cert in the store for the user, so
 // a curious admin can see exactly what wendy added (and remove it if they wish).
 const (
-	certSubject      = "CN=Wendy Labs (Jetson WinUSB driver signing)"
-	certFriendlyName = "Wendy Labs (Jetson WinUSB driver signing)"
+	certSubject      = "CN=Wendy Labs (USB flashing driver signing)"
+	certFriendlyName = "Wendy Labs (USB flashing driver signing)"
 
 	msEnhRSAAESProv = "Microsoft Enhanced RSA and AES Cryptographic Provider"
 )
@@ -40,16 +39,25 @@ type signingCert struct {
 	ctx *windows.CertContext
 }
 
-// createSigningCert creates (or recreates) the signing keypair and a self-signed
-// code-signing certificate bound to it. machineKeyset selects the machine key
+// createSigningCert reuses a valid certificate for our signing key, creating
+// one only when none is reusable. machineKeyset selects the machine key
 // container (needed for the elevated install path so the staged package validates
 // system-wide); a user keyset lets the non-elevated debug path sign+inspect.
 // The caller must Free the result.
 func createSigningCert(machineKeyset bool) (*signingCert, error) {
-	// 1. Ensure a key container with an AT_SIGNATURE RSA key exists.
 	if err := ensureSigningKey(machineKeyset); err != nil {
 		return nil, err
 	}
+	cert, err := findStoredSigningCert(machineKeyset)
+	if err != nil || cert != nil {
+		return cert, err
+	}
+	return newSigningCert(keyContainerName, machineKeyset)
+}
+
+// newSigningCert requires an existing signing key. A separate constructor lets
+// tests use disposable user keys and memory stores without changing host trust.
+func newSigningCert(keyName string, machineKeyset bool) (*signingCert, error) {
 	keysetFlag := uint32(0)
 	if machineKeyset {
 		keysetFlag = cryptMachineKeyset
@@ -63,7 +71,7 @@ func createSigningCert(machineKeyset bool) (*signingCert, error) {
 
 	// 3. Describe the key container so the cert carries CERT_KEY_PROV_INFO and
 	//    SignerSignEx can locate the private key.
-	container, _ := windows.UTF16PtrFromString(keyContainerName)
+	container, _ := windows.UTF16PtrFromString(keyName)
 	provName, _ := windows.UTF16PtrFromString(msEnhRSAAESProv)
 	keyProv := cryptKeyProvInfo{
 		pwszContainerName: container,
@@ -121,7 +129,11 @@ func (c *signingCert) Free() {
 // If the container already exists it is reused (opened, key left in place).
 // machineKeyset selects the machine vs user key store.
 func ensureSigningKey(machineKeyset bool) error {
-	container, _ := windows.UTF16PtrFromString(keyContainerName)
+	return ensureSigningKeyIn(keyContainerName, machineKeyset)
+}
+
+func ensureSigningKeyIn(keyName string, machineKeyset bool) error {
+	container, _ := windows.UTF16PtrFromString(keyName)
 	provName, _ := windows.UTF16PtrFromString(msEnhRSAAESProv)
 	keysetFlag := uint32(0)
 	if machineKeyset {
@@ -179,48 +191,16 @@ func addCertToSystemStore(ctx *windows.CertContext, storeName string) error {
 	}
 	defer windows.CertCloseStore(store, 0)
 
-	// Replace any prior wendy cert of the same subject so repeated installs don't
-	// pile up entries: each run mints a fresh self-signed cert (new serial), which
-	// CERT_STORE_ADD_REPLACE_EXISTING would not dedup (it matches identical certs).
-	removeCertsBySubject(store, strings.TrimPrefix(certSubject, "CN="))
+	// Keep prior signing certificates. A different staged package may still
+	// rely on one when its board is connected later; installing Qualcomm must
+	// not invalidate the trust of an already-staged Jetson package (or vice versa).
+	// Normal installs reuse the same certificate, so this replaces its existing
+	// entry. Only renewal adds a certificate; old package signers are retained.
 
 	if err := windows.CertAddCertificateContextToStore(store, ctx, certStoreAddReplaceExisting, nil); err != nil {
 		return fmt.Errorf("CertAddCertificateContextToStore(%s): %w", storeName, err)
 	}
 	return nil
-}
-
-// removeCertsBySubject deletes every certificate in store whose simple-display
-// name (subject CN) equals cn. Enumerated contexts are freed by the enumeration
-// itself; each match is duplicated so it survives deletion.
-func removeCertsBySubject(store windows.Handle, cn string) {
-	var dups []*windows.CertContext
-	var prev *windows.CertContext
-	for {
-		cur, err := windows.CertEnumCertificatesInStore(store, prev)
-		if err != nil || cur == nil {
-			break
-		}
-		if certDisplayName(cur) == cn {
-			dups = append(dups, windows.CertDuplicateCertificateContext(cur))
-		}
-		prev = cur
-	}
-	for _, d := range dups {
-		windows.CertDeleteCertificateFromStore(d) // removes from store and frees d
-	}
-}
-
-// certDisplayName returns a certificate's simple display name (its subject CN).
-func certDisplayName(ctx *windows.CertContext) string {
-	const certNameSimpleDisplayType = 4
-	n, _, _ := procCertGetNameStringW.Call(uintptr(unsafe.Pointer(ctx)), certNameSimpleDisplayType, 0, 0, 0, 0)
-	if n <= 1 {
-		return ""
-	}
-	buf := make([]uint16, n)
-	procCertGetNameStringW.Call(uintptr(unsafe.Pointer(ctx)), certNameSimpleDisplayType, 0, 0, uintptr(unsafe.Pointer(&buf[0])), n)
-	return windows.UTF16ToString(buf)
 }
 
 // codeSigningExtensions builds a CERT_EXTENSIONS containing a single non-critical

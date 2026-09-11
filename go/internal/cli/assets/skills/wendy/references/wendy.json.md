@@ -92,6 +92,20 @@ When enabled:
 
 **Note**: GPU entitlement behavior is hardware-specific.
 
+### NPU Entitlement
+
+Enables on-SoC neural accelerator access for on-device inference.
+
+```json
+{ "type": "npu" }
+```
+
+When enabled:
+- **Qualcomm (Hexagon DSP)**: Bind-mounts the non-secure `/dev/fastrpc-*` nodes and `/dev/dma_heap/system`, and adds the app to the `fastrpc` and `dmaheap` groups
+- **Other hardware**: No grant; the entitlement is inert
+
+**Note**: the `-secure` FastRPC nodes are the signed-PD path and are never granted.
+
 ### Camera Entitlement
 
 Camera / V4L2 device access.

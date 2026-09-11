@@ -1,0 +1,56 @@
+syntax = "proto3";
+package wendy.lite.sensorlink;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb;sensorlinkpb";
+
+message VideoFormat {
+  enum Codec { CODEC_UNSPECIFIED = 0; MJPEG = 1; H264 = 2; }
+  Codec codec = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  uint32 fps = 4;
+}
+message AudioFormat {
+  enum Codec { CODEC_UNSPECIFIED = 0; PCM_S16LE = 1; OPUS = 2; }
+  Codec codec = 1;
+  uint32 sample_rate = 2;
+  uint32 channels = 3;
+}
+message SensorFormat {
+  string schema = 1;      // type id, e.g. "wendy.imu.v1"
+  uint32 rate_hz = 2;
+  uint32 sample_bytes = 3;
+}
+message SensorDescriptor {
+  enum Kind { KIND_UNSPECIFIED = 0; CAMERA = 1; MICROPHONE = 2; SENSOR = 3; }
+  uint32 channel_id = 1;
+  Kind kind = 2;
+  string name = 3;
+  oneof format {
+    VideoFormat video = 4;
+    AudioFormat audio = 5;
+    SensorFormat sensor = 6;
+  }
+}
+message SensorManifest {
+  int32 device_asset_id = 1;
+  repeated SensorDescriptor sensors = 2;
+}
+message Subscribe { repeated uint32 channel_id = 1; }
+message SensorFrame {
+  uint32 channel_id = 1;
+  uint32 seq = 2;
+  uint64 ts_us = 3;
+  uint32 flags = 4;   // bit0 = keyframe
+  bytes payload = 5;
+}
+message Ping { uint64 ts_us = 1; }
+
+// Every message on the wire is an Envelope, so framing needs only one type.
+message Envelope {
+  oneof msg {
+    SensorManifest manifest = 1;
+    Subscribe subscribe = 2;
+    SensorFrame frame = 3;
+    Ping ping = 4;
+  }
+}

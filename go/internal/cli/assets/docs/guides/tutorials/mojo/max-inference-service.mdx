@@ -1,0 +1,222 @@
+---
+title: Serve text embeddings with MAX
+description: Run a pinned MiniLM model through MAX 26.5 on WendyOS and request embeddings over HTTP
+language: mojo
+---
+
+[MAX](https://max.modular.com/stable/get-started/) is Modular's platform for compiling and running AI models on supported CPUs and GPUs. Its inference server handles model execution and exposes an OpenAI-compatible API, so applications can call a model running on your WendyOS device.
+
+Here, you will serve a small text embedding model and call its `/v1/embeddings` endpoint. Embeddings turn text into numeric vectors for semantic search and similarity comparisons. Running this service locally lets your applications generate those vectors without sending requests to a hosted inference service.
+
+This tutorial uses **MAX 26.5.0** and `sentence-transformers/all-MiniLM-L6-v2`, a supported BERT model with 384 output dimensions. It serves embeddings, so clients use `/v1/embeddings`. For chat or text generation, choose a supported generative model and size it for your hardware separately.
+
+The model and tokenizer are downloaded at image build time from a pinned revision. The running container uses local files with Hugging Face offline mode enabled and remote telemetry disabled, so a USB-connected device can serve requests without internet access.
+
+## Prerequisites
+
+1. Install the [Wendy CLI](/docs/installation/developer-machine-setup) and start Docker on your development machine.
+2. Connect a 64-bit Linux WendyOS device that meets [MAX's package and hardware requirements](https://max.modular.com/stable/packages/).
+3. Ensure the build machine has internet access and disk space for the image and model weights. This model's weights are approximately 91 MB; the complete image also includes MAX, Python, and build tools.
+4. Check that port `8000` is available for the API on the device.
+
+Start with the CPU configuration below. The GPU variation requires a supported NVIDIA GPU, its driver, and Wendy's `gpu` entitlement. Complete the [MAX graph tutorial](/docs/guides/tutorials/mojo/max-graph) to check GPU execution first.
+
+Use your [default Wendy device](/docs/guides/tutorials/mojo/hello-world#choose-a-default-device). Create a project folder named `max-embeddings` and run the commands below from that folder.
+
+## Package MAX and the model
+
+Create `Dockerfile`:
+
+```dockerfile title="Dockerfile"
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libedit2 libnuma1 && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "max[serve]==26.5.0"
+RUN python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="sentence-transformers/all-MiniLM-L6-v2", revision="1110a243fdf4706b3f48f1d95db1a4f5529b4d41", local_dir="/opt/models/all-MiniLM-L6-v2", allow_patterns=["*.json", "*.txt", "model.safetensors"])'
+
+WORKDIR /app
+COPY serve.sh .
+ENV MAX_DEVICE=cpu HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+    MAX_SERVE_DISABLE_TELEMETRY=true
+EXPOSE 8000
+CMD ["sh", "serve.sh"]
+```
+
+`max[serve]` installs the server dependencies in addition to the graph runtime. The C toolchain is needed because MAX compiles a bundled Mojo extension during startup. Installing just the Python packages is insufficient in a minimal image.
+
+`snapshot_download()` fetches the model's configuration, tokenizer, and safetensors weights at revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. The allow list avoids unrelated ONNX and other framework exports. This public model requires no access token. Keep its model card and license in mind when adapting the example; see [the model repository](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2).
+
+Create `serve.sh`:
+
+```bash title="serve.sh"
+#!/bin/sh
+set -eu
+
+exec max serve \
+  --model /opt/models/all-MiniLM-L6-v2 \
+  --served-model-name sentence-transformers/all-MiniLM-L6-v2 \
+  --task embeddings_generation \
+  --devices "$MAX_DEVICE" \
+  --quantization-encoding float32 \
+  --pool-embeddings \
+  --max-batch-size 1 \
+  --max-length 128 \
+  --port 8000
+```
+
+MAX loads the local model directory. `--served-model-name` supplies the identifier clients send in requests. `float32` works with the CPU configuration; `--pool-embeddings` produces one vector per input string. The batch size of one and 128-token sequence limit keep this example small. Send short inputs within that token limit.
+
+Create `.dockerignore`:
+
+```text title=".dockerignore"
+.git
+.venv
+__pycache__
+```
+
+Create `wendy.json`:
+
+```json title="wendy.json"
+{
+  "appId": "max-embeddings",
+  "platform": "linux",
+  "version": "0.1.0",
+  "entitlements": [{ "type": "network" }],
+  "readiness": {
+    "tcpSocket": { "port": 8000 },
+    "timeoutSeconds": 600
+  }
+}
+```
+
+The network entitlement allows your development machine to reach the API. The model is already inside the image, so this example needs no persistent model-download volume. The ten-minute readiness allowance accommodates first-start compilation; it is a timeout, not an expected startup duration.
+
+## Deploy and wait for readiness
+
+```bash
+wendy json validate
+wendy run
+```
+
+Keep this terminal open to see the startup and request logs. The first start compiles the model for the selected processor. The app should remain running after the server is ready.
+
+In another terminal, check the API. Replace `your-device.local` in the URLs below with the device hostname shown by Wendy:
+
+```bash
+curl --fail "http://your-device.local:8000/health"
+curl --fail "http://your-device.local:8000/v1/models"
+```
+
+`/health` should return HTTP 200. The model list should include `sentence-transformers/all-MiniLM-L6-v2`. A listening TCP port or a container's running state alone does not prove inference works; make the following request too.
+
+## Request embeddings
+
+```bash
+curl --fail "http://your-device.local:8000/v1/embeddings" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "sentence-transformers/all-MiniLM-L6-v2",
+    "input": ["Wendy runs AI on edge devices.", "An edge device runs local inference."],
+    "encoding_format": "float"
+  }'
+```
+
+The response contains two entries in `data`, indexed `0` and `1`. Each `embedding` is an array of 384 numbers. The precise floating-point values can vary across processors.
+
+For a compact validation instead of printing hundreds of numbers, create `verify.py` on your development machine:
+
+```python title="verify.py"
+"""Run on your development machine: python3 verify.py http://your-device.local:8000"""
+import json
+import math
+import sys
+from urllib.request import Request, urlopen
+
+base_url = sys.argv[1].rstrip("/")
+model = "sentence-transformers/all-MiniLM-L6-v2"
+with urlopen(base_url + "/health", timeout=10) as response:
+    assert response.status == 200
+with urlopen(base_url + "/v1/models", timeout=10) as response:
+    models = json.load(response)
+assert any(item["id"] == model for item in models["data"]), models
+
+payload = {
+    "model": model,
+    "input": ["Wendy runs AI on edge devices.", "An edge device runs local inference."],
+    "encoding_format": "float",
+}
+request = Request(
+    base_url + "/v1/embeddings",
+    data=json.dumps(payload).encode(),
+    headers={"Content-Type": "application/json"},
+)
+with urlopen(request, timeout=120) as response:
+    data = json.load(response)
+rows = sorted(data["data"], key=lambda row: row["index"])
+assert [row["index"] for row in rows] == [0, 1], data
+vectors = [row["embedding"] for row in rows]
+for vector in vectors:
+    assert len(vector) == 384, len(vector)
+    assert all(math.isfinite(value) for value in vector)
+norms = [math.sqrt(sum(value * value for value in vector)) for vector in vectors]
+assert all(norm > 0 for norm in norms)
+cosine = sum(a * b for a, b in zip(*vectors)) / (norms[0] * norms[1])
+print("PASS: model listed; received 2 finite embeddings with 384 dimensions")
+print(f"Cosine similarity: {cosine:.4f}")
+```
+
+Run it with your development machine's Python 3:
+
+```bash
+python3 verify.py "http://your-device.local:8000"
+```
+
+It checks health, model registration, both response indexes, all 384 dimensions, and finite nonzero vectors. Successful output starts with:
+
+```text
+PASS: model listed; received 2 finite embeddings with 384 dimensions
+```
+
+The next line reports cosine similarity. The client divides by both vector norms because these pooled embeddings are not guaranteed to be unit vectors. This is an integration check, not an accuracy or throughput benchmark.
+
+## Use the Jetson GPU
+
+After verifying the CPU path, replace `wendy.json` with:
+
+```json
+{
+  "appId": "max-embeddings",
+  "platform": "linux",
+  "version": "0.1.0",
+  "entitlements": [{ "type": "network" }, { "type": "gpu" }],
+  "readiness": {
+    "tcpSocket": { "port": 8000 },
+    "timeoutSeconds": 600
+  }
+}
+```
+
+Stop the attached CPU run with Ctrl+C, then redeploy:
+
+```bash
+wendy run --env MAX_DEVICE=gpu:0
+```
+
+`serve.sh` passes this value to MAX's `--devices` flag. This service uses `gpu:0`; the graph tutorial's Python script instead accepts `gpu`. Check startup logs for the selected GPU, wait for readiness, and rerun `verify.py`. Do not infer GPU success from a previous CPU response.
+
+## Stop and troubleshoot
+
+Press Ctrl+C in the attached terminal, or run:
+
+```bash
+wendy device apps stop max-embeddings
+```
+
+- **Cannot find a C compiler:** include the Dockerfile's `build-essential` package; MAX links a Mojo extension at startup.
+- **API not ready:** inspect the attached logs. Model compilation occurs before serving. If using `wendy run --detach`, the CLI returns without waiting for readiness; check `/health` yourself.
+- **Address already in use:** check API port `8000`; stop your previous tutorial instance before redeploying.
+- **CUDA, PTX, or memory error:** first verify the [small GPU graph](/docs/guides/tutorials/mojo/max-graph). Check driver requirements, the GPU entitlement, and available memory. A small embedding model working does not establish that a larger language model will fit.
+- **Need a different model:** consult MAX's [supported models](https://max.modular.com/models/) and [serve CLI reference](https://max.modular.com/stable/cli/serve/), then update the model files, serving task, dtype, limits, and request shape together.
+
+This example exposes an unauthenticated API on your device's network interfaces. Keep it on a trusted development network; configure access controls before making a service public.

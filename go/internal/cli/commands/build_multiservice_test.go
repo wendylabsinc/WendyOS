@@ -178,7 +178,10 @@ func TestBuildCmd_MultiService_BuildsFromManifestOnly(t *testing.T) {
 		if c.imageName != wantImage {
 			t.Errorf("service %s: imageName = %q, want %q", name, c.imageName, wantImage)
 		}
-		wantContext := filepath.Clean(filepath.Join(root, "./"+name))
+		wantContext, err := filepath.EvalSymlinks(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if filepath.Clean(c.contextDir) != wantContext {
 			t.Errorf("service %s: contextDir = %q, want %q", name, c.contextDir, wantContext)
 		}

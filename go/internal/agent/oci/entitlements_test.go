@@ -1383,7 +1383,7 @@ func TestApplyI2C_DeviceAbsent(t *testing.T) {
 // TestEntitlements_OmitMknod verifies the whole-major device entitlements grant
 // "rw", never "rwm": the host owns the device nodes and bind-mounts them, so the
 // container never needs the mknod bit (WDY-1601). The minor-scoped entitlements
-// (serial, i2c) and camera are covered by their own tests.
+// (serial, i2c, npu) and camera are covered by their own tests.
 func TestEntitlements_OmitMknod(t *testing.T) {
 	// applyGPU branches on the board (a Raspberry Pi also exposes vcio); pin to
 	// Generic so the result is deterministic regardless of the host running the test.
@@ -2600,5 +2600,237 @@ func TestApplyEntitlements_HTTPIsNoOp(t *testing.T) {
 	}
 	if !reflect.DeepEqual(base, spec) {
 		t.Errorf("http entitlement mutated the OCI spec; want no-op.\nbase: %+v\nspec: %+v", base, spec)
+	}
+}
+
+// installFakeFastrpcDevTree lays out plain-file stand-ins for the FastRPC nodes and
+// repoints the package vars at them, so the suite needs no CAP_MKNOD. nodes maps a
+// basename to its major:minor; heap does the same for the dma-buf system heap.
+func installFakeFastrpcDevTree(t *testing.T, nodes map[string][2]int64, heap *[2]int64) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	nums := map[string][2]int64{}
+	for name, mm := range nodes {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		nums[path] = mm
+	}
+	heapPath := filepath.Join(dir, "absent-heap")
+	if heap != nil {
+		heapPath = filepath.Join(dir, "system")
+		if err := os.WriteFile(heapPath, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		nums[heapPath] = *heap
+	}
+
+	modelPath := filepath.Join(dir, "model")
+	if err := os.WriteFile(modelPath, []byte("Acme Board\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origGlob := fastrpcDeviceGlob
+	origHeap := dmaHeapDevicePath
+	origModel := dtModelPath
+	origStat := statDeviceNode
+	origFastrpc := lookupFastrpcGID
+	origDmaheap := lookupDmaheapGID
+	t.Cleanup(func() {
+		fastrpcDeviceGlob = origGlob
+		dmaHeapDevicePath = origHeap
+		dtModelPath = origModel
+		statDeviceNode = origStat
+		lookupFastrpcGID = origFastrpc
+		lookupDmaheapGID = origDmaheap
+	})
+
+	fastrpcDeviceGlob = filepath.Join(dir, "fastrpc-*")
+	dmaHeapDevicePath = heapPath
+	dtModelPath = modelPath
+	statDeviceNode = func(path string) (int64, int64, error) {
+		if mm, ok := nums[path]; ok {
+			return mm[0], mm[1], nil
+		}
+		return 0, 0, os.ErrNotExist
+	}
+	lookupFastrpcGID = func() (uint32, bool) { return 998, true }
+	lookupDmaheapGID = func() (uint32, bool) { return 997, true }
+	return dir
+}
+
+func npuSpec(t *testing.T) *Spec {
+	t.Helper()
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	cfg := &appconfig.AppConfig{
+		AppID:        "test-app",
+		Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementNPU}},
+	}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+	return spec
+}
+
+// TestApplyNPU_BindMountsNonSecureNodes is the load-bearing test: the non-secure
+// FastRPC nodes must arrive as bind mounts scoped to their own major:minor, because a
+// node re-created inside the container cannot carry the host group ownership that
+// authorises the open, and a whole-major rule would reach every other misc device.
+// The -secure nodes are the signed-PD path and must never be granted.
+func TestApplyNPU_BindMountsNonSecureNodes(t *testing.T) {
+	dir := installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp":        {10, 262},
+		"fastrpc-gdsp0":       {10, 264},
+		"fastrpc-cdsp-secure": {10, 263},
+	}, nil)
+
+	spec := npuSpec(t)
+
+	for name, mm := range map[string][2]int64{
+		"fastrpc-cdsp":  {10, 262},
+		"fastrpc-gdsp0": {10, 264},
+	} {
+		path := filepath.Join(dir, name)
+		m, ok := mountForDest(spec, path)
+		if !ok {
+			t.Errorf("npu entitlement did not mount %s", name)
+			continue
+		}
+		if m.Type != "bind" {
+			t.Errorf("%s Type = %q, want bind", name, m.Type)
+		}
+		if !hasExactDeviceRule(spec, mm[0], mm[1]) {
+			t.Errorf("npu entitlement did not allow %s at %d:%d", name, mm[0], mm[1])
+		}
+	}
+
+	if hasMountDest(spec, filepath.Join(dir, "fastrpc-cdsp-secure")) {
+		t.Error("npu entitlement mounted a -secure node")
+	}
+	if hasExactDeviceRule(spec, 10, 263) {
+		t.Error("npu entitlement allowed the -secure node's major:minor")
+	}
+	// A minor-unscoped rule is the over-grant this entitlement must not emit: it
+	// would reach every other device sharing the misc major.
+	for _, d := range spec.Linux.Resources.Devices {
+		if d.Allow && d.Major != nil && *d.Major == 10 && d.Minor == nil {
+			t.Error("npu entitlement allowed the whole misc major instead of scoped nodes")
+		}
+	}
+}
+
+// TestApplyNPU_SecureOnlyHostIsInert covers a board exposing only signed-PD nodes: the
+// entitlement must grant nothing at all, not just skip the mounts.
+func TestApplyNPU_SecureOnlyHostIsInert(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp-secure": {10, 263},
+	}, &[2]int64{251, 0})
+
+	base := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec := npuSpec(t)
+
+	if len(spec.Mounts) != len(base.Mounts) {
+		t.Errorf("mounts changed on a secure-only host: %d -> %d", len(base.Mounts), len(spec.Mounts))
+	}
+	if len(spec.Process.User.AdditionalGids) != len(base.Process.User.AdditionalGids) {
+		t.Errorf("GIDs granted on a secure-only host: %v", spec.Process.User.AdditionalGids)
+	}
+	if slices.Contains(spec.Process.Env, "MACHINE_NAME=Acme Board") {
+		t.Error("npu entitlement passed the board model on a secure-only host")
+	}
+}
+
+func TestApplyNPU_BindMountsDmaHeap(t *testing.T) {
+	dir := installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp": {10, 262},
+	}, &[2]int64{251, 0})
+
+	spec := npuSpec(t)
+
+	want := filepath.Join(dir, "system")
+	m, ok := mountForDest(spec, want)
+	if !ok {
+		t.Fatal("npu entitlement did not mount the dma-buf heap")
+	}
+	if m.Type != "bind" || m.Source != want {
+		t.Errorf("dma_heap mount = {Type:%q Source:%q}, want bind from %q", m.Type, m.Source, want)
+	}
+	if !hasExactDeviceRule(spec, 251, 0) {
+		t.Error("npu entitlement did not allow the dma_heap major:minor")
+	}
+}
+
+func TestApplyNPU_AddsFastrpcAndDmaheapGIDs(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp": {10, 262},
+	}, &[2]int64{251, 0})
+
+	spec := npuSpec(t)
+
+	if !hasGID(spec, 998) {
+		t.Errorf("AdditionalGids = %v, want the fastrpc GID", spec.Process.User.AdditionalGids)
+	}
+	if !hasGID(spec, 997) {
+		t.Errorf("AdditionalGids = %v, want the dmaheap GID", spec.Process.User.AdditionalGids)
+	}
+}
+
+// TestApplyNPU_NoDevicesIsNoOp keeps the entitlement safe to declare in a wendy.json
+// that also deploys to a board without an NPU.
+func TestApplyNPU_NoDevicesIsNoOp(t *testing.T) {
+	installFakeFastrpcDevTree(t, nil, nil)
+
+	base := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec := npuSpec(t)
+
+	if len(spec.Mounts) != len(base.Mounts) {
+		t.Errorf("mounts changed on a host with no NPU: %d -> %d", len(base.Mounts), len(spec.Mounts))
+	}
+	if len(spec.Process.User.AdditionalGids) != len(base.Process.User.AdditionalGids) {
+		t.Errorf("GIDs changed on a host with no NPU: %v -> %v",
+			base.Process.User.AdditionalGids, spec.Process.User.AdditionalGids)
+	}
+}
+
+// TestApplyNPU_PassesDeviceTreeModel is the difference between reaching the DSP nodes
+// and actually offloading: FastRPC identifies the board from the device-tree model.
+// Passing it as an env var keeps the container behind the default /sys/firmware mask,
+// which also hides the DMI and ACPI trees.
+func TestApplyNPU_PassesDeviceTreeModel(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp": {10, 262},
+	}, &[2]int64{251, 0})
+
+	spec := npuSpec(t)
+
+	if !slices.Contains(spec.Process.Env, "MACHINE_NAME=Acme Board") {
+		t.Errorf("Env = %v, want MACHINE_NAME carrying the device-tree model", spec.Process.Env)
+	}
+}
+
+// TestApplyNPU_LeavesFirmwareMasked pins the hardening default: the entitlement must
+// never widen /sys/firmware, which carries SMBIOS serials and ACPI tables.
+func TestApplyNPU_LeavesFirmwareMasked(t *testing.T) {
+	for name, heap := range map[string]*[2]int64{
+		"with an NPU":    {251, 0},
+		"without an NPU": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			nodes := map[string][2]int64{"fastrpc-cdsp": {10, 262}}
+			if heap == nil {
+				nodes = nil
+			}
+			installFakeFastrpcDevTree(t, nodes, heap)
+
+			base := DefaultSpec("/rootfs", []string{"/bin/sh"})
+			spec := npuSpec(t)
+
+			if !slices.Equal(spec.Linux.MaskedPaths, base.Linux.MaskedPaths) {
+				t.Errorf("MaskedPaths = %v, want it untouched at %v",
+					spec.Linux.MaskedPaths, base.Linux.MaskedPaths)
+			}
+		})
 	}
 }

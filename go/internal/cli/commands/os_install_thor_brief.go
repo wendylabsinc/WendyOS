@@ -2,7 +2,7 @@ package commands
 
 // Pre-scan briefing for Thor USB flashing. Cross-platform (no gousb) so both the
 // macOS/Linux install path and the Windows path show the same cabling/recovery
-// instructions; on Windows an extra note explains the one-time WinUSB driver
+// instructions; on Windows an extra note explains WinUSB driver installation
 // install and its UAC prompt.
 
 import (
@@ -74,10 +74,11 @@ func thorWindowsDriverNote() string {
 		return ""
 	}
 	lines := []string{
-		briefMarker.Render("●") + " " + briefTitle.Render("First-time driver setup"),
-		"  To talk to the Thor over USB, Wendy installs a small " + briefKey.Render("WinUSB driver") + " for it.",
-		"  The first time, Windows will ask for " + briefKey.Render("administrator approval") + " (a UAC prompt)",
-		"  to install and trust the driver. This is a one-time step per computer.",
+		briefMarker.Render("●") + " " + briefTitle.Render("Windows driver setup"),
+		"  Wendy checks the selected Thor's " + briefKey.Render("WinUSB driver") + " and its flashing gadget support.",
+		"  If installation or an update is needed, Windows asks for " + briefKey.Render("administrator approval") + ".",
+		"  A compatible driver is reused without another setup prompt.",
+		"  The flashing gadget is checked again after the board restarts.",
 	}
 	return briefBorder.Render(strings.Join(lines, "\n"))
 }

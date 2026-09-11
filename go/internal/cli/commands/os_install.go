@@ -234,6 +234,14 @@ type pickerDevice struct {
 	Manifest   *deviceManifest // cached manifest for Linux devices
 }
 
+// installedFromFlashBundle reports whether a device type's manifest image is a
+// flash bundle rather than a writable disk image. Such a device must not reach
+// the generic download or tour flows, which would treat the bundle as an image
+// and could write it to a disk. (Thor's generic path is a real .img.zip.)
+func installedFromFlashBundle(deviceType string) bool {
+	return deviceType == dragonwingDeviceType
+}
+
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
 // an interactive picker. Returns the selected device key and its deviceInfo.
 func pickLinuxDevice() (string, deviceInfo, error) {
@@ -248,7 +256,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	deviceMap := make(map[string]deviceInfo)
 
 	for _, dev := range devices {
-		if dev.LatestVersion == "" {
+		if dev.LatestVersion == "" || installedFromFlashBundle(dev.Key) {
 			continue
 		}
 		deviceMap[dev.Key] = dev
@@ -325,6 +333,15 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 			return fmt.Errorf("--storage does not apply to Jetson AGX Thor recovery")
 		}
 		return installThor(ctx, flagVersion, nightly, force, wifi, deviceName, preOpts, prNumber)
+	}
+
+	// The Dragonwing flashes over EDL from a qcomflash bundle, not to a drive.
+	if flagDeviceType == dragonwingDeviceType {
+		if err := checkDragonwingFlags(rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride,
+			wifi, deviceName, preOpts); err != nil {
+			return err
+		}
+		return installDragonwing(ctx, flagVersion, nightly, force, prNumber)
 	}
 	fmt.Println("Fetching available devices...")
 
@@ -495,6 +512,16 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 			return fmt.Errorf("--storage does not apply to Jetson AGX Thor recovery")
 		}
 		return installThor(ctx, flagVersion, nightly, force, wifi, deviceName, preOpts, prNumber)
+	}
+
+	// Same for the Dragonwing: the picker reaches here with the flag empty, so
+	// route it away from the disk-image flow that would dd the bundle onto a drive.
+	if selected == dragonwingDeviceType {
+		if err := checkDragonwingFlags(rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride,
+			wifi, deviceName, preOpts); err != nil {
+			return err
+		}
+		return installDragonwing(ctx, flagVersion, nightly, force, prNumber)
 	}
 
 	if selected == linuxDesktopValue {

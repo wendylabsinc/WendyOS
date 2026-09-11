@@ -328,6 +328,35 @@ func TestMergedDevices_LANOnly(t *testing.T) {
 	}
 }
 
+// TestMergedDevices_CopiesAddresses proves the multi-interface address union
+// carried on a LANDevice reaches the merged DiscoveredDevice, so the dial ladder
+// downstream can try every path the device was seen at.
+func TestMergedDevices_CopiesAddresses(t *testing.T) {
+	c := &DevicesCollection{
+		LANDevices: []LANDevice{
+			{
+				DisplayName: "Multi Homed",
+				Hostname:    "orin.local",
+				IPAddress:   "192.168.1.69",
+				Addresses:   []string{"192.168.1.69", "169.254.1.2"},
+				Port:        50051,
+			},
+		},
+	}
+
+	merged := c.MergedDevices()
+	if len(merged) != 1 {
+		t.Fatalf("MergedDevices() returned %d entries, want 1", len(merged))
+	}
+	d := merged[0]
+	if d.IPAddress != "192.168.1.69" {
+		t.Errorf("primary IPAddress = %q, want 192.168.1.69", d.IPAddress)
+	}
+	if len(d.Addresses) != 2 || d.Addresses[0] != "192.168.1.69" || d.Addresses[1] != "169.254.1.2" {
+		t.Errorf("Addresses = %v, want [192.168.1.69 169.254.1.2]", d.Addresses)
+	}
+}
+
 func TestMergedDevices_Empty(t *testing.T) {
 	c := &DevicesCollection{}
 	merged := c.MergedDevices()

@@ -10,17 +10,19 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"go.uber.org/zap"
 )
 
-// meshNameRE matches the only names this server is authoritative for.
-var meshNameRE = regexp.MustCompile(`^device-([0-9]{1,5})\.cloud\.wendy\.dev\.$`)
+var meshDNSSuffixRE = `(?:` + regexp.QuoteMeta(meshname.Suffix) + `|` + regexp.QuoteMeta(meshname.LegacySuffix) + `)`
 
-// friendlyNameRE matches <devicename>.<org-slug>.cloud.wendy.dev. — the
-// human-readable mesh name resolved via the injected Resolver. It never
-// overlaps meshNameRE: the numeric form has one label before ".cloud", this
-// form has two.
-var friendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.([a-z0-9-]+)\.cloud\.wendy\.dev\.$`)
+// meshNameRE accepts the private mesh namespace and its legacy public alias.
+var meshNameRE = regexp.MustCompile(`^device-([0-9]{1,5})\.` + meshDNSSuffixRE + `\.$`)
+
+// friendlyNameRE matches <devicename>.<org-slug>.mesh.wendy.internal. and its
+// legacy alias. It never overlaps meshNameRE: the numeric form has one label
+// before the suffix, while this form has two.
+var friendlyNameRE = regexp.MustCompile(`^([a-z0-9-]+)\.([a-z0-9-]+)\.` + meshDNSSuffixRE + `\.$`)
 
 // Resolver maps a normalized device name to a cloud asset ID within this
 // device's own org, and reports this device's own org slug. It is implemented
@@ -31,7 +33,7 @@ type Resolver interface {
 	OrgSlug() string
 }
 
-// DNSServer answers device-N.cloud.wendy.dev with the device's mesh VIP and
+// DNSServer answers device-N.mesh.wendy.internal with the device's mesh VIP and
 // forwards every other query to the host's upstream resolver. One UDP
 // listener is bound per app bridge gateway address, refcounted by the number
 // of running meshed containers behind that bridge.

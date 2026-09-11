@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -28,13 +27,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
-
-type mcpCloseFunc func()
-
-func (f mcpCloseFunc) Close() error {
-	f()
-	return nil
-}
 
 type mcpCloudTunnel struct {
 	cancel     context.CancelFunc
@@ -546,21 +538,17 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 		}
 	}()
 
-	tunnelConn, err := mcpOpenBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), 50052)
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening cloud tunnel to %s: %w", asset.GetName(), err)
-	}
-	dialOpt, closeTunnel := mcpTunnelDialer(tunnelConn)
+	dialOpt := clouddefaults.TunnelDialer(func(tunnelCtx context.Context) (net.Conn, error) {
+		return mcpOpenBrokerTunnel(tunnelCtx, brokerConn, auth, asset.GetId(), 50052)
+	})
 
 	certInfo := auth.Certificates[0]
 	keyPEM, err := certInfo.PrivateKeyPEM()
 	if err != nil {
-		closeTunnel()
 		return nil, nil, fmt.Errorf("loading client key: %w", err)
 	}
 	x509Cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
 	if err != nil {
-		closeTunnel()
 		return nil, nil, fmt.Errorf("loading agent mTLS cert: %w", err)
 	}
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
@@ -568,7 +556,6 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 		ExpectedOrgID: int32(certInfo.OrganizationID),
 	})
 	if err != nil {
-		closeTunnel()
 		return nil, nil, fmt.Errorf("building TLS verifier: %w", err)
 	}
 	tlsCfg := &tls.Config{
@@ -583,7 +570,6 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 	)
 	if err != nil {
-		closeTunnel()
 		return nil, nil, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
 	}
 	agentConn := grpcclient.NewFromConn(grpcConn)
@@ -592,7 +578,7 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
 		return mcpOpenBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), uint32(port))
 	}
-	agentConn.ExtraClosers = append(agentConn.ExtraClosers, mcpCloseFunc(closeTunnel), brokerConn)
+	agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
 	cleanupBroker = false
 	return agentConn, asset, nil
 }
@@ -705,9 +691,11 @@ func mcpListCloudAssets(ctx context.Context, auth *config.AuthConfig, filter str
 		return nil, err
 	}
 	defer conn.Close()
+	pageSize := int32(200)
 	req := &cloudpb.ListAssetsRequest{
 		OrganizationId:  int32(auth.Certificates[0].OrganizationID),
 		IsComputeDevice: boolPtr(true),
+		Limit:           &pageSize,
 	}
 	if filter != "" {
 		req.Filter = &filter
@@ -720,24 +708,36 @@ func mcpListCloudAssets(ctx context.Context, auth *config.AuthConfig, filter str
 	if err != nil {
 		return nil, err
 	}
-	stream, err := client.ListAssets(cloudCtx, req)
-	if err != nil {
-		return nil, fmt.Errorf("listing devices: %w", err)
-	}
 	const maxAssets = 10_000
 	var assets []*cloudpb.Asset
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
+	for offset := int32(0); ; {
+		req.Offset = &offset
+		stream, err := client.ListAssets(cloudCtx, req)
 		if err != nil {
 			return nil, fmt.Errorf("listing devices: %w", err)
 		}
-		if len(assets) >= maxAssets {
-			return nil, &cloudResolveErr{code: errCodeInvalidArgument, msg: fmt.Sprintf("cloud returned more than %d devices", maxAssets)}
+		var page, total int32
+		for {
+			resp, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("listing devices: %w", err)
+			}
+			if len(assets) >= maxAssets {
+				return nil, &cloudResolveErr{code: errCodeInvalidArgument, msg: fmt.Sprintf("cloud returned more than %d devices", maxAssets)}
+			}
+			assets = append(assets, resp.GetAsset())
+			page++
+			total = resp.GetTotal()
 		}
-		assets = append(assets, resp.GetAsset())
+		offset += page
+		// Match the CLI's pagination, including its empty-page guard for a
+		// changing roster or an inconsistent server-reported total.
+		if page == 0 || offset >= total {
+			break
+		}
 	}
 	return assets, nil
 }
@@ -825,11 +825,15 @@ func mcpOpenBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth 
 	}
 
 	local, remote := net.Pipe()
+	// Record the broker's verdict (a non-EOF stream end) on the local end so
+	// callers see why the tunnel died instead of a bare EOF; see BrokerTunnelConn.
+	tunnel := clouddefaults.NewBrokerTunnelConn(local)
 	go func() {
 		defer remote.Close()
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
+				tunnel.Fail(err)
 				break
 			}
 			if len(msg.Payload) > 0 {
@@ -870,14 +874,7 @@ func mcpOpenBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth 
 		}
 		_ = stream.CloseSend()
 	}()
-	return local, nil
-}
-
-func mcpTunnelDialer(tunnelConn net.Conn) (grpc.DialOption, func()) {
-	var once sync.Once
-	return grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
-		return tunnelConn, nil
-	}), func() { once.Do(func() { tunnelConn.Close() }) }
+	return tunnel, nil
 }
 
 func mcpServeTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.ClientConn, auth *config.AuthConfig, assetID int32, remotePort uint32) {

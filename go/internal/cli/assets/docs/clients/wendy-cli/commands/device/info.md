@@ -1,6 +1,6 @@
 # `wendy device info`
 
-Shows agent version, OS, architecture, GPU, and hardware info for the target device.
+Shows agent version, OS, architecture, GPU, NPU, and hardware info for the target device.
 
 ## Usage
 
@@ -10,7 +10,7 @@ wendy device info [flags]
 
 ## Description
 
-`wendy device info` queries the connected device's agent and prints its version, operating system, CPU architecture, CPU core count, total RAM, GPU presence, and other hardware details. Use this command anywhere device metadata is needed — in scripts, CI pipelines, or interactively.
+`wendy device info` queries the connected device's agent and prints its version, operating system, CPU architecture, CPU core count, total RAM, GPU and NPU presence, and other hardware details. Use this command anywhere device metadata is needed — in scripts, CI pipelines, or interactively.
 
 The output format follows the standard `--json` / human-readable convention shared across all device commands.
 
@@ -35,6 +35,17 @@ On GPU-capable devices, the following GPU fields are included. Each is omitted f
 | `jetpackVersion` | `JetPack:` | JetPack/L4T version string (Jetson only). |
 | `cudaVersion` | `CUDA:` | CUDA toolkit version (e.g. `12.6`). |
 | `gpuArch` | `GPU Arch:` | GPU architecture identifier. Format is vendor-specific (e.g. `sm_87` for NVIDIA). |
+
+### NPU output fields
+
+On devices with an on-SoC neural accelerator the agent can reach, the following fields are included.
+
+| Field (JSON) | Human-readable label | Description |
+|---|---|---|
+| `hasNpu` | — | Whether the device has a reachable NPU. Always present; `false` elsewhere. |
+| `npuVendor` | `NPU:` | NPU vendor (e.g. `qualcomm`); shown as `unknown` in human-readable output when an NPU is present but the vendor is unreported. |
+
+Detection requires a non-secure FastRPC node: the signed-PD nodes are root-only, so a board exposing only those reports no NPU. The vendor comes from the DSP's device-tree `compatible`, the only vendor signal an on-SoC accelerator has.
 
 `wendy device info` reports static GPU *metadata* (vendor, architecture, toolkit versions). For **live** GPU utilization, memory, temperature, and power draw, use [`wendy device top`](top.md).
 

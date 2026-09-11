@@ -1,6 +1,7 @@
 package oci
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/user"
@@ -76,6 +77,8 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 		switch ent.Type {
 		case appconfig.EntitlementGPU:
 			applyGPU(spec)
+		case appconfig.EntitlementNPU:
+			applyNPU(spec)
 		case appconfig.EntitlementNetwork:
 			applyNetwork(spec, ent, opts.HostResolvConfPath)
 		case appconfig.EntitlementAudio:
@@ -484,6 +487,75 @@ func applyVCIO(spec *Spec) {
 	allowMajorsFromGlob(spec, vcioDevicePath)
 }
 
+// Which FastRPC domains exist varies by board, so the nodes are discovered rather
+// than listed. Behind vars so tests can repoint them.
+var (
+	fastrpcDeviceGlob = "/dev/fastrpc-*"
+	dmaHeapDevicePath = "/dev/dma_heap/system"
+	dtModelPath       = "/proc/device-tree/model"
+)
+
+const (
+	// The -secure nodes are the signed-PD path and are root-only; never granted.
+	fastrpcSecureSuffix = "-secure"
+)
+
+// applyNPU grants the FastRPC transport to the on-SoC DSPs.
+//
+// Bind-mounted rather than mknod'd: access is authorised by the nodes' group ownership
+// and, for the dma-buf heap, a POSIX ACL, neither of which a node re-created inside the
+// container would carry. A host with no FastRPC nodes is left untouched.
+func applyNPU(spec *Spec) {
+	matches, err := filepath.Glob(fastrpcDeviceGlob)
+	if err != nil {
+		return
+	}
+
+	// Scoped to each node's own major:minor, never the whole major: FastRPC shares
+	// the misc major with every other misc device on the host, including the
+	// signed-PD nodes skipped here.
+	var granted bool
+	for _, node := range matches {
+		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+			continue
+		}
+		if _, _, err := addScopedCharDevice(spec, node); err != nil {
+			continue
+		}
+		granted = true
+	}
+	if !granted {
+		return
+	}
+
+	if _, _, err := addScopedCharDevice(spec, dmaHeapDevicePath); err == nil {
+		if gid, ok := lookupDmaheapGID(); ok {
+			spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)
+		}
+	}
+
+	if gid, ok := lookupFastrpcGID(); ok {
+		spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)
+	}
+
+	// FastRPC identifies the board from the device-tree model. Passing it in lets the
+	// container stay behind the default /sys/firmware mask, which also covers the DMI
+	// and ACPI trees.
+	if model := hostDeviceTreeModel(); model != "" {
+		spec.Process.Env = append(spec.Process.Env, "MACHINE_NAME="+model)
+	}
+}
+
+// hostDeviceTreeModel reads the board name the FastRPC userspace matches against its
+// SoC config. Empty when the host has no device tree.
+func hostDeviceTreeModel() string {
+	data, err := os.ReadFile(dtModelPath)
+	if err != nil {
+		return ""
+	}
+	return string(bytes.TrimRight(data, "\x00\n"))
+}
+
 // applyDisplay grants an app the ability to present to the local display as a
 // Wayland client: GPU render-node access via /dev/dri plus, when present, the
 // compositor's Wayland socket. It is the ONLY entitlement that exposes
@@ -843,6 +915,33 @@ var pipewireUserUID = func() (uint32, bool) {
 // the host has no render group (then only the video GID is added).
 var lookupRenderGID = func() (uint32, bool) {
 	g, err := user.LookupGroup("render")
+	if err != nil {
+		return 0, false
+	}
+	gid, err := strconv.ParseUint(g.Gid, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(gid), true
+}
+
+// lookupFastrpcGID and lookupDmaheapGID resolve the host groups that own the FastRPC
+// nodes and the dma-buf heap. Both GIDs are image-specific, so they are resolved at
+// apply time. Behind vars so tests do not depend on the developer machine's groups.
+var lookupFastrpcGID = func() (uint32, bool) {
+	g, err := user.LookupGroup("fastrpc")
+	if err != nil {
+		return 0, false
+	}
+	gid, err := strconv.ParseUint(g.Gid, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(gid), true
+}
+
+var lookupDmaheapGID = func() (uint32, bool) {
+	g, err := user.LookupGroup("dmaheap")
 	if err != nil {
 		return 0, false
 	}

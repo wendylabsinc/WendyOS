@@ -242,6 +242,10 @@ message GetAgentVersionResponse {
     // mains-powered devices and on agents predating this field, so `wendy
     // device info` shows no battery line for either.
     optional BatteryStats battery = 22;
+    // Whether the device has an on-SoC neural accelerator the agent can reach.
+    optional bool has_npu = 23;
+    // NPU vendor identifier (e.g. "qualcomm"). Only present when has_npu is true.
+    optional string npu_vendor = 24;
 }
 
 // A network interface on the device and the IP addresses assigned to it.

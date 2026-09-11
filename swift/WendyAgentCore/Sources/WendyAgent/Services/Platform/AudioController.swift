@@ -151,9 +151,12 @@ struct AudioController: AudioManaging {
         (pcm: Data, sampleRate: UInt32, channels: UInt32), any Error
     > {
         // Bound the buffer so a stalled network consumer drops old audio chunks
-        // instead of accumulating an unbounded backlog. 32 buffers of ~4096
-        // frames is a fraction of a second of slack before dropping.
-        AsyncThrowingStream(bufferingPolicy: .bufferingNewest(32)) { continuation in
+        // instead of accumulating an unbounded backlog. For a live mic, low
+        // latency beats completeness: keep only ~4 buffers (~4096 frames each,
+        // ~340ms at 48kHz) so a brief consumer stall drops stale audio and
+        // stays current rather than adding seconds of lag. 32 buffers (~2.7s)
+        // sounded "mega laggy" in testing.
+        AsyncThrowingStream(bufferingPolicy: .bufferingNewest(4)) { continuation in
             let session = AudioTapSession()
             do {
                 try session.start(deviceID: deviceID, minInterval: 0) { buffer in

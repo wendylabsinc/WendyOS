@@ -59,6 +59,12 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 		resp.GpuArch = &gpuInfo.gpuArch
 	}
 
+	npuInfo := detectNPUInfo()
+	resp.HasNpu = &npuInfo.hasNPU
+	if npuInfo.vendor != "" {
+		resp.NpuVendor = &npuInfo.vendor
+	}
+
 	if usage, ok := rootDiskUsage(); ok {
 		resp.DiskUsedBytes = &usage.usedBytes
 		resp.DiskTotalBytes = &usage.totalBytes

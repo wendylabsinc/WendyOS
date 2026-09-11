@@ -1,0 +1,12 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+import "wendy/lite/sensorlink.proto";
+
+service WendySensorService {
+  rpc GetSensorManifest(GetSensorManifestRequest) returns (wendy.lite.sensorlink.SensorManifest);
+  rpc StreamSensors(StreamSensorsRequest) returns (stream wendy.lite.sensorlink.SensorFrame);
+}
+message GetSensorManifestRequest {}
+message StreamSensorsRequest { repeated uint32 channel_id = 1; }

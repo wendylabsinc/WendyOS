@@ -118,6 +118,7 @@ type initOptions struct {
 // Questions for WendyOS devices.
 var wendyOSEntitlementQuestions = []entitlementQuestion{
 	{"Will your app run AI or GPU-accelerated workloads?", appconfig.EntitlementGPU, "GPU access for AI inference or compute"},
+	{"Will your app run inference on the NPU?", appconfig.EntitlementNPU, "NPU access for on-device inference"},
 	{"Does your app need Bluetooth peripheral access?", appconfig.EntitlementBluetooth, "Bluetooth Low Energy peripherals"},
 	{"Does your app need USB peripheral access?", appconfig.EntitlementUSB, "USB device access"},
 	{"Does your app need GPIO pin access?", appconfig.EntitlementGPIO, "General-purpose I/O pins"},

@@ -89,6 +89,8 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceEnrollCmd(),
 		newDeviceUnenrollCmd(),
 		newDeviceRenameCmd(),
+		newDevicePairCmd(),
+		newDeviceUnpairCmd(),
 		newDeviceUpdateCmd(),
 		newDeviceSyncTimeCmd(),
 		newDeviceCacheCmd(),
@@ -208,7 +210,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:    use,
-		Short:  "Show agent version, OS, architecture, GPU, and hardware info for the target device",
+		Short:  "Show agent version, OS, architecture, GPU, NPU, and hardware info for the target device",
 		Hidden: deprecated,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -226,13 +228,13 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			}
 			defer target.Close()
 
-			var agentVersion, osName, osVersion, cpuArch, deviceType, storageMedium, gpuVendor, jetpackVersion, cudaVersion, gpuArch string
+			var agentVersion, osName, osVersion, cpuArch, deviceType, storageMedium, gpuVendor, jetpackVersion, cudaVersion, gpuArch, npuVendor string
 			var diskUsedBytes, diskTotalBytes *int64
 			var memTotalBytes int64
 			var cpuCount uint32
 			var partitions []*agentpb.DiskPartition
 			var netInterfaces []*agentpb.NetworkInterface
-			var hasGPU bool
+			var hasGPU, hasNPU bool
 			var providerInfo *providers.ProviderDeviceInfo
 			// nil for mains-powered devices, for agents predating the field,
 			// and for the BLE/provider paths that never report one.
@@ -269,6 +271,8 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				jetpackVersion = resp.GetJetpackVersion()
 				cudaVersion = resp.GetCudaVersion()
 				gpuArch = resp.GetGpuArch()
+				hasNPU = resp.GetHasNpu()
+				npuVendor = resp.GetNpuVendor()
 				diskUsedBytes = resp.DiskUsedBytes
 				diskTotalBytes = resp.DiskTotalBytes
 				memTotalBytes = resp.GetMemTotalBytes()
@@ -372,6 +376,10 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if gpuArch != "" {
 					out["gpuArch"] = gpuArch
 				}
+				out["hasNpu"] = hasNPU
+				if npuVendor != "" {
+					out["npuVendor"] = npuVendor
+				}
 				if len(netInterfaces) > 0 {
 					ifaces := make([]map[string]any, len(netInterfaces))
 					for i, iface := range netInterfaces {
@@ -448,6 +456,13 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if gpuArch != "" {
 					fmt.Printf("%s %s\n", tui.Dim("GPU Arch:"), tui.Value(gpuArch))
 				}
+			}
+			if hasNPU {
+				vendor := npuVendor
+				if vendor == "" {
+					vendor = "unknown"
+				}
+				fmt.Printf("%s %s\n", tui.Dim("NPU:"), tui.Value(vendor))
 			}
 			if providerInfo != nil {
 				fmt.Printf("%s %s\n", tui.Dim("WASM Apps:"), tui.Value(yesNo(providerInfo.WasmAppSupport)))

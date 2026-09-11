@@ -724,11 +724,9 @@ type GetAgentVersionResponse struct {
 	// even when version strings cannot distinguish builds (dev builds).
 	// Empty when the agent cannot hash its own executable.
 	//
-	// Only comparable to the update payload on platforms where that payload
-	// IS the executable (linux). The darwin payload is an app-bundle zip, so
-	// its hash can never match this field — the CLI must skip the comparison
-	// there, and a future darwin implementation should instead persist and
-	// report the hash of the update payload it committed.
+	// Linux uploads the executable directly. The Darwin payload is an
+	// app-bundle ZIP, so its updater extracts and hashes Contents/MacOS before
+	// comparing it with this field.
 	BinarySha256 string `protobuf:"bytes,20,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
 	// Device hostname (gethostname(2)). The CLI uses it to identify a device
 	// reached over the USB well-known link-local address, where no mDNS TXT
@@ -742,7 +740,11 @@ type GetAgentVersionResponse struct {
 	// Aggregate system-battery state, from /sys/class/power_supply. Absent on
 	// mains-powered devices and on agents predating this field, so `wendy
 	// device info` shows no battery line for either.
-	Battery       *BatteryStats `protobuf:"bytes,22,opt,name=battery,proto3,oneof" json:"battery,omitempty"`
+	Battery *BatteryStats `protobuf:"bytes,22,opt,name=battery,proto3,oneof" json:"battery,omitempty"`
+	// Whether the device has an on-SoC neural accelerator the agent can reach.
+	HasNpu *bool `protobuf:"varint,23,opt,name=has_npu,json=hasNpu,proto3,oneof" json:"has_npu,omitempty"`
+	// NPU vendor identifier (e.g. "qualcomm"). Only present when has_npu is true.
+	NpuVendor     *string `protobuf:"bytes,24,opt,name=npu_vendor,json=npuVendor,proto3,oneof" json:"npu_vendor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -929,6 +931,20 @@ func (x *GetAgentVersionResponse) GetBattery() *BatteryStats {
 		return x.Battery
 	}
 	return nil
+}
+
+func (x *GetAgentVersionResponse) GetHasNpu() bool {
+	if x != nil && x.HasNpu != nil {
+		return *x.HasNpu
+	}
+	return false
+}
+
+func (x *GetAgentVersionResponse) GetNpuVendor() string {
+	if x != nil && x.NpuVendor != nil {
+		return *x.NpuVendor
+	}
+	return ""
 }
 
 // A network interface on the device and the IP addresses assigned to it.
@@ -4336,7 +4352,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\xd5\b\n" +
+	"\x16GetAgentVersionRequest\"\xb2\t\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -4369,7 +4385,10 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\tcpu_count\x18\x13 \x01(\rR\bcpuCount\x12#\n" +
 	"\rbinary_sha256\x18\x14 \x01(\tR\fbinarySha256\x12\x1a\n" +
 	"\bhostname\x18\x15 \x01(\tR\bhostname\x12,\n" +
-	"\abattery\x18\x16 \x01(\v2\r.BatteryStatsH\vR\abattery\x88\x01\x01B\r\n" +
+	"\abattery\x18\x16 \x01(\v2\r.BatteryStatsH\vR\abattery\x88\x01\x01\x12\x1c\n" +
+	"\ahas_npu\x18\x17 \x01(\bH\fR\x06hasNpu\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"npu_vendor\x18\x18 \x01(\tH\rR\tnpuVendor\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +
@@ -4383,7 +4402,10 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\x11_disk_total_bytesB\v\n" +
 	"\t_gpu_archB\n" +
 	"\n" +
-	"\b_battery\"I\n" +
+	"\b_batteryB\n" +
+	"\n" +
+	"\b_has_npuB\r\n" +
+	"\v_npu_vendor\"I\n" +
 	"\x10NetworkInterface\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fip_addresses\x18\x02 \x03(\tR\vipAddresses\"\xa7\x01\n" +

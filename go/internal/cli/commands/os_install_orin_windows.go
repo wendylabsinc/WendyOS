@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"golang.org/x/sys/windows"
 
@@ -100,19 +99,11 @@ func pickOrinRecoveryDevice(opts t234InstallOptions) (rcm.RecoveryDevice, error)
 }
 
 // ensureOrinDriver installs the Jetson WinUSB driver when the selected
-// recovery device is not yet bound to wendy's interface. requireElevation may
-// re-launch the process under UAC (the elevated child re-runs the flow from
-// the start and reaches here already elevated); after this, preAuthElevation
-// is a no-op, so a full install costs exactly one UAC prompt.
+// recovery device needs a binding update. The Orin raw-disk flow already
+// elevates before the wizard; the shared driver helper also supports callers
+// that are not elevated without restarting their install session.
 func ensureOrinDriver(d winusb.Device) error {
-	if winusb.DeviceHasOurInterface(d) {
-		return nil
-	}
-	if err := requireElevation("to install the Jetson WinUSB driver"); err != nil {
-		return err
-	}
-	fmt.Println("Installing WinUSB driver for the Jetson…")
-	return winusb.InstallDriver(os.Stdout)
+	return ensureUSBDriver(d, winusb.JetsonDriver())
 }
 
 // orinStageOne performs the stage-1 RCM boot over WinUSB with the file chain
