@@ -13,13 +13,13 @@
     "types:check": "next typegen && fumadocs-mdx && tsc --noEmit"
   },
   "dependencies": {
-    "@next/third-parties": "16.2.11",
+    "@next/third-parties": "16.3.4",
     "@orama/orama": "3.1.18",
     "fumadocs-core": "16.9.0",
     "fumadocs-mdx": "15.0.7",
     "fumadocs-ui": "16.9.0",
     "lucide-react": "1.16.0",
-    "next": "16.2.11",
+    "next": "16.3.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "tailwind-merge": "3.6.0"
@@ -30,13 +30,13 @@
     "@types/node": "25.8.0",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
-    "postcss": "8.5.18",
+    "postcss": "8.5.23",
     "sirv-cli": "3.0.1",
     "tailwindcss": "4.3.0",
     "typescript": "6.0.3"
   },
   "overrides": {
-    "postcss": "8.5.18",
-    "sharp": "0.35.3"
+    "postcss": "8.5.23",
+    "sharp": "0.35.4"
   }
 }

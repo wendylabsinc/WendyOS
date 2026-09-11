@@ -8,7 +8,9 @@ import importlib.util
 import json
 import pathlib
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 MODULE_PATH = pathlib.Path(__file__).with_name("security_review.py")
 SPEC = importlib.util.spec_from_file_location("security_review", MODULE_PATH)
@@ -106,6 +108,16 @@ class InputManifestTests(unittest.TestCase):
             security_review.build_input_manifest(
                 metadata(), raw, 42, HEAD_SHA, len(raw) - 1
             )
+
+    def test_large_pr_prepares_every_byte_in_bounded_file_batches(self) -> None:
+        first = diff("go/one.go")
+        second = diff("go/two.go", "let café = true")
+        raw = first + second
+        limit = max(len(first), len(second))
+        manifest = security_review.build_input_manifest(metadata(2), raw, 42, HEAD_SHA, limit)
+        self.assertEqual(manifest["prepared_bytes"], len(raw))
+        self.assertEqual(manifest["batch_count"], 2)
+        self.assertEqual(manifest["batch_sha256"], [hashlib.sha256(part).hexdigest() for part in (first, second)])
 
     def test_zero_file_pr_fails(self) -> None:
         with self.assertRaisesRegex(security_review.ReviewError, "at least one"):
@@ -250,6 +262,13 @@ class PromptAndCommentTests(unittest.TestCase):
         self.assertIn("Existing risk", warning)
         self.assertIn("bytes prepared for review", warning)
 
+    def test_truncated_batch_comment_keeps_blocking_state(self) -> None:
+        body = "# AI Security Review\n" + ("é" * 1000) + security_review.BLOCKING_MARKER
+        comment = security_review.prepare_comment(body, max_comment_bytes=500)
+        self.assertLessEqual(len(comment.encode()), 500)
+        self.assertEqual(comment.count(security_review.BLOCKING_MARKER), 1)
+        self.assertTrue(security_review.previous_review_has_blocking(comment))
+
     def test_repeated_credit_warning_does_not_nest_prior_state(self) -> None:
         raw = diff()
         manifest = security_review.build_input_manifest(metadata(), raw, 42, HEAD_SHA)
@@ -336,6 +355,68 @@ class CommandTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(security_review.ReviewError, "input manifest"):
                 security_review.command_enforce(args)
+
+
+class BatchReviewTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.parts = [diff(f"go/file{index}.go") for index in range(3)]
+        self.raw = b"".join(self.parts)
+        self.meta = metadata(len(self.parts))
+        self.manifest = security_review.build_input_manifest(
+            self.meta, self.raw, 42, HEAD_SHA, max(map(len, self.parts))
+        )
+
+    def run_review(self) -> dict:
+        return security_review.review_batches(None, "test-model", self.meta,
+                                              self.raw.decode(), "", self.manifest)
+
+    def test_every_batch_is_reviewed_and_late_blocker_is_preserved(self) -> None:
+        def response(_client, _model, _meta, batch, _previous, _context):
+            return payload(*[finding(severity="high", path="go/file2.go")] if "file2.go" in batch else [])
+
+        with patch.object(security_review, "review_batch", side_effect=response) as review:
+            result = self.run_review()
+        reviewed_parts = [call.args[3] for call in review.call_args_list]
+        self.assertCountEqual(reviewed_parts, [part.decode() for part in self.parts])
+        _, blocking = security_review.render_review(result, self.raw.decode(), self.manifest)
+        self.assertTrue(blocking)
+
+    def test_later_failure_cannot_become_a_nonblocking_partial_review(self) -> None:
+        def response(_client, _model, _meta, batch, _previous, _context):
+            if "file1.go" in batch:
+                raise RuntimeError("credit balance unavailable after initial review")
+            return payload(finding(severity="high"))
+
+        with patch.object(security_review, "review_batch", side_effect=response):
+            with self.assertRaisesRegex(security_review.ReviewError, "Incomplete batched"):
+                self.run_review()
+
+    def test_changed_input_fails_before_any_model_call(self) -> None:
+        self.raw = self.raw.replace(b"value := 1", b"value := 2")
+        with patch.object(security_review, "review_batch") as review:
+            with self.assertRaisesRegex(security_review.ReviewError, "input manifest"):
+                self.run_review()
+        review.assert_not_called()
+
+    def test_repair_credit_outage_fails_closed_after_initial_response(self) -> None:
+        client = Mock()
+        client.messages.create.side_effect = [
+            SimpleNamespace(content=[SimpleNamespace(text='{"severity":"high", invalid')]),
+            RuntimeError("credit balance unavailable"),
+        ]
+        with self.assertRaisesRegex(security_review.ReviewError, "repair failed"):
+            security_review.review_batch(client, "test-model", self.meta, self.raw.decode(), "", "")
+
+    def test_combined_results_keep_more_than_ten_findings(self) -> None:
+        def response(_client, _model, _meta, batch, _previous, _context):
+            path = batch.splitlines()[0].split(" b/")[1]
+            return payload(*[finding(path=path, lines=str(index)) for index in range(10)])
+
+        with patch.object(security_review, "review_batch", side_effect=response):
+            result = self.run_review()
+        self.assertEqual(len(result["findings"]), 30)
+        rendered, _ = security_review.render_review(result, self.raw.decode(), self.manifest)
+        self.assertEqual(rendered.count("#### "), 30)
 
 
 if __name__ == "__main__":

@@ -68,13 +68,16 @@ class InputTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(api_review.ReviewError):
                 self.validate(diff(), metadata(additions=invalid))
 
-    def test_empty_oversized_and_incomplete_diffs_fail(self):
+    def test_empty_and_incomplete_diffs_fail(self):
         with self.assertRaisesRegex(api_review.ReviewError, "empty"):
             self.validate(b"")
-        with patch.object(api_review, "MAX_DIFF_BYTES", 5), self.assertRaisesRegex(api_review.ReviewError, "No partial review"):
-            self.validate(diff())
         with self.assertRaisesRegex(api_review.ReviewError, "incomplete"):
             self.validate(diff().replace(b"@@ -4,3 +4,3 @@", b"@@ -4,4 +4,4 @@"))
+
+    def test_complete_input_can_exceed_one_batch_limit(self):
+        with patch.object(api_review, "MAX_DIFF_BYTES", 5):
+            text, _ = self.validate(diff())
+        self.assertEqual(text.encode(), diff())
 
     def test_new_and_deleted_files_have_only_real_revision_sides(self):
         raw = b"diff --git a/new.proto b/new.proto\nnew file mode 100644\n--- /dev/null\n+++ b/new.proto\n@@ -0,0 +1 @@\n+message New {}\ndiff --git a/old.proto b/old.proto\ndeleted file mode 100644\n--- a/old.proto\n+++ /dev/null\n@@ -1 +0,0 @@\n-message Old {}\n"
@@ -243,6 +246,66 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result["diff_base_sha"], DIFF_BASE_SHA)
         self.assertEqual(result["diff_bytes"], len(diff()))
         self.assertEqual(len(result["diff_sha256"]), 64)
+        self.assertEqual(result["review_batches"], 1)
+
+    def test_large_diff_reviews_every_file_and_combines_highest_risk(self):
+        patches = [diff(path=f"go/file{i}.go") for i in range(3)]
+        raw = b"".join(patches)
+
+        def review(meta, batch, repo, model):
+            index = meta["review_batch"]["number"] - 1
+            self.assertEqual(meta["review_batch"]["total"], 3)
+            self.assertEqual(batch.encode(), patches[index])
+            item = decision(title=f"Contract {index}")
+            item["locations"][0]["path"] = f"go/file{index}.go"
+            return {"risk": ("mid", "high", "low")[index], "decisions": [item]}
+
+        with patch.object(api_review, "MAX_DIFF_BYTES", len(patches[0])):
+            code, result, model = self.run_review(raw=raw, meta=metadata(changed_files=3, additions=3, deletions=3), error=review)
+        self.assertEqual(code, 0)
+        self.assertEqual(model.call_count, 3)
+        self.assertEqual(result["risk"], "high")
+        self.assertEqual(result["review_batches"], 3)
+        self.assertEqual(result["diff_bytes"], len(raw))
+        self.assertEqual([item["title"] for item in result["decisions"]], ["Contract 0", "Contract 1", "Contract 2"])
+        calls = sorted(model.call_args_list, key=lambda call: call.args[0]["review_batch"]["number"])
+        self.assertEqual("".join(call.args[1] for call in calls).encode(), raw)
+
+    def test_oversized_individual_file_fails_before_any_model_request(self):
+        with patch.object(api_review, "MAX_DIFF_BYTES", 5):
+            code, result, model = self.run_review()
+        self.assertEqual(code, 1)
+        self.assertIn("No partial review", result["error"])
+        self.assertEqual(result["decisions"], [])
+        model.assert_not_called()
+
+    def test_one_failed_batch_cannot_publish_partial_decisions(self):
+        raw = diff() + diff(path="go/another.go")
+
+        def review(meta, batch, repo, model):
+            if meta["review_batch"]["number"] == 2:
+                raise api_review.ReviewError("Claude did not complete the API review response")
+            return {"risk": "high", "decisions": [decision()]}
+
+        with patch.object(api_review, "MAX_DIFF_BYTES", len(diff())):
+            code, result, _ = self.run_review(raw=raw, meta=metadata(changed_files=2, additions=2, deletions=2), error=review)
+        self.assertEqual(code, 1)
+        self.assertEqual(result["status"], "incomplete")
+        self.assertIn("did not complete", result["error"])
+        self.assertEqual(result["decisions"], [])
+
+    def test_model_cannot_cite_valid_evidence_from_a_different_batch(self):
+        raw = diff() + diff(path="go/another.go")
+        with patch.object(api_review, "MAX_DIFF_BYTES", len(diff())):
+            code, result, _ = self.run_review(raw=raw, meta=metadata(changed_files=2, additions=2, deletions=2), payload={"risk": "high", "decisions": [decision()]})
+        self.assertEqual(code, 1)
+        self.assertEqual(result["decisions"], [])
+        self.assertIn("outside the changed lines", result["error"])
+
+    def test_duplicate_decisions_are_retained_only_once(self):
+        code, result, _ = self.run_review(payload={"risk": "high", "decisions": [decision(), decision()]})
+        self.assertEqual(code, 0)
+        self.assertEqual(result["decisions"], [decision()])
 
     def test_input_failure_writes_incomplete_result_without_model_call(self):
         code, result, model = self.run_review(meta=metadata(additions=2))

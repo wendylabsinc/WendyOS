@@ -37,28 +37,30 @@ jobs:
           path: review-automation
           sparse-checkout: .github/scripts
           persist-credentials: false
+          fetch-depth: 0
 
-      - name: Bootstrap review automation when absent from base
+      - name: Bootstrap batched review automation when absent from base
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
-          if [[ -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" ]]; then
+          if [[ -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" && -f "$scripts_dir/review_diff.py" ]]; then
             exit 0
           fi
-          if [[ -e "$scripts_dir/api_review.py" || -e "$scripts_dir/api_review_comment.py" ]]; then
+          if [[ -f "$scripts_dir/api_review.py" && ! -f "$scripts_dir/api_review_comment.py" ]] || \
+             [[ ! -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" ]]; then
             echo "::error::Base revision contains incomplete API review automation."
             exit 1
           fi
 
-          # Bootstrap only: the introducing PR predates these scripts on base.
+          # Bootstrap only: the introducing PR predates batched review on base.
           # Only same-repository writers can reach this step. Download only the
-          # four review automation files at the event's immutable head SHA;
+          # review automation files at the event's immutable head SHA;
           # application code is never checked out, compiled, or executed.
           echo "::notice::Bootstrapping API review automation from the same-repository PR"
           bootstrap_dir="$(mktemp -d)"
-          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py; do
+          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py review_diff.py review_diff_test.py; do
             gh api --method GET \
               "repos/$REPO/contents/.github/scripts/$filename" \
               -f ref="$EXPECTED_HEAD_SHA" --jq '.content' \
@@ -78,6 +80,7 @@ jobs:
           set -euo pipefail
           python3 review-automation/.github/scripts/api_review_test.py
           python3 review-automation/.github/scripts/api_review_comment_test.py
+          python3 review-automation/.github/scripts/review_diff_test.py
 
       - name: Fetch complete PR metadata and diff
         env:
@@ -92,14 +95,15 @@ jobs:
             '.head.sha == $head and .base.sha == $base' "$metadata_tmp" > /dev/null
           # Removed lines in a PR diff belong to its merge base, which can
           # differ from the target branch tip used by the stale-run checks.
-          diff_base_sha="$(gh api "repos/$REPO/compare/$EXPECTED_BASE_SHA...$EXPECTED_HEAD_SHA" \
-            --jq '.merge_base_commit.sha')"
+          diff_base_sha="$(git -C review-automation merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA")"
           if [[ ! "$diff_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::Could not identify the PR diff's immutable merge base."
             exit 1
           fi
-          gh api -H "Accept: application/vnd.github.diff" \
-            "repos/$REPO/pulls/$PR_NUMBER" > "$diff_tmp"
+          # Avoid GitHub's 20,000-line diff API limit without truncating input
+          # or checking out/executing application code from the PR.
+          git -C review-automation diff --no-ext-diff --no-textconv --find-renames \
+            "$diff_base_sha" "$EXPECTED_HEAD_SHA" > "$diff_tmp"
           # The PR endpoint is live. Reject a revision change during fetching,
           # rather than reviewing a diff against mismatched metadata or links.
           gh api "repos/$REPO/pulls/$PR_NUMBER" > "$current_metadata_tmp"

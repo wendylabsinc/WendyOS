@@ -132,7 +132,8 @@ def render_comment(result: dict, repo: str, previous: str = "") -> str:
     lines = [
         "# API decisions", "",
         f"Reviewed [{head[:12]}](https://github.com/{repo}/commit/{head}). "
-        f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes; no truncation.",
+        f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes "
+        f"across {result.get('review_batches', 1)} complete batch(es); no truncation.",
         "",
         "Check a box to accept that decision for this revision. New commits reset acceptance. "
         "These checkboxes track API review and do not block merging automatically.",
