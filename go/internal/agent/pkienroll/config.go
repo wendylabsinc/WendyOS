@@ -1,6 +1,9 @@
 package pkienroll
 
 import (
+	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -39,20 +42,36 @@ const (
 	EnvironmentEnv = "WENDY_PKI_ENV"
 )
 
+// ErrPlaintextEndpoint reports a configured frontend URL that would carry the
+// enrollment token, a single-use bearer credential, over cleartext HyperText
+// Transfer Protocol (HTTP) to somewhere other than this machine.
+//
+// It is refused at configuration time rather than at request time so that the
+// enrolment never starts: by the time a request is on the wire the token has
+// already left the device, and a token seen in cleartext must be treated as
+// spent and revoked. Loopback is exempt because a local pki-core, a port
+// forward and the package's own tests all speak plain HTTP to 127.0.0.1, where
+// the packet never reaches a network interface.
+var ErrPlaintextEndpoint = fmt.Errorf("pki enrollment: refusing a plaintext http endpoint")
+
 // CSRFrontendURL resolves the frontend base URL.
 //
 // Precedence, most specific first: an explicit override (the staged credential
 // file's csrEndpoint, then CSREndpointEnv), then the derived host for the named
 // environment. The override wins so that a local pki-core, a staging tenant or
 // a port-forwarded frontend needs no code change.
-func CSRFrontendURL(override, environment string) string {
+//
+// A scheme-less value is given https. An explicit http:// value is accepted
+// only for a loopback host; anything else returns ErrPlaintextEndpoint, so a
+// misconfiguration cannot send the bearer enrolment token in cleartext.
+func CSRFrontendURL(override, environment string) (string, error) {
 	if v := strings.TrimSpace(override); v != "" {
-		return withScheme(v)
+		return checkedScheme(v)
 	}
 	if v := strings.TrimSpace(os.Getenv(CSREndpointEnv)); v != "" {
-		return withScheme(v)
+		return checkedScheme(v)
 	}
-	return withScheme(csrFrontendHost(environment))
+	return checkedScheme(csrFrontendHost(environment))
 }
 
 // csrFrontendHost maps an environment name to a host. An empty environment
@@ -68,11 +87,56 @@ func csrFrontendHost(environment string) string {
 	return ProdCSRFrontendHost
 }
 
+// checkedScheme applies the default scheme and then the plaintext rule.
+func checkedScheme(v string) (string, error) {
+	withDefault := withScheme(v)
+	if err := checkTransport(withDefault); err != nil {
+		return "", err
+	}
+	return withDefault, nil
+}
+
 func withScheme(v string) string {
 	if strings.Contains(v, "://") {
 		return v
 	}
 	return "https://" + v
+}
+
+// checkTransport refuses a cleartext endpoint that is not on this machine. It
+// is deliberately permissive about everything else: an unparseable URL and an
+// unknown scheme are frontendEndpoint's to report, with its own message.
+func checkTransport(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("parsing csr frontend url %q: %w", endpoint, err)
+	}
+	if !strings.EqualFold(u.Scheme, "http") {
+		return nil
+	}
+	if isLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("%w: %q would send the single-use enrollment token in cleartext; "+
+		"use https, or a loopback host (127.0.0.0/8, ::1, localhost) for a local frontend",
+		ErrPlaintextEndpoint, endpoint)
+}
+
+// isLoopbackHost reports whether host names this machine. "localhost" is
+// accepted by name because a local frontend is normally reached that way and
+// resolving it here would make the check depend on the resolver.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 // StagedFileName is the credential file, relative to the agent's config
