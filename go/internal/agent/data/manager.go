@@ -831,6 +831,16 @@ func evictionTier(state string) int {
 	return 2
 }
 
+// BeginDownload pins an episode against quota eviction for as long as its
+// payload is being read, and EndDownload releases that pin. They nest: the
+// count is what enforceQuota consults, so an episode a device download and an
+// upload are both reading survives until the last reader is done.
+//
+// Named for the first caller (DataService.DownloadEpisode), but the contract is
+// "somebody is reading these bytes right now", which is equally true of the
+// transfer worker streaming an episode to the cloud. Every reader must take the
+// pin: an evicted episode's files vanish under an open stream, and the reader
+// then fails with an error naming the file rather than the eviction.
 func (m *Manager) BeginDownload(id string) { m.mu.Lock(); defer m.mu.Unlock(); m.downloads[id]++ }
 func (m *Manager) EndDownload(id string) {
 	m.mu.Lock()
