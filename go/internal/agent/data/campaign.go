@@ -557,6 +557,9 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 		return Campaign{}, err
 	}
 	campaign.DeployedUnixNanos = time.Now().UnixNano()
+	if absent := m.unpublishedROS2Selectors(campaign); len(absent) > 0 {
+		campaign.Warnings = append(campaign.Warnings, "no healthy ROS 2 graph currently publishes these selectors; the campaign still deploys, and a trigger records its other sources and marks the absent one in the episode manifest: "+strings.Join(absent, ", "))
+	}
 	if campaign.BufferDuration() > 0 {
 		for _, source := range campaign.Sources {
 			if source.Audio != "" || source.ROS2 != "" {
@@ -656,10 +659,35 @@ func (m *Manager) Campaigns() ([]Campaign, error) {
 // ROS 2 and telemetry policies are not plumbed because those adapters
 // implement only continuous capture (deployment warns).
 func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string, map[string]*SourceCapture, error) {
+	ids, topics, captures, _, err := m.resolveCampaignSources(campaign, false)
+	return ids, topics, captures, err
+}
+
+// ResolveCampaignSourcesDegrading is ResolveCampaignSources with one selector
+// class downgraded from a failure to a report: a Robot Operating System 2
+// (ROS 2) topic that nobody is publishing at the moment of the trigger.
+//
+// Aborting the whole episode for it was the wrong trade. A ROS 2 node that has
+// not come up yet, or that restarts between triggers, took the camera, the
+// telemetry and the application records of the triggering event down with it,
+// and the operator was left with no episode at all rather than an episode
+// missing one source. The unresolved selectors come back as unhealthy Source
+// entries so the caller can record them in the manifest, where the episode says
+// plainly which source was absent and why.
+func (m *Manager) ResolveCampaignSourcesDegrading(campaign Campaign) ([]string, []string, map[string]*SourceCapture, []Source, error) {
+	return m.resolveCampaignSources(campaign, true)
+}
+
+// ROS2AbsentDetail explains a ROS 2 source entry that names a selector nothing
+// published when the episode opened.
+const ROS2AbsentDetail = "no healthy ROS 2 graph published this selector when the episode was triggered; the episode recorded its other sources"
+
+func (m *Manager) resolveCampaignSources(campaign Campaign, degradeROS2 bool) ([]string, []string, map[string]*SourceCapture, []Source, error) {
 	all := m.Sources(context.Background())
 	selected := map[string]bool{"applications": true}
 	captures := map[string]*SourceCapture{}
 	var topics []string
+	var unresolved []Source
 	for _, requested := range campaign.Sources {
 		switch {
 		case requested.Telemetry:
@@ -668,7 +696,16 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 			topics = append(topics, requested.ROS2)
 			ids, err := resolveROS2Selector(all, requested.ROS2)
 			if err != nil {
-				return nil, nil, nil, err
+				if !degradeROS2 {
+					return nil, nil, nil, nil, err
+				}
+				unresolved = append(unresolved, Source{
+					ID:      ROS2SourcePrefix + strings.TrimPrefix(requested.ROS2, ROS2SourcePrefix),
+					Kind:    "ros2",
+					Healthy: false,
+					Detail:  ROS2AbsentDetail + ": " + err.Error(),
+				})
+				continue
 			}
 			for _, id := range ids {
 				selected[id] = true
@@ -676,7 +713,7 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 		case requested.Camera != "":
 			id, err := resolveCameraSelector(all, requested.Camera)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			selected[id] = true
 			if requested.Capture != nil {
@@ -685,7 +722,7 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 		case requested.Audio != "":
 			id, err := resolveKindSelector(all, "audio", requested.Audio)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			selected[id] = true
 			if requested.Capture != nil {
@@ -699,7 +736,36 @@ func (m *Manager) ResolveCampaignSources(campaign Campaign) ([]string, []string,
 	}
 	sort.Strings(ids)
 	sort.Strings(topics)
-	return ids, topics, captures, nil
+	return ids, topics, captures, unresolved, nil
+}
+
+// ResolveCampaignCameraSources resolves only a campaign's camera selectors,
+// independently of every other selector in the plan.
+//
+// Arming pre-roll needs the camera sources and nothing else, so it must not be
+// held hostage by an unrelated selector: resolving the whole plan meant that one
+// ROS 2 topic that had not been published yet silently disarmed the camera ring
+// for the entire campaign, and the first trigger then opened with no pre-roll at
+// all. An unresolvable camera selector is still an error, because that one names
+// the source arming is about.
+func (m *Manager) ResolveCampaignCameraSources(campaign Campaign) ([]Source, error) {
+	var cameras []Source
+	var all []Source
+	loaded := false
+	for _, requested := range campaign.Sources {
+		if requested.Camera == "" {
+			continue
+		}
+		if !loaded {
+			all, loaded = m.Sources(context.Background()), true
+		}
+		id, err := resolveCameraSelector(all, requested.Camera)
+		if err != nil {
+			return nil, err
+		}
+		cameras = append(cameras, Source{ID: id, Kind: "camera", Capture: requested.Capture})
+	}
+	return cameras, nil
 }
 
 // resolveROS2Selector maps a campaign `ros2:` selector onto discovered source
@@ -821,6 +887,36 @@ func (m *Manager) checkDeployableAudioSources(campaign Campaign) error {
 		return fmt.Errorf("audio source %q does not name a healthy capture source on this device", requested.Audio)
 	}
 	return nil
+}
+
+// unpublishedROS2Selectors names the campaign's ROS 2 selectors that no healthy
+// graph publishes right now.
+//
+// It WARNS where checkDeployableAudioSources refuses, and the asymmetry is
+// deliberate. An audio selector that does not resolve names a capture device
+// that either exists on the board or does not, so deploy is the last moment an
+// operator can be told. A ROS 2 topic is published by a node that legitimately
+// comes and goes: a plan is routinely deployed before the node that publishes
+// its topic is running, so refusing here would make correct plans undeployable.
+// The trigger degrades rather than aborting (see
+// ResolveCampaignSourcesDegrading), so the warning is the operator's early
+// notice, not the last line of defence.
+func (m *Manager) unpublishedROS2Selectors(campaign Campaign) []string {
+	var absent []string
+	var all []Source
+	loaded := false
+	for _, requested := range campaign.Sources {
+		if requested.ROS2 == "" {
+			continue
+		}
+		if !loaded {
+			all, loaded = m.Sources(context.Background()), true
+		}
+		if _, err := resolveROS2Selector(all, requested.ROS2); err != nil {
+			absent = append(absent, strconv.Quote(requested.ROS2))
+		}
+	}
+	return absent
 }
 
 // matchUnhealthySource finds an unhealthy source of the given kind that the

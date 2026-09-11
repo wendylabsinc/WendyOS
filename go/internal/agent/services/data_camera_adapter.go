@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -100,7 +102,7 @@ func (a *cameraDataAdapter) Start(ctx context.Context, session data.CaptureSessi
 				// records this camera from the trigger rather than losing it.
 				capture, err = a.startOne(ctx, session, source, devID)
 			}
-			if errors.Is(err, errCameraHeldExplicitly) {
+			if isCameraCaptureRefusal(err) {
 				group.refused = append(group.refused, data.CaptureResult{
 					SourceID:     source.ID,
 					SourceDetail: strings.TrimSpace(source.Detail + " (not captured: " + err.Error() + ")"),
@@ -116,9 +118,10 @@ func (a *cameraDataAdapter) Start(ctx context.Context, session data.CaptureSessi
 			continue
 		}
 		capture, err := a.startOne(ctx, session, source, devID)
-		if errors.Is(err, errCameraHeldExplicitly) {
+		if isCameraCaptureRefusal(err) {
 			// Another consumer holds this camera at explicitly requested
-			// parameters that conflict with the campaign's. Refusing this one
+			// parameters that conflict with the campaign's, or the camera it
+			// holds did not release in time for the takeover. Refusing this one
 			// source, with the named error in its manifest entry, is the
 			// honest outcome: the episode continues with its other sources and
 			// the manifest says exactly who holds the camera and at what
@@ -272,14 +275,11 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	}
 	mappings, err := os.OpenFile(filepath.Join(dir, "clock_samples.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
-		index.Close()
-		return nil, err
+		return nil, errors.Join(err, index.Close())
 	}
 	hub, subID, frames, achievedW, achievedH, achievedFPS, restarted, err := a.subscribeHub(ctx, src.key, req)
 	if err != nil {
-		index.Close()
-		mappings.Close()
-		return nil, err
+		return nil, errors.Join(err, index.Close(), mappings.Close())
 	}
 	if restarted {
 		notes = append(notes, fmt.Sprintf("campaign capture parameters took over the camera: restarted the producer, previously running at producer-default parameters for parameter-less subscribers, at the requested %s; those subscribers reattached to the new stream",
@@ -294,7 +294,7 @@ func (a *cameraDataAdapter) startOne(ctx context.Context, session data.CaptureSe
 	rejoin := func(ctx context.Context) (*deviceHub, int, chan *videoFrame, error) {
 		return a.video.joinHub(ctx, src.key, &agentpb.StreamVideoRequest{DeviceId: devID})
 	}
-	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, rejoin: rejoin, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
+	c := &cameraCapture{source: source, session: session, dir: dir, hub: hub, subID: subID, frames: frames, rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1), mode: mode, interval: interval.Nanoseconds(), rateCap: rateCap, notes: notes, lastSnapshotIdx: -1}
 	go c.run()
 	select {
 	case err := <-c.ready:
@@ -422,7 +422,23 @@ type cameraCapture struct {
 	rejoin func(ctx context.Context) (*deviceHub, int, chan *videoFrame, error)
 	// carriedDrops accumulates subscriber-channel drops from hub
 	// subscriptions this capture already left when reattaching.
-	carriedDrops       uint64
+	carriedDrops uint64
+	// dropBaseline is the hub drop total already accrued on the subscription
+	// this capture inherited, at the moment it inherited it. Only an armed
+	// capture has one: its subscription was delivering throughout the armed
+	// period, and those drops belong to the armed period rather than to the
+	// episode. Subtracted from the final total in run's teardown.
+	dropBaseline uint64
+	// armedDrops is that same baseline, reported in the manifest as the
+	// source's armed-period drops so the number is separated rather than lost.
+	armedDrops uint64
+	// deathRejoins counts recoveries from a producer that exited under this
+	// capture, bounding how often one episode chases a failing camera.
+	deathRejoins int
+	// logger is the video service's logger, so a mid-episode failure is said
+	// when it happens rather than only appearing in the manifest at Stop. Nil in
+	// unit tests that drive a bare capture.
+	logger             *zap.Logger
 	index, mappingFile *os.File
 	segment            *os.File
 	segmentRel         string
@@ -439,15 +455,20 @@ type cameraCapture struct {
 	runErr             error
 	lastSequence       uint32
 	haveSequence       bool
-	lastMapping        data.MonotonicMappingSample
-	haveMapping        bool
-	mappingNumber      int
-	mappingStart       int64
-	mappingMaxError    int64
-	mappingSamples     uint64
-	mappingSummaries   []data.ClockMapping
-	maxCanonicalError  int64
-	observedDomains    map[string]bool
+	// sawSequence records that this capture observed at least one frame carrying
+	// a valid producer sequence number, at any point in its life. Unlike
+	// haveSequence it is never reset by a producer restart: it decides which of
+	// the two loss accountings the capture result reports (see run's teardown).
+	sawSequence       bool
+	lastMapping       data.MonotonicMappingSample
+	haveMapping       bool
+	mappingNumber     int
+	mappingStart      int64
+	mappingMaxError   int64
+	mappingSamples    uint64
+	mappingSummaries  []data.ClockMapping
+	maxCanonicalError int64
+	observedDomains   map[string]bool
 	// mode is "continuous" or captureModeSnapshot; interval is the snapshot
 	// period in nanoseconds; rateCap is the campaign's continuous-mode capture
 	// rate cap in hertz (0 when uncapped). alignmentKnown records that the
@@ -485,6 +506,18 @@ type cameraCapture struct {
 	// subscribed and producing, so run() reports ready once its pre-roll is
 	// flushed rather than waiting for a first live frame.
 	armed bool
+	// awaitLiveSegmentReset makes the first random-access frame of the LIVE
+	// tail open a fresh segment. Set once the pre-roll has been written: the
+	// flush is a burst of disk work during which the hub may have dropped
+	// frames despite the drain (see drainDuring), so any gap between the
+	// pre-roll and the tail is made to land on a segment boundary rather than
+	// inside a file a decoder reads as one continuous timeline.
+	awaitLiveSegmentReset bool
+	// preRollFlushHook is a test seam over the pre-roll write loop, in the
+	// style of captureReceipt above: it is called after each buffered frame is
+	// written, so a test can make the flush slow enough to prove the live
+	// frames arriving during it are not lost.
+	preRollFlushHook func()
 }
 
 func (c *cameraCapture) receiptNow() (int64, int64, int64, error) {
@@ -535,7 +568,40 @@ func (c *cameraCapture) run() {
 			c.result.ClockDomain = "GSTREAMER_PIPE/AGENT_RECEIPT"
 			c.notes = append([]string{"pipeline PTS unavailable; canonical time uses bounded agent receipt"}, c.notes...)
 		}
+		// One loss model, three cases, and each branch below reports under
+		// exactly one of them:
+		//
+		//   snapshot   the loss unit is an interval that produced no still.
+		//              Discarding frames between intervals is the workflow, so
+		//              subscriber-channel drops are not loss here at all.
+		//   sequenced  the producer's own frame counter is the single witness.
+		//              A frame the hub dropped for this subscriber also leaves
+		//              a gap in that counter, so adding the subscriber total on
+		//              top would report the same lost frame twice.
+		//   neither    the transport carries no sequence numbers, so a hub-side
+		//              drop leaves no trace in the stream and the subscriber
+		//              counter is the only witness there is.
+		//
+		// subscriberDrops is accumulated for every capture but reported only in
+		// the third case. The armed-period baseline is netted out of it once,
+		// here, rather than at each use, so that the episode's drops and the
+		// armed period's drops can never both claim the same frame nor both
+		// disclaim it.
 		subscriberDrops := c.hub.unsubscribe(c.subID) + c.carriedDrops
+		// An armed capture inherited a subscription that had been delivering
+		// since the campaign armed, so its hub drop counter already held the
+		// armed period's losses when the trigger arrived. Those frames were
+		// never candidates for this episode (the ring keeps only the last
+		// `buffer` seconds), so they are reported separately instead of being
+		// folded into the episode's own drop figure. Losses inside the
+		// pre-roll window do reach Drops, through the sequence gaps between
+		// the frames the ring retained; that is the sequenced case above, and
+		// it is why netting the baseline out here loses nothing.
+		subscriberDrops = saturatingSub(subscriberDrops, c.dropBaseline)
+		if c.armed {
+			armed := c.armedDrops
+			c.result.ArmedDrops = &armed
+		}
 		end := int64(0)
 		if _, receipt, _, err := c.receiptNow(); err == nil {
 			end = receipt
@@ -545,13 +611,27 @@ func (c *cameraCapture) run() {
 			// workflow, so subscriber-channel drops are not data loss here;
 			// the honest loss unit is an interval that produced no still.
 			c.finishSnapshotAccounting(end)
-		} else {
-			drops := subscriberDrops
+		} else if c.sawSequence {
+			// The producer's own sequence counter already covers a frame the hub
+			// dropped for this subscriber: the frame was produced, it never
+			// reached the capture, and the next frame that did arrives with a
+			// gap in its sequence. Adding the hub's subscriber-drop counter on
+			// top counted every such frame twice, so a camera that dropped five
+			// frames reported ten. When sequences are available they are the
+			// single loss count, and the accounting label says so.
+			drops := uint64(0)
 			if c.result.Drops != nil {
-				drops += *c.result.Drops
+				drops = *c.result.Drops
 			}
 			c.result.Drops = &drops
-			c.result.DropAccounting = "partial_known_driver_and_subscriber"
+			c.result.DropAccounting = "driver_sequence_gaps_include_subscriber_drops"
+		} else {
+			// No sequence numbers from this transport, so a hub-side drop leaves
+			// no trace in the stream: the subscriber counter is the only loss
+			// signal there is, and it sees only what the hub itself discarded.
+			drops := subscriberDrops
+			c.result.Drops = &drops
+			c.result.DropAccounting = "subscriber_drops_only_no_source_sequence"
 		}
 		c.finishResultDetail(end)
 		c.finishMapping(c.result.Count)
@@ -575,21 +655,39 @@ func (c *cameraCapture) run() {
 	// times before the live loop takes over on the same subscription. An
 	// undecodable leading frame (should not happen: the ring only retains from a
 	// keyframe) is skipped rather than failing the episode.
-	for i := range c.preRoll {
-		if err := c.writeBufferedFrame(c.preRoll[i]); errors.Is(err, errAwaitCameraRandomAccess) {
-			continue
-		} else if err != nil {
+	if len(c.preRoll) > 0 {
+		// The flush is disk work (MkdirAll, OpenFile, per-segment Sync) taking
+		// far longer than a frame interval, and the subscriber channel it is
+		// not reading during that time is four frames deep. Draining it into a
+		// bounded side buffer from a helper goroutine is what keeps the frames
+		// immediately after the trigger, which are the most interesting ones in
+		// the episode, out of the hub's drop counter.
+		drain, err := c.drainDuring(c.flushPreRoll)
+		if err != nil {
 			c.runErr = err
 			c.signalReady(err)
 			return
 		}
-	}
-	c.preRoll = nil
-	// The armed subscription was already producing while the ring filled, so the
-	// capture is ready as soon as its pre-roll is on disk; the live loop then
-	// continues. A never-armed capture leaves preRoll empty and signals ready on
-	// its first live frame below, exactly as before.
-	if c.armed {
+		c.carriedDrops += drain.dropped
+		c.awaitLiveSegmentReset = true
+		// The armed subscription was already producing while the ring filled,
+		// so the capture is ready as soon as its pre-roll is on disk; the live
+		// loop then continues.
+		if c.armed {
+			c.signalReady(nil)
+		}
+		for _, frame := range drain.frames {
+			if err := c.handleFrame(frame); errors.Is(err, errAwaitCameraRandomAccess) {
+				continue
+			} else if err != nil {
+				c.runErr = err
+				c.signalReady(err)
+				return
+			}
+		}
+	} else if c.armed {
+		// An armed capture whose ring held nothing still reports ready here
+		// rather than waiting for a first live frame.
 		c.signalReady(nil)
 	}
 
@@ -613,9 +711,27 @@ func (c *cameraCapture) run() {
 					}
 					continue
 				}
-				c.runErr = errors.New("camera producer stopped")
-				c.signalReady(c.runErr)
-				return
+				// The producer died mid-episode: a GStreamer crash, a USB
+				// disconnect, a camera that faulted. Say so at the moment it
+				// happens rather than letting the episode carry on marked
+				// "recording" with no camera data until Stop, and try to get the
+				// camera back.
+				c.warn("camera capture: producer stopped mid-episode",
+					zap.String("source", c.source.ID),
+					zap.Uint64("frames_captured", c.result.Count))
+				if c.rejoin == nil || c.deathRejoins >= maxCameraProducerRejoins {
+					c.runErr = errors.New("camera producer stopped")
+					c.signalReady(c.runErr)
+					return
+				}
+				if err := c.rejoinAfterProducerDeath(); err != nil {
+					c.warn("camera capture: producer could not be rejoined; the source is failed for the rest of the episode",
+						zap.String("source", c.source.ID), zap.Error(err))
+					c.runErr = fmt.Errorf("camera producer stopped and could not be rejoined: %w", err)
+					c.signalReady(c.runErr)
+					return
+				}
+				continue
 			}
 			if err := c.handleFrame(frame); errors.Is(err, errAwaitCameraRandomAccess) {
 				continue
@@ -627,6 +743,76 @@ func (c *cameraCapture) run() {
 			c.signalReady(nil)
 		}
 	}
+}
+
+// Bounds on recovering from a producer that died mid-episode. Three attempts
+// half a second apart covers a GStreamer pipeline respawn and a camera that
+// re-enumerates, without turning a genuinely unplugged camera into a capture
+// that spins for the rest of the episode.
+const (
+	maxCameraProducerRejoins = 3
+	cameraProducerRejoinWait = 500 * time.Millisecond
+)
+
+// warn logs one line about this capture, if the adapter was given a logger.
+// Unit tests that drive a bare cameraCapture leave it nil.
+func (c *cameraCapture) warn(msg string, fields ...zap.Field) {
+	if c.logger == nil {
+		return
+	}
+	c.logger.Warn(msg, fields...)
+}
+
+// rejoinAfterProducerDeath tries to get the camera back after its producer
+// exited under the capture.
+//
+// What it can and cannot say honestly is the whole point. Rejoining starts a
+// NEW stream, so the recording has a real discontinuity there and the next write
+// opens a fresh segment. How many frames the gap swallowed is not knowable: the
+// producer is gone, its sequence counter restarts, and nothing counted what the
+// camera would have delivered. So the note records the wall time of the gap,
+// which is knowable, and says the frame count is not, instead of publishing a
+// zero that would read as "nothing was lost".
+func (c *cameraCapture) rejoinAfterProducerDeath() error {
+	_, start, _, _ := c.receiptNow()
+	c.carriedDrops += c.hub.unsubscribe(c.subID)
+	c.deathRejoins++
+	var lastErr error
+	for attempt := 1; attempt <= maxCameraProducerRejoins; attempt++ {
+		hub, subID, frames, err := c.rejoin(c.ctx)
+		if err == nil {
+			c.hub, c.subID, c.frames = hub, subID, frames
+			if c.segment != nil {
+				if syncErr := c.segment.Sync(); syncErr != nil {
+					return syncErr
+				}
+				if closeErr := c.segment.Close(); closeErr != nil {
+					return closeErr
+				}
+				c.segment = nil
+			}
+			// Sequence numbering and access-unit alignment are properties of the
+			// producer, so both classifications reset with the new one.
+			c.haveSequence = false
+			c.alignmentKnown = false
+			c.result.Discontinuities++
+			_, end, _, _ := c.receiptNow()
+			c.notes = append(c.notes, fmt.Sprintf(
+				"camera producer stopped mid-episode and was rejoined after %s on attempt %d of %d; the recording has a discontinuity there and continues in a new segment, and the number of frames lost across the gap is not knowable because the producer that would have counted them is the one that died",
+				time.Duration(end-start).Round(time.Millisecond), attempt, maxCameraProducerRejoins))
+			c.warn("camera capture: rejoined the producer after it stopped",
+				zap.String("source", c.source.ID), zap.Int("attempt", attempt),
+				zap.Duration("gap", time.Duration(end-start)))
+			return nil
+		}
+		lastErr = err
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-time.After(cameraProducerRejoinWait):
+		}
+	}
+	return lastErr
 }
 
 // reattachAfterRestart rejoins the device's hub after an explicit-parameter
@@ -692,17 +878,31 @@ func (c *cameraCapture) handleFrame(frame *videoFrame) error {
 
 // canonicalTime stamps one frame on the canonical CLOCK_BOOTTIME episode
 // timeline, maintaining the native-clock mapping segments as a side effect.
+//
+// The receipt bracket is the one the HUB took when it broadcast the frame
+// (frame.receiptBootNanos), not a fresh read taken here. The hub stamps it once
+// so that every consumer of a frame agrees on it, and the pre-roll replay path
+// already uses it; reading the clock again in the adapter made the capture index
+// and the model-input ledger publish two different receipts for the same
+// sample_id, which is exactly the join those two records exist to support. A
+// zero receipt means the hub's clock read failed (or a unit test drove the
+// capture with a bare frame), and only then is a fresh read taken.
 func (c *cameraCapture) canonicalTime(frame *videoFrame) (canonical, uncertainty int64, mappingID string, receipt int64, err error) {
 	if c.observedDomains == nil {
 		c.observedDomains = make(map[string]bool)
 	}
 	c.observedDomains[frame.nativeClock] = true
-	before, receipt, after, err := c.receiptNow()
-	if err != nil {
-		return 0, 0, "", 0, err
+	if frame.receiptBootNanos != 0 {
+		receipt, uncertainty = frame.receiptBootNanos, frame.receiptUncertaintyNanos
+	} else {
+		var before, after int64
+		before, receipt, after, err = c.receiptNow()
+		if err != nil {
+			return 0, 0, "", 0, err
+		}
+		uncertainty = (after - before + 1) / 2
 	}
 	canonical = receipt
-	uncertainty = (after - before + 1) / 2
 	mappingID = "receipt-bracket-v1"
 	if frame.nativeClock == "CLOCK_MONOTONIC_V4L2" {
 		if !c.haveMapping || receipt-c.lastMapping.BootAfterNanos >= int64(time.Second) {
@@ -772,15 +972,47 @@ func (c *cameraCapture) gateGOP(frame *videoFrame, receipt int64) (skip bool) {
 	return c.skipGOP
 }
 
+// trackSequence follows the producer's own frame counter and accumulates the
+// gaps in it as driver-side losses. It must be called for EVERY frame the
+// capture takes off the hub channel that carries a valid sequence, written or
+// deliberately skipped, or a skipped run is later read as a gap.
+func (c *cameraCapture) trackSequence(frame *videoFrame) {
+	if !frame.sequenceValid {
+		return
+	}
+	c.sawSequence = true
+	if c.haveSequence && frame.sequence > c.lastSequence+1 {
+		d := uint64(frame.sequence - c.lastSequence - 1)
+		if c.result.Drops == nil {
+			c.result.Drops = new(uint64)
+		}
+		*c.result.Drops += d
+	}
+	c.lastSequence, c.haveSequence = frame.sequence, true
+}
+
 func (c *cameraCapture) writeFrame(frame *videoFrame) error {
 	canonical, uncertainty, mappingID, receipt, err := c.canonicalTime(frame)
 	if err != nil {
 		return err
 	}
 	if c.rateCap > 0 && c.gateGOP(frame, receipt) {
+		// A group of pictures skipped to honour the rate cap is not a loss, but
+		// its frames still advance the driver's sequence counter. Tracking them
+		// here is what makes that true: the gate used to return before any
+		// sequence bookkeeping, so the next admitted keyframe saw a sequence jump
+		// spanning the whole skipped group and counted every deliberately
+		// discarded frame as a driver drop.
+		c.trackSequence(frame)
 		return nil
 	}
-	if err := c.writeEncodedFrame(frame, canonical, uncertainty, mappingID, receipt, false); err != nil {
+	newStream := false
+	if c.awaitLiveSegmentReset {
+		if _, randomAccess := frameRandomAccess(frame); randomAccess {
+			newStream, c.awaitLiveSegmentReset = true, false
+		}
+	}
+	if err := c.writeEncodedFrame(frame, canonical, uncertainty, mappingID, receipt, newStream); err != nil {
 		return err
 	}
 	if !c.haveRateStart {
@@ -845,18 +1077,11 @@ func (c *cameraCapture) writeEncodedFrame(frame *videoFrame, canonical, uncertai
 		return ioErrShortWrite(n, len(payload))
 	}
 	c.segmentOffset += int64(n)
+	c.trackSequence(frame)
 	var seq *uint32
 	if frame.sequenceValid {
 		v := frame.sequence
 		seq = &v
-		if c.haveSequence && frame.sequence > c.lastSequence+1 {
-			d := uint64(frame.sequence - c.lastSequence - 1)
-			if c.result.Drops == nil {
-				c.result.Drops = new(uint64)
-			}
-			*c.result.Drops += d
-		}
-		c.lastSequence, c.haveSequence = frame.sequence, true
 	}
 	record := cameraIndexRecord{SampleID: frame.sampleID, CanonicalEpisodeNanos: canonical - c.session.RequestBootNanos, CanonicalUncertaintyNanos: uncertainty, NativeTimestampNanos: frame.nativeNs, NativeClockDomain: frame.nativeClock, NativeTimestampFlags: frame.nativeFlags, AgentCaptureRealtimeNanos: frame.tsNs, AgentReceiptBootNanos: receipt, MappingSegment: mappingID, Segment: c.segmentRel, ByteOffset: offset, ByteSize: n, Codec: frame.codec.String(), Sequence: seq}
 	b, _ := json.Marshal(record)

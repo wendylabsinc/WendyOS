@@ -415,6 +415,27 @@ type hubSubscriber struct {
 	// broadcast and the final teardown from touching the channel twice.
 	closed bool
 	err    error
+	// pendingDrops counts frames dropped for this subscriber since the last one
+	// that was successfully queued, and queuedDrops holds, in the same order as
+	// the frames sitting in ch, the drops that immediately preceded each of
+	// them. Together they let a consumer attribute a loss to the frame it
+	// actually preceded.
+	//
+	// Reading the running total when a frame is DEQUEUED cannot do that: ch is
+	// buffered, so a drop that happens while frames are still waiting in it was
+	// charged to whichever frame the consumer happened to pull next, which is up
+	// to a channel depth later than the gap. The total was always exact and no
+	// loss went unreported; only the attribution was wrong, and for a model
+	// input ledger the attribution is the point.
+	//
+	// The queue is bounded by the channel's own capacity. A consumer that never
+	// calls dequeueDrops (a dashboard viewer, episode capture, which account
+	// losses in total instead) would otherwise accumulate one entry per frame
+	// forever; past the bound the counts fold into the newest entry, which for
+	// such a consumer changes nothing, and unreportedDrops still returns the
+	// exact outstanding total.
+	pendingDrops uint64
+	queuedDrops  []uint64
 }
 
 // deviceHub multiplexes one camera producer to multiple gRPC subscribers.
@@ -575,12 +596,48 @@ func (h *deviceHub) wasRestarted() bool {
 }
 
 // drops reports how many frames the hub has dropped for one subscriber so far.
-// A subscriber reads it to turn the running total into a per-sample delta, so a
-// gap in sample identifiers always comes with the count that explains it.
+// It is the running total for the whole subscription; a consumer that needs to
+// attribute a loss to the frame it preceded uses dequeueDrops instead.
 func (h *deviceHub) drops(id int) uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.subDrops[id]
+}
+
+// dequeueDrops reports the frames dropped for this subscriber IMMEDIATELY
+// BEFORE the frame it has just taken off its channel, and consumes that count.
+// It must be called exactly once per frame received, including frames the
+// consumer then discards, or the queue slips against the channel and later
+// frames carry a neighbour's losses.
+func (h *deviceHub) dequeueDrops(id int) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sub := h.subs[id]
+	if sub == nil || len(sub.queuedDrops) == 0 {
+		return 0
+	}
+	drops := sub.queuedDrops[0]
+	sub.queuedDrops = sub.queuedDrops[1:]
+	return drops
+}
+
+// unreportedDrops reports the losses this subscriber has not yet been handed:
+// the drops since the last successfully queued frame plus those still riding on
+// frames left in its channel. A subscription that is about to end carries this
+// total over to its replacement, so a producer restart reports no loss twice and
+// loses none.
+func (h *deviceHub) unreportedDrops(id int) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sub := h.subs[id]
+	if sub == nil {
+		return 0
+	}
+	total := sub.pendingDrops
+	for _, drops := range sub.queuedDrops {
+		total += drops
+	}
+	return total
 }
 
 // terminalErr returns the error recorded by runProducer under h.mu.
@@ -683,8 +740,15 @@ func (h *deviceHub) broadcast(frame *videoFrame) bool {
 		}
 		select {
 		case sub.ch <- frame:
+			if len(sub.queuedDrops) < cap(sub.ch) {
+				sub.queuedDrops = append(sub.queuedDrops, sub.pendingDrops)
+			} else if n := len(sub.queuedDrops); n > 0 {
+				sub.queuedDrops[n-1] += sub.pendingDrops
+			}
+			sub.pendingDrops = 0
 		default:
 			h.subDrops[id]++
+			sub.pendingDrops++
 		}
 	}
 	return true
@@ -1616,6 +1680,24 @@ func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, r
 // the wrapped message names the holder and both parameter sets.
 var errCameraHeldExplicitly = errors.New("camera is held at explicitly requested stream parameters")
 
+// errCameraReleaseTimeout is the named refusal for a capture takeover whose
+// outgoing producer did not release the device within hubTeardownTimeout.
+// Starting the replacement anyway is worse than refusing: the old producer
+// still holds the file descriptor, VIDIOC_S_FMT returns EBUSY, and the
+// replacement hub fails to produce anything at all, so every parameter-less
+// subscriber that reattached to it loses the camera as well as the campaign
+// losing its capture. Refusing costs this one campaign source its clip and
+// leaves the running stream untouched.
+var errCameraReleaseTimeout = errors.New("camera did not release in time for a capture takeover")
+
+// isCameraCaptureRefusal reports whether err is one of the named camera
+// refusals a campaign records in its manifest instead of failing the whole
+// episode. Both mean "this one source was not captured, and here is exactly
+// why"; neither means the episode is broken.
+func isCameraCaptureRefusal(err error) bool {
+	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraReleaseTimeout)
+}
+
 // joinHubForCapture is the episode-capture join. It implements the parameter
 // priority the capture policy promises:
 //
@@ -1765,7 +1847,20 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 			abort()
 			return nil, 0, nil, false, ctx.Err()
 		}
-		s.logger.Warn("timed out waiting for hub teardown before capture takeover", zap.String("device", key))
+		// The old producer still holds the device. Starting the replacement now
+		// would bind nothing (EBUSY on VIDIOC_S_FMT) and take the camera away
+		// from every parameter-less subscriber that reattached to the hub
+		// installed above, so the takeover is abandoned instead: abort() puts
+		// the subscribers back on the "producer stopped" path rather than
+		// leaving them on a hub whose producer will never start, and the
+		// campaign gets a named refusal for its manifest.
+		waitCancel()
+		abort()
+		s.logger.Warn("abandoning capture takeover: camera did not release in time",
+			zap.String("device", key), zap.Duration("waited", hubTeardownTimeout))
+		return nil, 0, nil, false, fmt.Errorf(
+			"%w: %s was still held by the previous producer after %s; refusing to start a replacement that cannot bind the device",
+			errCameraReleaseTimeout, key, hubTeardownTimeout)
 	}
 	waitCancel()
 
@@ -2244,8 +2339,12 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				// sequence parameter sets into it mid-timeline; the client
 				// reconnects and joins the restarted producer as a new stream.
 				if h.wasRestarted() {
-					return status.Errorf(codes.Unavailable,
-						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream")
+					// Machine-readable so a client can tell this apart from
+					// every other Unavailable and rejoin by itself; the CLI's
+					// `camera view` does exactly that.
+					return streamreason.New(codes.Unavailable,
+						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream",
+						streamreason.CameraProducerRestarted, nil)
 				}
 				// If the hub context was cancelled (e.g. service shutdown), propagate that.
 				if err := h.ctx.Err(); err != nil {

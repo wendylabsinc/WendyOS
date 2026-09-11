@@ -102,18 +102,19 @@ type cameraSensorSubscription struct {
 	hub    *deviceHub
 	subID  int
 	frames chan *videoFrame
-	// lastDrops is the hub's drop counter for this subscriber as of the
-	// previously delivered sample, so each sample reports the drops since it.
-	lastDrops uint64
+	// pending accumulates losses no delivered sample has reported yet: the
+	// hub's per-frame drop counts as each frame is taken off the channel, plus
+	// frames the random-access gate skipped. It is handed to the next sample
+	// that is actually delivered and reset there.
+	pending uint64
 	// awaitRandomAccess gates delivery after a reattach: the subscriber's old
 	// stream ended with the restarted producer, and the new one must begin on
 	// a random-access unit so the app decodes from a clean start rather than
 	// from the middle of a group of pictures. This is the subscriber-side
 	// counterpart of the rule episode capture enforces with
-	// errAwaitCameraRandomAccess. Frames skipped by the gate are reported in
-	// gatedSkips so the sample_id gap they leave stays explained.
+	// errAwaitCameraRandomAccess. Frames skipped by the gate are counted into
+	// pending so the sample_id gap they leave stays explained.
 	awaitRandomAccess bool
-	gatedSkips        uint64
 	closed            bool
 }
 
@@ -140,17 +141,19 @@ func (c *cameraSensorSubscription) Next(ctx context.Context) (SensorSample, erro
 				}
 				return SensorSample{}, errSensorProducerStopped
 			}
+			// Taken for EVERY frame off the channel, before any gate can
+			// discard it: the count belongs to this frame's place in the
+			// stream, so skipping the call would shift it onto a later one.
+			c.pending += c.hub.dequeueDrops(c.subID)
 			if c.awaitRandomAccess && frame.auAligned {
 				if _, randomAccess := frameRandomAccess(frame); !randomAccess {
-					c.gatedSkips++
+					c.pending++
 					continue
 				}
 			}
 			c.awaitRandomAccess = false
-			drops := c.hub.drops(c.subID)
-			delta := drops - c.lastDrops + c.gatedSkips
-			c.lastDrops = drops
-			c.gatedSkips = 0
+			delta := c.pending
+			c.pending = 0
 			return SensorSample{
 				SampleID:         frame.sampleID,
 				BootNanos:        frame.receiptBootNanos,
@@ -165,20 +168,20 @@ func (c *cameraSensorSubscription) Next(ctx context.Context) (SensorSample, erro
 }
 
 // reattach joins the replacement hub after a capture takeover, again asserting
-// no parameters. The hub-side drop counter starts at zero on the new
-// subscription, and delivery is gated to a random-access unit so the app's new
-// stream starts decodable. Drops the old subscription accrued after the last
-// delivered sample can no longer ride on a sample of their own, so they are
-// carried into gatedSkips and reported on the first sample the new
-// subscription delivers; the restart leaves no loss unreported.
+// no parameters. The new subscription starts with an empty drop queue, and
+// delivery is gated to a random-access unit so the app's new stream starts
+// decodable. Losses the old subscription never got to report can no longer ride
+// on a sample of their own, so they are carried into pending and reported on the
+// first sample the new subscription delivers; the restart leaves no loss
+// unreported.
 func (c *cameraSensorSubscription) reattach(ctx context.Context) error {
-	c.gatedSkips += c.hub.unsubscribe(c.subID) - c.lastDrops
+	c.pending += c.hub.unreportedDrops(c.subID)
+	c.hub.unsubscribe(c.subID)
 	hub, subID, frames, err := c.video.joinHub(ctx, c.key, &agentpb.StreamVideoRequest{DeviceId: c.devID})
 	if err != nil {
 		return err
 	}
 	c.hub, c.subID, c.frames = hub, subID, frames
-	c.lastDrops = 0
 	c.awaitRandomAccess = true
 	return nil
 }

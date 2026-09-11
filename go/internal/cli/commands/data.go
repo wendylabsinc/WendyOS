@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,7 +18,45 @@ import (
 
 	"github.com/spf13/cobra"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
+
+// encodeProtoJSON writes one protocol buffer message as canonical protobuf
+// JSON and is the single --json dialect of every "wendy data" subcommand whose
+// payload is a protocol buffer message. The dialect is: protocol buffer field
+// names exactly as the .proto declares them (snake_case, not lowerCamelCase),
+// unpopulated fields omitted, one compact line per message.
+//
+// It is used everywhere rather than encoding/json on the generated struct
+// because the two disagree on the wire: encoding/json renders enums as their
+// numbers and has no defined mapping for well-known types, while protobuf JSON
+// is the mapping the protocol itself specifies, so a script can read the output
+// of any subcommand the same way.
+//
+// The one deliberate exception is a payload that is ALREADY JSON produced
+// elsewhere: the campaign plan (DataCampaign.plan_json) and the episode
+// manifest (DataInspectResponse.manifest_json) are byte fields carrying a
+// document the device sealed. Those bytes are written through untouched,
+// because re-encoding them would lose the byte fidelity that makes them
+// checkable against the device.
+//
+// protojson varies its whitespace deliberately between runs, so the result is
+// compacted before it is written; without that no two invocations of the same
+// command agree byte for byte.
+func encodeProtoJSON(out io.Writer, message proto.Message) error {
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(message)
+	if err != nil {
+		return err
+	}
+	var compact bytes.Buffer
+	if err = json.Compact(&compact, raw); err != nil {
+		return err
+	}
+	compact.WriteByte('\n')
+	_, err = out.Write(compact.Bytes())
+	return err
+}
 
 func newDataCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "data", Short: "Record and retrieve synchronized device data"}
@@ -63,7 +102,7 @@ func newDataCampaignListCmd() *cobra.Command {
 				return err
 			}
 			if jsonOutput {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(response)
+				return encodeProtoJSON(cmd.OutOrStdout(), response)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "CAMPAIGN\tSTATE\tREVISION\tFLEET")
 			for _, campaign := range response.GetCampaigns() {
@@ -152,9 +191,9 @@ const sourceKindFloodLimit = 6
 // filtered set, which is what the caller asked for.
 func encodeDataSourcesJSON(out io.Writer, response *agentpbv2.DataSourcesResponse, wanted []string) error {
 	if len(wanted) == 0 {
-		return json.NewEncoder(out).Encode(response)
+		return encodeProtoJSON(out, response)
 	}
-	return json.NewEncoder(out).Encode(&agentpbv2.DataSourcesResponse{Sources: filterSourcesByKind(response.GetSources(), wanted)})
+	return encodeProtoJSON(out, &agentpbv2.DataSourcesResponse{Sources: filterSourcesByKind(response.GetSources(), wanted)})
 }
 
 func normalizeSourceKinds(kinds []string) []string {
@@ -356,7 +395,7 @@ func newDataEpisodesCmd() *cobra.Command {
 				return e
 			}
 			if jsonOutput {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(r)
+				return encodeProtoJSON(cmd.OutOrStdout(), r)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "EPISODE\tSTATE\tSIZE\tNAME")
 			for _, x := range r.GetEpisodes() {
@@ -506,16 +545,42 @@ type downloadManifest struct {
 	} `json:"files"`
 }
 
+// downloadDestination resolves the destination directory and the staging
+// directory that is renamed onto it once every file verifies.
+//
+// The destination is cleaned first. filepath.Clean strips a trailing separator,
+// so "-o ./ep/" stages at "./ep.partial" NEXT TO the destination rather than at
+// "./ep/.partial" INSIDE it. Without the clean, os.MkdirAll created the
+// destination as a side effect of creating the staging directory, the final
+// rename failed with ENOTEMPTY because the destination then held the staging
+// directory, and every re-run refused with "destination already exists".
+func downloadDestination(id, output string) (destination, stage string) {
+	if output == "" {
+		output = id
+	}
+	destination = filepath.Clean(output)
+	return destination, destination + ".partial"
+}
+
+// dataDownloadResult is the --json payload of "wendy data download". Unlike
+// every other data subcommand this one reports what it wrote to the local
+// filesystem, which no wire message describes, so it is a command-shaped struct
+// rather than a protocol buffer message. Paths are relative to destination and
+// include the manifest the command writes itself; bytes is the total written.
+type dataDownloadResult struct {
+	Episode     string   `json:"episode"`
+	Destination string   `json:"destination"`
+	Files       []string `json:"files"`
+	Bytes       int64    `json:"bytes"`
+}
+
 func newDataDownloadCmd() *cobra.Command {
 	var output string
 	c := &cobra.Command{Use: "download <episode>", Short: "Resume and verify an episode download", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		id := args[0]
-		if output == "" {
-			output = id
-		}
-		stage := output + ".partial"
-		if _, e := os.Stat(output); e == nil {
-			return fmt.Errorf("destination already exists: %s", output)
+		destination, stage := downloadDestination(id, output)
+		if _, e := os.Stat(destination); e == nil {
+			return fmt.Errorf("destination already exists: %s", destination)
 		}
 		return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
 			inspect, e := client.Inspect(cmd.Context(), &agentpbv2.DataInspectRequest{Episode: id})
@@ -529,18 +594,26 @@ func newDataDownloadCmd() *cobra.Command {
 			if e = os.MkdirAll(stage, 0o750); e != nil {
 				return e
 			}
+			result := dataDownloadResult{Episode: id, Destination: destination}
 			for _, meta := range mf.Files {
 				if e = downloadOne(cmd.Context(), client, id, stage, meta.Path, meta.Size, meta.SHA256); e != nil {
 					return e
 				}
+				result.Files = append(result.Files, meta.Path)
+				result.Bytes += meta.Size
 			}
 			if e = os.WriteFile(filepath.Join(stage, "manifest.json"), inspect.GetManifestJson(), 0o640); e != nil {
 				return e
 			}
-			if e = os.Rename(stage, output); e != nil {
+			result.Files = append(result.Files, "manifest.json")
+			result.Bytes += int64(len(inspect.GetManifestJson()))
+			if e = os.Rename(stage, destination); e != nil {
 				return e
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Downloaded %s to %s\n", id, output)
+			if jsonOutput {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Downloaded %s to %s\n", id, destination)
 			return nil
 		})
 	}}
@@ -587,7 +660,7 @@ func downloadOne(ctx context.Context, c agentpbv2.DataServiceClient, id, root, r
 	}
 	offset := st.Size()
 	if offset > size {
-		return fmt.Errorf("staged file %s is larger than manifest", rel)
+		return discardStagedFile(f, p, fmt.Errorf("staged file for %s holds %d bytes but the manifest declares %d", rel, offset, size))
 	}
 	if _, e = f.Seek(offset, io.SeekStart); e != nil {
 		return e
@@ -621,8 +694,16 @@ func downloadOne(ctx context.Context, c agentpbv2.DataServiceClient, id, root, r
 	if e = f.Sync(); e != nil {
 		return e
 	}
+	if offset > size {
+		// The device sent past the declared end. Nothing about the file can be
+		// trusted, and the surplus would wedge the next run's resume, so drop it.
+		return discardStagedFile(f, p, fmt.Errorf("device sent %d bytes for %s but the manifest declares %d", offset, rel, size))
+	}
 	if offset != size {
-		return fmt.Errorf("downloaded size mismatch for %s", rel)
+		// Short of the declared size but consistent with it: the stream ended
+		// early. Those bytes are good, and the next run resumes from them, so
+		// they are kept deliberately.
+		return fmt.Errorf("download of %s ended at %d of %d bytes; re-run to resume from the staged file %s", rel, offset, size, p)
 	}
 	if _, e = f.Seek(0, io.SeekStart); e != nil {
 		return e
@@ -631,15 +712,32 @@ func downloadOne(ctx context.Context, c agentpbv2.DataServiceClient, id, root, r
 	if _, e = io.Copy(h, f); e != nil {
 		return e
 	}
-	if hex.EncodeToString(h.Sum(nil)) != wantHash {
-		return fmt.Errorf("checksum mismatch for %s", rel)
+	if got := hex.EncodeToString(h.Sum(nil)); got != wantHash {
+		return discardStagedFile(f, p, fmt.Errorf("checksum mismatch for %s: got %s, manifest declares %s", rel, got, wantHash))
 	}
 	return nil
 }
 
+// discardStagedFile truncates a staged file that cannot be resumed and returns
+// an error naming both the cause and the staged path.
+//
+// Resume starts from the staged file's own size (see downloadOne), so a staged
+// file that is already the full size with the wrong contents, or longer than
+// the manifest declares, is not a transient failure: every later run reads the
+// same size, asks for no bytes, and fails the same way. Truncating to zero is
+// what makes the next run refetch the file. The path is named because the file
+// lives under a ".partial" sibling of the destination that the user never asked
+// for by name and would otherwise have to guess at.
+func discardStagedFile(f *os.File, path string, cause error) error {
+	if err := f.Truncate(0); err != nil {
+		return fmt.Errorf("%w; the staged file %s could not be discarded (%v), so remove it by hand before retrying", cause, path, err)
+	}
+	return fmt.Errorf("%w; discarded the staged file %s, so a re-run refetches it", cause, path)
+}
+
 func printEpisode(cmd *cobra.Command, e *agentpbv2.DataEpisode) error {
 	if jsonOutput {
-		return json.NewEncoder(cmd.OutOrStdout()).Encode(e)
+		return encodeProtoJSON(cmd.OutOrStdout(), e)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Episode %s: %s\n", e.GetId(), e.GetState())
 	return nil

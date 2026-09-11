@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -549,5 +550,243 @@ func TestDeviceHubCountsSubscriberDrops(t *testing.T) {
 	}
 	if got := hub.unsubscribe(id); got != 2 {
 		t.Fatalf("drops = %d, want 2", got)
+	}
+}
+
+// testSequencedFrame is a native V4L2 frame carrying the driver's own frame
+// counter, which is what makes a loss visible in the stream itself.
+func testSequencedFrame(payload []byte, sequence uint32) *videoFrame {
+	frame := testH264Frame(payload)
+	frame.sequence, frame.sequenceValid = sequence, true
+	return frame
+}
+
+// TestCaptureCountsAHubDropOnceNotTwice pins the double count out of the
+// manifest. A frame the hub dropped for this subscriber is one loss with two
+// witnesses: the hub's own subscriber counter, and the gap it leaves in the
+// driver's sequence numbers. Adding both reported every such frame twice, so a
+// camera that lost five frames claimed to have lost ten.
+func TestCaptureCountsAHubDropOnceNotTwice(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := &deviceHub{subs: make(map[int]*hubSubscriber), subDrops: make(map[int]uint64), ctx: ctx, cancel: cancel}
+	subID, frames, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clock := &fakeReceipt{}
+	c := newTestCameraCapture(t, clock)
+	c.hub, c.subID, c.frames = hub, subID, frames
+	c.ctx, c.cancel = ctx, cancel
+	c.done, c.ready = make(chan struct{}), make(chan error, 1)
+	c.lastSnapshotIdx = -1
+	go c.run()
+
+	// Sequences 1..6, with 5 dropped by the hub while the capture was busy. One
+	// frame was produced and lost: the answer is 1, from either witness.
+	for _, seq := range []uint32{1, 2, 3, 4} {
+		if !hub.broadcast(testSequencedFrame(testRAUFrame, seq)) {
+			t.Fatal("broadcast reported no subscribers")
+		}
+		waitForCaptureCount(t, c, int(seq))
+	}
+	hub.mu.Lock()
+	hub.subDrops[subID]++
+	hub.subs[subID].pendingDrops++
+	hub.mu.Unlock()
+	if !hub.broadcast(testSequencedFrame(testRAUFrame, 6)) {
+		t.Fatal("broadcast reported no subscribers")
+	}
+	waitForCaptureCount(t, c, 5)
+
+	results, err := c.Stop(context.Background())
+	if err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if len(results) != 1 || results[0].Drops == nil {
+		t.Fatalf("results = %+v", results)
+	}
+	if *results[0].Drops != 1 {
+		t.Fatalf("drops = %d, want 1: the hub drop and the sequence gap are the same lost frame", *results[0].Drops)
+	}
+	if results[0].DropAccounting != "driver_sequence_gaps_include_subscriber_drops" {
+		t.Fatalf("drop accounting = %q, want the label that says which witness was counted", results[0].DropAccounting)
+	}
+}
+
+// waitForCaptureCount blocks until the capture has written n index entries.
+// It counts lines in index.jsonl rather than reading c.result.Count, which the
+// capture goroutine owns.
+func waitForCaptureCount(t *testing.T, c *cameraCapture, n int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	written := 0
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(filepath.Join(c.dir, "index.jsonl"))
+		if err == nil {
+			written = len(bytes.Split(bytes.TrimSpace(raw), []byte("\n")))
+			if len(bytes.TrimSpace(raw)) == 0 {
+				written = 0
+			}
+			if written >= n {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("capture wrote %d index entries, waited for %d", written, n)
+}
+
+// TestRateCappedGOPsDoNotCountAsDriverDrops pins the sequence bookkeeping the
+// rate-cap gate used to skip. A group of pictures dropped to honour the cap is a
+// deliberate choice, not a loss, but its frames still advance the driver's
+// counter: returning before the sequence was tracked made the next admitted
+// keyframe read the whole skipped group as a gap and report it as driver drops,
+// contradicting the gate's own comment.
+func TestRateCappedGOPsDoNotCountAsDriverDrops(t *testing.T) {
+	clock := &fakeReceipt{}
+	c := newTestCameraCapture(t, clock)
+	c.rateCap = 1 // hertz
+
+	// Sequences 1..5. The first group (1, 2) is admitted, the second (3, 4) is
+	// over the cap and skipped, and 5 is back under it.
+	script := []struct {
+		at       time.Duration
+		payload  []byte
+		sequence uint32
+	}{
+		{0, testRAUFrame, 1},
+		{100 * time.Millisecond, testInterFrame, 2},
+		{250 * time.Millisecond, testRAUFrame, 3},
+		{300 * time.Millisecond, testInterFrame, 4},
+		{2 * time.Second, testRAUFrame, 5},
+	}
+	for _, step := range script {
+		clock.now = int64(step.at)
+		if err := c.handleFrame(testSequencedFrame(step.payload, step.sequence)); err != nil {
+			t.Fatalf("frame %d: %v", step.sequence, err)
+		}
+	}
+	if c.result.Count != 3 {
+		t.Fatalf("wrote %d frames, want 3 (the skipped group is 2 frames)", c.result.Count)
+	}
+	if c.result.Drops != nil && *c.result.Drops != 0 {
+		t.Fatalf("drops = %d, want 0: a rate-capped group is not a loss", *c.result.Drops)
+	}
+}
+
+// TestFrameReceiptComesFromTheHubNotAFreshClockRead pins the join between the
+// capture index and the model-input ledger. The hub stamps a frame's receipt
+// once at broadcast so every consumer of that frame agrees on it; reading the
+// clock again in the adapter published two different receipts for one sample_id,
+// which is exactly the correlation the ledger exists to support.
+func TestFrameReceiptComesFromTheHubNotAFreshClockRead(t *testing.T) {
+	clock := &fakeReceipt{now: 9 * int64(time.Second)}
+	c := newTestCameraCapture(t, clock)
+
+	frame := testH264Frame(testRAUFrame)
+	frame.sampleID = 42
+	frame.receiptBootNanos = 3 * int64(time.Second)
+	frame.receiptUncertaintyNanos = 1234
+	if err := c.handleFrame(frame); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.index.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(c.dir, "index.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record cameraIndexRecord
+	if err := json.Unmarshal(bytes.TrimSpace(contents), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.AgentReceiptBootNanos != frame.receiptBootNanos {
+		t.Fatalf("index receipt = %d, want the hub's %d", record.AgentReceiptBootNanos, frame.receiptBootNanos)
+	}
+	if record.CanonicalEpisodeNanos != frame.receiptBootNanos {
+		t.Fatalf("canonical time = %d, want the hub receipt %d", record.CanonicalEpisodeNanos, frame.receiptBootNanos)
+	}
+	if record.CanonicalUncertaintyNanos != frame.receiptUncertaintyNanos {
+		t.Fatalf("uncertainty = %d, want the hub bracket %d", record.CanonicalUncertaintyNanos, frame.receiptUncertaintyNanos)
+	}
+}
+
+// TestCaptureRejoinsAfterTheProducerDies pins recovery from a producer that
+// exits mid-episode (a GStreamer crash, a camera unplugged and replugged). The
+// capture used to record a run error and stop, silently: no log, no rejoin, and
+// an episode that stayed "recording" with no camera data until Stop finally said
+// interrupted. It now rejoins and says in the manifest that the recording has a
+// discontinuity whose frame cost is not knowable.
+func TestCaptureRejoinsAfterTheProducerDies(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first, firstCancel := context.WithCancel(context.Background())
+	defer firstCancel()
+	deadHub := &deviceHub{subs: make(map[int]*hubSubscriber), subDrops: make(map[int]uint64), ctx: first, cancel: firstCancel}
+	subID, frames, err := deadHub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondCancel := context.WithCancel(context.Background())
+	defer secondCancel()
+	liveHub := &deviceHub{subs: make(map[int]*hubSubscriber), subDrops: make(map[int]uint64), ctx: second, cancel: secondCancel}
+
+	clock := &fakeReceipt{}
+	c := newTestCameraCapture(t, clock)
+	c.hub, c.subID, c.frames = deadHub, subID, frames
+	c.ctx, c.cancel = ctx, cancel
+	c.done, c.ready = make(chan struct{}), make(chan error, 1)
+	var rejoins atomic.Int64
+	c.rejoin = func(context.Context) (*deviceHub, int, chan *videoFrame, error) {
+		rejoins.Add(1)
+		id, ch, joinErr := liveHub.subscribe()
+		return liveHub, id, ch, joinErr
+	}
+	go c.run()
+
+	if !deadHub.broadcast(testH264Frame(testRAUFrame)) {
+		t.Fatal("broadcast reported no subscribers")
+	}
+	waitForCaptureCount(t, c, 1)
+
+	// The producer dies: the hub closes its subscriber channels with no terminal
+	// error and no takeover marker, which is exactly what a crashed producer
+	// leaves behind.
+	deadHub.mu.Lock()
+	for _, sub := range deadHub.subs {
+		if !sub.closed {
+			sub.closed = true
+			close(sub.ch)
+		}
+	}
+	deadHub.mu.Unlock()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for rejoins.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if rejoins.Load() == 0 {
+		t.Fatal("the capture never tried to rejoin after its producer died")
+	}
+	if !liveHub.broadcast(testH264Frame(testRAUFrame)) {
+		t.Fatal("replacement hub reported no subscribers")
+	}
+	waitForCaptureCount(t, c, 2)
+
+	results, err := c.Stop(context.Background())
+	if err != nil {
+		t.Fatalf("stop: %v; a rejoined capture must not fail the episode", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %+v", results)
+	}
+	if results[0].Discontinuities != 1 {
+		t.Fatalf("discontinuities = %d, want 1", results[0].Discontinuities)
+	}
+	if !strings.Contains(results[0].SourceDetail, "rejoined") || !strings.Contains(results[0].SourceDetail, "not knowable") {
+		t.Fatalf("source detail %q does not record the gap honestly", results[0].SourceDetail)
 	}
 }

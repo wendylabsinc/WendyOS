@@ -553,6 +553,12 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 		}
 		manifest.Sources = append(manifest.Sources, SourceStats{Source: s, RequestedOffset: requestedOffset, DropAccounting: "unavailable"})
 	}
+	// Sources the plan named and the device could not resolve are recorded as
+	// present-in-the-plan, absent-in-the-episode rather than omitted, so a
+	// degraded episode never reads as one that was never asked for them.
+	for _, s := range opts.UnresolvedSources {
+		manifest.Sources = append(manifest.Sources, SourceStats{Source: s, DropAccounting: "source_absent_at_trigger"})
+	}
 	for source, contents := range opts.Calibrations {
 		name := safeName(source) + ".calibration"
 		p := filepath.Join(dir, name)
@@ -706,6 +712,7 @@ func (m *Manager) ApplyCaptureResults(key string, results []CaptureResult) error
 			}
 			stats.Count = result.Count
 			stats.Drops = result.Drops
+			stats.ArmedDrops = result.ArmedDrops
 			if result.DropAccounting != "" {
 				stats.DropAccounting = result.DropAccounting
 			}

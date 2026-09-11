@@ -2,7 +2,6 @@ package commands
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -244,13 +243,14 @@ func TestWriteDataSourcesFloodKeepsOtherKinds(t *testing.T) {
 	}
 }
 
-// --json without --kind must stay byte-for-byte the full proto encoding,
-// because scripts consume it.
+// --json without --kind must stay the full response the device sent, in the
+// canonical protobuf JSON dialect every data subcommand emits, because scripts
+// consume it.
 func TestDataSourcesJSONUnchangedWithoutKind(t *testing.T) {
 	response := &agentpbv2.DataSourcesResponse{Sources: orinNanoSources()}
 
 	var want bytes.Buffer
-	if err := json.NewEncoder(&want).Encode(response); err != nil {
+	if err := encodeProtoJSON(&want, response); err != nil {
 		t.Fatalf("encode: %v", err)
 	}
 

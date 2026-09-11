@@ -267,3 +267,222 @@ func TestArmedCampaignFlushesPreRollOnTrigger(t *testing.T) {
 		t.Fatal("no index entry carries a before-trigger canonical time with a real sample id")
 	}
 }
+
+// The pre-roll flush is disk work far longer than a frame interval, and the
+// live hub subscription it inherits is four frames deep. Before the drain, the
+// frames arriving during the flush, which are the most interesting ones in the
+// episode, were dropped by the hub and the tail resumed mid group of pictures.
+func TestPreRollFlushLosesNoFramesWhileWriting(t *testing.T) {
+	const preRollFrames = 4
+	const liveFrames = 12
+
+	video := NewVideoService(context.Background(), zap.NewNop())
+	hub, _ := newDefaultHub(t, video, "/dev/video0")
+	subID, frames, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	trigger := int64(10 * time.Second)
+	c := newTestCameraCapture(t, &fakeReceipt{now: trigger})
+	c.session = data.CaptureSession{RequestBootNanos: trigger}
+	c.hub, c.subID, c.frames = hub, subID, frames
+	c.armed, c.mode = true, "continuous"
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+	c.done, c.ready = make(chan struct{}), make(chan error, 1)
+	for i := 0; i < preRollFrames; i++ {
+		c.preRoll = append(c.preRoll, bufferedCameraFrame{
+			frame:        preRollFrame(trigger-int64(preRollFrames-i)*100*ms, uint64(i+1), i == 0),
+			randomAccess: i == 0,
+			resetSegment: i == 0,
+		})
+	}
+
+	// The producer keeps delivering at a steady rate throughout the flush, and
+	// each written pre-roll frame takes long enough for several of them to
+	// arrive: without a reader on the channel the four-deep buffer overflows.
+	produced := make(chan struct{})
+	c.preRollFlushHook = func() { time.Sleep(20 * time.Millisecond) }
+	go func() {
+		defer close(produced)
+		for i := 0; i < liveFrames; i++ {
+			payload := testInterFrame
+			if i%4 == 0 {
+				payload = testRAUFrame
+			}
+			hub.produce(testH264Frame(payload))
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	go c.run()
+	if err := <-c.ready; err != nil {
+		t.Fatalf("capture never became ready: %v", err)
+	}
+	<-produced
+	// Let the live loop drain whatever is still queued, then stop.
+	time.Sleep(100 * time.Millisecond)
+	c.cancel()
+	<-c.done
+
+	// The capture's teardown has already unsubscribed, so the hub's own
+	// counter is gone; the figure that survives is the one the manifest would
+	// carry.
+	if c.result.Drops == nil || *c.result.Drops != 0 {
+		t.Fatalf("capture reports %d drops; the drain must lose no frame during the flush", *c.result.Drops)
+	}
+	if c.result.Count < preRollFrames+liveFrames {
+		t.Fatalf("wrote %d frames, want at least the %d pre-roll plus %d live ones",
+			c.result.Count, preRollFrames, liveFrames)
+	}
+}
+
+// Any gap the flush could not avoid must land on a segment boundary rather
+// than inside a file a decoder reads as one continuous timeline.
+func TestLiveTailAfterPreRollOpensANewSegmentAtTheNextKeyframe(t *testing.T) {
+	trigger := int64(10 * time.Second)
+	clock := &fakeReceipt{now: trigger}
+	c := newTestCameraCapture(t, clock)
+	c.session = data.CaptureSession{RequestBootNanos: trigger}
+	c.mode = "continuous"
+
+	c.preRoll = []bufferedCameraFrame{
+		{frame: preRollFrame(trigger-200*ms, 1, true), randomAccess: true, resetSegment: true},
+		{frame: preRollFrame(trigger-100*ms, 2, false)},
+	}
+	if err := c.flushPreRoll(); err != nil {
+		t.Fatal(err)
+	}
+	preRollSegment := c.segmentRel
+	c.awaitLiveSegmentReset = true
+
+	// An inter frame stays in the pre-roll's segment: rotating here would
+	// leave a file no decoder can open.
+	clock.now = trigger + 50*ms
+	if err := c.handleFrame(testH264Frame(testInterFrame)); err != nil {
+		t.Fatal(err)
+	}
+	if c.segmentRel != preRollSegment {
+		t.Fatal("the live tail rotated the segment on an inter frame")
+	}
+	// The first live keyframe opens the new one.
+	clock.now = trigger + 100*ms
+	if err := c.handleFrame(testH264Frame(testRAUFrame)); err != nil {
+		t.Fatal(err)
+	}
+	if c.segmentRel == preRollSegment {
+		t.Fatal("the first live keyframe after the flush did not open a new segment")
+	}
+	if c.awaitLiveSegmentReset {
+		t.Fatal("the pending reset was not cleared, so every later keyframe would rotate too")
+	}
+}
+
+// A producer emitting one very long group of pictures gives the ring no
+// keyframe boundary to trim at, so the byte cap must be enforced by starting
+// over rather than by letting the ring grow without bound.
+func TestPreRollRingRestartsWhenOneGOPExceedsTheByteCap(t *testing.T) {
+	const cap = 4096
+	r := &cameraPreRollRing{buffer: time.Second, limitBytes: cap}
+	big := func(receipt int64, id uint64, key bool) *videoFrame {
+		f := preRollFrame(receipt, id, key)
+		f.data = append(append([]byte(nil), f.data...), make([]byte, 1024)...)
+		return f
+	}
+	r.add(big(0, 1, true))
+	for i := 1; i <= 40; i++ {
+		r.add(big(int64(i)*10*ms, uint64(i+1), false))
+		if r.bytes > cap+1024 {
+			t.Fatalf("ring holds %d bytes after %d keyframe-free frames, above the %d cap", r.bytes, i, cap)
+		}
+	}
+	if !r.droppedForBytes {
+		t.Fatal("the ring did not report that the byte cap bounded it")
+	}
+	// After the restart the ring waits for a keyframe and opens a new stream.
+	r.add(big(500*ms, 100, false))
+	if len(r.frames) != 0 {
+		t.Fatal("the restarted ring retained an inter frame before its next keyframe")
+	}
+	r.add(big(600*ms, 101, true))
+	if len(r.frames) != 1 || !r.frames[0].resetSegment {
+		t.Fatalf("the restarted ring did not begin a new stream on its next keyframe: %+v", r.frames)
+	}
+}
+
+// A mid-arm producer restart must not lose the drops it had already counted,
+// and the armed period's drops must be reported apart from the episode's own.
+func TestArmedDropsAreCarriedAndReportedSeparately(t *testing.T) {
+	video := NewVideoService(context.Background(), zap.NewNop())
+	hub, _ := newDefaultHub(t, video, "/dev/video0")
+	adapter := &cameraDataAdapter{video: video}
+	source := data.Source{ID: "v4l2:/dev/video0", Kind: "camera"}
+
+	adapter.Arm("cam", 5*time.Second, []data.Source{source})
+	adapter.armedMu.Lock()
+	armed := adapter.armed["cam"][source.ID]
+	adapter.armedMu.Unlock()
+	if armed == nil {
+		t.Fatal("the campaign armed no source")
+	}
+	// Stand in for a long armed period during which the hub fell behind.
+	const armedPeriodDrops = 7
+	hub.mu.Lock()
+	hub.subDrops[armed.subID] += armedPeriodDrops
+	hub.mu.Unlock()
+
+	_, origin, _, err := data.CaptureReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := data.CaptureSession{Directory: t.TempDir(), RequestBootNanos: origin, CampaignKey: "cam"}
+	// One keyframe so the ring holds something to flush.
+	hub.produce(testH264Frame(testRAUFrame))
+	time.Sleep(20 * time.Millisecond)
+
+	capture, err := adapter.Start(context.Background(), session, []data.Source{source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := capture.Stop(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %d, want 1", len(results))
+	}
+	res := results[0]
+	if res.ArmedDrops == nil || *res.ArmedDrops != armedPeriodDrops {
+		t.Fatalf("armed-period drops = %v, want %d reported separately", res.ArmedDrops, armedPeriodDrops)
+	}
+	if res.Drops == nil || *res.Drops != 0 {
+		t.Fatalf("episode drops = %v, want 0: the armed period's losses are not the episode's", res.Drops)
+	}
+}
+
+// A reattach during arming must keep the count it had already accumulated
+// rather than zeroing it the moment after adding to it.
+func TestArmedSourceKeepsDropsAcrossAReattach(t *testing.T) {
+	video := NewVideoService(context.Background(), zap.NewNop())
+	hub, _ := newDefaultHub(t, video, "/dev/video0")
+	subID, frames, err := hub.subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.mu.Lock()
+	hub.subDrops[subID] += 3
+	hub.mu.Unlock()
+
+	a := &armedCameraSource{
+		video: video, source: data.Source{ID: "v4l2:/dev/video0"}, key: "/dev/video0",
+		devID: 0, buffer: time.Second, hub: hub, subID: subID, frames: frames, alive: true,
+		ring: &cameraPreRollRing{buffer: time.Second, limitBytes: preRollCameraLimitBytes},
+	}
+	if err := a.reattach(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if a.carriedDrops != 3 {
+		t.Fatalf("carried drops = %d, want the 3 the left subscription had counted", a.carriedDrops)
+	}
+	a.hub.unsubscribe(a.subID)
+}

@@ -8,7 +8,15 @@ import (
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
+
+// observedLogger returns a logger whose entries a test can read back.
+func observedLogger() (*zap.Logger, *observer.ObservedLogs) {
+	core, logs := observer.New(zapcore.WarnLevel)
+	return zap.New(core), logs
+}
 
 // fakeLoopbackWriter stands in for the v4l2loopback node.
 //
@@ -64,15 +72,33 @@ func newPumpTestHub(t *testing.T) (*deviceHub, int, chan *videoFrame) {
 	return hub, subID, frames
 }
 
+// dropForSubscriber records n frames the hub failed to hand to this subscriber,
+// with exactly the bookkeeping broadcast's failed-send branch keeps: the running
+// total and the pending count that the next successfully queued frame carries.
+func dropForSubscriber(hub *deviceHub, subID int, n uint64) {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	hub.subDrops[subID] += n
+	hub.subs[subID].pendingDrops += n
+}
+
+// queueForSubscriber hands a frame to the subscriber through the hub's own
+// broadcast, so the pending drops recorded before it ride on it exactly as they
+// would in production. Pushing straight onto the channel would bypass that
+// bookkeeping and prove nothing about the real path.
+func queueForSubscriber(t *testing.T, hub *deviceHub, frame *videoFrame) {
+	t.Helper()
+	if !hub.broadcast(frame) {
+		t.Fatal("broadcast reported no subscribers")
+	}
+}
+
 // waitForBindings blocks until the pump has recorded n bindings.
 //
-// The drop tests need this because the hub's drop counter is read when the pump
-// CONSUMES a frame, not when the hub queued it (this is the same accounting
-// cameraSensorSubscription.Next does, deliberately). Staging all the frames and
-// all the drops up front would therefore attribute drops to whichever frame the
-// pump happened to reach first, which says nothing about the real behaviour.
-// Interleaving the way the hub actually would is the only way these tests mean
-// anything.
+// The drop tests need this because a loss is attributed to the frame that
+// FOLLOWS it, so the frames and the drops have to be interleaved in the order
+// the hub would really produce them. Staging them all up front says nothing
+// about the real behaviour.
 func waitForBindings(t *testing.T, pump *hubLoopbackPump, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -212,12 +238,10 @@ func TestPumpReportsHubDroppedFrames(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- pump.pump(context.Background(), hub, subID, frames, writer) }()
 
-	frames <- bindableFrame(1, 100, 1)
+	queueForSubscriber(t, hub, bindableFrame(1, 100, 1))
 	waitForBindings(t, pump, 1)
-	hub.mu.Lock()
-	hub.subDrops[subID] = 3
-	hub.mu.Unlock()
-	frames <- bindableFrame(5, 200, 1)
+	dropForSubscriber(hub, subID, 3)
+	queueForSubscriber(t, hub, bindableFrame(5, 200, 1))
 	waitForBindings(t, pump, 2)
 	close(frames)
 
@@ -263,13 +287,11 @@ func TestPumpWriteFailureIsNotADroppedFrame(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- pump.pump(context.Background(), hub, subID, frames, writer) }()
 
-	frames <- bindableFrame(1, 100, 1)
+	queueForSubscriber(t, hub, bindableFrame(1, 100, 1))
 	waitForBindings(t, pump, 1)
-	hub.mu.Lock()
-	hub.subDrops[subID] = 2 // two samples lost after frame 1 was consumed
-	hub.mu.Unlock()
-	frames <- bindableFrame(4, 200, 1) // this write fails, so it records nothing
-	frames <- bindableFrame(5, 300, 1)
+	dropForSubscriber(hub, subID, 2)                     // two samples lost after frame 1 was consumed
+	queueForSubscriber(t, hub, bindableFrame(4, 200, 1)) // this write fails, so it records nothing
+	queueForSubscriber(t, hub, bindableFrame(5, 300, 1))
 	waitForBindings(t, pump, 2)
 	close(frames)
 
@@ -519,8 +541,8 @@ func TestPumpReturnsUnreportedLossesOnRestart(t *testing.T) {
 	writer := newFakeLoopbackWriter(0)
 	pump := newHubLoopbackPump(zap.NewNop(), "v4l2:/dev/video0", "/dev/video200")
 
+	dropForSubscriber(hub, subID, 3)
 	hub.mu.Lock()
-	hub.subDrops[subID] = 3
 	hub.restarted = true
 	hub.mu.Unlock()
 	close(frames)
@@ -553,5 +575,121 @@ func TestPumpReportsCarriedLossesOnFirstBinding(t *testing.T) {
 	}
 	if binding.HubDropsBefore != 4 {
 		t.Fatalf("HubDropsBefore = %d, want the 4 carried losses", binding.HubDropsBefore)
+	}
+}
+
+// A refused source must be refused by NAME, so the node lifecycle can tell a
+// permanent property of the producer's pipeline from a transient fault and
+// stop rebuilding a data path that cannot work.
+func TestPumpRefusalNamesAnUnbindableSource(t *testing.T) {
+	hub, subID, frames := newPumpTestHub(t)
+	writer := newFakeLoopbackWriter(1)
+	pump := newHubLoopbackPump(zap.NewNop(), "ipcamera:200", "/dev/video200")
+
+	frames <- &videoFrame{
+		data:      []byte{1, 2, 3},
+		codec:     agentpb.VideoCodec_VIDEO_CODEC_H264,
+		auAligned: false,
+		sampleID:  1,
+	}
+	err := pump.pump(context.Background(), hub, subID, frames, writer)
+	if !errors.Is(err, errSourceNotBindable) {
+		t.Fatalf("pump returned %v, want an error wrapping errSourceNotBindable", err)
+	}
+}
+
+// A subscriber waiting on Next must be told when the pump stops. Its channel
+// was previously closed only by its own cancel, so a subscription outliving
+// the pump waited forever on a channel nothing would ever write to again.
+func TestIdentitySubscriberEndsWhenThePumpStops(t *testing.T) {
+	svc := newTestVideoService(nil, nil)
+	installFakeProducers(svc)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	restore := openLoopbackFrameWriter
+	openLoopbackFrameWriter = func(string) (loopbackFrameWriter, error) { return newFakeLoopbackWriter(1), nil }
+	defer func() { openLoopbackFrameWriter = restore }()
+
+	pump := newHubLoopbackPump(zap.NewNop(), "v4l2:/dev/video0", "/dev/video200")
+	ch, cancelSub := pump.subscribeIdentities()
+	defer cancelSub()
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- pump.Run(ctx, svc, videoSource{kind: sourceV4L2, key: "/dev/video0", path: "/dev/video0"}, 0)
+	}()
+
+	sub := &pumpIdentitySubscription{sourceID: "v4l2:/dev/video0", nodePath: "/dev/video200", ch: ch, cancel: cancelSub}
+	next := make(chan error, 1)
+	go func() {
+		_, err := sub.Next(context.Background())
+		next <- err
+	}()
+
+	// Stopping the pump must wake the subscriber rather than leave it blocked.
+	cancel()
+	select {
+	case err := <-next:
+		if !errors.Is(err, errNoDataPlane) {
+			t.Fatalf("Next returned %v, want errNoDataPlane once the pump stopped", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next never returned after the pump stopped; the subscriber hangs forever")
+	}
+	<-runDone
+
+	// A subscriber that arrives after the pump has stopped gets the same
+	// answer immediately instead of a channel nobody will write to.
+	late, cancelLate := pump.subscribeIdentities()
+	defer cancelLate()
+	select {
+	case _, ok := <-late:
+		if ok {
+			t.Fatal("a late subscriber received an identity from a stopped pump")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a late subscriber's channel is open on a stopped pump")
+	}
+}
+
+// A stalled subscriber drops at frame rate. The warning must be rate limited
+// and carry the count, not print one line per lost identity.
+func TestIdentityDropWarningsAreRateLimited(t *testing.T) {
+	logs, observed := observedLogger()
+	pump := newHubLoopbackPump(logs, "v4l2:/dev/video0", "/dev/video200")
+	now := time.Unix(0, 0)
+	pump.now = func() time.Time { return now }
+
+	ch, cancelSub := pump.subscribeIdentities()
+	defer cancelSub()
+	// Fill the subscriber's queue so every further publish drops.
+	for i := 0; i < identitySubscriberBuffer; i++ {
+		pump.publishIdentity(loopbackBinding{LoopbackSequence: uint32(i)})
+	}
+	if len(ch) != identitySubscriberBuffer {
+		t.Fatalf("subscriber queue holds %d, want it full at %d", len(ch), identitySubscriberBuffer)
+	}
+	for i := 0; i < 500; i++ {
+		pump.publishIdentity(loopbackBinding{LoopbackSequence: uint32(i)})
+	}
+	if got := observed.Len(); got != 1 {
+		t.Fatalf("warnings logged = %d, want 1 for 500 dropped identities inside one interval", got)
+	}
+
+	now = now.Add(identityDropLogInterval + time.Second)
+	pump.publishIdentity(loopbackBinding{})
+	if got := observed.Len(); got != 2 {
+		t.Fatalf("warnings logged = %d, want a second one after the interval elapsed", got)
+	}
+	entry := observed.All()[1]
+	var dropped int64
+	for _, f := range entry.Context {
+		if f.Key == "dropped_since_last_warning" {
+			dropped = f.Integer
+		}
+	}
+	if dropped != 500 {
+		t.Fatalf("second warning reports %d dropped, want the 500 accumulated since the first", dropped)
 	}
 }

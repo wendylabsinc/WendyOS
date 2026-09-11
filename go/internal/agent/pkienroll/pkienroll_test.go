@@ -51,6 +51,9 @@ type fakeFrontend struct {
 	lifetime time.Duration
 	// includeChain controls whether the issuer is appended after the leaf.
 	includeChain bool
+	// substituteKey issues the leaf against a freshly generated key instead of
+	// the CSR's, reproducing an issuance the device could never present.
+	substituteKey bool
 
 	// Captured for assertions.
 	lastPath       string
@@ -185,7 +188,15 @@ func (f *fakeFrontend) handle(w http.ResponseWriter, r *http.Request) {
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		URIs:        uris,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, f.caCert, csr.PublicKey, f.caKey)
+	leafPub := csr.PublicKey
+	if f.substituteKey {
+		other, keyErr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if keyErr != nil {
+			f.t.Fatalf("generating substitute key: %v", keyErr)
+		}
+		leafPub = &other.PublicKey
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, f.caCert, leafPub, f.caKey)
 	if err != nil {
 		f.t.Fatalf("issuing test leaf: %v", err)
 	}
@@ -555,32 +566,187 @@ func TestCSRFrontendURL(t *testing.T) {
 	t.Setenv(CSREndpointEnv, "")
 	t.Setenv(EnvironmentEnv, "")
 
-	if got, want := CSRFrontendURL("", EnvDev), "https://"+DevCSRFrontendHost; got != want {
+	if got, want := mustCSRFrontendURL(t, "", EnvDev), "https://"+DevCSRFrontendHost; got != want {
 		t.Errorf("dev = %q, want %q", got, want)
 	}
-	if got, want := CSRFrontendURL("", EnvProd), "https://"+ProdCSRFrontendHost; got != want {
+	if got, want := mustCSRFrontendURL(t, "", EnvProd), "https://"+ProdCSRFrontendHost; got != want {
 		t.Errorf("prod = %q, want %q", got, want)
 	}
 	// An unrecognised environment must not be read as dev: sending a
 	// production device to a dev certificate authority is the failure this
 	// guards.
-	if got, want := CSRFrontendURL("", "staging"), "https://"+ProdCSRFrontendHost; got != want {
+	if got, want := mustCSRFrontendURL(t, "", "staging"), "https://"+ProdCSRFrontendHost; got != want {
 		t.Errorf("unknown environment = %q, want %q", got, want)
 	}
-	if got, want := CSRFrontendURL("http://127.0.0.1:8451", EnvProd), "http://127.0.0.1:8451"; got != want {
+	// A loopback plaintext override stays allowed: a local pki-core and a port
+	// forward are both reached that way, and the packet never leaves the host.
+	if got, want := mustCSRFrontendURL(t, "http://127.0.0.1:8451", EnvProd), "http://127.0.0.1:8451"; got != want {
 		t.Errorf("override = %q, want %q", got, want)
 	}
 
 	t.Setenv(EnvironmentEnv, EnvDev)
-	if got, want := CSRFrontendURL("", ""), "https://"+DevCSRFrontendHost; got != want {
+	if got, want := mustCSRFrontendURL(t, "", ""), "https://"+DevCSRFrontendHost; got != want {
 		t.Errorf("environment from env = %q, want %q", got, want)
 	}
 	t.Setenv(CSREndpointEnv, "csr.internal:9443")
-	if got, want := CSRFrontendURL("", ""), "https://csr.internal:9443"; got != want {
+	if got, want := mustCSRFrontendURL(t, "", ""), "https://csr.internal:9443"; got != want {
 		t.Errorf("endpoint from env = %q, want %q", got, want)
 	}
-	if got, want := CSRFrontendURL("explicit.example", ""), "https://explicit.example"; got != want {
+	if got, want := mustCSRFrontendURL(t, "explicit.example", ""), "https://explicit.example"; got != want {
 		t.Errorf("explicit override must beat the environment variable, got %q want %q", got, want)
+	}
+}
+
+func mustCSRFrontendURL(t *testing.T, override, environment string) string {
+	t.Helper()
+	got, err := CSRFrontendURL(override, environment)
+	if err != nil {
+		t.Fatalf("CSRFrontendURL(%q, %q): %v", override, environment, err)
+	}
+	return got
+}
+
+// A plaintext override to anything but this machine is refused where it is
+// configured, so the single-use bearer token is never put on the wire in
+// cleartext. Loopback stays allowed, and the accepted form is checked here too
+// so the allowance cannot be widened by accident.
+func TestCSRFrontendURLRefusesNonLoopbackPlaintext(t *testing.T) {
+	t.Setenv(CSREndpointEnv, "")
+	t.Setenv(EnvironmentEnv, "")
+
+	refused := []string{
+		"http://csr.dev.pki.wendy.sh",
+		"http://csr.internal:9443/v1/tenant/enroll",
+		"http://10.0.0.4:8451",
+		"http://[2001:db8::1]:8451",
+	}
+	for _, endpoint := range refused {
+		t.Run(endpoint, func(t *testing.T) {
+			got, err := CSRFrontendURL(endpoint, EnvProd)
+			if !errors.Is(err, ErrPlaintextEndpoint) {
+				t.Fatalf("CSRFrontendURL(%q) = %q, %v; want ErrPlaintextEndpoint", endpoint, got, err)
+			}
+			if got != "" {
+				t.Errorf("a refused endpoint must not also be returned, got %q", got)
+			}
+		})
+	}
+
+	accepted := []string{
+		"http://127.0.0.1:8451",
+		"http://127.0.0.2:8451",
+		"http://[::1]:8451",
+		"http://localhost:8451",
+		"https://csr.dev.pki.wendy.sh",
+		"csr.dev.pki.wendy.sh",
+	}
+	for _, endpoint := range accepted {
+		t.Run(endpoint, func(t *testing.T) {
+			if _, err := CSRFrontendURL(endpoint, EnvProd); err != nil {
+				t.Fatalf("CSRFrontendURL(%q): %v", endpoint, err)
+			}
+		})
+	}
+
+	// The environment-variable override takes the same route, so a device
+	// cannot be talked into cleartext through WENDY_PKI_CSR_ENDPOINT either.
+	t.Setenv(CSREndpointEnv, "http://csr.internal:9443")
+	if _, err := CSRFrontendURL("", ""); !errors.Is(err, ErrPlaintextEndpoint) {
+		t.Fatalf("environment override err = %v, want ErrPlaintextEndpoint", err)
+	}
+}
+
+// Enroll must not proceed on a plaintext endpoint even when the URL reached the
+// request without passing through CSRFrontendURL. Nothing is sent: the fake
+// frontend records no call.
+func TestEnrollRefusesNonLoopbackPlaintext(t *testing.T) {
+	f := newFakeFrontend(t)
+	srv := f.serve()
+	defer srv.Close()
+
+	_, err := Enroll(context.Background(), EnrollRequest{
+		CSRFrontendURL:  "http://csr.dev.pki.wendy.sh",
+		TenantUUID:      testTenant,
+		EnrollmentToken: "tok",
+		Key:             testKey(t),
+		CommonName:      "sh/wendy/2/408",
+	})
+	if !errors.Is(err, ErrPlaintextEndpoint) {
+		t.Fatalf("err = %v, want ErrPlaintextEndpoint", err)
+	}
+	if f.calls != 0 {
+		t.Errorf("the frontend was called %d time(s); a refused endpoint must spend no token", f.calls)
+	}
+
+	_, err = Renew(context.Background(), RenewRequest{
+		CSRFrontendURL: "http://csr.dev.pki.wendy.sh",
+		TenantUUID:     testTenant,
+		CurrentLeafPEM: f.caPEM,
+		Key:            testKey(t),
+		HTTPClient:     srv.Client(),
+	})
+	if !errors.Is(err, ErrPlaintextEndpoint) {
+		t.Fatalf("Renew err = %v, want ErrPlaintextEndpoint", err)
+	}
+}
+
+// A leaf attesting a key the device does not hold cannot complete a handshake,
+// so it is refused before Save is ever reached. The fake frontend is told to
+// issue against a key of its own rather than the one in the CSR.
+func TestEnrollRefusesLeafForAnotherKey(t *testing.T) {
+	f := newFakeFrontend(t)
+	f.substituteKey = true
+	srv := f.serve()
+	defer srv.Close()
+
+	_, err := Enroll(context.Background(), EnrollRequest{
+		CSRFrontendURL:  srv.URL,
+		TenantUUID:      testTenant,
+		EnrollmentToken: "tok",
+		Key:             testKey(t),
+		CommonName:      "sh/wendy/2/408",
+	})
+	if !errors.Is(err, ErrKeyMismatch) {
+		t.Fatalf("err = %v, want ErrKeyMismatch", err)
+	}
+	// The identity is right and the key is wrong: the SAN check alone would
+	// have accepted this, which is the gap the comparison closes.
+	var identityErr *IdentityError
+	if errors.As(err, &identityErr) {
+		t.Errorf("err = %v, want a key mismatch and not an identity error", err)
+	}
+}
+
+// The same check on renewal: a renewed leaf for another key would replace a
+// working certificate with one the device cannot present.
+func TestRenewRefusesLeafForAnotherKey(t *testing.T) {
+	f := newFakeFrontend(t)
+	srv := f.serve()
+	defer srv.Close()
+	key := testKey(t)
+
+	enrolled, err := Enroll(context.Background(), EnrollRequest{
+		CSRFrontendURL:  srv.URL,
+		TenantUUID:      testTenant,
+		EnrollmentToken: "tok",
+		Key:             key,
+		CommonName:      "sh/wendy/2/408",
+	})
+	if err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+
+	f.substituteKey = true
+	_, err = Renew(context.Background(), RenewRequest{
+		CSRFrontendURL:  srv.URL,
+		TenantUUID:      testTenant,
+		CurrentLeafPEM:  enrolled.LeafPEM,
+		CurrentChainPEM: enrolled.ChainPEM,
+		Key:             key,
+		HTTPClient:      srv.Client(),
+	})
+	if !errors.Is(err, ErrKeyMismatch) {
+		t.Fatalf("err = %v, want ErrKeyMismatch", err)
 	}
 }
 

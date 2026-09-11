@@ -44,7 +44,7 @@ func muxPlayableClips(dir string) []string {
 	for _, index := range indexes {
 		sourceDir := filepath.Dir(index)
 		rel := path.Join("cameras", filepath.Base(sourceDir), episodeexport.PlayableFileName)
-		result, err := episodeexport.ConvertSourceInPlace(dir, sourceDir)
+		result, err := convertPlayableClip(dir, sourceDir)
 		if reason := playableSkipReason(result, err); reason != "" {
 			// ConvertSourceInPlace only leaves a file behind on success, but a
 			// clip refused by policy (B slices and the like) was written before
@@ -61,8 +61,36 @@ func muxPlayableClips(dir string) []string {
 			}
 			notes = append(notes, note)
 		}
+		if result.NominalHold > 0 {
+			notes = append(notes, fmt.Sprintf(
+				"%s holds a single frame whose display duration no index entry records; it was given a nominal %s",
+				rel, result.NominalHold))
+		}
 	}
 	return notes
+}
+
+// convertClip is the remux entry point. It is a variable only so a test can
+// drive convertPlayableClip's recover without having to find a fixture that
+// makes the muxer panic for real.
+var convertClip = episodeexport.ConvertSourceInPlace
+
+// convertPlayableClip is ConvertSourceInPlace with a bounded recover.
+//
+// The remux parses attacker-shaped-in-principle data (an index and segment
+// files that a crashed or corrupted capture may have left in any state) while
+// running inside the seal. A panic there would abort the seal and lose the
+// episode itself, which is a far worse outcome than losing a derived clip that
+// can be rebuilt from the raw capture at any time. Turning the panic into an
+// ordinary mux error keeps the existing refusal path: the clip is not written
+// and the manifest's playable_notes name the reason.
+func convertPlayableClip(dir, sourceDir string) (result episodeexport.ClipResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("remuxing panicked: %v", r)
+		}
+	}()
+	return convertClip(dir, sourceDir)
 }
 
 // playableSkipReason decides whether a mux result is honest enough to publish
@@ -83,6 +111,8 @@ func playableSkipReason(r episodeexport.ClipResult, err error) string {
 		return fmt.Sprintf("%d slice header(s) could not be parsed, so whether the stream carries B slices is unknown and the clip's timing cannot be vouched for", r.UndecodedSliceHeaders)
 	case r.ParameterSetChanges > 0:
 		return fmt.Sprintf("the stream's parameter sets change mid-episode (%d changed SPS/PPS unit(s), a producer restart), and the clip's single decoder configuration would misdecode every frame after the change", r.ParameterSetChanges)
+	case r.TimestampInversions > 0:
+		return fmt.Sprintf("%d index entry/entries record a canonical timestamp earlier than the entry before them, so the recorded timing disagrees with the coded order the clip must preserve and its timing cannot be vouched for", r.TimestampInversions)
 	case r.SyncSamples == 0:
 		return "clip would carry no random-access frame, so players cannot seek in it and many will not open it"
 	}
