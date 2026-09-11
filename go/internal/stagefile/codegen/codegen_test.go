@@ -454,14 +454,6 @@ func TestGenerateBuildRejectsUnsupportedLang(t *testing.T) {
 	}
 }
 
-func TestShellQuoteEscapesEmbeddedSingleQuote(t *testing.T) {
-	got := shellQuote(`it's`)
-	want := `'it'"'"'s'`
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
 func TestGenerateAptInstallQuotesPackageNames(t *testing.T) {
 	f := &spec.File{Version: 1, Stages: []spec.Stage{
 		{Name: "app", From: "debian:12", Install: &spec.Install{

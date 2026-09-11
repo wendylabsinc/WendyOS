@@ -46,6 +46,16 @@ var (
 	RecipeBuild       = Recipe{Name: "build", Version: 1}
 )
 
+// DefaultUser is the distroless-style non-root numeric UID a backend
+// substitutes when a final stage leaves Stage.User empty. A numeric UID needs
+// no /etc/passwd entry, so it works on any base image.
+//
+// It lives beside the field it defaults rather than inside one backend,
+// because every backend must substitute the same value: two backends holding
+// their own copy is how a Dockerfile build and an LLB build of one Stagefile
+// end up running as different users.
+const DefaultUser = "65532"
+
 // Graph is a lowered Stagefile.
 type Graph struct {
 	Nodes  []Node
