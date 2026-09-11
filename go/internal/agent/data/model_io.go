@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // ModelInputLedgerFile is the episode-relative path of the model-input ledger.
@@ -240,6 +241,26 @@ func reconcileModelInputs(dir string, mf *Manifest) (bool, error) {
 	}
 	defer f.Close()
 
+	// The retention class and its note are decided while the episode is
+	// recording, from the campaign's capture policy, and are the only record
+	// of it: SourceCapture is excluded from the manifest JSON (Source.Capture
+	// is `json:"-"`), so a manifest read back off disk has no policy left to
+	// classify from. Rebuilding the block from that nil policy relabelled
+	// every snapshot and every rate-capped source as
+	// captured_subject_to_drop_accounting, which tells a training pipeline the
+	// episode holds a payload for every sample the model saw when it holds a
+	// fraction of them. Only the counters are recomputed here; the
+	// classification that survived the crash is kept.
+	retained := make(map[string]SourceModelInputs, len(mf.Sources)+len(mf.ModelIO.Uncaptured))
+	for i := range mf.Sources {
+		if block := mf.Sources[i].ModelInputs; block != nil {
+			retained[mf.Sources[i].Source.ID] = *block
+		}
+	}
+	for _, block := range mf.ModelIO.Uncaptured {
+		retained[block.SourceID] = block
+	}
+
 	mf.ModelIO.InputLedger = ModelInputLedgerFile
 	mf.ModelIO.SamplesDelivered = 0
 	mf.ModelIO.Uncaptured = nil
@@ -249,6 +270,7 @@ func reconcileModelInputs(dir string, mf *Manifest) (bool, error) {
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLedgerLineBytes)
+	var skipped uint64
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -256,11 +278,16 @@ func reconcileModelInputs(dir string, mf *Manifest) (bool, error) {
 		}
 		var input ModelInput
 		if err := json.Unmarshal(line, &input); err != nil {
+			skipped++
 			continue
 		}
 		stats := manifestModelInputs(mf, input.SourceID)
 		if stats.Delivered == 0 {
 			stats.FirstSampleID = input.SampleID
+			if prior, ok := retained[input.SourceID]; ok && prior.PayloadRetention != "" {
+				stats.PayloadRetention = prior.PayloadRetention
+				stats.Note = prior.Note
+			}
 		}
 		stats.Delivered++
 		stats.SubscriberDrops += input.DroppedBefore
@@ -268,7 +295,20 @@ func reconcileModelInputs(dir string, mf *Manifest) (bool, error) {
 		mf.ModelIO.SamplesDelivered++
 	}
 	if err := scanner.Err(); err != nil {
-		return false, err
+		if !errors.Is(err, bufio.ErrTooLong) {
+			return false, err
+		}
+		// One line longer than the buffer stops the scanner dead, so every
+		// line after it is unread and the counters below it are silently low.
+		// Reading past it is not worth a second pass over the file, but
+		// pretending the count is complete is not an option either.
+		skipped++
+		mf.ModelIO.RecoveryNotes = append(mf.ModelIO.RecoveryNotes,
+			ModelInputLedgerFile+" holds a line longer than the "+strconv.Itoa(maxLedgerLineBytes)+" byte recovery limit; the delivery counters stop at it and are lower than what the ledger holds")
+	}
+	if skipped > 0 {
+		mf.ModelIO.RecoveryNotes = append(mf.ModelIO.RecoveryNotes,
+			"recovery skipped "+strconv.FormatUint(skipped, 10)+" unparseable line(s) in "+ModelInputLedgerFile)
 	}
 	return true, nil
 }
@@ -294,6 +334,7 @@ func reconcileOutcomes(dir string, mf *Manifest) (bool, error) {
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLedgerLineBytes)
+	var skipped uint64
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
@@ -301,6 +342,7 @@ func reconcileOutcomes(dir string, mf *Manifest) (bool, error) {
 		}
 		var record ApplicationRecord
 		if err := json.Unmarshal(line, &record); err != nil {
+			skipped++
 			continue
 		}
 		if record.Type != "prediction" {
@@ -318,7 +360,20 @@ func reconcileOutcomes(dir string, mf *Manifest) (bool, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return false, err
+		// An application record over the recovery line limit used to abort the
+		// whole reconciliation, which aborted NewManager, which stopped the
+		// agent from starting at all. One outsized record must cost its own
+		// outcome counters, not the device's ability to record.
+		if !errors.Is(err, bufio.ErrTooLong) {
+			return false, err
+		}
+		skipped++
+		mf.ModelIO.RecoveryNotes = append(mf.ModelIO.RecoveryNotes,
+			name+" holds a line longer than the "+strconv.Itoa(maxLedgerLineBytes)+" byte recovery limit; the outcome counters stop at it and are lower than what the log holds")
+	}
+	if skipped > 0 {
+		mf.ModelIO.RecoveryNotes = append(mf.ModelIO.RecoveryNotes,
+			"recovery skipped "+strconv.FormatUint(skipped, 10)+" unparseable line(s) in "+name)
 	}
 	return true, nil
 }

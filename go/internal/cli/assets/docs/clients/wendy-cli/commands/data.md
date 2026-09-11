@@ -7,6 +7,25 @@ manifest retains UTC correlation intervals, native clock mappings, source and
 device identity, drop accounting, calibration revisions, lifecycle state, file
 sizes, formats, and SHA-256 checksums.
 
+### Clock status
+
+The manifest's `system_clock_status` says what the Episode knows about the
+device's own system clock, judged against the Roughtime consensus. It is one of
+four values and never anything else.
+
+| Value | Meaning |
+|---|---|
+| `system_reported` | No Roughtime consensus was available, so the manifest carries only the system's own reported uncertainty. |
+| `agreement` | The system observation's UTC offset interval overlaps the Roughtime consensus interval. |
+| `conflict` | The two intervals are disjoint: the system clock and the Roughtime consensus cannot both be right. |
+| `roughtime_only` | The device has no synchronized system clock, so its observation is unbounded and there is no interval to compare. Roughtime is the Episode's only UTC evidence. This is not a disagreement; the system clock simply said nothing. |
+
+Each Roughtime round's full evidence, including the nonce and the raw signed
+responses, is appended to `roughtime.jsonl` in the Episode, which is sealed and
+checksummed like every other file. The manifest keeps the bounds of the first
+and most recent rounds in `roughtime_observations` and counts the rounds in
+`roughtime_rounds`, so it stays a fixed size however long the Episode records.
+
 ## Episode commands
 
 | Command | Description |
@@ -213,7 +232,12 @@ an ad-hoc `wendy data record` Episode can avoid the wait, and only by leaving
 the applications source out with `--source` or `--exclude-source`, as described
 above. The wait is added
 to the Episode's own lifetime, after `after_trigger` has expired, and it is
-included in the `stopped_episode_nanos` the manifest records.
+included in the `stopped_episode_nanos` the manifest records. Nothing is
+captured during it, so the manifest also records
+`capture_stopped_episode_nanos`, the point at which the capture adapters
+actually stopped. Measure how long an Episode recorded from that field;
+`stopped_episode_nanos` is the point past which no record was accepted, which
+is what an event timeline needs. The difference between them is the drain.
 
 A draining Episode has already stopped capturing, so it no longer holds its
 campaign. A trigger that matches during the drain starts the campaign's next

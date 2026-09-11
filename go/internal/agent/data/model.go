@@ -13,6 +13,47 @@ const (
 	ClockAlgorithm  = "wendy-sandwich-v1"
 )
 
+// The system_clock_status vocabulary. It reports what the episode knows about
+// the device's own system clock, judged against the Roughtime consensus when
+// one is available. Every value an episode manifest can carry is here, and
+// nothing outside this list is ever written.
+const (
+	// ClockStatusSystemReported means no Roughtime consensus was available to
+	// judge the system clock against, so the manifest carries only the
+	// system's own reported uncertainty (which may itself be unbounded).
+	ClockStatusSystemReported = "system_reported"
+	// ClockStatusAgreement means the system observation's Coordinated
+	// Universal Time (UTC) offset interval overlaps the Roughtime consensus
+	// interval.
+	ClockStatusAgreement = "agreement"
+	// ClockStatusConflict means the two intervals are disjoint: the system
+	// clock and the Roughtime consensus cannot both be right.
+	ClockStatusConflict = "conflict"
+	// ClockStatusRoughtimeOnly means the device has no synchronized system
+	// clock (adjtimex reports STA_UNSYNC, or no error bound at all), so the
+	// system observation is unbounded and carries no interval to compare. The
+	// Roughtime consensus is the episode's only UTC evidence.
+	//
+	// This is deliberately NOT "conflict". An unbounded observation records
+	// zero for both interval bounds, and comparing that empty interval against
+	// a real consensus made every episode on an unsynchronized device report a
+	// clock conflict that no evidence supported.
+	ClockStatusRoughtimeOnly = "roughtime_only"
+)
+
+// RoughtimeEvidenceFile is the episode-relative path of the Roughtime evidence
+// sidecar: one JSON object per consensus round, each holding that round's full
+// evidence including the nonce and the raw signed responses. It is sealed and
+// checksummed exactly like every other episode file.
+//
+// The raw evidence used to live in the manifest, which is rewritten in full on
+// every consensus round. A long episode queries Roughtime every five minutes,
+// so the manifest grew by several kilobytes of base64 per round and a
+// day-long episode ended with a manifest dominated by clock evidence. The
+// bounds a consumer actually reads stay in the manifest; the bytes needed to
+// independently reverify a round live here.
+const RoughtimeEvidenceFile = "roughtime.jsonl"
+
 type ClockSample struct {
 	BootBeforeNanos int64 `json:"boot_before_nanos"`
 	TargetNanos     int64 `json:"target_nanos"`
@@ -142,6 +183,12 @@ type ModelIO struct {
 	// are not among the episode's own sources. The ledger records what the
 	// model consumed; the episode holds no payload bytes for them.
 	Uncaptured []SourceModelInputs `json:"uncaptured_sources,omitempty"`
+	// RecoveryNotes records what crash recovery could not account for while
+	// recomputing the counters above: lines in the ledger or the outcome log
+	// that it had to skip. A skipped line is a counter that is low by an
+	// unknown amount, and a counter that is quietly low is exactly the kind of
+	// number a training pipeline trusts. Absent on a normally sealed episode.
+	RecoveryNotes []string `json:"recovery_notes,omitempty"`
 }
 
 // ModelInput is one sample handed to a model subscriber, as recorded in the
@@ -306,24 +353,44 @@ type WorkflowState struct {
 }
 
 type Manifest struct {
-	Version           int                     `json:"version"`
-	ID                string                  `json:"id"`
-	Name              string                  `json:"name,omitempty"`
-	State             string                  `json:"state"`
-	Interruption      string                  `json:"interruption,omitempty"`
-	Device            DeviceIdentity          `json:"device"`
-	CanonicalClock    string                  `json:"canonical_clock"`
-	BootID            string                  `json:"boot_id"`
-	RequestBootNanos  int64                   `json:"request_boottime_nanos"`
-	StartedEpisodeNS  int64                   `json:"started_episode_nanos"`
-	StartedUnixNanos  int64                   `json:"started_unix_nanos"`
-	StoppedEpisodeNS  int64                   `json:"stopped_episode_nanos,omitempty"`
-	Trigger           EpisodeTrigger          `json:"trigger"`
-	CollectorVersion  string                  `json:"collector_version"`
-	ModelVersions     map[string]string       `json:"model_versions"`
-	RequestedTopics   []string                `json:"requested_ros2_topics"`
-	UTCObservations   []UTCObservation        `json:"utc_observations"`
-	Roughtime         []timesync.Consensus    `json:"roughtime_observations,omitempty"`
+	Version          int            `json:"version"`
+	ID               string         `json:"id"`
+	Name             string         `json:"name,omitempty"`
+	State            string         `json:"state"`
+	Interruption     string         `json:"interruption,omitempty"`
+	Device           DeviceIdentity `json:"device"`
+	CanonicalClock   string         `json:"canonical_clock"`
+	BootID           string         `json:"boot_id"`
+	RequestBootNanos int64          `json:"request_boottime_nanos"`
+	StartedEpisodeNS int64          `json:"started_episode_nanos"`
+	StartedUnixNanos int64          `json:"started_unix_nanos"`
+	StoppedEpisodeNS int64          `json:"stopped_episode_nanos,omitempty"`
+	// CaptureStoppedEpisodeNS is when this episode's capture adapters actually
+	// stopped, which is earlier than StoppedEpisodeNS by the post-seal drain.
+	// The drain is a window for late application records, not recording time:
+	// nothing was captured during it, so a consumer measuring how long the
+	// episode recorded must use this field. StoppedEpisodeNS remains the point
+	// past which no record was accepted, which is what an event timeline needs.
+	// Absent on episodes sealed before this field existed.
+	CaptureStoppedEpisodeNS int64             `json:"capture_stopped_episode_nanos,omitempty"`
+	Trigger                 EpisodeTrigger    `json:"trigger"`
+	CollectorVersion        string            `json:"collector_version"`
+	ModelVersions           map[string]string `json:"model_versions"`
+	RequestedTopics         []string          `json:"requested_ros2_topics"`
+	UTCObservations         []UTCObservation  `json:"utc_observations"`
+	// Roughtime holds the bounds of this episode's first and most recent
+	// Roughtime consensus rounds, and never their raw evidence. Every round,
+	// in full, is appended to RoughtimeEvidenceFile instead, so the manifest
+	// stays a fixed size however long the episode records. RoughtimeRounds
+	// counts what the sidecar holds.
+	Roughtime []timesync.Consensus `json:"roughtime_observations,omitempty"`
+	// RoughtimeEvidenceLog names the sidecar, absent when no round landed.
+	RoughtimeEvidenceLog string `json:"roughtime_evidence_log,omitempty"`
+	// RoughtimeRounds counts the consensus rounds the sidecar holds, so a
+	// consumer can tell a two-round episode from a two-hundred-round one
+	// without reading the sidecar.
+	RoughtimeRounds uint64 `json:"roughtime_rounds,omitempty"`
+	// SystemClockStatus is one of the ClockStatus constants above.
 	SystemClockStatus string                  `json:"system_clock_status"`
 	Sources           []SourceStats           `json:"sources"`
 	Calibrations      []Calibration           `json:"calibrations"`
