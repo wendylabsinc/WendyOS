@@ -394,3 +394,44 @@ func TestStartDoesNotBlockOnRoughtimeConsensus(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestEnforceQuotaSkipsPinnedEpisode pins the retention-versus-transfer race.
+// An episode whose bytes are being read right now (a device download, or the
+// transfer worker streaming it to the cloud) must survive eviction even when
+// the quota cannot hold it: deleting it removes the files from under an open
+// stream, and the reader then fails with an error naming the file rather than
+// the eviction. The "uploading" upload state alone did not protect it, because
+// enforceQuota consults the pin count and nothing else.
+func TestEnforceQuotaSkipsPinnedEpisode(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetWarnLogger(func(string) {})
+	pinned := recordEpisode(t, m, StartOptions{Sources: []string{"applications"}, Trigger: EpisodeTrigger{Reason: "event:test", CampaignName: "forklift"}})
+	setUploadState(t, m, pinned.ID, "uploading", "forklift")
+
+	// A quota of one byte cannot hold anything, so every unpinned candidate
+	// goes and enforceQuota reports it could not get under the ceiling.
+	m.SetQuota(1, 0)
+	m.BeginDownload(pinned.ID)
+	if _, err = m.Start(StartOptions{Sources: []string{"applications"}}); err == nil {
+		if _, stopErr := m.Stop(AdHocEpisodeKey); stopErr != nil {
+			t.Fatal(stopErr)
+		}
+	}
+	if _, err = m.episodeDir(pinned.ID); err != nil {
+		t.Fatalf("pinned episode was evicted while its payload was being read: %v", err)
+	}
+
+	// Releasing the pin makes it a candidate again.
+	m.EndDownload(pinned.ID)
+	if _, err = m.Start(StartOptions{Sources: []string{"applications"}}); err == nil {
+		if _, stopErr := m.Stop(AdHocEpisodeKey); stopErr != nil {
+			t.Fatal(stopErr)
+		}
+	}
+	if _, err = m.episodeDir(pinned.ID); err == nil {
+		t.Fatal("episode survived eviction after its pin was released")
+	}
+}
