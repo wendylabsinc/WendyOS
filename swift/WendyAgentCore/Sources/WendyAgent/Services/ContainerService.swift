@@ -64,6 +64,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     private let logger = Logger(label: "sh.wendy.agent.container")
     private let nativeStopTimeout: Duration = .seconds(5)
     private var appsByID: [String: WendyApp] = [:]
+    private var nativeIdentityLeases: [UUID: NativeAppIdentityLease] = [:]
     private var isStopping = false
     private let sandboxProfilePath: String?
 
@@ -78,6 +79,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// Minimum gap between two automatic restarts of the same app, mirroring
     /// the Linux monitor's 10 s floor (`planRestarts`).
     private let restartFloorSeconds: TimeInterval
+    private let nativeAppIdentityProvider: any NativeAppIdentityProviding
     private let pidExecutablePath: PIDExecutablePathLookup
     private let pidBirthTime: PIDBirthTimeLookup
     private let sendSignal: PIDSignalSender
@@ -94,6 +96,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         otelPort: Int = 4317,
         supervisorInterval: Duration = .seconds(15),
         restartFloor: Duration = .seconds(10),
+        nativeAppIdentityProvider: any NativeAppIdentityProviding =
+            UnavailableNativeAppIdentityProvider(),
         pidExecutablePath: @escaping PIDExecutablePathLookup = {
             ContainerService.executablePath(forPID: $0)
         },
@@ -112,6 +116,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.otelPort = otelPort
         self.supervisorInterval = supervisorInterval
         self.restartFloorSeconds = Self.seconds(restartFloor)
+        self.nativeAppIdentityProvider = nativeAppIdentityProvider
         self.pidExecutablePath = pidExecutablePath
         self.pidBirthTime = pidBirthTime
         self.sendSignal = sendSignal
@@ -328,6 +333,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.appsByID[id] = app
     }
 
+    private func isAppLaunchCurrent(id: String, launchToken: UUID) -> Bool {
+        guard !self.isStopping, let app = self.appsByID[id] else { return false }
+        return app.launchToken == launchToken && !app.stoppedByUser
+    }
+
     private func markAppRunning(
         id: String,
         process: Foundation.Process,
@@ -410,8 +420,14 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     }
 
     func handleAppTermination(id: String, launchToken: UUID, exitCode: Int32? = nil) async {
+        await self.revokeNativeIdentity(for: launchToken)
         guard let app = self.appsByID[id], app.launchToken == launchToken else { return }
         await self.markAppStopped(id: id, exitCode: exitCode)
+    }
+
+    private func revokeNativeIdentity(for launchToken: UUID) async {
+        guard let lease = self.nativeIdentityLeases.removeValue(forKey: launchToken) else { return }
+        await self.nativeAppIdentityProvider.revokeIdentity(lease)
     }
 
     private func makeTerminationHandler(
@@ -1229,10 +1245,15 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         appName: String,
         otelPort: Int,
         source: [String: String] = ProcessInfo.processInfo.environment,
-        overrides: [String: String] = [:]
+        overrides: [String: String] = [:],
+        identitySocketPath: String? = nil
     ) -> [String: String] {
         var environment = source.merging(overrides) { _, userValue in userValue }
         environment["WENDY_APP_ID"] = appName
+        environment.removeValue(forKey: NativeAppIdentityLease.environmentKey)
+        if let identitySocketPath {
+            environment[NativeAppIdentityLease.environmentKey] = identitySocketPath
+        }
         environment["NSUnbufferedIO"] = "YES"
         environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:\(otelPort)"
         environment["OTEL_EXPORTER_OTLP_PROTOCOL"] = "grpc"
@@ -1820,6 +1841,32 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             currentDirectory = nil
         }
 
+        let launchToken = UUID()
+        self.prepareAppForLaunch(id: appName, launchToken: launchToken)
+
+        let identityLease: NativeAppIdentityLease?
+        do {
+            identityLease = try await self.nativeAppIdentityProvider.prepareIdentity(
+                forAppID: appName
+            )
+        } catch {
+            self.cancelAppLaunch(id: appName, launchToken: launchToken)
+            throw RPCError(
+                code: .failedPrecondition,
+                message: "App-scoped identity is unavailable for \(appName)"
+            )
+        }
+        guard self.isAppLaunchCurrent(id: appName, launchToken: launchToken) else {
+            if let identityLease {
+                await self.nativeAppIdentityProvider.revokeIdentity(identityLease)
+            }
+            self.cancelAppLaunch(id: appName, launchToken: launchToken)
+            throw RPCError(code: .aborted, message: "Native app launch was cancelled")
+        }
+        if let identityLease {
+            self.nativeIdentityLeases[launchToken] = identityLease
+        }
+
         let process = Foundation.Process()
         // Child stdout/stderr are connected to pipes, not a TTY. Without
         // unbuffered I/O, Swift's `print()` output may sit in stdio buffers for
@@ -1828,7 +1875,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         process.environment = Self.nativeAppEnvironment(
             appName: appName,
             otelPort: self.otelPort,
-            overrides: app.native?.environment ?? [:]
+            overrides: app.native?.environment ?? [:],
+            identitySocketPath: identityLease?.socketPath
         )
         if let profilePath {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
@@ -1848,8 +1896,6 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
-        let launchToken = UUID()
-        self.prepareAppForLaunch(id: appName, launchToken: launchToken)
         process.terminationHandler = self.makeTerminationHandler(
             forAppID: appName,
             launchToken: launchToken
@@ -1858,11 +1904,47 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         do {
             try process.run()
         } catch {
+            await self.revokeNativeIdentity(for: launchToken)
             self.cancelAppLaunch(id: appName, launchToken: launchToken)
             throw RPCError(
                 code: .internalError,
                 message: "Failed to launch process at \(binaryPath): \(error)"
             )
+        }
+
+        if let identityLease {
+            do {
+                try await self.nativeAppIdentityProvider.activateIdentity(
+                    identityLease,
+                    forProcessID: process.processIdentifier
+                )
+            } catch {
+                if process.isRunning {
+                    Self.forceKillProcess(process)
+                    process.waitUntilExit()
+                }
+                await self.revokeNativeIdentity(for: launchToken)
+                self.cancelAppLaunch(id: appName, launchToken: launchToken)
+                throw RPCError(
+                    code: .failedPrecondition,
+                    message: "App-scoped identity is unavailable for \(appName)"
+                )
+            }
+        }
+        guard process.isRunning else {
+            await self.revokeNativeIdentity(for: launchToken)
+            self.cancelAppLaunch(id: appName, launchToken: launchToken)
+            throw RPCError(
+                code: .unavailable,
+                message: "Native process at \(binaryPath) exited during launch"
+            )
+        }
+        guard self.isAppLaunchCurrent(id: appName, launchToken: launchToken) else {
+            Self.forceKillProcess(process)
+            process.waitUntilExit()
+            await self.revokeNativeIdentity(for: launchToken)
+            self.cancelAppLaunch(id: appName, launchToken: launchToken)
+            throw RPCError(code: .aborted, message: "Native app launch was cancelled")
         }
         try await self.markAppRunning(id: appName, process: process, launchToken: launchToken)
         logger.info(
