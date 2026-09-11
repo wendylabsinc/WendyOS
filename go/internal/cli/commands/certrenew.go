@@ -142,19 +142,15 @@ func renewEndpoint(auth *config.AuthConfig) string {
 	if auth == nil {
 		return ""
 	}
-	const devRenewEndpoint = "https://renew.dev.pki.wendy.sh/v1/renew"
-	if auth.PKIEndpoint != "" {
-		u, err := url.Parse(auth.PKIEndpoint)
-		if err == nil && u.Scheme == "https" && u.Host == "identity.dev.pki.wendy.sh" && u.User == nil {
-			return devRenewEndpoint
-		}
-		// An explicit custom PKI deployment takes precedence over Cloud defaults.
-		return ""
-	}
-	// Imported operator certificates may have no OIDC/identity configuration.
-	// The known dev API still identifies the deployment to renew them against.
-	if auth.CloudGRPC == "api.dev.wendy.sh:443" {
-		return devRenewEndpoint
+	// The renew frontend is derived from the session's own pki-core identity
+	// endpoint and from nothing else. Deriving one service's host from
+	// another's is WDY-2799, where enrollment tokens went to the wrong place
+	// in cleartext: a cloud host says which cloud answers, never which PKI
+	// mints. A session with no identity endpoint is not configured for
+	// renewal, and says so rather than guessing.
+	u, err := url.Parse(auth.PKIEndpoint)
+	if err == nil && u.Scheme == "https" && u.Host == "identity.dev.pki.wendy.sh" && u.User == nil {
+		return "https://renew.dev.pki.wendy.sh/v1/renew"
 	}
 	return ""
 }
