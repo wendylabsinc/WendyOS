@@ -1,0 +1,56 @@
+# Campaign for the WendyDataModelApp reference app. Deploy with:
+#
+#   wendy data campaign deploy campaign.yaml
+#
+# This is the only campaign the example needs. It works with the app
+# running, on a single-camera device, because the app no longer opens the
+# camera: it subscribes to the same producer this campaign's capture
+# adapter consumes (the sensors entitlement, see wendysensors.py). The
+# earlier telemetry-only variant existed solely to work around the
+# device-conflict that arrangement removes.
+version: 1
+
+name: model-harness-demo
+
+sources:
+  # "front" selects the only healthy camera on a single-camera device.
+  # Captured continuously and uncapped, so the episode holds the actual
+  # frames the model consumed: the manifest's model_input ledger names each
+  # sample the app received, and cameras/<source>/index.jsonl locates the
+  # bytes for the same sample_id. after_trigger bounds the volume to about
+  # twenty seconds of video per episode.
+  #
+  # A "capture: {mode: snapshot, interval: 30s}" policy here stores far
+  # less, and remains correct — the manifest then reports the source's
+  # payload_retention as capture_policy_keeps_a_subset, so a consumer knows
+  # the episode holds bytes for only some of the frames the model saw.
+  - camera: front
+
+capture:
+  # Keep 10 seconds of pre-trigger application records and 20 seconds
+  # after the trigger.
+  buffer: 10s
+  after_trigger: 20s
+  triggers:
+    # Fired by the app's edge-triggered person event.
+    - event: person_detected
+    # Fired by any prediction whose attributes.uncertainty exceeds 0.65:
+    # frames where YOLOv8n saw nothing above its confidence threshold
+    # (uncertainty 1.0) or only low-confidence detections. Each such
+    # prediction names the sample it came from, so the episode can be
+    # replayed against the exact frame that confused the model.
+    - model.uncertainty: "> 0.65"
+
+upload:
+  when: always
+
+retention:
+  local_quota: 5GiB
+
+export:
+  annotation: cvat
+
+# Pin the model this campaign collects for, matching the version every
+# prediction record reports in attributes.model_version.
+models:
+  yolov8n: "8.3.63"
