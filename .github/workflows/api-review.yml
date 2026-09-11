@@ -134,6 +134,15 @@ jobs:
             --output "$RUNNER_TEMP/api-review-result.json" \
             --model "$CLAUDE_MODEL"
 
+      - name: Preserve complete API review result
+        if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: api-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/api-review-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
       # Publish incomplete reviews too, retaining the failed check and previous
       # accepted decisions. Checkboxes track the maintainer's API acceptance;
       # unchecked decisions are not an additional merge gate.
