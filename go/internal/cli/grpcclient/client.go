@@ -89,6 +89,7 @@ type AgentConnection struct {
 	TimeSyncService     agentpbv2.WendyTimeSyncServiceClient
 	BuildService        agentpbv2.WendyBuildServiceClient
 	DriverService       agentpbv2.WendyDriverServiceClient
+	DataService         agentpbv2.DataServiceClient
 	// cachedAgentVersion retains a successful liveness probe performed while
 	// establishing this connection. Direct-agent connects already call
 	// GetAgentVersion to force gRPC's lazy dial and authenticate the peer; run
@@ -580,6 +581,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		TimeSyncService:     agentpbv2.NewWendyTimeSyncServiceClient(conn),
 		BuildService:        agentpbv2.NewWendyBuildServiceClient(conn),
 		DriverService:       agentpbv2.NewWendyDriverServiceClient(conn),
+		DataService:         agentpbv2.NewDataServiceClient(conn),
 	}
 }
 

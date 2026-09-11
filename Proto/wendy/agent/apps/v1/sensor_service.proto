@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+// Everything in the wendy.agent.apps package is APP-FACING: it is reachable by
+// an entitled application over a per-app private unix socket that the agent
+// creates for that app alone, and it is the only surface an application can
+// reach. Nothing here is part of the device control plane.
+//
+// The control-plane counterpart is wendy.agent.services.v2, served over device
+// mutual Transport Layer Security alongside provisioning, WiFi, container and
+// update services. Applications cannot reach that package at all. The two live
+// in separate proto packages precisely so the trust boundary is visible in the
+// protocol rather than left to a comment or a runtime policy check: if a
+// definition is in this package it is exposed to apps, and if it is not in this
+// package it is not.
+package wendy.agent.apps.v1;
+
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/appspb/v1;appspbv1";
+
+// SensorService is the read-only model-input surface of the harness. An app
+// with the "sensor-read" entitlement receives a private socket serving THIS
+// service and nothing else, so the grant cannot reach episode control,
+// campaign deployment, or downloads.
+//
+// It is a sibling of DataService rather than two more methods on it: the
+// entitlement's whole point is that the app reaches sensor subscription only.
+// A gRPC server exposes services, not methods, so keeping Subscribe on
+// DataService would put Start, Stop, Download, and CampaignDeploy on the same
+// socket and leave a per-method interceptor allowlist as the only barrier. A
+// separate service, in a separate package, makes the boundary structural
+// instead of a policy check.
+//
+// Samples are identified by (source_id, sample_id). sample_id is assigned by
+// the producer that feeds every consumer of that source, so the sample a model
+// received and the sample an episode recorded carry the same identifier and
+// can be joined offline. Canonical times are signed CLOCK_BOOTTIME nanoseconds.
+service SensorService {
+  // Sources lists the sensor sources this app may subscribe to, using the same
+  // identifiers `wendy data sources` reports.
+  rpc Sources(SensorSourcesRequest) returns (SensorSourcesResponse);
+  // Subscribe joins the existing producer for each requested source and streams
+  // its samples. The subscriber is one more consumer of the same producer the
+  // episode capture adapter uses, so subscribing never takes a device away from
+  // capture (or from another app).
+  rpc Subscribe(SensorSubscribeRequest) returns (stream SensorSample);
+}
+
+message SensorSource {
+  string id = 1;
+  string kind = 2;
+  string clock_domain = 3;
+  bool healthy = 4;
+  string detail = 5;
+  // subscribable reports whether this source can be streamed through
+  // SensorService.Subscribe. Sources whose producer cannot yet multiplex are
+  // listed with subscribable=false and a detail saying why, rather than
+  // omitted: a caller must be able to tell "not available to models" from
+  // "does not exist".
+  bool subscribable = 6;
+}
+message SensorSourcesRequest {}
+message SensorSourcesResponse { repeated SensorSource sources = 1; }
+
+message SensorSubscribeRequest {
+  // source_ids are the sources to stream, as reported by Sources (and by
+  // `wendy data sources`). At least one is required.
+  repeated string source_ids = 1;
+  // model optionally names the model consuming this stream. It is recorded in
+  // the episode's model-input ledger so an episode says which model consumed
+  // which samples.
+  string model = 2;
+}
+
+message SensorSample {
+  string source_id = 1;
+  // sample_id increases monotonically per source and is the join key between
+  // what a model consumed, what an episode recorded, and what a prediction
+  // references. It does not restart when a subscriber joins or leaves.
+  uint64 sample_id = 2;
+  // boottime_nanos is the agent's bracketed receipt of this sample on the
+  // canonical CLOCK_BOOTTIME timeline, with the bracket half-width in
+  // timestamp_uncertainty_nanos. An episode's own index may carry a
+  // higher-fidelity canonical time for the same sample (a device clock mapped
+  // into CLOCK_BOOTTIME); join on sample_id, not on time.
+  int64 boottime_nanos = 3;
+  int64 timestamp_uncertainty_nanos = 4;
+  bytes payload = 5;
+  // encoding names the payload bytes, for example "h264" or "vp8".
+  string encoding = 6;
+  // payload_self_contained reports that payload holds exactly one whole
+  // encoded access unit. When false the payload is an arbitrary chunk of the
+  // source's byte stream and must be reassembled before decoding.
+  bool payload_self_contained = 7;
+  // dropped_before counts samples this subscriber lost since the previous
+  // delivered sample because it was not reading fast enough. It is the honest
+  // explanation for gaps in sample_id.
+  uint64 dropped_before = 8;
+  // boot_id is the kernel boot the timestamps belong to.
+  string boot_id = 9;
+}
