@@ -7,74 +7,116 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// InstallDriver installs a WinUSB driver binding for the Jetson USB device IDs
-// (recovery 0955:7023/7026 and the initrd-flash gadget 0955:7100), so wendy can
-// open them over WinUSB. Steps, all via inbox DLLs:
-//
-//  1. generate a self-signed code-signing cert (key in a machine container);
-//  2. write the INF and build+sign its catalog with that cert;
-//  3. trust the cert (LocalMachine Root + TrustedPublisher);
-//  4. stage the package into the driver store (SetupCopyOEMInf);
-//  5. bind it to any present matching device (UpdateDriverForPlugAndPlayDevices).
-//
-// Staging in step 4 means the gadget (0955:7100) binds automatically when it
-// enumerates mid-flash, so the user sees a single UAC prompt total.
-//
-// Requires elevation (machine key container + Root store + driver store).
-func InstallDriver(out io.Writer) error {
-	// Working dir for the package files; the .cat must sit beside the .inf.
-	dir, err := os.MkdirTemp("", "wendy-jetson-driver-")
+// InstallDriverFor stages a complete family package and binds the selected
+// hardware ID. UpdateDriverForPlugAndPlayDevices is ID-wide, so refuse if
+// another device with that ID is present. Other board families are untouched.
+// Requires elevation; the command layer handles UAC before calling this.
+func InstallDriverFor(out io.Writer, target Device, profile DriverProfile) error {
+	if !profile.supports(target) {
+		return fmt.Errorf("unsupported %s target %s", profile.Name, target.HardwareID())
+	}
+	if err := ValidateDriverTarget(target); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "wendy-usb-driver-")
 	if err != nil {
-		return fmt.Errorf("creating package dir: %w", err)
+		return err
 	}
 	defer os.RemoveAll(dir)
-	infPath := filepath.Join(dir, infFileName)
-	catPath := filepath.Join(dir, catalogFileName)
-
-	fmt.Fprintln(out, "1/5 Writing driver INF…")
-	if err := os.WriteFile(infPath, []byte(generateINF()), 0o644); err != nil {
-		return fmt.Errorf("writing INF: %w", err)
+	infPath := filepath.Join(dir, profile.inf)
+	catPath := filepath.Join(dir, profile.catalog)
+	fmt.Fprintf(out, "Preparing %s USB driver package…\n", profile.Name)
+	if err := os.WriteFile(infPath, []byte(generateProfileINF(profile)), 0o644); err != nil {
+		return err
 	}
-
-	fmt.Fprintln(out, "2/5 Generating self-signed signing certificate…")
 	cert, err := createSigningCert(true)
 	if err != nil {
 		return err
 	}
 	defer cert.Free()
-
-	fmt.Fprintln(out, "3/5 Building and signing driver catalog…")
-	if err := buildAndSignCatalog(catPath, infPath, jetsonHardwareIDs(), cert); err != nil {
+	if err := buildAndSignCatalog(catPath, infPath, profile.hardwareIDs(), cert); err != nil {
 		return err
 	}
-
-	fmt.Fprintln(out, "4/5 Trusting certificate + staging driver package…")
 	if err := cert.installToStores(); err != nil {
 		return err
 	}
 	if err := stageDriverPackage(infPath); err != nil {
 		return err
 	}
-
-	fmt.Fprintln(out, "5/5 Binding driver to present devices…")
-	bound := 0
-	for _, hwid := range jetsonHardwareIDs() {
-		ok, err := bindDriverToPresentDevices(infPath, hwid)
+	// Repeat immediately before the ID-wide bind in case a board was unplugged
+	// or another appeared while signing/staging the package.
+	if err := ValidateDriverTarget(target); err != nil {
+		return err
+	}
+	ok, err := bindDriverToPresentDevices(infPath, target.HardwareID())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("%s disappeared before its driver could be bound", target.InstanceID)
+	}
+	// PnP can complete asynchronously. Do not equate staging or a bind call's
+	// return value with a usable, up-to-date target.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		devices, err := ListVendor(target.VID)
 		if err != nil {
-			fmt.Fprintf(out, "    %s: %v\n", hwid, err)
+			return err
+		}
+		for _, d := range devices {
+			if !strings.EqualFold(d.InstanceID, target.InstanceID) {
+				continue
+			}
+			ready, err := DriverReady(d, profile)
+			if err != nil {
+				return err
+			}
+			if ready {
+				fmt.Fprintf(out, "%s driver ready for %s.\n", profile.Name, target.InstanceID)
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s package staged, but %s did not acquire a compatible binding; reconnect it and retry", profile.Name, target.InstanceID)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+// ValidateDriverTarget checks that an ID-wide bind would affect only the
+// selected device. Callers can surface this error before asking for elevation;
+// InstallDriverFor repeats the check immediately before modifying the binding.
+func ValidateDriverTarget(target Device) error {
+	devices, err := ListVendor(target.VID)
+	if err != nil {
+		return err
+	}
+	return soleBindingTarget(devices, target)
+}
+
+func soleBindingTarget(devices []Device, target Device) error {
+	matched := false
+	count := 0
+	for _, d := range devices {
+		if d.VID != target.VID || d.PID != target.PID {
 			continue
 		}
-		if ok {
-			bound++
-			fmt.Fprintf(out, "    %s: bound\n", hwid)
-		}
+		count++
+		matched = matched || strings.EqualFold(d.InstanceID, target.InstanceID)
 	}
-	fmt.Fprintf(out, "Done. Package staged; %d present device(s) bound now, others bind on connect.\n", bound)
+	if !matched {
+		return fmt.Errorf("selected USB device %s is no longer present", target.InstanceID)
+	}
+	if count != 1 {
+		return fmt.Errorf("%d devices share %s; disconnect the others before installing its driver", count, target.HardwareID())
+	}
 	return nil
 }
 

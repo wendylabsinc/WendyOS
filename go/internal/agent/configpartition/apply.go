@@ -542,6 +542,99 @@ func updateOrgIDTXTRecord(block string, orgID int32) string {
 		"    <txt-record>orgid="+value+"</txt-record>\n  </service>", 1)
 }
 
+// UpdateAvahiSensorlink adds or removes the sensorlink=true TXT record on the
+// _wendyos._udp service block and restarts avahi-daemon, so a sensor-source
+// device can advertise itself for the `wendy device pair` picker (Task 10)
+// independently of provisioning state. Consumer devices in this plan never
+// call it; it exists so the source-role wiring and the picker agree on the key.
+func UpdateAvahiSensorlink(logger *zap.Logger, on bool) {
+	entries, err := os.ReadDir(defaultAvahiServiceDir)
+	if err != nil {
+		logger.Warn("Could not read avahi services dir", zap.String("path", defaultAvahiServiceDir), zap.Error(err))
+		return
+	}
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".service") {
+			continue
+		}
+		serviceFile := filepath.Join(defaultAvahiServiceDir, e.Name())
+		data, err := os.ReadFile(serviceFile)
+		if err != nil {
+			continue
+		}
+		if !strings.Contains(string(data), "_wendyos._udp") {
+			continue
+		}
+
+		content := updateWendyOSServiceSensorlink(string(data), on)
+		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
+			logger.Warn("Could not write avahi service file",
+				zap.String("path", serviceFile), zap.Error(err))
+			return
+		}
+
+		restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+		if out, err := restart.CombinedOutput(); err != nil {
+			logger.Warn("systemctl restart avahi-daemon failed",
+				zap.Error(err), zap.String("output", string(out)))
+		} else {
+			logger.Info("Updated avahi sensorlink advertisement",
+				zap.String("file", e.Name()), zap.Bool("sensorlink", on))
+		}
+		return
+	}
+
+	logger.Warn("No avahi service file with _wendyos._udp found; sensorlink not updated")
+}
+
+// updateWendyOSServiceSensorlink finds the _wendyos._udp service block and
+// updates its sensorlink TXT record. Other service blocks are left untouched.
+func updateWendyOSServiceSensorlink(content string, on bool) string {
+	const typeTag = "<type>_wendyos._udp</type>"
+
+	typeIdx := strings.Index(content, typeTag)
+	if typeIdx < 0 {
+		return content
+	}
+
+	serviceStart := strings.LastIndex(content[:typeIdx], "<service")
+	if serviceStart < 0 {
+		serviceStart = typeIdx
+	}
+
+	closeOffset := strings.Index(content[typeIdx:], "</service>")
+	if closeOffset < 0 {
+		return content
+	}
+	serviceEnd := typeIdx + closeOffset + len("</service>")
+
+	block := updateSensorlinkTXTRecord(content[serviceStart:serviceEnd], on)
+
+	return content[:serviceStart] + block + content[serviceEnd:]
+}
+
+// updateSensorlinkTXTRecord adds, updates, or removes the sensorlink TXT
+// record within a single _wendyos._udp service block, mirroring
+// updateAssetIDTXTRecord. on == false removes the record.
+func updateSensorlinkTXTRecord(block string, on bool) string {
+	sensorlinkRe := regexp.MustCompile(`\s*<txt-record>sensorlink=[^<]*</txt-record>`)
+	hasRecord := strings.Contains(block, "<txt-record>sensorlink=")
+
+	if !on {
+		if hasRecord {
+			block = sensorlinkRe.ReplaceAllString(block, "")
+		}
+		return block
+	}
+
+	if hasRecord {
+		return replaceTXTRecord(block, "sensorlink", "true")
+	}
+	return strings.Replace(block, "</service>",
+		"    <txt-record>sensorlink=true</txt-record>\n  </service>", 1)
+}
+
 // replaceTXTRecord replaces the value in a <txt-record>key=...</txt-record> line.
 func replaceTXTRecord(content, key, value string) string {
 	re := regexp.MustCompile(`(<txt-record>` + regexp.QuoteMeta(key) + `=)[^<]*(</txt-record>)`)

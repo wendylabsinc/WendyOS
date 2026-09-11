@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -88,6 +89,21 @@ func TestExtractTarGzRejectsTraversal(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, "escape")); err == nil {
 			t.Errorf("%q: wrote outside dest", name)
 		}
+	}
+}
+
+func TestSafeJoinWindowsPaths(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path semantics")
+	}
+	for _, name := range []string{`\escape`, `C:\escape`, `C:escape`, `\\server\share\escape`,
+		`bundle\..\..\escape`, `NUL`, `bundle/CON`, `bundle/data:stream`} {
+		if _, err := SafeJoin(t.TempDir(), name); err == nil {
+			t.Errorf("accepted unsafe path %q", name)
+		}
+	}
+	if _, err := SafeJoin(t.TempDir(), "bundle/rootfs.img"); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -184,7 +200,7 @@ func TestExtractTarGzDropsGroupAndWorldWrite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := fi.Mode().Perm(); got != want {
+		if got := fi.Mode().Perm(); runtime.GOOS != "windows" && got != want {
 			t.Errorf("%s mode = %o, want %o", name, got, want)
 		}
 		if fi.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {

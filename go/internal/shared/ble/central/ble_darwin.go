@@ -213,6 +213,8 @@ func bleError(code C.WendyBLEError, context string) error {
 		msg = "L2CAP channel failed"
 	case C.WENDY_BLE_ERR_DISCONNECTED:
 		msg = "disconnected"
+	case C.WENDY_BLE_ERR_SUBSCRIBE_FAILED:
+		msg = "subscribe failed"
 	default:
 		msg = "unknown error"
 	}

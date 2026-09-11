@@ -1,7 +1,28 @@
 import AVFoundation
 import Foundation
 import VideoToolbox
+import WendyAgentGRPC
 
+/// One encoded H.264 access unit in Annex-B framing (start-code delimited),
+/// with SPS/PPS prepended on keyframes so the stream is self-describing.
+struct CameraFrame: Equatable, Sendable {
+    var annexB: Data
+    var isKeyframe: Bool
+    /// Capture presentation time, for consumers that carry timestamps on the
+    /// wire (`WendyVideoService`). Sensor channels ignore it.
+    var timestampNanoseconds: UInt64 = 0
+}
+
+/// Produces H.264 camera frames. Injectable so `SensorService` can be tested
+/// with a fake that yields canned frames instead of touching real hardware.
+protocol CameraCapturing: Sendable {
+    func frames() -> AsyncThrowingStream<CameraFrame, any Error>
+    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor?
+}
+
+/// A camera as `WendyVideoService` presents it: a small numeric ID (position
+/// in the deterministic enumeration order), the AVFoundation unique ID it maps
+/// back to, and the display name.
 struct CameraDeviceInfo: Equatable, Sendable {
     let id: UInt32
     let uniqueID: String
@@ -9,47 +30,91 @@ struct CameraDeviceInfo: Equatable, Sendable {
     let isExternal: Bool
 }
 
-struct EncodedCameraFrame: Equatable, Sendable {
-    let data: Data
-    let timestampNanoseconds: UInt64
-}
-
+/// Enumerates cameras and opens an encoded stream on a chosen one. Injectable
+/// so `WendyVideoService` can be tested without hardware.
 protocol CameraManaging: Sendable {
     func devices() async -> [CameraDeviceInfo]
-    func frames(for device: CameraDeviceInfo) -> AsyncThrowingStream<EncodedCameraFrame, any Error>
+    func frames(for device: CameraDeviceInfo) -> AsyncThrowingStream<CameraFrame, any Error>
 }
 
-enum CameraCaptureError: Error, CustomStringConvertible {
+/// Converts a VideoToolbox AVCC bitstream (repeated 4-byte big-endian length +
+/// NALU) to Annex-B (each length replaced by the `00 00 00 01` start code). On a
+/// keyframe the parameter sets are prepended (`SC+SPS…`, `SC+PPS…`) so a consumer
+/// that joined mid-stream can decode from the first keyframe alone.
+///
+/// Pure `Data` math — this is the one piece of the camera path that is unit
+/// tested without hardware. A truncated trailing length prefix is dropped rather
+/// than trusted, so a malformed buffer can never over-read.
+func annexBFromAVCC(_ avcc: Data, sps: [Data], pps: [Data], isKeyframe: Bool) -> Data {
+    annexBFromAVCC(avcc, nalUnitHeaderLength: 4, parameterSets: sps + pps, isKeyframe: isKeyframe)
+}
+
+/// The general form: VideoToolbox reports the NAL length-prefix width with the
+/// parameter sets (1–4 bytes; 4 in practice), and the caller passes the
+/// parameter sets in the order they should precede a keyframe.
+func annexBFromAVCC(
+    _ avcc: Data,
+    nalUnitHeaderLength: Int,
+    parameterSets: [Data],
+    isKeyframe: Bool
+) -> Data {
+    guard (1...4).contains(nalUnitHeaderLength) else { return Data() }
+
+    let startCode = Data([0, 0, 0, 1])
+    var out = Data()
+    if isKeyframe {
+        for set in parameterSets {
+            out += startCode
+            out += set
+        }
+    }
+
+    var index = avcc.startIndex
+    while index + nalUnitHeaderLength <= avcc.endIndex {
+        var length = 0
+        for offset in 0..<nalUnitHeaderLength {
+            length = (length << 8) | Int(avcc[index + offset])
+        }
+        index += nalUnitHeaderLength
+        guard length > 0, index + length <= avcc.endIndex else { break }
+        out += startCode
+        out += avcc[index..<index + length]
+        index += length
+    }
+    return out
+}
+
+enum CameraError: Error, CustomStringConvertible {
     case accessDenied
+    case noDevice
     case deviceNotFound
-    case cannotOpenDevice(String)
     case cannotAddInput
     case cannotAddOutput
-    case videoToolbox(String, OSStatus)
+    case vtStatus(String, OSStatus)
 
     var description: String {
         switch self {
-        case .accessDenied:
-            return "Camera access is not allowed for Wendy Agent."
-        case .deviceNotFound:
-            return "The selected camera is no longer available."
-        case .cannotOpenDevice(let reason):
-            return "The selected camera could not be opened: \(reason)"
+        case .accessDenied: return "Camera access is not allowed for Wendy Agent."
+        case .noDevice: return "No default video capture device available."
+        case .deviceNotFound: return "The selected camera is no longer available."
         case .cannotAddInput:
             return "The selected camera could not be added to the capture session."
         case .cannotAddOutput:
             return "The camera encoder output could not be added to the capture session."
-        case .videoToolbox(let action, let status):
+        case .vtStatus(let action, let status):
             return "VideoToolbox \(action) failed (OSStatus \(status))."
         }
     }
 }
 
+/// Camera enumeration and per-device streaming for `WendyVideoService`, on the
+/// same capture pipeline `SensorService` uses for its default-camera channel.
 struct AVCaptureCameraManager: CameraManaging {
+    var averageBitRate: Int32 = 4_000_000
+
     func devices() async -> [CameraDeviceInfo] {
         await BlockingExecutor.run {
-            let devices = Self.captureDevices()
-            return devices.enumerated().map { index, device in
+            Self.captureDevices().enumerated().map { index, device in
                 CameraDeviceInfo(
                     id: UInt32(index),
                     uniqueID: device.uniqueID,
@@ -60,19 +125,24 @@ struct AVCaptureCameraManager: CameraManaging {
         }
     }
 
-    func frames(
-        for device: CameraDeviceInfo
-    ) -> AsyncThrowingStream<EncodedCameraFrame, any Error> {
-        let session = CameraCaptureSession(deviceUniqueID: device.uniqueID)
+    func frames(for device: CameraDeviceInfo) -> AsyncThrowingStream<CameraFrame, any Error> {
+        let bitRate = averageBitRate
         return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
-            continuation.onTermination = { _ in
-                session.stop()
+            let session = CameraCaptureSession(bitRate: bitRate, deviceUniqueID: device.uniqueID)
+            do {
+                try session.start(continuation: continuation)
+            } catch {
+                continuation.finish(throwing: error)
+                return
             }
-            session.start(continuation: continuation)
+            continuation.onTermination = { _ in session.stop() }
         }
     }
 
-    fileprivate static func captureDevices() -> [AVCaptureDevice] {
+    /// Built-in, Continuity, and external cameras, ordered deterministically:
+    /// the system default first, then by display name, then by unique ID, so a
+    /// numeric camera ID stays stable across calls while the set is unchanged.
+    static func captureDevices() -> [AVCaptureDevice] {
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .continuityCamera, .external],
             mediaType: .video,
@@ -91,200 +161,153 @@ struct AVCaptureCameraManager: CameraManaging {
     }
 }
 
-/// Converts length-prefixed H.264 NAL units into start-code-delimited Annex-B.
-/// Parameter sets are prepended to keyframes so a newly connected decoder can
-/// begin at the next keyframe without out-of-band codec configuration.
-func annexBFromAVCC(
-    _ avcc: Data,
-    nalUnitHeaderLength: Int,
-    parameterSets: [Data],
-    isKeyframe: Bool
-) -> Data {
-    guard (1...4).contains(nalUnitHeaderLength) else { return Data() }
+/// Live `AVCaptureSession` → `VTCompressionSession` H.264 capture.
+///
+/// NOTE: the real capture path cannot run on CI (no camera, no authorization).
+/// It is exercised only by a manual hardware gate; `annexBFromAVCC` above and the
+/// `SensorService` fan-in are what the automated tests cover.
+struct CameraCapture: CameraCapturing {
+    /// Camera occupies sensor channel 2 (mic is channel 1).
+    static let channel: UInt32 = 2
 
-    let startCode = Data([0, 0, 0, 1])
-    var output = Data()
-    if isKeyframe {
-        for parameterSet in parameterSets {
-            output += startCode
-            output += parameterSet
+    /// Target average bitrate for the H.264 encoder. Tunable per deployment; the
+    /// real world (lighting, motion, link) is what decides the right value.
+    var averageBitRate: Int32 = 4_000_000
+
+    func frames() -> AsyncThrowingStream<CameraFrame, any Error> {
+        let bitRate = averageBitRate
+        // bufferingNewest(1) IS the source-side newest-drop: a slow gRPC consumer
+        // means the encoder's older frames are discarded rather than backing up.
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let session = CameraCaptureSession(bitRate: bitRate)
+            do {
+                try session.start(continuation: continuation)
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
+            continuation.onTermination = { _ in session.stop() }
         }
     }
 
-    var index = avcc.startIndex
-    while index + nalUnitHeaderLength <= avcc.endIndex {
-        var length = 0
-        for offset in 0..<nalUnitHeaderLength {
-            length = (length << 8) | Int(avcc[index + offset])
-        }
-        index += nalUnitHeaderLength
-        guard length > 0, index + length <= avcc.endIndex else { break }
-        output += startCode
-        output += avcc[index..<index + length]
-        index += length
+    func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor? {
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return nil }
+        guard let device = AVCaptureDevice.default(for: .video) else { return nil }
+        let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+
+        var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
+        descriptor.channelID = Self.channel
+        descriptor.kind = .camera
+        descriptor.name = device.localizedName
+        var video = Wendy_Lite_Sensorlink_VideoFormat()
+        video.codec = .h264
+        video.width = UInt32(max(0, dims.width))
+        video.height = UInt32(max(0, dims.height))
+        video.fps = UInt32(
+            device.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
+        )
+        descriptor.video = video
+        return descriptor
     }
-    return output
 }
 
-/// Owns one AVFoundation capture session and its VideoToolbox encoder.
+/// Owns the live capture + encode pipeline for one `frames()` stream.
 ///
-/// `@unchecked Sendable` invariant: AVFoundation calls `captureOutput` only on
-/// `frameQueue`; that queue also owns `compressionSession`. The continuation,
-/// termination flag, and force-keyframe flag are protected by `lock`. Capture
-/// startup and shutdown are serialized on `sessionQueue`, and encoder teardown
-/// is enqueued behind every in-flight capture callback before invalidation.
+/// `@unchecked Sendable` invariant: `continuation` and `compressionSession` are
+/// assigned once in `start` before capture begins; every later read or clear of
+/// either (in `stop`, `captureOutput`, and `handleEncoded`) is guarded by `lock`,
+/// as are `forceNextKeyframe` / `isFirstFrame`. `stop` clears both under the lock
+/// before invalidating the VT session, so a concurrent snapshot never observes
+/// a session that's mid-invalidation. `start` and `stop` are each called once
+/// from the owning `AsyncThrowingStream` closures.
 final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate,
     @unchecked Sendable
 {
     private let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
-    private let sessionQueue = DispatchQueue(label: "sh.wendy.agent.camera.session")
-    private let frameQueue = DispatchQueue(label: "sh.wendy.agent.camera.frames")
+    private let queue = DispatchQueue(label: "wendy.sensor.camera")
+    private let bitRate: Int32
+    /// `nil` selects the system default camera (sensor channel); a value picks
+    /// the camera `WendyVideoService` was asked for.
+    private let deviceUniqueID: String?
     private let lock = NSLock()
-    private let deviceUniqueID: String
 
     private var compressionSession: VTCompressionSession?
-    private var continuation: AsyncThrowingStream<EncodedCameraFrame, any Error>.Continuation?
-    private var stopped = false
+    private var continuation: AsyncThrowingStream<CameraFrame, any Error>.Continuation?
     private var forceNextKeyframe = false
     private var isFirstFrame = true
 
-    init(deviceUniqueID: String) {
+    init(bitRate: Int32, deviceUniqueID: String? = nil) {
+        self.bitRate = bitRate
         self.deviceUniqueID = deviceUniqueID
         super.init()
     }
 
     func start(
-        continuation: AsyncThrowingStream<EncodedCameraFrame, any Error>.Continuation
-    ) {
-        lock.withLock {
-            self.continuation = continuation
-        }
-        sessionQueue.async { [self] in
-            do {
-                try configureAndStart()
-            } catch {
-                finish(throwing: error)
-            }
-        }
-    }
+        continuation: AsyncThrowingStream<CameraFrame, any Error>.Continuation
+    ) throws {
+        self.continuation = continuation
 
-    func stop() {
-        let shouldStop = lock.withLock {
-            guard !stopped else { return false }
-            stopped = true
-            continuation = nil
-            return true
-        }
-        guard shouldStop else { return }
-
-        sessionQueue.async { [self] in
-            videoOutput.setSampleBufferDelegate(nil, queue: nil)
-            if captureSession.isRunning {
-                captureSession.stopRunning()
-            }
-            frameQueue.async { [self] in
-                if let compressionSession {
-                    VTCompressionSessionCompleteFrames(
-                        compressionSession,
-                        untilPresentationTimeStamp: .invalid
-                    )
-                    VTCompressionSessionInvalidate(compressionSession)
-                    self.compressionSession = nil
-                }
-            }
-        }
-    }
-
-    private func configureAndStart() throws {
-        guard !lock.withLock({ stopped }) else { return }
+        // Never trigger the system permission prompt from a capture request:
+        // the user grants camera access in the app's onboarding.
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
-            throw CameraCaptureError.accessDenied
+            throw CameraError.accessDenied
         }
-        guard
-            let device = AVCaptureCameraManager.captureDevices().first(where: {
-                $0.uniqueID == deviceUniqueID
-            })
-        else {
-            throw CameraCaptureError.deviceNotFound
+        let device: AVCaptureDevice
+        if let deviceUniqueID {
+            guard
+                let selected = AVCaptureCameraManager.captureDevices().first(where: {
+                    $0.uniqueID == deviceUniqueID
+                })
+            else { throw CameraError.deviceNotFound }
+            device = selected
+        } else {
+            guard let fallback = AVCaptureDevice.default(for: .video) else {
+                throw CameraError.noDevice
+            }
+            device = fallback
         }
+        let input = try AVCaptureDeviceInput(device: device)
 
-        let input: AVCaptureDeviceInput
-        do {
-            input = try AVCaptureDeviceInput(device: device)
-        } catch {
-            throw CameraCaptureError.cannotOpenDevice(error.localizedDescription)
-        }
         captureSession.beginConfiguration()
-        if captureSession.canSetSessionPreset(.hd1280x720) {
-            captureSession.sessionPreset = .hd1280x720
-        }
-        guard captureSession.canAddInput(input) else {
-            captureSession.commitConfiguration()
-            throw CameraCaptureError.cannotAddInput
-        }
+        defer { captureSession.commitConfiguration() }
+        guard captureSession.canAddInput(input) else { throw CameraError.cannotAddInput }
         captureSession.addInput(input)
-
         videoOutput.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
         videoOutput.alwaysDiscardsLateVideoFrames = true
-        videoOutput.setSampleBufferDelegate(self, queue: frameQueue)
-        guard captureSession.canAddOutput(videoOutput) else {
-            captureSession.commitConfiguration()
-            throw CameraCaptureError.cannotAddOutput
-        }
+        videoOutput.setSampleBufferDelegate(self, queue: queue)
+        guard captureSession.canAddOutput(videoOutput) else { throw CameraError.cannotAddOutput }
         captureSession.addOutput(videoOutput)
-        captureSession.commitConfiguration()
+
+        let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        try makeCompressionSession(width: dims.width, height: dims.height)
         captureSession.startRunning()
     }
 
-    func captureOutput(
-        _ output: AVCaptureOutput,
-        didOutput sampleBuffer: CMSampleBuffer,
-        from connection: AVCaptureConnection
-    ) {
-        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+    func stop() {
+        captureSession.stopRunning()
 
-        do {
-            if compressionSession == nil {
-                try makeCompressionSession(
-                    width: Int32(CVPixelBufferGetWidth(imageBuffer)),
-                    height: Int32(CVPixelBufferGetHeight(imageBuffer))
-                )
-            }
-            guard let compressionSession else { return }
+        // Nil the continuation and snapshot+clear the session under the lock
+        // BEFORE invalidating, so a concurrent captureOutput/handleEncoded
+        // snapshot (also taken under lock) either sees a still-valid session or
+        // a nil continuation/session — never a session mid-invalidation.
+        lock.lock()
+        let session = compressionSession
+        compressionSession = nil
+        continuation = nil
+        lock.unlock()
 
-            let forceKeyframe = lock.withLock {
-                let force = forceNextKeyframe || isFirstFrame
-                forceNextKeyframe = false
-                isFirstFrame = false
-                return force
-            }
-            let properties: CFDictionary? =
-                forceKeyframe
-                ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary
-                : nil
-            let status = VTCompressionSessionEncodeFrame(
-                compressionSession,
-                imageBuffer: imageBuffer,
-                presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
-                duration: CMSampleBufferGetDuration(sampleBuffer),
-                frameProperties: properties,
-                sourceFrameRefcon: nil,
-                infoFlagsOut: nil
-            )
-            guard status == noErr else {
-                throw CameraCaptureError.videoToolbox("encode", status)
-            }
-        } catch {
-            finish(throwing: error)
+        if let session {
+            VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+            VTCompressionSessionInvalidate(session)
         }
     }
 
     private func makeCompressionSession(width: Int32, height: Int32) throws {
         var session: VTCompressionSession?
-        let status = unsafe VTCompressionSessionCreate(
+        let status = VTCompressionSessionCreate(
             allocator: kCFAllocatorDefault,
             width: width,
             height: height,
@@ -296,9 +319,7 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             refcon: Unmanaged.passUnretained(self).toOpaque(),
             compressionSessionOut: &session
         )
-        guard status == noErr, let session else {
-            throw CameraCaptureError.videoToolbox("session creation", status)
-        }
+        guard status == noErr, let session else { throw CameraError.vtStatus("create", status) }
 
         VTSessionSetProperty(
             session,
@@ -310,6 +331,7 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             key: kVTCompressionPropertyKey_ProfileLevel,
             value: kVTProfileLevel_H264_Main_AutoLevel
         )
+        // No B-frames: low latency, and every access unit is decodable in order.
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_AllowFrameReordering,
@@ -323,100 +345,107 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
         VTSessionSetProperty(
             session,
             key: kVTCompressionPropertyKey_AverageBitRate,
-            value: NSNumber(value: 4_000_000)
+            value: NSNumber(value: bitRate)
         )
-        let prepareStatus = VTCompressionSessionPrepareToEncodeFrames(session)
-        guard prepareStatus == noErr else {
-            VTCompressionSessionInvalidate(session)
-            throw CameraCaptureError.videoToolbox("encoder preparation", prepareStatus)
-        }
+        VTCompressionSessionPrepareToEncodeFrames(session)
         compressionSession = session
     }
 
-    fileprivate func handleEncoded(status: OSStatus, sampleBuffer: CMSampleBuffer?) {
-        guard status == noErr else {
-            finish(throwing: CameraCaptureError.videoToolbox("output", status))
+    // MARK: - Capture delegate (capture queue)
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        // Snapshot the session and the force-keyframe state under one lock hold
+        // so a concurrent stop() can't invalidate the session between reading it
+        // and using it below.
+        lock.lock()
+        guard let compressionSession else {
+            lock.unlock()
             return
         }
-        guard let sampleBuffer else {
-            lock.withLock {
-                forceNextKeyframe = true
-            }
-            return
+        let force = forceNextKeyframe || isFirstFrame
+        forceNextKeyframe = false
+        isFirstFrame = false
+        lock.unlock()
+
+        var properties: CFDictionary?
+        if force, let forceKey = kCFBooleanTrue {
+            properties = [kVTEncodeFrameOptionKey_ForceKeyFrame: forceKey] as CFDictionary
         }
-        guard
-            CMSampleBufferDataIsReady(sampleBuffer),
+
+        VTCompressionSessionEncodeFrame(
+            compressionSession,
+            imageBuffer: imageBuffer,
+            presentationTimeStamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
+            duration: CMSampleBufferGetDuration(sampleBuffer),
+            frameProperties: properties,
+            sourceFrameRefcon: nil,
+            infoFlagsOut: nil
+        )
+    }
+
+    // MARK: - Encode callback (VideoToolbox thread)
+
+    fileprivate func handleEncoded(_ sampleBuffer: CMSampleBuffer) {
+        lock.lock()
+        let continuation = self.continuation
+        lock.unlock()
+        guard let continuation, CMSampleBufferDataIsReady(sampleBuffer),
             let format = CMSampleBufferGetFormatDescription(sampleBuffer),
             let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer)
         else { return }
 
-        var nalUnitHeaderLength: Int32 = 0
-        var parameterSetCount = 0
-        let countStatus = unsafe CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-            format,
-            parameterSetIndex: 0,
-            parameterSetPointerOut: nil,
-            parameterSetSizeOut: nil,
-            parameterSetCountOut: &parameterSetCount,
-            nalUnitHeaderLengthOut: &nalUnitHeaderLength
-        )
-        guard countStatus == noErr else {
-            finish(throwing: CameraCaptureError.videoToolbox("format inspection", countStatus))
-            return
+        let isKeyframe = Self.isKeyframe(sampleBuffer)
+        var sps: [Data] = []
+        var pps: [Data] = []
+        if isKeyframe {
+            (sps, pps) = Self.parameterSets(format)
         }
 
-        let isKeyframe = Self.isKeyframe(sampleBuffer)
-        let parameterSets = isKeyframe ? Self.parameterSets(format, count: parameterSetCount) : []
-        let length = CMBlockBufferGetDataLength(dataBuffer)
-        var avcc = Data(count: length)
-        let copyStatus = unsafe avcc.withUnsafeMutableBytes { bytes in
-            guard let destination = bytes.baseAddress else {
-                return kCMBlockBufferBadPointerParameterErr
-            }
-            return unsafe CMBlockBufferCopyDataBytes(
+        var lengthAtOffset = 0
+        var totalLength = 0
+        var pointer: UnsafeMutablePointer<Int8>?
+        // ponytail: assumes the encoder emits a contiguous block (true for H.264
+        // access units); a non-contiguous buffer would need CMBlockBufferCopyDataBytes.
+        guard
+            CMBlockBufferGetDataPointer(
                 dataBuffer,
                 atOffset: 0,
-                dataLength: length,
-                destination: destination
-            )
-        }
-        guard copyStatus == kCMBlockBufferNoErr else {
-            finish(throwing: CameraCaptureError.videoToolbox("buffer copy", copyStatus))
-            return
-        }
+                lengthAtOffsetOut: &lengthAtOffset,
+                totalLengthOut: &totalLength,
+                dataPointerOut: &pointer
+            ) == kCMBlockBufferNoErr,
+            let pointer
+        else { return }
 
-        let annexB = annexBFromAVCC(
-            avcc,
-            nalUnitHeaderLength: Int(nalUnitHeaderLength),
-            parameterSets: parameterSets,
-            isKeyframe: isKeyframe
+        let avcc = Data(bytes: pointer, count: totalLength)
+        let presentation = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        let timestampNanoseconds: UInt64 =
+            presentation.isNumeric && presentation.seconds >= 0
+            ? UInt64(presentation.seconds * 1_000_000_000) : 0
+        let frame = CameraFrame(
+            annexB: annexBFromAVCC(avcc, sps: sps, pps: pps, isKeyframe: isKeyframe),
+            isKeyframe: isKeyframe,
+            timestampNanoseconds: timestampNanoseconds
         )
-        guard !annexB.isEmpty else { return }
 
-        let timestamp = max(0, Date().timeIntervalSince1970 * 1_000_000_000)
-        let frame = EncodedCameraFrame(
-            data: annexB,
-            timestampNanoseconds: UInt64(timestamp)
-        )
-        let continuation = lock.withLock { self.continuation }
-        switch continuation?.yield(frame) {
+        switch continuation.yield(frame) {
         case .dropped:
-            lock.withLock {
-                forceNextKeyframe = true
-            }
+            // A congested consumer dropped a frame; force the next encode to be a
+            // keyframe so the stream re-syncs instead of showing corruption.
+            lock.lock()
+            forceNextKeyframe = true
+            lock.unlock()
         case .terminated:
             stop()
-        case .enqueued, nil:
-            break
-        @unknown default:
+        default:
             break
         }
-    }
-
-    private func finish(throwing error: any Error) {
-        let continuation = lock.withLock { self.continuation }
-        continuation?.finish(throwing: error)
-        stop()
     }
 
     private static func isKeyframe(_ sampleBuffer: CMSampleBuffer) -> Bool {
@@ -428,32 +457,49 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             let first = attachments.first,
             let notSync = first[kCMSampleAttachmentKey_NotSync] as? Bool
         else {
+            // Absent NotSync attachment means a sync sample (keyframe).
             return true
         }
         return !notSync
     }
 
-    private static func parameterSets(
-        _ format: CMFormatDescription,
-        count: Int
-    ) -> [Data] {
-        (0..<count).compactMap { index in
+    private static func parameterSets(_ format: CMFormatDescription) -> ([Data], [Data]) {
+        var count = 0
+        CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+            format,
+            parameterSetIndex: 0,
+            parameterSetPointerOut: nil,
+            parameterSetSizeOut: nil,
+            parameterSetCountOut: &count,
+            nalUnitHeaderLengthOut: nil
+        )
+
+        var sps: [Data] = []
+        var pps: [Data] = []
+        for index in 0..<count {
             var pointer: UnsafePointer<UInt8>?
             var size = 0
-            let status = unsafe CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                format,
-                parameterSetIndex: index,
-                parameterSetPointerOut: &pointer,
-                parameterSetSizeOut: &size,
-                parameterSetCountOut: nil,
-                nalUnitHeaderLengthOut: nil
-            )
-            guard status == noErr, let pointer = unsafe pointer else { return nil }
-            return unsafe Data(bytes: pointer, count: size)
+            guard
+                CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                    format,
+                    parameterSetIndex: index,
+                    parameterSetPointerOut: &pointer,
+                    parameterSetSizeOut: &size,
+                    parameterSetCountOut: nil,
+                    nalUnitHeaderLengthOut: nil
+                ) == noErr,
+                let pointer
+            else { continue }
+            let data = Data(bytes: pointer, count: size)
+            // Convention: index 0 is the SPS, the rest are PPS.
+            if index == 0 { sps.append(data) } else { pps.append(data) }
         }
+        return (sps, pps)
     }
 }
 
+/// C output callback — no captures, so it bridges to a C function pointer. Routes
+/// back to the owning session via the unretained refcon set at create time.
 private func cameraCompressionOutputCallback(
     outputCallbackRefCon: UnsafeMutableRawPointer?,
     sourceFrameRefCon: UnsafeMutableRawPointer?,
@@ -461,8 +507,7 @@ private func cameraCompressionOutputCallback(
     infoFlags: VTEncodeInfoFlags,
     sampleBuffer: CMSampleBuffer?
 ) {
-    guard let outputCallbackRefCon = unsafe outputCallbackRefCon else { return }
-    let session = unsafe Unmanaged<CameraCaptureSession>.fromOpaque(outputCallbackRefCon)
-        .takeUnretainedValue()
-    session.handleEncoded(status: status, sampleBuffer: sampleBuffer)
+    guard status == noErr, let sampleBuffer, let refcon = outputCallbackRefCon else { return }
+    let session = Unmanaged<CameraCaptureSession>.fromOpaque(refcon).takeUnretainedValue()
+    session.handleEncoded(sampleBuffer)
 }

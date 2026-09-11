@@ -173,7 +173,7 @@ actor VideoService: RegistrableRPCService {
             do {
                 for try await frame in camera.frames(for: device) {
                     var proto = Wendy_Agent_Services_V1_VideoFrame()
-                    proto.data = frame.data
+                    proto.data = frame.annexB
                     proto.timestampNs = frame.timestampNanoseconds
                     proto.codec = .h264
                     try await writer.write(proto)
@@ -182,7 +182,7 @@ actor VideoService: RegistrableRPCService {
                 return Metadata()
             } catch {
                 await self.releaseStream(device: device, remotePeer: remotePeer)
-                if let error = error as? CameraCaptureError {
+                if let error = error as? CameraError {
                     throw Self.rpcError(for: error)
                 }
                 throw error
@@ -306,15 +306,15 @@ actor VideoService: RegistrableRPCService {
         return proto
     }
 
-    private static func rpcError(for error: CameraCaptureError) -> RPCError {
+    private static func rpcError(for error: CameraError) -> RPCError {
         switch error {
         case .accessDenied:
             return RPCError(code: .permissionDenied, message: error.description)
-        case .deviceNotFound:
+        case .deviceNotFound, .noDevice:
             return RPCError(code: .notFound, message: error.description)
-        case .cannotOpenDevice, .cannotAddInput, .cannotAddOutput:
+        case .cannotAddInput, .cannotAddOutput:
             return RPCError(code: .failedPrecondition, message: error.description)
-        case .videoToolbox:
+        case .vtStatus:
             return RPCError(code: .internalError, message: error.description)
         }
     }

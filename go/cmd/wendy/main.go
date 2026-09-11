@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"os"
 	"os/signal"
 	"strconv"
@@ -247,6 +248,14 @@ func formatError(err error) error {
 	prefix := ""
 	if idx := strings.Index(msg, "rpc error: code = "); idx > 0 {
 		prefix = msg[:idx]
+	}
+
+	// A cloud tunnel the broker closed carries the broker's verdict inside the
+	// handshake failure (clouddefaults.BrokerTunnelConn). That verdict is the
+	// actionable part: it is neither a cert problem nor a dead device, so show
+	// it before the handshake heuristics below can misread it as either.
+	if verdict, ok := clouddefaults.ExplainTunnelClose(msg); ok {
+		return fmt.Errorf("%sWendy Cloud closed the tunnel to the device: %s\n  For full tunnel details rerun with WENDY_TLS_DEBUG=1", prefix, verdict)
 	}
 
 	isPKICoreCall := strings.Contains(prefix, "pki-core")

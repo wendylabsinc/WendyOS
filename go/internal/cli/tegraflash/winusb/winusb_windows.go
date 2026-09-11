@@ -9,6 +9,7 @@ package winusb
 
 import (
 	"fmt"
+	"io"
 	"time"
 	"unsafe"
 
@@ -139,8 +140,8 @@ func interfaceDetailPath(set uintptr, ifd *spDeviceInterfaceData) (string, error
 // reported by ListDevices, which is stable across the recovery→gadget
 // re-enumeration. It deliberately does NOT match against the device-interface
 // path (which encodes VID/PID/serial and so changes when the device
-// re-enumerates and shares no substring with a location path). Empty opens the
-// first device found.
+// re-enumerates and shares no substring with a location path). Empty requires
+// exactly one device.
 func Open(locationPath string) (*USBDevice, error) {
 	return OpenExpected(locationPath, 0)
 }
@@ -156,6 +157,12 @@ func OpenExpected(locationPath string, expectedProduct uint16) (*USBDevice, erro
 		return nil, fmt.Errorf("no Jetson WinUSB device found (is the driver installed and the device connected?)")
 	}
 	if locationPath == "" {
+		if expectedProduct != 0 {
+			return nil, fmt.Errorf("a physical USB location is required for product 0x%04x", expectedProduct)
+		}
+		if len(paths) != 1 {
+			return nil, fmt.Errorf("%d WinUSB devices present; select a specific device", len(paths))
+		}
 		return openPath(paths[0])
 	}
 	// Pin by physical location: find the present NVIDIA device at locationPath
@@ -181,7 +188,7 @@ func OpenExpected(locationPath string, expectedProduct uint16) (*USBDevice, erro
 // specific device must not fall back to "first interface found".
 func OpenInstance(instanceID string, expectedProduct uint16) (*USBDevice, error) {
 	if expectedProduct != 0 {
-		if _, pid, ok := ParseVIDPID(instanceID); !ok || pid != expectedProduct {
+		if vid, pid, ok := ParseVIDPID(instanceID); !ok || vid != VendorNVIDIA || pid != expectedProduct {
 			return nil, fmt.Errorf("device %s is not USB product 0x%04x", instanceID, expectedProduct)
 		}
 	}
@@ -204,25 +211,6 @@ func devInterfacePath(instanceID string) string {
 		return ""
 	}
 	return paths[0]
-}
-
-// InterfacePresent reports whether any present device currently exposes wendy's
-// Jetson WinUSB interface — i.e. our driver is installed and bound. Unlike a
-// device merely reporting "no problem", this is true only when OUR WinUSB driver
-// (not some other driver, e.g. a prior Zadig install) is bound.
-func InterfacePresent() bool {
-	paths, err := openDevicePaths()
-	return err == nil && len(paths) > 0
-}
-
-// DeviceHasOurInterface reports whether this specific device is bound to
-// wendy's Jetson WinUSB interface. InterfacePresent alone is host-global and
-// can be satisfied by a *different* bound Jetson — e.g. a Thor bound by a
-// driver package staged before the T234 PIDs were added — while the target
-// device sits driverless; callers deciding whether to (re)install the driver
-// must check the device they are about to open.
-func DeviceHasOurInterface(d Device) bool {
-	return devInterfacePath(d.InstanceID) != ""
 }
 
 func openPath(devPath string) (*USBDevice, error) {
@@ -331,6 +319,25 @@ func (d *USBDevice) SetReadTimeout(ms uint32) {
 	d.curInTimeoutMs = ms
 }
 
+// SetTransferTimeout bounds both bulk pipes for transports such as EDL whose
+// per-call deadlines differ from RCM/ADB. Unlike legacy setters, errors are
+// returned so callers cannot silently use an old (possibly lengthy) timeout.
+func (d *USBDevice) SetTransferTimeout(timeout time.Duration, read bool) error {
+	ms := uint32(max(1, min(timeout.Milliseconds(), int64(^uint32(0)))))
+	pipe := d.outPipe
+	if read {
+		pipe = d.inPipe
+	}
+	if r, _, err := procWinUsbSetPipePolicy.Call(d.winusb, uintptr(pipe), uintptr(pipePolicyPipeTransferTimeout),
+		uintptr(unsafe.Sizeof(ms)), uintptr(unsafe.Pointer(&ms))); r == 0 {
+		return fmt.Errorf("setting USB transfer timeout: %w", err)
+	}
+	if read {
+		d.curInTimeoutMs = ms
+	}
+	return nil
+}
+
 // setPipeTimeout sets PIPE_TRANSFER_TIMEOUT (ms; 0 = infinite) on a pipe.
 func (d *USBDevice) setPipeTimeout(pipeID uint8, ms uint32) {
 	procWinUsbSetPipePolicy.Call(
@@ -363,7 +370,7 @@ func (d *USBDevice) WriteBulk(buf []byte) (int, error) {
 		uintptr(unsafe.Pointer(&transferred)), 0,
 	)
 	if r == 0 {
-		return 0, fmt.Errorf("WinUsb_WritePipe: %w", e)
+		return int(transferred), fmt.Errorf("WinUsb_WritePipe: %w", e)
 	}
 	return int(transferred), nil
 }
@@ -380,6 +387,9 @@ func (d *USBDevice) writeBulkChunked(data []byte) error {
 		n, err := d.WriteBulk(data[off:end])
 		if err != nil {
 			return err
+		}
+		if n != end-off {
+			return io.ErrShortWrite
 		}
 		off += n
 	}
@@ -416,7 +426,7 @@ func (d *USBDevice) ReadBulk(buf []byte) (int, error) {
 		uintptr(unsafe.Pointer(&transferred)), 0,
 	)
 	if r == 0 {
-		return 0, fmt.Errorf("WinUsb_ReadPipe: %w", e)
+		return int(transferred), fmt.Errorf("WinUsb_ReadPipe: %w", e)
 	}
 	return int(transferred), nil
 }

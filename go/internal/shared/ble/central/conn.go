@@ -165,6 +165,7 @@ func (c *l2capNetConn) Close() error {
 func (c *l2capNetConn) LocalAddr() net.Addr  { return bleNetAddr{} }
 func (c *l2capNetConn) RemoteAddr() net.Addr { return bleNetAddr{} }
 
+// WARNING: SetDeadline only ever bounds reads — see SetWriteDeadline.
 func (c *l2capNetConn) SetDeadline(t time.Time) error {
 	c.readDeadline = t
 	return nil
@@ -173,6 +174,8 @@ func (c *l2capNetConn) SetReadDeadline(t time.Time) error {
 	c.readDeadline = t
 	return nil
 }
+
+// WARNING: SetWriteDeadline is currently not implemented and is a no-op.
 func (c *l2capNetConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 // bleNetAddr is a minimal net.Addr for the BLE transport.

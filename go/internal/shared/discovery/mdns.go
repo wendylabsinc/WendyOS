@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,9 @@ func lanDeviceFromService(svc MDNSService) models.LANDevice {
 		IsWendyDevice:    true,
 		NetworkInterface: svc.InterfaceName,
 	}
+	if dev.IPAddress != "" {
+		dev.Addresses = []string{dev.IPAddress}
+	}
 	if v, ok := svc.TXTRecords["assetid"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
 			dev.AssetID = int32(n)
@@ -90,7 +94,25 @@ func lanDeviceFromService(svc MDNSService) models.LANDevice {
 	if v, ok := svc.TXTRecords["devicetype"]; ok {
 		dev.DeviceType = v
 	}
+	if v, ok := svc.TXTRecords["caps"]; ok {
+		for _, c := range strings.Split(v, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				dev.Caps = append(dev.Caps, c)
+			}
+		}
+	}
+	// Back-compat: the legacy sensorlink=true TXT record is superseded by
+	// caps=sensors, but old devices still advertise it alone.
+	if v, ok := svc.TXTRecords["sensorlink"]; ok && v == "true" && !contains(dev.Caps, "sensors") {
+		dev.Caps = append(dev.Caps, "sensors")
+	}
+	dev.Sensorlink = contains(dev.Caps, "sensors")
 	return dev
+}
+
+// contains reports whether ss contains s.
+func contains(ss []string, s string) bool {
+	return slices.Contains(ss, s)
 }
 
 // parseTXTRecord decodes a DNS-SD TXT record from its wire format: a sequence

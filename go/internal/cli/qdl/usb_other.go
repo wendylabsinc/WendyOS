@@ -1,4 +1,4 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package qdl
 
@@ -7,23 +7,11 @@ import (
 	"time"
 )
 
-// Windows binds Qualcomm's QDLoader driver as a serial port rather than
-// exposing the raw bulk interface libusb needs, so EDL flashing needs a
-// separate transport there and is not wired up yet.
+// Platforms without a USB transport cannot flash EDL devices.
 var errUnsupported = errors.New("flashing a device in EDL mode is not supported on this platform")
 
 // Supported reports whether this platform has an EDL transport.
 func Supported() bool { return false }
-
-// DeviceInfo identifies one attached device in EDL mode.
-type DeviceInfo struct {
-	Serial  string
-	CID     string
-	Bus     int
-	Address int
-}
-
-func (d DeviceInfo) String() string { return d.Serial }
 
 // USBConn is a stub on platforms without an EDL transport.
 type USBConn struct{}

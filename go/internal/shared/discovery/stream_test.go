@@ -576,6 +576,48 @@ func TestStreamDedupAndAddressChange(t *testing.T) {
 	expectQuiet(t, events, 100*time.Millisecond)
 }
 
+// TestStreamUnionsAddressesAcrossInterfaces proves a device seen on two
+// interfaces with different IPs keeps BOTH in Device.Addresses rather than
+// collapsing to the single primary preferStableTarget picks — the set the dial
+// ladder needs so a device reachable only over its USB link is still tried when
+// its WiFi IP is unreachable.
+func TestStreamUnionsAddressesAcrossInterfaces(t *testing.T) {
+	fb := newFakeBackend()
+	useStreamSeams(t, fb.fn, nil)
+
+	events, _ := startStream(t, StreamOptions{}) // no cache, no prober
+
+	wifi := wendyService("dev-7", "orin", "orin.local", "192.168.1.69", 50051)
+	wifi.InterfaceName = "en0"
+	fb.emit(t, wifi)
+	found := collectEvents(t, events, 1, 5*time.Second)[0]
+	if found.Device.IPAddress != "192.168.1.69" {
+		t.Fatalf("first sighting must land at its address: %+v", found.Device)
+	}
+	if got := found.Device.Addresses; len(got) != 1 || got[0] != "192.168.1.69" {
+		t.Fatalf("first sighting Addresses = %v, want [192.168.1.69]", got)
+	}
+
+	// Same device, different interface (USB link), different routable IPv4.
+	usb := wendyService("dev-7", "orin", "orin.local", "169.254.1.2", 50051)
+	usb.InterfaceName = "en5"
+	fb.emit(t, usb)
+	next := collectEvents(t, events, 1, 5*time.Second)[0]
+	if next.Kind != LANUpdated || next.Device.ID != "dev-7" {
+		t.Fatalf("second interface sighting must update the device: %+v", next)
+	}
+	want := map[string]bool{"192.168.1.69": true, "169.254.1.2": true}
+	got := next.Device.Addresses
+	if len(got) != len(want) {
+		t.Fatalf("both interface addresses must survive: Addresses = %v", got)
+	}
+	for _, a := range got {
+		if !want[a] {
+			t.Fatalf("unexpected address %q in %v", a, got)
+		}
+	}
+}
+
 func TestStreamNoCacheNoCachedEvents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "devices.json")
 	seedCache(t, path, discoverycache.Entry{ID: "dev-1", DisplayName: "orin", Hostname: "orin.local", IP: "10.0.0.5", Port: 50051})
@@ -1208,6 +1250,14 @@ func TestStreamKeepsIPv4TargetOverLinkLocalIPv6(t *testing.T) {
 
 	v6 := wendyService("dev-52", "orin", "orin.local", "fe80::1%eth0", 50051)
 	v6.InterfaceName = "eth0"
+	fb.emit(t, v6)
+	updated := collectEvents(t, events, 1, 5*time.Second)[0]
+	if updated.Kind != LANUpdated || updated.Device.IPAddress != found.Device.IPAddress {
+		t.Fatalf("address update changed primary: %+v", updated)
+	}
+	if len(updated.Device.Addresses) != 2 || updated.Device.Addresses[1] != "fe80::1%eth0" {
+		t.Fatalf("sibling missing from event: %+v", updated.Device)
+	}
 	fb.emit(t, v6)
 	expectQuiet(t, events, 200*time.Millisecond)
 	stop()

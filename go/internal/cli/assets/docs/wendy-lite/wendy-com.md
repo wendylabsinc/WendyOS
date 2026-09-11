@@ -78,6 +78,43 @@ USB layer on both sides.  The handshake uses echo mode for this:
 
 The channel is now in `USJ_MODE_COM` with no stale data in either buffer.
 
+#### Implementation notes
+
+A board that has just rebooted is a hostile environment for this sequence: boot
+logs keep the stream continuously readable so it never goes quiet, bytes can be
+dropped, and the device is not ready to serve WendyCom for some time after USB
+comes up. The CLI's implementation (`serialHandshake`, in
+`go/internal/cli/liteclient/link_direct.go`) is therefore more aggressive than
+the steps above, collapsing 2-5 into a single retry loop:
+
+- **Steps 2 and 5 go out as one write.** Each attempt sends
+  `DLE DLE DLE DLE e` immediately followed by 16 spaces of padding and a fresh
+  32-character random sentinel, as a single payload.
+- **The echo mode command is repeated with every attempt.** The device refuses
+  `DLE e` until its WendyCom agent is running, and the window between USB
+  initialization and that point is wide enough to swallow the first attempt.
+  Applying the command is a plain mode assignment, so re-issuing it is
+  idempotent. Escape sequences are consumed by the mode parser and never echoed,
+  so the prefix cannot show up in the echoed stream.
+- **Every attempt carries a fresh sentinel.** The sentinel is a stream position
+  marker, not a liveness probe: because the echo is FIFO, seeing the *latest*
+  one come back proves nothing the host wrote earlier is still in flight, which
+  is what step 4 is really after. Matching an older sentinel would leave the
+  later echoes queued, and the WendyCom framer reads their leading padding as a
+  frame header.
+- **The padding is 16 spaces.** A `DLE` whose command byte is lost stays latched
+  and consumes the byte after it, so a run of expendable bytes ahead of the
+  sentinel keeps a dropped byte from corrupting it.
+- **Matching uses a rolling window.** The host reads one byte at a time, keeping
+  the last 32, and compares that window to the sentinel just sent. Draining the
+  channel (step 4) falls out of this for free, without the stream ever having to
+  go quiet.
+- **Retries widen.** The first attempt goes out immediately, then the host waits
+  100 ms before retrying, then 200, 300, 400 and 500 ms, holding at 500 ms,
+  within a total budget of 3 seconds — about eight attempts. Widening keeps
+  probing a device that is still booting without pushing a kilobyte of sentinels
+  at it.
+
 ### Switching to program mode
 
 In addition to the modes described above, the host can reset the device into program mode via the DTR and RTS signals exposed by the USB Serial JTAG peripheral. The `wendy os install` command uses this to flash the firmware.
@@ -212,6 +249,7 @@ Queries the device for information about its hardware and software. The device r
 - `os` — the operating system name, typically `wendy-lite`.
 - `os_version` — the operating system version.
 - `cpu_architecture` — the CPU architecture.
-- `board` — the board identifier (e.g. `esp32c6`, meaning a generic ESP32-C6 board).
+- `target` — the SoC name (e.g. `esp32c6` or `esp32s3`).
 - `wasm_app_support` — whether the device can run WASM applications.
 - `native_app_support` — whether the device can run native applications.
+- `board` — the board identifier (e.g. `esp32c6_generic` or `esp32s3_seeed_xiao_native`). Empty when the board is not known.

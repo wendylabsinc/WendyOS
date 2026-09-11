@@ -351,6 +351,7 @@ public actor WendyAgent {
             ),
             containerService,
             AudioService(),
+            SensorService(assetID: info.assetID),
             provisioningService,
             TelemetryService(broadcaster: broadcaster),
             FileSyncService(appsBase: appsBase),
@@ -645,7 +646,9 @@ public actor WendyAgent {
             displayName: ProcessInfo.processInfo.hostName,
             deviceID: ProcessInfo.processInfo.hostName,
             tls: enrolled,
-            assetID: enrolled ? info?.assetID : nil
+            assetID: enrolled ? info?.assetID : nil,
+            orgID: enrolled ? info?.orgID : nil,
+            caps: enrolled ? ["sensors"] : []
         )
 
         let runtime = try await advertiser.start()

@@ -77,9 +77,13 @@ func buildWatcherScript(services []string) string {
 	}
 	var b strings.Builder
 	for _, svc := range services {
-		// Only canonical 36-character UUIDs are accepted; anything else would
-		// make [Guid] throw and kill the whole scan for one bad entry.
-		if len(svc) != 36 {
+		// Only canonical hyphenated UUIDs are accepted. Anything else would make
+		// [Guid] throw and kill the whole scan for one bad entry — and, more
+		// importantly, svc is interpolated into a single-quoted PowerShell
+		// literal below, so it must be known to hold nothing but hex and
+		// hyphens: a length-only check would let a 36-character value carrying a
+		// quote break out of the literal and inject commands.
+		if !isCanonicalUUID(svc) {
 			continue
 		}
 		fmt.Fprintf(&b, "    $watcher.AdvertisementFilter.Advertisement.ServiceUuids.Add([Guid]'%s')\n", svc)

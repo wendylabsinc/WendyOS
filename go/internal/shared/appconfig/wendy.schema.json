@@ -186,6 +186,14 @@
         },
         {
           "properties": {
+            "type": { "const": "npu" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "NPU access for on-device AI inference."
+        },
+        {
+          "properties": {
             "type": { "const": "persist" },
             "name": {
               "type": "string",

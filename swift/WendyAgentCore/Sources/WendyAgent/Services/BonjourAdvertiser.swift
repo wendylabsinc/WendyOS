@@ -14,6 +14,8 @@ struct BonjourAdvertiser {
     let deviceID: String
     var tls: Bool = false
     var assetID: Int32? = nil
+    var orgID: Int32? = nil
+    var caps: [String] = []
 
     private let logger = Logger(label: "sh.wendy.agent.bonjour")
 
@@ -35,18 +37,34 @@ struct BonjourAdvertiser {
             displayName: self.displayName,
             deviceID: self.deviceID,
             tls: self.tls,
-            assetID: self.assetID
+            assetID: self.assetID,
+            orgID: self.orgID,
+            caps: self.caps
         )
     }
 
-    /// Encodes DNS-SD TXT records as length-prefixed `key=value` fields. `tls`
-    /// and `assetid` mirror what the wendy CLI reads to decide mTLS vs plaintext
-    /// and to label the device (see discovery_*.go).
-    static func encodeTXT(displayName: String, deviceID: String, tls: Bool, assetID: Int32?) -> Data
-    {
+    /// Encodes DNS-SD TXT records as length-prefixed `key=value` fields. `tls`,
+    /// `assetid`, and `orgid` mirror what the wendy CLI reads to decide mTLS vs
+    /// plaintext, to label the device, and to enforce same-org pairing (see
+    /// discovery_*.go). `caps` advertises optional capabilities (e.g. "sensors")
+    /// as a comma-joined list; omitted when empty.
+    static func encodeTXT(
+        displayName: String,
+        deviceID: String,
+        tls: Bool,
+        assetID: Int32?,
+        orgID: Int32?,
+        caps: [String]
+    ) -> Data {
         var fields = ["displayname=\(displayName)", "id=\(deviceID)", "tls=\(tls)"]
         if let assetID {
             fields.append("assetid=\(assetID)")
+        }
+        if let orgID {
+            fields.append("orgid=\(orgID)")
+        }
+        if !caps.isEmpty {
+            fields.append("caps=\(caps.joined(separator: ","))")
         }
         return fields.reduce(into: Data()) { data, field in
             data.append(UInt8(field.utf8.count))
@@ -107,6 +125,11 @@ final class BonjourRegistration: @unchecked Sendable {
         self.readyContinuation = continuation
 
         var serviceRef: DNSServiceRef?
+        // Advertise on every interface (index 0), including the USB link. A
+        // consumer only ever receives our advert over an interface it shares
+        // with us, so resolving by the source's identity there yields an
+        // address it can actually reach — restricting to one "primary" LAN
+        // interface would hide us from a peer reachable only over USB.
         let error = self.txtData.withUnsafeBytes { buffer in
             DNSServiceRegister(
                 &serviceRef,

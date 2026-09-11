@@ -38,8 +38,9 @@ var errGadgetUnreachable = errors.New("thor flashing gadget did not appear over 
 // PathKey is the stable physical-location key used to re-find the device across
 // the RCM→gadget re-enumeration; Label is a human description.
 type thorDevice struct {
-	PathKey string
-	Label   string
+	PathKey  string
+	Label    string
+	Instance string // exact Windows recovery devnode; empty on Unix
 }
 
 // installThor flashes a Jetson AGX Thor over USB recovery: plan the flashpack,
@@ -53,7 +54,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	// enough. Elevate up front, before the briefing, so a missing-permission
 	// failure never surprises the user mid-flash (WDY-1843). On a successful sudo
 	// re-exec this replaces the process and does not return. Windows elevates
-	// separately via UAC when it installs the WinUSB driver (thorPrepareHost).
+	// only the driver helper via UAC if either USB stage needs a binding repair.
 	if err := ensureThorRootAccess(); err != nil {
 		return err
 	}
@@ -96,14 +97,14 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 		return err
 	}
 
-	// Brief the user (Windows briefing includes the one-time WinUSB driver note),
+	// Brief the user (Windows briefing includes the WinUSB driver note),
 	// then confirm before touching USB.
 	if err := confirmThorReady(plan.version, force); err != nil {
 		return err
 	}
 
-	// Prepare the host: Windows installs+trusts the WinUSB driver (UAC); macOS/
-	// Linux stop any conflicting adb server that would claim the gadget.
+	// Stop any conflicting adb server that would claim the gadget. Windows
+	// prepares each device's driver after identifying the selected USB target.
 	if err := thorPrepareHost(os.Stdout); err != nil {
 		return err
 	}

@@ -199,7 +199,7 @@ func elevationHint() string {
 func keepElevationAlive(_ context.Context) {}
 
 // ensureThorRootAccess is a no-op on Windows. The Thor flash's up-front root
-// requirement (WDY-1843) is a macOS/Linux concern — Windows elevates via UAC
-// when thorPrepareHost installs the WinUSB driver, so there is nothing to do
+// requirement (WDY-1843) is a macOS/Linux concern — Windows elevates a helper
+// when either USB stage needs a driver install, so there is nothing to do
 // here. Provided so the cross-platform installThor flow compiles on Windows.
 func ensureThorRootAccess() error { return nil }

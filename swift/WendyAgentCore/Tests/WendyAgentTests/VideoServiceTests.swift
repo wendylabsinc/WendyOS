@@ -50,8 +50,9 @@ struct VideoServiceAdapterTests {
             name: "Studio Camera",
             isExternal: true
         )
-        let expected = EncodedCameraFrame(
-            data: Data([0, 0, 0, 1, 0x67]),
+        let expected = CameraFrame(
+            annexB: Data([0, 0, 0, 1, 0x67]),
+            isKeyframe: true,
             timestampNanoseconds: 123
         )
         let service = VideoService(
@@ -69,7 +70,7 @@ struct VideoServiceAdapterTests {
 
         let frames = writer.snapshot()
         #expect(frames.count == 1)
-        #expect(frames[0].data == expected.data)
+        #expect(frames[0].data == expected.annexB)
         #expect(frames[0].timestampNs == expected.timestampNanoseconds)
         #expect(frames[0].codec == .h264)
     }
@@ -225,7 +226,7 @@ struct VideoServiceAdapterTests {
         let service = VideoService(
             camera: FakeCameraManager(
                 devices: [camera],
-                streamError: CameraCaptureError.accessDenied
+                streamError: CameraError.accessDenied
             )
         )
         let response = try await service.streamVideo(
@@ -300,7 +301,7 @@ struct VideoToolboxH264FramingTests {
 
 private struct FakeCameraManager: CameraManaging {
     var devices: [CameraDeviceInfo] = []
-    var frames: [String: [EncodedCameraFrame]] = [:]
+    var frames: [String: [CameraFrame]] = [:]
     var streamError: (any Error)?
 
     func devices() async -> [CameraDeviceInfo] {
@@ -309,7 +310,7 @@ private struct FakeCameraManager: CameraManaging {
 
     func frames(
         for device: CameraDeviceInfo
-    ) -> AsyncThrowingStream<EncodedCameraFrame, any Error> {
+    ) -> AsyncThrowingStream<CameraFrame, any Error> {
         let frames = frames[device.uniqueID] ?? []
         let streamError = self.streamError
         return AsyncThrowingStream { continuation in
@@ -331,7 +332,7 @@ private struct WaitingCameraManager: CameraManaging {
 
     func frames(
         for device: CameraDeviceInfo
-    ) -> AsyncThrowingStream<EncodedCameraFrame, any Error> {
+    ) -> AsyncThrowingStream<CameraFrame, any Error> {
         probe.stream()
     }
 }
@@ -342,9 +343,9 @@ private final class VideoStreamTerminationProbe: @unchecked Sendable {
     private var terminatedCount = 0
     private var continuations:
         [UUID:
-            AsyncThrowingStream<EncodedCameraFrame, any Error>.Continuation] = [:]
+            AsyncThrowingStream<CameraFrame, any Error>.Continuation] = [:]
 
-    func stream() -> AsyncThrowingStream<EncodedCameraFrame, any Error> {
+    func stream() -> AsyncThrowingStream<CameraFrame, any Error> {
         let id = UUID()
         return AsyncThrowingStream { continuation in
             lock.withLock {

@@ -25,6 +25,10 @@ var (
 // launched from an existing shell (the normal case) the console has another
 // client and this is a no-op.
 func PauseBeforeExitIfSoleConsole() {
+	// The hidden driver helper must exit so its waiting parent can continue.
+	if len(os.Args) > 1 && os.Args[1] == "__usb-driver" {
+		return
+	}
 	if !soleConsoleOwner() || !stdinIsTerminal() {
 		return
 	}

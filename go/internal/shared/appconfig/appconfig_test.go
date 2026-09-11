@@ -1423,6 +1423,46 @@ func TestHTTPEntitlementValid(t *testing.T) {
 	}
 }
 
+func TestValidateJSON_NPUNoWarnings(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "npu"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) != 0 {
+		t.Errorf("ValidateJSON() got %d warnings for valid npu entitlement, want 0", len(warnings))
+	}
+}
+
+func TestValidateJSON_NPUUnknownKeys(t *testing.T) {
+	data := []byte(`{
+		"appId": "com.example.app",
+		"entitlements": [
+			{"type": "npu", "device": "/dev/fastrpc-cdsp"}
+		]
+	}`)
+
+	warnings := ValidateJSON(data)
+	if len(warnings) == 0 {
+		t.Fatal("ValidateJSON() expected warning for unknown key on npu entitlement, got none")
+	}
+}
+
+func TestNPUEntitlementValid(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "test",
+		Entitlements: []Entitlement{
+			{Type: EntitlementNPU},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
 func TestHTTPEntitlementPortRequired(t *testing.T) {
 	cfg := &AppConfig{
 		AppID: "test",

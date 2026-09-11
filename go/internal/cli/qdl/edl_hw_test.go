@@ -23,8 +23,8 @@ func TestHardwareEDLHandshake(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	t.Logf("EDL devices: %v", devices)
-	if len(devices) == 0 {
-		t.Fatal("no device in EDL mode")
+	if len(devices) != 1 {
+		t.Fatalf("expected exactly one EDL device, found %d; disconnect other EDL devices", len(devices))
 	}
 
 	prog, err := os.ReadFile(filepath.Join(bundle, "prog_firehose_ddr.elf"))
@@ -32,7 +32,7 @@ func TestHardwareEDLHandshake(t *testing.T) {
 		t.Fatalf("reading programmer: %v", err)
 	}
 
-	conn, err := Open(DeviceInfo{})
+	conn, err := Open(devices[0])
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -58,5 +58,5 @@ func TestHardwareEDLHandshake(t *testing.T) {
 	if err := s.Reset(); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	t.Log("reset requested; the board should boot normally")
+	t.Log("reset requested; set the EDL DIP switch OFF and power-cycle to boot normally")
 }

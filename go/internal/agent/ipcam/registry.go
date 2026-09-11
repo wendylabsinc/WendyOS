@@ -32,6 +32,9 @@ const (
 	LoopbackBandStart = 128
 	IDBandStart       = 200
 	IDBandEnd         = 255
+	// MCU / remote-source cameras get their own band above the IP band.
+	MCUBandStart = 256
+	MCUBandEnd   = 319
 )
 
 // ErrBandExhausted is returned when every ID in the reserved band is taken.

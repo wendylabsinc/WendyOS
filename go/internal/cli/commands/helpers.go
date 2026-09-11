@@ -674,7 +674,11 @@ func hostPort(host string, port int) string {
 // port. connectWithAutoTLS derives the mTLS port as plaintext plus
 // agentMTLSPortOffset, so we subtract that offset here to keep that
 // convention working correctly.
-func lanAgentAddresses(dev models.LANDevice) []string {
+// lanAgentPort derives the plaintext gRPC port to dial for a LAN device,
+// undoing the mTLS-port offset baked into a provisioned device's advertisement
+// (connectWithAutoTLS adds it back). Shared by lanAgentAddresses and
+// lanDialCandidates so both agree on the port for every address.
+func lanAgentPort(dev models.LANDevice) int {
 	port := dev.Port
 	if port == 0 {
 		port = defaultAgentPort
@@ -682,6 +686,11 @@ func lanAgentAddresses(dev models.LANDevice) []string {
 	if dev.IsMTLS && dev.Port != 0 && port > agentMTLSPortOffset {
 		port -= agentMTLSPortOffset // advertised port is mTLS; connectWithAutoTLS will add the offset back
 	}
+	return port
+}
+
+func lanAgentAddresses(dev models.LANDevice) []string {
+	port := lanAgentPort(dev)
 
 	ip, hostname := strings.TrimSpace(dev.IPAddress), strings.TrimSpace(dev.Hostname)
 	hosts := []string{ip, hostname}
@@ -716,6 +725,42 @@ func preferredLANAddress(dev models.LANDevice) string {
 		return ""
 	}
 	return addresses[0]
+}
+
+// lanDialCandidates returns every gRPC address the dial ladder should try for a
+// picked LAN device, capped at maxDialCandidates. It starts from
+// lanAgentAddresses (primary IP + hostname, with the USB-first ordering that
+// path already applies) and appends every OTHER interface address the device was
+// seen at (dev.Addresses — e.g. a USB link-local when WiFi was the primary, or
+// vice versa). Without this the picker collapsed a multi-homed device to a single
+// address and the ladder never saw the reachable sibling; see the discovery
+// Addresses union in internal/shared/discovery/stream.go.
+func lanDialCandidates(dev models.LANDevice) []string {
+	base := lanAgentAddresses(dev)
+	if len(dev.Addresses) == 0 {
+		return base
+	}
+	port := lanAgentPort(dev)
+	seen := make(map[string]bool, len(base))
+	out := make([]string, 0, len(base)+len(dev.Addresses))
+	for _, a := range base {
+		if !seen[a] {
+			seen[a] = true
+			out = append(out, a)
+		}
+	}
+	for _, ip := range orderRoutedDialCandidates(dev.Addresses) {
+		hp := hostPort(ip, port)
+		if seen[hp] {
+			continue
+		}
+		seen[hp] = true
+		out = append(out, hp)
+	}
+	if len(out) > maxDialCandidates {
+		out = out[:maxDialCandidates]
+	}
+	return out
 }
 
 // resolveLANAgentVersion tries the discovered LAN addresses in order and
@@ -1021,9 +1066,13 @@ func connectAgentAtAddress(ctx context.Context, addr string) (*grpcclient.AgentC
 	return connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return false })
 }
 
-func connectAgentAtAddressWithProvisionedHint(ctx context.Context, addr string, provisionedMTLS func() bool) (*grpcclient.AgentConnection, error) {
+// extraCandidates, when non-empty, are additional pre-resolved host:port
+// addresses the dial ladder should try alongside addr — used by the picker to
+// feed every interface a multi-homed device was seen at, so a device reachable
+// only over its USB link is still dialed even when addr (its WiFi IP) is not.
+func connectAgentAtAddressWithProvisionedHint(ctx context.Context, addr string, provisionedMTLS func() bool, extraCandidates ...string) (*grpcclient.AgentConnection, error) {
 	tm := phaseTimer()
-	conn, mtlsErr, err := connectWithAutoTLSDiagnostics(ctx, addr)
+	conn, mtlsErr, err := connectWithAutoTLSDiagnostics(ctx, addr, extraCandidates...)
 	if err != nil {
 		return nil, err
 	}
@@ -1371,7 +1420,11 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		return connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, suppressUpdateCheck)
 	}
 	mtls := d.LAN.IsMTLS
-	conn, err := connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls })
+	// Feed every interface the device was seen at to the ladder, not just addr:
+	// a device the CLI can reach only over its USB link (WiFi on another net)
+	// advertises both, and dialing addr alone (its unreachable WiFi IP) is what
+	// made `device info/shell/pair` report a reachable device as unreachable.
+	conn, err := connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, lanDialCandidates(*d.LAN)...)
 	if err != nil {
 		// Neither refusal is "the LAN attempt failed", and the BLE half of this
 		// row is named by the same unauthenticated advertisement that named the
@@ -1947,7 +2000,7 @@ func defaultDeviceUnreachableError(hostname string, err error) error {
 // here — a lazy plaintext "success" from this function proves nothing (see
 // cacheFastPathReachable's doc); it happens at
 // connectAgentAtAddressWithProvisionedHint's real post-connect proof of life.
-func connectWithAutoTLSDiagnostics(ctx context.Context, plaintextAddr string) (*grpcclient.AgentConnection, error, error) {
+func connectWithAutoTLSDiagnostics(ctx context.Context, plaintextAddr string, extraCandidates ...string) (*grpcclient.AgentConnection, error, error) {
 	// An admin-entitled on-device container reaches the agent over its local
 	// unix socket (bind-mounted by the `admin` entitlement) with no mTLS. When
 	// WENDY_AGENT_SOCKET is set, route every command through it and skip all
@@ -2005,7 +2058,17 @@ func connectWithAutoTLSDiagnostics(ctx context.Context, plaintextAddr string) (*
 		}
 	}
 	candidates := []string{plaintextAddr}
-	if !fromCache {
+	switch {
+	case fromCache:
+		// A live cached IP: dial it directly (the block above already set it as
+		// plaintextAddr); the stale-cache retry below re-resolves if it fails.
+	case len(extraCandidates) > 0:
+		// The caller (the picker) already resolved every interface this
+		// multi-homed device was seen at; use them verbatim rather than
+		// re-resolving plaintextAddr, which — being a literal IP — would
+		// short-circuit to itself and drop the siblings.
+		candidates = extraCandidates
+	default:
 		candidates = resolveAddrCandidates(ctx, plaintextAddr)
 	}
 
@@ -3522,6 +3585,14 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 		existing.Provisioned = incoming.Provisioned
 		existing.Hint = incoming.Hint
 	}
+	// A Wendy Lite row has no LAN probe to speak for it: each of its transports
+	// reports its own mTLS state, and pickerSelection connects over the
+	// highest-ranked one (Externals[0], kept sorted above). Recompute from that
+	// transport so the warning describes the connection we would actually make,
+	// whichever order the transports were discovered in.
+	if md.LAN == nil && len(md.Externals) > 0 {
+		existing.Insecure = liteExternalInsecure(md.Externals[0])
+	}
 	// The no-access hint must stay consistent with the version cell no matter
 	// which transport supplied the version: AgentVersion is carried over from
 	// earlier LAN probes or backfilled from BLE above, and a hint claiming
@@ -3575,6 +3646,16 @@ func hideLocalProviders(excludes map[string]bool) map[string]bool {
 	return merged
 }
 
+// liteExternalInsecure reports whether a Wendy Lite transport will run without
+// mTLS. The Lite firmware advertises mtls=false until it is enrolled (see the
+// wendy-com doc), and connectClient dials such a device with ConnectInsecure (or ConnectViaBLEInsecure for BLE) —
+// so the row deserves the same warning a plaintext WendyOS device gets. Only an
+// explicit "false" counts: a serial row carries no mtls key at all, and an
+// absent key is not evidence of an unsecured connection.
+func liteExternalInsecure(dev *models.ExternalDevice) bool {
+	return dev != nil && dev.ConnectionInfo["mtls"] == "false"
+}
+
 // unflashedLiteDedupKey keys a board with no Wendy Lite firmware by its port
 // rather than its synthetic display name, so the row it gets once it identifies
 // itself can supersede it.
@@ -3589,9 +3670,10 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 	if prov.Key() == "wendy-lite" {
 		item := tui.PickerItem{
 			Name:         dev.DisplayName,
-			DedupKey:     dev.DisplayName,
+			DedupKey:     dev.ConnectionInfo["deviceId"],
 			Type:         dev.ConnectionType() + " (Lite)",
 			Address:      dev.ConnectionInfo["ip"],
+			Insecure:     liteExternalInsecure(dev),
 			AgentVersion: dev.AgentVersion,
 			OS:           dev.OS,
 			OSVersion:    dev.OSVersion,
@@ -3646,11 +3728,33 @@ func providerPollDelay(elapsed time.Duration) time.Duration {
 // from the start of each scan (with a 500ms minimum gap, so slow scans don't
 // stretch the period). If the stream fails to start or closes while the
 // picker is still open, discovery falls back to polling.
+//
+// Both paths deliver a whole set of devices per send, and both are additive
+// only: the picker merges them with tui.PickerAddMsg, so a device that drops
+// out of a later snapshot stays on screen. Removal would need PickerSetMsg,
+// which replaces the picker's entire list — and one of these runs per
+// provider into a shared picker, so each would clobber the others' rows.
+//
+// discoverModel (the `wendy discover` TUI) applies the same stream-else-poll
+// choice, but its own way and with one deliberate difference: it does not fall
+// back to polling when a stream closes, because DiscoverDevices cannot see BLE
+// (see waitExternalSnapshot). The two are not shared code — this owns a
+// goroutine and a send callback where that is a bubbletea message loop, and
+// they scan different provider sets (AvailableProviders here so the picker only
+// offers targets that can build, AllProviders there so discovery reports
+// hardware regardless of toolchain) with different cadences and, as above,
+// different accumulation semantics.
 func discoverProviderForPicker(ctx context.Context, prov providers.DeviceProvider, send func([]tui.PickerItem)) {
 	if cd, ok := prov.(providers.ContinuousDiscoverer); ok {
 		if ch, err := cd.DiscoverDevicesContinuous(ctx); err == nil {
-			for dev := range ch {
-				send([]tui.PickerItem{externalProviderPickerItem(prov, &dev)})
+			for devices := range ch {
+				items := make([]tui.PickerItem, 0, len(devices))
+				for i := range devices {
+					items = append(items, externalProviderPickerItem(prov, &devices[i]))
+				}
+				if len(items) > 0 {
+					send(items)
+				}
 			}
 			if ctx.Err() != nil {
 				return

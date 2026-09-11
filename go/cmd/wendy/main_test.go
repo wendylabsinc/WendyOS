@@ -538,3 +538,26 @@ func TestIsSetupCommand(t *testing.T) {
 		}
 	}
 }
+
+// A tunnel the broker closed carries the broker's verdict inside the handshake
+// failure (clouddefaults.BrokerTunnelConn). The presenter must show that
+// verdict rather than the transport envelope, and must not blame the device
+// clock or reachability: the device was never reached.
+func TestFormatError_CloudTunnelVerdictIsShown(t *testing.T) {
+	inner := `connection error: desc = "transport: authentication handshake failed: cloud tunnel closed by broker: rpc error: code = PermissionDenied desc = user is not a current member of this organization"`
+	err := formatError(fmt.Errorf("getting agent version: %w", status.Error(codes.Unavailable, inner)))
+	msg := err.Error()
+	if !strings.HasPrefix(msg, "getting agent version: ") {
+		t.Errorf("lost the command context prefix: %q", msg)
+	}
+	for _, want := range []string{"Wendy Cloud", "user is not a current member of this organization", "PermissionDenied"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	for _, noise := range []string{"authentication handshake failed", "connection error", "transport:", "clock", "offline"} {
+		if strings.Contains(msg, noise) {
+			t.Errorf("message %q still carries %q", msg, noise)
+		}
+	}
+}

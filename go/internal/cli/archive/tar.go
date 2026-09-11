@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -100,20 +99,16 @@ func ExtractTar(r io.Reader, dest string) error {
 // SafeJoin resolves an entry name under root, rejecting anything that would
 // escape it. Returns an empty path for an archive's own "." entry.
 func SafeJoin(root, name string) (string, error) {
+	// IsLocal guarantees that Join stays under root and handles the host's
+	// path rules, including Windows drive paths and reserved device names.
+	if !filepath.IsLocal(name) {
+		return "", fmt.Errorf("unsafe path in archive: %q", name)
+	}
 	clean := filepath.Clean(name)
 	if clean == "." {
 		return "", nil
 	}
-	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
-		return "", fmt.Errorf("unsafe path in archive: %q", name)
-	}
-	target := filepath.Join(root, clean)
-	// Defence in depth: even after Clean and the checks above, require the
-	// joined path to stay inside root.
-	if target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)) {
-		return "", fmt.Errorf("unsafe path in archive: %q", name)
-	}
-	return target, nil
+	return filepath.Join(root, clean), nil
 }
 
 func writeFile(target string, r io.Reader, mode os.FileMode) error {

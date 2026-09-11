@@ -143,7 +143,7 @@ Jetson AGX Thor does not use the drive-writing flow. Selecting `jetson-agx-thor`
 2. **Stage 2 partition flash** — flashes QSPI and the internal NVMe through the Thor flashing gadget. Expect around 25 minutes: USB transfers and device-side writes are deliberately serialized (concurrent USB access could crash the flash tooling, most notably on macOS), so this stage does not parallelize.
 3. **Power-cycle** — after a successful flash, power-cycle the Thor out of recovery mode to boot WendyOS.
 
-The CLI prompts for confirmation before erasing the Thor. No external USB drive is selected, and `--drive` does not apply to this path. Thor flashing is supported on macOS, Linux, and Windows. On Windows, the first flash installs a WinUSB driver for the Jetson recovery device — expect a one-time administrator (UAC) prompt.
+The CLI prompts for confirmation before erasing the Thor. No external USB drive is selected, and `--drive` does not apply to this path. On Windows, installing or updating the USB driver requires administrator approval (UAC).
 
 ### Stage 2 flash errors and recovery
 
@@ -157,6 +157,16 @@ A Stage 2 failure can leave the Thor booting only into the UEFI shell; the CLI p
 | `USB access denied opening the flashing gadget` | Linux: install the wendy udev rule (USB vendor 0955) or run with sudo. macOS: quit whatever holds the gadget (e.g. `adb kill-server`). |
 
 Every failure prints the path of the full flash log (`thor-flash-<timestamp>.log`), which contains the complete tooling output.
+
+## Dragonwing IQ-8275 path
+
+```sh
+wendy install --device-type dragonwing-iq-8275
+```
+
+Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wendy downloads and verifies the bundle, and programs the board. Set DIP switch 3 OFF and power-cycle after success.
+
+Both OS slots and the partition table are rewritten. Existing configuration and data are preserved when flashing a compatible WendyOS layout.
 
 ## Linux Desktop / Headless Mac path
 

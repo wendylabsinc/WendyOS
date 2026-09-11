@@ -2,6 +2,42 @@
 #import <Foundation/Foundation.h>
 #include "ble_darwin.h"
 
+// Longest GATT characteristic value the Bluetooth core spec allows (Vol 3,
+// Part F). A compliant peripheral cannot exceed this, so a longer value is
+// treated as an error rather than truncated: a GATT value is one indivisible
+// unit, and silently shortening it would corrupt the protocol above us.
+static const NSUInteger kWendyBLEMaxGATTValue = 512;
+
+// Most bytes one wendy_ble_l2cap_recv hands back. L2CAP is a byte stream, so
+// returning less than is buffered is lossless — the remainder stays queued for
+// the next call. Matches the linux path's per-read buffer (ble_linux.go), so
+// both platforms cap a chunk at the same size.
+static const NSUInteger kWendyBLEMaxL2CAPChunk = 65536;
+
+// Copies n bytes into a fresh malloc'd buffer for the Go side to take over.
+//
+// Result lengths cross into Go as a 32-bit signed int while the sources are
+// NSUInteger, so an unbounded cast could truncate or go negative and leave
+// malloc, memcpy and C.GoBytes disagreeing about the size. Callers bound n
+// first; this keeps all three agreeing on that one already-bounded value.
+// Returns NO if the allocation fails, so no caller memcpys into NULL.
+static BOOL wendyBLECopyOut(const void *bytes, NSUInteger n, uint8_t **outData, int *outLength) {
+    // malloc(0) may legally return NULL, which would look like failure here.
+    // An empty value is not an error: hand back NULL/0, which the Go side
+    // already reads as "no data" and frees harmlessly.
+    if (n == 0) {
+        *outData = NULL;
+        *outLength = 0;
+        return YES;
+    }
+    uint8_t *copy = (uint8_t *)malloc(n);
+    if (!copy) return NO;
+    memcpy(copy, bytes, n);
+    *outData = copy;
+    *outLength = (int)n;
+    return YES;
+}
+
 // ── WendyBLEConnection ──────────────────────────────────────────────
 // Manages a single connection to a BLE peripheral including GATT and L2CAP.
 
@@ -31,10 +67,15 @@
 @property (strong) NSData *readData;
 @property BOOL readError;
 
-// Notification state
-@property (strong) dispatch_semaphore_t notifySema;
+// Notification state. notifyCond guards notifyQueues and is broadcast on every
+// enqueue and on disconnect. It replaces a lock plus a counting semaphore: the
+// queues are per characteristic but one semaphore was shared by all of them, so
+// a notification for one characteristic woke a waiter on another, and a value
+// taken by the queued fast path left a count behind that made the next wait
+// return instantly. A condition has no count to drift, and a waiter that wakes
+// for someone else's characteristic simply loops and waits again.
+@property (strong) NSCondition *notifyCond;
 @property (strong) NSMutableDictionary<NSString *, NSMutableArray<NSData *> *> *notifyQueues;
-@property (strong) NSLock *notifyLock;
 
 // L2CAP state
 @property (strong) dispatch_semaphore_t l2capSema;
@@ -71,11 +112,10 @@
         _discoverSema = dispatch_semaphore_create(0);
         _writeSema = dispatch_semaphore_create(0);
         _readSema = dispatch_semaphore_create(0);
-        _notifySema = dispatch_semaphore_create(0);
         _l2capSema = dispatch_semaphore_create(0);
         _l2capRecvSema = dispatch_semaphore_create(0);
         _notifyQueues = [NSMutableDictionary dictionary];
-        _notifyLock = [[NSLock alloc] init];
+        _notifyCond = [[NSCondition alloc] init];
         _l2capRecvBuffer = [NSMutableData data];
         _l2capRecvLock = [[NSLock alloc] init];
     }
@@ -139,10 +179,19 @@ didDisconnectPeripheral:(CBPeripheral *)peripheral
                  error:(NSError *)error {
     self.connected = NO;
     self.l2capIORunning = NO; // wake the I/O thread so it exits
-    // Signal any blocked operations
+    // Signal any blocked operations. A stray signal left on a semaphore nobody is
+    // currently waiting on is harmless: every caller below checks conn.connected
+    // before it would ever reach dispatch_semaphore_wait again.
     dispatch_semaphore_signal(self.readSema);
     dispatch_semaphore_signal(self.writeSema);
     dispatch_semaphore_signal(self.l2capRecvSema);
+    dispatch_semaphore_signal(self.discoverSema);
+    dispatch_semaphore_signal(self.l2capSema);
+    // Broadcast rather than signal: every notification waiter has to learn the
+    // link is gone, not just whichever one happens to be woken first.
+    [self.notifyCond lock];
+    [self.notifyCond broadcast];
+    [self.notifyCond unlock];
 }
 
 // ── CBPeripheralDelegate ────────────────────────────────────────────
@@ -168,10 +217,12 @@ didDiscoverServices:(NSError *)error {
 - (void)peripheral:(CBPeripheral *)peripheral
 didDiscoverCharacteristicsForService:(CBService *)service
              error:(NSError *)error {
+    if (error) {
+        self.discoverError = YES;
+    }
     self.pendingCharDiscovery--;
     if (self.pendingCharDiscovery <= 0) {
-        self.discoverDone = !error;
-        self.discoverError = (error != nil);
+        self.discoverDone = !self.discoverError;
         dispatch_semaphore_signal(self.discoverSema);
     }
 }
@@ -198,17 +249,17 @@ didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
                      characteristic.service.UUID.UUIDString,
                      characteristic.UUID.UUIDString];
 
-    [self.notifyLock lock];
+    [self.notifyCond lock];
     NSMutableArray *queue = self.notifyQueues[key];
     if (queue) {
         if (characteristic.value) {
             [queue addObject:[characteristic.value copy]];
         }
-        [self.notifyLock unlock];
-        dispatch_semaphore_signal(self.notifySema);
+        [self.notifyCond broadcast];
+        [self.notifyCond unlock];
         return;
     }
-    [self.notifyLock unlock];
+    [self.notifyCond unlock];
 
     // Regular read response
     self.readData = characteristic.value ? [characteristic.value copy] : nil;
@@ -219,7 +270,7 @@ didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
 - (void)peripheral:(CBPeripheral *)peripheral
 didUpdateNotificationStateForCharacteristic:(CBCharacteristic *)characteristic
              error:(NSError *)error {
-    // Handled by subscribe call checking isNotifying
+    self.writeError = (error != nil);
     dispatch_semaphore_signal(self.writeSema); // reuse write sema for subscribe ack
 }
 
@@ -373,6 +424,7 @@ WendyBLEError wendy_ble_discover_services(WendyBLEConn handle, int timeout_secon
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout_seconds * NSEC_PER_SEC));
 
     if (result != 0) return WENDY_BLE_ERR_TIMEOUT;
+    if (!conn.connected) return WENDY_BLE_ERR_DISCONNECTED;
     if (conn.discoverError) return WENDY_BLE_ERR_DISCOVER_FAILED;
     return WENDY_BLE_OK;
 }
@@ -394,6 +446,7 @@ WendyBLEError wendy_ble_write_characteristic(WendyBLEConn handle, const char *se
         dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 
     if (result != 0) return WENDY_BLE_ERR_TIMEOUT;
+    if (!conn.connected) return WENDY_BLE_ERR_DISCONNECTED;
     if (conn.writeError) return WENDY_BLE_ERR_WRITE_FAILED;
     return WENDY_BLE_OK;
 }
@@ -430,12 +483,14 @@ WendyBLEReadResult wendy_ble_read_characteristic(WendyBLEConn handle, const char
         dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 
     if (result != 0) { res.error = WENDY_BLE_ERR_TIMEOUT; return res; }
+    if (!conn.connected) { res.error = WENDY_BLE_ERR_DISCONNECTED; return res; }
     if (conn.readError) { res.error = WENDY_BLE_ERR_READ_FAILED; return res; }
 
     if (conn.readData && conn.readData.length > 0) {
-        res.length = (int)conn.readData.length;
-        res.data = (uint8_t *)malloc(res.length);
-        memcpy(res.data, conn.readData.bytes, res.length);
+        if (conn.readData.length > kWendyBLEMaxGATTValue ||
+            !wendyBLECopyOut(conn.readData.bytes, conn.readData.length, &res.data, &res.length)) {
+            res.error = WENDY_BLE_ERR_READ_FAILED;
+        }
     }
     return res;
 }
@@ -449,20 +504,27 @@ WendyBLEError wendy_ble_subscribe(WendyBLEConn handle, const char *service_uuid,
                                            inService:[NSString stringWithUTF8String:service_uuid]];
     if (!chr) return WENDY_BLE_ERR_NOT_FOUND;
 
-    // Set up notification queue
+    // Key the notification queue off CoreBluetooth's own CBUUID.UUIDString (via the
+    // resolved characteristic) rather than the caller's spelling: for 16/32-bit UUIDs
+    // CoreBluetooth's UUIDString is the short form ("180F"), which can differ from a
+    // caller-supplied expanded 128-bit form. chr is the same CBCharacteristic instance
+    // CoreBluetooth will hand back to didUpdateValueForCharacteristic:, so this
+    // guarantees the keys match exactly.
     NSString *key = [NSString stringWithFormat:@"%@:%@",
-                     [NSString stringWithUTF8String:service_uuid],
-                     [NSString stringWithUTF8String:char_uuid]];
-    [conn.notifyLock lock];
+                     chr.service.UUID.UUIDString, chr.UUID.UUIDString];
+    [conn.notifyCond lock];
     conn.notifyQueues[key] = [NSMutableArray array];
-    [conn.notifyLock unlock];
+    [conn.notifyCond unlock];
 
+    conn.writeError = NO;
     [conn.peripheral setNotifyValue:YES forCharacteristic:chr];
 
     long result = dispatch_semaphore_wait(conn.writeSema,
         dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 
     if (result != 0) return WENDY_BLE_ERR_TIMEOUT;
+    if (!conn.connected) return WENDY_BLE_ERR_DISCONNECTED;
+    if (conn.writeError) return WENDY_BLE_ERR_SUBSCRIBE_FAILED;
     return WENDY_BLE_OK;
 }
 
@@ -472,47 +534,47 @@ WendyBLEReadResult wendy_ble_wait_notification(WendyBLEConn handle, const char *
     WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
     if (!conn.connected) { res.error = WENDY_BLE_ERR_DISCONNECTED; return res; }
 
+    // Re-resolve the characteristic to derive the same canonical key wendy_ble_subscribe
+    // used — see the comment there.
+    CBCharacteristic *chr = [conn findCharacteristic:[NSString stringWithUTF8String:char_uuid]
+                                           inService:[NSString stringWithUTF8String:service_uuid]];
+    if (!chr) { res.error = WENDY_BLE_ERR_NOT_FOUND; return res; }
+
     NSString *key = [NSString stringWithFormat:@"%@:%@",
-                     [NSString stringWithUTF8String:service_uuid],
-                     [NSString stringWithUTF8String:char_uuid]];
+                     chr.service.UUID.UUIDString, chr.UUID.UUIDString];
 
-    // Check if there's already a queued notification
-    [conn.notifyLock lock];
-    NSMutableArray *queue = conn.notifyQueues[key];
-    if (queue && queue.count > 0) {
-        NSData *data = queue[0];
-        [queue removeObjectAtIndex:0];
-        [conn.notifyLock unlock];
+    // One deadline for the whole call, fixed up front: a broadcast meant for
+    // another characteristic sends us back to waiting, and recomputing the
+    // timeout each time round would let those wakeups stretch the wait well
+    // past what the caller asked for.
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout_seconds];
 
-        res.length = (int)data.length;
-        res.data = (uint8_t *)malloc(res.length);
-        memcpy(res.data, data.bytes, res.length);
-        return res;
+    [conn.notifyCond lock];
+    for (;;) {
+        NSMutableArray *queue = conn.notifyQueues[key];
+        if (queue && queue.count > 0) {
+            NSData *data = queue[0];
+            [queue removeObjectAtIndex:0];
+            [conn.notifyCond unlock];
+
+            if (data.length > kWendyBLEMaxGATTValue ||
+                !wendyBLECopyOut(data.bytes, data.length, &res.data, &res.length)) {
+                res.error = WENDY_BLE_ERR_READ_FAILED;
+            }
+            return res;
+        }
+        if (!conn.connected) {
+            [conn.notifyCond unlock];
+            res.error = WENDY_BLE_ERR_DISCONNECTED;
+            return res;
+        }
+        if (![conn.notifyCond waitUntilDate:deadline]) {
+            // NO means the deadline passed rather than a broadcast arriving.
+            [conn.notifyCond unlock];
+            res.error = conn.connected ? WENDY_BLE_ERR_TIMEOUT : WENDY_BLE_ERR_DISCONNECTED;
+            return res;
+        }
     }
-    [conn.notifyLock unlock];
-
-    // Wait for notification
-    long result = dispatch_semaphore_wait(conn.notifySema,
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout_seconds * NSEC_PER_SEC));
-
-    if (result != 0) { res.error = WENDY_BLE_ERR_TIMEOUT; return res; }
-
-    [conn.notifyLock lock];
-    queue = conn.notifyQueues[key];
-    if (queue && queue.count > 0) {
-        NSData *data = queue[0];
-        [queue removeObjectAtIndex:0];
-        [conn.notifyLock unlock];
-
-        res.length = (int)data.length;
-        res.data = (uint8_t *)malloc(res.length);
-        memcpy(res.data, data.bytes, res.length);
-        return res;
-    }
-    [conn.notifyLock unlock];
-
-    res.error = WENDY_BLE_ERR_TIMEOUT;
-    return res;
 }
 
 WendyBLEError wendy_ble_open_l2cap(WendyBLEConn handle, uint16_t psm, int timeout_seconds) {
@@ -527,6 +589,7 @@ WendyBLEError wendy_ble_open_l2cap(WendyBLEConn handle, uint16_t psm, int timeou
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)timeout_seconds * NSEC_PER_SEC));
 
     if (result != 0) return WENDY_BLE_ERR_TIMEOUT;
+    if (!conn.connected) return WENDY_BLE_ERR_DISCONNECTED;
     if (conn.l2capError || !conn.l2capChannel) return WENDY_BLE_ERR_L2CAP_FAILED;
 
     return WENDY_BLE_OK;
@@ -557,10 +620,15 @@ WendyBLEL2CAPRecvResult wendy_ble_l2cap_recv(WendyBLEConn handle, int timeout_se
     // Check if data is already buffered
     [conn.l2capRecvLock lock];
     if (conn.l2capRecvBuffer.length > 0) {
-        res.length = (int)conn.l2capRecvBuffer.length;
-        res.data = (uint8_t *)malloc(res.length);
-        memcpy(res.data, conn.l2capRecvBuffer.bytes, res.length);
-        conn.l2capRecvBuffer.length = 0;
+        // Drain at most one chunk and keep the rest queued. L2CAP is a byte
+        // stream, so a short return is lossless — l2capNetConn.Read stashes
+        // whatever it can't take and the next call picks the remainder up here.
+        NSUInteger n = MIN(conn.l2capRecvBuffer.length, kWendyBLEMaxL2CAPChunk);
+        if (!wendyBLECopyOut(conn.l2capRecvBuffer.bytes, n, &res.data, &res.length)) {
+            res.error = WENDY_BLE_ERR_L2CAP_FAILED;
+        } else {
+            [conn.l2capRecvBuffer replaceBytesInRange:NSMakeRange(0, n) withBytes:NULL length:0];
+        }
         [conn.l2capRecvLock unlock];
         return res;
     }
@@ -574,17 +642,22 @@ WendyBLEL2CAPRecvResult wendy_ble_l2cap_recv(WendyBLEConn handle, int timeout_se
 
     [conn.l2capRecvLock lock];
     if (conn.l2capRecvBuffer.length > 0) {
-        res.length = (int)conn.l2capRecvBuffer.length;
-        res.data = (uint8_t *)malloc(res.length);
-        memcpy(res.data, conn.l2capRecvBuffer.bytes, res.length);
-        conn.l2capRecvBuffer.length = 0;
+        // Drain at most one chunk and keep the rest queued. L2CAP is a byte
+        // stream, so a short return is lossless — l2capNetConn.Read stashes
+        // whatever it can't take and the next call picks the remainder up here.
+        NSUInteger n = MIN(conn.l2capRecvBuffer.length, kWendyBLEMaxL2CAPChunk);
+        if (!wendyBLECopyOut(conn.l2capRecvBuffer.bytes, n, &res.data, &res.length)) {
+            res.error = WENDY_BLE_ERR_L2CAP_FAILED;
+        } else {
+            [conn.l2capRecvBuffer replaceBytesInRange:NSMakeRange(0, n) withBytes:NULL length:0];
+        }
     } else if (conn.connected && conn.l2capIORunning && !conn.l2capError) {
-        // The buffered fast path above drains everything in one copy without
-        // consuming a semaphore count, so several signalled arrivals collapse
-        // into one return and leave the semaphore over-signalled. A later wait
-        // then succeeds immediately with the buffer already empty. The channel
-        // is still up, so report a timeout and let the caller retry rather than
-        // tearing the link down.
+        // The buffered fast path above returns a whole chunk in one copy
+        // without consuming a semaphore count, so several signalled arrivals
+        // collapse into one return and leave the semaphore over-signalled. A
+        // later wait then succeeds immediately with the buffer already empty.
+        // The channel is still up, so report a timeout and let the caller retry
+        // rather than tearing the link down.
         res.error = WENDY_BLE_ERR_TIMEOUT;
     } else {
         res.error = WENDY_BLE_ERR_DISCONNECTED;

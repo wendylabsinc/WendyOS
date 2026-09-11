@@ -37,7 +37,7 @@ protocol LinuxContainerBackend: Sendable {
 enum LinuxRunSpecBuilder {
     /// Hardware entitlements that VM-isolated Linux containers can't honor on macOS.
     static let unsupportedHardwareTypes: Set<String> = [
-        "gpu", "bluetooth", "audio", "video", "camera", "usb", "i2c", "gpio",
+        "gpu", "npu", "bluetooth", "audio", "video", "camera", "usb", "i2c", "gpio",
     ]
 
     static func specs(

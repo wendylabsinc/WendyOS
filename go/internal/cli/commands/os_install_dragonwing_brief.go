@@ -6,6 +6,7 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -27,7 +28,7 @@ func dragonwingEDLBriefingBox() string {
 		"  identity and saved Wi-Fi survive; this is not a factory reset.",
 		"",
 		section("USB cabling"),
-		"  Connect this computer to the board's " + briefPort.Render("USB-C debug/EDL port") + ".",
+		"  Connect this computer to the board's " + briefPort.Render("USB0 (USB-C) port") + ".",
 		"",
 		section("Entering EDL mode"),
 		"  EDL is selected by a " + briefKey.Render("DIP switch") + ", not a button, so it stays set until",
@@ -40,6 +41,12 @@ func dragonwingEDLBriefingBox() string {
 		"",
 		"  " + briefDim.Render("After flashing, set DIP switch 3 back to OFF and power-cycle,"),
 		"  " + briefDim.Render("otherwise the board will keep booting into EDL."),
+	}
+	if runtime.GOOS == "windows" {
+		lines = append(lines, "", section("Windows USB driver"),
+			"  Wendy checks the selected board's driver and installs or updates its",
+			"  WinUSB binding if needed. Windows will ask for administrator access.",
+			"  This replaces the selected EDL device's QDLoader binding if installed.")
 	}
 	return briefBorder.Render(strings.Join(lines, "\n"))
 }
@@ -67,7 +74,7 @@ func dragonwingEDLHints() recoveryWaitHints {
 		label:       "Dragonwing",
 		family:      "Dragonwing",
 		mode:        "EDL mode",
-		cablingLine: "the USB-C cable is in the " + briefPort.Render("debug/EDL port"),
+		cablingLine: "the USB-C cable is in the " + briefPort.Render("USB0 port"),
 		buttonLine:  briefKey.Render("DIP switch 3") + " is " + briefKey.Render("ON") + ", and the board was power-cycled after setting it",
 	}
 }

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"io"
 	"strings"
 	"time"
@@ -275,6 +276,11 @@ func userFacingGRPCError(err error) string {
 	if err == nil {
 		return ""
 	}
+	// A broker-closed tunnel: the verdict inside the handshake failure is the
+	// whole story, so show it instead of the transport envelope.
+	if verdict, ok := clouddefaults.ExplainTunnelClose(err.Error()); ok {
+		return "Wendy Cloud closed the tunnel: " + verdict
+	}
 	if _, ok := status.FromError(err); ok {
 		if desc, descOK := grpcDescFromErrorString(err.Error()); descOK {
 			return desc
@@ -502,7 +508,7 @@ func (m appsDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case appsDashContainersMsg:
 		if msg.err != nil {
-			m.flash = fmt.Sprintf("Poll error: %s", msg.err)
+			m.flash = appsDashPollFlash(msg.err)
 		} else {
 			m.cachedContainers = msg.containers
 			m.refreshTable()
@@ -511,7 +517,7 @@ func (m appsDashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case appsDashStatsMsg:
 		if msg.err != nil {
-			m.flash = fmt.Sprintf("Poll error: %s", msg.err)
+			m.flash = appsDashPollFlash(msg.err)
 		} else {
 			m.cachedStats = msg.stats
 			m.refreshTable()

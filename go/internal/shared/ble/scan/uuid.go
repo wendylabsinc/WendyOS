@@ -94,3 +94,34 @@ func isHex(s string) bool {
 	}
 	return true
 }
+
+// isCanonicalUUID reports whether s is a canonical 128-bit UUID in hyphenated
+// 8-4-4-4-12 form (e.g. "0000180F-0000-1000-8000-00805F9B34FB"): exactly 36
+// characters, ASCII hex digits (either case) everywhere except hyphens at
+// positions 8, 13, 18 and 23.
+//
+// buildWatcherScript interpolates each service UUID into a single-quoted
+// PowerShell literal, so a value reaching that point must contain nothing but
+// hex and hyphens. A length-only check let a 36-character string carrying a
+// quote break out of the literal; this is the gate that closes that. Both hex
+// cases are accepted so this stands on its own — CanonicalUUID happens to
+// uppercase first, but the safety here must not depend on that.
+func isCanonicalUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
+}

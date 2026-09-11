@@ -310,6 +310,25 @@ Hardware-dependent GPU or board-telemetry access.
 
 On Raspberry Pi, `/dev/vcio` is bind-mounted only when present on the host; access is `rw` (no `mknod`).
 
+### `npu`
+
+Access to an on-SoC neural accelerator over FastRPC, for on-device inference.
+
+```json
+{ "type": "npu" }
+```
+
+| Host hardware | Grant |
+|---------------|-------|
+| Qualcomm (Hexagon DSP) | the non-secure `/dev/fastrpc-*` transport nodes and `/dev/dma_heap/system`, plus the `fastrpc`/`dmaheap` groups |
+| Other | No hardware-specific grant |
+
+The nodes are bind-mounted from the host, so the group ownership and POSIX ACL that authorise the open are preserved; access is `rw` (no `mknod`). The signed-PD `-secure` nodes are never granted. On a host with no FastRPC nodes the entitlement is inert, so it is safe to declare in an app that also deploys to a board without an NPU.
+
+FastRPC identifies the board from the device-tree model and refuses a session without it, so the entitlement passes it in as `MACHINE_NAME`. The container keeps the default `/sys/firmware` mask, which also hides the DMI and ACPI trees.
+
+It grants **device nodes, not libraries**. The host's `/usr` is not visible to the container, so an app that runs a model must carry its own runtime: the FastRPC transport library (with its `.so.1`/`.so` symlinks and `ldconfig`), the `/usr/share/qcom/conf.d/*.yaml` device-tree-model mapping, the Hexagon skels at the path that mapping names, and a base image with **glibc 2.38 or newer**. `DSP_LIBRARY_PATH` names the parent `dsp/` directory and does not substitute for the mapping file.
+
 ### `camera`
 
 Camera / V4L2 device access.

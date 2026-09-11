@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -121,6 +122,12 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 	}
 	if gpuInfo.gpuArch != "" {
 		resp.GpuArch = &gpuInfo.gpuArch
+	}
+
+	npuInfo := detectNPUInfo()
+	resp.HasNpu = &npuInfo.hasNPU
+	if npuInfo.vendor != "" {
+		resp.NpuVendor = &npuInfo.vendor
 	}
 
 	if usage, ok := rootDiskUsage(); ok {
@@ -290,6 +297,10 @@ var drmDriverVendors = map[string]string{
 var (
 	drmSysfsRoot = "/sys/class/drm"
 	devDRIPath   = "/dev/dri"
+	// FastRPC transport nodes; the "-secure" ones are the root-only signed-PD path.
+	// Kept in step with the npu entitlement in agent/oci, which grants the same set.
+	fastrpcDeviceGlob   = "/dev/fastrpc-*"
+	fastrpcSecureSuffix = "-secure"
 )
 
 // drmVendor names the GPU vendor from the DRM driver bound to it. The render
@@ -325,6 +336,57 @@ func drmVendor() string {
 
 // adrenoCompatibleRe pulls the model out of "qcom,adreno-623.0" -> "623".
 var adrenoCompatibleRe = regexp.MustCompile(`qcom,adreno-(\d+)\.\d+`)
+
+type npuInfo struct {
+	hasNPU bool
+	vendor string
+}
+
+// detectNPUInfo probes on every call, for the same reason detectGPUInfo does: the
+// FastRPC nodes are live state and can appear after the agent starts.
+//
+// Only the non-secure nodes count. The signed-PD nodes are root:root 0600, so their
+// presence says nothing about whether an app can reach the DSP.
+func detectNPUInfo() npuInfo {
+	nodes, err := filepath.Glob(fastrpcDeviceGlob)
+	if err != nil {
+		return npuInfo{}
+	}
+	for _, node := range nodes {
+		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+			continue
+		}
+		return npuInfo{hasNPU: true, vendor: dspVendor()}
+	}
+	return npuInfo{}
+}
+
+// dspVendor names the vendor from the DSP remoteproc's device-tree compatible. An
+// on-SoC accelerator has no PCI vendor id, so that is the only signal available;
+// an unrecognised one reports "" rather than a guess.
+func dspVendor() string {
+	entries, err := os.ReadDir(platformDevicesRoot)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".remoteproc") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(platformDevicesRoot, e.Name(), "of_node", "compatible"))
+		if err != nil {
+			continue
+		}
+		// The property is a NUL-separated list of "vendor,model" entries, and the
+		// qcom entry is not always first, so check each one's prefix.
+		for _, entry := range bytes.Split(data, []byte{0}) {
+			if bytes.HasPrefix(entry, []byte("qcom,")) {
+				return "qualcomm"
+			}
+		}
+	}
+	return ""
+}
 
 // platformDevicesRoot is behind a var so tests can use a fixture tree.
 var platformDevicesRoot = "/sys/bus/platform/devices"

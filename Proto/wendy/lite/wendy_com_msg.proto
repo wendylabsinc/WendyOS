@@ -121,12 +121,14 @@ message WendyComDeviceInfo {
     string os = 1; // typically "wendy-lite"
     string os_version = 2;
     string cpu_architecture = 3;
-    // Board can be "esp32c6", but this doesn't mean that this field contains
-    // the SoC name. Here "esp32c6" means "generic esp32c6 board". Should
-    // probably be replaced by "esp32c6-generic" in the future.
-    string board = 4;
+    // SoC name, e.g. "esp32c6" or "esp32s3".
+    string target = 4;
     bool wasm_app_support = 5;
     bool native_app_support = 6;
+    // Board identifier, e.g. "esp32c6_generic" or "esp32s3_seeed_xiao_native".
+    // Empty when the board is not known, which is typically the case when
+    // wendy-lite is compiled and flashed manually.
+    string board = 7;
 }
 
 // Command sent host -> device — the oneof variant identifies the command.

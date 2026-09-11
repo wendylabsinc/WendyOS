@@ -63,6 +63,14 @@ const (
 	alsaCardMask   = 1<<alsaCardBits - 1
 	// alsaSourceFlag marks a capture endpoint; sinks leave it clear.
 	alsaSourceFlag = uint64(1) << (alsaDeviceBits + alsaCardBits)
+	// alsaSubdeviceShift packs a snd-aloop subdevice index above every field
+	// EncodeAlsaID uses, so a per-subdevice Loopback capture row gets a unique,
+	// non-colliding Node.ID that DecodeAlsaID still reads the right card/device
+	// from (the subdevice sits above the card mask and source flag).
+	alsaSubdeviceShift = alsaDeviceBits + alsaCardBits + 1
+	// loopbackCaptureDevice is the snd-aloop device the consumer captures from:
+	// writes to hw:Loopback,0,N surface as captures on hw:Loopback,1,N.
+	loopbackCaptureDevice = 1
 )
 
 // EncodeAlsaID and DecodeAlsaID convert between an ALSA card/device/direction
@@ -86,6 +94,25 @@ func DecodeAlsaID(id uint32) (card, device uint64, isSink bool) {
 	card = (encoded >> alsaDeviceBits) & alsaCardMask
 	device = encoded & alsaDeviceMask
 	return card, device, encoded&alsaSourceFlag == 0
+}
+
+// EncodeAlsaSubdeviceID builds a Node.ID for one snd-aloop capture subdevice
+// (hw:Loopback,1,subdevice). These synthetic rows are addressed by Name
+// (arecord -D), so the encoding only needs to be unique per subdevice, not a
+// full round-trip; DecodeAlsaID still recovers the card and device from it.
+func EncodeAlsaSubdeviceID(card, subdevice uint64) uint32 {
+	return EncodeAlsaID(card, loopbackCaptureDevice, false) | uint32((subdevice+1)<<alsaSubdeviceShift)
+}
+
+// AlsaSubdevice returns the snd-aloop subdevice packed into id by
+// EncodeAlsaSubdeviceID, and whether one is present. A plain card/device id
+// from parseAlsaList (no subdevice) returns ok=false.
+func AlsaSubdevice(id uint32) (uint64, bool) {
+	s := uint64(id) >> alsaSubdeviceShift
+	if s == 0 {
+		return 0, false
+	}
+	return s - 1, true
 }
 
 // parseAlsaList parses the output of "aplay -l" or "arecord -l": lines of the
