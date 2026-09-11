@@ -383,7 +383,7 @@ I2C bus access.
 
 ### `serial`
 
-Serial tty (UART) device access — e.g. a USB-serial adapter or servo bus (`pyserial`/termios). This is how apps do **UART**. See the [Serial / UART guide](../device/entitlements.md#serial--uart).
+Serial tty (UART) device access — e.g. a USB-serial adapter or servo bus (`pyserial`/termios). This is how apps do **UART**. See the [Serial / UART guide](/docs/device/entitlements#serial--uart-entitlement).
 
 ```json
 { "type": "serial", "device": "ttyACM0" }

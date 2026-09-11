@@ -723,6 +723,11 @@ func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...res
 	if errors.Is(err, ErrUserCancelled) {
 		return nil, err
 	}
+	// The user picked a local VM. Falling back to a cloud device here would
+	// deploy their app to an entirely different machine and report success.
+	if errors.Is(err, errSimulatorUnavailable) {
+		return nil, err
+	}
 
 	cfg, loadErr := config.Load()
 	if loadErr != nil || len(cfg.Auth) == 0 {
@@ -1906,6 +1911,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return runMultiServiceWithAgent(ctx, conn, cwd, appCfg, opts)
 	}
 
+	if err := prepareVMAppPorts(ctx, conn, appCfg); err != nil {
+		return err
+	}
 	// Detect project type and ensure a build file exists when needed.
 	projectType, err := resolveRunProjectType(cwd, opts.buildType)
 	if err != nil {
@@ -2610,6 +2618,9 @@ func announceReachableURL(ctx context.Context, conn *grpcclient.AgentConnection,
 		return ""
 	}
 	ip := bestReachableIP(resp.GetNetworkInterfaces())
+	if name, err := userVMForConnection(conn); err == nil && name != "" {
+		ip = "127.0.0.1"
+	}
 	url := reachableAppURL(hookURL, appCfg.AppID, appCfg.ServiceName, ip, httpPort, readiness)
 	if url == "" {
 		return ""

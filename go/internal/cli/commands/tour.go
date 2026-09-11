@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -1659,6 +1660,12 @@ func (m tourWizardModel) viewError(w int) string {
 func loadDevicesCmd() tea.Cmd {
 	return func() tea.Msg {
 		devices, err := getAvailableDevices()
+		// The tour always passes --device-name, which a bundle-flashed board
+		// cannot apply, so offering one would guarantee a failure at the last
+		// step.
+		devices = slices.DeleteFunc(devices, func(d deviceInfo) bool {
+			return installedFromFlashBundle(d.Key)
+		})
 		return tourDevicesLoadedMsg{devices: devices, err: err}
 	}
 }

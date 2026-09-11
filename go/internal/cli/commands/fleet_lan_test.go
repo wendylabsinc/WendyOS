@@ -73,7 +73,7 @@ func TestComputePeers(t *testing.T) {
 		t.Fatalf("computePeers returned %d peers, want 2", len(peers))
 	}
 	// Known asset id -> mesh name (asset id wins over the LAN host).
-	if peers[0].URL != "http://device-42.cloud.wendy.dev:8000" {
+	if peers[0].URL != "http://device-42.mesh.wendy.internal:8000" {
 		t.Errorf("peer[0].URL = %q", peers[0].URL)
 	}
 	// Unknown asset id -> direct-LAN host fallback.
@@ -119,7 +119,7 @@ func TestDiscoveryEnv(t *testing.T) {
 	if err := json.Unmarshal([]byte(env[0][len(prefix):]), &peers); err != nil {
 		t.Fatalf("env value is not valid JSON: %v", err)
 	}
-	if len(peers) != 1 || peers[0].URL != "http://device-42.cloud.wendy.dev:8000" {
+	if len(peers) != 1 || peers[0].URL != "http://device-42.mesh.wendy.internal:8000" {
 		t.Errorf("peers = %+v", peers)
 	}
 }

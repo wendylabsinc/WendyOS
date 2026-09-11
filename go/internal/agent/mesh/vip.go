@@ -1,6 +1,6 @@
 // Package mesh implements the WendyOS mesh data plane: the deterministic
 // device-ID↔VIP mapping, the per-app DNS server that answers
-// device-n.cloud.wendy.dev names, and the transparent TCP proxy that carries
+// device-n.mesh.wendy.internal names, and the transparent TCP proxy that carries
 // mesh VIP connections to peer devices.
 package mesh
 

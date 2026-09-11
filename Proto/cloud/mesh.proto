@@ -3,7 +3,7 @@ syntax = "proto3";
 package wendycloud.v1;
 
 // MeshRosterService serves the minimal name directory the WendyOS mesh needs
-// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
+// to resolve <devicename>.<org-slug>.mesh.wendy.internal to a cloud asset id. It is
 // deliberately narrower than AssetService: only {name, asset_id} pairs plus the
 // caller's own org slug, scoped by the caller's asset-certificate identity.
 service MeshRosterService {

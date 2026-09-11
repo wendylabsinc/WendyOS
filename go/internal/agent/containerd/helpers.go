@@ -112,6 +112,12 @@ const labelKeyIsolation = "sh.wendy/isolation"
 // group restart. Absent means no declared dependencies.
 const labelKeyDependsOn = "sh.wendy/depends-on"
 
+// labelKeySerialIdentities maps the container-visible tty name declared by a
+// serial entitlement to the host's stable /dev/serial/by-id basename. It lets
+// StartContainer re-resolve the same physical USB device after ttyACM/ttyUSB
+// numbering changes across reconnects or reboots.
+const labelKeySerialIdentities = "sh.wendy/serial-identities"
+
 // labelKeyStoppedByUser records that an app was explicitly stopped by the user
 // (wendy device apps stop). Set to "true" on stop, removed on start. The boot
 // reconcile skips containers carrying it, so a deliberate stop survives a

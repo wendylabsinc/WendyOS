@@ -219,6 +219,11 @@ type gpuInfo struct {
 	gpuArch        string
 }
 
+// detectGPUInfo probes on every call rather than caching. /dev/dri and the DRM
+// sysfs tree are live state: the first RPC can land before udev has settled,
+// and installing a driver add-on makes a GPU appear without restarting the
+// agent — so a cached "no GPU" would never heal, and would contradict
+// detectFeatureset, which re-probes.
 func detectGPUInfo() gpuInfo {
 	info := gpuInfo{}
 
@@ -238,18 +243,113 @@ func detectGPUInfo() gpuInfo {
 		// DRM branch so an AMD box reports "amd" rather than an unknown vendor.
 		info.hasGPU = true
 		info.vendor = "amd"
-	} else if entries, _ := os.ReadDir("/dev/dri"); len(entries) > 0 {
-		// Generic GPU via DRM — vendor unknown.
+	} else if entries, _ := os.ReadDir(devDRIPath); len(entries) > 0 {
+		// Name the vendor from the kernel driver: an SoC GPU has no PCI
+		// vendor id, so that is the only signal available.
 		info.hasGPU = true
+		info.vendor = drmVendor()
 	}
 
-	if info.vendor == "nvidia" {
+	switch info.vendor {
+	case "nvidia":
 		info.jetpackVersion = detectJetPackVersion()
 		info.cudaVersion = detectCUDAVersion()
 		info.gpuArch = detectNvidiaGPUArch()
+	case "qualcomm":
+		info.gpuArch = detectAdrenoArch()
 	}
 
 	return info
+}
+
+// drmDriverVendors maps a DRM kernel driver to the GPU vendor behind it. Every
+// entry is a driver a WendyOS image actually ships, so an untested GPU reports
+// an honest "unknown" rather than a guess.
+//
+// Never map a driver to "nvidia": an NVIDIA GPU is identified by the branches
+// above, and reaching this one means the proprietary stack is absent — so the
+// JetPack/CUDA/nvidia-smi probes would report a runtime that is not there.
+var drmDriverVendors = map[string]string{
+	// Dragonwing IQ-8275 (CONFIG_DRM_MSM).
+	"msm":     "qualcomm",
+	"msm_dpu": "qualcomm",
+	// Raspberry Pi 3/4/5: vc4 drives the display, v3d the GPU.
+	"v3d": "broadcom",
+	"vc4": "broadcom",
+	// Generic x86: the builder's x86-nuc-drivers.cfg enables all four for
+	// "integrated and discrete GPU coverage for commodity x86 PCs".
+	"i915":   "intel",
+	"xe":     "intel",
+	"amdgpu": "amd",
+	"radeon": "amd",
+	// QEMU ARM64 and both VM targets, whose virtual GPU is virtio.
+	"virtio_gpu": "virtio",
+}
+
+// These paths are behind vars so tests can point them at a fixture tree.
+var (
+	drmSysfsRoot = "/sys/class/drm"
+	devDRIPath   = "/dev/dri"
+)
+
+// drmVendor names the GPU vendor from the DRM driver bound to it. The render
+// node wins over the card node: on a board that splits them (an RPi exposes
+// vc4 for display and v3d for the GPU) the render node is the GPU.
+func drmVendor() string {
+	entries, err := os.ReadDir(drmSysfsRoot)
+	if err != nil {
+		return ""
+	}
+	// Render nodes first: on a split display/GPU SoC that is the GPU.
+	for _, prefix := range []string{"renderD", "card"} {
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			// Skip per-connector children ("card0-DP-1"): no driver.
+			if prefix == "card" && strings.Contains(name, "-") {
+				continue
+			}
+			link, err := os.Readlink(filepath.Join(drmSysfsRoot, name, "device", "driver"))
+			if err != nil {
+				continue
+			}
+			if vendor, ok := drmDriverVendors[filepath.Base(link)]; ok {
+				return vendor
+			}
+		}
+	}
+	return ""
+}
+
+// adrenoCompatibleRe pulls the model out of "qcom,adreno-623.0" -> "623".
+var adrenoCompatibleRe = regexp.MustCompile(`qcom,adreno-(\d+)\.\d+`)
+
+// platformDevicesRoot is behind a var so tests can use a fixture tree.
+var platformDevicesRoot = "/sys/bus/platform/devices"
+
+// detectAdrenoArch reports the Adreno model, e.g. "a623". The DRM device on
+// this SoC family is the display controller, so its compatible string names the
+// DPU; the GPU is a separate platform device bound to the adreno driver.
+func detectAdrenoArch() string {
+	entries, err := os.ReadDir(platformDevicesRoot)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".gpu") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(platformDevicesRoot, e.Name(), "of_node", "compatible"))
+		if err != nil {
+			continue
+		}
+		if m := adrenoCompatibleRe.FindSubmatch(data); len(m) > 1 {
+			return "a" + string(m[1])
+		}
+	}
+	return ""
 }
 
 var tegraReleaseRe = regexp.MustCompile(`R(\d+)\s+\([^)]+\),\s+REVISION:\s+([\d.]+)`)

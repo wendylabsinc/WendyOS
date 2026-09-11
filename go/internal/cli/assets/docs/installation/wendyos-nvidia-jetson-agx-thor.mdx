@@ -3,6 +3,8 @@ title: NVIDIA Jetson AGX Thor
 description: Install WendyOS on an NVIDIA Jetson AGX Thor over USB recovery
 ---
 
+import { withBasePath } from '@/lib/shared';
+
 Jetson AGX Thor uses a dedicated USB recovery flash path. WendyOS flashes the Thor's QSPI and internal NVMe directly; no external drive is required.
 
 WendyOS on Jetson is built on **JetPack 7.2** (L4T R39.2.0). Apps can target JetPack 7.2 or later.
@@ -17,11 +19,13 @@ WendyOS on Jetson is built on **JetPack 7.2** (L4T R39.2.0). Apps can target Jet
 <figure style={{ margin: '1.5rem 0' }}>
   <img
     src="/images/installation/jetson-thor-usb-c-ports.webp"
-    alt="Back of the NVIDIA Jetson AGX Thor with the left USB-C port labeled USB-C to Power Supply and the right USB-C port labeled USB-C to Developer Machine"
+    alt="Rear of the Jetson AGX Thor with Power Cable pointing to the left USB-C connection and To Computer pointing to the right USB-C connection next to HDMI"
+    width="1920"
+    height="1080"
     style={{ width: '100%', borderRadius: '8px' }}
   />
   <figcaption style={{ textAlign: 'center', fontSize: '0.875rem', color: 'var(--color-fd-muted-foreground)', marginTop: '0.5rem' }}>
-    USB-C cable for the left goes into the power supply and the right goes into your Macbook
+    With the rear ports facing you: <strong>Power Cable</strong> connects on the left, and <strong>To Computer</strong> connects on the right, next to HDMI.
   </figcaption>
 </figure>
 
@@ -29,34 +33,82 @@ WendyOS on Jetson is built on **JetPack 7.2** (L4T R39.2.0). Apps can target Jet
 
 <Steps>
   <Step>
-    ### Connect the Cables and Enter Recovery Mode
+    ### Connect Your Computer
 
-    Start with the Thor powered off. Turn it so the **back faces you**; you should see all of the ports. Connect the USB-C cable from your MacBook to the **right** USB-C port, next to HDMI.
+    Start with the Thor powered off. Connect a data-capable USB-C cable to your MacBook or other development machine.
 
-    <video width="100%" autoPlay loop muted playsInline>
-      <source src="/videos/installation/jetson-thor-usb-c-connection.mp4" type="video/mp4" />
-      Your browser does not support the video tag.
-    </video>
+    <figure>
+      <video
+        width="1280" height="720" autoPlay loop muted playsInline controls preload="metadata"
+        poster={withBasePath('/images/installation/jetson-thor-computer-connection.webp')}
+        aria-label="Connect the data cable to your computer's USB-C port"
+        style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+      >
+        <source src="/videos/installation/jetson-thor-computer-connection.mp4" type="video/mp4" />
+        Your browser does not support embedded video.
+      </video>
+      <figcaption>Connect one end of the data cable to your computer.</figcaption>
+    </figure>
 
-    Plug the power-supply cable into a power outlet, then connect it to the **left** USB-C port on the Thor.
+    Turn the Thor so the **back faces you**; you should see all of the ports. Connect the other end to the **right USB-C port, next to HDMI**, labeled **To Computer** in the clip.
 
-    <video width="100%" autoPlay loop muted playsInline>
-      <source src="/videos/installation/jetson-thor-power-connection.mp4" type="video/mp4" />
-      Your browser does not support the video tag.
-    </video>
+    <figure>
+      <video
+        width="1280" height="720" autoPlay loop muted playsInline controls preload="metadata"
+        poster={withBasePath('/images/installation/jetson-thor-usb-c-connection.webp')}
+        aria-label="Connect the computer's data cable to the Thor's right USB-C port next to HDMI"
+        style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+      >
+        <source src="/videos/installation/jetson-thor-usb-c-connection.mp4" type="video/mp4" />
+        Your browser does not support embedded video.
+      </video>
+      <figcaption>The right USB-C port connects the Thor to your computer for recovery and flashing.</figcaption>
+    </figure>
+  </Step>
 
-    Turn the Thor so the **front faces you**. You should see three small buttons and an LED light.
+  <Step>
+    ### Connect Power
 
-    1. Press and **hold** the **middle** button.
-    2. Tap the **right** button.
-    3. Wait a moment, then release the **middle** button.
+    Plug the supplied power adapter into a power outlet, then connect its USB-C cable to the **left USB-C port** on the Thor, labeled **Power Cable** in the clip.
 
-    <video width="100%" autoPlay loop muted playsInline>
-      <source src="/videos/installation/jetson-thor-recovery-mode.mp4" type="video/mp4" />
-      Your browser does not support the video tag.
-    </video>
+    <figure>
+      <video
+        width="1280" height="720" autoPlay loop muted playsInline controls preload="metadata"
+        poster={withBasePath('/images/installation/jetson-thor-power-connection.webp')}
+        aria-label="Connect the power adapter to the Thor's left USB-C port"
+        style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+      >
+        <source src="/videos/installation/jetson-thor-power-connection.mp4" type="video/mp4" />
+        Your browser does not support embedded video.
+      </video>
+      <figcaption>Connect the supplied power adapter to the left USB-C port.</figcaption>
+    </figure>
+  </Step>
 
-    You should hear the fans quiet down. The Thor is now ready to flash.
+  <Step>
+    ### Enter Recovery Mode
+
+    Turn the Thor so the **front faces you**. Its three buttons, from left to right, are **Power**, **Force Recovery**, and **Reset**.
+
+    1. Briefly press the **left Power** button to turn the Thor on.
+    2. Press and **hold** the **middle Force Recovery** button.
+    3. While holding it, briefly tap the **right Reset** button.
+    4. Wait a moment, then release the **middle Force Recovery** button.
+
+    <figure>
+      <video
+        width="1280" height="720" autoPlay loop muted playsInline controls preload="metadata"
+        poster={withBasePath('/images/installation/jetson-thor-recovery-mode.webp')}
+        aria-label="Hold the middle Force Recovery button, tap the right Reset button, then release Force Recovery"
+        style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+      >
+        <source src="/videos/installation/jetson-thor-recovery-mode.mp4" type="video/mp4" />
+        Your browser does not support embedded video.
+      </video>
+      <figcaption>The clip starts with the Thor powered on and shows the recovery-button sequence.</figcaption>
+    </figure>
+
+    In the next step, confirm that the installer detects the Thor in USB recovery mode before flashing.
   </Step>
 
   <Step>
@@ -70,10 +122,20 @@ WendyOS on Jetson is built on **JetPack 7.2** (L4T R39.2.0). Apps can target Jet
 
     Follow the on-screen instructions. The CLI downloads a Thor flashpack, detects the Thor in USB recovery mode, and flashes QSPI plus its internal NVMe.
 
-    <video width="100%" autoPlay loop muted playsInline>
-      <source src="/videos/installation/jetson-thor-flash-cli.mp4" type="video/mp4" />
-      Your browser does not support the video tag.
-    </video>
+    <figure>
+      <video
+        width="1920" height="1080" autoPlay loop muted playsInline controls preload="metadata"
+        poster={withBasePath('/images/installation/jetson-thor-flash-cli.webp')}
+        aria-label="The Wendy CLI detecting a Jetson AGX Thor and showing WendyOS installation progress"
+        style={{ width: '100%', height: 'auto', borderRadius: '8px' }}
+      >
+        <source src="/videos/installation/jetson-thor-flash-cli.mp4" type="video/mp4" />
+        Your browser does not support embedded video.
+      </video>
+      <figcaption>The installer detects the Thor in USB recovery mode and shows flash progress.</figcaption>
+    </figure>
+
+    The recording uses `sudo wendy os install`. `wendy install` runs the same installer and requests elevated access when needed.
   </Step>
 
   <Step>

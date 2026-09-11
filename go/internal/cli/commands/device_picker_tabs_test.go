@@ -31,10 +31,29 @@ func TestDevicePickerShowsLocalAndCloudTabs(t *testing.T) {
 	}
 }
 
+// tabTo presses Tab until the model lands on want, so a test that cares about
+// one tab does not encode how many tabs precede it. Returns the cmd from the
+// last press, which is what the lazy-start assertions read.
+func tabTo(t *testing.T, m devicePickerModel, want devicePickerTab) (devicePickerModel, tea.Cmd) {
+	t.Helper()
+	var cmd tea.Cmd
+	for range len(deviceTabOrder()) {
+		if m.active == want {
+			return m, cmd
+		}
+		var updated tea.Model
+		updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = updated.(devicePickerModel)
+	}
+	if m.active != want {
+		t.Fatalf("never reached tab %v", want)
+	}
+	return m, cmd
+}
+
 func TestDevicePickerLoggedOutCloudTabOffersLoginRow(t *testing.T) {
 	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0)
-	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(devicePickerModel)
+	m, _ = tabTo(t, m, devicePickerCloudTab)
 
 	view := m.View()
 	for _, want := range []string{"Wendy Cloud login", "Not logged in", "enter log in"} {
@@ -59,8 +78,7 @@ func TestDevicePickerStartsCloudDiscoveryOnFirstCloudTabVisit(t *testing.T) {
 		t.Fatal("cloud discovery started before the Cloud tab was visited")
 	}
 
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(devicePickerModel)
+	m, cmd := tabTo(t, m, devicePickerCloudTab)
 	if !m.cloudStarted {
 		t.Fatal("cloud discovery did not start on the first Cloud tab visit")
 	}
@@ -68,12 +86,11 @@ func TestDevicePickerStartsCloudDiscoveryOnFirstCloudTabVisit(t *testing.T) {
 		t.Fatal("first Cloud tab visit did not schedule discovery")
 	}
 
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = updated.(devicePickerModel)
+	m, cmd = tabTo(t, m, devicePickerLocalTab)
 	if cmd != nil {
 		t.Fatal("returning to Local unexpectedly restarted cloud discovery")
 	}
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	_, cmd = tabTo(t, m, devicePickerCloudTab)
 	if cmd != nil {
 		t.Fatal("second Cloud tab visit restarted cloud discovery")
 	}

@@ -148,7 +148,6 @@ func newDevicePushAgentCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
-			addr := hostPort(conn.Host, defaultAgentPort)
 
 			h := sha256.Sum256(binaryData)
 			sha256Hex := hex.EncodeToString(h[:])
@@ -165,7 +164,7 @@ func newDevicePushAgentCmd() *cobra.Command {
 			conn.Close()
 
 			fmt.Fprint(os.Stderr, "Waiting for agent to restart...")
-			newConn, err := waitForAgentRestart(ctx, addr)
+			newConn, err := reconnectAgentAfterRestart(ctx, conn)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, " failed.")
 				return fmt.Errorf("agent did not come back after update: %w", err)
@@ -2032,7 +2031,17 @@ func reconnectAgentAfterRestart(ctx context.Context, conn *grpcclient.AgentConne
 	if conn != nil && conn.Reconnect != nil {
 		return conn.Reconnect(ctx)
 	}
-	return waitForAgentRestart(ctx, hostPort(conn.Host, defaultAgentPort))
+	if conn == nil {
+		return nil, fmt.Errorf("cannot reconnect without the original device")
+	}
+	if conn.SimulatorName != "" {
+		return waitForSimulatorAgent(ctx, conn.SimulatorName, conn.Addr, 60*time.Second)
+	}
+	addr := conn.Addr
+	if addr == "" {
+		addr = hostPort(conn.Host, defaultAgentPort)
+	}
+	return waitForAgentRestart(ctx, addr)
 }
 
 // osUpdateOutcome reports what `device update`'s OS-update step did, so the
@@ -3098,6 +3107,12 @@ func updatedAgentReconnectFunc(ctx context.Context, previous *grpcclient.AgentCo
 	if previous != nil && previous.Reconnect != nil {
 		return previous.Reconnect
 	}
+	if previous != nil && previous.SimulatorName != "" {
+		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
+			conn, _, err := connectSimulatorAgent(waitCtx, previous.SimulatorName, previous.Addr)
+			return conn, err
+		}
+	}
 
 	if cloudCfg, ok := cloudDeviceConfigFromContext(ctx); ok {
 		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
@@ -3112,7 +3127,10 @@ func updatedAgentReconnectFunc(ctx context.Context, previous *grpcclient.AgentCo
 	}
 
 	if previous != nil && previous.Host != "" {
-		addr := hostPort(previous.Host, defaultAgentPort)
+		addr := previous.Addr
+		if addr == "" {
+			addr = hostPort(previous.Host, defaultAgentPort)
+		}
 		return func(waitCtx context.Context) (*grpcclient.AgentConnection, error) {
 			return connectResolvedAgentWithProvisionedHint(waitCtx, previous.Host, addr, false, func() bool { return false })
 		}

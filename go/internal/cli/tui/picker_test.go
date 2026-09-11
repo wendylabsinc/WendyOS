@@ -48,6 +48,47 @@ func TestPickerModel_SelectsFromTable(t *testing.T) {
 	}
 }
 
+func TestPickerStopRunsOutsideUpdateAndRemainsResponsive(t *testing.T) {
+	m := NewPickerWithTitle("Simulators")
+	called := false
+	m.OnStopItem = func(item PickerItem) (string, bool) {
+		called = true
+		if item.Name != "alpha" {
+			t.Fatalf("stopped wrong row: %s", item.Name)
+		}
+		return "Stopped alpha.", false
+	}
+	u, _ := m.Update(PickerAddMsg{Items: []PickerItem{{Name: "alpha"}, {Name: "beta"}}})
+	m = u.(PickerModel)
+	u, stop := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = u.(PickerModel)
+	if called || stop == nil {
+		t.Fatal("stop ran synchronously or was not scheduled")
+	}
+	if !strings.Contains(m.View(), "Stopping alpha") {
+		t.Fatal("no shutdown progress")
+	}
+	u, duplicate := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	if duplicate != nil {
+		t.Fatal("scheduled duplicate shutdown")
+	}
+	m = u.(PickerModel)
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = u.(PickerModel)
+	if m.table.Cursor() != 1 || !strings.Contains(m.View(), "Stopping alpha") {
+		t.Fatal("navigation lost progress")
+	}
+	u, quit := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if quit == nil || !u.(PickerModel).Cancelled() {
+		t.Fatal("cannot quit during shutdown")
+	}
+	u, _ = m.Update(stop())
+	m = u.(PickerModel)
+	if !called || m.stoppingName != "" || !strings.Contains(m.View(), "Stopped alpha.") {
+		t.Fatal("stop result not applied")
+	}
+}
+
 func TestPickerModel_DedupesItems(t *testing.T) {
 	m := NewPicker()
 
