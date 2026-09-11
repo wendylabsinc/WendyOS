@@ -1,0 +1,174 @@
+---
+title: Chat with your hardware
+description: Develop applications and operate Wendy devices from a terminal chat with local or hosted models
+---
+
+`wendy chat` is an interactive terminal assistant for developing apps and working
+with hardware running Wendy. It can inspect and edit a local project, run builds
+and tests, discover and connect to devices, deploy apps, and inspect device state
+using the same tools as Wendy's MCP server.
+
+## Start chatting
+
+Open a terminal in your project and run:
+
+```sh
+wendy chat
+```
+
+The first time, Wendy helps you choose where your AI runs, connect to it, and
+pick a model from the available models. You don't need to know a model name or
+set environment variables first.
+
+- **On your computer:** use Ollama, LM Studio, or another local model server.
+  Wendy looks for available models. Local inference needs no cloud account or
+  API key.
+- **With a hosted provider:** choose OpenAI or Anthropic. If a key is needed,
+  Wendy prompts for it with the input hidden, then lists your available models.
+
+Wendy remembers your selected provider, server, and model for the next
+`wendy chat`. To choose a different setup, run:
+
+```sh
+wendy chat --setup
+```
+
+During a conversation, type `/setup` to change your AI or enter a replacement
+API key in the private setup screen. Choosing a new setup starts a fresh
+conversation; canceling setup resumes your current conversation.
+
+Once chat opens, try:
+
+```text
+Inspect this project and discover my Wendy devices.
+```
+
+You can also ask it to diagnose an app's logs, add a feature, run tests, or deploy
+to a named device. Reads run automatically; file changes, shell commands, and
+device changes ask for approval.
+
+## Use a local model
+
+Start Ollama or enable LM Studio's local server, then run `wendy chat` and choose
+**On this computer**. Wendy finds the server and fetches its model list so you
+can select a model without typing its identifier. Choose one that supports
+**tool calling** so the assistant can use files, commands, and devices.
+
+If Ollama has no models yet, Wendy offers to download a starter model and shows
+its download size. Choose the download to proceed, or load a model yourself and
+check again. In LM Studio, download and load a model in the app first.
+
+For llama.cpp, vLLM, or another compatible server, choose a custom local server
+and enter its address when prompted. Its API address usually ends in `/v1`:
+
+```text
+http://localhost:8080/v1
+```
+
+If no server is running, setup explains how to get one and lets you check again
+without leaving Wendy. See [Ollama's compatibility documentation](https://docs.ollama.com/api/openai-compatibility)
+or [LM Studio tool use](https://lmstudio.ai/docs/developer/openai-compat/tools)
+for more about server setup and model support.
+
+The model server can also run on another reachable machine, including a Wendy
+device. Enter that server's address during setup. The model server and the
+device you control with `--device` are selected independently.
+
+Configure a context window large enough for the conversation and Wendy's tool
+definitions. Tool accuracy depends on the model and its server's tool-call
+parser/template. A model that only generates plain text can chat but cannot
+execute Wendy tools.
+
+## Select a project and device
+
+The current directory is the project workspace. Use `-C` to select another
+directory and `--device` to request a direct device connection:
+
+```sh
+wendy chat -C ./my-app --device my-pi.local
+```
+
+You can include the first message on the command line:
+
+```sh
+wendy chat "Inspect this project and discover my devices"
+```
+
+The assistant uses Wendy's discovery and connection tools to establish device
+context. Cloud devices use your existing Wendy Cloud login (`wendy auth login`).
+Local model inference also works with cloud-connected Wendy devices.
+
+## Working in the terminal
+
+The transcript shows streamed answers and tool activity. Read-only operations
+run automatically. File writes, shell commands, and device changes show their
+arguments for approval before running. Approve with `y` or deny with `n`; use the
+scroll keys to review longer calls.
+
+Local file tools operate within the selected workspace. Approved shell commands
+run with your user permissions on the developer machine; the workspace is their
+working directory, not a shell sandbox. The model can also use offline Wendy
+documentation through the `wendy_docs` tool.
+
+| Key or command | Action |
+| --- | --- |
+| Enter | Send a message |
+| Alt+Enter | Add a line to the message |
+| Page Up / Page Down | Scroll the transcript or approval preview |
+| Esc / Ctrl+C during a turn | Cancel the active response or tool call |
+| Ctrl+C while idle | Exit |
+| `/help` | Show chat controls |
+| `/setup` | Change your AI or enter an API key privately |
+| `/clear` | Start a fresh conversation |
+| `/quit` | Exit |
+
+Cancellation does not undo changes that have already completed. Use `/clear` to
+start fresh if a long conversation exceeds your model's context window.
+
+`--yes` approves every tool call for the session, including shell commands,
+file writes, and disruptive device operations. Chat does not save conversation
+transcripts. With hosted inference, the conversation and tool results are sent
+to the configured provider; with a local endpoint, they go to that local server.
+Existing Wendy Cloud/device connections and CLI analytics settings continue to
+apply.
+
+Settings and API keys pasted during setup are saved in `~/.wendy/chat.json`,
+with file permissions restricted to your user. API keys supplied through
+environment variables are not copied into that file.
+
+Chat requires interactive stdin and stdout and does not support `--json`.
+
+## Advanced configuration
+
+Run `wendy chat --help-all` to see all options. You can supply settings directly
+instead of using guided setup:
+
+```sh
+wendy chat --provider ollama --model my-model
+wendy chat --provider local --base-url http://localhost:1234/v1 --model my-model
+```
+
+Replace `my-model` with a model served by your endpoint. For hosted models,
+`OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are supported if you already manage
+credentials through your environment. Choose an accessible model ID with
+`--model` or use guided setup to browse available models.
+
+For an authenticated custom API, set `WENDY_CHAT_API_KEY` along with `--base-url`.
+Provider-specific cloud keys are not automatically sent to custom endpoints.
+
+| Setting | Flag | Environment variable |
+| --- | --- | --- |
+| Change saved setup | `--setup` | — |
+| API protocol/preset | `--provider` | `WENDY_CHAT_PROVIDER` |
+| Model name | `--model`, `-m` | `WENDY_CHAT_MODEL` |
+| API base URL | `--base-url` | `WENDY_CHAT_BASE_URL` |
+| API credential | Guided setup | `WENDY_CHAT_API_KEY` |
+| Response token limit | `--max-tokens` | `WENDY_CHAT_MAX_TOKENS` |
+| Project directory | `--directory`, `-C` | — |
+| Device | `--device` | Existing Wendy device configuration |
+
+Flags take precedence over environment variables, which override saved
+settings. The `openai` provider also
+accepts `OPENAI_BASE_URL`. Available providers are `openai`, `anthropic`,
+`ollama`, and `local`. The `ollama` preset uses `http://localhost:11434/v1`;
+the `local` preset defaults to `http://localhost:8080/v1`.
