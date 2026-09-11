@@ -1,6 +1,7 @@
 package timesync
 
 import (
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -11,6 +12,23 @@ import (
 type Manager struct {
 	logger     *zap.Logger
 	configPath string
+	mu         sync.RWMutex
+	latest     *Consensus
+}
+
+func (m *Manager) RecordConsensus(c Consensus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copy := c
+	m.latest = &copy
+}
+func (m *Manager) LatestConsensus() (Consensus, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.latest == nil {
+		return Consensus{}, false
+	}
+	return *m.latest, true
 }
 
 // NewManager creates a Manager. logger may be nil. configPath is the agent
