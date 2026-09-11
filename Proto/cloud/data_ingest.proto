@@ -103,6 +103,13 @@ enum EpisodeFileRole {
 // The full manifest JSON rides in attributes_json for fidelity; the typed
 // fields are what the catalog indexes on.
 message EpisodeManifest {
+  // Field numbers 2 and 3 carried a uint64 org_id and asset_id. Tenant identity
+  // comes from the caller's certificate and never from the manifest, so they
+  // were removed rather than retyped; reserving them stops a later edit from
+  // giving the numbers a new meaning that an older device would fill in with
+  // the identity it used to claim.
+  reserved 2, 3;
+
   string episode_id = 1;
 
   // Campaign name: the `name:` field of the campaign file that armed this
@@ -313,10 +320,28 @@ message QueryEpisodesRequest {
 
   // Maximum episodes returned, newest first. Zero means the server default.
   uint32 limit = 7;
+
+  // Opaque continuation token from a previous QueryEpisodesResponse's
+  // next_page_token. Empty asks for the first page, which is what every client
+  // that predates this field sends. Clients must treat the value as opaque:
+  // its contents are the server's to define and to change.
+  //
+  // Additive and not yet load bearing: the catalog read path lives outside this
+  // service, and the ingest answers this RPC with UNIMPLEMENTED, so nothing on
+  // a device reads or writes this field today. It is declared now so the shape
+  // is right before any client depends on it; retrofitting pagination onto a
+  // deployed query is the expensive version of this change.
+  string page_token = 8;
 }
 
 message QueryEpisodesResponse {
   repeated Episode episodes = 1;
+
+  // Token to pass as the next request's page_token. EMPTY means this is the
+  // last page, which is the only value a server that does not paginate ever
+  // sends; a client must therefore stop on empty rather than on a short page,
+  // because a full page with no token is also the last one.
+  string next_page_token = 2;
 }
 
 message GetEpisodeRequest {

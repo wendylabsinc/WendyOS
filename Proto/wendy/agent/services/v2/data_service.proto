@@ -46,6 +46,15 @@ message DataStartRequest {
   string name = 1;
   repeated string sources = 2;
   repeated string exclude_sources = 3;
+  // Refuse to start unless fresh UTC evidence bounds the device clock to within
+  // this many nanoseconds.
+  //
+  // ZERO MEANS NO REQUIREMENT, not "demand a perfect clock". It is the value
+  // every caller that does not care sends, including every client that predates
+  // the field, so a server that read it as a bound would refuse to start at all.
+  //
+  // Signed, and a negative value is invalid rather than meaningful: see the
+  // signedness note on DataDownloadChunk.
   int64 require_utc_uncertainty_nanos = 4;
   repeated DataCalibration calibrations = 5;
 }
@@ -66,11 +75,35 @@ message DataEpisode {
 message DataStatusResponse { DataEpisode active = 1; }
 message DataEpisodesResponse { repeated DataEpisode episodes = 1; }
 message DataInspectResponse { bytes manifest_json = 1; repeated string verification_errors = 2; }
+// One chunk of one file of an episode.
+//
+// size and sha256 describe the WHOLE FILE, not this chunk, and both are
+// repeated on every chunk of the stream rather than sent once. A receiver
+// therefore learns the file's length and digest from the first chunk and can
+// check every later chunk against the same pair; it must not read them as a
+// description of the bytes in this message, and must not accumulate them.
+//
+// This message is not the file list. What an episode contains is the manifest
+// JSON (DataInspectResponse.manifest_json), whose files array carries each
+// path, its size and its sha256; a downloader reads that first and then asks
+// for each path in turn. Nothing in this stream enumerates paths.
+//
+// Signedness, stated once for the whole file: every numeric field here is
+// int64, sizes and durations included. That differs from the cloud ingest
+// contract, where a size or a byte count is uint64 and only a point on a
+// timeline is signed. Devices already ship this contract, so the types stay as
+// they are; the rule for a reader is that size, offset and any duration in this
+// file are non-negative, and a negative value is a protocol error to reject
+// rather than a range to interpret.
 message DataDownloadChunk {
   string path = 1;
+  // Byte offset of data within the file. Chunks arrive in order with no gaps,
+  // starting at the offset the request asked to resume from.
   int64 offset = 2;
   bytes data = 3;
+  // Total size of the whole file, repeated on every chunk.
   int64 size = 4;
+  // Lowercase hex SHA-256 of the whole file, repeated on every chunk.
   string sha256 = 5;
   bool eof = 6;
 }
