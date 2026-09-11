@@ -179,6 +179,11 @@ class PromptTests(unittest.TestCase):
 
 
 class ModelTests(unittest.TestCase):
+    @staticmethod
+    def message(payload, reason="end_turn"):
+        text = payload if isinstance(payload, str) else json.dumps(payload)
+        return types.SimpleNamespace(stop_reason=reason, content=[types.SimpleNamespace(type="text", text=text)])
+
     def call_model(self, message=None, error=None):
         create = unittest.mock.Mock(return_value=message, side_effect=error)
         client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
@@ -204,6 +209,82 @@ class ModelTests(unittest.TestCase):
         with self.assertRaises(api_review.ReviewError) as caught:
             self.call_model(error=RuntimeError("secret-sk-test-key"))
         self.assertNotIn("secret-sk-test-key", str(caught.exception))
+
+    def test_invalid_location_schema_is_repaired_against_the_entire_same_batch(self):
+        malformed = decision()
+        del malformed["locations"][0]["end_line"]
+        original = {"risk": "high", "decisions": [malformed]}
+        corrected = {"risk": "high", "decisions": [decision()]}
+        result, create = self.call_model(error=[self.message(original), self.message(corrected)])
+        self.assertEqual(result, corrected)
+        self.assertEqual(create.call_count, 2)
+        first, repair = [json.loads(call.kwargs["messages"][0]["content"]) for call in create.call_args_list]
+        self.assertEqual({key: value for key, value in repair.items() if key != "response_repair"}, first)
+        self.assertEqual(repair["diff"].encode(), diff())
+        self.assertEqual(json.loads(repair["response_repair"]["previous_response"]), original)
+        self.assertIn("decisions[0].locations[0]", repair["response_repair"]["validation_error"])
+        self.assertIn("end_line", repair["response_repair"]["validation_error"])
+        self.assertEqual(create.call_args_list[0].kwargs["model"], create.call_args_list[1].kwargs["model"])
+        self.assertNotIn("tools", create.call_args.kwargs)
+
+    def test_invalid_evidence_can_be_corrected_but_not_accepted_unchanged(self):
+        malformed = decision(locations=[{"path": "go/network.go", "side": "head", "line": 4, "end_line": 4}])
+        original = {"risk": "high", "decisions": [malformed]}
+        corrected = {"risk": "high", "decisions": [decision()]}
+        result, create = self.call_model(error=[self.message(original), self.message(corrected)])
+        self.assertEqual(result, corrected)
+        prompt = json.loads(create.call_args.kwargs["messages"][0]["content"])
+        self.assertIn("outside the changed lines", prompt["response_repair"]["validation_error"])
+
+    def test_invalid_json_gets_one_complete_response_repair(self):
+        result, create = self.call_model(error=[self.message('```json\n{"risk":"low","decisions":[]}\n```'), self.message({"risk": "low", "decisions": []})])
+        self.assertEqual(result, {"risk": "low", "decisions": []})
+        self.assertEqual(create.call_count, 2)
+
+    def test_repair_remains_strict_and_is_bounded_to_one_attempt(self):
+        for malformed in (
+            decision(locations=[{"path": "go/another-batch.go", "side": "head", "line": 5, "end_line": 5}]),
+            decision(locations=[{"path": "go/network.go", "side": "head", "line": 5}]),
+            decision(accepted=True),
+        ):
+            with self.subTest(malformed=malformed):
+                message = self.message({"risk": "high", "decisions": [malformed]})
+                create = unittest.mock.Mock(return_value=message)
+                client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+                with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
+                    with self.assertRaisesRegex(api_review.ReviewError, "after one repair"):
+                        api_review.review_model(metadata(), diff().decode(), REPO, "test-model")
+                self.assertEqual(create.call_count, 2)
+
+    def test_repair_cannot_drop_decisions_change_valid_decisions_or_lower_risk(self):
+        malformed = decision(title="Second decision")
+        del malformed["locations"][0]["end_line"]
+        original = {"risk": "high", "decisions": [decision(), malformed]}
+        corrected_second = decision(title="Second decision")
+        for corrected, expected in (
+            ({"risk": "high", "decisions": [decision()]}, "dropped"),
+            ({"risk": "low", "decisions": [decision(), corrected_second]}, "lowered"),
+            ({"risk": "high", "decisions": [decision(title="Unrelated replacement"), corrected_second]}, "already-valid"),
+        ):
+            with self.subTest(expected=expected), self.assertRaisesRegex(api_review.ReviewError, expected):
+                self.call_model(error=[self.message(original), self.message(corrected)])
+        corrected = {"risk": "high", "decisions": [decision(), corrected_second]}
+        result, _ = self.call_model(error=[self.message(original), self.message(corrected)])
+        self.assertEqual(result, corrected)
+
+    def test_repair_provider_failure_is_closed_and_redacts_secrets(self):
+        with self.assertRaises(api_review.ReviewError) as caught:
+            self.call_model(error=[self.message("invalid JSON"), RuntimeError("secret-sk-test-key")])
+        self.assertIn("API request failed", str(caught.exception))
+        self.assertNotIn("secret-sk-test-key", str(caught.exception))
+
+    def test_truncated_response_does_not_enter_schema_repair(self):
+        create = unittest.mock.Mock(return_value=self.message('{"risk":', reason="max_tokens"))
+        client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+        with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
+            with self.assertRaisesRegex(api_review.ReviewError, "did not complete"):
+                api_review.review_model(metadata(), diff().decode(), REPO, "test-model")
+        create.assert_called_once()
 
 
 class CommandTests(unittest.TestCase):
