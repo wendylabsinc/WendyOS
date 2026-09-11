@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+// MeshRosterService serves the minimal name directory the WendyOS mesh needs
+// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
+// deliberately narrower than AssetService: only {name, asset_id} pairs plus the
+// caller's own org slug, scoped by the caller's asset-certificate identity.
+//
+// The shape originates device-side in WendyOS (Proto/cloud/mesh.proto,
+// e926cb0dc), which is the only client; this is its first upstream home
+// (WDY-2824). Identities are v2 UUID strings.
+service MeshRosterService {
+  rpc GetMeshRoster(GetMeshRosterRequest) returns (GetMeshRosterResponse);
+}
+
+message GetMeshRosterRequest {}
+
+message MeshRosterEntry {
+  string name = 1;      // device asset name, server-normalized to a DNS label
+  string asset_id = 2;
+}
+
+message GetMeshRosterResponse {
+  string org_slug = 1;  // caller org's slug, server-normalized to a DNS label
+  repeated MeshRosterEntry entries = 2;
+}

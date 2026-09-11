@@ -1,0 +1,221 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+enum AssetKind {
+  ASSET_KIND_UNSPECIFIED = 0;
+  ASSET_KIND_DRONE       = 1;
+  ASSET_KIND_CAR         = 2;
+  ASSET_KIND_QUADRUPED   = 3;
+  ASSET_KIND_STATIONARY  = 4;
+}
+
+service AssetService {
+  rpc CreateAsset(CreateAssetRequest) returns (Asset);
+  rpc GetAsset(GetAssetRequest) returns (Asset);
+  rpc UpdateAsset(UpdateAssetRequest) returns (Asset);
+  rpc DeleteAsset(DeleteAssetRequest) returns (DeleteAssetResponse);
+  // Server-streamed pagination using offset/limit (matches OrganizationService)
+  rpc ListAssets(ListAssetsRequest) returns (stream ListAssetsResponse);
+  rpc ListAssetsByApp(ListAssetsByAppRequest) returns (stream ListAssetsByAppResponse);
+  rpc ListAssetChildren(ListAssetChildrenRequest) returns (stream ListAssetChildrenResponse);
+  rpc GetAssetLineage(GetAssetLineageRequest) returns (GetAssetLineageResponse);
+  // Filter assets using JQ filter with pagination
+  rpc FilterAssets(FilterAssetsRequest) returns (stream FilterAssetsResponse);
+}
+
+message Asset {
+  string id = 1;
+  string organization_id = 2;
+  optional string parent_asset_id = 3;
+  string name = 4;
+  string details = 5;
+  string asset_type = 6;
+
+  // Blob storage fields
+  optional string blob_storage_url = 7;
+  optional string blob_content_type = 8;
+  optional int64 blob_size_bytes = 9;
+  optional google.protobuf.Struct blob_metadata = 10;
+
+  // Compute device fields
+  bool is_compute_device = 11;
+  optional string device_type = 12;
+  optional string architecture = 13;
+  optional int32 cpu_cores = 14;
+  optional int32 ram_mb = 15;
+  optional int32 storage_gb = 16;
+  optional string os_type = 17;
+  optional string os_version = 18;
+  optional string ip_address = 19;
+  optional string mac_address = 20;
+
+  // Tags for filtering and organization
+  repeated string tags = 23;
+
+  // Geographic coordinates
+  optional double latitude = 24;
+  optional double longitude = 25;
+  optional double altitude = 26;
+
+  // Presence: set when the device has an active or recent broker connection
+  optional google.protobuf.Timestamp last_heartbeat = 27;
+
+  AssetKind kind = 28;
+  optional double heading = 29;
+
+  // Connection location: populated from the IP of the most recent broker connection
+  optional string connection_ip = 30;
+  optional string connection_city = 31;
+  optional string connection_country = 32;
+  optional double connection_latitude = 33;
+  optional double connection_longitude = 34;
+
+  google.protobuf.Timestamp created_at = 21;
+  google.protobuf.Timestamp updated_at = 22;
+}
+
+message CreateAssetRequest {
+  string organization_id = 1;
+  optional string parent_asset_id = 2;
+  string name = 3;
+  string details = 4;
+  string asset_type = 5;
+
+  optional string blob_storage_url = 6;
+  optional string blob_content_type = 7;
+  optional int64 blob_size_bytes = 8;
+  optional google.protobuf.Struct blob_metadata = 9;
+
+  bool is_compute_device = 10;
+  optional string device_type = 11;
+  optional string architecture = 12;
+  optional int32 cpu_cores = 13;
+  optional int32 ram_mb = 14;
+  optional int32 storage_gb = 15;
+  optional string os_type = 16;
+  optional string os_version = 17;
+  optional string ip_address = 18;
+  optional string mac_address = 19;
+  repeated string tags = 20;
+
+  optional double latitude = 21;
+  optional double longitude = 22;
+  optional double altitude = 23;
+  optional double heading  = 24;
+}
+
+message GetAssetRequest {
+  string id = 1;
+}
+
+message UpdateAssetRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string details = 3;
+  optional string blob_storage_url = 4;
+  optional string blob_content_type = 5;
+  optional int64 blob_size_bytes = 6;
+  optional google.protobuf.Struct blob_metadata = 7;
+  optional string device_type = 8;
+  optional string architecture = 9;
+  optional int32 cpu_cores = 10;
+  optional int32 ram_mb = 11;
+  optional int32 storage_gb = 12;
+  optional string os_type = 13;
+  optional string os_version = 14;
+  optional string ip_address = 15;
+  optional string mac_address = 16;
+  repeated string tags = 17;
+
+  optional double latitude = 18;
+  optional double longitude = 19;
+  optional double altitude = 20;
+  optional string asset_type = 21;
+  optional double heading = 22;
+}
+
+message DeleteAssetRequest {
+  string id = 1;
+}
+
+message DeleteAssetResponse {
+  bool success = 1;
+}
+
+message ListAssetsRequest {
+  string organization_id = 1;
+  optional bool is_compute_device = 2;
+  // Offset/limit based pagination (offset = starting row, limit = page size)
+  optional int32 offset = 3;
+  optional int32 limit = 4;
+  optional string filter = 5;  // Filter by name, details, asset_type, device_type, or tags
+  optional bool online_only = 6;  // If true, only return assets with active broker presence
+  // Server-side ordering (applied across all matching assets, before pagination).
+  optional string order_by = 7;   // "id" | "name" | "status" | "type"; defaults to "id"
+  optional string order_dir = 8;  // "asc" | "desc"; defaults to "asc"
+}
+
+message ListAssetsResponse {
+  // One asset per streamed response and total count for the full query
+  Asset asset = 1;
+  int32 total = 2;
+}
+
+message ListAssetChildrenRequest {
+  string parent_asset_id = 1;
+  // Offset/limit based pagination
+  optional int32 offset = 2;
+  optional int32 limit = 3;
+}
+
+message ListAssetChildrenResponse {
+  Asset asset = 1;
+  int32 total = 2;
+}
+
+message GetAssetLineageRequest {
+  string asset_id = 1;
+}
+
+message GetAssetLineageResponse {
+  // The root asset (top-most parent)
+  Asset root_asset = 1;
+  // All assets in the lineage tree (including root and all descendants)
+  repeated Asset all_assets = 2;
+  // The asset ID that was requested (for highlighting)
+  string requested_asset_id = 3;
+}
+
+message ListAssetsByAppRequest {
+  string organization_id = 1;
+  string app_id = 2;
+  optional bool is_compute_device = 3;
+  // Offset/limit based pagination (offset = starting row, limit = page size)
+  optional int32 offset = 4;
+  optional int32 limit = 5;
+  optional string filter = 6;  // Filter by name, details, asset_type, device_type, or tags
+}
+
+message ListAssetsByAppResponse {
+  // One asset per streamed response and total count for the full query
+  Asset asset = 1;
+  int32 total = 2;
+}
+
+message FilterAssetsRequest {
+  string organization_id = 1;
+  optional string jq_filter = 2;  // JQ filter expression (e.g., ".asset_type == \"compute_device\"")
+  // Offset/limit based pagination
+  optional int32 offset = 3;
+  optional int32 limit = 4;
+}
+
+message FilterAssetsResponse {
+  // One asset per streamed response and total count for the full query
+  Asset asset = 1;
+  int32 total = 2;
+}

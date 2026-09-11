@@ -230,7 +230,7 @@ func startPreEnrollFakeServer(t *testing.T, svc *fakePreEnrollCertService) PreEn
 	t.Cleanup(func() { srv.GracefulStop(); lis.Close() })
 
 	addr := lis.Addr().String()
-	return func(_ context.Context, _ string, _ grpc.DialOption) (*grpc.ClientConn, error) {
+	return func(_ context.Context, _ string, _ ...grpc.DialOption) (*grpc.ClientConn, error) {
 		return grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 }

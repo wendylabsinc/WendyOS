@@ -33,6 +33,12 @@ import (
 
 const defaultCloudDashboard = "https://cloud.wendy.sh"
 const defaultCloudGRPC = "wendy-cloud-services-114319063177.us-central1.run.app:443"
+const defaultDevAuthBase = "https://auth.dev.wendy.sh"
+const defaultDevCloudDashboard = "https://cloud.dev.wendy.sh"
+const defaultDevCloudGRPC = "api.dev.wendy.sh:443"
+const defaultDevCloudResource = "https://cloud.dev.wendy.sh/api"
+const defaultPKIIdentityResource = "https://pki.wendy.sh/identity"
+const defaultDevPKIIdentityEndpoint = "https://identity.dev.pki.wendy.sh/v1/identity/certificate"
 
 func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -58,12 +64,62 @@ func newAuthLoginCmd() *cobra.Command {
 	var cloudGRPC string
 	var apiKey string
 	var orgID int32
+	var issuer string
+	var email string
+	var authBase string
+	var clientID string
+	var resource string
+	var identityResource string
+	var identityEndpoint string
+	var printClaims bool
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to Wendy Cloud or a local pki-core instance",
-		Long:  "Without --api-key: opens a browser for authentication, receives a callback with an enrollment token, generates certificates, and saves them to config.\nWith --api-key: issues a certificate from a self-hosted pki-core instance using a Bearer API key.",
+		Long: "Without --api-key: opens a browser for authentication, creates an operator CSR, obtains its certificate, and saves it to config.\n" +
+			"With --api-key: issues a certificate from a self-hosted pki-core instance using a Bearer API key.\n" +
+			"With --email: discovers your wendy-auth organization, signs in with authorization code + PKCE, obtains the certificate directly from pki-core, and saves a refreshable Cloud API session. --issuer skips email discovery.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if issuer != "" || email != "" {
+				if apiKey != "" {
+					return fmt.Errorf("OIDC and --api-key select different login modes; pass only one")
+				}
+				if authBase == "" {
+					authBase = defaultDevAuthBase
+				}
+				if issuer == "" {
+					var err error
+					issuer, err = discoverOIDCIssuer(cmd.Context(), authBase, email)
+					if err != nil {
+						return err
+					}
+				}
+				if cloudDashboard == "" {
+					cloudDashboard = defaultDevCloudDashboard
+				}
+				if cloudGRPC == "" {
+					cloudGRPC = defaultDevCloudGRPC
+				}
+				if resource == "" {
+					resource = defaultDevCloudResource
+				}
+				if identityResource == "" {
+					identityResource = defaultPKIIdentityResource
+				}
+				if identityEndpoint == "" {
+					identityEndpoint = defaultDevPKIIdentityEndpoint
+				}
+				return performOIDCLogin(cmd.Context(), oidcLoginOptions{
+					Issuer:           issuer,
+					ClientID:         clientID,
+					CloudResource:    resource,
+					IdentityResource: identityResource,
+					IdentityEndpoint: identityEndpoint,
+					CloudURL:         cloudDashboard,
+					CloudGRPC:        cloudGRPC,
+					PrintClaims:      printClaims,
+				})
+			}
 			if apiKey != "" {
 				if cloudGRPC == "" {
 					return fmt.Errorf("--cloud-grpc is required for local authentication")
@@ -88,6 +144,14 @@ func newAuthLoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint, or local pki-core address (host:port) when using --api-key")
 	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for local pki-core authentication")
 	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID (used with --api-key)")
+	cmd.Flags().StringVar(&issuer, "issuer", "", "wendy-auth realm issuer URL, e.g. https://auth.wendy.sh/realms/acme (enables OIDC login)")
+	cmd.Flags().StringVar(&email, "email", "", "Email address used to discover your organization and sign in with wendy-auth")
+	cmd.Flags().StringVar(&authBase, "auth", defaultDevAuthBase, "wendy-auth base URL used with --email")
+	cmd.Flags().StringVar(&clientID, "client-id", "wendy-cli", "public DPoP OAuth client ID registered in wendy-auth")
+	cmd.Flags().StringVar(&resource, "resource", "", "RFC 8707 API resource indicator (used with OIDC login)")
+	cmd.Flags().StringVar(&identityResource, "pki-resource", defaultPKIIdentityResource, "RFC 8707 pki-core identity resource (used with OIDC login)")
+	cmd.Flags().StringVar(&identityEndpoint, "pki-identity-endpoint", defaultDevPKIIdentityEndpoint, "pki-core operator identity CSR endpoint (used with OIDC login)")
+	cmd.Flags().BoolVar(&printClaims, "print-claims", false, "Print the decoded access-token claims after login (used with --issuer)")
 	return cmd
 }
 
@@ -218,11 +282,11 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("generating key pair: %w", err)
 	}
 
-	commonName, identityURN, err := enrollmentTokenIdentity(result.EnrollmentToken)
+	commonName, identityURIs, err := enrollmentTokenIdentity(result.EnrollmentToken)
 	if err != nil {
 		return fmt.Errorf("reading enrollment token identity: %w", err)
 	}
-	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), commonName, identityURN)
+	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), commonName, identityURIs)
 	if err != nil {
 		return fmt.Errorf("generating CSR: %w", err)
 	}
@@ -304,36 +368,47 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 // authoritative identity URI SAN from an enrollment token's claims. The URN
 // ("urn:wendy:org:<org>:user:<userID>" for users, "urn:wendy:org:<org>:asset:<assetID>"
 // for assets) is what IdentityFromCert prefers over the legacy CommonName.
-func enrollmentTokenIdentity(token string) (commonName, identityURN string, err error) {
+func enrollmentTokenIdentity(token string) (commonName string, identityURIs []string, err error) {
 	claims, err := enrolltoken.Parse(token)
 	if err != nil {
-		return "", "", err
+		return "", nil, err
+	}
+	// The tenant SPIFFE principal rides alongside the urn:wendy SAN whenever
+	// the token carries a tenant; cloud refuses to sign a relay grant without
+	// it. Orgs with no pki tenant get no claim, and enroll as they always did.
+	withTenant := func(cn, urn string) (string, []string, error) {
+		uris := []string{urn}
+		if spiffeURI, ok := claims.TenantSPIFFEURI(); ok {
+			uris = append(uris, spiffeURI)
+		}
+		return cn, uris, nil
 	}
 	switch claims.Type {
 	case "user_enrollment":
 		if claims.UserID == "" {
-			return "", "", fmt.Errorf("user enrollment token missing user_id")
+			return "", nil, fmt.Errorf("user enrollment token missing user_id")
 		}
 		if strings.Contains(claims.UserID, ":") {
 			// A ':' in the user ID would make the URN unreadable for every
 			// identity parser (they expect exactly 6 colon-separated parts),
 			// yielding a cert that cannot authenticate anywhere.
-			return "", "", fmt.Errorf("user_id %q contains ':', cannot build identity URN", claims.UserID)
+			return "", nil, fmt.Errorf("user_id %q contains ':', cannot build identity URN", claims.UserID)
 		}
 		cn := fmt.Sprintf("wendy/user/%s", claims.UserID)
 		if claims.OrganizationID == 0 {
 			// Legacy token without an org claim: keep login working, CN only.
-			return cn, "", nil
+			return cn, nil, nil
 		}
-		return cn, certs.UserURN(claims.OrganizationID, claims.UserID), nil
+		return withTenant(cn, certs.UserURN(claims.OrganizationID, claims.UserID))
 	case "asset_enrollment":
 		if claims.OrganizationID == 0 || claims.AssetID == 0 {
-			return "", "", fmt.Errorf("asset enrollment token missing org_id or asset_id")
+			return "", nil, fmt.Errorf("asset enrollment token missing org_id or asset_id")
 		}
-		return fmt.Sprintf("wendy/%d/%d", claims.OrganizationID, claims.AssetID),
-			certs.AssetURN(claims.OrganizationID, claims.AssetID), nil
+		return withTenant(
+			fmt.Sprintf("wendy/%d/%d", claims.OrganizationID, claims.AssetID),
+			certs.AssetURN(claims.OrganizationID, claims.AssetID))
 	default:
-		return "", "", fmt.Errorf("unsupported enrollment token type %q", claims.Type)
+		return "", nil, fmt.Errorf("unsupported enrollment token type %q", claims.Type)
 	}
 }
 
@@ -359,13 +434,16 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 	}
 	// Reconstruct the device_id that pki-core stored in the token.
 	deviceID := fmt.Sprintf("sh/wendy/%d/%d", tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
-	identityURN := certs.AssetURN(tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
+	identityURIs := []string{certs.AssetURN(tokenResp.GetOrganizationId(), tokenResp.GetAssetId())}
+	if spiffeURI, ok := enrolltoken.TenantSPIFFEURIFromToken(tokenResp.GetEnrollmentToken()); ok {
+		identityURIs = append(identityURIs, spiffeURI)
+	}
 
 	privateKeyPEM, err := certs.GenerateKeyPair()
 	if err != nil {
 		return fmt.Errorf("generating key pair: %w", err)
 	}
-	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), deviceID, identityURN)
+	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), deviceID, identityURIs)
 	if err != nil {
 		return fmt.Errorf("generating CSR: %w", err)
 	}
@@ -481,6 +559,13 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 // no entry could be refreshed, so callers that retry a connection afterwards
 // do not retry with the same stale certificates.
 func refreshAllCerts(ctx context.Context) error {
+	// OIDC certificate refresh consumes the same rotating token family as API
+	// refresh. Keep the lock through the final Save, including partial failures.
+	unlock, err := acquireAuthRefreshLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -488,6 +573,9 @@ func refreshAllCerts(ctx context.Context) error {
 
 	if len(cfg.Auth) == 0 {
 		return fmt.Errorf("not logged in; run 'wendy auth login' first")
+	}
+	for i := range cfg.Auth {
+		cfg.Auth[i].InvalidateCachedSecrets()
 	}
 
 	refreshed := 0
@@ -584,100 +672,46 @@ func storedCertIdentityURN(cert config.CertificateInfo) string {
 	return ""
 }
 
-// refreshCertsForAuth generates a new CSR and refreshes certificates for a single auth entry.
+// refreshCertsForAuth renews one auth entry's certificate against pki-core's
+// renew frontend. Cloud is not in this path: it neither mints the certificate
+// nor relays the request. The certificate being replaced is itself the proof of
+// possession — it is presented in the mTLS handshake that carries the CSR.
 func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 	if len(auth.Certificates) == 0 {
 		return fmt.Errorf("no existing certificates")
 	}
-
-	existingCert := auth.Certificates[0]
-
-	cn, err := certCommonName(existingCert.PemCertificate)
-	if err != nil {
-		return fmt.Errorf("reading existing cert CN: %w", err)
+	if auth.OAuthIssuer != "" {
+		return refreshOIDCCertificate(ctx, auth)
 	}
 
-	// Carry the authoritative identity URN forward so the refreshed cert keeps
-	// its "urn:wendy:org:..." SAN. The org/user/asset are taken from the stored
-	// config (the cert's own CN may be a legacy "wendy/user/<uid>" that carries
-	// no parseable org).
-	identityURN := storedCertIdentityURN(existingCert)
+	current := auth.Certificates[0]
 
-	// Generate new key pair.
-	newKeyPEM, err := certs.GenerateKeyPair()
-	if err != nil {
-		return fmt.Errorf("generating key pair: %w", err)
+	// pki-core routes a renewal by the tenant SPIFFE principal on the presented
+	// certificate, and renews only lineages it issued itself. A leaf carrying no
+	// tenant principal is not renewable there by any route, so report that here
+	// rather than spend a round trip to be told the same thing as a bare 403.
+	if _, ok := tenantPrincipalFor(current.PemCertificate); !ok {
+		return errCertNotPKIIssued
 	}
 
-	csrPEM, err := certs.GenerateCSR([]byte(newKeyPEM), cn, identityURN)
-	if err != nil {
-		return fmt.Errorf("generating CSR: %w", err)
+	endpoint := renewEndpoint(auth)
+	if endpoint == "" {
+		return errNoRenewEndpoint
 	}
 
-	// Connect to cloud using existing mTLS credentials.
-	var refreshTransport grpc.DialOption
-	if strings.HasSuffix(auth.CloudGRPC, ":443") {
-		existingKeyPEM, err := existingCert.PrivateKeyPEM()
-		if err != nil {
-			return fmt.Errorf("loading existing client key: %w", err)
-		}
-		tlsCfg, err := certs.LoadTLSConfig(
-			existingCert.PemCertificate,
-			existingCert.PemCertificateChain,
-			existingKeyPEM,
-			"",
-		)
-		if err != nil {
-			return fmt.Errorf("loading existing TLS config: %w", err)
-		}
-		refreshTransport = grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))
-	} else {
-		refreshTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
-	}
-	certConn, err := grpc.NewClient(auth.CloudGRPC, refreshTransport)
-	if err != nil {
-		return fmt.Errorf("connecting to cloud: %w", err)
-	}
-	defer certConn.Close()
-
-	certClient := cloudpb.NewCertificateServiceClient(certConn)
-
-	cloudCtx, err := cloudContext(ctx, auth)
+	certPEM, chainPEM, keyPEM, err := renewViaPKICore(ctx, endpoint, auth)
 	if err != nil {
 		return err
 	}
 
-	// Use RefreshCertificate RPC.
-	refreshResp, err := certClient.RefreshCertificate(cloudCtx, &cloudpb.RefreshCertificateRequest{
-		PemCsr: csrPEM,
-	})
-	if err != nil {
-		return fmt.Errorf("refreshing certificate: %w", err)
-	}
-
-	// The cloud reports refresh failures via a structured error field on an
-	// otherwise-successful response (not a gRPC status). Surface its code/message
-	// so the caller can react — an unauthorized code means the session expired and
-	// the user should log in again — instead of the generic "no certificate" below.
-	if respErr := refreshResp.GetError(); respErr != nil {
-		return cloudCertError{code: respErr.GetCode(), message: respErr.GetMessage()}
-	}
-
-	cert := refreshResp.GetCertificate()
-	if cert == nil {
-		return fmt.Errorf("no certificate returned from refresh")
-	}
-
-	// Update the auth entry with new certificates.
-	auth.Certificates = []config.CertificateInfo{
-		{
-			PemCertificate:      cert.GetPemCertificate(),
-			PemCertificateChain: cert.GetPemCertificateChain(),
-			PemPrivateKey:       newKeyPEM,
-			OrganizationID:      existingCert.OrganizationID,
-			UserID:              existingCert.UserID,
-		},
-	}
+	// Mutate the stored entry rather than rebuild it: a renewal replaces key
+	// material and nothing else. Rebuilding dropped the asset and principal
+	// fields, which is what identifies a device session to every later command.
+	updated := current
+	updated.PemCertificate = certPEM
+	updated.PemCertificateChain = chainPEM
+	updated.PemPrivateKey = keyPEM
+	auth.Certificates[0] = updated
 
 	// This cert has a later NotBefore than the one it replaces, so the proof kept
 	// for offline use has to move with it.
@@ -704,6 +738,7 @@ type authStatusSession struct {
 	CloudGRPC      string          `json:"cloudGrpc,omitempty"`
 	UserID         string          `json:"userId,omitempty"`
 	OrganizationID int             `json:"organizationId,omitempty"`
+	PrincipalURI   string          `json:"principalUri,omitempty"`
 	Certificate    *authStatusCert `json:"certificate,omitempty"`
 }
 
@@ -781,6 +816,9 @@ func newAuthStatusCmd() *cobra.Command {
 				}
 
 				cert := auth.Certificates[0]
+				if cert.PrincipalURI != "" {
+					fmt.Fprintf(out, "  Identity: %s\n", cert.PrincipalURI)
+				}
 				if cert.UserID != "" {
 					fmt.Fprintf(out, "  User: %s\n", cert.UserID)
 				}
@@ -794,7 +832,7 @@ func newAuthStatusCmd() *cobra.Command {
 					case info.Expired:
 						fmt.Fprintln(out, tui.ErrorMessage(fmt.Sprintf("  Certificate expired on %s", expiryStr)))
 					case info.ExpiringSoon:
-						remaining := time.Until(info.ExpiresAt).Round(time.Hour)
+						remaining := time.Until(info.ExpiresAt).Truncate(time.Second)
 						fmt.Fprintln(out, tui.WarningMessage(fmt.Sprintf("  Certificate expires %s (in %s)", expiryStr, remaining)))
 					default:
 						fmt.Fprintln(out, tui.SuccessMessage(fmt.Sprintf("  Certificate valid until %s", expiryStr)))
@@ -823,6 +861,7 @@ func writeAuthStatusJSON(w io.Writer, cfg *config.Config, now time.Time) error {
 			cert := auth.Certificates[0]
 			session.UserID = cert.UserID
 			session.OrganizationID = cert.OrganizationID
+			session.PrincipalURI = cert.PrincipalURI
 			session.Certificate = authStatusCertInfo(cert.PemCertificate, now)
 		}
 		status.Sessions = append(status.Sessions, session)
@@ -864,7 +903,7 @@ func matchAuthSelector(cfg *config.Config, selector string) (*config.AuthConfig,
 	if orgID, err := strconv.Atoi(selector); err == nil {
 		for i := range cfg.Auth {
 			for _, c := range cfg.Auth[i].Certificates {
-				if c.OrganizationID == orgID {
+				if c.OrganizationID == orgID && c.TenantUUID() == "" {
 					matches = append(matches, &cfg.Auth[i])
 					break
 				}
@@ -874,7 +913,7 @@ func matchAuthSelector(cfg *config.Config, selector string) (*config.AuthConfig,
 		q := strings.ToLower(selector)
 		for i := range cfg.Auth {
 			if strings.Contains(strings.ToLower(cfg.Auth[i].CloudGRPC), q) ||
-				strings.Contains(strings.ToLower(cfg.Auth[i].CloudDashboard), q) {
+				strings.Contains(strings.ToLower(cfg.Auth[i].CloudDashboard), q) || (len(cfg.Auth[i].Certificates) > 0 && strings.EqualFold(cfg.Auth[i].Certificates[0].TenantUUID(), selector)) {
 				matches = append(matches, &cfg.Auth[i])
 			}
 		}
@@ -968,6 +1007,10 @@ func newAuthUseCmd() *cobra.Command {
 			// first — silently overriding the org the user just selected.
 			cfg.DefaultCloudGRPC = chosen.CloudGRPC
 			cfg.DefaultOrgID = int32(chosen.Certificates[0].OrganizationID)
+			cfg.DefaultTenantUUID = chosen.Certificates[0].TenantUUID()
+			if cfg.DefaultTenantUUID != "" {
+				cfg.DefaultOrgID = 0
+			}
 			if err := config.Save(cfg); err != nil {
 				return fmt.Errorf("saving config: %w", err)
 			}
@@ -990,6 +1033,7 @@ func newAuthDefaultCmd() *cobra.Command {
 			if clear {
 				cfg.DefaultCloudGRPC = ""
 				cfg.DefaultOrgID = 0
+				cfg.DefaultTenantUUID = ""
 				if err := config.Save(cfg); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
@@ -1015,6 +1059,7 @@ func newAuthDefaultCmd() *cobra.Command {
 				// Only a stale org default remains (its session is gone).
 				fmt.Println(tui.WarningMessage(fmt.Sprintf("Default session for org %d no longer exists; clearing it.", cfg.DefaultOrgID)))
 				cfg.DefaultOrgID = 0
+				cfg.DefaultTenantUUID = ""
 				if err := config.Save(cfg); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}
@@ -1025,6 +1070,7 @@ func newAuthDefaultCmd() *cobra.Command {
 				fmt.Println(tui.WarningMessage(fmt.Sprintf("Default session %s no longer exists; clearing it.", cfg.DefaultCloudGRPC)))
 				cfg.DefaultCloudGRPC = ""
 				cfg.DefaultOrgID = 0
+				cfg.DefaultTenantUUID = ""
 				if err := config.Save(cfg); err != nil {
 					return fmt.Errorf("saving config: %w", err)
 				}

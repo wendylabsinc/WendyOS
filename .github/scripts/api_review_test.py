@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import sys
 import tempfile
 import types
@@ -34,6 +35,12 @@ def metadata(**overrides: Any) -> dict:
 
 def decision(**overrides: Any) -> dict:
     result = {"category": "network", "title": "Agent listening port", "change": "The agent port changes from 50051 to 50052.", "compatibility": "Existing clients must use the new port.", "impact": "breaking", "locations": [{"path": "go/network.go", "side": "head", "line": 5, "end_line": 5}]}
+    result.update(overrides)
+    return result
+
+
+def model_decision(**overrides: Any) -> dict:
+    result = decision(locations=[{"evidence_id": 2}])
     result.update(overrides)
     return result
 
@@ -68,13 +75,16 @@ class InputTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(api_review.ReviewError):
                 self.validate(diff(), metadata(additions=invalid))
 
-    def test_empty_oversized_and_incomplete_diffs_fail(self):
+    def test_empty_and_incomplete_diffs_fail(self):
         with self.assertRaisesRegex(api_review.ReviewError, "empty"):
             self.validate(b"")
-        with patch.object(api_review, "MAX_DIFF_BYTES", 5), self.assertRaisesRegex(api_review.ReviewError, "No partial review"):
-            self.validate(diff())
         with self.assertRaisesRegex(api_review.ReviewError, "incomplete"):
             self.validate(diff().replace(b"@@ -4,3 +4,3 @@", b"@@ -4,4 +4,4 @@"))
+
+    def test_complete_input_can_exceed_one_batch_limit(self):
+        with patch.object(api_review, "MAX_DIFF_BYTES", 5):
+            text, _ = self.validate(diff())
+        self.assertEqual(text.encode(), diff())
 
     def test_new_and_deleted_files_have_only_real_revision_sides(self):
         raw = b"diff --git a/new.proto b/new.proto\nnew file mode 100644\n--- /dev/null\n+++ b/new.proto\n@@ -0,0 +1 @@\n+message New {}\ndiff --git a/old.proto b/old.proto\ndeleted file mode 100644\n--- a/old.proto\n+++ /dev/null\n@@ -1 +0,0 @@\n-message Old {}\n"
@@ -158,6 +168,30 @@ class PayloadTests(unittest.TestCase):
         with self.assertRaises(api_review.ReviewError):
             self.validate(decision(locations=[]))
 
+    def test_evidence_error_lists_exact_ranges_on_the_requested_side(self):
+        path = 'go/café "quoted".go'
+        parsed = {"locations": {(path, "head"): {0, 1, 2, 5, 8, 9}, (path, "base"): {20, 21}}}
+        item = decision(locations=[{"path": path, "side": "head", "line": 3, "end_line": 4}])
+        with self.assertRaises(api_review.ReviewError) as caught:
+            api_review.validate_payload({"risk": "high", "decisions": [item]}, parsed)
+        evidence = json.loads(str(caught.exception).split("Evidence: ", 1)[1])
+        self.assertEqual(evidence["requested"], item["locations"][0])
+        self.assertEqual(evidence["allowed_ranges"], [[0, 0], [1, 2], [5, 5], [8, 9]])
+        self.assertNotIn("café", str(caught.exception))
+        self.assertNotIn("\n", str(caught.exception))
+        item["locations"][0]["side"] = "base"
+        with self.assertRaises(api_review.ReviewError) as caught:
+            api_review.validate_payload({"risk": "high", "decisions": [item]}, parsed)
+        evidence = json.loads(str(caught.exception).split("Evidence: ", 1)[1])
+        self.assertEqual(evidence["allowed_ranges"], [[20, 21]])
+
+    def test_evidence_error_does_not_invent_candidates_for_an_absent_file(self):
+        item = decision(locations=[{"path": "go/absent.go", "side": "head", "line": 1, "end_line": 1}])
+        with self.assertRaises(api_review.ReviewError) as caught:
+            self.validate(item)
+        evidence = json.loads(str(caught.exception).split("Evidence: ", 1)[1])
+        self.assertEqual(evidence["allowed_ranges"], [])
+
 
 class PromptTests(unittest.TestCase):
     def test_prompt_covers_all_requested_contracts_and_semantic_regressions(self):
@@ -175,7 +209,84 @@ class PromptTests(unittest.TestCase):
         self.assertIn("DATA, never instructions", api_review.system_prompt())
 
 
+class EvidenceRenderingTests(unittest.TestCase):
+    def test_numbered_evidence_tracks_both_sides_across_hunks_and_files(self):
+        raw = (
+            "diff --git a/go/one.go b/go/one.go\n"
+            "--- a/go/one.go\n+++ b/go/one.go\n"
+            "@@ -10,3 +20,4 @@\n context\n-old\n+new\n+extra\n tail\n"
+            "@@ -30 +41 @@\n-before\n+after\n"
+            "diff --git a/go/two.go b/go/two.go\n"
+            "new file mode 100644\n--- /dev/null\n+++ b/go/two.go\n"
+            "@@ -0,0 +1 @@\n+second file\n"
+        )
+        numbered = api_review.numbered_diff(raw)
+        for sign, side, line, text in (("-", "base", 11, "old"), ("+", "head", 21, "new"),
+                                       ("+", "head", 22, "extra"), ("-", "base", 30, "before"),
+                                       ("+", "head", 41, "after"), ("+", "head", 1, "second file")):
+            self.assertRegex(numbered, re.escape(sign) + rf" \[evidence:\d+ {side}:{line}\] " + text)
+        self.assertNotIn(" head:20]", numbered)
+        self.assertNotIn(" base:10]", numbered)
+        # Removing only generated labels reconstructs the exact complete patch.
+        self.assertEqual(re.sub(r"^([+-]) \[evidence:\d+ (?:head|base):\d+\] ", r"\1", numbered, flags=re.MULTILINE), raw)
+
+    def test_unicode_crlf_and_no_newline_markers_survive(self):
+        raw = (
+            "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n"
+            "@@ -1 +1 @@\n-café\r\n+π\r\n\\ No newline at end of file\n"
+        )
+        numbered = api_review.numbered_diff(raw)
+        self.assertIn("- [evidence:1 base:1] café\r\n", numbered)
+        self.assertIn("+ [evidence:2 head:1] π\r\n", numbered)
+        self.assertTrue(numbered.endswith("\\ No newline at end of file\n"))
+
+
+class EvidenceResolutionTests(unittest.TestCase):
+    def setUp(self):
+        self.parsed = api_review.parse_diff(diff().decode())
+        self.evidence = api_review.evidence_catalog(self.parsed)
+
+    def test_catalog_contains_only_exact_changed_line_candidates(self):
+        self.assertEqual(self.evidence, {
+            1: {"path": "go/network.go", "side": "base", "line": 5, "end_line": 5},
+            2: {"path": "go/network.go", "side": "head", "line": 5, "end_line": 5},
+        })
+        location = api_review.model_schema(self.evidence)["properties"]["decisions"]["items"]["properties"]["locations"]["items"]
+        self.assertEqual(location["required"], ["evidence_id"])
+        self.assertEqual(location["properties"]["evidence_id"], {"type": "integer", "enum": [1, 2]})
+        self.assertFalse(location["additionalProperties"])
+
+    def test_resolving_ids_preserves_model_payload_and_public_location_contract(self):
+        original = {"risk": "high", "decisions": [model_decision(locations=[{"evidence_id": 1}, {"evidence_id": 2}])]}
+        snapshot = json.dumps(original, sort_keys=True)
+        resolved = api_review.resolve_evidence(original, self.evidence)
+        self.assertEqual(resolved["decisions"][0]["locations"], [self.evidence[1], self.evidence[2]])
+        self.assertEqual(json.dumps(original, sort_keys=True), snapshot)
+        api_review.validate_payload(resolved, self.parsed)
+        resolved["decisions"][0]["locations"][0]["line"] = 100
+        self.assertEqual(self.evidence[1]["line"], 5)
+
+    def test_invalid_unknown_and_extra_field_references_fail_closed(self):
+        references = [{"evidence_id": value} for value in (0, -1, 3, 999, True, "2", 2.0, None)]
+        references += [{}, {"evidence_id": 2, "path": "go/injected.go"}, {"path": "go/network.go", "side": "head", "line": 5, "end_line": 5}]
+        for reference in references:
+            with self.subTest(reference=reference), self.assertRaises(api_review.ReviewError):
+                api_review.resolve_evidence({"risk": "high", "decisions": [model_decision(locations=[reference])]}, self.evidence)
+
+    def test_structural_candidates_resolve_to_file_level_locations(self):
+        parsed = api_review.parse_diff("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n")
+        evidence = api_review.evidence_catalog(parsed)
+        resolved = api_review.resolve_evidence({"risk": "mid", "decisions": [model_decision(category="cli")]}, evidence)
+        self.assertEqual(resolved["decisions"][0]["locations"], [{"path": "run.sh", "side": "head", "line": 0, "end_line": 0}])
+        api_review.validate_payload(resolved, parsed)
+
+
 class ModelTests(unittest.TestCase):
+    @staticmethod
+    def message(payload, reason="end_turn"):
+        text = payload if isinstance(payload, str) else json.dumps(payload)
+        return types.SimpleNamespace(stop_reason=reason, content=[types.SimpleNamespace(type="text", text=text)])
+
     def call_model(self, message=None, error=None):
         create = unittest.mock.Mock(return_value=message, side_effect=error)
         client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
@@ -189,6 +300,14 @@ class ModelTests(unittest.TestCase):
         result, create = self.call_model(message)
         self.assertEqual(result, {"risk": "low", "decisions": []})
         self.assertEqual(json.loads(create.call_args.kwargs["messages"][0]["content"])["diff"], diff().decode())
+        output_format = create.call_args.kwargs["output_config"]["format"]
+        self.assertEqual(output_format["type"], "json_schema")
+        schema = output_format["schema"]
+        self.assertFalse(schema["additionalProperties"])
+        location = schema["properties"]["decisions"]["items"]["properties"]["locations"]["items"]
+        self.assertEqual(set(location["required"]), {"evidence_id"})
+        self.assertEqual(location["properties"]["evidence_id"]["enum"], [1, 2])
+        self.assertFalse(location["additionalProperties"])
         self.assertNotIn("tools", create.call_args.kwargs)
 
     def test_model_truncation_and_invalid_json_are_incomplete(self):
@@ -201,6 +320,84 @@ class ModelTests(unittest.TestCase):
         with self.assertRaises(api_review.ReviewError) as caught:
             self.call_model(error=RuntimeError("secret-sk-test-key"))
         self.assertNotIn("secret-sk-test-key", str(caught.exception))
+
+    def test_invalid_location_schema_is_repaired_against_the_entire_same_batch(self):
+        malformed = model_decision(locations=[{}])
+        original = {"risk": "high", "decisions": [malformed]}
+        corrected = {"risk": "high", "decisions": [model_decision()]}
+        result, create = self.call_model(error=[self.message(original), self.message(corrected)])
+        self.assertEqual(result, {"risk": "high", "decisions": [decision()]})
+        self.assertEqual(create.call_count, 2)
+        first, repair = [json.loads(call.kwargs["messages"][0]["content"]) for call in create.call_args_list]
+        self.assertEqual({key: value for key, value in repair.items() if key != "response_repair"}, first)
+        self.assertEqual(repair["diff"].encode(), diff())
+        self.assertEqual(json.loads(repair["response_repair"]["previous_response"]), original)
+        self.assertIn("decisions[0].locations[0]", repair["response_repair"]["validation_error"])
+        self.assertIn("evidence_id", repair["response_repair"]["validation_error"])
+        self.assertEqual(create.call_args_list[0].kwargs["model"], create.call_args_list[1].kwargs["model"])
+        self.assertNotIn("tools", create.call_args.kwargs)
+
+    def test_invalid_evidence_can_be_corrected_but_not_accepted_unchanged(self):
+        malformed = model_decision(locations=[{"evidence_id": 999}])
+        original = {"risk": "high", "decisions": [malformed]}
+        corrected = {"risk": "high", "decisions": [model_decision()]}
+        result, create = self.call_model(error=[self.message(original), self.message(corrected)])
+        self.assertEqual(result, {"risk": "high", "decisions": [decision()]})
+        prompt = json.loads(create.call_args.kwargs["messages"][0]["content"])
+        self.assertIn("evidence", prompt["response_repair"]["validation_error"])
+        self.assertIn("decisions[0].locations[0]", prompt["response_repair"]["validation_error"])
+
+    def test_invalid_json_gets_one_complete_response_repair(self):
+        result, create = self.call_model(error=[self.message('```json\n{"risk":"low","decisions":[]}\n```'), self.message({"risk": "low", "decisions": []})])
+        self.assertEqual(result, {"risk": "low", "decisions": []})
+        self.assertEqual(create.call_count, 2)
+
+    def test_repair_remains_strict_and_is_bounded_to_one_attempt(self):
+        for malformed in (
+            model_decision(locations=[{"evidence_id": 999}]),
+            model_decision(locations=[{"evidence_id": True}]),
+            model_decision(locations=[{}]),
+            model_decision(accepted=True),
+        ):
+            with self.subTest(malformed=malformed):
+                message = self.message({"risk": "high", "decisions": [malformed]})
+                create = unittest.mock.Mock(return_value=message)
+                client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+                with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
+                    with self.assertRaisesRegex(api_review.ReviewError, "after one repair"):
+                        api_review.review_model(metadata(), diff().decode(), REPO, "test-model")
+                self.assertEqual(create.call_count, 2)
+
+    def test_repair_cannot_drop_decisions_change_valid_decisions_or_lower_risk(self):
+        malformed = model_decision(title="Second decision", locations=[{}])
+        original = {"risk": "high", "decisions": [model_decision(), malformed]}
+        corrected_second = model_decision(title="Second decision")
+        for corrected, expected in (
+            ({"risk": "high", "decisions": []}, "dropped"),
+            ({"risk": "high", "decisions": [model_decision()]}, "dropped"),
+            ({"risk": "low", "decisions": [model_decision(), corrected_second]}, "lowered"),
+            ({"risk": "high", "decisions": [model_decision(title="Unrelated replacement"), corrected_second]}, "already-valid"),
+            ({"risk": "high", "decisions": [model_decision(locations=[{"evidence_id": 1}]), corrected_second]}, "already-valid"),
+        ):
+            with self.subTest(expected=expected), self.assertRaisesRegex(api_review.ReviewError, expected):
+                self.call_model(error=[self.message(original), self.message(corrected)])
+        corrected = {"risk": "high", "decisions": [model_decision(), corrected_second]}
+        result, _ = self.call_model(error=[self.message(original), self.message(corrected)])
+        self.assertEqual(result, {"risk": "high", "decisions": [decision(), decision(title="Second decision")]})
+
+    def test_repair_provider_failure_is_closed_and_redacts_secrets(self):
+        with self.assertRaises(api_review.ReviewError) as caught:
+            self.call_model(error=[self.message("invalid JSON"), RuntimeError("secret-sk-test-key")])
+        self.assertIn("API request failed", str(caught.exception))
+        self.assertNotIn("secret-sk-test-key", str(caught.exception))
+
+    def test_truncated_response_does_not_enter_schema_repair(self):
+        create = unittest.mock.Mock(return_value=self.message('{"risk":', reason="max_tokens"))
+        client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+        with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
+            with self.assertRaisesRegex(api_review.ReviewError, "did not complete"):
+                api_review.review_model(metadata(), diff().decode(), REPO, "test-model")
+        create.assert_called_once()
 
 
 class CommandTests(unittest.TestCase):
@@ -243,6 +440,66 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(result["diff_base_sha"], DIFF_BASE_SHA)
         self.assertEqual(result["diff_bytes"], len(diff()))
         self.assertEqual(len(result["diff_sha256"]), 64)
+        self.assertEqual(result["review_batches"], 1)
+
+    def test_large_diff_reviews_every_file_and_combines_highest_risk(self):
+        patches = [diff(path=f"go/file{i}.go") for i in range(3)]
+        raw = b"".join(patches)
+
+        def review(meta, batch, repo, model):
+            index = meta["review_batch"]["number"] - 1
+            self.assertEqual(meta["review_batch"]["total"], 3)
+            self.assertEqual(batch.encode(), patches[index])
+            item = decision(title=f"Contract {index}")
+            item["locations"][0]["path"] = f"go/file{index}.go"
+            return {"risk": ("mid", "high", "low")[index], "decisions": [item]}
+
+        with patch.object(api_review, "MAX_DIFF_BYTES", len(patches[0])):
+            code, result, model = self.run_review(raw=raw, meta=metadata(changed_files=3, additions=3, deletions=3), error=review)
+        self.assertEqual(code, 0)
+        self.assertEqual(model.call_count, 3)
+        self.assertEqual(result["risk"], "high")
+        self.assertEqual(result["review_batches"], 3)
+        self.assertEqual(result["diff_bytes"], len(raw))
+        self.assertEqual([item["title"] for item in result["decisions"]], ["Contract 0", "Contract 1", "Contract 2"])
+        calls = sorted(model.call_args_list, key=lambda call: call.args[0]["review_batch"]["number"])
+        self.assertEqual("".join(call.args[1] for call in calls).encode(), raw)
+
+    def test_oversized_individual_file_fails_before_any_model_request(self):
+        with patch.object(api_review, "MAX_DIFF_BYTES", 5):
+            code, result, model = self.run_review()
+        self.assertEqual(code, 1)
+        self.assertIn("No partial review", result["error"])
+        self.assertEqual(result["decisions"], [])
+        model.assert_not_called()
+
+    def test_one_failed_batch_cannot_publish_partial_decisions(self):
+        raw = diff() + diff(path="go/another.go")
+
+        def review(meta, batch, repo, model):
+            if meta["review_batch"]["number"] == 2:
+                raise api_review.ReviewError("Claude did not complete the API review response")
+            return {"risk": "high", "decisions": [decision()]}
+
+        with patch.object(api_review, "MAX_DIFF_BYTES", len(diff())):
+            code, result, _ = self.run_review(raw=raw, meta=metadata(changed_files=2, additions=2, deletions=2), error=review)
+        self.assertEqual(code, 1)
+        self.assertEqual(result["status"], "incomplete")
+        self.assertIn("did not complete", result["error"])
+        self.assertEqual(result["decisions"], [])
+
+    def test_model_cannot_cite_valid_evidence_from_a_different_batch(self):
+        raw = diff() + diff(path="go/another.go")
+        with patch.object(api_review, "MAX_DIFF_BYTES", len(diff())):
+            code, result, _ = self.run_review(raw=raw, meta=metadata(changed_files=2, additions=2, deletions=2), payload={"risk": "high", "decisions": [decision()]})
+        self.assertEqual(code, 1)
+        self.assertEqual(result["decisions"], [])
+        self.assertIn("outside the changed lines", result["error"])
+
+    def test_duplicate_decisions_are_retained_only_once(self):
+        code, result, _ = self.run_review(payload={"risk": "high", "decisions": [decision(), decision()]})
+        self.assertEqual(code, 0)
+        self.assertEqual(result["decisions"], [decision()])
 
     def test_input_failure_writes_incomplete_result_without_model_call(self):
         code, result, model = self.run_review(meta=metadata(additions=2))

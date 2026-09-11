@@ -53,11 +53,16 @@ When run non-interactively (output is piped) or with `--json`, a JSON array is w
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | integer | Stable numeric asset ID. Pass this value to [`wendy cloud tunnel --device <id>`](./tunnel.md) to target unnamed or ambiguously named devices. Omitted when zero. |
+| `id` | string or integer | UUID string for principal-based Cloud v2 sessions; numeric asset ID for legacy v1 sessions (omitted when zero). |
 | `name` | string | Device name (may be empty for devices enrolled without a name). |
 | `type` | string | Human-readable hardware device type. |
 | `address` | string | IP address reported by the cloud. |
 | `version` | string | Running agent version. Omitted when it could not be determined. |
+
+Principal-based sessions use the Cloud v2 API for interactive discovery and JSON
+output, including when output is piped. Clipboard copies preserve device UUIDs,
+and interactive version probes, updates, and picker selections use v2 tunnels.
+The standalone `cloud tunnel --device` command still resolves legacy numeric IDs.
 
 Example:
 

@@ -483,7 +483,7 @@ func (rawCodec) Unmarshal(data []byte, v any) error {
 // slower than Connect's healthTimeout — makes every invocation pay a probe
 // timeout on top of the direct dial it falls back to; exiting instead lets
 // that direct dial prepare a healthy replacement. Three strikes rather than
-// one so a single canceled stream cannot evict a working broker.
+// one so a single deadline expiry cannot evict a working broker.
 const maxUnansweredRPCs = 3
 
 type activity struct {
@@ -507,9 +507,11 @@ func (a *activity) markBad() { a.badOnce.Do(func() { close(a.upstreamBad) }) }
 // rpcAnswered / rpcUnanswered feed the eviction streak: an RPC counts as
 // answered when anything at all came back from the upstream — a message, a
 // clean end-of-stream, or an application-level error status — because any of
-// those proves the retained transport still reaches the device. Cancellations
-// and deadline expiries prove nothing (they are generated client-side) and a
-// run of them is exactly how a black-holed transport looks.
+// those proves the retained transport still reaches the device. Deadline
+// expiries prove nothing (they are generated client-side) and a run of them
+// is exactly how a black-holed transport looks. Downstream cancellations
+// without a deadline do not feed the streak: a caller may intentionally
+// cancel many parallel uploads when it falls back to another deployment path.
 func (a *activity) rpcAnswered() { a.failStreak.Store(0) }
 
 func (a *activity) rpcUnanswered() {
@@ -556,9 +558,14 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 		activity.touch()
 		answered := false
 		defer func() {
+			// A client deadline may reach us as RST_CANCEL before our own
+			// deadline timer fires, so preserve failures for deadline-bearing
+			// requests. Only cancellation without a deadline proves the caller
+			// abandoned the operation independently of an unanswered timeout.
+			_, hasDeadline := downstream.Context().Deadline()
 			if answered {
 				activity.rpcAnswered()
-			} else {
+			} else if hasDeadline || !errors.Is(downstream.Context().Err(), context.Canceled) {
 				activity.rpcUnanswered()
 			}
 			activity.activeRPCs.Add(-1)

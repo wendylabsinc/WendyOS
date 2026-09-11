@@ -32,7 +32,7 @@ type grpcTransport struct {
 
 // NewGRPCTransport dials the source's mTLS agent endpoint, pinning its identity.
 func NewGRPCTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
-	tlsCfg, err := mtls.NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM, logger, p.OrgID, strconv.Itoa(int(p.SourceAssetID)))
+	tlsCfg, err := mtls.NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM, logger, strconv.Itoa(int(p.SourceAssetID)))
 	if err != nil {
 		return nil, fmt.Errorf("mcusource: grpc tls: %w", err)
 	}

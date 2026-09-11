@@ -1,0 +1,247 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+import "google/protobuf/timestamp.proto";
+
+service DeploymentService {
+  // ==================== App Releases ====================
+  rpc CreateAppRelease(CreateAppReleaseRequest) returns (AppRelease);
+  rpc UpdateAppRelease(UpdateAppReleaseRequest) returns (AppRelease);
+  rpc ListAppReleases(ListAppReleasesRequest) returns (stream ListAppReleasesResponse);
+  rpc GetPushImageCredentials(GetPushImageCredentialsRequest) returns (GetPushImageCredentialsResponse);
+
+
+  // ==================== Deployments ====================
+  rpc CreateDeployment(CreateDeploymentRequest) returns (Deployment);
+  rpc GetDeployment(GetDeploymentRequest) returns (Deployment);
+  rpc ListDeployments(ListDeploymentsRequest) returns (stream ListDeploymentsResponse);
+
+  // ==================== Asset App Desired Instructions (wendy-agent) ====================
+  rpc HandleReportedState(stream UpdateReportedStateRequest) returns (stream DesiredStateResponse);
+  rpc ListAssetApps(ListAssetAppsRequest) returns (ListAssetAppsResponse);
+  rpc GetPullCredentials(GetPullCredentialsRequest) returns (GetPullCredentialsResponse);
+
+  // ==================== Device Container Control ====================
+  rpc ListDeviceContainers(ListDeviceContainersRequest) returns (stream DeviceContainer);
+  rpc ControlContainer(ControlContainerRequest) returns (ControlContainerResponse);
+}
+
+// ==================== App Releases ====================
+message AppRelease {
+  string id = 1;
+  string organization_id = 2;
+  string app_id = 3;
+  string name = 4;
+  string details = 5;
+  optional string image_digest = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  ReleaseType release_type = 9;
+}
+
+message CreateAppReleaseRequest {
+  string app_id = 1;
+  string organization_id = 2;
+  string name = 3;
+  string details = 4;
+  ReleaseType release_type = 5;
+}
+
+// Use this to assign a image_digest to an app_release after it has been pushed to the registry
+// Note, verify that the image_digest exists in the registry before updating the app_release
+message UpdateAppReleaseRequest {
+  string id = 1;
+  string name = 2;
+  string details = 3;
+  string image_digest = 4;
+}
+
+message ListAppReleasesRequest {
+  string organization_id = 1;
+  string app_id = 2;
+  int32 offset = 3;
+  int32 limit = 4;
+}
+
+message ListAppReleasesResponse {
+  repeated AppRelease app_releases = 1;
+  int32 total = 2;
+  int32 offset = 3;
+}
+
+message GetPushImageCredentialsRequest {
+  string organization_id = 1;
+  string app_id = 2;
+}
+
+message GetPushImageCredentialsResponse {
+  string registry_url = 1;
+  string full_image_path = 2;
+  string access_token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string username = 5;
+}
+
+// ==================== Deployments ====================
+
+message Deployment {
+  string id = 1;
+  string organization_id = 2;
+  string jq_filter = 3;
+  string app_release_id = 4;
+  string details = 5;
+  string created_by_user_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// infer the created_by_user_id from the authService
+message CreateDeploymentRequest {
+  string organization_id = 1;
+  optional string jq_filter = 2;
+  string app_release_id = 3;
+  string details = 4;
+  Running running = 5;
+} 
+
+message GetDeploymentRequest {
+  string id = 1;
+}
+
+message ListDeploymentsRequest {
+  string organization_id = 1;
+  string app_id = 2;
+  int32 offset = 3;
+  int32 limit = 4;
+}
+
+message ListDeploymentsResponse {
+  repeated Deployment deployments = 1;
+  int32 total = 2;
+}
+
+// ==================== Asset App Desired Instructions (wendy-agent) ====================
+
+// this is to be called by the wendy-agent to update the reported state of an apps on an asset
+// asset_id and organization_id are derived from the client certificate
+message UpdateReportedStateRequest {
+  repeated CurrentState current_states = 1;
+}
+
+message CurrentState {
+  string app_id = 1;
+  optional string app_release_id = 2;
+  Running reported_state = 3;
+  int32 reported_restart_count = 4;
+  uint32 reported_last_exit_signal = 5;
+}
+
+// this is to be called by the wendy-agent to get the desired state of an app on an asset
+// if the app_id does not exist, wendy-agent should remove the container from the asset
+message DesiredStateResponse {
+  repeated DesiredAppState desired_app_states = 1;
+  optional google.protobuf.Timestamp cert_expires_at = 2;
+}
+
+message DesiredAppState {
+  string app_id = 1;
+  optional string app_release_id = 2;
+  Running desired_state = 3;
+  optional string image_digest = 4;
+  ReleaseType release_type = 5;
+}
+
+enum Running {
+  ABSENT = 0;
+  RUNNING = 1;
+  STOPPED = 2;
+}
+
+enum ReleaseType {
+  CONTAINER = 0;
+  WASM = 1;
+}
+
+// ==================== List Asset Apps ====================
+message ListAssetAppsRequest {
+  string asset_id = 1;
+  string organization_id = 2;
+}
+
+message AssetApp {
+  string app_id = 1;
+  string app_name = 2;
+  optional string app_release_id = 3;
+  optional string app_release_name = 4;
+  Running desired_state = 5;
+  optional Running reported_state = 6;
+  optional google.protobuf.Timestamp reported_at = 7;
+  optional int32 reported_restart_count = 8;
+  // Convenience: most recent deployment that targeted this app release in the org
+  optional string deployment_id = 9;
+  optional string deployment_details = 10;
+  optional google.protobuf.Timestamp deployment_created_at = 11;
+  ReleaseType release_type = 12;
+}
+
+message ListAssetAppsResponse {
+  repeated AssetApp asset_apps = 1;
+}
+
+// ==================== Pull Credentials (wendy-agent / microcontrollers) ====================
+message GetPullCredentialsRequest {
+  string app_release_id = 1;
+}
+
+message GetPullCredentialsResponse {
+  string registry_url = 1;
+  string full_artifact_path = 2;
+  string access_token = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string username = 5;
+  ReleaseType release_type = 6;
+}
+
+// ==================== Device Container Control ====================
+
+message ListDeviceContainersRequest {
+  string asset_id = 1;
+  string organization_id = 2;
+}
+
+message DeviceContainer {
+  string app_name = 1;
+  string app_version = 2;
+  AppRunningState running_state = 3;
+  uint32 failure_count = 4;
+  repeated DeviceService services = 5;
+}
+
+message DeviceService {
+  string name = 1;
+  AppRunningState running_state = 2;
+}
+
+enum AppRunningState {
+  APP_RUNNING_STATE_UNSPECIFIED = 0;
+  APP_RUNNING_STATE_STOPPED = 1;
+  APP_RUNNING_STATE_RUNNING = 2;
+}
+
+message ControlContainerRequest {
+  string asset_id = 1;
+  string organization_id = 2;
+  // "myapp" for whole app; "myapp.web" for one service container
+  string container_name = 3;
+  ContainerAction action = 4;
+}
+
+enum ContainerAction {
+  CONTAINER_ACTION_UNSPECIFIED = 0;
+  CONTAINER_ACTION_START = 1;
+  CONTAINER_ACTION_STOP = 2;
+}
+
+message ControlContainerResponse {
+  optional string warning = 1;
+}

@@ -2,9 +2,14 @@ package services
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/pem"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,9 +26,21 @@ type fakeCertService struct {
 	cloudpb.UnimplementedCertificateServiceServer
 	certPEM  string
 	chainPEM string
+
+	mu     sync.Mutex
+	gotCSR string // the last CSR received, for SAN assertions
 }
 
-func (f *fakeCertService) IssueCertificate(_ context.Context, _ *cloudpb.IssueCertificateRequest) (*cloudpb.IssueCertificateResponse, error) {
+func (f *fakeCertService) lastCSR() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.gotCSR
+}
+
+func (f *fakeCertService) IssueCertificate(_ context.Context, req *cloudpb.IssueCertificateRequest) (*cloudpb.IssueCertificateResponse, error) {
+	f.mu.Lock()
+	f.gotCSR = req.GetPemCsr()
+	f.mu.Unlock()
 	return &cloudpb.IssueCertificateResponse{
 		Certificate: &cloudpb.Certificate{
 			PemCertificate:      f.certPEM,
@@ -231,9 +248,11 @@ func TestCertificateServiceAddr(t *testing.T) {
 		want      string
 	}{
 		{
-			name:      "host without port uses legacy provisioning port",
+			// WDY-2799: a port-less host used to become <host>:50051, which the
+			// old port heuristic then dialled in cleartext.
+			name:      "host without port uses the TLS port",
 			cloudHost: "test.wendy.io",
-			want:      "test.wendy.io:50051",
+			want:      "test.wendy.io:443",
 		},
 		{
 			name:      "cloud run endpoint keeps explicit tls port",
@@ -332,4 +351,174 @@ func TestStartProvisioning_OnProvisionedCallback(t *testing.T) {
 	if len(callbackKey) == 0 {
 		t.Error("callback keyData should not be empty")
 	}
+}
+
+// TestDefaultCloudDialerRequiresTLS is the regression guard for WDY-2799: the
+// enrollment dial must not fall back to plaintext because of how the address
+// is spelled. It points the real DefaultCloudDialer at a plaintext server on a
+// non-443 port — the exact shape that used to downgrade — and asserts the RPC
+// only succeeds once the operator has explicitly opted out via
+// WENDY_CLOUD_INSECURE.
+func TestDefaultCloudDialerRequiresTLS(t *testing.T) {
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer lis.Close()
+
+	srv := grpc.NewServer()
+	cloudpb.RegisterCertificateServiceServer(srv, &fakeCertService{
+		certPEM:  "fake-cert-pem",
+		chainPEM: "fake-chain-pem",
+	})
+	go srv.Serve(lis)
+	defer srv.GracefulStop()
+
+	// issue makes a real RPC so the transport actually handshakes; grpc.NewClient
+	// alone connects lazily and would pass regardless of the credentials.
+	issue := func(t *testing.T) error {
+		t.Helper()
+		conn, err := DefaultCloudDialer(context.Background(), lis.Addr().String())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err = cloudpb.NewCertificateServiceClient(conn).IssueCertificate(ctx,
+			&cloudpb.IssueCertificateRequest{})
+		return err
+	}
+
+	t.Run("plaintext server is refused by default", func(t *testing.T) {
+		if err := issue(t); err == nil {
+			t.Fatal("DefaultCloudDialer reached a plaintext server without WENDY_CLOUD_INSECURE; " +
+				"the enrollment token would be sent in cleartext")
+		}
+	})
+
+	t.Run("explicit opt-out allows plaintext", func(t *testing.T) {
+		t.Setenv(cloudInsecureEnv, "1")
+		if err := issue(t); err != nil {
+			t.Fatalf("with %s=1 the plaintext dial should succeed, got: %v", cloudInsecureEnv, err)
+		}
+	})
+
+	t.Run("unset and non-true values keep TLS", func(t *testing.T) {
+		for _, v := range []string{"", "0", "false", "no", "maybe"} {
+			t.Setenv(cloudInsecureEnv, v)
+			if cloudDialInsecure() {
+				t.Fatalf("%s=%q must not disable TLS", cloudInsecureEnv, v)
+			}
+		}
+	})
+}
+
+// provisioningTokenFor builds an enrollment token shaped like cloud's, with an
+// optional tenant_uuid claim (WDY-2584). Only the payload segment is decoded by
+// the agent, so header and signature are placeholders.
+func provisioningTokenFor(t *testing.T, orgID, assetID int32, tenantUUID string) string {
+	t.Helper()
+	tenant := ""
+	if tenantUUID != "" {
+		tenant = fmt.Sprintf(`"tenant_uuid":%q,`, tenantUUID)
+	}
+	payload := fmt.Sprintf(`{"org_id":%d,"asset_id":%d,%s"type":"asset_enrollment"}`,
+		orgID, assetID, tenant)
+	return "header." + base64.RawURLEncoding.EncodeToString([]byte(payload)) + ".sig"
+}
+
+// csrURIs returns the URI SANs and DNS SANs of a PEM-encoded CSR.
+func csrURIs(t *testing.T, csrPEM string) (uris, dnsNames []string) {
+	t.Helper()
+	block, _ := pem.Decode([]byte(csrPEM))
+	if block == nil {
+		t.Fatalf("CSR is not valid PEM: %q", csrPEM)
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParseCertificateRequest: %v", err)
+	}
+	for _, u := range csr.URIs {
+		uris = append(uris, u.String())
+	}
+	return uris, csr.DNSNames
+}
+
+// TestStartProvisioningCSRCarriesTenantSPIFFESAN covers the agent half of
+// WDY-2498: cloud refuses to sign a relay grant unless the CSR carries the
+// tenant SPIFFE principal, and pki-core refuses the mint outright if the CSR
+// carries any DNS SAN.
+func TestStartProvisioningCSRCarriesTenantSPIFFESAN(t *testing.T) {
+	const tenant = "13a72725-dfe3-4425-bd04-b253d2036089"
+
+	newSvcWithFake := func(t *testing.T) (*ProvisioningService, *fakeCertService) {
+		t.Helper()
+		tmpDir := t.TempDir()
+
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		fake := &fakeCertService{certPEM: "fake-cert-pem", chainPEM: "fake-chain-pem"}
+		srv := grpc.NewServer()
+		cloudpb.RegisterCertificateServiceServer(srv, fake)
+		go srv.Serve(lis)
+		t.Cleanup(func() { srv.GracefulStop(); lis.Close() })
+
+		svc := NewProvisioningService(zap.NewNop(), tmpDir)
+		svc.CloudDialer = func(_ context.Context, _ string) (*grpc.ClientConn, error) {
+			return grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+		}
+		return svc, fake
+	}
+
+	t.Run("token with tenant_uuid adds the SPIFFE SAN alongside the urn", func(t *testing.T) {
+		svc, fake := newSvcWithFake(t)
+		if _, err := svc.StartProvisioning(context.Background(), &agentpb.StartProvisioningRequest{
+			OrganizationId:  7,
+			AssetId:         42,
+			CloudHost:       "cloud.wendy.io",
+			EnrollmentToken: provisioningTokenFor(t, 7, 42, tenant),
+		}); err != nil {
+			t.Fatalf("StartProvisioning: %v", err)
+		}
+
+		uris, dnsNames := csrURIs(t, fake.lastCSR())
+		want := []string{
+			"urn:wendy:org:7:asset:42",
+			"spiffe://wendy.sh/tenant/" + tenant + "/service/asset-42",
+		}
+		if len(uris) != len(want) {
+			t.Fatalf("CSR URI SANs = %q, want %q", uris, want)
+		}
+		for i := range want {
+			if uris[i] != want[i] {
+				t.Errorf("CSR URI SAN %d = %q, want %q", i, uris[i], want[i])
+			}
+		}
+		// pki-core's service-identity profile checks every dNSName against the
+		// tenant allow-list, so any DNS SAN at all fails the mint.
+		if len(dnsNames) != 0 {
+			t.Errorf("CSR must be URI-SAN-only, got DNS SANs %q", dnsNames)
+		}
+	})
+
+	t.Run("token without tenant_uuid keeps the pre-tenant CSR", func(t *testing.T) {
+		svc, fake := newSvcWithFake(t)
+		if _, err := svc.StartProvisioning(context.Background(), &agentpb.StartProvisioningRequest{
+			OrganizationId:  7,
+			AssetId:         42,
+			CloudHost:       "cloud.wendy.io",
+			EnrollmentToken: provisioningTokenFor(t, 7, 42, ""),
+		}); err != nil {
+			t.Fatalf("StartProvisioning must not fail when the org has no pki tenant: %v", err)
+		}
+
+		uris, _ := csrURIs(t, fake.lastCSR())
+		if len(uris) != 1 || uris[0] != "urn:wendy:org:7:asset:42" {
+			t.Fatalf("CSR URI SANs = %q, want only [urn:wendy:org:7:asset:42]", uris)
+		}
+	})
 }

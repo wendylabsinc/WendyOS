@@ -23,8 +23,8 @@ func TestNewMTLSDialerPinsPairingIdentity(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected mtlsDialer, got %T", d)
 	}
-	if md.orgID != 9 || md.assetID != 42 {
-		t.Fatalf("expected dialer pinned to org=9 asset=42, got org=%d asset=%d", md.orgID, md.assetID)
+	if md.assetID != 42 {
+		t.Fatalf("expected dialer pinned to asset=42, got asset=%d", md.assetID)
 	}
 	if md.certPEM != "cert" || md.chainPEM != "chain" || md.keyPEM != "key" {
 		t.Fatalf("expected agent identity carried through, got %+v", md)

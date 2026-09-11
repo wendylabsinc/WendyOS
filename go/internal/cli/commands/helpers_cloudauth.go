@@ -32,11 +32,11 @@ func (e cloudCertError) Error() string {
 	return e.code.String()
 }
 
-// isUnauthenticatedCloudError reports whether err indicates the cloud rejected
-// the caller's identity — an expired or missing session — for which logging in
-// again is the remedy. It matches both the gRPC Unauthenticated status code
-// (transport-level rejection) and the structured CertificateError unauthorized
-// code carried in a response body.
+// isUnauthenticatedCloudError reports whether err means the caller's stored
+// identity is no longer usable and logging in again is the remedy. It matches
+// the gRPC Unauthenticated status code (transport-level rejection), the
+// structured CertificateError unauthorized code carried in a response body, and
+// a pki-core renewal refusal that only a freshly minted certificate resolves.
 func isUnauthenticatedCloudError(err error) bool {
 	if err == nil {
 		return false
@@ -44,6 +44,12 @@ func isUnauthenticatedCloudError(err error) bool {
 	var ce cloudCertError
 	if errors.As(err, &ce) {
 		return ce.code == cloudpb.CertificateErrorCode_CERTIFICATE_ERROR_UNAUTHORIZED
+	}
+	// pki-core reports the same situation as a renewal refusal: the lineage is
+	// spent, gone, or was never its own, and only a fresh mint replaces it.
+	var ru renewUnavailableError
+	if errors.As(err, &ru) {
+		return ru.needsFreshCert
 	}
 	// Unwrap toward a gRPC status; status.FromError does not unwrap %w chains on
 	// every grpc-go version, so walk the chain ourselves.

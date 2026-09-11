@@ -1,0 +1,709 @@
+syntax = "proto3";
+
+package wendycloud.tunnel.v2;
+
+import "google/protobuf/timestamp.proto";
+import "wendyauth/v1/envelope.proto";
+
+// Version 1 of the Cloud-authorized tunnel contract. This package is additive;
+// wendycloud.v1.TunnelBrokerService in /tunnel.proto remains the migration-era
+// legacy API and is not changed by this contract.
+//
+// Trust boundaries:
+//
+// * TunnelAuthorizationService is Cloud-facing. Its transport authentication
+//   maps an agent or caller to a Wendy principal and Cloud performs policy.
+// * TunnelBrokerControlService is called only by authenticated Cloud instances.
+// * TunnelBrokerV2Service is public to lease/grant holders. The broker learns
+//   only opaque routing/session values, hashes, public-key bindings, and
+//   encrypted dial material. User, organization, asset, and service identity
+//   MUST NOT appear in either broker-facing RPC, metadata, grants, proof inputs,
+//   logs, or status details.
+//
+// All byte limits below are limits on decoded protobuf field values. A server
+// MUST reject an over-limit value with INVALID_ARGUMENT before expensive
+// cryptographic work. Strings are UTF-8 and MUST contain no ASCII control
+// characters. Opaque identifiers are compared byte-for-byte and never parsed
+// for identity.
+
+// Cloud authorization and artifact issuance.
+service TunnelAuthorizationService {
+  // Authenticated agent asks Cloud for a renewable presence lease. Cloud maps
+  // the transport-authenticated principal to an asset, chooses one exact broker
+  // instance, and creates the opaque routing handle. No asset identifier is
+  // copied into the lease.
+  rpc IssuePresenceLease(IssuePresenceLeaseRequest) returns (IssuePresenceLeaseResponse);
+
+  // Authenticated caller presents the complete request body plus its existing
+  // §4.1 cert-bound request signature. Cloud authorizes and resolves target and
+  // service, selects a live broker incarnation, then obtains the pki-core
+  // attestation before minting the session grant or calling the broker.
+  rpc RequestTunnel(RequestTunnelRequest) returns (RequestTunnelResponse);
+}
+
+// Private pki-core boundary. Cloud cannot mint this service's attestation.
+service TunnelPrincipalAttestationService {
+  // Verifies the §4.1 certificate chain, request signature, exact body hash,
+  // freshness, replay, revocation/status, audience, and tunnel purpose before
+  // returning an identity-free broker artifact. The request uses the mandatory
+  // §11.2 wendyauth.v1.Envelope described on AttestTunnelPrincipalRequest.
+  rpc AttestTunnelPrincipal(wendyauth.v1.Envelope) returns (AttestTunnelPrincipalResponse);
+}
+
+// Private Cloud-to-broker control plane. Requests contain no target identity.
+service TunnelBrokerControlService {
+  // Reserves a session and queues its encrypted instruction for the active
+  // presence owner. See CreateSessionRequest for exact retry semantics.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+}
+
+// Identity-blind broker rendezvous and relay plane.
+service TunnelBrokerV2Service {
+  // Agent establishes and renews ownership of one opaque presence route. This
+  // is a challenge-response bidirectional stream, not a bearer-token login.
+  rpc RegisterPresence(stream RegisterPresenceRequest) returns (stream RegisterPresenceResponse);
+
+  // Caller and agent each establish one endpoint stream for the same opaque
+  // session. Each stream receives its own challenge and proves its role-bound
+  // key before framed traffic is accepted.
+  rpc JoinSession(stream JoinSessionRequest) returns (stream JoinSessionResponse);
+}
+
+// Exact address and audience of one live broker boot incarnation chosen by
+// Cloud. At every process boot the broker generates a fresh 256-bit CSPRNG
+// value, encodes it as 43-character unpadded base64url after `/incarnation/`,
+// and registers that audience as live. It MUST NOT load, derive from deployment
+// configuration, persist, or reuse the value. Cloud selects only a current live
+// incarnation and binds its audience into every artifact, HPKE/proof input, and
+// response. After restart, old artifacts fail audience before replay lookup
+// even while unexpired; no durable replay state is needed. Endpoint is used to
+// connect and is never an authorization input.
+message BrokerInstance {
+  string audience = 1; // 1..512 bytes; exact boot-incarnation audience.
+  string endpoint = 2; // 1..2048 bytes; absolute gRPC target/URI.
+  reserved 3 to 15;
+}
+
+message IssuePresenceLeaseRequest {
+  // Canonical DER SubjectPublicKeyInfo for a P-256 ECDSA signing key. Exactly
+  // the frozen encoding specified on TunnelPrincipalRequestBody; max 256.
+  bytes agent_signing_public_key_spki_der = 1;
+
+  // Canonical DER SubjectPublicKeyInfo for a distinct P-256 key-agreement key used as the
+  // HPKE recipient. It MUST NOT encode the same EC point as field 1. Signing
+  // keys are never accepted for encryption. Max 256 bytes.
+  bytes agent_key_agreement_public_key_spki_der = 2;
+
+  // Opaque Cloud audit correlation value, 1..128 bytes. It MUST NOT embed a
+  // principal or target identifier because it is copied into the lease.
+  string correlation_id = 3;
+  reserved 4 to 15;
+}
+
+message IssuePresenceLeaseResponse {
+  // Compact JWS with protected typ "tunnel-presence-lease+jwt". Its claims are
+  // the GrantKit TunnelPresenceLeaseClaims contract. In particular it has no
+  // `sub`, target, or service claim.
+  string presence_lease_jws = 1; // 1..8192 ASCII bytes.
+  BrokerInstance broker = 2;
+
+  // Cloud's recommended renewal time. The agent should renew on the existing
+  // stream before lease exp; this is advisory and never extends signed exp.
+  google.protobuf.Timestamp renew_after = 3;
+  reserved 4 to 15;
+}
+
+// Retired, never-shipped draft message names CallerTunnelRequestPayload and
+// CallerTunnelRequestArtifact MUST NOT be reused. Their old JSON fixture is
+// archival only; v1 exposes no decoder or acceptance path for either shape.
+
+// Exact body covered by the §4.1 request signature's body_sha256. It is sent to
+// Cloud and pki-core, never to the broker. The reqsig descriptor MUST use
+// operation "create_tunnel", aud "pki-core/tunnel-attestation", and a target
+// object that binds the same target asset and symbolic service as this body.
+// Descriptor nonce is pki-core's sole single-use replay key: first use is
+// consumed and every duplicate is rejected even when the request is identical.
+// Pki-core retains that replay record through descriptor expiry plus verifier
+// clock skew, then reaps it; storage is not unbounded.
+// The validated leaf selects the verifier. This tunnel profile allows only
+// RFC 9964 pure/empty-context ML-DSA-44, ML-DSA-65, or ML-DSA-87, with
+// ML-DSA-65 the issuance default. Header alg, leaf algorithm, and signature
+// parameters MUST agree exactly; fallback, downgrade, supplied verifier keys,
+// and ES256 are forbidden.
+message TunnelPrincipalRequestBody {
+  string target_asset_id = 1; // Positive Cloud policy input.
+  string service = 2; // Cloud-defined symbolic service, 1..128 ASCII bytes.
+  // Frozen v1 canonical P-256 SPKI: strict DER AlgorithmIdentifier
+  // id-ecPublicKey + named curve prime256v1 and a BIT STRING with zero unused
+  // bits containing the 65-byte uncompressed SEC1 point. Every ingress parses
+  // then canonically reserializes and requires byte-for-byte equality before
+  // hashing. Compressed points, alternate parameters, BER, trailing bytes, and
+  // other noncanonical encodings are rejected. Max 256 bytes.
+  bytes caller_signing_public_key_spki_der = 3;
+  // Opaque caller-generated request/idempotency id, exactly 16 bytes. This is
+  // not a second replay nonce; pki-core replay enforcement uses only the
+  // signed descriptor nonce.
+  bytes request_id = 4;
+  reserved 5 to 15;
+}
+
+message RequestTunnelRequest {
+  TunnelPrincipalRequestBody request_body = 1;
+
+  // kind MUST be "tunnel-principal-request+jws". value is the existing §4.1
+  // cert-bound compact JWS over the RFC 8785 descriptor; x5c carries the leaf.
+  wendyauth.v1.SignedArtifact principal_request = 2;
+  reserved 3 to 15;
+}
+
+message AttestTunnelPrincipalRequest {
+  // This message is serialized into wendyauth.v1.Envelope.payload. The envelope
+  // MUST have proto_version "1.0.0", msg_type
+  // "tunnel.principal_attestation", the authenticated pki tenant UUID, and a
+  // non-empty end-to-end audit correlation_id. Envelope.signed_artifact MUST be
+  // the exact principal request with kind "tunnel-principal-request+jws".
+  // Pki-core rejects a tenant that differs from the certificate-bound tenant.
+  TunnelPrincipalRequestBody request_body = 1;
+  reserved 2; // Principal request moved to Envelope.signed_artifact.
+  string broker_audience = 3; // Exact live boot-incarnation audience, 1..512.
+  reserved 4 to 15;
+}
+
+message AttestTunnelPrincipalResponse {
+  // Compact ES256 JWS signed by a dedicated pki-core key, published through a
+  // purpose-separated pki-core JWKS. Protected typ is exactly
+  // "tunnel-principal-attestation+jwt". Claims are exactly iss, aud, iat, exp,
+  // jti, request_hash, and caller_key_binding; no identity or policy fields.
+  // Pki-core constrains iat/exp to the intersection of its issuance window and
+  // the verified principal request's iat/expiry. Broker requires iat <= now <
+  // exp and 0 < exp - iat <= 60 seconds. Cloud grants MUST satisfy attestation
+  // iat <= grant iat and grant exp <= attestation exp.
+  string principal_attestation_jws = 1; // 1..16384 ASCII bytes.
+  reserved 2 to 15;
+}
+
+message RequestTunnelResponse {
+  // Compact Cloud JWS with protected typ "tunnel-session-grant+jws". It binds
+  // only opaque handles, SHA-256 hashes, key bindings, and admission/relay
+  // deadlines; it has no `sub`, target, service, hostname, or port.
+  string session_grant_jws = 1; // 1..16384 ASCII bytes.
+  BrokerInstance broker = 2;
+
+  // DATAGRAM only: 1..32 caller-visible opaque destination ids, strictly
+  // ordered ascending and unique. TCP requires this empty. The ids MUST equal
+  // exactly (no omissions or additions) the destination_id set in the
+  // authorized_datagram_destinations of the encrypted DialInstruction for this
+  // session. Cloud validates that equality before it calls CreateSession and
+  // before it returns this response. This Cloud-to-caller field is never sent
+  // to the broker and discloses no port, host, agent, or target details.
+  repeated CallerDatagramDestination authorized_datagram_destinations = 3;
+  reserved 4 to 15;
+}
+
+// Cloud-facing description of a caller-selectable DATAGRAM destination. The
+// opaque id has meaning only within this session; it is not a port or address.
+message CallerDatagramDestination {
+  uint32 destination_id = 1; // Nonzero and unique in RequestTunnelResponse.
+  reserved 2 to 15;
+}
+
+// The only supported encrypted-instruction suite in v1. Numeric value 1 maps
+// to RFC 9180 base mode with DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, and
+// AES-128-GCM (KEM 0x0010, KDF 0x0001, AEAD 0x0001).
+enum HpkeSuite {
+  HPKE_SUITE_UNSPECIFIED = 0;
+  HPKE_SUITE_DHKEM_P256_HKDF_SHA256_HKDF_SHA256_AES_128_GCM = 1;
+}
+
+// Cloud-selected plaintext carried only inside HPKE ciphertext. The broker
+// never receives these decoded fields. Before sealing, Cloud serializes each
+// field below once in ascending field order using ordinary proto3 wire types,
+// minimal varints, exact UTF-8/bytes, and no unknown, duplicate, explicit-
+// default, group, or overlong encoding. The additional repeated/padding rules
+// below apply. The resulting plaintext MUST be exactly 4096 bytes.
+message DialInstruction {
+  string session_id = 1; // Exact opaque session_id in the signed grant.
+  DialTransport transport = 2;
+  string host = 3;
+  uint32 port = 4;
+  int64 relay_expires_at_unix_seconds = 5; // Exact grant relay_exp.
+
+  // Exact non-empty Cloud service descriptor, 1..2048 bytes. It may identify a
+  // symbolic service and therefore MUST occur only inside HPKE plaintext. The
+  // agent validates it according to the Cloud/agent service vocabulary before
+  // dialing; Cloud retains the same descriptor in its authorization audit.
+  bytes service_descriptor = 6;
+
+  // DATAGRAM only: 1..32 Cloud-authorized loopback destinations, strictly
+  // ordered by ascending destination_id. Both destination_id and loopback_port
+  // are nonzero and unique within this instruction. TCP requires this empty.
+  // These mappings are HPKE plaintext; broker sees only opaque destination_id
+  // values later in TunnelDatagram and never learns a port.
+  repeated AuthorizedDatagramDestination authorized_datagram_destinations = 7;
+
+  reserved 8 to 14;
+
+  // Final field in canonical order. Cloud fills this with cryptographically
+  // random bytes so the complete canonical DialInstruction serialization is
+  // exactly 4096 bytes before HPKE Seal. Producer first canonical-serializes all
+  // semantic fields, then chooses the padding length accounting for field 15's
+  // tag and minimal length varint, fills exactly that many random bytes, and
+  // serializes once more; any result other than 4096 bytes is an internal error.
+  // Receiver requires an exact 4096-byte plaintext, rejects non-canonical or
+  // invalid semantic fields, and ignores padding only after successful AEAD
+  // authentication and complete canonical validation. Padding is non-empty.
+  bytes padding = 15;
+}
+
+message AuthorizedDatagramDestination {
+  uint32 destination_id = 1; // Stable opaque nonzero id, unique in instruction.
+  uint32 loopback_port = 2; // Cloud-authorized 1..65535, unique in instruction.
+  reserved 3 to 15;
+}
+
+enum DialTransport {
+  DIAL_TRANSPORT_UNSPECIFIED = 0;
+  DIAL_TRANSPORT_TCP = 1;
+  DIAL_TRANSPORT_DATAGRAM = 2;
+}
+
+// DialInstruction conditional rules:
+//
+// * TCP requires host (1..255 bytes) and port (1..65535). TunnelFrame then
+//   permits only non-empty data (max 65536 bytes) and one final half_close.
+// * DATAGRAM requires host empty, port zero, and 1..32 authorized destination
+//   entries. TunnelFrame then permits only
+//   TunnelDatagram, IcmpEchoRequest, or IcmpEchoReply. The destination for each
+//   UDP flow is selected by opaque destination_id; ICMP echo addresses the
+//   agent itself. Agent rejects an unknown destination_id with INVALID_ARGUMENT
+//   and never treats it as a port or other caller-controlled address.
+//   Caller sends datagrams and echo requests; agent sends datagrams and echo
+//   replies. A role/direction mismatch is INVALID_ARGUMENT.
+// * UNSPECIFIED and every transport/frame mismatch are INVALID_ARGUMENT.
+
+// Explicit RFC 9180 encrypted dial envelope. V1 uses HPKE base mode to provide
+// confidentiality/integrity to the presence lease's distinct P-256 key-
+// agreement SPKI. Base mode does NOT authenticate Cloud as sender. Before
+// decrypting, interpreting plaintext, or dialing, the agent independently
+// verifies the accompanying Cloud KMS grant as specified on SessionOffer.
+message EncryptedDialInstructionEnvelope {
+  HpkeSuite suite = 1; // Must be the sole supported nonzero v1 value.
+
+  // RFC 9180 enc, the 65-byte uncompressed P-256 KEM public key.
+  bytes encapsulated_key = 2;
+
+  // Exact HPKE info bytes. CanonicalEncode is defined below:
+  // CanonicalEncode("wendycloud.tunnel.v1/hpke-info/1", session_id,
+  //                 routing_handle,
+  //                 SHA-256(agent_key_agreement_spki_der)).
+  // This is exactly TunnelHPKEContext.info. The final component is 32 raw
+  // digest bytes, not base64url text.
+  bytes info = 3;
+
+  // Exact AEAD associated data bytes:
+  // CanonicalEncode("wendycloud.tunnel.v1/hpke-aad/1", session_id,
+  //                 SHA-256(exact decoded §4.1 request-descriptor payload)).
+  // This is exactly TunnelHPKEContext.aad. The request digest is 32 raw bytes.
+  bytes aad = 4;
+
+  // HPKE Seal output over exactly 4096 plaintext bytes: ciphertext followed by
+  // the 16-byte AES-GCM tag. This field MUST be exactly 4112 bytes.
+  bytes ciphertext = 5;
+  reserved 6 to 15;
+}
+
+// CanonicalEncode(parts...) used by HPKE and all proof inputs is the
+// concatenation of every part in the listed order, each represented as:
+//
+//   uint32_be(byte_count(part)) || part
+//
+// There is no total-length prefix, terminator, normalization, protobuf wrapper,
+// or implicit separator. Quoted literals are their exact ASCII bytes; strings
+// are their exact UTF-8 bytes; *_raw_sha256 values are exactly 32 raw bytes.
+// Lengths greater than 2^32-1 are unrepresentable and rejected.
+//
+// The session grant's dial_instruction_hash is unpadded base64url SHA-256 over:
+//
+//   CanonicalEncode(
+//     "wendycloud.tunnel.v1/hpke-envelope/1",
+//     "DHKEM(P-256,HKDF-SHA256)+HKDF-SHA256+AES-128-GCM",
+//     encapsulated_key, info, aad, ciphertext)
+//
+// This tuple and order are exactly GrantKit TunnelHPKEEnvelopeBinding's
+// canonicalBytes. The suite enum is validated separately and value 1 maps to
+// the exact suite ASCII component above; the enum's protobuf encoding is not
+// part of the hash. Thus context, AAD, and exact ciphertext are bound without
+// protobuf reserialization or ambiguity. Receivers reconstruct this tuple and
+// verify the grant's dial_instruction_hash over it. Cloud's
+// TunnelSessionGrantBuilder independently reconstructs TunnelHPKEContext from
+// session_id, routing_handle, the typed agent P-256 key-agreement public key,
+// and exact decoded principal-request descriptor; it rejects an envelope whose
+// context does
+// not match those authorization inputs.
+
+message CreateSessionRequest {
+  // Exact compact JWS returned by Cloud. The broker verifies exact iss, exact
+  // per-instance aud, typ, kid, ES256 signature, iat/exp, relay_exp, hashes,
+  // and artifact kind before storing anything.
+  string session_grant_jws = 1;
+  EncryptedDialInstructionEnvelope encrypted_dial_instruction = 2;
+
+  // Exact identity-free pki-core JWS. Broker verifies pki-core's dedicated JWKS,
+  // exact typ/iss/aud/freshness, and matches request_hash, caller_key_binding,
+  // and SHA-256(compact JWS) against the independently verified Cloud grant.
+  // It also requires attestation iat <= grant iat and grant exp <= attestation
+  // exp, so admission cannot outlive the cert-bound principal request.
+  // It never receives the principal reqsig, certificate, body, target, service,
+  // tenant, or principal. Cloud alone therefore cannot fabricate admission.
+  string principal_attestation_jws = 3; // 1..16384 ASCII bytes.
+
+  // Exact canonical DER SPKI whose hash is bound by both signed artifacts and whose
+  // private key must produce the caller JoinProof. Max 256 bytes.
+  bytes caller_signing_public_key_spki_der = 4;
+  reserved 5 to 15;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_WAITING_FOR_ENDPOINTS = 1;
+  SESSION_STATE_ACTIVE = 2;
+  SESSION_STATE_TERMINAL = 3;
+}
+
+message CreateSessionResponse {
+  string session_id = 1; // Opaque value read from the verified grant.
+  SessionState state = 2;
+  bool exact_retry = 3;
+  reserved 4 to 15;
+}
+
+// CreateSession retry/replay contract:
+//
+// * The first valid request atomically reserves (grant jti, session_id) and
+//   consumes both the pki attestation jti and SHA-256(exact compact attestation)
+//   for single use, then returns OK with WAITING_FOR_ENDPOINTS. Merely
+//   reserving/queuing does NOT consume the separate Cloud grant jti.
+// * An exact byte-for-byte retry of the same compact grant and pki attestation
+//   plus the same caller SPKI and envelope canonical encoding is exempt from
+//   attestation replay rejection and returns OK, exact_retry=true, with the
+//   current state. It never duplicates an agent offer or resets a deadline.
+// * Reuse of grant jti, session_id, attestation jti, or attestation hash with any
+//   different signed grant, pki attestation, caller SPKI, or envelope returns
+//   ALREADY_EXISTS and does not alter the original reservation.
+// * The Cloud grant jti becomes consumed atomically only when one verified
+//   caller proof and one verified agent proof are paired and state becomes
+//   ACTIVE. Partial proofs, failed proofs, disconnects, and CreateSession do not
+//   consume the Cloud grant jti; they never unconsume the attestation.
+// * Admission exp governs reservation and proof admission. No new proof is
+//   accepted at or after exp. Once ACTIVE, relay may continue after exp but is
+//   terminated no later than relay_exp. relay_exp MUST be no more than 3600
+//   seconds after iat. There is no endpoint reconnection after
+//   exp. Both grant and attestation replay state are retained through relay_exp
+//   plus verifier clock skew.
+
+message PresenceOpen {
+  string presence_lease_jws = 1; // Exact compact Cloud JWS, max 8192 bytes.
+
+  // DER SubjectPublicKeyInfo for the agent's P-256 ECDSA signing key, max 256
+  // bytes. Broker parses and validates this key, hashes the exact DER with
+  // SHA-256, and compares unpadded base64url(hash) to the verified lease's
+  // agent_signing_key_binding before issuing a challenge. The proven route
+  // retains this SPKI for agent-role JoinProof verification.
+  bytes agent_signing_public_key_spki_der = 2;
+  reserved 3 to 15;
+}
+
+message PresenceRenewal {
+  // A fresh Cloud-signed lease for the same routing handle, broker audience,
+  // signing-key binding, and key-agreement binding. Its jti and exp are fresh.
+  // Accepted renewal replaces the stream's old lease deadline; it neither
+  // opens a second owner nor requires another proof on the same proven stream.
+  string presence_lease_jws = 1;
+  reserved 2 to 15;
+}
+
+message PresenceProof {
+  bytes challenge_id = 1; // Exact 16-byte challenge identifier.
+
+  // Raw 64-byte P-256 ECDSA signature r || s over the SHA-256 digest of the
+  // exact PresenceProofInput documented below.
+  bytes signature = 2;
+  reserved 3 to 15;
+}
+
+message PresenceOfferAcknowledgement {
+  string offer_id = 1; // Exact opaque offer_id received from broker, 1..128 bytes.
+  string session_id = 2; // Exact opaque session_id in that offer, 1..128 bytes.
+  reserved 3 to 15;
+}
+
+message RegisterPresenceRequest {
+  // State machine: first open, then exactly one proof, then zero or more
+  // renewals and offer acknowledgements. Traffic in any other order closes the
+  // stream. Acknowledgements are valid only after PresenceAccepted.
+  oneof message {
+    PresenceOpen open = 1;
+    PresenceProof proof = 2;
+    PresenceRenewal renewal = 3;
+    PresenceOfferAcknowledgement offer_acknowledgement = 4;
+  }
+  reserved 5 to 15;
+}
+
+message BrokerChallenge {
+  bytes challenge_id = 1; // Fresh random 16 bytes, unique for this stream.
+  bytes nonce = 2; // Fresh random 32 bytes.
+  google.protobuf.Timestamp expires_at = 3; // At most 30 seconds after issue.
+  reserved 4 to 15;
+}
+
+message PresenceAccepted {
+  google.protobuf.Timestamp lease_expires_at = 1; // Signed lease exp.
+  google.protobuf.Timestamp renew_by = 2; // Advisory; never extends exp.
+  reserved 3 to 15;
+}
+
+message PresenceRenewed {
+  google.protobuf.Timestamp lease_expires_at = 1;
+  google.protobuf.Timestamp renew_by = 2;
+  reserved 3 to 15;
+}
+
+message SessionOffer {
+  // Broker verifies the grant and canonical envelope binding but never decrypts
+  // the instruction. Agent decrypts and validates the bound plaintext.
+  string session_grant_jws = 1;
+  EncryptedDialInstructionEnvelope encrypted_dial_instruction = 2;
+
+  // Stable broker-generated identifier for this logical offer. It is opaque,
+  // random, 1..128 bytes, and remains identical on every redelivery.
+  string offer_id = 3;
+
+  // Stable opaque session identifier from the verified grant, 1..128 bytes.
+  string session_id = 4;
+  reserved 5 to 15;
+}
+
+// Agent SessionOffer admission is ordered and fail-closed. Before HPKE Open or
+// any dial, the agent resolves grant kid from Cloud's rotating, issuer-pinned
+// JWKS and verifies ES256, exact Cloud issuer, typ, current boot-incarnation
+// audience, session_id, routing_handle, presence_jti, caller/agent key bindings,
+// iat <= now < exp, relay_exp, and canonical dial_instruction_hash. It then
+// reconstructs and compares exact HPKE info/AAD from those verified values and
+// retained presence/request bindings. Only then may it decrypt, canonically
+// validate DialInstruction, and dial. Fake or broker-signed grants, stale kids,
+// issuer/audience/key/routing/presence substitution, envelope-hash mismatch,
+// and context mismatch produce no decryption and no dial. Cloud and broker are
+// non-colluding; HPKE base mode and broker transport auth do not replace this.
+
+message PresenceOfferAcknowledged {
+  string offer_id = 1;
+  string session_id = 2;
+  reserved 3 to 15;
+}
+
+message RegisterPresenceResponse {
+  // Broker sends challenge after a valid open, accepted after a valid proof,
+  // renewed after each valid renewal, and offers only while accepted.
+  oneof message {
+    BrokerChallenge challenge = 1;
+    PresenceAccepted accepted = 2;
+    PresenceRenewed renewed = 3;
+    SessionOffer session_offer = 4;
+    PresenceOfferAcknowledged offer_acknowledged = 5;
+  }
+  reserved 6 to 15;
+}
+
+// PresenceProofInput is:
+//
+//   CanonicalEncode(
+//     "wendycloud.tunnel.v1/presence-proof/1",
+//     broker_audience,
+//     routing_handle,
+//     lease_jti,
+//     SHA-256(exact ASCII presence_lease_jws),
+//     "agent-presence",
+//     challenge_id,
+//     nonce)
+//
+// The signature key is the P-256 signing SPKI supplied in PresenceOpen after
+// broker has validated its SHA-256 binding against the verified lease. Broker
+// verifies challenge_id/nonce/expiry and signature on the same stream.
+// A challenge is single-use: the first proof attempt, successful or not,
+// consumes it. Failure closes the stream and reconnection always receives a
+// fresh challenge; no challenge or successful proof survives reconnection.
+//
+// Presence is a renewable lease with exactly one active owner per routing
+// handle. Ownership begins only after proof succeeds and ends on disconnect,
+// lease expiry, or terminal error. A second successfully proven stream while an
+// owner is active receives ALREADY_EXISTS; it never steals the lease. After the
+// owner ends, a new stream may acquire the route using an unexpired lease and a
+// fresh one-use connection challenge.
+//
+// Session offers use at-least-once delivery. The first valid CreateSession
+// creates exactly one logical offer_id; an exact CreateSession retry does not
+// create another logical offer, though the same offer may be redelivered. The
+// broker redelivers an unacknowledged offer with identical offer_id, session_id,
+// grant, and envelope on the current presence stream and after proven presence
+// reconnects, until admission exp. Agents deduplicate on offer_id/session_id,
+// durably retain/decrypt/validate the offer, then acknowledge it. A matching
+// acknowledgement is idempotent and broker confirms it with
+// PresenceOfferAcknowledged. It records receipt only: it does not prove a Join
+// role, consume grant jti, extend exp, or make the relay active. Agent JoinOpen
+// requires the matching offer to have been acknowledged; otherwise it fails
+// FAILED_PRECONDITION.
+
+enum JoinRole {
+  JOIN_ROLE_UNSPECIFIED = 0;
+  JOIN_ROLE_CALLER = 1;
+  JOIN_ROLE_AGENT = 2;
+}
+
+message JoinOpen {
+  string session_grant_jws = 1; // Exact compact grant used by CreateSession.
+  JoinRole role = 2;
+  reserved 3 to 15;
+}
+
+message JoinProof {
+  bytes challenge_id = 1; // Exact 16-byte challenge identifier.
+  bytes signature = 2; // Raw 64-byte P-256 ECDSA r || s.
+  reserved 3 to 15;
+}
+
+message TunnelFrame {
+  oneof frame {
+    // TCP only. 1..65536 bytes; empty data is invalid. gRPC stream order is
+    // byte-stream order; frames have no independent identity or sequence.
+    bytes data = 1;
+
+    // TCP only and must be true. Half-close is sent at most once and is the
+    // final outbound frame from that endpoint. The peer may continue sending.
+    bool half_close = 2;
+
+    // DATAGRAM only; exactly one UDP datagram, max 65507 payload bytes.
+    TunnelDatagram datagram = 3;
+
+    // DATAGRAM only; agent-targeted ICMP echo request/reply.
+    IcmpEchoRequest icmp_request = 4;
+    IcmpEchoReply icmp_reply = 5;
+  }
+  reserved 6 to 15;
+}
+
+message TunnelDatagram {
+  // Caller-assigned id, unique among live flows in this session. Agent
+  // creates a connected loopback UDP socket on first sight and expires it after
+  // 2 minutes idle. Reuse is permitted only after expiry and is treated as a
+  // new flow subject to the creation rate limit.
+  uint32 flow_id = 1;
+  // Opaque id from DialInstruction.authorized_datagram_destinations. It is not
+  // a port. First frame binds the live flow_id to this id; subsequent frames for
+  // that flow MUST repeat it. Unknown ids or attempts to rebind a live flow_id
+  // are INVALID_ARGUMENT and do not alter flow state.
+  uint32 destination_id = 2;
+  bytes payload = 3; // 0..65507 bytes; an empty UDP datagram is valid.
+  reserved 4 to 15;
+}
+
+// DATAGRAM resource rules: broker counts opaque flow ids and agent independently
+// enforces the same limits. A session has at most 64 live flow_id values. It may
+// accept at most 16 previously non-live flow ids in any rolling one-second
+// interval. Existing live-flow traffic does not consume that creation rate.
+// A flow expires after 2 minutes without a frame in either direction. Exceeding
+// either limit returns RESOURCE_EXHAUSTED without evicting or rebinding an
+// existing flow. A frame with malformed/unknown destination_id or conflicting
+// reuse returns INVALID_ARGUMENT. After idle expiry, the same flow_id may start
+// a new flow (including a different authorized destination_id) subject to both
+// limits. These limits do not disclose the destination mapping to broker.
+
+message IcmpEchoRequest {
+  uint32 identifier = 1;
+  uint32 sequence = 2;
+  bytes payload = 3; // Max 65507 bytes.
+  uint64 originate_unix_ns = 4; // Caller send time.
+  reserved 5 to 15;
+}
+
+message IcmpEchoReply {
+  uint32 identifier = 1; // Copied from request.
+  uint32 sequence = 2; // Copied from request.
+  bytes payload = 3; // Echoed verbatim, max 65507 bytes.
+  uint64 originate_unix_ns = 4; // Copied from request.
+  uint64 agent_unix_ns = 5; // Agent receive time.
+  reserved 6 to 15;
+}
+
+message JoinSessionRequest {
+  // State machine: exactly one open, exactly one proof after challenge, then
+  // frames only after JoinAccepted. A proof message carries no frame.
+  oneof message {
+    JoinOpen open = 1;
+    JoinProof proof = 2;
+    TunnelFrame frame = 3;
+  }
+  reserved 4 to 15;
+}
+
+message JoinAccepted {
+  JoinRole role = 1;
+  google.protobuf.Timestamp relay_expires_at = 2; // Exact grant relay_exp.
+  reserved 3 to 15;
+}
+
+message JoinSessionResponse {
+  oneof message {
+    BrokerChallenge challenge = 1;
+    JoinAccepted accepted = 2;
+    TunnelFrame frame = 3;
+  }
+  reserved 4 to 15;
+}
+
+// JoinProofInput is:
+//
+//   CanonicalEncode(
+//     "wendycloud.tunnel.v1/join-proof/1",
+//     broker_audience,
+//     session_id,
+//     grant_jti,
+//     SHA-256(exact ASCII session_grant_jws),
+//     role, // exact ASCII "caller" or "agent"
+//     challenge_id,
+//     nonce)
+//
+// Broker verifies caller proofs with caller_key_binding and agent proofs with
+// agent_key_binding from the grant. For CALLER, broker uses the P-256 SPKI from
+// CreateSession after verifying its hash equals the matching binding in both
+// pki-core attestation and Cloud grant. For AGENT, broker uses the
+// P-256 SPKI retained on the currently proven presence route, after verifying
+// its hash equals agent_key_binding and the grant routes to that presence.
+// Neither key is obtained from JoinOpen, metadata, or identity. Roles cannot be
+// substituted. Each stream gets a fresh single-use challenge; the first proof
+// attempt consumes it and a failure closes that stream. At most one proven
+// endpoint per role is parked. Pairing the two roles and consuming grant jti is
+// one atomic transition. Both streams receive JoinAccepted before any
+// TunnelFrame is relayed.
+//
+// Status mapping for all services:
+//
+// * INVALID_ARGUMENT: malformed/over-limit fields, forbidden default/unknown
+//   request payload encoding, invalid SPKI/suite/envelope/frame, reused agent
+//   key material, or invalid message order before authentication.
+// * UNAUTHENTICATED: missing/invalid Cloud transport authentication, caller
+//   transport authentication, JWS signature/header, lease/grant signature, or
+//   holder proof. Proof failure closes its stream without an identity detail.
+// * PERMISSION_DENIED: authenticated Cloud policy denial (including target or
+//   service denial). Broker-facing denials never reveal such identity.
+// * NOT_FOUND: broker has no unexpired opaque route/session reservation.
+// * ALREADY_EXISTS: replayed pki principal descriptor nonce, conflicting
+//   CreateSession reuse, second presence owner, or second proven endpoint for a
+//   role. Exact CreateSession retries return OK.
+// * FAILED_PRECONDITION: expired/not-yet-valid artifact, audience/instance
+//   mismatch, presence/grant/envelope hash mismatch, admission after exp, or a
+//   state transition that is valid in shape but no longer permitted.
+// * RESOURCE_EXHAUSTED: documented broker or Cloud concurrency/rate limits.
+// * UNAVAILABLE: transient dependency/instance unavailability; clients retry
+//   with bounded backoff. Only CreateSession exact retries are idempotent.
+// * INTERNAL: an unexpected server failure with no principal/target details.

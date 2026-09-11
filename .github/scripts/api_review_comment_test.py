@@ -29,6 +29,20 @@ def result():
     }
 
 
+def large_result():
+    data = result()
+    prototype = data["decisions"][0]
+    data.update(review_batches=11, changed_files=181, diff_bytes=900_000, risk="high", decisions=[])
+    for index in range(93):
+        item = copy.deepcopy(prototype)
+        item["title"] = f"Contract {index:03}: native launch command"
+        item["change"] = f"Decision {index}: " + "The launch configuration gains an optional compatible field. " * 15
+        item["compatibility"] = "Existing manifests keep their launch behavior and existing clients remain compatible. " * 10
+        item["locations"][0].update(line=index + 1, end_line=index + 1)
+        data["decisions"].append(item)
+    return data
+
+
 def pull():
     return {
         "head": {"sha": HEAD, "repo": {"full_name": REPO}},
@@ -64,6 +78,34 @@ class FakeGitHub:
 
     def posted_body(self):
         return next(payload["body"] for _, _, payload in self.calls if payload and "body" in payload)
+
+
+class MultipartGitHub(FakeGitHub):
+    def __init__(self, comments=None, pulls=None, fail_body_write=None):
+        super().__init__(copy.deepcopy(comments or []), pulls or [pull() for _ in range(10)])
+        self.next_id = max((comment["id"] for comment in self.comments), default=1000) + 1
+        self.body_writes = 0
+        self.fail_body_write = fail_body_write
+
+    def request(self, method, path, payload=None):
+        response = super().request(method, path, payload)
+        if payload and "body" in payload:
+            self.body_writes += 1
+            if self.body_writes == self.fail_body_write:
+                raise urllib.error.URLError("simulated publication failure")
+            if method == "POST":
+                identifier = self.next_id
+                self.next_id += 1
+                self.comments.append(bot_comment(payload["body"], identifier))
+                return {"id": identifier}
+            identifier = int(path.rsplit("/", 1)[1])
+            for comment in self.comments:
+                if comment["id"] == identifier:
+                    comment["body"] = payload["body"]
+        elif method == "DELETE" and "/issues/comments/" in path:
+            identifier = int(path.rsplit("/", 1)[1])
+            self.comments = [comment for comment in self.comments if comment["id"] != identifier]
+        return response
 
 
 class RenderingTests(unittest.TestCase):
@@ -236,6 +278,133 @@ class PublicationTests(unittest.TestCase):
                 with self.subTest(pulls=pulls), self.assertRaisesRegex(ValueError, "refusing stale"):
                     self.publish(result(), github)
                 self.assertEqual(github.mutations(), [])
+
+
+class MultipartTests(unittest.TestCase):
+    def publish(self, data, github):
+        return review.publish(data, REPO, 1911, HEAD, BASE, github)
+
+    def previous_comments(self, data):
+        pages = review.render_continuations(data, REPO)
+        comments = [bot_comment(body, index) for index, body in enumerate(pages, start=11)]
+        root = review.render_primary(data, REPO, 1911, [comment["id"] for comment in comments])
+        comments.append(bot_comment(root, 99))
+        return comments
+
+    def test_93_long_decisions_are_complete_bounded_and_published_before_primary(self):
+        data = large_result()
+        with self.assertRaises(ValueError):
+            review.render_comment(data, REPO)
+        github = MultipartGitHub()
+        self.assertTrue(self.publish(data, github))
+        primary = next(comment for comment in github.comments if review.part_index(comment["body"]) == 0)
+        pages = [comment for comment in github.comments if review.part_index(comment["body"]) > 0]
+        self.assertGreater(len(pages), 1)
+        self.assertGreater(primary["id"], max(comment["id"] for comment in pages))
+        self.assertIn("93 decisions", primary["body"])
+        self.assertIn("11 complete batch(es)", primary["body"])
+        for page in pages:
+            self.assertIn(f"#issuecomment-{page['id']}", primary["body"])
+        bodies = "\n".join(page["body"] for page in pages)
+        self.assertEqual(bodies.count("- [ ] Accept"), 93)
+        for item in data["decisions"]:
+            identifier = f"<!-- api-decision:{review.decision_id(item)} -->"
+            self.assertEqual(bodies.count(identifier), 1)
+            self.assertIn(review.inline(item["change"]), bodies)
+            self.assertIn(review.inline(item["compatibility"]), bodies)
+            self.assertIn(review.code_link(REPO, data, item["locations"][0]), bodies)
+        for comment in github.comments:
+            self.assertLessEqual(len(comment["body"].encode()), review.MAX_COMMENT_BYTES - review.WARNING_RESERVE_BYTES)
+        writes = [(index, payload["body"]) for index, (method, _, payload) in enumerate(github.calls)
+                  if method != "GET" and payload and "body" in payload]
+        self.assertEqual(review.part_index(writes[-1][1]), 0)
+        label_mutations = [index for index, (method, path, _) in enumerate(github.calls)
+                           if method != "GET" and "/labels" in path]
+        self.assertGreater(min(label_mutations), writes[-1][0])
+
+    def test_rerun_preserves_acceptance_and_finds_primary_created_after_parts(self):
+        data = large_result()
+        comments = self.previous_comments(data)
+        comments[0]["body"] = comments[0]["body"].replace("- [ ]", "- [x]", 1)
+        old_parts = {comment["id"] for comment in comments if review.part_index(comment["body"]) > 0}
+        github = MultipartGitHub(comments)
+        self.assertTrue(self.publish(data, github))
+        self.assertTrue(any(method == "PATCH" and path.endswith("/comments/99") for method, path, _ in github.calls))
+        self.assertEqual(sum(comment["body"].count("- [x] Accept") for comment in github.comments), 1)
+        self.assertTrue(old_parts.isdisjoint(comment["id"] for comment in github.comments))
+        root_write = next(index for index, (method, path, _) in enumerate(github.calls)
+                          if method == "PATCH" and path.endswith("/comments/99"))
+        deletions = [index for index, (method, path, _) in enumerate(github.calls)
+                     if method == "DELETE" and "/issues/comments/" in path]
+        self.assertGreater(min(deletions), root_write)
+
+    def test_mixed_revision_pages_cannot_revive_stale_acceptance(self):
+        data = large_result()
+        comments = self.previous_comments(data)
+        old_revision = review.revision_marker({**data, "head_sha": "d" * 40})
+        comments[1]["body"] = comments[1]["body"].replace(review.revision_marker(data), old_revision).replace("- [ ]", "- [x]")
+        github = MultipartGitHub(comments)
+        self.assertTrue(self.publish(data, github))
+        self.assertEqual(sum(comment["body"].count("- [x] Accept") for comment in github.comments), 0)
+
+    def test_missing_old_page_is_already_clean_but_other_cleanup_errors_fail(self):
+        data = large_result()
+        for status in (404, 500):
+            with self.subTest(status=status):
+                github = MultipartGitHub(self.previous_comments(data))
+                original_request = github.request
+
+                def request(method, path, payload=None):
+                    if method == "DELETE" and "/issues/comments/" in path:
+                        error = urllib.error.HTTPError(path, status, "simulated deletion failure", None, None)
+                        error.close()
+                        raise error
+                    return original_request(method, path, payload)
+
+                with patch.object(github, "request", side_effect=request):
+                    if status == 404:
+                        self.assertTrue(self.publish(data, github))
+                    else:
+                        with self.assertRaises(urllib.error.HTTPError):
+                            self.publish(data, github)
+
+    def test_partial_write_failure_preserves_prior_primary_pages_and_risk_labels(self):
+        data = large_result()
+        comments = self.previous_comments(data)
+        comments[0]["body"] = comments[0]["body"].replace("- [ ]", "- [x]", 1)
+        original_pages = {comment["id"]: comment["body"] for comment in comments if review.part_index(comment["body"]) > 0}
+        github = MultipartGitHub(comments, fail_body_write=2)
+        self.assertFalse(self.publish(data, github))
+        current = {comment["id"]: comment["body"] for comment in github.comments}
+        for identifier, body in original_pages.items():
+            self.assertEqual(current[identifier], body)
+            self.assertIn(f"#issuecomment-{identifier}", current[99])
+        self.assertIn(review.WARNING_START, current[99])
+        self.assertIn("Could not publish every", current[99])
+        self.assertFalse(any(method == "DELETE" or "/labels/risk" in path for method, path, _ in github.mutations()))
+        self.assertFalse(any(method == "POST" and path.endswith("/labels") and any(label.startswith("risk:") for label in payload["labels"])
+                             for method, path, payload in github.mutations()))
+
+    def test_stale_revision_after_continuations_never_commits_primary(self):
+        data = large_result()
+        comments = self.previous_comments(data)
+        stale = pull()
+        stale["head"]["sha"] = "d" * 40
+        github = MultipartGitHub(comments, pulls=[pull(), pull(), stale, stale])
+        with self.assertRaisesRegex(ValueError, "refusing stale"):
+            self.publish(data, github)
+        self.assertFalse(any(method == "PATCH" or method == "DELETE" or "/labels" in path for method, path, _ in github.mutations()))
+        self.assertEqual(next(comment["body"] for comment in github.comments if comment["id"] == 99), comments[-1]["body"])
+
+    def test_oversized_later_decision_is_rejected_before_any_part_is_written(self):
+        data = large_result()
+        data["decisions"][-1]["change"] = "x" * review.MAX_COMMENT_BYTES
+        github = MultipartGitHub()
+        self.assertFalse(self.publish(data, github))
+        bodies = [payload["body"] for _, _, payload in github.calls if payload and "body" in payload]
+        self.assertEqual(len(bodies), 1)
+        self.assertIn("individual API decision", bodies[0])
+        self.assertNotIn("- [ ]", bodies[0])
 
 
 if __name__ == "__main__":

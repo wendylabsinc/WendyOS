@@ -19,13 +19,32 @@ Subject CommonName:
 
 | Entity | URI SAN format |
 |--------|---------------|
-| User (CLI) | `urn:wendy:org:‹orgID›:user:‹userID›` |
-| Device / agent | `urn:wendy:org:‹orgID›:asset:‹assetID›` |
+| Operator (pki-core identity endpoint) | `spiffe://wendy.sh/tenant/‹uuid›/operator/‹sub›` |
+| User (CLI, cloud-relayed) | `spiffe://wendy.sh/tenant/‹uuid›/service/user-‹userID›` |
+| Device / agent (cloud-relayed) | `spiffe://wendy.sh/tenant/‹uuid›/service/asset-‹assetID›` |
+| Device (ACME / EST, direct) | `spiffe://wendy.sh/tenant/‹uuid›/device/‹deviceID›` |
+| User (CLI) — legacy chain | `urn:wendy:org:‹orgID›:user:‹userID›` |
+| Device / agent — legacy chain | `urn:wendy:org:‹orgID›:asset:‹assetID›` |
 
-The URI SAN is what `IdentityFromCert` (Go) and `OrgIdentity.identity(fromLeaf:)`
-(Swift) resolve first. The CommonName (`sh/wendy/‹org›/‹asset›` or
-`wendy/user/‹uid›`) is retained for backward compatibility but is treated as
-the fallback when no URI SAN is present.
+The **tenant SPIFFE principal is the identity**. It is what `IdentityFromCert`
+(Go) and `OrgIdentity.identity(fromLeaf:)` (Swift) resolve first, because it is
+the only identity pki-core carries across a renewal: the renew path replaces a
+CSR's URI SAN list wholesale with the principal read off the presented
+certificate, so a renewed leaf comes back with its `urn:wendy:org:…` SAN gone.
+
+The `urn:wendy:org:…` SAN is read second and only as a legacy old-chain
+identity. On a transitional leaf that carries both, the principal decides *who*
+the caller is and the URN contributes only its organisation, so a peer that can
+still compare nothing but organisations keeps working. The CommonName
+(`sh/wendy/‹org›/‹asset›` or `wendy/user/‹uid›`) is the last fallback, used only
+when no URI SAN is present.
+
+Two identities are compared in whichever vocabulary they share: tenant UUIDs
+when both carry one, organisations when both carry one. A pair with no shared
+vocabulary — a SPIFFE-only caller against an old-chain device, or the reverse —
+is **not** a match, because no mapping exists between a tenant UUID and an
+int32 organisation and answering "close enough" is exactly what a cross-tenant
+caller would need.
 
 Legacy tokens that carry no `org_id` claim (user enrollment only) produce a
 CSR with a CommonName only — no URI SAN — so existing enrollments continue to
@@ -33,6 +52,33 @@ work without re-authentication.
 
 The cloud certificate service validates the URI SAN against the
 enrollment-token or mTLS identity at issuance time.
+
+When the enrollment token carries a `tenant_uuid` claim, a second URI SAN is
+added *alongside* the urn:wendy SAN:
+
+| Entity | Tenant SPIFFE URI SAN format |
+|--------|------------------------------|
+| Device / agent | `spiffe://wendy.sh/tenant/‹uuid›/service/asset-‹assetID›` |
+| User (CLI) | `spiffe://wendy.sh/tenant/‹uuid›/service/user-‹userID›` |
+
+Cloud refuses to sign a relay grant unless the CSR carries exactly this SPIFFE
+principal. The principal kind is always `service`, never `device`: cloud relays
+every client leaf through pki-core's `service-identity` profile, which would
+refuse a profile-kind mismatch. That profile is also the one that consults the
+tenant domain allow-list, so these CSRs stay URI-SAN-only — any dNSName fails
+the mint.
+
+The urn:wendy SAN is retained rather than replaced. It is what the agent's
+org-equality gate reads out of a peer certificate, and a SPIFFE principal names
+a tenant UUID rather than the int32 org that gate compares, so dropping the urn
+would silently disarm org enforcement across the fleet.
+
+Organizations with no pki tenant receive no `tenant_uuid` claim and enroll
+exactly as before — the absence of the claim is never an error.
+
+› **Certificate refresh:** the refresh path derives identity from the
+› already-stored certificate rather than an enrollment token, so it has no
+› `tenant_uuid` to read and adds no SPIFFE SAN. Only initial enrollment does.
 
 ## Server certificate verification
 
@@ -48,7 +94,7 @@ The CLI verifies device server certificates on all mTLS connections (BLE, LAN gR
 
 ## Device identity pinning (default device)
 
-On the first successful connection to a hostname, the CLI records that hostname's identity in `~/.wendy/config.json` under `devicePins`: the **organisation**, the **cloud host** that issued its certificate, and the **asset id** from the device certificate's `urn:wendy:org:<org>:asset:<assetID>` URI SAN. Every later connection to that hostname is checked against the pin — this is what feeds `ServerVerifyOpts.ExpectedIdentity` above, so a wrong device is rejected during the TLS handshake itself, not after.
+On the first successful connection to a hostname, the CLI records that hostname's identity in `~/.wendy/config.json` under `devicePins`: the **organisation**, the **cloud host** that issued its certificate, and the **asset id** from the device certificate's identity SAN (the name of its tenant SPIFFE principal, or the legacy `urn:wendy:org:<org>:asset:<assetID>` URN on an old chain), and that **principal** when it has one. Every later connection to that hostname is checked against the pin — this is what feeds `ServerVerifyOpts.ExpectedIdentity` above, so a wrong device is rejected during the TLS handshake itself, not after.
 
 The pin is deliberately not a certificate fingerprint — a device legitimately rotates and re-enrolls certificates, and that must not look like an attack. What trips it is a change of *who* is answering:
 
@@ -66,12 +112,13 @@ The asset id is read only from a certificate that passed chain and org verificat
 
 ```sh
 wendy device unpin <hostname>
+wendy device unpin spiffe://wendy.sh/tenant/<uuid>/device/<id>
 wendy device unpin urn:wendy:org:<org>:asset:<id>
 ```
 
 This clears the local pin only — it never dials the device, so it works even when the device is offline, wiped, or gone. The next successful connection to that hostname records a fresh pin from scratch. Naming a device explicitly with `wendy device set-default <hostname>` has the same clearing effect, since typing the hostname is itself the user asserting "I mean that device."
 
-Both forms are accepted because the two stores are keyed differently. The identity-change refusals above name a hostname, and the hostname form clears it. The **SPKI** refusal (point 4 above) can only name the certificate identity URN, because that is what `known_devices.json` is keyed by and there is often no hostname to offer: `wendy device list` and the device picker dial the device's IP, and an agent that never advertises `orgid` in its mDNS records leaves nothing locally that maps a name to an asset. Copy the URN out of the refusal and pass it back — it clears the SPKI entry and any `devicePins` entry naming the same asset.
+Both forms are accepted because the two stores are keyed differently. The identity-change refusals above name a hostname, and the hostname form clears it (a pin records its device's principal on the first connect after the SPIFFE cutover, which is how the hostname form still reaches the SPKI entry). The **SPKI** refusal (point 4 above) can only name the certificate identity, because that is what `known_devices.json` is keyed by — the tenant SPIFFE principal for a pki-core-issued device, the legacy URN for an old chain and there is often no hostname to offer: `wendy device list` and the device picker dial the device's IP, and an agent that never advertises `orgid` in its mDNS records leaves nothing locally that maps a name to an asset. Copy the identity out of the refusal and pass it back — it clears the SPKI entry and any `devicePins` entry naming the same asset.
 
 Unpinning by hostname also clears pins filed under the device's *other* names (the cloud roster's asset name, its mesh name), because one device is legitimately pinned under several — but only when those pins name the same organisation and asset. Those alternate names come from mDNS, which is unauthenticated, so a pin naming a *different* asset is a different device's pin and is left alone. Whatever is cleared is printed, one line per entry, so an unpin never removes trust state silently.
 
@@ -149,7 +196,23 @@ When connecting to a device, the CLI automatically checks for clock skew. If the
    ```
    This exposes `wendycloud.v1.CertificateService` on the configured listen address (default `:50051`).
 
-### Provision a device
+### Authenticate the CLI
+
+Do this first: `wendy device enroll` mints its enrollment token from your stored
+auth session, so the CLI has to be logged in to the same pki-core before it can
+enroll anything. `--api-key` selects the local pki-core flow.
+
+```sh
+wendy auth login \
+  --api-key <key-from-config.yaml> \
+  --cloud-grpc <your-lan-ip>:50051
+```
+
+The same step issues the CLI its own client certificate, which is what lets
+`wendy device version`, `wendy run`, and the other device commands connect over
+mTLS afterwards.
+
+### Enroll a device
 
 Find your machine's LAN IP (the address the device can reach):
 
@@ -157,29 +220,29 @@ Find your machine's LAN IP (the address the device can reach):
 ifconfig | grep "inet " | grep -v 127.0.0.1
 ```
 
-Then provision the target device:
+Then enroll the target device:
 
 ```sh
-wendy device provision \
-  --cloud <your-lan-ip>:50051 \
-  --api-key <key-from-config.yaml> \
+wendy device enroll \
+  --cloud-grpc <your-lan-ip>:50051 \
   --name my-device
 ```
 
-### Authenticate the CLI
-
-Issue a client certificate from the same pki-core so the CLI can connect over mTLS:
-
-```sh
-wendy auth login-local \
-  --cloud <your-lan-ip>:50051 \
-  --api-key <key-from-config.yaml>
-```
+› **Plaintext dial (local pki-core only):** the agent's enrollment dial is TLS
+› by default for every address, and a cloud host given without a port resolves
+› to `:443` (it used to resolve to the plaintext `:50051`, which is what sent
+› enrollment tokens in cleartext — WDY-2799). A local pki-core serving
+› plaintext gRPC therefore needs two things: its port named explicitly, as
+› above, and `WENDY_CLOUD_INSECURE=1` set **in the agent's environment on the
+› device** — the agent performs this dial, so setting the variable in your own
+› shell has no effect. The agent logs a warning naming the target address
+› whenever the variable is active, because the enrollment token is a bearer
+› credential. Never set it on a real device.
 
 After this, `wendy device version`, `wendy run`, and other device commands automatically use the mTLS port (plaintext port + 1) when the device's Avahi advertisement includes `tls=true`.
 
-> **Note:** The end-to-end test helper `go run ./cmd/local-pki-test` passes an
-> empty identity URN, so the CSR it generates has no URI SAN. This is
+> **Note:** The end-to-end test helper `go run ./cmd/local-pki-test` passes
+> `nil` for identity URIs, so the CSR it generates has no URI SAN. This is
 > intentional — the tool is for CA wiring tests only, not for producing
 > production-equivalent certificates.
 

@@ -17,7 +17,12 @@ struct `'wendy cloud device enroll'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy cloud device enroll --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Creates an enrollment token"))
+                #expect(
+                    result.stdout.contains(
+                        "Enrolls the connected device using your stored auth session"
+                    )
+                )
+                #expect(result.stdout.contains("OIDC accounts"))
                 #expect(result.stdout.contains("wendy cloud device enroll [flags]"))
                 #expect(result.stdout.contains("--name"))
                 #expect(result.stdout.contains("--org"))

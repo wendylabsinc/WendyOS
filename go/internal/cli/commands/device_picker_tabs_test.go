@@ -104,7 +104,7 @@ func TestDevicePickerCloudTabShowsDefaultOrgAndSwitchHotkey(t *testing.T) {
 	m = updated.(devicePickerModel)
 
 	view := m.View()
-	for _, want := range []string{"Organization: Robotics (org 7)", "default", "o switch"} {
+	for _, want := range []string{"Organization: Robotics", "default", "o switch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("authenticated cloud view does not contain %q: %q", want, view)
 		}

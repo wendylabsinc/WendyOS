@@ -4,6 +4,8 @@ option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv
 
 service WendyProvisioningService {
     rpc StartProvisioning(StartProvisioningRequest) returns (StartProvisioningResponse);
+    // OIDC accounts: the device enrolls directly with PKI using a provisioned EAB.
+    rpc StartACMEProvisioning(StartACMEProvisioningRequest) returns (StartACMEProvisioningResponse);
     rpc IsProvisioned(IsProvisionedRequest) returns (IsProvisionedResponse);
     // Unprovision resets the device to an unprovisioned state: it deletes the
     // stored enrollment certificates and provisioning state, then restarts the
@@ -26,6 +28,8 @@ message ProvisionedResponse {
     string cloud_host = 1;
     int32 organization_id = 2;
     int32 asset_id = 3;
+    // Set for direct PKI enrollment; legacy numeric IDs remain unset.
+    string principal_uri = 4;
 }
 
 message StartProvisioningRequest {
@@ -40,3 +44,16 @@ message StartProvisioningResponse {}
 message UnprovisionRequest {}
 
 message UnprovisionResponse {}
+
+// EAB credentials are delivered once and must never be logged or returned.
+message StartACMEProvisioningRequest {
+    string cloud_host = 1;
+    string directory_url = 2;
+    string device_id = 3;
+    string eab_key_id = 4;
+    string eab_hmac_key = 5;
+}
+
+message StartACMEProvisioningResponse {
+    string principal_uri = 1;
+}

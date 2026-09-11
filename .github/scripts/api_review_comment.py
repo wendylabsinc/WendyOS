@@ -17,6 +17,7 @@ import urllib.parse
 import urllib.request
 
 COMMENT_MARKER = "<!-- ai-api-review:v1 -->"
+PART_MARKER_RE = re.compile(r"<!-- ai-api-review:part=(\d+)/(\d+) -->")
 WARNING_START = "<!-- ai-api-review:incomplete -->"
 WARNING_END = "<!-- /ai-api-review:incomplete -->"
 MAX_COMMENT_BYTES = 65_000
@@ -120,19 +121,23 @@ def code_link(repo: str, result: dict, location: dict) -> str:
     return f"[{inline(label)}]({url})"
 
 
-def render_comment(result: dict, repo: str, previous: str = "") -> str:
-    accepted = set()
+def accepted_decisions(result: dict, previous: str) -> set[str]:
     # Preserve only unchanged decisions for the exact reviewed diff. Model prose
     # changes conservatively require acceptance again, even on a rerun.
     if revision_marker(result) in previous:
-        accepted = set(re.findall(
+        return set(re.findall(
             r"^- \[[xX]\] .*<!-- api-decision:([0-9a-f]{64}) -->$", previous, re.MULTILINE,
         ))
+    return set()
+
+
+def review_intro(result: dict, repo: str) -> list[str]:
     head = result["head_sha"]
-    lines = [
+    return [
         "# API decisions", "",
         f"Reviewed [{head[:12]}](https://github.com/{repo}/commit/{head}). "
-        f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes; no truncation.",
+        f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes "
+        f"across {result.get('review_batches', 1)} complete batch(es); no truncation.",
         "",
         "Check a box to accept that decision for this revision. New commits reset acceptance. "
         "These checkboxes track API review and do not block merging automatically.",
@@ -140,6 +145,24 @@ def render_comment(result: dict, repo: str, previous: str = "") -> str:
         f"**Testing risk:** {result['risk']}. Compatibility impact is listed separately for each decision.",
         "",
     ]
+
+
+def decision_lines(decision: dict, result: dict, repo: str, accepted: set[str]) -> list[str]:
+    identifier = decision_id(decision)
+    checked = "x" if identifier in accepted else " "
+    return [
+        f"- [{checked}] Accept **{inline(decision['title'])}** — "
+        f"{IMPACTS[decision['impact']]}. <!-- api-decision:{identifier} -->",
+        f"  - Change: {inline(decision['change'])}",
+        f"  - Compatibility: {inline(decision['compatibility'])}",
+        "  - Code: " + ", ".join(code_link(repo, result, loc) for loc in decision["locations"]),
+        "",
+    ]
+
+
+def render_comment(result: dict, repo: str, previous: str = "") -> str:
+    accepted = accepted_decisions(result, previous)
+    lines = review_intro(result, repo)
     if not result["decisions"]:
         lines += ["No durable API decisions changed. Comments, formatting, and documentation wording alone do not require acceptance.", ""]
     for category, title in CATEGORIES.items():
@@ -149,20 +172,80 @@ def render_comment(result: dict, repo: str, previous: str = "") -> str:
             lines += ["No API decisions changed.", ""]
             continue
         for decision in sorted(decisions, key=lambda item: (item["title"], decision_id(item))):
-            identifier = decision_id(decision)
-            checked = "x" if identifier in accepted else " "
-            lines += [
-                f"- [{checked}] Accept **{inline(decision['title'])}** — "
-                f"{IMPACTS[decision['impact']]}. <!-- api-decision:{identifier} -->",
-                f"  - Change: {inline(decision['change'])}",
-                f"  - Compatibility: {inline(decision['compatibility'])}",
-                "  - Code: " + ", ".join(code_link(repo, result, loc) for loc in decision["locations"]),
-                "",
-            ]
+            lines += decision_lines(decision, result, repo, accepted)
     lines += [revision_marker(result), COMMENT_MARKER, ""]
     body = "\n".join(lines)
     if len(body.encode()) > MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES:
         raise ValueError("API decision checklist exceeds GitHub's comment limit; no decisions were truncated")
+    return body
+
+
+def part_index(body: str) -> int:
+    markers = PART_MARKER_RE.findall(body)
+    if not markers:
+        return 0  # Legacy single comments are primary comments.
+    if len(markers) != 1:
+        raise ValueError("API review comment has ambiguous part metadata")
+    index, total = map(int, markers[0])
+    if not 0 <= index <= total or total <= 0:
+        raise ValueError("API review comment has invalid part metadata")
+    return index
+
+
+def render_continuations(result: dict, repo: str, previous: str = "") -> list[str]:
+    """Pack whole decision blocks; never truncate prose, evidence, or checkboxes."""
+    accepted = accepted_decisions(result, previous)
+    limit = MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES
+    maximum_parts = len(result["decisions"])
+
+    def render(lines: list[str], index: int, total: int) -> str:
+        return "\n".join([
+            f"# API decisions — checklist part {index} of {total}", "",
+            f"Reviewed revision `{result['head_sha']}`. "
+            "The primary API review comment records whether every checklist part was published successfully.",
+            "Check a box to accept that decision for this revision. New commits reset acceptance.", "",
+            *lines, revision_marker(result),
+            f"<!-- ai-api-review:part={index}/{total} -->", COMMENT_MARKER, "",
+        ])
+
+    pages: list[list[str]] = []
+    current: list[str] = []
+    current_category = None
+    for category, title in CATEGORIES.items():
+        decisions = sorted((item for item in result["decisions"] if item["category"] == category),
+                           key=lambda item: (item["title"], decision_id(item)))
+        for decision in decisions:
+            block = decision_lines(decision, result, repo, accepted)
+            heading = [f"## {title}", ""]
+            candidate = current + ([] if current_category == category else heading) + block
+            # Reserve the maximum possible page-number width before any write.
+            if len(render(candidate, maximum_parts, maximum_parts).encode()) > limit:
+                if current:
+                    pages.append(current)
+                current = heading + block
+                if len(render(current, maximum_parts, maximum_parts).encode()) > limit:
+                    raise ValueError("An individual API decision exceeds GitHub's comment limit; no decisions were truncated")
+            else:
+                current = candidate
+            current_category = category
+    if current:
+        pages.append(current)
+    if not pages:
+        raise ValueError("Cannot partition an empty API decision checklist")
+    return [render(lines, index, len(pages)) for index, lines in enumerate(pages, start=1)]
+
+
+def render_primary(result: dict, repo: str, pr_number: int, comment_ids: list[int]) -> str:
+    lines = review_intro(result, repo) + [
+        f"**Complete checklist:** {len(result['decisions'])} decisions across {len(comment_ids)} comments.", "",
+        *[f"- [Checklist part {index} of {len(comment_ids)}](https://github.com/{repo}/pull/{pr_number}#issuecomment-{identifier})"
+          for index, identifier in enumerate(comment_ids, start=1)],
+        "", revision_marker(result),
+        f"<!-- ai-api-review:part=0/{len(comment_ids)} -->", COMMENT_MARKER, "",
+    ]
+    body = "\n".join(lines)
+    if len(body.encode()) > MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES:
+        raise ValueError("API checklist index exceeds GitHub's comment limit; no decisions were truncated")
     return body
 
 
@@ -251,23 +334,69 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
     else:
         raise ValueError("Could not enumerate all previous API review comments")
     existing.sort(key=lambda comment: comment["id"])
-    previous = existing[0]["body"] if existing else ""
+    primary = next((comment for comment in existing if part_index(comment["body"]) == 0), None)
+    previous = primary["body"] if primary else ""
     complete = result["status"] == "complete"
+    continuations = []
     try:
-        body = render_comment(result, repo, previous) if complete else render_incomplete(result, repo, previous)
+        if complete:
+            # Filter each page before combining state: a matching revision on
+            # one page must not revive acceptance from a different revision.
+            accepted_previous = "\n\n".join(comment["body"] for comment in existing
+                                               if revision_marker(result) in comment["body"])
+            try:
+                body = render_comment(result, repo, accepted_previous)
+            except ValueError:
+                continuations = render_continuations(result, repo, accepted_previous)
+                # GitHub comment IDs are bounded integers. Validate the complete
+                # primary with worst-case link lengths before creating any part.
+                body = render_primary(result, repo, pr_number, [10**20 - 1] * len(continuations))
+        else:
+            body = render_incomplete(result, repo, previous)
     except ValueError as error:
         if not complete:
             raise
         result = {**result, "status": "incomplete", "error": str(error)}
         complete = False
+        continuations = []
         body = render_incomplete(result, repo, previous)
     # A model call can take minutes. Recheck after reading state and directly
     # before mutations so a superseded run cannot overwrite a newer checklist.
     pull = current_pull()
-    if existing:
-        github.request("PATCH", f"{root}/issues/comments/{existing[0]['id']}", {"body": body})
-    else:
-        github.request("POST", f"{issue}/comments", {"body": body})
+    primary_attempted = False
+    try:
+        if continuations:
+            identifiers = []
+            # Fresh continuations keep the previous primary's linked checklist
+            # intact if this attempt fails halfway through publication.
+            for continuation in continuations:
+                created = github.request("POST", f"{issue}/comments", {"body": continuation})
+                identifier = created.get("id") if isinstance(created, dict) else None
+                if type(identifier) is not int or not 0 < identifier < 10**20:
+                    raise ValueError("GitHub returned an invalid checklist comment ID")
+                identifiers.append(identifier)
+            body = render_primary(result, repo, pr_number, identifiers)
+            pull = current_pull()
+        primary_attempted = True
+        if primary:
+            github.request("PATCH", f"{root}/issues/comments/{primary['id']}", {"body": body})
+        else:
+            github.request("POST", f"{issue}/comments", {"body": body})
+    except (ValueError, OSError, urllib.error.URLError):
+        if not continuations:
+            raise
+        # Never touch a newly superseding revision. A failed POST of the primary
+        # may already have created it, so do not retry that ambiguous creation.
+        current_pull()
+        if not primary and primary_attempted:
+            raise
+        complete = False
+        result = {**result, "status": "incomplete", "error": "Could not publish every API checklist part; prior review state was preserved"}
+        body = render_incomplete(result, repo, previous)
+        if primary:
+            github.request("PATCH", f"{root}/issues/comments/{primary['id']}", {"body": body})
+        else:
+            github.request("POST", f"{issue}/comments", {"body": body})
 
     def ensure_label(label):
         path = f"{root}/labels/{urllib.parse.quote(label['name'], safe='')}"
@@ -311,6 +440,15 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
     if (result["decisions"] and pull["user"]["login"].lower() != reviewer
             and not any(user["login"].lower() == reviewer for user in pull["requested_reviewers"])):
         github.request("POST", f"{pull_path}/requested_reviewers", {"reviewers": [reviewer]})
+    # Only a fully published replacement may remove old continuation pages.
+    # Primary comments are identified explicitly, never by creation order.
+    for comment in existing:
+        if part_index(comment["body"]) > 0:
+            try:
+                github.request("DELETE", f"{root}/issues/comments/{comment['id']}")
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
     return True
 
 

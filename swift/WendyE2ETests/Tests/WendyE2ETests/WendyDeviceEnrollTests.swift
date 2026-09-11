@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import WendyE2ETesting
 
@@ -17,7 +18,12 @@ struct `'wendy device enroll'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy device enroll --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Creates an enrollment token"))
+                #expect(
+                    result.stdout.contains(
+                        "Enrolls the connected device using your stored auth session"
+                    )
+                )
+                #expect(result.stdout.contains("OIDC accounts"))
                 #expect(result.stdout.contains("wendy device enroll [flags]"))
                 #expect(result.stdout.contains("--name"))
                 #expect(result.stdout.contains("--org"))
@@ -41,13 +47,36 @@ struct `'wendy device enroll'` {
     func `uses explicit device selection without prompting`() async throws {}
 
     /**
-     Without an explicit or configured device in a non-interactive context,
-     reports that a device selection is required, emits no prompt escape
-     sequences, and performs no device operation.
+     With a usable auth session but no explicit or configured device in a
+     non-interactive context, reports that a device selection is required,
+     emits no prompt escape sequences, and performs no device operation.
      */
     @Test
     func `reports missing device selection in non-interactive mode`() async throws {
         try await self.scenario.run(authenticated: false) { cli, _ in
+            // A synthetic public certificate passes local expiry validation.
+            // It has no private key and cannot authenticate to a real service.
+            let configJSON = String(
+                decoding: try JSONSerialization.data(withJSONObject: [
+                    "auth": [
+                        [
+                            "cloudGRPC": "127.0.0.1:1",
+                            "certificates": [["pemCertificate": Self.enrollmentCertificate]],
+                        ]
+                    ]
+                ]),
+                as: UTF8.self
+            )
+            try await cli.sh(
+                posix: """
+                    mkdir -p "$HOME/.wendy"
+                    printf '%s' '\(configJSON)' > "$HOME/.wendy/config.json"
+                    """,
+                power: """
+                    New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
+                    Set-Content -NoNewline -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '\(configJSON)'
+                    """
+            )
             try await cli.sh("wendy device enroll --name Example --org 1 --json") { result in
                 #expect(result.status.isFailure)
                 #expect(result.stdout == "")
@@ -84,12 +113,20 @@ struct `'wendy device enroll'` {
      Without a usable auth session, reports that login is required and performs
      no device provisioning.
      */
-    @Test(
-        .disabled(
-            "WDY-1959: auth is currently resolved only after target connection and optional WiFi inspection."
-        )
-    )
-    func `reports missing auth before touching the device`() async throws {}
+    @Test
+    func `reports missing auth before touching the device`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                "wendy device enroll --device 127.0.0.1:1 --name Example --org 1 --json"
+            ) { result in
+                #expect(result.status.isFailure)
+                #expect(result.stdout == "")
+                #expect(result.stderr.contains("not logged in"))
+                #expect(result.stderr.contains("wendy auth login"))
+                #expect(!result.stderr.contains("connecting"))
+            }
+        }
+    }
 
     /**
      Token creation, certificate issuance, or device provisioning failures
@@ -142,4 +179,20 @@ struct `'wendy device enroll'` {
         )
     )
     func `rejects undocumented positional arguments`() async throws {}
+
+    // Self-signed test certificate, valid until 2126. Only local validation
+    // reads it; the missing-device test must never open a connection.
+    private static let enrollmentCertificate = """
+        -----BEGIN CERTIFICATE-----
+        MIIBpTCCAUugAwIBAgIUATCLgMOyyhlsDZIMtH9vfSedZrAwCgYIKoZIzj0EAwIw
+        JzElMCMGA1UEAwwcd2VuZHktZTJlLWVucm9sbG1lbnQtZml4dHVyZTAgFw0yNjA5
+        MTExNDUyMjBaGA8yMTI2MDgxODE0NTIyMFowJzElMCMGA1UEAwwcd2VuZHktZTJl
+        LWVucm9sbG1lbnQtZml4dHVyZTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBH8
+        ywsez8b1erKR+4KxWiVRcwI3S2riPUP/0nezDUcGHyF9tovWQW/cSocCKd9uKH1r
+        MJqM9znLH2QJvOuRwcujUzBRMB0GA1UdDgQWBBTjVer+3dkaplly/DRGC+M3xDxf
+        4DAfBgNVHSMEGDAWgBTjVer+3dkaplly/DRGC+M3xDxf4DAPBgNVHRMBAf8EBTAD
+        AQH/MAoGCCqGSM49BAMCA0gAMEUCIEaXvy0EmVWHcjkE19UNT2raDTGTsnVLn/Md
+        6c1KxbnZAiEAm6p88NdgpobBIEs2EaMxL/jpWYo/FXz/W8m8oCb5RYU=
+        -----END CERTIFICATE-----
+        """
 }

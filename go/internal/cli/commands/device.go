@@ -20,6 +20,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -783,14 +784,24 @@ func newDeviceEnrollCmd() *cobra.Command {
 	var name string
 	var cloudGRPC string
 	var orgID int32
+	var acmeDirectoryURL string
 
 	cmd := &cobra.Command{
 		Use:    "enroll",
 		Short:  "Enroll this device with Wendy Cloud or a local pki-core",
-		Long:   "Creates an enrollment token using your stored auth session and provisions the connected device with mTLS certificates. Run 'wendy cloud login' first.",
+		Long:   "Enrolls the connected device using your stored auth session. OIDC accounts use direct PKI enrollment through Cloud's enrollment relay; legacy accounts use Cloud enrollment. Run 'wendy auth login' first.",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			auth, err := resolveAuthEntry(cloudGRPC)
+			if err != nil {
+				return err
+			}
+			auth, err = prepareEnrollmentAuth(ctx, auth)
+			if err != nil {
+				return err
+			}
 
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
 			if err != nil {
@@ -800,17 +811,13 @@ func newDeviceEnrollCmd() *cobra.Command {
 
 			promptWifiIfNeeded(ctx, conn)
 
-			auth, err := pickAuthEntry(cloudGRPC)
-			if err != nil {
-				return err
-			}
-
-			return runEnrollDevice(ctx, conn, auth, name, orgID)
+			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
 		},
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Device name")
-	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID to enroll into; skips the interactive org picker (required in non-interactive/--json runs when you belong to multiple orgs)")
+	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
+	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use (optional when a default session is set via 'wendy auth use')")
 	return cmd
 }
@@ -876,18 +883,14 @@ func defaultEnrollmentName(host string) string {
 	return strings.TrimSuffix(h, ".local")
 }
 
-func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32) error {
-	if len(auth.Certificates) == 0 {
-		return fmt.Errorf("selected auth entry has no certificates; re-run 'wendy auth login'")
-	}
-
+func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string, error) {
 	if name == "" {
 		defaultName := defaultEnrollmentName(conn.Host)
 		if !isInteractiveTerminal() {
 			if defaultName != "" {
 				name = defaultName
 			} else {
-				return fmt.Errorf("device name is required; pass --name when not running interactively")
+				return "", fmt.Errorf("device name is required; pass --name when not running interactively")
 			}
 		} else {
 			prompt := "Device name"
@@ -902,14 +905,39 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 				name = defaultName
 			}
 			if name == "" {
-				return fmt.Errorf("device name is required")
+				return "", fmt.Errorf("device name is required")
 			}
 		}
 	}
 
+	return name, nil
+}
+
+func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, acmeDirectoryURLs ...string) error {
 	if auth == nil || len(auth.Certificates) == 0 {
-		return fmt.Errorf("missing authentication certificate in selected auth entry")
+		return validateEnrollmentCertificate(auth)
 	}
+	acmeDirectoryURL := ""
+	if len(acmeDirectoryURLs) > 0 {
+		acmeDirectoryURL = acmeDirectoryURLs[0]
+	}
+	if auth.OAuthIssuer == "" && acmeDirectoryURL != "" {
+		return fmt.Errorf("--acme-directory-url requires an OIDC login session")
+	}
+	if err := validateEnrollmentCertificate(auth); err != nil {
+		return err
+	}
+	// Only the new login flow uses direct PKI enrollment. Imported certificates
+	// and legacy sessions retain the Cloud enrollment contract.
+	if auth.OAuthIssuer != "" {
+		return runOIDCEnrollDevice(ctx, conn, auth, name, orgOverride, acmeDirectoryURL)
+	}
+
+	name, err := enrollmentDeviceName(conn, name)
+	if err != nil {
+		return err
+	}
+
 	cert := auth.Certificates[0]
 
 	var cloudTransport grpc.DialOption
@@ -931,7 +959,11 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	} else {
 		cloudTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	cloudConn, err := grpc.NewClient(auth.CloudGRPC, cloudTransport)
+	dialOptions, err := withCloudRequestSigning(auth, cloudTransport)
+	if err != nil {
+		return err
+	}
+	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return fmt.Errorf("connecting to cloud: %w", err)
 	}
@@ -942,25 +974,22 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return err
 	}
 
-	var org OrgResolution
+	// The selected session already identifies the enrollment organization.
+	// Avoid requiring the organization-listing API just to enroll a device.
+	orgID := int32(cert.OrganizationID)
 	if orgOverride != 0 {
-		// Explicit --org: use it directly (the cloud rejects it if the caller
-		// isn't a member), skipping org listing and the interactive picker.
-		org = OrgResolution{ID: orgOverride, Name: fmt.Sprintf("org %d", orgOverride)}
-	} else {
-		var orgErr error
-		org, orgErr = resolveOrg(ctx, auth, false)
-		if orgErr != nil {
-			return fmt.Errorf("resolving organization: %w", orgErr)
-		}
+		orgID = orgOverride
 	}
 
 	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
 	tokenResp, err := certClient.CreateAssetEnrollmentToken(tokenCtx, &cloudpb.CreateAssetEnrollmentTokenRequest{
-		OrganizationId: org.ID,
+		OrganizationId: orgID,
 		Name:           name,
 		TtlSeconds:     600,
 	})
+	if status.Code(err) == codes.Unimplemented {
+		return fmt.Errorf("this Cloud deployment does not support legacy device enrollment; sign in with 'wendy auth login --email <your-email>' and retry: %w", err)
+	}
 	if err != nil {
 		return fmt.Errorf("creating enrollment token: %w", err)
 	}
@@ -976,12 +1005,28 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		return fmt.Errorf("enrolling device: %w", err)
 	}
 
-	fmt.Printf("Device enrolled (org: %s / ID: %d, asset: %d).\n",
-		org.Name, tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
+	fmt.Printf("Device enrolled (org: %d, asset: %d).\n",
+		tokenResp.GetOrganizationId(), tokenResp.GetAssetId())
 	return nil
 }
 
 func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
+	auth, err := resolveAuthEntry(cloudGRPC)
+	if err != nil {
+		return nil, err
+	}
+	// Renew while the certificate is still valid. This shared picker has no
+	// caller context; renewal applies its own request timeout. Enrollment uses
+	// prepareEnrollmentAuth instead so expiry can trigger login before work.
+	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
+		reportStaleCertificate(rerr)
+	}
+	return auth, nil
+}
+
+// resolveAuthEntry selects a session without renewing or warning, so enrollment
+// can handle expired credentials before connecting to a device or prompting.
+func resolveAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)
@@ -998,6 +1043,28 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 		pick = pickAuthSessionFn
 	}
 	return config.ResolveAuth(cfg, cloudGRPC, pick)
+}
+
+// reportStaleCertificate prints why the stored certificate could not be renewed
+// and what to do about it. It does not fail the command: the connection attempt
+// is still worth making — the certificate may be accepted anyway, and a
+// connection error carries better context than a guess made here.
+func reportStaleCertificate(err error) {
+	if jsonOutput {
+		return
+	}
+	fmt.Fprintln(os.Stderr, tui.WarningMessage(capitalizeFirst(err.Error())+"."))
+	fmt.Fprintln(os.Stderr, "  Sign in again to get a new one: wendy auth login")
+}
+
+// capitalizeFirst upper-cases the first rune so an error string reads as a
+// sentence when printed as one.
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	return string(unicode.ToUpper(r[0])) + string(r[1:])
 }
 
 func newDeviceUnenrollCmd() *cobra.Command {
@@ -1135,7 +1202,11 @@ func dialCloud(ctx context.Context, target, deviceCloudHost string) (*grpc.Clien
 		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
 
-	cloudConn, dialErr := grpc.NewClient(auth.CloudGRPC, transport)
+	dialOptions, dialErr := withCloudRequestSigning(auth, transport)
+	if dialErr != nil {
+		return nil, nil, dialErr
+	}
+	cloudConn, dialErr := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if dialErr != nil {
 		return nil, nil, fmt.Errorf("connecting to cloud: %w", dialErr)
 	}

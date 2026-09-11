@@ -289,19 +289,13 @@ func newAgentTLSConfig(
 	mismatch *atomic.Pointer[certs.IdentityMismatchError],
 	pinMismatch *atomic.Pointer[devicepin.PinMismatchError],
 ) (*tls.Config, error) {
-	// Only load the leaf cert — not the chain. Go's TLS library calls
-	// x509.ParseCertificate on every cert sent in the handshake, and ML-DSA
-	// chain certs (from pki-core) cause parse failures on the agent's server.
-	// The agent's VerifyPeerCertificate callback verifies the client cert via
-	// its own ML-DSA-aware CA pool without needing the chain in the handshake.
+	// Present normalized issuers so the agent can validate an operator signed
+	// by a sibling authority under its trusted tenant CA.
 	keyPEM, err := certInfo.PrivateKeyPEM()
 	if err != nil {
 		return nil, fmt.Errorf("loading client key: %w", err)
 	}
-	cert, err := tls.X509KeyPair(
-		[]byte(certInfo.PemCertificate),
-		[]byte(keyPEM),
-	)
+	cert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading TLS cert: %w", err)
 	}

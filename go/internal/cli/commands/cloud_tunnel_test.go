@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -12,8 +13,36 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	"google.golang.org/grpc/metadata"
 )
+
+func TestCloudContextSupportsFreshTokenOnlySession(t *testing.T) {
+	auth := &config.AuthConfig{
+		APIKey:         "access-token",
+		OAuthIssuer:    "https://auth.dev.wendy.sh/realms/acme",
+		OAuthExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	}
+	ctx, err := cloudContext(context.Background(), auth)
+	if err != nil {
+		t.Fatalf("cloudContext: %v", err)
+	}
+	md, ok := metadata.FromOutgoingContext(ctx)
+	if !ok || len(md.Get("authorization")) != 1 || md.Get("authorization")[0] != "Bearer access-token" {
+		t.Fatalf("authorization metadata = %v", md.Get("authorization"))
+	}
+}
+
+func TestDialCloudGRPCSupportsTokenOnlyPublicTLS(t *testing.T) {
+	conn, err := dialCloudGRPC(&config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", APIKey: "access-token"})
+	if err != nil {
+		t.Fatalf("dialCloudGRPC: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
 
 func TestParseTunnelArg(t *testing.T) {
 	tests := []struct {

@@ -23,30 +23,30 @@ func testEnrollmentToken(t *testing.T, payload string) string {
 func TestEnrollmentTokenIdentity_UserEnrollment(t *testing.T) {
 	token := testEnrollmentToken(t, `{"type":"user_enrollment","org_id":1,"user_id":"user-123"}`)
 
-	cn, urn, err := enrollmentTokenIdentity(token)
+	cn, uris, err := enrollmentTokenIdentity(token)
 	if err != nil {
 		t.Fatalf("enrollmentTokenIdentity() error = %v", err)
 	}
 	if cn != "wendy/user/user-123" {
 		t.Fatalf("enrollmentTokenIdentity() cn = %q, want %q", cn, "wendy/user/user-123")
 	}
-	if urn != "urn:wendy:org:1:user:user-123" {
-		t.Fatalf("enrollmentTokenIdentity() urn = %q, want %q", urn, "urn:wendy:org:1:user:user-123")
+	if len(uris) != 1 || uris[0] != "urn:wendy:org:1:user:user-123" {
+		t.Fatalf("enrollmentTokenIdentity() uris = %q, want [urn:wendy:org:1:user:user-123]", uris)
 	}
 }
 
 func TestEnrollmentTokenIdentity_UserEnrollmentMissingOrg(t *testing.T) {
 	token := testEnrollmentToken(t, `{"type":"user_enrollment","user_id":"user-123"}`)
 
-	cn, urn, err := enrollmentTokenIdentity(token)
+	cn, uris, err := enrollmentTokenIdentity(token)
 	if err != nil {
 		t.Fatalf("enrollmentTokenIdentity() error = %v, want nil (legacy org-less token should keep login working)", err)
 	}
 	if cn != "wendy/user/user-123" {
 		t.Fatalf("enrollmentTokenIdentity() cn = %q, want %q", cn, "wendy/user/user-123")
 	}
-	if urn != "" {
-		t.Fatalf("enrollmentTokenIdentity() urn = %q, want empty (CN-only for org-less token)", urn)
+	if len(uris) != 0 {
+		t.Fatalf("enrollmentTokenIdentity() uris = %q, want none (CN-only for org-less token)", uris)
 	}
 }
 
@@ -61,15 +61,15 @@ func TestEnrollmentTokenIdentity_UserEnrollmentUserIDContainsColon(t *testing.T)
 func TestEnrollmentTokenIdentity_AssetEnrollment(t *testing.T) {
 	token := testEnrollmentToken(t, `{"type":"asset_enrollment","org_id":7,"asset_id":42}`)
 
-	cn, urn, err := enrollmentTokenIdentity(token)
+	cn, uris, err := enrollmentTokenIdentity(token)
 	if err != nil {
 		t.Fatalf("enrollmentTokenIdentity() error = %v", err)
 	}
 	if cn != "wendy/7/42" {
 		t.Fatalf("enrollmentTokenIdentity() cn = %q, want %q", cn, "wendy/7/42")
 	}
-	if urn != "urn:wendy:org:7:asset:42" {
-		t.Fatalf("enrollmentTokenIdentity() urn = %q, want %q", urn, "urn:wendy:org:7:asset:42")
+	if len(uris) != 1 || uris[0] != "urn:wendy:org:7:asset:42" {
+		t.Fatalf("enrollmentTokenIdentity() uris = %q, want [urn:wendy:org:7:asset:42]", uris)
 	}
 }
 

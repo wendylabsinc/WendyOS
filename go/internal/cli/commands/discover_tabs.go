@@ -39,6 +39,7 @@ func newDiscoverTabsModel(ctx context.Context, local discoverModel, auth *config
 		local:      local,
 		sim:        newSimulatorListModel(ctx),
 		cloudAuth:  auth,
+		cloudOrg:   cachedCloudOrganizationName(auth),
 		defaultOrg: defaultOrg,
 		active:     active,
 	}
@@ -104,20 +105,15 @@ func (m discoverTabsModel) startCloudCmd() tea.Cmd {
 
 func (m discoverTabsModel) loadOrgNameCmd() tea.Cmd {
 	ctx := m.cloud.ctx
-	auth := m.cloudAuth
-	orgID := cloudAuthOrgID(auth)
-	return func() tea.Msg {
-		orgs, err := listOrgsFromCloud(ctx, auth)
-		if err != nil {
-			return discoverTabsOrgMsg{}
-		}
-		for _, org := range orgs {
-			if org.GetId() == orgID {
-				return discoverTabsOrgMsg{name: org.GetName()}
-			}
-		}
-		return discoverTabsOrgMsg{}
+	// Snapshot before the batch starts: device scanning can refresh the live
+	// session concurrently with this display-only lookup.
+	var auth *config.AuthConfig
+	if m.cloudAuth != nil {
+		copy := *m.cloudAuth
+		copy.Certificates = append([]config.CertificateInfo(nil), m.cloudAuth.Certificates...)
+		auth = &copy
 	}
+	return func() tea.Msg { return discoverTabsOrgMsg{name: cloudOrganizationName(ctx, auth)} }
 }
 
 func (m discoverTabsModel) updateLocal(msg tea.Msg) (discoverTabsModel, tea.Cmd) {
@@ -173,7 +169,9 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.updateCloud(msg.msg)
 	case discoverTabsOrgMsg:
-		m.cloudOrg = msg.name
+		if msg.name != "" {
+			m.cloudOrg = msg.name
+		}
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width

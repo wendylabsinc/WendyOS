@@ -131,7 +131,7 @@ func main() {
 		log.Fatalf("GenerateKeyPair: %v", err)
 	}
 
-	clientCSRPEM, err := certs.GenerateCSR([]byte(clientKeyPEM), "sh/wendy/test-client", "")
+	clientCSRPEM, err := certs.GenerateCSR([]byte(clientKeyPEM), "sh/wendy/test-client", nil)
 	if err != nil {
 		log.Fatalf("GenerateCSR: %v", err)
 	}

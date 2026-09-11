@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+// DeviceEnrollmentService turns "add a device" into a device that can actually enroll
+// (WDY-2924, AAA flow 5).
+//
+// THE PROBLEM IT CLOSES. pki-core's ACME directory advertises externalAccountRequired, so a
+// device cannot enroll without an EAB credential, and until now cloud had no surface that
+// could mint one: the only paths were direct engine mTLS (CreateEABKey, deliberately not on
+// FabricManagementService) or a hand-built operator-signed RelayEnrollment. Sem's ruling of
+// 2026-09-06 is that no credential is hand-minted -- the automatic flow must work.
+//
+// Downstream of that, this is also the missing writer migration 000059 named. That migration
+// added assets.pki_device_name and said in its own comment that "device enrollment against
+// pki-core is not built ... Every row is NULL today, and the image-assignment query therefore
+// DENIES every pull". Enrolling through this RPC is the first thing in the system that learns
+// a device's pki-core name and records it, so it closes an authorization path that currently
+// fails closed for the whole fleet.
+//
+// CLOUD IS A PURE RELAY, NEVER THE ISSUER (AAA D7). The authority is the operator's own
+// signature on the enrollment request, verified by pki-core against the tenant's Operator
+// Authority pool with a live revocation check. Cloud cannot sign one: its signing key is the
+// grant key, and pki-core's verifier would refuse it.
+//
+// TWO SIGNATURES, DELIBERATELY NOT COLLAPSED. The caller signs the REQUEST (the ordinary
+// x-wendy-request-signature envelope, since this is an authorization-gated mutation) and
+// separately signs the enrollment request carried in `enrollment_request_jws`. Same operator,
+// same key, two different scopes: reusing one for the other would either widen the request
+// signature into an enrollment authority or narrow the enrollment artifact into a transport
+// detail.
+//
+// Cloud-owned and outside the shared service-protos submodule, for the reason
+// OrganizationInviteService and OrganizationProvisioningService give in their own headers:
+// what crosses the fabric is pki-core's contract and lives there; this RPC is the shape of
+// cloud's OWN add-device surface, which no other service participates in.
+service DeviceEnrollmentService {
+  // Registers a device and returns its enrollment credential, once.
+  rpc EnrollDevice(EnrollDeviceRequest) returns (EnrollDeviceResponse);
+}
+
+// The device tier, which pki-core maps to a credential kind and to whether hardware
+// attestation is demanded. Cloud does not choose the mapping and does not send a profile:
+// class is what goes on the wire and pki-core derives the rest (A/B -> EAB device-tier-a/b,
+// C -> an EST enrollment token; class A implies attestation_required).
+enum DeviceClass {
+  DEVICE_CLASS_UNSPECIFIED = 0;
+  DEVICE_CLASS_A = 1;
+  DEVICE_CLASS_B = 2;
+  DEVICE_CLASS_C = 3;
+}
+
+message EnrollDeviceRequest {
+  // The name pki-core will know this device by, and the one irreversible field here: it is
+  // fixed at mint and becomes the permanent SPIFFE SAN
+  // spiffe://wendy.sh/tenant/<tenant>/device/<device_id>, carried across every renewal.
+  //
+  // It MUST equal the device_id inside enrollment_request_jws. Cloud checks that and refuses
+  // on disagreement -- see the note on enrollment_request_jws.
+  //
+  // A "/"-separated path, each segment matching ^[A-Za-z0-9._-]{1,64}$, no empty, "." or ".."
+  // segment, no leading or trailing "/". Multi-segment is legal and intended ("fleet-a/box-01").
+  string device_id = 1;
+
+  DeviceClass device_class = 2;
+
+  // The operator-signed enrollment request: a compact JWS with an x5c chain to an operator
+  // leaf under the tenant's Operator Authority. Relayed to pki-core BYTE-IDENTICALLY -- cloud
+  // decodes a copy of the payload to cross-check it and never re-serializes what it forwards,
+  // because any re-encoding would break the signature.
+  //
+  // Cloud's cross-check is a CONSISTENCY check, not an authorization one. pki-core already
+  // compares the JWS tenant against the envelope tenant, but it never compares the JWS
+  // device_id against anything -- it mints the SAN straight from it. Cloud is the only party
+  // holding both the operator's typed device_id and the signed one, so a mismatch caught
+  // anywhere else is a mismatch caught nowhere: the asset row would record a name pki-core
+  // never minted, and that device's image pulls would be denied forever with nothing to show
+  // why. On mismatch cloud refuses and reports both values rather than "correcting" either.
+  bytes enrollment_request_jws = 3;
+
+  // Display name and free-text details for the asset row. Cosmetic; unlike device_id they can
+  // be changed later and mean nothing to pki-core.
+  string name = 4;
+  string details = 5;
+}
+
+// The enrollment credential, returned INLINE AND EXACTLY ONCE.
+//
+// There is no second read and no retrieval RPC, because there is nothing to retrieve: cloud
+// persists the key id (so an operator can recognise which credential a device holds) and never
+// the secret. A caller that loses this response re-enrolls; that is the intended recovery and
+// it is cheaper than a stored secret nobody needed.
+message EnrollDeviceResponse {
+  // Cloud's asset id for the device row this call created.
+  string asset_id = 1;
+  // "eab" for class A/B, "enrollment_token" for class C. pki-core's word, relayed unchanged.
+  string credential_kind = 2;
+
+  // Class A/B. The hmac key is hex and is the once-only secret.
+  string eab_key_id = 3;
+  string eab_hmac_key = 4;
+
+  // Class C. token_value is the once-only secret.
+  string token_id = 5;
+  string token_value = 6;
+  // RFC 3339, for the class C token. Empty for EAB.
+  string expires_at = 7;
+}

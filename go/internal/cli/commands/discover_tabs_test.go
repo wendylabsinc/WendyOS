@@ -77,7 +77,7 @@ func TestDiscoverTabsStartsCloudLazilyAndShowsDefaultOrg(t *testing.T) {
 	}
 	updated, _ := m.Update(discoverTabsOrgMsg{name: "Robotics"})
 	m = updated.(discoverTabsModel)
-	for _, want := range []string{"Organization: Robotics (org 7)", "default", "o switch"} {
+	for _, want := range []string{"Organization: Robotics", "default", "o switch"} {
 		if !strings.Contains(m.View(), want) {
 			t.Fatalf("cloud discover view does not contain %q: %q", want, m.View())
 		}

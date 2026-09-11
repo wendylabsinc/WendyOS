@@ -115,7 +115,6 @@ CLOUD_PROTOS=(
     "cloud/mesh.proto"
     "cloud/notifications.proto"
     "cloud/organizations.proto"
-    "cloud/remote_logging.proto"
     "cloud/tunnel.proto"
     "cloud/users.proto"
 )
@@ -124,6 +123,34 @@ CLOUD_M_OPTS=""
 for p in "${CLOUD_PROTOS[@]}"; do
     CLOUD_M_OPTS="$CLOUD_M_OPTS --go_opt=M${p}=${CLOUD_PKG}"
     CLOUD_M_OPTS="$CLOUD_M_OPTS --go-grpc_opt=M${p}=${CLOUD_PKG}"
+done
+
+# ---- Cloud v2 protos ----
+# wendycloud.v2 is vendored beside v1, not instead of it: v1 stays the shipping
+# wire contract until the fleet has crossed over (WDY-2824). Paths match
+# service-protos exactly so a re-copy is a plain cp and the imports need no
+# rewriting. DeviceEnrollmentService is Cloud-owned rather than shared; its
+# source is vendored under go/proto/cloud and supplied as an extra include root.
+CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
+CLOUD_V2_PROTOS=(
+    "wendycloud/v2/device_enrollment.proto"
+    "wendycloud/v2/apps.proto"
+    "wendycloud/v2/assets.proto"
+    "wendycloud/v2/certificates.proto"
+    "wendycloud/v2/deployments.proto"
+    "wendycloud/v2/mesh.proto"
+    "wendycloud/v2/notifications.proto"
+    "wendycloud/v2/organizations.proto"
+    "wendycloud/v2/tunnel.proto"
+    "wendycloud/v2/users.proto"
+)
+
+# The import path ends in "/v2", which would name the Go package "v2"; the
+# ";cloudpbv2" suffix pins a usable name without editing the vendored protos.
+CLOUD_V2_M_OPTS=""
+for p in "${CLOUD_V2_PROTOS[@]}"; do
+    CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
+    CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go-grpc_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
 done
 
 # ---- Wendy System API protos ----
@@ -139,7 +166,7 @@ for p in "${SYSTEM_PROTOS[@]}"; do
 done
 
 # All M opts combined for cross-package imports
-ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $SYSTEM_M_OPTS"
+ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_M_OPTS $SYSTEM_M_OPTS"
 
 echo "Generating Wendy Agent protos..."
 mkdir -p "$GEN_DIR/agentpb"
@@ -173,6 +200,18 @@ protoc \
     --go-grpc_out="$GEN_DIR/cloudpb" \
     --go-grpc_opt=module="$CLOUD_PKG" \
     ${CLOUD_PROTOS[@]}
+
+echo "Generating Wendy Cloud v2 protos..."
+mkdir -p "$GEN_DIR/cloudpb/v2"
+protoc \
+    --proto_path="$GO_DIR/proto/cloud" \
+    --proto_path="$PROTO_DIR" \
+    --go_out="$GEN_DIR/cloudpb/v2" \
+    --go_opt=module="$CLOUD_V2_PKG" \
+    $ALL_M_OPTS \
+    --go-grpc_out="$GEN_DIR/cloudpb/v2" \
+    --go-grpc_opt=module="$CLOUD_V2_PKG" \
+    ${CLOUD_V2_PROTOS[@]}
 
 echo "Generating Wendy System API protos..."
 mkdir -p "$GEN_DIR/systempb"
@@ -225,3 +264,16 @@ protoc \
     "$PROTO_DIR/wendy/lite/sensorlink.proto"
 
 echo "Proto generation complete!"
+
+# Cloud-authorized relay contract (service-protos fe42be2). Crypto domain
+# separators remain v1; the RPC package and UUID asset identifiers are v2.
+RELAY_PKG="$MODULE/go/proto/gen/relaypb"
+AUTH_PKG="$MODULE/go/proto/gen/wendyauthpb"
+protoc --proto_path="$PROTO_DIR" \
+    --go_out="$GO_DIR" --go_opt=module="$MODULE/go" \
+    --go_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
+    --go_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
+    --go-grpc_out="$GO_DIR" --go-grpc_opt=module="$MODULE/go" \
+    --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
+    --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
+    wendycloud/tunnel/v2/tunnel.proto wendyauth/v1/envelope.proto

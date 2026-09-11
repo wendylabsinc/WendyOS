@@ -50,12 +50,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Fetch PR metadata and diff
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           metadata_tmp="$(mktemp)"
@@ -69,12 +72,18 @@ jobs:
             echo "::error::Could not fetch PR metadata; no security review was performed."
             exit 1
           fi
-          if ! gh api \
-            -H "Accept: application/vnd.github.diff" \
-            "repos/$REPO/pulls/$PR_NUMBER" > "$diff_tmp"
-          then
-            echo "::error::Could not fetch the PR diff; no security review was performed."
-            exit 1
+          jq -e --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.head.sha == $head and .base.sha == $base' "$metadata_tmp" > /dev/null
+          if [[ "$IS_DEPENDABOT" == 'true' ]]; then
+            # Dependabot never checks out repository code. Its dependency-only
+            # policy still validates the complete API diff and changed-file counts.
+            gh api -H "Accept: application/vnd.github.diff" \
+              "repos/$REPO/pulls/$PR_NUMBER" > "$diff_tmp"
+          else
+            # Generate the complete patch from immutable commits. The GitHub
+            # diff endpoint rejects PRs above 20,000 lines.
+            git diff --no-ext-diff --no-textconv --find-renames \
+              "$EXPECTED_BASE_SHA...$EXPECTED_HEAD_SHA" > "$diff_tmp"
           fi
 
           jq '{title, body, number, additions, deletions, changed_files, user: {login: .user.login, id: .user.id, type: .user.type}, head: {ref: .head.ref, repo: .head.repo.full_name, sha: .head.sha}}' \
@@ -316,7 +325,9 @@ jobs:
 
       - name: Test security review automation
         if: env.IS_DEPENDABOT != 'true'
-        run: python3 .github/scripts/security_review_test.py
+        run: |
+          python3 .github/scripts/review_diff_test.py
+          python3 .github/scripts/security_review_test.py
 
       - name: Validate complete review input
         if: env.IS_DEPENDABOT != 'true'

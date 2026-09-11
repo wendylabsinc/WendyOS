@@ -16,7 +16,7 @@ func TestEvaluateDevicePin(t *testing.T) {
 		t.Fatalf("unpinned host: want PinFirstUse, got %v", v)
 	}
 
-	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42")
+	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42", "")
 
 	// Same org + cloud + asset (e.g. a renewed cert) must match.
 	if v := c.EvaluateDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42"); v != PinMatch {
@@ -39,7 +39,7 @@ func TestEvaluateDevicePin(t *testing.T) {
 // every device in the fleet shares it.
 func TestEvaluateDevicePinDifferentAssetIsMismatch(t *testing.T) {
 	c := &Config{}
-	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42")
+	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42", "")
 
 	if v := c.EvaluateDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "43"); v != PinMismatch {
 		t.Fatalf("asset change within same org+cloud: want PinMismatch, got %v", v)
@@ -69,7 +69,7 @@ func TestEvaluateDevicePinAdoptsAssetForLegacyPin(t *testing.T) {
 // as a swapped device against a pin that does record one.
 func TestEvaluateDevicePinUnknownObservedAssetMatches(t *testing.T) {
 	c := &Config{}
-	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42")
+	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42", "")
 
 	if v := c.EvaluateDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", ""); v != PinMatch {
 		t.Fatalf("unidentifiable asset: want PinMatch, got %v", v)
@@ -80,7 +80,7 @@ func TestEvaluateDevicePinUnknownObservedAssetMatches(t *testing.T) {
 // (case, trailing dot, .local) don't spuriously read as a different device.
 func TestEvaluateDevicePinNormalizesHostname(t *testing.T) {
 	c := &Config{}
-	c.SetDevicePin("Wendy-Thor.local.", 7, "grpc.wendy.dev:443", "42")
+	c.SetDevicePin("Wendy-Thor.local.", 7, "grpc.wendy.dev:443", "42", "")
 	if v := c.EvaluateDevicePin("wendy-thor", 7, "grpc.wendy.dev:443", "42"); v != PinMatch {
 		t.Fatalf("normalized host should match pin, got %v", v)
 	}
@@ -91,7 +91,7 @@ func TestEvaluateDevicePinNormalizesHostname(t *testing.T) {
 // device's next enrollment reads as a first use.
 func TestClearDevicePin(t *testing.T) {
 	c := &Config{}
-	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42")
+	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42", "")
 
 	c.ClearDevicePin("Wendy-Thor.local.") // cosmetic variant must hit the same key
 	if _, ok := c.DevicePinFor("wendy-thor"); ok {
@@ -106,7 +106,7 @@ func TestClearDevicePin(t *testing.T) {
 
 func TestDevicePinRoundTripsThroughConfig(t *testing.T) {
 	c := &Config{}
-	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42")
+	c.SetDevicePin("wendy-thor.local", 7, "grpc.wendy.dev:443", "42", "")
 
 	data, err := json.Marshal(c)
 	if err != nil {
@@ -131,8 +131,8 @@ func TestDevicePinSourcePrecedence(t *testing.T) {
 
 	t.Run("cloud write overwrites a lan pin", func(t *testing.T) {
 		c := &Config{}
-		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "42", PinSourceLAN)
-		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "99", PinSourceCloud)
+		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "42", "", PinSourceLAN)
+		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "99", "", PinSourceCloud)
 
 		pin, _ := c.DevicePinFor(host)
 		if pin.AssetID != "99" || pin.Source != PinSourceCloud {
@@ -142,7 +142,7 @@ func TestDevicePinSourcePrecedence(t *testing.T) {
 
 	t.Run("lan observation conflicting with a cloud pin is a mismatch", func(t *testing.T) {
 		c := &Config{}
-		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "42", PinSourceCloud)
+		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "42", "", PinSourceCloud)
 		if v := c.EvaluateDevicePin(host, 7, "grpc.wendy.dev:443", "43"); v != PinMismatch {
 			t.Fatalf("want PinMismatch, got %v", v)
 		}
@@ -150,7 +150,7 @@ func TestDevicePinSourcePrecedence(t *testing.T) {
 
 	t.Run("lan never backfills an asset into a cloud pin", func(t *testing.T) {
 		c := &Config{}
-		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "", PinSourceCloud)
+		c.SetDevicePinFrom(host, 7, "grpc.wendy.dev:443", "", "", PinSourceCloud)
 		if v := c.EvaluateDevicePin(host, 7, "grpc.wendy.dev:443", "42"); v != PinMatch {
 			t.Fatalf("want PinMatch without adoption, got %v", v)
 		}

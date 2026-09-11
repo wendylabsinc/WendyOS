@@ -1,0 +1,150 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+import "google/protobuf/timestamp.proto";
+
+service OrganizationService {
+  rpc CreateOrganization(CreateOrganizationRequest) returns (Organization);
+  rpc GetOrganization(GetOrganizationRequest) returns (Organization);
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (Organization);
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns (DeleteOrganizationResponse);
+  rpc ListOrganizations(ListOrganizationsRequest) returns (stream ListOrganizationsResponse);
+
+  rpc AddMember(AddMemberRequest) returns (OrganizationMember);
+  rpc AddMembersByEmails(AddMembersByEmailsRequest) returns (AddMembersByEmailsResponse);
+  rpc UpdateMemberRole(UpdateMemberRoleRequest) returns (OrganizationMember);
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+  rpc TransferOwnership(TransferOwnershipRequest) returns (TransferOwnershipResponse);
+}
+
+enum OrganizationRole {
+  ORGANIZATION_ROLE_UNSPECIFIED = 0;
+  ORGANIZATION_ROLE_OWNER = 1;
+  ORGANIZATION_ROLE_ADMIN = 2;
+  ORGANIZATION_ROLE_BILLING_MANAGER = 3;
+  ORGANIZATION_ROLE_MEMBER = 4;
+  ORGANIZATION_ROLE_VIEWER = 5;
+}
+
+message Organization {
+  string id = 1;
+  string name = 2;
+  string details = 3;
+  optional string domain = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  optional string user_id = 7;
+  optional string slug = 8;
+}
+
+message OrganizationMember {
+  string id = 1;
+  string organization_id = 2;
+  string user_id = 3;
+  OrganizationRole role = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message CreateOrganizationRequest {
+  string name = 1;
+  string details = 2;
+  optional string domain = 3;
+}
+
+message GetOrganizationRequest {
+  string id = 1;
+}
+
+message UpdateOrganizationRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string details = 3;
+  optional string domain = 4;
+  optional string slug = 5;
+}
+
+message DeleteOrganizationRequest {
+  string id = 1;
+}
+
+message DeleteOrganizationResponse {
+  bool success = 1;
+}
+
+message ListOrganizationsRequest {
+  optional int32 offset = 1;
+  optional int32 limit = 2;
+  // Free-text search over organization name and domain, case-insensitive
+  // substring match. Empty or unset returns the unfiltered list. Applied
+  // server-side before offset/limit, so it searches every organization the
+  // caller can see rather than only the current page.
+  optional string query = 3;
+}
+
+message ListOrganizationsResponse {
+  Organization organization = 1;
+  int32 total = 2;
+}
+
+message AddMemberRequest {
+  string organization_id = 1;
+  string user_id = 2;
+  OrganizationRole role = 3;
+}
+
+message UpdateMemberRoleRequest {
+  string user_id = 1;
+  string organization_id = 2;
+  OrganizationRole role = 3;
+}
+
+message RemoveMemberRequest {
+  string organization_id = 1;
+  string user_id = 2;
+}
+
+message RemoveMemberResponse {
+  bool success = 1;
+}
+
+message ListMembersRequest {
+  string organization_id = 1;
+}
+
+message ListMembersResponse {
+  repeated OrganizationMember members = 1;
+}
+
+message EmailWithRole {
+  string email = 1;
+  OrganizationRole role = 2;
+}
+
+message AddMembersByEmailsRequest {
+  string organization_id = 1;
+  repeated EmailWithRole members = 2;
+}
+
+message AddMemberResult {
+  string email = 1;
+  bool success = 2;
+  string error = 3;
+  OrganizationMember member = 4;
+}
+
+message AddMembersByEmailsResponse {
+  repeated AddMemberResult results = 1;
+}
+
+message TransferOwnershipRequest {
+  string organization_id = 1;
+  string new_owner_user_id = 2;
+}
+
+message TransferOwnershipResponse {
+  OrganizationMember new_owner = 1;
+  OrganizationMember previous_owner = 2;
+}

@@ -82,16 +82,29 @@ func cloudTunnelCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL st
 	}
 
 	cliLogln("Fetching device list from cloud...")
-	asset, err := pickCloudDevice(ctx, auth, deviceName, brokerURL)
+	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return err
 	}
 
-	brokerConn, err := clouddefaults.DialBroker(auth, brokerURL)
-	if err != nil {
-		return err
+	var brokerConn *grpc.ClientConn
+	if asset.legacy != nil {
+		brokerConn, err = clouddefaults.DialBroker(auth, brokerURL)
+		if err != nil {
+			return err
+		}
+		defer brokerConn.Close()
+	} else {
+		if udp {
+			return fmt.Errorf("Cloud's authorized service catalog does not expose UDP forwarding")
+		}
+		if remotePort != 22 && remotePort != 50052 {
+			return fmt.Errorf("Cloud's authorized service catalog has no service for port %d", remotePort)
+		}
+		if brokerURL != "" {
+			return fmt.Errorf("Cloud selects the authorized relay; --broker-url is supported only for legacy sessions")
+		}
 	}
-	defer brokerConn.Close()
 
 	if udp {
 		pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(localPort)})
@@ -99,7 +112,7 @@ func cloudTunnelCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL st
 			return fmt.Errorf("listening on udp 127.0.0.1:%d: %w", localPort, err)
 		}
 		defer pc.Close()
-		session, err := openDatagramSession(ctx, brokerConn, auth, asset.GetId())
+		session, err := openDatagramSession(ctx, brokerConn, auth, asset.legacy.GetId())
 		if err != nil {
 			return datagramOpenError(err, asset.GetName())
 		}
@@ -137,8 +150,27 @@ func cloudTunnelCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL st
 			}
 			return fmt.Errorf("accepting connection: %w", err)
 		}
-		go serveTunnelConn(ctx, tcpConn, brokerConn, auth, asset.GetId(), remotePort)
+		go serveSelectedTunnelConn(ctx, tcpConn, brokerConn, auth, asset, remotePort)
 	}
+}
+
+func serveSelectedTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.ClientConn, auth *config.AuthConfig, asset cloudDiscoveryDevice, remotePort uint32) {
+	defer tcpConn.Close()
+	tunnel, err := asset.openTunnel(ctx, brokerConn, auth, remotePort)
+	if err != nil {
+		cliLogln("Cloud tunnel failed: %v", err)
+		return
+	}
+	defer tunnel.Close()
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(tunnel, tcpConn); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(tcpConn, tunnel); done <- struct{}{} }()
+	select {
+	case <-ctx.Done():
+	case <-done:
+	}
+	_ = tcpConn.Close()
+	_ = tunnel.Close()
 }
 
 func serveTunnelConn(ctx context.Context, tcpConn net.Conn, brokerConn *grpc.ClientConn, auth *config.AuthConfig, assetID int32, remotePort uint32) {

@@ -14,12 +14,19 @@ wendy device enroll [--name <name>] [--cloud-grpc <endpoint>] [flags]
 
 ## Description
 
-`wendy device enroll` creates an enrollment token using your stored auth session, then has the connected agent fetch its certificate. Run [`wendy cloud login`](../cloud/login.md) first.
+`wendy device enroll` uses your stored auth session to enroll the connected agent and obtain its certificate. Sign in first with `wendy auth login --email <your-email>` for OIDC enrollment.
 
-› **Certificate identity:** The CSR submitted during provisioning includes the
-› device's authoritative Wendy identity as a URI Subject Alternative Name
-› (`urn:wendy:org:‹org›:asset:‹assetID›`). The cloud certificate service
-› validates this SAN against the enrollment token at issuance time.
+Before connecting to the device, enrollment checks your certificate and attempts renewal if it is nearing expiry. If it has already expired, an interactive OIDC session offers to sign in again and then continue enrollment using the same realm and Cloud endpoints. Legacy sessions, non-interactive runs, and `--json` runs stop with login instructions. You do not need to log out first.
+
+› **Certificate identity:** The CSR submitted during provisioning always
+› includes the device's authoritative Wendy identity as a URI Subject
+› Alternative Name (`urn:wendy:org:‹org›:asset:‹assetID›`). When the
+› enrollment token carries a `tenant_uuid` claim, a second URI SAN
+› (`spiffe://wendy.sh/tenant/‹uuid›/service/asset-‹assetID›`) is added
+› alongside it — cloud requires that SPIFFE principal to sign a relay grant.
+› Organizations with no pki tenant get no `tenant_uuid` claim and receive only
+› the urn:wendy SAN, exactly as before. The cloud certificate service
+› validates these SANs against the enrollment token at issuance time.
 
 The enrolled device is registered in Wendy Cloud under a human-readable **name**. The name can be changed later with `wendy device rename`, so the command resolves it as follows:
 
@@ -66,5 +73,4 @@ wendy device enroll --device 192.168.1.11 --name lab-pi-01
 - [`wendy install` → Linux Desktop](../install.md) — mint a short-lived enrollment token and embed it in the `agent.sh` one-liner so the device self-enrolls on first startup, without needing a USB connection or a running agent.
 - [`wendy device setup`](./setup.md) — interactive wizard that provisions, configures WiFi, and enrolls in one flow.
 - `wendy cloud enroll-device` — alias for this command, reachable through the cloud tunnel.
-- [`wendy device provision`](./provision.md) — enroll against a self-hosted pki-core instead of Wendy Cloud.
 - `wendy device unenroll` — reverse enrollment and delete the device from Wendy Cloud.

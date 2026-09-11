@@ -191,3 +191,18 @@ func TestCloudFlusher_ScrubsBeforeExport(t *testing.T) {
 		t.Errorf("sensitive attr not scrubbed before export: %+v", attrs)
 	}
 }
+
+func TestTelemetryCloudEndpointPKI(t *testing.T) {
+	endpoint, err := telemetryCloudEndpoint("api.dev.wendy.sh:443", "spiffe://wendy.sh/tenant/t/device/d", "", "")
+	if err != nil || endpoint != "devices.dev.wendy.sh:443" {
+		t.Fatalf("PKI telemetry endpoint=%q,%v", endpoint, err)
+	}
+	endpoint, err = telemetryCloudEndpoint("api.dev.wendy.sh:443", "principal", "https://collector.example:4317", "")
+	if err != nil || endpoint != "collector.example:4317" {
+		t.Fatalf("collector override=%q,%v", endpoint, err)
+	}
+	endpoint, err = telemetryCloudEndpoint("legacy.example:8501", "", "", "")
+	if err != nil || endpoint != "legacy.example:8501" {
+		t.Fatalf("legacy endpoint=%q,%v", endpoint, err)
+	}
+}

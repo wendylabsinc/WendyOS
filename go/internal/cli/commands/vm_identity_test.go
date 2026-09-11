@@ -17,9 +17,9 @@ func TestVMIdentityUsesNameNotLoopbackOrPort(t *testing.T) {
 		}
 	}
 	cfg := &config.Config{}
-	cfg.SetDevicePin("127.0.0.1", 1, "cloud", "old-container")
-	cfg.SetDevicePin("vm:one", 1, "cloud", "one")
-	cfg.SetDevicePin("vm:two", 1, "cloud", "two")
+	cfg.SetDevicePin("127.0.0.1", 1, "cloud", "old-container", "")
+	cfg.SetDevicePin("vm:one", 1, "cloud", "one", "")
+	cfg.SetDevicePin("vm:two", 1, "cloud", "two", "")
 	oldLoad, oldDial := loadConfigForPinFn, dialAgentLadderFn
 	t.Cleanup(func() { loadConfigForPinFn, dialAgentLadderFn = oldLoad, oldDial })
 	loadConfigForPinFn = func() (*config.Config, error) { return cfg, nil }
@@ -52,7 +52,7 @@ func TestVMIdentityUsesNameNotLoopbackOrPort(t *testing.T) {
 
 func TestVMReconnectPreservesAliasAndFullEndpoint(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.SetDevicePin("127.0.0.1", 1, "cloud", "unrelated-container")
+	cfg.SetDevicePin("127.0.0.1", 1, "cloud", "unrelated-container", "")
 	oldLoad, oldDial := loadConfigForPinFn, dialAgentLadderFn
 	t.Cleanup(func() { loadConfigForPinFn, dialAgentLadderFn = oldLoad, oldDial })
 	loadConfigForPinFn = func() (*config.Config, error) { return cfg, nil }
@@ -90,7 +90,7 @@ func TestVMReconnectPreservesAliasAndFullEndpoint(t *testing.T) {
 	}
 	// An identity change after an update must fail immediately, not retry via
 	// generic localhost discovery or an unauthenticated connection.
-	cfg.SetDevicePin("vm:second", 1, "cloud", "second")
+	cfg.SetDevicePin("vm:second", 1, "cloud", "second", "")
 	dialAgentLadderFn = func(_ context.Context, target dialTarget) (*grpcclient.AgentConnection, error, error) {
 		if target.Expected == nil || target.Expected.EntityID != "second" {
 			t.Fatalf("lost expected identity: %+v", target)

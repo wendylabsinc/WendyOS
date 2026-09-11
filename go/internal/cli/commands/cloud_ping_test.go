@@ -157,3 +157,19 @@ func TestRunPingLoopSurfacesTransportError(t *testing.T) {
 		t.Fatal("runPingLoop did not return within 3s")
 	}
 }
+
+type sendErrorPing struct {
+	*fakePingSession
+	err error
+}
+
+func (s *sendErrorPing) sendEcho(*cloudpb.IcmpEchoRequest) error { return s.err }
+func TestPingFirstRequestFailureIsReported(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	expected := errors.New("RPC unavailable")
+	stats := runPingLoop(ctx, &sendErrorPing{newFakePingSession(ctx), expected}, "device", 1, time.Millisecond, io.Discard)
+	if !errors.Is(stats.Err, expected) || stats.Sent != 0 || stats.Received != 0 {
+		t.Fatalf("first request failure lost: %+v", stats)
+	}
+}

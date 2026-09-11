@@ -197,7 +197,11 @@ func createLinuxDesktopToken(ctx context.Context, auth *config.AuthConfig, devic
 		transportOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
 
-	conn, err := grpc.NewClient(auth.CloudGRPC, transportOpt)
+	dialOptions, err := withCloudRequestSigning(auth, transportOpt)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	conn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("connecting to cloud: %w", err)
 	}

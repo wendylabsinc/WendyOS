@@ -373,6 +373,23 @@ func TestFormatError_LocalPKICoreUnavailable(t *testing.T) {
 	}
 }
 
+func TestFormatError_CloudUnavailablePreservesDetails(t *testing.T) {
+	for _, prefix := range []string{
+		"creating enrollment token: ",
+		"creating enrollment token from pki-core services.orb.local:50051: ",
+	} {
+		for _, detail := range []string{
+			"upstream connect error or disconnect/reset before headers. reset reason: connection termination",
+			"enrollment signer is unavailable",
+		} {
+			err := fmt.Errorf("%s%w", prefix, status.Error(codes.Unavailable, detail))
+			if got, want := formatError(err).Error(), prefix+detail; got != want {
+				t.Errorf("formatError() = %q, want %q", got, want)
+			}
+		}
+	}
+}
+
 func TestFormatError_UnimplementedPreservesContextualDescription(t *testing.T) {
 	err := fmt.Errorf("listing audio devices: %w", status.Error(codes.Unimplemented, "Audio device management is currently not supported by Wendy Agent for Mac."))
 

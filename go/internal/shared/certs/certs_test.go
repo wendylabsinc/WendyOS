@@ -47,7 +47,7 @@ func TestGenerateCSR(t *testing.T) {
 		t.Fatalf("GenerateKeyPair() error = %v", err)
 	}
 
-	csrPEM, err := GenerateCSR([]byte(keyPEM), "test-device.example.com", "")
+	csrPEM, err := GenerateCSR([]byte(keyPEM), "test-device.example.com", nil)
 	if err != nil {
 		t.Fatalf("GenerateCSR() error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestGenerateCSRIncludesIdentityURN(t *testing.T) {
 				t.Fatalf("GenerateKeyPair() error = %v", err)
 			}
 
-			csrPEM, err := GenerateCSR([]byte(keyPEM), "sh/wendy/legacy", tc.urn)
+			csrPEM, err := GenerateCSR([]byte(keyPEM), "sh/wendy/legacy", []string{tc.urn})
 			if err != nil {
 				t.Fatalf("GenerateCSR() error = %v", err)
 			}
@@ -299,7 +299,7 @@ func TestGenerateAndCSR_RoundTrip(t *testing.T) {
 	}
 
 	// Generate a CSR with the key.
-	csrPEM, err := GenerateCSR([]byte(keyPEM), "roundtrip.example.com", "")
+	csrPEM, err := GenerateCSR([]byte(keyPEM), "roundtrip.example.com", nil)
 	if err != nil {
 		t.Fatalf("GenerateCSR() error = %v", err)
 	}
@@ -337,7 +337,7 @@ func TestGenerateCSRRequestsClientAuthUsage(t *testing.T) {
 		t.Fatalf("GenerateKeyPair() error = %v", err)
 	}
 
-	csrPEM, err := GenerateCSR([]byte(keyPEM), "wendy/user/abc", "")
+	csrPEM, err := GenerateCSR([]byte(keyPEM), "wendy/user/abc", nil)
 	if err != nil {
 		t.Fatalf("GenerateCSR() error = %v", err)
 	}
@@ -398,7 +398,7 @@ func TestGenerateCSRRequestsClientAndServerAuthUsage(t *testing.T) {
 		t.Fatalf("GenerateKeyPair() error = %v", err)
 	}
 
-	csrPEM, err := GenerateCSR([]byte(keyPEM), "sh/wendy/1/2", AssetURN(1, 2),
+	csrPEM, err := GenerateCSR([]byte(keyPEM), "sh/wendy/1/2", []string{AssetURN(1, 2)},
 		x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth)
 	if err != nil {
 		t.Fatalf("GenerateCSR() error = %v", err)

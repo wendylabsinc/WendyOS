@@ -342,6 +342,22 @@ func proofCloudNotificationRequest() *cloudpb.CreateNotificationV2Request {
 
 const deviceProofTestCertificateSerial = "01a2b3c4d5e6f708"
 
+// The two identity spellings the canonical preimage has to cover. The int URN is
+// what a device signs today; the UUID URN is the shape WDY-2808 moves every
+// boundary to. Both are lowercase because Cloud's parser re-renders a parsed
+// uuid and compares, so an upper-case variant is rejected, not accepted as a
+// second spelling.
+// deviceProofV2FullMethod is Cloud's 2.0 verifier method name. It is defined
+// here rather than in the package because this agent does not invoke it: the
+// generated client calls wendycloud.v1, so v1 is what a device signs. It exists
+// so the fixture can pin the bytes Cloud will verify once wendyos migrates.
+const deviceProofV2FullMethod = "wendycloud.v2.NotificationService/CreateNotificationV2"
+
+const (
+	deviceProofTestAssetURI     = "urn:wendy:org:17:asset:42"
+	deviceProofTestAssetUUIDURI = "urn:wendy:org:13a72725-dfe3-4425-bd04-b253d2036089:asset:9f2c1d84-6b30-4e57-9a1e-2c7d5f08b413"
+)
+
 func deviceProofTestKeyPEM(t *testing.T) (*ecdsa.PrivateKey, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -403,8 +419,8 @@ func TestNotificationDeviceProofRejectsMalformedProvisionedLeafCertificate(t *te
 			ctx, err := notificationDeviceProofContext(
 				context.Background(),
 				proofCloudNotificationRequest(),
-				17,
-				42,
+				deviceProofFullMethod,
+				deviceProofTestAssetURI,
 				1_753_267_200,
 				test.certPEM,
 				keyPEM,
@@ -420,7 +436,7 @@ func TestNotificationDeviceProofRejectsMalformedProvisionedLeafCertificate(t *te
 func TestCanonicalNotificationDeviceProofRejectsNoncanonicalCertificateSerial(t *testing.T) {
 	for _, serial := range []string{"", "0", "00", "0001", "abc", "0ABC", "12-34", strings.Repeat("aa", 21)} {
 		t.Run(serial, func(t *testing.T) {
-			if _, _, _, err := canonicalNotificationDeviceProof(proofCloudNotificationRequest(), 17, 42, serial, 1_753_267_200); err == nil {
+			if _, _, _, err := canonicalNotificationDeviceProof(proofCloudNotificationRequest(), deviceProofFullMethod, deviceProofTestAssetURI, serial, 1_753_267_200); err == nil {
 				t.Fatalf("certificate serial %q accepted", serial)
 			}
 		})
@@ -430,11 +446,11 @@ func TestCanonicalNotificationDeviceProofRejectsNoncanonicalCertificateSerial(t 
 func TestCanonicalNotificationDeviceProofIsDeterministic(t *testing.T) {
 	const timestamp = int64(1_753_267_200)
 	request := proofCloudNotificationRequest()
-	first, uri, timestampText, err := canonicalNotificationDeviceProof(request, 17, 42, deviceProofTestCertificateSerial, timestamp)
+	first, uri, timestampText, err := canonicalNotificationDeviceProof(request, deviceProofFullMethod, deviceProofTestAssetURI, deviceProofTestCertificateSerial, timestamp)
 	if err != nil {
 		t.Fatalf("canonicalNotificationDeviceProof() error = %v", err)
 	}
-	second, _, _, err := canonicalNotificationDeviceProof(proto.Clone(request).(*cloudpb.CreateNotificationV2Request), 17, 42, deviceProofTestCertificateSerial, timestamp)
+	second, _, _, err := canonicalNotificationDeviceProof(proto.Clone(request).(*cloudpb.CreateNotificationV2Request), deviceProofFullMethod, deviceProofTestAssetURI, deviceProofTestCertificateSerial, timestamp)
 	if err != nil {
 		t.Fatalf("second canonicalNotificationDeviceProof() error = %v", err)
 	}
@@ -449,9 +465,70 @@ func TestCanonicalNotificationDeviceProofIsDeterministic(t *testing.T) {
 	if !bytes.Equal(first, append([]byte(prefix), requestBytes...)) {
 		t.Fatal("canonical proof does not match the versioned NUL-framed contract")
 	}
-	digest := sha256.Sum256(first)
-	if got, want := hex.EncodeToString(digest[:]), "438186e9443c54083a91beb6815bad1a7376c1c1f3e3ca9ec9c1cbe4fd85ec94"; got != want {
-		t.Fatalf("canonical proof SHA-256 = %s, want fixture %s", got, want)
+}
+
+// deviceProofFixtures is the cross-repo pin. Cloud's DeviceNotificationProofTests
+// pins these same digests, copied from here, over the same request, serial and
+// timestamp. The preimage is signature input, so a framing or spelling change
+// made on one side only breaks every device proof in the fleet; pinning it in
+// both repos turns that into two red suites instead.
+var deviceProofFixtures = []struct {
+	name   string
+	method string
+	uri    string
+	digest string
+}{
+	// What a device signs today, and the check that no refactor moved the bytes.
+	{
+		name:   "v1 method and integer identity",
+		method: deviceProofFullMethod,
+		uri:    deviceProofTestAssetURI,
+		digest: "438186e9443c54083a91beb6815bad1a7376c1c1f3e3ca9ec9c1cbe4fd85ec94",
+	},
+	// What Cloud's 2.0 verifier expects. No device produces these bytes yet:
+	// this agent calls wendycloud.v1 and has no uuid identity to sign.
+	{
+		name:   "v2 method and uuid identity",
+		method: deviceProofV2FullMethod,
+		uri:    deviceProofTestAssetUUIDURI,
+		digest: "4dc7c616beb4cf9eea9467ada6fd464cfce45ef4f87473724a44ef8859ef779c",
+	},
+}
+
+func TestCanonicalNotificationDeviceProofMatchesCrossRepoFixture(t *testing.T) {
+	for _, fixture := range deviceProofFixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			canonical := mustCanonicalNotificationProof(
+				t, proofCloudNotificationRequest(), fixture.method, fixture.uri,
+				deviceProofTestCertificateSerial, 1_753_267_200)
+			if got := hex.EncodeToString(sliceDigest(canonical)); got != fixture.digest {
+				t.Fatalf("canonical proof SHA-256 for %s = %s, want fixture %s", fixture.name, got, fixture.digest)
+			}
+		})
+	}
+}
+
+func sliceDigest(data []byte) []byte {
+	digest := sha256.Sum256(data)
+	return digest[:]
+}
+
+func TestCanonicalNotificationDeviceProofRejectsNoncanonicalIdentityURN(t *testing.T) {
+	for _, uri := range []string{
+		"",
+		"urn:wendy:org:17:asset:",
+		"spiffe://wendy.sh/tenant/x/service/asset-42",
+		"urn:wendy:org:13A72725-DFE3-4425-BD04-B253D2036089:asset:42",
+		"urn:wendy:org:17:asset:42\x00urn:wendy:org:1:asset:1",
+		"urn:wendy:org:17:asset: 42",
+		"urn:wendy:org:" + strings.Repeat("a", 256),
+	} {
+		t.Run(uri, func(t *testing.T) {
+			if _, _, _, err := canonicalNotificationDeviceProof(
+				proofCloudNotificationRequest(), deviceProofFullMethod, uri, deviceProofTestCertificateSerial, 1_753_267_200); err == nil {
+				t.Fatalf("non-canonical identity URN %q accepted", uri)
+			}
+		})
 	}
 }
 
@@ -468,7 +545,7 @@ func TestNotificationDeviceProofSignatureAndTamperResistance(t *testing.T) {
 		deviceProofSignatureHeader, "forged",
 		"x-unrelated", "preserved",
 	))
-	ctx, err := notificationDeviceProofContext(baseCtx, request, 17, 42, timestamp, certificatePEM, keyPEM, rand.Reader)
+	ctx, err := notificationDeviceProofContext(baseCtx, request, deviceProofFullMethod, deviceProofTestAssetURI, timestamp, certificatePEM, keyPEM, rand.Reader)
 	if err != nil {
 		t.Fatalf("notificationDeviceProofContext() error = %v", err)
 	}
@@ -496,7 +573,7 @@ func TestNotificationDeviceProofSignatureAndTamperResistance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode signature: %v", err)
 	}
-	canonical, _, _, err := canonicalNotificationDeviceProof(request, 17, 42, deviceProofTestCertificateSerial, timestamp)
+	canonical, _, _, err := canonicalNotificationDeviceProof(request, deviceProofFullMethod, deviceProofTestAssetURI, deviceProofTestCertificateSerial, timestamp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,10 +585,10 @@ func TestNotificationDeviceProofSignatureAndTamperResistance(t *testing.T) {
 	tamperedRequest := proto.Clone(request).(*cloudpb.CreateNotificationV2Request)
 	tamperedRequest.Body = "different body"
 	for name, tamperedCanonical := range map[string][]byte{
-		"request":            mustCanonicalNotificationProof(t, tamperedRequest, 17, 42, deviceProofTestCertificateSerial, timestamp),
-		"identity":           mustCanonicalNotificationProof(t, request, 17, 43, deviceProofTestCertificateSerial, timestamp),
-		"certificate serial": mustCanonicalNotificationProof(t, request, 17, 42, "b1b2c3d4e5f60718", timestamp),
-		"timestamp":          mustCanonicalNotificationProof(t, request, 17, 42, deviceProofTestCertificateSerial, timestamp+1),
+		"request":            mustCanonicalNotificationProof(t, tamperedRequest, deviceProofFullMethod, deviceProofTestAssetURI, deviceProofTestCertificateSerial, timestamp),
+		"identity":           mustCanonicalNotificationProof(t, request, deviceProofFullMethod, "urn:wendy:org:17:asset:43", deviceProofTestCertificateSerial, timestamp),
+		"certificate serial": mustCanonicalNotificationProof(t, request, deviceProofFullMethod, deviceProofTestAssetURI, "b1b2c3d4e5f60718", timestamp),
+		"timestamp":          mustCanonicalNotificationProof(t, request, deviceProofFullMethod, deviceProofTestAssetURI, deviceProofTestCertificateSerial, timestamp+1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			tamperedDigest := sha256.Sum256(tamperedCanonical)
@@ -525,12 +602,13 @@ func TestNotificationDeviceProofSignatureAndTamperResistance(t *testing.T) {
 func mustCanonicalNotificationProof(
 	t *testing.T,
 	request *cloudpb.CreateNotificationV2Request,
-	orgID, assetID int32,
+	fullMethod string,
+	uri string,
 	certificateSerial string,
 	timestamp int64,
 ) []byte {
 	t.Helper()
-	canonical, _, _, err := canonicalNotificationDeviceProof(request, orgID, assetID, certificateSerial, timestamp)
+	canonical, _, _, err := canonicalNotificationDeviceProof(request, fullMethod, uri, certificateSerial, timestamp)
 	if err != nil {
 		t.Fatal(err)
 	}

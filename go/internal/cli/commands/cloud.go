@@ -147,13 +147,23 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 	var name string
 	var cloudGRPC string
 	var orgID int32
+	var acmeDirectoryURL string
 
 	cmd := &cobra.Command{
 		Use:   "enroll-device",
 		Short: "Enroll the connected device with Wendy Cloud or a local pki-core",
-		Long:  "Alias for 'wendy device enroll'. Creates an enrollment token using your stored auth session and provisions the connected device with mTLS certificates.",
+		Long:  "Alias for 'wendy device enroll'. OIDC accounts use direct PKI enrollment through Cloud's enrollment relay; legacy accounts use Cloud enrollment.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			auth, err := resolveAuthEntry(cloudGRPC)
+			if err != nil {
+				return err
+			}
+			auth, err = prepareEnrollmentAuth(ctx, auth)
+			if err != nil {
+				return err
+			}
 
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
 			if err != nil {
@@ -163,17 +173,13 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 
 			promptWifiIfNeeded(ctx, conn)
 
-			auth, err := pickAuthEntry(cloudGRPC)
-			if err != nil {
-				return err
-			}
-
-			return runEnrollDevice(ctx, conn, auth, name, orgID)
+			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
 		},
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Device name")
+	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use (optional when a default session is set via 'wendy auth use')")
-	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID to enroll into; skips the interactive org picker (required in non-interactive/--json runs when you belong to multiple orgs)")
+	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
 	return cmd
 }

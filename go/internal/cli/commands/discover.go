@@ -457,9 +457,10 @@ type flashClearMsg struct{}
 
 // discoverUpdateDoneMsg is sent when a background device update completes.
 type discoverUpdateDoneMsg struct {
-	deviceName string
-	assetID    int32
-	err        error
+	deviceName    string
+	assetID       int32
+	cloudAssetKey string
+	err           error
 	// note carries a non-error outcome that is not a successful update, e.g.
 	// the device already running the release we would install.
 	note string

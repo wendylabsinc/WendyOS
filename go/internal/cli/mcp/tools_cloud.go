@@ -16,6 +16,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -787,7 +788,15 @@ func mcpDialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 	} else {
 		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	conn, err := grpc.NewClient(auth.CloudGRPC, transport)
+	dialOptions := []grpc.DialOption{transport}
+	signingOption, err := cloudrequest.DialOption(auth)
+	if err != nil {
+		return nil, fmt.Errorf("configuring Cloud request signing: %w", err)
+	}
+	if signingOption != nil {
+		dialOptions = append(dialOptions, signingOption)
+	}
+	conn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}

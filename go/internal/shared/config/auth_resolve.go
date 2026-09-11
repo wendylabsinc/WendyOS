@@ -24,12 +24,42 @@ func (c *Config) DefaultAuth() (*AuthConfig, bool) {
 	if c == nil || c.DefaultCloudGRPC == "" {
 		return nil, false
 	}
-	for i := range c.Auth {
-		if c.Auth[i].CloudGRPC == c.DefaultCloudGRPC {
-			return &c.Auth[i], true
+	if c.DefaultTenantUUID != "" {
+		for i := range c.Auth {
+			a := &c.Auth[i]
+			if a.CloudGRPC == c.DefaultCloudGRPC && len(a.Certificates) > 0 && a.Certificates[0].TenantUUID() == c.DefaultTenantUUID {
+				return a, true
+			}
 		}
 	}
-	return nil, false
+	var preferred *AuthConfig
+	selectedOrg := ""
+	for i := range c.Auth {
+		if c.Auth[i].CloudGRPC == c.DefaultCloudGRPC {
+			if selectedOrg == "0" && len(c.Auth[i].Certificates) > 0 && c.Auth[i].Certificates[0].TenantUUID() != "" {
+				preferred = nil
+			}
+			if preferred == nil {
+				selectedOrg = c.Auth[i].OrganizationKey()
+			}
+			if c.Auth[i].OrganizationKey() != selectedOrg {
+				continue
+			}
+			preferred = preferAuth(preferred, &c.Auth[i])
+		}
+	}
+	return preferred, preferred != nil
+}
+
+// preferAuth resolves legacy/operator duplicates for the same selection. The
+// Cloud request-signing contract makes an operator session strictly more
+// capable: it has a refreshable bearer token and can sign privileged writes,
+// while the legacy session cannot satisfy the operator-signature gate.
+func preferAuth(current, candidate *AuthConfig) *AuthConfig {
+	if current == nil || (current.OAuthIssuer == "" && candidate.OAuthIssuer != "") {
+		return candidate
+	}
+	return current
 }
 
 // ResolveAuth chooses the auth session to use. Precedence:
@@ -41,10 +71,15 @@ func (c *Config) DefaultAuth() (*AuthConfig, bool) {
 //  5. pick != nil             -> interactive picker
 //  6. otherwise               -> ErrMultipleSessions
 //
-// The returned session is guaranteed to hold certificate material.
+// The returned session is guaranteed to hold certificate material or an API token.
 func ResolveAuth(cfg *Config, cloudGRPC string, pick SessionPicker) (*AuthConfig, error) {
 	if cfg == nil || len(cfg.Auth) == 0 {
 		return nil, ErrNotLoggedIn
+	}
+	if cfg.DefaultTenantUUID != "" && (cloudGRPC == "" || cloudGRPC == cfg.DefaultCloudGRPC) {
+		if auth, ok := cfg.DefaultAuth(); ok && len(auth.Certificates) > 0 && auth.Certificates[0].TenantUUID() == cfg.DefaultTenantUUID {
+			return authWithCerts(auth)
+		}
 	}
 	if cloudGRPC != "" {
 		// Several orgs can share one endpoint (multiple orgs on the production
@@ -61,23 +96,47 @@ func ResolveAuth(cfg *Config, cloudGRPC string, pick SessionPicker) (*AuthConfig
 			return nil, fmt.Errorf("no auth session for %s; run 'wendy auth login --cloud-grpc %s' first", cloudGRPC, cloudGRPC)
 		}
 		if cfg.DefaultOrgID != 0 {
+			var preferred *AuthConfig
 			for _, m := range matches {
 				if len(m.Certificates) > 0 && int32(m.Certificates[0].OrganizationID) == cfg.DefaultOrgID {
-					return authWithCerts(m)
+					preferred = preferAuth(preferred, m)
+				}
+			}
+			if preferred != nil {
+				return authWithCerts(preferred)
+			}
+		}
+		var preferred *AuthConfig
+		selectedOrg := matches[0].OrganizationKey()
+		if selectedOrg == "0" {
+			for _, m := range matches {
+				if len(m.Certificates) > 0 && m.Certificates[0].TenantUUID() != "" {
+					selectedOrg = m.OrganizationKey()
+					break
 				}
 			}
 		}
-		return authWithCerts(matches[0])
+		for _, match := range matches {
+			if match.OrganizationKey() != selectedOrg {
+				continue
+			}
+			preferred = preferAuth(preferred, match)
+		}
+		return authWithCerts(preferred)
 	}
 	if len(cfg.Auth) == 1 {
 		return authWithCerts(&cfg.Auth[0])
 	}
 	if cfg.DefaultOrgID != 0 {
+		var preferred *AuthConfig
 		for i := range cfg.Auth {
 			a := &cfg.Auth[i]
 			if len(a.Certificates) > 0 && int32(a.Certificates[0].OrganizationID) == cfg.DefaultOrgID {
-				return authWithCerts(a)
+				preferred = preferAuth(preferred, a)
 			}
+		}
+		if preferred != nil {
+			return authWithCerts(preferred)
 		}
 		// DefaultOrgID set but no matching session; fall through so the user
 		// can still operate (e.g. the session was removed).
@@ -97,8 +156,8 @@ func ResolveAuth(cfg *Config, cloudGRPC string, pick SessionPicker) (*AuthConfig
 
 // authWithCerts rejects sessions with no certificate material.
 func authWithCerts(a *AuthConfig) (*AuthConfig, error) {
-	if len(a.Certificates) == 0 {
-		return nil, fmt.Errorf("auth session %s has no certificates; re-run 'wendy auth login'", a.CloudGRPC)
+	if len(a.Certificates) == 0 && !a.HasAPIKey() {
+		return nil, fmt.Errorf("auth session %s has no certificates or API token; re-run 'wendy auth login'", a.CloudGRPC)
 	}
 	return a, nil
 }

@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
@@ -42,7 +44,7 @@ func newCloudPingCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ping [--device <name>]",
 		Short: "Ping a cloud-enrolled device through the tunnel broker",
-		Long:  "Sends echo requests over a Wendy Cloud datagram tunnel session. A reply proves the device's agent is up and measures true end-to-end round-trip time. No ICMP sockets or privileges are involved.",
+		Long:  "Measures agent round-trip time through Wendy Cloud. PKI sessions use the agent version RPC over an authorized tunnel; legacy sessions use datagram echoes. A reply proves the device's agent is up and measures true end-to-end round-trip time. No ICMP sockets or privileges are involved.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cloudPingCommand(cmd.Context(), cloudGRPC, deviceName, brokerURL, count, interval)
@@ -57,6 +59,8 @@ func newCloudPingCmd() *cobra.Command {
 }
 
 func cloudPingCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL string, count int, interval time.Duration) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	if count < 0 {
 		return fmt.Errorf("count must be >= 0")
 	}
@@ -67,23 +71,34 @@ func cloudPingCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL stri
 	if err != nil {
 		return err
 	}
-	asset, err := pickCloudDevice(ctx, auth, deviceName, brokerURL)
+	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return err
 	}
-	brokerConn, err := clouddefaults.DialBroker(auth, brokerURL)
-	if err != nil {
-		return err
+	var session pingSession
+	if asset.v2 != nil {
+		conn, err := asset.connect(ctx, auth, brokerURL)
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		session = &agentRPCPingSession{ctx: ctx, conn: conn, replies: make(chan *cloudpb.TunnelData, 1)}
+		cliLogln("PING %s (asset %s) via Wendy Cloud agent RPC", asset.GetName(), asset.key)
+	} else {
+		brokerConn, err := clouddefaults.DialBroker(auth, brokerURL)
+		if err != nil {
+			return err
+		}
+		defer brokerConn.Close()
+		datagrams, err := openDatagramSession(ctx, brokerConn, auth, asset.legacy.GetId())
+		if err != nil {
+			return datagramOpenError(err, asset.GetName())
+		}
+		defer datagrams.close()
+		session = datagrams
+		cliLogln("PING %s (asset %s) via Wendy Cloud", asset.GetName(), asset.key)
 	}
-	defer brokerConn.Close()
 
-	session, err := openDatagramSession(ctx, brokerConn, auth, asset.GetId())
-	if err != nil {
-		return datagramOpenError(err, asset.GetName())
-	}
-	defer session.close()
-
-	cliLogln("PING %s (asset %d) via Wendy Cloud", asset.GetName(), asset.GetId())
 	stats := runPingLoop(ctx, session, asset.GetName(), count, interval, os.Stdout)
 
 	loss := 0.0
@@ -95,6 +110,9 @@ func cloudPingCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL stri
 	if stats.Received > 0 {
 		cliLogln("rtt min/avg/max = %s/%s/%s", stats.Min.Round(time.Microsecond),
 			stats.Avg.Round(time.Microsecond), stats.Max.Round(time.Microsecond))
+	}
+	if stats.Received == 0 && stats.Err != nil {
+		return datagramOpenError(stats.Err, asset.GetName())
 	}
 	if stats.Received == 0 && stats.Sent > 0 {
 		if stats.Err != nil {
@@ -182,6 +200,9 @@ func runPingLoop(ctx context.Context, session pingSession, target string, count 
 		return true
 	}
 	if !sendOne() {
+		lifeErrMu.Lock()
+		stats.Err = lifeErr
+		lifeErrMu.Unlock()
 		return stats
 	}
 
@@ -250,4 +271,35 @@ func pingAvg(total time.Duration, n int) time.Duration {
 		return 0
 	}
 	return total / time.Duration(n)
+}
+
+// agentRPCPingSession measures an actual request/response over the authorized
+// wendy-agent tunnel. Cloud's standard catalog has no DATAGRAM/ping service.
+type agentRPCPingSession struct {
+	ctx     context.Context
+	conn    *grpcclient.AgentConnection
+	replies chan *cloudpb.TunnelData
+}
+
+func (s *agentRPCPingSession) sendEcho(req *cloudpb.IcmpEchoRequest) error {
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	if _, err := s.conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{}); err != nil {
+		return err
+	}
+	reply := &cloudpb.TunnelData{IcmpReply: &cloudpb.IcmpEchoReply{Identifier: req.Identifier, Sequence: req.Sequence, Payload: req.Payload, OriginateUnixNs: req.OriginateUnixNs}}
+	select {
+	case s.replies <- reply:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+func (s *agentRPCPingSession) recv() (*cloudpb.TunnelData, error) {
+	select {
+	case reply := <-s.replies:
+		return reply, nil
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
 }

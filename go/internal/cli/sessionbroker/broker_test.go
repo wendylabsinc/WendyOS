@@ -21,9 +21,11 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	grpcgzip "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 )
 
 type testAgentServer struct {
@@ -578,6 +580,113 @@ func TestServeEvictsBrokerThatStopsAnswering(t *testing.T) {
 	}
 	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
 		t.Fatalf("socket remains after eviction: %v", err)
+	}
+}
+
+type canceledUploadServer struct {
+	agentpb.UnimplementedWendyContainerServiceServer
+	started chan struct{}
+}
+
+func (s canceledUploadServer) QueryChunks(ctx context.Context, _ *agentpb.QueryChunksRequest) (*agentpb.QueryChunksResponse, error) {
+	s.started <- struct{}{}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestServeSurvivesCanceledParallelUploads(t *testing.T) {
+	// An older agent rejects PrepareImage, so the CLI cancels every parallel
+	// layer upload before falling back to a registry push. Those cancellations
+	// must not evict the healthy broker needed for the later CreateContainer.
+	testServeCanceledParallelRPCs(t, false)
+}
+
+func TestServeEvictsCanceledRequestsWithDeadline(t *testing.T) {
+	// gRPC reports a client's expired deadline as RST_CANCEL, indistinguishable
+	// from an explicit cancellation. Keep counting deadline-bearing requests
+	// conservatively so a black-holed connection still gets evicted.
+	testServeCanceledParallelRPCs(t, true)
+}
+
+func testServeCanceledParallelRPCs(t *testing.T, withDeadline bool) {
+	t.Helper()
+	started := make(chan struct{}, 4)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	agentpb.RegisterWendyAgentServiceServer(server, testAgentServer{})
+	agentpb.RegisterWendyContainerServiceServer(server, canceledUploadServer{started: started})
+	go server.Serve(lis) //nolint:errcheck
+	t.Cleanup(func() { server.Stop(); lis.Close() })
+	upstream, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { upstream.Close() })
+	spec := Spec{
+		Key: "cancel.local", Host: "cancel.local", Addr: lis.Addr().String(),
+		CertFingerprint: "public-cert-hash",
+		Expected:        certs.WendyIdentity{OrgID: 7, EntityType: "asset", EntityID: "47"},
+		ParentPID:       os.Getpid(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socketPath, _, done := startServing(t, ctx, shortTempDir(t), spec, upstream, time.Hour)
+	proxy, err := grpcclient.ConnectSessionProxy(ctx, socketPath, spec.Host, spec.Addr, &config.CertificateInfo{OrganizationID: 7}, spec.Expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	var uploadCtx context.Context
+	var cancelUploads context.CancelFunc
+	if withDeadline {
+		uploadCtx, cancelUploads = context.WithTimeout(ctx, time.Hour)
+	} else {
+		uploadCtx, cancelUploads = context.WithCancel(ctx)
+	}
+	defer cancelUploads()
+	results := make(chan error, cap(started))
+	for range cap(started) {
+		go func() {
+			_, err := proxy.ContainerService.QueryChunks(uploadCtx, &agentpb.QueryChunksRequest{})
+			results <- err
+		}()
+	}
+	for range cap(started) {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("parallel upload did not reach the upstream")
+		}
+	}
+	cancelUploads()
+	for range cap(started) {
+		if err := <-results; status.Code(err) != codes.Canceled {
+			t.Fatalf("upload error = %v; want cancellation", err)
+		}
+	}
+	if withDeadline {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("serve: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("broker ignored cancellations carrying a deadline")
+		}
+		return
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("broker exited after deliberate upload cancellations: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	probeCtx, probeCancel := context.WithTimeout(ctx, time.Second)
+	defer probeCancel()
+	if _, err := proxy.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{}); err != nil {
+		t.Fatalf("broker cannot serve the RPC after upload cancellation: %v", err)
 	}
 }
 

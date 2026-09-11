@@ -19,23 +19,23 @@ enum RegistryTLS {
         var chainPEM: String
         var keyBacking: ProvisioningStore.KeyBacking
         var seKey: SEPrivateKey?
-        var deviceOrg: Int32?
+        var deviceScope: OrgIdentity.Scope?
         var orgMode: ClientCertAuthorizer.OrgEnforcementMode
     }
 
     /// Derives the verification policy exactly like the gRPC server: the
-    /// device's org comes from its own leaf certificate (nil fails closed in
-    /// `ClientCertAuthorizer`), and the org-enforcement mode comes from
+    /// device's tenant comes from its own leaf certificate (nil fails closed in
+    /// `ClientCertAuthorizer`), and the enforcement mode comes from
     /// `WENDY_MTLS_ORG_ENFORCEMENT` (off|grace|strict, defaulting to grace).
     static func makeConfiguration(
         certs: ProvisioningService.ProvisioningCerts,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         logger: Logger
     ) -> Configuration {
-        let deviceOrg = ClientCertAuthorizer.organizationID(fromLeafPEM: certs.certPEM)
-        if deviceOrg == nil {
+        let deviceScope = ClientCertAuthorizer.scope(fromLeafPEM: certs.certPEM)
+        if deviceScope == nil {
             logger.error(
-                "Could not determine device organization from its own certificate; the registry push listener will reject all clients (fail closed). Re-provision the device to recover."
+                "Could not determine device tenant from its own certificate; the registry push listener will reject all clients (fail closed). Re-provision the device to recover."
             )
         }
         let rawOrgEnforcement = environment["WENDY_MTLS_ORG_ENFORCEMENT"]
@@ -51,7 +51,7 @@ enum RegistryTLS {
             chainPEM: certs.chainPEM,
             keyBacking: certs.keyBacking,
             seKey: certs.seKey,
-            deviceOrg: deviceOrg,
+            deviceScope: deviceScope,
             orgMode: orgMode
         )
     }
@@ -94,7 +94,7 @@ enum RegistryTLS {
         tls.trustRoots = .certificates(chainCerts)
 
         let trustRootsPEM = config.chainPEM
-        let deviceOrg = config.deviceOrg
+        let deviceScope = config.deviceScope
         let orgMode = config.orgMode
         return TLSChannelConfiguration(
             tlsConfiguration: tls,
@@ -104,7 +104,7 @@ enum RegistryTLS {
                     let authorized = await ClientCertAuthorizer.isAuthorized(
                         peerCertificatesDER: ders,
                         trustRootsPEM: trustRootsPEM,
-                        deviceOrg: deviceOrg,
+                        deviceScope: deviceScope,
                         mode: orgMode
                     )
                     promise.succeed(authorized ? .certificateVerified : .failed)

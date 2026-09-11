@@ -53,7 +53,9 @@ func seedPinsFromCloudAssets(assets []*cloudpb.Asset, orgID int, cloudGRPC strin
 		if existing, ok := cfg.DevicePinFor(name); ok && existing == want {
 			continue
 		}
-		cfg.SetDevicePinFrom(name, orgID, cloudGRPC, want.AssetID, config.PinSourceCloud)
+		// The roster names an asset, not a principal; the principal is
+		// backfilled by enforceDeviceIdentity on the first real connect.
+		cfg.SetDevicePinFrom(name, orgID, cloudGRPC, want.AssetID, "", config.PinSourceCloud)
 		changed = true
 	}
 	if !changed {

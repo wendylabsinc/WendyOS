@@ -88,12 +88,19 @@ func resolveError(cause error) error {
 
 // keyAccount derives the deterministic Keychain account for a client
 // private key, so re-login for the same identity overwrites one item. It
-// hashes cloudGRPC|orgID|userID|assetID: userID alone is not enough because
-// asset certs (from performLocalLogin) carry no UserID, only an AssetID, so
-// two asset certs on the same endpoint+org with different AssetID must not
-// collide on the same Keychain item.
-func keyAccount(cloudGRPC string, orgID int, userID string, assetID int) string {
-	sum := sha256.Sum256([]byte(cloudGRPC + "|" + strconv.Itoa(orgID) + "|" + userID + "|" + strconv.Itoa(assetID)))
+// hashes cloudGRPC|orgID|userID|assetID|principalURI. userID alone is not
+// enough because asset certs (from performLocalLogin) carry no UserID, only an
+// AssetID, so two asset certs on the same endpoint+org with different AssetID
+// must not collide. principalURI distinguishes newer pki-core SPIFFE
+// identities, which do not carry the legacy numeric org ID.
+func keyAccount(cloudGRPC string, orgID int, userID string, assetID int, principalURI string) string {
+	identity := cloudGRPC + "|" + strconv.Itoa(orgID) + "|" + userID + "|" + strconv.Itoa(assetID)
+	// Preserve the established account derivation for legacy certificates;
+	// append the new identity component only when it exists.
+	if principalURI != "" {
+		identity += "|" + principalURI
+	}
+	sum := sha256.Sum256([]byte(identity))
 	return "key-" + hex.EncodeToString(sum[:8])
 }
 
@@ -110,6 +117,11 @@ func keyAccount(cloudGRPC string, orgID int, userID string, assetID int) string 
 func tokenAccount(cloudDashboard, cloudGRPC string, orgID int) string {
 	sum := sha256.Sum256([]byte(cloudDashboard + "|" + cloudGRPC + "|" + strconv.Itoa(orgID)))
 	return "token-" + hex.EncodeToString(sum[:8])
+}
+
+func oauthSecretAccount(kind string, a AuthConfig) string {
+	sum := sha256.Sum256([]byte(kind + "|" + a.OAuthIssuer + "|" + a.OAuthClientID + "|" + a.CloudGRPC))
+	return kind + "-" + hex.EncodeToString(sum[:8])
 }
 
 // HasPrivateKey reports whether key material exists — inline or by
@@ -136,6 +148,37 @@ func (a AuthConfig) BearerToken() (string, error) {
 		return a.APIKey, nil
 	}
 	return resolveSecret(a.APIKey)
+}
+
+// OAuthRefreshToken and OAuthDPoPKey resolve the long-lived OAuth session
+// secrets without exposing their storage representation to callers.
+func (a AuthConfig) OAuthRefreshToken() (string, error) {
+	if !isRef(a.RefreshToken) {
+		return a.RefreshToken, nil
+	}
+	return resolveSecret(a.RefreshToken)
+}
+
+func (a AuthConfig) OAuthDPoPKey() (string, error) {
+	if !isRef(a.DPoPPrivateKey) {
+		return a.DPoPPrivateKey, nil
+	}
+	return resolveSecret(a.DPoPPrivateKey)
+}
+
+// InvalidateCachedSecrets forces subsequent reads to consult the credential
+// store. Use after reloading a session under the refresh lock: another process
+// can rotate a secret while its stored Keychain reference remains unchanged.
+// This only clears the in-process cache; it does not delete stored credentials.
+func (a AuthConfig) InvalidateCachedSecrets() {
+	secretMu.Lock()
+	defer secretMu.Unlock()
+	for _, ref := range []string{a.APIKey, a.RefreshToken, a.DPoPPrivateKey} {
+		delete(secretCache, ref)
+	}
+	for _, cert := range a.Certificates {
+		delete(secretCache, cert.PemPrivateKey)
+	}
 }
 
 // dehydrateEnabled reports whether Save should move inline secrets into the
@@ -176,16 +219,37 @@ func dehydrate(cfg *Config) {
 	for i := range cfg.Auth {
 		a := &cfg.Auth[i]
 		if a.APIKey != "" && !isRef(a.APIKey) {
-			acct := tokenAccount(a.CloudDashboard, a.CloudGRPC, authEntryOrgID(*a))
+			dashboardKey := a.CloudDashboard
+			if a.OAuthIssuer != "" {
+				dashboardKey += "|" + a.OAuthIssuer
+			}
+			acct := tokenAccount(dashboardKey, a.CloudGRPC, authEntryOrgID(*a))
 			if store.Put(acct, []byte(a.APIKey)) == nil {
 				cacheSecret(refPrefixV1+acct, a.APIKey)
 				a.APIKey = refPrefixV1 + acct
 			}
 		}
+		for value, kind := range map[string]string{
+			a.RefreshToken:   "refresh",
+			a.DPoPPrivateKey: "dpop-key",
+		} {
+			if value == "" || isRef(value) {
+				continue
+			}
+			acct := oauthSecretAccount(kind, *a)
+			if store.Put(acct, []byte(value)) == nil {
+				cacheSecret(refPrefixV1+acct, value)
+				if kind == "refresh" {
+					a.RefreshToken = refPrefixV1 + acct
+				} else {
+					a.DPoPPrivateKey = refPrefixV1 + acct
+				}
+			}
+		}
 		for j := range a.Certificates {
 			c := &a.Certificates[j]
 			if c.PemPrivateKey != "" && !isRef(c.PemPrivateKey) {
-				acct := keyAccount(a.CloudGRPC, c.OrganizationID, c.UserID, c.AssetID)
+				acct := keyAccount(a.CloudGRPC, c.OrganizationID, c.UserID, c.AssetID, c.PrincipalURI)
 				if store.Put(acct, []byte(c.PemPrivateKey)) == nil {
 					cacheSecret(refPrefixV1+acct, c.PemPrivateKey)
 					c.PemPrivateKey = refPrefixV1 + acct
@@ -204,6 +268,16 @@ func inlineSecrets(cfg *Config) {
 		if isRef(a.APIKey) {
 			if v, err := resolveSecret(a.APIKey); err == nil {
 				a.APIKey = v
+			}
+		}
+		if isRef(a.RefreshToken) {
+			if v, err := resolveSecret(a.RefreshToken); err == nil {
+				a.RefreshToken = v
+			}
+		}
+		if isRef(a.DPoPPrivateKey) {
+			if v, err := resolveSecret(a.DPoPPrivateKey); err == nil {
+				a.DPoPPrivateKey = v
 			}
 		}
 		for j := range a.Certificates {
@@ -261,6 +335,12 @@ func countInlineSecrets(cfg *Config) int {
 		if a.APIKey != "" && !isRef(a.APIKey) {
 			n++
 		}
+		if a.RefreshToken != "" && !isRef(a.RefreshToken) {
+			n++
+		}
+		if a.DPoPPrivateKey != "" && !isRef(a.DPoPPrivateKey) {
+			n++
+		}
 		for _, c := range a.Certificates {
 			if c.PemPrivateKey != "" && !isRef(c.PemPrivateKey) {
 				n++
@@ -274,6 +354,12 @@ func countSecretRefs(cfg *Config) int {
 	n := 0
 	for _, a := range cfg.Auth {
 		if isRef(a.APIKey) {
+			n++
+		}
+		if isRef(a.RefreshToken) {
+			n++
+		}
+		if isRef(a.DPoPPrivateKey) {
 			n++
 		}
 		for _, c := range a.Certificates {
@@ -306,6 +392,12 @@ func DeleteStoredSecrets(cfg *Config) {
 	for _, a := range cfg.Auth {
 		if isRef(a.APIKey) {
 			deleteRef(a.APIKey)
+		}
+		if isRef(a.RefreshToken) {
+			deleteRef(a.RefreshToken)
+		}
+		if isRef(a.DPoPPrivateKey) {
+			deleteRef(a.DPoPPrivateKey)
 		}
 		for _, c := range a.Certificates {
 			if isRef(c.PemPrivateKey) {
