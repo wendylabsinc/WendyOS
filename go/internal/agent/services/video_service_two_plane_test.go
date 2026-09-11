@@ -39,10 +39,10 @@ func (f *fakeLoopback) auxCreatedCount() int {
 	return len(f.auxCreated)
 }
 
-// waitFor polls until cond holds, failing the test if it never does. The
+// waitUntilTwoPlane polls until cond holds, failing the test if it never does. The
 // two-plane lifecycle runs on its own goroutine, so every assertion about it
 // is an assertion about a state the sweep eventually reaches.
-func waitFor(t *testing.T, what string, cond func() bool) {
+func waitUntilTwoPlane(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -63,10 +63,10 @@ func TestTwoPlaneRefusedSourceIsNotRecreated(t *testing.T) {
 	ctx := context.Background()
 
 	video.SetTwoPlaneContainerConsumers(ctx, []string{"container-a"})
-	waitFor(t, "the first node to be created", func() bool { return loop.auxCreatedCount() == 1 })
+	waitUntilTwoPlane(t, "the first node to be created", func() bool { return loop.auxCreatedCount() == 1 })
 	// The pump joins the hub on its own goroutine; a frame produced before it
 	// subscribes would simply never reach it.
-	waitFor(t, "the pump to join the hub", func() bool { return hubSubscriberCount(hub) == 2 })
+	waitUntilTwoPlane(t, "the pump to join the hub", func() bool { return hubSubscriberCount(hub) == 2 })
 
 	// A byte-chunked frame: whole access units are what a binding needs, so
 	// frameBindableToLoopback refuses this source permanently.
@@ -75,7 +75,7 @@ func TestTwoPlaneRefusedSourceIsNotRecreated(t *testing.T) {
 		codec:     agentpb.VideoCodec_VIDEO_CODEC_H264,
 		auAligned: false,
 	})
-	waitFor(t, "the refusal to be recorded", func() bool {
+	waitUntilTwoPlane(t, "the refusal to be recorded", func() bool {
 		return video.twoPlaneSourceRefused("v4l2:/dev/video0")
 	})
 
@@ -89,7 +89,7 @@ func TestTwoPlaneRefusedSourceIsNotRecreated(t *testing.T) {
 	// A different entitled container set is a different question, so the
 	// refusal stops standing and the source gets one honest attempt again.
 	video.SetTwoPlaneContainerConsumers(ctx, []string{"container-b"})
-	waitFor(t, "the node to be rebuilt for a new consumer set", func() bool {
+	waitUntilTwoPlane(t, "the node to be rebuilt for a new consumer set", func() bool {
 		return loop.auxCreatedCount() == 2
 	})
 }
