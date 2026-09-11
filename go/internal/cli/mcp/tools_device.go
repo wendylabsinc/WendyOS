@@ -7,7 +7,6 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -53,9 +52,13 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 
 func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	scan := req.GetBool("scan", false)
+	cfg, err := s.loadConfig()
+	if err != nil {
+		return errResultf(errCodeInternal, "loading config: %s", err.Error()), nil
+	}
 
 	var devices []map[string]any
-	for _, auth := range s.cfg.Auth {
+	for _, auth := range cfg.Auth {
 		if auth.CloudGRPC != "" {
 			devices = append(devices, map[string]any{
 				"address": auth.CloudGRPC,
@@ -64,9 +67,9 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 			})
 		}
 	}
-	if s.cfg.DefaultDevice != "" {
+	if cfg.DefaultDevice != "" {
 		devices = append(devices, map[string]any{
-			"address": s.cfg.DefaultDevice,
+			"address": cfg.DefaultDevice,
 			"type":    "default",
 			"source":  "config",
 		})
@@ -203,8 +206,12 @@ func (s *mcpServer) handleDeviceSetDefault(_ context.Context, req mcpgo.CallTool
 	if address == "" {
 		return errResult(errCodeInvalidArgument, "address is required"), nil
 	}
-	s.cfg.DefaultDevice = address
-	if err := config.Save(s.cfg); err != nil {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		return errResultf(errCodeInternal, "loading config: %s", err.Error()), nil
+	}
+	cfg.DefaultDevice = address
+	if err := s.saveConfig(cfg); err != nil {
 		return errResultf(errCodeInternal, "saving config: %s", err.Error()), nil
 	}
 	return okText(fmt.Sprintf("default device set to %s", address)), nil

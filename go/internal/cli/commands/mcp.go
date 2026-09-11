@@ -36,7 +36,7 @@ func newMCPServeCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			srv := wendymcp.New(cfg, connectWithAutoTLS)
+			srv := wendymcp.New(connectWithAutoTLS)
 			srv.SetLANDiscoverer(func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 				return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 			})

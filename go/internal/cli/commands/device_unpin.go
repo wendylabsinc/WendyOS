@@ -163,10 +163,10 @@ func configPinKeysForIdentity(cfg *config.Config, identityKey string) []string {
 	return keys
 }
 
-// clearPinsGoverning drops the pins that govern a dial to pinKey — the
-// governing config pin, the config pins under this device's other names, and
-// the SPKI entries those pins identify — and returns what it removed. It
-// mutates cfg; saving is the caller's job.
+// clearPinsGoverning drops the pins that govern an identity refusal for pinKey:
+// the pin filed under the refusal's exact key when present, otherwise the pin
+// found under a device alias, plus same-identity aliases and their SPKI entries.
+// It returns what it removed and mutates cfg; saving is the caller's job.
 //
 // It clears more than the single key lookupPin would return because "unpin" has
 // to terminate. A device pinned under both its mDNS hostname and the cloud
@@ -205,11 +205,17 @@ func clearPinsGoverning(cfg *config.Config, pinKey string) []clearedPin {
 		return nil
 	}
 
-	// The governing pin is what a dial to pinKey would actually be judged
-	// against, so it is also what defines "this device" for everything below.
-	// Resolving it through the same lookupPin the dial path uses is what keeps
-	// the refusal and its escape hatch talking about the same pin.
-	governing, governingKey, pinned := lookupPin(cfg, pinKey)
+	// Prefer a pin filed directly under the argument. Post-connect identity
+	// enforcement names that exact key in its refusal, so resolving through a
+	// higher-precedence cloud alias here can clear the new device while leaving
+	// the stale pin that raised the refusal untouched. Only fall back to alias
+	// lookup when the named key has no pin of its own (the cloud-roster-only
+	// case).
+	governing, pinned := cfg.DevicePinFor(pinKey)
+	governingKey := pinKey
+	if !pinned {
+		governing, governingKey, pinned = lookupPin(cfg, pinKey)
+	}
 
 	var cleared []clearedPin
 	var identityKeys []string

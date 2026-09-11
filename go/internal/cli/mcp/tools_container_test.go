@@ -17,7 +17,7 @@ import (
 
 func TestContainerStart_DescriptionMentionsEntitlements(t *testing.T) {
 	srv := server.NewMCPServer("t", "0")
-	s := New(&config.Config{}, nil)
+	s := newTestServer(&config.Config{}, nil)
 	s.registerContainerTools(srv)
 	tool, ok := srv.ListTools()["container_start"]
 	if !ok {
@@ -30,7 +30,7 @@ func TestContainerStart_DescriptionMentionsEntitlements(t *testing.T) {
 
 func TestContainerAnnotations_ReadOnlyNotDestructive(t *testing.T) {
 	srv := server.NewMCPServer("t", "0")
-	s := New(&config.Config{}, nil)
+	s := newTestServer(&config.Config{}, nil)
 	s.registerContainerTools(srv)
 	tools := srv.ListTools()
 	list, ok := tools["container_list"]
@@ -149,7 +149,7 @@ func startFakeContainerServer(t *testing.T, fake *fakeContainerServer) *grpcclie
 }
 
 func TestContainerList_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "container_list", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -166,7 +166,7 @@ func TestContainerList_ReturnsJSON(t *testing.T) {
 		},
 	}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_list", nil)
@@ -186,7 +186,7 @@ func TestContainerList_ReturnsJSON(t *testing.T) {
 }
 
 func TestContainerStop_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "container_stop", map[string]any{"app_name": "myapp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -199,7 +199,7 @@ func TestContainerStop_NotConnected(t *testing.T) {
 func TestContainerStop_Success(t *testing.T) {
 	fake := &fakeContainerServer{}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_stop", map[string]any{"app_name": "myapp"})
@@ -218,7 +218,7 @@ func TestContainerStop_Success(t *testing.T) {
 func TestContainerDelete_Success(t *testing.T) {
 	fake := &fakeContainerServer{}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_delete", map[string]any{"app_name": "myapp"})
@@ -241,7 +241,7 @@ func TestContainerStats_ReturnsJSON(t *testing.T) {
 		},
 	}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_stats", nil)
@@ -263,7 +263,7 @@ func TestContainerStats_ReturnsJSON(t *testing.T) {
 func TestContainerStart_ReturnsOutput(t *testing.T) {
 	fake := &fakeContainerServer{}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_start", map[string]any{"app_name": "myapp"})
@@ -282,7 +282,7 @@ func TestContainerStart_ReturnsOutput(t *testing.T) {
 func TestContainerAttach_ReturnsOutput(t *testing.T) {
 	fake := &fakeContainerServer{}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_attach", map[string]any{"app_name": "myapp"})
@@ -303,7 +303,7 @@ func TestContainerAttach_MaxLinesAlias_LimitsChunks(t *testing.T) {
 		attachOutputs: [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d"), []byte("e")},
 	}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	// max_lines is the deprecated alias for max_chunks; it must keep working.
@@ -325,7 +325,7 @@ func TestContainerAttach_MaxChunks_LimitsChunks(t *testing.T) {
 		attachOutputs: [][]byte{[]byte("a"), []byte("b"), []byte("c")},
 	}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_attach", map[string]any{"app_name": "myapp", "max_chunks": 1})
@@ -346,7 +346,7 @@ func TestContainerAttach_MaxChunksTakesPriorityOverMaxLines(t *testing.T) {
 		attachOutputs: [][]byte{[]byte("a"), []byte("b"), []byte("c")},
 	}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	// When both are passed, the new name wins per intParamAlias semantics.
@@ -368,7 +368,7 @@ func TestContainerStart_MaxChunks_LimitsChunks(t *testing.T) {
 		startOutputs: [][]byte{[]byte("a"), []byte("b"), []byte("c")},
 	}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_start", map[string]any{"app_name": "myapp", "max_chunks": 2})
@@ -389,7 +389,7 @@ func TestContainerAttach_MaxBytes_TruncatesOversizeOutput(t *testing.T) {
 		attachOutputs: [][]byte{[]byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
 	}
 	conn := startFakeContainerServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "container_attach", map[string]any{"app_name": "myapp", "max_bytes": 10})

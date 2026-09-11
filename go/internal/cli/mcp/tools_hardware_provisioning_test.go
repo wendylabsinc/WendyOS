@@ -78,7 +78,7 @@ func startFakeHWProvisioningServer(t *testing.T, fake *fakeHWProvisioningOSServe
 // --- Hardware tests ---
 
 func TestHardwareCapabilities_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "hardware_capabilities", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -95,7 +95,7 @@ func TestHardwareCapabilities_ReturnsList(t *testing.T) {
 		},
 	}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "hardware_capabilities", nil)
@@ -124,7 +124,7 @@ func TestHardwareCapabilities_HasStructuredContent(t *testing.T) {
 		},
 	}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "hardware_capabilities", nil)
@@ -142,7 +142,7 @@ func TestHardwareCapabilities_HasStructuredContent(t *testing.T) {
 func TestHardwareCapabilities_EmptyList(t *testing.T) {
 	fake := &fakeHWProvisioningOSServer{}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "hardware_capabilities", nil)
@@ -170,7 +170,7 @@ func TestHardwareCapabilities_MaxBytesTruncates(t *testing.T) {
 	}
 	fake := &fakeHWProvisioningOSServer{capabilities: caps}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "hardware_capabilities", map[string]any{"max_bytes": 50})
@@ -192,7 +192,7 @@ func TestHardwareCapabilities_MaxBytesTruncates(t *testing.T) {
 // --- Provisioning tests ---
 
 func TestProvisioningStatus_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "provisioning_status", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -205,7 +205,7 @@ func TestProvisioningStatus_NotConnected(t *testing.T) {
 func TestProvisioningStatus_NotProvisioned(t *testing.T) {
 	fake := &fakeHWProvisioningOSServer{}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "provisioning_status", nil)
@@ -238,7 +238,7 @@ func TestProvisioningStatus_Provisioned(t *testing.T) {
 		},
 	}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "provisioning_status", nil)
@@ -274,7 +274,7 @@ func TestProvisioningStatus_HasStructuredContent(t *testing.T) {
 		},
 	}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "provisioning_status", nil)
@@ -311,7 +311,7 @@ func TestProvisioningStart_Success(t *testing.T) {
 		},
 	}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "provisioning_start", map[string]any{
@@ -334,7 +334,7 @@ func TestProvisioningStart_Success(t *testing.T) {
 func TestProvisioningStart_MissingRequired(t *testing.T) {
 	fake := &fakeHWProvisioningOSServer{}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "provisioning_start", map[string]any{
@@ -351,7 +351,7 @@ func TestProvisioningStart_MissingRequired(t *testing.T) {
 // --- OS Update tests ---
 
 func TestOSUpdate_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "os_update", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -377,7 +377,7 @@ func TestOSUpdate_StreamsProgress(t *testing.T) {
 		},
 	}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "os_update", nil)
@@ -410,7 +410,7 @@ func TestOSUpdate_Failed(t *testing.T) {
 		},
 	}
 	conn := startFakeHWProvisioningServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "os_update", nil)

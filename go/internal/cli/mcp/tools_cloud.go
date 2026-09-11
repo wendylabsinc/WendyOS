@@ -508,9 +508,13 @@ func cloudErrResult(err error) *mcpgo.CallToolResult {
 }
 
 func (s *mcpServer) cloudAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
+	cfg, err := s.loadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
 	// MCP is non-interactive: pass a nil picker so resolution stops at the
 	// persisted default (or errors when several sessions remain ambiguous).
-	auth, err := config.ResolveAuth(s.cfg, cloudGRPC, nil)
+	auth, err := config.ResolveAuth(cfg, cloudGRPC, nil)
 	if errors.Is(err, config.ErrMultipleSessions) {
 		return nil, &cloudResolveErr{code: errCodeMultipleSessions, msg: "multiple auth sessions exist; pass cloud_grpc to select one, or set a default with 'wendy auth use'"}
 	}

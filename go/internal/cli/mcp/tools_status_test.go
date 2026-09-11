@@ -9,7 +9,7 @@ import (
 )
 
 func TestWendyStatus_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.handleWendyStatus(context.Background(), callToolReq("wendy_status", nil))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -31,7 +31,7 @@ func TestWendyStatus_NotConnected(t *testing.T) {
 
 func TestWendyStatus_Connected_Direct(t *testing.T) {
 	conn, _ := startFakeAgentServer(t, &fakeAgentServer{})
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 	srv.SetConnType("direct")
 

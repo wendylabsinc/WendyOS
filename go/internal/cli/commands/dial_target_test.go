@@ -76,6 +76,32 @@ func TestPinCandidateKeysSingleKeyWithoutCache(t *testing.T) {
 	}
 }
 
+func TestGoverningPinReloadsPersistedConfigBetweenCalls(t *testing.T) {
+	setPinCache(t)
+	setTempConfig(t, &config.Config{DevicePins: map[string]config.DevicePin{
+		"theta": {OrgID: 2, CloudGRPC: "cloud.example:443", AssetID: "226"},
+	}})
+	orig := loadConfigForPinFn
+	loadConfigForPinFn = config.Load
+	t.Cleanup(func() { loadConfigForPinFn = orig })
+
+	if pin, _, ok := governingPin("theta.local"); !ok || pin.AssetID != "226" {
+		t.Fatalf("initial governing pin = %+v, ok=%v; want asset 226", pin, ok)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("load config for external update: %v", err)
+	}
+	cfg.SetDevicePin("theta.local", 2, "cloud.example:443", "379")
+	if err := config.Save(cfg); err != nil {
+		t.Fatalf("persist external update: %v", err)
+	}
+
+	if pin, _, ok := governingPin("theta.local"); !ok || pin.AssetID != "379" {
+		t.Fatalf("governing pin after persisted update = %+v, ok=%v; want asset 379", pin, ok)
+	}
+}
+
 // TestPinCandidateKeysAddsMeshThenDisplayName: the cache entry matched by
 // hostname contributes its mesh name and then its display name, in that order,
 // after the dialled key. Deduplication is by the same normalisation the pin

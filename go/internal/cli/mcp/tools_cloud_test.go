@@ -117,7 +117,7 @@ func TestCloudDiscover_ReturnsConfiguredCloudDevices(t *testing.T) {
 		},
 	}
 	addr := startFakeCloudAssetServer(t, fake)
-	srv := New(&config.Config{
+	srv := newTestServer(&config.Config{
 		Auth: []config.AuthConfig{{
 			CloudGRPC: addr,
 			Certificates: []config.CertificateInfo{{
@@ -161,7 +161,7 @@ func TestCloudDiscover_HasStructuredContent(t *testing.T) {
 		},
 	}
 	addr := startFakeCloudAssetServer(t, fake)
-	srv := New(&config.Config{
+	srv := newTestServer(&config.Config{
 		Auth: []config.AuthConfig{{
 			CloudGRPC: addr,
 			Certificates: []config.CertificateInfo{{
@@ -195,7 +195,7 @@ func TestCloudDiscover_MaxBytesTruncates(t *testing.T) {
 	}
 	fake := &fakeCloudAssetServer{assets: assets}
 	addr := startFakeCloudAssetServer(t, fake)
-	srv := New(&config.Config{
+	srv := newTestServer(&config.Config{
 		Auth: []config.AuthConfig{{
 			CloudGRPC: addr,
 			Certificates: []config.CertificateInfo{{
@@ -221,7 +221,7 @@ func TestCloudDiscover_MaxBytesTruncates(t *testing.T) {
 }
 
 func TestCloud_MultipleSessions_Code(t *testing.T) {
-	srv := New(&config.Config{
+	srv := newTestServer(&config.Config{
 		Auth: []config.AuthConfig{
 			{CloudGRPC: "one:123", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
 			{CloudGRPC: "two:123", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
@@ -244,7 +244,7 @@ func TestCloud_MultipleSessions_Code(t *testing.T) {
 }
 
 func TestCloudDiscover_RequiresAuth(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_discover", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -254,8 +254,36 @@ func TestCloudDiscover_RequiresAuth(t *testing.T) {
 	}
 }
 
+func TestCloudAuthEntryReloadsPersistedConfig(t *testing.T) {
+	useDiskConfig(t)
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{{
+		CloudGRPC:    "old.example:443",
+		Certificates: []config.CertificateInfo{{OrganizationID: 2}},
+	}}}); err != nil {
+		t.Fatalf("save initial config: %v", err)
+	}
+	srv := New(nil)
+	if _, err := srv.cloudAuthEntry("old.example:443"); err != nil {
+		t.Fatalf("initial cloud auth: %v", err)
+	}
+
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{{
+		CloudGRPC:    "new.example:443",
+		Certificates: []config.CertificateInfo{{OrganizationID: 2}},
+	}}}); err != nil {
+		t.Fatalf("save replacement config: %v", err)
+	}
+	auth, err := srv.cloudAuthEntry("new.example:443")
+	if err != nil {
+		t.Fatalf("cloud auth after external write: %v", err)
+	}
+	if auth.CloudGRPC != "new.example:443" {
+		t.Fatalf("cloud auth = %q, want persisted replacement", auth.CloudGRPC)
+	}
+}
+
 func TestCloudDiscover_RequiresCloudGRPCWhenMultipleAuthSessionsExist(t *testing.T) {
-	srv := New(&config.Config{
+	srv := newTestServer(&config.Config{
 		Auth: []config.AuthConfig{
 			{CloudGRPC: "one:123", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
 			{CloudGRPC: "two:123", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
@@ -271,7 +299,7 @@ func TestCloudDiscover_RequiresCloudGRPCWhenMultipleAuthSessionsExist(t *testing
 }
 
 func TestRun_MissingProjectPath(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "run", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -282,7 +310,7 @@ func TestRun_MissingProjectPath(t *testing.T) {
 }
 
 func TestCloudTunnel_RejectsUnknownProtocol(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_tunnel", map[string]any{
 		"local_port": 8080,
 		"protocol":   "quic",
@@ -303,7 +331,7 @@ func TestCloudTunnel_DefaultsProtocolToTCP(t *testing.T) {
 	// Without a "protocol" argument at all, the invalid-argument short-circuit
 	// must not fire — the request should proceed past port/protocol
 	// validation and fail later for lack of auth, not for protocol.
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_tunnel", map[string]any{
 		"local_port": 8080,
 	})
@@ -320,7 +348,7 @@ func TestCloudTunnel_DefaultsProtocolToTCP(t *testing.T) {
 }
 
 func TestCloudTunnel_RejectsOutOfRangeLocalPort(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_tunnel", map[string]any{
 		"local_port": 70000,
 	})
@@ -337,7 +365,7 @@ func TestCloudTunnel_RejectsOutOfRangeLocalPort(t *testing.T) {
 }
 
 func TestCloudPing_RequiresDeviceName(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_ping", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -352,7 +380,7 @@ func TestCloudPing_RequiresDeviceName(t *testing.T) {
 }
 
 func TestCloudPing_RejectsCountAboveMax(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_ping", map[string]any{
 		"device_name": "edge-one",
 		"count":       21,
@@ -370,7 +398,7 @@ func TestCloudPing_RejectsCountAboveMax(t *testing.T) {
 }
 
 func TestCloudPing_RejectsCountBelowMin(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_ping", map[string]any{
 		"device_name": "edge-one",
 		"count":       0,
@@ -391,7 +419,7 @@ func TestCloudPing_DefaultCountWithinBounds(t *testing.T) {
 	// No count argument at all should use the default (4), which is within
 	// bounds — the failure here must come from auth resolution, not count
 	// validation.
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "cloud_ping", map[string]any{
 		"device_name": "edge-one",
 	})
@@ -408,7 +436,7 @@ func TestCloudPing_DefaultCountWithinBounds(t *testing.T) {
 }
 
 func TestCloudAuthEntry_UsesDefaultWhenMultiple(t *testing.T) {
-	srv := New(&config.Config{
+	srv := newTestServer(&config.Config{
 		DefaultCloudGRPC: "two:123",
 		Auth: []config.AuthConfig{
 			{CloudGRPC: "one:123", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
@@ -425,7 +453,7 @@ func TestCloudAuthEntry_UsesDefaultWhenMultiple(t *testing.T) {
 }
 
 func TestCloudAuthEntry_ErrorsMentionsCloudGRPCParam(t *testing.T) {
-	srv := New(&config.Config{
+	srv := newTestServer(&config.Config{
 		Auth: []config.AuthConfig{
 			{CloudGRPC: "one:123", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
 			{CloudGRPC: "two:123", Certificates: []config.CertificateInfo{{OrganizationID: 2}}},

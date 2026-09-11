@@ -94,7 +94,7 @@ func startFakeAgentWiFiServer(t *testing.T, fake *fakeWiFiBluetoothServer) *grpc
 }
 
 func TestWiFiList_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "wifi_list", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -111,7 +111,7 @@ func TestWiFiList_ReturnsNetworks(t *testing.T) {
 		},
 	}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "wifi_list", nil)
@@ -137,7 +137,7 @@ func TestWiFiList_HasStructuredContent(t *testing.T) {
 		},
 	}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "wifi_list", nil)
@@ -159,7 +159,7 @@ func TestWiFiList_MaxBytesTruncates(t *testing.T) {
 	}
 	fake := &fakeWiFiBluetoothServer{wifiNetworks: networks}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "wifi_list", map[string]any{"max_bytes": 50})
@@ -180,7 +180,7 @@ func TestWiFiConnect_Success(t *testing.T) {
 		wifiConnectResp: &agentpb.ConnectToWiFiResponse{Success: true},
 	}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "wifi_connect", map[string]any{
@@ -208,7 +208,7 @@ func TestWiFiStatus_ReturnsJSON(t *testing.T) {
 		},
 	}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "wifi_status", nil)
@@ -234,7 +234,7 @@ func TestWiFiStatus_ReturnsJSON(t *testing.T) {
 func TestWiFiDisconnect_Success(t *testing.T) {
 	fake := &fakeWiFiBluetoothServer{}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "wifi_disconnect", nil)
@@ -257,7 +257,7 @@ func TestWiFiKnownNetworks_ReturnsNetworks(t *testing.T) {
 		},
 	}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "wifi_known_networks", nil)
@@ -274,7 +274,7 @@ func TestWiFiKnownNetworks_ReturnsNetworks(t *testing.T) {
 }
 
 func TestBluetoothScan_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "bluetooth_scan", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -291,7 +291,7 @@ func TestBluetoothScan_ReturnsPeripherals(t *testing.T) {
 		},
 	}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "bluetooth_scan", map[string]any{"timeout_seconds": 2})
@@ -317,7 +317,7 @@ func TestBluetoothScan_HasStructuredContent(t *testing.T) {
 		},
 	}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "bluetooth_scan", map[string]any{"timeout_seconds": 2})
@@ -342,7 +342,7 @@ func TestBluetoothScan_MaxBytesTruncates(t *testing.T) {
 	}
 	fake := &fakeWiFiBluetoothServer{btPeripherals: peripherals}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "bluetooth_scan", map[string]any{"timeout_seconds": 2, "max_bytes": 50})
@@ -361,7 +361,7 @@ func TestBluetoothScan_MaxBytesTruncates(t *testing.T) {
 func TestBluetoothConnect_Success(t *testing.T) {
 	fake := &fakeWiFiBluetoothServer{}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "bluetooth_connect", map[string]any{"address": "AA:BB:CC:DD:EE:FF"})
@@ -380,7 +380,7 @@ func TestBluetoothConnect_Success(t *testing.T) {
 func TestBluetoothDisconnect_Success(t *testing.T) {
 	fake := &fakeWiFiBluetoothServer{}
 	conn := startFakeAgentWiFiServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "bluetooth_disconnect", map[string]any{"address": "AA:BB:CC:DD:EE:FF"})

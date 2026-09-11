@@ -50,7 +50,7 @@ func startFakeAgentServer(t *testing.T, srv *fakeAgentServer) (*grpcclient.Agent
 }
 
 func TestDeviceInfo_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "device_info", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -68,7 +68,7 @@ func TestDeviceInfo_ReturnsJSON(t *testing.T) {
 		},
 	}
 	conn, _ := startFakeAgentServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "device_info", nil)
@@ -91,7 +91,7 @@ func TestDeviceInfo_ReturnsJSON(t *testing.T) {
 func TestDeviceInfo_HasStructuredContent(t *testing.T) {
 	fake := &fakeAgentServer{versionResp: &agentpb.GetAgentVersionResponse{Version: "9.9.9", Os: "linux"}}
 	conn, _ := startFakeAgentServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 	result, err := srv.callTool(context.Background(), "device_info", nil)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestDeviceList_ReturnsConfiguredDevices(t *testing.T) {
 			{CloudGRPC: "mydevice.local:50051"},
 		},
 	}
-	srv := New(cfg, nil)
+	srv := newTestServer(cfg, nil)
 	result, err := srv.callTool(context.Background(), "device_list", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -128,7 +128,7 @@ func TestDeviceList_SourceFieldOnConfigEntries(t *testing.T) {
 			{CloudGRPC: "mydevice.local:50051"},
 		},
 	}
-	srv := New(cfg, nil)
+	srv := newTestServer(cfg, nil)
 	result, err := srv.callTool(context.Background(), "device_list", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -144,9 +144,72 @@ func TestDeviceList_SourceFieldOnConfigEntries(t *testing.T) {
 	}
 }
 
+func TestDeviceListReloadsPersistedConfig(t *testing.T) {
+	useDiskConfig(t)
+	if err := config.Save(&config.Config{DefaultDevice: "old.local:50051"}); err != nil {
+		t.Fatalf("save initial config: %v", err)
+	}
+	srv := New(nil)
+
+	// Exercise one read before another process changes config.json. A
+	// long-running MCP server must not retain this first snapshot.
+	if _, err := srv.callTool(context.Background(), "device_list", nil); err != nil {
+		t.Fatalf("initial device_list: %v", err)
+	}
+	if err := config.Save(&config.Config{DefaultDevice: "new.local:50052"}); err != nil {
+		t.Fatalf("save replacement config: %v", err)
+	}
+
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("device_list after external write: %v", err)
+	}
+	devices := listPayload(t, result, "devices")
+	if len(devices) != 1 || devices[0]["address"] != "new.local:50052" {
+		t.Fatalf("devices after external write = %#v, want only the new persisted default", devices)
+	}
+}
+
+func TestDeviceSetDefaultPreservesChangesPersistedAfterServerStart(t *testing.T) {
+	useDiskConfig(t)
+	if err := config.Save(&config.Config{DefaultDevice: "old.local:50051"}); err != nil {
+		t.Fatalf("save initial config: %v", err)
+	}
+	srv := New(nil)
+	if _, err := srv.callTool(context.Background(), "device_list", nil); err != nil {
+		t.Fatalf("initial device_list: %v", err)
+	}
+
+	// Model `wendy device unpin` or another CLI process updating trust state
+	// while MCP remains alive.
+	external, err := config.Load()
+	if err != nil {
+		t.Fatalf("load external config: %v", err)
+	}
+	external.SetDevicePin("theta.local", 2, "cloud.example:443", "379")
+	if err := config.Save(external); err != nil {
+		t.Fatalf("save external pin: %v", err)
+	}
+
+	result, err := srv.callTool(context.Background(), "device_set_default", map[string]any{"address": "theta.local:50052"})
+	if err != nil || result.IsError {
+		t.Fatalf("device_set_default: result=%v err=%v", result, err)
+	}
+	onDisk, err := config.Load()
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if onDisk.DefaultDevice != "theta.local:50052" {
+		t.Errorf("default = %q, want theta.local:50052", onDisk.DefaultDevice)
+	}
+	if pin, ok := onDisk.DevicePinFor("theta.local"); !ok || pin.AssetID != "379" {
+		t.Errorf("external pin was overwritten by stale MCP config: pin=%+v ok=%v", pin, ok)
+	}
+}
+
 func TestDeviceList_ScanTrue_IncludesScanResults(t *testing.T) {
 	cfg := &config.Config{}
-	srv := New(cfg, nil)
+	srv := newTestServer(cfg, nil)
 	srv.discoverLANFn = func(_ context.Context, _ time.Duration) ([]models.LANDevice, error) {
 		return []models.LANDevice{
 			{DisplayName: "test-device", Hostname: "test-device.local", Port: 50051, AgentVersion: "1.0.0"},
@@ -177,7 +240,7 @@ func TestDeviceList_MaxBytesTruncates(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		auth = append(auth, config.AuthConfig{CloudGRPC: "some-long-device-hostname-for-padding.local:50051"})
 	}
-	srv := New(&config.Config{Auth: auth}, nil)
+	srv := newTestServer(&config.Config{Auth: auth}, nil)
 
 	result, err := srv.callTool(context.Background(), "device_list", map[string]any{"max_bytes": 50})
 	if err != nil {
@@ -210,7 +273,7 @@ func TestDeviceConnect_CallsConnectFn(t *testing.T) {
 		}, nil
 	})
 
-	srv := New(&config.Config{}, connectFn)
+	srv := newTestServer(&config.Config{}, connectFn)
 	result, err := srv.callTool(context.Background(), "device_connect", map[string]any{"address": addr})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

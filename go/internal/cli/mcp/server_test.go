@@ -26,7 +26,7 @@ func TestStart_ServesWhileStartupConnectIsBlocked(t *testing.T) {
 
 	connectStarted := make(chan struct{})
 	connectCanceled := make(chan struct{})
-	s := New(&config.Config{}, nil)
+	s := newTestServer(&config.Config{}, nil)
 	s.SetStartupConnect(func(ctx context.Context) {
 		close(connectStarted)
 		<-ctx.Done()
@@ -73,7 +73,7 @@ func TestConnectToOnStartup_DoesNotOverwriteExplicitConnection(t *testing.T) {
 	allowConnect := make(chan struct{})
 	startupConn := &grpcclient.AgentConnection{}
 	explicitConn := &grpcclient.AgentConnection{}
-	s := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+	s := newTestServer(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
 		close(connectStarted)
 		<-allowConnect
 		return startupConn, nil
@@ -96,21 +96,21 @@ func TestConnectToOnStartup_DoesNotOverwriteExplicitConnection(t *testing.T) {
 }
 
 func TestNew_NotNil(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := New(nil)
 	if srv == nil {
 		t.Fatal("New returned nil")
 	}
 }
 
 func TestGetConn_NilBeforeConnect(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	if srv.GetConn() != nil {
 		t.Fatal("expected nil connection before connect")
 	}
 }
 
 func TestGuideResource_ReturnsText(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	contents, err := srv.handleGuideResource(context.Background(), mcpgo.ReadResourceRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -144,7 +144,7 @@ func TestGuideResource_ReturnsText(t *testing.T) {
 // noise for callers.
 func TestDeadTools_NotRegistered(t *testing.T) {
 	srv := server.NewMCPServer("t", "0")
-	s := New(&config.Config{}, nil)
+	s := newTestServer(&config.Config{}, nil)
 	s.registerStatusTools(srv)
 	s.registerDeviceTools(srv)
 	s.registerContainerTools(srv)

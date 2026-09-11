@@ -126,6 +126,43 @@ func TestDeviceUnpinClearsAPinFoundUnderAnAlias(t *testing.T) {
 	}
 }
 
+// TestDeviceUnpinPrefersTheExactRefusalKey reproduces the Theta failure: a
+// stale LAN pin is filed under the hostname named by post-connect enforcement,
+// while a newer cloud pin exists under a discovery alias. The refusal tells the
+// user to unpin the hostname, so that command must clear the exact stale pin,
+// not follow cloud-source precedence to the already-correct alias.
+func TestDeviceUnpinPrefersTheExactRefusalKey(t *testing.T) {
+	readPins := writePinTestConfig(t, map[string]config.DevicePin{
+		"wendyos-wendy-box-theta": {OrgID: 2, CloudGRPC: "cloud.example:443", AssetID: "226", Source: config.PinSourceLAN},
+		"wendy-box-theta":         {OrgID: 2, CloudGRPC: "cloud.example:443", AssetID: "379", Source: config.PinSourceCloud},
+	})
+	setPinCache(t, discoverycache.Entry{
+		ID:          "theta",
+		Hostname:    "wendyos-wendy-box-theta.local",
+		DisplayName: "wendy-box-theta",
+		AssetID:     379,
+		OrgID:       2,
+	})
+	seedSPKIPins(t, "urn:wendy:org:2:asset:226", "urn:wendy:org:2:asset:379")
+
+	runUnpin(t, "wendyos-wendy-box-theta.local")
+
+	pins := readPins()
+	if pin, ok := pins["wendyos-wendy-box-theta"]; ok {
+		t.Errorf("exact stale pin survived hostname unpin: %+v", pin)
+	}
+	if pin, ok := pins["wendy-box-theta"]; !ok || pin.AssetID != "379" {
+		t.Errorf("current cloud alias was removed: pin=%+v ok=%v", pin, ok)
+	}
+	spki := readSPKIPins(t)
+	if _, ok := spki["urn:wendy:org:2:asset:226"]; ok {
+		t.Error("stale identity SPKI pin survived")
+	}
+	if _, ok := spki["urn:wendy:org:2:asset:379"]; !ok {
+		t.Error("current identity SPKI pin was removed")
+	}
+}
+
 // TestDeviceUnpinClearsSPKIPinWithNoConfigPin covers the store that gets
 // written where no config pin ever does. getAgentVersionAtAddress runs the dial
 // ladder with the SPKI store for every device the mDNS prober enumerates, so

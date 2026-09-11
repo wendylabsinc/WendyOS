@@ -72,7 +72,7 @@ func startFakeTelemetryServer(t *testing.T, fake *fakeTelemetryServer) *grpcclie
 }
 
 func TestTelemetryLogs_NotConnected(t *testing.T) {
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "telemetry_logs", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -89,7 +89,7 @@ func TestTelemetryLogs_ReturnsJSON(t *testing.T) {
 		},
 	}
 	conn := startFakeTelemetryServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "telemetry_logs", map[string]any{"max_batches": 1})
@@ -111,7 +111,7 @@ func TestTelemetryLogs_HasStructuredContent(t *testing.T) {
 		},
 	}
 	conn := startFakeTelemetryServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "telemetry_logs", nil)
@@ -129,7 +129,7 @@ func TestTelemetryLogs_HasStructuredContent(t *testing.T) {
 func TestTelemetryLogs_EmptyReturnsEmptyList(t *testing.T) {
 	fake := &fakeTelemetryServer{}
 	conn := startFakeTelemetryServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "telemetry_logs", nil)
@@ -153,7 +153,7 @@ func TestTelemetryMetrics_ReturnsJSON(t *testing.T) {
 		},
 	}
 	conn := startFakeTelemetryServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "telemetry_metrics", nil)
@@ -175,7 +175,7 @@ func TestTelemetryTraces_ReturnsJSON(t *testing.T) {
 		},
 	}
 	conn := startFakeTelemetryServer(t, fake)
-	srv := New(&config.Config{}, nil)
+	srv := newTestServer(&config.Config{}, nil)
 	srv.SetConn(conn)
 
 	result, err := srv.callTool(context.Background(), "telemetry_traces", nil)

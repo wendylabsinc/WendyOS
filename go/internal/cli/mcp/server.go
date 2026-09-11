@@ -24,8 +24,12 @@ import (
 // ConnectFunc connects to a wendy agent at the given address (host:port).
 type ConnectFunc func(ctx context.Context, address string) (*grpcclient.AgentConnection, error)
 
+type configLoadFunc func() (*config.Config, error)
+type configSaveFunc func(*config.Config) error
+
 type mcpServer struct {
-	cfg              *config.Config
+	loadConfigFn     configLoadFunc
+	saveConfigFn     configSaveFunc
 	connectFn        ConnectFunc
 	startupConnectFn func(context.Context)
 	conn             *grpcclient.AgentConnection
@@ -47,13 +51,39 @@ func (s *mcpServer) SetStartupConnect(fn func(context.Context)) {
 	s.startupConnectFn = fn
 }
 
-func New(cfg *config.Config, connectFn ConnectFunc) *mcpServer {
+// New constructs an MCP server whose configuration is always read from and
+// written to ~/.wendy/config.json. The server is long-lived, while CLI commands
+// may update that file in other processes, so retaining the startup snapshot
+// would make device pins, auth sessions, and defaults disagree between the two
+// surfaces and could overwrite newer state on the next MCP write.
+func New(connectFn ConnectFunc) *mcpServer {
+	return newMCPServer(config.Load, config.Save, connectFn)
+}
+
+// newMCPServer accepts config functions so tests can use an isolated store
+// without touching the user's real Wendy configuration.
+func newMCPServer(loadConfigFn configLoadFunc, saveConfigFn configSaveFunc, connectFn ConnectFunc) *mcpServer {
 	return &mcpServer{
-		cfg:           cfg,
+		loadConfigFn:  loadConfigFn,
+		saveConfigFn:  saveConfigFn,
 		connectFn:     connectFn,
 		cloudTunnels:  make(map[string]*mcpCloudTunnel),
 		discoverLANFn: discovery.DiscoverLAN,
 	}
+}
+
+func (s *mcpServer) loadConfig() (*config.Config, error) {
+	if s.loadConfigFn == nil {
+		return nil, fmt.Errorf("no config loader configured")
+	}
+	return s.loadConfigFn()
+}
+
+func (s *mcpServer) saveConfig(cfg *config.Config) error {
+	if s.saveConfigFn == nil {
+		return fmt.Errorf("no config saver configured")
+	}
+	return s.saveConfigFn(cfg)
 }
 
 func (s *mcpServer) GetConn() *grpcclient.AgentConnection {

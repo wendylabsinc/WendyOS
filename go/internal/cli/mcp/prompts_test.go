@@ -15,7 +15,7 @@ func getPromptReq(args map[string]string) mcpgo.GetPromptRequest {
 }
 
 func TestDeployAppPrompt_MentionsRunAndPath(t *testing.T) {
-	s := New(nil, nil)
+	s := newTestServer(nil, nil)
 	res, err := s.handleDeployAppPrompt(context.Background(), getPromptReq(map[string]string{"project_path": "/tmp/myapp"}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -35,7 +35,7 @@ func TestDeployAppPrompt_MentionsRunAndPath(t *testing.T) {
 func TestDeployAppPrompt_UsesRealDeviceParamName(t *testing.T) {
 	// The run tool's device selector is device_name, not device. The prompt
 	// must render the real param name so an agent doesn't pass an invented one.
-	s := New(nil, nil)
+	s := newTestServer(nil, nil)
 	res, err := s.handleDeployAppPrompt(context.Background(), getPromptReq(map[string]string{"device_name": "edge-01"}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -50,7 +50,7 @@ func TestDeployAppPrompt_UsesRealDeviceParamName(t *testing.T) {
 }
 
 func TestDiagnoseContainerPrompt_MentionsDiagnostics(t *testing.T) {
-	s := New(nil, nil)
+	s := newTestServer(nil, nil)
 	res, err := s.handleDiagnoseContainerPrompt(context.Background(), getPromptReq(nil))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
