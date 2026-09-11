@@ -47,12 +47,22 @@ type Source struct {
 }
 
 type SourceStats struct {
-	Source          Source         `json:"source"`
-	RequestedOffset int64          `json:"requested_offset_nanos"`
-	ActualOffset    int64          `json:"actual_offset_nanos"`
-	Count           uint64         `json:"count"`
-	Drops           *uint64        `json:"drops,omitempty"`
-	DropAccounting  string         `json:"drop_accounting"`
+	Source          Source  `json:"source"`
+	RequestedOffset int64   `json:"requested_offset_nanos"`
+	ActualOffset    int64   `json:"actual_offset_nanos"`
+	Count           uint64  `json:"count"`
+	Drops           *uint64 `json:"drops,omitempty"`
+	DropAccounting  string  `json:"drop_accounting"`
+	// ArmedDrops is present only for a source a campaign armed for pre-roll,
+	// and counts frames the hub dropped for the standby subscription during
+	// the ARMED period, before the trigger opened this episode. Those frames
+	// were never candidates for the episode: the pre-roll ring keeps only the
+	// last `buffer` seconds, and most of the armed period is older than that.
+	// They are reported here rather than in Drops so the episode's own loss
+	// figure stays the loss of the recording it describes. Losses inside the
+	// pre-roll window itself do reach Drops, through the sequence gaps between
+	// the frames the ring retained.
+	ArmedDrops      *uint64        `json:"armed_period_drops,omitempty"`
 	MappingError    *int64         `json:"mapping_error_nanos,omitempty"`
 	Discontinuities uint64         `json:"discontinuities"`
 	Mappings        []ClockMapping `json:"clock_mappings,omitempty"`
@@ -191,13 +201,16 @@ type CaptureSession struct {
 
 // CaptureResult is reported by an adapter before the episode is sealed.
 type CaptureResult struct {
-	SourceID        string
-	ClockDomain     string
-	SourceDetail    string
-	ActualOffset    *int64
-	Count           uint64
-	Drops           *uint64
-	DropAccounting  string
+	SourceID       string
+	ClockDomain    string
+	SourceDetail   string
+	ActualOffset   *int64
+	Count          uint64
+	Drops          *uint64
+	DropAccounting string
+	// ArmedDrops carries the armed-period drops of a pre-roll campaign source.
+	// See SourceStats.ArmedDrops for what it counts and why it is separate.
+	ArmedDrops      *uint64
 	MappingError    *int64
 	Discontinuities uint64
 	Mappings        []ClockMapping

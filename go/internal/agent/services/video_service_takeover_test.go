@@ -344,3 +344,76 @@ func hubSubscriberCount(h *deviceHub) int {
 	defer h.mu.Unlock()
 	return len(h.subs)
 }
+
+// installSlowProducers is installFakeProducers whose teardown takes longer
+// than hubTeardownTimeout, standing in for a producer still holding the device
+// file descriptor when the takeover's wait expires.
+func installSlowProducers(svc *VideoService, teardown time.Duration) *fakeProducers {
+	fp := &fakeProducers{}
+	svc.startProducer = func(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
+		fp.mu.Lock()
+		fp.started = append(fp.started, req)
+		fp.hubs = append(fp.hubs, h)
+		fp.mu.Unlock()
+		go func() {
+			<-ctx.Done()
+			time.Sleep(teardown)
+			svc.mu.Lock()
+			if svc.hubs[path] == h {
+				delete(svc.hubs, path)
+			}
+			svc.mu.Unlock()
+			h.mu.Lock()
+			for _, sub := range h.subs {
+				if !sub.closed {
+					sub.closed = true
+					close(sub.ch)
+				}
+			}
+			h.mu.Unlock()
+			close(h.done)
+		}()
+	}
+	return fp
+}
+
+// A takeover whose outgoing producer does not release the device in time must
+// be abandoned with a named refusal. Starting the replacement anyway would
+// fail to bind (EBUSY) and take the camera from every parameter-less
+// subscriber that had reattached to the replacement hub.
+func TestTakeoverAbortsWhenTheCameraDoesNotReleaseInTime(t *testing.T) {
+	svc := newTestVideoService(nil, nil)
+	fp := installSlowProducers(svc, 2*hubTeardownTimeout)
+	ctx := context.Background()
+
+	oldHub, sensorID, _, err := svc.joinHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{DeviceId: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldHub.unsubscribe(sensorID)
+
+	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
+	_, _, _, _, _, _, _, err = svc.joinHubForCapture(ctx, "/dev/video0", req)
+	if !errors.Is(err, errCameraReleaseTimeout) {
+		t.Fatalf("takeover returned %v, want a refusal wrapping errCameraReleaseTimeout", err)
+	}
+	if !isCameraCaptureRefusal(err) {
+		t.Fatal("the refusal is not one the campaign records in its manifest")
+	}
+	if !strings.Contains(err.Error(), "/dev/video0") {
+		t.Fatalf("refusal does not name the camera: %v", err)
+	}
+	// Exactly one producer was ever started: no replacement was launched
+	// against a device the old producer still holds.
+	if got := fp.count(); got != 1 {
+		t.Fatalf("producers started = %d, want 1: a replacement was started for a device that had not been released", got)
+	}
+	// The abandoned replacement hub must not be left in the map for a
+	// reattaching subscriber to join.
+	svc.mu.Lock()
+	_, stillMapped := svc.hubs["/dev/video0"]
+	svc.mu.Unlock()
+	if stillMapped {
+		t.Fatal("the abandoned replacement hub was left registered for the device")
+	}
+}

@@ -242,7 +242,15 @@ func (p *PKIEnrollment) ApplyStagedFile(ctx context.Context) PKIEnrollmentOutcom
 		}
 	}
 
-	frontendURL := pkienroll.CSRFrontendURL(staged.CSREndpoint, staged.Environment)
+	// A refused frontend URL is a configuration failure, not a transport one,
+	// and the token has not been spent: the staged file goes, because the same
+	// file would be refused identically on every restart.
+	frontendURL, err := pkienroll.CSRFrontendURL(staged.CSREndpoint, staged.Environment)
+	if err != nil {
+		p.logger.Error("pki enrollment file names an unusable CSR frontend, removing", zap.Error(err))
+		p.removeStagedFile(path)
+		return PKIEnrollmentOutcome{Status: PKIEnrollmentFailed, Reason: err.Error()}
+	}
 
 	key, err := p.store.LoadOrGenerateKey()
 	if err != nil {

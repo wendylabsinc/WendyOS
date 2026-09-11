@@ -112,6 +112,111 @@ class InputManifestTests(unittest.TestCase):
             security_review.build_input_manifest(metadata(0), b"x", 42, HEAD_SHA)
 
 
+class GeneratedExclusionTests(unittest.TestCase):
+    """Generated files must not spend the byte budget or reach the reviewer."""
+
+    GLOBS = ("go/proto/gen/**", "*.pb.go", "*_grpc.pb.go")
+
+    def test_generated_paths_are_recognized(self) -> None:
+        for path in (
+            "go/proto/gen/agentpb/v2/data_service.pb.go",
+            "go/proto/gen/agentpb/v2/data_service_grpc.pb.go",
+            "go/proto/gen/anything.txt",
+            "some/other/place/thing.pb.go",
+        ):
+            self.assertTrue(
+                security_review.is_generated_path(path, self.GLOBS), path
+            )
+
+    def test_hand_written_paths_are_not_excluded(self) -> None:
+        for path in (
+            "go/internal/agent/pkienroll/pkienroll.go",
+            "go/proto/wendy/agent/services/v2/data_service.proto",
+            "docs/why-pb.go.md",
+            ".github/scripts/security_review.py",
+        ):
+            self.assertFalse(
+                security_review.is_generated_path(path, self.GLOBS), path
+            )
+
+    def test_gitattributes_patterns_are_read(self) -> None:
+        globs = security_review.gitattributes_generated_globs(
+            "# comment\n"
+            "swift/Sources/*/Proto/**/*.pb.swift linguist-generated=true\n"
+            "vendor/** linguist-generated\n"
+            "keep/me.go -linguist-generated\n"
+            "also/keep.go linguist-generated=false\n"
+            "unrelated.go text eol=lf\n"
+        )
+        self.assertEqual(
+            globs, ("swift/Sources/*/Proto/**/*.pb.swift", "vendor/**")
+        )
+        self.assertTrue(
+            security_review.is_generated_path(
+                "swift/Sources/WendyAgent/Proto/v2/agent.pb.swift", globs
+            )
+        )
+
+    def test_repo_gitattributes_marks_generated_go_protos(self) -> None:
+        globs = security_review.generated_globs(MODULE_PATH.parents[2])
+        self.assertTrue(
+            security_review.is_generated_path(
+                "go/proto/gen/agentpb/shared.pb.go", globs
+            )
+        )
+
+    def test_sections_rejoin_byte_for_byte(self) -> None:
+        raw = (diff("go/a.go") + diff("go/proto/gen/b.pb.go")).decode()
+        sections = security_review.split_diff_sections(raw)
+        self.assertEqual([path for path, _ in sections], ["go/a.go", "go/proto/gen/b.pb.go"])
+        self.assertEqual("".join(section for _, section in sections), raw)
+
+    def test_generated_file_leaves_the_budget_to_hand_written_code(self) -> None:
+        handwritten = diff("go/internal/thing.go")
+        generated = diff("go/proto/gen/agentpb/v2/data_service.pb.go")
+        raw = handwritten + generated
+        manifest = security_review.build_input_manifest(
+            metadata(2), raw, 42, HEAD_SHA, len(handwritten), self.GLOBS
+        )
+        self.assertEqual(manifest["diff_bytes"], len(raw))
+        self.assertEqual(manifest["reviewable_bytes"], len(handwritten))
+        self.assertEqual(manifest["prepared_bytes"], len(handwritten))
+        self.assertEqual(manifest["generated_files_excluded"], 1)
+        self.assertEqual(manifest["generated_bytes_excluded"], len(generated))
+        self.assertEqual(manifest["reviewed_files"], 1)
+        self.assertEqual(manifest["truncation"], "none")
+        # The digest still covers the whole diff, so `enforce` keeps matching a
+        # result to the exact input it was produced from.
+        self.assertEqual(manifest["sha256"], hashlib.sha256(raw).hexdigest())
+
+    def test_reviewed_diff_drops_the_generated_sections(self) -> None:
+        raw = (
+            diff("go/internal/thing.go", line="handWrittenMarker := 1")
+            + diff("go/proto/gen/x.pb.go", line="generatedMarker := 2")
+        ).decode()
+        kept, excluded = security_review.partition_generated(raw, self.GLOBS)
+        self.assertIn("handWrittenMarker", kept)
+        self.assertNotIn("generatedMarker", kept)
+        self.assertEqual(excluded, ["go/proto/gen/x.pb.go"])
+
+    def test_hand_written_diff_over_the_limit_still_fails(self) -> None:
+        handwritten = diff("go/internal/thing.go")
+        raw = handwritten + diff("go/proto/gen/x.pb.go")
+        with self.assertRaisesRegex(security_review.ReviewError, "no partial review"):
+            security_review.build_input_manifest(
+                metadata(2), raw, 42, HEAD_SHA, len(handwritten) - 1, self.GLOBS
+            )
+
+    def test_coverage_names_the_exclusion(self) -> None:
+        raw = diff("go/internal/thing.go") + diff("go/proto/gen/x.pb.go")
+        manifest = security_review.build_input_manifest(
+            metadata(2), raw, 42, HEAD_SHA, security_review.MAX_DIFF_BYTES, self.GLOBS
+        )
+        text = security_review.coverage_text(manifest, reviewed=True)
+        self.assertIn("1/2 changed files", text)
+        self.assertIn("1 generated file(s) excluded", text)
+
+
 class PayloadTests(unittest.TestCase):
     def test_no_findings_is_exact_and_valid(self) -> None:
         parsed = security_review.extract_payload("NO_FINDINGS")

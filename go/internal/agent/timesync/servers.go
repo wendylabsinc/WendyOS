@@ -8,8 +8,17 @@ import (
 )
 
 // Servers is the baked-in set of Roughtime servers queried on startup and on
-// network-up events. Query uses the first valid response — one honest server
-// suffices for Roughtime's security guarantee.
+// network-up events. All four are queried at once and the answers are
+// intersected, rather than the first valid response being taken: Roughtime's
+// guarantee is that a lying server can be CAUGHT, not that any one server can
+// be trusted, and catching it needs more than one answer to compare.
+//
+// The direct loop applies the intersection at "verified" (three or more
+// agreeing) and at "degraded" (two agreeing), and retries on the backoff
+// schedule below that; see disciplinesClock in roughtime.go for why two is the
+// floor. The multicast relay path is separate and applies a single relayed
+// response, because there the sender is a machine on the local network that
+// the device is already trusting for provisioning.
 //
 // Keys must be fetched from each operator's published ecosystem JSON and
 // encoded as 32-byte ed25519.PublicKey. See design doc for retrieval steps.

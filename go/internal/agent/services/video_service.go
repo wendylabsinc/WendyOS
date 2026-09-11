@@ -1616,6 +1616,24 @@ func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, r
 // the wrapped message names the holder and both parameter sets.
 var errCameraHeldExplicitly = errors.New("camera is held at explicitly requested stream parameters")
 
+// errCameraReleaseTimeout is the named refusal for a capture takeover whose
+// outgoing producer did not release the device within hubTeardownTimeout.
+// Starting the replacement anyway is worse than refusing: the old producer
+// still holds the file descriptor, VIDIOC_S_FMT returns EBUSY, and the
+// replacement hub fails to produce anything at all, so every parameter-less
+// subscriber that reattached to it loses the camera as well as the campaign
+// losing its capture. Refusing costs this one campaign source its clip and
+// leaves the running stream untouched.
+var errCameraReleaseTimeout = errors.New("camera did not release in time for a capture takeover")
+
+// isCameraCaptureRefusal reports whether err is one of the named camera
+// refusals a campaign records in its manifest instead of failing the whole
+// episode. Both mean "this one source was not captured, and here is exactly
+// why"; neither means the episode is broken.
+func isCameraCaptureRefusal(err error) bool {
+	return errors.Is(err, errCameraHeldExplicitly) || errors.Is(err, errCameraReleaseTimeout)
+}
+
 // joinHubForCapture is the episode-capture join. It implements the parameter
 // priority the capture policy promises:
 //
@@ -1765,7 +1783,20 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 			abort()
 			return nil, 0, nil, false, ctx.Err()
 		}
-		s.logger.Warn("timed out waiting for hub teardown before capture takeover", zap.String("device", key))
+		// The old producer still holds the device. Starting the replacement now
+		// would bind nothing (EBUSY on VIDIOC_S_FMT) and take the camera away
+		// from every parameter-less subscriber that reattached to the hub
+		// installed above, so the takeover is abandoned instead: abort() puts
+		// the subscribers back on the "producer stopped" path rather than
+		// leaving them on a hub whose producer will never start, and the
+		// campaign gets a named refusal for its manifest.
+		waitCancel()
+		abort()
+		s.logger.Warn("abandoning capture takeover: camera did not release in time",
+			zap.String("device", key), zap.Duration("waited", hubTeardownTimeout))
+		return nil, 0, nil, false, fmt.Errorf(
+			"%w: %s was still held by the previous producer after %s; refusing to start a replacement that cannot bind the device",
+			errCameraReleaseTimeout, key, hubTeardownTimeout)
 	}
 	waitCancel()
 
@@ -2244,8 +2275,12 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				// sequence parameter sets into it mid-timeline; the client
 				// reconnects and joins the restarted producer as a new stream.
 				if h.wasRestarted() {
-					return status.Errorf(codes.Unavailable,
-						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream")
+					// Machine-readable so a client can tell this apart from
+					// every other Unavailable and rejoin by itself; the CLI's
+					// `camera view` does exactly that.
+					return streamreason.New(codes.Unavailable,
+						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream",
+						streamreason.CameraProducerRestarted, nil)
 				}
 				// If the hub context was cancelled (e.g. service shutdown), propagate that.
 				if err := h.ctx.Err(); err != nil {

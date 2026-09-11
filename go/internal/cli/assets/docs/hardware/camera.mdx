@@ -41,6 +41,14 @@ If you want to pipe the encoded stream instead of opening a local preview window
 wendy device camera view --id 0 --stdout
 ```
 
+A view that names no `--width`, `--height` or `--fps` joins the camera at
+whatever it is already doing, and an episode capture whose campaign does name
+stream parameters may restart the producer under it. The stream is ended rather
+than spliced, because the replacement producer emits a new sequence parameter
+set; `camera view` then rejoins the new stream by itself and prints one line
+saying so. Naming stream parameters yourself makes the view a holder that no
+campaign can take over.
+
 For broad hardware inspection, filter the device capability list:
 
 ```bash
