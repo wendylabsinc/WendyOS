@@ -88,6 +88,12 @@ The episode directory is never modified.
 		if r.ParameterSetChanges > 0 {
 			fmt.Fprintf(os.Stderr, "episode-playable: warning: camera %s changes its SPS/PPS mid-stream (%d changed unit(s), a producer restart); the clip carries only the first decoder configuration, so frames after the change will misdecode\n", r.Source, r.ParameterSetChanges)
 		}
+		if r.TimestampInversions > 0 {
+			fmt.Fprintf(os.Stderr, "episode-playable: warning: camera %s has %d index entry/entries whose canonical timestamp runs backwards; capture order was preserved and those gaps were written as zero, so the clip's timing is approximate\n", r.Source, r.TimestampInversions)
+		}
+		if r.NominalHold > 0 {
+			fmt.Fprintf(os.Stderr, "episode-playable: warning: camera %s holds a single frame, whose display duration no index entry records; it was given a nominal %s\n", r.Source, r.NominalHold)
+		}
 		if r.BFrames {
 			fmt.Fprintf(os.Stderr, "episode-playable: warning: camera %s contains B slices, so its presentation order differs from the coded order index.jsonl records; the timing written for it is approximate\n", r.Source)
 		} else if r.UndecodedSliceHeaders > 0 {

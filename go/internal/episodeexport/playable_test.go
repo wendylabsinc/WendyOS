@@ -1,12 +1,14 @@
 package episodeexport
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -416,5 +418,158 @@ func TestIsBSlice(t *testing.T) {
 	// caller must be able to tell "no B slices" from "could not tell".
 	if isB, parsed := isBSlice([]byte{0x41}); isB || parsed {
 		t.Errorf("a truncated slice header should report unknown, got isB=%v parsed=%v", isB, parsed)
+	}
+}
+
+// writeSingleSourceEpisode lays out an episode with one camera source whose
+// index holds exactly the given entries, all pointing into one segment built
+// from the payloads. It is the smallest fixture that lets a test choose the
+// canonical timestamps and byte ranges an index records.
+func writeSingleSourceEpisode(t *testing.T, stamps []int64, payloads [][]byte) (dir, sourceDir string) {
+	t.Helper()
+	if len(stamps) != len(payloads) {
+		t.Fatalf("fixture needs one timestamp per payload: %d vs %d", len(stamps), len(payloads))
+	}
+	dir = t.TempDir()
+	sourceDir = filepath.Join(dir, "cameras", "cam")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	type entry struct {
+		CanonicalEpisodeNanos int64  `json:"canonical_episode_nanos"`
+		Segment               string `json:"segment"`
+		ByteOffset            int64  `json:"byte_offset"`
+		ByteSize              int    `json:"byte_size"`
+		Codec                 string `json:"codec"`
+	}
+	var segment, index []byte
+	for i, payload := range payloads {
+		b, _ := json.Marshal(entry{stamps[i], "cameras/cam/segment-000001.h264", int64(len(segment)), len(payload), "h264"})
+		index = append(append(index, b...), '\n')
+		segment = append(segment, payload...)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "segment-000001.h264"), segment, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "index.jsonl"), index, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir, sourceDir
+}
+
+// keyframeAndInter returns one random-access access unit and one inter frame,
+// both built from the real parameter sets.
+func keyframeAndInter(t *testing.T) (key, inter []byte) {
+	t.Helper()
+	sps, pps := mustHex(t, realSPS), mustHex(t, realPPS)
+	return annexB(sps, pps, append([]byte{0x65}, make([]byte, 40)...)),
+		annexB(append([]byte{0x41}, make([]byte, 30)...))
+}
+
+// A gap a 32-bit sample duration cannot carry must be refused by name rather
+// than wrapping silently to a short duration.
+func TestMuxRefusesGapBeyondSampleDurationLimit(t *testing.T) {
+	key, inter := keyframeAndInter(t)
+	// Two frames 80 minutes apart: beyond the 71 minutes and change that fits
+	// in a 32-bit duration at microsecond ticks.
+	gap := int64(80 * time.Minute)
+	dir, sourceDir := writeSingleSourceEpisode(t, []int64{0, gap}, [][]byte{key, inter})
+
+	_, err := ConvertSourceInPlace(dir, sourceDir)
+	if err == nil {
+		t.Fatal("an 80-minute inter-frame gap was muxed; it cannot fit a 32-bit sample duration")
+	}
+	if !strings.Contains(err.Error(), "exceeds") || !strings.Contains(err.Error(), "sample duration") {
+		t.Fatalf("error does not name the limit: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(sourceDir, PlayableFileName)); !os.IsNotExist(statErr) {
+		t.Fatalf("a refused mux left a playable file behind: %v", statErr)
+	}
+}
+
+// Two inverted timestamps must not reorder the coded frames: capture order is
+// kept, the inversion is counted, and the clip is refused at seal time.
+func TestInvertedTimestampsKeepCaptureOrderAndAreCounted(t *testing.T) {
+	key, inter := keyframeAndInter(t)
+	// The third and fourth entries are swapped in time but not in the index.
+	stamps := []int64{0, 10_000_000, 30_000_000, 20_000_000}
+	payloads := [][]byte{key, inter, inter, inter}
+	dir, sourceDir := writeSingleSourceEpisode(t, stamps, payloads)
+
+	frames, result, err := readCameraIndex(filepath.Join(sourceDir, "index.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TimestampInversions != 1 {
+		t.Fatalf("inversions counted = %d, want 1", result.TimestampInversions)
+	}
+	for i, want := range stamps {
+		if frames[i].CanonicalEpisodeNanos != want {
+			t.Fatalf("frame %d canonical = %d, want %d: capture order was not preserved",
+				i, frames[i].CanonicalEpisodeNanos, want)
+		}
+	}
+
+	clip, err := ConvertSourceInPlace(dir, sourceDir)
+	if err != nil {
+		t.Fatalf("the clip should still be written for the caller to judge: %v", err)
+	}
+	if clip.TimestampInversions != 1 {
+		t.Fatalf("ClipResult inversions = %d, want 1", clip.TimestampInversions)
+	}
+}
+
+// An index naming a byte_size near MaxInt64 must be refused by the bounds
+// check rather than overflowing the sum and panicking in make().
+func TestSegmentReadRefusesByteSizeNearMaxInt64(t *testing.T) {
+	dir := t.TempDir()
+	segDir := filepath.Join(dir, "cameras", "cam")
+	if err := os.MkdirAll(segDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(segDir, "segment-000001.h264"), make([]byte, 64), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &segmentReader{root: dir, seen: map[string]bool{}}
+	defer s.Close()
+
+	// An offset whose sum with the size wraps back into a small positive
+	// number is the case a naive `offset+size > size-on-disk` check passes.
+	huge := int(int64(1)<<62) + 8
+	for _, frame := range []cameraIndexLine{
+		{Segment: "cameras/cam/segment-000001.h264", ByteOffset: 1 << 62, ByteSize: huge},
+		{Segment: "cameras/cam/segment-000001.h264", ByteOffset: 0, ByteSize: huge},
+		{Segment: "cameras/cam/segment-000001.h264", ByteOffset: -1, ByteSize: 8},
+	} {
+		if _, err := s.read(frame); err == nil {
+			t.Fatalf("read accepted offset %d size %d against a 64-byte segment", frame.ByteOffset, frame.ByteSize)
+		}
+	}
+}
+
+// A clip holding one frame gets a nominal hold rather than a zero-duration
+// sample, and says so.
+func TestSingleFrameClipGetsNominalHold(t *testing.T) {
+	key, _ := keyframeAndInter(t)
+	dir, sourceDir := writeSingleSourceEpisode(t, []int64{7_000_000_000}, [][]byte{key})
+
+	clip, err := ConvertSourceInPlace(dir, sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clip.Frames != 1 {
+		t.Fatalf("frames written = %d, want 1", clip.Frames)
+	}
+	want := time.Duration(singleFrameNominalTicks) * (time.Second / playableTimescale)
+	if clip.NominalHold != want {
+		t.Fatalf("nominal hold = %s, want %s", clip.NominalHold, want)
+	}
+	// The movie header must report that duration, not zero.
+	b, err := os.ReadFile(clip.Output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, u32(uint32(singleFrameNominalTicks))) {
+		t.Fatal("the sample table carries no nominal duration; players would see an empty movie")
 	}
 }

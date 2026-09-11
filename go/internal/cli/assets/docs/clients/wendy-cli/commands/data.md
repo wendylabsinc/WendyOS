@@ -150,7 +150,21 @@ now.
 source, a buffer and explicit stream parameters are mutually exclusive in this
 release: a buffered camera is armed into a standby subscription that asserts no
 stream parameters, so it never takes a running camera away from a viewer and
-never changes the stream parameters part way through a clip. A source that sets
+never changes the stream parameters part way through a clip.
+
+There is exactly one exception to that promise, and it belongs to the other
+half of the same rule. A capture that *does* name explicit stream parameters
+(`max_resolution` or `rate`, with no buffer) restarts the camera producer at
+those parameters when the only consumers holding it asked for nothing in
+particular. Those parameter-less consumers, a plain `wendy device camera view`
+among them, have their stream ended rather than spliced onto the new stream:
+the replacement producer emits a new sequence parameter set, and a decoder
+handed both in one timeline produces garbage. The agent marks the ended stream
+with the machine-readable reason `CAMERA_PRODUCER_RESTARTED`, and
+`wendy device camera view` rejoins the replacement stream automatically,
+printing one line when it does. A consumer that named its own stream
+parameters is never taken over; a campaign that conflicts with it is refused
+and says so in the episode manifest. A source that sets
 both a buffer and an explicit `max_resolution` or `rate` therefore records both
 its pre-roll and its live tail at whatever parameters the producer is already
 running, and the explicit values are reported as requested but not achieved in
