@@ -1,0 +1,41 @@
+# A second corpus fixture, covering the two recipes example.stagefile.yaml
+# does not reach: npm (with its manager defaulted, so the default path is
+# pinned too) and build. Those are exactly the recipes whose params the
+# frozen key corpus otherwise pinned nothing for — which is how a missing
+# package.json digest survived review.
+#
+# It also exercises a multi-path local copy with an explicit dest and two
+# cross-stage copies, so the copy-destination normalization has frozen keys
+# on both sides of it.
+version: 1
+stages:
+  - name: web
+    from: node:20-slim
+    install:
+      npm: {}
+    copy:
+      - from: local
+        paths: [src, tsconfig.json]
+        dest: /app
+
+  - name: server
+    from: rust:1-alpine
+    install:
+      apk:
+        packages: [musl-dev]
+    build:
+      lang: rust
+      profile: debug
+
+  - name: app
+    from: node:20-slim
+    copy:
+      - from: web
+        paths: [/app/dist]
+        dest: /srv/dist
+      - from: server
+        paths: [/target/debug/server]
+        dest: /usr/local/bin/server
+    entrypoint:
+      exec: [/usr/local/bin/server]
+    user: "1000"

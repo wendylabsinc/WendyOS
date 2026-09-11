@@ -29,7 +29,7 @@ func (i *Install) LocalFiles() []string {
 		add(p.Requirements)
 	}
 	if i.Npm != nil {
-		add("package.json")
+		add(NpmManifest)
 		add(NpmLockfile(i.Npm.Manager))
 	}
 	if i.Uv != nil {
