@@ -73,10 +73,11 @@ account key for retries, but Cloud has no credential retrieval RPC.
 
 ## Contract sources
 
-`proto/cloud/wendycloud/v2/device_enrollment.proto` is copied unchanged from
-Cloud's `cloud-proto/device_enrollment.proto` (commit `bf89c120`). Cloud owns
-this public API outside its shared service-protos submodule. The Go generation
-script includes this local copy alongside the shared v2 contracts.
+`Proto/wendycloud/v2/device_enrollment.proto` is copied unchanged from
+Cloud's `cloud-proto/device_enrollment.proto` (commit `c194cf91`). Cloud owns this
+public API outside its shared service-protos submodule, but it is vendored
+beside the shared v2 contracts and generated from the same include root, so a
+re-copy stays a plain `cp`.
 
 PKI's `internal/fabric/enrollment_request.go`,
 `docs/reference/api/acme.md` and `docs/reference/fabric-relay-for-issuance.md`
