@@ -113,8 +113,17 @@ func TestSampleIdentitiesSurviveProducerRestart(t *testing.T) {
 }
 
 // TestCameraSensorSubscriptionReportsDropsPerSample checks the honesty of the
-// gap explanation: the subscription must report the drops since the previous
-// delivered sample, not a running total.
+// gap explanation: a loss must be charged to the sample it actually preceded,
+// not to whichever sample the consumer happened to reach next.
+//
+// The subscriber channel holds four frames, so samples 1 to 4 are queued, 5 and
+// 6 are dropped while they sit there, and 7 is queued once the consumer has
+// drained the buffer. Nothing was lost before samples 1 to 4: they were all in
+// the channel before the first drop happened. The two losses belong to sample 7,
+// the first one delivered after them. Reading the hub's running total when a
+// sample is DEQUEUED reported them against sample 1, up to a channel depth
+// earlier than the gap they describe, which is the join a model input ledger
+// exists to make.
 func TestCameraSensorSubscriptionReportsDropsPerSample(t *testing.T) {
 	hub, cancel := newSampleHub(new(atomic.Uint64))
 	defer cancel()
@@ -123,28 +132,41 @@ func TestCameraSensorSubscriptionReportsDropsPerSample(t *testing.T) {
 		t.Fatal(err)
 	}
 	subscription := &cameraSensorSubscription{hub: hub, subID: subID, frames: frames}
-	// The subscriber channel holds four frames; broadcasting six drops two.
+	produce := func() {
+		hub.produce(&videoFrame{data: []byte{1}, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, auAligned: true})
+	}
 	for i := 0; i < 6; i++ {
-		hub.produce(&videoFrame{data: []byte{byte(i)}, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, auAligned: true})
+		produce()
 	}
 	ctx := context.Background()
-	var reported []uint64
-	for i := 0; i < 4; i++ {
+	for i := 1; i <= 4; i++ {
 		sample, err := subscription.Next(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}
-		reported = append(reported, sample.DroppedBefore)
+		if sample.SampleID != uint64(i) {
+			t.Fatalf("sample %d has id %d", i, sample.SampleID)
+		}
+		if sample.DroppedBefore != 0 {
+			t.Fatalf("sample %d reports %d drops before it, but every drop happened after it was already queued", i, sample.DroppedBefore)
+		}
 		if sample.Encoding != "h264" || !sample.SelfContained {
 			t.Fatalf("sample %d payload description = %q/%v", i, sample.Encoding, sample.SelfContained)
 		}
 	}
-	total := uint64(0)
-	for _, drops := range reported {
-		total += drops
+	produce()
+	sample, err := subscription.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if total != 2 {
-		t.Fatalf("reported drops %v sum to %d, want the 2 frames the hub dropped", reported, total)
+	if sample.SampleID != 7 {
+		t.Fatalf("sample id after the gap = %d, want 7", sample.SampleID)
+	}
+	if sample.DroppedBefore != 2 {
+		t.Fatalf("sample 7 reports %d drops before it, want the 2 the hub lost between samples 4 and 7", sample.DroppedBefore)
+	}
+	if total := hub.drops(subID); total != 2 {
+		t.Fatalf("hub running drop total = %d, want 2", total)
 	}
 }
 
@@ -473,9 +495,13 @@ func TestSensorReattachCarriesTailDrops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subscription := &cameraSensorSubscription{video: svc, key: "/dev/video0", hub: hub, subID: subID, frames: frames, lastDrops: 1}
+	subscription := &cameraSensorSubscription{video: svc, key: "/dev/video0", hub: hub, subID: subID, frames: frames}
 	hub.mu.Lock()
 	hub.subDrops[subID] = 4
+	// Three of the four have not been handed to a sample yet: one is still
+	// riding on a frame sitting in the channel, two arrived after it.
+	hub.subs[subID].queuedDrops = []uint64{1}
+	hub.subs[subID].pendingDrops = 2
 	hub.mu.Unlock()
 
 	req := &agentpb.StreamVideoRequest{DeviceId: 0, Width: 640, Height: 480, Framerate: 15}
@@ -492,10 +518,10 @@ func TestSensorReattachCarriesTailDrops(t *testing.T) {
 	if subscription.hub != newHub {
 		t.Fatal("reattach did not land on the replacement hub")
 	}
-	if subscription.gatedSkips != 3 {
-		t.Fatalf("gatedSkips = %d, want 3 (4 total drops minus 1 already reported)", subscription.gatedSkips)
+	if subscription.pending != 3 {
+		t.Fatalf("pending = %d, want 3 (4 total drops minus 1 already reported)", subscription.pending)
 	}
-	if subscription.lastDrops != 0 || !subscription.awaitRandomAccess {
-		t.Fatalf("reattach state: lastDrops=%d awaitRandomAccess=%v, want 0/true", subscription.lastDrops, subscription.awaitRandomAccess)
+	if !subscription.awaitRandomAccess {
+		t.Fatal("reattach must gate the new stream to a random-access unit")
 	}
 }

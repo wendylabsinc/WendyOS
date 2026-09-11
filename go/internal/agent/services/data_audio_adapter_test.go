@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,22 +16,52 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 )
 
-// fakeAudioStream yields a fixed sequence of PCM chunks and then EOF.
+// fakeAudioStream yields a fixed sequence of PCM chunks and then waits, like a
+// real recorder subprocess that has nothing more to deliver yet: the stream ends
+// only when Close is called. Setting exitEarly instead models the recorder
+// process dying mid-episode, which the capture must report as a failure rather
+// than as a clean end of stream.
 type fakeAudioStream struct {
-	chunks [][]byte
-	i      int
+	chunks    [][]byte
+	i         int
+	exitEarly bool
+	err       string
+	mu        sync.Mutex
+	done      chan struct{}
+}
+
+func (f *fakeAudioStream) stopped() chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.done == nil {
+		f.done = make(chan struct{})
+	}
+	return f.done
 }
 
 func (f *fakeAudioStream) Read(b []byte) (int, error) {
 	if f.i >= len(f.chunks) {
+		if !f.exitEarly {
+			<-f.stopped()
+		}
 		return 0, io.EOF
 	}
 	n := copy(b, f.chunks[f.i])
 	f.i++
 	return n, nil
 }
-func (f *fakeAudioStream) Close()      {}
-func (f *fakeAudioStream) Err() string { return "" }
+
+func (f *fakeAudioStream) Close() {
+	ch := f.stopped()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+func (f *fakeAudioStream) Err() string { return f.err }
 
 // pcmChunk is silence of an arbitrary length. Anything shorter than
 // audioChunkBytes is a short read: the capture loop offers a 9600-byte buffer
@@ -804,5 +835,100 @@ func TestAudioSegmentStampIsNotClampedWhenItNeedNotBe(t *testing.T) {
 	}
 	if strings.Contains(result.SourceDetail, "clamped") {
 		t.Errorf("source detail = %q mentions a clamp that did not happen", result.SourceDetail)
+	}
+}
+
+// TestAudioCaptureOutlivesTheCallerContext pins the fix for a capture that
+// recorded roughly one chunk and then sealed the episode as complete.
+//
+// Start is called from a gRPC unary handler, and gRPC cancels that handler's
+// context the moment the handler returns. The recorder subprocess used to be
+// launched with exec.CommandContext on THAT context, so arecord or pw-record was
+// killed a few milliseconds into the episode, the pipe reached end of file, and
+// the read loop treated it as a clean end of stream. The recorder's lifetime now
+// belongs to the capture and ends only at Stop.
+func TestAudioCaptureOutlivesTheCallerContext(t *testing.T) {
+	stream := &fakeAudioStream{chunks: [][]byte{silentChunk()}}
+	var streamCtx context.Context
+	adapter := &audioDataAdapter{
+		audio: &AudioService{},
+		openStream: func(ctx context.Context, _ uint32) (audioStream, error) {
+			streamCtx = ctx
+			return stream, nil
+		},
+	}
+	source := data.Source{ID: "audio:0", Kind: "audio", ClockDomain: "TEST_CAPTURE/AGENT_RECEIPT", Healthy: true}
+	session := data.CaptureSession{ID: "ep", Directory: t.TempDir()}
+
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	running, err := adapter.Start(callerCtx, session, []data.Source{source})
+	if err != nil {
+		t.Fatalf("adapter start: %v", err)
+	}
+	// The handler returns: gRPC cancels its context.
+	cancelCaller()
+
+	if streamCtx == nil {
+		t.Fatal("openStream was never called")
+	}
+	select {
+	case <-streamCtx.Done():
+		t.Fatal("the recorder's context died with the caller's; the capture process would be killed one chunk into the episode")
+	default:
+	}
+	// Still recording: the fake keeps the read blocked until it is closed, and
+	// it is closed only by Stop.
+	select {
+	case <-stream.stopped():
+		t.Fatal("the PCM stream was closed before Stop")
+	default:
+	}
+
+	results, err := running.Stop(context.Background())
+	if err != nil {
+		t.Fatalf("adapter stop: %v", err)
+	}
+	if len(results) != 1 || results[0].Count == 0 {
+		t.Fatalf("results = %+v, want one source with at least one sealed segment", results)
+	}
+	select {
+	case <-streamCtx.Done():
+	default:
+		t.Fatal("Stop must cancel the capture context that owns the recorder process")
+	}
+}
+
+// TestAudioRecorderExitBeforeStopIsACaptureError pins the other half: a recorder
+// that dies mid-episode must surface as an error on the source, not as a clean
+// end of stream that seals the episode "complete" holding a fraction of the
+// audio it promised.
+func TestAudioRecorderExitBeforeStopIsACaptureError(t *testing.T) {
+	stream := &fakeAudioStream{chunks: [][]byte{silentChunk()}, exitEarly: true, err: "arecord: main:831: read error"}
+	adapter := &audioDataAdapter{
+		audio:      &AudioService{},
+		openStream: func(context.Context, uint32) (audioStream, error) { return stream, nil },
+	}
+	source := data.Source{ID: "audio:0", Kind: "audio", ClockDomain: "TEST_CAPTURE/AGENT_RECEIPT", Healthy: true, Detail: "test mic"}
+	session := data.CaptureSession{ID: "ep", Directory: t.TempDir()}
+
+	running, err := adapter.Start(context.Background(), session, []data.Source{source})
+	if err != nil {
+		t.Fatalf("adapter start: %v", err)
+	}
+	results, stopErr := running.Stop(context.Background())
+	if stopErr == nil {
+		t.Fatal("a recorder that exited before Stop was reported as a clean end of capture")
+	}
+	if !strings.Contains(stopErr.Error(), "exited before the capture was stopped") {
+		t.Fatalf("stop error = %v, want it to name the early exit", stopErr)
+	}
+	if !strings.Contains(stopErr.Error(), "read error") {
+		t.Fatalf("stop error = %v, want it to carry what the recorder printed", stopErr)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results = %+v, want one source result", results)
+	}
+	if !strings.Contains(results[0].SourceDetail, "capture ended early") {
+		t.Fatalf("source detail %q does not record the early end on the source", results[0].SourceDetail)
 	}
 }

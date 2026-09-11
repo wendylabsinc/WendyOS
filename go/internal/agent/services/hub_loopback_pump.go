@@ -294,30 +294,19 @@ func (p *hubLoopbackPump) pump(ctx context.Context, hub *deviceHub, subID int, f
 // subscription, including hub drops that accrued after the last written frame.
 // On every other return the count is meaningless and returned as zero.
 func (p *hubLoopbackPump) pumpFrom(ctx context.Context, hub *deviceHub, subID int, frames <-chan *videoFrame, writer loopbackFrameWriter, awaitRandomAccess bool, carried uint64) (uint64, error) {
-	// lastDrops is the hub's running drop total for this subscriber as of the
-	// previously WRITTEN frame, so each binding reports the drops since it. This
-	// is drop case 1 from hub_loopback_binding.go: those samples never reach the
-	// node, so the loopback sequence does not gap and cannot report them. If the
-	// pump did not carry this number across, a hub-side loss would be invisible
-	// on both planes.
+	// unreported counts losses no binding has reported yet: hub-side drops the
+	// hub recorded against the frames this pump has taken off its channel, the
+	// count carried in from a previous subscription, and frames the starting
+	// gate skipped after a rejoin. This is drop case 1 from
+	// hub_loopback_binding.go: those samples never reach the node, so the
+	// loopback sequence does not gap and cannot report them. If the pump did not
+	// carry the number across, a hub-side loss would be invisible on both planes.
 	//
-	// One honest limit on the attribution, shared with the gRPC sensor path
-	// (cameraSensorSubscription.Next does exactly the same thing): the counter is
-	// read when the pump CONSUMES a frame, not when the hub queued it. The
-	// subscriber channel is buffered, so a drop that happens while frames are
-	// still sitting in that buffer is attributed to the next frame the pump
-	// consumes rather than to the frame it actually preceded. The RUNNING TOTAL
-	// is exact and no loss is ever unreported; only the frame a given loss is
-	// charged to can be off by up to the channel depth. Reporting the drop
-	// against the wrong neighbouring frame is tolerable; silently losing the
-	// count would not be. Making it exact would mean stamping the drop count onto
-	// the frame at broadcast, which is a change to shared hub behaviour that the
-	// gRPC sensor path and episode capture would also have to absorb.
-	var lastDrops uint64
-	// unreported counts losses no binding has reported yet: the count carried
-	// in from a previous subscription, plus frames the starting gate skipped
-	// after a rejoin. None of them reached the node, so like hub-side drops
-	// they are reported on the next frame that did.
+	// The counts come from hub.dequeueDrops, which hands back the drops recorded
+	// immediately BEFORE the frame just consumed. Reading the running total at
+	// consume time instead (which this pump and the gRPC sensor path both used
+	// to do) charged a drop to whichever frame the consumer happened to pull
+	// next, up to a channel depth after the gap it belonged to.
 	unreported := carried
 	for {
 		select {
@@ -330,13 +319,17 @@ func (p *hubLoopbackPump) pumpFrom(ctx context.Context, hub *deviceHub, subID in
 				}
 				if hub.wasRestarted() {
 					// Hand back everything still unreported, including hub
-					// drops since the last written frame: this subscription
-					// will never write another binding, so they must ride on
-					// the replacement's first one.
-					return unreported + hub.drops(subID) - lastDrops, errLoopbackHubRestarted
+					// drops the subscription never got to deliver: it will
+					// never write another binding, so they must ride on the
+					// replacement's first one.
+					return unreported + hub.unreportedDrops(subID), errLoopbackHubRestarted
 				}
 				return 0, nil
 			}
+			// Taken for EVERY frame off the channel, before anything can
+			// discard it, so the count stays tied to this frame's place in the
+			// stream.
+			unreported += hub.dequeueDrops(subID)
 			if bindable, reason := frameBindableToLoopback(frame); !bindable {
 				// Fail closed rather than writing something the sequence cannot
 				// name. Publishing a node whose frames have no resolvable identity
@@ -360,8 +353,7 @@ func (p *hubLoopbackPump) pumpFrom(ctx context.Context, hub *deviceHub, subID in
 				awaitRandomAccess = false
 			}
 
-			drops := hub.drops(subID)
-			delta := drops - lastDrops + unreported
+			delta := unreported
 
 			// The stamp is the SAME canonical receipt the binding below
 			// records and FrameIdentity publishes, read from the one frame
@@ -371,16 +363,17 @@ func (p *hubLoopbackPump) pumpFrom(ctx context.Context, hub *deviceHub, subID in
 			if err != nil {
 				// A failed write is NOT a dropped frame: the kernel did not advance
 				// its counter and we record no binding, so the sample is simply
-				// absent from both planes rather than appearing as a loss. Keep
-				// lastDrops unadvanced so the next successful write still reports
-				// every hub drop since the last frame that actually reached the node.
+				// absent from both planes rather than appearing as a loss. The
+				// losses this frame was carrying stay unreported so the next
+				// successful write still reports every hub drop since the last
+				// frame that actually reached the node.
+				unreported = delta
 				p.logger.Warn("two-plane: writing frame to loopback node failed",
 					zap.String("node", p.nodePath),
 					zap.Uint64("sample_id", frame.sampleID),
 					zap.Error(err))
 				continue
 			}
-			lastDrops = drops
 			unreported = 0
 
 			binding := loopbackBinding{

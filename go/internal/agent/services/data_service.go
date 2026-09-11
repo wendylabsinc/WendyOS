@@ -58,11 +58,26 @@ type DataService struct {
 	manager   *data.Manager
 	adapterMu sync.RWMutex
 	adapters  []dataCaptureAdapter
+	// captureMu guards the maps below and nothing else. It is never held across
+	// an adapter start or stop, or across a manager call: serialising every
+	// campaign on one device-wide mutex meant a second campaign's trigger waited
+	// behind the first campaign's adapter startup (a camera waits up to 20
+	// seconds for its first frame) and behind its post-seal drain, and since the
+	// episode origin is stamped inside manager.Start, that wait moved the second
+	// episode's origin forward to whenever the first campaign finished. Its own
+	// triggering record then fell outside its pre-roll window. Start and stop for
+	// ONE campaign key are serialised by that key's own mutex instead (see
+	// keyLock), which keeps the invariant that a campaign key has at most one
+	// episode without coupling campaigns to each other.
 	captureMu sync.Mutex
 	// Concurrency is keyed per campaign name; data.AdHocEpisodeKey holds the
 	// campaign-less episode started through the Start RPC.
 	activeCaptures map[string][]runningDataCapture
 	autoStopCancel map[string]context.CancelFunc
+	// keyLocks holds one mutex per campaign key, created on demand. Keys are
+	// campaign names plus data.AdHocEpisodeKey, so the map is bounded by the
+	// number of deployed campaigns.
+	keyLocks map[string]*sync.Mutex
 	// armingAdapter is the capture adapter that supports pre-roll (the camera
 	// adapter). It is kept as a typed handle so the deploy, reconcile, and
 	// post-episode paths can arm and disarm campaigns; nil until a video service
@@ -98,7 +113,7 @@ type runningDataCapture interface {
 }
 
 func NewDataService(m *data.Manager) *DataService {
-	s := &DataService{manager: m, activeCaptures: make(map[string][]runningDataCapture), autoStopCancel: make(map[string]context.CancelFunc), adHocDrain: data.DefaultSealDrain}
+	s := &DataService{manager: m, activeCaptures: make(map[string][]runningDataCapture), autoStopCancel: make(map[string]context.CancelFunc), keyLocks: make(map[string]*sync.Mutex), adHocDrain: data.DefaultSealDrain}
 	m.SetSourceProvider(s.discoverAdapterSources)
 	m.SetApplicationObserver(s.observeApplicationRecord)
 	return s
@@ -209,19 +224,28 @@ func (s *DataService) rearmByName(name string) {
 }
 
 // cameraSourcesFor resolves a campaign's camera sources to the source objects
-// the arming adapter needs (id plus capture policy), dropping non-camera and
-// unresolvable sources.
+// the arming adapter needs (id plus capture policy).
+//
+// Only the camera selectors are resolved. Resolving the whole plan meant a
+// single unrelated selector that did not resolve, a ROS 2 topic whose node has
+// not started yet being the ordinary case, returned nothing and disarmed the
+// camera ring for the entire campaign, silently: the next trigger opened with no
+// pre-roll and nothing anywhere said why.
 func (s *DataService) cameraSourcesFor(campaign data.Campaign) []data.Source {
-	sources, _, captures, err := s.manager.ResolveCampaignSources(campaign)
+	cameras, err := s.manager.ResolveCampaignCameraSources(campaign)
 	if err != nil {
+		// An unresolvable CAMERA selector is the one failure that genuinely
+		// prevents arming, and it is worth a line: pre-roll silently not
+		// happening is indistinguishable from a campaign that never asked for it.
+		s.manager.Warnf("campaign %q: camera pre-roll not armed because a camera selector did not resolve; its next trigger will open at the trigger instant: %v", campaign.Name, err)
 		return nil
 	}
 	var out []data.Source
-	for _, id := range sources {
-		if _, ok := cameraDeviceID(id); !ok {
+	for _, source := range cameras {
+		if _, ok := cameraDeviceID(source.ID); !ok {
 			continue
 		}
-		out = append(out, data.Source{ID: id, Kind: "camera", Capture: captures[id]})
+		out = append(out, source)
 	}
 	return out
 }
@@ -242,10 +266,27 @@ func (s *DataService) Start(ctx context.Context, req *agentpbv2.DataStartRequest
 	return s.startCapture(ctx, data.StartOptions{Name: req.GetName(), Sources: req.GetSources(), ExcludeSources: req.GetExcludeSources(), RequireUTCUncertainty: time.Duration(req.GetRequireUtcUncertaintyNanos()), Calibrations: cal, DrainDuration: s.adHocDrain, CollectorVersion: version.Version})
 }
 
-func (s *DataService) startCapture(ctx context.Context, opts data.StartOptions) (*agentpbv2.DataEpisode, error) {
+// keyLock returns the mutex that serialises start and stop for one campaign
+// key, creating it on first use.
+func (s *DataService) keyLock(key string) *sync.Mutex {
 	s.captureMu.Lock()
 	defer s.captureMu.Unlock()
+	if s.keyLocks == nil {
+		s.keyLocks = make(map[string]*sync.Mutex)
+	}
+	lock := s.keyLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.keyLocks[key] = lock
+	}
+	return lock
+}
+
+func (s *DataService) startCapture(ctx context.Context, opts data.StartOptions) (*agentpbv2.DataEpisode, error) {
 	key := opts.Trigger.CampaignName
+	lock := s.keyLock(key)
+	lock.Lock()
+	defer lock.Unlock()
 	m, err := s.manager.Start(opts)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
@@ -275,19 +316,26 @@ func (s *DataService) startCapture(ctx context.Context, opts data.StartOptions) 
 		if applyErr := s.manager.ApplyCaptureResults(key, results); applyErr != nil {
 			s.manager.Warnf("recording capture results for episode key %q after a failed adapter start: %v", key, applyErr)
 		}
-		// Without the drain, deliberately. captureMu has been held since the top
-		// of this function and is what serialises every start and stop on the
-		// device, so a drain taken here is charged to every other caller: with
-		// the default two second drain a Start whose adapter errors took two
-		// seconds to return FailedPrecondition, and with capture.drain: 30s a
-		// flapping camera stalled the data service for thirty seconds per
-		// attempt. Nothing on this path needs the wait either: the adapters
-		// never started, so no application ever read a sample from this episode
-		// and no record about it can be outstanding.
-		_, _ = s.manager.InterruptWithoutDrain(key, "capture_adapter_start_failed")
+		// The drain is skipped only when NOTHING captured. The campaign key's
+		// mutex has been held since the top of this function, so a drain taken
+		// here is charged to every later start and stop of the same campaign:
+		// with the default two second drain a Start whose adapter errors took
+		// two seconds to return FailedPrecondition, and with capture.drain: 30s
+		// a flapping camera stalled that campaign for thirty seconds per
+		// attempt. That reasoning only holds while no adapter ever ran. Once an
+		// earlier adapter started, samples reached the episode and an
+		// application may have read one, so a record about this episode can be
+		// outstanding and the drain has to be served.
+		if len(captures) == 0 {
+			_, _ = s.manager.InterruptWithoutDrain(key, "capture_adapter_start_failed")
+		} else {
+			_, _ = s.manager.Interrupt(key, "capture_adapter_start_failed")
+		}
 		return nil, status.Error(codes.FailedPrecondition, fmt.Sprintf("starting capture adapter: %v", startErr))
 	}
+	s.captureMu.Lock()
 	s.activeCaptures[key] = captures
+	s.captureMu.Unlock()
 	return manifestEpisode(m), nil
 }
 
@@ -312,18 +360,20 @@ func (s *DataService) Stop(ctx context.Context, _ *agentpbv2.DataStopRequest) (*
 }
 
 func (s *DataService) stopCapture(ctx context.Context, key string) (*agentpbv2.DataEpisode, error) {
-	s.captureMu.Lock()
-	defer s.captureMu.Unlock()
+	lock := s.keyLock(key)
+	lock.Lock()
+	defer lock.Unlock()
 	return s.stopCaptureLocked(ctx, key)
 }
 
 // stopCaptureIfCurrent finalizes the episode keyed by key only while the
-// given episode is still the active one. The check runs under captureMu so a
-// stale auto-stop timer that raced a manual stop plus an immediate re-trigger
-// cannot finalize the campaign's new episode.
+// given episode is still the active one. The check runs under the campaign
+// key's mutex so a stale auto-stop timer that raced a manual stop plus an
+// immediate re-trigger cannot finalize the campaign's new episode.
 func (s *DataService) stopCaptureIfCurrent(ctx context.Context, key, episodeID string) {
-	s.captureMu.Lock()
-	defer s.captureMu.Unlock()
+	lock := s.keyLock(key)
+	lock.Lock()
+	defer lock.Unlock()
 	session, ok := s.manager.ActiveSession(key)
 	if !ok || session.ID != episodeID {
 		return
@@ -331,14 +381,19 @@ func (s *DataService) stopCaptureIfCurrent(ctx context.Context, key, episodeID s
 	_, _ = s.stopCaptureLocked(ctx, key)
 }
 
+// stopCaptureLocked finalizes the episode for key. The caller holds that key's
+// mutex; captureMu is taken only around the map reads and writes.
 func (s *DataService) stopCaptureLocked(ctx context.Context, key string) (*agentpbv2.DataEpisode, error) {
+	s.captureMu.Lock()
 	if cancel := s.autoStopCancel[key]; cancel != nil {
 		cancel()
 		delete(s.autoStopCancel, key)
 	}
+	captures := s.activeCaptures[key]
+	delete(s.activeCaptures, key)
+	s.captureMu.Unlock()
 	var results []data.CaptureResult
 	var captureErrs []error
-	captures := s.activeCaptures[key]
 	for i := len(captures) - 1; i >= 0; i-- {
 		r, err := captures[i].Stop(ctx)
 		results = append(results, r...)
@@ -346,7 +401,16 @@ func (s *DataService) stopCaptureLocked(ctx context.Context, key string) (*agent
 			captureErrs = append(captureErrs, err)
 		}
 	}
-	delete(s.activeCaptures, key)
+	// The episode's camera pre-roll ring (if any) was consumed at trigger. Re-arm
+	// the campaign the moment its adapters have released the camera, BEFORE the
+	// seal and its post-seal drain: re-arming afterwards left the ring empty for
+	// the whole drain, so a trigger that landed inside the drain window opened an
+	// episode with no camera pre-roll at all. Armed here, the drain doubles as
+	// the next episode's pre-roll window. Arming subscribes to camera hubs, so it
+	// still runs off this path.
+	if key != data.AdHocEpisodeKey {
+		go s.rearmByName(key)
+	}
 	if len(results) > 0 {
 		// A manifest sealed without its per-source capture results reports an
 		// episode as complete while silently omitting what each source
@@ -367,12 +431,6 @@ func (s *DataService) stopCaptureLocked(ctx context.Context, key string) (*agent
 	}
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
-	}
-	// The episode's camera pre-roll ring (if any) was consumed at trigger. Re-arm
-	// the campaign so its next trigger opens with pre-roll again. Arming
-	// subscribes to camera hubs, so it runs off the finalize path.
-	if key != data.AdHocEpisodeKey {
-		go s.rearmByName(key)
 	}
 	return manifestEpisode(m), nil
 }
@@ -442,9 +500,16 @@ func (s *DataService) CampaignTrigger(ctx context.Context, req *agentpbv2.DataCa
 }
 
 func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaign, reason, expression string) (*agentpbv2.DataEpisode, error) {
-	sources, topics, captures, err := s.manager.ResolveCampaignSources(campaign)
+	// Degrading, not aborting: a ROS 2 topic that nobody publishes at the moment
+	// of the trigger costs the episode that source, not the camera, the telemetry
+	// and the application records of the event that fired it. The unresolved
+	// selectors are carried into the manifest as absent sources.
+	sources, topics, captures, unresolved, err := s.manager.ResolveCampaignSourcesDegrading(campaign)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	for _, source := range unresolved {
+		s.manager.Warnf("campaign %q: source %s did not resolve at trigger; the episode records its other sources and marks this one absent in the manifest: %s", campaign.Name, source.ID, source.Detail)
 	}
 	privacy := make([]data.PrivacyTransformation, 0, len(campaign.Privacy))
 	for _, transform := range campaign.Privacy {
@@ -471,6 +536,7 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 		PreRollDuration:      campaign.BufferDuration(),
 		DrainDuration:        campaign.DrainDuration(),
 		Trigger:              data.EpisodeTrigger{Reason: reason, CampaignName: campaign.Name, CampaignRevision: campaign.Revision, Expression: expression, Notify: campaign.Notify},
+		UnresolvedSources:    unresolved,
 		CollectorVersion:     version.Version,
 		ModelVersions:        campaign.Models,
 		RequestedTopics:      topics,
@@ -508,9 +574,10 @@ func (s *DataService) observeApplicationRecord(_ string, record data.Application
 	// previous episode is inside its post-seal drain is not capturing, and
 	// ActiveEpisodeKeys no longer names it, so a record that matches during the
 	// drain starts the next episode instead of being dropped. That episode
-	// still has to wait for captureMu, which the stopping episode holds until
-	// its drain ends, so it begins up to one capture.drain late rather than not
-	// at all -- documented for operators in the data command reference.
+	// still has to wait for the campaign key's mutex, which the stopping episode
+	// holds until its drain ends, so it begins up to one capture.drain late
+	// rather than not at all -- documented for operators in the data command
+	// reference. Other campaigns are unaffected: the mutex is per key.
 	activeKeys := map[string]bool{}
 	for _, key := range s.manager.ActiveEpisodeKeys() {
 		activeKeys[key] = true

@@ -72,15 +72,33 @@ func newPumpTestHub(t *testing.T) (*deviceHub, int, chan *videoFrame) {
 	return hub, subID, frames
 }
 
+// dropForSubscriber records n frames the hub failed to hand to this subscriber,
+// with exactly the bookkeeping broadcast's failed-send branch keeps: the running
+// total and the pending count that the next successfully queued frame carries.
+func dropForSubscriber(hub *deviceHub, subID int, n uint64) {
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	hub.subDrops[subID] += n
+	hub.subs[subID].pendingDrops += n
+}
+
+// queueForSubscriber hands a frame to the subscriber through the hub's own
+// broadcast, so the pending drops recorded before it ride on it exactly as they
+// would in production. Pushing straight onto the channel would bypass that
+// bookkeeping and prove nothing about the real path.
+func queueForSubscriber(t *testing.T, hub *deviceHub, frame *videoFrame) {
+	t.Helper()
+	if !hub.broadcast(frame) {
+		t.Fatal("broadcast reported no subscribers")
+	}
+}
+
 // waitForBindings blocks until the pump has recorded n bindings.
 //
-// The drop tests need this because the hub's drop counter is read when the pump
-// CONSUMES a frame, not when the hub queued it (this is the same accounting
-// cameraSensorSubscription.Next does, deliberately). Staging all the frames and
-// all the drops up front would therefore attribute drops to whichever frame the
-// pump happened to reach first, which says nothing about the real behaviour.
-// Interleaving the way the hub actually would is the only way these tests mean
-// anything.
+// The drop tests need this because a loss is attributed to the frame that
+// FOLLOWS it, so the frames and the drops have to be interleaved in the order
+// the hub would really produce them. Staging them all up front says nothing
+// about the real behaviour.
 func waitForBindings(t *testing.T, pump *hubLoopbackPump, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -220,12 +238,10 @@ func TestPumpReportsHubDroppedFrames(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- pump.pump(context.Background(), hub, subID, frames, writer) }()
 
-	frames <- bindableFrame(1, 100, 1)
+	queueForSubscriber(t, hub, bindableFrame(1, 100, 1))
 	waitForBindings(t, pump, 1)
-	hub.mu.Lock()
-	hub.subDrops[subID] = 3
-	hub.mu.Unlock()
-	frames <- bindableFrame(5, 200, 1)
+	dropForSubscriber(hub, subID, 3)
+	queueForSubscriber(t, hub, bindableFrame(5, 200, 1))
 	waitForBindings(t, pump, 2)
 	close(frames)
 
@@ -271,13 +287,11 @@ func TestPumpWriteFailureIsNotADroppedFrame(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- pump.pump(context.Background(), hub, subID, frames, writer) }()
 
-	frames <- bindableFrame(1, 100, 1)
+	queueForSubscriber(t, hub, bindableFrame(1, 100, 1))
 	waitForBindings(t, pump, 1)
-	hub.mu.Lock()
-	hub.subDrops[subID] = 2 // two samples lost after frame 1 was consumed
-	hub.mu.Unlock()
-	frames <- bindableFrame(4, 200, 1) // this write fails, so it records nothing
-	frames <- bindableFrame(5, 300, 1)
+	dropForSubscriber(hub, subID, 2)                     // two samples lost after frame 1 was consumed
+	queueForSubscriber(t, hub, bindableFrame(4, 200, 1)) // this write fails, so it records nothing
+	queueForSubscriber(t, hub, bindableFrame(5, 300, 1))
 	waitForBindings(t, pump, 2)
 	close(frames)
 
@@ -527,8 +541,8 @@ func TestPumpReturnsUnreportedLossesOnRestart(t *testing.T) {
 	writer := newFakeLoopbackWriter(0)
 	pump := newHubLoopbackPump(zap.NewNop(), "v4l2:/dev/video0", "/dev/video200")
 
+	dropForSubscriber(hub, subID, 3)
 	hub.mu.Lock()
-	hub.subDrops[subID] = 3
 	hub.restarted = true
 	hub.mu.Unlock()
 	close(frames)

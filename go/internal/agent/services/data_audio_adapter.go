@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audio"
@@ -49,23 +50,47 @@ const (
 	// audioPipelineDelayEstimate is the capture delay still outstanding once
 	// the chunk in hand has been accounted for: audio already sitting in the
 	// device buffer when that chunk was handed over, plus its transit through
-	// the capture subprocess pipe. MEASURED on a Jetson Orin Nano with a
-	// Logitech C920 microphone over 60 reads, the ALSA device delay ran 12.6 ms
-	// to 20.9 ms and pipe transit about 4 ms, giving 16.6 ms to 24.9 ms and
-	// centring near 20 ms. The 102 ms by which the oldest sample in a chunk was
-	// stale on that hardware is this residue plus the 85.33 ms chunk itself.
+	// the capture subprocess pipe.
+	//
+	// SINGLE-DEVICE CALIBRATION, not a measurement this agent makes at runtime.
+	// It was measured on ONE configuration and is applied to every device: a
+	// Jetson Orin Nano (wendyos-hubert) running the shipped WendyOS image, a
+	// Logitech C920 USB microphone on the raw ALSA path (no PipeWire session),
+	// s16le 48 kHz mono at the 100 ms requested latency this adapter asks for,
+	// on an otherwise idle board, over 60 consecutive reads. Under those
+	// conditions the ALSA device delay ran 12.6 ms to 20.9 ms and pipe transit
+	// about 4 ms, giving 16.6 ms to 24.9 ms and centring near 20 ms. The 102 ms
+	// by which the oldest sample in a chunk was stale on that hardware is this
+	// residue plus the 85.33 ms chunk itself.
+	//
+	// Different hardware, a different period size, a loaded board or the
+	// PipeWire path will land somewhere else inside audioPipelineDelayBound,
+	// which is why the bound and not this number is what the published
+	// uncertainty carries. Every capture says so in its manifest source detail
+	// (see audioPipelineDelayNote) rather than leaving a reader to assume the
+	// correction was measured here.
 	audioPipelineDelayEstimate = 20 * time.Millisecond
 	// audioPipelineDelayBound is the uncertainty half-width published alongside
 	// a corrected stamp. It covers a residual delay anywhere between 0 and
-	// 40 ms, which absorbs the period-size and scheduling variation a single
-	// point measurement cannot pin down, and contains the arecord fallback path
-	// now that audio.ArecordCommand bounds its device buffer to 40 ms.
+	// 40 ms, which absorbs the period-size and scheduling variation the single
+	// point calibration above cannot pin down, and contains the arecord fallback
+	// path now that audio.ArecordCommand bounds its device buffer to 40 ms. It
+	// is the part of the pair a reader should trust on unmeasured hardware.
 	audioPipelineDelayBound = 20 * time.Millisecond
 	// audioMappingSegment labels a stamp corrected by the two constants above,
 	// so a reader can tell corrected audio stamps from the uncorrected
 	// "receipt-bracket-v1" stamps the camera adapters still publish.
 	audioMappingSegment = "receipt-minus-pipeline-v1"
 )
+
+// audioPipelineDelayNote is folded into every audio capture's manifest source
+// detail. A stamp corrected by a constant that was calibrated on one device and
+// one microphone must say so in the episode, not only in this file: a reader
+// comparing audio against camera timing on other hardware needs to know the
+// correction is an estimate carrying a bound, not a per-device measurement.
+var audioPipelineDelayNote = fmt.Sprintf(
+	"segment stamps are corrected by audioPipelineDelayEstimate (%s), a single-device calibration measured on a Jetson Orin Nano with a Logitech C920 microphone on the raw ALSA path, not a measurement taken on this device; treat it as an estimate and the published canonical uncertainty (at least %s) as the bound",
+	audioPipelineDelayEstimate, audioPipelineDelayBound)
 
 // audioStream is the PCM source the capture loop reads from. It is an interface
 // so tests can inject deterministic PCM without a live capture process.
@@ -262,22 +287,32 @@ func (a *audioDataAdapter) startOne(ctx context.Context, session data.CaptureSes
 		}
 	}
 
-	stream, err := a.openStream(ctx, devID)
+	// The recorder subprocess belongs to the capture, not to the caller.
+	// openStream used to be handed the RPC handler's context, which gRPC cancels
+	// the moment the handler returns: exec.CommandContext then killed arecord or
+	// pw-record about one chunk into the episode, the pipe reached end of file,
+	// that read as a clean end of stream, and the episode sealed "complete" with
+	// a single audio chunk in it. captureCtx is owned here and cancelled by Stop,
+	// exactly as the camera and ROS 2 adapters already do.
+	captureCtx, cancel := context.WithCancel(context.Background())
+	stream, err := a.openStream(captureCtx, devID)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	dir := filepath.Join(session.Directory, "audio", safeCaptureName(source.ID))
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		stream.Close()
+		cancel()
 		return nil, err
 	}
 	index, err := os.OpenFile(filepath.Join(dir, "index.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		stream.Close()
+		cancel()
 		return nil, err
 	}
 
-	captureCtx, cancel := context.WithCancel(context.Background())
 	c := &audioCapture{
 		source: source, session: session, dir: dir, stream: stream, index: index,
 		ctx: captureCtx, cancel: cancel, done: make(chan struct{}), ready: make(chan error, 1),
@@ -302,8 +337,10 @@ func (a *audioDataAdapter) startOne(ctx context.Context, session data.CaptureSes
 }
 
 // shutdown cancels the capture context and closes the PCM stream, unblocking a
-// pending Read, then waits for run to finish.
+// pending Read, then waits for run to finish. The stopping flag is raised first,
+// so run can tell the end of stream it caused from one the recorder caused.
 func (c *audioCapture) shutdown() {
+	c.stopping.Store(true)
 	c.cancel()
 	c.stream.Close()
 	<-c.done
@@ -337,8 +374,12 @@ type audioCapture struct {
 	ready     chan error
 	readyOnce sync.Once
 	stopOnce  sync.Once
-	result    data.CaptureResult
-	runErr    error
+	// stopping is raised by shutdown before the stream is closed, so the read
+	// loop can tell an end of stream it asked for from one the recorder process
+	// caused by exiting.
+	stopping atomic.Bool
+	result   data.CaptureResult
+	runErr   error
 
 	// mode is "continuous" or "threshold".
 	mode string
@@ -389,6 +430,12 @@ func (c *audioCapture) signalReady(err error) { c.readyOnce.Do(func() { c.ready 
 // run reads PCM until the stream ends. It does not poll c.ctx: Stop closes the
 // stream, which unblocks Read and drains the buffered PCM, so a stop never
 // truncates data the producer already delivered.
+//
+// An end of stream BEFORE Stop is a failure, not a clean end. The recorder is
+// meant to run for the whole episode, so its pipe closing early means the
+// process died: end of file was previously swallowed as a normal finish, and the
+// episode sealed "complete" holding whatever fraction of the audio the recorder
+// managed before it went. Only an end of stream that Stop caused is clean.
 func (c *audioCapture) run() {
 	defer close(c.done)
 	defer c.finish()
@@ -404,12 +451,21 @@ func (c *audioCapture) run() {
 			c.signalReady(nil)
 		}
 		if err != nil {
-			if err != io.EOF {
+			switch {
+			case err != io.EOF && !c.stopping.Load():
 				if msg := c.stream.Err(); msg != "" {
 					c.runErr = errors.New(msg)
 				} else {
 					c.runErr = err
 				}
+			case err == io.EOF && !c.stopping.Load():
+				c.runErr = errors.New("audio capture process exited before the capture was stopped")
+				if msg := c.stream.Err(); msg != "" {
+					c.runErr = fmt.Errorf("%w: %s", c.runErr, msg)
+				}
+			case err != io.EOF:
+				// Stop closed the stream underneath the read; that is the
+				// designed way out, not a capture failure.
 			}
 			c.signalReady(c.runErr)
 			return
@@ -541,8 +597,7 @@ func (c *audioCapture) beginSegment(triggerLevel *float64, firstChunkBytes int) 
 		return err
 	}
 	if err := writeWAVHeader(f, audioSampleRate, audioChannels, 0); err != nil {
-		f.Close()
-		return err
+		return errors.Join(err, f.Close())
 	}
 	c.seg = f
 	c.segRel = filepath.ToSlash(filepath.Join("audio", safeCaptureName(c.source.ID), name))
@@ -652,6 +707,13 @@ func (c *audioCapture) finish() {
 	c.result.SourceID = c.source.ID
 	c.result.ClockDomain = c.source.ClockDomain
 	c.result.ActualOffset = c.firstOffset
+	c.notes = append(c.notes, audioPipelineDelayNote)
+	if c.runErr != nil {
+		// The failure is recorded ON THE SOURCE as well as returned from Stop:
+		// the manifest entry for this microphone is where a reader looks to find
+		// out why an episode holds less audio than it should.
+		c.notes = append(c.notes, "capture ended early: "+c.runErr.Error())
+	}
 	if c.clampedSegments > 0 {
 		// Said in the manifest as well as per segment: an operator reading the
 		// episode summary should not have to open the audio index to learn that

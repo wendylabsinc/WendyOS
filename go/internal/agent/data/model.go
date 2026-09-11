@@ -369,9 +369,15 @@ type StartOptions struct {
 	CollectorVersion string
 	ModelVersions    map[string]string
 	RequestedTopics  []string
-	Privacy          []PrivacyTransformation
-	Upload           WorkflowState
-	Labeling         WorkflowState
+	// UnresolvedSources are sources the campaign asked for that the device could
+	// not resolve when the episode opened, most often a ROS 2 topic nobody is
+	// publishing. They are recorded in the manifest as unhealthy sources that
+	// captured nothing, so an episode that degraded says which source it lost
+	// instead of looking like a plan that never named it.
+	UnresolvedSources []Source
+	Privacy           []PrivacyTransformation
+	Upload            WorkflowState
+	Labeling          WorkflowState
 }
 
 type EpisodeInfo struct {
