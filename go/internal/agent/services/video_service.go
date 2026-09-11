@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -27,6 +28,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/audio"
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
@@ -267,10 +269,32 @@ type v4l2ReqBuffers struct {
 // Accessor methods read/write fields at their known offsets to avoid C-struct alignment surprises.
 type v4l2Buf [88]byte
 
-func (b *v4l2Buf) index() uint32      { return *(*uint32)(unsafe.Pointer(&b[0])) }
-func (b *v4l2Buf) setIndex(i uint32)  { *(*uint32)(unsafe.Pointer(&b[0])) = i }
-func (b *v4l2Buf) setType(t uint32)   { *(*uint32)(unsafe.Pointer(&b[4])) = t }
-func (b *v4l2Buf) bytesUsed() uint32  { return *(*uint32)(unsafe.Pointer(&b[8])) }
+func (b *v4l2Buf) index() uint32     { return *(*uint32)(unsafe.Pointer(&b[0])) }
+func (b *v4l2Buf) setIndex(i uint32) { *(*uint32)(unsafe.Pointer(&b[0])) = i }
+func (b *v4l2Buf) setType(t uint32)  { *(*uint32)(unsafe.Pointer(&b[4])) = t }
+func (b *v4l2Buf) bytesUsed() uint32 { return *(*uint32)(unsafe.Pointer(&b[8])) }
+func (b *v4l2Buf) flags() uint32     { return *(*uint32)(unsafe.Pointer(&b[12])) }
+func (b *v4l2Buf) setFlags(f uint32) { *(*uint32)(unsafe.Pointer(&b[12])) = f }
+func (b *v4l2Buf) timestampNanos() int64 {
+	sec := *(*int64)(unsafe.Pointer(&b[24]))
+	usec := *(*int64)(unsafe.Pointer(&b[32]))
+	return sec*int64(time.Second) + usec*int64(time.Microsecond)
+}
+
+// setTimestampNanos writes nanos into the struct timeval at offsets 24 and 32,
+// mirroring timestampNanos above exactly so a value written here reads back
+// through that accessor.
+//
+// The microsecond field truncates: struct timeval has no finer resolution. The
+// truncation is exact rather than lossy-and-rounded, because 1e9 is divisible
+// by 1000, so sec*1e6 + usec == nanos/1000 for any non-negative nanos. That
+// identity is what lets a consumer derive the expected buffer value from
+// FrameIdentity.boottime_nanos without a second field on the wire.
+func (b *v4l2Buf) setTimestampNanos(nanos int64) {
+	*(*int64)(unsafe.Pointer(&b[24])) = nanos / int64(time.Second)
+	*(*int64)(unsafe.Pointer(&b[32])) = (nanos % int64(time.Second)) / int64(time.Microsecond)
+}
+func (b *v4l2Buf) sequence() uint32   { return *(*uint32)(unsafe.Pointer(&b[56])) }
 func (b *v4l2Buf) setMemory(m uint32) { *(*uint32)(unsafe.Pointer(&b[60])) = m }
 func (b *v4l2Buf) offset() uint32     { return *(*uint32)(unsafe.Pointer(&b[64])) }
 
@@ -331,11 +355,53 @@ func (e nativeH264NotSupported) Error() string { return e.msg }
 // at broadcast time. stream.Send() serialises the proto synchronously before returning,
 // so reading frame.data without a per-subscriber copy is safe.
 type videoFrame struct {
-	data  []byte
-	tsNs  uint64
-	codec agentpb.VideoCodec
+	data          []byte
+	tsNs          uint64
+	codec         agentpb.VideoCodec
+	nativeNs      int64
+	nativeClock   string
+	nativeFlags   uint32
+	sequence      uint32
+	sequenceValid bool
+	// auAligned reports that data holds exactly one whole encoded access unit.
+	// Only the native V4L2 path delivers this (one V4L2 buffer per encoded
+	// frame); the GStreamer and IP camera producers read a byte stream from a
+	// pipe, so their frames are arbitrary chunk-sized slices of the stream that
+	// can begin or end mid-access-unit. Consumers that cut the stream at frame
+	// boundaries (snapshot stills, GOP-granularity rate capping) must require
+	// this flag: a chunk that merely contains an SPS/PPS/IDR prefix may still
+	// be truncated mid-IDR.
+	auAligned bool
+	// sampleID is the harness-wide identity of this sample within its source,
+	// assigned by the hub in produce, once per physical frame arriving from the
+	// producer and never again for a further plane, so that EVERY consumer of
+	// the frame — an app reading the agent-fed node, the episode capture
+	// adapter, a dashboard viewer — names it identically. It is what makes an episode able
+	// to say "this is the frame the model saw". The counter is owned by the
+	// VideoService per device key, not by the hub, so it does not restart when
+	// a producer is torn down and restarted mid-episode.
+	sampleID uint64
+	// receiptBootNanos is the agent's bracketed CLOCK_BOOTTIME receipt of this
+	// frame, taken once in produce so all consumers agree; the bracket
+	// half-width is receiptUncertaintyNanos. Zero when the clock read failed.
+	receiptBootNanos        int64
+	receiptUncertaintyNanos int64
 	// rawFmt describes a VIDEO_CODEC_RAW frame's layout; nil for encoded video.
 	rawFmt *agentpb.RawFormat
+}
+
+type frameTimestamp struct {
+	wallNs        uint64
+	nativeNs      int64
+	nativeClock   string
+	nativeFlags   uint32
+	sequence      uint32
+	sequenceValid bool
+	auAligned     bool
+}
+
+func realtimeFrameTimestamp(now time.Time) frameTimestamp {
+	return frameTimestamp{wallNs: uint64(now.UnixNano()), nativeNs: now.UnixNano(), nativeClock: "CLOCK_REALTIME_AGENT_CAPTURE"}
 }
 
 // hubSubscriber is one gRPC stream attached to a hub. Encoded and raw subscribers
@@ -353,12 +419,13 @@ type hubSubscriber struct {
 
 // deviceHub multiplexes one camera producer to multiple gRPC subscribers.
 type deviceHub struct {
-	mu     sync.Mutex
-	subs   map[int]*hubSubscriber
-	nextID int
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{} // closed by runProducer after the device fd is released
+	mu       sync.Mutex
+	subs     map[int]*hubSubscriber
+	subDrops map[int]uint64
+	nextID   int
+	ctx      context.Context
+	cancel   context.CancelFunc
+	done     chan struct{} // closed by runProducer after the device fd is released
 	// err is set by runProducer to the terminal error before closing subscriber
 	// channels. Nil on graceful shutdown (context cancelled). Protected by h.mu.
 	err error
@@ -366,6 +433,25 @@ type deviceHub struct {
 	// Storing scalars (not a proto pointer) prevents data races if the caller's
 	// proto message is ever mutated by middleware after the hub is created.
 	width, height, framerate uint32
+	// subExplicit records, per subscriber id, the label of the consumer kind
+	// that joined with EXPLICITLY asserted stream parameters; subscribers that
+	// asserted none (a model app on the sensor socket, the two-plane loopback
+	// pump) have no entry. This is the bit the parameter-priority rules pivot
+	// on, tracked as hub state at subscribe time rather than inferred later
+	// from the parameter values: the hub's parameters count as explicitly held
+	// only while at least one such subscriber remains, so a camera whose
+	// explicit consumer has left degrades back to a defaulted hub that episode
+	// capture may restart. Protected by h.mu.
+	subExplicit map[int]string
+	// restarted marks that this hub's producer was torn down by an episode
+	// capture takeover (takeOverDefaultedHub) rather than by a fault or a
+	// normal last-unsubscribe. Parameter-less subscribers use it to reattach
+	// to the replacement hub after their channel closes. Protected by h.mu.
+	restarted bool
+	// sampleSeq is the per-device sample counter, shared with every hub that
+	// has served the same device key. It outlives the hub so sample identities
+	// stay monotonic across producer restarts within one episode.
+	sampleSeq *atomic.Uint64
 	// Whether this producer tees raw capture frames (video_raw_tap.go). Undecided
 	// until the producer has chosen its capture path; a raw subscriber that joins
 	// before then waits, one that joins after a refusal is turned away up front.
@@ -385,12 +471,28 @@ const maxSubscribersPerHub = 16
 // (checked atomically under h.mu so no subscriber can be added to a dying hub),
 // or codes.ResourceExhausted if the hub already has maxSubscribersPerHub active subscribers.
 func (h *deviceHub) subscribe() (int, chan *videoFrame, error) {
-	return h.subscribeKind(false)
+	return h.subscribeAsKind("", false)
+}
+
+// subscribeAs is subscribe, additionally recording that this subscriber's join
+// asserted the hub's stream parameters explicitly when explicitHolder is
+// non-empty. The label names the kind of consumer (see the hubHolder
+// constants) so a refused campaign can be told exactly who holds the camera.
+func (h *deviceHub) subscribeAs(explicitHolder string) (int, chan *videoFrame, error) {
+	return h.subscribeAsKind(explicitHolder, false)
 }
 
 // subscribeKind is subscribe with a choice of frames: encoded video (the default)
 // or the raw capture frames the producer tees for analytic consumers.
 func (h *deviceHub) subscribeKind(raw bool) (int, chan *videoFrame, error) {
+	return h.subscribeAsKind("", raw)
+}
+
+// subscribeAsKind is the single implementation behind subscribe, subscribeAs and
+// subscribeKind. The two dimensions are independent: explicitHolder records who,
+// if anyone, asserted the hub's stream parameters, while raw selects which kind
+// of frame this subscriber receives.
+func (h *deviceHub) subscribeAsKind(explicitHolder string, raw bool) (int, chan *videoFrame, error) {
 	ch := make(chan *videoFrame, 4)
 	h.mu.Lock()
 	if h.ctx.Err() != nil {
@@ -404,6 +506,16 @@ func (h *deviceHub) subscribeKind(raw bool) (int, chan *videoFrame, error) {
 	id := h.nextID
 	h.nextID++
 	h.subs[id] = &hubSubscriber{ch: ch, raw: raw}
+	if h.subDrops == nil {
+		h.subDrops = make(map[int]uint64)
+	}
+	h.subDrops[id] = 0
+	if explicitHolder != "" {
+		if h.subExplicit == nil {
+			h.subExplicit = make(map[int]string)
+		}
+		h.subExplicit[id] = explicitHolder
+	}
 	h.mu.Unlock()
 	return id, ch, nil
 }
@@ -422,13 +534,53 @@ func (h *deviceHub) subscriberErr(id int) error {
 // unsubscribe removes a subscriber. When the last subscriber leaves it cancels the producer.
 // cancel() is called while h.mu is still held to close the race window where a concurrent
 // getOrCreateHub could observe h.ctx.Err()==nil between the delete and the cancel call.
-func (h *deviceHub) unsubscribe(id int) {
+func (h *deviceHub) unsubscribe(id int) uint64 {
 	h.mu.Lock()
+	drops := h.subDrops[id]
 	delete(h.subs, id)
+	delete(h.subDrops, id)
+	delete(h.subExplicit, id)
 	if len(h.subs) == 0 {
 		h.cancel()
 	}
 	h.mu.Unlock()
+	return drops
+}
+
+// heldExplicitly reports whether any current subscriber asserted this hub's
+// stream parameters explicitly, and the label of one such holder (the one
+// with the lowest subscriber id, for determinism). A hub whose explicit
+// consumers have all left is held only by parameter-less subscribers, so its
+// parameters are defaulted again no matter what values the producer runs at.
+func (h *deviceHub) heldExplicitly() (holder string, held bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	lowest := -1
+	for id, label := range h.subExplicit {
+		if lowest == -1 || id < lowest {
+			lowest, holder = id, label
+		}
+	}
+	return holder, lowest != -1
+}
+
+// wasRestarted reports whether this hub's producer was torn down by an
+// episode-capture takeover. Subscribers that observe their channel closed
+// check it to distinguish "the stream is being restarted at the campaign's
+// parameters, reattach" from "the producer stopped, give up".
+func (h *deviceHub) wasRestarted() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.restarted
+}
+
+// drops reports how many frames the hub has dropped for one subscriber so far.
+// A subscriber reads it to turn the running total into a per-sample delta, so a
+// gap in sample identifiers always comes with the count that explains it.
+func (h *deviceHub) drops(id int) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.subDrops[id]
 }
 
 // terminalErr returns the error recorded by runProducer under h.mu.
@@ -447,6 +599,57 @@ func (h *deviceHub) terminalErr() error {
 // malfunctioning or compromised device from triggering memory exhaustion.
 const maxFrameBytes = 2 * 1024 * 1024 // 2 MiB
 
+// frameTooLarge reports whether a frame exceeds what the hub is willing to
+// distribute. It is the single place the limit is applied, so the identity
+// minted in produce and the delivery done by broadcast can never disagree
+// about which frames exist.
+func frameTooLarge(frame *videoFrame) bool {
+	// Raw capture frames are uncompressed and legitimately far larger than an
+	// encoded access unit, so they carry their own ceiling. Applying the
+	// encoded limit to them would drop every raw frame silently.
+	limit := maxFrameBytes
+	if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW {
+		limit = maxRawFrameBytes
+	}
+	return len(frame.data) > limit
+}
+
+// produce takes one physical frame from the camera producer, stamps it with its
+// harness-wide identity and agent receipt, and delivers it. Every producer path
+// funnels through here (see the closure in runProducer), and this is the ONLY
+// place a sample identity is minted.
+//
+// Minting belongs to the arrival of a frame, not to a delivery of it. The hub
+// can deliver one physical frame on more than one plane — encoded video to
+// viewers, to the sensor subscribers a model app reads, and to episode capture;
+// and, where the producer tees it, the uncompressed capture frame to analytic
+// subscribers — and each plane is a separate broadcast call. Minting inside
+// broadcast made a single camera frame consume one identifier per plane, so the
+// encoded stream's identifiers came out [2 4 6] with no drops recorded. That
+// breaks two contracts at once: hub_loopback_binding reads a jump in sample_id
+// on a dense loopback sequence as a producer-side drop, so every frame read as
+// a drop; and the model-input ledger's sample_id is supposed to name the
+// episode index entry for the same frame, so the join returned nothing at all.
+//
+// An oversized frame is dropped here without consuming an identifier, so a gap
+// in sample_id always means a sample that existed and was lost, never one that
+// never existed.
+func (h *deviceHub) produce(frame *videoFrame) bool {
+	if frameTooLarge(frame) {
+		return true // oversized frame: drop silently, keep the hub alive
+	}
+	// Stamp the identity and receipt before the frame becomes shared: it is
+	// immutable from the moment the first subscriber can see it, and every
+	// consumer must read the same values.
+	if h.sampleSeq != nil {
+		frame.sampleID = h.sampleSeq.Add(1)
+	}
+	if before, receipt, after, err := data.CaptureReceipt(); err == nil {
+		frame.receiptBootNanos, frame.receiptUncertaintyNanos = receipt, (after-before+1)/2
+	}
+	return h.broadcast(frame)
+}
+
 // broadcast delivers a frame to the subscribers that want its kind — encoded
 // video to viewers, VIDEO_CODEC_RAW frames to raw subscribers — dropping for
 // slow consumers. Returns false when there are no subscribers left (producer
@@ -455,17 +658,18 @@ const maxFrameBytes = 2 * 1024 * 1024 // 2 MiB
 // naturally (at most one GOP interval away for GStreamer pipelines with
 // key-int-max set).
 //
+// This is delivery only: it mints nothing. Call produce for a frame arriving
+// from the producer, and broadcast to put an existing frame onto a further
+// plane. A second plane must never consume a second identifier for the same
+// physical frame.
+//
 // Sends are performed while holding h.mu so that runProducer cannot close
 // subscriber channels concurrently — sending on a closed channel panics. With
 // maxSubscribersPerHub = 16 and non-blocking selects, the lock is held for
 // O(16) nanoseconds, making the contention cost negligible.
 func (h *deviceHub) broadcast(frame *videoFrame) bool {
 	raw := frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW
-	limit := maxFrameBytes
-	if raw {
-		limit = maxRawFrameBytes
-	}
-	if len(frame.data) > limit {
+	if frameTooLarge(frame) {
 		return true // oversized frame: drop silently, keep the hub alive
 	}
 	h.mu.Lock()
@@ -473,13 +677,14 @@ func (h *deviceHub) broadcast(frame *videoFrame) bool {
 	if len(h.subs) == 0 {
 		return false
 	}
-	for _, sub := range h.subs {
+	for id, sub := range h.subs {
 		if sub.closed || sub.raw != raw {
 			continue
 		}
 		select {
 		case sub.ch <- frame:
 		default:
+			h.subDrops[id]++
 		}
 	}
 	return true
@@ -596,6 +801,12 @@ type cameraLoopback interface {
 	RemoveCamera(camID uint32)
 	EnsureNode(ctx context.Context, id uint32, label string) error
 	Shutdown()
+	// Auxiliary nodes back the two-plane camera data path: v4l2loopback nodes
+	// fed from the producer hub rather than from a registered network camera.
+	// See video_service_two_plane.go.
+	AllocateAuxNodeNumber() (int, error)
+	EnsureAuxNode(ctx context.Context, nr int, label string) error
+	RemoveAuxNode(nr int)
 }
 
 // VideoService implements agentpb.WendyVideoServiceServer.
@@ -618,6 +829,9 @@ type VideoService struct {
 	links       *ipcam.LinkManager
 	loopback    cameraLoopback
 	ros2Cameras *ros2camera.Manager
+
+	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
+	twoPlaneState
 
 	// runGStreamer is the injection seam for the network capture subprocess.
 	runGStreamer func(ctx context.Context, args []string, onFrame func([]byte)) error
@@ -644,6 +858,14 @@ type VideoService struct {
 	readTegraRelease func() ([]byte, error)
 	dumpBootSlots    func(context.Context) ([]byte, error)
 
+	// startProducer launches the capture loop that feeds a hub. It is the
+	// injection seam for hub lifecycle tests (creation, capture takeover): the
+	// default forks runProducer, and a test substitutes a producer that
+	// broadcasts frames without opening a device. Any substitute must perform
+	// runProducer's teardown duties when its context ends: evict the hub from
+	// s.hubs, close the subscriber channels, and close h.done.
+	startProducer func(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest)
+
 	// Tunable V4L2 controls (exposure/gain/white balance) for local cameras.
 	// controls persists desired values so they survive a pipeline reopen and an
 	// agent restart; applyLocalControls/queryLocalControls are seams so the two
@@ -667,6 +889,10 @@ type VideoService struct {
 
 	mu   sync.Mutex
 	hubs map[string]*deviceHub
+	// sampleSeqs holds one sample counter per device key, outliving the hubs so
+	// a producer restart does not reissue sample identities the harness has
+	// already handed out for that source.
+	sampleSeqs map[string]*atomic.Uint64
 }
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
@@ -674,10 +900,11 @@ type VideoService struct {
 func NewVideoService(ctx context.Context, logger *zap.Logger, rosRuntime ...ROS2Runtime) *VideoService {
 	svcCtx, cancel := context.WithCancel(ctx)
 	svc := &VideoService{
-		logger: logger,
-		ctx:    svcCtx,
-		cancel: cancel,
-		hubs:   make(map[string]*deviceHub),
+		logger:     logger,
+		ctx:        svcCtx,
+		cancel:     cancel,
+		hubs:       make(map[string]*deviceHub),
+		sampleSeqs: make(map[string]*atomic.Uint64),
 		globDevices: func() ([]string, error) {
 			return filepath.Glob("/dev/video*")
 		},
@@ -734,6 +961,10 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, rosRuntime ...ROS2
 	svc.runGStreamer = svc.gstreamerFrames
 	svc.cameraReachable = ipcam.Reachable
 	svc.probeCamera = ipcam.ProbeCredentials
+	svc.startProducer = func(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
+		svc.wg.Add(1)
+		go svc.runProducer(ctx, h, path, req)
+	}
 	// The pump closure reads svc.runGStreamer through the receiver at call
 	// time, not the value assigned above at construction: a test that swaps
 	// s.runGStreamer after NewVideoService returns (the usual pattern; see
@@ -836,6 +1067,11 @@ func (s *VideoService) StartDiscovery() {
 // shuttingDown check could still start a new supervisor moments after ctx
 // cancellation fires but before Loopback.Shutdown gets a chance to run.
 func (s *VideoService) Shutdown() {
+	// Two-plane pumps go first, and are waited for, because each one holds a hub
+	// subscription and an open v4l2loopback node. Cancelling s.ctx alone would
+	// stop them eventually but would not wait, so a pump could still be
+	// releasing its node after Shutdown returned.
+	s.stopAllTwoPlane()
 	if s.ros2Cameras != nil {
 		s.ros2Cameras.Shutdown()
 	}
@@ -1198,10 +1434,33 @@ const (
 	hubTeardownTimeout = 500 * time.Millisecond
 )
 
+// hubHolder labels name the kind of consumer whose join asserted a hub's
+// stream parameters, so a refused campaign capture can be told exactly who
+// holds the camera. They appear verbatim in manifest notes.
+const (
+	hubHolderStreamClient   = "a video stream client"
+	hubHolderEpisodeCapture = "episode capture"
+)
+
+// streamRequestAssertsParams reports whether a stream request asserts any
+// stream parameter explicitly. A request with no width, height, or framerate
+// is the parameter-less join used by consumers that must never take a running
+// stream away from anyone (the sensor socket, the loopback pump).
+func streamRequestAssertsParams(req *agentpb.StreamVideoRequest) bool {
+	return req.GetWidth() != 0 || req.GetHeight() != 0 || req.GetFramerate() != 0
+}
+
 // getOrCreateHub returns the existing hub for path, or starts a new producer and hub.
 // The caller receives a hub with at least one subscriber already registered (the returned id/ch).
 // Returns an error if a hub already exists with different stream parameters.
-func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *agentpb.StreamVideoRequest) (h *deviceHub, id int, ch chan *videoFrame, err error) {
+// origin labels the kind of consumer joining (see the hubHolder constants); it
+// is recorded against the subscription only when req asserts parameters
+// explicitly.
+func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *agentpb.StreamVideoRequest, origin string) (h *deviceHub, id int, ch chan *videoFrame, err error) {
+	explicitHolder := ""
+	if streamRequestAssertsParams(req) {
+		explicitHolder = origin
+	}
 	for retries := 0; ; retries++ {
 		if retries >= maxHubRetries {
 			s.logger.Warn("hub retry limit exceeded", zap.String("device", path), zap.Int("retries", retries))
@@ -1233,7 +1492,7 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 					return nil, 0, nil, refusal
 				}
 			}
-			id, ch, err = h.subscribeKind(req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW)
+			id, ch, err = h.subscribeAsKind(explicitHolder, req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW)
 			s.mu.Unlock()
 			if err != nil {
 				if st, _ := status.FromError(err); st.Code() == codes.Unavailable {
@@ -1291,21 +1550,267 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 	hctx, cancel := context.WithCancel(s.ctx)
 	h = &deviceHub{
 		subs:      make(map[int]*hubSubscriber),
+		subDrops:  make(map[int]uint64),
 		ctx:       hctx,
 		cancel:    cancel,
 		done:      make(chan struct{}),
 		width:     req.GetWidth(),
 		height:    req.GetHeight(),
 		framerate: req.GetFramerate(),
+		sampleSeq: s.sampleSeqLocked(path),
 	}
 	// New hub: the first subscriber is always within the cap.
-	id, ch, _ = h.subscribeKind(req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW)
+	id, ch, _ = h.subscribeAsKind(explicitHolder, req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW)
 	s.hubs[path] = h
 	s.mu.Unlock()
 
-	s.wg.Add(1)
-	go s.runProducer(hctx, h, path, req)
+	s.startProducer(hctx, h, path, req)
 	return h, id, ch, nil
+}
+
+// joinHub subscribes to a device's frame hub without insisting on the stream
+// parameters in req. When a hub already runs with different parameters the
+// caller must not fail — a live viewer, an episode capture, and a model
+// subscriber all legitimately want the same device — so it falls back to
+// joining the running hub as it is. Callers that care about the difference
+// compare the returned parameters against what they asked for and report it.
+func (s *VideoService) joinHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, error) {
+	hub, id, ch, _, _, _, err := s.joinHubReportingParams(ctx, key, req)
+	return hub, id, ch, err
+}
+
+// joinHubReportingParams is joinHub, additionally reporting the stream
+// parameters the subscription actually runs at.
+func (s *VideoService) joinHubReportingParams(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, uint32, uint32, uint32, error) {
+	for attempt := 0; attempt < maxHubRetries; attempt++ {
+		hub, id, ch, err := s.getOrCreateHub(ctx, key, req, hubHolderStreamClient)
+		if err == nil {
+			// Report the hub's ACTUAL parameters, never the request's. A
+			// request that asserts none now joins whatever the camera is
+			// already doing rather than being refused, so echoing the request
+			// back here would record an achieved size of 0x0@0 for a capture
+			// that is really running at the hub's parameters. For a hub this
+			// call created the two are identical, because getOrCreateHub
+			// copies them straight from req.
+			return hub, id, ch, hub.width, hub.height, hub.framerate, nil
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			return nil, 0, nil, 0, 0, 0, err
+		}
+		hub, id, ch, w, h, fps, ok, err := s.subscribeExistingHub(key)
+		if err != nil {
+			return nil, 0, nil, 0, 0, 0, err
+		}
+		if ok {
+			return hub, id, ch, w, h, fps, nil
+		}
+		// The conflicting hub disappeared between the two calls; retry.
+	}
+	return nil, 0, nil, 0, 0, 0, status.Error(codes.Unavailable, "video device hub churned during subscription")
+}
+
+// errCameraHeldExplicitly is the named refusal for a campaign whose explicit
+// capture parameters conflict with a hub that another consumer holds at
+// explicitly requested parameters. It is recorded in the episode manifest
+// (CaptureResult source detail) instead of silently downgrading the capture;
+// the wrapped message names the holder and both parameter sets.
+var errCameraHeldExplicitly = errors.New("camera is held at explicitly requested stream parameters")
+
+// joinHubForCapture is the episode-capture join. It implements the parameter
+// priority the capture policy promises:
+//
+//   - A capture that asserts no parameters joins whatever runs, exactly like
+//     any other parameter-less subscriber (joinHubReportingParams).
+//   - A capture with EXPLICIT parameters wins over a hub whose parameters were
+//     chosen by default because every current subscriber asserted none: the
+//     producer is restarted at the campaign's parameters and the
+//     parameter-less subscribers reattach to the restarted stream
+//     (takeOverDefaultedHub). restarted reports that this happened so the
+//     capture can note it in the manifest.
+//   - A capture with explicit parameters that conflict with a hub held at
+//     parameters ANOTHER consumer asserted explicitly is refused with
+//     errCameraHeldExplicitly, never silently downgraded.
+func (s *VideoService) joinHubForCapture(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (hub *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, restarted bool, err error) {
+	if !streamRequestAssertsParams(req) {
+		hub, id, ch, width, height, framerate, err = s.joinHubReportingParams(ctx, key, req)
+		return hub, id, ch, width, height, framerate, false, err
+	}
+	for attempt := 0; attempt < maxHubRetries; attempt++ {
+		hub, id, ch, err := s.getOrCreateHub(ctx, key, req, hubHolderEpisodeCapture)
+		if err == nil {
+			return hub, id, ch, req.GetWidth(), req.GetHeight(), req.GetFramerate(), false, nil
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			return nil, 0, nil, 0, 0, 0, false, err
+		}
+		hub, id, ch, retry, err := s.takeOverDefaultedHub(ctx, key, req)
+		if err != nil {
+			return nil, 0, nil, 0, 0, 0, false, err
+		}
+		if retry {
+			// The conflicting hub disappeared, or its parameters changed,
+			// between the two calls; re-evaluate from the top.
+			continue
+		}
+		return hub, id, ch, req.GetWidth(), req.GetHeight(), req.GetFramerate(), true, nil
+	}
+	return nil, 0, nil, 0, 0, 0, false, status.Error(codes.Unavailable, "video device hub churned during subscription")
+}
+
+// takeOverDefaultedHub replaces a hub running at defaulted parameters with one
+// running at the campaign's explicit parameters. Returns retry=true (and no
+// hub) when the observed hub is gone or no longer conflicts, in which case the
+// caller should retry getOrCreateHub; returns errCameraHeldExplicitly when a
+// current subscriber holds the hub's parameters explicitly.
+//
+// Splice semantics, deliberately NOT a mid-stream splice: each existing
+// subscriber's stream ends (its channel closes exactly as if the producer had
+// stopped) and a new stream begins on the replacement hub. A parameter-less
+// subscriber that reattaches gets a fresh decodable start on the new stream,
+// beginning on a random-access unit; nothing ever splices two different
+// sequence parameter sets into what a downstream decoder reads as one
+// timeline. gRPC StreamVideo subscribers get a terminal error telling them to
+// reconnect (see pumpFrames).
+//
+// The replacement hub is installed in s.hubs BEFORE the old producer is
+// cancelled, so every reattaching subscriber lands on it rather than racing
+// this takeover to create a competing defaulted hub.
+func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
+	s.mu.Lock()
+	old, exists := s.hubs[key]
+	if !exists || old.ctx.Err() != nil {
+		s.mu.Unlock()
+		return nil, 0, nil, true, nil
+	}
+	if old.width == req.GetWidth() && old.height == req.GetHeight() && old.framerate == req.GetFramerate() {
+		// No conflict any more; the plain subscribe path handles it.
+		s.mu.Unlock()
+		return nil, 0, nil, true, nil
+	}
+	if holder, held := old.heldExplicitly(); held {
+		w, hgt, fps := old.width, old.height, old.framerate
+		s.mu.Unlock()
+		return nil, 0, nil, false, fmt.Errorf(
+			"%w: %s holds this camera at %s; the campaign requested %s; refusing to capture at parameters the campaign did not ask for",
+			errCameraHeldExplicitly, holder,
+			describeStreamParams(w, hgt, fps),
+			describeStreamParams(req.GetWidth(), req.GetHeight(), req.GetFramerate()))
+	}
+
+	hctx, cancel := context.WithCancel(s.ctx)
+	h = &deviceHub{
+		subs:      make(map[int]*hubSubscriber),
+		subDrops:  make(map[int]uint64),
+		ctx:       hctx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		width:     req.GetWidth(),
+		height:    req.GetHeight(),
+		framerate: req.GetFramerate(),
+		sampleSeq: s.sampleSeqLocked(key),
+	}
+	id, ch, _ = h.subscribeAs(hubHolderEpisodeCapture)
+	s.hubs[key] = h
+	old.mu.Lock()
+	old.restarted = true
+	old.mu.Unlock()
+	old.cancel()
+	s.mu.Unlock()
+
+	s.logger.Info("episode capture restarting camera producer at campaign parameters",
+		zap.String("device", key),
+		zap.Uint32("width", req.GetWidth()), zap.Uint32("height", req.GetHeight()),
+		zap.Uint32("framerate", req.GetFramerate()))
+
+	// abort dismantles the replacement hub when the caller's context ends
+	// before its producer was started. No runProducer exists for it yet, so
+	// the cleanup runProducer would normally perform (evict from the map,
+	// close subscriber channels, close done) must happen here; otherwise a
+	// subscriber that reattached in the interim would wait forever on a
+	// channel nothing will ever close.
+	abort := func() {
+		s.mu.Lock()
+		if s.hubs[key] == h {
+			delete(s.hubs, key)
+		}
+		s.mu.Unlock()
+		cancel()
+		h.mu.Lock()
+		for _, sub := range h.subs {
+			// Guarded exactly as runProducer's teardown is: a raw subscriber
+			// the producer already turned away (rawNotOffered) has had its
+			// channel closed under h.mu, and closing it a second time panics.
+			if !sub.closed {
+				sub.closed = true
+				close(sub.ch)
+			}
+		}
+		h.mu.Unlock()
+		close(h.done)
+	}
+
+	// Wait for the old producer to release the device fd before starting the
+	// replacement, exactly like getOrCreateHub's teardown wait; otherwise
+	// VIDIOC_S_FMT returns EBUSY while the old streaming session is active.
+	waitCtx, waitCancel := context.WithTimeout(ctx, hubTeardownTimeout)
+	select {
+	case <-old.done:
+	case <-ctx.Done():
+		waitCancel()
+		abort()
+		return nil, 0, nil, false, ctx.Err()
+	case <-waitCtx.Done():
+		if ctx.Err() != nil {
+			waitCancel()
+			abort()
+			return nil, 0, nil, false, ctx.Err()
+		}
+		s.logger.Warn("timed out waiting for hub teardown before capture takeover", zap.String("device", key))
+	}
+	waitCancel()
+
+	s.startProducer(hctx, h, key, req)
+	return h, id, ch, false, nil
+}
+
+// sampleSeqLocked returns the sample counter for a device key, creating it on
+// first use. Callers must hold s.mu. Counters are never removed: a device that
+// comes back must not restart identities a consumer has already seen.
+func (s *VideoService) sampleSeqLocked(path string) *atomic.Uint64 {
+	if s.sampleSeqs == nil {
+		s.sampleSeqs = make(map[string]*atomic.Uint64)
+	}
+	seq := s.sampleSeqs[path]
+	if seq == nil {
+		seq = new(atomic.Uint64)
+		s.sampleSeqs[path] = seq
+	}
+	return seq
+}
+
+// subscribeExistingHub joins the live hub for path at whatever stream
+// parameters it is already running with, asserting none of its own. It returns
+// ok=false (and no error) when no live hub exists or the hub is shutting down,
+// in which case the caller should create one via getOrCreateHub. Episode
+// capture uses this to coexist with a live viewer instead of failing the
+// episode when the viewer's stream parameters differ from the campaign's caps.
+func (s *VideoService) subscribeExistingHub(path string) (h *deviceHub, id int, ch chan *videoFrame, width, height, framerate uint32, ok bool, err error) {
+	s.mu.Lock()
+	h, exists := s.hubs[path]
+	if !exists || h.ctx.Err() != nil {
+		s.mu.Unlock()
+		return nil, 0, nil, 0, 0, 0, false, nil
+	}
+	id, ch, err = h.subscribe()
+	s.mu.Unlock()
+	if err != nil {
+		if st, _ := status.FromError(err); st.Code() == codes.Unavailable {
+			// The hub began shutting down between the map lookup and subscribe.
+			return nil, 0, nil, 0, 0, 0, false, nil
+		}
+		return nil, 0, nil, 0, 0, 0, false, err
+	}
+	return h, id, ch, h.width, h.height, h.framerate, true, nil
 }
 
 // runProducer drives the capture loop for a single device hub.
@@ -1313,8 +1818,8 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 // When the hub loses its last subscriber the context is cancelled and this goroutine exits.
 func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path string, req *agentpb.StreamVideoRequest) {
 	defer s.wg.Done()
-	broadcast := func(data []byte, tsNs uint64, codec agentpb.VideoCodec) bool {
-		return h.broadcast(&videoFrame{data: data, tsNs: tsNs, codec: codec})
+	broadcast := func(payload []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
+		return h.produce(&videoFrame{data: payload, tsNs: stamp.wallNs, codec: codec, nativeNs: stamp.nativeNs, nativeClock: stamp.nativeClock, nativeFlags: stamp.nativeFlags, sequence: stamp.sequence, sequenceValid: stamp.sequenceValid, auAligned: stamp.auAligned})
 	}
 
 	// The hub key carries the source kind: network cameras key on "ip:<id>" and
@@ -1382,7 +1887,7 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 // captureLocalCamera reads a USB/unknown camera, preferring the cheapest source: raw V4L2
 // keeps MJPEG capture and the best-mode probe, so the graph is only worth its
 // raw-plus-re-encode cost once the device refuses a second streaming consumer.
-func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]byte, uint64, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, transport camera.Transport, libcameraID string, sink rawSink) error {
+func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, transport camera.Transport, libcameraID string, sink rawSink) error {
 	if sink == nil {
 		sink = noRawSink{}
 	}
@@ -1396,8 +1901,8 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	// delivered frame is the proof it is the path in use, and the moment a raw
 	// subscriber can be told rather than left waiting.
 	nativePhase := true
-	send := func(data []byte, tsNs uint64, codec agentpb.VideoCodec) bool {
-		ok := broadcast(data, tsNs, codec)
+	send := func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
+		ok := broadcast(data, stamp, codec)
 		if ok && nativePhase && !delivered {
 			sink.rawNotOffered("camera streams H.264 natively; raw frames are not offered")
 		}
@@ -1705,7 +2210,7 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 	// use for streaming, so capability verification and streaming happen atomically
 	// on a single fd rather than across separate opens.
 
-	h, id, ch, err := s.getOrCreateHub(ctx, path, req)
+	h, id, ch, err := s.getOrCreateHub(ctx, path, req, hubHolderStreamClient)
 	if err != nil {
 		return err
 	}
@@ -1734,6 +2239,13 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				// Producer exited. Return the original error if one was recorded.
 				if err := h.terminalErr(); err != nil {
 					return err
+				}
+				// A capture takeover ends this stream rather than splicing new
+				// sequence parameter sets into it mid-timeline; the client
+				// reconnects and joins the restarted producer as a new stream.
+				if h.wasRestarted() {
+					return status.Errorf(codes.Unavailable,
+						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream")
 				}
 				// If the hub context was cancelled (e.g. service shutdown), propagate that.
 				if err := h.ctx.Err(); err != nil {
@@ -1778,7 +2290,7 @@ func (s *VideoService) streamIPCamera(stream grpc.ServerStreamingServer[agentpb.
 		defer s.loopback.AcquireView(src.camera.ID)()
 	}
 
-	h, id, ch, err := s.getOrCreateHub(stream.Context(), src.key, req)
+	h, id, ch, err := s.getOrCreateHub(stream.Context(), src.key, req, hubHolderStreamClient)
 	if err != nil {
 		return err
 	}
@@ -1814,7 +2326,7 @@ func (s *VideoService) preflightIPCamera(cam ipcam.Camera) error {
 // The requested width selects the stream. That is safe despite a hub being
 // shared, because getOrCreateHub already refuses a subscriber whose stream
 // parameters differ from the running hub's.
-func (s *VideoService) runIPProducer(ctx context.Context, broadcast func([]byte, uint64, agentpb.VideoCodec) bool, key string, req *agentpb.StreamVideoRequest) error {
+func (s *VideoService) runIPProducer(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, key string, req *agentpb.StreamVideoRequest) error {
 	devID, err := strconv.ParseUint(strings.TrimPrefix(key, ipHubKeyPrefix), 10, 32)
 	if err != nil {
 		return status.Errorf(codes.Internal, "malformed camera key %q", key)
@@ -1835,7 +2347,7 @@ func (s *VideoService) runIPProducer(ctx context.Context, broadcast func([]byte,
 		zap.Uint32("id", uint32(devID)),
 		zap.String("url", ipcam.RedactURL(streamURL)))
 	return s.runGStreamer(ctx, ipcam.PipelineArgs(streamURL), func(chunk []byte) {
-		broadcast(chunk, uint64(time.Now().UnixNano()), agentpb.VideoCodec_VIDEO_CODEC_H264)
+		broadcast(chunk, realtimeFrameTimestamp(time.Now()), agentpb.VideoCodec_VIDEO_CODEC_H264)
 	})
 }
 
@@ -1856,7 +2368,7 @@ func (s *VideoService) errCaptureSetup(ioctl, path string, errno unix.Errno) err
 // Each captured frame is delivered via the broadcast callback; if the callback returns
 // false the loop exits cleanly (no subscribers remain).
 // Returns nativeH264NotSupported if the device rejects the H.264 pixel format.
-func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, uint64, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
+func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
 	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		s.logger.Error("failed to open video device", zap.String("device", path), zap.Error(err))
@@ -2027,7 +2539,25 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 			// subscribers must not alias a buffer the camera may refill.
 			data := make([]byte, n)
 			copy(data, mapped[idx][:n])
-			if !broadcast(data, uint64(time.Now().UnixNano()), agentpb.VideoCodec_VIDEO_CODEC_H264) {
+			stamp := realtimeFrameTimestamp(time.Now())
+			stamp.nativeNs = dqbuf.timestampNanos()
+			stamp.nativeFlags = dqbuf.flags()
+			stamp.sequence = dqbuf.sequence()
+			stamp.sequenceValid = true
+			// V4L2 compressed capture delivers exactly one encoded frame per
+			// dequeued buffer, so this is the one producer whose frames are
+			// whole access units. The maxFrameBytes cap below can truncate a
+			// pathologically large frame, in which case the alignment promise
+			// no longer holds.
+			stamp.auAligned = n == dqbuf.bytesUsed()
+			const v4l2TimestampMask = uint32(0x0000e000)
+			const v4l2TimestampMonotonic = uint32(0x00002000)
+			if stamp.nativeFlags&v4l2TimestampMask == v4l2TimestampMonotonic {
+				stamp.nativeClock = "CLOCK_MONOTONIC_V4L2"
+			} else {
+				stamp.nativeClock = "V4L2_TIMESTAMP_UNKNOWN"
+			}
+			if !broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264) {
 				return nil
 			}
 			framesSent++
@@ -2140,7 +2670,7 @@ func resolveGSTBinary(name string) (string, error) {
 
 // streamGStreamer spawns gst-launch-1.0 on the device to encode via the best available
 // encoder and pipes the resulting stream back as videoFrame chunks via the broadcast callback.
-func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byte, uint64, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, transport camera.Transport, libcameraID string, pw pipeWireSource, sink rawSink) (runErr error) {
+func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, transport camera.Transport, libcameraID string, pw pipeWireSource, sink rawSink) (runErr error) {
 	if sink == nil {
 		sink = noRawSink{}
 	}
@@ -2348,7 +2878,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 				}
 				data := make([]byte, n)
 				copy(data, buf[:n])
-				if !broadcast(data, uint64(now.UnixNano()), enc.codec) {
+				if !broadcast(data, realtimeFrameTimestamp(now), enc.codec) {
 					return nil
 				}
 			}

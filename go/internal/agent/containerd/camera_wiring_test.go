@@ -144,3 +144,101 @@ func TestShouldEnsureCameraNodes(t *testing.T) {
 		})
 	}
 }
+
+// TestTwoPlaneConsumerNames_RequiresCamera pins the gate after frame identity
+// moved in-band. The camera entitlement is the whole grant: it is the
+// device-node grant that the agent-fed v4l2loopback node needs, and identity
+// now arrives in the buffer timestamp rather than on a second channel that
+// would need authorising separately.
+func TestTwoPlaneConsumerNames_RequiresCamera(t *testing.T) {
+	cameraLabels := map[string]string{
+		labelKeyAppID:                 "modelapp",
+		"sh.wendy/entitlement.camera": `{"mode":"detect"}`,
+	}
+	viaVideoAlias := map[string]string{
+		labelKeyAppID:                "aliasapp",
+		"sh.wendy/entitlement.video": `{"mode":"detect"}`,
+	}
+	noCamera := map[string]string{
+		labelKeyAppID:                        "writerapp",
+		"sh.wendy/entitlement.episode-write": `{}`,
+	}
+	invalidAppID := map[string]string{
+		labelKeyAppID:                 "bad app id!",
+		"sh.wendy/entitlement.camera": `{"mode":"detect"}`,
+	}
+
+	tests := []struct {
+		name  string
+		infos []containerCameraInfo
+		want  []string
+	}{
+		{
+			name:  "camera, running -> in",
+			infos: []containerCameraInfo{{name: "modelapp", labels: cameraLabels, running: true}},
+			want:  []string{"modelapp"},
+		},
+		{
+			name:  "deprecated video alias, running -> in",
+			infos: []containerCameraInfo{{name: "aliasapp", labels: viaVideoAlias, running: true}},
+			want:  []string{"aliasapp"},
+		},
+		{
+			// No device-node grant, so no node: episode-write is the write
+			// path and says nothing about reading frames.
+			name:  "no camera entitlement -> out",
+			infos: []containerCameraInfo{{name: "writerapp", labels: noCamera, running: true}},
+			want:  nil,
+		},
+		{
+			name:  "camera but stopped -> out",
+			infos: []containerCameraInfo{{name: "modelapp", labels: cameraLabels, running: false}},
+			want:  nil,
+		},
+		{
+			name:  "invalid appID label -> out",
+			infos: []containerCameraInfo{{name: "brokenapp", labels: invalidAppID, running: true}},
+			want:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := twoPlaneConsumerNames(tt.infos)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("twoPlaneConsumerNames() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTwoPlaneConsumerNames_MatchesCameraConsumers pins the relation the design
+// depends on. It used to be containment, because the two-plane path demanded a
+// second entitlement; with frame identity in-band the two sets are equal, and
+// asserting equality keeps this test honest. Containment alone would now pass
+// no matter what the gate did, since identical sets satisfy it trivially.
+func TestTwoPlaneConsumerNames_MatchesCameraConsumers(t *testing.T) {
+	infos := []containerCameraInfo{
+		{name: "cam", labels: map[string]string{
+			labelKeyAppID:                 "cam",
+			"sh.wendy/entitlement.camera": `{"mode":"detect"}`,
+		}, running: true},
+		{name: "alias", labels: map[string]string{
+			labelKeyAppID:                "alias",
+			"sh.wendy/entitlement.video": `{"mode":"detect"}`,
+		}, running: true},
+		{name: "writer", labels: map[string]string{
+			labelKeyAppID:                        "writer",
+			"sh.wendy/entitlement.episode-write": `{}`,
+		}, running: true},
+		{name: "stopped", labels: map[string]string{
+			labelKeyAppID:                 "stopped",
+			"sh.wendy/entitlement.camera": `{"mode":"detect"}`,
+		}, running: false},
+	}
+
+	if got, want := twoPlaneConsumerNames(infos), cameraConsumerNames(infos); !reflect.DeepEqual(got, want) {
+		t.Errorf("twoPlaneConsumerNames() = %#v, cameraConsumerNames() = %#v; the two-plane "+
+			"path is the camera path and the two must not drift apart", got, want)
+	}
+}

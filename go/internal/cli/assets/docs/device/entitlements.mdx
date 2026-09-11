@@ -304,6 +304,40 @@ next call without a redeploy.
   the separate administrative `WENDY_AGENT_SOCKET`.
 </Callout>
 
+### Wendy Data Entitlement (`episode-write`)
+
+The `episode-write` entitlement lets an app write into the device's recorded
+dataset: it submits structured events and predictions to the episode recorder,
+without receiving the administrative agent socket.
+
+```json
+{
+  "type": "episode-write"
+}
+```
+
+The name says write, because that is the direction it runs. It is stronger than
+plain logging: campaign triggers match on application event names and prediction
+attributes, so an app holding `episode-write` can start recordings. It grants no
+sensor read access: reading is native, through the agent-fed device node that
+`camera` grants.
+
+The agent mounts the app-private socket directory at `/run/wendy/data` and
+injects `WENDY_DATA_SOCKET=/run/wendy/data/data.sock`. Records use a versioned,
+length-prefixed JSON protocol, are limited to 64 KiB, and receive a `buffered`,
+`recorded`, or `rejected` acknowledgement. Accepted records contribute to
+application pre-roll and can fire armed event or model-uncertainty campaigns.
+
+The socket is recreated from persisted container labels after an agent restart.
+Running containers reconnect on their next call without a redeploy. Apps
+without `episode-write` receive no mount, environment variable, or access to
+another app's records.
+
+<Callout type="warning">
+  **Security**: `episode-write` exposes only the private application-record
+  protocol. It never exposes the separate administrative `WENDY_AGENT_SOCKET`.
+</Callout>
+
 ### Admin Entitlement
 
 The admin entitlement grants the container the wendy-agent's full gRPC over a local unix socket (`/run/wendy/agent.sock`, exposed as `WENDY_AGENT_SOCKET`) — with no authentication.

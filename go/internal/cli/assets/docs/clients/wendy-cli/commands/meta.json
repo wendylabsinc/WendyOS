@@ -6,6 +6,7 @@
     "install",
     "project",
     "device",
+    "data",
     "cloud",
     "analytics",
     "cache",

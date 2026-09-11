@@ -1,0 +1,391 @@
+syntax = "proto3";
+
+package wendycloud.data.v1;
+
+// DataIngestService receives sealed episode captures from device transfer
+// workers (the WendyOS "Wendy Data" capture engine) and serves the episode
+// catalog to readers (dashboard, BI, training pipelines).
+//
+// Upload protocol (mirrors the device DataService chunked Download in
+// reverse):
+//   1. BeginEpisodeUpload(manifest) registers the episode in the catalog as
+//      `uploading` and returns per-file committed offsets. Idempotent: safe
+//      to call on every transfer-worker retry; already-stored files report
+//      their full size so the worker skips them.
+//   2. UploadEpisodeChunk streams file chunks (at most 1 MiB of data per
+//      chunk, sequential offsets per file, eof on the last chunk). Each
+//      chunk is acknowledged with the received (spooled) offset and the
+//      committed (durably stored in object storage) offset. An ack names the
+//      (episode_id, path) it belongs to and must be matched on that pair,
+//      because one stream may carry chunks for more than one episode and a
+//      path is unique only within an episode.
+//   3. CommitEpisode verifies the SHA-256 of every stored object against
+//      the manifest and flips the catalog state to `complete`, or `failed`
+//      with per-file detail on any mismatch.
+//
+// Authentication:
+//   - Begin/Upload/Commit require a device asset identity (mTLS client
+//     certificate SAN). The owning organization and asset are read from that
+//     certificate and attested by the cloud; they are not carried on the
+//     request. Every catalog row and every storage object name is written
+//     from the certificate identity, so an upload cannot name a tenant it
+//     does not hold a certificate for.
+//   - QueryEpisodes/GetEpisode are read RPCs for users and services; the
+//     serving implementation defines the accepted credential. Both carry an
+//     org_id whose membership the server does not verify today, and the read
+//     credential in use is a single shared token scoped to no organization.
+//     GetEpisode returns signed object URLs, so that combination is a
+//     cross-organization data-egress path, not just a catalog read. Read the
+//     org_id documentation on QueryEpisodesRequest and GetEpisodeRequest
+//     before exposing either RPC beyond a trusted internal caller.
+service DataIngestService {
+  // Registers (or re-registers) an episode upload. Idempotent.
+  rpc BeginEpisodeUpload(BeginEpisodeUploadRequest) returns (BeginEpisodeUploadResponse);
+
+  // Streams file chunks for an episode registered via BeginEpisodeUpload.
+  // Chunks for one file must arrive in offset order; files may be
+  // interleaved. Every chunk is acknowledged in order.
+  rpc UploadEpisodeChunk(stream EpisodeChunk) returns (stream EpisodeChunkAck);
+
+  // Verifies stored objects against the manifest checksums and finalizes
+  // the episode.
+  rpc CommitEpisode(CommitEpisodeRequest) returns (CommitEpisodeResponse);
+
+  // Catalog queries. Episodes are returned with per-file retrieval URLs
+  // (short-lived signed object-storage URLs).
+  rpc QueryEpisodes(QueryEpisodesRequest) returns (QueryEpisodesResponse);
+  rpc GetEpisode(GetEpisodeRequest) returns (Episode);
+}
+
+// Catalog lifecycle of an uploaded episode.
+enum EpisodeState {
+  EPISODE_STATE_UNSPECIFIED = 0;
+  EPISODE_STATE_UPLOADING = 1;
+  EPISODE_STATE_COMPLETE = 2;
+  EPISODE_STATE_FAILED = 3;
+}
+
+// What a file is to the episode it belongs to. Mirrors the device manifest's
+// per-file `role`, one word for one thing across device, wire and catalog.
+//
+// UNSPECIFIED carries exactly one meaning: the sender predates this field and
+// said nothing about roles. A file with no role is accounted as CAPTURED,
+// which is the meaning it carried before the field existed.
+//
+// That default is a best reading of a silent sender, not a proof about what
+// such senders produced. Derived files, including the playable remux, existed
+// on the device before the wire role did, so a manifest sealed in that window
+// can legitimately contain a derived file with no role on it.
+//
+// A sender that HAS a role but cannot express it on this enum MUST NOT send
+// UNSPECIFIED. Doing so books the file as capture payload, corrupts
+// capture-only accounting, and leaves no signal that anything was lost. Add
+// the role to this enum and send it.
+//
+// A reader that receives a role number it does not know must retain the
+// number as received, must not coerce it to CAPTURED, and must not fail the
+// episode. Carry it through storage, count its bytes in size totals, and
+// leave them out of capture-only sums. An unknown role means a newer peer,
+// not a corrupt one.
+enum EpisodeFileRole {
+  EPISODE_FILE_ROLE_UNSPECIFIED = 0;
+  // Capture payload, or capture metadata written while recording.
+  EPISODE_FILE_ROLE_CAPTURED = 1;
+  // Computed from capture payload at seal time rather than recorded during
+  // capture, e.g. the per-source cameras/<source>/playable.mp4 remux. A
+  // derived file is checksummed, uploaded and verified like any other file,
+  // but it is not capture payload: deleting one loses no recorded data, and
+  // per-source payload accounting must never count its bytes as capture.
+  EPISODE_FILE_ROLE_DERIVED = 2;
+}
+
+// Compact typed projection of the device episode manifest (manifest v2).
+// The full manifest JSON rides in attributes_json for fidelity; the typed
+// fields are what the catalog indexes on.
+message EpisodeManifest {
+  string episode_id = 1;
+
+  // Campaign name: the `name:` field of the campaign file that armed this
+  // capture, a human-authored slug such as "forklift-failures". It is not an
+  // identifier minted by the cloud, and it is not unique over time; the
+  // (campaign, campaign_revision) pair is what identifies an exact plan.
+  //
+  // EMPTY when the episode has no campaign. A manual or otherwise ad-hoc
+  // capture is armed by an operator, not by a campaign file, so there is no
+  // campaign name to report; such an episode carries "manual" as its trigger
+  // reason and leaves both campaign fields empty together. This is ordinary
+  // traffic, not an edge case, so consumers must accept the empty value
+  // rather than reject or substitute it.
+  string campaign = 4;
+  // Revision digest of the campaign plan that armed this capture.
+  //
+  // EMPTY when the episode has no campaign, for the same reason `campaign` is
+  // empty: a manual or ad-hoc capture never had a plan to digest. Otherwise
+  // it is a lowercase hex SHA-256 and therefore exactly 64 characters. A
+  // consumer that validates 64 hex characters unconditionally will reject
+  // legitimate and common data; check the length only after finding the value
+  // non-empty.
+  //
+  // Derivation: the device serialises the campaign to canonical JSON with
+  // deployment state stripped, so that only author-declared plan fields feed
+  // the digest, and takes the lowercase hex SHA-256 of those bytes. Two
+  // devices running the same plan report the same revision. Described rather
+  // than cited by file and line: the implementation lives in another
+  // repository and any line number given here is stale on its next edit.
+  //
+  // String, not an integer: 256 bits of digest do not fit in a uint64, and no
+  // truncation of a hash preserves it as an identifier. It is a content
+  // digest rather than a sequence number, so it identifies the exact plan
+  // that produced this episode but does not order two revisions.
+  string campaign_revision = 5;
+  // Trigger reason (e.g. "manual", "campaign-trigger", or the fired
+  // expression such as "model.uncertainty > 0.65").
+  string trigger = 6;
+
+  // Canonical episode timeline: signed CLOCK_BOOTTIME nanoseconds.
+  int64 started_boottime_nanos = 7;
+  int64 stopped_boottime_nanos = 8;
+
+  // UTC correlation: wall-clock start plus the bounded UTC offset interval
+  // from the device's clock-sandwich observations. system_clock_status is
+  // the device's own verdict ("ok", "conflict", ...); a "conflict" episode
+  // is flagged in the catalog, never silently resolved.
+  int64 started_unix_nanos = 9;
+  int64 utc_offset_lower_nanos = 10;
+  int64 utc_offset_upper_nanos = 11;
+  string system_clock_status = 12;
+
+  // The complete device manifest JSON (manifest v2), stored verbatim in the
+  // catalog attributes column.
+  //
+  // Deliberately bytes rather than map<string, string> or google.protobuf.
+  // Struct. This is not a flat key-value bag: it is a nested document (a
+  // files array, a per-file clock-mapping object, a trigger object, a device
+  // identity object), which a string map cannot hold at all. Struct could
+  // hold the shape but not the bytes, and byte fidelity is the point of the
+  // field: it is the artifact the device sealed, kept as sent so the catalog
+  // can be audited against the device rather than against our re-encoding of
+  // it. The typed fields above are what the catalog indexes on.
+  bytes attributes_json = 14;
+
+  // Declared last by convention; field number 13 is unchanged.
+  repeated EpisodeFileManifest files = 13;
+}
+
+// One file of an episode, as declared by the device manifest.
+message EpisodeFileManifest {
+  // Relative path within the episode directory, e.g. "front/000001.jpg" or
+  // "manifest.json". Also the object name suffix in storage.
+  string path = 1;
+  uint64 size_bytes = 2;
+  // Lowercase hex SHA-256 of the file contents; the commit-time contract.
+  string sha256 = 3;
+  string media_type = 4;
+  // Device capture format label, e.g. "jpeg", "mcap", "jsonl".
+  string format = 5;
+  string source_id = 6;
+  // Capture time range on the canonical episode timeline, when known.
+  int64 time_range_start_nanos = 7;
+  int64 time_range_end_nanos = 8;
+  // Source-clock to canonical-clock mapping summary JSON, when present.
+  bytes clock_mapping_json = 9;
+  // What this file is to the episode. Unset (UNSPECIFIED) means the sender
+  // predates this field, and is accounted as CAPTURED. See EpisodeFileRole
+  // for what a sender must do with a role it cannot express, and what a
+  // reader must do with a role number it does not know.
+  EpisodeFileRole role = 10;
+}
+
+message BeginEpisodeUploadRequest {
+  EpisodeManifest manifest = 1;
+}
+
+message FileUploadState {
+  string path = 1;
+  // Bytes durably stored in object storage for this file: 0 (not stored or
+  // partially stored; restart from 0) or the full file size (stored; skip).
+  uint64 committed_offset = 2;
+}
+
+message BeginEpisodeUploadResponse {
+  EpisodeState state = 1;
+  repeated FileUploadState files = 2;
+}
+
+message EpisodeChunk {
+  string episode_id = 1;
+  string path = 2;
+  // Byte offset of this chunk within the file; must equal the number of
+  // bytes already sent for the file (sequential, no gaps).
+  uint64 offset = 3;
+  // At most 1 MiB of payload per chunk.
+  //
+  // Why 1 MiB: gRPC's default maximum received message size is 4 MiB, and
+  // that budget covers the whole encoded EpisodeChunk, not just this field.
+  // 1 MiB leaves room for path, offset and framing while staying well inside
+  // the default on every runtime, so neither end has to raise its limit to
+  // speak this protocol. It also bounds what one failed chunk costs to send
+  // again, which is what makes a retry cheap on a slow uplink. It is the
+  // device transfer worker's buffer size too, so cap and sender agree by
+  // construction rather than by luck.
+  //
+  // The cloud enforces this: an oversized chunk is INVALID_ARGUMENT naming
+  // the limit and the size received. The cap is a rule, not a request.
+  bytes data = 4;
+  // True on the last chunk of the file; the server then persists the file
+  // to object storage.
+  bool eof = 5;
+}
+
+message EpisodeChunkAck {
+  string path = 1;
+  // Contiguous bytes received (spooled server-side, not yet durable).
+  uint64 received_offset = 2;
+  // Bytes durably stored in object storage. Stays 0 until the eof chunk is
+  // persisted, then equals the file size. Never claims durability that
+  // does not exist.
+  uint64 committed_offset = 3;
+  // The episode the acknowledged path belongs to; echoes the `episode_id` of
+  // the chunk being acknowledged.
+  //
+  // A client MUST match an ack on the (episode_id, path) pair, never on path
+  // alone. EpisodeChunk carries episode_id per chunk, so one stream may carry
+  // chunks for more than one episode, and the server keys its assembler on
+  // the same pair. A path is unique only within an episode: two episodes on
+  // one stream that both contain "manifest.json" produce acks that path alone
+  // cannot tell apart, and a client matching on path credits one episode's
+  // committed offset to the other, then skips a file it never uploaded. That
+  // is silent data loss, not a retry.
+  //
+  // Added after `path`, so a server built before this field leaves it empty.
+  // A client that finds it empty cannot match safely on a multi-episode
+  // stream, and must keep to one stream per episode until the server carries
+  // the field.
+  string episode_id = 4;
+}
+
+message CommitEpisodeRequest {
+  string episode_id = 1;
+}
+
+// Per-file checksum verification outcome, reported on commit.
+message FileVerification {
+  string path = 1;
+  bool ok = 2;
+  string expected_sha256 = 3;
+  string actual_sha256 = 4;
+  // Human-readable detail on failure (missing object, size mismatch, ...).
+  // Plain string rather than optional: `ok` is the discriminator, and the
+  // server sets detail on every failure and never on success, so empty and
+  // absent would mean the same thing. Presence here would add a has-check to
+  // every consumer without letting any of them decide anything new.
+  string detail = 5;
+}
+
+message CommitEpisodeResponse {
+  EpisodeState state = 1;
+  repeated FileVerification files = 2;
+}
+
+message QueryEpisodesRequest {
+  // Organization to read. This is a filter the caller supplies, not an
+  // identity the server verifies. With certificate-identity credentials it
+  // must match the organization on the certificate.
+  //
+  // AUTHORIZATION GAP, unresolved: the read credential today is a single
+  // shared bearer token that is scoped to no organization, and the server
+  // does NOT check that the caller is a member of the organization named
+  // here. Possession of that token therefore grants catalog read across every
+  // organization, obtained by passing a different number in this field. The
+  // field is not the defect and must not be removed, because a filter is the
+  // right shape once membership is enforced. A server-side membership check,
+  // against the caller's own credential rather than against this value, is
+  // REQUIRED before this RPC is exposed to anything but a trusted internal
+  // caller.
+  string org_id = 1;
+
+  // Optional filters; zero values mean "no filter".
+  string asset_id = 2;
+  string campaign = 3;
+  EpisodeState state = 4;
+  int64 started_after_unix_nanos = 5;
+  int64 started_before_unix_nanos = 6;
+
+  // Maximum episodes returned, newest first. Zero means the server default.
+  uint32 limit = 7;
+}
+
+message QueryEpisodesResponse {
+  repeated Episode episodes = 1;
+}
+
+message GetEpisodeRequest {
+  // Organization the named episode belongs to. Same caller-supplied filter as
+  // QueryEpisodesRequest.org_id, unverified in the same way, under the same
+  // shared read token.
+  //
+  // AUTHORIZATION GAP, sharper here than on the query: this RPC returns
+  // per-file retrieval URLs, short-lived signed object-storage URLs that read
+  // the stored bytes. Absent a membership check, the shared read token is not
+  // merely a cross-organization catalog read; it is a cross-organization
+  // data-egress capability. Name another organization's identifier here with
+  // one of its episode identifiers and the response hands back signed URLs to
+  // that organization's captured data. Those URLs are bearer capabilities in
+  // their own right: they work for anyone they are passed to, and revoking
+  // the read token afterwards does not revoke URLs already issued.
+  //
+  // The fix is authorization, not schema; the field stays. A server-side
+  // membership check is REQUIRED before this RPC is exposed to anything but a
+  // trusted internal caller.
+  string org_id = 1;
+  string episode_id = 2;
+}
+
+// A catalog row plus its files.
+message Episode {
+  string episode_id = 1;
+  // Owning tenant, as attested by the cloud. Unlike the upload manifest, this
+  // is server output, not a client claim: it reports the identity the episode
+  // was actually stored under. It stays on the response because a query with
+  // no asset filter spans assets, and a reader that cannot tell the rows
+  // apart would have to reach into attributes_json to do it.
+  string org_id = 2;
+  string asset_id = 3;
+  // Campaign name and its trigger, as recorded at capture time.
+  string campaign = 4;
+  string trigger = 5;
+  int64 started_unix_nanos = 6;
+  int64 ended_unix_nanos = 7;
+  EpisodeState state = 8;
+  // Total bytes the episode occupies in object storage: the sum of every
+  // file's size, derived files included. It is deliberately NOT capture-only.
+  // This number answers "what does this episode cost to store", which is what
+  // retention and quota act on, and it stays equal to the sum of the file
+  // sizes so the two can be checked against each other. A total that silently
+  // omitted some of its own parts would match neither storage nor the file
+  // list. Capture-only bytes are a filter over the per-file roles, e.g.
+  // summing size_bytes where role is CAPTURED or UNSPECIFIED.
+  uint64 size_bytes = 9;
+  // Clock correlation summary JSON (UTC offset bounds, clock status).
+  bytes clock_correlation_json = 10;
+  // Full device manifest JSON as uploaded.
+  bytes attributes_json = 11;
+  int64 updated_unix_nanos = 12;
+  repeated EpisodeFileInfo files = 13;
+}
+
+message EpisodeFileInfo {
+  string path = 1;
+  string source_id = 2;
+  string media_type = 3;
+  uint64 size_bytes = 4;
+  string sha256 = 5;
+  // Short-lived retrieval URL for the stored object (signed in production,
+  // direct in local development).
+  string retrieval_url = 6;
+  // What this file is to the episode, as recorded in the catalog. Unset
+  // (UNSPECIFIED) means the uploading sender predated the field, as on the
+  // upload manifest. A role the catalog did not recognise at write time is
+  // reported here as the number it arrived as, never rewritten to CAPTURED.
+  EpisodeFileRole role = 7;
+}

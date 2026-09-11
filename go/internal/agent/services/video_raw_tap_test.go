@@ -120,7 +120,7 @@ func TestGetOrCreateHub_DeviceDefaultRequestJoinsWhateverIsPlaying(t *testing.T)
 	defer cancel()
 
 	pinned := &agentpb.StreamVideoRequest{Width: 512, Height: 484, Framerate: 25}
-	h, id, _, err := svc.getOrCreateHub(ctx, "/dev/video4", pinned)
+	h, id, _, err := svc.getOrCreateHub(ctx, "/dev/video4", pinned, hubHolderStreamClient)
 	if err != nil {
 		t.Fatalf("first getOrCreateHub failed: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestGetOrCreateHub_DeviceDefaultRequestJoinsWhateverIsPlaying(t *testing.T)
 
 	// A bare `camera view` names nothing and must be able to join the app that
 	// pinned the mode, instead of being locked out of its own camera.
-	h2, id2, _, err := svc.getOrCreateHub(ctx, "/dev/video4", &agentpb.StreamVideoRequest{})
+	h2, id2, _, err := svc.getOrCreateHub(ctx, "/dev/video4", &agentpb.StreamVideoRequest{}, hubHolderStreamClient)
 	if err != nil {
 		t.Fatalf("device-default request was refused: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestGetOrCreateHub_DeviceDefaultRequestJoinsWhateverIsPlaying(t *testing.T)
 
 	// An explicit, different size is still a refusal — handing 512x484 to a
 	// caller that asked for 1280x720 would be worse than saying no.
-	_, _, _, err = svc.getOrCreateHub(ctx, "/dev/video4", &agentpb.StreamVideoRequest{Width: 1280, Height: 720, Framerate: 25})
+	_, _, _, err = svc.getOrCreateHub(ctx, "/dev/video4", &agentpb.StreamVideoRequest{Width: 1280, Height: 720, Framerate: 25}, hubHolderStreamClient)
 	if st, _ := status.FromError(err); err == nil || st.Code() != codes.InvalidArgument {
 		t.Errorf("explicit mismatch must still be InvalidArgument, got %v", err)
 	}
@@ -150,14 +150,14 @@ func TestGetOrCreateHub_RawRefusedUpFrontOnceProducerDeclined(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	h, id, _, err := svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{})
+	h, id, _, err := svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{}, hubHolderStreamClient)
 	if err != nil {
 		t.Fatalf("getOrCreateHub failed: %v", err)
 	}
 	defer h.unsubscribe(id)
 	h.rawNotOffered("camera is captured as MJPEG at 1280x720; raw frames are not offered")
 
-	_, _, _, err = svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW})
+	_, _, _, err = svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW}, hubHolderStreamClient)
 	if err == nil {
 		t.Fatal("raw request joined a hub that already declined raw")
 	}

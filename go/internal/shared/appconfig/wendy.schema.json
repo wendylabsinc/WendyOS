@@ -348,6 +348,14 @@
         },
         {
           "properties": {
+            "type": { "const": "episode-write" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Write into the device's recorded dataset: submit structured event and prediction records to the episode recorder over the app-private data socket (WENDY_DATA_SOCKET). Stronger than plain logging, because campaign triggers match on application event names and prediction attributes, so an app holding this can start recordings. Grants no sensor read access and never exposes the administrative agent socket."
+        },
+        {
+          "properties": {
             "type": { "const": "admin" }
           },
           "required": ["type"],

@@ -151,6 +151,8 @@ func NewRootCmd() *cobra.Command {
 	deviceCmd.GroupID = "manage"
 	fleetCmd := newFleetCmd()
 	fleetCmd.GroupID = "manage"
+	dataCmd := newDataCmd()
+	dataCmd.GroupID = "manage"
 
 	// Cloud
 	cloudCmd := newCloudCmd()
@@ -257,6 +259,7 @@ func NewRootCmd() *cobra.Command {
 		deviceCmd,
 		newVMCmd(),
 		fleetCmd,
+		dataCmd,
 		// Cloud
 		cloudCmd,
 		// Settings

@@ -47,6 +47,16 @@ const (
 	EntitlementSerial    = "serial"
 	EntitlementMCP       = "mcp"
 	EntitlementDisplay   = "display"
+	// EntitlementEpisodeWrite grants write access to the device's episode
+	// recorder through the app-private episode event socket, and nothing else.
+	// The app pushes its own event and prediction records into whatever
+	// episodes are active, so it writes into the recorded training corpus. It
+	// is stronger than "may log something": campaign triggers match on
+	// application event names and prediction attributes, so an app holding this
+	// entitlement can start recordings. It grants no read access to sensors:
+	// reading is native, through the agent-fed node the camera entitlement
+	// grants.
+	EntitlementEpisodeWrite = "episode-write"
 	// EntitlementNotifications grants access only to the app-attributed Wendy
 	// System Notification API. It does not expose the Agent control plane.
 	EntitlementNotifications = "notifications"
@@ -83,6 +93,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementSerial,
 	EntitlementMCP,
 	EntitlementDisplay,
+	EntitlementEpisodeWrite,
 	EntitlementNotifications,
 	EntitlementAdmin,
 	EntitlementBuild,
@@ -119,6 +130,7 @@ var allowedKeys = map[string][]string{
 	EntitlementSerial:        {"type", "device"},
 	EntitlementMCP:           {"type", "port"},
 	EntitlementDisplay:       {"type"},
+	EntitlementEpisodeWrite:  {"type"},
 	EntitlementNotifications: {"type"},
 	EntitlementAdmin:         {"type"},
 	EntitlementBuild:         {"type"},

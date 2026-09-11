@@ -5,64 +5,20 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
 
 // syncWriteFile atomically writes data to path: write to a temp file, fsync,
 // rename over the target, then fsync the directory. This ensures that a power
 // loss mid-write cannot leave the target file empty or partially written —
 // critical for security files (private keys, certificates) on embedded devices.
+//
+// The implementation now lives in internal/shared/atomicfile so the pki-core
+// enrolment store writes its second PEM triple through exactly the same
+// durability guarantee rather than a second copy of this code.
 func syncWriteFile(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".pem-tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	removeOnFail := true
-	tmpClosed := false
-	defer func() {
-		if !tmpClosed {
-			_ = tmp.Close() // best-effort: file will be removed in error paths
-		}
-		if removeOnFail {
-			os.Remove(tmpName)
-		}
-	}()
-
-	if err := tmp.Chmod(perm); err != nil {
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	tmpClosed = true
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	removeOnFail = false
-
-	// fsync the directory so the rename is durable on power loss. Open/close
-	// failures are reported too: skipping the fsync silently would drop the
-	// durability guarantee this helper exists to provide.
-	d, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open dir for fsync after rename: %w", err)
-	}
-	syncErr := d.Sync()
-	closeErr := d.Close()
-	if syncErr != nil {
-		return fmt.Errorf("fsync dir after rename: %w", syncErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close dir after fsync: %w", closeErr)
-	}
-	return nil
+	return atomicfile.Write(path, data, perm)
 }
 
 func WritePEMFiles(configPath, keyPEM, certPEM, chainPEM string) error {

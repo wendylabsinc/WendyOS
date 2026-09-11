@@ -347,6 +347,14 @@ func wendyLabels(appName, serviceName, version string, restartPolicy *agentpb.Re
 	}
 
 	for k, v := range appconfig.BuildEntitlementAnnotations(entitlements) {
+		// containerd silently omits labels whose value is empty. Type-only
+		// entitlements (camera, notifications, GPU, and others) therefore need a
+		// non-empty presence marker so restart reconciliation can reconstruct
+		// them from persisted labels. ParseEntitlementAnnotation deliberately
+		// ignores unknown keys, so this round-trips as the original entitlement.
+		if v == "" {
+			v = "present=true"
+		}
 		labels[k] = v
 	}
 
@@ -376,6 +384,18 @@ func entitlementsContain(entitlements []appconfig.Entitlement, entitlementType s
 		}
 	}
 	return false
+}
+
+// entitlementOfType returns the entitlement of a given type together with its
+// fields, for grants whose configuration matters (the sensors allowlist) and not
+// only their presence.
+func entitlementOfType(entitlements []appconfig.Entitlement, entitlementType string) (appconfig.Entitlement, bool) {
+	for _, entitlement := range entitlements {
+		if entitlement.Type == entitlementType {
+			return entitlement, true
+		}
+	}
+	return appconfig.Entitlement{}, false
 }
 
 // parseEntitlementsFromAnnotations reconstructs an entitlement list from OCI

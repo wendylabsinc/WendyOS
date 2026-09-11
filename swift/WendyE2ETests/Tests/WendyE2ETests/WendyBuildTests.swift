@@ -23,7 +23,7 @@ struct `'wendy build'` {
                 #expect(stdout.contains("--build-type"))
                 #expect(stdout.contains("--builder"))
                 #expect(stdout.contains("--dockerfile"))
-                #expect(!stdout.contains("--build-host"))
+                #expect(!Self.helpDeclaresFlag("--build-host", in: stdout))
                 #expect(stdout.contains("--json"))
                 #expect(result.stderr == "")
             }
@@ -167,5 +167,27 @@ struct `'wendy build'` {
     )
     func `rejects undocumented positional arguments`() async throws {
         // TODO: enable when build rejects positional arguments (WDY-1934).
+    }
+
+    /**
+     Reports whether a help listing declares `flag` as an option the command
+     accepts, meaning some line opens its flag column with it, optionally
+     behind a shorthand such as `-d, --device`.
+
+     A flag named inside another flag's description is prose, not an offered
+     option, so the global `--device` help mentioning `--build-host` must not
+     read as `wendy build` accepting `--build-host`.
+     */
+    private static func helpDeclaresFlag(_ flag: String, in help: String) -> Bool {
+        help.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
+            var column = line.drop(while: { $0.isWhitespace })
+            if column.count > 4, column.first == "-", column.dropFirst(2).hasPrefix(", ") {
+                column = column.dropFirst(4)
+            }
+            guard column.hasPrefix(flag) else { return false }
+            // `--build-hostname` must not answer for `--build-host`.
+            guard let separator = column.dropFirst(flag.count).first else { return true }
+            return separator.isWhitespace || separator == "="
+        }
     }
 }

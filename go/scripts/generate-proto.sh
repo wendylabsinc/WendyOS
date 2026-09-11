@@ -56,6 +56,7 @@ V2_AGENT_PROTOS=(
     "wendy/agent/services/v2/ros2_service.proto"
     "wendy/agent/services/v2/timesync_service.proto"
     "wendy/agent/services/v2/build_service.proto"
+    "wendy/agent/services/v2/data_service.proto"
 )
 
 V2_AGENT_M_OPTS=""
@@ -63,6 +64,19 @@ for p in "${V2_AGENT_PROTOS[@]}"; do
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=M${p}=${V2_AGENT_PKG}"
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=M${p}=${V2_AGENT_PKG}"
 done
+
+# ---- Wendy Agent app-facing protos ----
+#
+# There are none. The app-facing SensorService was retired: applications read
+# sensors natively and record over the existing episode socket, so no
+# wendy/agent/apps/v1 proto remains and no appspb package is generated. The
+# generator block that produced it was left behind and referenced the deleted
+# wendy/agent/apps/v1/sensor_service.proto, which aborted this script under
+# "set -e" before the Wendy Cloud, Wendy Lite, system and tunnel packages were
+# regenerated at all. Should an app-facing proto return, it belongs in its own
+# proto package and its own Go package, exactly as that one did: keeping it
+# apart from the control-plane wendy/agent/services protos is what makes the
+# app trust boundary structural.
 
 # ---- OpenTelemetry protos ----
 #
@@ -102,6 +116,7 @@ CLOUD_PROTOS=(
     "cloud/apps.proto"
     "cloud/assets.proto"
     "cloud/certificates.proto"
+    "cloud/data_ingest.proto"
     "cloud/deployments.proto"
     "cloud/mesh.proto"
     "cloud/notifications.proto"

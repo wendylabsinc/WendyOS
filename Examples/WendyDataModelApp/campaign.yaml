@@ -1,0 +1,70 @@
+# Campaign for the WendyDataModelApp reference app. Deploy with:
+#
+#   wendy data campaign deploy campaign.yaml
+#
+# This is the only campaign the example needs. It works with the app
+# running, on a single-camera device, because the app never opens the
+# camera itself: it reads the agent-fed node backed by the same producer
+# this campaign's capture adapter consumes. The earlier telemetry-only
+# variant existed solely to work around the device conflict that
+# arrangement removes.
+#
+# The app's prediction and event records arrive over the data socket and
+# arm the trigger below; the "applications" source is always captured, so
+# every episode carries the records themselves in events.jsonl.
+version: 1
+
+name: model-harness-demo
+
+sources:
+  # "front" selects the only healthy camera on a single-camera device.
+  #
+  # Continuous, and deliberately uncapped. The episode is already bounded by
+  # after_trigger below, so continuous capture inside it yields exactly the
+  # clip around the person and nothing more. A rate cap would make the
+  # episode keep FEWER frames than the model consumed (the manifest then
+  # reports payload_retention as capture_policy_keeps_a_subset), which is the
+  # one thing that breaks the join this demo exists to show.
+  - camera: front
+    capture:
+      mode: continuous
+
+capture:
+  # Ten seconds of pre-trigger APPLICATION records: the predictions leading up
+  # to the detection are included. Camera bytes are not: sensor pre-roll needs
+  # an armed-standby adapter that does not exist yet, so the video starts AT
+  # the detection. The manifest records the offset it actually achieved.
+  buffer: 10s
+
+  # Ten seconds after the trigger, so the episode IS the fragment around the
+  # person: long enough to cover someone walking through frame, short enough
+  # that the clip stays a few megabytes and the campaign re-arms quickly for
+  # the next appearance.
+  after_trigger: 10s
+
+  triggers:
+    # The only trigger. Edge-triggered by the app, once per appearance rather
+    # than once per frame, so one person walking past produces one episode.
+    #
+    # There is deliberately no model.uncertainty trigger. The app scores
+    # uncertainty as 1 minus its best detection confidence, so any scene the
+    # detector does not recognise sits at exactly 1.0 and a threshold like
+    # 0.65 fires on every prediction. Measured on a Jetson with nobody in
+    # frame: a fresh episode every 30 seconds. Putting it back needs a real
+    # uncertainty signal, entropy across classes or the margin between the top
+    # two, rather than one minus a confidence.
+    - event: person_detected
+
+upload:
+  when: always
+
+retention:
+  local_quota: 5GiB
+
+export:
+  annotation: cvat
+
+# Pin the model this campaign collects for, matching the version every
+# prediction record reports in attributes.model_version.
+models:
+  yolov8n: "8.3.63"

@@ -26,6 +26,11 @@ type CameraLoopbackProvider interface {
 	// containers entitled to camera access, so the loopback manager can
 	// start or stop its pumps to match.
 	SetCameraContainerConsumers(ctx context.Context, containerIDs []string)
+	// SetTwoPlaneContainerConsumers replaces, wholesale, the set of running
+	// containers entitled to the two-plane camera path. Since frame identity
+	// moved in-band, that is the camera set; the call stays separate because
+	// the two-plane pump has its own lifecycle.
+	SetTwoPlaneContainerConsumers(ctx context.Context, containerIDs []string)
 }
 
 // Compile-time check that *services.VideoService satisfies CameraLoopbackProvider
@@ -77,6 +82,37 @@ func cameraConsumerNames(infos []containerCameraInfo) []string {
 		}
 	}
 	return names
+}
+
+// twoPlaneConsumerNames returns the names of containers entitled to the
+// two-plane camera path: a Running task holding the camera entitlement (or its
+// deprecated alias, video).
+//
+// # Why camera alone is the whole grant
+//
+// The path has two halves. The data plane is a v4l2loopback device node the app
+// opens and reads, which is a device-node grant, and device-node grants are what
+// the camera entitlement is.
+//
+// The control plane is frame identity: source id, sample id, canonical time and
+// uncertainty. It used to travel as its own gRPC stream, which is why this gate
+// once demanded a second entitlement to authorise it. It no longer does. Identity
+// now rides in-band, in the v4l2 buffer timestamp the agent writes when it feeds
+// the node, so the app that is entitled to the pixels receives the identity with
+// them and there is no second channel to authorise.
+//
+// That in-band carriage is what makes one entitlement correct rather than merely
+// convenient. The node is agent-fed, so the app is not an independent second
+// reader: the frame it scores is provably the frame the episode recorded, which
+// is the property the harness exists to deliver. An app holding camera without
+// the agent-fed path keeps exactly the behaviour it has today.
+func twoPlaneConsumerNames(infos []containerCameraInfo) []string {
+	// Identical to the camera set, and deliberately still its own call. The two
+	// gates collapsed into one when frame identity moved in-band and the second
+	// entitlement went away; the two-plane pump keeps its own lifecycle, so the
+	// caller still says which set it means rather than relying on them being the
+	// same list forever.
+	return cameraConsumerNames(infos)
 }
 
 // shouldEnsureCameraNodes reports whether appCfg's entitlements include the
@@ -142,6 +178,7 @@ func (c *Client) SyncCameraLoopbacks(ctx context.Context) {
 		c.logger.Warn("camera loopback sync: ensuring camera nodes failed", zap.Error(err))
 	}
 	c.cameraLoopbackProvider.SetCameraContainerConsumers(ctx, names)
+	c.cameraLoopbackProvider.SetTwoPlaneContainerConsumers(ctx, twoPlaneConsumerNames(infos))
 }
 
 // RunCameraLoopbackSync runs SyncCameraLoopbacks on a fixed interval until ctx

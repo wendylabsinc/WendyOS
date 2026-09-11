@@ -64,6 +64,13 @@ func Query(ctx context.Context, servers []Server) (Result, error) {
 	return Result{}, fmt.Errorf("all Roughtime servers failed: %s", strings.Join(errs, "; "))
 }
 
+// QueryServer performs one nonce-bound exchange with a pinned server. It is
+// exported for callers that must retain every independently signed response
+// and form a quorum rather than accepting the first valid server.
+func QueryServer(ctx context.Context, server Server) (Result, error) {
+	return queryOne(ctx, server)
+}
+
 func queryOne(ctx context.Context, srv Server) (Result, error) {
 	var nonce [nonceSize]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
