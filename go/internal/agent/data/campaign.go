@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -141,9 +143,7 @@ type CampaignCapture struct {
 	Buffer string `json:"buffer" yaml:"buffer"`
 	// Drain holds the episode open for late application records after its
 	// capture adapters stop. An empty value takes DefaultSealDrain; "0s" opts
-	// out. The omitempty tag is load-bearing: planOnly is marshalled to JSON to
-	// compute Revision, so a field rendered on every campaign would change the
-	// revision digest of every already-deployed campaign.
+	// out.
 	Drain        string            `json:"drain,omitempty" yaml:"drain,omitempty"`
 	AfterTrigger string            `json:"after_trigger" yaml:"after_trigger"`
 	Triggers     []CampaignTrigger `json:"triggers" yaml:"triggers"`
@@ -252,9 +252,18 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	if err := decoder.Decode(&campaign); err != nil {
 		return Campaign{}, fmt.Errorf("parsing campaign YAML: %w", err)
 	}
+	// Only a clean end of input proves there was no second document. Testing
+	// for a nil error accepted anything that failed to parse, so a plan with a
+	// malformed second document deployed with the second document silently
+	// dropped, and the operator's whole intent for it went nowhere with no
+	// error anywhere. Any other error is that second document failing to
+	// parse, and is reported as such.
 	var trailing any
-	if err := decoder.Decode(&trailing); err == nil {
+	switch err := decoder.Decode(&trailing); {
+	case err == nil:
 		return Campaign{}, errors.New("campaign YAML must contain exactly one document")
+	case !errors.Is(err, io.EOF):
+		return Campaign{}, fmt.Errorf("campaign YAML must contain exactly one document; the text after the first one does not parse: %w", err)
 	}
 	if err := campaign.validate(); err != nil {
 		return Campaign{}, err
@@ -266,7 +275,7 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	if campaign.Privacy == nil {
 		campaign.Privacy = []CampaignPrivacy{}
 	}
-	canonical, err := json.Marshal(campaign.planOnly())
+	canonical, err := json.Marshal(campaign.planDigestInput())
 	if err != nil {
 		return Campaign{}, err
 	}
@@ -275,12 +284,97 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	return campaign, nil
 }
 
-// planOnly strips deployment state before hashing. The author-declared
-// schema version and every plan field, including per-source capture policy,
-// upload policy, and retention, feed the revision digest.
-func (c Campaign) planOnly() Campaign {
-	c.State, c.Revision, c.DeployedUnixNanos, c.Warnings = "", "", 0, nil
-	return c
+// revisionSchema versions the field list below. A campaign's revision is the
+// identity operators and the fleet backend use to tell "the plan changed" from
+// "the same plan was redeployed", so what feeds it is part of the on-device
+// schema and changes only with this number.
+const revisionSchema = 1
+
+// planDigestInput is the exact, enumerated set of author-declared plan fields
+// the revision digest covers.
+//
+// It is an explicit map rather than a marshalled Campaign struct. Hashing the
+// struct meant the digest covered every field the struct would ever have, so
+// adding an unrelated field to Campaign in a later agent release changed the
+// revision of every already-deployed campaign on every device that took the
+// upgrade: an operator saw plans they had not touched appear to have been
+// edited, and the fleet backend saw a fleet-wide plan change that never
+// happened. The digest now covers what the author wrote and nothing else, so a
+// new field is invisible to it until it is added here deliberately.
+//
+// The map is marshalled with encoding/json, which sorts object keys, so the
+// encoding is deterministic without an ordering convention of its own.
+//
+// Adding a field here is a schema change: bump revisionSchema with it. Note
+// that this fix itself moves every existing campaign to a new revision once,
+// because the digest no longer covers the struct's zero-valued fields.
+func (c Campaign) planDigestInput() map[string]any {
+	sources := make([]map[string]any, 0, len(c.Sources))
+	for _, source := range c.Sources {
+		entry := map[string]any{
+			"camera":               source.Camera,
+			"audio":                source.Audio,
+			"ros2":                 source.ROS2,
+			"telemetry":            source.Telemetry,
+			"calibration_revision": source.Calibration,
+		}
+		if capture := source.Capture; capture != nil {
+			entry["capture"] = map[string]any{
+				"mode":           capture.Mode,
+				"interval":       capture.Interval,
+				"rate":           capture.Rate,
+				"pre":            capture.Pre,
+				"post":           capture.Post,
+				"trigger":        capture.Trigger,
+				"fragment":       capture.Fragment,
+				"max_resolution": capture.MaxResolution,
+			}
+		}
+		sources = append(sources, entry)
+	}
+	triggers := make([]map[string]any, 0, len(c.Capture.Triggers))
+	for _, trigger := range c.Capture.Triggers {
+		triggers = append(triggers, map[string]any{
+			"event":             trigger.Event,
+			"model_uncertainty": trigger.ModelUncertainty,
+		})
+	}
+	privacy := make([]map[string]any, 0, len(c.Privacy))
+	for _, transform := range c.Privacy {
+		privacy = append(privacy, map[string]any{
+			"name":     transform.Name,
+			"revision": transform.Revision,
+		})
+	}
+	plan := map[string]any{
+		"revision_schema": revisionSchema,
+		"version":         c.Version,
+		"name":            c.Name,
+		"fleet":           c.Fleet,
+		"sources":         sources,
+		"capture": map[string]any{
+			"buffer":        c.Capture.Buffer,
+			"drain":         c.Capture.Drain,
+			"after_trigger": c.Capture.AfterTrigger,
+			"triggers":      triggers,
+		},
+		"upload": map[string]any{
+			"when":        c.Upload.When,
+			"destination": c.Upload.Destination,
+			"max_rate":    c.Upload.MaxRate,
+		},
+		"retention": map[string]any{"local_quota": c.Retention.LocalQuota},
+		"export":    map[string]any{"annotation": c.Export.Annotation},
+		"models":    c.Models,
+		"privacy":   privacy,
+	}
+	if c.Notify != nil {
+		// Only the fields this schema version knows. UnknownKeys is deploy-time
+		// state a newer cloud may add and is deliberately excluded, exactly as
+		// it is excluded from the stored plan.
+		plan["notify"] = map[string]any{"on": c.Notify.On}
+	}
+	return plan
 }
 
 func (c Campaign) validate() error {
@@ -297,14 +391,29 @@ func (c Campaign) validate() error {
 		return errors.New("campaign must define at least one source")
 	}
 	for i, source := range c.Sources {
+		// A selector that is present but holds nothing but whitespace is
+		// rejected outright rather than counted as absent. Validation trimmed
+		// before testing while resolution did not, so `camera: "  "` beside a
+		// real audio selector validated as a one-kind source and then took the
+		// camera branch at resolution, where an empty selector substring-matched
+		// every camera detail on the device and the audio source was never
+		// resolved at all. The plan recorded a camera the author did not choose
+		// and dropped the microphone they did.
+		for _, selector := range []struct{ field, value string }{
+			{"camera", source.Camera}, {"audio", source.Audio}, {"ros2", source.ROS2},
+		} {
+			if selector.value != "" && strings.TrimSpace(selector.value) == "" {
+				return fmt.Errorf("sources[%d].%s is blank; remove the key or name a source", i, selector.field)
+			}
+		}
 		kinds := 0
-		if strings.TrimSpace(source.Camera) != "" {
+		if source.Camera != "" {
 			kinds++
 		}
-		if strings.TrimSpace(source.Audio) != "" {
+		if source.Audio != "" {
 			kinds++
 		}
-		if strings.TrimSpace(source.ROS2) != "" {
+		if source.ROS2 != "" {
 			kinds++
 		}
 		if source.Telemetry {
@@ -483,11 +592,20 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 		return Campaign{}, err
 	}
 	b = append(b, '\n')
-	tmp := filepath.Join(dir, campaign.Name+".json.tmp")
-	if err := os.WriteFile(tmp, b, 0o640); err != nil {
-		return Campaign{}, err
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, campaign.Name+".json")); err != nil {
+	// Serialized, and written through atomicfile.
+	//
+	// Two deploys of the same campaign name used to race on one fixed
+	// temporary filename, <name>.json.tmp: both opened it, both wrote into it,
+	// and the file that was renamed into place held one plan's bytes overlaid
+	// with the other's. A campaign plan that is a blend of two deploys is not
+	// something either operator asked for, and nothing downstream can detect
+	// it, because the result is still valid JSON. atomicfile takes a unique
+	// temporary name per write and fsyncs the file and the directory, so the
+	// loser of the race is overwritten whole rather than interleaved, and a
+	// power cut cannot leave an empty plan behind.
+	m.campaignMu.Lock()
+	defer m.campaignMu.Unlock()
+	if err := atomicfile.Write(filepath.Join(dir, campaign.Name+".json"), b, 0o640); err != nil {
 		return Campaign{}, err
 	}
 	return campaign, nil
