@@ -473,15 +473,32 @@ public actor WendyAgent {
                     }
                 }(),
                 transportSecurity: security,
-                config: .defaults {
-                    $0.http2.maxFrameSize = 256 * 1024
-                    $0.http2.targetWindowSize = 8 * 1024 * 1024
-                    $0.rpc.maxRequestPayloadSize = 16 * 1024 * 1024
-                }
+                config: Self.mainServerConfig
             ),
             services: services
         )
         return (server, certs != nil)
+    }
+
+    /// Transport configuration shared by the plaintext and mTLS main servers.
+    ///
+    /// Flush coalescing is off. The transport writes its HTTP/2 preface before
+    /// the TLS handshake finishes, so NIOSSL holds that write until the
+    /// handshake completes. When a peer drops the connection mid-handshake,
+    /// NIOSSL reports the failure downstream before discarding the held write;
+    /// the connection handler closes in response, and the coalescing handler
+    /// turns that close into a flush that NIOSSL then tries to encrypt on a dead
+    /// connection. BoringSSL cannot make progress and NIOSSL aborts the process
+    /// (`doUnbufferActions(context:) looped too many times`). Without the
+    /// coalescing handler nothing flushes during that error path.
+    /// See `MTLSHandshakeAbortTests`.
+    nonisolated static var mainServerConfig: HTTP2ServerTransport.Posix.Config {
+        .defaults {
+            $0.http2.maxFrameSize = 256 * 1024
+            $0.http2.targetWindowSize = 8 * 1024 * 1024
+            $0.rpc.maxRequestPayloadSize = 16 * 1024 * 1024
+            $0.connection.flushCoalescing = nil
+        }
     }
 
     /// Constructs the mTLS transport security for the main server.
@@ -499,6 +516,20 @@ public actor WendyAgent {
     private func mTLSSecurity(
         certs: ProvisioningService.ProvisioningCerts
     ) throws -> HTTP2ServerTransport.Posix.TransportSecurity {
+        try Self.makeMTLSSecurity(
+            certs: certs,
+            environment: ProcessInfo.processInfo.environment,
+            logger: self.logger
+        )
+    }
+
+    /// The production mTLS transport security, factored out so tests can stand
+    /// up a real gRPC listener with exactly the configuration the agent uses.
+    nonisolated static func makeMTLSSecurity(
+        certs: ProvisioningService.ProvisioningCerts,
+        environment: [String: String],
+        logger: Logger
+    ) throws -> HTTP2ServerTransport.Posix.TransportSecurity {
         let leaf = TLSConfig.CertificateSource.bytes(Array(certs.certPEM.utf8), format: .pem)
         let chain = TLSConfig.CertificateSource.bytes(Array(certs.chainPEM.utf8), format: .pem)
         let key = try tlsPrivateKeySource(certs.keyBacking, seKey: certs.seKey)
@@ -506,7 +537,7 @@ public actor WendyAgent {
         let trustRootsPEM = certs.chainPEM
         let deviceOrg = ClientCertAuthorizer.organizationID(fromLeafPEM: certs.certPEM)
         if deviceOrg == nil {
-            self.logger.error(
+            logger.error(
                 "Could not determine device organization from its own certificate; mTLS will reject all clients (fail closed). Re-provision the device to recover."
             )
         }
@@ -514,17 +545,17 @@ public actor WendyAgent {
         // Org-enforcement mode (WENDY_MTLS_ORG_ENFORCEMENT: off|grace|strict).
         // Defaults to grace so today's CLI user certs — which carry no org claim
         // — can connect while cert rotation to org-bearing URNs completes.
-        let rawOrgEnforcement = ProcessInfo.processInfo.environment["WENDY_MTLS_ORG_ENFORCEMENT"]
+        let rawOrgEnforcement = environment["WENDY_MTLS_ORG_ENFORCEMENT"]
         let (orgMode, recognized) = ClientCertAuthorizer.OrgEnforcementMode.parse(rawOrgEnforcement)
         if !recognized {
-            self.logger.warning(
+            logger.warning(
                 "Unrecognized WENDY_MTLS_ORG_ENFORCEMENT value; defaulting to grace",
                 metadata: [
                     "value": "\(rawOrgEnforcement ?? "")"
                 ]
             )
         }
-        self.logger.info(
+        logger.info(
             "mTLS client org enforcement",
             metadata: ["mode": "\(orgMode.name)"]
         )
