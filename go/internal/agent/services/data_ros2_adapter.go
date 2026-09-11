@@ -366,6 +366,14 @@ func (a *ros2DataAdapter) startOne(ctx context.Context, session data.CaptureSess
 	// Paths are keyed by the domain, not by any one selected source: a domain
 	// yields exactly one bag per episode, whether it was selected whole or by
 	// a list of topics, and a topic name is not a safe path component.
+	//
+	// The seal reads this layout back the same way round. It never decodes a
+	// path component into a source identifier, which safeCaptureName makes
+	// impossible; it encodes each declared source's DOMAIN identifier and
+	// matches that against the component, so the bag and its clock sidecar are
+	// attributed to every topic source the campaign selected on this domain
+	// (data.associateFileSources). Renaming these paths after anything but a
+	// source's domain identifier therefore breaks manifest attribution.
 	key := ros2DomainSourceID(sc)
 	name := safeCaptureName("wendy-" + session.ID + "-" + key)
 	staging := filepath.Join(a.service.bagDir, name)

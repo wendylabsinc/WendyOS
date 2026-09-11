@@ -223,12 +223,22 @@ type MonotonicMappingSample struct {
 const FileRoleDerived = "derived"
 
 type File struct {
-	Path      string `json:"path"`
-	Size      int64  `json:"size"`
-	SHA256    string `json:"sha256"`
-	SourceID  string `json:"source_id,omitempty"`
-	Format    string `json:"format"`
-	MediaType string `json:"media_type"`
+	Path     string `json:"path"`
+	Size     int64  `json:"size"`
+	SHA256   string `json:"sha256"`
+	SourceID string `json:"source_id,omitempty"`
+	// AdditionalSourceIDs names the other episode sources this one file also
+	// belongs to; SourceID together with this list is the complete set. One
+	// file can serve several sources because a Robot Operating System 2 (ROS
+	// 2) recorder writes ONE bag per Data Distribution Service (DDS) domain
+	// however many topics on that domain the campaign selected, and each
+	// selected topic is its own episode source. It is empty for the ordinary
+	// one file, one source case, and it is never a stand-in for "unknown": a
+	// file no manifest source claims carries an empty SourceID instead of a
+	// guess derived from its path.
+	AdditionalSourceIDs []string `json:"additional_source_ids,omitempty"`
+	Format              string   `json:"format"`
+	MediaType           string   `json:"media_type"`
 	// Role distinguishes what a file is to the episode. Empty means capture
 	// payload or capture metadata written while recording; FileRoleDerived
 	// marks an artifact computed from that payload at seal time.

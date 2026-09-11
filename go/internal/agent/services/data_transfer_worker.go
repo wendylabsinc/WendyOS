@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
+	"os"
 	"strings"
 	"time"
 
@@ -26,11 +28,23 @@ const (
 	// (except the final short chunk of each file).
 	transferChunkBytes = 1 << 20
 
-	// transferMaxAttempts bounds how many times a single episode is retried on
-	// retryable (transport) failures before the worker gives up and records the
-	// episode as permanently "failed". Verification failures are terminal on the
-	// first occurrence and do not consume the retry budget.
+	// transferMaxAttempts bounds how many times a single episode is retried
+	// before the worker gives up and records it as permanently "failed".
+	//
+	// The budget pays only for failures that belong to THIS episode: a server
+	// that rejects its manifest or its stream (InvalidArgument, Internal,
+	// FailedPrecondition and anything else answered for that one stream). It
+	// does not pay for the network. A transport failure (Unavailable,
+	// DeadlineExceeded, a dead connection) says nothing about the episode and
+	// every queued episode would meet it identically, so it costs wall clock
+	// through the pass-level backoff and leaves the attempt counter untouched;
+	// see transportStalled. Verification failures are terminal on the first
+	// occurrence and do not consume the budget either.
 	transferMaxAttempts = 5
+
+	// transferBackoffBase is the first pass-level backoff step. Successive
+	// failed passes double it, with jitter, up to transferMaxBackoff.
+	transferBackoffBase = time.Second
 
 	// transferMaxBackoff caps the per-pass exponential backoff between failed
 	// upload passes, matching the telemetry flusher's ceiling.
@@ -39,6 +53,18 @@ const (
 	// transferIdlePause is the pause between successful passes when there is no
 	// backlog, to avoid busy-looping the disk scan.
 	transferIdlePause = 10 * time.Second
+
+	// transferRequeueInterval is how often the worker re-arms episodes it has
+	// already marked "failed".
+	//
+	// EpisodesAwaitingUpload returns only "pending" and "uploading", so a
+	// failed episode is invisible to every later pass and nothing would look at
+	// it again. Re-arming only at process start meant an outage that outlived
+	// one episode's retry budget stranded the backlog until somebody restarted
+	// the agent. Half an hour is long enough that a genuinely unshippable
+	// episode is not retried in a tight loop, and short enough that a device
+	// nobody is watching recovers on its own.
+	transferRequeueInterval = 30 * time.Minute
 )
 
 // errIngestBlocked wraps a failure that says the ROUTE is wrong rather than the
@@ -75,6 +101,54 @@ func ingestBlocked(err error) *errIngestBlocked {
 	switch st.Code() {
 	case codes.Unimplemented, codes.Unauthenticated, codes.PermissionDenied:
 		return &errIngestBlocked{code: st.Code(), cause: err}
+	}
+	return nil
+}
+
+// errTransportStalled wraps a failure that says the NETWORK is down rather than
+// that the episode is bad. Like errIngestBlocked it is a pass-level condition,
+// but unlike it the cure is time rather than a configuration change, so the
+// worker backs the whole pass off and tries again.
+type errTransportStalled struct {
+	code  codes.Code
+	cause error
+}
+
+func (e *errTransportStalled) Error() string {
+	return fmt.Sprintf("ingest transport is unavailable (%s): %v", e.code, e.cause)
+}
+func (e *errTransportStalled) Unwrap() error { return e.cause }
+
+// transportStalled reports whether err is the network failing rather than this
+// episode failing.
+//
+// This distinction is the difference between an outage and a data loss. The
+// ingest client is built with grpc.NewClient, which connects lazily, so an
+// offline device does not fail when it dials: it fails on the first call of
+// each episode, with Unavailable. Charged to the episode, roughly a minute of
+// outage spent the whole five-attempt budget of every queued episode and marked
+// them all permanently failed, and only a restart brought them back. Charged to
+// the pass, the same outage costs wall clock and nothing else.
+//
+// Unavailable covers the dial and connection failures grpc.NewClient defers to
+// call time; DeadlineExceeded covers a link too slow or too broken to finish.
+// context.DeadlineExceeded is included because a client-side timeout arrives
+// unwrapped from some call sites. Every other code, including Unknown, stays
+// with the episode: those are answers from a server that reached us.
+func transportStalled(err error) *errTransportStalled {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &errTransportStalled{code: codes.DeadlineExceeded, cause: err}
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return nil
+	}
+	switch st.Code() {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return &errTransportStalled{code: st.Code(), cause: err}
 	}
 	return nil
 }
@@ -134,10 +208,17 @@ type DataTransferWorker struct {
 	// whose upload.when is "wifi". When nil, no network-type signal is wired and
 	// "wifi" is treated as "always" (see resolveShouldUpload).
 	onWiFi func() bool
-	// now and newSleeper are injection points for deterministic tests; both
-	// default to real time.
+	// requeueInterval is how often the Run loop re-arms episodes that were
+	// marked "failed" (see transferRequeueInterval).
+	requeueInterval time.Duration
+	// now, newSleeper, wait and newTicker are injection points for
+	// deterministic tests; all four default to real time. newSleeper paces the
+	// byte stream, wait drives the Run loop's backoff and idle pause, and
+	// newTicker drives the periodic requeue.
 	now        func() time.Time
 	newSleeper func(ctx context.Context) func(time.Duration)
+	wait       func(ctx context.Context, d time.Duration)
+	newTicker  func(d time.Duration) (<-chan time.Time, func())
 }
 
 // NewDataTransferWorker builds a worker that reads cloud credentials and the
@@ -149,8 +230,11 @@ func NewDataTransferWorker(logger *zap.Logger, manager *data.Manager, provisioni
 		manager:         manager,
 		provisioningSvc: provisioningSvc,
 		maxAttempts:     transferMaxAttempts,
+		requeueInterval: transferRequeueInterval,
 		now:             time.Now,
 		newSleeper:      contextSleeper,
+		wait:            waitFor,
+		newTicker:       realTicker,
 	}
 	w.factory = w.dialFactory
 	return w
@@ -199,6 +283,26 @@ func contextSleeper(ctx context.Context) func(time.Duration) {
 		case <-ctx.Done():
 		}
 	}
+}
+
+// waitFor blocks for d, returning early when ctx is done. It is the production
+// implementation of DataTransferWorker.wait.
+func waitFor(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
+}
+
+// realTicker is the production implementation of DataTransferWorker.newTicker.
+func realTicker(d time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(d)
+	return t.C, t.Stop
 }
 
 // pkiIdentityReader reads the device's stored pki-core identity.
@@ -311,14 +415,38 @@ func (w *DataTransferWorker) Run(ctx context.Context) {
 		return
 	}
 
-	// A restart is usually what follows fixing whatever broke uploads, so give
-	// the episodes that exhausted their budget one more life. Bounded: this
-	// runs once per process, not per pass.
-	if moved, err := w.manager.RequeueFailedUploads(); err != nil {
-		w.logger.Warn("data transfer worker: requeue of failed episodes failed", zap.Error(err))
-	} else if moved > 0 {
-		w.logger.Info("data transfer worker: requeued previously failed episodes", zap.Int("episodes", moved))
+	wait := w.wait
+	if wait == nil {
+		wait = waitFor
 	}
+	newTicker := w.newTicker
+	if newTicker == nil {
+		newTicker = realTicker
+	}
+	interval := w.requeueInterval
+	if interval <= 0 {
+		interval = transferRequeueInterval
+	}
+
+	// Re-arm the episodes that exhausted their budget. A restart is usually
+	// what follows fixing whatever broke uploads, but an outage that outlasts
+	// the budget needs no fixing at all and no restart should be required to
+	// recover from it, so this also runs on a slow ticker below.
+	requeue := func(trigger string) {
+		moved, err := w.manager.RequeueFailedUploads()
+		switch {
+		case err != nil:
+			w.logger.Warn("data transfer worker: requeue of failed episodes failed",
+				zap.String("trigger", trigger), zap.Error(err))
+		case moved > 0:
+			w.logger.Info("data transfer worker: requeued previously failed episodes",
+				zap.Int("episodes", moved), zap.String("trigger", trigger))
+		}
+	}
+	requeue("startup")
+
+	tickC, stopTicker := newTicker(interval)
+	defer stopTicker()
 
 	w.logger.Info("data transfer worker: started")
 	attempt := 0
@@ -326,15 +454,24 @@ func (w *DataTransferWorker) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		select {
+		case <-tickC:
+			requeue("periodic")
+		default:
+		}
 		err := w.runPass(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
+			delay := passBackoff(attempt)
+			blocked := ingestBlocked(err)
+			stalled := transportStalled(err)
+			switch {
 			// A blocked route persists until someone changes configuration, so
 			// it would otherwise log identically every minute forever. Say it
 			// loudly once, then keep it at debug until the cause changes.
-			if blocked := ingestBlocked(err); blocked != nil {
+			case blocked != nil:
 				if w.lastBlockedCause != blocked.Error() {
 					w.lastBlockedCause = blocked.Error()
 					w.logger.Error("data transfer worker: ingest endpoint is not accepting uploads; "+
@@ -343,34 +480,40 @@ func (w *DataTransferWorker) Run(ctx context.Context) {
 				} else {
 					w.logger.Debug("data transfer worker: ingest still blocked", zap.Error(blocked))
 				}
-			} else {
+			case stalled != nil:
 				w.lastBlockedCause = ""
-				w.logger.Warn("data transfer worker: pass failed", zap.Error(err))
+				w.logger.Warn("data transfer worker: ingest transport is unavailable; the whole pass "+
+					"backs off and no episode was charged an attempt",
+					zap.String("code", stalled.code.String()), zap.Duration("backoff", delay), zap.Error(stalled))
+			default:
+				w.lastBlockedCause = ""
+				w.logger.Warn("data transfer worker: pass failed", zap.Duration("backoff", delay), zap.Error(err))
 			}
-			w.backoff(ctx, attempt)
+			wait(ctx, delay)
 			if attempt < 6 { // 2^6 = 64s > 60s cap
 				attempt++
 			}
 			continue
 		}
 		attempt = 0
-		select {
-		case <-time.After(transferIdlePause):
-		case <-ctx.Done():
-			return
-		}
+		wait(ctx, transferIdlePause)
 	}
 }
 
-func (w *DataTransferWorker) backoff(ctx context.Context, attempt int) {
-	d := time.Second << attempt
+// passBackoff returns how long to wait after the attempt-th consecutive failed
+// pass: transferBackoffBase doubled per attempt, capped at transferMaxBackoff,
+// then jittered over the upper half of that window.
+//
+// The jitter is not decoration. A fleet whose devices all lost the same uplink
+// resumes on the same schedule without it, and every one of them retries in the
+// same second the link returns.
+func passBackoff(attempt int) time.Duration {
+	d := transferBackoffBase << attempt
 	if d > transferMaxBackoff || d <= 0 {
 		d = transferMaxBackoff
 	}
-	select {
-	case <-time.After(d):
-	case <-ctx.Done():
-	}
+	half := d / 2
+	return half + time.Duration(rand.Float64()*float64(half))
 }
 
 // runPass dials the cloud, enumerates the upload backlog, and uploads each
@@ -460,21 +603,36 @@ func (w *DataTransferWorker) uploadRate(mf data.Manifest) int64 {
 // backoff (or to "failed" once the retry ceiling is hit), verification failures
 // move it straight to "failed", and success marks it "uploaded".
 //
-// It returns a non-nil error ONLY when the failure is the route rather than the
-// episode, which is the caller's signal to abandon the pass. The episode is
-// left exactly as it was found in that case: it did nothing wrong, so it keeps
-// its attempt count and its place in the queue.
+// It returns a non-nil error ONLY when the failure is the route or the network
+// rather than the episode, which is the caller's signal to abandon the pass.
+// The episode is left exactly as it was found in that case: it did nothing
+// wrong, so it keeps its attempt count and its place in the queue.
 func (w *DataTransferWorker) processEpisode(ctx context.Context, client cloudpb.DataIngestServiceClient, mf data.Manifest) error {
 	if ok, reason := w.resolveShouldUpload(mf); !ok {
 		w.logger.Debug("data transfer worker: skipping episode", zap.String("episode", mf.ID), zap.String("reason", reason))
 		return nil
 	}
 
+	// Pin the episode for the whole transfer. Quota eviction skips a pinned
+	// episode, so retention cannot delete the payload from under an open
+	// stream. The "uploading" state alone did not do this: enforceQuota reads
+	// the pin count and nothing else, and an episode that lost its files
+	// mid-transfer failed on every retry with an error that named the file
+	// rather than the eviction.
+	w.manager.BeginDownload(mf.ID)
+	defer w.manager.EndDownload(mf.ID)
+
 	// Mark uploading (durably) before any network work so a crash mid-transfer
 	// is recoverable and the quota manager knows the payload is in flight.
 	if _, err := w.manager.UpdateUploadState(mf.ID, func(ws *data.WorkflowState) {
 		ws.State = uploadStateUploading
 	}); err != nil {
+		if w.episodeGone(mf.ID, err) {
+			// Evicted between the backlog scan and the pin. There is no
+			// manifest left to record anything on, and nothing to retry.
+			w.logger.Info("data transfer worker: episode is gone, skipping", zap.String("episode", mf.ID))
+			return nil
+		}
 		w.logger.Warn("data transfer worker: mark uploading failed", zap.String("episode", mf.ID), zap.Error(err))
 		return nil
 	}
@@ -497,16 +655,25 @@ func (w *DataTransferWorker) processEpisode(ctx context.Context, client cloudpb.
 			w.logger.Info("data transfer worker: shutdown mid-upload, episode left for resume", zap.String("episode", mf.ID))
 			return nil
 		}
+		if w.episodeGone(mf.ID, retryErr) {
+			// Retention evicted the episode mid-transfer. Nothing to retry and
+			// nothing to record: the manifest went with the payload.
+			w.logger.Info("data transfer worker: episode was evicted mid-transfer, abandoning it",
+				zap.String("episode", mf.ID), zap.Error(retryErr))
+			return nil
+		}
 		if blocked := ingestBlocked(retryErr); blocked != nil {
 			// The route is wrong, not the episode. Put it back exactly as it
 			// was and let the caller stop the pass.
-			if _, err := w.manager.UpdateUploadState(mf.ID, func(ws *data.WorkflowState) {
-				ws.State = mf.Upload.State
-				ws.LastError = blocked.Error()
-			}); err != nil {
-				w.logger.Warn("data transfer worker: restore state failed", zap.String("episode", mf.ID), zap.Error(err))
-			}
+			w.restoreState(mf, blocked)
 			return blocked
+		}
+		if stalled := transportStalled(retryErr); stalled != nil {
+			// The network is down, not the episode. Charging this to the
+			// episode's retry budget marks the whole backlog failed within a
+			// minute of an outage, so it costs the pass wall clock instead.
+			w.restoreState(mf, stalled)
+			return stalled
 		}
 		w.handleRetryable(mf, retryErr)
 	default:
@@ -523,9 +690,41 @@ func (w *DataTransferWorker) processEpisode(ctx context.Context, client cloudpb.
 	return nil
 }
 
-// handleRetryable records a retryable failure: it bumps the attempt count and
-// either re-queues the episode with a backoff or, once the ceiling is reached,
-// marks it permanently failed.
+// episodeGone reports whether err is a not-exist failure BECAUSE the whole
+// episode has left the store, which on this device means quota eviction removed
+// it. That is not a retryable condition: there is nothing left to send and no
+// manifest left to record an attempt on, so the worker drops it quietly.
+//
+// The store is re-read rather than trusting the error alone, because a single
+// missing file inside an episode that is still there raises the same
+// os.ErrNotExist and is a completely different thing: a real, episode-specific
+// fault that must spend the retry budget and end as "failed". Treating it as an
+// eviction would leave the episode "uploading" forever, retried on every pass
+// and counted by nothing.
+func (w *DataTransferWorker) episodeGone(id string, err error) bool {
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	_, _, inspectErr := w.manager.Inspect(id, false)
+	return errors.Is(inspectErr, os.ErrNotExist)
+}
+
+// restoreState puts an episode back exactly as the pass found it, recording why
+// the pass gave up. Used for pass-level failures, which the episode did not
+// cause and must not be charged for.
+func (w *DataTransferWorker) restoreState(mf data.Manifest, cause error) {
+	if _, err := w.manager.UpdateUploadState(mf.ID, func(ws *data.WorkflowState) {
+		ws.State = mf.Upload.State
+		ws.LastError = cause.Error()
+	}); err != nil && !w.episodeGone(mf.ID, err) {
+		w.logger.Warn("data transfer worker: restore state failed", zap.String("episode", mf.ID), zap.Error(err))
+	}
+}
+
+// handleRetryable records a failure that belongs to THIS episode: it bumps the
+// attempt count and either re-queues the episode with a backoff or, once the
+// ceiling is reached, marks it permanently failed. Transport failures never
+// reach here; see transportStalled and transferMaxAttempts.
 func (w *DataTransferWorker) handleRetryable(mf data.Manifest, cause error) {
 	attempts := mf.Upload.Attempts + 1
 	if attempts >= w.maxAttempts {
@@ -608,37 +807,40 @@ func (w *DataTransferWorker) uploadEpisode(ctx context.Context, client cloudpb.D
 		return nil, fmt.Errorf("open upload stream: %w", err)
 	}
 
-	// Drain acks concurrently so large uploads do not deadlock on flow control.
+	// Drain acks concurrently so large uploads do not deadlock on flow control,
+	// recording the durable offset each one reports.
 	//
-	// The acks are read and discarded, not matched. That is deliberate, and it
-	// is why the (episode_id, path) matching rule the wire contract states for
-	// EpisodeChunkAck does not apply to this client today.
-	//
-	// Nothing here is keyed on an ack. Resume offsets come from
-	// BeginEpisodeUpload's per-file FileUploadState, above, which is scoped to
-	// one episode by construction; the acks contribute no state. Draining them
-	// serves two other purposes: gRPC flow control stalls a large upload if the
-	// receive side is never read, and a server-side stream error arrives here
-	// rather than being lost.
+	// Acks drive no resume decision: resume offsets come from
+	// BeginEpisodeUpload's per-file FileUploadState, above. What the recorded
+	// offsets answer is a different question, asked once, at commit: did the
+	// whole object actually reach durable storage? A checksum the server
+	// computed over a file it never finished storing is a fact about the
+	// transfer, not about our bytes, and commitFailureTerminal needs to tell
+	// those apart. Draining also matters for two reasons that predate this:
+	// gRPC flow control stalls a large upload if the receive side is never
+	// read, and a server-side stream error arrives here rather than being lost.
 	//
 	// The contract's hazard is a client that matches acks on `path` alone while
 	// one stream carries chunks for several episodes, which credits one
-	// episode's committed offset to another. This client cannot hit it from
-	// either direction: it matches on nothing, and it opens exactly one
-	// UploadEpisodeChunk stream per episode, here inside uploadEpisode, which
-	// processEpisode calls once per manifest. That is precisely the "keep to one
-	// stream per episode" fallback the contract requires of a client that cannot
-	// rely on the new episode_id field, and a server built before that field
-	// leaves it empty anyway.
+	// episode's committed offset to another. This client cannot hit it. It
+	// matches on the (episode_id, path) pair the contract requires, and it
+	// opens exactly one UploadEpisodeChunk stream per episode, here inside
+	// uploadEpisode, which processEpisode calls once per manifest. An ack that
+	// names a different episode is ignored; an empty episode_id means a server
+	// built before the field, and one-stream-per-episode makes `path` alone
+	// unambiguous in exactly that case.
 	//
 	// TestUploadStreamCarriesOneEpisode pins the one-stream-per-episode
-	// invariant. Batching several episodes onto a single stream, or using ack
-	// offsets to drive resume, means matching on the (episode_id, path) pair
-	// first; do not do one without the other.
+	// invariant. Batching several episodes onto one stream breaks the empty
+	// episode_id fallback below; do not do it.
+	//
+	// acked is written only by this goroutine and read only after ackErrCh
+	// delivers, which orders the writes before the reads.
+	acked := make(map[string]int64, len(mf.Files))
 	ackErrCh := make(chan error, 1)
 	go func() {
 		for {
-			_, rerr := stream.Recv()
+			ack, rerr := stream.Recv()
 			if rerr == io.EOF {
 				ackErrCh <- nil
 				return
@@ -646,6 +848,12 @@ func (w *DataTransferWorker) uploadEpisode(ctx context.Context, client cloudpb.D
 			if rerr != nil {
 				ackErrCh <- rerr
 				return
+			}
+			if id := ack.GetEpisodeId(); id != "" && id != mf.ID {
+				continue
+			}
+			if v := ack.GetCommittedOffset(); v <= math.MaxInt64 && int64(v) > acked[ack.GetPath()] {
+				acked[ack.GetPath()] = int64(v)
 			}
 		}
 	}()
@@ -655,14 +863,8 @@ func (w *DataTransferWorker) uploadEpisode(ctx context.Context, client cloudpb.D
 	closeErr := stream.CloseSend()
 	ackErr := <-ackErrCh
 
-	if sendErr != nil {
-		return nil, fmt.Errorf("stream chunks: %w", sendErr)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close send: %w", closeErr)
-	}
-	if ackErr != nil {
-		return nil, fmt.Errorf("chunk ack: %w", ackErr)
+	if err := streamFailure(sendErr, closeErr, ackErr); err != nil {
+		return nil, err
 	}
 
 	commit, err := client.CommitEpisode(ctx, &cloudpb.CommitEpisodeRequest{EpisodeId: mf.ID})
@@ -672,21 +874,102 @@ func (w *DataTransferWorker) uploadEpisode(ctx context.Context, client cloudpb.D
 	if commit.GetState() == cloudpb.EpisodeState_EPISODE_STATE_COMPLETE {
 		return nil, nil
 	}
-	// Not complete: collect per-file verification detail. Any failed file is a
-	// terminal corruption verdict.
-	var details []string
+
+	// Not complete: split the per-file verdicts into the ones that condemn our
+	// bytes and the ones that only ask for the file again.
+	durable := make(map[string]bool, len(mf.Files))
+	for _, f := range mf.Files {
+		durable[f.Path] = acked[f.Path] >= f.Size || committed[f.Path] >= f.Size
+	}
+	var terminal, retriable []string
 	for _, v := range commit.GetFiles() {
-		if !v.GetOk() {
-			details = append(details, fmt.Sprintf("%s: %s (expected %s, actual %s)",
-				v.GetPath(), v.GetDetail(), v.GetExpectedSha256(), v.GetActualSha256()))
+		if v.GetOk() {
+			continue
+		}
+		detail := fmt.Sprintf("%s: %s (expected %s, actual %s)",
+			v.GetPath(), v.GetDetail(), v.GetExpectedSha256(), v.GetActualSha256())
+		if commitFailureTerminal(v, durable[v.GetPath()]) {
+			terminal = append(terminal, detail)
+		} else {
+			retriable = append(retriable, detail)
 		}
 	}
-	if len(details) > 0 {
-		return errors.New(strings.Join(details, "; ")), nil
+	// A genuine mismatch decides the episode even if other files merely need
+	// re-sending: re-sending cannot change the bytes that already disagree.
+	if len(terminal) > 0 {
+		return errors.New(strings.Join(terminal, "; ")), nil
+	}
+	if len(retriable) > 0 {
+		return nil, fmt.Errorf("commit needs these files sent again: %s", strings.Join(retriable, "; "))
 	}
 	// Commit returned a non-complete state with no per-file failure detail:
 	// treat as retryable so we do not permanently fail on an ambiguous verdict.
 	return nil, fmt.Errorf("commit returned state %s without completion", commit.GetState())
+}
+
+// streamFailure picks the error that explains a failed chunk stream.
+//
+// When the server aborts a stream, the client's Send returns io.EOF: the
+// transport is saying the stream is closed, not why. The reason is on the
+// receive side, which the ack reader already holds. Returning the io.EOF first
+// masked every server-side abort as an anonymous "stream chunks: EOF", so a
+// PermissionDenied route looked like an ordinary write failure, was classified
+// as neither blocked nor stalled, and burned the episode's retry budget.
+func streamFailure(sendErr, closeErr, ackErr error) error {
+	if sendErr != nil {
+		if errors.Is(sendErr, io.EOF) && ackErr != nil {
+			return fmt.Errorf("stream chunks: %w", ackErr)
+		}
+		return fmt.Errorf("stream chunks: %w", sendErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close send: %w", closeErr)
+	}
+	if ackErr != nil {
+		return fmt.Errorf("chunk ack: %w", ackErr)
+	}
+	return nil
+}
+
+// commitFailureTerminal decides whether one failed FileVerification condemns
+// the episode or merely asks for the file again. durable says whether the whole
+// object reached the server's storage, from the acks on this stream or from the
+// committed offset BeginEpisodeUpload reported.
+//
+// Exactly one shape is terminal: the server holds the complete object and the
+// SHA-256 it computed over it differs from the manifest's. That is local
+// corruption, re-sending the same bytes fails identically, and the episode is
+// dead.
+//
+// Everything else is evidence about the transfer, not about our bytes, and the
+// old code treating every ok == false as terminal threw away shippable
+// episodes:
+//   - an empty actual_sha256 means the server hashed nothing
+//   - a detail naming a missing object means there is nothing stored to hash
+//   - a file whose durable offset never reached its size was truncated in
+//     flight, so any hash over it is a hash of a fragment
+//
+// Re-sending costs nothing extra: BeginEpisodeUpload reports a committed offset
+// of 0 for anything not durably stored, so the next attempt streams exactly the
+// files that still need bytes.
+func commitFailureTerminal(v *cloudpb.FileVerification, durable bool) bool {
+	if v.GetActualSha256() == "" {
+		return false
+	}
+	if detailSaysMissing(v.GetDetail()) {
+		return false
+	}
+	return durable
+}
+
+// detailSaysMissing reads the server's human-readable failure detail for the
+// "missing object" case the wire contract names. Matching prose is a weak
+// signal, which is why it is not the only one: the empty-hash and durability
+// checks in commitFailureTerminal classify a server that words this differently
+// without help from here.
+func detailSaysMissing(detail string) bool {
+	d := strings.ToLower(detail)
+	return strings.Contains(d, "missing") || strings.Contains(d, "not found") || strings.Contains(d, "no such")
 }
 
 // streamFiles sends every file that still needs bytes, honoring the committed
