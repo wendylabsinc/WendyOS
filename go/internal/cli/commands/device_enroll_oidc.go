@@ -18,8 +18,11 @@ import (
 )
 
 // Resolve and validate the destination before Cloud mints a once-only credential.
-func oidcEnrollmentConfig(auth *config.AuthConfig, name, directoryURL string) (acmeenroll.Config, error) {
-	cfg := acmeenroll.Config{DeviceID: name, DirectoryURL: directoryURL}
+//
+// deviceID is the permanent identity, not the operator-typed name: it becomes
+// the device's SPIFFE SAN and pki-core carries it across every renewal.
+func oidcEnrollmentConfig(auth *config.AuthConfig, deviceID, directoryURL string) (acmeenroll.Config, error) {
+	cfg := acmeenroll.Config{DeviceID: deviceID, DirectoryURL: directoryURL}
 	u, err := url.Parse(auth.Certificates[0].PrincipalURI)
 	if err != nil || u.Scheme != "spiffe" || u.Host != "wendy.sh" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return cfg, fmt.Errorf("OIDC session has no valid operator identity; re-run 'wendy auth login'")
@@ -44,7 +47,7 @@ func oidcEnrollmentConfig(auth *config.AuthConfig, name, directoryURL string) (a
 	if err != nil {
 		return cfg, err
 	}
-	if principal != "spiffe://wendy.sh/tenant/"+tenant.String()+"/device/"+name {
+	if principal != "spiffe://wendy.sh/tenant/"+tenant.String()+"/device/"+deviceID {
 		return cfg, fmt.Errorf("ACME enrollment tenant does not match the selected OIDC session")
 	}
 	return cfg, nil
@@ -61,7 +64,13 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if err != nil {
 		return err
 	}
-	cfg, err := oidcEnrollmentConfig(auth, name, directoryURL)
+	// The identity is minted here and never derived from the name. device_id is
+	// irreversible -- it becomes the SPIFFE SAN for the life of the device --
+	// while the name is a renameable, organization-unique discovery key, so
+	// deriving one from the other would make a relabelling rewrite an identity
+	// that pki-core has already stamped into certificates.
+	deviceID := uuid.NewString()
+	cfg, err := oidcEnrollmentConfig(auth, deviceID, directoryURL)
 	if err != nil {
 		return err
 	}
@@ -88,7 +97,7 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if err != nil {
 		return err
 	}
-	artifact, err := cloudrequest.EnrollmentRequest(auth, name)
+	artifact, err := cloudrequest.EnrollmentRequest(auth, deviceID)
 	if err != nil {
 		return fmt.Errorf("signing enrollment request: %w", err)
 	}
@@ -98,13 +107,22 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 	defer cloudConn.Close()
 
-	fmt.Printf("Enrolling %s with PKI...\n", name)
+	fmt.Printf("Enrolling %s as %s with PKI...\n", name, deviceID)
 	credential, err := cloudpbv2.NewDeviceEnrollmentServiceClient(cloudConn).EnrollDevice(tokenCtx, &cloudpbv2.EnrollDeviceRequest{
-		DeviceId: name, DeviceClass: cloudpbv2.DeviceClass_DEVICE_CLASS_B,
+		DeviceId: deviceID, DeviceClass: cloudpbv2.DeviceClass_DEVICE_CLASS_B,
 		EnrollmentRequestJws: artifact, Name: name,
 	})
-	if status.Code(err) == codes.Unimplemented {
+	switch status.Code(err) {
+	case codes.Unimplemented:
 		return fmt.Errorf("this Cloud deployment does not support OIDC device enrollment; it needs DeviceEnrollmentService/EnrollDevice")
+	case codes.AlreadyExists, codes.InvalidArgument:
+		// Cloud validates the name and checks its unique indexes BEFORE it
+		// relays to pki-core, so nothing was minted. Saying so is the whole
+		// point of separating this case: the operator's default assumption
+		// about a single-use credential is that they have just spent one.
+		// Cloud's own message is appended verbatim because it names which
+		// constraint was hit, and this side cannot tell the two indexes apart.
+		return fmt.Errorf("Cloud refused this enrollment before minting anything, so no credential was spent: %w", err)
 	}
 	if err != nil {
 		return fmt.Errorf("creating PKI enrollment credential: %w", err)
@@ -131,6 +149,6 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if resp.GetPrincipalUri() != expected {
 		return fmt.Errorf("agent returned an unexpected enrollment identity")
 	}
-	fmt.Printf("Device enrolled (%s, asset: %s).\n", resp.GetPrincipalUri(), credential.GetAssetId())
+	fmt.Printf("Device enrolled (name: %s, identity: %s, asset: %s).\n", name, resp.GetPrincipalUri(), credential.GetAssetId())
 	return nil
 }

@@ -154,7 +154,8 @@ func verifyEnrollmentJWS(t *testing.T, compact string) map[string]any {
 }
 
 func TestOIDCEnrollmentAutomaticCloudRelay(t *testing.T) {
-	for _, name := range []string{"sim", "fleet-a/box-01", ""} {
+	minted := map[string]bool{}
+	for _, name := range []string{"sim", "box-01", ""} {
 		t.Run(name, func(t *testing.T) {
 			cloud := &oidcEnrollmentServer{response: &cloudpbv2.EnrollDeviceResponse{AssetId: "asset-uuid", CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
 			agent := &acmeProvisioningServer{}
@@ -169,14 +170,30 @@ func TestOIDCEnrollmentAutomaticCloudRelay(t *testing.T) {
 			if name == "" {
 				name = "sim"
 			}
-			if cloud.req.GetDeviceId() != name || cloud.req.GetName() != name || cloud.req.GetDeviceClass() != cloudpbv2.DeviceClass_DEVICE_CLASS_B {
+
+			// The identity is a freshly minted UUID and the name is carried
+			// beside it: the operator's label never becomes the permanent SAN.
+			deviceID := cloud.req.GetDeviceId()
+			if _, err := uuid.Parse(deviceID); err != nil {
+				t.Fatalf("device_id %q is not a UUID", deviceID)
+			}
+			if deviceID == name {
+				t.Fatal("device identity was derived from the name")
+			}
+			if minted[deviceID] {
+				t.Fatal("device identity was reused across enrollments")
+			}
+			minted[deviceID] = true
+			if cloud.req.GetName() != name || cloud.req.GetDeviceClass() != cloudpbv2.DeviceClass_DEVICE_CLASS_B {
 				t.Fatal("incorrect Cloud enrollment request")
 			}
 			if got := cloud.md.Get("authorization"); len(got) != 1 || got[0] != "Bearer test-access-token" {
 				t.Fatal("missing OIDC bearer")
 			}
 			artifact := verifyEnrollmentJWS(t, string(cloud.req.GetEnrollmentRequestJws()))
-			if artifact["tenant"] != testOperatorTenant || artifact["device_id"] != name || artifact["device_class"] != "B" {
+			// Cloud refuses on disagreement, so the signed id and the request
+			// id have to be the same string.
+			if artifact["tenant"] != testOperatorTenant || artifact["device_id"] != deviceID || artifact["device_class"] != "B" {
 				t.Fatal("incorrect PKI claims")
 			}
 			if _, err := uuid.Parse(artifact["jti"].(string)); err != nil {
@@ -192,14 +209,40 @@ func TestOIDCEnrollmentAutomaticCloudRelay(t *testing.T) {
 			}
 			descriptor := verifyEnrollmentJWS(t, envelope[0])
 			target := descriptor["target"].(map[string]any)
-			if descriptor["operation"] != "wendycloud.v2.DeviceEnrollmentService/EnrollDevice" || target["tenant"] != testOperatorTenant || target["resource"] != "org/"+testOperatorTenant+"/device/"+name {
+			if descriptor["operation"] != "wendycloud.v2.DeviceEnrollmentService/EnrollDevice" || target["tenant"] != testOperatorTenant || target["resource"] != "org/"+testOperatorTenant+"/device/"+deviceID {
 				t.Fatal("incorrect Cloud request scope")
 			}
-			if agent.req.GetDeviceId() != name || agent.req.GetEabKeyId() != "eab-id" || agent.req.GetEabHmacKey() != strings.Repeat("ab", 32) || agent.req.GetCloudHost() != host {
+			if agent.req.GetDeviceId() != deviceID || agent.req.GetEabKeyId() != "eab-id" || agent.req.GetEabHmacKey() != strings.Repeat("ab", 32) || agent.req.GetCloudHost() != host {
 				t.Fatal("credential handoff mismatch")
 			}
 			if agent.req.GetDirectoryUrl() != "https://acme.dev.pki.wendy.sh/"+testOperatorTenant+"/acme/directory" {
 				t.Fatal("incorrect directory")
+			}
+		})
+	}
+}
+
+// A name Cloud would refuse has to be refused here, before the RPC that mints
+// a single-use credential is made at all.
+func TestOIDCEnrollmentRejectsNamesCloudWouldRefuse(t *testing.T) {
+	for _, name := range []string{"Box-01", "fleet-a/box-01", "box.01", "1box", "box-", strings.Repeat("b", 64)} {
+		t.Run(name, func(t *testing.T) {
+			cloud := &oidcEnrollmentServer{response: &cloudpbv2.EnrollDeviceResponse{AssetId: "asset-uuid", CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
+			agent := &acmeProvisioningServer{}
+			conn, host := enrollmentServers(t, cloud, agent)
+			auth := oidcEnrollmentAuth(t)
+			auth.CloudGRPC = host
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := runEnrollDevice(ctx, conn, auth, name, 0)
+			if err == nil {
+				t.Fatal("expected the enrollment to be refused")
+			}
+			if !strings.Contains(err.Error(), "not usable") {
+				t.Fatalf("err = %v, want the device-name rule", err)
+			}
+			if cloud.req != nil {
+				t.Fatal("a refused name still reached Cloud")
 			}
 		})
 	}

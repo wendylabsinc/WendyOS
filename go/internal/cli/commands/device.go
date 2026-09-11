@@ -875,12 +875,16 @@ func promptWifiIfNeeded(ctx context.Context, conn *grpcclient.AgentConnection) {
 
 // defaultEnrollmentName derives a device name from the connected host,
 // stripping a .local suffix. Returns "" for bare IP addresses (no usable name).
+// defaultEnrollmentName proposes the device's own advertised hostname. Cloud
+// compares names without regard to case, so the suggestion is lowercased --
+// but nothing else is repaired: a host that is not a DNS label is reported by
+// validateHostnameArg rather than quietly mangled into one.
 func defaultEnrollmentName(host string) string {
 	h := strings.TrimSpace(host)
 	if h == "" || net.ParseIP(h) != nil {
 		return ""
 	}
-	return strings.TrimSuffix(h, ".local")
+	return strings.ToLower(strings.TrimSuffix(h, ".local"))
 }
 
 func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string, error) {
@@ -908,6 +912,14 @@ func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string
 				return "", fmt.Errorf("device name is required")
 			}
 		}
+	}
+
+	// The same rule 'wendy device rename' enforces, and the same one Cloud
+	// applies to the asset row: a device whose hostname and Cloud row disagree
+	// is one an operator cannot find by either name. Checking it here keeps a
+	// bad name from reaching an enrollment that would refuse it anyway.
+	if err := validateHostnameArg(name); err != nil {
+		return "", fmt.Errorf("device name %q is not usable: %w", name, err)
 	}
 
 	return name, nil
