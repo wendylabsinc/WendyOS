@@ -138,9 +138,14 @@ func TestDataTransferWorker_PacingAbortsOnShutdown(t *testing.T) {
 }
 
 // TestDataTransferWorker_TransientCommitErrorIsRetryable proves a network drop
-// during CommitEpisode is classified as retryable (episode returns to pending
-// with a backoff), not misclassified as a terminal verification failure that
-// would strand a good episode forever.
+// during CommitEpisode is classified as retryable, not misclassified as a
+// terminal verification failure that would strand a good episode forever.
+//
+// The drop surfaces as DeadlineExceeded, which is the network rather than the
+// episode, so it is a pass-level condition: the episode goes back to pending
+// with its attempt count untouched and the worker backs the whole pass off.
+// Charging it to the episode is what let a short outage mark a whole backlog
+// failed; see TestTransportOutageSpendsNoRetryBudget.
 func TestDataTransferWorker_TransientCommitErrorIsRetryable(t *testing.T) {
 	mgr, root := newTestManager(t)
 	writeFixtureEpisode(t, root, "ep-commiterr", "", "pending", map[string][]byte{"blob.bin": []byte("good bytes")})
@@ -149,18 +154,19 @@ func TestDataTransferWorker_TransientCommitErrorIsRetryable(t *testing.T) {
 	client := startFakeIngest2(t, srv)
 	w := newTestWorker(mgr, client)
 
-	if err := w.runPass(context.Background()); err != nil {
-		t.Fatalf("runPass: %v", err)
+	err := w.runPass(context.Background())
+	if err == nil {
+		t.Fatal("runPass returned nil; a transport failure must surface as a pass failure")
+	}
+	if transportStalled(err) == nil {
+		t.Fatalf("runPass error %v is not classified as a transport stall", err)
 	}
 	st := uploadState(t, mgr, "ep-commiterr")
 	if st.State != uploadStatePending {
 		t.Fatalf("state = %q, want pending (transient commit error must be retryable, not failed)", st.State)
 	}
-	if st.Attempts != 1 {
-		t.Errorf("attempts = %d, want 1", st.Attempts)
-	}
-	if st.NextAttemptUnixNanos == 0 {
-		t.Errorf("no backoff timestamp recorded for retryable commit failure")
+	if st.Attempts != 0 {
+		t.Errorf("attempts = %d, want 0: the network failing is not the episode's fault", st.Attempts)
 	}
 }
 

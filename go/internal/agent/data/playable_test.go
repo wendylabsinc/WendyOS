@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -107,7 +108,14 @@ func TestSealWritesPlayableClipListedInManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = m.Start(StartOptions{Sources: []string{"applications"}}); err != nil {
+	// The camera is declared as an episode source, exactly as a device with a
+	// camera declares it. A sealed file is attributed to the source the
+	// manifest names, never to the directory component it happens to sit
+	// under, which is a lossy encoding of an identifier and not one.
+	m.SetSourceProvider(func(context.Context) []Source {
+		return []Source{{ID: "cam-front", Kind: "camera", ClockDomain: "CLOCK_BOOTTIME", Healthy: true}}
+	})
+	if _, err = m.Start(StartOptions{Sources: []string{"applications", "cam-front"}}); err != nil {
 		t.Fatal(err)
 	}
 	session, ok := m.ActiveSession(AdHocEpisodeKey)
@@ -515,5 +523,97 @@ func TestIsDerivedPlayable(t *testing.T) {
 		if got := isDerivedPlayable(path); got != want {
 			t.Errorf("isDerivedPlayable(%q) = %v, want %v", path, got, want)
 		}
+	}
+}
+
+// The seal must not publish a clip whose index timestamps run backwards: the
+// remux preserves capture order, so a clip built from an inverted index has
+// timing nobody can vouch for.
+func TestSealRefusesClipWithInvertedTimestamps(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Start(StartOptions{Sources: []string{"applications"}}); err != nil {
+		t.Fatal(err)
+	}
+	session, ok := m.ActiveSession(AdHocEpisodeKey)
+	if !ok {
+		t.Fatal("no active session")
+	}
+	writeCameraSource(t, session.Directory, "cam-front", [][]byte{
+		annexB(parsedIDR), annexB(parsedPSlice), annexB(parsedPSlice),
+	})
+	invertLastTwoIndexTimestamps(t, filepath.Join(session.Directory, "cameras", "cam-front", "index.jsonl"))
+
+	stopped, err := m.Stop(AdHocEpisodeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := "cameras/cam-front/" + episodeexport.PlayableFileName
+	if _, ok := fileByPath(stopped.Files, rel); ok {
+		t.Errorf("manifest lists %s despite its index timestamps inverting", rel)
+	}
+	if len(stopped.PlayableNotes) != 1 || !strings.Contains(stopped.PlayableNotes[0], "earlier than the entry before them") {
+		t.Errorf("notes %v do not name the inversion", stopped.PlayableNotes)
+	}
+	if _, statErr := os.Stat(filepath.Join(session.Directory, "cameras", "cam-front", episodeexport.PlayableFileName)); !os.IsNotExist(statErr) {
+		t.Errorf("a refused clip was left on disk: %v", statErr)
+	}
+}
+
+// invertLastTwoIndexTimestamps swaps the canonical timestamps of the last two
+// index entries, leaving the entries themselves in capture order.
+func invertLastTwoIndexTimestamps(t *testing.T, path string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("index holds %d entries, need at least two to invert", len(lines))
+	}
+	var a, b map[string]any
+	if err := json.Unmarshal([]byte(lines[len(lines)-2]), &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &b); err != nil {
+		t.Fatal(err)
+	}
+	a["canonical_episode_nanos"], b["canonical_episode_nanos"] = b["canonical_episode_nanos"], a["canonical_episode_nanos"]
+	for i, rec := range []map[string]any{a, b} {
+		encoded, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines[len(lines)-2+i] = string(encoded)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A panic anywhere in the remux must become an ordinary mux error: the seal
+// writes the episode itself and must never be brought down by a derived
+// artifact that can be rebuilt from the raw capture at any time.
+func TestConvertPlayableClipTurnsAPanicIntoAnError(t *testing.T) {
+	dir := t.TempDir()
+	// A source directory with no index at all: ConvertSourceInPlace returns an
+	// ordinary error, which proves the recover wrapper passes errors through.
+	if _, err := convertPlayableClip(dir, filepath.Join(dir, "cameras", "cam")); err == nil {
+		t.Fatal("expected an error for a source with no index")
+	}
+	original := convertClip
+	t.Cleanup(func() { convertClip = original })
+	convertClip = func(string, string) (episodeexport.ClipResult, error) {
+		panic("synthetic mux panic")
+	}
+	_, err := convertPlayableClip(dir, filepath.Join(dir, "cameras", "cam"))
+	if err == nil {
+		t.Fatal("a panic inside the remux escaped instead of becoming a mux error")
+	}
+	if !strings.Contains(err.Error(), "synthetic mux panic") {
+		t.Fatalf("error does not name the panic: %v", err)
 	}
 }

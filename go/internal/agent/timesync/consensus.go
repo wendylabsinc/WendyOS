@@ -88,18 +88,18 @@ func queryConsensus(ctx context.Context, servers []roughtime.Server, query query
 		}(i, srv)
 	}
 	wg.Wait()
-	c := Consensus{Confidence: "unbounded", Evidence: evidence, ObservedUnixNanos: time.Now().UnixNano()}
+	c := Consensus{Confidence: ConfidenceUnbounded, Evidence: evidence, ObservedUnixNanos: time.Now().UnixNano()}
 	idx, lo, hi := largestIntersection(evidence)
 	for _, i := range idx {
 		c.Evidence[i].Included = true
 	}
 	c.Quorum = len(idx)
 	if len(idx) >= 3 {
-		c.Confidence = "verified"
+		c.Confidence = ConfidenceVerified
 		c.LowerOffsetNanos = lo
 		c.UpperOffsetNanos = hi
 	} else if len(idx) == 2 {
-		c.Confidence = "degraded"
+		c.Confidence = ConfidenceDegraded
 		c.LowerOffsetNanos = lo
 		c.UpperOffsetNanos = hi
 	}

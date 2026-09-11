@@ -57,6 +57,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,6 +71,19 @@ import (
 // per-sample duration stays inside the 32-bit stts field for any gap short of
 // 71 minutes.
 const playableTimescale = 1_000_000
+
+// maxSampleDurationTicks is the largest per-sample duration the 32-bit stts
+// field can carry. At playableTimescale that is a little over 71 minutes, so a
+// gap between two consecutive index entries longer than this cannot be written
+// and is refused by name rather than silently wrapping to a short duration.
+const maxSampleDurationTicks = int64(math.MaxUint32)
+
+// singleFrameNominalTicks is the display duration given to a clip that holds
+// exactly one frame. Nothing recorded how long a lone frame was shown, and a
+// zero-duration sample makes players report an empty movie, so the frame is
+// held for a nominal thirtieth of a second. It is the only duration in a clip
+// that is not derived from the index, and ClipResult reports it as such.
+const singleFrameNominalTicks = playableTimescale / 30
 
 // PlayableFileName is the derived MP4 written into a camera source directory
 // at seal time by ConvertSourceInPlace. The agent's manifest code and the
@@ -133,6 +147,17 @@ type ClipResult struct {
 	// inter-frame intervals actually written. They differ from each other
 	// whenever the capture rate varied, which is the point.
 	MinInterval, MaxInterval, MeanInterval time.Duration
+	// TimestampInversions counts index entries whose canonical timestamp is
+	// earlier than the entry before them. The index is written in capture
+	// order, which for this device's encoder is coded order, and the remux
+	// preserves that order because reordering coded H.264 frames corrupts the
+	// decode. An inversion therefore means the recorded timing disagrees with
+	// the coded order, and the clip's timing cannot be vouched for.
+	TimestampInversions int
+	// NominalHold is non-zero only for a clip holding exactly one frame, whose
+	// display duration no index entry records; it names the invented duration
+	// so the caller can say the clip's length was not measured.
+	NominalHold time.Duration
 }
 
 // Convert writes one playable MP4 per camera source found under
@@ -217,6 +242,7 @@ func convertSource(episodeDir, sourceDir, indexPath, out string) (ClipResult, er
 	result.SyncSamples = stats.syncSamples
 	result.ParameterSetChanges = stats.parameterSetChanges
 	result.MinInterval, result.MaxInterval, result.MeanInterval = stats.min, stats.max, stats.mean
+	result.NominalHold = stats.nominalHold
 	if err := errors.Join(writeErr, closeErr); err != nil {
 		return result, err
 	}
@@ -238,10 +264,18 @@ type cameraIndexLine struct {
 	Codec                 string `json:"codec"`
 }
 
-// readCameraIndex reads the frame index and returns its H.264 frames sorted by
-// canonical episode time. Lines that are not valid records, which is what the
-// tail of an interrupted episode's index looks like, are counted and skipped
-// rather than guessed at.
+// readCameraIndex reads the frame index and returns its H.264 frames in the
+// order the index records them, which is capture order. Lines that are not
+// valid records, which is what the tail of an interrupted episode's index
+// looks like, are counted and skipped rather than guessed at.
+//
+// The order is deliberately left alone. Sorting by canonical timestamp would
+// reorder coded H.264 frames whenever two timestamps invert, and an inter
+// frame moved before the picture it references decodes to garbage from that
+// point on. Capture order is coded order, so it is preserved and an inversion
+// is counted instead: buildMoov clamps the resulting negative delta to zero so
+// the container stays well formed, and TimestampInversions tells the caller
+// the timing is not trustworthy.
 func readCameraIndex(path string) ([]cameraIndexLine, ClipResult, error) {
 	var result ClipResult
 	b, err := os.ReadFile(path)
@@ -266,9 +300,11 @@ func readCameraIndex(path string) ([]cameraIndexLine, ClipResult, error) {
 		}
 		frames = append(frames, rec)
 	}
-	sort.SliceStable(frames, func(i, j int) bool {
-		return frames[i].CanonicalEpisodeNanos < frames[j].CanonicalEpisodeNanos
-	})
+	for i := 1; i < len(frames); i++ {
+		if frames[i].CanonicalEpisodeNanos < frames[i-1].CanonicalEpisodeNanos {
+			result.TimestampInversions++
+		}
+	}
 	return frames, result, nil
 }
 
@@ -298,6 +334,9 @@ type muxStats struct {
 	// parameterSetChanges counts SPS/PPS units that differ byte-wise from the
 	// first ones seen; identical repeats before each IDR are not counted.
 	parameterSetChanges int
+	// nominalHold is non-zero only when the clip holds a single frame, whose
+	// display duration was invented rather than read from the index.
+	nominalHold time.Duration
 }
 
 // isBSlice reports whether a VCL NAL unit carries a B slice. It matters
@@ -468,6 +507,9 @@ func muxAnnexBToMP4(w *os.File, episodeDir string, frames []cameraIndexLine) (mu
 		return stats, err
 	}
 	stats.min, stats.max, stats.mean = intervalSpread(durations)
+	if len(durations) == 1 {
+		stats.nominalHold = time.Duration(durations[0]) * (time.Second / playableTimescale)
+	}
 	return stats, nil
 }
 
@@ -526,7 +568,13 @@ func (s *segmentReader) read(frame cameraIndexLine) ([]byte, error) {
 	// this frame. The model-input ledger's payload_bytes can exceed it for a
 	// frame that opens a segment, because the segment begins at the
 	// parameter-set prefix inside that payload rather than at its first byte.
-	if frame.ByteOffset < 0 || frame.ByteOffset+int64(frame.ByteSize) > s.size {
+	//
+	// The three conditions are written without summing offset and size on
+	// purpose: an index naming a byte_size near MaxInt64 would overflow the
+	// sum back into a small positive number, pass the check, and then panic in
+	// make() on an absurd allocation.
+	if frame.ByteOffset < 0 || frame.ByteSize <= 0 ||
+		int64(frame.ByteSize) > s.size || frame.ByteOffset > s.size-int64(frame.ByteSize) {
 		return nil, fmt.Errorf("frame at offset %d size %d exceeds %s (%d bytes on disk)",
 			frame.ByteOffset, frame.ByteSize, frame.Segment, s.size)
 	}
@@ -753,7 +801,18 @@ func buildMoov(samples []sample, sps, pps []byte, width, height int) ([]byte, []
 		if i+1 < len(samples) {
 			d := samples[i+1].timestamp - samples[i].timestamp
 			if d < 0 {
+				// The index recorded two frames out of order. Capture order is
+				// preserved (see readCameraIndex), so the pair is written with
+				// no gap between them rather than with a negative one; the
+				// clip is flagged through ClipResult.TimestampInversions.
 				d = 0
+			}
+			if d > maxSampleDurationTicks {
+				return nil, nil, fmt.Errorf(
+					"gap of %s between consecutive frames exceeds the %s a 32-bit sample duration can carry at %d ticks per second",
+					time.Duration(d)*time.Microsecond,
+					time.Duration(maxSampleDurationTicks)*time.Microsecond,
+					playableTimescale)
 			}
 			durations[i] = uint32(d)
 			continue
@@ -765,7 +824,12 @@ func buildMoov(samples []sample, sps, pps []byte, width, height int) ([]byte, []
 		// the clip's duration still matches the index span to within one frame.
 		if i > 0 {
 			durations[i] = durations[i-1]
+			continue
 		}
+		// A lone frame has no measured interval to borrow either, and a
+		// zero-duration only sample makes players report an empty movie, so it
+		// is held for a nominal thirtieth of a second.
+		durations[i] = singleFrameNominalTicks
 	}
 	var total uint64
 	for _, d := range durations {

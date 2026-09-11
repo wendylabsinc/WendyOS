@@ -44,8 +44,10 @@ package pkienroll
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
@@ -188,6 +190,20 @@ func (e *IdentityError) Error() string {
 		strings.Join(e.Got, ", "), e.Want)
 }
 
+// ErrKeyMismatch reports a leaf whose public key is not the one the CSR was
+// signed with.
+//
+// WHY THIS IS CHECKED. Everything else about the response is about identity:
+// the SPIFFE SAN says who the leaf claims to be. This says whether the device
+// can actually use it. A leaf attesting somebody else's key cannot complete a
+// handshake with the key on disk, so storing it would replace a working
+// identity with one that fails at the first mutual Transport Layer Security
+// (mTLS) connection — and it would do so silently, because nothing in the
+// store re-checks the pairing. It is also the shape a substituted or
+// misrouted issuance takes, which is reason enough to refuse it rather than
+// diagnose it later from a handshake error.
+var ErrKeyMismatch = errors.New("pki enrollment: the issued leaf attests a different public key than the CSR")
+
 type enrollRequestBody struct {
 	CSR      string `json:"csr"`
 	DeviceID string `json:"device_id"`
@@ -226,6 +242,10 @@ func Enroll(ctx context.Context, req EnrollRequest) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	csrPub, err := csrPublicKey(csrPEM)
+	if err != nil {
+		return Result{}, err
+	}
 	body, err := json.Marshal(enrollRequestBody{CSR: csrPEM, DeviceID: deviceID, Tier: DefaultTier})
 	if err != nil {
 		return Result{}, fmt.Errorf("encoding enrollment request: %w", err)
@@ -246,7 +266,7 @@ func Enroll(ctx context.Context, req EnrollRequest) (Result, error) {
 	if client == nil {
 		client = &http.Client{Timeout: requestTimeout}
 	}
-	return exchange(client, httpReq, req.TenantUUID)
+	return exchange(client, httpReq, req.TenantUUID, csrPub)
 }
 
 // Renew exchanges a CSR for a fresh leaf, authenticated by presenting the
@@ -271,6 +291,10 @@ func Renew(ctx context.Context, req RenewRequest) (Result, error) {
 		return Result{}, err
 	}
 	csrPEM, err := buildCSR(req.Key, commonName)
+	if err != nil {
+		return Result{}, err
+	}
+	csrPub, err := csrPublicKey(csrPEM)
 	if err != nil {
 		return Result{}, err
 	}
@@ -304,7 +328,7 @@ func Renew(ctx context.Context, req RenewRequest) (Result, error) {
 			Transport: &http.Transport{TLSClientConfig: tlsCfg},
 		}
 	}
-	return exchange(client, httpReq, req.TenantUUID)
+	return exchange(client, httpReq, req.TenantUUID, csrPub)
 }
 
 func (r EnrollRequest) validate() error {
@@ -348,6 +372,11 @@ func buildCSR(keyPEM []byte, commonName string) (string, error) {
 // frontendEndpoint builds /v1/<tenant>/<action> under base. A base that already
 // carries a /v1/ path is returned unchanged, so a fully-specified endpoint from
 // configuration is honoured rather than having a second path appended to it.
+//
+// The plaintext rule is re-applied here and not only in CSRFrontendURL, because
+// a caller may fill EnrollRequest.CSRFrontendURL from somewhere that never went
+// through the resolver. Both Enroll and Renew reach this before any byte of the
+// request is built, so a refused endpoint costs no token.
 func frontendEndpoint(base, tenantUUID, action string) (string, error) {
 	base = strings.TrimSpace(base)
 	if !strings.Contains(base, "://") {
@@ -360,6 +389,9 @@ func frontendEndpoint(base, tenantUUID, action string) (string, error) {
 	if u.Host == "" {
 		return "", fmt.Errorf("csr frontend url %q has no host", base)
 	}
+	if err := checkTransport(base); err != nil {
+		return "", err
+	}
 	if strings.Contains(u.Path, "/v1/") {
 		return u.String(), nil
 	}
@@ -368,7 +400,9 @@ func frontendEndpoint(base, tenantUUID, action string) (string, error) {
 }
 
 // exchange performs the request and turns the response into a verified Result.
-func exchange(client *http.Client, req *http.Request, tenantUUID string) (Result, error) {
+// csrPub is the public half of the key that signed the CSR; the issued leaf has
+// to attest exactly that key or it is refused.
+func exchange(client *http.Client, req *http.Request, tenantUUID string, csrPub crypto.PublicKey) (Result, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("contacting pki-core csr frontend: %w", err)
@@ -390,12 +424,13 @@ func exchange(client *http.Client, req *http.Request, tenantUUID string) (Result
 	if err := json.NewDecoder(limited).Decode(&ok); err != nil {
 		return Result{}, fmt.Errorf("decoding pki-core certificate response: %w", err)
 	}
-	return parseAndVerify(ok.Certificate, tenantUUID)
+	return parseAndVerify(ok.Certificate, tenantUUID, csrPub)
 }
 
 // parseAndVerify splits the returned leaf-first chain and refuses anything that
-// is not exactly one device principal for tenantUUID.
-func parseAndVerify(bundlePEM, tenantUUID string) (Result, error) {
+// is not exactly one device principal for tenantUUID, attesting the key that
+// signed the CSR.
+func parseAndVerify(bundlePEM, tenantUUID string, csrPub crypto.PublicKey) (Result, error) {
 	leafPEM, chainPEM, err := SplitLeafAndChain(bundlePEM)
 	if err != nil {
 		return Result{}, err
@@ -428,6 +463,9 @@ func parseAndVerify(bundlePEM, tenantUUID string) (Result, error) {
 	if !strings.EqualFold(gotTenant, tenantUUID) {
 		return Result{}, &IdentityError{Want: certs.DeviceSPIFFEURI(tenantUUID, "<name>"), Got: uris}
 	}
+	if err := checkPublicKeyMatch(leaf.PublicKey, csrPub); err != nil {
+		return Result{}, err
+	}
 
 	return Result{
 		LeafPEM:    normalizedLeaf,
@@ -437,6 +475,45 @@ func parseAndVerify(bundlePEM, tenantUUID string) (Result, error) {
 		NotBefore:  leaf.NotBefore,
 		NotAfter:   leaf.NotAfter,
 	}, nil
+}
+
+// csrPublicKey reads the public half back off the CSR that is about to be sent,
+// rather than deriving it from the private key a second time. It is the same
+// bytes the frontend will see, so the later comparison is against what was
+// actually asked for.
+func csrPublicKey(csrPEM string) (crypto.PublicKey, error) {
+	block, _ := pem.Decode([]byte(csrPEM))
+	if block == nil {
+		return nil, errors.New("pki enrollment: generated CSR is not PEM")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing generated CSR: %w", err)
+	}
+	return csr.PublicKey, nil
+}
+
+// checkPublicKeyMatch compares the issued leaf's key with the CSR's.
+//
+// Every public key type in crypto/x509 (ECDSA, RSA, Ed25519 and the ML-DSA keys
+// the agent's parser also handles) offers Equal(crypto.PublicKey) bool, so the
+// comparison is done through that interface rather than a type switch that
+// would have to be extended for each new algorithm — and would, by defaulting
+// to "cannot compare", turn a new algorithm into a silently skipped check. A
+// key that does not implement it is refused for the same reason.
+func checkPublicKeyMatch(leafPub, csrPub crypto.PublicKey) error {
+	if csrPub == nil {
+		return fmt.Errorf("%w: the CSR carried no public key to compare", ErrKeyMismatch)
+	}
+	equaler, ok := csrPub.(interface{ Equal(crypto.PublicKey) bool })
+	if !ok {
+		return fmt.Errorf("%w: the CSR public key (%T) cannot be compared", ErrKeyMismatch, csrPub)
+	}
+	if !equaler.Equal(leafPub) {
+		return fmt.Errorf("%w: the leaf attests a %T, the CSR a %T; the device could not "+
+			"complete a handshake with it, so it is not stored", ErrKeyMismatch, leafPub, csrPub)
+	}
+	return nil
 }
 
 // leafCommonName reads the CN off a stored leaf, so a renewal CSR restates the

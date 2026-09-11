@@ -22,6 +22,13 @@ import (
 // counted per armed source against the device's memory.
 const preRollCameraLimitBytes = 64 << 20
 
+// preRollGOPWindowFactor bounds how far past the requested buffer one
+// undivided group of pictures may reach before the ring gives up on it. A
+// producer emitting keyframes at all keeps GOPs well inside a factor of eight;
+// a stream that does not is a stream the ring cannot trim at all, so the only
+// bound left is to start over.
+const preRollGOPWindowFactor = 8
+
 // bufferedCameraFrame is one encoded frame held in an armed campaign's standby
 // ring. The frame pointer is retained, not copied: hub frames are immutable
 // from the moment they are broadcast (identity, receipt, and payload never
@@ -96,13 +103,26 @@ func (r *cameraPreRollRing) evict() {
 	for r.bytesFrom(keep) > r.limitBytes {
 		next := r.nextKeyframeAfter(keep)
 		if next < 0 {
-			// One group of pictures left: cannot shrink further without leaving
-			// the ring undecodable. Keep it and let the byte total ride; the flush
-			// reports the shortened reach.
-			break
+			// One group of pictures left and it alone exceeds the cap. Keeping
+			// it would let a producer that emits a single very long GOP grow
+			// the ring without bound, because every other eviction rule works
+			// at keyframe boundaries and there is no second boundary to move
+			// to. The ring is dropped whole and refilled from the next
+			// keyframe, which is the only bound available that still leaves a
+			// decodable ring.
+			r.restart()
+			return
 		}
 		keep = next
 		r.droppedForBytes = true
+	}
+	// The same trap measured in time rather than bytes: one undivided group of
+	// pictures reaching far past the requested buffer is a ring nothing can
+	// trim, so it is dropped rather than allowed to keep growing.
+	if r.nextKeyframeAfter(keep) < 0 &&
+		newest-r.frames[keep].frame.receiptBootNanos > preRollGOPWindowFactor*r.buffer.Nanoseconds() {
+		r.restart()
+		return
 	}
 	if keep <= 0 {
 		return
@@ -115,6 +135,19 @@ func (r *cameraPreRollRing) evict() {
 		r.frames[i] = bufferedCameraFrame{}
 	}
 	r.frames = r.frames[:n]
+}
+
+// restart drops the whole ring and waits for the next keyframe to begin a new
+// one. It is the eviction of last resort, used when a single group of pictures
+// has grown past a bound and there is no keyframe boundary left to trim at.
+// The retained pre-roll is honestly shorter afterwards, which droppedForBytes
+// reports, and the frames that follow open a new stream because the discarded
+// tail leaves a gap no decoder should be asked to cross.
+func (r *cameraPreRollRing) restart() {
+	r.frames = r.frames[:0]
+	r.bytes = 0
+	r.droppedForBytes = true
+	r.nextResetSegment = true
 }
 
 // lastKeyframeAtOrBefore returns the index of the newest retained keyframe whose
@@ -166,6 +199,105 @@ func (r *cameraPreRollRing) flush(triggerBoot int64) (frames []bufferedCameraFra
 	return frames, earliest - triggerBoot, earliest <= windowStart
 }
 
+// preRollFlushDrainLimitBytes bounds the side buffer that holds live frames
+// arriving while the pre-roll is written. It is a quarter of the ring's own
+// cap: the flush is bounded work, so the buffer only has to cover a burst
+// lasting as long as writing at most preRollCameraLimitBytes to disk, and a
+// bound is still needed because a stalled disk must cost memory no faster than
+// the ring itself does.
+const preRollFlushDrainLimitBytes = preRollCameraLimitBytes / 4
+
+// frameDrain is what a drain goroutine collected while a slow operation held
+// the capture goroutine.
+type frameDrain struct {
+	frames []*videoFrame
+	bytes  int
+	// dropped counts frames the side buffer refused because it was full. They
+	// are charged to the capture's drop total, exactly like a hub-side drop:
+	// the frame existed and the episode does not have it.
+	dropped uint64
+	// closed records that the subscription ended during the drain. The live
+	// loop discovers the same thing on its next receive (a closed channel
+	// yields immediately), so nothing special has to be done with it here.
+	closed bool
+}
+
+// drainDuring runs fn while a helper goroutine keeps consuming c.frames into a
+// bounded side buffer, and returns what it collected.
+//
+// This exists because of what the pre-roll flush is: activate hands the LIVE
+// hub subscription straight to the capture, and run then spends the flush
+// writing every buffered frame to disk before it reaches the live select. The
+// subscriber channel is four frames deep, so on any real camera the frames
+// immediately after the trigger, the ones the episode exists to record, were
+// dropped by the hub while the flush ran, and the tail resumed mid group of
+// pictures. Keeping a reader on the channel throughout is what removes that
+// loss; the frames collected are replayed through the ordinary live path
+// afterwards, in order, so they are written exactly as if the flush had been
+// instantaneous.
+//
+// The goroutine owns c.frames for the duration and is joined before this
+// returns, so the caller resumes as its sole reader with no data race.
+func (c *cameraCapture) drainDuring(fn func() error) (*frameDrain, error) {
+	d := &frameDrain{}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			case frame, ok := <-c.frames:
+				if !ok {
+					d.closed = true
+					return
+				}
+				if d.bytes+len(frame.data) > preRollFlushDrainLimitBytes {
+					d.dropped++
+					continue
+				}
+				d.frames = append(d.frames, frame)
+				d.bytes += len(frame.data)
+			}
+		}
+	}()
+	err := fn()
+	close(stop)
+	<-done
+	return d, err
+}
+
+// flushPreRoll writes every frame of the activated standby ring. An
+// undecodable leading frame (which should not happen: the ring only retains
+// from a keyframe) is skipped rather than failing the episode.
+func (c *cameraCapture) flushPreRoll() error {
+	for i := range c.preRoll {
+		if err := c.writeBufferedFrame(c.preRoll[i]); errors.Is(err, errAwaitCameraRandomAccess) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if c.preRollFlushHook != nil {
+			c.preRollFlushHook()
+		}
+	}
+	c.preRoll = nil
+	return nil
+}
+
+// saturatingSub subtracts b from a without wrapping. The drop baselines it
+// guards are read from the same monotonic counter as the totals, so a > b
+// always holds in practice; a counter that wrapped the other way would turn a
+// small overcount into an astronomically wrong drop figure in the manifest,
+// which is exactly the kind of number a reader would believe.
+func saturatingSub(a, b uint64) uint64 {
+	if b > a {
+		return 0
+	}
+	return a - b
+}
+
 // armedCameraSource is one camera source's standby state for a campaign that
 // requested a buffer. It subscribes to the device hub as a NON-owning consumer
 // (asserting no stream parameters, exactly like the sensor path), so it never
@@ -188,10 +320,11 @@ type armedCameraSource struct {
 	subID  int
 	frames chan *videoFrame
 	ring   *cameraPreRollRing
-	// lastDrops tracks the hub's drop counter for this subscription so a reattach
-	// carries the unaccounted drops forward as a ring stream reset rather than
-	// losing them silently.
-	lastDrops uint64
+	// carriedDrops accumulates the hub drop counters of subscriptions this
+	// armed source has already left, so a mid-arm producer restart does not
+	// lose the count. activate hands the total to the capture, which reports
+	// it as the episode's armed-period drops.
+	carriedDrops uint64
 	// alive reports that the subscription is still delivering. The fill goroutine
 	// clears it if the producer stops or a reattach fails, so activate knows to
 	// re-subscribe for the live tail instead of handing capture a dead channel.
@@ -238,13 +371,16 @@ func (a *armedCameraSource) fill(ctx context.Context) {
 }
 
 func (a *armedCameraSource) reattach(ctx context.Context) error {
-	a.lastDrops += a.hub.unsubscribe(a.subID)
+	carried := a.carriedDrops + a.hub.unsubscribe(a.subID)
 	hub, subID, frames, err := a.video.joinHub(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: a.devID})
 	if err != nil {
+		// The count still belongs to this armed source even when the rejoin
+		// failed: activate reports it whether or not a live tail follows.
+		a.carriedDrops = carried
 		return err
 	}
 	a.hub, a.subID, a.frames = hub, subID, frames
-	a.lastDrops = 0
+	a.carriedDrops = carried
 	a.ring.markStreamReset()
 	return nil
 }
@@ -314,11 +450,26 @@ func (a *armedCameraSource) activate(session data.CaptureSession) (*cameraCaptur
 	rejoin := func(ctx context.Context) (*deviceHub, int, chan *videoFrame, error) {
 		return a.video.joinHub(ctx, a.key, &agentpb.StreamVideoRequest{DeviceId: devID})
 	}
+	// Everything the hub dropped for this subscription up to now happened
+	// during the ARMED period. The capture subtracts it from its own total and
+	// reports it separately, so the episode's Drops describe the recording
+	// rather than the whole standby watch that preceded it.
+	// baseline is what the INHERITED subscription's own counter already holds;
+	// it is the part the capture's teardown will read back and must subtract.
+	// The armed total additionally carries the counters of subscriptions this
+	// armed source already left across a mid-arm producer restart, which the
+	// capture will never see.
+	var baseline uint64
+	if a.hub != nil {
+		baseline = a.hub.drops(a.subID)
+	}
+	armedDrops := a.carriedDrops + baseline
 	c := &cameraCapture{
 		source: a.source, session: session, dir: dir, hub: a.hub, subID: a.subID, frames: a.frames,
 		rejoin: rejoin, logger: a.video.logger, index: index, mappingFile: mappings, ctx: captureCtx, cancel: cancel,
 		done: make(chan struct{}), ready: make(chan error, 1), mode: "continuous", rateCap: rateCap,
 		notes: notes, lastSnapshotIdx: -1, preRoll: preRoll, armed: true,
+		dropBaseline: baseline, armedDrops: armedDrops,
 	}
 	go c.run()
 	select {

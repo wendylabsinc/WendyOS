@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
@@ -38,15 +39,27 @@ type loopbackFrameWriter interface {
 	Close() error
 }
 
-// openLoopbackFrameWriter opens a node for writing. Implemented per platform;
-// non-Linux builds return an error, which makes the whole data plane a no-op
-// there rather than a compile break.
+// openLoopbackFrameWriter opens a node for writing. There is one
+// implementation (hub_loopback_writer.go): it builds everywhere, because it
+// speaks V4L2 through golang.org/x/sys/unix rather than through a Linux-only
+// package, and simply fails to open the node on a host that has none. The
+// indirection exists so tests can inject a fake writer, not to select a
+// platform.
 var openLoopbackFrameWriter = openLoopbackFrameWriterPlatform
 
 // errLoopbackDataPlaneUnsupported is returned by the pump when the running build
 // or the source cannot support a sound binding. It is deliberately a refusal
 // rather than a degraded mode.
 var errLoopbackDataPlaneUnsupported = errors.New("two-plane camera data path unavailable on this build")
+
+// errSourceNotBindable reports that a producer's frames cannot carry a frame
+// identity binding at all: the transport does not deliver whole access units,
+// so no loopback sequence could name a frame. It is a property of the
+// producer's pipeline, not a transient condition, so a refusal wrapping it is
+// permanent for as long as that producer is what the source runs. The node
+// lifecycle uses it to stop recreating a data path the pump will refuse again
+// (see VideoService.twoPlaneRefused).
+var errSourceNotBindable = errors.New("source cannot carry a frame identity binding")
 
 // hubLoopbackPump feeds one v4l2loopback node from the producer hub and records
 // the identity binding for every frame it writes.
@@ -68,11 +81,35 @@ type hubLoopbackPump struct {
 	// reads it concurrently.
 	bindings *loopbackBindingTable
 
-	// mu guards the identity subscriber set.
+	// mu guards the identity subscriber set and the closed flag.
 	mu     sync.Mutex
-	subs   map[int]chan loopbackBinding
+	subs   map[int]*identitySubscriber
 	nextID int
+	// closed marks that Run has returned, so no further identity will ever be
+	// published. Subscribers are closed at that point and a late subscribe
+	// hands back an already-closed channel rather than one that never speaks.
+	closed bool
+	// now is the clock the drop-log rate limiter reads. A field only so a test
+	// can drive the limiter without sleeping.
+	now func() time.Time
 }
+
+// identitySubscriber is one control-plane subscriber's queue plus the state
+// the drop-log rate limiter keeps for it.
+type identitySubscriber struct {
+	ch chan loopbackBinding
+	// dropped counts identities discarded since the last warning about this
+	// subscriber, so the log reports a count rather than one line per frame.
+	dropped  uint64
+	lastWarn time.Time
+}
+
+// identityDropLogInterval bounds how often one subscriber falling behind is
+// logged. Without it a stalled subscriber produces a warning per frame, which
+// at capture rate is tens of lines a second per source and buries everything
+// else in the agent's log. The count accumulated between warnings is reported
+// with each one, so nothing about the loss is hidden by the rate limit.
+const identityDropLogInterval = 10 * time.Second
 
 // identitySubscriberBuffer is the per-subscriber queue depth for the control
 // plane. Identities are a few dozen bytes each, so this is cheap, and the depth
@@ -86,28 +123,60 @@ func newHubLoopbackPump(logger *zap.Logger, sourceID, nodePath string) *hubLoopb
 		sourceID: sourceID,
 		nodePath: nodePath,
 		bindings: newLoopbackBindingTable(loopbackBindingRetention),
-		subs:     map[int]chan loopbackBinding{},
+		subs:     map[int]*identitySubscriber{},
+		now:      time.Now,
 	}
 }
 
 // subscribeIdentities registers a control-plane subscriber and returns its
 // channel plus a cancel function that unregisters and closes it.
+//
+// A subscriber that arrives after the pump has stopped gets an already-closed
+// channel rather than a live one: nothing will ever publish to it, and a
+// subscriber blocked forever on Next would report "no frames" where the honest
+// answer is "this source has no data plane any more".
 func (p *hubLoopbackPump) subscribeIdentities() (<-chan loopbackBinding, func()) {
 	ch := make(chan loopbackBinding, identitySubscriberBuffer)
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		close(ch)
+		return ch, func() {}
+	}
 	id := p.nextID
 	p.nextID++
-	p.subs[id] = ch
+	p.subs[id] = &identitySubscriber{ch: ch}
 	p.mu.Unlock()
 
 	var once sync.Once
 	return ch, func() {
 		once.Do(func() {
 			p.mu.Lock()
+			// closeSubscribers may already have closed and removed this one.
+			_, live := p.subs[id]
 			delete(p.subs, id)
 			p.mu.Unlock()
-			close(ch)
+			if live {
+				close(ch)
+			}
 		})
+	}
+}
+
+// closeSubscribers ends every identity subscription and marks the pump closed.
+// Run calls it on the way out: the data plane has stopped, so a subscriber
+// still waiting on Next must be told rather than left hanging on a channel
+// nobody will write to again.
+func (p *hubLoopbackPump) closeSubscribers() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	p.closed = true
+	for id, sub := range p.subs {
+		delete(p.subs, id)
+		close(sub.ch)
 	}
 }
 
@@ -123,12 +192,21 @@ func (p *hubLoopbackPump) subscribeIdentities() (<-chan loopbackBinding, func())
 func (p *hubLoopbackPump) publishIdentity(b loopbackBinding) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for id, ch := range p.subs {
+	for id, sub := range p.subs {
 		select {
-		case ch <- b:
+		case sub.ch <- b:
 		default:
-			p.logger.Warn("two-plane: frame identity subscriber is behind; dropping an identity",
-				zap.String("source", p.sourceID), zap.Int("subscriber", id))
+			// A stalled subscriber drops at frame rate, so the warning is rate
+			// limited and carries the count accumulated since the last one.
+			sub.dropped++
+			now := p.now()
+			if !sub.lastWarn.IsZero() && now.Sub(sub.lastWarn) < identityDropLogInterval {
+				continue
+			}
+			p.logger.Warn("two-plane: frame identity subscriber is behind; dropping identities",
+				zap.String("source", p.sourceID), zap.Int("subscriber", id),
+				zap.Uint64("dropped_since_last_warning", sub.dropped))
+			sub.dropped, sub.lastWarn = 0, now
 		}
 	}
 }
@@ -160,6 +238,10 @@ var errLoopbackHubRestarted = errors.New("producer hub restarted by episode capt
 // its picture size in the bitstream's own parameter sets (see
 // hub_loopback_writer.go), so the writer stays open across the restart.
 func (p *hubLoopbackPump) Run(ctx context.Context, svc *VideoService, src videoSource, devID uint32) error {
+	// Whatever ends the pump, the control plane must learn of it: a subscriber
+	// waiting on Next would otherwise hang on a channel nothing writes to
+	// again, and a later subscriber would join a pump that has already stopped.
+	defer p.closeSubscribers()
 	writer, err := openLoopbackFrameWriter(p.nodePath)
 	if err != nil {
 		return fmt.Errorf("opening loopback node %s: %w", p.nodePath, err)
@@ -257,7 +339,7 @@ func (p *hubLoopbackPump) pumpFrom(ctx context.Context, hub *deviceHub, subID in
 					zap.String("source", p.sourceID),
 					zap.String("node", p.nodePath),
 					zap.String("reason", reason))
-				return 0, fmt.Errorf("source %s: %s", p.sourceID, reason)
+				return 0, fmt.Errorf("%w: %s: %s", errSourceNotBindable, p.sourceID, reason)
 			}
 
 			if awaitRandomAccess {
