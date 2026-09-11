@@ -94,6 +94,28 @@ type Step struct {
 
 func run(cmd ...string) Step { return Step{Run: &RunSpec{Command: cmd}} }
 
+// StagedFiles returns the build-context paths one exec op reads, or nil if it
+// reads none.
+//
+// It is deliberately independent of platform: what a recipe stages cannot vary
+// by architecture, and the derived build-context allowlist has no platform to
+// give. Deriving it from For's PreCopy — rather than from a second table of
+// "which recipes read files" — is what keeps the allowlist in step with the
+// recipes when one of them starts staging something new.
+func StagedFiles(x *ir.ExecOp) ([]string, error) {
+	steps, err := For(x, "")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, s := range steps {
+		if s.Run != nil && s.Run.PreCopy != nil {
+			paths = append(paths, s.Run.PreCopy.Paths...)
+		}
+	}
+	return paths, nil
+}
+
 // FetchFor translates a download node into the same Fetch shape a recipe's
 // own fetches use, so a backend has one fetch renderer rather than two.
 //
@@ -119,13 +141,15 @@ func FetchFor(f *ir.FetchOp) (Fetch, error) {
 func For(x *ir.ExecOp, platform string) ([]Step, error) {
 	switch {
 	case x.Apt != nil:
-		return aptSteps(x.Apt), nil
+		return aptSteps(x.Apt, platform), nil
 	case x.Apk != nil:
 		return apkSteps(x.Apk), nil
 	case x.CMake != nil:
 		return cmakeSteps(x.CMake, platform), nil
 	case x.Pip != nil:
 		return pipSteps(x.Pip, platform), nil
+	case x.PipBootstrap != nil:
+		return pipBootstrapSteps(x.PipBootstrap, platform), nil
 	case x.Npm != nil:
 		return npmSteps(x.Npm)
 	case x.Uv != nil:
@@ -135,7 +159,7 @@ func For(x *ir.ExecOp, platform string) ([]Step, error) {
 	case x.CUDACollect != nil:
 		return cudaCollectSteps(x.CUDACollect), nil
 	case x.Build != nil:
-		return buildSteps(x.Build)
+		return buildSteps(x.Build, platform)
 	default:
 		return nil, fmt.Errorf("recipe: exec op %q has no params", x.Recipe.Name)
 	}
@@ -179,6 +203,7 @@ func ScopedCacheID(kind string, parts ...string) string {
 // ID exists to prevent.
 func pipCacheID(p *ir.PipParams, platform string) string {
 	parts := append([]string{platform, p.Index}, p.ExtraIndex...)
+	parts = append(parts, p.BuildPackages...)
 	return ScopedCacheID("pip", parts...)
 }
 
@@ -199,13 +224,11 @@ func cmakeCacheID(repository, platform string) string {
 // sources.list URL fails apt-get update without it — stock ubuntu/debian
 // images don't ship it), the pinned signing key fetched by the builder itself
 // so it can't drift, and one sources.list.d entry per repository.
-func aptSteps(a *ir.AptParams) []Step {
+func aptSteps(a *ir.AptParams, platform string) []Step {
 	var steps []Step
 	if len(a.Repositories) > 0 {
-		steps = append(steps, run(
-			"apt-get update && apt-get install -y --no-install-recommends ca-certificates",
-			"rm -rf /var/lib/apt/lists/*",
-		))
+		steps = append(steps, aptRun(a.Base, platform, nil,
+			"apt-get update && apt-get install -y --no-install-recommends ca-certificates"))
 		for _, r := range a.Repositories {
 			ext := ".gpg"
 			if r.KeyFormat == "armored" {
@@ -237,7 +260,62 @@ func aptSteps(a *ir.AptParams) []Step {
 	for _, p := range a.Packages {
 		parts = append(parts, ShellQuote(p))
 	}
-	return append(steps, run(strings.Join(parts, " "), "rm -rf /var/lib/apt/lists/*"))
+	return append(steps, aptRun(a.Base, platform, a.Repositories, strings.Join(parts, " ")))
+}
+
+func aptCacheScope(base, platform string, repos []ir.AptRepository) []string {
+	parts := []string{base, platform}
+	for _, r := range repos {
+		parts = append(parts, r.Name, r.URL, strings.Join(r.Suites, "\x1f"), strings.Join(r.Components, "\x1f"), r.KeyURL, r.KeySHA256, r.KeyFormat)
+	}
+	return parts
+}
+
+func aptRun(base, platform string, repos []ir.AptRepository, command string) Step {
+	if base == "" {
+		return run(command, "rm -rf /var/lib/apt/lists/*")
+	}
+	scope := aptCacheScope(base, platform, repos)
+	return Step{Run: &RunSpec{
+		Command: []string{"rm -f /etc/apt/apt.conf.d/docker-clean && " + command},
+		CacheMounts: []CacheMount{
+			{Dir: "/var/lib/apt/lists", ID: ScopedCacheID("apt-lists", scope...), Locked: true},
+			{Dir: "/var/cache/apt", ID: ScopedCacheID("apt-archives", scope...), Locked: true},
+		},
+	}}
+}
+
+func pipBootstrapSteps(p *ir.PipBootstrapParams, platform string) []Step {
+	quoted := func(values []string) string {
+		out := make([]string, len(values))
+		for i, value := range values {
+			out[i] = ShellQuote(value)
+		}
+		return strings.Join(out, " ")
+	}
+	if p.Manager == "apk" {
+		var steps []Step
+		if len(p.ApkRepositories) > 0 && len(p.Packages) > 0 {
+			steps = append(steps, run(fmt.Sprintf("printf '%%s\\n' %s >> /etc/apk/repositories", quoted(p.ApkRepositories))))
+		}
+		if len(p.Packages) == 0 {
+			return append(steps, run("command -v pip >/dev/null 2>&1 || apk add --no-cache 'py3-pip'"))
+		}
+		withPip := append([]string{"py3-pip"}, p.Packages...)
+		return append(steps, run(fmt.Sprintf("if command -v pip >/dev/null 2>&1; then apk add --no-cache %s; else apk add --no-cache %s; fi", quoted(p.Packages), quoted(withPip))))
+	}
+	a := &ir.AptParams{Repositories: p.AptRepositories, Base: p.AptBase}
+	steps := []Step{}
+	if len(p.AptRepositories) > 0 {
+		steps = append(steps, aptSteps(&ir.AptParams{Repositories: p.AptRepositories, Base: p.AptBase}, platform)[:len(p.AptRepositories)*2+1]...)
+	}
+	if len(p.Packages) == 0 {
+		return append(steps, aptRun(p.AptBase, platform, p.AptRepositories, "command -v pip >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends 'python3-pip')"))
+	}
+	withPip := append([]string{"python3-pip"}, p.Packages...)
+	command := fmt.Sprintf("if command -v pip >/dev/null 2>&1; then apt-get update && apt-get install -y --no-install-recommends %s; else apt-get update && apt-get install -y --no-install-recommends %s; fi", quoted(p.Packages), quoted(withPip))
+	_ = a
+	return append(steps, aptRun(p.AptBase, platform, p.AptRepositories, command))
 }
 
 func apkSteps(a *ir.ApkParams) []Step {
@@ -314,6 +392,12 @@ func pipSteps(p *ir.PipParams, platform string) []Step {
 	// out of the image layer, and disabling the cache would force a full wheel
 	// re-download every time this layer rebuilds.
 	parts := []string{"pip", "install"}
+	if p.Root != "" {
+		parts = append(parts, "--root", ShellQuote(p.Root))
+	}
+	if p.Target != "" {
+		parts = append(parts, "--target", ShellQuote(p.Target))
+	}
 	if p.Index != "" {
 		parts = append(parts, "--index-url", ShellQuote(p.Index))
 	}
@@ -442,7 +526,7 @@ func cudaCollectSteps(c *ir.CUDACollectParams) []Step {
 	)}
 }
 
-func buildSteps(b *ir.BuildParams) ([]Step, error) {
+func buildSteps(b *ir.BuildParams, platform string) ([]Step, error) {
 	cache := func(dir string) []CacheMount { return []CacheMount{{Dir: dir, Locked: true}} }
 	switch b.Lang {
 	case "rust":
@@ -467,11 +551,23 @@ func buildSteps(b *ir.BuildParams) ([]Step, error) {
 		// debug, so an implicit debug build is indistinguishable from someone
 		// having forgotten the flag — both in the generated Dockerfile and to
 		// the optimizer check that scans for it.
-		cmd := "swift build -c " + b.Profile
+		const scratch = "/var/cache/stagefile/swift/scratch"
+		const cachePath = "/var/cache/stagefile/swift/pm"
+		flags := "--scratch-path " + scratch + " --cache-path " + cachePath + " -c " + b.Profile
+		cmd := "swift build " + flags
 		if b.Product != "" {
 			cmd += " --product " + ShellQuote(b.Product)
 		}
-		return []Step{{Run: &RunSpec{Command: []string{cmd}, CacheMounts: cache("/root/.swiftpm")}}}, nil
+		dest := ".build/" + b.Profile
+		return []Step{{Run: &RunSpec{Command: []string{
+			cmd,
+			`BIN="$(swift build ` + flags + ` --show-bin-path)"`,
+			"mkdir -p " + dest,
+			`find "$BIN" -mindepth 1 -maxdepth 1 \( -type f -o -name '*.bundle' \) -exec cp -a '{}' ` + dest + `/ ';'`,
+		}, CacheMounts: []CacheMount{
+			{Dir: scratch, ID: ScopedCacheID("swift-scratch", b.CacheScope, b.From, platform, b.Profile), Locked: true},
+			{Dir: cachePath, ID: ScopedCacheID("swiftpm", b.From, platform), Locked: true},
+		}}}}, nil
 	case "npm", "yarn", "pnpm":
 		cacheDir := map[string]string{
 			"npm":  "/root/.npm",

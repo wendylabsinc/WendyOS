@@ -28,6 +28,9 @@ var supportedLangs = map[string]bool{
 // Dockerfile renders — a backend that re-derived any of them could drift
 // from the key while still producing a Dockerfile that builds.
 type Options struct {
+	// Images maps external image refs to lockfile digests. It is used in the
+	// semantic graph for cache-mount scoping as well as by cache-key callers.
+	Images map[string]string
 	// Platform is the target platform (e.g. "linux/arm64"), or "" to let
 	// the builder decide.
 	Platform string
@@ -37,6 +40,9 @@ type Options struct {
 	// CUDAProfile is the GPU profile resolved for Platform. Required if any
 	// stage declares cuda:.
 	CUDAProfile *gpu.Profile
+	// CacheScope is a stable project identity for compiler caches that hold
+	// project-specific object files (currently Swift's scratch tree).
+	CacheScope string
 }
 
 // Lower converts a validated spec.File into a Graph.
@@ -57,7 +63,7 @@ func Lower(f *spec.File, opts Options) (*Graph, error) {
 	g := &Graph{}
 	stageFinal := map[string]int{}
 
-	for _, s := range f.Stages {
+	for stageIndex, s := range f.Stages {
 		if s.CUDA && opts.CUDAProfile == nil {
 			return nil, fmt.Errorf("stage %q declares cuda: but no GPU target was resolved for this build", s.Name)
 		}
@@ -66,8 +72,25 @@ func Lower(f *spec.File, opts Options) (*Graph, error) {
 		if s.Platform == "build" {
 			platform = "$BUILDPLATFORM"
 		}
+		install := s.Install
+		if install == nil {
+			install = &spec.Install{}
+		}
 
-		cur := g.add(Node{Kind: OpImage, Image: &ImageOp{
+		// Large CUDA wheels and user pip dependencies are sibling stages. Their
+		// linked copies keep APT/application edits out of those cache chains.
+		cudaStage := -1
+		if s.CUDA {
+			name := generatedStageName("stagefile-cuda-runtime", stageIndex, f.Stages)
+			cudaStage = addGeneratedCUDAStage(g, name, stageIndex, s, platform, stageFinal, opts.Images, opts.CUDAProfile)
+		}
+		pipStage := -1
+		if len(install.Pip) > 0 {
+			name := generatedStageName("stagefile-pip-deps", stageIndex, f.Stages)
+			pipStage = addGeneratedPipStage(g, name, stageIndex, s, platform, stageFinal, opts.Images, install, opts.CUDAProfile)
+		}
+
+		image := Node{Kind: OpImage, Image: &ImageOp{
 			Ref: s.From,
 			// An absent pin: means pinned; `pin: false` is the visible
 			// deviation. Resolving the tri-state pointer here means no
@@ -81,7 +104,13 @@ func Lower(f *spec.File, opts Options) (*Graph, error) {
 			Args:    maps.Clone(s.Args),
 			Env:     stageEnv(&s, opts.CUDAProfile),
 			Workdir: s.Workdir,
-		}})
+		}}
+		if from, ok := stageFinal[s.From]; ok {
+			image.Image.FromStage = true
+			image.Image.Unpinned = true
+			image.Inputs = []int{from}
+		}
+		cur := g.add(image)
 
 		fetches, err := fetchNodes(s.Download, opts.Downloads)
 		if err != nil {
@@ -91,18 +120,12 @@ func Lower(f *spec.File, opts Options) (*Graph, error) {
 			cur = g.add(Node{Kind: OpFetch, Inputs: []int{cur}, Fetch: fo})
 		}
 
-		install := s.Install
-		if install == nil {
-			// An absent install: lowers as an empty one rather than being
-			// skipped, because pipNodes is also where a GPU stage's CUDA
-			// runtime is spliced in, and that stage needs the runtime
-			// whether or not it declares any install of its own — the
-			// collection below imports it. With no fields set, nothing else
-			// here emits a node.
-			install = &spec.Install{}
-		}
 		if install.Apt != nil {
-			cur = g.add(execNode(cur, &ExecOp{Recipe: RecipeApt, Apt: aptParams(install.Apt)}))
+			apt := aptParams(install.Apt)
+			if !image.Image.FromStage && !image.Image.Unpinned {
+				apt.Base = resolvedBase(s.From, opts.Images)
+			}
+			cur = g.add(execNode(cur, &ExecOp{Recipe: RecipeApt, Apt: apt}))
 		}
 		if install.Apk != nil {
 			cur = g.add(execNode(cur, &ExecOp{Recipe: RecipeApk, Apk: &ApkParams{
@@ -114,8 +137,15 @@ func Lower(f *spec.File, opts Options) (*Graph, error) {
 		for i, c := range install.CMake {
 			cur = g.add(execNode(cur, &ExecOp{Recipe: RecipeCMake, CMake: cmakeParams(i, c)}))
 		}
-		for _, p := range pipParams(install.Pip, s.CUDA, opts.CUDAProfile) {
-			cur = g.add(execNode(cur, &ExecOp{Recipe: RecipePip, Pip: p}))
+		if cudaStage >= 0 {
+			cur = g.add(Node{Kind: OpCopy, Inputs: []int{cur, cudaStage}, Copy: &CopyOp{
+				Paths: []string{CUDAPythonRoot}, Dest: CUDAPythonRoot, Link: true,
+			}})
+		}
+		if pipStage >= 0 {
+			cur = g.add(Node{Kind: OpCopy, Inputs: []int{cur, pipStage}, Copy: &CopyOp{
+				Paths: []string{PipOverlayRoot + "/"}, Dest: "/", Link: true,
+			}})
 		}
 		if install.Npm != nil {
 			manager := install.Npm.Manager
@@ -201,14 +231,16 @@ func Lower(f *spec.File, opts Options) (*Graph, error) {
 				script = "build"
 			}
 			cur = g.add(execNode(cur, &ExecOp{Recipe: RecipeBuild, Build: &BuildParams{
-				Lang:    s.Build.Lang,
-				Profile: profile,
-				Product: s.Build.Product,
-				Script:  script,
+				Lang:       s.Build.Lang,
+				Profile:    profile,
+				Product:    s.Build.Product,
+				Script:     script,
+				From:       s.From,
+				CacheScope: opts.CacheScope,
 			}}))
 		}
 
-		st := Stage{Name: s.Name, Final: cur, User: stageUser(&s)}
+		st := Stage{Name: s.Name, Final: cur, SourceIndex: stageIndex, User: stageUser(&s)}
 		if s.Healthcheck != nil {
 			st.Healthcheck = &Healthcheck{
 				Exec:        slices.Clone(s.Healthcheck.Exec),
@@ -236,6 +268,95 @@ func Lower(f *spec.File, opts Options) (*Graph, error) {
 // directory with the dynamic loader. The 000- prefix puts it first among
 // ld.so.conf.d entries.
 const CUDAConfPath = "/etc/ld.so.conf.d/000-stagefile-cuda.conf"
+
+const (
+	CUDAPythonRoot = "/opt/stagefile/cuda/python"
+	PipOverlayRoot = "/opt/stagefile/pip/root"
+)
+
+func generatedStageName(prefix string, stageIndex int, stages []spec.Stage) string {
+	used := make(map[string]bool, len(stages))
+	for _, s := range stages {
+		used[s.Name] = true
+	}
+	base := fmt.Sprintf("%s-%d", prefix, stageIndex)
+	name := base
+	for suffix := 2; used[name]; suffix++ {
+		name = fmt.Sprintf("%s-%d", base, suffix)
+	}
+	return name
+}
+
+func imageNodeForStage(s spec.Stage, platform string, stageFinal map[string]int, settings bool) Node {
+	im := &ImageOp{Ref: s.From, Unpinned: s.Pin != nil && !*s.Pin, Platform: platform}
+	if settings {
+		im.Args, im.Env, im.Workdir = maps.Clone(s.Args), maps.Clone(s.Env), s.Workdir
+	}
+	n := Node{Kind: OpImage, Image: im}
+	if from, ok := stageFinal[s.From]; ok {
+		im.FromStage, im.Unpinned, n.Inputs = true, true, []int{from}
+	}
+	return n
+}
+
+func appendGeneratedStage(g *Graph, name string, sourceIndex, final int) {
+	g.Stages = append(g.Stages, Stage{Name: name, SourceIndex: sourceIndex, Final: final, User: "root"})
+}
+
+func resolvedBase(ref string, images map[string]string) string {
+	if digest := images[ref]; digest != "" {
+		return ref + "@" + digest
+	}
+	return ref
+}
+
+func pipBootstrapParams(s spec.Stage, install *spec.Install, stageFinal map[string]int, images map[string]string) *PipBootstrapParams {
+	p := &PipBootstrapParams{Manager: "apt"}
+	seen := map[string]bool{}
+	for _, group := range install.Pip {
+		for _, pkg := range group.BuildPackages {
+			if !seen[pkg] {
+				seen[pkg] = true
+				p.Packages = append(p.Packages, pkg)
+			}
+		}
+	}
+	if install.Apk != nil && install.Apt == nil {
+		p.Manager = "apk"
+		p.ApkRepositories = slices.Clone(install.Apk.Repositories)
+	} else if install.Apt != nil && len(p.Packages) > 0 {
+		p.AptRepositories = aptParams(install.Apt).Repositories
+	}
+	if _, fromStage := stageFinal[s.From]; !fromStage && (s.Pin == nil || *s.Pin) {
+		p.AptBase = resolvedBase(s.From, images)
+	}
+	return p
+}
+
+func addGeneratedPipStage(g *Graph, name string, sourceIndex int, s spec.Stage, platform string, stageFinal map[string]int, images map[string]string, install *spec.Install, profile *gpu.Profile) int {
+	cur := g.add(imageNodeForStage(s, platform, stageFinal, true))
+	cur = g.add(execNode(cur, &ExecOp{Recipe: RecipePipBootstrap, PipBootstrap: pipBootstrapParams(s, install, stageFinal, images)}))
+	for _, p := range pipParams(install.Pip, profile) {
+		p.Root = PipOverlayRoot
+		cur = g.add(execNode(cur, &ExecOp{Recipe: RecipePip, Pip: p}))
+	}
+	appendGeneratedStage(g, name, sourceIndex, cur)
+	return cur
+}
+
+func addGeneratedCUDAStage(g *Graph, name string, sourceIndex int, s spec.Stage, platform string, stageFinal map[string]int, images map[string]string, profile *gpu.Profile) int {
+	cur := g.add(imageNodeForStage(s, platform, stageFinal, false))
+	bootstrap := &PipBootstrapParams{Manager: "apt"}
+	if _, fromStage := stageFinal[s.From]; !fromStage && (s.Pin == nil || *s.Pin) {
+		bootstrap.AptBase = resolvedBase(s.From, images)
+	}
+	cur = g.add(execNode(cur, &ExecOp{Recipe: RecipePipBootstrap, PipBootstrap: bootstrap}))
+	cur = g.add(execNode(cur, &ExecOp{Recipe: RecipePip, Pip: &PipParams{
+		Packages: slices.Clone(profile.Runtime), Target: CUDAPythonRoot,
+	}}))
+	appendGeneratedStage(g, name, sourceIndex, cur)
+	return cur
+}
 
 // entrypointArgv resolves the entrypoint to the exact argv a backend
 // renders, wrapper included.
@@ -292,9 +413,14 @@ func stageEnv(s *spec.Stage, cudaProfile *gpu.Profile) map[string]string {
 	if !s.CUDA || cudaProfile == nil {
 		return maps.Clone(s.Env)
 	}
-	env := make(map[string]string, len(s.Env)+1)
+	env := make(map[string]string, len(s.Env)+2)
 	maps.Copy(env, s.Env)
 	env[spec.LDLibraryPath] = cudaProfile.LibDir
+	if existing := env["PYTHONPATH"]; existing != "" {
+		env["PYTHONPATH"] = CUDAPythonRoot + ":" + existing
+	} else {
+		env["PYTHONPATH"] = CUDAPythonRoot
+	}
 	return env
 }
 
@@ -340,56 +466,22 @@ func cmakeParams(i int, c spec.CMakeInstall) *CMakeParams {
 	}
 }
 
-// pipParams lowers the stage's pip groups, splicing in the CUDA runtime
-// group a GPU stage needs.
-//
-// The runtime lands directly after the last group that asked for the GPU
-// index, and before any ordinary PyPI group. That position is not cosmetic:
-// the runtime changes only when the profile does, while app dependencies
-// change constantly, and a later group's edit must not invalidate the layer
-// holding several hundred megabytes of CUDA libraries.
-func pipParams(groups []spec.PipInstall, stageCUDA bool, cudaProfile *gpu.Profile) []*PipParams {
-	runtimeAfter := -1
-	for i, g := range groups {
-		if g.CUDA {
-			runtimeAfter = i
-		}
-	}
-
+// pipParams lowers user dependency groups. CUDA runtime packages live in a
+// separate generated stage and are intentionally absent here.
+func pipParams(groups []spec.PipInstall, cudaProfile *gpu.Profile) []*PipParams {
 	var out []*PipParams
-	appendRuntime := func() {
-		if !stageCUDA || cudaProfile == nil {
-			return
-		}
-		// A separate group from the wheels above, with no index, so it
-		// resolves from PyPI. Folding the two together would make the vendor
-		// index primary and PyPI an extra index, and pip would then be free
-		// to satisfy either package from either source — resolving torch
-		// from PyPI, which is the wrong-architecture wheel this whole
-		// feature exists to avoid.
-		out = append(out, &PipParams{Packages: slices.Clone(cudaProfile.Runtime)})
-	}
-
-	for i, g := range groups {
+	for _, g := range groups {
 		index := g.Index
 		if g.CUDA && cudaProfile != nil {
 			index = cudaProfile.Index
 		}
 		out = append(out, &PipParams{
-			Requirements: g.Requirements,
-			Packages:     slices.Clone(g.Packages),
-			Index:        index,
-			ExtraIndex:   slices.Clone(g.ExtraIndex),
+			Requirements:  g.Requirements,
+			Packages:      slices.Clone(g.Packages),
+			BuildPackages: slices.Clone(g.BuildPackages),
+			Index:         index,
+			ExtraIndex:    slices.Clone(g.ExtraIndex),
 		})
-		if i == runtimeAfter {
-			appendRuntime()
-		}
-	}
-	if runtimeAfter == -1 {
-		// A GPU stage that installs no GPU wheels of its own still gets the
-		// runtime — it may be loading CUDA through something apt or cmake
-		// installed.
-		appendRuntime()
 	}
 	return out
 }

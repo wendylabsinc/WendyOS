@@ -50,12 +50,14 @@ func TestLowerResolvesCUDAStage(t *testing.T) {
 		t.Fatalf("Lower: %v", err)
 	}
 
-	img := g.Nodes[0].Image
+	appStage := g.Stages[len(g.Stages)-1]
+	appStart := g.Stages[len(g.Stages)-2].Final + 1
+	img := g.Nodes[appStart].Image
 	if got := img.Env[spec.LDLibraryPath]; got != p.LibDir {
 		t.Errorf("%s = %q, want %q", spec.LDLibraryPath, got, p.LibDir)
 	}
-	if g.Stages[0].User != "root" {
-		t.Errorf("user = %q, want root — a GPU stage needs /dev/nvmap", g.Stages[0].User)
+	if appStage.User != "root" {
+		t.Errorf("user = %q, want root — a GPU stage needs /dev/nvmap", appStage.User)
 	}
 
 	var pipGroups []*PipParams
@@ -71,16 +73,14 @@ func TestLowerResolvesCUDAStage(t *testing.T) {
 	if len(pipGroups) != 3 {
 		t.Fatalf("got %d pip groups, want 3 (cuda wheels, runtime, pypi)", len(pipGroups))
 	}
-	if pipGroups[0].Index != p.Index {
-		t.Errorf("cuda group index = %q, want the profile's %q", pipGroups[0].Index, p.Index)
+	if !reflect.DeepEqual(pipGroups[0].Packages, p.Runtime) || pipGroups[0].Target != CUDAPythonRoot {
+		t.Errorf("runtime group = %+v, want %v targeted at %s", pipGroups[0], p.Runtime, CUDAPythonRoot)
 	}
-	// The runtime lands between the GPU group and the ordinary one, and with
-	// no index, so it resolves from PyPI.
-	if !reflect.DeepEqual(pipGroups[1].Packages, p.Runtime) {
-		t.Errorf("group 1 = %v, want the runtime %v", pipGroups[1].Packages, p.Runtime)
+	if pipGroups[1].Index != p.Index {
+		t.Errorf("cuda group index = %q, want the profile's %q", pipGroups[1].Index, p.Index)
 	}
-	if pipGroups[1].Index != "" {
-		t.Errorf("runtime group index = %q, want empty so it resolves from PyPI", pipGroups[1].Index)
+	if pipGroups[1].Root != PipOverlayRoot || pipGroups[2].Root != PipOverlayRoot {
+		t.Errorf("user pip groups do not target the linked overlay: %+v", pipGroups)
 	}
 	if pipGroups[2].Index != "" {
 		t.Errorf("plain group index = %q, want empty", pipGroups[2].Index)
@@ -128,8 +128,8 @@ func TestLowerExplicitUserBeatsCUDARoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
-	if g.Stages[0].User != "1000" {
-		t.Fatalf("user = %q, want the declared 1000", g.Stages[0].User)
+	if got := g.Stages[len(g.Stages)-1].User; got != "1000" {
+		t.Fatalf("user = %q, want the declared 1000", got)
 	}
 }
 

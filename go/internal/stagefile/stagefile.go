@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/codegen"
 	dockerignorepkg "github.com/wendylabsinc/wendy/go/internal/stagefile/dockerignore"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/gpu"
+	"github.com/wendylabsinc/wendy/go/internal/stagefile/ir"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/lock"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/spec"
 )
@@ -283,12 +284,22 @@ func compileFileWithFramework(dir, source, platform, gpuArch, buildProfile, ros2
 	if err != nil {
 		absDir = dir
 	}
-	dockerfile, err = codegen.Generate(f, updated.Images, updated.Downloads, platform, cudaProfile,
-		codegen.WithCacheScope(absDir))
+	g, err := ir.Lower(f, ir.Options{
+		Images: updated.Images, Downloads: updated.Downloads, Platform: platform,
+		CUDAProfile: cudaProfile, CacheScope: absDir,
+	})
 	if err != nil {
 		return "", "", err
 	}
-	dockerignore = dockerignorepkg.Derive(dockerignorepkg.LocalPaths(f))
+	dockerfile, err = codegen.GenerateGraph(g, updated.Images)
+	if err != nil {
+		return "", "", err
+	}
+	localPaths, err := dockerignorepkg.LocalPathsFromGraph(g)
+	if err != nil {
+		return "", "", err
+	}
+	dockerignore = dockerignorepkg.Derive(localPaths)
 	return dockerfile, dockerignore, nil
 }
 

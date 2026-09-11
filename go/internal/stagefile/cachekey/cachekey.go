@@ -43,7 +43,7 @@ import (
 // representation before. Everything it adds is a build input that was
 // previously invisible to the key, so it is one bump rather than one per
 // field.
-const keyFormatVersion = 3
+const keyFormatVersion = 4
 
 // Inputs supplies the externally-resolved facts a key depends on: base
 // image digests (from the lockfile) and build-context path digests.
@@ -196,9 +196,11 @@ func write(e enc, g *ir.Graph, idx int, in Inputs, st *keyState) error {
 		if n.Image == nil {
 			return fmt.Errorf("cachekey: node %d has kind %q but nil Image payload", idx, n.Kind)
 		}
-		if !n.Image.Unpinned {
+		if n.Image.FromStage {
+			e.tag("stage")
+		} else if !n.Image.Unpinned {
 			digest, ok := in.Images[n.Image.Ref]
-			if !ok {
+			if !ok || digest == "" {
 				return fmt.Errorf("cachekey: no resolved digest for image %q", n.Image.Ref)
 			}
 			// The ref itself is excluded on purpose: two tags pointing at the
@@ -241,6 +243,7 @@ func write(e enc, g *ir.Graph, idx int, in Inputs, st *keyState) error {
 			return fmt.Errorf("cachekey: node %d has kind %q but nil Copy payload", idx, n.Kind)
 		}
 		e.bool(n.Copy.FromLocal)
+		e.bool(n.Copy.Link)
 		e.strs(n.Copy.Paths)
 		e.str(n.Copy.Dest)
 		e.str(n.Copy.Owner)
@@ -248,7 +251,7 @@ func write(e enc, g *ir.Graph, idx int, in Inputs, st *keyState) error {
 		if n.Copy.FromLocal {
 			for _, p := range n.Copy.Paths {
 				d, ok := in.Files[p]
-				if !ok {
+				if !ok || d == "" {
 					return fmt.Errorf("cachekey: no digest for context path %q", p)
 				}
 				e.str(d)
@@ -274,6 +277,7 @@ func writeExec(e enc, x *ir.ExecOp, in Inputs) error {
 	case x.Apt != nil:
 		e.strs(x.Apt.Packages)
 		e.bool(x.Apt.Recommends)
+		e.str(x.Apt.Base)
 		// A declared repository changes which packages the install can even
 		// resolve, so it is as much a build input as the package list. The
 		// key is hashed by URL and digest rather than by fetching it: the
@@ -307,18 +311,36 @@ func writeExec(e enc, x *ir.ExecOp, in Inputs) error {
 	case x.Pip != nil:
 		e.str(x.Pip.Requirements)
 		e.strs(x.Pip.Packages)
+		e.strs(x.Pip.BuildPackages)
 		// The index set is hashed because the same package name resolves to
 		// different wheels from different indexes — which is the entire point
 		// of a cuda: group, where ir.Lower has already substituted the GPU
 		// profile's index here.
 		e.str(x.Pip.Index)
 		e.strs(x.Pip.ExtraIndex)
+		e.str(x.Pip.Root)
+		e.str(x.Pip.Target)
 		if x.Pip.Requirements != "" {
 			d, ok := in.Files[x.Pip.Requirements]
-			if !ok {
+			if !ok || d == "" {
 				return fmt.Errorf("cachekey: no digest for %q", x.Pip.Requirements)
 			}
 			e.str(d)
+		}
+	case x.PipBootstrap != nil:
+		e.str(x.PipBootstrap.Manager)
+		e.strs(x.PipBootstrap.Packages)
+		e.strs(x.PipBootstrap.ApkRepositories)
+		e.str(x.PipBootstrap.AptBase)
+		e.int(len(x.PipBootstrap.AptRepositories))
+		for _, r := range x.PipBootstrap.AptRepositories {
+			e.str(r.Name)
+			e.str(r.URL)
+			e.strs(r.Suites)
+			e.strs(r.Components)
+			e.str(r.KeyURL)
+			e.str(r.KeySHA256)
+			e.str(r.KeyFormat)
 		}
 	case x.Npm != nil:
 		e.str(x.Npm.Manager)
@@ -332,7 +354,7 @@ func writeExec(e enc, x *ir.ExecOp, in Inputs) error {
 		// engines, or dependency ranges that left the lockfile untouched.
 		for _, f := range []string{x.Npm.Manifest, x.Npm.Lockfile} {
 			d, ok := in.Files[f]
-			if !ok {
+			if !ok || d == "" {
 				return fmt.Errorf("cachekey: no digest for %q", f)
 			}
 			e.str(d)
@@ -347,7 +369,7 @@ func writeExec(e enc, x *ir.ExecOp, in Inputs) error {
 		// a dependency edit would change nothing the key can see.
 		for _, f := range x.Uv.Files {
 			d, ok := in.Files[f]
-			if !ok {
+			if !ok || d == "" {
 				return fmt.Errorf("cachekey: no digest for %q", f)
 			}
 			e.str(d)
@@ -364,6 +386,8 @@ func writeExec(e enc, x *ir.ExecOp, in Inputs) error {
 		e.str(x.Build.Profile)
 		e.str(x.Build.Product)
 		e.str(x.Build.Script)
+		e.str(x.Build.From)
+		e.str(x.Build.CacheScope)
 	default:
 		return fmt.Errorf("cachekey: exec node has no params")
 	}

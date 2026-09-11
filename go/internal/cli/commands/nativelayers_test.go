@@ -247,6 +247,49 @@ func TestNativeDepsHash(t *testing.T) {
 	}
 }
 
+func TestNativeSemanticDepsKeyTracksDependencyFrontier(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "build.stagefile.lock.yaml", "version: 1\nimages:\n  python:3.11-slim: sha256:base\n")
+	writeFile(t, dir, "requirements.txt", "mcp\n")
+	writeFile(t, dir, "main.py", "print('v1')\n")
+	sf := &spec.File{Version: 1, Stages: []spec.Stage{{
+		Name: "app",
+		From: "python:3.11-slim",
+		Install: &spec.Install{
+			Apt: &spec.AptInstall{Packages: []string{"ca-certificates"}},
+			Pip: []spec.PipInstall{{Requirements: "requirements.txt"}},
+		},
+		Copy: []spec.CopyEntry{{From: "local", Paths: []string{"main.py"}}},
+	}}}
+
+	key := func() string {
+		t.Helper()
+		got, err := nativeSemanticDepsKey(dir, "Dockerfile.generated", "linux/arm64", sf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(got, "sha256:") {
+			t.Fatalf("semantic key = %q, want sha256 digest", got)
+		}
+		return got
+	}
+
+	base := key()
+	writeFile(t, dir, "main.py", "print('v2')\n")
+	if got := key(); got != base {
+		t.Fatal("final app copy changed the dependency-frontier key")
+	}
+	writeFile(t, dir, "requirements.txt", "mcp\nuvicorn\n")
+	afterRequirements := key()
+	if afterRequirements == base {
+		t.Fatal("requirements edit did not change the dependency-frontier key")
+	}
+	sf.Stages[0].Install.Apt.Packages = append(sf.Stages[0].Install.Apt.Packages, "curl")
+	if got := key(); got == afterRequirements {
+		t.Fatal("semantic apt change did not change the dependency-frontier key")
+	}
+}
+
 // Local copies in NON-final stages feed deps layers and must be part of the
 // deps hash (only the final stage's local copies are app inputs).
 // A uv install's dependency set lives entirely in pyproject.toml and uv.lock.

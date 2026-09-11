@@ -315,7 +315,7 @@ func TestBuildVariants(t *testing.T) {
 	}
 	// Always spelled out: bare `swift build` already means debug, so an
 	// implicit debug build is indistinguishable from a forgotten flag.
-	if got := cmd(&ir.BuildParams{Lang: "swift", Profile: "debug"}); got != "swift build -c debug" {
+	if got := cmd(&ir.BuildParams{Lang: "swift", Profile: "debug"}); got != "swift build --scratch-path /var/cache/stagefile/swift/scratch --cache-path /var/cache/stagefile/swift/pm -c debug" {
 		t.Errorf("swift = %q", got)
 	}
 	if got := cmd(&ir.BuildParams{Lang: "pnpm", Script: "bundle"}); got != "pnpm run 'bundle'" {

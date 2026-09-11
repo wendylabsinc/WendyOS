@@ -35,15 +35,16 @@ type Recipe struct {
 }
 
 var (
-	RecipeApt         = Recipe{Name: "apt", Version: 1}
-	RecipeApk         = Recipe{Name: "apk", Version: 1}
-	RecipeCMake       = Recipe{Name: "cmake", Version: 1}
-	RecipePip         = Recipe{Name: "pip", Version: 1}
-	RecipeNpm         = Recipe{Name: "npm", Version: 1}
-	RecipeUv          = Recipe{Name: "uv", Version: 1}
-	RecipeExtract     = Recipe{Name: "extract", Version: 1}
-	RecipeCUDACollect = Recipe{Name: "cuda-collect", Version: 1}
-	RecipeBuild       = Recipe{Name: "build", Version: 1}
+	RecipeApt          = Recipe{Name: "apt", Version: 2}
+	RecipeApk          = Recipe{Name: "apk", Version: 1}
+	RecipeCMake        = Recipe{Name: "cmake", Version: 1}
+	RecipePip          = Recipe{Name: "pip", Version: 2}
+	RecipePipBootstrap = Recipe{Name: "pip-bootstrap", Version: 1}
+	RecipeNpm          = Recipe{Name: "npm", Version: 1}
+	RecipeUv           = Recipe{Name: "uv", Version: 1}
+	RecipeExtract      = Recipe{Name: "extract", Version: 1}
+	RecipeCUDACollect  = Recipe{Name: "cuda-collect", Version: 1}
+	RecipeBuild        = Recipe{Name: "build", Version: 2}
 )
 
 // DefaultUser is the distroless-style non-root numeric UID a backend
@@ -66,6 +67,9 @@ type Graph struct {
 type Stage struct {
 	Name  string
 	Final int
+	// SourceIndex identifies the declared Stagefile stage that owns generated
+	// helper stages, for consumers that must reproduce declaration order.
+	SourceIndex int
 	// Healthcheck, Entrypoint, Cmd, and User are stage-level image config
 	// rather than filesystem operations, so they hang off the stage, not
 	// off a node. They never enter a cache key: changing an entrypoint does
@@ -114,6 +118,10 @@ type Node struct {
 // ancestor, so its key propagates down the whole stage.
 type ImageOp struct {
 	Ref string
+	// FromStage distinguishes a prior Stagefile stage from an external image.
+	// Its node carries the source stage final as its sole input and therefore
+	// needs neither a registry digest nor an image config.
+	FromStage bool
 	// Unpinned marks the `pin: false` images that exist solely in a local
 	// daemon store and have no registry digest to pin against.
 	//
@@ -137,16 +145,17 @@ type ImageOp struct {
 // ExecOp is a typed operation. Exactly one params pointer is non-nil, and
 // it must correspond to Recipe.
 type ExecOp struct {
-	Recipe      Recipe
-	Apt         *AptParams
-	Apk         *ApkParams
-	CMake       *CMakeParams
-	Pip         *PipParams
-	Npm         *NpmParams
-	Uv          *UvParams
-	Extract     *ExtractParams
-	CUDACollect *CUDACollectParams
-	Build       *BuildParams
+	Recipe       Recipe
+	Apt          *AptParams
+	Apk          *ApkParams
+	CMake        *CMakeParams
+	Pip          *PipParams
+	PipBootstrap *PipBootstrapParams
+	Npm          *NpmParams
+	Uv           *UvParams
+	Extract      *ExtractParams
+	CUDACollect  *CUDACollectParams
+	Build        *BuildParams
 }
 
 // AptParams installs Debian/Ubuntu packages, optionally from extra
@@ -155,6 +164,9 @@ type AptParams struct {
 	Packages     []string
 	Recommends   bool
 	Repositories []AptRepository
+	// Base is the immutable external base identity used to scope persistent
+	// APT caches. Empty disables them for unpinned and stage-derived bases.
+	Base string
 }
 
 // AptRepository is one extra apt source, with its signing key pinned by
@@ -206,10 +218,27 @@ type CMakeParams struct {
 // go look one up. That resolution is what lets the cache key cover which
 // index the wheels came from without the key having to know about GPUs.
 type PipParams struct {
-	Requirements string
-	Packages     []string
-	Index        string
-	ExtraIndex   []string
+	Requirements  string
+	Packages      []string
+	BuildPackages []string
+	Index         string
+	ExtraIndex    []string
+	// Root and Target select pip's isolated overlay modes. They are mutually
+	// exclusive; empty values preserve the ordinary install scheme.
+	Root   string
+	Target string
+}
+
+// PipBootstrapParams installs pip and any build-only OS packages in a
+// generated dependency stage. The stage's declared package-manager family and
+// repositories decide how it does so without leaking build packages into the
+// runtime image.
+type PipBootstrapParams struct {
+	Manager         string
+	Packages        []string
+	AptRepositories []AptRepository
+	ApkRepositories []string
+	AptBase         string
 }
 
 // NpmParams records the resolved manager, the manifest it reads, and the
@@ -257,10 +286,12 @@ type CUDACollectParams struct {
 
 // BuildParams is a language compile step with its profile resolved.
 type BuildParams struct {
-	Lang    string
-	Profile string
-	Product string
-	Script  string
+	Lang       string
+	Profile    string
+	Product    string
+	Script     string
+	From       string
+	CacheScope string
 }
 
 // FetchOp downloads one URL into the stage. Checksum is mandatory and fully
@@ -290,6 +321,7 @@ type FetchOp struct {
 // cache key.
 type CopyOp struct {
 	FromLocal bool
+	Link      bool
 	Paths     []string
 	Dest      string
 	Owner     string

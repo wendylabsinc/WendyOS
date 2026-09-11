@@ -21,29 +21,30 @@ import (
 // excluded from the hash, because two tags resolving to one digest are one
 // rootfs. The list's job is to force the question to be asked.
 var keyedPayloadFields = map[string][]string{
-	"AptParams":     {"Packages", "Recommends", "Repositories"},
-	"AptRepository": {"Name", "URL", "Suites", "Components", "KeyURL", "KeySHA256", "KeyFormat"},
-	"ApkParams":     {"Packages", "Cache", "Repositories"},
-	"CMakeParams":   {"Repository", "Commit", "Prefix", "BuildType", "Defines", "Jobs", "Root"},
-	"PipParams":     {"Requirements", "Packages", "Index", "ExtraIndex"},
-	"NpmParams":     {"Manager", "Manifest", "Lockfile", "Production"},
-	"UvParams":      {"Extras", "Dev", "Files"},
-	"ExtractParams": {"Archive", "Dest", "Format"},
+	"AptParams":          {"Packages", "Recommends", "Repositories", "Base"},
+	"AptRepository":      {"Name", "URL", "Suites", "Components", "KeyURL", "KeySHA256", "KeyFormat"},
+	"ApkParams":          {"Packages", "Cache", "Repositories"},
+	"CMakeParams":        {"Repository", "Commit", "Prefix", "BuildType", "Defines", "Jobs", "Root"},
+	"PipParams":          {"Requirements", "Packages", "BuildPackages", "Index", "ExtraIndex", "Root", "Target"},
+	"PipBootstrapParams": {"Manager", "Packages", "AptRepositories", "ApkRepositories", "AptBase"},
+	"NpmParams":          {"Manager", "Manifest", "Lockfile", "Production"},
+	"UvParams":           {"Extras", "Dev", "Files"},
+	"ExtractParams":      {"Archive", "Dest", "Format"},
 	// LibDir and ConfPath are both hashed. They come from the pinned GPU
 	// profile rather than the Stagefile, so in practice they change only
 	// when the profile does — but they are paths the built rootfs actually
 	// contains, so they belong in the key rather than being excluded as
 	// rendering detail.
 	"CUDACollectParams": {"LibDir", "ConfPath"},
-	"BuildParams":       {"Lang", "Profile", "Product", "Script"},
-	"CopyOp":            {"FromLocal", "Paths", "Dest", "Owner", "Mode"},
+	"BuildParams":       {"Lang", "Profile", "Product", "Script", "From", "CacheScope"},
+	"CopyOp":            {"FromLocal", "Link", "Paths", "Dest", "Owner", "Mode"},
 	"FetchOp":           {"URL", "Dest", "Checksum", "Mode", "Owner"},
 	// Ref is listed but hashed only for an unpinned image: for a pinned one
 	// the resolved digest stands in for it, because two tags resolving to
 	// one digest are one rootfs. Unpinned itself is hashed by selecting
 	// between those two encodings.
-	"ImageOp": {"Ref", "Unpinned", "Platform", "Args", "Env", "Workdir"},
-	"ExecOp": {"Recipe", "Apt", "Apk", "CMake", "Pip", "Npm", "Uv",
+	"ImageOp": {"Ref", "FromStage", "Unpinned", "Platform", "Args", "Env", "Workdir"},
+	"ExecOp": {"Recipe", "Apt", "Apk", "CMake", "Pip", "PipBootstrap", "Npm", "Uv",
 		"Extract", "CUDACollect", "Build"},
 	"Recipe": {"Name", "Version"},
 }
@@ -71,6 +72,7 @@ func TestIRPayloadFieldsAreAccountedFor(t *testing.T) {
 		ir.ApkParams{},
 		ir.CMakeParams{},
 		ir.PipParams{},
+		ir.PipBootstrapParams{},
 		ir.NpmParams{},
 		ir.UvParams{},
 		ir.ExtractParams{},

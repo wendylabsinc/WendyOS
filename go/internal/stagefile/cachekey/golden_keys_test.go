@@ -37,12 +37,15 @@ func TestGoldenKeys(t *testing.T) {
 				Platform: "linux/arm64",
 			},
 			want: []string{
-				"sha256:af5065361d0fbbce9bde07caaa4e5b8dc4abd129d4b2e4198b5da3135da97e29",
-				"sha256:0806cb7cf175b910d3733d8e742c49a4a55016ed1a27e55ded858652cccbffa3",
-				"sha256:e10a7f44181cced429e4074448ab357b40da887e28192372140e1df7fb366577",
-				"sha256:af5065361d0fbbce9bde07caaa4e5b8dc4abd129d4b2e4198b5da3135da97e29",
-				"sha256:525549c50c0b2be4880210488a402871c4304f2cc7612af0da4cae7040b3038c",
-				"sha256:d3e106c5ad74ba127b59a645eb527e2068ab2805857f8170091095ce423ce5db",
+				"sha256:d66b2224c7741edfcf37c844040c2d93ebeb503b492bfdbb3604f70ed7ddfc0c",
+				"sha256:69580d9c8f04a6c1686d2c6f10d947360991511276754e9db3d8ea5ec2484dd4",
+				"sha256:38f52f5e45682e7b3cd569679d2d07ead390bf12e162b99f26a3bfc412cfc6d1",
+				"sha256:d66b2224c7741edfcf37c844040c2d93ebeb503b492bfdbb3604f70ed7ddfc0c",
+				"sha256:eb45219ba8553f883e445438af1a09035bfc99ee188d19ca7671050165dda26f",
+				"sha256:1c23146276118cba692e45723d949ef6cb28b950fd21846d80ec1d779616c8b7",
+				"sha256:d66b2224c7741edfcf37c844040c2d93ebeb503b492bfdbb3604f70ed7ddfc0c",
+				"sha256:2ea558fb9e467674eb38d7291a1ef4876716790bfbe6fed12e21aa4edd98d567",
+				"sha256:1eb41b246411d79a01ebf2444eff83f87e5d00f60ba617c4c1cd8edb0345da6a",
 			},
 		},
 		{
@@ -61,21 +64,22 @@ func TestGoldenKeys(t *testing.T) {
 				Platform: "linux/arm64",
 			},
 			want: []string{
-				"sha256:f14948db391fcdca5457255da7bc9897eaab4735cf836091016bee120d5b7dfd",
-				"sha256:e11cefc5aad3445de1d11cc2775c4dd63cf41d4293fe4c75f60bc119634744b0",
-				"sha256:f33cd53c4a9c8d74c46dfa68a3134ef7989187aa7587fcc013256d8532aa51bd",
-				"sha256:2b9ec32b97be9f52d128dc676795b2fe7e47b2ecd06766e3320adeb47a1f20aa",
-				"sha256:43bda82d75a3ff1a5e2cc3a6ce0b848baf643571ff01360b4abd4affc5937d6e",
-				"sha256:1243a24800c4125e5dac389edd627c041e914da4284fa3ebd67231c6336779ea",
-				"sha256:f14948db391fcdca5457255da7bc9897eaab4735cf836091016bee120d5b7dfd",
-				"sha256:8fb7b638047b032559ab0684813075444aee9ae4a80ea2f2e83a1a76564576f3",
-				"sha256:2a0a243246b5aa580a2405193ea6f6e063920fccc8eb3eddf8f9365a323232fa",
+				"sha256:4a65491fc80e664288abe94aadb7c7841573124c4915e91a096c27373b13313a",
+				"sha256:7379f0e72f6fad183a885c839422f196511b2973151290cbf1fe9d81d2d162fd",
+				"sha256:edf6ddfd6342e760b9e829964e99e09e202981a661a4bfb0b5dd74733c2cdbf6",
+				"sha256:e7b3e39854c61c26044f8b338d52549371b73951cdc80a7a998d7e52d8494b52",
+				"sha256:6ddcd21703dc811eb7e89e13024237e2b7d9ff06352181d460017d8740be1204",
+				"sha256:31a9903faef66c2ac2c307bd815aad66ad8e397c094f7f310ed34741dacdeeb2",
+				"sha256:4a65491fc80e664288abe94aadb7c7841573124c4915e91a096c27373b13313a",
+				"sha256:203af77f22d456d1ab53bfb9617661249a02092f6bf9eb64e252e28d93dff73a",
+				"sha256:1abb97e78815e7917aa5affba356b63398bff6bdbe5d75665af0e6b4494114cf",
 			},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
+			update := os.Getenv("UPDATE_STAGEFILE_KEYS") != ""
 			data, err := os.ReadFile("../testdata/" + tc.fixture)
 			if err != nil {
 				t.Fatal(err)
@@ -92,17 +96,22 @@ func TestGoldenKeys(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Lower: %v", err)
 			}
-			if len(g.Nodes) != len(tc.want) {
+			if !update && len(g.Nodes) != len(tc.want) {
 				t.Fatalf("fixture lowered to %d nodes, corpus pins %d — update both together", len(g.Nodes), len(tc.want))
 			}
+			var harvested []string
 			for i := range g.Nodes {
 				got, err := Key(g, i, tc.in)
 				if err != nil {
 					t.Fatalf("Key(node %d): %v", i, err)
 				}
-				if got != tc.want[i] {
+				harvested = append(harvested, got)
+				if !update && got != tc.want[i] {
 					t.Errorf("node %d (%s) key drift:\n got  %s\n want %s", i, g.Nodes[i].Kind, got, tc.want[i])
 				}
+			}
+			if update {
+				t.Logf("%q", harvested)
 			}
 		})
 	}

@@ -62,8 +62,8 @@ func TestKeyIsStableAcrossUnrelatedFiles(t *testing.T) {
 	}
 }
 
-// The soundness property: a different dependency closure must key
-// differently, even with identical pip params.
+// The linked pip overlay deliberately ignores the app stage's APT closure,
+// while the final image key still covers both branches.
 func TestKeyDiffersWhenClosureDiffers(t *testing.T) {
 	a := mustLower(t, &spec.File{Version: 1, Stages: []spec.Stage{
 		pipStage("deps", "python:3.12-slim", "requirements.txt", []string{"foo"}),
@@ -72,10 +72,27 @@ func TestKeyDiffersWhenClosureDiffers(t *testing.T) {
 		pipStage("deps", "python:3.12-slim", "requirements.txt", []string{"bar"}),
 	}})
 
-	ka, _ := Key(a, a.Stages[0].Final, testInputs())
-	kb, _ := Key(b, b.Stages[0].Final, testInputs())
+	pa, err := Key(a, a.Stages[0].Final, testInputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pb, err := Key(b, b.Stages[0].Final, testInputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pa != pb {
+		t.Fatal("pip overlay key changed with unrelated runtime APT packages")
+	}
+	ka, err := Key(a, a.Stages[len(a.Stages)-1].Final, testInputs())
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, err := Key(b, b.Stages[len(b.Stages)-1].Final, testInputs())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ka == kb {
-		t.Fatal("pip keyed identically over different apt closures — cache is unsound")
+		t.Fatal("final image key ignored its changed APT branch")
 	}
 }
 
@@ -85,11 +102,11 @@ func TestKeyDiffersWhenInputFileChanges(t *testing.T) {
 	}})
 
 	in1 := testInputs()
-	k1, _ := Key(g, g.Stages[0].Final, in1)
+	k1, _ := Key(g, g.Stages[len(g.Stages)-1].Final, in1)
 
 	in2 := testInputs()
 	in2.Files["requirements.txt"] = "sha256:reqs2"
-	k2, _ := Key(g, g.Stages[0].Final, in2)
+	k2, _ := Key(g, g.Stages[len(g.Stages)-1].Final, in2)
 
 	if k1 == k2 {
 		t.Fatal("key ignored requirements.txt content")
@@ -101,10 +118,10 @@ func TestKeyDiffersWhenBaseDigestChanges(t *testing.T) {
 		pipStage("deps", "python:3.12-slim", "requirements.txt", nil),
 	}})
 
-	k1, _ := Key(g, g.Stages[0].Final, testInputs())
+	k1, _ := Key(g, g.Stages[len(g.Stages)-1].Final, testInputs())
 	in2 := testInputs()
 	in2.Images["python:3.12-slim"] = "sha256:ccc"
-	k2, _ := Key(g, g.Stages[0].Final, in2)
+	k2, _ := Key(g, g.Stages[len(g.Stages)-1].Final, in2)
 
 	if k1 == k2 {
 		t.Fatal("key ignored the base image digest")
@@ -124,7 +141,7 @@ func TestKeyErrorsOnMissingFileDigest(t *testing.T) {
 	g := mustLower(t, &spec.File{Version: 1, Stages: []spec.Stage{
 		pipStage("deps", "python:3.12-slim", "absent.txt", nil),
 	}})
-	if _, err := Key(g, g.Stages[0].Final, testInputs()); err == nil {
+	if _, err := Key(g, g.Stages[len(g.Stages)-1].Final, testInputs()); err == nil {
 		t.Fatal("Key succeeded with no digest for absent.txt")
 	}
 }
@@ -214,7 +231,7 @@ func TestKeyConvergesOnEquivalentCopyDests(t *testing.T) {
 		g := mustLower(t, &spec.File{Version: 1, Stages: []spec.Stage{
 			{Name: "app", From: "python:3.12-slim", Copy: []spec.CopyEntry{entry}},
 		}})
-		k, err := Key(g, g.Stages[0].Final, in)
+		k, err := Key(g, g.Stages[len(g.Stages)-1].Final, in)
 		if err != nil {
 			t.Fatalf("Key: %v", err)
 		}
@@ -301,11 +318,11 @@ func TestKeyDiffersForNpmManifest(t *testing.T) {
 		return in
 	}
 
-	k1, err := Key(g, g.Stages[0].Final, inputs("sha256:pkgjson1"))
+	k1, err := Key(g, g.Stages[len(g.Stages)-1].Final, inputs("sha256:pkgjson1"))
 	if err != nil {
 		t.Fatalf("Key: %v", err)
 	}
-	k2, err := Key(g, g.Stages[0].Final, inputs("sha256:pkgjson2"))
+	k2, err := Key(g, g.Stages[len(g.Stages)-1].Final, inputs("sha256:pkgjson2"))
 	if err != nil {
 		t.Fatalf("Key: %v", err)
 	}
@@ -324,7 +341,7 @@ func TestKeyErrorsOnMissingNpmManifestDigest(t *testing.T) {
 	in := testInputs()
 	in.Files["package-lock.json"] = "sha256:lock1"
 
-	if _, err := Key(g, g.Stages[0].Final, in); err == nil {
+	if _, err := Key(g, g.Stages[len(g.Stages)-1].Final, in); err == nil {
 		t.Fatal("Key succeeded with no digest for package.json")
 	}
 }
@@ -343,11 +360,11 @@ func TestKeyDiffersByPlatform(t *testing.T) {
 	amd := testInputs()
 	amd.Platform = "linux/amd64"
 
-	kArm, err := Key(g, g.Stages[0].Final, arm)
+	kArm, err := Key(g, g.Stages[len(g.Stages)-1].Final, arm)
 	if err != nil {
 		t.Fatalf("Key: %v", err)
 	}
-	kAmd, err := Key(g, g.Stages[0].Final, amd)
+	kAmd, err := Key(g, g.Stages[len(g.Stages)-1].Final, amd)
 	if err != nil {
 		t.Fatalf("Key: %v", err)
 	}
@@ -358,11 +375,11 @@ func TestKeyDiffersByPlatform(t *testing.T) {
 	// An unset platform is a legitimate caller state (nothing has been
 	// resolved yet) and must still key deterministically rather than
 	// varying run to run.
-	empty1, err := Key(g, g.Stages[0].Final, testInputs())
+	empty1, err := Key(g, g.Stages[len(g.Stages)-1].Final, testInputs())
 	if err != nil {
 		t.Fatalf("Key: %v", err)
 	}
-	empty2, err := Key(g, g.Stages[0].Final, testInputs())
+	empty2, err := Key(g, g.Stages[len(g.Stages)-1].Final, testInputs())
 	if err != nil {
 		t.Fatalf("Key: %v", err)
 	}
@@ -407,7 +424,7 @@ func TestKeyDiffersForBuildLangAndProfile(t *testing.T) {
 		t.Fatal("changing build.lang did not change the key")
 	}
 
-	kGoDebug, err := Key(gGoDebug, gGoDebug.Stages[0].Final, in)
+	kGoDebug, err := Key(gGoDebug, gGoDebug.Stages[len(gGoDebug.Stages)-1].Final, in)
 	if err != nil {
 		t.Fatalf("Key: %v", err)
 	}

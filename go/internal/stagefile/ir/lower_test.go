@@ -46,24 +46,24 @@ func TestLowerAptThenPipChainsInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lower: %v", err)
 	}
-	if len(g.Nodes) != 3 {
-		t.Fatalf("got %d nodes, want 3 (image, apt, pip)", len(g.Nodes))
-	}
-	if g.Nodes[1].Exec.Recipe != RecipeApt {
-		t.Fatalf("node 1 recipe = %+v, want apt", g.Nodes[1].Exec.Recipe)
+	if len(g.Nodes) != 6 {
+		t.Fatalf("got %d nodes, want 6 (pip helper plus app stage)", len(g.Nodes))
 	}
 	if g.Nodes[2].Exec.Recipe != RecipePip {
 		t.Fatalf("node 2 recipe = %+v, want pip", g.Nodes[2].Exec.Recipe)
 	}
-	// The chain must be explicit: pip runs on apt's result.
+	if g.Nodes[4].Exec.Recipe != RecipeApt {
+		t.Fatalf("node 4 recipe = %+v, want apt", g.Nodes[4].Exec.Recipe)
+	}
+	// Pip is deliberately independent of the app's APT chain.
 	if len(g.Nodes[2].Inputs) != 1 || g.Nodes[2].Inputs[0] != 1 {
 		t.Fatalf("pip inputs = %v, want [1]", g.Nodes[2].Inputs)
 	}
 	if g.Nodes[2].Exec.Pip.Requirements != "requirements.txt" {
 		t.Fatalf("pip requirements = %q", g.Nodes[2].Exec.Pip.Requirements)
 	}
-	if g.Stages[0].Final != 2 {
-		t.Fatalf("stage final = %d, want 2", g.Stages[0].Final)
+	if got := g.Stages[len(g.Stages)-1].Final; got != 5 {
+		t.Fatalf("stage final = %d, want 5", got)
 	}
 }
 
@@ -222,12 +222,12 @@ func TestLowerDoesNotAliasSpecSlices(t *testing.T) {
 		t.Fatalf("PipParams.Packages changed after mutating the source spec: got %v, want %v", pipNode.Exec.Pip.Packages, wantPipPkgs)
 	}
 
-	gotCopy := g.Nodes[g.Stages[0].Final].Copy
+	gotCopy := g.Nodes[g.Stages[len(g.Stages)-1].Final].Copy
 	if !reflect.DeepEqual(gotCopy.Paths, wantPaths) {
 		t.Fatalf("Copy.Paths changed after mutating the source spec: got %v, want %v", gotCopy.Paths, wantPaths)
 	}
-	if !reflect.DeepEqual(g.Stages[0].Entrypoint, wantExec) {
-		t.Fatalf("Stage.Entrypoint changed after mutating the source spec: got %v, want %v", g.Stages[0].Entrypoint, wantExec)
+	if got := g.Stages[len(g.Stages)-1].Entrypoint; !reflect.DeepEqual(got, wantExec) {
+		t.Fatalf("Stage.Entrypoint changed after mutating the source spec: got %v, want %v", got, wantExec)
 	}
 }
 
