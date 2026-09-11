@@ -18,6 +18,10 @@ type PageProps = {
 const pageOgImages: Record<string, string> = {
   'installation/wendyos-nvidia-jetson-agx-thor': '/images/opengraph-thor.png',
   'integrations/ros2': '/images/opengraph-ros2.png',
+  'guides/tutorials/mojo/hello-world': '/images/opengraph-mojo.png',
+  'guides/tutorials/mojo/simple-web-server': '/images/opengraph-mojo.png',
+  'guides/tutorials/mojo/max-graph': '/images/opengraph-max.png',
+  'guides/tutorials/mojo/max-inference-service': '/images/opengraph-max.png',
 };
 
 const tutorialOgImages: Record<string, string> = {

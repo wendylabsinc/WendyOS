@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
@@ -26,7 +27,7 @@ type fleetPeer struct {
 }
 
 // meshPeer is a discovered peer device for a component. When AssetID is known it
-// is addressed over the mesh as device-<AssetID>.cloud.wendy.dev (reachable
+// is addressed over the mesh as device-<AssetID>.mesh.wendy.internal (reachable
 // LAN-direct or cloud-relay); Host is a direct-LAN fallback for older agents
 // that don't advertise an asset id over mDNS.
 type meshPeer struct {
@@ -42,7 +43,7 @@ type meshPeer struct {
 // 'wendy fleet group add') and deployed over the cloud tunnel; with --lan they
 // are placed by matching device names over mDNS. Cross-component discovery
 // (discovers -> WENDY_FLEET_PEERS) resolves peers to their mesh names
-// (device-<assetID>.cloud.wendy.dev), reachable LAN-direct or via cloud-relay by
+// (device-<assetID>.mesh.wendy.internal), reachable LAN-direct or via cloud-relay by
 // Joannis's mesh — so discovery now works in both cloud and LAN mode. The
 // consuming component must run with a "mesh" network entitlement to reach them.
 func runFleetManifest(ctx context.Context, opts runOptions, projectCwd string, manifest *appconfig.FleetManifest, lan bool, central, cloudGRPC, brokerURL string, timeout time.Duration) error {
@@ -197,7 +198,7 @@ func discoveryEnv(consumer *appconfig.ComponentConfig, manifest *appconfig.Fleet
 
 // computePeers turns a component's discovered peers into endpoint URLs using its
 // exposed port. A peer with a known asset id is addressed over the mesh
-// (device-<id>.cloud.wendy.dev), reachable LAN-direct or via cloud-relay;
+// (device-<id>.mesh.wendy.internal), reachable LAN-direct or via cloud-relay;
 // otherwise it falls back to a direct-LAN host. url is the endpoint's base
 // origin; consumers append their own path (the discover contract — see the
 // template dashboard's serve.py).
@@ -211,7 +212,7 @@ func computePeers(comp *appconfig.ComponentConfig, peers []meshPeer) []fleetPeer
 		var url string
 		switch {
 		case p.AssetID > 0:
-			url = fmt.Sprintf("http://device-%d.cloud.wendy.dev:%d", p.AssetID, comp.Expose.Port)
+			url = fmt.Sprintf("http://%s:%d", meshname.Device(p.AssetID), comp.Expose.Port)
 		case p.Host != "":
 			url = fmt.Sprintf("http://%s:%d", p.Host, comp.Expose.Port)
 		default:

@@ -37,7 +37,7 @@ func query(t *testing.T, addr, name string, qtype uint16) *dns.Msg {
 
 func TestDNSAnswersMeshName(t *testing.T) {
 	_, addr := startTestDNS(t, "")
-	resp := query(t, addr, "device-215.cloud.wendy.dev.", dns.TypeA)
+	resp := query(t, addr, "device-215.mesh.wendy.internal.", dns.TypeA)
 	if resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 1 {
 		t.Fatalf("rcode=%d answers=%d, want NOERROR with 1 answer", resp.Rcode, len(resp.Answer))
 	}
@@ -47,9 +47,17 @@ func TestDNSAnswersMeshName(t *testing.T) {
 	}
 }
 
+func TestDNSAnswersLegacyMeshAlias(t *testing.T) {
+	_, addr := startTestDNS(t, "")
+	resp := query(t, addr, "device-215.cloud.wendy.dev.", dns.TypeA)
+	if resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 1 {
+		t.Fatalf("rcode=%d answers=%d, want legacy alias to remain resolvable", resp.Rcode, len(resp.Answer))
+	}
+}
+
 func TestDNSMeshNameAAAAEmptyNoError(t *testing.T) {
 	_, addr := startTestDNS(t, "")
-	resp := query(t, addr, "device-215.cloud.wendy.dev.", dns.TypeAAAA)
+	resp := query(t, addr, "device-215.mesh.wendy.internal.", dns.TypeAAAA)
 	if resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 0 {
 		t.Fatalf("rcode=%d answers=%d, want NOERROR with 0 answers", resp.Rcode, len(resp.Answer))
 	}
@@ -57,7 +65,7 @@ func TestDNSMeshNameAAAAEmptyNoError(t *testing.T) {
 
 func TestDNSOutOfRangeIsNXDOMAIN(t *testing.T) {
 	_, addr := startTestDNS(t, "")
-	for _, name := range []string{"device-0.cloud.wendy.dev.", "device-70000.cloud.wendy.dev."} {
+	for _, name := range []string{"device-0.mesh.wendy.internal.", "device-70000.mesh.wendy.internal."} {
 		resp := query(t, addr, name, dns.TypeA)
 		if resp.Rcode != dns.RcodeNameError {
 			t.Fatalf("%s: rcode=%d, want NXDOMAIN", name, resp.Rcode)
@@ -159,9 +167,19 @@ func TestFriendlyNameResolves(t *testing.T) {
 	s := NewDNSServer(zaptest.NewLogger(t), "")
 	s.SetResolver(fakeResolver{slug: "acme", byName: map[string]int32{"brave-dolphin": 215}})
 
-	rcode, ip := answerA(t, s, "brave-dolphin.acme.cloud.wendy.dev.")
+	rcode, ip := answerA(t, s, "brave-dolphin.acme.mesh.wendy.internal.")
 	if rcode != dns.RcodeSuccess || ip != "10.99.0.215" {
 		t.Fatalf("got rcode=%d ip=%q, want SUCCESS 10.99.0.215", rcode, ip)
+	}
+}
+
+func TestLegacyFriendlyNameResolves(t *testing.T) {
+	s := NewDNSServer(zaptest.NewLogger(t), "")
+	s.SetResolver(fakeResolver{slug: "acme", byName: map[string]int32{"brave-dolphin": 215}})
+
+	rcode, ip := answerA(t, s, "brave-dolphin.acme.cloud.wendy.dev.")
+	if rcode != dns.RcodeSuccess || ip != "10.99.0.215" {
+		t.Fatalf("legacy friendly alias: got rcode=%d ip=%q, want SUCCESS 10.99.0.215", rcode, ip)
 	}
 }
 
@@ -169,7 +187,7 @@ func TestFriendlyNameWrongOrgIsNXDOMAIN(t *testing.T) {
 	s := NewDNSServer(zaptest.NewLogger(t), "")
 	s.SetResolver(fakeResolver{slug: "acme", byName: map[string]int32{"brave-dolphin": 215}})
 
-	rcode, _ := answerA(t, s, "brave-dolphin.other-org.cloud.wendy.dev.")
+	rcode, _ := answerA(t, s, "brave-dolphin.other-org.mesh.wendy.internal.")
 	if rcode != dns.RcodeNameError {
 		t.Fatalf("wrong-org: got rcode=%d, want NXDOMAIN", rcode)
 	}
@@ -179,7 +197,7 @@ func TestFriendlyNameUnknownDeviceIsNXDOMAIN(t *testing.T) {
 	s := NewDNSServer(zaptest.NewLogger(t), "")
 	s.SetResolver(fakeResolver{slug: "acme", byName: map[string]int32{}})
 
-	rcode, _ := answerA(t, s, "ghost.acme.cloud.wendy.dev.")
+	rcode, _ := answerA(t, s, "ghost.acme.mesh.wendy.internal.")
 	if rcode != dns.RcodeNameError {
 		t.Fatalf("unknown device: got rcode=%d, want NXDOMAIN", rcode)
 	}
@@ -187,7 +205,7 @@ func TestFriendlyNameUnknownDeviceIsNXDOMAIN(t *testing.T) {
 
 func TestFriendlyNameNoResolverIsNXDOMAIN(t *testing.T) {
 	s := NewDNSServer(zaptest.NewLogger(t), "")
-	rcode, _ := answerA(t, s, "brave-dolphin.acme.cloud.wendy.dev.")
+	rcode, _ := answerA(t, s, "brave-dolphin.acme.mesh.wendy.internal.")
 	if rcode != dns.RcodeNameError {
 		t.Fatalf("no resolver: got rcode=%d, want NXDOMAIN", rcode)
 	}
@@ -196,7 +214,7 @@ func TestFriendlyNameNoResolverIsNXDOMAIN(t *testing.T) {
 func TestNumericNamePathUnchanged(t *testing.T) {
 	s := NewDNSServer(zaptest.NewLogger(t), "")
 	s.SetResolver(fakeResolver{slug: "acme"})
-	rcode, ip := answerA(t, s, "device-215.cloud.wendy.dev.")
+	rcode, ip := answerA(t, s, "device-215.mesh.wendy.internal.")
 	if rcode != dns.RcodeSuccess || ip != "10.99.0.215" {
 		t.Fatalf("numeric: got rcode=%d ip=%q, want SUCCESS 10.99.0.215", rcode, ip)
 	}
@@ -210,7 +228,7 @@ func TestFriendlyNameDoubledHyphenNormalizes(t *testing.T) {
 	s := NewDNSServer(zaptest.NewLogger(t), "")
 	s.SetResolver(fakeResolver{slug: "acme", byName: map[string]int32{"a-b": 215}})
 
-	rcode, ip := answerA(t, s, "a--b.acme.cloud.wendy.dev.")
+	rcode, ip := answerA(t, s, "a--b.acme.mesh.wendy.internal.")
 	if rcode != dns.RcodeSuccess || ip != "10.99.0.215" {
 		t.Fatalf("doubled hyphen: got rcode=%d ip=%q, want SUCCESS 10.99.0.215", rcode, ip)
 	}

@@ -972,15 +972,16 @@ var (
 )
 
 var deviceTypeNames = map[string]string{
-	"raspberry-pi-3":   "Raspberry Pi 3",
-	"raspberry-pi-4":   "Raspberry Pi 4",
-	"raspberry-pi-5":   "Raspberry Pi 5",
-	"jetson-agx-orin":  "Jetson AGX Orin",
-	"jetson-orin-nano": "Jetson Orin Nano",
-	"jetson-agx-thor":  "Jetson AGX Thor",
-	"x86_64":           "x86-64",
-	"vm-arm64":         "ARM64 VM",
-	"vm-x86-64":        "x86-64 VM",
+	"raspberry-pi-3":     "Raspberry Pi 3",
+	"raspberry-pi-4":     "Raspberry Pi 4",
+	"raspberry-pi-5":     "Raspberry Pi 5",
+	"jetson-agx-orin":    "Jetson AGX Orin",
+	"jetson-orin-nano":   "Jetson Orin Nano",
+	"jetson-agx-thor":    "Jetson AGX Thor",
+	"dragonwing-iq-8275": "Dragonwing IQ-8275",
+	"x86_64":             "x86-64",
+	"vm-arm64":           "ARM64 VM",
+	"vm-x86-64":          "x86-64 VM",
 }
 
 func humanReadableDeviceType(dt string) string {

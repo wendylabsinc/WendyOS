@@ -1,0 +1,12 @@
+{
+  "appId": "mojo-simple-web-server",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": [
+    { "type": "network" }
+  ],
+  "readiness": {
+    "tcpSocket": { "port": 8080 },
+    "timeoutSeconds": 30
+  }
+}
