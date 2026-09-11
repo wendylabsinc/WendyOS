@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"google.golang.org/grpc/codes"
@@ -154,6 +156,40 @@ func checkFleetDeliverySupported(host string, resp *agentpbv2.GetBuildCapabiliti
 	return fmt.Errorf("build host %s cannot deliver one build to several devices; update its agent, or deploy to one device at a time", host)
 }
 
+// checkChunkDeliverySupported refuses --chunking=force against a build host
+// whose agent predates chunked delivery: it would discard the mode and push
+// through the registry, which is the silent fallback force exists to forbid.
+// auto and off need nothing new from the host — an older one pushes through
+// the registry, which is what off asks for and what auto accepts, though auto
+// is told.
+func checkChunkDeliverySupported(host string, resp *agentpbv2.GetBuildCapabilitiesResponse, mode string) error {
+	if resp.GetChunkDelivery() {
+		return nil
+	}
+	switch mode {
+	case chunkingForce:
+		return fmt.Errorf("build host %s predates chunked delivery, so --chunking=force cannot be honoured there; update its agent, or use --chunking=auto or off", host)
+	case chunkingOff:
+		return nil
+	default:
+		cliNotice("build host %s predates chunked delivery; the image will be pushed through the device's registry", host)
+		return nil
+	}
+}
+
+// buildChunkingMode carries --chunking to the build host, so the flag means the
+// same thing whichever machine delivers the image. Empty is auto, as locally.
+func buildChunkingMode(mode string) agentpbv2.ChunkingMode {
+	switch mode {
+	case chunkingForce:
+		return agentpbv2.ChunkingMode_CHUNKING_MODE_FORCE
+	case chunkingOff:
+		return agentpbv2.ChunkingMode_CHUNKING_MODE_OFF
+	default:
+		return agentpbv2.ChunkingMode_CHUNKING_MODE_AUTO
+	}
+}
+
 // checkBuildHostCapabilities refuses a build host before any context is
 // transferred. Every failure names the host, and none falls back to a local
 // build: a long build the developer believed was running on the Spark is worse
@@ -226,8 +262,10 @@ func classifyRemoteBuildError(host string, err error) error {
 }
 
 // runRemoteBuild builds the image on another WendyOS device, has that device
-// push it straight into the target's registry over the mesh, and then creates
-// the container through the unchanged registry-push deploy path.
+// deliver it to the target over the mesh — by chunks into the target's content
+// store, registered under the same localhost:<port>/<repo> name a registry push
+// would have given it — and then creates the container by that name through
+// the unchanged registry-push deploy path.
 //
 // Nothing here touches a local container builder: no ensureDockerDaemon, no
 // ensureBuildxBuilder, no ensureAppleContainerSystemForBuilder. That is the
@@ -257,6 +295,9 @@ func runRemoteBuild(
 		return fmt.Errorf("querying build host %s: %w", host, err)
 	}
 	if err := checkBuildHostCapabilities(host, caps, platform); err != nil {
+		return err
+	}
+	if err := checkChunkDeliverySupported(host, caps, opts.chunking); err != nil {
 		return err
 	}
 
@@ -326,6 +367,7 @@ func runRemoteBuild(
 	}
 
 	buildTitle := fmt.Sprintf("Building on %s for %s...", tui.Value(host), tui.Value(platform))
+	var buildResult *agentpbv2.BuildImageResult
 	if err := runBuildWithProgress(ctx, buildTitle, dumpRawAlways, func(buildCtx context.Context, stream, logw io.Writer) error {
 		manifest, err := pushBuildContext(buildCtx, builder.ContainerService, tarBytes)
 		if err != nil {
@@ -341,6 +383,7 @@ func runRemoteBuild(
 			AppId:    appCfg.AppID,
 			Platform: platform,
 			Context:  manifest,
+			Chunking: buildChunkingMode(opts.chunking),
 			Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 				DockerfileBuild: &agentpbv2.DockerfileBuild{
 					Dockerfile: resolved,
@@ -353,7 +396,8 @@ func runRemoteBuild(
 		} else {
 			spec.PushTargets = pushTargets
 		}
-		return streamRemoteBuild(buildCtx, builder, spec, stream)
+		buildResult, err = streamRemoteBuild(buildCtx, builder, spec, stream)
+		return err
 	}); err != nil {
 		return classifyRemoteBuildError(host, err)
 	}
@@ -371,6 +415,9 @@ func runRemoteBuild(
 		Env:           deployEnv,
 	}
 	if len(fleetConns) == 0 {
+		if err := reportedDeliveryError(buildResult, pushTargets[0].GetAssetId()); err != nil {
+			return fmt.Errorf("image built on %s but could not be delivered to %s: %w", host, deviceFlag, err)
+		}
 		return startAndStreamContainer(ctx, target, appCfg, createReq, opts)
 	}
 
@@ -378,7 +425,9 @@ func runRemoteBuild(
 	// created, and one device failing that must not strand the others -- the
 	// image is already on them.
 	report := make([]*agentpbv2.DeliveryResult, 0, len(pushTargets))
-	primaryErr := startAndStreamContainer(ctx, target, appCfg, createReq, opts)
+	primaryErr := startAfterReportedDelivery(buildResult, pushTargets[0].GetAssetId(), func() error {
+		return startAndStreamContainer(ctx, target, appCfg, createReq, opts)
+	})
 	report = append(report, deliveryOutcome(pushTargets[0].GetAssetId(), primaryErr))
 
 	for i, conn := range fleetConns {
@@ -391,8 +440,11 @@ func runRemoteBuild(
 			UserArgs:      opts.userArgs,
 			Env:           deployEnv,
 		}
-		report = append(report, deliveryOutcome(pushTargets[i+1].GetAssetId(),
-			startAndStreamContainer(ctx, conn, appCfg, req, opts)))
+		assetID := pushTargets[i+1].GetAssetId()
+		targetErr := startAfterReportedDelivery(buildResult, assetID, func() error {
+			return startAndStreamContainer(ctx, conn, appCfg, req, opts)
+		})
+		report = append(report, deliveryOutcome(assetID, targetErr))
 	}
 
 	lines, failed := fleetDeliveryReport(report, nameOf)
@@ -404,6 +456,41 @@ func runRemoteBuild(
 		return &errPartialFleetDeploy{failed: failed, total: len(report)}
 	}
 	return nil
+}
+
+func startAfterReportedDelivery(result *agentpbv2.BuildImageResult, assetID int32, start func() error) error {
+	if err := reportedDeliveryError(result, assetID); err != nil {
+		return err
+	}
+	return start()
+}
+
+// reportedDeliveryError returns the build host's failure for one target. An
+// empty delivery list is the legacy single-target contract: older build hosts
+// reported delivery failure through the stream status and success by EOF, so
+// there is no per-target result to inspect.
+//
+// Once a host sends any per-target results, absence is a failure. Failing
+// closed prevents the CLI from creating a container from an older image that
+// happens to remain registered under the same :latest name.
+func reportedDeliveryError(result *agentpbv2.BuildImageResult, assetID int32) error {
+	if result == nil || len(result.GetDeliveries()) == 0 {
+		return nil
+	}
+	for _, delivery := range result.GetDeliveries() {
+		if delivery.GetAssetId() != assetID {
+			continue
+		}
+		if delivery.GetDelivered() {
+			return nil
+		}
+		reason := delivery.GetError()
+		if reason == "" {
+			reason = "delivery failed (no reason reported)"
+		}
+		return errors.New(reason)
+	}
+	return fmt.Errorf("build host returned no delivery result for asset %d", assetID)
 }
 
 // deliveryOutcome records what happened to one device without collapsing a
@@ -503,11 +590,35 @@ func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, a
 	if err != nil {
 		return nil, err
 	}
+	agentPort, err := connectedTargetAgentPort(target)
+	if err != nil {
+		return nil, fmt.Errorf("determining the target device's agent port: %w", err)
+	}
 	return &agentpbv2.PushTarget{
 		AssetId:      prov.Provisioned.GetAssetId(),
 		RegistryPort: uint32(registryPort(agentOS)),
 		Repository:   strings.ToLower(appCfg.AppID) + ":latest",
+		AgentPort:    agentPort,
 	}, nil
+}
+
+// connectedTargetAgentPort reports the mTLS endpoint the CLI actually used.
+// Direct and session-proxy connections retain that address in Addr. A cloud
+// connection is a pre-built gRPC channel with no network Addr; cloud tunnelling
+// currently reaches the standard provisioned-agent port, so use that default.
+func connectedTargetAgentPort(target *grpcclient.AgentConnection) (uint32, error) {
+	if target.Addr == "" {
+		return uint32(defaultAgentPort + agentMTLSPortOffset), nil
+	}
+	_, portText, err := net.SplitHostPort(target.Addr)
+	if err != nil {
+		return 0, fmt.Errorf("parsing connected address %q: %w", target.Addr, err)
+	}
+	port, err := strconv.ParseUint(portText, 10, 16)
+	if err != nil || port == 0 {
+		return 0, fmt.Errorf("invalid port in connected address %q", target.Addr)
+	}
+	return uint32(port), nil
 }
 
 // localRegistryReference is the same image as the target itself sees it. The
@@ -531,16 +642,16 @@ func targetAgentOS(ctx context.Context, target *grpcclient.AgentConnection) (str
 
 // streamRemoteBuild drives one BuildImage stream, forwarding the build host's
 // plain-mode output into the CLI's existing progress renderer.
-func streamRemoteBuild(ctx context.Context, builder *grpcclient.AgentConnection, spec *agentpbv2.BuildSpec, out io.Writer) error {
+func streamRemoteBuild(ctx context.Context, builder *grpcclient.AgentConnection, spec *agentpbv2.BuildSpec, out io.Writer) (*agentpbv2.BuildImageResult, error) {
 	stream, err := builder.BuildService.BuildImage(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := stream.Send(&agentpbv2.BuildImageRequest{Spec: spec}); err != nil {
-		return err
+		return nil, err
 	}
 	if err := stream.CloseSend(); err != nil {
-		return err
+		return nil, err
 	}
 	return consumeBuildProgress(stream.Recv, out)
 }
@@ -549,14 +660,14 @@ func streamRemoteBuild(ctx context.Context, builder *grpcclient.AgentConnection,
 //
 // Split from streamRemoteBuild so the termination rule can be tested without a
 // gRPC connection: it is the part with a way to go wrong.
-func consumeBuildProgress(recv func() (*agentpbv2.BuildImageProgress, error), out io.Writer) error {
+func consumeBuildProgress(recv func() (*agentpbv2.BuildImageProgress, error), out io.Writer) (*agentpbv2.BuildImageResult, error) {
 	for {
 		msg, err := recv()
 		if err == io.EOF {
-			return nil
+			return nil, nil
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if line := msg.GetLogLine(); line != "" {
 			fmt.Fprintln(out, line)
@@ -565,8 +676,8 @@ func consumeBuildProgress(recv func() (*agentpbv2.BuildImageProgress, error), ou
 		// right after sending it, so EOF follows immediately — but a client that
 		// stops only on EOF is one trailing event away from waiting forever on a
 		// build that has already finished.
-		if msg.GetResult() != nil {
-			return nil
+		if result := msg.GetResult(); result != nil {
+			return result, nil
 		}
 	}
 }

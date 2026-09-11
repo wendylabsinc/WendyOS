@@ -49,7 +49,7 @@ func (p *chunkPushProgress) SetLayerCounts(total, reused int) {
 }
 
 // LayerPlanned records one layer's chunk-diff plan, once QueryChunks has told
-// us which of its chunks the device is missing: the chunk count in the
+// us which content hashes the device is missing: the unique-hash count in the
 // layer's manifest, how many of those are missing, and the byte total of the
 // missing ones (what this layer will actually push over WriteChunks). Called
 // once per layer that was not skipped by the layer-level pre-check, from

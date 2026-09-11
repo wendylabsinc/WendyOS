@@ -2,6 +2,7 @@ package services
 
 import (
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -83,8 +84,18 @@ func (s *TelemetryServiceV2) StreamLogs(req *agentpbv2.StreamLogsRequest, stream
 		}
 	}
 
+	// A single sender owns both logs and empty application heartbeats. Reset
+	// after each successful write so busy streams don't emit extra messages.
+	heartbeat := time.NewTimer(15 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
+		case <-heartbeat.C:
+			if err := stream.Send(&agentpbv2.StreamLogsResponse{}); err != nil {
+				return err
+			}
+			heartbeat.Reset(15 * time.Second)
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		case item, ok := <-ch:
@@ -101,6 +112,7 @@ func (s *TelemetryServiceV2) StreamLogs(req *agentpbv2.StreamLogsRequest, stream
 			if err := stream.Send(&agentpbv2.StreamLogsResponse{Logs: item}); err != nil {
 				return err
 			}
+			heartbeat.Reset(15 * time.Second)
 		}
 	}
 }

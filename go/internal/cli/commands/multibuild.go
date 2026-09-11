@@ -158,7 +158,7 @@ type servicePlan struct {
 // plan as "don't skip this service, and don't reuse anything for it", so the
 // real error surfaces from the build path instead of aborting the whole group
 // during planning.
-func computeServicePlans(cwd, platform, gpuArch string, appCfg *appconfig.AppConfig, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) map[string]servicePlan {
+func computeServicePlans(cwd, platform, gpuArch string, serviceEnvs map[string][]string, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) map[string]servicePlan {
 	var mu sync.Mutex
 	plans := make(map[string]servicePlan, len(services))
 
@@ -174,7 +174,7 @@ func computeServicePlans(cwd, platform, gpuArch string, appCfg *appconfig.AppCon
 			if err != nil {
 				return
 			}
-			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, buildArgs, expandServiceEnv(appCfg, svc))
+			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, buildArgs, serviceEnvs[name])
 			if err != nil {
 				return
 			}
@@ -274,7 +274,7 @@ func deviceContainerNames(ctx context.Context, conn *grpcclient.AgentConnection)
 // that consult the device happen here. The resolved build files are returned
 // alongside so the build path can reuse them instead of resolving (and, for a
 // Stagefile, recompiling) every service a second time in the same run.
-func planServicePushSkips(ctx context.Context, conn *grpcclient.AgentConnection, cwd, appID, deviceKey, platform string, appCfg *appconfig.AppConfig, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) (skip map[string]bool, hashes, dockerfiles map[string]string) {
+func planServicePushSkips(ctx context.Context, conn *grpcclient.AgentConnection, cwd, appID, deviceKey, platform string, serviceEnvs map[string][]string, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) (skip map[string]bool, hashes, dockerfiles map[string]string) {
 	skip = map[string]bool{}
 	hashes = map[string]string{}
 	dockerfiles = map[string]string{}
@@ -282,7 +282,7 @@ func planServicePushSkips(ctx context.Context, conn *grpcclient.AgentConnection,
 		return skip, hashes, dockerfiles
 	}
 
-	plans := computeServicePlans(cwd, platform, serviceGPUArch(ctx, cwd, services, conn), appCfg, services, buildArgs, sfOpts...)
+	plans := computeServicePlans(cwd, platform, serviceGPUArch(ctx, cwd, services, conn), serviceEnvs, services, buildArgs, sfOpts...)
 	present := deviceContainerNames(ctx, conn)
 	type candidate struct {
 		name string
@@ -369,6 +369,15 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	if err != nil {
 		return err
 	}
+	networkOrder, err := serviceTopoOrder(services)
+	if err != nil {
+		return err
+	}
+	networkConfigs := make([]*appconfig.AppConfig, 0, len(networkOrder))
+	for _, name := range networkOrder {
+		networkConfigs = append(networkConfigs, multiServiceCreateConfig(appCfg, name, services[name]))
+	}
+	printMissingNetworkWarnings(networkConfigs...)
 	portConfigs := []*appconfig.AppConfig{appCfg}
 	for name, svc := range services {
 		portConfigs = append(portConfigs, multiServiceCreateConfig(appCfg, name, svc))
@@ -428,7 +437,8 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	// fail closed because they do not provide a verifiable content identity.
 	deviceKey := deviceFingerprintKey(versionResp)
 	sfOpts := debugStagefileOptions(opts.debug)
-	skip, hashes, dockerfiles := planServicePushSkips(ctx, conn, cwd, appCfg.AppID, deviceKey, platform, appCfg, services, buildArgs, sfOpts...)
+	serviceEnvs := effectiveServiceEnvs(appCfg, services, opts.env)
+	skip, hashes, dockerfiles := planServicePushSkips(ctx, conn, cwd, appCfg.AppID, deviceKey, platform, serviceEnvs, services, buildArgs, sfOpts...)
 
 	// Build the full per-service create configs before selecting watch work: a
 	// service is unchanged only when both its image inputs and its effective
@@ -445,12 +455,12 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	if opts.watchState != nil {
 		states := deviceContainerStates(ctx, conn)
 		candidates := map[string]watchServiceCandidate{}
-		for name, svc := range services {
+		for name := range services {
 			buildHash, planned := hashes[name]
 			if !planned {
 				continue
 			}
-			desiredHash, err := multiServiceWatchHash(buildHash, svcCfgs[name], expandServiceEnv(appCfg, svc), resolveRestartPolicy(opts))
+			desiredHash, err := multiServiceWatchHash(buildHash, svcCfgs[name], serviceEnvs[name], resolveRestartPolicy(opts))
 			if err != nil {
 				continue
 			}
@@ -540,7 +550,6 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 
 	createService := func(name string) error {
-		svc := services[name]
 		deviceImage := fmt.Sprintf("localhost:%d/%s-%s:latest", regPort,
 			strings.ToLower(appCfg.AppID), strings.ToLower(name))
 
@@ -556,7 +565,7 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 			AppName:       serviceCfg.ContainerName(),
 			AppConfig:     appConfigData,
 			RestartPolicy: restartPolicy,
-			Env:           expandServiceEnv(appCfg, svc),
+			Env:           serviceEnvs[name],
 		}
 
 		cliLogln("Creating container for service %s...", name)
@@ -1127,6 +1136,9 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 	defer runCancel()
 
 	runner := &serviceHookRunner{conn: conn, opts: opts}
+	defer func() { runCancel(); runner.reap() }()
+	appHookCtx, appHookCancel := context.WithCancel(runCtx)
+	defer appHookCancel()
 
 	// Ctrl+C stops all services. The watch loop owns the signal for the whole
 	// session and leaves the group running when it stops, so a watch cycle must
@@ -1209,7 +1221,7 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 		for _, name := range preservedLifecycle {
 			runner.startAsync(runCtx, svcLifecycleCfgs[name])
 		}
-		runner.startAsync(runCtx, appLevelCfg)
+		runner.startAsync(appHookCtx, appLevelCfg)
 		if len(ordered) > 0 {
 			cliLogln("App group %s started (%d services).", appID, len(ordered))
 		}
@@ -1260,10 +1272,13 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 		// failing probe never delays creating/starting the next service — the
 		// sequential Started-ack ordering above is load-bearing for
 		// shared-ipc/shared-network joins and must not be disturbed (WDY-1271).
-		runner.startAsync(runCtx, svcLifecycleCfgs[name])
+		serviceCtx, serviceCancel := context.WithCancel(runCtx)
+		runner.startAsync(serviceCtx, svcLifecycleCfgs[name])
 		wg.Add(1)
 		go func(name string, stream agentpb.WendyContainerService_StartContainerClient) {
 			defer wg.Done()
+			defer serviceCancel()
+			defer appHookCancel()
 			for {
 				resp, recvErr := stream.Recv()
 				if recvErr == io.EOF {
@@ -1295,7 +1310,7 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 
 	// Every service has started: fire the app-level fallback (nil on subset
 	// runs). Async, for the same non-blocking reason as the per-service hooks.
-	runner.startAsync(runCtx, appLevelCfg)
+	runner.startAsync(appHookCtx, appLevelCfg)
 
 	go func() {
 		wg.Wait()

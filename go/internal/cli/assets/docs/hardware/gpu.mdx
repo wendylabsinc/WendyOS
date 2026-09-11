@@ -11,6 +11,8 @@ This covers **NVIDIA GPUs (CUDA)** on Jetson and x86 systems, and **AMD GPUs (RO
 
 For a complete AMD example, follow [Run PyTorch on an AMD GPU](/docs/guides/tutorials/python/amd-rocm-pytorch). Stagefile's `cuda: true` option remains NVIDIA-only; the ROCm example selects its wheel index explicitly.
 
+On **Qualcomm Dragonwing** boards (such as the IQ-8275), the entitlement exposes the Adreno GPU's DRM render node, which the mesa freedreno/turnip, OpenCL, and Vulkan userspace in your image opens. The on-SoC Hexagon NPU is a separate accelerator: `wendy device info` reports it as the `qnn` compute backend when its FastRPC nodes are present, and apps reach it through the `npu` entitlement rather than `gpu`.
+
 On NVIDIA Jetson, the latest WendyOS is built on **JetPack 7.2** (L4T R39.2.0, CUDA 13). Target JetPack 7.2 or later when selecting CUDA wheels or base images for your app.
 
 Add the entitlement from your project directory:

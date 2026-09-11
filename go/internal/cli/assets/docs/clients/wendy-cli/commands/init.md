@@ -42,10 +42,12 @@ An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that
 | `--target` | `platform` written to `wendy.json` | Languages |
 |---|---|---|
 | `wendyos` | `linux` | `swift`, `python` |
-| `darwin` (aliases: `mac`, `macos`) | `darwin` | `swift` only |
+| `darwin` (aliases: `mac`, `macos`) | `darwin` | `swift` (plain wizard), `mojo` (via templates) |
 | `wendy-lite` | `wendy-lite` | `swift` only (optional WASM scaffold) |
 
-Templates may offer additional languages (for example `rust`, `node`, or `cpp`) on a `wendyos` target; the plain wizard writes `swift` or `python`.
+Templates may offer additional languages (for example `rust`, `node`, or `cpp`) on a `wendyos` target; the plain wizard writes `swift` or `python`. On a `darwin` target the plain wizard writes `swift`; `mojo` is accepted when a catalogued Mojo/MAX template such as `mac-llm` provides it.
+
+**Language resolution.** `wendy-lite` always uses Swift and rejects any other language. `darwin` accepts `swift` or `mojo`; with a template, the language must be one the template offers, and an unsupported choice is rejected with the languages it does offer.
 
 For ESP32, regular native ESP-IDF projects are recommended. Create them with the standard ESP-IDF tooling and add a `wendy.json` whose platform is `wendy-lite`; you do not need `wendy init`. The `wendy-lite` wizard target remains available for scaffolding an optional Swift/WASM guest.
 
@@ -58,7 +60,7 @@ For ESP32, regular native ESP-IDF projects are recommended. Create them with the
 | `--app-id <id>` | Application ID written to `wendy.json`. Creates a subdirectory of that name. |
 | `--here` | Scaffold into the current directory instead of creating a subdirectory. With no `[app-id]`/`--app-id`, infers the app ID from the current directory's name. |
 | `--target <name>` | Target platform: `wendyos`, `darwin`, or `wendy-lite`. Required when running non-interactively. |
-| `--language <name>` | Project language. `swift` or `python` for the plain wizard; templates may offer more. |
+| `--language <name>` | Project language. `swift` or `python` for the plain wizard (`swift` on `darwin`); templates may offer more, including `mojo` on `darwin`. |
 | `--git-init <yes\|no>` | Initialize a git repo in the project directory. |
 
 ### Template flags
@@ -236,6 +238,14 @@ wendy init \
   --app-id mac-llm \
   --target darwin \
   --language swift \
+  --template mac-llm \
+  --assistant skip
+
+# The same template as a native Mojo/MAX app (run.command on the Mac agent)
+wendy init \
+  --app-id mac-llm \
+  --target darwin \
+  --language mojo \
   --template mac-llm \
   --assistant skip
 

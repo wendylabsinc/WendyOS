@@ -46,12 +46,24 @@ Builds of the same app are serialised on a host. Builds of different apps can
 run concurrently. This prevents one build from replacing source files that
 another build of the same app is still compiling.
 
+## Delivery
+
+The finished image reaches the target by chunks: the build host asks the device
+which layers and chunks it already holds and sends only the missing bytes into
+its content store. A link that drops mid-transfer resumes from the chunks the
+device already staged rather than restarting. This leg is scoped to one build —
+the host dials the target's agent with its own certificate, pinned to that one
+device, so a build for one target cannot deliver to another.
+
+A device whose agent predates chunked delivery receives a registry push instead,
+as does a build run with `--chunking=off`. The build log says which route it took.
+
 ## Delivery credentials
 
-While a build runs, the agent exposes a loopback endpoint for BuildKit to push
-through. The endpoint holds the credentials for reaching the target device and
-requires a password generated for that build alone. Other processes on the host
-cannot use it to push their own image to the device.
+On the registry-push route, the agent exposes a loopback endpoint for BuildKit to
+push through while a build runs. The endpoint holds the credentials for reaching
+the target device and requires a password generated for that build alone. Other
+processes on the host cannot use it to push their own image to the device.
 
 The password is passed to BuildKit in a file with mode `0600`. It is not placed
 on the command line, where other local users could read it through `/proc`.

@@ -40,6 +40,13 @@ message GetDeviceInfoResponse {
     optional bool has_npu = 18;
     // NPU vendor identifier (e.g. "qualcomm"). Only present when has_npu is true.
     optional string npu_vendor = 19;
+    // Filesystem containing /var/lib/containerd. Absent when inspection fails.
+    optional DiskPartition container_storage = 20;
+    // One entry per detected GPU with the host compute backends an app can use
+    // on it. Empty on agents predating this field and on hosts without a GPU;
+    // an agent that reports has_gpu=true always lists at least one entry, so
+    // has_gpu with an empty list identifies an older agent.
+    repeated GpuCapabilities gpu_capabilities = 21;
 }
 
 // Usage information for a single mounted filesystem.
@@ -69,4 +76,18 @@ message ListHardwareCapabilitiesResponse {
         string description = 3;
         map<string, string> properties = 4;
     }
+}
+
+// A detected GPU and the host compute backends an app can use on it.
+message GpuCapabilities {
+    // Host compute backends usable on this GPU: cuda, rocm, metal, or qnn (the
+    // Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing). Empty when
+    // the GPU is present but no supported backend was detected.
+    repeated string compute_backends = 1;
+    // GPU vendor (nvidia, amd, intel, apple, broadcom, arm, qualcomm, vivante,
+    // virtio). Empty when the driver is not recognized.
+    string vendor = 2;
+    // Device node or sysfs path that identified the GPU on Linux
+    // (e.g. /dev/dri/card0, /dev/nvidia0, /dev/kfd). Empty on macOS.
+    string path = 3;
 }

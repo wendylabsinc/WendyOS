@@ -73,8 +73,37 @@ func TestApplyDeviceBuildArgHints_DerivesJetpackMajor(t *testing.T) {
 func TestApplyDeviceBuildArgHints_OmitsUnreportedHints(t *testing.T) {
 	buildArgs := map[string]string{}
 	applyDeviceBuildArgHints(buildArgs, &agentpb.GetAgentVersionResponse{})
-	if len(buildArgs) != 0 {
-		t.Fatalf("expected no hints set for empty response, got %v", buildArgs)
+	if len(buildArgs) != 1 || buildArgs["WENDY_HAS_CUDA"] != "false" {
+		t.Fatalf("expected conservative CUDA hint for empty response, got %v", buildArgs)
+	}
+}
+
+func TestCUDAHintCapabilitiesAndLegacyFallback(t *testing.T) {
+	nvidiaCUDA := &agentpb.GpuCapabilities{Vendor: "nvidia", Path: "/dev/dri/card1", ComputeBackends: []string{"cuda"}}
+	amdROCm := &agentpb.GpuCapabilities{Vendor: "amd", Path: "/dev/dri/card0", ComputeBackends: []string{"rocm"}}
+	for _, tc := range []struct {
+		name   string
+		vendor string
+		gpus   []*agentpb.GpuCapabilities
+		want   string
+	}{
+		{"gpu without compute", "broadcom", []*agentpb.GpuCapabilities{{Vendor: "broadcom"}}, "false"},
+		{"nvidia without driver evidence", "nvidia", []*agentpb.GpuCapabilities{{Vendor: "nvidia"}}, "false"},
+		{"nvidia with cuda", "nvidia", []*agentpb.GpuCapabilities{nvidiaCUDA}, "true"},
+		{"amd with rocm", "amd", []*agentpb.GpuCapabilities{amdROCm}, "false"},
+		{"apple with metal", "apple", []*agentpb.GpuCapabilities{{Vendor: "apple", ComputeBackends: []string{"metal"}}}, "false"},
+		// The legacy vendor names the AMD card; cuda on the second GPU still counts.
+		{"amd and nvidia", "amd", []*agentpb.GpuCapabilities{amdROCm, nvidiaCUDA}, "true"},
+		{"older agent, nvidia", "nvidia", nil, "true"},
+		{"older agent, no vendor", "", nil, "false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]string{}
+			applyDeviceBuildArgHints(args, &agentpb.GetAgentVersionResponse{GpuVendor: &tc.vendor, GpuCapabilities: tc.gpus})
+			if args["WENDY_HAS_CUDA"] != tc.want {
+				t.Fatalf("WENDY_HAS_CUDA = %q, want %q (%v)", args["WENDY_HAS_CUDA"], tc.want, args)
+			}
+		})
 	}
 }
 

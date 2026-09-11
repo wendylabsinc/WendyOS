@@ -473,7 +473,7 @@ func TestResolveTemplateLanguage_DarwinRequiresSwift(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected Python Darwin template language to fail")
 	}
-	if got, want := err.Error(), `darwin templates require swift`; got != want {
+	if got, want := err.Error(), `template "mac-llm" is not available for language "python" (available: swift)`; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
@@ -1905,5 +1905,13 @@ func TestResolveTemplateLanguage_NonInteractiveMultiLanguageRequiresFlag(t *test
 	}
 	if !strings.Contains(err.Error(), "python") || !strings.Contains(err.Error(), "rust") {
 		t.Fatalf("error should list the template's languages, got: %v", err)
+	}
+}
+
+func TestResolveTemplateLanguage_DarwinMojo(t *testing.T) {
+	meta := &repoMeta{Templates: []repoMetaTemplate{{Name: "mac-llm", Languages: []string{langSwift, langMojo}, Targets: []string{targetDarwin}}}, Languages: []repoMetaLanguage{{Key: langSwift, Name: "Swift"}, {Key: langMojo, Name: "Mojo"}}}
+	language, err := resolveTemplateLanguage(targetDarwin, "mac-llm", meta, initOptions{language: langMojo, languageSet: true})
+	if err != nil || language != langMojo {
+		t.Fatalf("language=%q error=%v", language, err)
 	}
 }

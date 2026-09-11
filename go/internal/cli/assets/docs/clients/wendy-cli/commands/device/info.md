@@ -25,6 +25,14 @@ Two headline hardware specs are included when the agent reports them. Both are o
 
 For **live** CPU and memory utilization, use [`wendy device top`](top.md).
 
+### Storage output fields
+
+When the agent can identify the filesystem that holds `/var/lib/containerd`, it is reported alongside the mounted partitions. The field is omitted from the JSON map when inspection fails or the agent predates it.
+
+| Field (JSON) | Human-readable label | Description |
+|---|---|---|
+| `containerStorage` | `(container storage)` suffix on the matching partition row | The mounted filesystem backing `/var/lib/containerd`: `mountpoint`, `filesystem`, `device`, `usedBytes`, and `totalBytes`. Image pulls and container layers consume this filesystem, so its usage feeds the disk-usage warning. |
+
 ### GPU output fields
 
 On GPU-capable devices, the following GPU fields are included. Each is omitted from both the human-readable output and the JSON map when the agent does not report it (e.g. non-GPU devices or older agents), so consumers should treat every field as optional.
@@ -34,7 +42,8 @@ On GPU-capable devices, the following GPU fields are included. Each is omitted f
 | `gpuVendor` | `GPU:` | GPU vendor (e.g. `nvidia`, `qualcomm`); shown as `unknown` in human-readable output when a GPU is present but the vendor is unreported. |
 | `jetpackVersion` | `JetPack:` | JetPack/L4T version string (Jetson only). |
 | `cudaVersion` | `CUDA:` | CUDA toolkit version (e.g. `12.6`). |
-| `gpuArch` | `GPU Arch:` | GPU architecture identifier. Format is vendor-specific (e.g. `sm_87` for NVIDIA). |
+| `gpuArch` | `GPU Arch:` | GPU architecture identifier. Format is vendor-specific (e.g. `sm_87` for NVIDIA, `a623` for a Qualcomm Adreno). |
+| `gpuCapabilities[]` | `GPU Compute:` | One entry per detected GPU: `vendor`, `path` (the device node that identified it, e.g. `/dev/dri/card0`), and `computeBackends` (`cuda`, `rocm`, `metal`, or `qnn`, the Qualcomm Hexagon NPU over FastRPC on Dragonwing). A single GPU prints its backends, or `none detected`; several GPUs print each one with its vendor and path. No entries means an older agent. |
 
 ### NPU output fields
 

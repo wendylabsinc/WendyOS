@@ -165,10 +165,10 @@ Frames flow through the app like this:
 
     The FastAPI backend (`app.py`) captures frames with GStreamer, runs YOLOv8 inference on a **separate background thread**, and ships raw JPEG frames plus JSON detection metadata to the browser over a WebSocket. Capturing and inference are decoupled so a slow inference pass never stalls the video.
 
-    The base-image selection at build time is mirrored at runtime: the app reads the `WENDY_HAS_GPU` / `WENDY_GPU_VENDOR` hints the CLI baked in, and chooses CUDA vs CPU (and a sensible inference FPS/image size) accordingly:
+    The base-image selection at build time is mirrored at runtime: the app reads the `WENDY_HAS_CUDA` / `WENDY_GPU_VENDOR` hints the CLI baked in, and chooses CUDA vs CPU (and a sensible inference FPS/image size) accordingly:
 
     ```python
-    _HAS_CUDA = _has_cuda()  # uses WENDY_HAS_GPU hint, then torch.cuda.is_available()
+    _HAS_CUDA = _has_cuda()  # uses WENDY_HAS_CUDA hint, then torch.cuda.is_available()
     _MAX_INFERENCE_FPS = float(os.environ.get("YOLO_MAX_FPS", "15" if _HAS_CUDA else "3"))
     _INFERENCE_IMGSZ = 320 if _HAS_CUDA else 224
     # RPi5 / CPU devices idle lighter on OpenCV than GStreamer + inference.

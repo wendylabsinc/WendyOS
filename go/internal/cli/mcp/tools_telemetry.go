@@ -144,7 +144,12 @@ func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolR
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 	result, err := collectProtoStream(ctx, func() (*agentpb.StreamLogsResponse, error) {
-		return stream.Recv()
+		for {
+			response, err := stream.Recv()
+			if err != nil || response.GetLogs() != nil {
+				return response, err
+			}
+		}
 	}, maxBatches)
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil

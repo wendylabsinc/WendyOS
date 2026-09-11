@@ -37,15 +37,30 @@ func formatGigabytes(n int64) string {
 // formatPartitionTable renders an aligned, human-readable table of per-partition
 // disk usage suitable for printing under the device info output. The returned
 // string ends with a trailing newline.
-func formatPartitionTable(partitions []*agentpb.DiskPartition) string {
+func formatPartitionTable(partitions []*agentpb.DiskPartition, storage ...*agentpb.DiskPartition) string {
 	var b strings.Builder
 	b.WriteString("Disk Usage:\n")
+	var containerStorage *agentpb.DiskPartition
+	if len(storage) > 0 && storage[0] != nil {
+		containerStorage = storage[0]
+		ordered := []*agentpb.DiskPartition{containerStorage}
+		for _, p := range partitions {
+			if !samePartition(p, containerStorage) {
+				ordered = append(ordered, p)
+			}
+		}
+		partitions = ordered
+	}
 
 	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "  MOUNTPOINT\tFILESYSTEM\tUSED\tTOTAL\tUSE%")
 	for _, p := range partitions {
+		name := p.GetMountpoint()
+		if samePartition(p, containerStorage) {
+			name += " (container storage)"
+		}
 		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n",
-			p.GetMountpoint(),
+			name,
 			p.GetFilesystem(),
 			formatGigabytes(p.GetUsedBytes()),
 			formatGigabytes(p.GetTotalBytes()),

@@ -419,12 +419,10 @@ func (c *Client) hydrateIsolationLocked(appID string, labels map[string]string) 
 	if c.appIsolation == nil {
 		c.appIsolation = make(map[string]string)
 	}
-	if c.appIsolation[appID] != "" {
+	if _, loaded := c.appIsolation[appID]; loaded {
 		return // already set (live create or earlier hydrate) — never override
 	}
-	if v := labels[labelKeyIsolation]; v != "" {
-		c.appIsolation[appID] = v
-	}
+	c.appIsolation[appID] = labels[labelKeyIsolation]
 }
 
 // recordServiceIP stores the CNI-assigned IP for a service. Caller must hold c.mu.
@@ -1675,12 +1673,12 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		}
 		c.appServices[appID] = appCfg.Services
 	}
-	if appCfg.Isolation != "" {
-		if c.appIsolation == nil {
-			c.appIsolation = make(map[string]string)
-		}
-		c.appIsolation[appID] = appCfg.Isolation
+	if c.appIsolation == nil {
+		c.appIsolation = make(map[string]string)
 	}
+	// An empty value is authoritative too: a redeploy can remove isolation.
+	// Hydration must not revive old sibling labels during group replacement.
+	c.appIsolation[appID] = appCfg.Isolation
 
 	return nil
 }
@@ -2153,7 +2151,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 				// c.appIsolation[appID] during the window between CNI ADD and this
 				// re-lock. If the app is already gone, discard the IP silently rather
 				// than writing stale state (SOC2-CC6, NIST-SI-16, ISO27001-A.8).
-				if c.appIsolation[appID] == "" {
+				if _, loaded := c.appIsolation[appID]; !loaded {
 					c.mu.Unlock()
 					c.logger.Warn("CNI ADD: app already stopped before IP could be recorded, discarding IP",
 						zap.String(logfields.AppID, appID), zap.String("ip", ip))

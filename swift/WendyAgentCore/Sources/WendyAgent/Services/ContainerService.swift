@@ -79,6 +79,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// the Linux monitor's 10 s floor (`planRestarts`).
     private let restartFloorSeconds: TimeInterval
     private let pidExecutablePath: PIDExecutablePathLookup
+    private let pidBirthTime: PIDBirthTimeLookup
     private let sendSignal: PIDSignalSender
 
     init(
@@ -96,6 +97,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         pidExecutablePath: @escaping PIDExecutablePathLookup = {
             ContainerService.executablePath(forPID: $0)
         },
+        pidBirthTime: @escaping PIDBirthTimeLookup = {
+            NativeProcessConfiguration.birthTime(forPID: $0)
+        },
         sendSignal: @escaping PIDSignalSender = { pid, signal in _ = Darwin.kill(pid, signal) },
         onAppsChanged: @escaping @Sendable ([WendyAppInfo]) async -> Void = { _ in }
     ) {
@@ -109,6 +113,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         self.supervisorInterval = supervisorInterval
         self.restartFloorSeconds = Self.seconds(restartFloor)
         self.pidExecutablePath = pidExecutablePath
+        self.pidBirthTime = pidBirthTime
         self.sendSignal = sendSignal
 
         let defaultStateDirectory = WendyAgentPaths.stateDirectory
@@ -337,6 +342,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         )
         app.process = process
         app.launchToken = launchToken
+        app.pidBirthTime = self.pidBirthTime(process.processIdentifier)
         self.appsByID[id] = app
         try self.saveApps()
         await self.publishApps()
@@ -834,21 +840,20 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// a pid that has already exited (and possibly been recycled) is marked
     /// stopped without anything being signalled.
     private func stopAdoptedNativeApp(id: String, pid: Int32, app: WendyApp) async {
-        guard let binaryPath = Self.nativeBinaryPath(app), self.isPIDRunningApp(pid, app: app)
+        guard self.isPIDRunningApp(pid, app: app)
         else {
             await self.markAppStopped(id: id)
             return
         }
 
         self.sendSignal(pid, SIGTERM)
-        if !(await self.waitForPIDToExit(pid, matching: binaryPath, timeout: self.nativeStopTimeout))
-        {
+        if !(await self.waitForPIDToExit(pid, matching: app, timeout: self.nativeStopTimeout)) {
             self.logger.warning(
                 "Adopted native app did not exit after SIGTERM, force killing",
                 metadata: ["app_name": "\(id)", "pid": "\(pid)"]
             )
-            self.sendSignal(pid, SIGKILL)
-            _ = await self.waitForPIDToExit(pid, matching: binaryPath, timeout: .seconds(1))
+            if self.isPIDRunningApp(pid, app: app) { self.sendSignal(pid, SIGKILL) }
+            _ = await self.waitForPIDToExit(pid, matching: app, timeout: .seconds(1))
         }
 
         await self.markAppStopped(id: id)
@@ -860,13 +865,18 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// recycled is never mistaken for the app.
     private func isPIDRunningApp(_ pid: Int32, app: WendyApp) -> Bool {
         guard pid > 0, let binaryPath = Self.nativeBinaryPath(app) else { return false }
+        if let expected = app.pidBirthTime {
+            return self.pidBirthTime(pid) == expected
+        }
         guard let actualPath = self.pidExecutablePath(pid) else { return false }
         return Self.pathsMatch(actualPath, binaryPath)
     }
 
     nonisolated private static func nativeBinaryPath(_ app: WendyApp) -> String? {
         guard let native = app.native else { return nil }
-        return "\(native.directory)/\(native.binaryName)"
+        return native.executablePath
+            ?? (native.binaryName.hasPrefix("/")
+                ? native.binaryName : "\(native.directory)/\(native.binaryName)")
     }
 
     /// Marks an app running without a `Foundation.Process`: it is alive but
@@ -960,11 +970,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// and only then is it terminated, so the relaunch that follows leaves
     /// exactly one copy that the agent owns.
     ///
-    /// A mismatch is never signalled. That deliberately means apps launched
-    /// through `/usr/bin/sandbox-exec`, or whose "binary" is a script (where the
-    /// pid's executable is the interpreter), are not recognized as survivors and
-    /// are left alone: starting a second copy is a far cheaper mistake than
-    /// killing an unrelated process that merely reused the pid.
+    /// The persisted birth time identifies scripts, interpreters and sandboxed
+    /// launches across exec(). A recycled PID with a different birth time is
+    /// never adopted or signalled. Legacy snapshots use the executable check.
     ///
     /// Terminating is right here and wrong in `syncAdoptedNativeStates`, which
     /// adopts instead, because of who owns the process: reconcile runs on a
@@ -974,7 +982,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// a live `ContainerService` in this same process.
     private func terminateNativeSurvivorIfAny(_ app: WendyApp) async {
         guard let pid = app.persistedPID, pid > 0,
-            let binaryPath = Self.nativeBinaryPath(app)
+            Self.nativeBinaryPath(app) != nil
         else {
             return
         }
@@ -1002,7 +1010,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             metadata: ["app_name": "\(app.info.id)", "pid": "\(pid)"]
         )
         self.sendSignal(pid, SIGTERM)
-        if await self.waitForPIDToExit(pid, matching: binaryPath, timeout: self.nativeStopTimeout) {
+        if await self.waitForPIDToExit(pid, matching: app, timeout: self.nativeStopTimeout) {
             return
         }
 
@@ -1010,10 +1018,10 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             "Surviving app process ignored SIGTERM, force killing",
             metadata: ["app_name": "\(app.info.id)", "pid": "\(pid)"]
         )
-        self.sendSignal(pid, SIGKILL)
+        if self.isPIDRunningApp(pid, app: app) { self.sendSignal(pid, SIGKILL) }
         let didExit = await self.waitForPIDToExit(
             pid,
-            matching: binaryPath,
+            matching: app,
             timeout: .seconds(1)
         )
         if !didExit {
@@ -1029,13 +1037,13 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     /// costs nothing.
     private func waitForPIDToExit(
         _ pid: Int32,
-        matching binaryPath: String,
+        matching app: WendyApp,
         timeout: Duration
     ) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now + timeout
         while true {
-            guard let path = self.pidExecutablePath(pid), Self.pathsMatch(path, binaryPath) else {
+            guard self.isPIDRunningApp(pid, app: app) else {
                 return true
             }
             if clock.now >= deadline { return false }
@@ -1183,6 +1191,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
     nonisolated static func brewBundleEnvironment(
         source: [String: String] = ProcessInfo.processInfo.environment,
+        overrides: [String: String] = [:],
         realUserName: String? = realUserName()
     ) -> [String: String] {
         var environment: [String: String] = [:]
@@ -1219,9 +1228,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     nonisolated static func nativeAppEnvironment(
         appName: String,
         otelPort: Int,
-        source: [String: String] = ProcessInfo.processInfo.environment
+        source: [String: String] = ProcessInfo.processInfo.environment,
+        overrides: [String: String] = [:]
     ) -> [String: String] {
-        var environment = source
+        var environment = source.merging(overrides) { _, userValue in userValue }
+        environment["WENDY_APP_ID"] = appName
         environment["NSUnbufferedIO"] = "YES"
         environment["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:\(otelPort)"
         environment["OTEL_EXPORTER_OTLP_PROTOCOL"] = "grpc"
@@ -1491,6 +1502,9 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_CreateContainerResponse> {
         let appName = request.message.appName
         let imageName = request.message.imageName
+        // Validate the app component separately from cwd, where an empty value
+        // intentionally means the app directory.
+        _ = try validateContainedPath(base: appsBase, relative: appName)
         logger.info(
             "CreateContainer called",
             metadata: ["app_name": "\(appName)", "image_name": "\(imageName)"]
@@ -1512,7 +1526,7 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             } ?? false
         let brewfile = appConfig?.brewfile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        if !brewfile.isEmpty, appConfig?.platform != "darwin" {
+        if !brewfile.isEmpty, isLinux {
             throw RPCError(
                 code: .invalidArgument,
                 message: "Brewfile is only supported for native Darwin apps"
@@ -1538,10 +1552,13 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
 
         // Native darwin path (existing behavior).
 
-        let nativeLaunchInfo: NativeLaunchInfo
+        var nativeLaunchInfo: NativeLaunchInfo
         if imageName.hasPrefix("sha256:") {
             // OCI image: parse manifest → config → extract layer.
-            let appDirectory = try validateContainedPath(base: appsBase, relative: appName).path
+            let appDirectory = try NativeProcessConfiguration.contained(
+                appName,
+                directory: appsBase.path
+            )
             try FileManager.default.createDirectory(
                 atPath: appDirectory,
                 withIntermediateDirectories: true
@@ -1569,14 +1586,6 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             }
             try await extractTarGz(blobDigest: layerDesc.digest, to: appDirectory)
 
-            let binaryPath = "\(appDirectory)/\(binaryName)"
-            guard FileManager.default.fileExists(atPath: binaryPath) else {
-                throw RPCError(
-                    code: .notFound,
-                    message: "Binary not found at \(binaryPath) after extraction"
-                )
-            }
-
             nativeLaunchInfo = NativeLaunchInfo(
                 directory: appDirectory,
                 binaryName: binaryName,
@@ -1589,11 +1598,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             )
         } else if !imageName.isEmpty {
             // Legacy: imageName is the binary name directly.
-            let appDirectory = try validateContainedPath(base: appsBase, relative: appName).path
+            let appDirectory = try NativeProcessConfiguration.contained(
+                appName,
+                directory: appsBase.path
+            )
             let binaryPath = "\(appDirectory)/\(imageName)"
-            guard FileManager.default.fileExists(atPath: binaryPath) else {
-                throw RPCError(code: .notFound, message: "Binary not found at \(binaryPath)")
-            }
             nativeLaunchInfo = NativeLaunchInfo(
                 directory: appDirectory,
                 binaryName: imageName,
@@ -1611,16 +1620,11 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
                 // Nothing to register — container will fall back to --appPath.
                 return ServerResponse(message: Wendy_Agent_Services_V1_CreateContainerResponse())
             }
-            let appDirectory = try validateContainedPath(base: appsBase, relative: appName).path
+            let appDirectory = try NativeProcessConfiguration.contained(
+                appName,
+                directory: appsBase.path
+            )
             let binaryPath = "\(appDirectory)/\(cmd)"
-
-            guard FileManager.default.fileExists(atPath: binaryPath) else {
-                throw RPCError(
-                    code: .notFound,
-                    message:
-                        "Binary not found at \(binaryPath). Run 'wendy run' to sync files first."
-                )
-            }
 
             nativeLaunchInfo = NativeLaunchInfo(
                 directory: appDirectory,
@@ -1640,6 +1644,18 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
             appName: appName,
             appDirectory: nativeLaunchInfo.directory
         )
+        nativeLaunchInfo.executablePath = try NativeProcessConfiguration.executable(
+            nativeLaunchInfo.binaryName,
+            directory: nativeLaunchInfo.directory
+        )
+        nativeLaunchInfo.currentDirectory = try NativeProcessConfiguration.workingDirectory(
+            request.message.workingDir,
+            directory: nativeLaunchInfo.directory
+        )
+        nativeLaunchInfo.environment = try NativeProcessConfiguration.environment(
+            Array(request.message.env)
+        )
+        nativeLaunchInfo.args = Array(request.message.userArgs)
         try await self.registerApp(
             id: appName,
             kind: .native,
@@ -1783,12 +1799,23 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         let processArgs: [String]
         let currentDirectory: String?
         if let entry = app.native {
-            binaryPath = "\(entry.directory)/\(entry.binaryName)"
+            let directory = try NativeProcessConfiguration.contained(
+                entry.directory,
+                directory: appsBase.path
+            )
+            binaryPath = try NativeProcessConfiguration.executable(
+                entry.binaryName,
+                directory: directory
+            )
             let candidateProfile = "\(entry.directory)/sandbox.sb"
             profilePath =
-                FileManager.default.fileExists(atPath: candidateProfile) ? candidateProfile : nil
+                FileManager.default.fileExists(atPath: candidateProfile)
+                ? try NativeProcessConfiguration.contained("sandbox.sb", directory: directory) : nil
             processArgs = entry.args
-            currentDirectory = entry.currentDirectory
+            currentDirectory = try NativeProcessConfiguration.workingDirectory(
+                entry.currentDirectory ?? "",
+                directory: entry.directory
+            )
         } else {
             binaryPath = executablePath
             profilePath = sandboxProfilePath
@@ -1803,7 +1830,8 @@ actor ContainerService: Wendy_Agent_Services_V1_WendyContainerService.ServicePro
         // for long-running native macOS apps like HelloMLX.
         process.environment = Self.nativeAppEnvironment(
             appName: appName,
-            otelPort: self.otelPort
+            otelPort: self.otelPort,
+            overrides: app.native?.environment ?? [:]
         )
         if let profilePath {
             process.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")

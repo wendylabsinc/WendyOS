@@ -90,7 +90,8 @@ devices first. Select one explicitly with `--device` (as above), or set
 | `WENDY_PLATFORM` | `nvidia-jetson` \| `generic` | Platform tier derived from the device type |
 | `WENDY_DEBUG` | `true` \| `false` | Set when `--debug` is passed |
 | `WENDY_DEVICE_TYPE` | e.g. `jetson-agx-orin` | Raw device type; absent when unknown |
-| `WENDY_HAS_GPU` | `true` \| `false` | Absent on older agents |
+| `WENDY_HAS_GPU` | `true` \| `false` (hardware presence) | Absent on older agents |
+| `WENDY_HAS_CUDA` | `true` \| `false` (host CUDA support) | Falls back only to an explicit NVIDIA vendor on older agents |
 | `WENDY_GPU_VENDOR` | e.g. `nvidia`, `qualcomm` | Absent when no GPU is reported |
 | `WENDY_JETPACK_VERSION` | e.g. `6.0` | Jetson only |
 | `WENDY_JETPACK_MAJOR` | e.g. `6`, `7` | Jetson only; JetPack major for per-generation base-image selection |
@@ -185,11 +186,20 @@ On a **Windows host**, `wendy run` returns an actionable error for Swift project
 wendy run --build-host spark-office
 ```
 
-The build host pushes the finished image directly into the target device's
-registry over the mesh, using a direct LAN connection when possible and the
-cloud broker otherwise. It addresses the provisioned target by asset ID without
-resolving a hostname, so delivery does not depend on the build host resolving
-`device-<id>.cloud.wendy.dev`. The image never travels through your machine.
+The build runs on that device, and it delivers the finished image to the target
+device over the mesh — LAN-direct when possible, via the cloud broker otherwise.
+It addresses the provisioned target by asset ID without resolving a hostname, so
+delivery does not depend on the build host resolving `device-<id>.cloud.wendy.dev`.
+The image never travels through your machine.
+
+Delivery works the way `wendy run` deploys from your laptop: the build host asks
+the device which layers and chunks it already holds and sends only the missing
+bytes into its content store, so a rebuild that changed one layer transfers a
+few chunks rather than the image. A link that drops mid-transfer is resumed —
+chunks the device already staged are never re-sent — and a deploy you cancel
+and re-run picks up where it stopped. A device whose agent predates chunked
+delivery receives a registry push instead, and the build log says so.
+`--chunking` governs this leg too; see [Deploy path: `--chunking`](#deploy-path---chunking).
 
 Use a remote host for builds that need its GPU or CPU architecture, such as an
 arm64 build that would otherwise use QEMU emulation on an x86 development machine.
@@ -297,6 +307,14 @@ an app that reads stdin.
 | `auto` (default) | Try chunk-diff; fall back to a registry push on failure. |
 | `force` | Use chunk-diff only. If chunk-diff fails the error is returned and no registry-push fallback is attempted. Cancellation still exits cleanly. |
 | `off` | Skip chunk-diff entirely; go straight to the registry push. |
+
+> **Note:** With `--build-host`, the same modes govern the build host's delivery
+> to the device. `auto` delivers by chunks and falls back to a registry push only
+> for a device whose agent predates chunked delivery, saying so in the build
+> log. `force` turns that fallback into a delivery failure, and is refused up
+> front against a build host too old to honour it. `off` takes the registry
+> route for every device, as build hosts delivered before chunked delivery
+> existed.
 
 > **Note:** When `--deploy` is also passed, `--chunking force` and `--chunking off` are no-ops — `--deploy` always uses the registry path because it must create the container without starting it.
 
@@ -413,3 +431,68 @@ process to reap. Attached watch hooks are owned and reaped by the watch session.
 `wendy run` optionally includes a detached **ML-DSA65** signature with every `RunContainer` call. The agent verifies the signature over the SHA256 digest of the OCI image config before assembling or starting the container.
 
 Set `WENDY_IMAGE_SIGNATURE_PATH` to the path of the detached signature file; when the variable is unset or points to an empty file, no signature is sent. Verification is currently dormant on the agent side (the per-org publisher key is not yet wired in), so omitting the signature does not block container creation today. Once the publisher key is provisioned, sending an unsigned or tampered image causes the agent to refuse the run.
+
+CUDA-selecting Dockerfiles must use `WENDY_HAS_CUDA`. `WENDY_HAS_GPU`
+reports hardware presence, including Broadcom and other GPUs without CUDA.
+Device info exposes `gpuCapabilities`, one entry per detected GPU with its
+`vendor`, `path`, and `computeBackends` (`cuda`, `rocm`, `metal`, `qnn`). A GPU
+whose backend list is empty has no supported backend; no entries at all on a
+device that reports a GPU means an older agent. `containerStorage` identifies the filesystem used by
+containerd; the existing disk scalar fields continue to describe the root filesystem.
+
+Attached runs keep observing slow startup after the initial readiness budget.
+If the relevant service is still running, the CLI reports “still starting” and
+checks every five seconds while streaming logs. Browser opening and host
+`postStart` commands run once readiness succeeds. Stopping the service,
+canceling the session, or replacing a watch deployment cancels its probes.
+Detached and create-only runs continue to skip host readiness and hooks.
+
+
+## Native commands on Mac
+
+A single native Darwin app can name a target executable directly:
+
+```json
+{
+  "appId": "sh.example.chat",
+  "platform": "darwin",
+  "files": [{"path": "launcher.py"}, {"path": "data"}],
+  "run": {"command": "/usr/bin/python3", "args": ["../launcher.py"], "cwd": "data"},
+  "env": {"MAX_MODEL": "HuggingFaceTB/SmolLM2-135M-Instruct"}
+}
+```
+
+`run.command` is an absolute executable on the target or an executable relative
+ to the synced app directory. Relative scripts must have executable permission.
+`run.cwd` defaults to the app directory and must stay inside it, including after
+symlink resolution. Arguments are passed directly; shell expressions are literal
+unless you explicitly choose a shell executable. The CLI selects this mode before
+project detection and rejects conflicting build flags and non-Darwin targets.
+
+The target must advertise `native-process`; update Wendy Agent for Mac if the
+CLI requests it. Declared files, `wendy.json`, an optional `sandbox.sb`, and the
+configured Brewfile (or auto-detected `Brewfile.wendy`) use native file sync.
+Homebrew installation completes before the agent validates the executable.
+Request environment values apply to native command, SwiftPM, and Xcode launches;
+agent identity and telemetry settings take precedence. `WENDY_APP_ID` identifies
+the app. Keep runtime data outside the synced source directory, for example under
+`~/Library/Application Support/<appId>/runtime/`, to retain it across file sync.
+
+Attached watch compares the command, working directory, arguments, effective
+environment, files, configuration, and restart policy. Unchanged running commands
+remain running. Host hooks and browser opening wait for readiness.
+
+
+## Diagnosing an interrupted log stream
+
+Quiet log subscriptions receive an empty transport heartbeat every 15 seconds.
+The CLI and MCP omit these messages from logs, history transitions, and batch
+counts. Go agent gRPC keepalive acknowledgements allow 20 seconds. A stream that
+ends with a connection error still reports that error.
+
+For a recurrence, record the CLI, agent, and OS versions, timestamps, device
+address, direct WiFi or cloud route, and the exact gRPC error. Capture agent and
+cloud tunnel logs for the same interval; compare an idle subscription with one
+that emits a new log after ten minutes. Check WiFi roaming, link loss, NAT/proxy
+idle limits, and HTTP/2 GOAWAY/keepalive diagnostics before assigning a cause.
+The original direct-WiFi failure has no confirmed transport root cause.

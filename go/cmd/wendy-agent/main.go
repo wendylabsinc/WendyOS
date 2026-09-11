@@ -630,6 +630,9 @@ func main() {
 			Chunks:       buildChunkSource,
 			Peers:        meshDialer,
 			ContextLocks: buildContextLocks,
+			// Legacy fallback for a CLI that does not put each target's actual
+			// mTLS agent port in PushTarget.
+			TargetAgentPort: uint16(mtlsPortNum),
 			// Read fresh per build rather than captured: a certificate rotated
 			// while the agent runs must be picked up without a restart.
 			//
@@ -878,7 +881,7 @@ func main() {
 			grpc.KeepaliveParams(keepalive.ServerParameters{
 				MaxConnectionIdle: 5 * time.Minute,
 				Time:              30 * time.Second,
-				Timeout:           10 * time.Second,
+				Timeout:           20 * time.Second,
 			}),
 			grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 				MinTime:             10 * time.Second,
@@ -1022,7 +1025,7 @@ func main() {
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle: 5 * time.Minute,
 			Time:              30 * time.Second,
-			Timeout:           10 * time.Second,
+			Timeout:           20 * time.Second,
 		}),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             10 * time.Second,

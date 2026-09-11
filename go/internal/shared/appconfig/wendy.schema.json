@@ -476,6 +476,14 @@
       "description": "Runtime configuration applied when the app is started.",
       "additionalProperties": false,
       "properties": {
+        "command": {
+          "type": "string", "minLength": 1,
+          "description": "Single native Darwin app: a synced executable relative to the app directory, or an absolute executable on the target. Arguments are executed directly without shell parsing. Requires agent feature native-process."
+        },
+        "cwd": {
+          "type": "string", "minLength": 1,
+          "description": "Native working directory relative to the app directory (default .). Must stay inside the app directory, including through symlinks."
+        },
         "args": {
           "type": "array",
           "description": "Command-line arguments passed directly to the app executable.",

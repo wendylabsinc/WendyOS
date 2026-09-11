@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
 	"github.com/wendylabsinc/wendy/go/internal/shared/sigverify"
@@ -30,13 +31,15 @@ import (
 
 type AgentService struct {
 	agentpb.UnimplementedWendyAgentServiceServer
-	logger             *zap.Logger
-	networkManager     NetworkManager
-	hardwareDiscoverer HardwareDiscoverer
-	bluetoothManager   BluetoothManager
-	installer          *AgentInstaller
-	isWendyOSHost      func() bool
-	osUpdateStateDir   string
+	logger                   *zap.Logger
+	networkManager           NetworkManager
+	hardwareDiscoverer       HardwareDiscoverer
+	discoverGPUs             func() []gpudiscovery.Device
+	discoverContainerStorage func() (partitionUsage, bool)
+	bluetoothManager         BluetoothManager
+	installer                *AgentInstaller
+	isWendyOSHost            func() bool
+	osUpdateStateDir         string
 
 	// verifier checks the update binary's signature before install. Defaults
 	// to sigverify.DefaultVerifier (disabled until a real pinned key is
@@ -109,7 +112,12 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 		}
 	}
 
-	gpuInfo := detectGPUInfo()
+	gpuProbe := s.discoverGPUs
+	if gpuProbe == nil {
+		gpuProbe = gpudiscovery.Host
+	}
+	gpuInfo := detectGPUInfoFrom(gpuProbe())
+	resp.GpuCapabilities = gpuCapabilitiesV1(gpuInfo.devices)
 	resp.HasGpu = &gpuInfo.hasGPU
 	if gpuInfo.vendor != "" {
 		resp.GpuVendor = &gpuInfo.vendor
@@ -133,6 +141,14 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 	if usage, ok := rootDiskUsage(); ok {
 		resp.DiskUsedBytes = &usage.usedBytes
 		resp.DiskTotalBytes = &usage.totalBytes
+	}
+
+	storageProbe := s.discoverContainerStorage
+	if storageProbe == nil {
+		storageProbe = containerStorageUsage
+	}
+	if p, ok := storageProbe(); ok {
+		resp.ContainerStorage = &agentpb.DiskPartition{Mountpoint: p.mountpoint, Filesystem: p.filesystem, Device: p.device, UsedBytes: p.usedBytes, TotalBytes: p.totalBytes}
 	}
 
 	resp.MemTotalBytes, resp.CpuCount = hostMemAndCPUCount()
@@ -224,6 +240,7 @@ type gpuInfo struct {
 	jetpackVersion string
 	cudaVersion    string
 	gpuArch        string
+	devices        []gpudiscovery.Device
 }
 
 // detectGPUInfo probes on every call rather than caching. /dev/dri and the DRM
@@ -231,31 +248,11 @@ type gpuInfo struct {
 // and installing a driver add-on makes a GPU appear without restarting the
 // agent — so a cached "no GPU" would never heal, and would contradict
 // detectFeatureset, which re-probes.
-func detectGPUInfo() gpuInfo {
-	info := gpuInfo{}
+func detectGPUInfo() gpuInfo { return detectGPUInfoFrom(gpudiscovery.Host()) }
 
-	// /etc/nv_tegra_release is the definitive indicator of an NVIDIA Tegra/Jetson
-	// device. Check it first because /dev/nvidia0 is absent on many Jetson configs
-	// where the GPU is an integrated Tegra (e.g. JetPack 5/6 on Orin).
-	if _, err := os.Stat("/etc/nv_tegra_release"); err == nil {
-		info.hasGPU = true
-		info.vendor = "nvidia"
-	} else if _, err := os.Stat("/dev/nvidia0"); err == nil {
-		// Discrete NVIDIA GPU (no Tegra release file).
-		info.hasGPU = true
-		info.vendor = "nvidia"
-	} else if _, err := os.Stat("/dev/kfd"); err == nil {
-		// AMD ROCm: /dev/kfd (the compute device) is the definitive signal, and
-		// unlike a bare /dev/dri it names the vendor. Checked before the generic
-		// DRM branch so an AMD box reports "amd" rather than an unknown vendor.
-		info.hasGPU = true
-		info.vendor = "amd"
-	} else if entries, _ := os.ReadDir(devDRIPath); len(entries) > 0 {
-		// Name the vendor from the kernel driver: an SoC GPU has no PCI
-		// vendor id, so that is the only signal available.
-		info.hasGPU = true
-		info.vendor = drmVendor()
-	}
+func detectGPUInfoFrom(devices []gpudiscovery.Device) gpuInfo {
+	vendor, _ := gpudiscovery.Summary(devices)
+	info := gpuInfo{hasGPU: len(devices) > 0, vendor: vendor, devices: devices}
 
 	switch info.vendor {
 	case "nvidia":
@@ -269,70 +266,13 @@ func detectGPUInfo() gpuInfo {
 	return info
 }
 
-// drmDriverVendors maps a DRM kernel driver to the GPU vendor behind it. Every
-// entry is a driver a WendyOS image actually ships, so an untested GPU reports
-// an honest "unknown" rather than a guess.
-//
-// Never map a driver to "nvidia": an NVIDIA GPU is identified by the branches
-// above, and reaching this one means the proprietary stack is absent — so the
-// JetPack/CUDA/nvidia-smi probes would report a runtime that is not there.
-var drmDriverVendors = map[string]string{
-	// Dragonwing IQ-8275 (CONFIG_DRM_MSM).
-	"msm":     "qualcomm",
-	"msm_dpu": "qualcomm",
-	// Raspberry Pi 3/4/5: vc4 drives the display, v3d the GPU.
-	"v3d": "broadcom",
-	"vc4": "broadcom",
-	// Generic x86: the builder's x86-nuc-drivers.cfg enables all four for
-	// "integrated and discrete GPU coverage for commodity x86 PCs".
-	"i915":   "intel",
-	"xe":     "intel",
-	"amdgpu": "amd",
-	"radeon": "amd",
-	// QEMU ARM64 and both VM targets, whose virtual GPU is virtio.
-	"virtio_gpu": "virtio",
-}
-
-// These paths are behind vars so tests can point them at a fixture tree.
+// FastRPC transport nodes; the "-secure" ones are the root-only signed-PD path.
+// Kept in step with the npu entitlement in agent/oci, which grants the same set.
+// Behind vars so tests can point them at a fixture tree.
 var (
-	drmSysfsRoot = "/sys/class/drm"
-	devDRIPath   = "/dev/dri"
-	// FastRPC transport nodes; the "-secure" ones are the root-only signed-PD path.
-	// Kept in step with the npu entitlement in agent/oci, which grants the same set.
 	fastrpcDeviceGlob   = "/dev/fastrpc-*"
 	fastrpcSecureSuffix = "-secure"
 )
-
-// drmVendor names the GPU vendor from the DRM driver bound to it. The render
-// node wins over the card node: on a board that splits them (an RPi exposes
-// vc4 for display and v3d for the GPU) the render node is the GPU.
-func drmVendor() string {
-	entries, err := os.ReadDir(drmSysfsRoot)
-	if err != nil {
-		return ""
-	}
-	// Render nodes first: on a split display/GPU SoC that is the GPU.
-	for _, prefix := range []string{"renderD", "card"} {
-		for _, e := range entries {
-			name := e.Name()
-			if !strings.HasPrefix(name, prefix) {
-				continue
-			}
-			// Skip per-connector children ("card0-DP-1"): no driver.
-			if prefix == "card" && strings.Contains(name, "-") {
-				continue
-			}
-			link, err := os.Readlink(filepath.Join(drmSysfsRoot, name, "device", "driver"))
-			if err != nil {
-				continue
-			}
-			if vendor, ok := drmDriverVendors[filepath.Base(link)]; ok {
-				return vendor
-			}
-		}
-	}
-	return ""
-}
 
 // adrenoCompatibleRe pulls the model out of "qcom,adreno-623.0" -> "623".
 var adrenoCompatibleRe = regexp.MustCompile(`qcom,adreno-(\d+)\.\d+`)
@@ -1127,4 +1067,19 @@ func CleanupOldBackups(logger *zap.Logger) {
 		}
 		logger.Info("Removed old backup", zap.String("path", backupPath))
 	}
+}
+
+// gpuCapabilitiesV1 lists one entry per detected GPU. A GPU without a supported
+// backend is still listed with an empty backend list, so a client can tell "no
+// compute on this GPU" from "older agent that never sent the list".
+func gpuCapabilitiesV1(devices []gpudiscovery.Device) []*agentpb.GpuCapabilities {
+	out := make([]*agentpb.GpuCapabilities, 0, len(devices))
+	for _, d := range devices {
+		out = append(out, &agentpb.GpuCapabilities{
+			Vendor:          d.Vendor,
+			Path:            d.Path,
+			ComputeBackends: append([]string{}, d.ComputeBackends...),
+		})
+	}
+	return out
 }

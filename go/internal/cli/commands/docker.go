@@ -459,6 +459,21 @@ func applyDeviceBuildArgHints(buildArgs map[string]string, versionResp *agentpb.
 	if versionResp.HasGpu != nil {
 		buildArgs["WENDY_HAS_GPU"] = fmt.Sprintf("%t", versionResp.GetHasGpu())
 	}
+	// A new agent lists every GPU, so a non-empty list without a cuda backend
+	// suppresses the legacy vendor hint. An empty list is an older agent (or a
+	// host with no GPU, where the vendor hint is empty anyway).
+	hasCUDA := strings.EqualFold(versionResp.GetGpuVendor(), "nvidia")
+	if gpus := versionResp.GetGpuCapabilities(); len(gpus) > 0 {
+		hasCUDA = false
+		for _, gpu := range gpus {
+			for _, backend := range gpu.GetComputeBackends() {
+				if backend == "cuda" {
+					hasCUDA = true
+				}
+			}
+		}
+	}
+	buildArgs["WENDY_HAS_CUDA"] = fmt.Sprintf("%t", hasCUDA)
 	setHint("WENDY_GPU_VENDOR", versionResp.GetGpuVendor())
 	setHint("WENDY_JETPACK_VERSION", versionResp.GetJetpackVersion())
 	// Coarse major ("7" from "7.2") to aid in per-generation image selection
