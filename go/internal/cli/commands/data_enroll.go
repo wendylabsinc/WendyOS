@@ -123,6 +123,12 @@ func runDataEnrollLocal(cmd *cobra.Command, configPath, tenant, token, deviceID,
 	if configPath == "" {
 		configPath = agentConfigPath()
 	}
+	// Resolved before staging, not after: a frontend URL the agent will refuse
+	// must not first be written to disk alongside the token.
+	frontendURL, err := pkienroll.CSRFrontendURL(csrEndpoint, environment)
+	if err != nil {
+		return err
+	}
 	path, err := pkienroll.Stage(configPath, pkienroll.StagedEnrollment{
 		Token:       token,
 		TenantUUID:  tenant,
@@ -138,7 +144,7 @@ func runDataEnrollLocal(cmd *cobra.Command, configPath, tenant, token, deviceID,
 			"  tenant:   %s\n"+
 			"  frontend: %s\n"+
 			"The agent redeems and deletes it on its next start; restart wendy-agent to apply now.\n",
-		path, tenant, pkienroll.CSRFrontendURL(csrEndpoint, environment))
+		path, tenant, frontendURL)
 	return nil
 }
 
