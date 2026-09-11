@@ -1,6 +1,8 @@
 Controls whether a device will run image builds submitted by other people with
 [`wendy run --build-host`](../run.md#remote-build-host).
 
+For a complete example that sends one build to several devices, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+
 ```sh
 wendy device build-host enable  --device spark-office
 wendy device build-host status  --device spark-office
@@ -9,25 +11,21 @@ wendy device build-host disable --device spark-office
 
 ## The role is off by default
 
-A remote build runs build instructions supplied by whoever calls it — that is the
-feature, not a flaw in it. So a device has to **volunteer** for the build-host
-role rather than acquire it by being reachable with an organisation
-certificate. Nothing is enabled by installing the agent, by provisioning, or by
-having BuildKit present.
+A remote build executes the caller's build instructions on the host. Enabling
+the builder role allows users in your organisation to run builds there. Use a
+host intended for shared builds.
+
+The role requires an explicit `enable` command. Installing the agent,
+provisioning the device, or installing BuildKit does not enable it.
 
 Enabling takes effect on the next build. There is no agent restart.
 
 ## Who may change it
 
-`enable` and `disable` require a **user** certificate and refuse a device
-certificate. Without that split the opt-in would be decorative: anything able to
-submit a build could call `enable` first and let itself in.
-
-Submitting a build makes the same demand. A device certificate cannot build even
-on a host that has opted in — nothing in the design has one device build for
-another, and allowing it would leave a single compromised device with code
-execution on every build host in the organisation. The unauthenticated port the
-agent serves before provisioning does not accept builds either.
+`enable`, `disable`, and build submission require a **user** certificate.
+Device certificates are rejected, including on hosts with the builder role
+enabled. The unauthenticated port the agent serves before provisioning does not
+accept builds.
 
 The one caller without a certificate is an on-device container holding the
 **admin entitlement**, which reaches the agent over a local unix socket. There
@@ -36,6 +34,27 @@ carries full agent authority.
 
 Cross-organisation callers are rejected before any of this is reached, by the
 agent's mTLS organisation check.
+
+## Source contexts and concurrent builds
+
+The host stores source files under `/var/lib/wendy/buildctx/<app>` between
+builds so BuildKit can reuse its local-source cache. The files are cleared and
+rewritten at the start of each build of that app, but are not deleted after
+the build finishes.
+
+Builds of the same app are serialised on a host. Builds of different apps can
+run concurrently. This prevents one build from replacing source files that
+another build of the same app is still compiling.
+
+## Delivery credentials
+
+While a build runs, the agent exposes a loopback endpoint for BuildKit to push
+through. The endpoint holds the credentials for reaching the target device and
+requires a password generated for that build alone. Other processes on the host
+cannot use it to push their own image to the device.
+
+The password is passed to BuildKit in a file with mode `0600`. It is not placed
+on the command line, where other local users could read it through `/proc`.
 
 ## `status`
 

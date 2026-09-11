@@ -56,7 +56,7 @@ WendyOS runs on multiple hardware platforms. Networking behaviour is identical a
 | Jetson AGX Orin / Orin Nano | `tegra-xudc` | USB 3.2 |
 | Other Linux (generic) | Detected at runtime | USB 2.0 fallback |
 
-The QEMU virtual machine (`qemuarm64-wendyos`) does not use USB NCM gadget networking. It emulates a standard virtio network device instead.
+The virtual machine boards (`vm-arm64-wendyos`, `vm-x86-64-wendyos`) do not use USB NCM gadget networking. They emulate a standard virtio network device instead.
 
 ## Planned changes (not yet shipped)
 

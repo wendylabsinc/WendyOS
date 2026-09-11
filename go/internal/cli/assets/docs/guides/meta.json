@@ -1,5 +1,12 @@
 {
   "title": "Guides & Tutorials",
   "description": "Learn how to build with Wendy through practical examples",
-  "pages": ["tutorials", "stagefile", "multi-app-deployments", "llm-integration"]
+  "pages": [
+    "tutorials",
+    "camera-exposure",
+    "stagefile",
+    "multi-app-deployments",
+    "fleet-deployment",
+    "llm-integration"
+  ]
 }

@@ -892,3 +892,28 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 		})
 	}
 }
+
+func TestIsLoopbackHostIdentifiesAPortForwardedDevice(t *testing.T) {
+	// A VM answers on the host's loopback through a port forward. It reports no
+	// WiFi but is not offline, and the local artifact server could only ever
+	// advertise a loopback address, which inside the guest is the guest.
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"127.0.0.1:50051", true},
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"[::1]:50051", true},
+		{"localhost:50051", true},
+		{"192.168.2.253:50051", false},
+		{"169.254.198.132", false},
+		{"rpi5.local:50051", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := isLoopbackHost(tc.host); got != tc.want {
+			t.Errorf("isLoopbackHost(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}

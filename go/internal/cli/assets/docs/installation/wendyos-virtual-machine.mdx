@@ -1,0 +1,378 @@
+---
+title: WendyOS in a Virtual Machine
+description: Run WendyOS on your own computer, without a Jetson or Raspberry Pi
+---
+
+## What this is for
+
+The simulator runs a real WendyOS ARM64 image on your own machine. It is the same
+image a physical device runs — same agent, same containerd, same entitlements —
+so you can build and deploy apps before you have hardware on your desk, or
+alongside it.
+
+On an Apple Silicon Mac this is also the fastest development loop WendyOS has.
+`wendy run` targets `linux/arm64`, and an ARM64 guest on an ARM64 host builds
+natively, with none of the emulation an x86 machine pays when it cross-builds
+for a device.
+
+<Callout type="info">
+The VM has no camera, microphone, speaker, Bluetooth adapter, GPU, GPIO or USB
+devices. Anything under **Hardware Access**
+needs a real device. The VM is for the software half of your project.
+</Callout>
+
+## What you'll need
+
+QEMU, plus its ARM64 UEFI firmware:
+
+<Tabs items={['macOS', 'Debian / Ubuntu']} groupId="developer-machine-os" persist>
+<Tab value="macOS">
+```sh
+brew install qemu
+```
+</Tab>
+<Tab value="Debian / Ubuntu">
+```sh
+sudo apt install qemu-system-arm qemu-efi-aarch64
+```
+</Tab>
+</Tabs>
+
+On macOS you can skip this: if QEMU is missing when you start a simulator,
+`wendy` offers to run `brew install qemu` for you.
+
+That is the only prerequisite. The image is downloaded the first time you need
+one and reused for every simulator afterwards.
+
+## The short version
+
+You do not have to create or start anything by hand. With no `--device` and no
+default device set, `wendy run` opens a picker with a **Simulator** tab:
+
+```sh
+wendy run
+```
+
+Pick a simulator and press enter. If it is stopped, it is booted for you. On a
+fresh machine the first boot downloads the image, so it takes a few minutes.
+
+The tab manages simulators without dropping to `wendy vm`:
+
+| Key | Does |
+| --- | --- |
+| `c` | Create one at the latest release, naming it `sim`, `sim-2`, … |
+| `s` | Power off the highlighted VM |
+| `r` | Delete it, once it is stopped |
+
+`wendy discover` shows the same tab with the same three keys; there `enter`
+copies the VM's address instead of selecting it. For a specific name, version
+or disk size, use `wendy vm create`.
+
+To skip the picker entirely, name the simulator directly:
+
+```sh
+wendy --device sim device info
+```
+
+`sim` starts the simulator if it is not already running. Everything below is the
+manual equivalent, useful when you want several VMs or need to debug one.
+
+## Create and start a VM
+
+<Steps>
+<Step>
+
+### Create it
+
+```sh
+wendy vm create dev
+```
+
+The published image is downloaded and unpacked straight into the VM's disk. It
+is cached compressed, so a second VM starts from the cache rather than the
+network, and the raw multi-gigabyte image is never written twice. `--disk` sets
+the disk size and WendyOS expands `/data` into the extra room on first boot; the
+disk is sparse, so a 16 GiB VM only occupies what it uses. Container images live
+on the root filesystem rather than `/data`, so a bigger disk does not give
+`wendy run` more room.
+
+To pin a version, or to run a VM from an image you built yourself:
+
+```sh
+wendy vm create dev --version 0.19.0
+wendy vm create dev --image ./wendyos-image-vm-arm64-wendyos.rootfs.wic
+```
+
+</Step>
+<Step>
+
+### Start it
+
+```sh
+wendy vm start dev
+```
+
+This attaches you to the VM's console. Press **Ctrl-A** then **X** to power it
+off.
+
+</Step>
+<Step>
+
+### Talk to it
+
+In another terminal:
+
+```sh
+wendy --device 127.0.0.1:50051 device info
+```
+
+To avoid repeating the address:
+
+```sh
+wendy device set-default 127.0.0.1:50051
+wendy run
+```
+
+</Step>
+</Steps>
+
+## Trying a change before it merges
+
+Every pull request to WendyOS-Builder builds a VM image, so a change can be run
+without hardware and without waiting for a release:
+
+```sh
+wendy vm create review --pr 1234
+wendy vm start review
+```
+
+`--pr` takes the pull request number and stands in for the version: a PR
+publishes exactly one build, so it cannot be combined with `--version`,
+`--nightly` or `--image`.
+
+<Callout type="warn">
+A pull request's image is built from an unmerged branch, so booting one runs
+code that has not been reviewed — on your machine, with a real filesystem and a
+real network stack. Treat `--pr` the way you would treat running that branch's
+build script: only for branches you trust. `wendy vm create --pr` says the same
+thing when it starts.
+</Callout>
+
+## Networking
+
+`wendy vm start` offers two networks. Both are discoverable from your own
+machine; the difference is whether anything *else* can reach the VM.
+
+| `--net` | Setup needed | Listed by `wendy discover` | On your network |
+| --- | --- | --- | --- |
+| `user` (default) | none | Yes — Simulator tab | No |
+| `shared` | one-time `socket_vmnet` install, **macOS only** | Yes — Local tab via mDNS | Host-shared segment |
+
+The default forwards the agent's port to your machine and needs no privileges.
+Nothing on your network can reach the guest. Its mDNS announcement does leak
+out (QEMU passes the guest's multicast through one way), advertising an address
+nobody can dial — `wendy discover` recognises that sighting as your VM and
+keeps it off the **Local** tab. A user-mode VM is listed only on the
+**Simulator** tab, which shows stopped ones too; in JSON output it is under
+`simulators` as `vm:<name>`.
+
+Choose `shared` to test mDNS or reach the guest directly by IP on the host's
+vmnet segment. Its reachable entry stays on **Local** (and in JSON's
+`lanDevices`); the **Simulator** tab still lists its local lifecycle state.
+This is not a bridge onto the physical LAN; reachability from another machine
+depends on routing and the helper's configuration:
+
+```sh
+wendy vm start dev --net shared
+```
+
+The helper it needs is `socket_vmnet`; if it is missing, `wendy` offers to run
+`brew install socket_vmnet` and `sudo brew services start socket_vmnet` for you.
+Both are also fine to run by hand.
+
+<Callout type="warn">
+`--net shared` is macOS only — it builds on Apple's vmnet framework. On Linux
+use the default `--net user` and reach the VM by address.
+</Callout>
+
+<Callout type="info">
+On macOS 15 and later the first `wendy discover` may ask for **Local Network**
+permission. Discovery cannot see anything until you allow it.
+</Callout>
+
+### Reaching an app you deployed
+
+`--net user` puts the guest on a private NAT. The address the guest sees itself
+at — something like `10.0.2.15` — does not exist on your machine, and nothing
+routes into that network. Only forwarded ports are reachable, and the launcher
+forwards three:
+
+| Port | Carries |
+| --- | --- |
+| `50051` | the agent |
+| `50052` | the agent again, once the device is provisioned and on mTLS |
+| `5000` | the device's container registry, which `wendy run` pushes to |
+
+On macOS and Linux, `wendy run` also forwards each declared `http` entitlement
+and TCP readiness port to the same port on `127.0.0.1`. The app URL uses that
+loopback address, and readiness checks use it too. This works with background
+VMs and detached applications; forwards last until the VM stops and are
+recreated on the next run.
+
+If another application or VM owns the host port, deployment reports a forwarding
+error. Free that port or choose a different application port. Other ports are
+not automatically exposed. VMs started with an older launcher must be restarted
+once to enable this feature. On `--net shared` the guest is on your network
+directly and none of this applies.
+
+The launcher manages these forwards through a Unix control socket in the VM's
+directory, whose permissions are enforced as `0700` on each launch. There is no
+TCP control listener. Other user accounts cannot traverse the directory, but
+processes running as your user (and root) can connect and have full QEMU control.
+
+### If port 50051 is taken
+
+Prefer `--device vm:<name>` (or save it with `wendy device set-default
+vm:<name>`) over a literal loopback address. The alias follows the VM's current
+port and keeps enrolled-device trust pins separate for each VM. A literal
+`127.0.0.1` target retains its existing host-based pin behavior. If you replace
+an enrolled VM intentionally, clear only its pin with `wendy device unpin
+vm:<name>` before connecting to the replacement.
+
+The agent's port is often already in use on a development machine. Move the
+host side of the forward:
+
+```sh
+wendy vm start dev --port 50151
+wendy --device 127.0.0.1:50151 device info
+```
+
+## Updating the OS
+
+The VM is partitioned exactly like a device — two rootfs slots plus a growable
+`/data`, with GRUB choosing between them through `grubenv` — so A/B OTA works
+here the same way it works on hardware:
+
+```sh
+wendy --device 127.0.0.1:50051 os update
+```
+
+The update is written to the slot that is not running, the VM reboots into it,
+and the new slot is committed once the agent comes back. `/data` is untouched,
+so containers and app data survive.
+
+`device info` reports both slots under `osUpdate.engine` — `currentSlot` is the
+one running, and each entry names its partition, so you can watch A on
+`/dev/vda3` hand over to B on `/dev/vda4`:
+
+```sh
+wendy --device 127.0.0.1:50051 device info
+wendy --device 127.0.0.1:50051 os update-status   # how the last update ended
+```
+
+The agent returns on the same forwarded port after the reboot, so nothing needs
+restarting on your side. `wendy vm logs <name>` shows the reboot and the slot
+GRUB picked, which is the quickest way to watch an update land.
+
+<Callout type="info">
+This makes the simulator the cheapest way to rehearse an OS update — including a
+rollback — without tying up a Jetson or a Raspberry Pi.
+</Callout>
+
+## Managing VMs
+
+`wendy vm` is hidden from `wendy --help` on purpose — the simulator is meant to
+be reached through `wendy run` or `--device sim`. The subcommands below are all
+still available for when you need to look under the hood.
+
+```sh
+wendy vm list          # every VM, with its state, address and version
+wendy vm start dev -d  # run it in the background instead of taking the terminal
+wendy vm logs dev -f   # the console of a backgrounded VM
+wendy vm stop dev      # request graceful guest shutdown
+wendy vm rm dev        # delete a VM and its disk
+```
+
+The VM name is optional for `start`, `stop`, `logs`, and `rm` in an interactive
+terminal. Leave it out to choose a VM from a list; scripts should continue to
+pass the name explicitly.
+
+`vm stop` waits up to two minutes for the guest to shut down and flush its
+filesystems. If QMP is unavailable or the guest does not finish, it reports an
+error without killing the VM. Shut down inside an older guest without QMP, or
+use `wendy vm stop dev --force` only when an immediate power cut is intended.
+
+A backgrounded VM outlives the command that started it, so closing the terminal
+or pressing Ctrl-C does not power it off. `wendy vm rm` refuses to delete a
+running VM unless you pass `--force`.
+
+VMs live in `~/.wendy/vms/<name>/`. Removing one deletes its disk, which cannot
+be undone — but the image you created it from is untouched, so you can always
+make a fresh one.
+
+Published VM images are cached by their manifest SHA-256, not by the version
+label. Cached and newly downloaded bytes are verified before use, so rebuilding
+a PR under the same label cannot silently reuse the old image. If no checksum
+is published, each create downloads afresh and removes that temporary download
+after provisioning. Existing VM disks are never refreshed implicitly.
+
+New VMs receive a random locally-administered MAC stored in `meta.json`, stable
+across restarts and distinct even when another host creates a VM with the same
+name. Older VMs without a stored MAC retain their legacy name-derived address
+to avoid changing their network identity on upgrade. If two such legacy VMs
+share a name, do not place both on the same shared network; recreate one to
+allocate a fresh address. Copying an entire VM directory also copies its MAC.
+
+<Callout type="info">
+A freshly created VM's agent is unauthenticated until the device is provisioned,
+and it is reachable on `127.0.0.1`. On a machine you share with other people,
+that means any local account can talk to it — including enrolling it — in the
+window before you do. Provision it promptly, or use a machine you do not share.
+</Callout>
+
+## Options
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--image` | — | Create from a local `.wic` instead of downloading |
+| `--version` | latest | Version to download |
+| `--nightly` | off | Download a nightly rather than a release |
+| `--disk` | `16` | Disk size in GiB |
+| `--net` | `user` | `user` or `shared` — see above |
+| `--port` | `50051` | Host port forwarded to the agent |
+| `--memory` | `4096` | Guest memory in MiB |
+| `--cpus` | `4` | Guest CPU count |
+| `--detach` / `-d` | off | Run in the background rather than on this terminal |
+| `--yes` / `-y` | off | Accept prompts, including installing QEMU |
+
+## Troubleshooting
+
+**`no ARM64 UEFI firmware found`** — QEMU is installed but its firmware is not.
+Reinstall it with the command under *What you'll need*; the error lists every
+path that was searched.
+
+**`host port already in use`** — something already holds 50051. Use `--port`.
+
+**`shared networking needs macOS`** — `--net shared` builds on Apple's vmnet
+framework. Use `--net user`.
+
+**`socket_vmnet helper not found`** — `--net shared` needs the helper installed
+*and* running. Install it as above, or drop back to `--net user` and reach the
+VM by address.
+
+**`readiness probe timed out`, or the app's URL does not load.** The app's port
+is not forwarded — see *Reaching an app you deployed*. The app itself is
+usually running fine; check with `wendy vm logs <name>`.
+
+**`Decompressor is not installed for grpc-encoding "gzip"`, then a registry
+push that fails.** The agent in the VM's image is older than your CLI and cannot
+accept compressed layers. The CLI falls back to a registry push and resolves
+the selected VM's registry forward automatically, allocating another loopback
+port if host port 5000 is busy. If the error reports an unavailable control
+socket, restart the VM with the current CLI to enable forwarding. There is no
+need to recreate its disk.
+
+**It boots slowly.** On a Mac without Apple Silicon, or on an x86 PC, the guest
+is emulated rather than accelerated, because the guest is ARM64 and the host is
+not. It still works; it is just slower. `wendy vm start` prints which mode it
+chose.

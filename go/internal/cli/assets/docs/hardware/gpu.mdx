@@ -1,13 +1,15 @@
 ---
 title: GPU Access
-description: Enable NVIDIA GPU access for CUDA, ML inference, and accelerated vision workloads
+description: Enable NVIDIA CUDA or AMD ROCm GPU access for compute and vision workloads
 ---
 
 ## GPU Access
 
 The `gpu` entitlement exposes the host GPU to your app for CUDA, ML inference, image processing, DeepStream, PyTorch, TensorRT, and MLX workloads. WendyOS does not expose GPU devices to apps unless the app declares the entitlement.
 
-Today this covers **NVIDIA GPUs (CUDA)** — both NVIDIA Jetson devices and x86 Intel/AMD machines with an NVIDIA card. **AMD GPU acceleration via ROCm is in progress.**
+This covers **NVIDIA GPUs (CUDA)** on Jetson and x86 systems, and **AMD GPUs (ROCm)** on supported x86 Linux hosts. AMD hosts need the `amdgpu` driver, `/dev/kfd`, and a DRM render node. The container also needs ROCm libraries compatible with its GPU.
+
+For a complete AMD example, follow [Run PyTorch on an AMD GPU](/docs/guides/tutorials/python/amd-rocm-pytorch). Stagefile's `cuda: true` option remains NVIDIA-only; the ROCm example selects its wheel index explicitly.
 
 On NVIDIA Jetson, the latest WendyOS is built on **JetPack 7.2** (L4T R39.2.0, CUDA 13). Target JetPack 7.2 or later when selecting CUDA wheels or base images for your app.
 

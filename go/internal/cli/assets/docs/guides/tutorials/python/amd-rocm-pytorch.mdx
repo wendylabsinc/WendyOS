@@ -1,0 +1,140 @@
+---
+title: Run PyTorch on an AMD GPU
+description: Deploy the ROCm example to an AMD x86 device and check a GPU calculation against the CPU result.
+language: python
+---
+
+Run a PyTorch calculation on an AMD GPU through Wendy, then check that the GPU result matches a CPU calculation. This tutorial uses the complete [ROCm example](https://github.com/wendylabsinc/wendyos/tree/main/Examples/ROCM) from the WendyOS repository.
+
+The example targets an x86_64 Linux device with an AMD GPU. It installs PyTorch's ROCm wheels and gives the container access to the host GPU through the `gpu` entitlement.
+
+## Prerequisites
+
+- [Wendy CLI](/docs/installation/developer-machine-setup) and Git on your development machine.
+- Docker running on your development machine, or another configured Wendy image builder.
+- An x86_64 device running a recent Wendy Agent with AMD GPU support, reachable from your development machine.
+- A ROCm-compatible AMD GPU and the host `amdgpu` kernel driver. The host must expose `/dev/kfd` and at least one `/dev/dri/renderD*` device.
+- Internet access for the first image build and space for the PyTorch packages and image.
+
+The checked-in example uses ROCm 6.2 wheels and sets `HSA_OVERRIDE_GFX_VERSION=11.0.0` for the gfx1151 APU used by the example's author. Review the compatibility step below before deploying to a different GPU. An AMD CPU by itself does not provide an AMD GPU.
+
+## 1. Get the example
+
+Run these commands from the directory where you keep source checkouts:
+
+```bash
+git clone --depth 1 https://github.com/wendylabsinc/wendyos.git
+cd wendyos/Examples/ROCM
+```
+
+Keep this terminal in `Examples/ROCM` for the remaining steps. The directory contains:
+
+| File | Purpose |
+| --- | --- |
+| `wendy.json` | Declares the app ID and GPU entitlement. |
+| `build.stagefile.yaml` | Installs Python, PyTorch's ROCm build, and NumPy. |
+| `rocm-test.py` | Reports GPU access, runs a matrix multiplication, and checks the result. |
+
+## 2. Select the AMD device
+
+Discover the devices Wendy can reach:
+
+```bash
+wendy discover
+```
+
+Replace `amd-device.local` below with the hostname or address of your AMD device. Keep the variable in the same terminal:
+
+```bash
+AMD_DEVICE=amd-device.local
+wendy device info --device "$AMD_DEVICE"
+```
+
+Confirm that the device is the intended x86_64 Linux host. Wendy reports an AMD GPU when the host exposes `/dev/kfd`. If the GPU is missing, check the host's driver setup before building the app. The entitlement exposes existing GPU devices; it does not install a kernel driver.
+
+## 3. Check the ROCm configuration
+
+Open `build.stagefile.yaml`. Its PyTorch installation uses a ROCm wheel index:
+
+```yaml
+pip:
+  - packages: ["torch", "torchvision"]
+    index: "https://download.pytorch.org/whl/rocm6.2"
+  - packages: ["numpy==1.26.4"]
+```
+
+Keep the index attached to the PyTorch packages. Installing the CPU build of PyTorch will not use the GPU. The Stagefile `cuda: true` option resolves NVIDIA dependencies and is not a ROCm configuration option.
+
+The example also contains:
+
+```yaml
+HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+```
+
+This selects gfx1100 kernels for the example's gfx1151 target. For a GPU with native support in your chosen ROCm wheels, remove this override. If your GPU needs a different ROCm version, choose wheels that support that GPU and update the dependency pins together. Do not assume this override makes every AMD GPU compatible.
+
+The existing `wendy.json` already requests GPU access:
+
+```json
+{
+  "appId": "sh.wendy.examples.rocm",
+  "platform": "linux",
+  "version": "1.0.0",
+  "language": "python",
+  "entitlements": [
+    { "type": "gpu" }
+  ]
+}
+```
+
+On an AMD host, Wendy exposes `/dev/kfd` and the DRM render devices to the container and adds the `render` and `video` groups. The ROCm runtime libraries come from the PyTorch wheels in the image.
+
+## 4. Build and run
+
+From `Examples/ROCM`, deploy the Stagefile to your selected device:
+
+```bash
+wendy run --device "$AMD_DEVICE" --dockerfile build.stagefile.yaml --no-restart
+```
+
+The first build downloads the dependencies. Wendy then transfers the image, starts the app, and streams its output. The `--no-restart` flag lets this calculation finish once.
+
+Check the output in this order:
+
+1. `HIP (ROCm) version` has a version value.
+2. `/dev/kfd` exists and the render-node list is not empty.
+3. The app reports `ROCm available` and names your GPU.
+4. The matrix multiplication finishes with `GPU computation verified correct`.
+
+The final check multiplies two 2048 by 2048 matrices on the GPU, repeats the calculation on the CPU, and asserts that the largest absolute difference is less than `1e-2`. The output includes the GPU calculation time and measured difference. Those numbers depend on the GPU and are not performance guarantees.
+
+PyTorch uses the `torch.cuda` API for its ROCm build too. In this script, `torch.version.hip` identifies the ROCm build while `torch.cuda.is_available()` checks whether that build can reach the GPU.
+
+## Troubleshooting
+
+| Result | What to check |
+| --- | --- |
+| `HIP (ROCm) version: None` | PyTorch is a CPU or CUDA build. Check the ROCm index in the Stagefile and rebuild. |
+| `/dev/kfd` or render nodes are missing | Confirm the `amdgpu` driver and device nodes exist on the host, the agent supports AMD GPUs, and `wendy.json` has the `gpu` entitlement. |
+| `No ROCm GPU visible to PyTorch` | Check both the installed ROCm build and the GPU device nodes. A HIP version alone does not prove device access. |
+| `HIP error: invalid device function` | The installed wheel may lack kernels for the GPU architecture. Revisit the wheel version and architecture override in step 3. |
+| `GPU matmul disagrees with CPU` | The correctness check failed. Treat the configuration as unverified and revisit the ROCm wheel and architecture settings before using it for other work. |
+| The target cannot be reached | Run `wendy discover` again and update `AMD_DEVICE` to the current address. |
+
+## Cleanup
+
+After the script finishes, its app entry remains on the device. Remove the example and its image:
+
+```bash
+wendy device apps remove sh.wendy.examples.rocm --device "$AMD_DEVICE" --cleanup
+```
+
+Confirm the removal when prompted. To interrupt a run from another terminal, set `AMD_DEVICE` there and stop the app first:
+
+```bash
+wendy device apps stop sh.wendy.examples.rocm --device "$AMD_DEVICE"
+```
+
+## Next steps
+
+Use the same Stagefile and entitlement as a starting point for an AMD PyTorch app. Keep the GPU availability and correctness checks while changing the workload. See [GPU access](/docs/hardware/gpu) for the entitlement and [Stagefiles](/docs/guides/stagefile) for image configuration.

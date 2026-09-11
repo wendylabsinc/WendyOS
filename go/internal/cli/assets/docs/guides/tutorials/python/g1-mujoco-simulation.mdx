@@ -1,0 +1,174 @@
+---
+title: Deploy a G1 MuJoCo Simulation
+description: Run the G1 Fruit Ninja simulation with a live browser view, inspect its telemetry, and deploy it to a Wendy device.
+language: python
+---
+
+Deploy a Unitree G1 simulation and open its live rendered view in your browser. You will run it locally with Docker, check its health and telemetry, reset the scene, and optionally move it to a Wendy device.
+
+The [G1 Fruit Ninja example](https://github.com/wendylabsinc/wendyos/tree/main/Examples/G1FruitNinjaMujoco) includes the robot model, Python application, and container configuration. MuJoCo simulates fruit trajectories, contacts, gravity, and split fruit. A scripted controller moves the upper body while the robot's base stays supported. This example is simulation only and sends no commands to a physical robot. It does not load a trained policy.
+
+## Prerequisites
+
+- [Wendy CLI](/docs/installation/developer-machine-setup), Git, and `curl` on your development machine.
+- Docker running with Docker Compose available.
+- Internet access for the first image build.
+- A browser and an unused local port `8878`.
+- Optional: a reachable Linux Wendy device for the remote deployment step. An NVIDIA GPU with working GPU access can use EGL rendering; software rendering is also available.
+
+The local Compose configuration uses OSMesa for software rendering, so a physical robot or NVIDIA GPU is not required.
+
+## 1. Get the example
+
+Run these commands from the directory where you keep source checkouts:
+
+```bash
+git clone --depth 1 https://github.com/wendylabsinc/wendyos.git
+cd wendyos/Examples/G1FruitNinjaMujoco
+```
+
+Keep this terminal in `Examples/G1FruitNinjaMujoco`. Check Docker before starting the build:
+
+```bash
+docker info
+docker compose version
+```
+
+If either command fails, start Docker and confirm that Compose is installed before continuing.
+
+The `Dockerfile` installs MuJoCo and its rendering libraries. `compose.yml` publishes port `8878` and selects OSMesa. `wendy.json` supplies GPU access, host networking, and a TCP readiness check for deployment to a Wendy device.
+
+## 2. Run locally
+
+From the example directory, run:
+
+```bash
+wendy run --device docker --build-type compose
+```
+
+Wendy builds the image and starts the Compose service. Keep the terminal running. During startup, the application checks whether its renderer can create a frame. Look for these log messages:
+
+```text
+[bootstrap] selected backend=osmesa
+[fruit-ninja] ready http://0.0.0.0:8878 backend=osmesa
+```
+
+Open [the local simulation](http://localhost:8878) in your browser. You should see the G1 in a supported pose, fruit moving through the scene, and live hit and rendering statistics. The status badge changes to **LIVE** after the application reports readiness.
+
+`0.0.0.0` in the startup log is the server's listening address. Use `localhost:8878` in the browser when running locally.
+
+## 3. Check health and telemetry
+
+Leave `wendy run` open. In a second terminal, request the health endpoint:
+
+```bash
+curl --fail --show-error http://localhost:8878/api/health
+```
+
+The endpoint returns JSON. Once a rendered frame is available, expect these fields among the result:
+
+```json
+{
+  "ready": true,
+  "error": null,
+  "simulation": "MuJoCo",
+  "renderer": "osmesa",
+  "controller": "scripted upper-body strike",
+  "policyLoaded": false,
+  "simulationOnly": true
+}
+```
+
+Read the live state again:
+
+```bash
+curl --fail --show-error http://localhost:8878/api/status
+```
+
+The response also includes `frameSeq`, `simTimeSeconds`, `launches`, `hits`, and `streamFps`. Repeat the request while the simulation runs. The frame sequence and simulation time should advance. The reported frame rate depends on the host and renderer.
+
+If the health endpoint returns HTTP `503`, inspect its JSON without `--fail`:
+
+```bash
+curl --show-error http://localhost:8878/api/health
+```
+
+The `ready` and `error` fields help distinguish startup from a simulation or rendering error.
+
+## 4. Reset the scene and use cinematic mode
+
+Click **RESET LOOP** in the browser to restart the scene and its counters. The same operation is available over HTTP:
+
+```bash
+curl --fail --show-error --request POST http://localhost:8878/api/reset
+```
+
+The response includes `"ok": true`. The simulation immediately continues, so its counters start changing again after the reset.
+
+Click **CINEMATIC** to hide the surrounding panels, or open [cinematic mode](http://localhost:8878/?cinematic=1). The live image comes from `/stream.mjpg`; telemetry comes from `/api/status`.
+
+## 5. Deploy to a Wendy device
+
+This step is optional. Return to the first terminal and press **Ctrl+C** to stop the local run. Stay in `Examples/G1FruitNinjaMujoco` and discover your target:
+
+```bash
+wendy discover
+```
+
+Replace `gpu-device.local` below with the hostname or address of your Linux Wendy device:
+
+```bash
+SIM_DEVICE=gpu-device.local
+wendy device info --device "$SIM_DEVICE"
+wendy run --device "$SIM_DEVICE" --build-type docker
+```
+
+The `--build-type docker` flag selects the Dockerfile for this deployment. The app's `gpu` entitlement exposes the target GPU, and host networking makes its HTTP server reachable on port `8878`. Wendy waits for that port to open and prints a reachable URL. Open that URL in your browser; use the device's address with `:8878` if opening it manually.
+
+The renderer tries EGL first when NVIDIA devices are visible. If its EGL check fails, it tries OSMesa. Look for `[bootstrap] selected backend=egl` if you want to confirm GPU rendering. A running simulation with `renderer: "osmesa"` is using software rendering.
+
+In a second terminal, set `SIM_DEVICE` to the same device and check the remote app:
+
+```bash
+SIM_DEVICE=gpu-device.local
+curl --fail --show-error "http://$SIM_DEVICE:8878/api/health"
+curl --fail --show-error "http://$SIM_DEVICE:8878/api/status"
+```
+
+Use the same checks from step 3. A listening TCP port proves the server is reachable; `ready: true` and advancing frames confirm that the simulation is producing output.
+
+## Troubleshooting
+
+| Result | What to check |
+| --- | --- |
+| Docker is unavailable | Start Docker, then rerun `docker info` and `docker compose version`. |
+| Port `8878` is already in use | Stop the process using that port. For local runs, you can instead change the published port in `compose.yml` from `8878:8878` to `8879:8878` and use `localhost:8879`. |
+| The browser shows a blank image | Check `/api/health`, the `error` field, and renderer output in the running terminal. |
+| No renderer passes startup | Read the renderer preflight errors. Use the included Dockerfile so the container has EGL and OSMesa libraries. For local Compose, keep `MUJOCO_GL: osmesa`. |
+| A remote app uses OSMesa | Check the target's NVIDIA driver and Wendy GPU access if you need EGL. Software rendering is a supported fallback. |
+| The remote page does not open | Check that the hostname resolves, the target is reachable, and TCP port `8878` is allowed on the device's network. Use the address printed by Wendy. |
+| Rendering is slow | Check `renderer` and `streamFps` in `/api/status`. Software rendering speed depends on CPU resources; use a target with working EGL for GPU rendering. |
+
+## Cleanup
+
+For the local run, press **Ctrl+C** in the `wendy run` terminal. Wendy tears down the Compose deployment. You can also remove the local Compose containers and network explicitly from `Examples/G1FruitNinjaMujoco`:
+
+```bash
+docker compose -f compose.yml down
+```
+
+This retains the built image for the next run.
+
+For a remote run, press **Ctrl+C** in its terminal, or stop the app explicitly with the device variable set:
+
+```bash
+wendy device apps stop g1-fruit-ninja-mujoco --device "$SIM_DEVICE"
+```
+
+Remove the remote app and its image when finished:
+
+```bash
+wendy device apps remove g1-fruit-ninja-mujoco --device "$SIM_DEVICE" --cleanup
+```
+
+Confirm the removal when prompted. See [managing apps](/docs/device/managing-apps) for restarting a deployed app and [GPU access](/docs/hardware/gpu) for the permissions used by this example.

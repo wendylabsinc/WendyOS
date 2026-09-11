@@ -1,7 +1,9 @@
 ---
 title: Multi-App Deployments
-description: Run cooperating multi-container stacks on WendyOS from a single wendy.json, with one Dockerfile per service or a companion docker-compose.yml
+description: Run several services on one WendyOS device using a services map or Docker Compose
 ---
+
+This guide runs several services on one device. To deploy one image to several devices, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
 
 ## Run a multi-container stack as one deployment
 
@@ -29,7 +31,7 @@ Wendy auto-detects the project shape, so you do not need a build-type flag. A `w
 - Wendy CLI installed on your development machine
 - A WendyOS device reachable over USB, LAN, or Wendy Cloud
 - Docker installed locally so Wendy can build service images
-- A project directory that contains `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`
+- A project directory with either a `services` map in `wendy.json` or a Compose file (`docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, or `compose.yaml`)
 
 ## How Wendy runs compose projects
 

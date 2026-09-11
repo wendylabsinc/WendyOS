@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -10,11 +11,14 @@ import (
 )
 
 type discoverTabsLocalMsg struct{ msg tea.Msg }
+type discoverTabsSimulatorMsg struct{ msg tea.Msg }
 type discoverTabsCloudMsg struct{ msg tea.Msg }
 type discoverTabsOrgMsg struct{ name string }
 
 type discoverTabsModel struct {
 	local        discoverModel
+	sim          simulatorPickerModel
+	simStarted   bool
 	cloud        cloudDiscoverModel
 	cloudAuth    *config.AuthConfig
 	cloudOrg     string
@@ -22,15 +26,26 @@ type discoverTabsModel struct {
 	defaultOrg   int32
 	active       devicePickerTab
 	action       devicePickerAction
+	createVMName string
 	cancelled    bool
 	windowWidth  int
 }
 
-func newDiscoverTabsModel(ctx context.Context, local discoverModel, auth *config.AuthConfig, defaultOrg int32) discoverTabsModel {
+// active selects the tab to open on. Creating a VM leaves and re-enters this
+// view, and coming back on Local would drop the user somewhere they did not ask
+// to be, with no sign the create happened.
+func newDiscoverTabsModel(ctx context.Context, local discoverModel, auth *config.AuthConfig, defaultOrg int32, active devicePickerTab) discoverTabsModel {
 	m := discoverTabsModel{
 		local:      local,
+		sim:        newSimulatorListModel(ctx),
 		cloudAuth:  auth,
 		defaultOrg: defaultOrg,
+		active:     active,
+	}
+	// The simulator list polls only once its tab is first shown; opening
+	// straight onto it has to start that here instead.
+	if active == devicePickerSimulatorTab {
+		m.simStarted = true
 	}
 	if auth != nil {
 		m.cloud = newCloudDiscoverModel(ctx, auth, os.Getenv("WENDY_BROKER_URL"), false, false, nil)
@@ -54,15 +69,27 @@ func tagDiscoverTabsCmd(cmd tea.Cmd, tab devicePickerTab) tea.Cmd {
 			}
 			return tagged
 		}
-		if tab == devicePickerCloudTab {
+		switch tab {
+		case devicePickerCloudTab:
 			return discoverTabsCloudMsg{msg: msg}
+		case devicePickerSimulatorTab:
+			return discoverTabsSimulatorMsg{msg: msg}
+		default:
+			return discoverTabsLocalMsg{msg: msg}
 		}
-		return discoverTabsLocalMsg{msg: msg}
 	}
 }
 
 func (m discoverTabsModel) Init() tea.Cmd {
+	if m.simStarted {
+		return tea.Batch(tagDiscoverTabsCmd(m.local.Init(), devicePickerLocalTab), m.startSimulatorCmd())
+	}
+	// Otherwise simulator polling starts on first entry.
 	return tagDiscoverTabsCmd(m.local.Init(), devicePickerLocalTab)
+}
+
+func (m discoverTabsModel) startSimulatorCmd() tea.Cmd {
+	return tagDiscoverTabsCmd(m.sim.Init(), devicePickerSimulatorTab)
 }
 
 func (m discoverTabsModel) startCloudCmd() tea.Cmd {
@@ -103,6 +130,27 @@ func (m discoverTabsModel) updateLocal(msg tea.Msg) (discoverTabsModel, tea.Cmd)
 	return m, tagDiscoverTabsCmd(cmd, devicePickerLocalTab)
 }
 
+// updateSimulator forwards to the shared simulator list. A selection is ignored
+// -- discover shows devices, it does not connect to one, and enter copies
+// instead -- but 'c' still has to leave, because the download needs the
+// terminal this view is holding.
+func (m discoverTabsModel) updateSimulator(msg tea.Msg) (discoverTabsModel, tea.Cmd) {
+	updated, cmd := m.sim.Update(msg)
+	m.sim = updated
+	if m.sim.createRequested() {
+		if choice := m.sim.selected(); choice != nil {
+			m.createVMName = choice.Name
+		}
+		m.action = devicePickerCreateVM
+		return m, tea.Quit
+	}
+	if m.sim.cancelled() {
+		m.cancelled = true
+		return m, tea.Quit
+	}
+	return m, tagDiscoverTabsCmd(cmd, devicePickerSimulatorTab)
+}
+
 func (m discoverTabsModel) updateCloud(msg tea.Msg) (discoverTabsModel, tea.Cmd) {
 	updated, cmd := m.cloud.Update(msg)
 	m.cloud = updated.(cloudDiscoverModel)
@@ -117,6 +165,8 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case discoverTabsLocalMsg:
 		return m.updateLocal(msg.msg)
+	case discoverTabsSimulatorMsg:
+		return m.updateSimulator(msg.msg)
 	case discoverTabsCloudMsg:
 		if m.cloudAuth == nil {
 			return m, nil
@@ -127,25 +177,30 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
+		var cmds []tea.Cmd
 		local, localCmd := m.updateLocal(msg)
 		m = local
-		if m.cloudAuth == nil {
-			return m, localCmd
+		cmds = append(cmds, localCmd)
+		sim, simCmd := m.updateSimulator(msg)
+		m = sim
+		cmds = append(cmds, simCmd)
+		if m.cloudAuth != nil {
+			cloud, cloudCmd := m.updateCloud(msg)
+			m = cloud
+			cmds = append(cmds, cloudCmd)
 		}
-		cloud, cloudCmd := m.updateCloud(msg)
-		m = cloud
-		return m, tea.Batch(localCmd, cloudCmd)
+		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab", "shift+tab":
-			if m.active == devicePickerLocalTab {
-				m.active = devicePickerCloudTab
-				if m.cloudAuth != nil && !m.cloudStarted {
-					m.cloudStarted = true
-					return m, m.startCloudCmd()
-				}
-			} else {
-				m.active = devicePickerLocalTab
+			m.active = cycleTab(deviceTabOrder(), m.active, tabCycleDelta(msg.String()))
+			if m.active == devicePickerCloudTab && m.cloudAuth != nil && !m.cloudStarted {
+				m.cloudStarted = true
+				return m, m.startCloudCmd()
+			}
+			if m.active == devicePickerSimulatorTab && !m.simStarted {
+				m.simStarted = true
+				return m, m.startSimulatorCmd()
 			}
 			return m, nil
 		case "o":
@@ -165,13 +220,17 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		if m.active == devicePickerCloudTab {
+		switch m.active {
+		case devicePickerCloudTab:
 			if m.cloudAuth == nil {
 				return m, nil
 			}
 			return m.updateCloud(msg)
+		case devicePickerSimulatorTab:
+			return m.updateSimulator(msg)
+		default:
+			return m.updateLocal(msg)
 		}
-		return m.updateLocal(msg)
 	}
 	return m, nil
 }
@@ -180,9 +239,13 @@ func (m discoverTabsModel) View() string {
 	if m.cancelled || m.action != devicePickerNoAction {
 		return ""
 	}
-	header := deviceTabsHeader(m.active, m.windowWidth)
-	if m.active == devicePickerLocalTab {
+	header := deviceTabsHeader(m.active, deviceTabOrder(), m.windowWidth)
+	switch m.active {
+	case devicePickerLocalTab:
 		return header + "\n\n" + m.local.View()
+	case devicePickerSimulatorTab:
+		return header + "\n\n" + m.sim.View() + "\n" + devicePickerOrgStyle.Render(
+			"  enter copy address, tab switch, q quit — start one with 'wendy vm start <name>'")
 	}
 
 	var body strings.Builder
@@ -201,4 +264,22 @@ func (m discoverTabsModel) View() string {
 	body.WriteString("\n\n")
 	body.WriteString(m.cloud.View())
 	return body.String()
+}
+
+// copySimulatorAddress puts a running VM's agent address on the clipboard, so
+// the address can be pasted straight into a --device flag. A stopped VM has no
+// address to copy, so it says how to get one instead.
+func copySimulatorAddress(choice *simulatorChoice) string {
+	switch {
+	case choice == nil:
+		return ""
+	case choice.Create:
+		return "No simulator yet — press c to create one."
+	case choice.Address == "":
+		return fmt.Sprintf("%s is not running — start it with 'wendy vm start %s'.", choice.Name, choice.Name)
+	}
+	if err := clipboardWriter(choice.Address); err != nil {
+		return fmt.Sprintf("Copy failed: %v", err)
+	}
+	return "Copied " + choice.Address + " to clipboard."
 }

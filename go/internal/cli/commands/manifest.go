@@ -2,6 +2,7 @@ package commands
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -165,10 +166,12 @@ type deviceInfo struct {
 // imageInfo describes a downloadable OS image.
 type imageInfo struct {
 	DownloadURL string
+	Checksum    string
 	ImageSize   int64
 	Version     string
 	BmapURL     string
 	ZstURL      string
+	ZstChecksum string
 	// Storage is the resolved manifest variant ("sd"/"nvme"/""), used to keep
 	// the on-disk cache keyed per variant so an SD download and an NVMe download
 	// of the same device+version never collide on one cache file.
@@ -179,12 +182,12 @@ func fetchMainManifest() (*mainManifest, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(gcsBaseURL + "/manifests/master.json")
 	if err != nil {
-		return nil, fmt.Errorf("fetching main manifest: %w", err)
+		return nil, fmt.Errorf("fetching main manifest: %w: %w", ErrManifestUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("manifest returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w: manifest returned status %d", ErrManifestUnreachable, resp.StatusCode)
 	}
 
 	var m mainManifest
@@ -199,12 +202,12 @@ func fetchDeviceManifest(path string) (*deviceManifest, error) {
 	url := gcsBaseURL + "/" + path
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("fetching device manifest: %w", err)
+		return nil, fmt.Errorf("fetching device manifest: %w: %w", ErrManifestUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("device manifest returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%w: device manifest returned status %d", ErrManifestUnreachable, resp.StatusCode)
 	}
 
 	var dm deviceManifest
@@ -270,7 +273,7 @@ func fetchPRMainManifest(pr int) (*mainManifest, error) {
 	url := gcsBaseURL + "/" + prBasePath(pr) + "manifests/master.json"
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("fetching PR %d manifest: %w", pr, err)
+		return nil, fmt.Errorf("fetching PR %d manifest: %w: %w", pr, ErrManifestUnreachable, err)
 	}
 	defer resp.Body.Close()
 
@@ -278,7 +281,7 @@ func fetchPRMainManifest(pr int) (*mainManifest, error) {
 		return nil, fmt.Errorf("no build found for PR %d — is the build still running or the PR closed?", pr)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("PR %d manifest returned status %d", pr, resp.StatusCode)
+		return nil, fmt.Errorf("%w: PR %d manifest returned status %d", ErrManifestUnreachable, pr, resp.StatusCode)
 	}
 
 	var m mainManifest
@@ -367,6 +370,13 @@ func getImageInfo(dm *deviceManifest, ver, storage string) (*imageInfo, error) {
 		ImageSize:   t.imageSize,
 		Version:     ver,
 		Storage:     storage,
+	}
+	// Select checksums from the same artifact triple, including legacy fallback.
+	info.Checksum, info.ZstChecksum = v.Checksum, v.ZstChecksum
+	if storage == "nvme" && v.NVMEPath != "" {
+		info.Checksum, info.ZstChecksum = v.NVMEChecksum, v.NVMEZstChecksum
+	} else if storage == "sd" && v.SDPath != "" {
+		info.Checksum, info.ZstChecksum = v.SDChecksum, v.SDZstChecksum
 	}
 	if t.bmapPath != "" {
 		info.BmapURL = gcsBaseURL + "/" + t.bmapPath
@@ -556,12 +566,15 @@ type thorFlashpackInfo struct {
 	Version   string
 }
 
-// getThorFlashpackInfo fetches the jetson-agx-thor manifest and returns the flashpack
-// artifact for version (or the latest stable / nightly when version is ""). When
-// pr > 0 it resolves against the per-PR manifest (pr/<N>/) written by the
-// wendyos-builder publish-pr job instead of the released master manifest; the
-// flashpack path there is already pr-prefixed, so the download URL is correct.
-func getThorFlashpackInfo(version string, nightly bool, pr int) (*thorFlashpackInfo, error) {
+// ErrManifestUnreachable marks a manifest that could not be reached — a
+// transport failure or a server error. A 404 is deliberately excluded: it means
+// the build does not exist, which must not license flashing a cached one.
+var ErrManifestUnreachable = errors.New("manifest unreachable")
+
+// resolveDeviceArtifact fetches deviceType's manifest and resolves which
+// version to install: the explicit one, or the latest stable / nightly, or the
+// PR build when pr > 0 (pr/<N>/, written by the wendyos-builder publish-pr job).
+func resolveDeviceArtifact(deviceType, version string, nightly bool, pr int) (*deviceManifest, string, error) {
 	var main *mainManifest
 	var err error
 	if pr > 0 {
@@ -570,31 +583,40 @@ func getThorFlashpackInfo(version string, nightly bool, pr int) (*thorFlashpackI
 		main, err = fetchMainManifest()
 	}
 	if err != nil {
-		return nil, fmt.Errorf("fetching manifest: %w", err)
+		return nil, "", fmt.Errorf("fetching manifest: %w", err)
 	}
-	dev, ok := main.Devices[thorDeviceType]
+	dev, ok := main.Devices[deviceType]
 	if !ok || dev.ManifestPath == "" {
 		if pr > 0 {
-			return nil, fmt.Errorf("%s not built by PR %d", thorDeviceType, pr)
+			return nil, "", fmt.Errorf("%s not built by PR %d", deviceType, pr)
 		}
-		return nil, fmt.Errorf("%s not found in manifest", thorDeviceType)
+		return nil, "", fmt.Errorf("%s not found in manifest", deviceType)
 	}
 	dm, err := fetchDeviceManifest(dev.ManifestPath)
 	if err != nil {
-		return nil, fmt.Errorf("fetching device manifest: %w", err)
+		return nil, "", fmt.Errorf("fetching device manifest: %w", err)
 	}
 	if version == "" {
-		if pr > 0 {
+		switch {
+		case pr > 0:
 			version = prDeviceVersion(dev)
-		} else {
+		case nightly && dev.LatestNightly != "":
+			version = dev.LatestNightly
+		default:
 			version = dev.Latest
-			if nightly && dev.LatestNightly != "" {
-				version = dev.LatestNightly
-			}
 		}
 	}
 	if version == "" {
-		return nil, fmt.Errorf("no version available for %s", thorDeviceType)
+		return nil, "", fmt.Errorf("no version available for %s", deviceType)
+	}
+	return dm, version, nil
+}
+
+// getThorFlashpackInfo resolves the USB-recovery flashpack for a Thor version.
+func getThorFlashpackInfo(version string, nightly bool, pr int) (*thorFlashpackInfo, error) {
+	dm, version, err := resolveDeviceArtifact(thorDeviceType, version, nightly, pr)
+	if err != nil {
+		return nil, err
 	}
 	v, ok := dm.Versions[version]
 	if !ok {
@@ -607,6 +629,46 @@ func getThorFlashpackInfo(version string, nightly bool, pr int) (*thorFlashpackI
 		URL:       gcsBaseURL + "/" + v.FlashpackPath,
 		Checksum:  v.FlashpackChecksum,
 		SizeBytes: v.FlashpackSizeBytes,
+		Version:   version,
+	}, nil
+}
+
+// dragonwingDeviceType is the manifest key / --device-type for the IQ-8275 EVK.
+const dragonwingDeviceType = "dragonwing-iq-8275"
+
+// dragonwingBundleInfo is the resolved qcomflash bundle download for a version.
+type dragonwingBundleInfo struct {
+	URL       string
+	Checksum  string
+	SizeBytes int64
+	Version   string
+}
+
+// getDragonwingBundleInfo resolves the qcomflash bundle to install. It reads
+// the generic image fields rather than a dedicated key: EDL flashing produces
+// no disk image, so the bundle tarball *is* the device's image artifact.
+func getDragonwingBundleInfo(version string, nightly bool, pr int) (*dragonwingBundleInfo, error) {
+	dm, version, err := resolveDeviceArtifact(dragonwingDeviceType, version, nightly, pr)
+	if err != nil {
+		return nil, err
+	}
+	return dragonwingBundleFrom(dm, version)
+}
+
+// dragonwingBundleFrom picks the bundle for version out of a fetched manifest,
+// split from the fetch so the selection is testable.
+func dragonwingBundleFrom(dm *deviceManifest, version string) (*dragonwingBundleInfo, error) {
+	v, ok := dm.Versions[version]
+	if !ok {
+		return nil, fmt.Errorf("version %s not found for %s", version, dragonwingDeviceType)
+	}
+	if v.Path == "" {
+		return nil, fmt.Errorf("version %s has no flash bundle in the manifest", version)
+	}
+	return &dragonwingBundleInfo{
+		URL:       gcsBaseURL + "/" + v.Path,
+		Checksum:  v.Checksum,
+		SizeBytes: v.SizeBytes,
 		Version:   version,
 	}, nil
 }

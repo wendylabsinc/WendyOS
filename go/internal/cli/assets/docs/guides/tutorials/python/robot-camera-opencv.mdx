@@ -1,0 +1,179 @@
+---
+title: Read a Robot Camera with OpenCV
+description: Read a Go2 or ROS 2 camera through WendyOS and process its frames in a Python container
+language: python
+---
+
+Build a Python app that reads a robot's camera and reports the percentage of edge pixels in sampled frames. WendyOS receives the ROS 2 video topic and exposes it as a camera device. The app uses OpenCV and does not need a ROS 2 client library.
+
+## Before you start
+
+- Install the [Wendy CLI](/docs/installation/developer-machine-setup) on your computer.
+- Connect a Linux WendyOS device to the robot's wired network. The device must run an agent with ROS 2 camera bridging and have compatible v4l2loopback 0.15.x support. WendyOS uses 0.15.4; Ubuntu 22.04's packaged 0.12.7 module does not provide the required API.
+- Have a camera topic publishing on that network. This tutorial uses a Unitree Go2's `/frontvideostream`. Standard `sensor_msgs/msg/Image` topics with supported color or grayscale encodings, and JPEG `sensor_msgs/msg/CompressedImage` topics, also work. Float depth images are not supported by this bridge.
+- Have a local container builder available to `wendy run`.
+
+The commands below use `robot-companion` as the Wendy device name. Replace it with the name shown by `wendy discover`. The app only reads camera frames and sends no robot commands.
+
+Host-facing ROS 2 camera discovery uses domain 0 on wired interfaces. Keep the robot and companion on a trusted network. See [ROS 2 camera topics](/docs/hardware/camera#ros-2-camera-topics) for discovery scope and driver details.
+
+## 1. Find and preview the camera
+
+Run these commands on your computer:
+
+```bash
+wendy device camera list --device robot-companion
+```
+
+Find the row named **Unitree Go2 front camera**, or the row for your image topic. ROS 2 camera IDs are allocated from 128 through 199. This example uses ID 128; use the ID from your own listing in both the preview command and the app configuration below.
+
+```bash
+wendy device camera view --device robot-companion --id 128
+```
+
+Check that the preview shows new frames as the scene changes. A listed camera alone does not prove that frames are arriving. Close the preview with Ctrl-C before starting the app so the preview and OpenCV do not compete for the same capture node.
+
+## 2. Create the project
+
+```bash
+mkdir robot-camera-opencv
+cd robot-camera-opencv
+```
+
+Create `wendy.json`:
+
+```json
+{
+  "appId": "robot-camera-opencv",
+  "version": "1.0.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "camera" }
+  ]
+}
+```
+
+The `camera` entitlement gives the container access to the camera nodes. WendyOS maps ROS 2 camera 128 to `/dev/video128`. The agent handles DDS reception, so this app needs no ROS 2 framework configuration or host-network entitlement.
+
+Create `Dockerfile`:
+
+```dockerfile
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-opencv \
+    gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad gstreamer1.0-libav \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY app.py .
+ENV PYTHONUNBUFFERED=1
+CMD ["python3", "app.py", "/dev/video128"]
+```
+
+Change `/dev/video128` in `CMD` if your camera has another ID. The Debian OpenCV package includes the GStreamer backend. `decodebin` handles the camera's encoded format before OpenCV receives BGR pixels, including the H.264 feed used by current Go2 firmware.
+
+Create `app.py`:
+
+```python
+import re
+import sys
+import time
+
+import cv2
+
+
+def open_camera(pipeline):
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        capture = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        if capture.isOpened():
+            ok, frame = capture.read()
+            if ok:
+                return capture, frame
+        capture.release()
+        time.sleep(0.5)
+    raise RuntimeError("No camera frame arrived. Check the topic and loopback driver.")
+
+
+def edge_percentage(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 80, 160)
+    return 100 * cv2.countNonZero(edges) / edges.size
+
+
+def main():
+    device = sys.argv[1] if len(sys.argv) > 1 else "/dev/video128"
+    if not re.fullmatch(r"/dev/video[0-9]+", device):
+        raise SystemExit("Pass a camera path such as /dev/video128.")
+
+    pipeline = (
+        f"v4l2src device={device} ! decodebin ! videoconvert ! "
+        "video/x-raw,format=BGR ! appsink max-buffers=1 drop=true sync=false"
+    )
+    capture, frame = open_camera(pipeline)
+    count = 0
+    try:
+        while True:
+            count += 1
+            if count == 1 or count % 30 == 0:
+                height, width = frame.shape[:2]
+                print(
+                    f"frame={count} size={width}x{height} "
+                    f"edge_pixels={edge_percentage(frame):.2f}%",
+                    flush=True,
+                )
+            ok, frame = capture.read()
+            if not ok:
+                raise RuntimeError("Camera stream stopped. Check the publisher and rerun.")
+    finally:
+        capture.release()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+The app retries during startup because a loopback node can appear before its first frame sets the capture format. An individual open or read can take longer than the retry window while GStreamer waits for data. Once frames arrive, the app keeps only the latest buffered frame and prints a count every 30 frames.
+
+## 3. Run the app
+
+From the project directory on your computer:
+
+```bash
+wendy run --device robot-companion --no-restart
+```
+
+After the build and deployment, look for output in this form. The resolution and percentages depend on your camera and scene:
+
+```text
+frame=1 size=640x360 edge_pixels=7.14%
+frame=30 size=640x360 edge_pixels=6.82%
+frame=60 size=640x360 edge_pixels=8.05%
+```
+
+Hold an object in front of the stationary camera. The frame count should advance, and the edge percentage should change with the scene. This confirms that the container can decode and process the robot's video.
+
+You can replace `edge_percentage` with an object detector or another OpenCV operation. Keep the capture and retry code while changing the processing step.
+
+## 4. Stop and remove the app
+
+Press Ctrl-C in the attached `wendy run` session to stop the app. To remove the tutorial app and reclaim its image data:
+
+```bash
+wendy device apps remove robot-camera-opencv --device robot-companion --cleanup
+```
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| No camera row appears | Check that the robot is publishing, the wired link is up, and the publisher uses the expected DDS domain. See [Wendy for ROS 2](/docs/integrations/ros2). |
+| Camera is listed, but preview fails | Check for compatible v4l2loopback support. ROS 2 camera viewing and container access both depend on that module. |
+| `/dev/video128` is missing | Use the ID from `camera list`, declare the `camera` entitlement, and redeploy after changing `wendy.json`. |
+| Capture reports that the device is busy | Stop the CLI preview and other apps reading the same camera node, then rerun the app. |
+| GStreamer cannot decode the feed | Build with the Dockerfile above, including `gstreamer1.0-plugins-bad` and `gstreamer1.0-libav`. Do not replace Debian's OpenCV package with a wheel that lacks GStreamer support. |
+| Capture never receives a first frame | Check the publisher and wired connection. A device node may exist while the publisher is silent. |
+
+For another camera source, see [IP camera container access](/docs/hardware/camera#container-access). IP cameras need stored credentials and use IDs from 200 through 255; their loopback nodes carry the selected sub-stream.

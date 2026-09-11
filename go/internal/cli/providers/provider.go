@@ -23,7 +23,18 @@ type DeviceProvider interface {
 	IsAvailable(ctx context.Context) bool
 	// CheckRequirements returns a detailed error if prerequisites are missing.
 	CheckRequirements(ctx context.Context) error
-	// DiscoverDevices returns the devices currently reachable through this provider.
+	// DiscoverDevices returns the devices currently reachable through this
+	// provider. It fits a scan that has an end — enumerating USB devices,
+	// listing the local Docker containers — where "the scan is finished" is a
+	// well-defined moment, and the returned set is complete.
+	//
+	// mDNS and Bluetooth have no such moment: the scan runs until it is
+	// stopped, and nothing announces that the last device has been seen. A
+	// provider on those transports has nothing to define when this method
+	// should return, so it simply waits some time before returning, giving
+	// devices a chance to get discovered — and accepts that a slow responder
+	// is missed. Such a provider can also implement ContinuousDiscoverer,
+	// which drops that arbitrary wait.
 	DiscoverDevices(ctx context.Context) ([]models.ExternalDevice, error)
 	// SupportedBuildTypes returns the build type keys (e.g. "docker", "swift")
 	// that this provider can handle. Used to filter the build-type picker.
@@ -124,14 +135,28 @@ type ImageBuilder interface {
 	BuildFromImage(device models.ExternalDevice, product, imageName string) *BuiltApp
 }
 
-// ContinuousDiscoverer is optionally implemented by providers that can stream
-// discovered devices as they appear, instead of being polled via DiscoverDevices.
+// ContinuousDiscoverer is optionally implemented by providers whose scan has no
+// end of its own (mDNS, Bluetooth — see DeviceProvider.DiscoverDevices), so a
+// caller can watch discovery unfold instead of paying a fixed wait for one
+// DiscoverDevices snapshot. Implementing it is optional: a caller must fall
+// back to polling DiscoverDevices for providers that do not.
 type ContinuousDiscoverer interface {
 	// DiscoverDevicesContinuous starts continuous discovery and returns a
-	// channel that receives each device as it is found. The channel stays
-	// open until ctx is cancelled (or the stream fails), then is closed.
-	// Implementations may re-send a device; consumers deduplicate.
-	DiscoverDevicesContinuous(ctx context.Context) (<-chan models.ExternalDevice, error)
+	// channel of snapshots. It finds the same devices DiscoverDevices does —
+	// only the scan methodology differs.
+	//
+	// Every emission is the full list of devices discovered so far, not the
+	// single device that just turned up, so a consumer can render a received
+	// snapshot as-is without accumulating across emissions. A device drops out
+	// of later snapshots once its source stops reporting it (a board
+	// unplugged, a BLE device out of range); mDNS rows are cumulative, since a
+	// browse only ever announces arrivals.
+	//
+	// The channel stays open until ctx is cancelled (or the stream fails),
+	// then is closed. A close before ctx is done means discovery died, not
+	// that discovery is complete — the caller should fall back to polling
+	// DiscoverDevices.
+	DiscoverDevicesContinuous(ctx context.Context) (<-chan []models.ExternalDevice, error)
 }
 
 // TypedBuilder is optionally implemented by providers that can disambiguate

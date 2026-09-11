@@ -1,0 +1,223 @@
+---
+title: Build Once, Deploy to Several Devices
+description: Use a Wendy build host to build one container image, deploy it to two devices, and check the app on each device.
+---
+
+This tutorial deploys the same small HTTP service to two WendyOS devices. A third device builds the image and delivers it to both targets. You then request the service from each target to confirm that both are running the expected revision.
+
+For several cooperating services on one device, follow [Multi-App Deployments](/docs/guides/multi-app-deployments).
+
+## Prerequisites
+
+- The [Wendy CLI](/docs/installation/developer-machine-setup) on your development machine.
+- Two Linux devices with the same CPU architecture, such as two `linux/arm64` devices.
+- A Linux build host running the Wendy agent and BuildKit, with support for the target platform and at least 8 GiB free on its BuildKit cache filesystem.
+- All three devices enrolled in the same [Wendy Cloud organization](/docs/cloud), with working connections between the build host and the targets.
+- A signed-in user account in that organization. Enabling the builder role and submitting builds require a user certificate.
+- Current CLI and agent versions that support delivery to multiple targets.
+
+Your development machine does not need Docker for this workflow. The build host needs internet access to download the Python base image. This example uses a single-service Dockerfile project; remote builds do not support Compose or a `services` map in `wendy.json`.
+
+The commands use `build-host`, `device-a`, and `device-b` as device names. Replace them with the enrolled names of your devices.
+
+## Check the devices and build host
+
+Sign in and list your devices:
+
+```bash
+wendy auth login
+wendy --json cloud discover
+```
+
+Check the target operating systems and architectures:
+
+```bash
+wendy device info --device device-a
+wendy device info --device device-b
+```
+
+Both targets must have the same platform. One image cannot serve a mix of `linux/arm64` and `linux/amd64` targets. For GPU applications, also check that the image and GPU runtime are compatible with every target. The first target supplies the build's device and GPU hints.
+
+Enable the builder role on the machine you intend to use for builds:
+
+```bash
+wendy device build-host enable --device build-host
+wendy device build-host status --device build-host
+```
+
+The status should report `Builder role: enabled`, `BuildKit: available`, and support for your targets' platform under `Builds` or `Emulates`. Check that `Cache` reports enough free space. Enabling the role does not install BuildKit. See the [build host reference](/docs/advanced/clients/wendy-cli/commands/device/build-host) if BuildKit is unavailable.
+
+The builder role permits users in your organization to submit builds to this machine. Use a host intended for shared builds. A Mac can run the CLI, but cannot serve as the remote build host.
+
+## Create the service
+
+Create an empty project directory:
+
+```bash
+mkdir fleet-demo
+cd fleet-demo
+```
+
+Save this as `app.py`:
+
+```python
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+REVISION = "fleet-demo-v1"
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/health":
+            self.send_error(404)
+            return
+
+        body = json.dumps({"status": "ok", "revision": REVISION}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+if __name__ == "__main__":
+    print(f"Serving {REVISION} on port 8080", flush=True)
+    ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+```
+
+Save this as `Dockerfile`:
+
+```dockerfile
+FROM python:3.12-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+COPY app.py .
+EXPOSE 8080
+CMD ["python", "app.py"]
+```
+
+Save this as `wendy.json`:
+
+```json
+{
+  "$schema": "https://wendy.dev/schemas/wendy.json",
+  "appId": "fleet-demo",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" }
+  ]
+}
+```
+
+Host networking makes port 8080 available on each device. The app uses that device's network stack, so another app must not already be listening on the same port.
+
+## Build and deploy
+
+Run this from the project directory:
+
+```bash
+wendy run --build-host build-host --device device-a,device-b --detach
+```
+
+Both `--build-host` and `--detach` are required when `--device` names several targets. The CLI checks target compatibility, sends the source to the build host, and requests one image build. The build host pushes that image to each target's registry. Wendy then creates and starts the app on each target.
+
+A successful run ends with a report like this:
+
+```text
+Deployed from one build on build-host:
+  device-a                 delivered
+  device-b                 delivered
+```
+
+Read every row and check the command's exit status. A container start failure appears in the per-device report and makes the command fail. Earlier build or image-delivery errors can stop the command before this final report.
+
+Deployment is not atomic: an error can leave some devices updated and others unchanged. Wendy does not roll successful devices back automatically. Detached deployment also skips readiness probes, so check the service on both devices next.
+
+## Verify both apps
+
+List the apps on each target:
+
+```bash
+wendy --json device apps list --device device-a
+wendy --json device apps list --device device-b
+```
+
+Find `fleet-demo` in each result and check that its `runningState` is `RUNNING` and its version is `0.1.0`.
+
+Open a cloud tunnel to the first device in a separate terminal and leave it running:
+
+```bash
+wendy cloud tunnel 18081:8080 --device device-a
+```
+
+Open a second terminal for the other device's tunnel:
+
+```bash
+wendy cloud tunnel 18082:8080 --device device-b
+```
+
+Back in your project terminal, request both services:
+
+```bash
+curl --fail --max-time 10 http://127.0.0.1:18081/health
+curl --fail --max-time 10 http://127.0.0.1:18082/health
+```
+
+Each request should return:
+
+```json
+{"status": "ok", "revision": "fleet-demo-v1"}
+```
+
+These responses confirm that the expected app revision answers requests on both devices. A `delivered` row or a running container alone does not establish that.
+
+## Deploy a change
+
+Change `REVISION` in `app.py` to `fleet-demo-v2` and set the version in `wendy.json` to `0.2.0`. Run the same deployment command again:
+
+```bash
+wendy run --build-host build-host --device device-a,device-b --detach
+```
+
+Repeat both health requests. Each should now return `fleet-demo-v2`. If one device failed, inspect its logs and fix the reported problem before retrying that target:
+
+```bash
+wendy device logs --app fleet-demo --device device-b
+```
+
+Press Ctrl+C to stop viewing logs. To retry only `device-b`, use:
+
+```bash
+wendy run --build-host build-host --device device-b --detach
+```
+
+This submits another build, which can reuse the build host's cache. It does not resume the previous delivery.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| The build host cannot deliver to several devices | Update its agent to a version with multi-target delivery support. |
+| A target has a different platform | Split the targets into groups with matching operating systems and CPU architectures. |
+| The image built but delivery failed | Check target enrollment, mesh connectivity, and the registry error in the output. |
+| The app starts but a health request fails | Check that port 8080 is free, both tunnel processes are running, and the app logs show that the HTTP server started. |
+| The CLI rejects `--builder` | Remove it when using `--build-host`. It selects a local builder and cannot be combined with a remote build host. |
+
+## Clean up
+
+Press Ctrl+C in both tunnel terminals. Remove the tutorial app and its image from each target:
+
+```bash
+wendy device apps remove fleet-demo --force --cleanup --device device-a
+wendy device apps remove fleet-demo --force --cleanup --device device-b
+```
+
+If you enabled the builder role only for this exercise, disable it:
+
+```bash
+wendy device build-host disable --device build-host
+```
+
+Disabling the role stops future remote builds. It does not delete the build host's cached layers or source context.

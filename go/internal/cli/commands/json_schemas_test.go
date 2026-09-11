@@ -429,7 +429,6 @@ func TestDiscoverCollectionJSON_AllArraysPresent(t *testing.T) {
 				VendorID:      "0x303a",
 				ProductID:     "0x1001",
 				IsWendyDevice: true,
-				IsESP32:       true,
 			},
 		},
 		LANDevices: []models.LANDevice{

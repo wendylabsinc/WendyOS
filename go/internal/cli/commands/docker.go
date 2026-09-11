@@ -2666,6 +2666,10 @@ var (
 // dialErr reports the shared proxy's most recent failure to reach the device
 // registry; it is non-nil on every nil-error return.
 func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), dialErr func() error, err error) {
+	port, err = registryHostPortForAgent(ctx, conn, port)
+	if err != nil {
+		return "", nil, nil, err
+	}
 	// Hold the lock for the entire operation so concurrent callers block rather
 	// than each starting their own proxy. Proxy creation is just a local
 	// net.Listen call, so the lock is held only briefly.
@@ -2747,6 +2751,10 @@ func resolveRegistryForSwift(ctx context.Context, host string, port int) (regist
 // of a generic build failure. dialErr is always safely callable (never nil)
 // on a nil-error return.
 func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, swiftUseMTLS bool, cleanup func(), dialErr func() error, err error) {
+	port, err = registryHostPortForAgent(ctx, conn, port)
+	if err != nil {
+		return "", false, nil, nil, err
+	}
 	if conn.RegistryDialer == nil {
 		if conn.IsMTLS {
 			// Provisioned LAN device: the registry speaks HTTPS with a cert signed
@@ -2885,6 +2893,10 @@ func tlsClientDialer(certPEM, keyPEM, caPEM string, dial func(context.Context) (
 }
 
 func resolveRegistryForAppleContainer(ctx context.Context, conn *grpcclient.AgentConnection, port int) (registryAddr string, cleanup func(), useMTLS bool, dialErr func() error, err error) {
+	port, err = registryHostPortForAgent(ctx, conn, port)
+	if err != nil {
+		return "", nil, false, nil, err
+	}
 	if conn.RegistryDialer != nil || conn.IsMTLS {
 		registryAddr, appleUseMTLS, cleanup, proxyDialErr, err := resolveRegistryForSwiftAgent(ctx, conn, port)
 		if err != nil {

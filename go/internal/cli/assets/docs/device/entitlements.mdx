@@ -210,6 +210,41 @@ When using `bluez` mode, this entitlement:
 - Allows interaction with paired devices and Bluetooth profiles
 - Enables use of standard Bluetooth libraries that depend on BlueZ
 
+WendyOS recreates the filtered BlueZ proxy before a stopped container starts.
+It also restores the socket for a container that remains running across an
+agent-only restart. The app or its Bluetooth library must reconnect any D-Bus
+connection that closed when the old proxy exited.
+
+### Serial / UART Entitlement
+
+The `serial` entitlement grants one USB serial tty to an app. The device must be
+connected for the initial deployment.
+
+```json
+{
+  "type": "serial",
+  "device": "ttyACM0"
+}
+```
+
+Only bare `ttyACM<N>` and `ttyUSB<N>` names are accepted. WendyOS bind-mounts
+the named device and grants its exact character-device `major:minor`, rather
+than exposing every serial device on the host.
+
+When `/dev/serial/by-id` provides a stable identity at deployment, WendyOS
+records it. Before each later container start, it resolves that same physical
+device again, updates the host mount and cgroup minor if Linux renumbered it,
+and keeps the path inside the container unchanged. Restart the container after
+replugging a device; a running task is not remounted in place.
+
+<Callout type="warning">
+  **Devices without a stable by-id identity:** WendyOS falls back to the exact
+  tty name and verifies that it is still the expected serial-device class. It
+  fails clearly if the path is missing or incompatible, but it cannot tell if a
+  different physical adapter has taken the same tty name. Redeploy with the
+  intended device connected if physical-device identity matters.
+</Callout>
+
 ### Persist Entitlement
 
 The persist entitlement creates a persistent storage volume that survives container restarts. Data written to the mounted path is stored on the host device and persists across application updates and reboots.

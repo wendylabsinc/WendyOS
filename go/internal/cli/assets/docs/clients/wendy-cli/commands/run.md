@@ -185,100 +185,46 @@ On a **Windows host**, `wendy run` returns an actionable error for Swift project
 wendy run --build-host spark-office
 ```
 
-The build runs on that device, and it pushes the finished image straight into
-the target device's registry over the mesh — LAN-direct when possible, via the
-cloud broker otherwise. The image never travels through your machine.
+The build host pushes the finished image directly into the target device's
+registry over the mesh, using a direct LAN connection when possible and the
+cloud broker otherwise. It addresses the provisioned target by asset ID without
+resolving a hostname, so delivery does not depend on the build host resolving
+`device-<id>.cloud.wendy.dev`. The image never travels through your machine.
 
-This is worth reaching for when your laptop is the wrong machine for the job:
-CUDA-heavy builds that want a real GPU, or an arm64 target that would otherwise
-be built under QEMU emulation on an x86 host.
+Use a remote host for builds that need its GPU or CPU architecture, such as an
+arm64 build that would otherwise use QEMU emulation on an x86 development machine.
 
-**Your machine needs no container builder at all.** On the `--build-host` path
-the CLI never starts Docker, Apple Container, or a local BuildKit daemon — a Mac
-with no Docker Desktop installed can still `wendy run`. Because of that,
-`--builder` (which selects a *local* builder) cannot be combined with
-`--build-host`.
+Your machine does not need a container builder. With `--build-host`, the CLI
+does not start Docker, Apple Container, or a local BuildKit daemon. The
+`--builder` flag selects a local builder and cannot be combined with `--build-host`.
 
 To set a default so you do not pass the flag every time, set `defaultBuildHost`
 in the CLI config. The flag always wins over the default. This is a
 per-developer setting rather than a project one, because the right build host
 depends on which network you are on.
 
+For a complete example, follow [Build Once, Deploy to Several Devices](/docs/guides/fleet-deployment).
+
 ### Requirements
 
-- **The build host must opt in:**
+- A Linux build host with the builder role enabled, BuildKit available, and
+  support for the target platform.
+- A user certificate in the build host's organisation.
+- A provisioned target device reachable from the build host over the mesh.
 
-  ```bash
-  wendy device build-host enable --device spark-office
-  wendy device build-host status --device spark-office
-  ```
+See [`wendy device build-host`](device/build-host.md) for setup, access rules,
+cache-space requirements, and how shared builds use the host.
 
-  A device does not become a build farm merely by being reachable. Enabling takes
-  effect immediately, with no agent restart. The RPC requires a *user*
-  certificate, so one device cannot opt another in on your behalf. See
-  [`wendy device build-host`](device/build-host.md).
-
-- **The build host must run BuildKit**, listening on
-  `/run/buildkit/buildkitd.sock`. WendyOS devices have it. An adopted Linux host —
-  a DGX Spark running Ubuntu, say — does not, and Ubuntu ships no `buildkit`
-  package, so install the release tarball and symlink `buildctl` into `/usr/bin`
-  (the agent runs it by name, and systemd units get a minimal PATH).
-  `build-host status` reports the version it finds.
-
-  A Mac cannot be a build host: the Mac agent runs Linux containers through Apple
-  Container, which has no BuildKit underneath. A Mac remains a perfectly good
-  *target*, and a perfectly good machine to run `wendy run` from.
-
-- **The target device must be provisioned**, so the build host can address it by
-  asset id. Delivery goes through the mesh dialer — LAN first, cloud broker
-  otherwise — and never resolves a hostname, so a build host that cannot resolve
-  `device-<id>.cloud.wendy.dev` still delivers.
-
-If any of these does not hold, `wendy run` fails immediately and names the host.
-It never quietly falls back to building locally — a twenty-minute local build
-you believed was running on the Spark is worse than an error.
-
-### What enabling a build host means
-
-Worth being deliberate about, because a build host is a shared machine running
-other people's instructions:
-
-- **Anyone in your organisation can build on it.** A remote build executes the
-  Dockerfile it was handed, which is the feature — but it means the builder role
-  grants code execution on that device to every *person* in your organisation.
-  Enable it on machines you would already trust that way, not on a robot in the
-  field.
-
-  Three things sit outside that grant. Cross-organisation callers are rejected by
-  the agent's mTLS organisation check. **Devices** are rejected too — submitting a
-  build requires a user certificate, so one compromised device cannot conscript
-  its peers into building for it. And the unauthenticated port the agent serves
-  before provisioning does not accept builds at all.
-- **Build contexts land on its disk.** Sources are reassembled under
-  `/var/lib/wendy/buildctx/<app>` and are kept between
-  builds so BuildKit's local-source cache stays warm. They are cleared and
-  rewritten at the start of each build of that app, but they are not deleted
-  afterwards.
-- **Builds of the same app are serialised** on a given host; different apps build
-  concurrently. Two people building one app id would otherwise share a context
-  directory, and the second build's extraction would replace sources the first
-  was still compiling.
-- **Delivery is scoped to one build.** While a build runs, the agent exposes a
-  loopback endpoint that BuildKit pushes through, and that endpoint holds the
-  credentials for reaching the target device. It requires a password minted for
-  that build alone, so other processes on the build host cannot use it to push
-  something of their own to your device. The password is passed to BuildKit in a
-  `0600` file rather than on a command line, where any local user could read it
-  out of `/proc`.
+If a requirement is missing, `wendy run` fails and names the host. It does not
+fall back to building locally.
 
 ### Errors
 
 A failed remote build reports which half failed, because the fixes differ:
 
-- *build on `<host>` failed* — the problem is your Dockerfile or Stagefile.
-- *image built on `<host>` but could not be delivered* — the build was fine; look
-  at mesh reachability between the two devices, or registry credentials on the
-  build host.
+- *build on `<host>` failed*: check your Dockerfile or Stagefile.
+- *image built on `<host>` but could not be delivered*: check mesh reachability
+  between the two devices and registry credentials on the build host.
 
 ## Watch mode
 

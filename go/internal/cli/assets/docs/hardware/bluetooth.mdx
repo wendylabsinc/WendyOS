@@ -109,3 +109,12 @@ wendy run
 ```
 
 <CliShot flow="run" step="deploy" alt="The Wendy CLI deploying a Bluetooth app to a WendyOS device" />
+
+## App Recovery After Restarts
+
+WendyOS recreates the app's filtered BlueZ D-Bus proxy before a stopped
+container starts, including after a device reboot. If only the Wendy agent
+restarts, it restores the proxy socket without restarting the running
+container. Existing D-Bus connections close with the old proxy, so the app or
+its Bluetooth library must reconnect to the restored socket. No redeploy is
+required.

@@ -654,6 +654,12 @@ func TestParseDeviceTypePrefersBoard(t *testing.T) {
 			wantStorage: "nvme",
 		},
 		{
+			name:        "disk storage",
+			content:     "BOARD=vm-arm64\nMACHINE=vm-arm64-wendyos\nSTORAGE=disk\n",
+			wantType:    "vm-arm64",
+			wantStorage: "disk",
+		},
+		{
 			name:        "board wins when listed after machine",
 			content:     "MACHINE=jetson-orin-nano-devkit-nvme-wendyos\nBOARD=jetson-orin-nano\n",
 			wantType:    "jetson-orin-nano",

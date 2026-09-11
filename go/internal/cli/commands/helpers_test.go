@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -298,7 +299,7 @@ func TestLANAgentAddressesFallsBackToDefaultPort(t *testing.T) {
 func TestIsCertRejectionErrorIgnoresPlaintextTLSProbe(t *testing.T) {
 	err := errors.New(`rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: tls: first record does not look like a TLS handshake"`)
 
-	if isCertRejectionError(err) {
+	if isCertRejectionError("192.168.2.253:50052", err) {
 		t.Fatal("isCertRejectionError() = true, want false for plaintext TLS probe")
 	}
 }
@@ -306,7 +307,7 @@ func TestIsCertRejectionErrorIgnoresPlaintextTLSProbe(t *testing.T) {
 func TestIsCertRejectionErrorDetectsTLSAlert(t *testing.T) {
 	err := errors.New("rpc error: code = Unavailable desc = remote error: tls: bad certificate")
 
-	if !isCertRejectionError(err) {
+	if !isCertRejectionError("192.168.2.253:50052", err) {
 		t.Fatal("isCertRejectionError() = false, want true for TLS alert")
 	}
 }
@@ -1873,7 +1874,7 @@ func TestIsCertRejectionError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isCertRejectionError(tc.err); got != tc.want {
+			if got := isCertRejectionError("192.168.2.253:50052", tc.err); got != tc.want {
 				t.Errorf("isCertRejectionError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
@@ -1992,6 +1993,7 @@ func TestHideLocalProviders(t *testing.T) {
 type fakeProvider struct {
 	key           string
 	devices       []models.ExternalDevice
+	discoverErr   error // when set, DiscoverDevices reports this instead of devices
 	discoverCalls atomic.Int32
 }
 
@@ -2001,6 +2003,9 @@ func (p *fakeProvider) IsAvailable(context.Context) bool        { return true }
 func (p *fakeProvider) CheckRequirements(context.Context) error { return nil }
 func (p *fakeProvider) DiscoverDevices(context.Context) ([]models.ExternalDevice, error) {
 	p.discoverCalls.Add(1)
+	if p.discoverErr != nil {
+		return nil, p.discoverErr
+	}
 	return p.devices, nil
 }
 func (p *fakeProvider) SupportedBuildTypes() []string { return nil }
@@ -2021,11 +2026,11 @@ func (p *fakeProvider) GetDeviceInfo(context.Context, models.ExternalDevice) (*p
 // fakeContinuousProvider additionally implements ContinuousDiscoverer.
 type fakeContinuousProvider struct {
 	fakeProvider
-	ch  chan models.ExternalDevice
+	ch  chan []models.ExternalDevice
 	err error
 }
 
-func (p *fakeContinuousProvider) DiscoverDevicesContinuous(context.Context) (<-chan models.ExternalDevice, error) {
+func (p *fakeContinuousProvider) DiscoverDevicesContinuous(context.Context) (<-chan []models.ExternalDevice, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
@@ -2038,31 +2043,37 @@ var (
 )
 
 // runDiscoverProviderForPicker starts the discovery loop in a goroutine and
-// returns a channel of items sent to the picker plus a done channel closed
-// when the loop returns.
-func runDiscoverProviderForPicker(ctx context.Context, prov providers.DeviceProvider) (<-chan tui.PickerItem, <-chan struct{}) {
-	got := make(chan tui.PickerItem, 16)
+// returns a channel of the batches sent to the picker plus a done channel
+// closed when the loop returns. Batches are kept whole rather than flattened:
+// each send is one snapshot, and a snapshot legitimately repeats devices the
+// previous one already carried.
+func runDiscoverProviderForPicker(ctx context.Context, prov providers.DeviceProvider) (<-chan []tui.PickerItem, <-chan struct{}) {
+	got := make(chan []tui.PickerItem, 16)
 	done := make(chan struct{})
 	go func() {
 		discoverProviderForPicker(ctx, prov, func(items []tui.PickerItem) {
-			for _, item := range items {
-				got <- item
-			}
+			got <- items
 		})
 		close(done)
 	}()
 	return got, done
 }
 
-func awaitPickerItem(t *testing.T, got <-chan tui.PickerItem, wantName string) {
+// awaitPickerBatch asserts the next batch sent to the picker holds exactly
+// wantNames, in order.
+func awaitPickerBatch(t *testing.T, got <-chan []tui.PickerItem, wantNames ...string) {
 	t.Helper()
 	select {
-	case item := <-got:
-		if item.Name != wantName {
-			t.Fatalf("picker item name = %q, want %q", item.Name, wantName)
+	case items := <-got:
+		names := make([]string, 0, len(items))
+		for _, item := range items {
+			names = append(names, item.Name)
+		}
+		if !slices.Equal(names, wantNames) {
+			t.Fatalf("picker batch = %v, want %v", names, wantNames)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for picker item %q", wantName)
+		t.Fatalf("timed out waiting for picker batch %v", wantNames)
 	}
 }
 
@@ -2100,16 +2111,20 @@ func TestDiscoverProviderForPickerStreamsContinuous(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	one := models.ExternalDevice{ID: "fake:1", DisplayName: "one", ProviderKey: "fake"}
+	two := models.ExternalDevice{ID: "fake:2", DisplayName: "two", ProviderKey: "fake"}
+
 	prov := &fakeContinuousProvider{
 		fakeProvider: fakeProvider{key: "fake"},
-		ch:           make(chan models.ExternalDevice),
+		ch:           make(chan []models.ExternalDevice),
 	}
 	got, done := runDiscoverProviderForPicker(ctx, prov)
 
-	prov.ch <- models.ExternalDevice{ID: "fake:1", DisplayName: "one", ProviderKey: "fake"}
-	awaitPickerItem(t, got, "one")
-	prov.ch <- models.ExternalDevice{ID: "fake:2", DisplayName: "two", ProviderKey: "fake"}
-	awaitPickerItem(t, got, "two")
+	// Snapshots, not increments: the second one re-carries the first device.
+	prov.ch <- []models.ExternalDevice{one}
+	awaitPickerBatch(t, got, "one")
+	prov.ch <- []models.ExternalDevice{one, two}
+	awaitPickerBatch(t, got, "one", "two")
 
 	// Cancel then close the stream, as a real implementation would on ctx
 	// cancellation; the loop must return without falling back to polling.
@@ -2141,7 +2156,7 @@ func TestDiscoverProviderForPickerPollingFallback(t *testing.T) {
 			defer cancel()
 
 			got, done := runDiscoverProviderForPicker(ctx, tt.prov)
-			awaitPickerItem(t, got, "polled")
+			awaitPickerBatch(t, got, "polled")
 			cancel()
 			awaitDone(t, done)
 		})
@@ -2157,13 +2172,13 @@ func TestDiscoverProviderForPickerStreamDeathFallsBackToPolling(t *testing.T) {
 			key:     "fake",
 			devices: []models.ExternalDevice{{ID: "fake:1", DisplayName: "polled", ProviderKey: "fake"}},
 		},
-		ch: make(chan models.ExternalDevice),
+		ch: make(chan []models.ExternalDevice),
 	}
 	got, done := runDiscoverProviderForPicker(ctx, prov)
 
 	// Stream dies while the picker is still open: polling must take over.
 	close(prov.ch)
-	awaitPickerItem(t, got, "polled")
+	awaitPickerBatch(t, got, "polled")
 	cancel()
 	awaitDone(t, done)
 }
@@ -2177,7 +2192,7 @@ func TestExternalProviderPickerItem(t *testing.T) {
 			ProviderKey:     "wendy-lite",
 			AgentVersion:    "1.2.3",
 			CPUArchitecture: "riscv",
-			ConnectionInfo:  map[string]string{"type": "LAN", "ip": "10.0.0.9"},
+			ConnectionInfo:  map[string]string{"type": "LAN", "ip": "10.0.0.9", "deviceId": "lite-board-1"},
 		}
 		item := externalProviderPickerItem(prov, &dev)
 
@@ -2196,8 +2211,8 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 		// A LAN row carries no serial port, so it must not take part in the
 		// unflashed-row supersede at all.
-		if item.DedupKey != dev.DisplayName || item.Supersedes != "" {
-			t.Errorf("DedupKey = %q, Supersedes = %q, want the display name and no supersede",
+		if item.DedupKey != dev.ConnectionInfo["deviceId"] || item.Supersedes != "" {
+			t.Errorf("DedupKey = %q, Supersedes = %q, want the device id and no supersede",
 				item.DedupKey, item.Supersedes)
 		}
 	})
@@ -2235,13 +2250,13 @@ func TestExternalProviderPickerItem(t *testing.T) {
 			DisplayName: "Lite Board",
 			ProviderKey: "wendy-lite",
 			ConnectionInfo: map[string]string{
-				"type": "USB", "serialPort": "/dev/cu.usbmodem2101", "name": "lite-board",
+				"type": "USB", "serialPort": "/dev/cu.usbmodem2101", "name": "lite-board", "deviceId": "lite-board-1",
 			},
 		}
 		item := externalProviderPickerItem(prov, &dev)
 
-		if item.DedupKey != dev.DisplayName {
-			t.Errorf("DedupKey = %q, want the display name so LAN/USB rows still merge", item.DedupKey)
+		if item.DedupKey != dev.ConnectionInfo["deviceId"] {
+			t.Errorf("DedupKey = %q, want the device id so LAN/USB rows still merge", item.DedupKey)
 		}
 		if want := unflashedLiteDedupKey("/dev/cu.usbmodem2101"); item.Supersedes != want {
 			t.Errorf("Supersedes = %q, want %q", item.Supersedes, want)
@@ -2287,6 +2302,112 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 	})
 
+	// An unenrolled Wendy Lite board advertises mtls=false and connectClient
+	// then dials it with ConnectInsecure, so its row must carry the same
+	// warning a plaintext WendyOS device gets.
+	t.Run("insecure flag follows the transport's mtls key", func(t *testing.T) {
+		tests := []struct {
+			name string
+			info map[string]string
+			want bool
+		}{
+			{
+				name: "LAN board that is not enrolled",
+				info: map[string]string{"type": "LAN", "ip": "10.0.0.9", "deviceId": "lite-board-1", "mtls": "false"},
+				want: true,
+			},
+			{
+				name: "LAN board that is enrolled",
+				info: map[string]string{"type": "LAN", "ip": "10.0.0.9", "deviceId": "lite-board-1", "mtls": "true"},
+				want: false,
+			},
+			// Serial carries no mtls key at all, so an absent key must not be
+			// read as an unsecured connection (an `!= "true"` test would).
+			{
+				name: "USB board reports no mtls at all",
+				info: map[string]string{"type": "USB", "serialPort": "/dev/cu.usbmodem2101", "deviceId": "lite-board-1"},
+				want: false,
+			},
+			{
+				name: "unflashed board reports no mtls at all",
+				info: map[string]string{"type": "USB", "serialPort": "/dev/cu.usbmodem2101", "needsInstall": "true"},
+				want: false,
+			},
+		}
+
+		prov := &fakeProvider{key: "wendy-lite"}
+		for _, tt := range tests {
+			dev := models.ExternalDevice{
+				ID:             "wendy-lite:board",
+				DisplayName:    "Lite Board",
+				ProviderKey:    "wendy-lite",
+				ConnectionInfo: tt.info,
+			}
+			if got := externalProviderPickerItem(prov, &dev).Insecure; got != tt.want {
+				t.Errorf("%s: Insecure = %v, want %v", tt.name, got, tt.want)
+			}
+		}
+	})
+
+	// End to end over the picker: the reported gap was an unenrolled Lite board
+	// presented as if its connection were secure.
+	t.Run("insecure Lite row warns in the picker", func(t *testing.T) {
+		prov := &fakeProvider{key: "wendy-lite"}
+		lan := models.ExternalDevice{
+			ID:          "wendy-lite:board.local",
+			DisplayName: "Lite Board",
+			ProviderKey: "wendy-lite",
+			ConnectionInfo: map[string]string{
+				"type": "LAN", "ip": "10.0.0.9", "deviceId": "lite-board-1", "mtls": "false",
+			},
+		}
+		usb := models.ExternalDevice{
+			ID:          "wendy-lite:/dev/cu.usbmodem2101",
+			DisplayName: "Lite Board",
+			ProviderKey: "wendy-lite",
+			ConnectionInfo: map[string]string{
+				"type": "USB", "serialPort": "/dev/cu.usbmodem2101", "deviceId": "lite-board-1",
+			},
+		}
+
+		pickerView := func(devs ...*models.ExternalDevice) string {
+			picker := tui.NewPicker()
+			picker.MergeItem = mergePickerItem
+			model, _ := picker.Update(tui.PickerAddMsg{
+				Items: []tui.PickerItem{externalProviderPickerItem(prov, devs[0])},
+			})
+			for _, dev := range devs[1:] {
+				model, _ = model.(tui.PickerModel).Update(tui.PickerAddMsg{
+					Items: []tui.PickerItem{externalProviderPickerItem(prov, dev)},
+				})
+			}
+			return model.(tui.PickerModel).View()
+		}
+
+		view := pickerView(&lan)
+		if !strings.Contains(view, "Connection is not secured with mTLS") {
+			t.Errorf("picker does not warn about the unenrolled board:\n%s", view)
+		}
+		if !strings.Contains(view, tui.LegendInsecure) {
+			t.Errorf("picker legend does not document the warning glyph:\n%s", view)
+		}
+
+		// The merged row must describe the connection pickerSelection would
+		// actually make: USB outranks LAN, and serial is not an mTLS question —
+		// so the warning goes away, whichever order the transports arrive in.
+		for _, order := range [][]*models.ExternalDevice{{&lan, &usb}, {&usb, &lan}} {
+			view := pickerView(order...)
+			if strings.Contains(view, "Connection is not secured with mTLS") {
+				t.Errorf("%s then %s: merged row still warns although it connects over USB:\n%s",
+					order[0].ConnectionInfo["type"], order[1].ConnectionInfo["type"], view)
+			}
+			if strings.Contains(view, tui.LegendInsecure) {
+				t.Errorf("%s then %s: merged row still documents the warning glyph:\n%s",
+					order[0].ConnectionInfo["type"], order[1].ConnectionInfo["type"], view)
+			}
+		}
+	})
+
 	t.Run("other providers keep provider row layout", func(t *testing.T) {
 		prov := &fakeProvider{key: "fake"}
 		dev := models.ExternalDevice{ID: "fake:1", DisplayName: "Dev", ProviderKey: "fake"}
@@ -2328,5 +2449,51 @@ func TestCachedDeviceEntryAnyAgeMostRecentWins(t *testing.T) {
 	// Bare-name form matches the .local stored form.
 	if _, ok := cachedDeviceEntry(cache, "orin"); !ok {
 		t.Error("bare hostname did not match .local entry")
+	}
+}
+
+func TestIsCertRejectionErrorClassifiesHandshakeFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want bool
+	}{{
+		name: "server sent a TLS alert",
+		msg:  `rpc error: desc = "transport: authentication handshake failed: remote error: tls: bad certificate"`,
+		want: true,
+	}, {
+		name: "server demanded a certificate",
+		msg:  `rpc error: desc = "transport: authentication handshake failed: certificate required"`,
+		want: true,
+	}, {
+		name: "plaintext agent probed with TLS",
+		msg:  `rpc error: desc = "transport: authentication handshake failed: tls: first record does not look like a TLS handshake"`,
+		want: false,
+	}, {
+		// Off loopback an EOF may be an on-path reset, so it stays strict.
+		name: "handshake ended in EOF",
+		msg:  `rpc error: desc = "transport: authentication handshake failed: EOF"`,
+		want: true,
+	}}
+	for _, tc := range cases {
+		if got := isCertRejectionError("192.168.2.253:50052", errors.New(tc.msg)); got != tc.want {
+			t.Errorf("%s: isCertRejectionError() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestLoopbackEOFIsNotTreatedAsACertRejection(t *testing.T) {
+	// QEMU's user-mode networking accepts on the host and only then finds the
+	// guest port closed, so an unprovisioned VM's mTLS probe ends in EOF. That
+	// must not suppress the plaintext rung -- but only for loopback, because
+	// off it the same EOF may be an on-path reset.
+	eof := errors.New(`rpc error: desc = "transport: authentication handshake failed: EOF"`)
+	for _, addr := range []string{"127.0.0.1:50052", "localhost:50052", "[::1]:50052"} {
+		if isCertRejectionError(addr, eof) {
+			t.Errorf("%s: a loopback EOF still counts as a cert rejection", addr)
+		}
+	}
+	if !isCertRejectionError("192.168.2.253:50052", eof) {
+		t.Error("an EOF off loopback stopped counting as a cert rejection")
 	}
 }
