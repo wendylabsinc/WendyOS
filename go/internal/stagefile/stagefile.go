@@ -11,12 +11,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/moby/buildkit/client/llb"
 
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/codegen"
 	dockerignorepkg "github.com/wendylabsinc/wendy/go/internal/stagefile/dockerignore"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/gpu"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/ir"
+	"github.com/wendylabsinc/wendy/go/internal/stagefile/llbgen"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/lock"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/spec"
 )
@@ -30,6 +34,20 @@ var baseResolver lock.Resolver = lock.CraneResolver
 // reaches, and a package var for the same reason baseResolver is: so tests
 // can exercise the memoization without fetching anything.
 var baseHasher lock.Hasher = lock.HTTPHasher
+
+// baseConfigResolver is CompileToLLB's counterpart to baseResolver: the
+// underlying registry lookup for a base image's raw OCI config, indirected
+// through a package var so tests can exercise sharedConfigResolver's
+// memoization without touching a live registry.
+var baseConfigResolver lock.ConfigResolver = lock.CraneConfigResolver
+
+// sharedConfigResolver is the process-wide config resolver CompileToLLB uses,
+// for the same reason sharedResolver is memoized: a compose project's services
+// typically share both a base image and a target platform, and their compiles
+// run concurrently.
+var sharedConfigResolver = lock.MemoizeConfig(func(ref, platform string) ([]byte, error) {
+	return baseConfigResolver(ref, platform)
+})
 
 // sharedResolver is the process-wide resolver CompileFile uses. Memoizing here
 // rather than per-call is what makes a compose project cheap: its services each
@@ -239,59 +257,26 @@ func compileFile(dir, source, platform, gpuArch, buildProfile string, resolver l
 }
 
 func compileFileWithFramework(dir, source, platform, gpuArch, buildProfile, ros2Distro, ros2RMW string, resolver lock.Resolver, hasher lock.Hasher) (dockerfile, dockerignore string, err error) {
-	sourcePath := filepath.Join(dir, source)
-	raw, err := os.ReadFile(sourcePath)
+	rs, err := resolveSpec(dir, source, gpuArch, buildProfile, ros2Distro, ros2RMW, resolver, hasher)
 	if err != nil {
-		return "", "", fmt.Errorf("reading %s: %w", sourcePath, err)
-	}
-	f, err := spec.Parse(raw)
-	if err != nil {
-		return "", "", err
-	}
-	applyBuildProfile(f, buildProfile)
-	applyROS2Runtime(f, ros2Distro, ros2RMW)
-
-	lockPath := filepath.Join(dir, LockName(source))
-	existing, err := lock.Load(lockPath)
-	if err != nil {
-		return "", "", err
-	}
-	updated, _, err := lock.Resolve(existing, spec.SourceHash(raw), imageRefs(f), nil, resolver)
-	if err != nil {
-		return "", "", err
-	}
-	if _, err := updated.ResolveDownloads(downloadURLs(f), nil, hasher); err != nil {
-		return "", "", err
-	}
-	// Resolved before Save so a first GPU build records its profile in the
-	// same write as its image digests, and after Resolve so it can reuse a
-	// profile an earlier build already pinned.
-	cudaProfile, err := resolveCUDAProfile(f, gpuArch, updated)
-	if err != nil {
-		return "", "", err
-	}
-	if err := updated.Save(lockPath); err != nil {
 		return "", "", err
 	}
 
 	// The project directory is the cache scope: it is what makes two different
 	// projects' compiler caches distinct, and it is stable across the rebuilds
-	// of one project that the caches exist to speed up. An absolute path means
-	// moving a checkout starts from a cold cache, which is the right trade —
-	// the alternative keys are either not unique per project or not stable
-	// across an edit.
+	// of one project that the caches exist to speed up.
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		absDir = dir
 	}
-	g, err := ir.Lower(f, ir.Options{
-		Images: updated.Images, Downloads: updated.Downloads, Platform: platform,
-		CUDAProfile: cudaProfile, CacheScope: absDir,
+	g, err := ir.Lower(rs.file, ir.Options{
+		Images: rs.images, Downloads: rs.downloads, Platform: platform,
+		CUDAProfile: rs.cudaProfile, CacheScope: absDir,
 	})
 	if err != nil {
 		return "", "", err
 	}
-	dockerfile, err = codegen.GenerateGraph(g, updated.Images)
+	dockerfile, err = codegen.GenerateGraph(g, rs.images)
 	if err != nil {
 		return "", "", err
 	}
@@ -301,6 +286,93 @@ func compileFileWithFramework(dir, source, platform, gpuArch, buildProfile, ros2
 	}
 	dockerignore = dockerignorepkg.Derive(localPaths)
 	return dockerfile, dockerignore, nil
+}
+
+// CompileToLLB reads the canonical Stagefile from dir and compiles it to a
+// BuildKit LLB definition plus the derived image config. It shares
+// CompileFile's parse/lock/resolve path, so both backends use identical pins.
+func CompileToLLB(dir, platform, gpuArch, buildProfile string) (*llb.Definition, *llbgen.ImageConfig, error) {
+	return compileToLLB(dir, platform, gpuArch, buildProfile, sharedResolver, sharedHasher, sharedConfigResolver)
+}
+
+// compileToLLB is the resolver-injectable implementation behind CompileToLLB.
+func compileToLLB(dir, platform, gpuArch, buildProfile string, resolver lock.Resolver, hasher lock.Hasher, configResolver lock.ConfigResolver) (*llb.Definition, *llbgen.ImageConfig, error) {
+	rs, err := resolveSpec(dir, SourceName, gpuArch, buildProfile, "", "", resolver, hasher)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
+	g, err := ir.Lower(rs.file, ir.Options{
+		Images: rs.images, Downloads: rs.downloads, Platform: platform,
+		CUDAProfile: rs.cudaProfile, CacheScope: absDir,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	configs, err := lock.ResolveConfigs(imageRefs(rs.file), rs.images, platform, configResolver)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return llbgen.Emit(g, llbgen.Options{
+		Images: rs.images, Configs: configs, Platform: platform,
+		BuildPlatform: hostPlatform(),
+	})
+}
+
+func hostPlatform() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
+}
+
+// resolvedSpec is the parse+lock+resolve result shared by both backends.
+type resolvedSpec struct {
+	file        *spec.File
+	images      map[string]string
+	downloads   map[string]string
+	cudaProfile *gpu.Profile
+}
+
+func resolveSpec(dir, source, gpuArch, buildProfile, ros2Distro, ros2RMW string, resolver lock.Resolver, hasher lock.Hasher) (*resolvedSpec, error) {
+	sourcePath := filepath.Join(dir, source)
+	raw, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", sourcePath, err)
+	}
+	f, err := spec.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	applyBuildProfile(f, buildProfile)
+	applyROS2Runtime(f, ros2Distro, ros2RMW)
+
+	lockPath := filepath.Join(dir, LockName(source))
+	existing, err := lock.Load(lockPath)
+	if err != nil {
+		return nil, err
+	}
+	updated, _, err := lock.Resolve(existing, spec.SourceHash(raw), imageRefs(f), nil, resolver)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := updated.ResolveDownloads(downloadURLs(f), nil, hasher); err != nil {
+		return nil, err
+	}
+	cudaProfile, err := resolveCUDAProfile(f, gpuArch, updated)
+	if err != nil {
+		return nil, err
+	}
+	if err := updated.Save(lockPath); err != nil {
+		return nil, err
+	}
+	return &resolvedSpec{
+		file: f, images: updated.Images, downloads: updated.Downloads,
+		cudaProfile: cudaProfile,
+	}, nil
 }
 
 // applyROS2Runtime appends the RMW implementation package implied by the
