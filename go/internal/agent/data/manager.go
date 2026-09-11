@@ -656,12 +656,7 @@ func (m *Manager) interrupt(key, reason string, drain bool) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.stillOpenLocked(a) {
-		return Manifest{}, ErrNoActiveEpisode
-	}
-	return m.finalizeLocked(a, "interrupted", reason)
+	return m.finalize(a, "interrupted", reason)
 }
 
 func (m *Manager) sampleEpisode(ctx context.Context, a *activeEpisode) {
@@ -845,15 +840,17 @@ func (m *Manager) EndDownload(id string) {
 // RecordApplication validates and stamps an entitled application's record.
 // It returns buffered or recorded; protocol-level validation happens before it.
 func (m *Manager) RecordApplication(appID string, record ApplicationRecord) (string, error) {
-	m.mu.Lock()
+	// The receipt is sampled BEFORE m.mu is taken. It is the agent's statement
+	// of when this record arrived, so any wait for the lock belongs outside it:
+	// stamped after the wait, a record that queued behind a seal or another
+	// record was dated to when the manager got round to it, and the pre-roll
+	// window and the episode offsets derived from it inherited that error.
 	before, err := readBootTime()
 	if err != nil {
-		m.mu.Unlock()
 		return "rejected", err
 	}
 	after, err := readBootTime()
 	if err != nil {
-		m.mu.Unlock()
 		return "rejected", err
 	}
 	receipt := before + (after-before)/2
@@ -872,6 +869,7 @@ func (m *Manager) RecordApplication(appID string, record ApplicationRecord) (str
 		stamp = record.ClientBootNanos
 	}
 	stored := storedApplicationRecord{ApplicationRecord: record, AppID: appID, AgentReceiptBootNanos: receipt, ClientTimestampAccepted: accepted, TimestampUncertaintyNanos: (after - before + 1) / 2}
+	m.mu.Lock()
 	// Every open episode that selected the applications source receives the
 	// record on its own timeline; episodes that excluded it are skipped. Open
 	// means capturing OR inside its post-seal drain: the drain exists precisely
@@ -1128,7 +1126,7 @@ func (m *Manager) stillOpenLocked(a *activeEpisode) bool {
 // configured drain (see beginSeal) so an application that scores asynchronously
 // can still file its verdict here. It gives up its campaign key as it enters
 // that window, so the campaign can start its next episode immediately.
-// StoppedEpisodeNS is stamped in finalizeLocked, after the drain, so records
+// StoppedEpisodeNS is stamped in the seal, after the drain, so records
 // that arrive during the drain carry an EpisodeNanos below it exactly as live
 // ones do.
 func (m *Manager) Stop(key string) (Manifest, error) {
@@ -1136,26 +1134,80 @@ func (m *Manager) Stop(key string) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.stillOpenLocked(a) {
-		return Manifest{}, ErrNoActiveEpisode
-	}
-	return m.finalizeLocked(a, "complete", "")
+	return m.finalize(a, "complete", "")
 }
 
-func (m *Manager) finalizeLocked(a *activeEpisode, state, reason string) (Manifest, error) {
-	now, err := readBootTime()
-	if err != nil {
+// sealMux is the seal's playable remux, indirected so a test can substitute a
+// slow one and observe that the rest of the manager keeps serving during it.
+// Production always runs muxPlayableClips.
+var sealMux = muxPlayableClips
+
+// finalize seals an episode whose capture has stopped and whose post-seal
+// drain, if it had one, has already been served.
+//
+// It runs in three phases so that the cost of a seal is not charged to every
+// other caller of the manager. A seal rewrites every camera byte (the playable
+// remux) and then reads every byte again (the per-file SHA-256), which on a
+// multi-gigabyte episode is seconds of input and output. Holding m.mu across
+// that blocked Start, Status, ActiveEpisodeKeys, UpdateUploadState and, worst
+// of all, RecordApplication, whose agent receipt was then taken after the wait:
+// the whole seal duration was added to a timestamp whose entire purpose is to
+// say when the agent received the record.
+//
+//  1. Under the lock the episode is detached from m.active and m.sealing. That
+//     detachment is the fence the unlocked phase relies on: openEpisodesLocked
+//     no longer returns the episode, so no application record and no model
+//     input can be appended to it once its bytes are being hashed, and no
+//     second Stop or Interrupt can claim it.
+//  2. With the lock released the episode's clock is read, its ledger is
+//     flushed, and its bytes are muxed and hashed. Nothing else can reach the
+//     episode by then, and enforceQuota skips ".partial" directories, so the
+//     store cannot evict it mid-seal either.
+//  3. The lock is retaken to write the manifest and rename the directory out
+//     of ".partial", which is what publishes the episode to every path that
+//     walks the store.
+//
+// A failure in any phase abandons the episode rather than parking it. It is
+// already detached, so it can neither be sealed twice nor absorb further
+// records, and its directory keeps its ".partial" suffix, which is exactly
+// what recoverPartials seals on the next start. Leaving it in m.sealing
+// instead, as an earlier version did, produced an episode no caller could
+// reach (Stop and Interrupt look only in m.active) that nevertheless kept
+// answering "recorded" for records nothing would ever seal.
+func (m *Manager) finalize(a *activeEpisode, state, reason string) (Manifest, error) {
+	m.mu.Lock()
+	if !m.stillOpenLocked(a) {
+		m.mu.Unlock()
+		return Manifest{}, ErrNoActiveEpisode
+	}
+	m.forgetLocked(a)
+	a.manifest.State, a.manifest.Interruption = state, reason
+	consensus := m.consensus
+	m.mu.Unlock()
+
+	if err := m.sealDetached(a, consensus); err != nil {
+		m.Warnf("episode %s: seal failed, leaving %s for recovery on the next start: %v",
+			a.manifest.ID, filepath.Base(a.dir), err)
 		return Manifest{}, err
 	}
+	return a.manifest, nil
+}
+
+// sealDetached is phases two and three of finalize: everything the seal does
+// once the episode belongs to this call alone. Only the caller may run it, and
+// only after the episode has left m.active and m.sealing.
+func (m *Manager) sealDetached(a *activeEpisode, consensus func(context.Context) (timesync.Consensus, error)) error {
+	now, err := readBootTime()
+	if err != nil {
+		return err
+	}
 	a.manifest.StoppedEpisodeNS = now - a.manifest.RequestBootNanos
-	if obs, err := observeUTC(a.manifest.RequestBootNanos, "system_reported", "linux_realtime_sandwich"); err == nil {
+	if obs, obsErr := observeUTC(a.manifest.RequestBootNanos, "system_reported", "linux_realtime_sandwich"); obsErr == nil {
 		a.manifest.UTCObservations = append(a.manifest.UTCObservations, obs)
 	}
-	if m.consensus != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		c, queryErr := m.consensus(ctx)
+	if consensus != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), consensusQueryTimeout)
+		c, queryErr := consensus(ctx)
 		cancel()
 		if queryErr == nil {
 			a.manifest.Roughtime = append(a.manifest.Roughtime, c)
@@ -1164,7 +1216,6 @@ func (m *Manager) finalizeLocked(a *activeEpisode, state, reason string) (Manife
 			}
 		}
 	}
-	a.manifest.State, a.manifest.Interruption = state, reason
 	// The model-input ledger is appended without per-sample fsync, so it must
 	// reach the disk before its checksum is taken.
 	if a.modelInputs != nil {
@@ -1172,7 +1223,7 @@ func (m *Manager) finalizeLocked(a *activeEpisode, state, reason string) (Manife
 		closeErr := a.modelInputs.Close()
 		a.modelInputs = nil
 		if err := errors.Join(syncErr, closeErr); err != nil {
-			return Manifest{}, err
+			return err
 		}
 	}
 	// The playable remux runs before sealFiles so each derived
@@ -1182,25 +1233,23 @@ func (m *Manager) finalizeLocked(a *activeEpisode, state, reason string) (Manife
 	// the remux is a copy, not a transcode, so this keeps the seal's shape:
 	// one more read of the camera bytes, never a failure. A source that
 	// cannot be muxed honestly seals without its clip and the notes say why.
-	a.manifest.PlayableNotes = muxPlayableClips(a.dir)
+	a.manifest.PlayableNotes = sealMux(a.dir)
 	for _, note := range a.manifest.PlayableNotes {
-		m.warnf("episode %s: %s", a.manifest.ID, note)
+		m.Warnf("episode %s: %s", a.manifest.ID, note)
 	}
 	files, err := sealFiles(a.dir)
 	if err != nil {
-		return Manifest{}, err
+		return err
 	}
 	associateFileSources(files, a.manifest.Sources)
 	a.manifest.Files = files
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := writeManifest(a.dir, a.manifest); err != nil {
-		return Manifest{}, err
+		return err
 	}
-	final := strings.TrimSuffix(a.dir, ".partial")
-	if err := os.Rename(a.dir, final); err != nil {
-		return Manifest{}, err
-	}
-	m.forgetLocked(a)
-	return a.manifest, nil
+	return os.Rename(a.dir, strings.TrimSuffix(a.dir, ".partial"))
 }
 
 // forgetLocked drops a finalized episode from whichever collection holds it:
@@ -1665,37 +1714,91 @@ func payloadFormat(path string) (string, string) {
 	}
 }
 
+// sourceForPath names the source behind the two files whose episode-relative
+// path is fixed rather than derived from a source identifier. Every other file
+// is attributed by associateFileSources, which matches it against the sources
+// the manifest actually declares. A path component is deliberately NOT used as
+// a fallback identifier: it is safeName of an identifier, and safeName is not
+// invertible, so a file no source claims is left unattributed rather than
+// labelled with a fragment that matches nothing on the device or in the cloud
+// catalog.
 func sourceForPath(path string) string {
-	if path == "events.jsonl" {
+	switch path {
+	case "events.jsonl":
 		return "applications"
-	}
-	if path == "telemetry.jsonl" {
+	case "telemetry.jsonl":
 		return "telemetry"
-	}
-	parts := strings.Split(path, "/")
-	if len(parts) >= 2 && (parts[0] == "cameras" || parts[0] == "ros2" || parts[0] == "audio") {
-		return parts[1]
 	}
 	return ""
 }
 
+// fileSourceKey is the path component that a source's files are written under.
+// It is safeName of the source identifier, except for a ROS 2 topic source: one
+// recorder per DDS domain records every selected topic on that domain into a
+// single bag, and both the bag directory and its clock-sample sidecar are named
+// for the domain, so a topic source's files live under the domain's key.
+func fileSourceKey(id string) string {
+	if domainID, _, ok := ParseROS2SourceID(id); ok {
+		return safeName(domainID)
+	}
+	return safeName(id)
+}
+
+// fileHasSourceKey reports whether an episode-relative path, with its
+// kind directory already stripped, belongs to the source encoded as key: the
+// payload directory itself, a file inside it, the source's calibration
+// blob, or a sidecar such as "<key>-clock_samples.jsonl".
+func fileHasSourceKey(path, key string) bool {
+	return path == key || path == key+".calibration" ||
+		strings.HasPrefix(path, key+"/") || strings.HasPrefix(path, key+"-")
+}
+
+// associateFileSources attaches every sealed file to the episode sources that
+// produced it.
+//
+// Most files have exactly one source. A ROS 2 bag has as many as the campaign
+// selected topics on its domain, because the domain is recorded once: the bag
+// and its clock samples are the payload of each of those sources, not of a
+// domain source the campaign never named. SourceID stays single valued for the
+// consumers that key on it, so it carries the domain-level source when the
+// campaign selected one and the first selected topic source otherwise, and the
+// remaining sources are listed in AdditionalSourceIDs.
 func associateFileSources(files []File, sources []SourceStats) {
 	for i := range files {
-		if files[i].SourceID == "applications" || files[i].SourceID == "telemetry" {
+		if files[i].SourceID != "" {
 			continue
 		}
 		path := strings.TrimPrefix(files[i].Path, "cameras/")
 		path = strings.TrimPrefix(path, "ros2/")
 		path = strings.TrimPrefix(path, "audio/")
+		var matched []string
+		var additional []string
+		primary := -1
 		for _, stats := range sources {
-			encoded := safeName(stats.Source.ID)
-			if path == encoded || path == encoded+".calibration" || strings.HasPrefix(path, encoded+"/") || strings.HasPrefix(path, encoded+"-") {
-				files[i].SourceID = stats.Source.ID
-				break
+			id := stats.Source.ID
+			if !fileHasSourceKey(path, fileSourceKey(id)) {
+				continue
+			}
+			if _, topic, isROS2 := ParseROS2SourceID(id); isROS2 && topic == "" && primary < 0 {
+				primary = len(matched)
+			}
+			matched = append(matched, id)
+		}
+		if len(matched) == 0 {
+			continue
+		}
+		if primary < 0 {
+			primary = 0
+		}
+		for j, id := range matched {
+			if j != primary {
+				additional = append(additional, id)
 			}
 		}
+		files[i].SourceID, files[i].AdditionalSourceIDs = matched[primary], additional
 	}
 }
+
 func writeManifest(dir string, m Manifest) error {
 	b, e := json.MarshalIndent(m, "", "  ")
 	if e != nil {

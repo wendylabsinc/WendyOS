@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -107,7 +108,14 @@ func TestSealWritesPlayableClipListedInManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = m.Start(StartOptions{Sources: []string{"applications"}}); err != nil {
+	// The camera is declared as an episode source, exactly as a device with a
+	// camera declares it. A sealed file is attributed to the source the
+	// manifest names, never to the directory component it happens to sit
+	// under, which is a lossy encoding of an identifier and not one.
+	m.SetSourceProvider(func(context.Context) []Source {
+		return []Source{{ID: "cam-front", Kind: "camera", ClockDomain: "CLOCK_BOOTTIME", Healthy: true}}
+	})
+	if _, err = m.Start(StartOptions{Sources: []string{"applications", "cam-front"}}); err != nil {
 		t.Fatal(err)
 	}
 	session, ok := m.ActiveSession(AdHocEpisodeKey)
