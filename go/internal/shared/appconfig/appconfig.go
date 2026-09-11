@@ -411,6 +411,41 @@ func LoadFromBytes(data []byte) (*AppConfig, error) {
 	return &cfg, nil
 }
 
+// validateAllowlistEntries rejects the two characters an allowlist entry may
+// not contain.
+//
+// An entitlement travels to the device as a container label whose value is a
+// comma-separated list of key=value pairs, with list-valued fields such as the
+// allowlist folded into one segment by joining on commas
+// (EntitlementAnnotationValue in annotation.go).
+//
+// A comma corrupts that encoding outright. The parser splits on the commas that
+// precede a new "key=" and cannot tell those apart from a comma inside an
+// entry, so an entry containing one is silently split into two allowlist
+// entries, and an entry containing ",key=" is worse: it terminates the
+// allowlist and overwrites a sibling field of the entitlement, such as the
+// mode.
+//
+// An '=' does not corrupt anything today, because the parser takes only the
+// first '=' of a segment as the separator and keeps the rest as the value. It
+// is refused anyway: '=' IS the pair separator, so an entry carrying one is
+// ambiguous by construction, and it is the one character that would turn any
+// future change to the key-detection rule into silent corruption of exactly
+// this field.
+//
+// No source identifier the platform emits today contains either character, so
+// this rejects nothing that works. It is enforced here, at the point where the
+// value enters the system from an author's wendy.json, rather than at the codec,
+// because the codec has no way to report a problem to the person who can fix it.
+func validateAllowlistEntries(allowlist []string, prefix string, index int) error {
+	for j, entry := range allowlist {
+		if strings.ContainsAny(entry, ",=") {
+			return fmt.Errorf("%s[%d]: allowlist[%d] must not contain ',' or '=', got %q; those characters delimit the container label the entitlement is carried in and would corrupt it", prefix, index, j, entry)
+		}
+	}
+	return nil
+}
+
 // validateEntitlements checks a slice of entitlements for required fields and
 // valid types. The prefix string is used in error messages (e.g.
 // "entitlement" for top-level or "services[\"foo\"].entitlement" for service-
@@ -422,6 +457,9 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 		}
 		if !slices.Contains(ValidEntitlementTypes, e.Type) {
 			return fmt.Errorf("%s[%d]: unknown type %q", prefix, i, e.Type)
+		}
+		if err := validateAllowlistEntries(e.Allowlist, prefix, i); err != nil {
+			return err
 		}
 
 		switch e.Type {

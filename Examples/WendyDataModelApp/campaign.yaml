@@ -30,10 +30,13 @@ sources:
       mode: continuous
 
 capture:
-  # Ten seconds of pre-trigger APPLICATION records: the predictions leading up
-  # to the detection are included. Camera bytes are not: sensor pre-roll needs
-  # an armed-standby adapter that does not exist yet, so the video starts AT
-  # the detection. The manifest records the offset it actually achieved.
+  # Ten seconds of pre-trigger buffer. It covers the APPLICATION records, so
+  # the predictions leading up to the detection are included, and it covers the
+  # CAMERA stream, so the video reaches back before the detection too: a
+  # buffered camera arms a standby subscription and keeps a keyframe-aligned
+  # ring of encoded frames. Audio and ROS 2 streams still start AT the trigger.
+  # The manifest records the offset each source actually achieved, which is
+  # shorter than the request whenever the ring's byte cap was reached first.
   buffer: 10s
 
   # Ten seconds after the trigger, so the episode IS the fragment around the

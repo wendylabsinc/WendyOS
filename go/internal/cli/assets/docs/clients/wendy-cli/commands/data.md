@@ -76,6 +76,26 @@ wendy data sources --kind camera,telemetry
 wendy data sources --kind audio            # every audio source, nothing summarised
 ```
 
+### The `--json` dialect
+
+Every `data` subcommand whose payload is a protocol buffer message prints it as
+canonical protobuf JSON on one compact line, with protocol buffer field names
+exactly as the `.proto` declares them, and unpopulated fields omitted. That
+covers `sources`, `episodes`, `record`, `stop`, `campaign list` and
+`campaign trigger`.
+
+Some payloads are already a JSON document the device produced, and those bytes
+are written through untouched so they stay checkable against the device:
+`inspect` emits the episode manifest, and `campaign deploy` and
+`campaign inspect` emit the canonical campaign plan. `campaign inspect` emits
+the plan whether or not `--json` is given, because the plan is the whole output
+of the command.
+
+`download` reports what it wrote to the local filesystem, which no wire message
+describes, so under `--json` it prints an object of its own: `episode`,
+`destination`, `files` (paths relative to the destination, including the
+`manifest.json` the command writes itself) and `bytes`.
+
 Episode IDs are stable opaque identifiers. Their readable UTC prefix is only a
 convenience; canonical ordering comes from the Episode's `CLOCK_BOOTTIME`
 timestamps and boot ID.
@@ -318,12 +338,13 @@ nothing:
 # From the repository root.
 CGO_ENABLED=0 go build -o bin/episode-playable ./go/cmd/episode-playable
 
-wendy data download <episode-id> -o /absolute/path/to/episode --device <device-hostname>
-./bin/episode-playable -o /absolute/path/to/playable /absolute/path/to/episode
+wendy data download <episode-id> -o ./episode --device <device-hostname>
+./bin/episode-playable -o ./playable ./episode
 ```
 
-Note that `wendy data download` needs an absolute `-o` path; a relative one
-fails with "server file path escapes destination".
+`wendy data download` takes either an absolute or a relative `-o` path. A
+trailing separator is fine too: the destination is cleaned before the staging
+directory beside it is named.
 
 One `<source>.mp4` is written per camera source into the output directory,
 which must be somewhere other than the Episode. The command prints the index

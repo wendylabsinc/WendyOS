@@ -23,6 +23,10 @@ when a device has exactly one. ROS 2 topic entries select the device's healthy
 ROS graph recorders; requested topics are retained separately in the Episode
 manifest.
 
-Application records honor the requested pre-trigger buffer. Camera and ROS 2
-adapters currently begin at the trigger and record their achieved source offset
-in the manifest; deployment prints this limitation when it applies.
+Application records and camera streams honor the requested pre-trigger buffer:
+a buffered camera arms a standby subscription and keeps a keyframe-aligned ring
+of encoded frames, so the clip reaches back before the trigger. Audio and ROS 2
+adapters still begin at the trigger. Every source records the offset it
+actually achieved in the manifest, which is shorter than the request whenever a
+ring's byte cap was reached first, and deployment warns when a campaign asks for a
+buffer on a source that cannot honor it.
