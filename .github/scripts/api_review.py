@@ -20,6 +20,43 @@ MAX_REVIEW_WORKERS = 4
 CATEGORIES = {"network", "protobuf", "storage", "config", "cli", "other"}
 IMPACTS = {"additive", "breaking", "behavioral"}
 RISKS = {"low", "mid", "high"}
+REVIEW_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["risk", "decisions"],
+    "properties": {
+        "risk": {"type": "string", "enum": sorted(RISKS)},
+        "decisions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["category", "title", "change", "compatibility", "impact", "locations"],
+                "properties": {
+                    "category": {"type": "string", "enum": sorted(CATEGORIES)},
+                    "title": {"type": "string"},
+                    "change": {"type": "string"},
+                    "compatibility": {"type": "string"},
+                    "impact": {"type": "string", "enum": sorted(IMPACTS)},
+                    "locations": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["path", "side", "line", "end_line"],
+                            "properties": {
+                                "path": {"type": "string"},
+                                "side": {"type": "string", "enum": ["head", "base"]},
+                                "line": {"type": "integer"},
+                                "end_line": {"type": "integer"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
 SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:.*)$")
 
@@ -239,6 +276,7 @@ def system_prompt() -> str:
     return """You review durable, externally observable API decisions in WendyOS, its Go CLI, Swift/Go agents, and OS images. Identify contracts that become costly to reverse once users, devices, clients, or saved data rely on them. Examine the ENTIRE provided diff, regardless of filename or whether a public symbol changed.
 
 Large PRs are reviewed in separate complete-file batches. The user message identifies this batch and the total batch count. Review every supplied file, and cite only evidence in this batch. Other files may be present in other batches; do not infer that a migration, caller update, or related implementation is missing merely because it is absent from this batch.
+The numbered_diff field contains the same complete patch with explicit [head:N] and [base:N] labels on changed lines. Copy the revision side and line number from those labels for citations; do not count lines yourself or use positions in the diff text. Unlabelled context lines are not valid evidence. The diff field is the unchanged original patch for reference.
 
 Report actual new, removed, or changed contract decisions, including compatible additions. Classify each impact separately from testing risk:
 - additive: a new compatible contract or option;
@@ -266,8 +304,38 @@ If the user message includes response_repair, correct the previous response agai
 """
 
 
+def numbered_diff(diff: str) -> str:
+    """Label changed source lines without relying on the model's hunk arithmetic."""
+    parse_diff(diff)
+    base_line = head_line = 0
+    in_hunk = False
+    output: list[str] = []
+    for raw in diff.splitlines(keepends=True):
+        line = raw.rstrip("\r\n")
+        match = HUNK_RE.fullmatch(line)
+        if line.startswith("diff --git "):
+            in_hunk = False
+        elif match:
+            base_line, head_line = int(match[1]), int(match[3])
+            in_hunk = True
+        elif in_hunk:
+            if raw.startswith("+"):
+                output.append(f"+ [head:{head_line}] {raw[1:]}")
+                head_line += 1
+                continue
+            if raw.startswith("-"):
+                output.append(f"- [base:{base_line}] {raw[1:]}")
+                base_line += 1
+                continue
+            if raw.startswith(" "):
+                base_line += 1
+                head_line += 1
+        output.append(raw)
+    return "".join(output)
+
+
 def user_prompt(metadata: dict[str, Any], diff: str, repo: str) -> str:
-    return json.dumps({"repository": repo, "number": metadata["number"], "title": metadata.get("title", ""), "body": metadata.get("body") or "", "batch": metadata.get("review_batch", {"number": 1, "total": 1}), "diff": diff}, ensure_ascii=False)
+    return json.dumps({"repository": repo, "number": metadata["number"], "title": metadata.get("title", ""), "body": metadata.get("body") or "", "batch": metadata.get("review_batch", {"number": 1, "total": 1}), "diff": diff, "numbered_diff": numbered_diff(diff)}, ensure_ascii=False)
 
 
 def _text(value: Any, field: str, maximum: int) -> str:
@@ -276,6 +344,17 @@ def _text(value: Any, field: str, maximum: int) -> str:
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise ReviewError(f"Model response has control characters in {field}")
     return value.strip()
+
+
+def evidence_ranges(lines: set[int]) -> list[list[int]]:
+    """Exact inclusive ranges; structural line zero remains a separate choice."""
+    ranges: list[list[int]] = []
+    for line in sorted(lines):
+        if ranges and ranges[-1][0] != 0 and line == ranges[-1][1] + 1:
+            ranges[-1][1] = line
+        else:
+            ranges.append([line, line])
+    return ranges
 
 
 def validate_payload(payload: Any, parsed: dict[str, Any]) -> dict[str, Any]:
@@ -311,7 +390,16 @@ def validate_payload(payload: Any, parsed: dict[str, Any]) -> dict[str, Any]:
                 raise ReviewError(f"Model response has an invalid code line range at {position}")
             actual = parsed["locations"].get((path, side), set())
             if not all(line in actual for line in range(start, end + 1)):
-                raise ReviewError(f"Model response cites code outside the changed lines of the PR diff at {position}; cite only added head lines or removed base lines from this batch")
+                evidence = json.dumps({
+                    "requested": {"path": path, "side": side, "line": start, "end_line": end},
+                    "allowed_ranges": evidence_ranges(actual),
+                }, ensure_ascii=True, separators=(",", ":"))
+                raise ReviewError(
+                    f"Model response cites code outside the changed lines of the PR diff at {position}; "
+                    "cite only added head lines or removed base lines from this batch. "
+                    "Each allowed range is inclusive; choose a line that supports the decision. "
+                    f"Evidence: {evidence}"
+                )
     return payload
 
 
@@ -355,6 +443,7 @@ def review_model(metadata: dict[str, Any], diff: str, repo: str, model: str) -> 
             message = client.messages.create(
                 model=model,
                 max_tokens=16000,
+                output_config={"format": {"type": "json_schema", "schema": REVIEW_SCHEMA}},
                 system=[{"type": "text", "text": system_prompt(), "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": prompt}],
             )
