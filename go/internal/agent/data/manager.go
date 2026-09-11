@@ -1378,9 +1378,19 @@ func (m *Manager) beginSeal(key string, drain bool) (*activeEpisode, error) {
 	// so a consumer computing episode length from stopped_episode_nanos
 	// over-reported every drained episode by the whole drain. Both numbers are
 	// now in the manifest and each means what it says.
+	//
+	// The stillOpenLocked check is the same fence finalize relies on, and it is
+	// load-bearing rather than defensive. A concurrent Stop and Interrupt can
+	// both leave the block above holding this episode; the one that reaches
+	// finalize first detaches it under this mutex and then seals it with the
+	// mutex released, so writing to the manifest here after that detachment
+	// would race the seal's own reads. Once the episode is detached it is not
+	// ours to stamp, and the seal has already read the clock itself.
 	if now, timeErr := readBootTime(); timeErr == nil {
 		m.mu.Lock()
-		a.manifest.CaptureStoppedEpisodeNS = now - a.manifest.RequestBootNanos
+		if m.stillOpenLocked(a) {
+			a.manifest.CaptureStoppedEpisodeNS = now - a.manifest.RequestBootNanos
+		}
 		m.mu.Unlock()
 	}
 	if !drain || !a.wantsDrain() {
@@ -1457,8 +1467,9 @@ var sealMux = muxPlayableClips
 //     second Stop or Interrupt can claim it.
 //  2. With the lock released the episode's clock is read, its ledger is
 //     flushed, and its bytes are muxed and hashed. Nothing else can reach the
-//     episode by then, and enforceQuota skips ".partial" directories, so the
-//     store cannot evict it mid-seal either.
+//     episode by then, and the quota counts a ".partial" directory's bytes but
+//     never offers one as an eviction candidate, so the store cannot evict it
+//     mid-seal either.
 //  3. The lock is retaken to write the manifest and rename the directory out
 //     of ".partial", which is what publishes the episode to every path that
 //     walks the store.
