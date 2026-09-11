@@ -31,6 +31,27 @@ const (
 	// dataRatePerSecond bounds records accepted per app across all of the
 	// app's connections combined (see appDataSocket.limiter).
 	dataRatePerSecond = 200
+	// dataMaxLiveConnectionsPerApp bounds how many connections one app may hold
+	// open on its data socket at once.
+	//
+	// The record rate limiter above bounds records, not connections, so it does
+	// nothing about a reconnect loop: an app that dials, fails to write, and
+	// dials again costs one goroutine and one file descriptor per attempt, none
+	// of which the rate limiter sees. Sixteen is well above what a legitimate
+	// app needs (one connection per service of the app, and every service of an
+	// app shares this one socket), and low enough that a loop is stopped long
+	// before the agent's descriptor budget is.
+	//
+	// Refusing is safe for a correct app: the refusal arrives as a normal
+	// rejected ack, so the client learns why instead of seeing a bare close.
+	dataMaxLiveConnectionsPerApp = 16
+	// dataRefusalLogInterval throttles the connection-cap warning. A reconnect
+	// loop is exactly the situation where one line per refusal would flood the
+	// journal with the same fact.
+	dataRefusalLogInterval = time.Minute
+	// dataRefusalWriteTimeout bounds how long the accept loop will spend
+	// telling one peer it was refused.
+	dataRefusalWriteTimeout = 2 * time.Second
 )
 
 // peerCredentials identifies the process on the far end of a data-socket
@@ -58,6 +79,11 @@ type appDataSocket struct {
 	// limiter is shared by every connection the app opens, so the rate limit
 	// is enforced per app rather than per connection.
 	limiter *notificationRateLimiter
+	// live counts the connections currently being served for this app and
+	// lastRefusalLog is when the connection cap last logged. Both are guarded
+	// by AppDataSocketManager.mu.
+	live           int
+	lastRefusalLog time.Time
 }
 type AppDataSocketManager struct {
 	ctx     context.Context
@@ -117,6 +143,13 @@ func (m *AppDataSocketManager) Ensure(appID, service string) (string, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return "", err
 	}
+	// MkdirAll applies the process umask to the requested mode, so the
+	// directory that guards an app's private socket would otherwise be as tight
+	// as the agent's umask happened to be. State the mode instead of inheriting
+	// it, exactly as the sibling System API socket manager does.
+	if err := os.Chmod(dir, 0o750); err != nil {
+		return "", err
+	}
 	if os.Geteuid() == 0 {
 		if err := os.Chown(dir, 0, dataSocketGroupGID); err != nil {
 			return "", err
@@ -158,7 +191,7 @@ func (m *AppDataSocketManager) Release(appID, service string) {
 	delete(m.sockets, key)
 	m.mu.Unlock()
 	s.listener.Close()
-	_ = os.RemoveAll(filepath.Join(AppDataSocketRootPath, key))
+	m.removeRootUnlessRecreated(key)
 }
 func (m *AppDataSocketManager) ReleaseApp(appID string) {
 	key := appDataKey(appID)
@@ -168,7 +201,73 @@ func (m *AppDataSocketManager) ReleaseApp(appID string) {
 	m.mu.Unlock()
 	if s != nil {
 		s.listener.Close()
-		_ = os.RemoveAll(filepath.Join(AppDataSocketRootPath, key))
+		m.removeRootUnlessRecreated(key)
+	}
+}
+
+// removeRootUnlessRecreated deletes an app's socket directory, unless a
+// concurrent redeploy has already recreated the entry for the same app between
+// the listener being closed and this call. Removing it then would delete a
+// live socket out from under the new listener, which is why the check is taken
+// under the lock and the removal happens with the lock still held. The sibling
+// System API socket manager guards its own removal the same way.
+func (m *AppDataSocketManager) removeRootUnlessRecreated(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sockets[key] != nil {
+		return
+	}
+	if err := os.RemoveAll(filepath.Join(AppDataSocketRootPath, key)); err != nil && m.logger != nil {
+		m.logger.Warn("cannot remove unused app data socket directory", zap.Error(err))
+	}
+}
+
+// SweepOrphanedRoots removes socket directories under AppDataSocketRootPath
+// that belong to none of the given app identities.
+//
+// It exists because a directory can outlive every owner that could release it:
+// deleting the only service of an app by its service name removes the
+// container, and with it any later chance to learn the app identity whose hash
+// named the directory. The sweep runs at restore, where the set of apps that
+// still have containers is known exactly, and a directory whose name matches
+// no live app's hash therefore belongs to nothing.
+//
+// Directories currently served are never swept even if the caller omits their
+// app, because an in-memory socket entry is proof of a live owner.
+func (m *AppDataSocketManager) SweepOrphanedRoots(activeAppIDs []string) {
+	live := make(map[string]struct{}, len(activeAppIDs))
+	for _, appID := range activeAppIDs {
+		live[appDataKey(appID)] = struct{}{}
+	}
+	entries, err := os.ReadDir(AppDataSocketRootPath)
+	if err != nil {
+		if !os.IsNotExist(err) && m.logger != nil {
+			m.logger.Warn("cannot sweep app data socket directories", zap.Error(err))
+		}
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		key := entry.Name()
+		if _, ok := live[key]; ok {
+			continue
+		}
+		if m.sockets[key] != nil {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(AppDataSocketRootPath, key)); err != nil {
+			if m.logger != nil {
+				m.logger.Warn("cannot remove orphaned app data socket directory", zap.String("directory", key), zap.Error(err))
+			}
+			continue
+		}
+		if m.logger != nil {
+			m.logger.Info("removed orphaned app data socket directory", zap.String("directory", key))
+		}
 	}
 }
 func (m *AppDataSocketManager) stopAll() {
@@ -194,7 +293,56 @@ func (m *AppDataSocketManager) serve(s *appDataSocket) {
 			}
 			return
 		}
-		go m.serveConn(s, c)
+		if !m.admit(s) {
+			// The refusal is written from the accept loop, so it must not be
+			// able to block it: a peer that connects and never reads would
+			// otherwise stall every later accept, which is the same denial the
+			// cap exists to prevent.
+			_ = c.SetWriteDeadline(time.Now().Add(dataRefusalWriteTimeout))
+			_ = writeDataFrame(c, dataAck{Version: 1, State: "rejected", Error: "too many open connections for this app"})
+			_ = c.Close()
+			continue
+		}
+		go func() {
+			defer m.finish(s)
+			m.serveConn(s, c)
+		}()
+	}
+}
+
+// admit reserves one of the app's live-connection slots, or reports that the
+// app is already at dataMaxLiveConnectionsPerApp. The over-cap warning is
+// logged at most once per dataRefusalLogInterval per app.
+func (m *AppDataSocketManager) admit(s *appDataSocket) bool {
+	now := time.Now()
+	m.mu.Lock()
+	if s.live >= dataMaxLiveConnectionsPerApp {
+		warn := s.lastRefusalLog.IsZero() || now.Sub(s.lastRefusalLog) >= dataRefusalLogInterval
+		if warn {
+			s.lastRefusalLog = now
+		}
+		live := s.live
+		appID := s.appID
+		m.mu.Unlock()
+		if warn && m.logger != nil {
+			m.logger.Warn("app data socket refused connection over the per-app limit",
+				zap.String("app_id", appID),
+				zap.Int("live_connections", live),
+				zap.Int("limit", dataMaxLiveConnectionsPerApp))
+		}
+		return false
+	}
+	s.live++
+	m.mu.Unlock()
+	return true
+}
+
+// finish returns the slot admit reserved.
+func (m *AppDataSocketManager) finish(s *appDataSocket) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s.live > 0 {
+		s.live--
 	}
 }
 
