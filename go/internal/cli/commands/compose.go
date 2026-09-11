@@ -1233,6 +1233,14 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 			return err
 		}
 	}
+	var appIDs []string
+	for _, cfg := range svcCfgs {
+		appIDs = append(appIDs, cfg.AppID)
+	}
+	sort.Strings(appIDs)
+	if err := registerCloudApps(ctx, conn, appIDs, opts.skipCloudRegistration); err != nil {
+		return err
+	}
 	svcLifecycleCfgs := composeServiceLifecycleConfigs(svcCfgs, companion)
 	portConfigs := []*appconfig.AppConfig{companion}
 	for _, svc := range svcCfgs {

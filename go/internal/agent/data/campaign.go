@@ -180,10 +180,10 @@ type CampaignPrivacy struct {
 // NotifyOnEpisodeCommitted carries notification intent to cloud ingestion.
 const NotifyOnEpisodeCommitted = "episode_committed"
 
-// NotifyOnDetection sends an immediate agent-originated webhook notification.
+// NotifyOnDetection sends an immediate agent-originated notification.
 const NotifyOnDetection = "detection"
 
-// NotifyOnEvent sends a webhook when a named event is emitted.
+// NotifyOnEvent sends a notification when a named event is emitted.
 const NotifyOnEvent = "event"
 
 // ErrUnsupportedNotifyOn marks a notify.on value this schema version does not
@@ -406,9 +406,11 @@ func (c Campaign) validate() error {
 			return errors.New("notify.on: detection requires inference")
 		}
 
-		endpoint, err := url.Parse(c.Notify.Webhook)
-		if err != nil || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || len(c.Notify.Webhook) > 2048 {
-			return errors.New("notify.webhook must be an absolute HTTP(S) URL without userinfo or fragment, at most 2048 bytes")
+		if c.Notify.Webhook != "" {
+			endpoint, err := url.Parse(c.Notify.Webhook)
+			if err != nil || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || len(c.Notify.Webhook) > 2048 {
+				return errors.New("notify.webhook must be an absolute HTTP(S) URL without userinfo or fragment, at most 2048 bytes")
+			}
 		}
 	} else if c.Notify != nil && c.Notify.Webhook != "" {
 		return errors.New("notify.webhook requires notify.on: detection or event")

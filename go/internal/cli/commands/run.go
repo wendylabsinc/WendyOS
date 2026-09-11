@@ -502,18 +502,19 @@ type runOptions struct {
 	buildHost string
 	// Devices beyond the primary --device that this build is also delivered to.
 	// Empty for every ordinary run.
-	fleetDevices         []string
-	debug                bool
-	deploy               bool
-	detach               bool
-	yes                  bool
-	restartUnlessStopped bool
-	restartOnFailure     bool
-	noRestart            bool
-	prefix               string
-	product              string
-	service              string
-	keepGoing            bool
+	fleetDevices          []string
+	debug                 bool
+	deploy                bool
+	skipCloudRegistration bool
+	detach                bool
+	yes                   bool
+	restartUnlessStopped  bool
+	restartOnFailure      bool
+	noRestart             bool
+	prefix                string
+	product               string
+	service               string
+	keepGoing             bool
 	// maxConcurrency bounds simultaneous service build-and-push jobs for both
 	// standalone multi-service manifests and Compose projects.
 	maxConcurrency int
@@ -615,6 +616,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.buildHost, "build-host", "", "WendyOS device to build the image on instead of this machine (e.g. a DGX Spark); the built image is pushed straight to the target device")
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
+	cmd.Flags().BoolVar(&opts.skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering apps in Cloud (offline use)")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container and return without streaming logs, waiting for readiness, or opening the app URL")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Automatically accept all interactive prompts")
 	cmd.Flags().BoolVar(&opts.restartUnlessStopped, "restart-unless-stopped", false, "Restart unless manually stopped")
@@ -1896,6 +1898,9 @@ func waitForDeviceReady(ctx context.Context, p providers.DeviceProvider, device 
 
 // runWithAgent is the existing gRPC agent pipeline.
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
+		return err
+	}
 	mark := phaseTimer()
 	if opts.isWatch() && !opts.detach {
 		if err := opts.watchState.ensureLogStream(conn, appCfg.AppID); err != nil {

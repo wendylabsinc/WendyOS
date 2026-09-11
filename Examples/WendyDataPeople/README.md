@@ -5,6 +5,9 @@ feed wendy-agent knows about**. The agent owns the model runtime, camera
 subscriptions, detection events, episode capture and notifications. Users supply
 only YAML: no application, Python environment or continuously running CLI.
 
+With no file argument, the CLI opens a picker for `.yaml` and `.yml` files in the
+current directory. Scripts and `--json` invocations must pass a file explicitly.
+
 ```sh
 wendy --device <device> data campaign deploy campaign.yaml
 wendy --device <device> data campaign inspect people-all-cameras
@@ -55,13 +58,45 @@ an existing episode share that recording; immediate webhook mode can send an
 alert for each camera without opening duplicate recordings. A new camera joins subsequent episodes; an episode in progress keeps
 its original source set.
 
-The example uses `notify.on: episode_committed`: the episode manifest carries
-notification intent to Wendy Cloud ingestion, which sends the alert after the
-detection recording is committed and uploaded. This requires the existing cloud
-ingest notification service and a connected/enrolled device; the agent does not
-send an immediate Cloud notification from this setting.
+The example uses `notify.on: event` with `event: person_detected` to send an
+immediate Wendy Cloud notification to organization owners and admins. It uses
+`campaign:people-all-cameras` as its Cloud notification source and the device's
+enrollment credentials. No application container or webhook is required.
 
-For an immediate alert independent of cloud ingestion, use a webhook:
+On a Cloud-enrolled device, `wendy data campaign deploy` registers
+`campaign:people-all-cameras` in Cloud Apps before arming the plan. It uses the
+existing `GetApp`/`UpsertApp` RPCs and leaves an existing entry unchanged.
+It appears in Cloud Apps immediately, without waiting for a detection. Open
+Apps → people-all-cameras → Wendy Notifications and enable notification sending
+as an organization owner or admin. Events emitted while the grant is disabled
+are rejected and are not replayed after enabling it. The grant covers this named
+campaign across assigned devices in the organization. Its first authenticated
+event registers the device assignment without changing an existing grant or
+stopped state; if the grant is already enabled, that first event can deliver.
+
+The CLI uses your saved operator session for the device's enrolled Cloud host
+and organization. Run `wendy auth login` first. Unenrolled devices can deploy
+locally; `--skip-cloud-registration` also allows an explicit offline deployment
+on an enrolled device. Rerun without the flag to register once connected. A failed
+registration stops deployment; a later device failure may leave its registered
+Cloud entry. `wendy run` performs the same registration for ordinary apps using
+their `wendy.json` app ID, including Compose and multi-service deployments. This
+only registers their catalog entries; ordinary app device assignments still come
+from the existing Cloud deployment workflow, and locally uploaded ordinary apps
+need that assignment before notifications are allowed.
+
+Catalog registration uses existing Cloud APIs. Campaign event delivery requires
+the companion Cloud implementation (WDY-2939). Without CLI registration, a first
+signed campaign event can also create a missing app, with sending disabled.
+This agent branch uses the v1 notification API served by Cloud main; Cloud dev's
+v2 API requires an agent with the matching API and enrollment identity contract.
+Cloud failures are visible in logs and `inference_status.notification_error`.
+
+`notify.on: episode_committed` is still available as manifest-carried intent for
+a separate ingestion service. It does not send an immediate notification, and
+Cloud main/dev do not implement an episode-ingestion notification consumer here.
+
+For direct delivery to your own notification service, add a webhook:
 
 ```yaml
 notify:
@@ -86,9 +121,11 @@ receiver should deduplicate that key. Failed attempts and queue overflow are
 visible in agent logs and, for enabled model campaigns,
 `inference_status.notification_error`. Webhook delivery
 has no persistent outbox. Recording failures do not suppress webhook alerts, and
-webhook failures do not stop detection. The direct Cloud notification API is not
-used here because it requires a registered application identity; campaigns do
-not invent an application to bypass that requirement.
+webhook failures do not stop detection.
+
+Cloud delivery uses the same bounded queue and event UUID. Permission failures and
+`ALREADY_EXISTS` stop retries; transient failures retain bounded retries. Cloud
+registration never grants notification permission automatically.
 
 Episodes contain prediction and detection records in `events.jsonl` and the
 model revision in the manifest. The input ledger records the encoded samples

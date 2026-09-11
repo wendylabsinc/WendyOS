@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -32,27 +34,76 @@ func newDataCampaignCmd() *cobra.Command {
 }
 
 func newDataCampaignDeployCmd() *cobra.Command {
-	return &cobra.Command{Use: "deploy <campaign.yaml>", Short: "Validate, persist, and arm a campaign on the connected device", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		contents, err := os.ReadFile(args[0])
+	var skipCloudRegistration bool
+	command := &cobra.Command{Use: "deploy [campaign.yaml]", Short: "Validate, persist, and arm a campaign on the connected device", Long: "Deploy a campaign YAML file. Without a path, select a .yaml or .yml file from the current directory.\nNon-interactive and --json invocations require an explicit path.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := resolveCampaignDeployFile(args, !jsonOutput && isInteractiveTerminal(), pickFromItems)
 		if err != nil {
-			return fmt.Errorf("reading campaign: %w", err)
+			return err
 		}
-		return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
-			campaign, err := client.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
-			if err != nil {
-				return err
-			}
-			if jsonOutput {
-				_, err = cmd.OutOrStdout().Write(campaign.GetPlanJson())
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Campaign %s: %s (revision %s)\n", campaign.GetName(), campaign.GetState(), shortRevision(campaign.GetRevision()))
-			for _, warning := range campaign.GetWarnings() {
-				fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", warning)
-			}
-			return nil
-		})
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("reading campaign %q: %w", path, err)
+		}
+		plan, err := data.ParseCampaign(contents)
+		if err != nil {
+			return err
+		}
+		conn, err := connectToAgent(cmd.Context())
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		if err := registerCloudApps(cmd.Context(), conn, []string{"campaign:" + plan.Name}, skipCloudRegistration); err != nil {
+			return err
+		}
+		campaign, err := conn.DataService.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
+		if err != nil {
+			return err
+		}
+		if jsonOutput {
+			_, err = cmd.OutOrStdout().Write(campaign.GetPlanJson())
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "Campaign %s: %s (revision %s)\n", campaign.GetName(), campaign.GetState(), shortRevision(campaign.GetRevision()))
+		for _, warning := range campaign.GetWarnings() {
+			fmt.Fprintf(cmd.OutOrStdout(), "Warning: %s\n", warning)
+		}
+		return nil
 	}}
+	command.Flags().BoolVar(&skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering the campaign in Cloud (offline use)")
+	return command
+}
+
+func resolveCampaignDeployFile(args []string, interactive bool, pick func(string, []tui.PickerItem) (string, error)) (string, error) {
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	const usage = "pass a file path, for example: wendy data campaign deploy campaign.yaml"
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		return "", fmt.Errorf("listing campaign files in the current directory: %w; %s", err, usage)
+	}
+	var items []tui.PickerItem
+	var names []string
+	for _, entry := range entries {
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		info, err := os.Stat(entry.Name())
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		names = append(names, entry.Name())
+		items = append(items, tui.PickerItem{Name: entry.Name(), Value: entry.Name()})
+	}
+	if len(items) == 0 {
+		return "", fmt.Errorf("no .yaml or .yml files found in the current directory; %s", usage)
+	}
+	if !interactive {
+		return "", fmt.Errorf("a campaign YAML path is required in non-interactive or --json mode; %s\nYAML files in the current directory: %s", usage, strings.Join(names, ", "))
+	}
+	return pick("Select a campaign YAML file", items)
 }
 
 func newDataCampaignListCmd() *cobra.Command {

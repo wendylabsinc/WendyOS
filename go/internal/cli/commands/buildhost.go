@@ -306,6 +306,9 @@ func runRemoteBuild(
 			return fmt.Errorf("connecting to %s: %w", name, err)
 		}
 		fleetConns = append(fleetConns, conn)
+		if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
+			return fmt.Errorf("registering deployment on %s: %w", name, err)
+		}
 
 		// One build produces one image for one platform. A device of a different
 		// architecture cannot run it, and finding that out after delivery would

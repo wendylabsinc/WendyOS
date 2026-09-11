@@ -13,6 +13,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type inferenceVideo interface {
@@ -449,9 +451,10 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 			return
 		case request := <-queue:
 			var err error
+		notificationAttempts:
 			for attempt := 0; attempt < 3 && ctx.Err() == nil; attempt++ {
 				if j.owner.sender == nil {
-					err = errors.New("webhook notification delivery is unavailable")
+					err = errors.New("campaign notification delivery is unavailable")
 					break
 				}
 				forward, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -459,6 +462,15 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 				cancel()
 				if err == nil {
 					break
+				}
+				// Cloud rejects unauthorized identities and duplicate UUIDs permanently.
+				// Retrying those responses cannot deliver this notification.
+				if j.campaign.Notify.Webhook == "" {
+					switch status.Code(err) {
+					case codes.InvalidArgument, codes.Unauthenticated, codes.PermissionDenied,
+						codes.FailedPrecondition, codes.AlreadyExists, codes.Unimplemented, codes.DataLoss:
+						break notificationAttempts
+					}
 				}
 
 				if attempt < 2 {
