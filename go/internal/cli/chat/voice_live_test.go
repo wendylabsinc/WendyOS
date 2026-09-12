@@ -127,7 +127,7 @@ func (a *testLiveAudio) Close() error {
 	return nil
 }
 
-func startTestLive(t *testing.T, wire *testLiveWire, audio *testLiveAudio) *liveSession {
+func startTestLive(t *testing.T, wire *testLiveWire, audio VoiceAudio) *liveSession {
 	t.Helper()
 	wire.push(map[string]any{"type": "session.started"})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -702,6 +702,7 @@ func TestLiveOnlyAcceptedFreshCommentaryResumesInterruptedPlayback(t *testing.T)
 			case "newer_interrupt":
 				interrupt()
 			case "newer_delegation":
+				wire.push(map[string]any{"type": "session.input_transcript.delta", "event_id": "new-task-speech", "start_ms": 100, "end_ms": 400, "delta": "Cancel that task."})
 				wire.push(map[string]any{"type": "session.delegation.created", "offset_ms": 500, "delegation": map[string]any{"id": "new-task", "type": "delegation", "target": "client"}})
 			}
 			if mode != "rejected" {
@@ -834,5 +835,155 @@ func TestLiveUpgradeCancellationClosesBlockedHTTPRead(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("handshake waited for its deadline instead of honoring cancellation")
+	}
+}
+
+func TestLiveDelegationWaitsForTranscriptBeyondTwoSeconds(t *testing.T) {
+	var transcript liveTranscript
+	now := time.Now()
+	transcript.delegate("delayed", 1000, now)
+	for _, delay := range []time.Duration{3 * time.Second, time.Hour} {
+		if _, ready := transcript.ready(now.Add(delay), 300*time.Millisecond); ready || transcript.pending == nil || transcript.pending.hasSpeech {
+			t.Fatal("metadata alone executed or expired the pending delegation")
+		}
+	}
+	transcript.add("late-first", "user", "Inspect ", 100, 400, now.Add(3*time.Second))
+	if _, ready := transcript.ready(now.Add(3100*time.Millisecond), 300*time.Millisecond); ready {
+		t.Fatal("old delegation bypassed settling for delayed speech")
+	}
+	transcript.add("late-last", "user", "the device.", 400, 800, now.Add(3250*time.Millisecond))
+	if _, ready := transcript.ready(now.Add(3400*time.Millisecond), 300*time.Millisecond); ready {
+		t.Fatal("executed before the delayed final fragment settled")
+	}
+	event, ready := transcript.ready(now.Add(3600*time.Millisecond), 300*time.Millisecond)
+	if !ready || event.DelegationID != "delayed" || event.Text != "Inspect the device." {
+		t.Fatalf("lost delayed delegated request: %#v", event)
+	}
+	if _, ready := transcript.ready(now.Add(time.Hour), 300*time.Millisecond); ready {
+		t.Fatal("executed delayed speech more than once")
+	}
+}
+
+func TestLiveMetadataWithoutFreshSpeechKeepsCurrentResult(t *testing.T) {
+	wire, audio := newTestLiveWire(), newTestLiveAudio()
+	s := startTestLive(t, wire, audio)
+	wire.push(map[string]any{"type": "session.input_transcript.delta", "event_id": "first-input", "delta": "Inspect the device.", "start_ms": 100, "end_ms": 200})
+	wire.push(map[string]any{"type": "session.delegation.created", "offset_ms": 300, "delegation": map[string]any{"id": "working", "type": "delegation", "target": "client"}})
+	awaitLiveEvent(t, s, "delegation")
+	wire.push(map[string]any{"type": "session.delegation.created", "offset_ms": 600, "delegation": map[string]any{"id": "unresolved", "type": "delegation", "target": "client"}})
+	if err := s.SendContext(context.Background(), "The backend is working."); err != nil {
+		t.Fatal(err)
+	}
+	awaitLiveSent(t, wire, "session.thinking.append")
+	s.mu.Lock()
+	active := s.activeID
+	_, fired := s.transcript.ready(time.Now().Add(time.Hour), s.settle)
+	pending := s.transcript.pending
+	s.mu.Unlock()
+	if active != "working" || fired || pending == nil || pending.id != "unresolved" || pending.hasSpeech {
+		t.Fatal("metadata-only delegation superseded active work or disappeared")
+	}
+	if err := s.Reply(context.Background(), "working", "The device is healthy."); err != nil {
+		t.Fatal(err)
+	}
+	result := awaitLiveSent(t, wire, "session.commentary.append")
+	if result["delegation_id"] != "working" {
+		t.Fatal("running task result was lost to metadata-only delegation")
+	}
+}
+
+func TestLiveLateCorrectionInvalidatesOldReplyWhenSpeechArrives(t *testing.T) {
+	wire, audio := newTestLiveWire(), newTestLiveAudio()
+	s := startTestLive(t, wire, audio)
+	wire.push(map[string]any{"type": "session.input_transcript.delta", "event_id": "first-input", "delta": "Deploy.", "start_ms": 100, "end_ms": 200})
+	wire.push(map[string]any{"type": "session.delegation.created", "offset_ms": 300, "delegation": map[string]any{"id": "old", "type": "delegation", "target": "client"}})
+	awaitLiveEvent(t, s, "delegation")
+	wire.push(map[string]any{"type": "session.delegation.created", "offset_ms": 600, "delegation": map[string]any{"id": "correction", "type": "delegation", "target": "client"}})
+	wire.push(map[string]any{"type": "session.input_transcript.delta", "event_id": "correction-space", "delta": " ", "start_ms": 400, "end_ms": 405})
+	awaitLiveEvent(t, s, "input")
+	s.mu.Lock()
+	before := s.activeID
+	s.mu.Unlock()
+	if before != "old" {
+		t.Fatal("whitespace without a request invalidated the current result")
+	}
+	wire.push(map[string]any{"type": "session.input_transcript.delta", "event_id": "correction-input", "delta": "Actually cancel.", "start_ms": 410, "end_ms": 500})
+	awaitLiveEvent(t, s, "input")
+	s.mu.Lock()
+	active, pending := s.activeID, s.transcript.pending
+	s.mu.Unlock()
+	if active != "correction" || pending == nil || !pending.hasSpeech {
+		t.Fatal("late fresh correction did not invalidate the old reply immediately")
+	}
+	if err := s.Reply(context.Background(), "old", "Obsolete result"); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		select {
+		case event := <-wire.out:
+			if event["type"] == "session.commentary.append" {
+				t.Fatal("old result was spoken while the known correction settled")
+			}
+		default:
+			awaitLiveEvent(t, s, "delegation")
+			return
+		}
+	}
+}
+
+type testGuardedLiveAudio struct {
+	*testLiveAudio
+	entered chan func() bool
+	resume  chan struct{}
+	wrote   chan struct{}
+}
+
+func (a *testGuardedLiveAudio) Write([]byte) (int, error) {
+	return 0, errors.New("playback bypassed the generation guard")
+}
+
+func (a *testGuardedLiveAudio) writePlayback(data []byte, current func() bool) (int, error) {
+	defer close(a.wrote)
+	a.entered <- current
+	select {
+	case <-a.resume:
+	case <-a.done:
+		return 0, io.ErrClosedPipe
+	}
+	if !current() {
+		return 0, ErrVoicePlaybackInterrupted
+	}
+	return a.testLiveAudio.Write(data)
+}
+
+func TestLivePlaybackGuardRejectsWriteStartingAfterInterrupt(t *testing.T) {
+	wire := newTestLiveWire()
+	audio := &testGuardedLiveAudio{testLiveAudio: newTestLiveAudio(), entered: make(chan func() bool, 1), resume: make(chan struct{}), wrote: make(chan struct{})}
+	s := startTestLive(t, wire, audio)
+	wire.push(map[string]any{"type": "session.output_audio.delta", "delta": "AQACAA=="})
+	select {
+	case current := <-audio.entered:
+		if !current() {
+			t.Fatal("fresh packet started with a stale generation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native guarded playback path was not used")
+	}
+	if err := s.Interrupt(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	close(audio.resume)
+	select {
+	case <-audio.wrote:
+	case <-time.After(time.Second):
+		t.Fatal("guarded write did not finish")
+	}
+	select {
+	case <-audio.writes:
+		t.Fatal("stale packet entered playback after Flush completed")
+	default:
+	}
+	if s.ctx.Err() != nil {
+		t.Fatal("expected stale-write interruption killed the session")
 	}
 }

@@ -401,7 +401,15 @@ func (s *liveSession) play() {
 			if packet.generation != s.generation.Load() {
 				continue
 			}
-			n, err := s.audio.Write(packet.data)
+			var n int
+			var err error
+			if writer, ok := s.audio.(voicePlaybackWriter); ok {
+				// Native audio checks the packet's session generation while
+				// holding its queue lock, including after backpressure wakes.
+				n, err = writer.writePlayback(packet.data, func() bool { return packet.generation == s.generation.Load() })
+			} else {
+				n, err = s.audio.Write(packet.data)
+			}
 			if err == nil && n != len(packet.data) {
 				err = io.ErrShortWrite
 			}
@@ -447,17 +455,20 @@ func (s *liveSession) receive() {
 			}
 			s.lastOutput = now
 			drop := s.interrupted
+			generation := s.generation.Load()
 			s.mu.Unlock()
 			if drop || len(data) == 0 || s.closing.Load() {
 				continue
 			}
-			packet := livePlayback{data: data, generation: s.generation.Load()}
+			packet := livePlayback{data: data, generation: generation}
 			select {
 			case s.playback <- packet:
 			default:
 				// Bound latency if the device cannot keep up. Flush unblocks a
 				// pending write; transcript/control handling never waits on audio.
+				s.mu.Lock()
 				s.generation.Add(1)
+				s.mu.Unlock()
 				_ = s.audio.Flush()
 			}
 		case "session.input_transcript.delta", "session.output_transcript.delta":
@@ -472,6 +483,11 @@ func (s *liveSession) receive() {
 			}
 			s.mu.Lock()
 			added := s.transcript.add(event.EventID, speaker, event.Delta, *event.StartMS, *event.EndMS, time.Now())
+			if added && speaker == "user" && s.transcript.pending != nil && s.transcript.pending.hasSpeech {
+				// Delegation metadata may arrive before its transcript. Invalidate
+				// the old result once the corresponding new speech is known.
+				s.activeID = s.transcript.pending.id
+			}
 			s.mu.Unlock()
 			if added {
 				s.publish(VoiceEvent{Type: kind, Text: event.Delta})
@@ -482,9 +498,9 @@ func (s *liveSession) receive() {
 				return
 			}
 			s.mu.Lock()
-			if s.transcript.delegate(event.Delegation.ID, *event.OffsetMS, time.Now()) {
-				// Invalidate an old result as soon as a correction is delegated,
-				// before its delayed transcript has finished reconciling.
+			if s.transcript.delegate(event.Delegation.ID, *event.OffsetMS, time.Now()) && s.transcript.pending.hasSpeech {
+				// Metadata alone does not establish a new task. Preserve the
+				// current result until relevant fresh speech confirms a correction.
 				s.activeID = event.Delegation.ID
 			}
 			s.mu.Unlock()
@@ -645,8 +661,8 @@ func (s *liveSession) Interrupt(ctx context.Context) error {
 	s.interruptID++
 	s.interruptAt = time.Now()
 	s.lastOutput = s.interruptAt
-	s.mu.Unlock()
 	s.generation.Add(1)
+	s.mu.Unlock()
 	if err := s.audio.Flush(); err != nil {
 		return err
 	}
@@ -682,9 +698,10 @@ type liveTranscriptPart struct {
 }
 
 type liveDelegation struct {
-	id      string
-	offset  float64
-	created time.Time
+	id        string
+	offset    float64
+	created   time.Time
+	hasSpeech bool
 }
 
 // Live supplies timestamped fragments, not completed user turns or task text.
@@ -727,6 +744,9 @@ func (t *liveTranscript) add(id, speaker, text string, start, end float64, now t
 		t.bytes -= len(t.parts[0].Text)
 		t.parts = t.parts[1:]
 	}
+	if t.pending != nil {
+		t.refreshPendingSpeech()
+	}
 	return true
 }
 
@@ -747,12 +767,33 @@ func (t *liveTranscript) delegate(id string, offset float64, now time.Time) bool
 		return false
 	}
 	t.pending = &liveDelegation{id: id, offset: offset, created: now}
+	t.refreshPendingSpeech()
 	return true
+}
+
+func (t *liveTranscript) freshSpeech(part liveTranscriptPart, pending *liveDelegation) bool {
+	return part.Speaker == "user" && part.seq > t.delivered &&
+		(t.deliveredMS == 0 || part.EndMS > t.deliveredMS) &&
+		(pending.offset == 0 || part.StartMS <= pending.offset)
+}
+
+func (t *liveTranscript) refreshPendingSpeech() {
+	t.pending.hasSpeech = false
+	for _, part := range t.parts {
+		if t.freshSpeech(part, t.pending) && strings.TrimSpace(part.Text) != "" {
+			t.pending.hasSpeech = true
+			return
+		}
+	}
 }
 
 func (t *liveTranscript) ready(now time.Time, settle time.Duration) (VoiceEvent, bool) {
 	pending := t.pending
-	if pending == nil || now.Sub(pending.created) < settle || (now.Sub(t.lastFragment) < settle && now.Sub(pending.created) < 2*time.Second) {
+	// There is no transcript delivery deadline or transcript-done event in
+	// Live. Keep one pending delegation until its speech arrives or a newer
+	// delegation replaces it. The cached speech flag avoids polling the full
+	// history while waiting, and delayed fragments still get a settling gap.
+	if pending == nil || !pending.hasSpeech || now.Sub(pending.created) < settle || now.Sub(t.lastFragment) < settle {
 		return VoiceEvent{}, false
 	}
 	var recent, fresh []liveTranscriptPart
@@ -761,7 +802,7 @@ func (t *liveTranscript) ready(now time.Time, settle time.Duration) (VoiceEvent,
 		if pending.offset > 0 && part.StartMS > pending.offset {
 			continue
 		}
-		if part.Speaker == "user" && part.seq > t.delivered && (t.deliveredMS == 0 || part.EndMS > t.deliveredMS) {
+		if t.freshSpeech(part, pending) {
 			fresh = append(fresh, part)
 			if part.seq > delivered {
 				delivered = part.seq
@@ -771,9 +812,7 @@ func (t *liveTranscript) ready(now time.Time, settle time.Duration) (VoiceEvent,
 		}
 	}
 	if len(fresh) == 0 {
-		if now.Sub(pending.created) >= 2*time.Second {
-			t.pending = nil // Never execute a task from missing or repeated speech.
-		}
+		pending.hasSpeech = false
 		return VoiceEvent{}, false
 	}
 	t.pending = nil

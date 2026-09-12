@@ -172,6 +172,71 @@ func TestVoiceAudioFlushCancelsPendingPlayback(t *testing.T) {
 	})
 }
 
+func TestVoiceAudioGuardRejectsPacketStartedAfterFlush(t *testing.T) {
+	a := newBufferedVoiceAudio()
+	defer a.Close()
+	var sessionGeneration atomic.Uint64
+	packetGeneration := sessionGeneration.Load()
+	stillCurrent := func() bool { return packetGeneration == sessionGeneration.Load() }
+	// The session already selected this packet. An interruption wins before
+	// the native writer begins and snapshots its own playback generation.
+	sessionGeneration.Add(1)
+	if err := a.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := a.writePlayback([]byte{1, 2}, stillCurrent); n != 0 || !errors.Is(err, ErrVoicePlaybackInterrupted) {
+		t.Fatalf("late stale packet reached playback: bytes=%d, error=%v", n, err)
+	}
+	output := []byte{0xff, 0xff}
+	a.samples(output, nil)
+	if !bytes.Equal(output, []byte{0, 0}) {
+		t.Fatalf("stale audio was audible after interruption: %v", output)
+	}
+	// Fresh output remains playable after rejecting the old packet.
+	packetGeneration = sessionGeneration.Load()
+	if n, err := a.writePlayback([]byte{3, 4}, stillCurrent); err != nil || n != 2 {
+		t.Fatalf("fresh packet rejected: bytes=%d, error=%v", n, err)
+	}
+	a.samples(output, nil)
+	if !bytes.Equal(output, []byte{3, 4}) {
+		t.Fatalf("fresh audio lost after interruption: %v", output)
+	}
+}
+
+func TestVoiceAudioGuardRechecksAfterBackpressure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		a := newBufferedVoiceAudio()
+		defer a.Close()
+		var sessionGeneration atomic.Uint64
+		packetGeneration := sessionGeneration.Load()
+		stillCurrent := func() bool { return packetGeneration == sessionGeneration.Load() }
+		done := make(chan error, 1)
+		go func() {
+			_, err := a.writePlayback(bytes.Repeat([]byte{1, 2}, voiceBufferBytes), stillCurrent)
+			done <- err
+		}()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("write did not wait for playback: %v", err)
+		default:
+		}
+		// Invalidate while the writer waits. Simulate the next device callback
+		// before Flush acquires the queue lock; no stale tail may be enqueued.
+		sessionGeneration.Add(1)
+		a.samples(make([]byte, voiceBufferBytes), nil)
+		synctest.Wait()
+		if err := <-done; !errors.Is(err, ErrVoicePlaybackInterrupted) {
+			t.Fatalf("stale writer resumed after backpressure: %v", err)
+		}
+		output := []byte{0xff, 0xff}
+		a.samples(output, nil)
+		if !bytes.Equal(output, []byte{0, 0}) {
+			t.Fatalf("stale tail reached playback: %v", output)
+		}
+	})
+}
+
 func TestVoiceAudioCloseUnblocksIOAndReleasesDevice(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		device := &fakeVoiceAudioDevice{}

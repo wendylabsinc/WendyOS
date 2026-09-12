@@ -29,6 +29,13 @@ type VoiceAudio interface {
 	Close() error
 }
 
+// voicePlaybackWriter lets the live session reject a stale packet even when an
+// interruption occurs just before Write begins. stillCurrent must not block;
+// it is checked while holding the native playback queue mutex.
+type voicePlaybackWriter interface {
+	writePlayback(p []byte, stillCurrent func() bool) (int, error)
+}
+
 type voiceAudioDevice interface {
 	Start() error
 	Close() error
@@ -102,6 +109,10 @@ func (a *bufferedVoiceAudio) Read(p []byte) (int, error) {
 }
 
 func (a *bufferedVoiceAudio) Write(p []byte) (int, error) {
+	return a.writePlayback(p, nil)
+}
+
+func (a *bufferedVoiceAudio) writePlayback(p []byte, stillCurrent func() bool) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -122,7 +133,7 @@ func (a *bufferedVoiceAudio) Write(p []byte) (int, error) {
 		if a.closed {
 			return written, io.ErrClosedPipe
 		}
-		if generation != a.playbackGeneration {
+		if generation != a.playbackGeneration || (stillCurrent != nil && !stillCurrent()) {
 			return written, ErrVoicePlaybackInterrupted
 		}
 		if a.playback.size == len(a.playback.data) {

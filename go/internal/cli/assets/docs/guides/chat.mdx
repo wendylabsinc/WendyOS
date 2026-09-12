@@ -112,7 +112,9 @@ Use headphones to avoid microphone feedback. The terminal shows when voice is
 on. `/voice off` closes the microphone, playback, and Live connection while
 ongoing agent work continues in text. Escape
 cancels active work and interrupts speech; cancellation cannot undo completed
-tool actions. If voice fails, the text conversation remains available.
+tool actions. Escape also discards an answer waiting to be spoken after the
+agent finishes, while keeping the answer in the transcript and voice listening
+for your next request. If voice fails, the text conversation remains available.
 
 Native audio requires a CLI built with cgo on macOS, Linux, or Windows and
 permission to use the microphone. Builds without cgo still support text chat

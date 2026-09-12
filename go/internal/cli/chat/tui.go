@@ -340,7 +340,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "enter" {
 			prompt := m.composer.Value()
 			control := strings.TrimSpace(prompt)
-			if m.active && !(strings.HasPrefix(control, "/voice") || control == "/setup" || control == "/quit" || control == "/help" || control == "/tools") {
+			if m.active && !(control == "/voice" || control == "/voice on" || control == "/voice off" || control == "/voice setup" || control == "/setup" || control == "/quit" || control == "/help" || control == "/tools") {
 				return m, nil
 			}
 			m.composer.Reset()
@@ -703,6 +703,11 @@ func (m *chatModel) voiceActionFor(actionCtx context.Context, action func(contex
 
 func (m *chatModel) interruptVoice() {
 	m.voiceInputCaption, m.voiceInputPending, m.voiceOutputCaption = -1, -1, -1
+	// A completed turn can still have speech queued behind context updates.
+	// Escape must invalidate that reply even when the engine is already idle.
+	if m.turnSpeechCancel != nil {
+		m.turnSpeechCancel()
+	}
 	// Playback interruption must not wait behind queued context or speech.
 	m.voiceActionTail = nil
 	m.voiceAction(func(ctx context.Context, session VoiceSession) error { return session.Interrupt(ctx) })
