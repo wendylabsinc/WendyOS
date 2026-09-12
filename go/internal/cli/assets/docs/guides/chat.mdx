@@ -211,7 +211,54 @@ Settings and API keys pasted during setup are saved in `~/.wendy/chat.json`,
 with file permissions restricted to your user. API keys supplied through
 environment variables are not copied into that file.
 
-Chat requires interactive stdin and stdout and does not support `--json`.
+The chat screen requires interactive stdin and stdout. Scripts use `--prompt`
+instead, described next.
+
+## Run one turn from a script
+
+`--prompt` runs a single turn without the chat screen and exits. It uses the
+setup you saved with `wendy chat --setup`, or the connection flags below, and
+never opens a setup screen. Use it from shell scripts, CI, or another program
+that wants Wendy's reasoning and tools without its terminal.
+
+```sh
+wendy chat --prompt "Which of my devices are online?"
+```
+
+When stdout is a terminal, the assistant's final text is printed. When stdout
+is a pipe or a file, or with `--json`, each event is printed as it happens, one
+JSON object per line, following the CLI's usual rule that non-interactive
+output is JSON. Notices go to stderr, so stdout is only the stream:
+
+```sh
+wendy chat --prompt "Why does app A on device X keep restarting?" --json
+```
+
+```json
+{"type":"status","text":"Thinking…"}
+{"type":"text","text":"Let me look at the logs. "}
+{"type":"tool_start","id":"call_1","tool":"telemetry_logs","arguments":{"app_name":"A","min_severity":"error"}}
+{"type":"tool_result","id":"call_1","tool":"telemetry_logs","text":"..."}
+{"type":"text","text":"The app cannot reach port 8080..."}
+{"type":"done","text":"Let me look at the logs. The app cannot reach port 8080..."}
+```
+
+Event types are `status`, `text` (streamed chunks), `tool_start`,
+`approval`, `tool_result`, and a final `done` or `error`. The `done` event
+carries the complete assistant text. A non-zero exit status accompanies
+`error`.
+
+Tools that would ask a person, such as shell commands, file writes, and
+device changes, are **denied** in this mode: there is nobody to answer. The
+stream reports each denial as an `approval` event with `"approved":false`, and
+the model is told the tool did not run. Pass `--yes` to allow them:
+
+```sh
+wendy chat --prompt "Redeploy the relay to Unitree G1 Nx" --json --yes
+```
+
+`--prompt` cannot be combined with `--setup` or `--voice`. Each run is a fresh
+conversation; there is no memory between prompts.
 
 ## Advanced configuration
 
