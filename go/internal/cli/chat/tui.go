@@ -102,13 +102,14 @@ type chatModel struct {
 	opts    UIOptions
 	workers sync.WaitGroup
 
-	width, height int
-	compact       bool
-	transcript    []chatEntry
-	viewport      viewport.Model
-	composer      textarea.Model
-	spinner       spinner.Model
-	status        string
+	width, height   int
+	compact         bool
+	showToolDetails bool
+	transcript      []chatEntry
+	viewport        viewport.Model
+	composer        textarea.Model
+	spinner         spinner.Model
+	status          string
 
 	turnID      uint64
 	events      <-chan turnMessage
@@ -230,6 +231,10 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			msg.Runes = []rune(chatSanitize(string(msg.Runes)))
 		}
 		switch msg.String() {
+		case "ctrl+t":
+			m.showToolDetails = !m.showToolDetails
+			m.refreshTranscript()
+			return m, nil
 		case "ctrl+c":
 			if m.active {
 				m.cancelActiveTurn()
@@ -299,6 +304,10 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		return nil
 	}
 	switch prompt {
+	case "/tools":
+		m.showToolDetails = !m.showToolDetails
+		m.refreshTranscript()
+		return nil
 	case "/quit", "/exit":
 		m.quitting = true
 		return tea.Quit
@@ -316,7 +325,7 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		m.quitting = true
 		return tea.Quit
 	case "/help":
-		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/setup  Change your AI or enter an API key privately\n/clear  Clear the transcript and model conversation\n/quit   Exit chat\n\nEnter sends a message. Alt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work. Ctrl+C exits when idle.\nFor tool approvals, review the arguments and press y to allow once or n to deny.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
+		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Show or hide full tool details (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/clear  Clear the transcript and model conversation\n/quit   Exit chat\n\nEnter sends a message. Alt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work. Ctrl+C exits when idle.\nFor tool approvals, review the arguments and press y to allow once or n to deny.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
 		return nil
 	}
 	if strings.HasPrefix(prompt, "/") && !strings.ContainsAny(prompt, " \n\t") {
@@ -475,8 +484,18 @@ func (m *chatModel) refreshTranscript() {
 	follow := m.viewport.AtBottom()
 	var out strings.Builder
 	for i, entry := range m.transcript {
+		compactTool := !m.showToolDetails && (entry.kind == "tool" || entry.kind == "result")
 		if i > 0 {
-			out.WriteString("\n\n")
+			previous := m.transcript[i-1].kind
+			if compactTool && (previous == "tool" || previous == "result") {
+				out.WriteByte('\n')
+			} else {
+				out.WriteString("\n\n")
+			}
+		}
+		if compactTool {
+			out.WriteString(chatDim.Render(ansi.Truncate(compactToolEntry(entry), m.viewport.Width, "…")))
+			continue
 		}
 		style := chatTitle
 		switch entry.kind {
@@ -613,9 +632,9 @@ func (m *chatModel) View() string {
 		if m.opts.AutoApprove {
 			status += " · auto-approve"
 		}
-		hints := "Enter send · Alt+Enter newline · PgUp/PgDn scroll · /help · Ctrl+C exit"
+		hints := "Enter send · Alt+Enter newline · Ctrl+T tools · /help · Ctrl+C exit"
 		if m.active {
-			hints = "Esc/Ctrl+C cancel · PgUp/PgDn scroll · draft your next message below"
+			hints = "Esc/Ctrl+C cancel · Ctrl+T tools · PgUp/PgDn scroll"
 		}
 		if m.compact {
 			frame = strings.Join([]string{line(title), m.viewport.View(), line(chatDim.Render(status)), m.composer.View(), line(chatDim.Render(hints))}, "\n")

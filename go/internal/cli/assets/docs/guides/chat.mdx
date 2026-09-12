@@ -100,7 +100,9 @@ Local model inference also works with cloud-connected Wendy devices.
 
 ## Working in the terminal
 
-The transcript shows streamed answers and tool activity. Read-only operations
+The transcript shows streamed answers and compact tool activity. Press Ctrl+T
+or type `/tools` to show or hide complete tool arguments and results. The agent
+receives the full results in either view. Read-only operations
 run automatically. File writes, shell commands, and device changes show their
 arguments for approval before running. Approve with `y` or deny with `n`; use the
 scroll keys to review longer calls.
@@ -118,6 +120,7 @@ documentation through the `wendy_docs` tool.
 | Esc / Ctrl+C during a turn | Cancel the active response or tool call |
 | Ctrl+C while idle | Exit |
 | `/help` | Show chat controls |
+| `/tools` or Ctrl+T | Show or hide full tool details |
 | `/setup` | Change your AI or enter an API key privately |
 | `/clear` | Start a fresh conversation |
 | `/quit` | Exit |
