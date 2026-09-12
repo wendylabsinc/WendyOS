@@ -39,16 +39,21 @@ validates it against PKI's own CA material. Including the ML-DSA intermediates
 would exceed the broker's 16 KiB HTTP/2 header limit alongside the bearer token.
 The enrollment JWS retains the full chain in the protobuf body.
 
-Cloud does not return an ACME directory URL. For sessions using
-`identity.dev.pki.wendy.sh`, the CLI uses:
+Cloud does not return an ACME directory URL. The CLI derives one from the
+pki-core identity endpoint the session already holds, by replacing its leading
+`identity.` label:
 
 ```text
-https://acme.dev.pki.wendy.sh/<session-tenant>/acme/directory
+https://identity.<rest>/v1/identity/certificate
+  -> https://acme.<rest>/<session-tenant>/acme/directory
 ```
 
-Custom deployments can supply `--acme-directory-url <url>`. The directory must
-use HTTPS (HTTP is allowed on loopback development servers), and its tenant
-must match the selected login.
+That keeps the derivation inside one PKI deployment and names no environment,
+so a self-hosted pki-core derives its own directory exactly as the hosted one
+does. A session whose identity endpoint is not an `https://identity.<rest>`
+URL derives nothing and must supply `--acme-directory-url <url>`. The directory
+must use HTTPS (HTTP is allowed on loopback development servers), and its
+tenant must match the selected login.
 
 ## Device-side behavior and failures
 

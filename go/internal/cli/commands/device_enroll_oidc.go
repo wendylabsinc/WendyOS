@@ -33,12 +33,11 @@ func oidcEnrollmentConfig(auth *config.AuthConfig, name, directoryURL string) (a
 		return cfg, fmt.Errorf("OIDC session has an invalid tenant UUID")
 	}
 	if cfg.DirectoryURL == "" {
-		identityURL, _ := url.Parse(auth.PKIEndpoint)
-		if identityURL != nil && identityURL.Scheme == "https" && identityURL.Host == "identity.dev.pki.wendy.sh" {
-			cfg.DirectoryURL = "https://acme.dev.pki.wendy.sh/" + tenant.String() + "/acme/directory"
-		} else {
+		host := pkiSiblingHost(auth.PKIEndpoint, "acme")
+		if host == "" {
 			return cfg, fmt.Errorf("no ACME directory configured for this PKI deployment; pass --acme-directory-url")
 		}
+		cfg.DirectoryURL = "https://" + host + "/" + tenant.String() + "/acme/directory"
 	}
 	principal, err := cfg.PrincipalURI()
 	if err != nil {

@@ -173,7 +173,7 @@ func TestRenewalRefusalsOfferRelogin(t *testing.T) {
 	}
 }
 
-func TestRefreshCertsForAuthUsesDevRenewEndpoint(t *testing.T) {
+func TestRefreshCertsForAuthDerivesTheRenewEndpoint(t *testing.T) {
 	t.Setenv(renewEndpointEnv, "")
 	orig := renewViaPKICore
 	var endpoint string

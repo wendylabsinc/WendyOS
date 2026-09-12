@@ -311,19 +311,25 @@ func TestRenewStatusMapping(t *testing.T) {
 	}
 }
 
-func TestRenewEndpointUsesKnownDeployment(t *testing.T) {
+func TestRenewEndpointDerivesTheSessionsOwnPKI(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		auth           *config.AuthConfig
 		override, want string
 	}{
 		{name: "cloud host alone derives nothing", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443"}},
+		{name: "any deployment derives its own sibling", auth: &config.AuthConfig{PKIEndpoint: "https://identity.pki.example.com/v1/identity/certificate"}, want: "https://renew.pki.example.com/v1/renew"},
+		{name: "port is carried across", auth: &config.AuthConfig{PKIEndpoint: "https://identity.pki.example:8451/v1/identity/certificate"}, want: "https://renew.pki.example:8451/v1/renew"},
+		{name: "identity must be its own label", auth: &config.AuthConfig{PKIEndpoint: "https://identityx.pki.example/v1/identity/certificate"}},
+		{name: "no host beyond the label", auth: &config.AuthConfig{PKIEndpoint: "https://identity./v1/identity/certificate"}},
+		{name: "plaintext derives nothing", auth: &config.AuthConfig{PKIEndpoint: "http://identity.pki.example/v1/identity/certificate"}},
+		{name: "userinfo derives nothing", auth: &config.AuthConfig{PKIEndpoint: "https://user@identity.pki.example/v1/identity/certificate"}},
 		{name: "identity deployment", auth: &config.AuthConfig{PKIEndpoint: "https://identity.dev.pki.wendy.sh/v1/identity/certificate"}, want: "https://renew.dev.pki.wendy.sh/v1/renew"},
 		{name: "explicit override", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443"}, override: " https://renew.example/v1/renew ", want: "https://renew.example/v1/renew"},
-		{name: "custom PKI", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", PKIEndpoint: "https://identity.example/v1/identity/certificate"}},
-		{name: "cloud host does not override a custom PKI", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", PKIEndpoint: "https://identity.example/v1/identity/certificate"}},
+		{name: "cloud host never overrides the session's own PKI", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", PKIEndpoint: "https://identity.example/v1/identity/certificate"}, want: "https://renew.example/v1/renew"},
+		{name: "a PKI host with no identity label derives nothing", auth: &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", PKIEndpoint: "https://pki.example/v1/identity/certificate"}},
 		{name: "unknown deployment", auth: &config.AuthConfig{CloudGRPC: "api.example:443"}},
-		{name: "lookalike host", auth: &config.AuthConfig{PKIEndpoint: "https://identity.dev.pki.wendy.sh.example/v1/identity/certificate"}},
+		{name: "a lookalike suffix is simply another deployment", auth: &config.AuthConfig{PKIEndpoint: "https://identity.dev.pki.wendy.sh.example/v1/identity/certificate"}, want: "https://renew.dev.pki.wendy.sh.example/v1/renew"},
 		{name: "no session"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -335,7 +341,7 @@ func TestRenewEndpointUsesKnownDeployment(t *testing.T) {
 	}
 }
 
-func TestEnsureFreshCertificateUsesDevRenewEndpoint(t *testing.T) {
+func TestEnsureFreshCertificateDerivesTheRenewEndpoint(t *testing.T) {
 	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
 	stubPreflight(t, now, "")
 	origLeaf := leafNotAfterFn
