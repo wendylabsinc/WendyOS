@@ -142,7 +142,7 @@ class GeneratedExclusionTests(unittest.TestCase):
 
     def test_hand_written_paths_are_not_excluded(self) -> None:
         for path in (
-            "go/internal/agent/pkienroll/pkienroll.go",
+            "go/internal/agent/data/manager.go",
             "go/proto/wendy/agent/services/v2/data_service.proto",
             "docs/why-pb.go.md",
             ".github/scripts/security_review.py",
