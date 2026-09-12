@@ -11,6 +11,36 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
+func TestShellQuoteArg(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"wendyos-ccr1.local", "wendyos-ccr1.local"}, // ordinary name left bare
+		{"", "''"},
+		{"has space", "'has space'"},
+		{"foo;rm -rf ~", "'foo;rm -rf ~'"},
+		{"$(reboot)", "'$(reboot)'"},
+		{"a'b", `'a'\''b'`}, // embedded single quote
+	} {
+		if got := shellQuoteArg(tc.in); got != tc.want {
+			t.Errorf("shellQuoteArg(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A pin keyed by an mDNS display alias can carry arbitrary bytes. The recovery
+// command must not paste into a shell as anything but a single, inert argument.
+func TestDevicePinRefusalQuotesUntrustedAlias(t *testing.T) {
+	const alias = "evil; rm -rf ~ #"
+	msg := devicePinDiagnostic{hostname: alias, heading: "blocked", details: "x"}.message(false)
+	if want := "wendy device unpin '" + alias + "'\n"; !strings.Contains(msg, want) {
+		t.Errorf("recovery command not shell-quoted, want %q in:\n%s", want, msg)
+	}
+	if strings.Contains(msg, "unpin evil;") {
+		t.Errorf("unquoted injection reached the recovery command:\n%s", msg)
+	}
+}
+
 func TestDevicePinRefusalRecoveryPresentation(t *testing.T) {
 	profile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)

@@ -141,7 +141,7 @@ type devicePinDiagnostic struct {
 
 func (d devicePinDiagnostic) message(styled bool) string {
 	heading := d.heading
-	command := "wendy device unpin " + d.hostname
+	command := "wendy device unpin " + shellQuoteArg(d.hostname)
 	details := d.details
 	if styled {
 		heading = tui.ErrorMessage(heading)
@@ -236,6 +236,29 @@ func clearDevicePinForRepin(hostname string) {
 		return
 	}
 	_ = config.Save(cfg)
+}
+
+// shellQuoteArg renders s so a copy-paste of the recovery command survives a
+// POSIX shell as a single argument. d.hostname can be an mDNS display alias
+// copied verbatim from unauthenticated discovery data, so a name like
+// `foo; rm -rf ~` must not turn the suggested command into something else, and
+// one containing spaces must still reach `device unpin` as one arg (it enforces
+// ExactArgs(1)). An ordinary, unsurprising name is left bare.
+func shellQuoteArg(s string) string {
+	unsafe := strings.ContainsFunc(s, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		default:
+			return !strings.ContainsRune("-_.:/@%+=", r)
+		}
+	})
+	if s != "" && !unsafe {
+		return s
+	}
+	// POSIX single-quoting: everything is literal inside '...', and an embedded
+	// single quote is closed, escaped, and reopened.
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func assetSuffix(assetID string) string {
