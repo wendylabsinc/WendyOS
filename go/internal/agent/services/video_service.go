@@ -200,6 +200,29 @@ func bestDefaultFrameSize(fd int, pixfmt uint32) (uint32, uint32) {
 	return fallbackW, fallbackH
 }
 
+// frameSizeProbeFormats lists the pixel formats worth asking a camera about when
+// enumerating its frame sizes: every raw format the capture path can actually
+// negotiate (rawPixelFormats), plus MJPEG.
+//
+// It used to be a hardcoded {YUYV, MJPEG}. A camera offering neither answered
+// nothing, so the agent concluded it had no sizes at all — and a thermal module
+// offers neither: a FLIR Lepton behind a PureThermal advertises Y16, UYVY and
+// GREY. Zero dimensions then propagate: the caps get no width or height, the
+// GStreamer pipeline has nothing to negotiate with, no frame ever arrives, and
+// the raw tap is declined for "no discrete frame size". rawPixelFormats already
+// names the formats the tap handles, Y16 among them, so the two lists were
+// describing the same capability and disagreeing about it.
+//
+// YUYV stays first via rawPixelFormats' own ordering, so the webcam path that
+// every other camera takes is unchanged.
+func frameSizeProbeFormats() []uint32 {
+	formats := make([]uint32, 0, len(rawPixelFormats)+1)
+	for _, f := range rawPixelFormats {
+		formats = append(formats, f.v4l2)
+	}
+	return append(formats, v4l2PixFmtMJPEG)
+}
+
 // bestDefaultFrameSizeForDevice opens path just long enough to ask what the
 // camera can do, and returns the largest discrete size across the pixel formats
 // the GStreamer path can negotiate. (0,0) when the device cannot be opened or
@@ -220,7 +243,7 @@ var bestDefaultFrameSizeForDevice = func(path string) (uint32, uint32) {
 	defer unix.Close(fd) //nolint:errcheck
 
 	var bestW, bestH uint32
-	for _, pixfmt := range []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG} {
+	for _, pixfmt := range frameSizeProbeFormats() {
 		w, h := bestDefaultFrameSize(fd, pixfmt)
 		if uint64(w)*uint64(h) > uint64(bestW)*uint64(bestH) {
 			bestW, bestH = w, h
@@ -1531,7 +1554,7 @@ func deviceAdvertisesFrameSize(path string, w, h uint32) (advertised, known bool
 	}
 	defer unix.Close(fd) //nolint:errcheck
 
-	for _, pixfmt := range []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG} {
+	for _, pixfmt := range frameSizeProbeFormats() {
 		for index := uint32(0); index < 64; index++ {
 			fse := v4l2FrmSizeEnum{Index: index, PixelFormat: pixfmt}
 			if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocEnumFramesizes,
