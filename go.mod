@@ -25,6 +25,7 @@ require (
 	github.com/ebitengine/oto/v3 v3.4.0
 	github.com/ebitengine/purego v0.9.0
 	github.com/fsnotify/fsnotify v1.10.1
+	github.com/gen2brain/malgo v0.11.26
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/google/go-containerregistry v0.21.8
 	github.com/google/gousb v1.1.3

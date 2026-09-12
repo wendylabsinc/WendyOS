@@ -31,6 +31,8 @@ type UIOptions struct {
 	Device        string
 	InitialPrompt string
 	AutoApprove   bool
+	Voice         bool
+	VoiceFactory  func(context.Context) (VoiceSession, error)
 	Input         io.Reader
 	Output        io.Writer
 }
@@ -39,10 +41,15 @@ type UIOptions struct {
 // canceled and the same engine resumes. A new connection uses a fresh state.
 type UIState struct {
 	transcript []chatEntry
+	composer   string
+	Voice      bool
 }
 
 // ErrReconfigure asks the command to reopen private connection setup.
 var ErrReconfigure = errors.New("chat setup requested")
+
+// ErrVoiceSetup asks the command to configure voice credentials privately.
+var ErrVoiceSetup = errors.New("voice setup requested")
 
 // Run opens a full-screen chat session, restoring the original terminal on exit.
 // All agent work and pending approvals are canceled before Run returns.
@@ -57,6 +64,8 @@ func Run(ctx context.Context, opts UIOptions) error {
 		m.workers.Wait()
 		if opts.State != nil {
 			opts.State.transcript = append([]chatEntry(nil), m.transcript...)
+			opts.State.composer = m.composer.Value()
+			opts.State.Voice = m.voiceEnabled
 		}
 	}()
 	options := []tea.ProgramOption{tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion()}
@@ -72,6 +81,9 @@ func Run(ctx context.Context, opts UIOptions) error {
 	}
 	if err == nil && m.reconfigure {
 		return ErrReconfigure
+	}
+	if err == nil && m.voiceSetup {
+		return ErrVoiceSetup
 	}
 	return err
 }
@@ -97,6 +109,17 @@ type turnMessage struct {
 
 type initialPromptMessage struct{}
 
+type voiceMessage struct {
+	id      uint64
+	session VoiceSession
+	event   VoiceEvent
+}
+
+type voiceDelegation struct {
+	id, prompt, display string
+	generation          uint64
+}
+
 type chatModel struct {
 	ctx     context.Context
 	opts    UIOptions
@@ -120,6 +143,24 @@ type chatModel struct {
 	reconfigure bool
 	approval    *approvalRequest
 	preview     viewport.Model
+
+	voiceEnabled      bool
+	voiceStarting     bool
+	voiceSetup        bool
+	voiceID           uint64
+	voiceSession      VoiceSession
+	voiceCtx          context.Context
+	voiceCancel       context.CancelFunc
+	voiceClosed       <-chan struct{}
+	voiceEvents       <-chan voiceMessage
+	voiceSend         chan<- voiceMessage
+	delegation        *voiceDelegation
+	pendingDelegation *voiceDelegation
+	turnReply         string
+	voiceSeen         map[string]bool
+	voiceActionTail   <-chan struct{}
+	turnSpeechCtx     context.Context
+	turnSpeechCancel  context.CancelFunc
 }
 
 var (
@@ -162,6 +203,7 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	}
 	if opts.State != nil && len(opts.State.transcript) > 0 {
 		m.transcript = append([]chatEntry(nil), opts.State.transcript...)
+		m.composer.SetValue(opts.State.composer)
 	}
 	m.resize(80, 24)
 	if m.removeStandaloneCredential(m.opts.InitialPrompt) {
@@ -171,10 +213,14 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 }
 
 func (m *chatModel) Init() tea.Cmd {
-	if strings.TrimSpace(m.opts.InitialPrompt) != "" {
-		return tea.Batch(textarea.Blink, func() tea.Msg { return initialPromptMessage{} })
+	cmds := []tea.Cmd{textarea.Blink}
+	if m.opts.Voice {
+		cmds = append(cmds, m.startVoice())
 	}
-	return textarea.Blink
+	if strings.TrimSpace(m.opts.InitialPrompt) != "" {
+		cmds = append(cmds, func() tea.Msg { return initialPromptMessage{} })
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -189,22 +235,33 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.submit(prompt)
 		}
 		return m, nil
+	case voiceMessage:
+		return m, m.handleVoiceMessage(msg)
 	case turnMessage:
 		if msg.id != m.turnID || !m.active {
 			return m, nil
 		}
 		if msg.done {
+			canceled := m.canceling || errors.Is(msg.err, context.Canceled)
 			m.active = false
 			m.approval = nil
 			m.cancelTurn()
 			m.cancelTurn = nil
 			m.status = "Ready"
-			if m.canceling || errors.Is(msg.err, context.Canceled) {
+			if canceled {
 				m.appendEntry("notice", "Canceled", "You can send another message.")
 			} else if msg.err != nil {
 				m.appendEntry("error", "Agent error", msg.err.Error())
 			}
 			m.canceling = false
+			m.finishVoiceTurn(msg.err, canceled)
+			if next := m.pendingDelegation; next != nil {
+				m.pendingDelegation = nil
+				if m.voiceEnabled && next.generation == m.voiceID {
+					cmd := m.startVoiceTurn(next)
+					return m, tea.Batch(cmd, m.composer.Focus())
+				}
+			}
 			return m, m.composer.Focus()
 		}
 		if !m.canceling {
@@ -216,6 +273,9 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Approval required"
 				m.refreshApproval()
 				m.preview.GotoTop()
+				m.voiceActionFor(m.turnSpeechCtx, func(ctx context.Context, session VoiceSession) error {
+					return session.Reply(ctx, "", "Please review the tool call in the terminal and press y or n.")
+				})
 			}
 		}
 		return m, m.waitForEvent()
@@ -236,6 +296,8 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshTranscript()
 			return m, nil
 		case "ctrl+c":
+			m.interruptVoice()
+			m.pendingDelegation = nil
 			if m.active {
 				m.cancelActiveTurn()
 				return m, nil
@@ -243,6 +305,8 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "esc":
+			m.interruptVoice()
+			m.pendingDelegation = nil
 			if m.active {
 				m.cancelActiveTurn()
 			}
@@ -269,10 +333,11 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.String() == "enter" {
-			if m.active {
+			prompt := m.composer.Value()
+			control := strings.TrimSpace(prompt)
+			if m.active && !(strings.HasPrefix(control, "/voice") || control == "/setup" || control == "/quit" || control == "/help" || control == "/tools") {
 				return m, nil
 			}
-			prompt := m.composer.Value()
 			m.composer.Reset()
 			return m, m.submit(prompt)
 		}
@@ -312,26 +377,45 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		m.quitting = true
 		return tea.Quit
 	case "/clear":
+		wasVoice := m.voiceEnabled
+		m.stopVoice()
 		m.opts.Engine.Reset()
 		m.transcript = nil
-		m.appendEntry("notice", "Conversation cleared", "Your next message starts a new conversation.")
+		text := "Your next message starts a new conversation."
+		if wasVoice {
+			text += " Voice is off so its previous context is discarded; use /voice to start listening again."
+		}
+		m.appendEntry("notice", "Conversation cleared", text)
 		return nil
 	case "/setup":
 		if m.active {
-			m.appendEntry("notice", "Setup", "Press Esc to cancel the current response before changing your AI setup.")
-			return nil
+			m.cancelActiveTurn()
 		}
 		m.reconfigure = true
 		m.quitting = true
 		return tea.Quit
+	case "/voice", "/voice on", "/voice off", "/voice setup":
+		if prompt == "/voice setup" {
+			return m.requestVoiceSetup()
+		}
+		if prompt == "/voice off" || (prompt == "/voice" && m.voiceEnabled) {
+			m.stopVoice()
+			m.appendEntry("notice", "Voice off", "The microphone and voice connection are shutting down. Text chat remains available.")
+			return nil
+		}
+		if !m.voiceEnabled {
+			return m.startVoice()
+		}
+		return nil
 	case "/help":
-		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Show or hide full tool details (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/clear  Clear the transcript and model conversation\n/quit   Exit chat\n\nEnter sends a message. Alt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work. Ctrl+C exits when idle.\nFor tool approvals, review the arguments and press y to allow once or n to deny.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
+		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Show or hide full tool details (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/voice  Toggle voice; /voice setup changes voice credentials privately\n/clear  Clear the transcript and model conversation\n/quit   Exit chat\n\nEnter sends a message. Alt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work and stops voice playback. Ctrl+C exits when idle.\nFor tool approvals, review the arguments and press y to allow once or n to deny. Spoken approval is never accepted.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
 		return nil
 	}
 	if strings.HasPrefix(prompt, "/") && !strings.ContainsAny(prompt, " \n\t") {
 		m.appendEntry("notice", "Unknown command", "Use /help to see the available chat commands.")
 		return nil
 	}
+	m.voiceContext("Typed request (handled by the text agent): " + prompt)
 	return m.startTurn(prompt)
 }
 
@@ -361,6 +445,16 @@ func looksLikeStandaloneCredential(value string) bool {
 }
 
 func (m *chatModel) startTurn(prompt string) tea.Cmd {
+	return m.startTurnWithDisplay(prompt, prompt)
+}
+
+func (m *chatModel) startTurnWithDisplay(prompt, display string) tea.Cmd {
+	if m.turnSpeechCancel != nil {
+		m.turnSpeechCancel()
+	}
+	m.turnSpeechCtx, m.turnSpeechCancel = context.WithCancel(m.ctx)
+	m.delegation = nil
+	m.turnReply = ""
 	m.turnID++
 	id := m.turnID
 	ctx, cancel := context.WithCancel(m.ctx)
@@ -368,7 +462,7 @@ func (m *chatModel) startTurn(prompt string) tea.Cmd {
 	m.active = true
 	m.canceling = false
 	m.status = "Thinking"
-	m.appendEntry("user", "You", prompt)
+	m.appendEntry("user", "You", display)
 	m.viewport.GotoBottom()
 	events := make(chan turnMessage, 64)
 	m.events = events
@@ -434,6 +528,9 @@ func (m *chatModel) waitForEvent() tea.Cmd {
 }
 
 func (m *chatModel) cancelActiveTurn() {
+	if m.turnSpeechCancel != nil {
+		m.turnSpeechCancel()
+	}
 	m.canceling = true
 	m.status = "Canceling…"
 	m.approval = nil
@@ -442,12 +539,272 @@ func (m *chatModel) cancelActiveTurn() {
 	}
 }
 
+func (m *chatModel) requestVoiceSetup() tea.Cmd {
+	if m.active {
+		m.cancelActiveTurn()
+	}
+	m.stopVoice()
+	m.voiceSetup = true
+	m.quitting = true
+	return tea.Quit
+}
+
+func (m *chatModel) startVoice() tea.Cmd {
+	if m.opts.VoiceFactory == nil {
+		return m.requestVoiceSetup()
+	}
+	m.voiceID++
+	id := m.voiceID
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.voiceCtx, m.voiceCancel = ctx, cancel
+	m.voiceEnabled, m.voiceStarting = true, true
+	m.voiceSeen = make(map[string]bool)
+	m.voiceActionTail = nil
+	events := make(chan voiceMessage, 64)
+	m.voiceEvents, m.voiceSend = events, events
+	previousClosed := m.voiceClosed
+	closed := make(chan struct{})
+	m.voiceClosed = closed
+	factory := m.opts.VoiceFactory
+	m.workers.Add(1)
+	go func() {
+		defer m.workers.Done()
+		defer close(closed)
+		send := func(msg voiceMessage) bool {
+			msg.id = id
+			select {
+			case events <- msg:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		// A quick off/on toggle must finish closing the previous microphone
+		// before attempting to open it again.
+		if previousClosed != nil {
+			select {
+			case <-previousClosed:
+			case <-ctx.Done():
+				return
+			}
+		}
+		session, err := factory(ctx)
+		if err == nil && session == nil {
+			err = errors.New("voice provider returned no session")
+		}
+		if err != nil {
+			send(voiceMessage{event: VoiceEvent{Type: "error", Err: err}})
+			return
+		}
+		defer session.Close()
+		if !send(voiceMessage{session: session}) {
+			return
+		}
+		for {
+			select {
+			case event, ok := <-session.Events():
+				if !ok {
+					send(voiceMessage{event: VoiceEvent{Type: "done"}})
+					return
+				}
+				if !send(voiceMessage{event: event}) || event.Type == "done" || event.Type == "error" {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return m.waitForVoiceEvent()
+}
+
+func (m *chatModel) waitForVoiceEvent() tea.Cmd {
+	ctx, events := m.voiceCtx, m.voiceEvents
+	return func() tea.Msg {
+		select {
+		case msg := <-events:
+			return msg
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func (m *chatModel) stopVoice() {
+	if m.turnSpeechCancel != nil {
+		m.turnSpeechCancel()
+	}
+	if m.voiceCancel != nil {
+		m.voiceCancel()
+	}
+	m.voiceEnabled, m.voiceStarting = false, false
+	m.voiceSession = nil
+	m.pendingDelegation, m.delegation = nil, nil
+}
+
+func (m *chatModel) voiceAction(action func(context.Context, VoiceSession) error) {
+	m.voiceActionFor(m.voiceCtx, action)
+}
+
+func (m *chatModel) voiceActionFor(actionCtx context.Context, action func(context.Context, VoiceSession) error) {
+	if !m.voiceEnabled || m.voiceSession == nil {
+		return
+	}
+	ctx, session, id, events := m.voiceCtx, m.voiceSession, m.voiceID, m.voiceSend
+	if actionCtx == nil {
+		actionCtx = ctx
+	}
+	previous := m.voiceActionTail
+	finished := make(chan struct{})
+	m.voiceActionTail = finished
+	m.workers.Add(1)
+	go func() {
+		defer m.workers.Done()
+		defer close(finished)
+		if previous != nil {
+			select {
+			case <-previous:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if ctx.Err() != nil || actionCtx.Err() != nil {
+			return
+		}
+		// Task speech has its own lifetime: correction/escape invalidates a
+		// queued result. Once a write begins it uses the session lifetime, so
+		// canceling one task cannot tear down the live connection mid-write.
+		if err := action(ctx, session); err != nil && ctx.Err() == nil {
+			select {
+			case events <- voiceMessage{id: id, event: VoiceEvent{Type: "error", Err: err}}:
+			case <-ctx.Done():
+			}
+		}
+	}()
+}
+
+func (m *chatModel) interruptVoice() {
+	// Playback interruption must not wait behind queued context or speech.
+	m.voiceActionTail = nil
+	m.voiceAction(func(ctx context.Context, session VoiceSession) error { return session.Interrupt(ctx) })
+}
+
+func (m *chatModel) voiceContext(text string) {
+	m.voiceAction(func(ctx context.Context, session VoiceSession) error { return session.SendContext(ctx, text) })
+}
+
+func (m *chatModel) handleVoiceMessage(msg voiceMessage) tea.Cmd {
+	if msg.id != m.voiceID || !m.voiceEnabled {
+		return nil
+	}
+	if msg.session != nil {
+		m.voiceSession = msg.session
+		contextText := "The current workspace is " + m.opts.Workspace + ". Device preference: " + m.opts.Device + ". The terminal handles all action approvals with keyboard y/n; spoken approval is never sufficient."
+		// Voice can be enabled in the middle of a text conversation. Seed recent
+		// visible exchanges without waiting on an engine that may be working.
+		for _, entry := range m.transcript[max(0, len(m.transcript)-8):] {
+			if entry.kind == "user" || entry.kind == "assistant" {
+				text := []rune(entry.text)
+				if len(text) > 2000 {
+					text = text[:2000]
+				}
+				contextText += "\n" + entry.title + ": " + string(text)
+			}
+		}
+		m.voiceContext(contextText)
+		return m.waitForVoiceEvent()
+	}
+	event := msg.event
+	switch event.Type {
+	case "ready":
+		m.voiceStarting = false
+		m.appendEntry("notice", "Voice on · microphone sent to OpenAI · /voice to stop", "Speak naturally. Approvals stay in the terminal.")
+	case "input", "output":
+		if event.Text != "" {
+			title := "You · voice"
+			if event.Type == "output" {
+				title = "Voice"
+			}
+			kind := "voice_" + event.Type
+			last := len(m.transcript) - 1
+			if last >= 0 && m.transcript[last].kind == kind {
+				m.transcript[last].text += event.Text
+				m.refreshTranscript()
+			} else {
+				m.appendEntry(kind, title, event.Text)
+			}
+		}
+	case "delegation":
+		if event.DelegationID == "" || strings.TrimSpace(event.Text) == "" || m.voiceSeen[event.DelegationID] {
+			break
+		}
+		m.voiceSeen[event.DelegationID] = true
+		prompt := event.Prompt
+		if prompt == "" {
+			prompt = event.Text
+		}
+		next := &voiceDelegation{id: event.DelegationID, prompt: prompt, display: event.Text, generation: m.voiceID}
+		if m.active {
+			m.pendingDelegation = next
+			m.cancelActiveTurn()
+		} else {
+			cmd := m.startVoiceTurn(next)
+			return tea.Batch(cmd, m.waitForVoiceEvent())
+		}
+	case "error", "done":
+		m.stopVoice()
+		if event.Type == "error" {
+			detail := "Voice connection failed."
+			if event.Err != nil {
+				detail = event.Err.Error()
+			}
+			m.appendEntry("error", "Voice unavailable", detail+"\nText chat remains available. Use /voice to retry or /voice setup to change credentials privately.")
+		} else {
+			m.appendEntry("notice", "Voice disconnected", "Text chat remains available. Use /voice to reconnect.")
+		}
+		return nil
+	}
+	return m.waitForVoiceEvent()
+}
+
+func (m *chatModel) finishVoiceTurn(err error, canceled bool) {
+	delegation := m.delegation
+	m.delegation = nil
+	if canceled || m.pendingDelegation != nil {
+		return
+	}
+	text := strings.TrimSpace(m.turnReply)
+	if err != nil {
+		text = "I couldn't complete the task: " + err.Error()
+	}
+	if text == "" {
+		return
+	}
+	if delegation != nil {
+		if delegation.generation == m.voiceID {
+			m.voiceActionFor(m.turnSpeechCtx, func(ctx context.Context, session VoiceSession) error {
+				return session.Reply(ctx, delegation.id, text)
+			})
+		}
+	} else {
+		m.voiceContext("Text agent result (context only): " + text)
+	}
+}
+
+func (m *chatModel) startVoiceTurn(delegation *voiceDelegation) tea.Cmd {
+	prompt := delegation.prompt + "\n\nThis request came from voice. Perform the requested work, then give a concise final result suitable for speaking. Do not narrate tool progress aloud; keep required action approvals in the terminal."
+	cmd := m.startTurnWithDisplay(prompt, delegation.display)
+	m.delegation = delegation
+	return cmd
+}
+
 func (m *chatModel) handleEvent(event Event) {
 	switch event.Type {
 	case "text":
 		if event.Text == "" {
 			return
 		}
+		m.turnReply += event.Text
 		last := len(m.transcript) - 1
 		if last >= 0 && m.transcript[last].kind == "assistant" {
 			m.transcript[last].text += event.Text
@@ -457,6 +814,7 @@ func (m *chatModel) handleEvent(event Event) {
 		m.status = "Responding"
 		m.refreshTranscript()
 	case "tool_start":
+		m.turnReply = ""
 		name, arguments := "tool", ""
 		if event.Call != nil {
 			name, arguments = event.Call.Name, prettyArguments(event.Call.Arguments)
@@ -595,7 +953,7 @@ func (m *chatModel) resize(width, height int) {
 	m.preview.Width = contentWidth
 	m.preview.Height = max(1, m.height-8)
 	if m.compact {
-		m.preview.Height = max(1, m.height-2)
+		m.preview.Height = max(1, m.height-3)
 	}
 	// The textarea setters only change geometry. Rendering refreshes its
 	// private viewport's wrapped content before Update repositions the caret.
@@ -700,22 +1058,26 @@ func (m *chatModel) View() string {
 		frame = strings.Join([]string{
 			header, "", line(chatWarn.Render("Allow tool: " + chatSingleLine(m.approval.call.Name) + "?")),
 			m.preview.View(),
-			line(chatDim.Render(fmt.Sprintf("Arguments · %.0f%% · ↑/↓ PgUp/PgDn scroll", m.preview.ScrollPercent()*100))),
+			line(chatDim.Render(fmt.Sprintf("Arguments · %.0f%% · ↑/↓ PgUp/PgDn scroll · %s", m.preview.ScrollPercent()*100, m.voiceStatus()))),
 			line(chatWarn.Render("[y] Allow once   [n] Deny   [Esc] Cancel turn")),
 		}, "\n")
 		if m.compact {
 			question := line(chatWarn.Render("Allow " + chatSingleLine(m.approval.call.Name) + "?"))
 			controls := line(chatWarn.Render("[y] Allow [n] Deny"))
+			mic := line(chatDim.Render(m.voiceStatus()))
 			parts := []string{controls}
-			if m.height >= 3 {
-				parts = []string{question, m.preview.View(), controls}
+			if m.height >= 4 {
+				parts = []string{question, m.preview.View(), mic, controls}
+			} else if m.height == 3 {
+				parts = []string{question, mic, controls}
 			} else if m.height == 2 {
-				parts = []string{question, controls}
+				parts = []string{mic, controls}
 			}
 			frame = strings.Join(parts, "\n")
 		}
 	} else {
 		status := chatSingleLine(m.status)
+		status += " · " + m.voiceStatus()
 		if m.active {
 			status = m.spinner.View() + " " + status
 		}
@@ -745,6 +1107,26 @@ func (m *chatModel) View() string {
 		lines[i] = " " + ansi.Truncate(lines[i], max(0, m.width-1), "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *chatModel) voiceStatus() string {
+	if !m.voiceEnabled {
+		if m.voiceClosed != nil {
+			select {
+			case <-m.voiceClosed:
+			default:
+				return "mic stopping"
+			}
+		}
+		return "mic muted"
+	}
+	if m.voiceStarting {
+		return "voice connecting"
+	}
+	if m.active {
+		return "voice on · working"
+	}
+	return "voice on · listening"
 }
 
 func prettyArguments(raw json.RawMessage) string {

@@ -79,6 +79,50 @@ definitions. Tool accuracy depends on the model and its server's tool-call
 parser/template. A model that only generates plain text can chat but cannot
 execute Wendy tools.
 
+## Use your voice
+
+Start with voice enabled:
+
+```sh
+wendy chat --voice
+```
+
+Or type `/voice` during a conversation to turn it on. Type `/voice` again to
+turn it off and continue typing. `/voice on` and `/voice off` also work.
+
+Voice uses your computer's default microphone and speakers with OpenAI
+**GPT Live (`gpt-live-1`)**. Your selected chat model still handles reasoning,
+files, tests, deployment, and device tools. That model can be local. Voice itself
+requires OpenAI access and sends microphone audio and brief task context to
+OpenAI, even when the reasoning model runs locally.
+
+Wendy keeps voice brief: it listens while you work, shows tool progress in the
+terminal, and speaks short results or questions when your input is needed.
+It does not narrate each action. File changes, commands, and device changes
+still show their arguments for approval in the terminal; press `y` or `n`.
+Speech does not approve tool calls.
+
+If needed, Wendy opens a private OpenAI key prompt. It can reuse the key from
+an official OpenAI chat connection, or use `OPENAI_API_KEY` or
+`WENDY_VOICE_API_KEY`. A separate key entered for voice is saved privately in
+`~/.wendy/voice.json`; environment keys are not copied there. Use `/voice setup`
+to replace the voice key. OpenAI API usage is billed separately from ChatGPT.
+
+Use headphones to avoid microphone feedback. The terminal shows when voice is
+on. `/voice off` closes the microphone, playback, and Live connection while
+ongoing agent work continues in text. Escape
+cancels active work and interrupts speech; cancellation cannot undo completed
+tool actions. If voice fails, the text conversation remains available.
+
+Native audio requires a CLI built with cgo on macOS, Linux, or Windows and
+permission to use the microphone. Builds without cgo still support text chat
+and explain when native voice is unavailable. Current Windows release builds
+disable cgo.
+
+The integration uses the [GPT Live WebSocket API](https://developers.openai.com/api/docs/guides/voice-websockets)
+with [client delegation](https://developers.openai.com/api/docs/guides/live-delegation),
+so voice and reasoning models are selected independently.
+
 ## Select a project and device
 
 The current directory is the project workspace. Use `-C` to select another
@@ -122,6 +166,8 @@ documentation through the `wendy_docs` tool.
 | `/help` | Show chat controls |
 | `/tools` or Ctrl+T | Show or hide full tool details |
 | `/setup` | Change your AI or enter an API key privately |
+| `/voice` | Turn GPT Live voice on or off |
+| `/voice setup` | Enter or replace the OpenAI voice key privately |
 | `/clear` | Start a fresh conversation |
 | `/quit` | Exit |
 

@@ -31,7 +31,7 @@ func TestListModelsCompatible(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Error("missing API key")
 		}
-		fmt.Fprint(w, `{"data":[{"id":"gpt-4.1-2025-04-14"},{"id":"text-embedding-3-large"},{"id":"gpt-4o-audio-preview"},{"id":"gpt-image-1"},{"id":"gpt-4.1"},{"id":"gpt-4.1"},{"id":"gpt-3.5-turbo-instruct"},{"id":"gpt-5-codex"},{"id":"gpt-4o-search-preview"},{"id":"gpt-5-pro"},{"id":"o3-deep-research"},{"id":""},{"id":"\u001b[2J"}]}`)
+		fmt.Fprint(w, `{"data":[{"id":"gpt-4.1-2025-04-14"},{"id":"text-embedding-3-large"},{"id":"gpt-4o-audio-preview"},{"id":"gpt-live-1"},{"id":"gpt-live-1-mini"},{"id":"gpt-image-1"},{"id":"gpt-4.1"},{"id":"gpt-4.1"},{"id":"gpt-3.5-turbo-instruct"},{"id":"gpt-5-codex"},{"id":"gpt-4o-search-preview"},{"id":"gpt-5-pro"},{"id":"o3-deep-research"},{"id":""},{"id":"\u001b[2J"}]}`)
 	}))
 	defer server.Close()
 	models, err := ListModels(context.Background(), Config{Provider: "openai", BaseURL: server.URL + "/v1", APIKey: "test-key"})

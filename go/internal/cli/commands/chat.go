@@ -16,7 +16,7 @@ import (
 func newChatCmd() *cobra.Command {
 	var cfg chat.Config
 	var directory string
-	var autoApprove, setup, helpAll bool
+	var autoApprove, setup, helpAll, voice bool
 	var preferredDevice string
 	cmd := &cobra.Command{
 		Use:   "chat [prompt...]",
@@ -55,6 +55,16 @@ Use --setup whenever you want to change your AI or model.`,
 			if err != nil {
 				return err
 			}
+			voiceKey := chat.VoiceKey(resolved)
+			voiceSupportError := chat.VoiceSupportError()
+			if voice && voiceKey == "" && voiceSupportError == nil {
+				voiceKey, err = chat.SetupVoice(cmd.Context(), resolved, cmd.InOrStdin(), cmd.OutOrStdout())
+				if errors.Is(err, tui.ErrCancelled) {
+					voice = false
+				} else if err != nil {
+					return err
+				}
+			}
 			executable, err := os.Executable()
 			if err != nil {
 				return fmt.Errorf("locating Wendy executable: %w", err)
@@ -77,13 +87,34 @@ Use --setup whenever you want to change your AI or model.`,
 					}
 					engine = chat.NewEngine(provider, toolset, chat.SystemPrompt(workspace, preferredDevice))
 				}
+				var voiceFactory func(context.Context) (chat.VoiceSession, error)
+				if voiceSupportError != nil {
+					voiceFactory = func(context.Context) (chat.VoiceSession, error) { return nil, voiceSupportError }
+				} else if voiceKey != "" {
+					key := voiceKey
+					voiceFactory = func(ctx context.Context) (chat.VoiceSession, error) { return chat.StartVoice(ctx, key) }
+				}
 				err = chat.Run(ctx, chat.UIOptions{
 					Engine: engine, Provider: resolved.Provider, Model: resolved.Model,
 					State:     state,
 					Workspace: workspace, Device: preferredDevice,
 					InitialPrompt: initialPrompt, AutoApprove: autoApprove,
+					Voice: voice, VoiceFactory: voiceFactory,
 					Input: cmd.InOrStdin(), Output: cmd.OutOrStdout(),
 				})
+				initialPrompt = ""
+				voice = state.Voice
+				if errors.Is(err, chat.ErrVoiceSetup) {
+					key, setupErr := chat.SetupVoice(ctx, resolved, cmd.InOrStdin(), cmd.OutOrStdout())
+					if errors.Is(setupErr, tui.ErrCancelled) {
+						continue
+					}
+					if setupErr != nil {
+						return setupErr
+					}
+					voiceKey, voice = key, true
+					continue
+				}
 				if !errors.Is(err, chat.ErrReconfigure) {
 					return err
 				}
@@ -104,6 +135,7 @@ Use --setup whenever you want to change your AI or model.`,
 		},
 	}
 	cmd.Flags().BoolVar(&setup, "setup", false, "Choose or change your AI and model")
+	cmd.Flags().BoolVar(&voice, "voice", false, "Listen and speak with GPT Live (or use /voice in chat)")
 	cmd.Flags().BoolVar(&helpAll, "help-all", false, "Show advanced connection options")
 	cmd.Flags().StringVarP(&preferredDevice, "device", "d", "", "Preferred Wendy device (you can also choose while chatting)")
 	cmd.Flags().StringVar(&cfg.Provider, "provider", "", "Model API: openai, anthropic, ollama, or local (WENDY_CHAT_PROVIDER)")

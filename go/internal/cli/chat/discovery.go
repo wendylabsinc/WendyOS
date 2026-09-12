@@ -282,7 +282,7 @@ func chatModelName(id, provider string) bool {
 		// as "image-assistant" may still be a conversational vision model.
 		return true
 	}
-	for _, part := range []string{"moderation", "whisper", "tts-", "audio", "realtime", "transcribe", "dall-e", "image", "sora"} {
+	for _, part := range []string{"moderation", "whisper", "tts-", "audio", "realtime", "gpt-live", "transcribe", "dall-e", "image", "sora"} {
 		if strings.Contains(id, part) {
 			return false
 		}
