@@ -59,6 +59,7 @@ func cloneMessages(messages []Message) []Message {
 		for j := range out[i].ResponseItems {
 			out[i].ResponseItems[j] = append(json.RawMessage(nil), out[i].ResponseItems[j]...)
 		}
+		out[i].Images = append([]Image(nil), out[i].Images...)
 		out[i].ToolCalls = append([]ToolCall(nil), out[i].ToolCalls...)
 		for j := range out[i].ToolCalls {
 			out[i].ToolCalls[j].Arguments = append(json.RawMessage(nil), out[i].ToolCalls[j].Arguments...)
@@ -159,6 +160,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		var turnErr error
 		for i, call := range message.ToolCalls {
 			var result string
+			var images []Image
 			emit(Event{Type: "tool_start", Call: &call})
 			switch {
 			case turnErr != nil:
@@ -184,12 +186,21 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					result = "User denied permission. Tool was not executed; do not retry this action without new user instructions."
 				default:
 					emit(Event{Type: "status", Text: "Running " + call.Name + "…", Call: &call})
-					output, toolErr := e.executor.Execute(ctx, call)
-					result = output
+					var output ToolResult
+					var toolErr error
+					if executor, ok := e.executor.(MediaExecutor); ok {
+						output, toolErr = executor.ExecuteResult(ctx, call)
+					} else {
+						output.Text, toolErr = e.executor.Execute(ctx, call)
+					}
+					result = output.Text
+					if toolErr == nil {
+						images, toolErr = validateImages(output.Images)
+					}
 					if toolErr != nil {
 						result = "Tool error: " + toolErr.Error()
-						if output != "" {
-							result += "\n" + output
+						if output.Text != "" {
+							result += "\n" + output.Text
 						}
 					}
 					if ctx.Err() != nil {
@@ -197,8 +208,12 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					}
 				}
 			}
+			if len(images) > 0 {
+				result = fmt.Sprintf("[%d image(s) attached for visual inspection.]\n%s", len(images), result)
+			}
 			result = truncateOutput(result)
-			e.messages = append(e.messages, Message{Role: "tool", ToolCallID: call.ID, Content: result})
+			e.messages = append(e.messages, Message{Role: "tool", ToolCallID: call.ID, Content: result, Images: images})
+			e.trimImageHistory()
 			emit(Event{Type: "tool_result", Text: result, Call: &call})
 		}
 		// Every announced tool call now has a result, including on cancellation.

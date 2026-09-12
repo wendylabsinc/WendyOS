@@ -148,53 +148,68 @@ func (t *Tools) ListTools(ctx context.Context) ([]Tool, error) {
 	return available, nil
 }
 
-func (t *Tools) callMCP(ctx context.Context, call ToolCall) (string, error) {
+func (t *Tools) callMCPResult(ctx context.Context, call ToolCall) (ToolResult, error) {
 	if t.mcp == nil {
-		return "", errors.New("Wendy MCP server is not connected")
+		return ToolResult{}, errors.New("Wendy MCP server is not connected")
 	}
 	var arguments map[string]any
 	if err := json.Unmarshal(call.Arguments, &arguments); err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 	request := mcpgo.CallToolRequest{}
 	request.Params.Name = call.Name
 	request.Params.Arguments = arguments
 	result, err := t.mcp.CallTool(ctx, request)
 	if err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 	if result == nil {
-		return "", errors.New("Wendy MCP tool returned an empty response")
+		return ToolResult{}, errors.New("Wendy MCP tool returned an empty response")
 	}
+	return mediaToolResult(result)
+}
+
+func mediaToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
 	var output strings.Builder
+	var images []Image
 	for _, content := range result.Content {
+		var text string
 		switch block := content.(type) {
 		case mcpgo.TextContent:
-			output.WriteString(block.Text)
+			text = block.Text
 		case *mcpgo.TextContent:
-			output.WriteString(block.Text)
+			if block != nil {
+				text = block.Text
+			}
+		case mcpgo.ImageContent:
+			images = append(images, Image{MIMEType: block.MIMEType, Data: block.Data})
+		case *mcpgo.ImageContent:
+			if block != nil {
+				images = append(images, Image{MIMEType: block.MIMEType, Data: block.Data})
+			}
 		default:
-			// Chat providers use text tool results; avoid inserting base64 image
-			// or audio data into the language model's context.
-			output.WriteString("[Non-text MCP result omitted. Use a tool that saves the media to a file.]")
+			text = "[Unsupported media result: this chat can perceive JPEG/PNG images, but does not yet process device audio or other media.]"
 		}
-		output.WriteByte('\n')
-		if output.Len() >= maxToolOutputBytes {
-			break
+		if text != "" && output.Len() < maxToolOutputBytes {
+			output.WriteString(truncateOutput(text))
+			output.WriteByte('\n')
 		}
 	}
-	if output.Len() == 0 && result.StructuredContent != nil {
+	// Media servers may mirror image payloads in structuredContent. Preserve
+	// the native attachment without copying those bytes into transcript text.
+	if output.Len() == 0 && len(images) == 0 && result.StructuredContent != nil {
 		structured, err := json.Marshal(result.StructuredContent)
 		if err != nil {
-			return "", fmt.Errorf("encoding MCP tool result: %w", err)
+			return ToolResult{}, fmt.Errorf("encoding MCP tool result: %w", err)
 		}
 		output.Write(structured)
 	}
+	value := ToolResult{Text: truncateOutput(output.String()), Images: images}
 	if result.IsError {
-		return output.String(), errors.New("Wendy MCP tool reported an error")
+		return ToolResult{Text: value.Text}, errors.New("Wendy MCP tool reported an error")
 	}
-	if output.Len() == 0 {
-		return "Tool completed successfully with no output.", nil
+	if value.Text == "" && len(images) == 0 {
+		value.Text = "Tool completed successfully with no output."
 	}
-	return output.String(), nil
+	return value, nil
 }

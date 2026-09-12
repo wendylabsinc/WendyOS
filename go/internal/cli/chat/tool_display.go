@@ -25,6 +25,13 @@ func compactToolEntry(entry chatEntry) string {
 		return "› " + label
 	}
 	text := strings.TrimSpace(entry.text)
+	var imageCount int
+	if n, err := fmt.Sscanf(text, "[%d image(s) attached for visual inspection.]", &imageCount); err == nil && n == 1 && imageCount > 0 {
+		if imageCount == 1 {
+			return "↳ 1 image captured"
+		}
+		return fmt.Sprintf("↳ %d images captured", imageCount)
+	}
 	switch {
 	case strings.HasPrefix(text, "Tool error:"):
 		return "! " + toolSummaryLine(strings.SplitN(text, "\n", 2)[0])

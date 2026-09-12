@@ -79,6 +79,32 @@ definitions. Tool accuracy depends on the model and its server's tool-call
 parser/template. A model that only generates plain text can chat but cannot
 execute Wendy tools.
 
+## See through a device camera
+
+Ask Wendy to inspect a camera on a connected device:
+
+```text
+Connect to beecam and tell me what you see through its camera.
+```
+
+Wendy discovers the camera, asks for approval to capture a snapshot, and sends
+the image to your selected model for visual inspection. Use a model that accepts
+images: a vision-capable local model works through a compatible server, as do
+supported OpenAI and Anthropic models. A text-only model cannot inspect a frame;
+use `/setup` to choose a model with vision if the provider rejects image input.
+
+`camera_snapshot` takes one frame using the active device connection, including
+Wendy Cloud connections. It returns a bounded JPEG with camera, capture-time,
+and dimension metadata. It does not open a desktop preview or leave a camera
+stream running. The CLI uses GStreamer to decode the device video stream; if it
+is unavailable, the tool explains how to install it.
+
+Snapshots go to your configured model provider, so a local model keeps visual
+inference local. Image bytes are kept out of terminal tool JSON and are retained
+only in memory, with older image attachments expiring as more are captured.
+Camera status alone does not prove what a camera sees. Continuous video and
+device audio sensing are not yet supported.
+
 ## Select a project and device
 
 The current directory is the project workspace. Use `-C` to select another
