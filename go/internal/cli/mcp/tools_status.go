@@ -24,7 +24,7 @@ func (s *mcpServer) handleWendyStatus(_ context.Context, _ mcpgo.CallToolRequest
 	if conn == nil {
 		out := map[string]any{
 			"connected":           false,
-			"suggested_next_step": "not connected — call device_list to see available devices then device_connect, or cloud_discover + cloud_connect for cloud-enrolled devices",
+			"suggested_next_step": "not connected — call device_list for configured and online cloud devices (scan=true adds LAN discovery), then device_connect for local devices or cloud_connect for cloud devices",
 			"proxy_diagnostics":   s.proxyDiagnostics(),
 		}
 		return okResult(out), nil

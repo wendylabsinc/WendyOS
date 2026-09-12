@@ -132,19 +132,17 @@ func NewRootCmd() *cobra.Command {
 	)
 
 	// Develop & Deploy
+	// `wendy install` is the surfaced alias for `wendy os install` (the `os`
+	// group is hidden). A fresh command instance is used because a cobra
+	// command can only be attached to one parent.
+	installCmd := newOSInstallCmd()
+	installCmd.GroupID = "develop"
 	initCmd := newInitCmd()
 	initCmd.GroupID = "develop"
 	runCmd := newRunCmd()
 	runCmd.GroupID = "develop"
 	chatCmd := newChatCmd()
 	chatCmd.GroupID = "develop"
-	// `wendy install` is the surfaced alias for `wendy os install` (the `os`
-	// group is hidden). A fresh command instance is used because a cobra
-	// command can only be attached to one parent.
-	installCmd := newOSInstallCmd()
-	installCmd.GroupID = "develop"
-	docsCmd := newDocsCmd()
-	docsCmd.GroupID = "develop"
 
 	// Manage
 	projectCmd := newProjectCmd()
@@ -163,6 +161,10 @@ func NewRootCmd() *cobra.Command {
 	analyticsCmd.GroupID = "settings"
 	cacheCmd := newCacheCmd()
 	cacheCmd.GroupID = "settings"
+	docsCmd := newDocsCmd()
+	docsCmd.GroupID = "settings"
+	tourCmd := newTourCmd()
+	tourCmd.GroupID = "settings"
 
 	// Hidden commands: still fully functional, just omitted from `wendy --help`
 	// to keep the top-level surface focused on the common workflow. `auth`
@@ -183,8 +185,6 @@ func NewRootCmd() *cobra.Command {
 	infoCmd.Hidden = true
 	utilsCmd := newUtilsCmd()
 	utilsCmd.Hidden = true
-	tourCmd := newTourCmd()
-	tourCmd.GroupID = "develop"
 	mcpCmd := newMCPCmd()
 	mcpCmd.Hidden = true
 	completionCmd := newCompletionCmd()
@@ -250,11 +250,10 @@ func NewRootCmd() *cobra.Command {
 	// above); hidden commands follow and never appear in help.
 	root.AddCommand(
 		// Develop & Deploy
+		installCmd,
 		initCmd,
 		runCmd,
 		chatCmd,
-		installCmd,
-		docsCmd,
 		// Manage
 		projectCmd,
 		deviceCmd,
@@ -265,6 +264,8 @@ func NewRootCmd() *cobra.Command {
 		// Settings
 		analyticsCmd,
 		cacheCmd,
+		docsCmd,
+		tourCmd,
 		// Hidden
 		bleCheckCmd,
 		sessionBrokerCmd,
@@ -279,7 +280,6 @@ func NewRootCmd() *cobra.Command {
 		osCmd,
 		infoCmd,
 		utilsCmd,
-		tourCmd,
 		mcpCmd,
 		completionCmd,
 	)

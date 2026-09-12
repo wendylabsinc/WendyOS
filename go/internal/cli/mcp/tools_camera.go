@@ -21,7 +21,7 @@ import (
 func (s *mcpServer) registerCameraTools(srv *server.MCPServer) {
 	s.registerCameraSnapshotTool(srv)
 	listOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("List the cameras attached to the connected device, with the id each control tool takes"),
+		mcpgo.WithDescription("List the cameras attached to the connected device, with the id each control tool takes. Online means detected or reachable; a camera may still be in use by another application or fail to stream."),
 	}
 	listOpts = append(listOpts, readOnly()...)
 	listOpts = append(listOpts, localOnly()...)
@@ -77,12 +77,21 @@ func (s *mcpServer) handleCameraList(ctx context.Context, req mcpgo.CallToolRequ
 	}
 	cams := make([]map[string]any, 0, len(resp.GetDevices()))
 	for _, d := range resp.GetDevices() {
+		online := d.GetOnline()
+		switch d.GetTransport() {
+		case agentpb.VideoTransport_VIDEO_TRANSPORT_UNKNOWN,
+			agentpb.VideoTransport_VIDEO_TRANSPORT_USB,
+			agentpb.VideoTransport_VIDEO_TRANSPORT_CSI:
+			// Local cameras are listed only after a successful capture-device
+			// query. Older agents leave Online unset for these entries.
+			online = true
+		}
 		cams = append(cams, map[string]any{
 			"device_id": d.GetId(),
 			"name":      d.GetName(),
 			"path":      d.GetPath(),
 			"driver":    d.GetDriver(),
-			"online":    d.GetOnline(),
+			"online":    online,
 		})
 	}
 	return okResultBounded(map[string]any{"cameras": cams}, intParam(req, "max_bytes", 100000)), nil
