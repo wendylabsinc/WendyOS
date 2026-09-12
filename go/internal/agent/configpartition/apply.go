@@ -342,6 +342,24 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 	return nil
 }
 
+// restartAvahiDaemon restarts avahi-daemon so it re-reads the service files.
+//
+// --reload (SIGHUP) only refreshes service files; it does not re-read the
+// hostname from gethostname(), so %h would stay stale. A full restart picks up
+// both the new service file and the updated hostname.
+//
+// Use the absolute path: exec.Command resolves binaries from the calling
+// process's PATH, not from cmd.Env, so bare "systemctl" would not be found.
+func restartAvahiDaemon(logger *zap.Logger, env []string) bool {
+	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+	restart.Env = env
+	if out, err := restart.CombinedOutput(); err != nil {
+		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
+		return false
+	}
+	return true
+}
+
 // updateAvahiDeviceName rewrites the name/displayname/fqdn TXT records in the
 // avahi service file and reloads avahi-daemon so mDNS picks up the new name.
 func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
@@ -365,16 +383,7 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 		return
 	}
 
-	// --reload (SIGHUP) only refreshes service files; it does not re-read the
-	// hostname from gethostname(), so %h would stay stale. A full restart picks
-	// up both the new service file and the updated hostname.
-	// Use the absolute path: exec.Command resolves binaries from the calling
-	// process's PATH, not from cmd.Env, so bare "systemctl" would not be found.
-	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
-	restart.Env = env
-	if out, err := restart.CombinedOutput(); err != nil {
-		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
-	} else {
+	if restartAvahiDaemon(logger, env) {
 		logger.Info("Restarted avahi-daemon with new device name", zap.String("name", name))
 	}
 }
@@ -385,7 +394,9 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 // restarts avahi-daemon so the mDNS advertisement reflects that the device is
 // now provisioned.
 func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, assetID, orgID int32) {
-	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, assetID, orgID)
+	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, assetID, orgID, func() bool {
+		return restartAvahiDaemon(logger, nil)
+	})
 }
 
 // UpdateAvahiForUnprovisioning reverts the _wendyos._udp service block to
@@ -394,7 +405,9 @@ func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, assetID, orgID
 // inverse of UpdateAvahiForProvisioning, used when a device is unprovisioned
 // so it is rediscoverable for re-enrollment.
 func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int) {
-	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, 0, 0)
+	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, 0, 0, func() bool {
+		return restartAvahiDaemon(logger, nil)
+	})
 }
 
 // defaultAvahiServiceDir is the directory scanned for avahi service files on
@@ -406,7 +419,13 @@ const defaultAvahiServiceDir = "/etc/avahi/services"
 // image (e.g. wendyos-mdns.service or wendy-agent.service), so we scan all
 // files in serviceDir and update the first one that contains a _wendyos._udp
 // block.
-func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, assetID, orgID int32) {
+//
+// The avahi restart is injected, like the equivalent helpers in
+// internal/agent/services: a test drives this with a real service file in a
+// temporary directory, so every guard passes and the restart is reached for
+// real. Left un-injected it prompts for polkit authorization on a developer
+// machine and blocks the package's tests for the length of that timeout.
+func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, assetID, orgID int32, restartAvahi func() bool) {
 	entries, err := os.ReadDir(serviceDir)
 	if err != nil {
 		logger.Warn("Could not read avahi services dir", zap.String("path", serviceDir), zap.Error(err))
@@ -433,11 +452,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 			return
 		}
 
-		restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
-		if out, err := restart.CombinedOutput(); err != nil {
-			logger.Warn("systemctl restart avahi-daemon failed",
-				zap.Error(err), zap.String("output", string(out)))
-		} else {
+		if restartAvahi() {
 			logger.Info("Updated avahi advertisement",
 				zap.String("file", e.Name()), zap.Int("port", port), zap.Bool("tls", tls), zap.Int32("assetId", assetID), zap.Int32("orgId", orgID))
 		}
@@ -574,11 +589,7 @@ func UpdateAvahiSensorlink(logger *zap.Logger, on bool) {
 			return
 		}
 
-		restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
-		if out, err := restart.CombinedOutput(); err != nil {
-			logger.Warn("systemctl restart avahi-daemon failed",
-				zap.Error(err), zap.String("output", string(out)))
-		} else {
+		if restartAvahiDaemon(logger, nil) {
 			logger.Info("Updated avahi sensorlink advertisement",
 				zap.String("file", e.Name()), zap.Bool("sensorlink", on))
 		}
