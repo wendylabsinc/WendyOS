@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -40,7 +41,7 @@ type VoiceSession interface {
 const liveEndpoint = "wss://api.openai.com/v1/live/sessions"
 const liveModel = "gpt-live-1"
 
-const liveInstructions = `You are Wendy's quiet voice interface to a coding and hardware agent. Keep listening; do not greet first. Speak briefly only for clarification, an explicit approval prompt, a blocker, or verified completion. Stay silent while the backend thinks or uses tools. Do not narrate plans, code, logs, or routine progress.
+const liveInstructions = `You are Wendy's quiet voice interface to a coding and hardware agent. Keep listening; do not greet first. Speak briefly only for clarification, an explicit approval prompt, a blocker, or verified completion. Stay silent while the backend thinks or uses tools. Do not narrate plans, code, logs, or routine progress. Delegate silently: do not say "I'll check", "let me", or announce what the backend is about to do.
 Backchannel policy: No routine listening sounds or filler.
 Interruption policy: Stop speaking when the user interrupts and listen.
 Delegation policy: The backend can inspect and edit the local project, build and test code, and discover, control, deploy to, and debug Wendy devices. Delegate requests for those tasks or careful reasoning. Delegate corrections or cancellation of active work. Do not delegate greetings or requests to repeat a verified result. If a request is unclear, ask one short clarification. Delegate before a result-dependent answer; never invent results. Agent actions requiring approval are approved only through terminal y/n; spoken yes does not approve them. Context appended as thinking is background information and needs no spoken acknowledgment. Announce only the concise final result supplied by the backend.`
@@ -64,11 +65,35 @@ func dialLiveEndpoint(ctx context.Context, key, endpoint string, dialer *websock
 	// This is a backend connection, not a browser connection. Live rejects the
 	// synthetic Origin header required by x/net/websocket; the official SDK
 	// sends no Origin. Authenticate only with the documented bearer header.
-	conn, response, err := dialer.DialContext(ctx, endpoint, http.Header{"Authorization": {"Bearer " + key}})
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	// Gorilla applies handshake deadlines, but cancellation after TCP/TLS
+	// establishment must also release a blocked HTTP upgrade read immediately.
+	configured := *dialer
+	dial := configured.NetDialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	var stop func() bool
+	configured.NetDialContext = func(dialCtx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(dialCtx, network, address)
+		if err == nil {
+			stop = context.AfterFunc(ctx, func() { _ = conn.Close() })
 		}
+		return conn, err
+	}
+	conn, response, err := configured.DialContext(ctx, endpoint, http.Header{"Authorization": {"Bearer " + key}})
+	if stop != nil {
+		stop()
+	}
+	if ctx.Err() != nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return nil, ctx.Err()
+	}
+	if err != nil {
 		if response != nil {
 			return nil, liveUpgradeError(key, response)
 		}

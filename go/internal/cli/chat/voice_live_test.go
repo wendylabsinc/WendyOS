@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -728,5 +730,109 @@ func TestLiveOnlyAcceptedFreshCommentaryResumesInterruptedPlayback(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+func TestLiveUpgradeFailuresExposeStatusAndSafeActionableDetails(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{http.StatusUnauthorized, `{"error":{"message":"Rejected test-secret"}}`, "/voice setup"},
+		{http.StatusForbidden, "Forbidden", "network/proxy"},
+		{http.StatusNotFound, `{"error":{"message":"Endpoint is unavailable"}}`, "endpoint was not found"},
+		{http.StatusTooManyRequests, `{"error":{"message":"Usage limit reached"}}`, "usage limits and billing"},
+		{http.StatusBadGateway, "Proxy unavailable", "retry later"},
+	} {
+		t.Run(strconv.Itoa(test.status), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Origin") != "" || r.Header.Get("Authorization") != "Bearer test-secret" || r.URL.RawQuery != "" {
+					t.Error("invalid Live authentication/Origin/query headers")
+				}
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			_, err := dialLiveEndpoint(context.Background(), "test-secret", "ws"+strings.TrimPrefix(server.URL, "http")+"/v1/live/sessions", &websocket.Dialer{HandshakeTimeout: time.Second})
+			if err == nil || !strings.Contains(err.Error(), "HTTP "+strconv.Itoa(test.status)) || !strings.Contains(err.Error(), test.want) || strings.Contains(err.Error(), "test-secret") {
+				t.Fatalf("missing or unsafe upgrade diagnostic: %v", err)
+			}
+			if test.status == http.StatusForbidden && (!strings.Contains(err.Error(), "Forbidden") || strings.Contains(err.Error(), "invalid key")) {
+				t.Fatalf("403 incorrectly attributed to credentials: %v", err)
+			}
+		})
+	}
+}
+
+func TestLiveUpgradeBoundsAndRedactsErrorBody(t *testing.T) {
+	key := "test-secret-plus/value"
+	for _, body := range []string{
+		`{"error":{"message":"` + key + " " + url.QueryEscape(key) + " " + url.PathEscape(key) + `"}}`,
+		strings.Repeat("x", 1000) + "test-secret-plus/value",
+		strings.Repeat("x", 1000) + strings.Repeat("z", 10000),
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, body)
+		}))
+		_, err := dialLiveEndpoint(context.Background(), key, "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.Dialer{HandshakeTimeout: time.Second})
+		server.Close()
+		if err == nil || len(err.Error()) > 1400 || strings.Contains(err.Error(), key) || strings.Contains(err.Error(), url.QueryEscape(key)) {
+			t.Fatalf("unbounded or unsafe response: %v", err)
+		}
+	}
+	// Exercise the exact bounded-buffer case where only the start of a key
+	// remains. The rest of the response never enters the diagnostic.
+	err := liveUpgradeError("test-secret-truncated-suffix", &http.Response{StatusCode: http.StatusForbidden, Body: io.NopCloser(strings.NewReader("Denied test-secret-trun"))})
+	if strings.Contains(err.Error(), "test-secret") {
+		t.Fatalf("truncated credential leaked: %v", err)
+	}
+}
+
+func TestLiveUpgradeDoesNotFollowRedirects(t *testing.T) {
+	forwarded := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { forwarded <- struct{}{} }))
+	defer target.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer server.Close()
+	_, err := dialLiveEndpoint(context.Background(), "test-secret", "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.Dialer{HandshakeTimeout: time.Second})
+	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("redirect was not rejected: %v", err)
+	}
+	select {
+	case <-forwarded:
+		t.Fatal("upgrade redirected the credential")
+	default:
+	}
+}
+
+func TestLiveUpgradeCancellationClosesBlockedHTTPRead(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := dialLiveEndpoint(ctx, "test-secret", "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.Dialer{HandshakeTimeout: 15 * time.Second})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("handshake did not reach the local server")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected canceled handshake, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handshake waited for its deadline instead of honoring cancellation")
 	}
 }

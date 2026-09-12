@@ -118,6 +118,7 @@ type voiceMessage struct {
 type voiceDelegation struct {
 	id, prompt, display string
 	generation          uint64
+	captionIndex        int
 }
 
 type chatModel struct {
@@ -144,23 +145,26 @@ type chatModel struct {
 	approval    *approvalRequest
 	preview     viewport.Model
 
-	voiceEnabled      bool
-	voiceStarting     bool
-	voiceSetup        bool
-	voiceID           uint64
-	voiceSession      VoiceSession
-	voiceCtx          context.Context
-	voiceCancel       context.CancelFunc
-	voiceClosed       <-chan struct{}
-	voiceEvents       <-chan voiceMessage
-	voiceSend         chan<- voiceMessage
-	delegation        *voiceDelegation
-	pendingDelegation *voiceDelegation
-	turnReply         string
-	voiceSeen         map[string]bool
-	voiceActionTail   <-chan struct{}
-	turnSpeechCtx     context.Context
-	turnSpeechCancel  context.CancelFunc
+	voiceEnabled       bool
+	voiceStarting      bool
+	voiceSetup         bool
+	voiceID            uint64
+	voiceSession       VoiceSession
+	voiceCtx           context.Context
+	voiceCancel        context.CancelFunc
+	voiceClosed        <-chan struct{}
+	voiceEvents        <-chan voiceMessage
+	voiceSend          chan<- voiceMessage
+	delegation         *voiceDelegation
+	pendingDelegation  *voiceDelegation
+	turnReply          string
+	voiceSeen          map[string]bool
+	voiceActionTail    <-chan struct{}
+	turnSpeechCtx      context.Context
+	turnSpeechCancel   context.CancelFunc
+	voiceInputCaption  int
+	voiceInputPending  int
+	voiceOutputCaption int
 }
 
 var (
@@ -194,7 +198,8 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	m := &chatModel{
 		ctx: ctx, opts: opts, composer: input, spinner: s,
 		viewport: viewport.New(0, 0), preview: viewport.New(0, 0),
-		status: "Ready",
+		status:            "Ready",
+		voiceInputCaption: -1, voiceInputPending: -1, voiceOutputCaption: -1,
 	}
 	m.viewport.KeyMap = viewport.KeyMap{} // Composer owns ordinary cursor keys.
 	m.transcript = []chatEntry{{kind: "welcome", title: "Build something with Wendy", text: "Develop in your workspace and work with Wendy devices using natural language.\nTry: inspect my device, explain this project, or build and deploy an app.\n\nType /help for commands. Tool actions that change files or devices ask for approval."}}
@@ -449,6 +454,10 @@ func (m *chatModel) startTurn(prompt string) tea.Cmd {
 }
 
 func (m *chatModel) startTurnWithDisplay(prompt, display string) tea.Cmd {
+	return m.startTurnAtEntry(prompt, display, -1)
+}
+
+func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) tea.Cmd {
 	if m.turnSpeechCancel != nil {
 		m.turnSpeechCancel()
 	}
@@ -462,7 +471,14 @@ func (m *chatModel) startTurnWithDisplay(prompt, display string) tea.Cmd {
 	m.active = true
 	m.canceling = false
 	m.status = "Thinking"
-	m.appendEntry("user", "You", display)
+	if captionIndex >= 0 && captionIndex < len(m.transcript) && m.transcript[captionIndex].kind == "voice_input" {
+		// This is the same utterance already shown by live transcription, now
+		// accepted as an agent request. Promote it instead of echoing it again.
+		m.transcript[captionIndex] = chatEntry{kind: "user", title: "You · voice", text: display}
+		m.refreshTranscript()
+	} else {
+		m.appendEntry("user", "You", display)
+	}
 	m.viewport.GotoBottom()
 	events := make(chan turnMessage, 64)
 	m.events = events
@@ -559,6 +575,7 @@ func (m *chatModel) startVoice() tea.Cmd {
 	m.voiceCtx, m.voiceCancel = ctx, cancel
 	m.voiceEnabled, m.voiceStarting = true, true
 	m.voiceSeen = make(map[string]bool)
+	m.voiceInputCaption, m.voiceInputPending, m.voiceOutputCaption = -1, -1, -1
 	m.voiceActionTail = nil
 	events := make(chan voiceMessage, 64)
 	m.voiceEvents, m.voiceSend = events, events
@@ -631,6 +648,7 @@ func (m *chatModel) waitForVoiceEvent() tea.Cmd {
 }
 
 func (m *chatModel) stopVoice() {
+	m.voiceInputCaption, m.voiceInputPending, m.voiceOutputCaption = -1, -1, -1
 	if m.turnSpeechCancel != nil {
 		m.turnSpeechCancel()
 	}
@@ -684,6 +702,7 @@ func (m *chatModel) voiceActionFor(actionCtx context.Context, action func(contex
 }
 
 func (m *chatModel) interruptVoice() {
+	m.voiceInputCaption, m.voiceInputPending, m.voiceOutputCaption = -1, -1, -1
 	// Playback interruption must not wait behind queued context or speech.
 	m.voiceActionTail = nil
 	m.voiceAction(func(ctx context.Context, session VoiceSession) error { return session.Interrupt(ctx) })
@@ -721,18 +740,7 @@ func (m *chatModel) handleVoiceMessage(msg voiceMessage) tea.Cmd {
 		m.appendEntry("notice", "Voice on · microphone sent to OpenAI · /voice to stop", "Speak naturally. Approvals stay in the terminal.")
 	case "input", "output":
 		if event.Text != "" {
-			title := "You · voice"
-			if event.Type == "output" {
-				title = "Voice"
-			}
-			kind := "voice_" + event.Type
-			last := len(m.transcript) - 1
-			if last >= 0 && m.transcript[last].kind == kind {
-				m.transcript[last].text += event.Text
-				m.refreshTranscript()
-			} else {
-				m.appendEntry(kind, title, event.Text)
-			}
+			m.appendVoiceCaption(event.Type, event.Text)
 		}
 	case "delegation":
 		if event.DelegationID == "" || strings.TrimSpace(event.Text) == "" || m.voiceSeen[event.DelegationID] {
@@ -743,7 +751,14 @@ func (m *chatModel) handleVoiceMessage(msg voiceMessage) tea.Cmd {
 		if prompt == "" {
 			prompt = event.Text
 		}
-		next := &voiceDelegation{id: event.DelegationID, prompt: prompt, display: event.Text, generation: m.voiceID}
+		caption := -1
+		if index := m.voiceInputPending; index >= 0 && index < len(m.transcript) && m.transcript[index].kind == "voice_input" && strings.Join(strings.Fields(m.transcript[index].text), " ") == strings.Join(strings.Fields(event.Text), " ") {
+			caption = index
+		}
+		// Claim only this input turn. A later repeated request, even with the
+		// exact same words, receives its own caption and backend invocation.
+		m.voiceInputPending, m.voiceInputCaption = -1, -1
+		next := &voiceDelegation{id: event.DelegationID, prompt: prompt, display: event.Text, generation: m.voiceID, captionIndex: caption}
 		if m.active {
 			m.pendingDelegation = next
 			m.cancelActiveTurn()
@@ -782,6 +797,7 @@ func (m *chatModel) finishVoiceTurn(err error, canceled bool) {
 	}
 	if delegation != nil {
 		if delegation.generation == m.voiceID {
+			m.voiceOutputCaption = -1
 			m.voiceActionFor(m.turnSpeechCtx, func(ctx context.Context, session VoiceSession) error {
 				return session.Reply(ctx, delegation.id, text)
 			})
@@ -793,9 +809,31 @@ func (m *chatModel) finishVoiceTurn(err error, canceled bool) {
 
 func (m *chatModel) startVoiceTurn(delegation *voiceDelegation) tea.Cmd {
 	prompt := delegation.prompt + "\n\nThis request came from voice. Perform the requested work, then give a concise final result suitable for speaking. Do not narrate tool progress aloud; keep required action approvals in the terminal."
-	cmd := m.startTurnWithDisplay(prompt, delegation.display)
+	cmd := m.startTurnAtEntry(prompt, delegation.display, delegation.captionIndex)
 	m.delegation = delegation
 	return cmd
+}
+
+func (m *chatModel) appendVoiceCaption(speaker, text string) {
+	index, kind, title := &m.voiceInputCaption, "voice_input", "You · voice"
+	if speaker == "output" {
+		index, kind, title = &m.voiceOutputCaption, "voice_output", "Voice"
+		m.voiceInputCaption = -1
+	} else {
+		// Incoming speech begins a new listening turn and interrupts any old
+		// spoken answer. Tool/status events alone do not split spoken captions.
+		m.voiceOutputCaption = -1
+	}
+	if *index >= 0 && *index < len(m.transcript) && m.transcript[*index].kind == kind {
+		m.transcript[*index].text += text
+		m.refreshTranscript()
+	} else {
+		m.appendEntry(kind, title, text)
+		*index = len(m.transcript) - 1
+	}
+	if speaker == "input" {
+		m.voiceInputPending = *index
+	}
 }
 
 func (m *chatModel) handleEvent(event Event) {

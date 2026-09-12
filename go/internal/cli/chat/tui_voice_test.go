@@ -189,12 +189,14 @@ func TestUIVoiceCorrectionCancelsOldTurnBeforeStartingNewAndDropsLateResult(t *t
 	})
 	m := uiModel(t, provider, &uiExecutor{}, false)
 	session := uiConnectVoice(t, m)
+	uiSendVoice(t, m, session, VoiceEvent{Type: "input", Text: "first task"})
 	uiSendVoice(t, m, session, VoiceEvent{Type: "delegation", DelegationID: "old", Text: "first task"})
 	select {
 	case <-oldStarted:
 	case <-time.After(3 * time.Second):
 		t.Fatal("first backend turn did not start")
 	}
+	uiSendVoice(t, m, session, VoiceEvent{Type: "input", Text: "corrected task"})
 	uiSendVoice(t, m, session, VoiceEvent{Type: "delegation", DelegationID: "new", Text: "corrected task"})
 	if !m.canceling || m.pendingDelegation == nil || calls.Load() != 1 {
 		t.Fatal("replacement turn must wait for cancellation of the old turn")
@@ -208,6 +210,15 @@ func TestUIVoiceCorrectionCancelsOldTurnBeforeStartingNewAndDropsLateResult(t *t
 	uiSendVoice(t, m, session, VoiceEvent{Type: "delegation", DelegationID: "new", Text: "corrected task"})
 	if m.active || calls.Load() != 2 {
 		t.Fatal("a duplicate delegation executed another backend turn")
+	}
+	counts := map[string]int{}
+	for _, entry := range m.transcript {
+		if entry.kind == "user" || entry.kind == "voice_input" {
+			counts[entry.text]++
+		}
+	}
+	if counts["first task"] != 1 || counts["corrected task"] != 1 {
+		t.Fatalf("correction should promote its own live caption exactly once: %#v", counts)
 	}
 	uiVoiceStopAndWait(t, m, session)
 	if len(session.replies) != 0 {
@@ -437,4 +448,75 @@ func TestUICompactToolLabelIsSanitized(t *testing.T) {
 	if strings.Contains(view, "\x1b[2J") || strings.Contains(view, "\u202e") {
 		t.Fatal("compact tool label retained untrusted terminal control sequences")
 	}
+}
+
+func TestUIVoiceDelegationPromotesCaptionAndExecutesOnce(t *testing.T) {
+	const question = "Which devices are online"
+	call := ToolCall{ID: "list", Name: "device_list", Arguments: json.RawMessage(`{}`)}
+	executor := &uiExecutor{tools: []Tool{{Name: call.Name}}}
+	provider := uiProviderFunc(func(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (Message, error) {
+		if messages[len(messages)-1].Role == "tool" {
+			return Message{Content: "Two devices are online."}, nil
+		}
+		return Message{ToolCalls: []ToolCall{call}}, nil
+	})
+	m := uiModel(t, provider, executor, false)
+	session := uiConnectVoice(t, m)
+	uiSendVoice(t, m, session, VoiceEvent{Type: "input", Text: question})
+	uiSendVoice(t, m, session, VoiceEvent{Type: "output", Text: "I'll"})
+	delegation := VoiceEvent{Type: "delegation", DelegationID: "first", Text: question}
+	uiSendVoice(t, m, session, delegation)
+	for {
+		event := uiNextEvent(t, m)
+		m.Update(event)
+		if event.event != nil && event.event.Type == "tool_start" {
+			break
+		}
+	}
+	// Reproduce the reported interleaving: audio text arrives both before and
+	// after delegation/tool entries, but belongs to one spoken caption.
+	uiSendVoice(t, m, session, VoiceEvent{Type: "output", Text: " check the device list."})
+	uiSendVoice(t, m, session, delegation)
+	uiDrainTurn(t, m)
+	_ = uiNextVoiceReply(t, session)
+	uiSendVoice(t, m, session, VoiceEvent{Type: "output", Text: "Two devices are online."})
+	uiSendVoice(t, m, session, delegation)
+	users, voice := 0, []string{}
+	for _, entry := range m.transcript {
+		if (entry.kind == "user" || entry.kind == "voice_input") && entry.text == question {
+			users++
+		}
+		if entry.kind == "voice_output" {
+			voice = append(voice, entry.text)
+		}
+	}
+	engineUsers := 0
+	for _, message := range m.opts.Engine.Messages() {
+		if message.Role == "user" {
+			engineUsers++
+		}
+	}
+	if users != 1 || engineUsers != 1 || executor.executed.Load() != 1 || m.active {
+		t.Fatalf("one spoken request was duplicated: captions=%d engine turns=%d executions=%d active=%v", users, engineUsers, executor.executed.Load(), m.active)
+	}
+	if len(voice) != 2 || voice[0] != "I'll check the device list." || voice[1] != "Two devices are online." {
+		t.Fatalf("voice captions were fragmented or final result merged into progress: %#v", voice)
+	}
+	// Identical words spoken again are a distinct request, with their own
+	// caption and delegation. Deduplication must never be global by text.
+	uiSendVoice(t, m, session, VoiceEvent{Type: "input", Text: question})
+	delegation.DelegationID = "second"
+	uiSendVoice(t, m, session, delegation)
+	uiDrainTurn(t, m)
+	_ = uiNextVoiceReply(t, session)
+	users = 0
+	for _, entry := range m.transcript {
+		if entry.kind == "user" && entry.text == question {
+			users++
+		}
+	}
+	if users != 2 || executor.executed.Load() != 2 {
+		t.Fatalf("distinct repeated speech was dropped: captions=%d executions=%d", users, executor.executed.Load())
+	}
+	uiVoiceStopAndWait(t, m, session)
 }
