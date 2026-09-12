@@ -1361,3 +1361,73 @@ func TestLoopback_LogsNodeNotReadyOnceThenStaysQuiet(t *testing.T) {
 		t.Fatalf("warnings logged = %d across multiple node-not-ready retries, want exactly 1: %v", len(entries), entries)
 	}
 }
+
+// TestAllocateAuxNodeNumber_TopDownAndSkipsTaken pins the auxiliary node
+// allocator's collision avoidance.
+//
+// Auxiliary nodes (the two-plane camera data path) and registered network
+// cameras share one reserved band, because the kernel's VIDEO_NUM_DEVICES of 256
+// leaves no room for a second one. They must never be handed the same number: an
+// auxiliary node reusing a camera's number would point an app at the wrong
+// camera's frames. The allocator therefore works DOWN from the top of the band
+// while the registry allocates UP from the bottom, and skips anything already
+// taken by a camera or by an existing node.
+func TestAllocateAuxNodeNumber_TopDownAndSkipsTaken(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	l, reg := newTestLoopback(t, h)
+
+	// A fresh device allocates from the top of the band.
+	nr, err := l.AllocateAuxNodeNumber()
+	if err != nil {
+		t.Fatalf("AllocateAuxNodeNumber: %v", err)
+	}
+	if nr != IDBandEnd {
+		t.Errorf("first allocation = %d, want %d (top of the band)", nr, IDBandEnd)
+	}
+
+	// A registered camera's number must be skipped even though nothing has
+	// created its node yet: the registry owns that number already.
+	cam, err := reg.Upsert(Camera{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.0.0.5"})
+	if err != nil {
+		t.Fatalf("registry upsert: %v", err)
+	}
+	h.setNodeExists(IDBandEnd, true) // the node we just allocated now exists
+	// Force the camera to the top of the band so the two allocators collide.
+	reg.mu.Lock()
+	for mac, c := range reg.by {
+		c.ID = uint32(IDBandEnd - 1)
+		reg.by[mac] = c
+	}
+	reg.mu.Unlock()
+	_ = cam
+
+	nr, err = l.AllocateAuxNodeNumber()
+	if err != nil {
+		t.Fatalf("AllocateAuxNodeNumber: %v", err)
+	}
+	if nr == IDBandEnd {
+		t.Error("allocator reused a number whose node already exists")
+	}
+	if nr == IDBandEnd-1 {
+		t.Error("allocator handed out a number already held by a registered camera")
+	}
+	if nr != IDBandEnd-2 {
+		t.Errorf("allocation = %d, want %d", nr, IDBandEnd-2)
+	}
+}
+
+// TestAllocateAuxNodeNumber_BandExhausted pins that a full band is a clean
+// refusal rather than a number outside it. The band's ceiling is the kernel's,
+// so there is nothing above it to fall back to.
+func TestAllocateAuxNodeNumber_BandExhausted(t *testing.T) {
+	h := newLoopbackHarness()
+	h.controlExists = true
+	l, _ := newTestLoopback(t, h)
+	for nr := IDBandStart; nr <= IDBandEnd; nr++ {
+		h.setNodeExists(nr, true)
+	}
+	if _, err := l.AllocateAuxNodeNumber(); !errors.Is(err, ErrBandExhausted) {
+		t.Errorf("AllocateAuxNodeNumber() error = %v, want ErrBandExhausted", err)
+	}
+}
