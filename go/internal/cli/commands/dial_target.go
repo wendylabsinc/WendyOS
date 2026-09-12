@@ -333,7 +333,10 @@ var errDeviceIdentityRefused = errors.New("device identity refused")
 // deviceIdentityRefusalError carries a refusal's full user-facing text while
 // staying recognisable to errors.Is. The text is the whole message rather than
 // a wrap so the refusals read exactly as they did before this type existed.
-type deviceIdentityRefusalError struct{ msg string }
+type deviceIdentityRefusalError struct {
+	msg        string
+	diagnostic *devicePinDiagnostic
+}
 
 func (e *deviceIdentityRefusalError) Error() string { return e.msg }
 
@@ -344,7 +347,7 @@ func (e *deviceIdentityRefusalError) Is(target error) bool {
 // refuseIdentity builds a refusal that errors.Is(err, errDeviceIdentityRefused)
 // recognises. Every refusal raised because the wrong device answered — here and
 // in device_pin.go — must go through it.
-func refuseIdentity(format string, args ...any) error {
+func refuseIdentity(format string, args ...any) *deviceIdentityRefusalError {
 	return &deviceIdentityRefusalError{msg: fmt.Sprintf(format, args...)}
 }
 
@@ -356,9 +359,11 @@ func identityRefusal(pinKey string, im *certs.IdentityMismatchError) error {
 	if im.GotAsset != "" {
 		got = fmt.Sprintf("asset %s in organization %d", im.GotAsset, im.GotOrg)
 	}
-	return refuseIdentity(
-		"device %q is pinned to asset %s in organization %d, but the host answering presented %s; refusing to connect — if this device was legitimately replaced or re-enrolled, run 'wendy device unpin %s'",
-		pinKey, im.WantAsset, im.WantOrg, got, pinKey)
+	return refuseDevicePin(devicePinDiagnostic{
+		hostname: pinKey,
+		heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", pinKey),
+		details:  fmt.Sprintf("Saved: asset %s in organization %d\nNow:   %s", im.WantAsset, im.WantOrg, got),
+	})
 }
 
 // errNoAuthenticatedEndpoint is what a "nothing answered" refusal answers
