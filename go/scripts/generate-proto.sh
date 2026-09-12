@@ -129,8 +129,7 @@ done
 # wendycloud.v2 is vendored beside v1, not instead of it: v1 stays the shipping
 # wire contract until the fleet has crossed over (WDY-2824). Paths match
 # service-protos exactly so a re-copy is a plain cp and the imports need no
-# rewriting. DeviceEnrollmentService is Cloud-owned rather than shared; its
-# source is vendored under go/proto/cloud and supplied as an extra include root.
+# rewriting -- DeviceEnrollmentService included, Cloud-owned though it is.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
     "wendycloud/v2/device_enrollment.proto"
@@ -204,7 +203,6 @@ protoc \
 echo "Generating Wendy Cloud v2 protos..."
 mkdir -p "$GEN_DIR/cloudpb/v2"
 protoc \
-    --proto_path="$GO_DIR/proto/cloud" \
     --proto_path="$PROTO_DIR" \
     --go_out="$GEN_DIR/cloudpb/v2" \
     --go_opt=module="$CLOUD_V2_PKG" \
