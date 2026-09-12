@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // workerWithIdentity builds a worker whose provisioning holds the given

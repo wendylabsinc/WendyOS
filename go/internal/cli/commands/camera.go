@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -401,18 +402,20 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 			// not while constructing the stream. Wrap both phases so a missing IP
 			// camera login is resolved and retried exactly once wherever gRPC
 			// surfaces it. Local cameras never take this path.
-			stream, err := streamVideoWithCredentialRetry(startStream, resolveCredentials)
-			if err != nil {
-				return fmt.Errorf("starting video stream: %w", cameraStreamDiagnostic(err))
+			open := func() (videoStream, error) {
+				stream, err := streamVideoWithCredentialRetry(startStream, resolveCredentials)
+				if err != nil {
+					return nil, err
+				}
+				return &cameraDiagnosticStream{videoStream: stream}, nil
 			}
-			diagnosticStream := &cameraDiagnosticStream{videoStream: stream}
-
-			cliLogln("Streaming video (Ctrl+C to stop)...")
-
-			if toStdout {
-				return pipeVideoToStdout(diagnosticStream, cmd.OutOrStdout())
+			play := func(stream videoStream) error {
+				if toStdout {
+					return pipeVideoToStdout(stream, cmd.OutOrStdout())
+				}
+				return playVideoWithGStreamer(ctx, stream)
 			}
-			return playVideoWithGStreamer(ctx, diagnosticStream)
+			return streamCameraRejoiningRestarts(ctx, open, play)
 		},
 	}
 
@@ -426,6 +429,58 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 	cmd.Flags().BoolVar(&raw, "raw", false, "With --stdout: write the camera's uncompressed capture frames (one whole frame per message, layout printed to stderr) instead of encoded video. Only cameras captured in a raw pixel format offer this; viewers of the same camera keep receiving H.264.")
 
 	return cmd
+}
+
+// cameraRejoinDelay is how long the viewer waits before rejoining a camera
+// whose producer an episode capture restarted. It is a pause, not a backoff:
+// the replacement producer is started by the agent as part of the same
+// takeover, so the camera is normally back within one pipeline start. The wait
+// only keeps the client from arriving before the new hub exists.
+const cameraRejoinDelay = 500 * time.Millisecond
+
+// cameraRejoinAttempts bounds the rejoins one `camera view` will make. A
+// takeover is a rare event driven by a campaign trigger; a stream that keeps
+// being restarted is a device busy recording, and saying so beats reconnecting
+// forever in a loop the operator has to notice and break.
+const cameraRejoinAttempts = 5
+
+// streamCameraRejoiningRestarts plays a camera stream, rejoining when the
+// agent ends it because an episode capture restarted the producer.
+//
+// The agent's capture policy takes a camera over only from viewers that
+// asserted no stream parameters, and `wendy camera view` with no --width,
+// --height or --fps is exactly such a viewer. The stream is deliberately ended
+// rather than spliced, because a new producer means a new sequence parameter
+// set and a decoder handed both in one timeline produces garbage. Ending it is
+// therefore right; leaving the operator staring at a dead window is not, so
+// the viewer rejoins the replacement stream and says that it did.
+func streamCameraRejoiningRestarts(ctx context.Context, open func() (videoStream, error), play func(videoStream) error) error {
+	for attempt := 0; ; attempt++ {
+		stream, err := open()
+		if err != nil {
+			return fmt.Errorf("starting video stream: %w", cameraStreamDiagnostic(err))
+		}
+		if attempt == 0 {
+			cliLogln("Streaming video (Ctrl+C to stop)...")
+		}
+		err = play(stream)
+		if !streamreason.Has(err, streamreason.CameraProducerRestarted) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt+1 >= cameraRejoinAttempts {
+			return fmt.Errorf("camera producer was restarted by episode capture %d times; the device is busy recording: %w",
+				cameraRejoinAttempts, err)
+		}
+		cliLogln("Camera producer restarted by an episode capture; rejoining the new stream...")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(cameraRejoinDelay):
+		}
+	}
 }
 
 // videoStream is the receive side of the StreamVideo gRPC stream.
