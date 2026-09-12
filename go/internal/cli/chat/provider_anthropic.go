@@ -15,7 +15,14 @@ type anthropicBlock struct {
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
+	Content   any             `json:"content,omitempty"`
+	Source    *anthropicImage `json:"source,omitempty"`
+}
+
+type anthropicImage struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type anthropicMessage struct {
@@ -23,7 +30,22 @@ type anthropicMessage struct {
 	Content []anthropicBlock `json:"content"`
 }
 
-func (p *httpProvider) streamAnthropic(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (Message, error) {
+func anthropicContent(message Message) []anthropicBlock {
+	blocks := make([]anthropicBlock, 0, 1+len(message.Images))
+	if message.Content != "" {
+		blocks = append(blocks, anthropicBlock{Type: "text", Text: message.Content})
+	}
+	for _, image := range message.Images {
+		blocks = append(blocks, anthropicBlock{Type: "image", Source: &anthropicImage{Type: "base64", MediaType: image.MIMEType, Data: image.Data}})
+	}
+	return blocks
+}
+
+func (p *httpProvider) streamAnthropic(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (reply Message, err error) {
+	if err := validateImageRoles(messages); err != nil {
+		return Message{}, err
+	}
+	defer func() { err = imageRequestError(messages, err) }()
 	var system []string
 	wireMessages := make([]anthropicMessage, 0, len(messages))
 	for _, message := range messages {
@@ -34,11 +56,13 @@ func (p *httpProvider) streamAnthropic(ctx context.Context, messages []Message, 
 		m := anthropicMessage{Role: message.Role}
 		if message.Role == "tool" {
 			m.Role = "user"
-			m.Content = []anthropicBlock{{Type: "tool_result", ToolUseID: message.ToolCallID, Content: message.Content}}
-		} else {
-			if message.Content != "" {
-				m.Content = append(m.Content, anthropicBlock{Type: "text", Text: message.Content})
+			var content any = message.Content
+			if len(message.Images) > 0 {
+				content = anthropicContent(message)
 			}
+			m.Content = []anthropicBlock{{Type: "tool_result", ToolUseID: message.ToolCallID, Content: content}}
+		} else {
+			m.Content = anthropicContent(message)
 			for _, call := range message.ToolCalls {
 				m.Content = append(m.Content, anthropicBlock{Type: "tool_use", ID: call.ID, Name: call.Name, Input: call.Arguments})
 			}

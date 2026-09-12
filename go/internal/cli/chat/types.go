@@ -12,9 +12,28 @@ type Message struct {
 	Content    string
 	ToolCalls  []ToolCall
 	ToolCallID string
+	Images     []Image
 	// ResponseItems preserves native OpenAI response items, including opaque
 	// reasoning state required when continuing a tool-calling conversation.
 	ResponseItems []json.RawMessage
+}
+
+// Image is a validated, bounded image attached to a tool result. Data is base64
+// encoded; it is sent as provider media content, never as transcript text.
+type Image struct {
+	MIMEType string
+	Data     string
+}
+
+type ToolResult struct {
+	Text   string
+	Images []Image
+}
+
+// MediaExecutor extends text-only executors without requiring every tool to
+// handle media. The engine preserves attachments separately from text limits.
+type MediaExecutor interface {
+	ExecuteResult(context.Context, ToolCall) (ToolResult, error)
 }
 
 type ToolCall struct {

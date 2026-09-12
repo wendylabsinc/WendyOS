@@ -13,10 +13,13 @@ import (
 // encrypted reasoning. With store:false, referring to previous server-side
 // response IDs is insufficient to retain reasoning across tool calls.
 func responsesInput(messages []Message) ([]any, error) {
+	if err := validateImageRoles(messages); err != nil {
+		return nil, err
+	}
 	input := make([]any, 0, len(messages))
 	for _, message := range messages {
 		if message.Role == "tool" {
-			input = append(input, map[string]any{"type": "function_call_output", "call_id": message.ToolCallID, "output": message.Content})
+			input = append(input, map[string]any{"type": "function_call_output", "call_id": message.ToolCallID, "output": responsesContent(message)})
 			continue
 		}
 		if message.Role == "assistant" && len(message.ResponseItems) > 0 {
@@ -50,7 +53,7 @@ func responsesInput(messages []Message) ([]any, error) {
 			continue
 		}
 		if message.Content != "" || message.Role != "assistant" {
-			input = append(input, map[string]any{"role": message.Role, "content": message.Content})
+			input = append(input, map[string]any{"role": message.Role, "content": responsesContent(message)})
 		}
 		for _, call := range message.ToolCalls {
 			input = append(input, map[string]any{
@@ -60,6 +63,22 @@ func responsesInput(messages []Message) ([]any, error) {
 		}
 	}
 	return input, nil
+}
+
+// Function outputs and user messages both accept native input content arrays.
+// Keep plain text as a string so existing conversation replay stays unchanged.
+func responsesContent(message Message) any {
+	if len(message.Images) == 0 {
+		return message.Content
+	}
+	parts := make([]map[string]any, 0, 1+len(message.Images))
+	if message.Content != "" {
+		parts = append(parts, map[string]any{"type": "input_text", "text": message.Content})
+	}
+	for _, image := range message.Images {
+		parts = append(parts, map[string]any{"type": "input_image", "image_url": imageDataURL(image), "detail": "auto"})
+	}
+	return parts
 }
 
 type responsesOutputItem struct {
@@ -82,11 +101,12 @@ type responsesStreamItem struct {
 	done bool
 }
 
-func (p *httpProvider) streamResponses(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (Message, error) {
+func (p *httpProvider) streamResponses(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (reply Message, err error) {
 	input, err := responsesInput(messages)
 	if err != nil {
 		return Message{}, err
 	}
+	defer func() { err = imageRequestError(messages, err) }()
 	wireTools := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
 		parameters := tool.Parameters

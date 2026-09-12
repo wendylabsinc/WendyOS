@@ -126,17 +126,22 @@ func (t *Tools) Close() error {
 }
 
 func (t *Tools) Execute(ctx context.Context, call ToolCall) (string, error) {
+	result, err := t.ExecuteResult(ctx, call)
+	return result.Text, err
+}
+
+func (t *Tools) ExecuteResult(ctx context.Context, call ToolCall) (ToolResult, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 	t.mu.RLock()
 	tool, ok := t.known[call.Name]
 	t.mu.RUnlock()
 	if !ok {
-		return "", fmt.Errorf("unknown tool %q", call.Name)
+		return ToolResult{}, fmt.Errorf("unknown tool %q", call.Name)
 	}
 	if err := validateArguments(tool, call.Arguments); err != nil {
-		return "", err
+		return ToolResult{}, err
 	}
 	var output string
 	var err error
@@ -172,9 +177,9 @@ func (t *Tools) Execute(ctx context.Context, call ToolCall) (string, error) {
 		_ = json.Unmarshal(call.Arguments, &args)
 		output, err = readWendyDocs(ctx, args.Path, args.Offset, args.Limit)
 	default:
-		output, err = t.callMCP(ctx, call)
+		return t.callMCPResult(ctx, call)
 	}
-	return truncateOutput(output), err
+	return ToolResult{Text: truncateOutput(output)}, err
 }
 
 // os.Root enforces traversal and symlink boundaries on the actual file access,

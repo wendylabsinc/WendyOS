@@ -19,6 +19,7 @@ import (
 //
 // Only local (USB/CSI) cameras have V4L2 controls; a network camera has none.
 func (s *mcpServer) registerCameraTools(srv *server.MCPServer) {
+	s.registerCameraSnapshotTool(srv)
 	listOpts := []mcpgo.ToolOption{
 		mcpgo.WithDescription("List the cameras attached to the connected device, with the id each control tool takes"),
 	}
