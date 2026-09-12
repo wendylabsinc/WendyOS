@@ -13,7 +13,7 @@ import (
 func compactToolEntry(entry chatEntry) string {
 	if entry.kind == "tool" {
 		name := strings.TrimPrefix(entry.title, "Tool · ")
-		label := strings.ReplaceAll(name, "_", " ")
+		label := chatSingleLine(strings.ReplaceAll(name, "_", " "))
 		var args map[string]any
 		if json.Unmarshal([]byte(entry.text), &args) == nil {
 			for _, key := range []string{"command", "path", "app_name", "device_name", "device", "address", "project_path", "query", "category"} {

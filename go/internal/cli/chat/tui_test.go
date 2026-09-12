@@ -271,6 +271,117 @@ func TestUIScrollingDuringStreamingDoesNotJumpToBottom(t *testing.T) {
 	}
 }
 
+func TestUIResizeKeepsDraftAndCaretVisible(t *testing.T) {
+	m := uiModel(t, nil, &uiExecutor{}, false)
+	m.resize(100, 28)
+	draft := strings.Repeat("draft words 硬件 ", 12) + "DRAFT_END"
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(draft), Paste: true})
+	_ = m.View()
+	m.Update(nil)
+	for _, size := range [][2]int{{100, 28}, {20, 10}, {120, 35}, {40, 14}, {80, 24}} {
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		if m.composer.Value() != draft {
+			t.Fatalf("size %v: resizing changed the draft", size)
+		}
+		if view := ansi.Strip(m.View()); !strings.Contains(view, "DRAFT_END") {
+			t.Fatalf("size %v: draft caret disappeared until another keypress:\n%s", size, view)
+		}
+	}
+}
+
+func uiResizeTranscript() string {
+	var lines []string
+	for i := 0; i < 100; i++ {
+		lines = append(lines, fmt.Sprintf("ROW%03d %send-row-%03d", i, strings.Repeat("context ", 15), i))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func uiScrollToMarker(t *testing.T, m *chatModel, marker string, approval bool) {
+	t.Helper()
+	v := &m.viewport
+	if approval {
+		v = &m.preview
+	}
+	v.GotoTop()
+	for range v.TotalLineCount() {
+		first := strings.Split(ansi.Strip(v.View()), "\n")[0]
+		if strings.HasPrefix(strings.TrimSpace(first), marker) {
+			return
+		}
+		if v.AtBottom() {
+			break
+		}
+		v.ScrollDown(1)
+	}
+	t.Fatalf("could not scroll to marker %s", marker)
+}
+
+func TestUIResizePreservesReadingPassageAndFollowState(t *testing.T) {
+	m := uiModel(t, nil, &uiExecutor{}, false)
+	m.resize(100, 28)
+	m.transcript = []chatEntry{{kind: "assistant", title: "Wendy", text: uiResizeTranscript()}}
+	m.refreshTranscript()
+	uiScrollToMarker(t, m, "ROW090 ", false)
+	if m.viewport.AtBottom() {
+		t.Fatal("test must start with the reader scrolled away from the end")
+	}
+	// Growing vertically makes the old wrapped content appear to be at its
+	// bottom, while narrowing makes the actual content much taller.
+	for _, size := range [][2]int{{20, 50}, {120, 20}, {30, 30}, {100, 28}} {
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		first := strings.Split(ansi.Strip(m.viewport.View()), "\n")[0]
+		if !strings.HasPrefix(strings.TrimSpace(first), "ROW090 ") || m.viewport.AtBottom() {
+			t.Fatalf("size %v: resize moved the reading passage or resumed following: %q", size, first)
+		}
+		m.handleEvent(Event{Type: "text", Text: "\nnew streamed line"})
+		if firstAfter := strings.Split(ansi.Strip(m.viewport.View()), "\n")[0]; firstAfter != first {
+			t.Fatalf("size %v: streaming moved the reader after resize", size)
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 35})
+	m.handleEvent(Event{Type: "text", Text: "\nLATEST_TOKEN"})
+	if !m.viewport.AtBottom() || !strings.Contains(ansi.Strip(m.viewport.View()), "LATEST_TOKEN") {
+		t.Fatal("resizing lost following after Ctrl+End")
+	}
+}
+
+func TestUIResizeClampsViewportAfterWidening(t *testing.T) {
+	m := uiModel(t, nil, &uiExecutor{}, false)
+	m.resize(20, 10)
+	m.transcript = []chatEntry{{kind: "assistant", title: "Wendy", text: uiResizeTranscript()}}
+	m.refreshTranscript()
+	m.viewport.ScrollUp(1)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 35})
+	if m.viewport.PastBottom() || !strings.Contains(ansi.Strip(m.viewport.View()), "end-row-099") {
+		t.Fatal("widening left a viewport past the end of its reflowed content")
+	}
+}
+
+func TestUIApprovalResizeKeepsPassageAndDecisionControls(t *testing.T) {
+	m := uiModel(t, nil, &uiExecutor{}, false)
+	m.resize(100, 28)
+	args, err := json.Marshal(map[string]string{"script": uiResizeTranscript()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.approval = &approvalRequest{call: ToolCall{Name: "run_shell", Arguments: args}, reply: make(chan bool, 1)}
+	m.refreshApproval()
+	uiScrollToMarker(t, m, "ROW080 ", true)
+	for _, size := range [][2]int{{20, 10}, {120, 35}, {30, 5}} {
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		first := strings.Split(ansi.Strip(m.preview.View()), "\n")[0]
+		if !strings.HasPrefix(strings.TrimSpace(first), "ROW080 ") || m.preview.PastBottom() {
+			t.Fatalf("size %v: approval lost its reading passage: %q", size, first)
+		}
+		view := ansi.Strip(m.View())
+		if len(strings.Split(view, "\n")) > size[1] || !strings.Contains(view, "[y]") || !strings.Contains(view, "[n]") {
+			t.Fatalf("size %v: approval decisions were clipped:\n%s", size, view)
+		}
+	}
+}
+
 func TestUIResizeAndUntrustedLabelsStayWithinTerminal(t *testing.T) {
 	m := uiModel(t, nil, &uiExecutor{}, false)
 	m.opts.Device = "pi\n\n\x1b[2Jspoofed\u202e"

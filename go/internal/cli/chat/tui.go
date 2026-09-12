@@ -481,20 +481,42 @@ func (m *chatModel) appendEntry(kind, title, text string) {
 }
 
 func (m *chatModel) refreshTranscript() {
-	follow := m.viewport.AtBottom()
-	var out strings.Builder
+	follow, offset := m.viewport.AtBottom(), m.viewport.YOffset
+	content, _ := m.transcriptContent(m.viewport.Width)
+	m.viewport.SetContent(content)
+	if follow {
+		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(offset)
+	}
+}
+
+// transcriptContent keeps a row count for each logical line, so a terminal
+// resize can preserve the passage being read when those lines wrap differently.
+func (m *chatModel) transcriptContent(width int) (string, []int) {
+	var rows []string
+	var counts []int
+	appendBlock := func(text string, style lipgloss.Style, truncate bool) {
+		for _, line := range strings.Split(text, "\n") {
+			wrapped := ansi.Wrap(line, max(1, width), "")
+			if truncate {
+				wrapped = ansi.Truncate(line, max(1, width), "…")
+			}
+			rows = append(rows, style.Render(wrapped))
+			counts = append(counts, strings.Count(wrapped, "\n")+1)
+		}
+	}
+	plain := lipgloss.NewStyle()
 	for i, entry := range m.transcript {
 		compactTool := !m.showToolDetails && (entry.kind == "tool" || entry.kind == "result")
 		if i > 0 {
 			previous := m.transcript[i-1].kind
-			if compactTool && (previous == "tool" || previous == "result") {
-				out.WriteByte('\n')
-			} else {
-				out.WriteString("\n\n")
+			if !compactTool || (previous != "tool" && previous != "result") {
+				appendBlock("", plain, false)
 			}
 		}
 		if compactTool {
-			out.WriteString(chatDim.Render(ansi.Truncate(compactToolEntry(entry), m.viewport.Width, "…")))
+			appendBlock(chatSingleLine(compactToolEntry(entry)), chatDim, true)
 			continue
 		}
 		style := chatTitle
@@ -508,20 +530,55 @@ func (m *chatModel) refreshTranscript() {
 		case "error":
 			style = chatError
 		}
-		out.WriteString(style.Render(ansi.Wrap(chatSanitize(entry.title), m.viewport.Width, "")))
-		out.WriteByte('\n')
-		// Sanitize the accumulated text, rather than each token, so escape
-		// sequences split over separate streaming chunks are also removed.
-		out.WriteString(ansi.Wrap(chatSanitize(entry.text), m.viewport.Width, ""))
+		appendBlock(chatSanitize(entry.title), style, false)
+		// Sanitize accumulated text so escapes split over streaming chunks
+		// cannot escape into the terminal.
+		appendBlock(chatSanitize(entry.text), plain, false)
 	}
-	m.viewport.SetContent(out.String())
-	if follow {
-		m.viewport.GotoBottom()
+	return strings.Join(rows, "\n"), counts
+}
+
+type chatViewportAnchor struct {
+	line, row, height int
+}
+
+func captureChatViewportAnchor(counts []int, offset int) chatViewportAnchor {
+	for line, height := range counts {
+		if offset < height {
+			return chatViewportAnchor{line: line, row: max(0, offset), height: height}
+		}
+		offset -= height
 	}
+	return chatViewportAnchor{line: len(counts)}
+}
+
+func (a chatViewportAnchor) offset(counts []int) int {
+	offset := 0
+	for line, height := range counts {
+		if line == a.line {
+			return offset + min(height-1, a.row*height/max(1, a.height))
+		}
+		offset += height
+	}
+	return offset
+}
+
+func chatWrappedLineCounts(content string, width int) []int {
+	lines := strings.Split(content, "\n")
+	counts := make([]int, len(lines))
+	for i, line := range lines {
+		counts[i] = strings.Count(ansi.Wrap(line, max(1, width), ""), "\n") + 1
+	}
+	return counts
 }
 
 func (m *chatModel) resize(width, height int) {
 	follow := m.viewport.AtBottom()
+	_, oldCounts := m.transcriptContent(m.viewport.Width)
+	anchor := captureChatViewportAnchor(oldCounts, m.viewport.YOffset)
+	approvalBody := m.approvalContent()
+	approvalFollow := m.preview.AtBottom()
+	approvalAnchor := captureChatViewportAnchor(chatWrappedLineCounts(approvalBody, m.preview.Width), m.preview.YOffset)
 	m.width, m.height = max(1, width), max(1, height)
 	m.compact = m.width < 40 || m.height < 14
 	contentWidth := max(1, m.width-2)
@@ -537,16 +594,41 @@ func (m *chatModel) resize(width, height int) {
 	}
 	m.preview.Width = contentWidth
 	m.preview.Height = max(1, m.height-8)
-	m.refreshTranscript()
+	if m.compact {
+		m.preview.Height = max(1, m.height-2)
+	}
+	// The textarea setters only change geometry. Rendering refreshes its
+	// private viewport's wrapped content before Update repositions the caret.
+	_ = m.composer.View()
+	m.composer, _ = m.composer.Update(nil)
+	content, counts := m.transcriptContent(contentWidth)
+	m.viewport.SetContent(content)
 	if follow {
 		m.viewport.GotoBottom()
+	} else {
+		m.viewport.SetYOffset(anchor.offset(counts))
 	}
-	m.refreshApproval()
+	if m.approval != nil {
+		m.preview.SetContent(ansi.Wrap(approvalBody, contentWidth, ""))
+		if approvalFollow {
+			m.preview.GotoBottom()
+		} else {
+			m.preview.SetYOffset(approvalAnchor.offset(chatWrappedLineCounts(approvalBody, contentWidth)))
+		}
+	}
 }
 
 func (m *chatModel) refreshApproval() {
 	if m.approval == nil {
 		return
+	}
+	m.preview.SetContent(ansi.Wrap(m.approvalContent(), m.preview.Width, ""))
+	m.preview.SetYOffset(m.preview.YOffset)
+}
+
+func (m *chatModel) approvalContent() string {
+	if m.approval == nil {
+		return ""
 	}
 	call := m.approval.call
 	body := prettyArguments(call.Arguments)
@@ -561,7 +643,7 @@ func (m *chatModel) refreshApproval() {
 			}
 		}
 	}
-	m.preview.SetContent(ansi.Wrap(chatSanitize(body), m.preview.Width, ""))
+	return chatSanitize(body)
 }
 
 func (m *chatModel) scroll(v *viewport.Model, k string, approval bool) bool {
@@ -621,6 +703,17 @@ func (m *chatModel) View() string {
 			line(chatDim.Render(fmt.Sprintf("Arguments · %.0f%% · ↑/↓ PgUp/PgDn scroll", m.preview.ScrollPercent()*100))),
 			line(chatWarn.Render("[y] Allow once   [n] Deny   [Esc] Cancel turn")),
 		}, "\n")
+		if m.compact {
+			question := line(chatWarn.Render("Allow " + chatSingleLine(m.approval.call.Name) + "?"))
+			controls := line(chatWarn.Render("[y] Allow [n] Deny"))
+			parts := []string{controls}
+			if m.height >= 3 {
+				parts = []string{question, m.preview.View(), controls}
+			} else if m.height == 2 {
+				parts = []string{question, controls}
+			}
+			frame = strings.Join(parts, "\n")
+		}
 	} else {
 		status := chatSingleLine(m.status)
 		if m.active {
