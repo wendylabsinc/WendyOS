@@ -526,7 +526,11 @@ func TestUpdateAvahiService_ProvisioningWritesAssetIDTXTRecord(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	updateAvahiService(logger, dir, 50052, true, 215, 0)
+	restarts := 0
+	updateAvahiService(logger, dir, 50052, true, 215, 0, func() bool { restarts++; return true })
+	if restarts != 1 {
+		t.Errorf("restarted avahi %d times, want 1", restarts)
+	}
 
 	got, err := os.ReadFile(serviceFile)
 	if err != nil {
@@ -549,7 +553,11 @@ func TestUpdateAvahiService_UnprovisioningRemovesAssetID(t *testing.T) {
 	}
 
 	logger, _ := zap.NewDevelopment()
-	updateAvahiService(logger, dir, 50051, false, 0, 0)
+	restarts := 0
+	updateAvahiService(logger, dir, 50051, false, 0, 0, func() bool { restarts++; return true })
+	if restarts != 1 {
+		t.Errorf("restarted avahi %d times, want 1", restarts)
+	}
 
 	got, err := os.ReadFile(serviceFile)
 	if err != nil {
