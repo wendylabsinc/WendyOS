@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -118,23 +119,69 @@ func enforceDeviceIdentity(hostname string, obs observedDeviceIdentity) error {
 		return nil
 	default: // config.PinMismatch
 		prev, _ := cfg.DevicePinFor(hostname)
-		printIdentityChangeWarning(hostname, prev, obs, cloud)
-		return refuseIdentity("device %q identity changed (organization/cloud/asset); refusing to connect — if this is expected, run 'wendy device unpin %s'", hostname, hostname)
+		return refuseDevicePin(devicePinDiagnostic{
+			hostname: hostname,
+			heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", hostname),
+			details: fmt.Sprintf("Saved: organization %d via %s%s\nNow:   organization %d via %s%s",
+				prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID),
+				obs.orgID, displayCloud(cloud), assetSuffix(obs.assetID)),
+		})
 	}
 }
 
-// printIdentityChangeWarning explains a pin mismatch in terms of what actually
-// changed. A different asset within the same org+cloud is a different physical
-// device; a different org or cloud is a different trust domain entirely.
-func printIdentityChangeWarning(hostname string, prev config.DevicePin, obs observedDeviceIdentity, cloud string) {
-	fmt.Fprintln(os.Stderr, tui.ErrorMessage(fmt.Sprintf("Device %q now presents a different identity than the one you pinned.", hostname)))
-	fmt.Fprintln(os.Stderr, tui.ErrorMessage(fmt.Sprintf("  pinned: organization %d via %s%s", prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID))))
-	fmt.Fprintln(os.Stderr, tui.ErrorMessage(fmt.Sprintf("  now:    organization %d via %s%s", obs.orgID, displayCloud(cloud), assetSuffix(obs.assetID))))
-	if prev.OrgID == obs.orgID && prev.CloudGRPC == cloud {
-		fmt.Fprintln(os.Stderr, tui.ErrorMessage("Same organization and cloud, but a different device: this hostname now resolves to another machine, or the device was wiped and re-enrolled as a new asset."))
-	} else {
-		fmt.Fprintln(os.Stderr, tui.ErrorMessage("A renewed or re-enrolled certificate keeps the same organization and cloud, so this change is unexpected — it may be a man-in-the-middle or a swapped device."))
+// devicePinDiagnostic puts intentional unenrollment and organization changes
+// next to the recovery command. The same information is kept in Error() for
+// MCP and other callers; only the CLI presentation adds styling.
+type devicePinDiagnostic struct {
+	hostname   string
+	heading    string
+	details    string
+	checkLogin bool
+}
+
+func (d devicePinDiagnostic) message(styled bool) string {
+	heading := d.heading
+	command := "wendy device unpin " + shellQuoteArg(d.hostname)
+	details := d.details
+	if styled {
+		heading = tui.ErrorMessage(heading)
+		command = tui.Command(command)
+		detailLines := strings.Split(details, "\n")
+		for i, line := range detailLines {
+			detailLines[i] = tui.Dim(line)
+		}
+		details = strings.Join(detailLines, "\n")
 	}
+	lines := []string{
+		heading,
+		"This CLI still remembers its previous enrollment (a local pin).",
+		"",
+		"If you intentionally unenrolled, reset, reflashed, or changed this device's organization:",
+		"  " + command,
+		"Then retry your command. Unpinning only clears this CLI's saved device identity.",
+		"",
+		"If this change was unexpected, keep the pin and verify the device first.",
+	}
+	if d.checkLogin {
+		lines = append(lines, "Missing organization credentials? Run 'wendy auth login', then retry.")
+	}
+	return strings.Join(append(lines, "", details), "\n")
+}
+
+func refuseDevicePin(diagnostic devicePinDiagnostic) error {
+	err := refuseIdentity("%s", diagnostic.message(false))
+	err.diagnostic = &diagnostic
+	return err
+}
+
+// CLIMessage is rendered once by the CLI entry point, including when wrapped.
+// Rendering here avoids painting the recovery instructions red along with the
+// heading, or printing a second copy while the error is propagated.
+func (e *deviceIdentityRefusalError) CLIMessage() string {
+	if e.diagnostic == nil {
+		return tui.ErrorMessage(e.Error())
+	}
+	return e.diagnostic.message(true)
 }
 
 // challengeUnprovisionedDevice handles a connection with no verifiable identity
@@ -152,12 +199,13 @@ func challengeUnprovisionedDevice(cfg *config.Config, hostname string) error {
 		return nil
 	}
 
-	fmt.Fprintln(os.Stderr, tui.ErrorMessage(fmt.Sprintf("Device %q was enrolled, but is now answering without an identity.", hostname)))
-	fmt.Fprintln(os.Stderr, tui.ErrorMessage(fmt.Sprintf("  pinned: organization %d via %s%s", prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID))))
-	fmt.Fprintln(os.Stderr, tui.ErrorMessage("  now:    unprovisioned (no mTLS)"))
-	fmt.Fprintln(os.Stderr, tui.ErrorMessage("An enrolled device does not drop its certificate on its own — it has been reflashed or factory reset, another machine has taken its name or address, or this CLI no longer holds credentials for its organization (try 'wendy auth login'). Anything you run over this connection would be unauthenticated."))
-
-	return refuseIdentity("device %q was enrolled but is now answering unprovisioned; refusing to connect — re-enroll it, check 'wendy auth login', or run 'wendy device unpin %s' if this is expected", hostname, hostname)
+	return refuseDevicePin(devicePinDiagnostic{
+		hostname: hostname,
+		heading:  fmt.Sprintf("Connection blocked: device %q has no enrolled identity.", hostname),
+		details: fmt.Sprintf("Saved: organization %d via %s%s\nNow:   unprovisioned (no mTLS)",
+			prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID)),
+		checkLogin: true,
+	})
 }
 
 // clearDevicePinForRepin drops the stored pins for hostname so the next
@@ -188,6 +236,29 @@ func clearDevicePinForRepin(hostname string) {
 		return
 	}
 	_ = config.Save(cfg)
+}
+
+// shellQuoteArg renders s so a copy-paste of the recovery command survives a
+// POSIX shell as a single argument. d.hostname can be an mDNS display alias
+// copied verbatim from unauthenticated discovery data, so a name like
+// `foo; rm -rf ~` must not turn the suggested command into something else, and
+// one containing spaces must still reach `device unpin` as one arg (it enforces
+// ExactArgs(1)). An ordinary, unsurprising name is left bare.
+func shellQuoteArg(s string) string {
+	unsafe := strings.ContainsFunc(s, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		default:
+			return !strings.ContainsRune("-_.:/@%+=", r)
+		}
+	})
+	if s != "" && !unsafe {
+		return s
+	}
+	// POSIX single-quoting: everything is literal inside '...', and an embedded
+	// single quote is closed, escaped, and reopened.
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func assetSuffix(assetID string) string {

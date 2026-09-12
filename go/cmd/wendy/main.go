@@ -57,7 +57,7 @@ func main() {
 
 	exitCode := 0
 	if err != nil && !errors.Is(err, commands.ErrUserCancelled) && !errors.Is(err, commands.ErrDefaultCleared) {
-		fmt.Fprintln(os.Stderr, tui.ErrorMessage(formatError(err).Error()))
+		fmt.Fprintln(os.Stderr, renderError(err))
 		exitCode = 1
 	}
 	// Windows: when this process owns its console window (UAC-relaunched or
@@ -236,6 +236,20 @@ func errorClass(err error) string {
 		return "context_deadline"
 	}
 	return "other"
+}
+
+// renderError lets actionable errors style their heading separately from the
+// recovery steps. Use errors.As because commands may add context with %w.
+func renderError(err error) string {
+	var diagnostic interface {
+		error
+		CLIMessage() string
+	}
+	if errors.As(err, &diagnostic) && strings.Contains(err.Error(), diagnostic.Error()) {
+		// Preserve surrounding action context and any joined sibling errors.
+		return strings.Replace(err.Error(), diagnostic.Error(), diagnostic.CLIMessage(), 1)
+	}
+	return tui.ErrorMessage(formatError(err).Error())
 }
 
 func formatError(err error) error {

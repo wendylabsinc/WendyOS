@@ -19,6 +19,29 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type diagnosticTestError struct{}
+
+func (diagnosticTestError) Error() string { return "plain programmatic error" }
+func (diagnosticTestError) CLIMessage() string {
+	return "✗ Connection blocked\n\n  wendy device unpin device.local"
+}
+
+func TestRenderErrorKeepsDiagnosticPresentationAndContext(t *testing.T) {
+	diagnostic := diagnosticTestError{}
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{diagnostic, diagnostic.CLIMessage()},
+		{fmt.Errorf("connecting: %w", diagnostic), "connecting: " + diagnostic.CLIMessage()},
+		{errors.Join(diagnostic, errors.New("other device failed")), diagnostic.CLIMessage() + "\nother device failed"},
+	} {
+		if got := renderError(tc.err); got != tc.want {
+			t.Errorf("diagnostic lost context or was restyled: got %q, want %q", got, tc.want)
+		}
+	}
+}
+
 type capturedEvent struct {
 	event string
 	props map[string]string
