@@ -15,7 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
 
 // VoiceEvent carries display transcripts and complete, reconciled delegations.
@@ -57,17 +57,66 @@ type liveSocket struct {
 }
 
 func dialLive(ctx context.Context, key string) (liveWire, error) {
-	config, err := websocket.NewConfig(liveEndpoint, "https://api.openai.com")
+	return dialLiveEndpoint(ctx, key, liveEndpoint, &websocket.Dialer{Proxy: http.ProxyFromEnvironment, HandshakeTimeout: 15 * time.Second})
+}
+
+func dialLiveEndpoint(ctx context.Context, key, endpoint string, dialer *websocket.Dialer) (liveWire, error) {
+	// This is a backend connection, not a browser connection. Live rejects the
+	// synthetic Origin header required by x/net/websocket; the official SDK
+	// sends no Origin. Authenticate only with the documented bearer header.
+	conn, response, err := dialer.DialContext(ctx, endpoint, http.Header{"Authorization": {"Bearer " + key}})
 	if err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if response != nil {
+			return nil, liveUpgradeError(key, response)
+		}
+		return nil, liveError(key, "opening GPT-Live connection", err)
 	}
-	config.Header = http.Header{"Authorization": {"Bearer " + key}}
-	conn, err := config.DialContext(ctx)
-	if err != nil {
-		return nil, err
-	}
-	conn.MaxPayloadBytes = 2 << 20
+	conn.SetReadLimit(2 << 20)
 	return &liveSocket{conn: conn, gate: make(chan struct{}, 1)}, nil
+}
+
+func liveUpgradeError(key string, response *http.Response) error {
+	var data []byte
+	if response.Body != nil {
+		defer response.Body.Close()
+		data, _ = io.ReadAll(io.LimitReader(response.Body, 8192))
+	}
+	provider := httpProvider{config: Config{APIKey: key}}
+	detail := provider.errorDetail(data)
+	// Gorilla retains a bounded prefix of failed-upgrade bodies. Do not expose
+	// a credential prefix if that prefix was cut off at the buffer boundary.
+	if key != "" {
+		for n := min(len(key)-1, len(detail)); n >= 8; n-- {
+			if strings.HasSuffix(detail, key[:n]) {
+				detail = strings.TrimSuffix(detail, key[:n]) + "[redacted]"
+				break
+			}
+		}
+	}
+	if detail == "" {
+		detail = http.StatusText(response.StatusCode)
+	}
+	var hint string
+	switch response.StatusCode {
+	case http.StatusUnauthorized:
+		hint = "Authentication was rejected; use /voice setup to choose another OpenAI key."
+	case http.StatusForbidden:
+		hint = "The connection was denied; check your project's GPT-Live access and network/proxy settings, or use /voice setup to choose another key."
+	case http.StatusNotFound:
+		hint = "The documented GPT-Live endpoint was not found; check API availability and any network proxy."
+	case http.StatusTooManyRequests:
+		hint = "Check the project's usage limits and billing, then retry later."
+	default:
+		if response.StatusCode >= 500 {
+			hint = "The service or a network proxy is unavailable; retry later."
+		} else {
+			hint = "The WebSocket upgrade was rejected; check the server response and network/proxy settings."
+		}
+	}
+	return fmt.Errorf("GPT-Live HTTP %d (%s): %s. %s", response.StatusCode, http.StatusText(response.StatusCode), detail, hint)
 }
 
 func (w *liveSocket) Send(ctx context.Context, value any) error {
@@ -90,10 +139,10 @@ func (w *liveSocket) Send(ctx context.Context, value any) error {
 	// Closing the socket also releases a write blocked inside the TLS transport.
 	stop := context.AfterFunc(ctx, func() { _ = w.conn.Close() })
 	defer stop()
-	return websocket.JSON.Send(w.conn, value)
+	return w.conn.WriteJSON(value)
 }
 
-func (w *liveSocket) Receive(value any) error { return websocket.JSON.Receive(w.conn, value) }
+func (w *liveSocket) Receive(value any) error { return w.conn.ReadJSON(value) }
 func (w *liveSocket) Close() error            { return w.conn.Close() }
 
 type liveServerEvent struct {

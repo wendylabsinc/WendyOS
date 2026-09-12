@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/net/websocket"
+	"github.com/gorilla/websocket"
 )
 
 // Tests never open a real microphone, connect to OpenAI, or read credentials.
@@ -527,50 +527,47 @@ func TestLiveWebSocketProtocolWithLocalServer(t *testing.T) {
 	serverEvents := make(chan map[string]any, 16)
 	serverErrors := make(chan error, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/live/sessions" || r.URL.RawQuery != "" || r.Header.Get("Authorization") != "Bearer test-secret" {
+		if r.URL.Path != "/v1/live/sessions" || r.URL.RawQuery != "" || r.Header.Get("Authorization") != "Bearer test-secret" || r.Header.Get("Origin") != "" {
 			http.Error(w, "invalid test handshake", http.StatusBadRequest)
 			return
 		}
-		websocket.Handler(func(conn *websocket.Conn) {
+		func() {
+			upgrader := websocket.Upgrader{}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				serverErrors <- err
+				return
+			}
 			defer conn.Close()
-			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 			for {
 				var event map[string]any
-				if err := websocket.JSON.Receive(conn, &event); err != nil {
+				if err := conn.ReadJSON(&event); err != nil {
 					serverErrors <- err
 					return
 				}
 				serverEvents <- event
 				switch event["type"] {
 				case "session.start":
-					_ = websocket.JSON.Send(conn, map[string]any{"type": "session.started"})
+					_ = conn.WriteJSON(map[string]any{"type": "session.started"})
 				case "session.input_audio.append":
-					_ = websocket.JSON.Send(conn, map[string]any{"type": "session.delegation.created", "offset_ms": 500, "delegation": map[string]any{"id": "live-opaque", "type": "delegation", "target": "client"}})
-					_ = websocket.JSON.Send(conn, map[string]any{"type": "session.input_transcript.delta", "event_id": "late-transcript", "start_ms": 100, "end_ms": 400, "delta": "List the devices."})
+					_ = conn.WriteJSON(map[string]any{"type": "session.delegation.created", "offset_ms": 500, "delegation": map[string]any{"id": "live-opaque", "type": "delegation", "target": "client"}})
+					_ = conn.WriteJSON(map[string]any{"type": "session.input_transcript.delta", "event_id": "late-transcript", "start_ms": 100, "end_ms": 400, "delta": "List the devices."})
 				case "session.commentary.append":
-					_ = websocket.JSON.Send(conn, map[string]any{"type": "session.commentary.appended", "client_event_id": event["event_id"]})
+					_ = conn.WriteJSON(map[string]any{"type": "session.commentary.appended", "client_event_id": event["event_id"]})
 				case "session.close":
-					_ = websocket.JSON.Send(conn, map[string]any{"type": "session.closed"})
+					_ = conn.WriteJSON(map[string]any{"type": "session.closed"})
 					return
 				}
 			}
-		}).ServeHTTP(w, r)
+		}()
 	}))
 	defer server.Close()
 	audio := newTestLiveAudio()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	session, err := startVoice(ctx, "test-secret", func(ctx context.Context, key string) (liveWire, error) {
-		config, err := websocket.NewConfig("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/live/sessions", server.URL)
-		if err != nil {
-			return nil, err
-		}
-		config.Header.Set("Authorization", "Bearer "+key)
-		conn, err := config.DialContext(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return &liveSocket{conn: conn, gate: make(chan struct{}, 1)}, nil
+		return dialLiveEndpoint(ctx, key, "ws"+strings.TrimPrefix(server.URL, "http")+"/v1/live/sessions", &websocket.Dialer{HandshakeTimeout: time.Second})
 	}, func() (VoiceAudio, error) { return audio, nil })
 	if err != nil {
 		t.Fatal(err)
