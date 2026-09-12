@@ -24,15 +24,18 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type testRelay struct {
-	renewOnly bool
-	renewed   chan struct{}
+	refusePresence bool
+	renewOnly      bool
+	renewed        chan struct{}
 	pb.UnimplementedTunnelAuthorizationServiceServer
 	pb.UnimplementedTunnelBrokerV2ServiceServer
 	t                   *testing.T
@@ -120,6 +123,11 @@ func verifyProof(pub *ecdsa.PublicKey, domain string, c claims, artifact, role s
 }
 func (r *testRelay) RegisterPresence(s grpc.BidiStreamingServer[pb.RegisterPresenceRequest, pb.RegisterPresenceResponse]) error {
 	assertAnonymous(r.t, s.Context())
+	if r.refusePresence {
+		// What a restarted broker does with a lease minted against the audience
+		// its previous incarnation generated: it has never heard of it.
+		return status.Error(codes.PermissionDenied, "unknown presence lease")
+	}
 	m, e := s.Recv()
 	if e != nil {
 		return e
@@ -521,5 +529,47 @@ func TestAgentRenewsProvenPresence(t *testing.T) {
 	}
 	if stored.PresenceLeaseJws != r.leaseJWS {
 		t.Fatal("renewal was not persisted for reconnect")
+	}
+}
+
+// A broker restart mints a new audience and invalidates every outstanding
+// lease, so a refused admission is the normal outcome of an ordinary deploy.
+// Re-presenting the refused lease can never begin to work -- the agent has to
+// drop it, on disk as well as in memory, or it stays out of contact until the
+// lease expires.
+func TestRefusedAdmissionDropsTheLease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	verifier := &Verifier{Issuer: "https://cloud.test", fetched: time.Now(), keys: map[string]jwk{"test": {Kid: "test", Kty: "EC", Alg: "ES256", Crv: "P-256", X: b64.EncodeToString(key.X.FillBytes(make([]byte, 32))), Y: b64.EncodeToString(key.Y.FillBytes(make([]byte, 32)))}}}
+	listener, e := net.Listen("tcp", "127.0.0.1:0")
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := &testRelay{t: t, endpoint: listener.Addr().String(), cloudKey: key, verifier: verifier, refusePresence: true}
+	srv := grpc.NewServer()
+	pb.RegisterTunnelAuthorizationServiceServer(srv, r)
+	pb.RegisterTunnelBrokerV2ServiceServer(srv, r)
+	go srv.Serve(listener)
+	defer srv.Stop()
+	dial := func(endpoint string) (*grpc.ClientConn, error) {
+		return grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	verifier.relayDial = dial
+	agent := &Agent{Endpoint: r.endpoint, Verifier: verifier, StateDir: t.TempDir(), Credentials: func() (string, string, []byte) { return "", "", nil }, Logger: zap.NewNop(), dialCloud: func(endpoint, _, _ string, _ []byte) (*grpc.ClientConn, error) { return dial(endpoint) }}
+
+	if err := agent.runOnce(ctx); err == nil {
+		t.Fatal("expected the refused admission to fail the attempt")
+	}
+	// Cloud did issue one -- the refusal is the broker's, downstream of a
+	// perfectly valid lease -- so this is genuinely a discard, not a no-op.
+	if r.leaseJWS == "" {
+		t.Fatal("no lease was ever issued, so nothing was under test")
+	}
+	if agent.lease != nil || agent.leaseClaims != (claims{}) {
+		t.Fatal("the refused lease is still cached and would be presented again")
+	}
+	if _, err := os.Stat(filepath.Join(agent.StateDir, "lease.pb")); !os.IsNotExist(err) {
+		t.Fatalf("the refused lease survives on disk and would be reloaded at next start (stat err = %v)", err)
 	}
 }
