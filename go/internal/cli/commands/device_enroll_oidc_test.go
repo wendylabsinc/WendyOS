@@ -292,27 +292,34 @@ func TestOIDCEnrollmentFailures(t *testing.T) {
 func TestOIDCEnrollmentConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name, device, directory string
-		custom                  bool
-		want                    string
+		pkiEndpoint             string
+		want, wantDirectory     string
 	}{
 		{name: "wrong tenant", device: "sim", directory: "https://acme.example/11111111-1111-4111-8111-111111111111/acme/directory", want: "tenant does not match"},
-		{name: "custom endpoint", device: "sim", custom: true, want: "--acme-directory-url"},
-		{name: "custom directory", device: "fleet/sim", custom: true, directory: "https://acme.example/" + testOperatorTenant + "/acme/directory"},
+		// Any deployment derives its own ACME frontend from its own identity
+		// frontend, not just the one this CLI was built knowing about.
+		{name: "self-hosted deployment derives its own directory", device: "sim", pkiEndpoint: "https://identity.example/v1/identity/certificate", wantDirectory: "https://acme.example/" + testOperatorTenant + "/acme/directory"},
+		{name: "port is carried across", device: "sim", pkiEndpoint: "https://identity.pki.example:8451/v1/identity/certificate", wantDirectory: "https://acme.pki.example:8451/" + testOperatorTenant + "/acme/directory"},
+		{name: "a PKI host with no identity label needs the flag", device: "sim", pkiEndpoint: "https://pki.example/v1/identity/certificate", want: "--acme-directory-url"},
+		{name: "custom directory", device: "fleet/sim", pkiEndpoint: "https://identity.example/v1/identity/certificate", directory: "https://acme.example/" + testOperatorTenant + "/acme/directory"},
 		{name: "bad device", device: "../sim", want: "invalid ACME device ID"},
 		{name: "insecure endpoint", device: "sim", directory: "http://acme.example/" + testOperatorTenant + "/acme/directory", want: "HTTPS"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			auth := oidcEnrollmentAuth(t)
-			if tc.custom {
-				auth.PKIEndpoint = "https://identity.example/v1/identity/certificate"
+			if tc.pkiEndpoint != "" {
+				auth.PKIEndpoint = tc.pkiEndpoint
 			}
-			_, err := oidcEnrollmentConfig(auth, tc.device, tc.directory)
+			cfg, err := oidcEnrollmentConfig(auth, tc.device, tc.directory)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatal(err)
 				}
 			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("error=%v, want %q", err, tc.want)
+			}
+			if tc.wantDirectory != "" && cfg.DirectoryURL != tc.wantDirectory {
+				t.Fatalf("directory=%q, want %q", cfg.DirectoryURL, tc.wantDirectory)
 			}
 		})
 	}

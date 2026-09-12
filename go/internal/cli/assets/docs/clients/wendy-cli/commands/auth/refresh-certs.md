@@ -26,10 +26,16 @@ wendy auth refresh-certs
 
 `WENDY_PKI_RENEW_ENDPOINT` names pki-core's renew frontend, e.g.
 `https://renew.pki.example:8451/v1/renew`, and overrides deployment defaults.
-Sessions using `identity.dev.pki.wendy.sh`, or certificate-only sessions using
-`api.dev.wendy.sh:443`, default to `https://renew.dev.pki.wendy.sh/v1/renew`.
-Custom deployments still require the override; a custom identity endpoint is
-never replaced by the Cloud dev default.
+Without it, the renew frontend is derived from the pki-core identity endpoint
+the session already holds, by replacing its leading `identity.` label:
+`https://identity.<rest>/...` becomes `https://renew.<rest>/v1/renew`, port
+included. The derivation therefore stays inside one PKI deployment and names no
+environment.
+
+A session whose identity endpoint is not an `https://identity.<rest>` URL
+derives nothing and requires the override. That includes a session which knows
+only its Cloud endpoint: which cloud answers says nothing about which PKI
+mints, so no renew host is ever derived from one.
 
 ## It also runs by itself
 

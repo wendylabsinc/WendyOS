@@ -173,7 +173,7 @@ func TestRenewalRefusalsOfferRelogin(t *testing.T) {
 	}
 }
 
-func TestRefreshCertsForAuthUsesDevRenewEndpoint(t *testing.T) {
+func TestRefreshCertsForAuthDerivesTheRenewEndpoint(t *testing.T) {
 	t.Setenv(renewEndpointEnv, "")
 	orig := renewViaPKICore
 	var endpoint string
@@ -182,7 +182,11 @@ func TestRefreshCertsForAuthUsesDevRenewEndpoint(t *testing.T) {
 		return "leaf", "chain", "key", nil
 	}
 	t.Cleanup(func() { renewViaPKICore = orig })
-	auth := &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", Certificates: []config.CertificateInfo{{PemCertificate: leafWithURIs(t, testTenantPrincipal)}}}
+	auth := &config.AuthConfig{
+		CloudGRPC:    "api.dev.wendy.sh:443",
+		PKIEndpoint:  "https://identity.dev.pki.wendy.sh/v1/identity/certificate",
+		Certificates: []config.CertificateInfo{{PemCertificate: leafWithURIs(t, testTenantPrincipal)}},
+	}
 	if err := refreshCertsForAuth(cancelledCtx(t), auth); err != nil {
 		t.Fatal(err)
 	}

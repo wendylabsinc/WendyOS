@@ -142,21 +142,36 @@ func renewEndpoint(auth *config.AuthConfig) string {
 	if auth == nil {
 		return ""
 	}
-	const devRenewEndpoint = "https://renew.dev.pki.wendy.sh/v1/renew"
-	if auth.PKIEndpoint != "" {
-		u, err := url.Parse(auth.PKIEndpoint)
-		if err == nil && u.Scheme == "https" && u.Host == "identity.dev.pki.wendy.sh" && u.User == nil {
-			return devRenewEndpoint
-		}
-		// An explicit custom PKI deployment takes precedence over Cloud defaults.
-		return ""
-	}
-	// Imported operator certificates may have no OIDC/identity configuration.
-	// The known dev API still identifies the deployment to renew them against.
-	if auth.CloudGRPC == "api.dev.wendy.sh:443" {
-		return devRenewEndpoint
+	if host := pkiSiblingHost(auth.PKIEndpoint, "renew"); host != "" {
+		return "https://" + host + "/v1/renew"
 	}
 	return ""
+}
+
+// pkiSiblingHost rewrites a pki-core identity frontend into a sibling frontend
+// of the same deployment: identity.<rest> becomes <label>.<rest>, port and all.
+//
+// The only input is the identity endpoint the session already holds, so this
+// stays inside one PKI host family. Reading a PKI host out of a *cloud* host is
+// WDY-2799, where enrollment tokens went to the wrong place in cleartext: which
+// cloud answers says nothing about which PKI mints. Nor is any environment
+// named here -- a hardcoded "identity.dev.pki.wendy.sh" only works for one
+// deployment and silently declines to derive for every other, which is how the
+// dev hostname ends up load-bearing.
+//
+// A URL that is not an https identity frontend derives nothing. The caller
+// reports the deployment as unconfigured, which is the WDY-2799 rule: unset
+// means not configured, never "guess".
+func pkiSiblingHost(identityEndpoint, label string) string {
+	u, err := url.Parse(identityEndpoint)
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return ""
+	}
+	rest, ok := strings.CutPrefix(u.Host, "identity.")
+	if !ok || rest == "" {
+		return ""
+	}
+	return label + "." + rest
 }
 
 // splitLeafAndChain splits a PEM bundle into its first certificate and the
