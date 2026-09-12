@@ -229,6 +229,28 @@ func (a *Agent) runOnce(parent context.Context) error {
 		return err
 	}
 	defer conn.Close()
+	// Past this point the lease is committed to one broker process, and a lease
+	// outlives that process by nothing: every boot mints a fresh 256-bit
+	// audience, so a restart invalidates every lease Cloud signed against the
+	// old one. The broker then refuses admission, and re-presenting the same
+	// lease can never start working -- it has to be replaced. Dropping it here
+	// costs one extra IssuePresenceLease on reconnect; keeping it costs
+	// presence until the lease expires, up to a quarter of an hour, on every
+	// ordinary broker deploy.
+	keepLease := false
+	defer func() {
+		// A cancelled parent is the agent shutting down, not the broker
+		// refusing anything: the lease is still good and is what lets the next
+		// start resume presence without a round trip to Cloud.
+		if keepLease || parent.Err() != nil {
+			return
+		}
+		a.lease, a.leaseClaims = nil, claims{}
+		// The same dead lease is otherwise reloaded after an agent restart:
+		// validateLease checks Cloud's signature, which a stale lease still
+		// carries, not whether the broker still knows it.
+		_ = os.Remove(filepath.Join(a.StateDir, "lease.pb"))
+	}()
 	stream, err := pb.NewTunnelBrokerV2ServiceClient(conn).RegisterPresence(metadata.NewOutgoingContext(ctx, metadata.MD{}))
 	if err != nil {
 		return err
@@ -308,8 +330,11 @@ func (a *Agent) runOnce(parent context.Context) error {
 				return e
 			}
 			if n.Aud != c.Aud || n.Route != c.Route || l.Broker.Endpoint != lease.Broker.Endpoint {
+				// Freshly issued against the broker Cloud now names, so it is
+				// the one lease that survives this attempt.
 				a.lease = l
 				a.leaseClaims = n
+				keepLease = true
 				return fmt.Errorf("Cloud selected a new presence route; reconnecting")
 			}
 			renewing = l
