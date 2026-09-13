@@ -163,10 +163,22 @@ func classifyProbeResponse(resp rtspResponse, cam Camera, cred Credential, chall
 // writeDescribeRequest sends a DESCRIBE request. CSeq is required by RTSP
 // (RFC 2326 §12.17) on every request; authorization, when non-empty, is sent
 // as the Authorization header value verbatim.
+//
+// Accept is sent on every DESCRIBE, although RFC 2326 §12.1 makes it optional
+// with application/sdp as the implied default. Some cameras enforce it: an
+// ONVIF "IPC-XD400-N" (firmware V1.0.4.10) answers a DESCRIBE with no Accept
+// header with "RTSP/1.0 551 Option not supported" and the same request with
+// "Accept: application/sdp" with 200 and the SDP. Measured on the entrance
+// pilot Jetson on 2026-09-13; the 551 reached the operator as "returned
+// unexpected RTSP status 551 to DESCRIBE, which this probe cannot read as a
+// credential verdict", and `camera test` refused a camera whose login was
+// fine. Every RTSP client that streams (GStreamer's rtspsrc, ffmpeg, VLC)
+// sends this header, which is why the same camera streams and does not probe.
 func writeDescribeRequest(w io.Writer, uri string, cseq int, authorization string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "DESCRIBE %s RTSP/1.0\r\n", uri)
 	fmt.Fprintf(&b, "CSeq: %d\r\n", cseq)
+	b.WriteString("Accept: application/sdp\r\n")
 	if authorization != "" {
 		fmt.Fprintf(&b, "Authorization: %s\r\n", authorization)
 	}
