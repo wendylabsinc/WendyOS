@@ -407,3 +407,65 @@ func TestContainerAttach_MaxBytes_TruncatesOversizeOutput(t *testing.T) {
 		t.Errorf("expected truncated text to start with the original bytes, got %q", text)
 	}
 }
+
+// TestContainerList_ReportsInterfacePorts covers the fields a fleet-managing
+// client needs to answer "which apps here expose something I can talk to".
+// The proto has carried mcp_port, http_port and services all along; the handler
+// simply never copied them out.
+func TestContainerList_ReportsInterfacePorts(t *testing.T) {
+	fake := &fakeContainerServer{
+		containers: []*agentpb.AppContainer{
+			{
+				AppName:      "with-ports",
+				RunningState: agentpb.AppRunningState_RUNNING,
+				McpPort:      3000,
+				HttpPort:     8978,
+				Services: []*agentpb.ServiceEntry{
+					{Name: "web", RunningState: agentpb.AppRunningState_RUNNING},
+					{Name: "worker", RunningState: agentpb.AppRunningState_STOPPED},
+				},
+			},
+			{AppName: "plain", RunningState: agentpb.AppRunningState_RUNNING},
+		},
+	}
+	srv := New(&config.Config{}, nil)
+	srv.SetConn(startFakeContainerServer(t, fake))
+
+	result, err := srv.callTool(context.Background(), "container_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	containers := listPayload(t, result, "containers")
+	if len(containers) != 2 {
+		t.Fatalf("expected 2 containers, got %d", len(containers))
+	}
+
+	withPorts := containers[0]
+	if got := withPorts["mcp_port"]; got != float64(3000) {
+		t.Errorf("mcp_port = %v, want 3000", got)
+	}
+	if got := withPorts["http_port"]; got != float64(8978) {
+		t.Errorf("http_port = %v, want 8978", got)
+	}
+	services, ok := withPorts["services"].([]any)
+	if !ok || len(services) != 2 {
+		t.Fatalf("services = %v, want 2 entries", withPorts["services"])
+	}
+	first, _ := services[0].(map[string]any)
+	if first["name"] != "web" || first["running_state"] != "RUNNING" {
+		t.Errorf("first service = %v, want web/RUNNING", first)
+	}
+
+	// An app declaring neither entitlement carries neither key, so presence
+	// means "declared" rather than "zero".
+	plain := containers[1]
+	if _, ok := plain["mcp_port"]; ok {
+		t.Error("mcp_port must be absent when the app declares no mcp entitlement")
+	}
+	if _, ok := plain["http_port"]; ok {
+		t.Error("http_port must be absent when the app declares no http entitlement")
+	}
+	if _, ok := plain["services"]; ok {
+		t.Error("services must be absent when the app declares none")
+	}
+}

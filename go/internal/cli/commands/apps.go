@@ -152,6 +152,7 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 			ExitCode          *int32        `json:"exitCode,omitempty"` // pointer so a clean exit 0 is still emitted alongside terminationReason
 			TerminationReason string        `json:"terminationReason,omitempty"`
 			HTTPPort          uint32        `json:"httpPort,omitempty"`
+			MCPPort           uint32        `json:"mcpPort,omitempty"`
 			Services          []jsonService `json:"services,omitempty"`
 		}
 		apps := make([]jsonApp, len(containers))
@@ -176,6 +177,7 @@ func appsListAgent(ctx context.Context, conn *grpcclient.AgentConnection) error 
 				ExitCode:          exitCode,
 				TerminationReason: c.GetTerminationReason(),
 				HTTPPort:          c.GetHttpPort(),
+				MCPPort:           c.GetMcpPort(),
 				Services:          svcs,
 			}
 		}
