@@ -100,7 +100,7 @@ func okTextBounded(s, hint string, maxBytes int) *mcpgo.CallToolResult {
 }
 
 // defaultProxyMaxBytes bounds the size of a result proxied in from a
-// container's own MCP server (see connectContainerMCPTools in server.go).
+// container's own MCP server (see addProxiedTools in app_tools.go).
 // Unlike wendy's native tools, a container-supplied tool's output shape is
 // not under our control — a poorly-behaved or malicious app could return an
 // arbitrarily large payload (e.g. dumping a huge file or log) straight into
