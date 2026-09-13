@@ -537,6 +537,10 @@ const (
 	fastrpcSecureSuffix = "-secure"
 )
 
+// FastRPC also fronts the audio, sensor and modem DSPs. Only the compute and
+// general-purpose ones run NPU workloads, so only those are granted.
+var fastrpcComputeRe = regexp.MustCompile(`/fastrpc-(cdsp|gdsp)[0-9]*$`)
+
 // applyNPU grants the FastRPC transport to the on-SoC DSPs.
 //
 // Bind-mounted rather than mknod'd: access is authorised by the nodes' group ownership
@@ -553,7 +557,7 @@ func applyNPU(spec *Spec) {
 	// signed-PD nodes skipped here.
 	var granted bool
 	for _, node := range matches {
-		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+		if strings.HasSuffix(node, fastrpcSecureSuffix) || !fastrpcComputeRe.MatchString(node) {
 			continue
 		}
 		if _, _, err := addScopedCharDevice(spec, node); err != nil {

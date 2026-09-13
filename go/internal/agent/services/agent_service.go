@@ -274,6 +274,10 @@ var (
 	fastrpcSecureSuffix = "-secure"
 )
 
+// Audio, sensor and modem DSPs sit behind FastRPC too; only the compute and
+// general-purpose ones run NPU workloads.
+var fastrpcComputeRe = regexp.MustCompile(`/fastrpc-(cdsp|gdsp)[0-9]*$`)
+
 // adrenoCompatibleRe pulls the model out of "qcom,adreno-623.0" -> "623".
 var adrenoCompatibleRe = regexp.MustCompile(`qcom,adreno-(\d+)\.\d+`)
 
@@ -293,7 +297,7 @@ func detectNPUInfo() npuInfo {
 		return npuInfo{}
 	}
 	for _, node := range nodes {
-		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+		if strings.HasSuffix(node, fastrpcSecureSuffix) || !fastrpcComputeRe.MatchString(node) {
 			continue
 		}
 		return npuInfo{hasNPU: true, vendor: dspVendor()}

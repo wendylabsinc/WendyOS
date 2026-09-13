@@ -2721,6 +2721,49 @@ func TestApplyNPU_BindMountsNonSecureNodes(t *testing.T) {
 	}
 }
 
+// TestApplyNPU_GrantsOnlyComputeDSPs keeps the entitlement to its name: FastRPC also
+// fronts the audio, sensor and modem DSPs, and an NPU app has no business reaching them.
+func TestApplyNPU_GrantsOnlyComputeDSPs(t *testing.T) {
+	dir := installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp":  {10, 262},
+		"fastrpc-gdsp0": {10, 264},
+		"fastrpc-adsp":  {10, 265},
+		"fastrpc-sdsp":  {10, 266},
+		"fastrpc-mdsp":  {10, 267},
+	}, nil)
+
+	spec := npuSpec(t)
+
+	for _, want := range []string{"fastrpc-cdsp", "fastrpc-gdsp0"} {
+		if !hasMountDest(spec, filepath.Join(dir, want)) {
+			t.Errorf("npu entitlement did not grant the compute DSP %s", want)
+		}
+	}
+	for _, unwanted := range []string{"fastrpc-adsp", "fastrpc-sdsp", "fastrpc-mdsp"} {
+		if hasMountDest(spec, filepath.Join(dir, unwanted)) {
+			t.Errorf("npu entitlement granted %s, which is not a compute DSP", unwanted)
+		}
+	}
+}
+
+// TestApplyNPU_AudioOnlyHostIsInert covers a board whose only FastRPC node fronts the
+// audio DSP: there is no NPU to reach, so the entitlement must grant nothing.
+func TestApplyNPU_AudioOnlyHostIsInert(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-adsp": {10, 265},
+	}, &[2]int64{251, 0})
+
+	base := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec := npuSpec(t)
+
+	if len(spec.Mounts) != len(base.Mounts) {
+		t.Errorf("mounts changed on an audio-DSP-only host: %d -> %d", len(base.Mounts), len(spec.Mounts))
+	}
+	if len(spec.Process.User.AdditionalGids) != len(base.Process.User.AdditionalGids) {
+		t.Errorf("GIDs granted on an audio-DSP-only host: %v", spec.Process.User.AdditionalGids)
+	}
+}
+
 // TestApplyNPU_SecureOnlyHostIsInert covers a board exposing only signed-PD nodes: the
 // entitlement must grant nothing at all, not just skip the mounts.
 func TestApplyNPU_SecureOnlyHostIsInert(t *testing.T) {

@@ -55,6 +55,11 @@ func TestDetectNPUInfo(t *testing.T) {
 			false, "",
 		},
 		"no fastrpc nodes": {nil, "", "", false, ""},
+		// FastRPC also fronts the audio DSP; that is not an NPU.
+		"audio DSP only": {
+			[]string{"fastrpc-adsp"}, "26300000.remoteproc",
+			"qcom,qcs8300-cdsp-pas\x00", false, "",
+		},
 		// The qcom entry is not always the first in the compatible list.
 		"vendor entry not first": {
 			[]string{"fastrpc-cdsp"}, "26300000.remoteproc",
