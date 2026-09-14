@@ -32,15 +32,25 @@ type mcpServer struct {
 	mu               sync.RWMutex
 	proxyDiag        []proxyDiagEntry
 
+	// srv is the MCP server tools are registered on, kept so a connection
+	// change can drop the previous device's app tools before returning rather
+	// than waiting for the next reconcile pass. Nil until Start runs.
+	srv *server.MCPServer
+
 	// Proxied app tools, reconciled against the device rather than registered
 	// once at startup -- see app_tools.go. appMu guards the two maps; it is
 	// separate from mu because a reconcile pass does network I/O and must never
 	// hold the lock the tool handlers take.
 	appMu       sync.Mutex
 	appTools    map[string]*appToolSet
-	appRetry    map[string]time.Time
+	appRetry    map[string]appRetryState
 	appToolsRev uint64
 	reconcileCh chan struct{}
+
+	// Reconcile timing, zero meaning the package defaults. Tests set these to
+	// separate "the trigger fired" from "the ticker came round".
+	rescanInterval  time.Duration
+	retryBackoffMin time.Duration
 }
 
 // SetStartupConnect configures the optional device connection attempted after
@@ -87,8 +97,14 @@ func (s *mcpServer) SetConn(conn *grpcclient.AgentConnection) {
 	if conn == nil {
 		s.connType = ""
 	}
+	srv := s.srv
 	s.mu.Unlock()
-	// Outside the lock: the reconciler reads the connection back through it.
+
+	// Outside the lock: both of these read the connection back through it.
+	// Dropping the previous device's tools synchronously matters because a
+	// client calls tools/list straight after device_connect -- leaving it to
+	// the reconciler would show it the device it just left.
+	s.unregisterAllAppTools(srv)
 	s.triggerAppToolReconcile()
 }
 
@@ -191,6 +207,10 @@ func (s *mcpServer) Start(ctx context.Context) error {
 	s.registerProvisioningTools(srv)
 	s.registerOSTools(srv)
 	s.registerCloudTools(srv)
+
+	s.mu.Lock()
+	s.srv = srv
+	s.mu.Unlock()
 
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	defer cancelStartup()

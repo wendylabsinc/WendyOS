@@ -24,11 +24,36 @@ import (
 // a redeploy is invisible for at most one tick.
 const appToolRescanInterval = 10 * time.Second
 
-// appToolRetryBackoff is how long an app that failed to proxy is left alone.
-// Opening a proxy costs up to ~14s of initialize retries, so without a backoff
-// one permanently broken app would spend longer failing than the rescan
-// interval and starve every healthy app behind it in the same pass.
-const appToolRetryBackoff = time.Minute
+// appToolOpenTimeout bounds one attempt at bringing an app's MCP server up:
+// the initialize handshake and the first tool listing. The streamable HTTP
+// client has no timeout of its own, so without this a container whose port
+// accepts TCP and then never answers wedges the single reconciler goroutine
+// for the life of the session -- nothing new registered, nothing stopped
+// removed, and a device switch leaving the previous device's tools in place.
+const appToolOpenTimeout = 5 * time.Second
+
+// appToolListTimeout bounds the container listing and any tool listing made
+// through a proxy that is already open, for the same reason.
+const appToolListTimeout = 5 * time.Second
+
+// appToolOpenBudget caps how long one pass may spend opening new proxies. A
+// device with several wedged apps would otherwise stretch a pass well past the
+// rescan interval and delay every removal behind it; apps not reached in this
+// pass are opened in the next.
+const appToolOpenBudget = 15 * time.Second
+
+// appToolRetryMin and appToolRetryMax bound the per-app backoff after a failed
+// open, which doubles from the minimum. Retrying is the reconcile loop's job
+// rather than a sleep inside a pass. The minimum is shorter than the rescan
+// interval on purpose: a demo that was deployed a moment ago and is still
+// starting its server must be picked up on the very next tick, which is what
+// keeps "a new app appears within one interval" true for it. An app that is
+// simply broken doubles away to the maximum and stops costing an attempt
+// every pass.
+const (
+	appToolRetryMin = 2 * time.Second
+	appToolRetryMax = time.Minute
+)
 
 // maxMCPToolName is the tool-name budget MCP clients commonly enforce. A name
 // over it is skipped and recorded, never truncated: a silently shortened name
@@ -51,6 +76,13 @@ type appToolSet struct {
 	close     func()
 }
 
+// appRetryState holds an app back after a failed open, with the delay that
+// produced it so the next failure can double it.
+type appRetryState struct {
+	next  time.Time
+	delay time.Duration
+}
+
 // runAppToolReconciler keeps proxied app tools in step with the device for as
 // long as the server runs.
 //
@@ -60,7 +92,7 @@ type appToolSet struct {
 // device_connect got a connection with no app tools at all. Both are the same
 // one-shot-scan bug, so both are fixed by reconciling rather than registering.
 func (s *mcpServer) runAppToolReconciler(ctx context.Context, srv *server.MCPServer) {
-	ticker := time.NewTicker(appToolRescanInterval)
+	ticker := time.NewTicker(s.rescanEvery())
 	defer ticker.Stop()
 	// Proxies left open past shutdown strand the TCP listeners the agent
 	// relays through.
@@ -96,7 +128,8 @@ func (s *mcpServer) reconcileAppTools(ctx context.Context, srv *server.MCPServer
 	// A new connection is a different device, or none. Tools registered for the
 	// previous one name apps this client can no longer reach, so they go before
 	// anything else is considered -- the tool list must always describe the
-	// device being talked to.
+	// device being talked to. SetConn does this synchronously too; this covers
+	// a pass that was in flight when the connection changed.
 	if revision != s.appToolsRev {
 		s.unregisterAllAppTools(srv)
 		s.appToolsRev = revision
@@ -105,43 +138,51 @@ func (s *mcpServer) reconcileAppTools(ctx context.Context, srv *server.MCPServer
 		return
 	}
 
-	apps, err := s.listMCPApps(ctx, conn)
+	listCtx, cancelList := context.WithTimeout(ctx, appToolListTimeout)
+	apps, err := s.listMCPApps(listCtx, conn)
+	cancelList()
 	if err != nil {
 		// Keep what is registered. A failed list is far likelier a blip than
 		// every app vanishing at once, and tearing tools down on a blip is
 		// worse than serving them one tick stale.
 		return
 	}
-	prefixes := mcpToolPrefixes(apps)
+
+	prefixes, ambiguous := mcpToolPrefixes(apps)
+	for _, name := range ambiguous {
+		s.recordProxyDiag(name, "prefix-collision",
+			fmt.Errorf("app id shares a sanitised tool prefix with another running app; its tools are not registered"))
+	}
 
 	for _, name := range s.registeredAppNames() {
 		if _, ok := prefixes[name]; !ok {
 			s.unregisterAppTools(srv, name)
 		}
 	}
+
+	openUntil := time.Now().Add(appToolOpenBudget)
 	for _, name := range apps {
-		s.syncAppTools(ctx, srv, conn, name, prefixes[name])
+		prefix, ok := prefixes[name]
+		if !ok {
+			continue // ambiguous prefix, already diagnosed
+		}
+		s.syncAppTools(ctx, srv, conn, name, prefix, revision, openUntil)
 	}
 }
 
 // syncAppTools brings one app's registration up to date: opening a proxy for an
 // app seen for the first time, and otherwise re-reading the tool list through
 // the proxy already open for it.
-func (s *mcpServer) syncAppTools(ctx context.Context, srv *server.MCPServer, conn *grpcclient.AgentConnection, appName, prefix string) {
+func (s *mcpServer) syncAppTools(ctx context.Context, srv *server.MCPServer, conn *grpcclient.AgentConnection, appName, prefix string, revision uint64, openUntil time.Time) {
 	set := s.appToolSet(appName)
 	if set == nil {
-		s.openAppTools(ctx, srv, conn, appName, prefix)
-		return
-	}
-	// A prefix changes when another app arrives or leaves and the short form
-	// stops (or starts) being unique. The registered names are then wrong.
-	if set.prefix != prefix {
-		s.unregisterAppTools(srv, appName)
-		s.openAppTools(ctx, srv, conn, appName, prefix)
+		s.openAppTools(ctx, srv, conn, appName, prefix, revision, openUntil)
 		return
 	}
 
-	result, err := set.client.ListTools(ctx, mcpgo.ListToolsRequest{})
+	listCtx, cancel := context.WithTimeout(ctx, appToolListTimeout)
+	result, err := set.client.ListTools(listCtx, mcpgo.ListToolsRequest{})
+	cancel()
 	if err != nil {
 		// The app restarted, or its proxy died with it. A fresh proxy is the
 		// only way back to a working client, so reopen in this same pass
@@ -149,30 +190,33 @@ func (s *mcpServer) syncAppTools(ctx context.Context, srv *server.MCPServer, con
 		// is the common case, not an exceptional one.
 		s.recordProxyDiag(appName, "list-tools", err)
 		s.unregisterAppTools(srv, appName)
-		s.openAppTools(ctx, srv, conn, appName, prefix)
+		s.openAppTools(ctx, srv, conn, appName, prefix, revision, openUntil)
 		return
 	}
-	if toolSignature(result.Tools) == set.signature {
+
+	signature := toolSignature(result.Tools)
+	if signature == set.signature && prefix == set.prefix {
 		return
 	}
-	// Same app, different surface. Replace the names wholesale rather than
-	// diffing them, so a renamed or removed tool cannot linger.
+	// The proxy and the client are still good. A changed surface -- or a prefix
+	// that changed because another app arrived and made the short form
+	// ambiguous -- costs a re-registration and a tools/list_changed, not a
+	// teardown and a fresh MCP handshake.
 	srv.DeleteTools(set.toolNames...)
 	s.storeAppTools(appName, &appToolSet{
 		prefix:    prefix,
 		toolNames: s.addProxiedTools(srv, set.client, appName, prefix, result.Tools),
-		signature: toolSignature(result.Tools),
+		signature: signature,
 		client:    set.client,
 		close:     set.close,
-	})
+	}, revision)
 }
 
-// openAppTools proxies one app's MCP server into srv. Initialize is retried up
-// to 4 times with exponential backoff (2s, 4s, 8s) because an app that was just
-// deployed may still be starting its server. Failures are isolated to the app
-// and recorded in the wendy://diagnostics resource.
-func (s *mcpServer) openAppTools(ctx context.Context, srv *server.MCPServer, conn *grpcclient.AgentConnection, appName, prefix string) {
-	if until, ok := s.appRetryAt(appName); ok && time.Now().Before(until) {
+// openAppTools proxies one app's MCP server into srv with a single bounded
+// attempt. Failures are isolated to the app, recorded in the
+// wendy://diagnostics resource, and held back by a doubling backoff.
+func (s *mcpServer) openAppTools(ctx context.Context, srv *server.MCPServer, conn *grpcclient.AgentConnection, appName, prefix string, revision uint64, openUntil time.Time) {
+	if !s.appOpenDue(appName) || time.Now().After(openUntil) {
 		return
 	}
 
@@ -181,49 +225,58 @@ func (s *mcpServer) openAppTools(ctx context.Context, srv *server.MCPServer, con
 		s.failAppTools(appName, "proxy", err)
 		return
 	}
-
 	mcpCli, err := mcpclient.NewStreamableHttpClient("http://" + addr)
 	if err != nil {
-		closeProxy()
+		closeAppTransport(nil, closeProxy)
 		s.failAppTools(appName, "client", err)
 		return
 	}
 
-	var initErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				closeProxy()
-				return
-			case <-time.After(time.Duration(1<<attempt) * time.Second):
-			}
-		}
-		_, initErr = mcpCli.Initialize(ctx, mcpgo.InitializeRequest{})
-		if initErr == nil {
-			break
-		}
-	}
-	if initErr != nil {
-		closeProxy()
-		s.failAppTools(appName, "initialize", initErr)
+	// One bounded attempt per pass. Sleeping through 2s+4s+8s of retries here
+	// would hold the single reconciler goroutine while every other app waits,
+	// and against an app that never answers it would hold it forever.
+	openCtx, cancel := context.WithTimeout(ctx, appToolOpenTimeout)
+	defer cancel()
+
+	if _, err := mcpCli.Initialize(openCtx, mcpgo.InitializeRequest{}); err != nil {
+		closeAppTransport(mcpCli, closeProxy)
+		s.failAppTools(appName, "initialize", err)
 		return
 	}
-
-	result, err := mcpCli.ListTools(ctx, mcpgo.ListToolsRequest{})
+	result, err := mcpCli.ListTools(openCtx, mcpgo.ListToolsRequest{})
 	if err != nil {
-		closeProxy()
+		closeAppTransport(mcpCli, closeProxy)
 		s.failAppTools(appName, "list-tools", err)
 		return
 	}
 
-	s.storeAppTools(appName, &appToolSet{
+	if !s.storeAppTools(appName, &appToolSet{
 		prefix:    prefix,
 		toolNames: s.addProxiedTools(srv, mcpCli, appName, prefix, result.Tools),
 		signature: toolSignature(result.Tools),
 		client:    mcpCli,
 		close:     closeProxy,
-	})
+	}, revision) {
+		// The connection changed while this app was being opened, so these
+		// tools describe a device the client is no longer talking to.
+		srv.DeleteTools(prefixedToolNames(prefix, result.Tools)...)
+		closeAppTransport(mcpCli, closeProxy)
+	}
+}
+
+// closeAppTransport tears down an app's client and proxy off the reconciler
+// goroutine. Closing a streamable HTTP client sends a DELETE to end the MCP
+// session, which against a device that has gone away blocks until its own
+// timeout -- seconds, per app, in the middle of a pass.
+func closeAppTransport(cli *mcpclient.Client, closeProxy func()) {
+	go func() {
+		if cli != nil {
+			_ = cli.Close()
+		}
+		if closeProxy != nil {
+			closeProxy()
+		}
+	}()
 }
 
 // addProxiedTools registers one app's tools under prefix and returns the names
@@ -258,13 +311,24 @@ func (s *mcpServer) addProxiedTools(srv *server.MCPServer, cli *mcpclient.Client
 	return names
 }
 
+// prefixedToolNames is the name set addProxiedTools would register, used to
+// undo a registration whose connection went stale underneath it.
+func prefixedToolNames(prefix string, tools []mcpgo.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if name := prefix + mcpToolSeparator + tool.Name; len(name) <= maxMCPToolName {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
 // listMCPApps names every running app on the device that serves MCP, sorted so
 // a pass is deterministic.
 func (s *mcpServer) listMCPApps(ctx context.Context, conn *grpcclient.AgentConnection) ([]string, error) {
 	stream, err := conn.ContainerService.ListContainers(ctx, &agentpb.ListContainersRequest{})
 	if err != nil {
-		s.recordProxyDiag("", "list-containers", err)
-		fmt.Fprintf(os.Stderr, "Warning: listing containers for MCP tools: %v\n", err)
+		s.warnProxyDiag("", "list-containers", err)
 		return nil, err
 	}
 	var names []string
@@ -274,8 +338,7 @@ func (s *mcpServer) listMCPApps(ctx context.Context, conn *grpcclient.AgentConne
 			break
 		}
 		if err != nil {
-			s.recordProxyDiag("", "read-container-list", err)
-			fmt.Fprintf(os.Stderr, "Warning: reading container list: %v\n", err)
+			s.warnProxyDiag("", "read-container-list", err)
 			return nil, err
 		}
 		c := resp.GetContainer()
@@ -303,11 +366,19 @@ func shortMCPPrefix(appName string) string {
 	return sanitizeMCPPrefix(segment)
 }
 
-// mcpToolPrefixes assigns every app its prefix, resolving collisions across the
-// whole set rather than per app: two apps sharing a last segment ("a.status"
-// and "b.status") both fall back to their full id, so neither silently answers
-// for the other.
-func mcpToolPrefixes(appNames []string) map[string]string {
+// mcpToolPrefixes assigns every app its tool-name prefix, resolving collisions
+// across the whole set rather than per app: two apps sharing a last segment
+// ("a.status" and "b.status") both fall back to their full id, so neither
+// silently answers for the other.
+//
+// The second return names the apps left without a prefix. sanitizeMCPPrefix is
+// not injective -- "a.b-x" and "a.b_x" both become "a_b_x" -- so the full-id
+// fallback is not guaranteed to separate two apps either. Whatever prefix is
+// still shared is withheld from every app holding it: AddTool would silently
+// overwrite one registration with the other and route calls to the wrong app,
+// and a tool that is absent and diagnosed beats one that answers as an app the
+// caller did not name.
+func mcpToolPrefixes(appNames []string) (map[string]string, []string) {
 	shortCount := make(map[string]int, len(appNames))
 	for _, name := range appNames {
 		shortCount[shortMCPPrefix(name)]++
@@ -320,7 +391,20 @@ func mcpToolPrefixes(appNames []string) map[string]string {
 		}
 		prefixes[name] = prefix
 	}
-	return prefixes
+
+	finalCount := make(map[string]int, len(prefixes))
+	for _, prefix := range prefixes {
+		finalCount[prefix]++
+	}
+	var ambiguous []string
+	for name, prefix := range prefixes {
+		if finalCount[prefix] > 1 {
+			ambiguous = append(ambiguous, name)
+			delete(prefixes, name)
+		}
+	}
+	sort.Strings(ambiguous)
+	return prefixes, ambiguous
 }
 
 // toolSignature summarises an app's tool list so a changed surface is detected
@@ -353,8 +437,32 @@ func sanitizeMCPPrefix(appName string) string {
 // --- registration state -----------------------------------------------------
 //
 // appTools and appRetry are written only by the reconciler goroutine, but they
-// are read by tests and could be read by a future diagnostics surface, so both
-// go through appMu rather than relying on that invariant holding forever.
+// are read by tests and by SetConn's synchronous teardown, so both go through
+// appMu. appMu is never held while s.mu is taken, or the other way round.
+
+// rescanEvery is the reconcile interval, overridable by tests.
+func (s *mcpServer) rescanEvery() time.Duration {
+	if s.rescanInterval > 0 {
+		return s.rescanInterval
+	}
+	return appToolRescanInterval
+}
+
+// retryFloor is the shortest backoff after a failed open, overridable by tests.
+func (s *mcpServer) retryFloor() time.Duration {
+	if s.retryBackoffMin > 0 {
+		return s.retryBackoffMin
+	}
+	return appToolRetryMin
+}
+
+// toolServer returns the MCP server tools are registered on, or nil before
+// Start has run.
+func (s *mcpServer) toolServer() *server.MCPServer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.srv
+}
 
 // connAndRevision reads the active connection together with the revision it was
 // stored under, so a pass cannot mix a connection with another's revision.
@@ -362,6 +470,20 @@ func (s *mcpServer) connAndRevision() (*grpcclient.AgentConnection, uint64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.conn, s.connRevision
+}
+
+// warnProxyDiag records a failure and, the first time that exact failure is
+// seen, also warns on stderr. Repeats stay in the diagnostics count only: the
+// reconciler retries for the life of the session, and a warning per pass would
+// bury everything else in the host's log.
+func (s *mcpServer) warnProxyDiag(appName, stage string, err error) {
+	if s.recordProxyDiag(appName, stage, err) {
+		if appName == "" {
+			fmt.Fprintf(os.Stderr, "Warning: MCP %s: %v\n", stage, err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Warning: MCP %s for %s: %v\n", stage, appName, err)
+	}
 }
 
 // appToolSet returns the registration for appName, or nil if it has none.
@@ -383,8 +505,13 @@ func (s *mcpServer) registeredAppNames() []string {
 	return names
 }
 
-// storeAppTools records a successful registration and clears any retry backoff.
-func (s *mcpServer) storeAppTools(appName string, set *appToolSet) {
+// storeAppTools records a successful registration and clears any backoff. It
+// reports false, storing nothing, when the connection changed while the app was
+// being opened -- the tools would describe a device the client has left.
+func (s *mcpServer) storeAppTools(appName string, set *appToolSet, revision uint64) bool {
+	if _, current := s.connAndRevision(); current != revision {
+		return false
+	}
 	s.appMu.Lock()
 	defer s.appMu.Unlock()
 	if s.appTools == nil {
@@ -392,30 +519,43 @@ func (s *mcpServer) storeAppTools(appName string, set *appToolSet) {
 	}
 	s.appTools[appName] = set
 	delete(s.appRetry, appName)
+	return true
 }
 
-// failAppTools records why an app could not be proxied and holds it back from
-// the next few passes.
+// failAppTools records why an app could not be proxied and holds it back, with
+// the delay doubling on each consecutive failure.
 func (s *mcpServer) failAppTools(appName, stage string, err error) {
-	s.recordProxyDiag(appName, stage, err)
-	fmt.Fprintf(os.Stderr, "Warning: MCP %s for %s: %v\n", stage, appName, err)
+	s.warnProxyDiag(appName, stage, err)
+
 	s.appMu.Lock()
 	defer s.appMu.Unlock()
 	if s.appRetry == nil {
-		s.appRetry = make(map[string]time.Time)
+		s.appRetry = make(map[string]appRetryState)
 	}
-	s.appRetry[appName] = time.Now().Add(appToolRetryBackoff)
+	state := s.appRetry[appName]
+	state.delay *= 2
+	if floor := s.retryFloor(); state.delay < floor {
+		state.delay = floor
+	}
+	if state.delay > appToolRetryMax {
+		state.delay = appToolRetryMax
+	}
+	state.next = time.Now().Add(state.delay)
+	s.appRetry[appName] = state
 }
 
-// appRetryAt reports when appName may be retried, if it is being held back.
-func (s *mcpServer) appRetryAt(appName string) (time.Time, bool) {
+// appOpenDue reports whether appName may be attempted in this pass.
+func (s *mcpServer) appOpenDue(appName string) bool {
 	s.appMu.Lock()
 	defer s.appMu.Unlock()
-	at, ok := s.appRetry[appName]
-	return at, ok
+	state, held := s.appRetry[appName]
+	return !held || !time.Now().Before(state.next)
 }
 
-// unregisterAppTools removes one app's tools and closes its proxy.
+// unregisterAppTools removes one app's tools. The names go synchronously so a
+// tools/list straight afterwards is already correct; the transports close in
+// the background because that can block for seconds against a device that has
+// gone away.
 func (s *mcpServer) unregisterAppTools(srv *server.MCPServer, appName string) {
 	s.appMu.Lock()
 	set := s.appTools[appName]
@@ -424,20 +564,16 @@ func (s *mcpServer) unregisterAppTools(srv *server.MCPServer, appName string) {
 	if set == nil {
 		return
 	}
-	// Removing the names before closing the transport keeps the window where a
-	// client can call a tool whose proxy is already gone as short as possible.
 	srv.DeleteTools(set.toolNames...)
-	if set.client != nil {
-		_ = set.client.Close()
-	}
-	if set.close != nil {
-		set.close()
-	}
+	closeAppTransport(set.client, set.close)
 }
 
 // unregisterAllAppTools drops every proxied app, used on shutdown and whenever
 // the connection changes device.
 func (s *mcpServer) unregisterAllAppTools(srv *server.MCPServer) {
+	if srv == nil {
+		return
+	}
 	for _, name := range s.registeredAppNames() {
 		s.unregisterAppTools(srv, name)
 	}

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -192,7 +193,10 @@ func TestShortMCPPrefix_UsesLastSegment(t *testing.T) {
 }
 
 func TestMCPToolPrefixes_CollisionFallsBackToFullID(t *testing.T) {
-	prefixes := mcpToolPrefixes([]string{"org.a.status", "org.b.status", "org.c.unique"})
+	prefixes, ambiguous := mcpToolPrefixes([]string{"org.a.status", "org.b.status", "org.c.unique"})
+	if len(ambiguous) != 0 {
+		t.Fatalf("full ids separate these apps; got ambiguous %v", ambiguous)
+	}
 	if got := prefixes["org.a.status"]; got != "org_a_status" {
 		t.Errorf("colliding app a got %q, want the full id", got)
 	}
@@ -348,12 +352,15 @@ func TestReconciler_TriggerRegistersWithoutWaitingForTick(t *testing.T) {
 	srv := server.NewMCPServer("t", "0")
 	s := New(&config.Config{}, nil)
 
+	// An hour between ticks: only the trigger can register anything inside the
+	// deadline below, so a broken trigger fails this test rather than being
+	// covered by the next tick.
+	s.rescanInterval = time.Hour
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go s.runAppToolReconciler(ctx, srv)
 
-	// SetConn triggers a pass; the rescan interval is far longer than this
-	// deadline, so passing proves the trigger and not the ticker.
 	s.SetConn(conn)
 	deadline := time.Now().Add(20 * time.Second)
 	for !hasTool(srv, "pinger__ping") {
@@ -462,5 +469,254 @@ func TestReconcile_DisconnectLeavesOnlyBuiltInTools(t *testing.T) {
 	}
 	if !hasTool(srv, "container_list") {
 		t.Error("built-in tools must survive a disconnect")
+	}
+}
+
+// --- review follow-ups -------------------------------------------------------
+
+// newWedgedBackend accepts TCP connections and then answers nothing, which is
+// how a container whose port is bound but whose MCP server is stuck behaves.
+func newWedgedBackend(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	var mu sync.Mutex
+	var held []net.Conn
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Held open and never answered, so the client waits on a reply
+			// that never comes -- the case the bounded context exists for.
+			mu.Lock()
+			held = append(held, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range held {
+			c.Close()
+		}
+	})
+	return ln.Addr().String()
+}
+
+// A container that accepts the proxy connection and never answers must not
+// wedge the single reconciler goroutine: before the bounded contexts it blocked
+// there for the life of the session, so no other app was ever registered.
+func TestReconcile_WedgedAppDoesNotBlockHealthyOnes(t *testing.T) {
+	healthy, _ := newAppMCPServer(t, "ping")
+	fake := &fakeAppAgent{}
+	fake.setApps([]*agentpb.AppContainer{
+		// "a.wedged" sorts before "z.healthy", so the wedged app is attempted
+		// first and the healthy one is only reached if the pass survives it.
+		runningMCPApp("a.wedged", 3000),
+		runningMCPApp("z.healthy", 3001),
+	}, map[string]string{
+		"a.wedged":  newWedgedBackend(t),
+		"z.healthy": healthy,
+	})
+	conn := startFakeAppAgent(t, fake)
+
+	srv := server.NewMCPServer("t", "0")
+	s := New(&config.Config{}, nil)
+	s.SetConn(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	s.reconcileAppTools(ctx, srv)
+	elapsed := time.Since(start)
+
+	if !hasTool(srv, "healthy__ping") {
+		t.Fatalf("a wedged app must not stop a healthy one registering; got %v", proxiedToolNames(srv))
+	}
+	if hasTool(srv, "wedged__ping") {
+		t.Error("the wedged app should not have registered anything")
+	}
+	// One bounded attempt, not an unbounded wait.
+	if elapsed > appToolOpenTimeout+appToolListTimeout+5*time.Second {
+		t.Errorf("pass took %s; a bounded attempt should cap it near %s", elapsed, appToolOpenTimeout)
+	}
+}
+
+// A failing app must not sleep inside the pass: retries belong to the loop, so
+// a second pass straight afterwards costs nothing for an app still in backoff.
+func TestReconcile_FailedAppBacksOffInsteadOfSleepingInThePass(t *testing.T) {
+	fake := &fakeAppAgent{}
+	// No backend registered for this app, so the proxy connects and the
+	// relay closes immediately -- initialize fails fast.
+	fake.setApps([]*agentpb.AppContainer{runningMCPApp("demo.broken", 3000)}, map[string]string{})
+	conn := startFakeAppAgent(t, fake)
+
+	srv := server.NewMCPServer("t", "0")
+	s := New(&config.Config{}, nil)
+	s.SetConn(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	s.reconcileAppTools(ctx, srv)
+	if due := s.appOpenDue("demo.broken"); due {
+		t.Fatal("a failed open must put the app in backoff")
+	}
+
+	// The second pass must skip it outright rather than pay for it again.
+	start := time.Now()
+	s.reconcileAppTools(ctx, srv)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("a backed-off app cost %s on the next pass; it should be skipped", elapsed)
+	}
+}
+
+// Two app ids that sanitise to the same prefix would register identical tool
+// names, and AddTool would silently keep only one -- routing calls to an app
+// the caller did not name. Neither is registered instead.
+func TestMCPToolPrefixes_NonInjectiveSanitiseIsWithheld(t *testing.T) {
+	prefixes, ambiguous := mcpToolPrefixes([]string{"a.b-x", "a.b_x", "a.safe"})
+	if len(ambiguous) != 2 || ambiguous[0] != "a.b-x" || ambiguous[1] != "a.b_x" {
+		t.Errorf("ambiguous = %v, want both colliding ids", ambiguous)
+	}
+	for _, name := range []string{"a.b-x", "a.b_x"} {
+		if p, ok := prefixes[name]; ok {
+			t.Errorf("%s should have no prefix, got %q", name, p)
+		}
+	}
+	if prefixes["a.safe"] != "safe" {
+		t.Errorf("the unaffected app lost its prefix: %q", prefixes["a.safe"])
+	}
+}
+
+// A prefix changes when a later app makes the short form ambiguous. That is a
+// rename, not a restart: the proxy and MCP session behind it are still good and
+// tearing them down would cost a fresh handshake for no reason.
+func TestReconcile_PrefixChangeKeepsTheSameClient(t *testing.T) {
+	firstAddr, _ := newAppMCPServer(t, "ping")
+	secondAddr, _ := newAppMCPServer(t, "ping")
+	fake := &fakeAppAgent{}
+	fake.setApps([]*agentpb.AppContainer{runningMCPApp("org.a.status", 3000)},
+		map[string]string{"org.a.status": firstAddr})
+	conn := startFakeAppAgent(t, fake)
+
+	srv := server.NewMCPServer("t", "0")
+	s := New(&config.Config{}, nil)
+	s.SetConn(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	s.reconcileAppTools(ctx, srv)
+	if !hasTool(srv, "status__ping") {
+		t.Fatalf("expected the short prefix while it is unique; got %v", proxiedToolNames(srv))
+	}
+	before := s.appToolSet("org.a.status").client
+
+	// A second app claims the same last segment, so both fall back to full ids.
+	fake.setApps([]*agentpb.AppContainer{
+		runningMCPApp("org.a.status", 3000),
+		runningMCPApp("org.b.status", 3001),
+	}, map[string]string{"org.a.status": firstAddr, "org.b.status": secondAddr})
+
+	s.reconcileAppTools(ctx, srv)
+
+	if hasTool(srv, "status__ping") {
+		t.Error("the ambiguous short prefix must be gone")
+	}
+	if !hasTool(srv, "org_a_status__ping") || !hasTool(srv, "org_b_status__ping") {
+		t.Errorf("both apps should carry full-id prefixes; got %v", proxiedToolNames(srv))
+	}
+	if after := s.appToolSet("org.a.status").client; after != before {
+		t.Error("a rename must reuse the open client, not rebuild the proxy")
+	}
+}
+
+// device_connect is followed immediately by tools/list. The previous device's
+// tools have to be gone by the time SetConn returns, not one pass later.
+func TestSetConn_DropsPreviousDeviceToolsSynchronously(t *testing.T) {
+	addr, _ := newAppMCPServer(t, "ping")
+	fake := &fakeAppAgent{}
+	fake.setApps([]*agentpb.AppContainer{runningMCPApp("demo.pinger", 3000)},
+		map[string]string{"demo.pinger": addr})
+	conn := startFakeAppAgent(t, fake)
+
+	srv := server.NewMCPServer("t", "0")
+	s := New(&config.Config{}, nil)
+	s.srv = srv // Start() does this; these tests never call it.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	s.SetConn(conn)
+	s.reconcileAppTools(ctx, srv)
+	if !hasTool(srv, "pinger__ping") {
+		t.Fatalf("expected pinger__ping; got %v", proxiedToolNames(srv))
+	}
+
+	// No reconcile pass in between: SetConn itself must have removed them.
+	s.SetConn(nil)
+	if got := proxiedToolNames(srv); len(got) != 0 {
+		t.Errorf("tools/list right after a connection change still shows %v", got)
+	}
+}
+
+// The whole point of the proxy is that a call reaches the app, so at least one
+// test has to make one rather than stopping at tools/list.
+func TestReconcile_ProxiedToolCallReachesTheApp(t *testing.T) {
+	addr, _ := newAppMCPServer(t, "ping")
+	fake := &fakeAppAgent{}
+	fake.setApps([]*agentpb.AppContainer{runningMCPApp("demo.pinger", 3000)},
+		map[string]string{"demo.pinger": addr})
+	conn := startFakeAppAgent(t, fake)
+
+	srv := server.NewMCPServer("t", "0")
+	s := New(&config.Config{}, nil)
+	s.SetConn(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	s.reconcileAppTools(ctx, srv)
+
+	entry, ok := srv.ListTools()["pinger__ping"]
+	if !ok {
+		t.Fatalf("pinger__ping not registered; got %v", proxiedToolNames(srv))
+	}
+	result, err := entry.Handler(ctx, callToolReq("pinger__ping", map[string]any{}))
+	if err != nil {
+		t.Fatalf("calling the proxied tool: %v", err)
+	}
+	if got := toolResultText(t, result); !strings.Contains(got, "answered by ping") {
+		t.Errorf("proxied call returned %q, want the app's own answer", got)
+	}
+}
+
+// The reconciler retries a failing app for the life of the session, so an
+// unreachable device used to add an identical diagnostic every tick.
+func TestRecordProxyDiag_CollapsesRepeatsAndStaysBounded(t *testing.T) {
+	s := New(&config.Config{}, nil)
+
+	for i := 0; i < 500; i++ {
+		s.recordProxyDiag("demo.app", "initialize", io.EOF)
+	}
+	diags := s.proxyDiagnostics()
+	if len(diags) != 1 {
+		t.Fatalf("the same failure should collapse to one entry, got %d", len(diags))
+	}
+	if diags[0].Count != 500 {
+		t.Errorf("count = %d, want 500", diags[0].Count)
+	}
+
+	for i := 0; i < maxProxyDiag*2; i++ {
+		s.recordProxyDiag("demo.app", "initialize", fmt.Errorf("distinct failure %d", i))
+	}
+	if got := len(s.proxyDiagnostics()); got > maxProxyDiag {
+		t.Errorf("retained %d entries, over the %d cap", got, maxProxyDiag)
 	}
 }
