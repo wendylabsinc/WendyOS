@@ -2810,6 +2810,35 @@ func TestApplyNPU_PassesDeviceTreeModel(t *testing.T) {
 	}
 }
 
+// TestApplyNPU_RequestsUnsignedProcessDomain is the difference between reaching the DSP
+// and being allowed to offload to it: the non-secure FastRPC nodes accept only an
+// unsigned process domain, and the userspace reads this attribute from the environment.
+func TestApplyNPU_RequestsUnsignedProcessDomain(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp": {10, 262},
+	}, &[2]int64{251, 0})
+
+	spec := npuSpec(t)
+
+	if !slices.Contains(spec.Process.Env, "FASTRPC_PROCESS_ATTRS=8") {
+		t.Errorf("Env = %v, want FASTRPC_PROCESS_ATTRS requesting an unsigned PD", spec.Process.Env)
+	}
+}
+
+// TestApplyNPU_NoUnsignedRequestWithoutDevices keeps the entitlement inert on boards
+// with no FastRPC transport, where the attribute would only be misleading.
+func TestApplyNPU_NoUnsignedRequestWithoutDevices(t *testing.T) {
+	installFakeFastrpcDevTree(t, nil, nil)
+
+	spec := npuSpec(t)
+
+	for _, e := range spec.Process.Env {
+		if strings.HasPrefix(e, "FASTRPC_PROCESS_ATTRS=") {
+			t.Errorf("Env = %v, want no FastRPC attribute on a host with no NPU", spec.Process.Env)
+		}
+	}
+}
+
 // TestApplyNPU_LeavesFirmwareMasked pins the hardening default: the entitlement must
 // never widen /sys/firmware, which carries SMBIOS serials and ACPI tables.
 func TestApplyNPU_LeavesFirmwareMasked(t *testing.T) {

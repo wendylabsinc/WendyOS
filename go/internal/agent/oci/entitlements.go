@@ -533,8 +533,11 @@ var (
 )
 
 const (
-	// The -secure nodes are the signed-PD path and are root-only; never granted.
-	fastrpcSecureSuffix = "-secure"
+	// The -secure nodes are the signed-PD path and are never granted. The driver
+	// confines the nodes granted below to the unsigned domain, selected via the
+	// process attribute the FastRPC userspace reads from the environment.
+	fastrpcSecureSuffix   = "-secure"
+	fastrpcUnsignedPDAttr = "FASTRPC_PROCESS_ATTRS=8"
 )
 
 // applyNPU grants the FastRPC transport to the on-SoC DSPs.
@@ -574,6 +577,10 @@ func applyNPU(spec *Spec) {
 	if gid, ok := lookupFastrpcGID(); ok {
 		spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)
 	}
+
+	// Without this the runtime asks for a signed process domain, which the kernel
+	// refuses on a non-secure node, so the DSP is reachable but cannot be offloaded to.
+	spec.Process.Env = append(spec.Process.Env, fastrpcUnsignedPDAttr)
 
 	// FastRPC identifies the board from the device-tree model. Passing it in lets the
 	// container stay behind the default /sys/firmware mask, which also covers the DMI
