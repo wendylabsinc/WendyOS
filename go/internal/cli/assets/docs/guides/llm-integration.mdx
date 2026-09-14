@@ -5,6 +5,17 @@ description: Install the Wendy plugin for Codex or Claude Code, then start a Wen
 
 This guide assumes you want Codex or Claude Code to do the coding work for you. You install the Wendy plugin, ask the agent to install or verify the Wendy CLI, then ask it to create and run a Wendy app.
 
+For a terminal assistant built into Wendy, run:
+
+```sh
+wendy chat
+```
+
+Wendy guides you through choosing a local server such as Ollama or LM Studio,
+or a hosted provider, and selecting an available model. It remembers your
+selection; use `wendy chat --setup` to change it. See
+[Wendy Chat](/docs/guides/chat) for local model setup and chat controls.
+
 ## Install the Wendy plugin
 
 Choose the coding agent you will use.

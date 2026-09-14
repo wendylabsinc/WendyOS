@@ -916,6 +916,8 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 			Path:      path,
 			Transport: transportToProto(transport),
 			Driver:    driver,
+			// Local cameras are listed only after a successful capture query.
+			Online: true,
 		}
 		// Empty for a camera with no /dev/v4l entry, which is not an error --
 		// the numeric id still addresses it, it is just not stable across a

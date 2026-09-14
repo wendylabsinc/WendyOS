@@ -643,6 +643,7 @@ jobs:
             --deb-recommends "nerdctl" \
             --deb-recommends "network-manager | connman" \
             --deb-recommends "bluez" \
+            --deb-recommends "v4l2loopback-dkms (>= 0.15.0)" \
             --config-files /etc/default/wendy-agent \
             --config-files /etc/wendy-agent/config.json \
             --config-files /etc/avahi/services/wendy-agent.service \
@@ -694,6 +695,7 @@ jobs:
             --depends "systemd" \
             --depends "ca-certificates" \
             --depends "avahi" \
+            --rpm-tag "Recommends: v4l2loopback >= 0.15.0" \
             --config-files /etc/default/wendy-agent \
             --config-files /etc/wendy-agent/config.json \
             --config-files /etc/avahi/services/wendy-agent.service \
