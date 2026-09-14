@@ -1,0 +1,14 @@
+{
+  "devices": [
+    {
+      "dsp_arch": "v75",
+      "cores": [
+        {
+          "perf_profile": "burst",
+          "rpc_control_latency": 100
+        }
+      ],
+      "pd_session": "unsigned"
+    }
+  ]
+}

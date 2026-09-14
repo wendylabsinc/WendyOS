@@ -1,0 +1,4 @@
+# Staged by setup.sh: vendor runtime, model bundle, and the config it generates.
+genie-htp.tgz
+model/
+genie_config.json

@@ -1,0 +1,10 @@
+{
+    "appId": "sh.wendy.examples.hellogemmanpu",
+    "platform": "linux",
+    "version": "1.0.0",
+    "entitlements": [
+        { "type": "npu" },
+        { "type": "network", "mode": "host" },
+        { "type": "http", "port": 8080 }
+    ]
+}
