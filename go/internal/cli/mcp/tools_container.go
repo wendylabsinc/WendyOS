@@ -123,6 +123,27 @@ func (s *mcpServer) handleContainerList(ctx context.Context, _ mcpgo.CallToolReq
 			"running_state": c.GetRunningState().String(),
 			"failure_count": c.GetFailureCount(),
 		}
+		// Interface ports: "which apps on this device expose something I can
+		// talk to" is the first question a fleet-managing agent asks, and the
+		// answer was being dropped on the floor -- the proto carries both
+		// ports, this handler just never copied them. Omitted when 0 so their
+		// presence means "this app declares that entitlement".
+		if port := c.GetMcpPort(); port != 0 {
+			entry["mcp_port"] = port
+		}
+		if port := c.GetHttpPort(); port != 0 {
+			entry["http_port"] = port
+		}
+		if svcs := c.GetServices(); len(svcs) > 0 {
+			services := make([]map[string]any, 0, len(svcs))
+			for _, svc := range svcs {
+				services = append(services, map[string]any{
+					"name":          svc.GetName(),
+					"running_state": svc.GetRunningState().String(),
+				})
+			}
+			entry["services"] = services
+		}
 		// Exit diagnostics: why a stopped app stopped (crashed / OOM / start
 		// failure / entitlement denied). Only present when recorded.
 		if reason := c.GetTerminationReason(); reason != "" {
