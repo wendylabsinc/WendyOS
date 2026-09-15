@@ -89,6 +89,21 @@ into other commands.
 See [`wendy cloud discover`](/docs/advanced/clients/wendy-cli/commands/cloud/discover)
 for the full column, keyboard, and flag reference.
 
+## Save a cloud device as the default
+
+Run `wendy device set-default` to open the device picker. Switch to the **Cloud**
+tab, highlight a device and press `d` to save it as the default. Press `x` to
+clear it. These shortcuts also work in the live cloud discovery table.
+
+Later `wendy run` and `wendy device` commands use that cloud device when you omit
+`--device`. The saved choice includes its cloud endpoint, organization and asset
+ID, so renaming the device or changing your default organization does not change
+the target. If the saved device is offline or its login is missing, the command
+reports that problem. Use `--device` to override the default for one command.
+
+The **Simulator** tab supports the same shortcuts and saves `vm:<name>`. You can
+set a stopped simulator as default; a later command starts it when needed.
+
 ## Operating Devices Remotely
 
 Everything under `wendy device` is mirrored under **`wendy cloud device`**, which

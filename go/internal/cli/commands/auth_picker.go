@@ -169,23 +169,26 @@ func pickAuthSession(cfg *config.Config) (*config.AuthConfig, error) {
 		}
 	}
 
-	picker.OnSetDefault = func(item tui.PickerItem) string {
+	picker.OnSetDefault = func(item tui.PickerItem) (string, error) {
 		key, _ := item.Value.(string)
 		if key == "" {
-			return ""
+			return "", fmt.Errorf("no auth session selected")
 		}
 		if err := persistSessionDefault(key); err != nil {
-			return fmt.Sprintf("Could not save default: %v", err)
+			return "", fmt.Errorf("could not save default: %w", err)
 		}
-		return fmt.Sprintf("Default set to %s.", item.Name)
+		return fmt.Sprintf("Default set to %s.", item.Name), nil
 	}
-	picker.OnUnsetDefault = func() string {
-		if c, err := config.Load(); err == nil {
-			c.DefaultCloudGRPC = ""
-			c.DefaultOrgID = 0
-			_ = config.Save(c)
+	picker.OnUnsetDefault = func() (string, error) {
+		c, err := config.Load()
+		if err != nil {
+			return "", err
 		}
-		return "Default cleared."
+		c.DefaultCloudGRPC, c.DefaultOrgID = "", 0
+		if err := config.Save(c); err != nil {
+			return "", err
+		}
+		return "Default cleared.", nil
 	}
 
 	p := tea.NewProgram(picker)
