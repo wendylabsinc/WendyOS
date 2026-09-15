@@ -1,0 +1,53 @@
+# The campaign schema version this file is written against. Required; this
+# release of the agent supports version 1.
+version: 1
+
+name: forklift-failures
+fleet: warehouse-west
+
+sources:
+  # Per-source capture policy is optional; without one a source records
+  # continuously. Which modes an adapter honors depends on the source kind:
+  # cameras do continuous and snapshot, audio does continuous and threshold,
+  # ROS 2 and telemetry do continuous only. A mode an adapter does not
+  # implement for its kind still validates and deploys; deployment warns and
+  # that source records continuously.
+  - camera: front
+    capture:
+      mode: snapshot
+      interval: 2s
+      max_resolution: 1280x720
+  - ros2: /lidar/points
+  - ros2: /vehicle/odometry
+  # An audio source with a level-threshold capture policy: when the cabin
+  # microphone's peak level crosses -20 dBFS, the agent seals a 30-second WAV
+  # fragment. level_db is a negative-valued field, so the comparison is against
+  # a negative threshold.
+  - audio: cabin-mic
+    capture:
+      mode: threshold
+      trigger: "level_db > -20"
+      fragment: 30s
+
+capture:
+  buffer: 10s
+  after_trigger: 20s
+  triggers:
+    - event: emergency_stop
+    - model.uncertainty: "> 0.65"
+
+upload:
+  # One of always, wifi, or manual.
+  when: wifi
+  # Optional logical dataset name the fleet backend maps to storage. This is
+  # not a URL; devices never receive bucket layouts or credentials.
+  destination: forklift-episodes
+  # Optional device-side bandwidth cap for uploads.
+  max_rate: 5MB/s
+
+retention:
+  # Optional cap for on-device episode storage.
+  local_quota: 10GiB
+
+export:
+  annotation: cvat
