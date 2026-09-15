@@ -95,7 +95,7 @@ func TestDiscoverModel_UpdateReturnsDelayedCmd(t *testing.T) {
 	}{
 		{"usb", usbScanMsg{devices: []models.USBDevice{{DisplayName: "test"}}}},
 		{"ethernet", ethScanMsg{devices: []models.EthernetInterface{{DisplayName: "eth0"}}}},
-		{"external", extScanMsg{devices: []models.ExternalDevice{{DisplayName: "ext0"}}}},
+		{"external", extScanMsg{provider: &fakeProvider{key: "fake-ext"}, devices: []models.ExternalDevice{{DisplayName: "ext0"}}}},
 	}
 
 	for _, tc := range cases {

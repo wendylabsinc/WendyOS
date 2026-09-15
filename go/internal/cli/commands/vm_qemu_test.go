@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -172,15 +173,27 @@ func TestQEMUInstallHintIsTheOnlySourceInHelp(t *testing.T) {
 	}
 }
 
-// stubSocketVMNetMissing records what would be run. The helper is genuinely
-// absent here -- the socket paths it probes are macOS-only -- so nothing needs
-// to fake that half.
+// stubSocketVMNetMissing simulates a missing helper that becomes available
+// after starting, regardless of the host's actual installation.
 func stubSocketVMNetMissing(t *testing.T, installed, started *bool) {
 	t.Helper()
+	savedFind := findSocketVMNetFn
 	savedInstall, savedStart := installSocketVMNetFn, startSocketVMNetFn
+	findSocketVMNetFn = func(hostOS, brewPrefix string) (string, error) {
+		if hostOS != "darwin" {
+			return savedFind(hostOS, brewPrefix)
+		}
+		if *started {
+			return "/test/socket_vmnet", nil
+		}
+		return "", fmt.Errorf("%w: brew install socket_vmnet", vm.ErrSocketVMNetNotFound)
+	}
 	installSocketVMNetFn = func(context.Context) error { *installed = true; return nil }
 	startSocketVMNetFn = func(context.Context) error { *started = true; return nil }
-	t.Cleanup(func() { installSocketVMNetFn, startSocketVMNetFn = savedInstall, savedStart })
+	t.Cleanup(func() {
+		findSocketVMNetFn = savedFind
+		installSocketVMNetFn, startSocketVMNetFn = savedInstall, savedStart
+	})
 }
 
 func TestEnsureSocketVMNetNeverPromptsOffMac(t *testing.T) {
@@ -211,7 +224,13 @@ func TestEnsureSocketVMNetInstallsAndStartsOnMac(t *testing.T) {
 	stubBrewLookPath(t, func(n string) (string, error) { return "/opt/homebrew/bin/" + n, nil })
 	stubConfirmFn(t, func(string) bool { asked = true; return true })
 
-	_, _ = ensureSocketVMNet(context.Background(), "darwin", "/opt/homebrew")
+	socket, err := ensureSocketVMNet(context.Background(), "darwin", "/opt/homebrew")
+	if err != nil {
+		t.Fatalf("ensureSocketVMNet() = %v, want nil", err)
+	}
+	if socket != "/test/socket_vmnet" {
+		t.Errorf("socket = %q, want /test/socket_vmnet", socket)
+	}
 	if !asked {
 		t.Error("did not prompt before installing")
 	}

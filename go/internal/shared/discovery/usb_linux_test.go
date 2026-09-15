@@ -16,29 +16,8 @@ func TestUSBDeviceFromSysfs(t *testing.T) {
 		wantOK          bool
 		wantName        string
 		wantDisplayName string
-		wantESP32       bool
 		wantVendorID    string
 	}{
-		{
-			name:            "esp32 by vid:pid with no strings",
-			vid:             "303a",
-			pid:             "1001",
-			wantOK:          true,
-			wantName:        "ESP32-C6",
-			wantDisplayName: "ESP32-C6",
-			wantESP32:       true,
-			wantVendorID:    "0x303a",
-		},
-		{
-			name:            "esp32 vid uppercased by sysfs is still matched",
-			vid:             "303A",
-			pid:             "1001",
-			wantOK:          true,
-			wantName:        "ESP32-C6",
-			wantDisplayName: "ESP32-C6",
-			wantESP32:       true,
-			wantVendorID:    "0x303a",
-		},
 		{
 			name:            "wendy device by name",
 			vid:             "1234",
@@ -48,7 +27,6 @@ func TestUSBDeviceFromSysfs(t *testing.T) {
 			wantOK:          true,
 			wantName:        "Wendy Labs Edge Device",
 			wantDisplayName: "Wendy Labs Edge Device",
-			wantESP32:       false,
 			wantVendorID:    "0x1234",
 		},
 		{
@@ -57,6 +35,20 @@ func TestUSBDeviceFromSysfs(t *testing.T) {
 			pid:     "0001",
 			mfr:     "Intel",
 			product: "Hub",
+			wantOK:  false,
+		},
+		{
+			name:   "esp32 by vid:pid with no name is excluded",
+			vid:    "303a",
+			pid:    "1001",
+			wantOK: false,
+		},
+		{
+			name:    "esp32 vid:pid is excluded even when the name also matches wendy",
+			vid:     "303a",
+			pid:     "1001",
+			mfr:     "Wendy Labs",
+			product: "Lite",
 			wantOK:  false,
 		},
 	}
@@ -75,9 +67,6 @@ func TestUSBDeviceFromSysfs(t *testing.T) {
 			}
 			if dev.DisplayName != tt.wantDisplayName {
 				t.Errorf("DisplayName = %q, want %q", dev.DisplayName, tt.wantDisplayName)
-			}
-			if dev.IsESP32 != tt.wantESP32 {
-				t.Errorf("IsESP32 = %v, want %v", dev.IsESP32, tt.wantESP32)
 			}
 			if !dev.IsWendyDevice {
 				t.Errorf("IsWendyDevice = false, want true")
@@ -105,11 +94,14 @@ func TestDiscoverUSB_FromSysfsTree(t *testing.T) {
 		}
 	}
 
-	// An ESP32-C6 whole-device directory.
-	mkdev("3-1", map[string]string{"idVendor": "303a", "idProduct": "1001"})
+	// A Wendy whole-device directory.
+	mkdev("3-1", map[string]string{"idVendor": "1234", "idProduct": "5678", "manufacturer": "Wendy Labs", "product": "Edge Device"})
 	// An unrelated device that must be ignored.
 	mkdev("3-2", map[string]string{"idVendor": "8086", "idProduct": "0001", "manufacturer": "Intel"})
-	// An interface directory for the ESP32 — must be skipped (has a colon, no ids).
+	// An Espressif ESP32 (Wendy Lite) whole-device directory — must be excluded here;
+	// it's surfaced separately via serial/WendyCom discovery.
+	mkdev("3-3", map[string]string{"idVendor": "303a", "idProduct": "1001"})
+	// An interface directory for the Wendy device — must be skipped (has a colon, no ids).
 	mkdev("3-1:1.0", map[string]string{})
 	// A bus root without idVendor/idProduct — must be skipped.
 	mkdev("usb3", map[string]string{})
@@ -122,7 +114,7 @@ func TestDiscoverUSB_FromSysfsTree(t *testing.T) {
 	if len(devices) != 1 {
 		t.Fatalf("expected exactly 1 matched device, got %d: %+v", len(devices), devices)
 	}
-	if !devices[0].IsESP32 {
-		t.Errorf("expected the matched device to be the ESP32, got %+v", devices[0])
+	if !devices[0].IsWendyDevice {
+		t.Errorf("expected the matched device to be flagged as a Wendy device, got %+v", devices[0])
 	}
 }

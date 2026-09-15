@@ -680,6 +680,12 @@ func (r *resolvedChunkLayer) upload(ctx context.Context, cs agentpb.WendyContain
 	if err != nil {
 		return fmt.Errorf("querying missing chunks for layer %s: %w", r.header.GetDiffId(), err)
 	}
+	unique := make(map[[32]byte]bool, len(orderedHashes))
+	for _, hb := range orderedHashes {
+		var h [32]byte
+		copy(h[:], hb)
+		unique[h] = true
+	}
 	missing := make(map[[32]byte]bool, len(qresp.GetMissingHashes()))
 	for _, hb := range qresp.GetMissingHashes() {
 		var h [32]byte
@@ -697,13 +703,16 @@ func (r *resolvedChunkLayer) upload(ctx context.Context, cs agentpb.WendyContain
 			return err
 		}
 		var missingBytes int64
+		planned := make(map[[32]byte]bool, len(missing))
 		for _, ref := range r.refs {
-			if missing[ref.Hash] {
-				missingBytes += int64(ref.Len)
+			if !missing[ref.Hash] || planned[ref.Hash] {
+				continue
 			}
+			planned[ref.Hash] = true
+			missingBytes += int64(ref.Len)
 		}
 		transferProgress.addTotal(missingBytes)
-		prog.LayerPlanned(len(orderedHashes), len(missing), missingBytes)
+		prog.LayerPlanned(len(unique), len(missing), missingBytes)
 		var wc grpc.ClientStreamingClient[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse]
 		chunksInStream := 0
 		for chunkIndex, ref := range r.refs {
@@ -741,6 +750,9 @@ func (r *resolvedChunkLayer) upload(ctx context.Context, cs agentpb.WendyContain
 				}
 				return fmt.Errorf("sending chunk %d/%d for layer %s: %w", chunkIndex+1, len(r.refs), r.header.GetDiffId(), err)
 			}
+			// The ordered manifest may reference identical content more than
+			// once. A single staged copy satisfies every occurrence.
+			delete(missing, ref.Hash)
 			prog.ChunkSent(len(buf))
 			transferProgress.addSent(int64(len(buf)))
 			chunksInStream++
@@ -759,7 +771,7 @@ func (r *resolvedChunkLayer) upload(ctx context.Context, cs agentpb.WendyContain
 			return fmt.Errorf("closing chunk upload for layer %s: %w", r.header.GetDiffId(), err)
 		}
 	} else {
-		prog.LayerPlanned(len(orderedHashes), 0, 0)
+		prog.LayerPlanned(len(unique), 0, 0)
 	}
 	return nil
 }

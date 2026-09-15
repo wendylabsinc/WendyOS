@@ -18,31 +18,49 @@ const minBufferMs uint32 = 10
 // playback jitter buffer depth is derived from it.
 const defaultAgentChunkMs uint32 = 10
 
-// virtualCapturePatterns are case-insensitive substrings that mark an INPUT
-// device as a virtual/dummy endpoint rather than a usable microphone. This is a
-// denylist on purpose: anything unrecognised (USB mics, onboard codecs, named
-// I2S mics) is treated as real, so an unusual real microphone is never silently
-// hidden. Users can still reach hidden devices with --all or an explicit --id.
-var virtualCapturePatterns = []string{
-	"admaif",   // Tegra APE DMA routing FIFOs; nothing routed in by default (EIO on read)
-	"hdmi",     // display audio, not a microphone
-	"dummy",    // snd-dummy driver
+// unusableCapturePatterns are case-insensitive substrings that mark an INPUT
+// device that cannot carry real audio: reading it fails or yields nothing. These
+// are never auto-selected (only reachable via --all or an explicit --id).
+var unusableCapturePatterns = []string{
+	"admaif", // Tegra APE DMA routing FIFOs; nothing routed in by default (EIO on read)
+	"hdmi",   // display audio, not a microphone
+	"dummy",  // snd-dummy driver
+	"null",   // null sink/source
+}
+
+// loopbackCapturePatterns are case-insensitive substrings that mark an INPUT
+// device as a virtual loopback endpoint. Unlike the unusable ones these DO carry
+// real audio — a mounted remote-sensor mic exposed via snd-aloop is a legitimate
+// microphone — so they are usable, just ranked below physical mics: auto-select
+// falls back to them only when no physical mic exists (see resolveListenDeviceID).
+var loopbackCapturePatterns = []string{
 	"loopback", // ALSA loopback
 	"aloop",    // snd-aloop
-	"null",     // null sink/source
 	"virtual",  // PipeWire/Pulse virtual nodes
 }
 
-// isLikelyVirtualCapture reports whether an INPUT device is a virtual/dummy
-// endpoint that cannot serve as a real microphone.
-func isLikelyVirtualCapture(d *agentpb.AudioDevice) bool {
+func matchesAny(d *agentpb.AudioDevice, patterns []string) bool {
 	hay := strings.ToLower(d.GetName() + " " + d.GetDescription())
-	for _, p := range virtualCapturePatterns {
+	for _, p := range patterns {
 		if strings.Contains(hay, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// isUnusableCapture reports whether an INPUT device cannot serve as a microphone
+// at all (EIO on read, display audio, dummy/null sinks).
+func isUnusableCapture(d *agentpb.AudioDevice) bool {
+	return matchesAny(d, unusableCapturePatterns)
+}
+
+// isLikelyVirtualCapture reports whether an INPUT device is a virtual/dummy
+// endpoint rather than a physical microphone. It covers both the unusable
+// endpoints and the (usable-but-secondary) loopback endpoints; it is the
+// predicate that keeps such devices out of the *default* physical-mic pool.
+func isLikelyVirtualCapture(d *agentpb.AudioDevice) bool {
+	return isUnusableCapture(d) || matchesAny(d, loopbackCapturePatterns)
 }
 
 // inputDevices returns the INPUT (capture) devices, preserving order.
@@ -68,6 +86,20 @@ func realCaptureDevices(devs []*agentpb.AudioDevice) []*agentpb.AudioDevice {
 	return out
 }
 
+// usableCaptureDevices returns INPUT devices that can carry real audio,
+// preserving order. This is the physical mics plus loopback endpoints
+// (snd-aloop, etc.) — everything except the genuinely-unusable endpoints
+// (admaif/hdmi/dummy/null). It is the fallback pool when no physical mic exists.
+func usableCaptureDevices(devs []*agentpb.AudioDevice) []*agentpb.AudioDevice {
+	var out []*agentpb.AudioDevice
+	for _, d := range inputDevices(devs) {
+		if !isUnusableCapture(d) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 func findAudioDeviceByID(devs []*agentpb.AudioDevice, id uint32) *agentpb.AudioDevice {
 	for _, d := range devs {
 		if d.GetId() == id {
@@ -86,10 +118,16 @@ type listenDevicePicker func(candidates []*agentpb.AudioDevice) (uint32, error)
 //
 // Precedence:
 //  1. idFlag != 0 -> use it verbatim (explicit always wins; no filtering).
-//  2. candidate pool = real capture devices (or all INPUT devices when all).
+//  2. candidate pool = physical capture devices; if none exist, fall back to
+//     usable devices (adds loopback/aloop mics but never the unusable
+//     admaif/hdmi/dummy/null endpoints). --all widens the pool to every INPUT.
 //  3. empty pool   -> actionable error.
 //  4. one device   -> use it.
 //  5. 2+ devices    -> picker when interactive, else the first one.
+//
+// A physical mic is thus always preferred over a loopback one when both exist,
+// but a loopback/virtual mic (e.g. a remote sensor via snd-aloop) is used
+// automatically when it is all that is available — no --all required.
 //
 // The returned *agentpb.AudioDevice is the chosen device when known (for
 // logging); it may be nil when idFlag points at a device not present in devs.
@@ -104,6 +142,9 @@ func resolveListenDeviceID(
 	}
 
 	pool := realCaptureDevices(devs)
+	if len(pool) == 0 {
+		pool = usableCaptureDevices(devs)
+	}
 	if all {
 		pool = inputDevices(devs)
 	}
@@ -114,8 +155,8 @@ func resolveListenDeviceID(
 			return 0, nil, fmt.Errorf("no capture devices found on the target device")
 		}
 		return 0, nil, fmt.Errorf(
-			"no microphone detected; re-run with --all to include virtual/loopback devices, " +
-				"or pass --id (see `wendy device audio list`)")
+			"no usable microphone detected; re-run with --all to include unusable " +
+				"endpoints (HDMI/dummy/routing FIFOs), or pass --id (see `wendy device audio list`)")
 	case 1:
 		return pool[0].GetId(), pool[0], nil
 	default:

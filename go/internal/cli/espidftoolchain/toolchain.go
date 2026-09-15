@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -91,6 +92,104 @@ func ProjectTarget(dir string) string {
 		return ""
 	}
 	return config.IdfTarget
+}
+
+// ReadSdkconfig reads the sdkconfig of the ESP-IDF project in dir and returns
+// the value of each requested setting, typed: a boolean option comes back as a
+// bool, an integer one as an int, and a string one with its quotes stripped.
+//
+// A setting that is not set is left out of the result rather than reported, so
+// a lookup of it yields nil, which stays distinct from an option genuinely set
+// to an empty string (CONFIG_WENDY_WIFI_SSID="" is a real one). Only a failure
+// to read the file is an error.
+//
+// This reads the sdkconfig idf.py generates in the project directory, which
+// exists only once the project has been configured — not sdkconfig.defaults,
+// which merely seeds it. Its lines look like:
+//
+//	CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+//	# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+//	CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+//	CONFIG_IDF_TARGET="esp32c6"
+func ReadSdkconfig(dir string, keys []string) (map[string]any, error) {
+	f, err := os.Open(filepath.Join(dir, "sdkconfig"))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	wanted := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		wanted[key] = struct{}{}
+	}
+
+	values := make(map[string]any, len(keys))
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skipping every comment is what detects an unset option: Kconfig
+		// writes those as "# CONFIG_X is not set" rather than leaving them
+		// out, and either way the option never enters the map.
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		// The generated file never pads the assignment, but a hand-edited one
+		// can, and a padded key would otherwise read as unset.
+		key = strings.TrimSpace(key)
+		if _, ok := wanted[key]; !ok {
+			continue
+		}
+		// Last one wins, as Kconfig itself resolves it. IDF appends a
+		// deprecated-alias section naming retired options
+		// (CONFIG_CONSOLE_UART_DEFAULT for CONFIG_ESP_CONSOLE_UART_DEFAULT),
+		// but never the same option twice, so this only matters for a
+		// hand-edited file.
+		values[key] = parseSdkconfigValue(strings.TrimSpace(value))
+	}
+	// Without this a truncated read would look like a project with every
+	// option unset, i.e. a misconfiguration rather than a failure to read.
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+// parseSdkconfigValue converts the right-hand side of an sdkconfig assignment
+// to the Go type the option holds:
+//
+//	y      -> true
+//	n      -> false
+//	"text" -> "text"
+//	115200 -> 115200
+//	0x8000 -> 32768
+//
+// An unrecognized form is returned as its raw string, so an option this does
+// not know how to type stays visible to the caller instead of vanishing.
+func parseSdkconfigValue(value string) any {
+	switch value {
+	case "y":
+		return true
+	case "n":
+		// The generated sdkconfig writes "# CONFIG_X is not set" instead, but
+		// a sdkconfig.defaults does use =n.
+		return false
+	}
+	// A matched pair only: strings.Trim(value, `"`), the idiom used elsewhere
+	// in the repo, would also eat an unbalanced quote belonging to the value.
+	if len(value) >= 2 && strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`) {
+		return value[1 : len(value)-1]
+	}
+	// Base 0 so hex values (CONFIG_PARTITION_TABLE_OFFSET=0x8000) parse too.
+	// int rather than int64, so an untyped constant in a caller's comparison
+	// — which boxes into any as an int — actually matches.
+	if n, err := strconv.ParseInt(value, 0, strconv.IntSize); err == nil {
+		return int(n)
+	}
+	return value
 }
 
 // EnsureVersion verifies that eim is installed and that the DefaultVersion

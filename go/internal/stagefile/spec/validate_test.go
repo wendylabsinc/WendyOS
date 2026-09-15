@@ -398,3 +398,26 @@ func TestValidateRejectsFormFeedInCopyDest(t *testing.T) {
 		t.Fatal("expected an error for a form feed embedded in copy.dest, got nil")
 	}
 }
+
+// An entrypoint with no argv compiles to a broken ENTRYPOINT [] — and with
+// source: set, to a bash wrapper that execs nothing.
+func TestValidateRejectsEmptyEntrypointExec(t *testing.T) {
+	for _, e := range []*Entrypoint{{}, {Exec: []string{}}, {Source: "/opt/setup.bash"}} {
+		f := &File{Version: 1, Stages: []Stage{{Name: "app", From: "debian:12", Entrypoint: e}}}
+		if err := f.Validate(); err == nil {
+			t.Errorf("Validate accepted entrypoint %+v with no exec", e)
+		}
+	}
+}
+
+// paths: [""] passes the cardinality check but compiles to a COPY with a
+// missing source and, via the dest default, a blank destination.
+func TestValidateRejectsEmptyCopyPath(t *testing.T) {
+	f := &File{Version: 1, Stages: []Stage{{
+		Name: "app", From: "debian:12",
+		Copy: []CopyEntry{{From: "local", Paths: []string{""}}},
+	}}}
+	if err := f.Validate(); err == nil {
+		t.Fatal("Validate accepted a copy entry with an empty path")
+	}
+}

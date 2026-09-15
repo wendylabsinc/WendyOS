@@ -38,6 +38,12 @@ let package = Package(
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.9.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.0.0"),
+        // Replace this revision with the first release containing
+        // https://github.com/apple/swift-nio-ssl/pull/604.
+        .package(
+            url: "https://github.com/apple/swift-nio-ssl.git",
+            revision: "76afd00803dd83dfdf2ec6fc56e1e460e60fd4e2"
+        ),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
     ],
     targets: [
@@ -49,6 +55,7 @@ let package = Package(
                 .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
@@ -62,6 +69,7 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "GRPCNIOTransportHTTP2", package: "grpc-swift-nio-transport"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "GRPCCore", package: "grpc-swift-2"),
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "GRPCServiceLifecycle", package: "grpc-swift-extras"),

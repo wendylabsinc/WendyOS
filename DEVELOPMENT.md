@@ -79,7 +79,9 @@ sudo dnf install -y alsa-lib-devel libusb1-devel containerd
 sudo systemctl enable --now containerd
 ```
 
-**Windows:** no libusb needed (the Thor path compiles to a stub). Only the CLI
+**Windows:** no libusb needed. Thor, Orin, and Dragonwing flashing use native
+WinUSB; the CLI installs or updates the selected board's driver binding when
+needed. Only the CLI
 builds on Windows — `wendy-agent` is Linux-only.
 
 ### Optional developer tools

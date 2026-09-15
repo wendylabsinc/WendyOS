@@ -21,6 +21,7 @@ var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementBluetooth: "Access Bluetooth peripherals",
 	appconfig.EntitlementVideo:     "Deprecated: use camera instead",
 	appconfig.EntitlementGPU:       "Access GPU for AI or compute workloads",
+	appconfig.EntitlementNPU:       "Access the NPU for on-device AI inference",
 	appconfig.EntitlementPersist:   "Persist data across restarts",
 	appconfig.EntitlementAudio:     "Access audio input/output devices",
 	appconfig.EntitlementCamera:    "Access camera devices",

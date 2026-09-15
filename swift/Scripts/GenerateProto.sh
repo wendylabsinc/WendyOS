@@ -32,7 +32,21 @@ swift package --allow-writing-to-package-directory generate-grpc-code-from-proto
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto"
+    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto" \
+    "$PROTO_DIR/wendy/lite/sensorlink.proto" \
+    "$PROTO_DIR/wendy/agent/services/v2/sensor_service.proto"
+
+# The Mac agent is the video server; it doesn't need generated client or
+# multi-layer service adapters for this protocol.
+echo "Generating Wendy Agent video messages..."
+swift package --allow-writing-to-package-directory generate-grpc-code-from-protos \
+    --no-clients \
+    --no-servers \
+    --access-level public \
+    --output-path Sources/WendyAgentGRPC/Proto \
+    --import-path "$PROTO_DIR" \
+    -- \
+    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
 
 echo "Generating OpenTelemetry gRPC code..."
 rm -rf Sources/OpenTelemetryGRPC/Proto

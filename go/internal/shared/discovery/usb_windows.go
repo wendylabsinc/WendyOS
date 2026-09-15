@@ -12,7 +12,9 @@ import (
 )
 
 // discoverUSB uses PowerShell and WMI to find USB-connected Wendy devices on Windows.
-// It queries Win32_PnPEntity for USB devices and filters by name or ESP32 VID:PID.
+// It queries Win32_PnPEntity for USB devices and filters by name, excluding
+// Espressif ESP32 boards (by VID:PID) even when the name also matches —
+// those are Wendy Lite boards, listed separately via serial/WendyCom discovery.
 func discoverUSB(ctx context.Context) ([]models.USBDevice, error) {
 	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command",
 		`Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPDeviceID -like 'USB\VID_*' } | Select-Object Name, PNPDeviceID, Manufacturer | ConvertTo-Json -Compress`)
@@ -46,7 +48,7 @@ func discoverUSB(ctx context.Context) ([]models.USBDevice, error) {
 		isWendy := strings.Contains(strings.ToLower(entry.Name), "wendy")
 		isESP32 := strings.EqualFold(vid, models.ESP32VendorID) && strings.EqualFold(pid, models.ESP32ProductID)
 
-		if !isWendy && !isESP32 {
+		if !isWendy || isESP32 {
 			continue
 		}
 
@@ -56,11 +58,6 @@ func discoverUSB(ctx context.Context) ([]models.USBDevice, error) {
 			VendorID:      vid,
 			ProductID:     pid,
 			IsWendyDevice: true,
-			IsESP32:       isESP32,
-		}
-
-		if isESP32 {
-			dev.DisplayName = "ESP32-C6"
 		}
 
 		// Extract serial number from PNPDeviceID (third segment).

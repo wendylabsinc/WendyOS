@@ -1,7 +1,7 @@
 //go:build windows
 
-// Package winusb is the Windows USB backend for Thor flashing. It enumerates
-// NVIDIA Jetson USB devices, installs a WinUSB driver binding for them (see
+// Package winusb provides Windows USB access for Jetson and Qualcomm flashing.
+// It enumerates USB devices and installs family-specific WinUSB bindings (see
 // driverinstall_windows.go), and speaks control/bulk USB to them via winusb.dll
 // (see winusb_windows.go) — the Windows equivalent of the gousb/libusb transport
 // used on macOS and Linux.
@@ -13,11 +13,13 @@
 package winusb
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/rcm"
 )
@@ -33,7 +35,7 @@ const (
 	ProductGadget = 0x7100
 )
 
-// Device is a Jetson USB device as seen by SetupAPI, independent of whether a
+// Device is a USB device as seen by SetupAPI, independent of whether a
 // driver is bound. It carries enough identity to select and describe a device
 // before we can open it (opening needs the WinUSB driver bound).
 type Device struct {
@@ -49,7 +51,12 @@ type Device struct {
 	// LocationPath is the firmware/bus topology path (DEVPKEY_Device_LocationPaths
 	// first entry), stable across re-enumeration at the same physical port. Used as
 	// the cross-stage PathKey so a multi-device host flashes the chosen board.
-	LocationPath string
+	LocationPath  string
+	Product       string
+	CompatibleIDs []string
+	Service       string
+	DriverINF     string
+	DriverVersion string
 	// Bound reports whether a function driver is attached (CM_Get_DevNode_Status
 	// without DN_HAS_PROBLEM/CM_PROB_FAILED_INSTALL). A driverless recovery device
 	// reports false; after WinUSB install it reports true.
@@ -133,6 +140,11 @@ const (
 // not a driver is bound. It never opens a device, so it needs no driver and no
 // elevation.
 func ListDevices() ([]Device, error) {
+	return ListVendor(VendorNVIDIA)
+}
+
+// ListVendor enumerates USB devnodes without opening them or requiring a driver.
+func ListVendor(vendor uint16) ([]Device, error) {
 	// DIGCF_ALLCLASSES so we see devices with no assigned setup class (a
 	// driverless recovery device has an empty Class); DIGCF_PRESENT for currently
 	// attached only. The "USB" enumerator scopes the walk to the USB bus.
@@ -146,15 +158,17 @@ func ListDevices() ([]Device, error) {
 	for i := 0; ; i++ {
 		info, err := set.EnumDeviceInfo(i)
 		if err != nil {
-			// ERROR_NO_MORE_ITEMS ends the enumeration.
-			break
+			if errors.Is(err, windows.ERROR_NO_MORE_ITEMS) {
+				break
+			}
+			return nil, fmt.Errorf("enumerating USB devices: %w", err)
 		}
 		instanceID, err := set.DeviceInstanceID(info)
 		if err != nil {
 			continue
 		}
 		vid, pid, ok := ParseVIDPID(instanceID)
-		if !ok || vid != VendorNVIDIA {
+		if !ok || vid != vendor {
 			continue
 		}
 
@@ -179,11 +193,33 @@ func ListDevices() ([]Device, error) {
 		if v, err := set.DeviceRegistryProperty(info, windows.SPDRP_LOCATION_PATHS); err == nil {
 			d.LocationPath = FirstString(v)
 		}
+		if v, err := set.DeviceRegistryProperty(info, windows.SPDRP_SERVICE); err == nil {
+			d.Service = FirstString(v)
+		}
+		if v, err := set.DeviceRegistryProperty(info, windows.SPDRP_COMPATIBLEIDS); err == nil {
+			if ids, ok := v.([]string); ok {
+				d.CompatibleIDs = ids
+			}
+		}
+		// DEVPKEY_Device_BusReportedDeviceDesc carries the EDL CID/SN product
+		// string even when the USB serial descriptor is absent.
+		productKey := windows.DEVPROPKEY{FmtID: windows.DEVPROPGUID(mustGUID("{540b947e-8b40-45bc-a8a2-6a0b894cbda2}")), PID: 4}
+		if v, err := windows.SetupDiGetDeviceProperty(set, info, &productKey); err == nil {
+			d.Product = FirstString(v)
+		}
+		if key, err := set.OpenDevRegKey(info, windows.DICS_FLAG_GLOBAL, 0, windows.DIREG_DRV, windows.KEY_READ); err == nil {
+			r := registry.Key(key)
+			d.DriverINF, _, _ = r.GetStringValue("InfPath")
+			d.DriverVersion, _, _ = r.GetStringValue("DriverVersion")
+			r.Close()
+		}
 
 		out = append(out, d)
 	}
 	return out, nil
 }
+
+func (d Device) HardwareID() string { return fmt.Sprintf(`USB\VID_%04X&PID_%04X`, d.VID, d.PID) }
 
 // ParseVIDPID extracts VID and PID from a hardware/instance ID containing
 // "VID_XXXX&PID_YYYY" (case-insensitive hex). Exported for package t234's

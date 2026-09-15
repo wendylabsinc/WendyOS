@@ -5,6 +5,8 @@ import WendyAgentGRPC
 
 struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     var hardware: any HardwareDiscovering = HardwareInventory()
+    var gpuDiscovery = GPUDiscovery()
+    var reportedVersion: @Sendable () -> String = { WendyAgent.version }
     var hostname: any HostnameSetting = ScutilHostname()
     var wifi: any WiFiManaging = WiFiController()
     var bluetooth: any BluetoothManaging = BluetoothScanner()
@@ -84,8 +86,9 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
     ) async throws -> ServerResponse<Wendy_Agent_Services_V1_GetAgentVersionResponse> {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         var response = Wendy_Agent_Services_V1_GetAgentVersionResponse()
-        response.version = WendyAgent.version
+        response.version = reportedVersion()
         response.os = "darwin"
+        response.featureset.append("native-process")
         response.osVersion =
             "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         #if arch(arm64)
@@ -96,6 +99,16 @@ struct AgentService: Wendy_Agent_Services_V1_WendyAgentService.ServiceProtocol {
         response.memTotalBytes = Int64(clamping: ProcessInfo.processInfo.physicalMemory)
         response.cpuCount = UInt32(clamping: ProcessInfo.processInfo.activeProcessorCount)
         response.binarySha256 = self.binarySHA256
+        let devices = gpuDiscovery.devices()
+        response.hasGpu_p = !devices.isEmpty
+        if let device = devices.first { response.gpuVendor = device.vendor }
+        // One entry per Metal device. macOS has no device node, so path stays empty.
+        response.gpuCapabilities = devices.map { device in
+            var capabilities = Wendy_Agent_Services_V1_GpuCapabilities()
+            capabilities.vendor = device.vendor
+            capabilities.computeBackends = device.computeBackends
+            return capabilities
+        }
         return ServerResponse(message: response)
     }
 

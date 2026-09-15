@@ -75,8 +75,6 @@ wendy device wifi rank --ssid "Home" --priority 10
 wendy device wifi rank --order "Home,Office,Cafe"
 ```
 
-WiFi management over Bluetooth requires a device running the full `wendy-agent`. The `wendy-lite` Bluetooth firmware supports connect/disconnect but not the full interactive TUI.
-
 ## Using `nmcli` directly on the device
 
 SSH into the device and run `nmcli`:

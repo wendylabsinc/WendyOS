@@ -69,6 +69,17 @@ Expected output:
 
 ## Run locally with Docker Desktop
 
+To verify global CLI overrides on both services, including repeated keys and an
+explicit empty value (WDY-2907), deploy with:
+
+```sh
+wendy run --env CHECK_CLI_OVERRIDES=1 --env APP_MODE=first --env APP_MODE=cli --env GREETING= --env MAX_WORKERS=7
+```
+
+The client checks its own environment and the server response. It exits with
+an error if either service missed an override. The same resolved environment
+is used for build fingerprints and watch change detection.
+
 `docker-compose.yml` is unmodified, so it works as-is with Docker Desktop
 (environment vars are native Docker Compose behaviour):
 
