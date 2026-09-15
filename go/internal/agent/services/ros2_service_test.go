@@ -219,7 +219,8 @@ func TestROS2Service_DomainOverride(t *testing.T) {
 }
 
 func TestROS2Service_NoSidecarIsFailedPrecondition(t *testing.T) {
-	rt := &fakeROS2Runtime{ensureErr: errors.New("no running ROS 2 containers found")}
+	// Runtimes without system ROS 2 support retain the app-only error.
+	rt := &fakeROS2Runtime{ensureErr: ErrNoRunningROS2Containers}
 	svc := newTestROS2Service(t, rt, t.TempDir())
 	_, err := svc.ListNodes(context.Background(), &agentpbv2.ListROS2NodesRequest{})
 	if status.Code(err) != codes.FailedPrecondition {

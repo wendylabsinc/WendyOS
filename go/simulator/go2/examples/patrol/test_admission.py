@@ -1,0 +1,339 @@
+"""ROS message admission checks that do not require rclpy."""
+
+import importlib.util
+import json
+import math
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+
+spec = importlib.util.spec_from_file_location("patrol_ros_app", Path(__file__).with_name("ros_app.py"))
+ros_app = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ros_app)
+
+
+def stamp(value):
+    sec, nanosec = divmod(value, 1_000_000_000)
+    return SimpleNamespace(sec=sec, nanosec=nanosec)
+
+
+def odometry(frame="odom", child="base_link", quaternion=(0, 0, 0, 1), x=1):
+    return SimpleNamespace(header=SimpleNamespace(frame_id=frame), child_frame_id=child,
+        pose=SimpleNamespace(pose=SimpleNamespace(position=SimpleNamespace(x=x, y=2, z=0.3),
+            orientation=SimpleNamespace(**dict(zip(("x", "y", "z", "w"), quaternion))))))
+
+
+def scan(**overrides):
+    fields = dict(header=SimpleNamespace(frame_id="lidar_link"), angle_min=-math.pi,
+                  angle_max=math.pi - math.pi / 180, angle_increment=math.pi / 180,
+                  range_min=0.1, range_max=12.0, ranges=[4.0] * 360)
+    fields.update(overrides)
+    return SimpleNamespace(**fields)
+
+
+def test_capture_age_is_preserved_and_each_topic_advances_independently():
+    gate = ros_app.ExposureGate()
+    assert gate.capture_time("scan", stamp(9_800_000_000), wall_ns=10_000_000_000,
+                             monotonic=50) == pytest.approx(49.8)
+    assert gate.capture_time("odom", stamp(9_800_000_000), wall_ns=10_000_000_000,
+                             monotonic=50) == pytest.approx(49.8)
+    assert gate.capture_time("scan", stamp(9_800_000_000), wall_ns=10_010_000_000,
+                             monotonic=50.01) is None
+    assert gate.capture_time("scan", stamp(9_700_000_000), wall_ns=10_010_000_000,
+                             monotonic=50.01) is None
+    assert gate.capture_time("scan", stamp(9_900_000_000), wall_ns=10_010_000_000,
+                             monotonic=50.01) == pytest.approx(49.9)
+
+
+@pytest.mark.parametrize("source", [0, 9_650_000_000, 10_060_000_000])
+def test_old_future_and_zero_stamps_do_not_refresh_sensor_gate(source):
+    gate = ros_app.ExposureGate()
+    assert gate.capture_time("scan", stamp(source), wall_ns=10_000_000_000, monotonic=50) is None
+    assert not gate.last_stamps
+
+
+@pytest.mark.parametrize("sec,nanosec", [(9, -1), (9, 1_000_000_000),
+    (9, float("nan")), (float("inf"), 0), (9.0, 0), (True, 0)])
+def test_malformed_stamp_fields_are_rejected(sec, nanosec):
+    gate = ros_app.ExposureGate()
+    assert gate.capture_time("scan", SimpleNamespace(sec=sec, nanosec=nanosec),
+                             wall_ns=10_000_000_000, monotonic=50) is None
+
+
+def test_unit_quaternion_is_converted_to_heading():
+    assert ros_app.pose_values(odometry(quaternion=(0, 0, math.sin(0.5), math.cos(0.5)))) == pytest.approx((1, 2, 1))
+
+
+@pytest.mark.parametrize("message", [odometry(frame="map"), odometry(child="camera_link"),
+    odometry(x=float("nan")), odometry(quaternion=(0, 0, 0, 0)),
+    odometry(quaternion=(0, 0, float("inf"), 1)), odometry(quaternion=(0, 0, 0, 2))])
+def test_invalid_odometry_frames_or_pose_are_rejected(message):
+    assert ros_app.pose_values(message) is None
+
+
+def test_valid_scan_metadata_is_accepted():
+    assert ros_app.scan_metadata_valid(scan())
+
+
+@pytest.mark.parametrize("overrides", [dict(header=SimpleNamespace(frame_id="base_link")),
+    dict(angle_increment=0), dict(angle_increment=float("nan")), dict(angle_max=0),
+    dict(range_min=-1), dict(range_min=12), dict(range_max=float("inf"))])
+def test_invalid_scan_frame_or_geometry_is_rejected(overrides):
+    assert not ros_app.scan_metadata_valid(scan(**overrides))
+
+
+@pytest.fixture
+def node_factory(monkeypatch):
+    class Publisher:
+        def __init__(self):
+            self.messages = []
+
+        def publish(self, message):
+            self.messages.append(message)
+
+    class Node:
+        def __init__(self, name):
+            self.name = name
+
+        def create_publisher(self, message_type, topic, qos):
+            return Publisher()
+
+        def create_subscription(self, *args):
+            pass
+
+        def create_service(self, *args):
+            pass
+
+        def create_timer(self, *args):
+            pass
+
+    class Twist:
+        def __init__(self):
+            self.linear = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+            self.angular = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+
+    for name, module in {
+        "geometry_msgs.msg": SimpleNamespace(Twist=Twist),
+        "nav_msgs.msg": SimpleNamespace(Odometry=object),
+        "sensor_msgs.msg": SimpleNamespace(LaserScan=object),
+        "std_msgs.msg": SimpleNamespace(String=SimpleNamespace),
+        "std_srvs.srv": SimpleNamespace(Trigger=object),
+        "rclpy.node": SimpleNamespace(Node=Node),
+        "rclpy.qos": SimpleNamespace(QoSProfile=SimpleNamespace,
+                                     ReliabilityPolicy=SimpleNamespace(BEST_EFFORT=1)),
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(ros_app.time, "monotonic", lambda: 50.0)
+    monkeypatch.setattr(ros_app.time, "time_ns", lambda: 10_000_000_000)
+    return ros_app.make_node
+
+
+@pytest.fixture
+def node(node_factory):
+    return node_factory()
+
+
+@pytest.fixture
+def autostart_node(node_factory):
+    return node_factory(autostart=True)
+
+
+def deliver_observations(node, captured=9_900_000_000):
+    pose = odometry(x=0)
+    pose.pose.pose.position.y = 0
+    pose.header.stamp = stamp(captured)
+    laser = scan()
+    laser.header.stamp = stamp(captured)
+    node.odom(pose)
+    node.scan(laser)
+
+
+def last_command(node):
+    command = node.drive.messages[-1]
+    assert command.linear.y == command.linear.z == command.angular.x == command.angular.y == 0
+    return command.linear.x, command.angular.z
+
+
+def test_ros_node_publishes_zero_on_startup_and_requires_start_service(node):
+    assert len(node.drive.messages) == 1
+    assert last_command(node) == (0, 0)
+    deliver_observations(node)
+    node.tick()
+    assert last_command(node) == (0, 0)
+    response = node.start(None, SimpleNamespace())
+    assert response.success
+    node.tick()
+    assert last_command(node) == (0.35, 0)
+    assert node.status_pub.messages[-1].data
+
+
+def test_stop_service_publishes_zero_immediately_and_fresh_sensors_do_not_restart(node):
+    deliver_observations(node)
+    assert node.start(None, SimpleNamespace()).success
+    node.tick()
+    assert last_command(node)[0] > 0
+    assert node.stop(None, SimpleNamespace()).success
+    assert last_command(node) == (0, 0)
+    deliver_observations(node, 9_950_000_000)
+    node.tick()
+    assert last_command(node) == (0, 0)
+
+
+@pytest.mark.parametrize("fault", ["scan_frame", "odom_frame", "replayed_scan", "obstacle"])
+def test_bad_observation_stops_ros_publisher_before_next_timer_tick(node, fault):
+    deliver_observations(node)
+    assert node.start(None, SimpleNamespace()).success
+    node.tick()
+    if fault == "odom_frame":
+        pose = odometry(frame="map")
+        pose.header.stamp = stamp(9_920_000_000)
+        node.odom(pose)
+    else:
+        laser = scan()
+        laser.header.stamp = stamp(9_900_000_000 if fault == "replayed_scan" else 9_920_000_000)
+        if fault == "scan_frame":
+            laser.header.frame_id = "base_link"
+        if fault == "obstacle":
+            laser.ranges[180] = 0.5
+        node.scan(laser)
+    assert last_command(node) == (0, 0)
+    assert not node.controller.active
+    deliver_observations(node, 9_950_000_000)
+    node.tick()
+    assert last_command(node) == (0, 0)
+
+
+def test_start_service_rejects_missing_observations_and_publishes_zero(node):
+    response = node.start(None, SimpleNamespace())
+    assert not response.success
+    assert "stale_scan" in response.message
+    assert last_command(node) == (0, 0)
+
+
+def test_autostart_waits_for_both_observations_then_requests_motion_once(autostart_node):
+    node = autostart_node
+    assert len(node.drive.messages) == 1
+    assert last_command(node) == (0, 0)
+    node.tick()
+    assert json.loads(node.status_pub.messages[-1].data)["autostart_pending"]
+    laser = scan()
+    laser.header.stamp = stamp(9_900_000_000)
+    node.scan(laser)
+    node.tick()
+    assert not node.controller.active
+    assert node.autostart_pending
+    assert last_command(node) == (0, 0)
+    pose = odometry(x=0)
+    pose.pose.pose.position.y = 0
+    pose.header.stamp = stamp(9_900_000_000)
+    node.odom(pose)
+    node.tick()
+    assert node.controller.active
+    assert not node.autostart_pending
+    assert last_command(node) == (0.35, 0)
+    targets = node.controller.targets
+    pose.pose.pose.position.x = 0.2
+    pose.header.stamp = stamp(9_950_000_000)
+    node.odom(pose)
+    node.tick()
+    assert node.controller.targets == targets
+    assert not json.loads(node.status_pub.messages[-1].data)["autostart_pending"]
+
+
+@pytest.mark.parametrize("not_ready", ["stale", "obstacle", "unknown_scan"])
+def test_autostart_waits_for_current_clear_observations(autostart_node, not_ready):
+    node = autostart_node
+    deliver_observations(node, 9_600_000_000 if not_ready == "stale" else 9_800_000_000)
+    if not_ready != "stale":
+        laser = scan()
+        laser.header.stamp = stamp(9_900_000_000)
+        laser.ranges[180] = 0.5 if not_ready == "obstacle" else float("inf")
+        node.scan(laser)
+    node.tick()
+    assert not node.controller.active
+    assert node.autostart_pending
+    assert last_command(node) == (0, 0)
+    deliver_observations(node, 9_950_000_000)
+    node.tick()
+    assert node.controller.active
+    assert not node.autostart_pending
+
+
+@pytest.mark.parametrize("service", ["start", "stop"])
+def test_explicit_service_cancels_pending_autostart_even_if_start_fails(autostart_node, service):
+    node = autostart_node
+    response = getattr(node, service)(None, SimpleNamespace())
+    assert response.success == (service == "stop")
+    assert not node.autostart_pending
+    deliver_observations(node)
+    node.tick()
+    assert not node.controller.active
+    assert last_command(node) == (0, 0)
+
+
+def test_autostart_bounds_failure_does_not_retry_from_later_pose(autostart_node):
+    node = autostart_node
+    deliver_observations(node, 9_800_000_000)
+    pose = odometry(x=4.5)
+    pose.header.stamp = stamp(9_900_000_000)
+    node.odom(pose)
+    node.tick()
+    assert node.controller.reason == "route_outside_patrol_bounds"
+    assert not node.autostart_pending
+    deliver_observations(node, 9_950_000_000)
+    node.tick()
+    assert not node.controller.active
+    assert last_command(node) == (0, 0)
+
+
+@pytest.mark.parametrize("fault", ["stop", "stale", "invalid_pose", "obstacle"])
+def test_started_automatic_route_does_not_restart_after_stop_or_fault(autostart_node, monkeypatch, fault):
+    node = autostart_node
+    deliver_observations(node, 9_800_000_000)
+    node.tick()
+    assert node.controller.active
+    if fault == "stop":
+        assert node.stop(None, SimpleNamespace()).success
+    elif fault == "stale":
+        monkeypatch.setattr(ros_app.time, "monotonic", lambda: 50.5)
+        monkeypatch.setattr(ros_app.time, "time_ns", lambda: 10_500_000_000)
+        node.tick()
+    elif fault == "invalid_pose":
+        pose = odometry(x=float("nan"))
+        pose.header.stamp = stamp(9_900_000_000)
+        node.odom(pose)
+    else:
+        laser = scan()
+        laser.header.stamp = stamp(9_900_000_000)
+        laser.ranges[180] = 0.5
+        node.scan(laser)
+    assert not node.controller.active
+    assert not node.autostart_pending
+    assert last_command(node) == (0, 0)
+    deliver_observations(node, 10_450_000_000 if fault == "stale" else 9_950_000_000)
+    node.tick()
+    assert not node.controller.active
+    assert last_command(node) == (0, 0)
+    assert node.start(None, SimpleNamespace()).success
+
+
+def test_completed_automatic_route_holds_zero_with_new_observations(autostart_node):
+    node = autostart_node
+    deliver_observations(node, 9_800_000_000)
+    node.tick()
+    for index, (x, y) in enumerate(node.controller.targets):
+        pose = odometry(x=x)
+        pose.pose.pose.position.y = y
+        pose.header.stamp = stamp(9_850_000_000 + index * 10_000_000)
+        node.odom(pose)
+        node.tick()
+    assert node.controller.state == "complete"
+    assert not node.autostart_pending
+    assert last_command(node) == (0, 0)
+    deliver_observations(node, 9_950_000_000)
+    node.tick()
+    assert node.controller.state == "complete"
+    assert last_command(node) == (0, 0)

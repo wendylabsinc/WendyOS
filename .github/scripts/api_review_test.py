@@ -134,6 +134,17 @@ class PayloadTests(unittest.TestCase):
             with self.subTest(override=override), self.assertRaises(api_review.ReviewError):
                 self.validate(item)
 
+    def test_malformed_location_objects_are_rejected(self):
+        location = decision()["locations"][0]
+        malformed = [
+            {key: value for key, value in location.items() if key != missing}
+            for missing in location
+        ]
+        malformed.extend([dict(location, url="https://example.com"), None, "go/network.go:5", [location]])
+        for value in malformed:
+            with self.subTest(location=value), self.assertRaisesRegex(api_review.ReviewError, "invalid code location$"):
+                self.validate(decision(locations=[value]))
+
     def test_file_level_locations_require_structural_evidence(self):
         parsed = api_review.parse_diff("diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n")
         item = decision(category="cli", locations=[{"path": "run.sh", "side": "head", "line": 0, "end_line": 0}])
@@ -191,11 +202,54 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(json.loads(create.call_args.kwargs["messages"][0]["content"])["diff"], diff().decode())
         self.assertNotIn("tools", create.call_args.kwargs)
 
+    def test_model_request_enforces_complete_location_objects(self):
+        message = types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text='{"risk":"low","decisions":[]}')])
+        _, create = self.call_model(message)
+        output_format = create.call_args.kwargs["output_config"]["format"]
+        self.assertEqual(output_format["type"], "json_schema")
+        schema = output_format["schema"]
+        decisions = schema["properties"]["decisions"]
+        self.assertEqual(decisions["type"], "array")
+        item = decisions["items"]
+        locations = item["properties"]["locations"]
+        self.assertEqual(locations["type"], "array")
+        self.assertEqual(locations["minItems"], 1)
+        location = locations["items"]
+        for object_schema, fields in (
+            (schema, {"risk", "decisions"}),
+            (item, {"category", "title", "change", "compatibility", "impact", "locations"}),
+            (location, {"path", "side", "line", "end_line"}),
+        ):
+            with self.subTest(fields=fields):
+                self.assertEqual(object_schema["type"], "object")
+                self.assertEqual(set(object_schema["properties"]), fields)
+                self.assertEqual(set(object_schema["required"]), fields)
+                self.assertIs(object_schema["additionalProperties"], False)
+        for field in ("title", "change", "compatibility"):
+            self.assertEqual(item["properties"][field]["type"], "string")
+        self.assertEqual(location["properties"]["path"]["type"], "string")
+        for field in ("line", "end_line"):
+            self.assertEqual(location["properties"][field]["type"], "integer")
+        for property_schema, values in (
+            (schema["properties"]["risk"], {"low", "mid", "high"}),
+            (item["properties"]["category"], {"network", "protobuf", "storage", "config", "cli", "other"}),
+            (item["properties"]["impact"], {"additive", "breaking", "behavioral"}),
+            (location["properties"]["side"], {"head", "base"}),
+        ):
+            with self.subTest(values=values):
+                self.assertEqual(property_schema["type"], "string")
+                self.assertEqual(set(property_schema["enum"]), values)
+
     def test_model_truncation_and_invalid_json_are_incomplete(self):
         for reason, response in (("max_tokens", '{"risk":'), ("end_turn", "NO_FINDINGS")):
             message = types.SimpleNamespace(stop_reason=reason, content=[types.SimpleNamespace(type="text", text=response)])
             with self.subTest(reason=reason), self.assertRaises(api_review.ReviewError):
                 self.call_model(message)
+
+    def test_refusal_is_rejected_even_with_schema_valid_json(self):
+        message = types.SimpleNamespace(stop_reason="refusal", content=[types.SimpleNamespace(type="text", text='{"risk":"low","decisions":[]}')])
+        with self.assertRaisesRegex(api_review.ReviewError, "did not complete"):
+            self.call_model(message)
 
     def test_provider_error_does_not_echo_secret(self):
         with self.assertRaises(api_review.ReviewError) as caught:

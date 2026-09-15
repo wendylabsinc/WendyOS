@@ -149,7 +149,43 @@ Snapshots go to your configured model provider, so a local model keeps visual
 inference local. Image bytes are kept out of terminal tool JSON and are retained
 only in memory, with older image attachments expiring as more are captured.
 Camera status alone does not prove what a camera sees. Continuous video and
-device audio sensing are not yet supported.
+audio playback for the user are available through separate background tools,
+described below.
+
+## Open live video and listen to a device
+
+Ask Wendy to open a live camera window or play the connected device's microphone
+through your computer's speakers:
+
+```text
+Show Woof's camera in a window and let me listen to its microphone.
+```
+
+Chat uses `camera_view` and `audio_listen` to launch the local Wendy media
+commands in the background. They follow the active direct or Wendy Cloud
+connection and return quickly, so you can keep chatting while video or audio
+continues. Starting a stream asks for normal tool approval; `--yes` also applies
+to these launches.
+
+For a specific camera or microphone, ask Wendy to select it. `camera_view`
+accepts `camera_id` or `stable_id` and optional `width`, `height`, and `fps`.
+`audio_listen` accepts `device_id`, `sample_rate`, `channels`, and `buffer_ms`.
+The local CLI needs the playback dependencies required by its camera and audio
+commands; launch failures include diagnostics in the job's output.
+
+Each launch returns a `job_id`. The transcript shows its state: `running`,
+`exited`, `failed`, or `stopped`. A running process does not yet prove that a
+window has rendered a frame or the speakers have played audio. Ask Wendy to
+check playback to inspect current state and recent output with
+`background_process_list`, or say “Stop the camera and audio” to use
+`background_process_stop`. Listing and stopping jobs need no additional tool
+approval. Jobs remain active between chat turns and close when stopped or when
+Chat exits.
+
+The live window and speakers are for you. Camera playback does not send a live
+video feed to the model; use `camera_snapshot` when you want Wendy to inspect a
+frame. Audio playback does not send the device microphone stream to the model.
+Chat's `/voice` mode separately uses your computer's microphone for conversation.
 
 ## Select a project and device
 
@@ -184,27 +220,41 @@ run with your user permissions on the developer machine; the workspace is their
 working directory, not a shell sandbox. The model can also use offline Wendy
 documentation through the `wendy_docs` tool.
 
+For commands inside a running device container, Wendy uses `container_exec`
+through the active direct or cloud connection. Commands use an argument array;
+shell syntax requires an explicit shell command. Execution is noninteractive,
+bounded by a timeout and output limit, and asks for approval. Use `telemetry_logs`
+for passive log inspection. `container_attach` starts or restarts the app.
+
 | Key or command | Action |
 | --- | --- |
-| Enter | Send a message |
+| Enter | Send a message, or queue a follow-up while Wendy works |
 | Alt+Enter | Add a line to the message |
 | Page Up / Page Down | Scroll the transcript or approval preview |
-| Esc / Ctrl+C during a turn | Cancel the active response or tool call |
+| Esc / Ctrl+C during a turn | Cancel active work and discard queued messages |
 | Ctrl+C while idle | Exit |
 | `/help` | Show chat controls |
 | `/tools` or Ctrl+T | Show or hide full tool details |
 | `/setup` | Change your AI or enter an API key privately |
 | `/voice` | Turn GPT Live voice on or off |
 | `/voice setup` | Enter or replace the OpenAI voice key privately |
-| `/clear` | Start a fresh conversation |
+| `/memory` | Browse recent notes for this project and preferred device |
+| `/memory <id>` | Read a note's full text and evidence using its short ID |
+| `/memory search <words>` | Find notes about a task or named device |
+| `/memory on` or `/memory off` | Enable or pause remembering and recall |
+| `/forget <id>` | Delete a note using its short or full ID |
+| `/clear` | Start a fresh conversation, keeping remembered notes |
 | `/quit` | Exit |
 
 Cancellation does not undo changes that have already completed. Use `/clear` to
 start fresh if a long conversation exceeds your model's context window.
+While Wendy works, Enter adds your message to a visible queue. Queued messages
+run in order after the current turn finishes. To change direction immediately,
+cancel the current turn, then send the new instruction.
 
 `--yes` approves every tool call for the session, including shell commands,
-file writes, and disruptive device operations. Chat does not save conversation
-transcripts. With hosted inference, the conversation and tool results are sent
+file writes, and disruptive device operations. Chat saves selected memory notes,
+but does not save conversation transcripts. With hosted inference, the conversation and tool results are sent
 to the configured provider; with a local endpoint, they go to that local server.
 Existing Wendy Cloud/device connections and CLI analytics settings continue to
 apply.
@@ -213,7 +263,102 @@ Settings and API keys pasted during setup are saved in `~/.wendy/chat.json`,
 with file permissions restricted to your user. API keys supplied through
 environment variables are not copied into that file.
 
-Chat requires interactive stdin and stdout and does not support `--json`.
+The chat screen requires interactive stdin and stdout. Scripts use `--prompt`
+instead, described next.
+
+## Run one turn from a script
+
+`--prompt` runs a single turn without the chat screen and exits. It uses the
+setup you saved with `wendy chat --setup`, or the connection flags below, and
+never opens a setup screen. Use it from shell scripts, CI, or another program
+that wants Wendy's reasoning and tools without its terminal.
+
+```sh
+wendy chat --prompt "Which of my devices are online?"
+```
+
+When stdout is a terminal, the assistant's final text is printed. When stdout
+is a pipe or a file, or with `--json`, each event is printed as it happens, one
+JSON object per line, following the CLI's usual rule that non-interactive
+output is JSON. Notices go to stderr, so stdout is only the stream:
+
+```sh
+wendy chat --prompt "Why does app A on device X keep restarting?" --json
+```
+
+```json
+{"type":"status","text":"Thinking…"}
+{"type":"text","text":"Let me look at the logs. "}
+{"type":"tool_start","id":"call_1","tool":"telemetry_logs","arguments":{"app_name":"A","min_severity":"error"}}
+{"type":"tool_result","id":"call_1","tool":"telemetry_logs","text":"..."}
+{"type":"text","text":"The app cannot reach port 8080..."}
+{"type":"done","text":"Let me look at the logs. The app cannot reach port 8080..."}
+```
+
+Event types are `status`, `text` (streamed chunks), `tool_start`,
+`approval`, `tool_result`, and a final `done` or `error`. The `done` event
+carries the complete assistant text. A non-zero exit status accompanies
+`error`.
+
+Tools that would ask a person, such as shell commands, file writes, and
+device changes, are **denied** in this mode: there is nobody to answer. The
+stream reports each denial as an `approval` event with `"approved":false`, and
+the model is told the tool did not run. Pass `--yes` to allow them:
+
+```sh
+wendy chat --prompt "Redeploy the relay to Unitree G1 Nx" --json --yes
+```
+
+`--prompt` cannot be combined with `--setup` or `--voice`. Each run is a fresh
+conversation; there is no memory between prompts.
+
+## Remember working methods and mistakes
+
+Memory is enabled by default. Wendy recalls relevant notes before a task, and
+can search for additional notes as it works. After using tools, it reviews the
+results for useful lessons if it has not already saved a note during the turn.
+That review uses the selected model, makes at most one additional model request,
+and can save up to three notes. The terminal shows saved notes and memory errors.
+A failed review leaves the task result intact.
+
+For example, after a direct connection attempt fails and a cloud command works,
+Wendy can remember the connection prerequisite, the working command, and the
+result that confirmed it. Procedures and failure lessons must cite tools that
+actually ran in the current turn. A procedure requires successful tool evidence;
+failed attempts are recorded as lessons. Notes remain fallible: a successful
+command exit alone does not establish that a physical action happened.
+
+Notes have one of three scopes:
+
+- **Workspace:** project-specific build, deployment, and debugging knowledge.
+- **Device:** knowledge about an explicitly named device, reusable across projects.
+- **Global:** general Wendy workflows and user preferences.
+
+Memory is stored locally in `~/.wendy/memory/`, as private JSON files. Saving a
+note is automatic and does not approve any future shell command or device action.
+Relevant notes go to your selected model alongside task context. Wendy is
+instructed to save concise lessons without credentials, raw transcripts, or
+temporary readings. The storage is shared across model changes and CLI sessions.
+
+Use `/memory` to browse up to 50 recent notes with titles, brief previews, and
+short IDs. Use `/memory <id>` to read the full note and its evidence, or
+`/forget <id>` to delete it. `/memory search <words>` finds notes about a task
+or named device. These commands run locally, including while Wendy is working
+or memory is paused. Ask Wendy to correct an outdated note or remember an
+explicit preference. Reusing a title and scope updates the note.
+Deleted notes stop appearing in automatic recall and refreshed memory searches;
+ordinary user and assistant text already in the conversation remains until
+`/clear`.
+
+Use `/memory off` to stop new recall and learning for the session, or start with:
+
+```sh
+wendy chat --no-memory
+```
+
+`/memory on` enables it again. Disabling memory keeps existing notes on disk;
+`/clear` also keeps notes while resetting the conversation. Memory changes what
+context Wendy can reuse; it does not retrain the selected model.
 
 ## Advanced configuration
 
@@ -243,6 +388,7 @@ Provider-specific cloud keys are not automatically sent to custom endpoints.
 | Response token limit | `--max-tokens` | `WENDY_CHAT_MAX_TOKENS` |
 | Project directory | `--directory`, `-C` | — |
 | Device | `--device` | Existing Wendy device configuration |
+| Disable memory for this session | `--no-memory` | — |
 
 Flags take precedence over environment variables, which override saved
 settings. The `openai` provider also

@@ -139,7 +139,7 @@ func newDevicePushAgentCmd() *cobra.Command {
 		Args:   cobra.ExactArgs(1),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
+			ctx := robotAgentMaintenanceContext(cmd.Context())
 			binaryData, err := os.ReadFile(args[0])
 			if err != nil {
 				return fmt.Errorf("reading agent binary %q: %w", args[0], err)
@@ -615,7 +615,7 @@ func newDeviceGetDefaultCmd() *cobra.Command {
 // pickDeviceForDefault runs the interactive device picker and returns a
 // hostname or provider key suitable for storing as the default device.
 func pickDeviceForDefault(ctx context.Context) (string, error) {
-	selected, err := pickDevice(ctx, nil, false, false)
+	selected, err := pickDevice(ctx, nil, false, false, false)
 	if err != nil {
 		return "", err
 	}
@@ -792,7 +792,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
 			if err != nil {
 				return err
 			}
@@ -2360,7 +2360,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 			"--pr N applies the OS image built by wendyos-builder PR #N instead of the manifest's latest — an unhardened debug build for testing PRs on hardware; it also works over the cloud tunnel. --pr cannot be combined with --artifact-url or --json. " +
 			"macOS agents receive the signed app-bundle zip (wendy-agent-macos-<arch>.zip) instead of a Linux binary; --binary accepts one of those zips for dev pushes to a Mac agent.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
+			ctx := robotAgentMaintenanceContext(cmd.Context())
 
 			if prNumber > 0 {
 				if artifactURL != "" {

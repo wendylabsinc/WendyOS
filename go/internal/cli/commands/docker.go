@@ -739,6 +739,7 @@ func compileStagefile(dir, source, gpuArch string, sfOpts ...stagefile.Option) (
 	} else if err := writeGeneratedFile(ignorePath, []byte(dockerignoreText)); err != nil {
 		return "", fmt.Errorf("writing %s: %w", generatedIgnoreName, err)
 	}
+	rememberStagefileLLBPlan(dir, generatedName, source, opts)
 	return generatedName, nil
 }
 
@@ -2127,7 +2128,14 @@ func buildAndPushImageForAgent(ctx context.Context, conn *grpcclient.AgentConnec
 	if imageBuilderWasExplicit(builder) {
 		return buildAndPushImageForAgentWithBuilder(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput)
 	}
-	if shouldAutoAttemptAppleContainerBuilder() {
+	// An opt-in direct LLB Stagefile must reach BuildKit even on Apple silicon;
+	// the ordinary automatic Apple Container attempt only understands the
+	// generated Dockerfile and would silently exercise the wrong backend.
+	_, directLLB, err := directStagefileLLBPlan(ctx, dir, dockerfile, imageBuilderDocker)
+	if err != nil {
+		return err
+	}
+	if !directLLB && shouldAutoAttemptAppleContainerBuilder() {
 		// Apple Container builds don't use buildx, so the local-cache key never
 		// applies; only the Docker fallback below consumes it. The auto-attempt path
 		// must not prompt or start services as a side effect: if Apple Container is
@@ -2206,7 +2214,7 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 	defer releaseLayout()
 	defer func() { _ = gcOCILayoutDir(layoutDir) }()
 
-	native, err := buildOrUpdateOCILayout(dir, dockerfile, platform, buildArgs, layoutDir, func() error {
+	native, err := buildOrUpdateOCILayout(dir, dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, layoutDir, func() error {
 		return buildImageToOCILayoutDirWithDocker(ctx, dir, dockerfile, platform, buildArgs, layoutDir, streamOutput, logOutput)
 	})
 	if err != nil {
@@ -2263,7 +2271,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	defer releaseLayout()
 	defer func() { _ = gcOCILayoutDir(layoutDir) }()
 
-	native, err := buildOrUpdateOCILayout(dir, dockerfile, platform, buildArgs, layoutDir, func() error {
+	native, err := buildOrUpdateOCILayout(dir, dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, layoutDir, func() error {
 		return buildImageToOCILayoutDirWithDocker(ctx, dir, dockerfile, platform, buildArgs, layoutDir, streamOutput, logOutput)
 	})
 	if err != nil {

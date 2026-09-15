@@ -605,23 +605,9 @@ func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) 
 }
 
 // resolveTemplateLanguage picks the language for the template flow.
-// Wendy Lite uses Swift. Other targets offer the languages available for
-// the selected template, including native Mojo/MAX chat on Darwin.
+// All targets, including Wendy Lite, offer the languages available for
+// the selected template (e.g. native Mojo/MAX chat on Darwin).
 func resolveTemplateLanguage(target, tmpl string, meta *repoMeta, opts initOptions) (string, error) {
-	if target == targetWendyLite {
-		if opts.languageSet && normalizeInitChoice(opts.language) != langSwift {
-			return "", fmt.Errorf("%s templates require %s", target, langSwift)
-		}
-		languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
-		if err != nil {
-			return "", err
-		}
-		if !templateLanguageAvailable(langSwift, languages) {
-			return "", fmt.Errorf("template %q is not available for language %q (available: %s)", tmpl, langSwift, repoMetaLanguageKeys(languages))
-		}
-		return langSwift, nil
-	}
-
 	languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
 	if err != nil {
 		return "", err
@@ -2099,9 +2085,15 @@ func isCommandAvailable(name string) bool {
 	return err == nil
 }
 
-// defaultEntitlements returns sensible default entitlements based on language and template.
+// defaultEntitlements returns sensible default entitlements based on project type and template.
 // Used by helpers.go when auto-generating a wendy.json during build.
-func defaultEntitlements(language, template string) []appconfig.Entitlement {
+func defaultEntitlements(projectType, template string) []appconfig.Entitlement {
+	// ESP-IDF targets run on bare-metal microcontrollers, which don't support
+	// the entitlement-gated capabilities (network, audio, GPU, Bluetooth).
+	if projectType == "esp-idf" {
+		return nil
+	}
+
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementNetwork},
 	}
@@ -2119,7 +2111,7 @@ func defaultEntitlements(language, template string) []appconfig.Entitlement {
 			appconfig.Entitlement{Type: appconfig.EntitlementGPU},
 		)
 	default:
-		if language == "python" {
+		if projectType == "python" {
 			entitlements = append(entitlements,
 				appconfig.Entitlement{Type: appconfig.EntitlementGPU},
 			)

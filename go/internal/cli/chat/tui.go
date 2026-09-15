@@ -89,9 +89,10 @@ func Run(ctx context.Context, opts UIOptions) error {
 }
 
 type chatEntry struct {
-	kind  string
-	title string
-	text  string
+	kind   string
+	title  string
+	text   string
+	memory *memoryDisplay
 }
 
 type approvalRequest struct {
@@ -134,16 +135,19 @@ type chatModel struct {
 	composer        textarea.Model
 	spinner         spinner.Model
 	status          string
+	queuedPrompts   []string
 
-	turnID      uint64
-	events      <-chan turnMessage
-	cancelTurn  context.CancelFunc
-	active      bool
-	canceling   bool
-	quitting    bool
-	reconfigure bool
-	approval    *approvalRequest
-	preview     viewport.Model
+	turnID            uint64
+	events            <-chan turnMessage
+	cancelTurn        context.CancelFunc
+	active            bool
+	canceling         bool
+	quitting          bool
+	reconfigure       bool
+	approval          *approvalRequest
+	preview           viewport.Model
+	clearAfterTurn    bool
+	clearStoppedVoice bool
 
 	voiceEnabled       bool
 	voiceStarting      bool
@@ -203,6 +207,9 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	}
 	m.viewport.KeyMap = viewport.KeyMap{} // Composer owns ordinary cursor keys.
 	m.transcript = []chatEntry{{kind: "welcome", title: "Build something with Wendy", text: "Develop in your workspace and work with Wendy devices using natural language.\nTry: inspect my device, explain this project, or build and deploy an app.\n\nType /help for commands. Tool actions that change files or devices ask for approval."}}
+	if opts.Engine != nil && opts.Engine.MemoryEnabled() {
+		m.transcript[0].text += "\nWendy remembers useful procedures and corrections locally. Use /memory to review notes."
+	}
 	if opts.AutoApprove {
 		m.transcript[0].text += "\nAutomatic tool approval is enabled for this session."
 	}
@@ -260,12 +267,41 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.canceling = false
 			m.finishVoiceTurn(msg.err, canceled)
+			if m.quitting {
+				return m, tea.Quit
+			}
+			if m.clearAfterTurn {
+				m.clearConversation()
+				return m, m.composer.Focus()
+			}
 			if next := m.pendingDelegation; next != nil {
 				m.pendingDelegation = nil
 				if m.voiceEnabled && next.generation == m.voiceID {
 					cmd := m.startVoiceTurn(next)
 					return m, tea.Batch(cmd, m.composer.Focus())
 				}
+			}
+			if len(m.queuedPrompts) > 0 {
+				prompt := m.queuedPrompts[0]
+				m.queuedPrompts = m.queuedPrompts[1:]
+				m.resize(m.width, m.height)
+				// Starting an already queued request is not a speech
+				// interruption. Let the completed voice reply finish, while
+				// retaining cancellation of both replies for Escape or a new
+				// explicit request.
+				previousCancel := m.turnSpeechCancel
+				m.turnSpeechCancel = nil
+				cmd := m.submit(prompt)
+				currentCancel := m.turnSpeechCancel
+				m.turnSpeechCancel = func() {
+					if previousCancel != nil {
+						previousCancel()
+					}
+					if currentCancel != nil {
+						currentCancel()
+					}
+				}
+				return m, tea.Batch(cmd, m.composer.Focus())
 			}
 			return m, m.composer.Focus()
 		}
@@ -303,6 +339,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.interruptVoice()
 			m.pendingDelegation = nil
+			m.discardQueuedPrompts()
 			if m.active {
 				m.cancelActiveTurn()
 				return m, nil
@@ -312,6 +349,7 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.interruptVoice()
 			m.pendingDelegation = nil
+			m.discardQueuedPrompts()
 			if m.active {
 				m.cancelActiveTurn()
 			}
@@ -339,10 +377,6 @@ func (m *chatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.String() == "enter" {
 			prompt := m.composer.Value()
-			control := strings.TrimSpace(prompt)
-			if m.active && !(control == "/voice" || control == "/voice on" || control == "/voice off" || control == "/voice setup" || control == "/setup" || control == "/quit" || control == "/help" || control == "/tools") {
-				return m, nil
-			}
 			m.composer.Reset()
 			return m, m.submit(prompt)
 		}
@@ -379,20 +413,26 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		m.refreshTranscript()
 		return nil
 	case "/quit", "/exit":
+		m.discardQueuedPrompts()
+		m.stopVoice()
+		if m.active {
+			m.cancelActiveTurn()
+		}
 		m.quitting = true
 		return tea.Quit
 	case "/clear":
-		wasVoice := m.voiceEnabled
+		m.discardQueuedPrompts()
+		m.clearStoppedVoice = m.clearStoppedVoice || m.voiceEnabled
 		m.stopVoice()
-		m.opts.Engine.Reset()
-		m.transcript = nil
-		text := "Your next message starts a new conversation."
-		if wasVoice {
-			text += " Voice is off so its previous context is discarded; use /voice to start listening again."
+		if m.active {
+			m.clearAfterTurn = true
+			m.cancelActiveTurn()
+		} else {
+			m.clearConversation()
 		}
-		m.appendEntry("notice", "Conversation cleared", text)
 		return nil
 	case "/setup":
+		m.discardQueuedPrompts()
 		if m.active {
 			m.cancelActiveTurn()
 		}
@@ -413,15 +453,85 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		}
 		return nil
 	case "/help":
-		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Show or hide full tool details (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/voice  Toggle voice; /voice setup changes voice credentials privately\n/clear  Clear the transcript and model conversation\n/quit   Exit chat\n\nEnter sends a message. Alt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work and stops voice playback. Ctrl+C exits when idle.\nFor tool approvals, review the arguments and press y to allow once or n to deny. Spoken approval is never accepted.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
+		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Show or hide full tool details (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/voice  Toggle voice; /voice setup changes voice credentials privately\n/memory Browse recent notes\n/memory <id>  Read a note and its evidence\n/memory search <words>  Find notes\n/memory on|off  Enable or pause remembering and recall\n/forget <id>  Delete a note using its short ID\n/clear  Clear the conversation and queued messages; keep remembered notes\n/quit   Exit chat\n\nEnter sends a message, or queues it while Wendy is working. Queued messages run in order after the current turn.\nAlt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work, discards queued messages, and stops voice playback. Ctrl+C exits when idle.\nVoice corrections interrupt current work and run before queued typed messages.\nFor tool approvals, review the arguments and press y to allow once or n to deny. Spoken approval is never accepted.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
+		return nil
+	case "/memory":
+		m.showMemoryNotes("")
+		return nil
+	case "/memory on", "/memory off":
+		enabled := prompt == "/memory on"
+		m.opts.Engine.SetMemoryEnabled(enabled)
+		if enabled && !m.opts.Engine.MemoryEnabled() {
+			m.appendEntry("notice", "Memory unavailable", "Memory could not be enabled for this session.")
+			return nil
+		}
+		text := "Remembering and recall are paused. Existing notes are kept."
+		if enabled {
+			text = "Remembering and recall are enabled. Use /memory to review notes."
+		}
+		m.appendEntry("notice", "Memory", text)
 		return nil
 	}
-	if strings.HasPrefix(prompt, "/") && !strings.ContainsAny(prompt, " \n\t") {
+	if prompt == "/memory search" || strings.HasPrefix(prompt, "/memory search ") {
+		query := strings.TrimSpace(strings.TrimPrefix(prompt, "/memory search"))
+		if query == "" {
+			m.appendEntry("notice", "Search remembered notes", "Use /memory search <words>, for example /memory search camera.")
+		} else {
+			m.showMemoryNotes(query)
+		}
+		return nil
+	}
+	if strings.HasPrefix(prompt, "/memory ") {
+		m.showMemoryNote(strings.TrimSpace(strings.TrimPrefix(prompt, "/memory ")))
+		return nil
+	}
+	if prompt == "/forget" || strings.HasPrefix(prompt, "/forget ") {
+		id := strings.TrimSpace(strings.TrimPrefix(prompt, "/forget"))
+		if id == "" {
+			m.appendEntry("notice", "Choose a note", "Use /memory to find its short ID, then /forget <id> to delete it.")
+		} else if err := m.opts.Engine.ForgetMemory(m.ctx, id); err != nil {
+			m.appendEntry("error", "Could not forget note", err.Error())
+		} else {
+			m.appendEntry("notice", "Note forgotten", "Removed the selected note from memory.")
+		}
+		return nil
+	}
+	if strings.HasPrefix(prompt, "/voice ") || (strings.HasPrefix(prompt, "/") && !strings.ContainsAny(prompt, " \n\t")) {
+		m.composer.SetValue(prompt)
 		m.appendEntry("notice", "Unknown command", "Use /help to see the available chat commands.")
+		return nil
+	}
+	if m.clearAfterTurn {
+		m.composer.SetValue(prompt)
+		return nil
+	}
+	if m.active {
+		m.queuedPrompts = append(m.queuedPrompts, prompt)
+		m.resize(m.width, m.height)
 		return nil
 	}
 	m.voiceContext("Typed request (handled by the text agent): " + prompt)
 	return m.startTurn(prompt)
+}
+
+func (m *chatModel) discardQueuedPrompts() {
+	if count := len(m.queuedPrompts); count > 0 {
+		m.queuedPrompts = nil
+		m.appendEntry("notice", "Queue cleared", fmt.Sprintf("Discarded %d queued message(s).", count))
+		m.resize(m.width, m.height)
+	}
+}
+
+func (m *chatModel) clearConversation() {
+	m.opts.Engine.Reset()
+	m.transcript = nil
+	m.clearAfterTurn = false
+	text := "Your next message starts a new conversation. Remembered notes are kept; use /memory to review them."
+	if m.clearStoppedVoice {
+		text += " Voice is off so its previous context is discarded; use /voice to start listening again."
+	}
+	m.clearStoppedVoice = false
+	m.appendEntry("notice", "Conversation cleared", text)
 }
 
 // Catch credentials accidentally pasted into the ordinary message box before
@@ -556,6 +666,7 @@ func (m *chatModel) cancelActiveTurn() {
 }
 
 func (m *chatModel) requestVoiceSetup() tea.Cmd {
+	m.discardQueuedPrompts()
 	if m.active {
 		m.cancelActiveTurn()
 	}
@@ -873,6 +984,8 @@ func (m *chatModel) handleEvent(event Event) {
 		m.status = "Thinking"
 	case "status":
 		m.status = event.Text
+	case "memory":
+		m.appendEntry("notice", "Memory", event.Text)
 	}
 }
 
@@ -932,6 +1045,12 @@ func (m *chatModel) transcriptContent(width int) (string, []int) {
 			style = chatError
 		}
 		appendBlock(chatSanitize(entry.title), style, false)
+		if entry.memory != nil {
+			for _, line := range entry.memory.lines() {
+				appendBlock(chatSanitize(line.text), line.style, false)
+			}
+			continue
+		}
 		// Sanitize accumulated text so escapes split over streaming chunks
 		// cannot escape into the terminal.
 		appendBlock(chatSanitize(entry.text), plain, false)
@@ -989,9 +1108,12 @@ func (m *chatModel) resize(width, height int) {
 		m.composer.SetHeight(1)
 		m.viewport.Height = max(1, m.height-5)
 	} else {
-		m.composer.SetWidth(max(1, contentWidth-4))
+		m.composer.SetWidth(max(1, contentWidth-chatBox.GetHorizontalFrameSize()))
 		m.composer.SetHeight(3)
 		m.viewport.Height = max(1, m.height-11)
+	}
+	if len(m.queuedPrompts) > 0 && m.height >= 6 {
+		m.viewport.Height = max(1, m.viewport.Height-1)
 	}
 	m.preview.Width = contentWidth
 	m.preview.Height = max(1, m.height-8)
@@ -1120,6 +1242,9 @@ func (m *chatModel) View() string {
 		}
 	} else {
 		status := chatSingleLine(m.status)
+		if len(m.queuedPrompts) > 0 {
+			status = fmt.Sprintf("%d queued · %s", len(m.queuedPrompts), status)
+		}
 		status += " · " + m.voiceStatus()
 		if m.active {
 			status = m.spinner.View() + " " + status
@@ -1132,13 +1257,19 @@ func (m *chatModel) View() string {
 		}
 		hints := "Enter send · Alt+Enter newline · Ctrl+T tools · /help · Ctrl+C exit"
 		if m.active {
-			hints = "Esc/Ctrl+C cancel · Ctrl+T tools · PgUp/PgDn scroll"
+			hints = "Enter queue · Esc/Ctrl+C cancel · Ctrl+T tools · PgUp/PgDn scroll"
 		}
+		var parts []string
 		if m.compact {
-			frame = strings.Join([]string{line(title), m.viewport.View(), line(chatDim.Render(status)), m.composer.View(), line(chatDim.Render(hints))}, "\n")
+			parts = []string{line(title), m.viewport.View(), line(chatDim.Render(status))}
 		} else {
-			frame = strings.Join([]string{header, "", m.viewport.View(), line(chatDim.Render(status)), chatBox.Render(m.composer.View()), line(chatDim.Render(hints))}, "\n")
+			parts = []string{header, "", m.viewport.View(), line(chatDim.Render(status))}
 		}
+		if len(m.queuedPrompts) > 0 && m.height >= 6 {
+			parts = append(parts, line(chatDim.Render("Next: "+chatSingleLine(m.queuedPrompts[0]))))
+		}
+		parts = append(parts, m.composerView(), line(chatDim.Render(hints)))
+		frame = strings.Join(parts, "\n")
 	}
 	// Small terminal sizes must never cause wrapping or emit more rows than the
 	// available screen. This also bounds long provider/device/workspace labels.
@@ -1150,6 +1281,23 @@ func (m *chatModel) View() string {
 		lines[i] = " " + ansi.Truncate(lines[i], max(0, m.width-1), "")
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *chatModel) composerView() string {
+	width := max(1, m.width-2)
+	if m.compact {
+		return ansi.Truncate(m.composer.View(), width, "")
+	}
+	innerWidth := max(1, width-chatBox.GetHorizontalFrameSize())
+	lines := strings.Split(m.composer.View(), "\n")
+	for i, line := range lines {
+		// Fix the entire frame to terminal geometry, including the prompt,
+		// padding and border. A wider textarea row must not push the right
+		// border off screen, even during a resize or a Unicode cursor update.
+		line = ansi.Truncate(line, innerWidth, "")
+		lines[i] = line + strings.Repeat(" ", max(0, innerWidth-ansi.StringWidth(line)))
+	}
+	return chatBox.Render(strings.Join(lines, "\n"))
 }
 
 func (m *chatModel) voiceStatus() string {

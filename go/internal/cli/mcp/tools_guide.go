@@ -35,15 +35,75 @@ Cloud-enrolled devices:
 
 ## Tools available once connected
 
-- container_list / container_start / container_stop / container_delete / container_attach / container_stats
+- device_info — agent, OS, hardware, storage, and battery information
+- container_list / container_start / container_stop / container_delete / container_attach / container_exec / container_stats
 - wifi_list / wifi_connect / wifi_disconnect / wifi_status / wifi_known_networks
 - telemetry_logs / telemetry_metrics / telemetry_traces
 - hardware_capabilities
+- ros2_topics / ros2_topic_info / ros2_topic_sample / ros2_topic_hz / ros2_lidar_summary
 - os_update
 - provisioning_start / provisioning_status
 
+Use container_exec with app_name and an explicit command argument array to run
+a bounded command in an existing container through the active direct or cloud
+connection. Use telemetry_logs for passive logs. container_attach starts or
+restarts the app and can interrupt its running task; it is not a command shell.
+
 Host↔device file sync happens automatically as part of ` + "`wendy run`" + `'s
 fast redeploy path — there is no standalone file-sync CLI command or MCP tool.
+
+## Robot and sensor diagnostics
+
+For battery level and charge state, call device_info. Its battery object contains
+percent (0–100), state, and optional seconds_remaining until empty (discharging)
+or full (charging). A missing battery means the agent has no reading; a missing
+seconds_remaining means no estimate is available. This uses the agent's battery
+API and does not require a running ROS 2 app or container.
+
+Use ros2_topics to discover sensor and odometry topics and ros2_topic_info to
+inspect a topic's publishers and QoS. Prefer ros2_lidar_summary for standard
+PointCloud2 and LaserScan messages: it subscribes with sensor-compatible QoS,
+decodes points on the device, and returns compact sector nearest returns,
+bounded XYZ samples, and frame, source timestamp, clock, and coverage diagnostics.
+Use ros2_topic_sample or ros2_topic_hz for other finite observations.
+Scope defaults to app and preserves its isolation.
+If no ROS 2 app is running but the robot/host publishes sensor DDS data, explicitly
+set scope="host" and the known domain_id on each inspection tool. This uses a
+standalone ROS Humble/FastRTPS inspector; first use may download its image.
+A domain override alone never enables host scope. Custom message samples require
+compatible typesupport in an app image or a robot adapter.
+
+Discover actual LiDAR topics; /utlidar/cloud_deskewed and /scan are examples,
+not assumed capabilities. For robot-relative sectors, verify a body frame and
+request it with target_frame; the tool resolves TF at the measurement timestamp.
+An odom/map cloud's axes are not necessarily the robot's axes. Choose min_z/max_z
+in the output frame and inspect filtering, point limits, and missing sectors.
+Do not assign directional meanings to undocumented /utlidar/range_info fields.
+source_age_seconds is a signed offset against clock_basis, not proof of clock
+synchronization or freshness. Use use_sim_time=true for a verified ROS simulation
+clock; never compare ROS source timestamps to the chat/session clock.
+The LiDAR tool requires an updated local CLI and device agent. Read
+wendy://docs/integrations/ros2.mdx for argument examples.
+
+No samples means unknown, not an empty obstacle field. A received sample or
+rate measurement does not establish sensor acquisition freshness, localization
+quality, coverage, or readiness to move. Reception times are not sensor times.
+Use the robot app's readiness and navigation tools when it provides them.
+
+Examples/RobotNavigation is a deployable app providing robot_status, supervised
+navigation_goal/status/renew/cancel, robot_stop, robot_observe, robot_targets,
+and approach_person. Its default configuration disables motor output. It needs
+standard scan/odometry/IMU inputs, calibrated RGB-D for person targets, and a
+commissioned local driver/watchdog before motion. Read-only status calls do not
+renew navigation leases; cancellation is confirmed only after the action ends
+and fresh odometry establishes rest. Use fresh app target IDs for person goals.
+
+Apps with an mcp entitlement expose tools under an app-name prefix. Their tools
+are refreshed as the active device and running apps change. Check wendy_status
+or wendy://diagnostics when an expected app tool is unavailable.
+
+Read wendy://docs/integrations/robot-diagnostics.mdx for the diagnostic workflow
+and the boundary between remote observation and local robot control.
 
 ## Deploying a workload
 

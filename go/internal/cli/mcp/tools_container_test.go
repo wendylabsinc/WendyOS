@@ -2,9 +2,14 @@ package mcp
 
 import (
 	"context"
+	"io"
 	"net"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -12,7 +17,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 func TestContainerStart_DescriptionMentionsEntitlements(t *testing.T) {
@@ -65,6 +72,7 @@ type fakeContainerServer struct {
 	// chunk" (preserves pre-existing test expectations).
 	startOutputs  [][]byte
 	attachOutputs [][]byte
+	exec          func(agentpb.WendyContainerService_ExecContainerServer) error
 }
 
 func (s *fakeContainerServer) ListContainers(_ *agentpb.ListContainersRequest, stream agentpb.WendyContainerService_ListContainersServer) error {
@@ -124,6 +132,13 @@ func (s *fakeContainerServer) AttachContainer(stream agentpb.WendyContainerServi
 		}
 	}
 	return nil
+}
+
+func (s *fakeContainerServer) ExecContainer(stream agentpb.WendyContainerService_ExecContainerServer) error {
+	if s.exec == nil {
+		return status.Error(codes.Unimplemented, "container exec unavailable")
+	}
+	return s.exec(stream)
 }
 
 func startFakeContainerServer(t *testing.T, fake *fakeContainerServer) *grpcclient.AgentConnection {
@@ -405,5 +420,198 @@ func TestContainerAttach_MaxBytes_TruncatesOversizeOutput(t *testing.T) {
 	}
 	if text[:10] != "aaaaaaaaaa" {
 		t.Errorf("expected truncated text to start with the original bytes, got %q", text)
+	}
+}
+
+func TestContainerAttachAndExecRequireApprovalAndExplainTheirBehavior(t *testing.T) {
+	srv := server.NewMCPServer("t", "0")
+	s := New(&config.Config{}, nil)
+	s.registerContainerTools(srv)
+	for _, name := range []string{"container_attach", "container_exec"} {
+		tool, exists := srv.ListTools()[name]
+		if !exists || tool.Tool.Annotations.ReadOnlyHint == nil || *tool.Tool.Annotations.ReadOnlyHint || tool.Tool.Annotations.DestructiveHint == nil || !*tool.Tool.Annotations.DestructiveHint {
+			t.Fatalf("%s must advertise that it can disrupt the device and requires approval", name)
+		}
+	}
+	description := srv.ListTools()["container_attach"].Tool.Description
+	for _, phrase := range []string{"restart", "interrupts", "telemetry_logs", "container_exec"} {
+		if !strings.Contains(description, phrase) {
+			t.Fatalf("attach description must explain %q: %s", phrase, description)
+		}
+	}
+}
+
+func callContainerExec(t *testing.T, s *mcpServer, ctx context.Context, args map[string]any) *mcpgo.CallToolResult {
+	t.Helper()
+	srv := server.NewMCPServer("t", "0")
+	s.registerContainerTools(srv)
+	result, err := srv.ListTools()["container_exec"].Handler(ctx, callToolReq("container_exec", args))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestContainerExecUsesActiveDirectOrCloudConnectionAndExactArgv(t *testing.T) {
+	for _, connectionType := range []string{"direct", "cloud"} {
+		t.Run(connectionType, func(t *testing.T) {
+			command := []string{"printf", "$(touch should-not-run)", "argument with spaces", ""}
+			started := make(chan *agentpb.ExecContainerRequest_ExecStart, 1)
+			fake := &fakeContainerServer{exec: func(stream agentpb.WendyContainerService_ExecContainerServer) error {
+				request, err := stream.Recv()
+				if err != nil {
+					return err
+				}
+				started <- request.GetStart()
+				if _, err := stream.Recv(); err != io.EOF {
+					t.Errorf("noninteractive execution must close stdin, got %v", err)
+				}
+				if err := stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_StdoutData{StdoutData: []byte("hello")}}); err != nil {
+					return err
+				}
+				if err := stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_StderrData{StderrData: []byte("diagnostic")}}); err != nil {
+					return err
+				}
+				return stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_ExitCode{ExitCode: 0}})
+			}}
+			s := New(&config.Config{}, nil)
+			s.SetConn(startFakeContainerServer(t, fake))
+			s.SetConnType(connectionType)
+			result := callContainerExec(t, s, context.Background(), map[string]any{"app_name": "go2-remote-control", "command": command})
+			if result.IsError {
+				t.Fatalf("exec failed: %s", toolResultText(t, result))
+			}
+			request := <-started
+			if request.GetAppName() != "go2-remote-control" || request.GetTty() || !reflect.DeepEqual(request.GetCommand(), command) {
+				t.Fatalf("exec changed its target, argv, or noninteractive behavior: %+v", request)
+			}
+			out := structuredMap(t, result)
+			if out["stdout"] != "hello" || out["stderr"] != "diagnostic" || out["exit_code"] != int32(0) || out["truncated"] != false {
+				t.Fatalf("exec result lost output or status: %#v", out)
+			}
+		})
+	}
+}
+
+func TestContainerExecPreservesFailureAndExitCodeAfterOutputTruncation(t *testing.T) {
+	for _, ending := range []string{"nonzero", "missing exit", "rpc error"} {
+		t.Run(ending, func(t *testing.T) {
+			fake := &fakeContainerServer{exec: func(stream agentpb.WendyContainerService_ExecContainerServer) error {
+				if _, err := stream.Recv(); err != nil {
+					return err
+				}
+				if err := stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_StdoutData{StdoutData: []byte("abcd硬件")}}); err != nil {
+					return err
+				}
+				if err := stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_StderrData{StderrData: []byte("later output")}}); err != nil {
+					return err
+				}
+				switch ending {
+				case "nonzero":
+					return stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_ExitCode{ExitCode: 7}})
+				case "rpc error":
+					return status.Error(codes.NotFound, "container vanished")
+				default:
+					return nil
+				}
+			}}
+			s := New(&config.Config{}, nil)
+			s.SetConn(startFakeContainerServer(t, fake))
+			result := callContainerExec(t, s, context.Background(), map[string]any{"app_name": "app", "command": []string{"test"}, "max_bytes": 5})
+			out := structuredMap(t, result)
+			if !result.IsError || out["stdout"] != "abcd" || out["stderr"] != "" || out["truncated"] != true || !utf8.ValidString(toolResultText(t, result)) {
+				t.Fatalf("failed command output must stay bounded and retain error status: %#v", out)
+			}
+			if ending == "nonzero" && (out["exit_code"] != int32(7) || out["error_code"] != "COMMAND_FAILED") {
+				t.Fatalf("output truncation lost final exit status: %#v", out)
+			}
+			if ending == "rpc error" && (out["error_code"] != "NOT_FOUND" || !strings.Contains(out["message"].(string), "container vanished")) {
+				t.Fatalf("RPC error details were lost: %#v", out)
+			}
+			if ending == "missing exit" && !strings.Contains(out["message"].(string), "without an exit code") {
+				t.Fatalf("missing exit code should report unknown completion: %#v", out)
+			}
+		})
+	}
+}
+
+func TestContainerExecTimeoutCancelsRPCAndPreservesOutput(t *testing.T) {
+	canceled := make(chan struct{})
+	fake := &fakeContainerServer{exec: func(stream agentpb.WendyContainerService_ExecContainerServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		if err := stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_StdoutData{StdoutData: []byte("working")}}); err != nil {
+			return err
+		}
+		<-stream.Context().Done()
+		close(canceled)
+		return stream.Context().Err()
+	}}
+	s := New(&config.Config{}, nil)
+	s.SetConn(startFakeContainerServer(t, fake))
+	result := callContainerExec(t, s, context.Background(), map[string]any{"app_name": "app", "command": []string{"wait"}, "timeout_seconds": 1})
+	out := structuredMap(t, result)
+	if !result.IsError || out["error_code"] != "TIMEOUT" || out["stdout"] != "working" {
+		t.Fatalf("timeout must retain partial output and report failure: %#v", out)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("exec timeout did not release the remote RPC")
+	}
+}
+
+func TestContainerExecErrorSummaryPrecedesLargeOutput(t *testing.T) {
+	fake := &fakeContainerServer{exec: func(stream agentpb.WendyContainerService_ExecContainerServer) error {
+		if _, err := stream.Recv(); err != nil {
+			return err
+		}
+		if err := stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_StdoutData{StdoutData: []byte(strings.Repeat("x", 40000))}}); err != nil {
+			return err
+		}
+		return stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_ExitCode{ExitCode: 2}})
+	}}
+	s := New(&config.Config{}, nil)
+	s.SetConn(startFakeContainerServer(t, fake))
+	result := callContainerExec(t, s, context.Background(), map[string]any{"app_name": "app", "command": []string{"test"}})
+	if !result.IsError || toolResultText(t, result) != "[COMMAND_FAILED] command exited with code 2" || len(result.Content) != 2 {
+		t.Fatalf("failure summary must precede a potentially truncated JSON result: %v", result.Content)
+	}
+	if len(structuredMap(t, result)["stdout"].(string)) != 40000 {
+		t.Fatal("the short failure summary must not replace captured output")
+	}
+}
+
+func TestContainerExecValidatesArgumentsBeforeRPC(t *testing.T) {
+	var calls atomic.Int32
+	fake := &fakeContainerServer{exec: func(agentpb.WendyContainerService_ExecContainerServer) error {
+		calls.Add(1)
+		return nil
+	}}
+	s := New(&config.Config{}, nil)
+	s.SetConn(startFakeContainerServer(t, fake))
+	for _, invalid := range []map[string]any{
+		{"app_name": ""}, {"command": "echo hello"}, {"command": []string{}}, {"command": []string{""}},
+		{"command": []any{"echo", nil}}, {"command": []string{"echo", "a\x00b"}},
+		{"command": []string{strings.Repeat("x", 16385)}},
+		{"timeout_seconds": 0}, {"timeout_seconds": 301}, {"timeout_seconds": 1.5}, {"max_bytes": 0}, {"max_bytes": 1000001},
+	} {
+		args := map[string]any{"app_name": "app", "command": []string{"true"}}
+		for key, value := range invalid {
+			args[key] = value
+		}
+		result := callContainerExec(t, s, context.Background(), args)
+		if !result.IsError || structuredMap(t, result)["error_code"] != "INVALID_ARGUMENT" {
+			t.Fatalf("invalid arguments were accepted: %#v", invalid)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatal("invalid arguments reached the device")
+	}
+	s.SetConn(nil)
+	result := callContainerExec(t, s, context.Background(), map[string]any{"app_name": "app", "command": []string{"true"}})
+	if !result.IsError || structuredMap(t, result)["error_code"] != "NOT_CONNECTED" {
+		t.Fatal("exec must require an active connection")
 	}
 }

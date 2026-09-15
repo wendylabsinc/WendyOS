@@ -58,6 +58,10 @@ func ensureSimulatorRunning(ctx context.Context, name string) (addr string, star
 	if err != nil {
 		return "", false, err
 	}
+	resources, err := simulatorResources(store, name)
+	if err != nil {
+		return "", false, err
+	}
 	if st.Running {
 		if st.State.AgentPort != 0 {
 			return fmt.Sprintf("127.0.0.1:%d", st.State.AgentPort), false, nil
@@ -87,8 +91,8 @@ func ensureSimulatorRunning(ctx context.Context, name string) (addr string, star
 	spec, store, err := resolveVMSpec(name, vmStartOptions{
 		netMode:   string(vm.NetUser),
 		hostPort:  port,
-		memoryMiB: vm.DefaultMemoryMiB,
-		cpus:      vm.DefaultCPUs,
+		memoryMiB: resources.memoryMiB,
+		cpus:      resources.cpus,
 	})
 	if err != nil {
 		return "", false, err
@@ -249,6 +253,10 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 			return nil, err
 		}
 	}
+	if err := reconcileSimulatorRobotFn(ctx, picked.Agent); err != nil {
+		picked.Agent.Close()
+		return nil, markSimulatorUnavailable(err)
+	}
 	return picked, nil
 }
 
@@ -266,6 +274,14 @@ var createSimulator = func(name string) error {
 		return fmt.Errorf("%w: no simulator yet; create one with 'wendy vm create %s'",
 			errSimulatorUnavailable, name)
 	}
+	profile := "generic"
+	if isInteractiveTerminalFn() {
+		var err error
+		profile, err = pickSimulatorProfileFn()
+		if err != nil {
+			return err
+		}
+	}
 	if !vmAssumeYes && !confirmFn("Download the WendyOS simulator image and create a VM? This is a one-time download of a few hundred MB.") {
 		return ErrUserCancelled
 	}
@@ -273,7 +289,7 @@ var createSimulator = func(name string) error {
 	if err := createVM(os.Stderr, name, "", "", defaultSimulatorDiskGiB, false, 0); err != nil {
 		return fmt.Errorf("%w: %w", errSimulatorUnavailable, err)
 	}
-	return nil
+	return attachSimulatorProfile(name, profile)
 }
 
 // awaitSimulator waits under a spinner for the guest agent to answer. Shared by

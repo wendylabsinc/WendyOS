@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go2 · Teleop</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #111719; color: #e7efec; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 36px 20px; }
+    main { max-width: 960px; margin: auto; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 30px; }
+    h1 { margin: 6px 0 8px; font-size: clamp(28px, 5vw, 42px); letter-spacing: -.04em; }
+    p { color: #a6b9b1; line-height: 1.55; margin: 0; }
+    .eyebrow { color: #a2e6c9; text-transform: uppercase; letter-spacing: .15em; font-size: 12px; font-weight: 700; }
+    .badge { border: 1px solid #3c5149; border-radius: 30px; padding: 8px 14px; white-space: nowrap; font-size: 12px; color: #b1c8bd; }
+    .layout { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; }
+    section { background: #192225; border: 1px solid #2a3c36; padding: 26px; border-radius: 20px; }
+    h2 { font-size: 17px; margin: 0 0 20px; font-weight: 600; }
+    button { font: inherit; cursor: pointer; color: inherit; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #a2e6c9; outline-offset: 4px; }
+    button:disabled { cursor: default; opacity: .45; }
+    .pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-width: 360px; margin: 26px auto; }
+    .direction { touch-action: none; user-select: none; -webkit-user-select: none; min-height: 92px; border-radius: 14px; background: #23302d; border: 1px solid #40564d; display: grid; place-content: center; gap: 5px; }
+    .direction strong { font-size: 22px; font-weight: 500; }
+    .direction span { font-size: 11px; color: #b4c7bf; }
+    .direction.held { background: #9de4c7; color: #14261e; border-color: #b4ffe0; }
+    .direction.held span { color: #254c3b; }
+    .actions { display: flex; gap: 10px; margin-bottom: 18px; }
+    .actions button { flex: 1; border-radius: 10px; padding: 13px 10px; font-weight: 600; border: 1px solid #486458; background: #283c33; }
+    #enable { color: #14261e; background: #a2e6c9; border-color: #a2e6c9; }
+    #disable { background: #392d2c; border-color: #72524b; color: #f3c1b4; }
+    #notice { font-size: 13px; min-height: 42px; }
+    label { display: flex; justify-content: space-between; gap: 16px; color: #c2d0ca; font-size: 13px; }
+    input { width: 100%; accent-color: #a2e6c9; margin: 18px 0 25px; }
+    output { color: #e7efec; font-variant-numeric: tabular-nums; }
+    .readings { display: grid; gap: 12px; padding: 20px 0; border-block: 1px solid #31453c; margin-top: 4px; }
+    .reading { display: flex; justify-content: space-between; color: #a6b9b1; font-size: 13px; }
+    .reading b { color: #e7efec; font-family: ui-monospace, monospace; font-weight: 500; }
+    .hint { font-size: 12px; margin-top: 18px; }
+    footer { margin-top: 24px; font-size: 12px; color: #81968c; line-height: 1.7; }
+    @media (max-width: 650px) { body { padding: 24px 14px; } .layout { grid-template-columns: 1fr; } header { align-items: flex-start; } .badge { display: none; } section { padding: 20px; } }
+    @media (prefers-reduced-motion: no-preference) { button { transition: background 100ms; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><div class="eyebrow">Wendy / Go2 simulator</div><h1>Take it for a walk.</h1><p>Hold a direction. Release to stop.</p></div>
+    <div class="badge">ROS 2 · 20 Hz</div>
+  </header>
+  <div class="layout">
+    <section aria-labelledby="controls-title">
+      <h2 id="controls-title">Drive controls</h2>
+      <div class="actions"><button id="enable">Enable controls</button><button id="disable" disabled>Stop / disable</button></div>
+      <p id="notice" role="status" aria-live="polite">Enable this tab, then hold a direction to drive.</p>
+      <div class="pad" aria-label="Hold these buttons or their letter keys to drive">
+        <button class="direction" data-key="q" disabled aria-label="Q: turn left"><strong>↶ Q</strong><span>Turn left</span></button>
+        <button class="direction" data-key="w" disabled aria-label="W: forward"><strong>↑ W</strong><span>Forward</span></button>
+        <button class="direction" data-key="e" disabled aria-label="E: turn right"><strong>E ↷</strong><span>Turn right</span></button>
+        <button class="direction" data-key="a" disabled aria-label="A: strafe left"><strong>← A</strong><span>Strafe left</span></button>
+        <button class="direction" data-key="s" disabled aria-label="S: backward"><strong>↓ S</strong><span>Backward</span></button>
+        <button class="direction" data-key="d" disabled aria-label="D: strafe right"><strong>D →</strong><span>Strafe right</span></button>
+      </div>
+      <p class="hint">Use W / S to walk, A / D to sidestep, and Q / E to turn. Space or Escape disables controls. Touch and mouse work too.</p>
+    </section>
+    <section aria-labelledby="status-title">
+      <h2 id="status-title">Pace &amp; requests</h2>
+      <label for="speed">Walking pace <output id="speed-value">0.30 m/s</output></label>
+      <input id="speed" type="range" min="0" max="0.6" step="0.05" value="0.3">
+      <label for="turn-speed">Turning pace <output id="turn-value">0.60 rad/s</output></label>
+      <input id="turn-speed" type="range" min="0" max="1" step="0.1" value="0.6">
+      <div class="readings">
+        <div class="reading"><span>Forward</span><b id="vx">0.00 m/s</b></div>
+        <div class="reading"><span>Left</span><b id="vy">0.00 m/s</b></div>
+        <div class="reading"><span>Turn left</span><b id="yaw">0.00 rad/s</b></div>
+        <div class="reading"><span>Heartbeat timeout</span><b>250 ms</b></div>
+      </div>
+      <p class="hint">Managed Go2 gives new apps control automatically. In manual mode, grant Teleop control in the sandbox first. Open the sandbox alongside this page to watch the robot.</p>
+      <p class="hint">Switching tabs, losing focus, or losing the connection disables this tab. Enable again to continue.</p>
+    </section>
+  </div>
+  <footer>Manual driving has no obstacle avoidance. The server stops requests after 250 ms without a heartbeat, with a 50 ms publisher interval.</footer>
+</main>
+<script>
+  'use strict';
+  const byId = id => document.getElementById(id);
+  const directions = [...document.querySelectorAll('[data-key]')];
+  const heldKeys = new Set(), pointers = new Map();
+  let session = null, sequence = 0, generation = 0, enabling = false;
+  const pressed = () => [...new Set([...heldKeys, ...pointers.values()])];
+  const keyFrom = event => ({KeyW:'w', KeyS:'s', KeyA:'a', KeyD:'d', KeyQ:'q', KeyE:'e'})[event.code];
+  const focused = () => !document.hidden && document.hasFocus();
+  function render() {
+    const keys = pressed();
+    directions.forEach(button => { button.disabled = !session; button.classList.toggle('held', keys.includes(button.dataset.key)); });
+    byId('enable').disabled = !!session || enabling;
+    byId('disable').disabled = !session;
+  }
+  async function post(path, data) {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 180);
+    try {
+      const response = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data), signal:abort.signal, cache:'no-store'});
+      const result = await response.json();
+      if (!response.ok) throw Error(result.error || 'Control request failed');
+      return result;
+    } finally { clearTimeout(timer); }
+  }
+  function disable(reason = 'Controls disabled. Enable again when ready.') {
+    const old = session;
+    session = null; generation++; heldKeys.clear(); pointers.clear();
+    byId('notice').textContent = reason;
+    render();
+    if (old) {
+      // Release is terminal: late drive packets cannot revive this session.
+      const body = JSON.stringify({session:old, sequence:++sequence});
+      fetch('/api/release', {method:'POST', headers:{'Content-Type':'application/json'}, body, keepalive:true}).catch(() => {});
+    }
+  }
+  async function heartbeat() {
+    if (!session) return;
+    if (!focused()) { disable('Tab lost focus. Enable again to continue.'); return; }
+    const current = session, sent = ++sequence;
+    try {
+      await post('/api/drive', {session:current, sequence:sent, keys:pressed(), speed:Number(byId('speed').value), turn_speed:Number(byId('turn-speed').value)});
+    } catch (error) {
+      if (session === current) disable('Connection interrupted. Enable again to continue.');
+    }
+  }
+  byId('enable').addEventListener('click', async () => {
+    if (session || enabling) return;
+    const attempt = ++generation;
+    enabling = true; heldKeys.clear(); pointers.clear(); render();
+    try {
+      const result = await post('/api/enable', {});
+      if (attempt !== generation || !focused()) {
+        fetch('/api/release', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({session:result.session, sequence:0}), keepalive:true}).catch(() => {});
+        return;
+      }
+      session = result.session; sequence = 0;
+      byId('notice').textContent = 'Enabled. Hold a direction to drive; release to stop.';
+      heartbeat();
+    } catch (error) { if (attempt === generation) byId('notice').textContent = error.message; }
+    finally { enabling = false; render(); }
+  });
+  byId('disable').addEventListener('click', () => disable());
+  document.addEventListener('keydown', event => {
+    if (event.code === 'Escape' || event.code === 'Space') {
+      if (session) { event.preventDefault(); disable(); }
+      return;
+    }
+    const key = keyFrom(event);
+    if (!key || !session || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.target.matches('input, textarea, select, [contenteditable]')) return;
+    event.preventDefault(); heldKeys.add(key); render(); heartbeat();
+  });
+  document.addEventListener('keyup', event => {
+    if (heldKeys.delete(keyFrom(event))) { event.preventDefault(); render(); heartbeat(); }
+  });
+  directions.forEach(button => {
+    button.addEventListener('pointerdown', event => {
+      if (!session || event.button !== 0) return;
+      event.preventDefault(); button.setPointerCapture(event.pointerId);
+      pointers.set(event.pointerId, button.dataset.key); render(); heartbeat();
+    });
+    const release = event => { if (pointers.delete(event.pointerId)) { render(); heartbeat(); } };
+    button.addEventListener('pointerup', release);
+    button.addEventListener('pointercancel', release);
+    button.addEventListener('lostpointercapture', release);
+  });
+  for (const [id, label, unit] of [['speed','speed-value','m/s'], ['turn-speed','turn-value','rad/s']]) {
+    byId(id).addEventListener('input', () => { byId(label).value = Number(byId(id).value).toFixed(2) + ' ' + unit; heartbeat(); });
+  }
+  window.addEventListener('blur', () => disable('Tab lost focus. Enable again to continue.'));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) disable('Tab hidden. Enable again to continue.'); });
+  window.addEventListener('pagehide', () => disable());
+  window.addEventListener('pageshow', () => disable('Enable this tab, then hold a direction to drive.'));
+  setInterval(heartbeat, 100);
+  let polling = false;
+  async function status() {
+    if (polling) return;
+    polling = true;
+    try {
+      const response = await fetch('/api/status', {cache:'no-store', signal:AbortSignal.timeout(1000)});
+      if (!response.ok) throw Error('Status unavailable');
+      const result = await response.json();
+      ['vx','vy','yaw'].forEach((id, i) => byId(id).textContent = result.velocity[i].toFixed(2) + (i === 2 ? ' rad/s' : ' m/s'));
+    } catch (error) { ['vx','vy','yaw'].forEach(id => byId(id).textContent = 'Unavailable'); }
+    finally { polling = false; }
+  }
+  setInterval(status, 250); status(); render();
+</script>
+</body>
+</html>

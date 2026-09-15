@@ -1,0 +1,30 @@
+FROM ros:humble-ros-base
+
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MUJOCO_GL=osmesa \
+    G1_HOST=0.0.0.0 G1_PORT=8890
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-pip libosmesa6 libgl1 libegl1 nftables iptables util-linux \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/wendy-g1
+COPY requirements.txt ./
+RUN python3 -m pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ros-humble-rmw-cyclonedds-cpp ros-humble-tf2-ros ros-humble-rosidl-generator-dds-idl \
+    && rm -rf /var/lib/apt/lists/*
+COPY ros_ws/src/g1_command_ingress ./ros_ws/src/g1_command_ingress
+COPY ros_ws/src/unitree ./ros_ws/src/unitree
+COPY unitree.lock.json ./
+COPY tools/fetch_assets.py tools/fetch_unitree.py tools/prepare_unitree.py ./tools/
+RUN python3 tools/prepare_unitree.py \
+    && /bin/bash -c 'source /opt/ros/humble/setup.bash && cd ros_ws && colcon build --base-paths src/g1_command_ingress generated_unitree --cmake-args -DBUILD_TESTING=OFF'
+COPY assets ./assets
+COPY licenses ./licenses
+COPY assets.lock.json UPSTREAM.md compatibility.json ./
+COPY g1_sim/*.py g1_sim/index.html g1_sim/viewer.js ./g1_sim/
+COPY g1_sim/vendor/three.module.js g1_sim/vendor/three.core.js g1_sim/vendor/OrbitControls.js ./g1_sim/vendor/
+COPY entrypoint.sh cyclonedds.xml ./
+ENV G1_VISUAL_DETAIL=balanced LP_NUM_THREADS=2 G1_NATIVE=1
+EXPOSE 8890
+CMD ["/bin/bash", "/opt/wendy-g1/entrypoint.sh"]

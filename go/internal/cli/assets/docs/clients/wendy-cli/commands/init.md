@@ -43,11 +43,11 @@ An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that
 |---|---|---|
 | `wendyos` | `linux` | `swift`, `python` |
 | `darwin` (aliases: `mac`, `macos`) | `darwin` | `swift` (plain wizard), `mojo` (via templates) |
-| `wendy-lite` | `wendy-lite` | `swift` only (optional WASM scaffold) |
+| `wendy-lite` | `wendy-lite` | `c` (native), `swift` (WASM) |
 
 Templates may offer additional languages (for example `rust`, `node`, or `cpp`) on a `wendyos` target; the plain wizard writes `swift` or `python`. On a `darwin` target the plain wizard writes `swift`; `mojo` is accepted when a catalogued Mojo/MAX template such as `mac-llm` provides it.
 
-**Language resolution.** `wendy-lite` always uses Swift and rejects any other language. `darwin` accepts `swift` or `mojo`; with a template, the language must be one the template offers, and an unsupported choice is rejected with the languages it does offer.
+**Language resolution.** `wendy-lite` accepts `c` for native apps and `swift` for WASM apps. `darwin` accepts `swift` or `mojo`; with a template, the language must be one the template offers, and an unsupported choice is rejected with the languages it does offer.
 
 For ESP32, regular native ESP-IDF projects are recommended. Create them with the standard ESP-IDF tooling and add a `wendy.json` whose platform is `wendy-lite`; you do not need `wendy init`. The `wendy-lite` wizard target remains available for scaffolding an optional Swift/WASM guest.
 

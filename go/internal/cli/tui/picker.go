@@ -228,6 +228,11 @@ type PickerModel struct {
 	// If nil, 'c' is ignored.
 	OnCreateItem func() (flash string, quit bool)
 
+	// OnEnrollItem is called when the user presses 'e' on the highlighted item.
+	// Returning quit=true closes the picker so enrollment can use the terminal.
+	// If nil, 'e' is ignored. Filterable pickers use 'e' as filter text instead.
+	OnEnrollItem func(item PickerItem) (flash string, quit bool)
+
 	// OnStopItem runs asynchronously when the user presses 's'. It must not
 	// mutate the model, and should honor its owner's cancellation context.
 	// Returns (flash message, isError). If nil, 's' is ignored.
@@ -436,6 +441,19 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case key == "e" && !m.Filterable:
+			if m.OnEnrollItem != nil {
+				visible := m.visibleItems()
+				if idx := m.itemIndexForRow(m.table.Cursor()); idx >= 0 && idx < len(visible) {
+					flash, quit := m.OnEnrollItem(visible[idx])
+					m.flashMessage = flash
+					m.flashIsError = false
+					if quit {
+						return m, tea.Quit
+					}
+				}
+			}
+			return m, nil
 		case key == "r" && !m.Filterable:
 			if m.OnRemoveItem != nil {
 				visible := m.visibleItems()
@@ -629,13 +647,16 @@ func (m PickerModel) View() string {
 		hint = " (type to filter, ↑/↓ navigate" + scrollHint + ", " + enterAction + ", esc quit)"
 	}
 	if m.OnSetDefault != nil || m.OnUnsetDefault != nil || m.OnRemoveItem != nil ||
-		m.OnCreateItem != nil || m.OnStopItem != nil {
+		m.OnCreateItem != nil || m.OnStopItem != nil || (m.OnEnrollItem != nil && !m.Filterable) {
 		extras := ""
 		if m.OnSetDefault != nil {
 			extras += ", d set default"
 		}
 		if m.OnUnsetDefault != nil {
 			extras += ", x clear default"
+		}
+		if m.OnEnrollItem != nil && !m.Filterable {
+			extras += ", e enroll"
 		}
 		if m.OnCreateItem != nil {
 			extras += ", c create"

@@ -19,7 +19,7 @@ from typing import Any
 COMMENT_MARKER = "<!-- ai-security-review:v1 -->"
 BLOCKING_MARKER = "<!-- ai-security-review:has-blocking=true -->"
 CREDIT_WARNING_MARKER = "<!-- ai-security-review:credit-unavailable -->"
-MAX_DIFF_BYTES = 140_000
+MAX_DIFF_BYTES = 512_000
 MAX_COMMENT_BYTES = 65_000
 TRUST_BOUNDARY_TAGS = (
     "<untrusted_pr_content>",

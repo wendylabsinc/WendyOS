@@ -158,7 +158,7 @@ type servicePlan struct {
 // plan as "don't skip this service, and don't reuse anything for it", so the
 // real error surfaces from the build path instead of aborting the whole group
 // during planning.
-func computeServicePlans(cwd, platform, gpuArch string, serviceEnvs map[string][]string, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) map[string]servicePlan {
+func computeServicePlans(cwd, platform, backend, gpuArch string, serviceEnvs map[string][]string, services map[string]*appconfig.ServiceConfig, buildArgs map[string]string, sfOpts ...stagefile.Option) map[string]servicePlan {
 	var mu sync.Mutex
 	plans := make(map[string]servicePlan, len(services))
 
@@ -174,7 +174,7 @@ func computeServicePlans(cwd, platform, gpuArch string, serviceEnvs map[string][
 			if err != nil {
 				return
 			}
-			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, buildArgs, serviceEnvs[name])
+			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, backend, buildArgs, serviceEnvs[name])
 			if err != nil {
 				return
 			}
@@ -282,7 +282,7 @@ func planServicePushSkips(ctx context.Context, conn *grpcclient.AgentConnection,
 		return skip, hashes, dockerfiles
 	}
 
-	plans := computeServicePlans(cwd, platform, serviceGPUArch(ctx, cwd, services, conn), serviceEnvs, services, buildArgs, sfOpts...)
+	plans := computeServicePlans(cwd, platform, resolvedStagefileBackend(ctx), serviceGPUArch(ctx, cwd, services, conn), serviceEnvs, services, buildArgs, sfOpts...)
 	present := deviceContainerNames(ctx, conn)
 	type candidate struct {
 		name string

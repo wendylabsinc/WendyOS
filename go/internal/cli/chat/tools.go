@@ -24,17 +24,19 @@ import (
 // Tools combines project development tools with the Wendy MCP server. Only the
 // trusted, bundled MCP server is launched; workspace files cannot add servers.
 type Tools struct {
-	workspace string
-	root      *os.Root
-	mcp       mcpToolClient
-	stderr    *limitedBuffer
-	mu        sync.RWMutex
-	known     map[string]Tool
-	closeOnce sync.Once
-	closeErr  error
+	workspace             string
+	root                  *os.Root
+	mcp                   mcpToolClient
+	stderr                *limitedBuffer
+	mu                    sync.RWMutex
+	known                 map[string]Tool
+	closeOnce             sync.Once
+	closeErr              error
+	background            *backgroundProcesses
+	stopBackgroundContext func() bool
 }
 
-var localTools = []Tool{
+var localTools = append([]Tool{
 	{
 		Name: "workspace_list", Description: "List entries in a local project directory. Paths are relative to the workspace; returns at most 1000 entries.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative directory, default ."}},"additionalProperties":false}`),
@@ -55,7 +57,7 @@ var localTools = []Tool{
 		Name: "wendy_docs", Description: "Read the Wendy documentation bundled with this CLI. With no path, list available documentation paths; provide a listed path to read it. Output is capped at 32 KiB; offset and limit select lines.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1,"maximum":1000000},"limit":{"type":"integer","minimum":1,"maximum":500}},"additionalProperties":false}`),
 	},
-}
+}, backgroundTools...)
 
 func NewTools(ctx context.Context, executable, workspace, device string) (*Tools, error) {
 	t, err := newWorkspaceTools(workspace)
@@ -79,6 +81,8 @@ func NewTools(ctx context.Context, executable, workspace, device string) (*Tools
 		_ = t.Close()
 		return nil, fmt.Errorf("locating Wendy executable: %w", err)
 	}
+	t.background = &backgroundProcesses{executable: executable, workspace: t.workspace}
+	t.stopBackgroundContext = context.AfterFunc(ctx, func() { _ = t.background.Close() })
 	if err := t.startMCP(ctx, executable, device); err != nil {
 		_ = t.Close()
 		return nil, err
@@ -115,8 +119,14 @@ func newWorkspaceTools(workspace string) (*Tools, error) {
 
 func (t *Tools) Close() error {
 	t.closeOnce.Do(func() {
+		if t.stopBackgroundContext != nil {
+			t.stopBackgroundContext()
+		}
+		if t.background != nil {
+			t.closeErr = t.background.Close()
+		}
 		if t.mcp != nil {
-			t.closeErr = t.mcp.Close()
+			t.closeErr = errors.Join(t.closeErr, t.mcp.Close())
 		}
 		if t.root != nil {
 			t.closeErr = errors.Join(t.closeErr, t.root.Close())
@@ -146,6 +156,8 @@ func (t *Tools) ExecuteResult(ctx context.Context, call ToolCall) (ToolResult, e
 	var output string
 	var err error
 	switch call.Name {
+	case "camera_view", "audio_listen", "background_process_list", "background_process_stop":
+		output, err = t.executeBackground(ctx, call)
 	case "workspace_list":
 		var args struct{ Path string }
 		_ = json.Unmarshal(call.Arguments, &args)

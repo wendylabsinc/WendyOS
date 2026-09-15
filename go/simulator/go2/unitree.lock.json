@@ -1,0 +1,2165 @@
+{
+  "schema_version": 1,
+  "description": "Unmodified pinned Unitree ROS message packages and complete Python SDK source for isolated compatibility testing.",
+  "archives": [
+    {
+      "id": "unitree_ros2",
+      "repository": "https://github.com/unitreerobotics/unitree_ros2",
+      "commit": "668d1ec5a05d1c38d3306bdca7d59f2ba3581a88",
+      "path": "assets/archives/unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88.tar.gz",
+      "url": "https://codeload.github.com/unitreerobotics/unitree_ros2/tar.gz/668d1ec5a05d1c38d3306bdca7d59f2ba3581a88",
+      "size": 1426912,
+      "sha256": "3e96da843c611878e28148ce113d978e5464dec922fc06dcd8c340f8232a6883"
+    },
+    {
+      "id": "unitree_sdk2_python",
+      "repository": "https://github.com/unitreerobotics/unitree_sdk2_python",
+      "commit": "65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5",
+      "path": "assets/archives/unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5.tar.gz",
+      "url": "https://codeload.github.com/unitreerobotics/unitree_sdk2_python/tar.gz/65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5",
+      "size": 278069,
+      "sha256": "b74e43fb6535929ec2a9efc1685e96111932ac6a9d7105b9cc7564ebaf6b7d58"
+    }
+  ],
+  "files": [
+    {
+      "path": "assets/sdk2_python/.gitignore",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/.gitignore",
+      "size": 296,
+      "sha256": "235006c2d8436f71a126ddfb1c32d10b17a901797429b5a2e09816aab95213b1"
+    },
+    {
+      "path": "assets/sdk2_python/LICENSE",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/LICENSE",
+      "size": 1559,
+      "sha256": "a5d73fc4aca9074e3e6fe0b1a0ba763cf9514b2249b7390ed20fe8d53630bf25"
+    },
+    {
+      "path": "assets/sdk2_python/README zh.md",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/README zh.md",
+      "size": 4747,
+      "sha256": "f84bc55b3d2582aca4e7611ce40a6a86d759944f8eb54cd41bd5112d6bc52733"
+    },
+    {
+      "path": "assets/sdk2_python/README.md",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/README.md",
+      "size": 5550,
+      "sha256": "0fa9e0fb386718da0619c6ddbf29b0ae01bfd49a61f36cb1c14000e4c4a7fe3d"
+    },
+    {
+      "path": "assets/sdk2_python/example/a2/audio/a2_audio_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/a2/audio/a2_audio_client_example.py",
+      "size": 1075,
+      "sha256": "6b7fa50fc306804e9d50faa9d5999de44401f08d376056269eabf6f6ab9bdb12"
+    },
+    {
+      "path": "assets/sdk2_python/example/a2/audio/a2_audio_client_play_wav.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/a2/audio/a2_audio_client_play_wav.py",
+      "size": 1111,
+      "sha256": "6393b83ba27f30ad6a8fc2b6b56a84505d4ac3a5526e333b2548d5c3d3e0f616"
+    },
+    {
+      "path": "assets/sdk2_python/example/a2/audio/test.wav",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/a2/audio/test.wav",
+      "size": 132246,
+      "sha256": "03031d6b8a6d023789280e99a0b823071dd97f3838eb58a68ab5f46c7b9df4a0"
+    },
+    {
+      "path": "assets/sdk2_python/example/a2/audio/wav.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/a2/audio/wav.py",
+      "size": 6351,
+      "sha256": "d24f97e51162d931cabe95caf94bc8b1eb5d8354ab42063a6575e4cd929a29f2"
+    },
+    {
+      "path": "assets/sdk2_python/example/a2/sport/a2_sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/a2/sport/a2_sport_client.py",
+      "size": 5053,
+      "sha256": "aa93edbe95e560dca20bb204f4aa2d8225daef762d150a8adbadd826adc2f9fc"
+    },
+    {
+      "path": "assets/sdk2_python/example/a2/sport/a2_sport_state.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/a2/sport/a2_sport_state.py",
+      "size": 1336,
+      "sha256": "15ba0aff5a2413b761cce8ab29456762a072baa3389048fa8e5f6bb66cc0e25b"
+    },
+    {
+      "path": "assets/sdk2_python/example/as2/sport/as2_sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/as2/sport/as2_sport_client.py",
+      "size": 5184,
+      "sha256": "dc4010799b9946431612b28a21731a824d01923020cc79a6dbd1f3457c8d0208"
+    },
+    {
+      "path": "assets/sdk2_python/example/as2/sport/as2_sport_state.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/as2/sport/as2_sport_state.py",
+      "size": 1335,
+      "sha256": "0758aeb11df1fcd8e15b54f61de18238f011b4c91de0fb79a1b2c7204c3da565"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2/camera/camera_opencv.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2/camera/camera_opencv.py",
+      "size": 1625,
+      "sha256": "a613f386182409d24a91ddb9c771b6436a8b93bf597648f222af6d25dfe801c2"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2/camera/capture_image.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2/camera/capture_image.py",
+      "size": 1573,
+      "sha256": "96962d93019fdfc7cf7673ec0ffeafedac5472640de0741fa8a644ac48fe715a"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2/high_level/b2_sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2/high_level/b2_sport_client.py",
+      "size": 3623,
+      "sha256": "d7eff2a375329268b83a0e08ae563caaec4dd2e7f969189a62d0a24012e0bcfd"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2/low_level/b2_stand_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2/low_level/b2_stand_example.py",
+      "size": 6319,
+      "sha256": "b60da482bfdffc26f02daa6313c904f92d7931a0ff3a1e490d78844743d306fc"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2/low_level/unitree_legged_const.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2/low_level/unitree_legged_const.py",
+      "size": 345,
+      "sha256": "7685d8c384f268ebfebd569dea5b6f1e40ba6ec3ae29e8535334193f257d1034"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2w/camera/camera_opencv.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2w/camera/camera_opencv.py",
+      "size": 1625,
+      "sha256": "a613f386182409d24a91ddb9c771b6436a8b93bf597648f222af6d25dfe801c2"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2w/camera/capture_image.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2w/camera/capture_image.py",
+      "size": 1573,
+      "sha256": "96962d93019fdfc7cf7673ec0ffeafedac5472640de0741fa8a644ac48fe715a"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2w/high_level/b2w_sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2w/high_level/b2w_sport_client.py",
+      "size": 3171,
+      "sha256": "a2a2fad4bd964a5ec815605837f3d3e165aec7f3c861fd0d41495c9645da5abb"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2w/low_level/b2w_stand_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2w/low_level/b2w_stand_example.py",
+      "size": 7403,
+      "sha256": "6b7a0b18002850a873d9665b0c06202728d0f45fd2e2c4c5301eb0f0af50bf06"
+    },
+    {
+      "path": "assets/sdk2_python/example/b2w/low_level/unitree_legged_const.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/b2w/low_level/unitree_legged_const.py",
+      "size": 485,
+      "sha256": "82af6f49261e087a7fb0d705466befe5bd9c2765ae39d1845ec89e7e5861fc77"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/audio/g1_audio_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/audio/g1_audio_client_example.py",
+      "size": 1284,
+      "sha256": "537cde5075c70ad4f6726977058e1d847abbc4e78c2a65fbab79c05ab3f89830"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/audio/g1_audio_client_play_wav.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/audio/g1_audio_client_play_wav.py",
+      "size": 1094,
+      "sha256": "161ae3e37135666e45453f8e0f780c97923ed7aa90892cee4e5fc67069fdcd74"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/audio/test.wav",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/audio/test.wav",
+      "size": 132246,
+      "sha256": "03031d6b8a6d023789280e99a0b823071dd97f3838eb58a68ab5f46c7b9df4a0"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/audio/wav.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/audio/wav.py",
+      "size": 6351,
+      "sha256": "d24f97e51162d931cabe95caf94bc8b1eb5d8354ab42063a6575e4cd929a29f2"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/high_level/g1_arm5_sdk_dds_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/high_level/g1_arm5_sdk_dds_example.py",
+      "size": 6840,
+      "sha256": "cbd01239cb2d3cce9922bd5a65cfe83ba2329271a5c437d18292400e5715f9f4"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/high_level/g1_arm7_sdk_dds_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/high_level/g1_arm7_sdk_dds_example.py",
+      "size": 6961,
+      "sha256": "7901aa5ef687b914e3d657d8b2ccb4eabc2a32b6abf97cf91dd41ffbdfb7e65a"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/high_level/g1_arm_action_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/high_level/g1_arm_action_example.py",
+      "size": 5417,
+      "sha256": "5fc4089b9de9a51a6e01fdf558a840ab7ec063d38411f4be8f51a9334f3b81a3"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/high_level/g1_loco_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/high_level/g1_loco_client_example.py",
+      "size": 4018,
+      "sha256": "80bfcaa9c073965f9abc3cd47273c1933fe0c625b4c4fd15a32c50b6f0a9a6e9"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/low_level/g1_low_level_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/low_level/g1_low_level_example.py",
+      "size": 7366,
+      "sha256": "044dc6f9f132ec4ddcdef7f6eda0fc74118dc21abc50e64de441179a748d1984"
+    },
+    {
+      "path": "assets/sdk2_python/example/g1/readme.md",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/g1/readme.md",
+      "size": 172,
+      "sha256": "789c5532c207a2df26689685fcd2ad91d958981d16d8b6c5f2ee176a2ea1f004"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2/front_camera/camera_opencv.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2/front_camera/camera_opencv.py",
+      "size": 1095,
+      "sha256": "dd11e1b9326375884e53d6ccf422a3737f07bcd56fa1d64792dfba391c4903c3"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2/front_camera/capture_image.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2/front_camera/capture_image.py",
+      "size": 736,
+      "sha256": "61811dc0a2c333e91ebfe0a94737c1ce83f88417784d2933d8057399e341dca0"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2/high_level/go2_sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2/high_level/go2_sport_client.py",
+      "size": 5141,
+      "sha256": "0ecb9953fb13c89d694cef17539877035987ca330204a50c1688f296214e0914"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2/high_level/go2_utlidar_switch.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2/high_level/go2_utlidar_switch.py",
+      "size": 1120,
+      "sha256": "ccacac7d8809d6cf942aab88a3b3dbccaf811739e8ab8570ef62ccf500731d1e"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2/low_level/go2_stand_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2/low_level/go2_stand_example.py",
+      "size": 6601,
+      "sha256": "0d6cb04cecdcbaad946073216fda79af8837ab1ac10e3b9a009d315ef9405896"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2/low_level/unitree_legged_const.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2/low_level/unitree_legged_const.py",
+      "size": 345,
+      "sha256": "7685d8c384f268ebfebd569dea5b6f1e40ba6ec3ae29e8535334193f257d1034"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2w/high_level/go2w_sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2w/high_level/go2w_sport_client.py",
+      "size": 3163,
+      "sha256": "4afe93629b7cec97d3c4830ff33f8e2e251c49fd7b361bcd746420aadf1c8d5a"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2w/low_level/go2w_stand_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2w/low_level/go2w_stand_example.py",
+      "size": 7372,
+      "sha256": "03f81f64db00b40a740d5e010387d4bf50f843adf6e029f565bc50d72545496a"
+    },
+    {
+      "path": "assets/sdk2_python/example/go2w/low_level/unitree_legged_const.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/go2w/low_level/unitree_legged_const.py",
+      "size": 485,
+      "sha256": "82af6f49261e087a7fb0d705466befe5bd9c2765ae39d1845ec89e7e5861fc77"
+    },
+    {
+      "path": "assets/sdk2_python/example/h1/high_level/h1_loco_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/h1/high_level/h1_loco_client_example.py",
+      "size": 2971,
+      "sha256": "124e3d7b73a4715bb9fb42f3ad4728c4be1ff66df665de34f562b3bbc28785f4"
+    },
+    {
+      "path": "assets/sdk2_python/example/h1/low_level/h1_low_level_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/h1/low_level/h1_low_level_example.py",
+      "size": 5322,
+      "sha256": "e70fb2e56c15b4629ee33b02603f6438eb0abd1e1951a5c6f13cd9d660e01cc4"
+    },
+    {
+      "path": "assets/sdk2_python/example/h1/low_level/unitree_legged_const.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/h1/low_level/unitree_legged_const.py",
+      "size": 90,
+      "sha256": "d997f6599c85bd217859144e6b825770555e24a1e46ce7dbdb0fb14707382624"
+    },
+    {
+      "path": "assets/sdk2_python/example/h1_2/low_level/h1_2_low_level_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/h1_2/low_level/h1_2_low_level_example.py",
+      "size": 7653,
+      "sha256": "d17bc442d7f4f17b9085ea4f11ce22e7ef9b182ebc9114d359716e0116672ea8"
+    },
+    {
+      "path": "assets/sdk2_python/example/h2/high_level/h2_arm_sdk_dds_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/h2/high_level/h2_arm_sdk_dds_example.py",
+      "size": 6365,
+      "sha256": "8858002693d65b4dad14ff8ff4d898d06064c6a87e3d6cc80d787adf547cd5fa"
+    },
+    {
+      "path": "assets/sdk2_python/example/h2/high_level/h2_loco_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/h2/high_level/h2_loco_client_example.py",
+      "size": 3423,
+      "sha256": "fc30196db80f7c469a7ded7db9e23fb6e1d0f2d4c43250a2eb9a1c1953d7772f"
+    },
+    {
+      "path": "assets/sdk2_python/example/h2/low_level/h2_ankle_swing_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/h2/low_level/h2_ankle_swing_example.py",
+      "size": 8380,
+      "sha256": "6b16366efb5e6ab103355c991aa95e034111c6254b147bdd2ed6f15aa3a4bbd9"
+    },
+    {
+      "path": "assets/sdk2_python/example/helloworld/publisher.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/helloworld/publisher.py",
+      "size": 689,
+      "sha256": "6bb9d2e916c4db9fd78672abdb3c00962b48bbc6f73e15a094cdba43e7b5e3b6"
+    },
+    {
+      "path": "assets/sdk2_python/example/helloworld/subscriber.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/helloworld/subscriber.py",
+      "size": 526,
+      "sha256": "747fb34b2e1ae7b4f750cd6b2ad50b376332a0e90be93448c4fa593f663dae92"
+    },
+    {
+      "path": "assets/sdk2_python/example/helloworld/user_data.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/helloworld/user_data.py",
+      "size": 251,
+      "sha256": "3ecca06e03313315a7cc60d6decf1ededdaf269201ba75b52f234e05a5ec245e"
+    },
+    {
+      "path": "assets/sdk2_python/example/motionSwitcher/motion_switcher_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/motionSwitcher/motion_switcher_example.py",
+      "size": 922,
+      "sha256": "7fcc9c42f265f437d9b4b63541acc555827749754f2fe1159a58b6d598426f9c"
+    },
+    {
+      "path": "assets/sdk2_python/example/obstacles_avoid/obstacles_avoid_move.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/obstacles_avoid/obstacles_avoid_move.py",
+      "size": 1074,
+      "sha256": "79697b82289389ffc99bb3cab9956c6a52452e80b1a898951d230a0adc899f6d"
+    },
+    {
+      "path": "assets/sdk2_python/example/obstacles_avoid/obstacles_avoid_switch.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/obstacles_avoid/obstacles_avoid_switch.py",
+      "size": 2842,
+      "sha256": "bb9175bc718db9760d93a3b2b8d3d275544111caa453e0b43726283d3ab888c8"
+    },
+    {
+      "path": "assets/sdk2_python/example/r1/high_level/r1_loco_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/r1/high_level/r1_loco_client_example.py",
+      "size": 3776,
+      "sha256": "b8f8319656f24477a1f82dfd17464080cc71d8c78e05653d8bc614c3d0579714"
+    },
+    {
+      "path": "assets/sdk2_python/example/r1/low_level/r1_low_level_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/r1/low_level/r1_low_level_example.py",
+      "size": 7532,
+      "sha256": "66d4d478e4551b865dab1952b17e869dc2e8c21bb247bede835b98272f143562"
+    },
+    {
+      "path": "assets/sdk2_python/example/vui_client/vui_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/vui_client/vui_client_example.py",
+      "size": 1957,
+      "sha256": "4fb120dd5c0d46aeb4efcc6c2c1c24ebea3b557d9884f04940448fee84fd4129"
+    },
+    {
+      "path": "assets/sdk2_python/example/wireless_controller/wireless_controller.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/example/wireless_controller/wireless_controller.py",
+      "size": 3917,
+      "sha256": "8d649f50a3e60015f6b494b0201b99a0e9ad6f3862ee24e8aad2a9272202c70a"
+    },
+    {
+      "path": "assets/sdk2_python/pyproject.toml",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/pyproject.toml",
+      "size": 89,
+      "sha256": "c83da5db515857a120ce4f6afd13c08644ebee0ea5128ad7dc2109236a973075"
+    },
+    {
+      "path": "assets/sdk2_python/setup.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/setup.py",
+      "size": 711,
+      "sha256": "f2c73b2981ee918dd8b3810267691d0294ebedf86d7897330819e8a5fefb19b5"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/__init__.py",
+      "size": 218,
+      "sha256": "5e06276c529e44793a69d560c660a80177e751e56504c5a5af8e8a262e15d65e"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/a2/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/a2/__init__.py",
+      "size": 2,
+      "sha256": "e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/a2/audio/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/a2/audio/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/a2/audio/audio_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/a2/audio/audio_api.py",
+      "size": 420,
+      "sha256": "0d10f31869c988e1941edbed97981e197e9dec34ed6ac36e3987f24c427bcd0c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/a2/audio/audio_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/a2/audio/audio_client.py",
+      "size": 2321,
+      "sha256": "6618e2e2f6ed93721fa77ed7474f6fec099e918bcbf7fd93cbf1581ae1666d58"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/a2/sport/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/a2/sport/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/a2/sport/sport_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/a2/sport/sport_api.py",
+      "size": 974,
+      "sha256": "68bc46ef16ea70f5f1aa604e224e7e85b5ba833afa61e83ac49cee4e49ed777a"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/a2/sport/sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/a2/sport/sport_client.py",
+      "size": 5761,
+      "sha256": "a62996f88721259e5306a9636d5db78cfbb9a01818b818c45efaa0b8fb8b27b0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/as2/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/as2/__init__.py",
+      "size": 2,
+      "sha256": "e16f1596201850fd4a63680b27f603cb64e67176159be3d8ed78a4403fdb1700"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/as2/sport/sport_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/as2/sport/sport_api.py",
+      "size": 1014,
+      "sha256": "5ba356d789f2274db1e4658e8543e8fc0c0158b13636294945fe16dda3f98e39"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/as2/sport/sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/as2/sport/sport_client.py",
+      "size": 6054,
+      "sha256": "d96219b2714224afeb4b30ad205f6c9a323c53345fa70758a69eeca9de3c5c2f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/back_video/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/back_video/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/back_video/back_video_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/back_video/back_video_api.py",
+      "size": 209,
+      "sha256": "edfc3d350bd8ed9968c1f3a49b194920f8e53041024c51e427b1c692978fa52c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/back_video/back_video_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/back_video/back_video_client.py",
+      "size": 540,
+      "sha256": "a6afe9b130b8acb3b49c44e066b51045d68387b65112a3b9f874d73cdf30eba6"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/front_video/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/front_video/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/front_video/front_video_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/front_video/front_video_api.py",
+      "size": 213,
+      "sha256": "3c6998fc1f6bcdc832146b06571c676399d77a7cb987090250fb5f4d82df3d9c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/front_video/front_video_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/front_video/front_video_client.py",
+      "size": 546,
+      "sha256": "cdc093c1d2fa2dcf111db003bb2998822fea4766a79d97e8d4ccc1c2ee26736c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/robot_state/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/robot_state/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/robot_state/robot_state_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/robot_state/robot_state_api.py",
+      "size": 497,
+      "sha256": "eff5b53dde23e62e5815b4f8893d23ee5d8ce1cd6a32a274996db37674fb538a"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/robot_state/robot_state_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/robot_state/robot_state_client.py",
+      "size": 3108,
+      "sha256": "bb1724f1d0a3d80e75aa88e754fea0594595bb5fa7e9b81266d773e72c69f4b6"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/sport/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/sport/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/sport/sport_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/sport/sport_api.py",
+      "size": 1208,
+      "sha256": "f408395413f7fdeae19fcefa2f89ba50149211d59083f29ebc3b7f9591ea9b9c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/sport/sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/sport/sport_client.py",
+      "size": 6666,
+      "sha256": "02ff547faaa49c0265997a76e843103b76ef9f3e5f95db81ced5bacbf59dec05"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/vui/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/vui/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/vui/vui_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/vui/vui_api.py",
+      "size": 303,
+      "sha256": "8d3c45fe84c5ab5a9130e8536dd4df3290e80fef5849e540679e2a288c297c6d"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/b2/vui/vui_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/b2/vui/vui_client.py",
+      "size": 2137,
+      "sha256": "0a5b7b6ced82c139dc47da49bb83477090b69be234b576aaa6bd04f1693af12c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/comm/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/comm/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/comm/motion_switcher/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/comm/motion_switcher/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/comm/motion_switcher/motion_switcher_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/comm/motion_switcher/motion_switcher_api.py",
+      "size": 538,
+      "sha256": "933210a39b46f9303de1991b5647b5780845886d94d491604de0444caaa9c60c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/comm/motion_switcher/motion_switcher_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/comm/motion_switcher/motion_switcher_client.py",
+      "size": 1409,
+      "sha256": "133d78f6619f6e32d971b40020868618f10db0fd191731085a4b08615448b195"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/core/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/core/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/core/channel.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/core/channel.py",
+      "size": 9786,
+      "sha256": "8a58eea2bc6bb8792e5b5fa76949407bd8c2ef8af07172d1a3a465bcc544e247"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/core/channel_config.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/core/channel_config.py",
+      "size": 861,
+      "sha256": "158d8ec4090b57e9a4030c759209d972b1401673072e7beb9cf95f412e7e9c02"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/core/channel_name.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/core/channel_name.py",
+      "size": 646,
+      "sha256": "a978ad0fe4e548a2b790cd83d4881191ef249018359b30e3cc710d9a1d0f9f0c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/arm/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/arm/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/arm/g1_arm_action_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/arm/g1_arm_action_api.py",
+      "size": 254,
+      "sha256": "e929f22cb2bc6e65bbbf2aa1f6f57983a14c1937b53bde7b49c85c30af8e73d0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/arm/g1_arm_action_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/arm/g1_arm_action_client.py",
+      "size": 1344,
+      "sha256": "0617124577a1d41b2fd559d8fbba8bb1b6ace43e0471a7dbbb972b51ac155872"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/audio/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/audio/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/audio/g1_audio_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/audio/g1_audio_api.py",
+      "size": 398,
+      "sha256": "7ccd417ef05637617a012606dc752709674a3c9984a3828b72c9f5c453db66a8"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/audio/g1_audio_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/audio/g1_audio_client.py",
+      "size": 2270,
+      "sha256": "64a9942c1278b3b5badf2ae7d1b871ac785f5fd3deda9404e97088b1e9aff74b"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/loco/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/loco/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/loco/g1_loco_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/loco/g1_loco_api.py",
+      "size": 879,
+      "sha256": "0127e2b266ced4bce67fc264c1858e53ee9e0d9301ac06f3d58af4903e50c908"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/g1/loco/g1_loco_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/g1/loco/g1_loco_client.py",
+      "size": 5224,
+      "sha256": "5fbc07b30994676cd2f7994a2389b24e9b51e2c13dfde7e565bfd77898300ce2"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/obstacles_avoid/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/obstacles_avoid/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/obstacles_avoid/obstacles_avoid_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/obstacles_avoid/obstacles_avoid_api.py",
+      "size": 337,
+      "sha256": "71b8f9dc4247558553187e36577ff631b0f615452464656b6b4edde40b4401d3"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/obstacles_avoid/obstacles_avoid_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/obstacles_avoid/obstacles_avoid_client.py",
+      "size": 2359,
+      "sha256": "2a538d37bb11a2f9281fc3ef1b7aabead3918b6a245f79c32bfd04ee8f353c15"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/robot_state/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/robot_state/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/robot_state/robot_state_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/robot_state/robot_state_api.py",
+      "size": 371,
+      "sha256": "9491fa44b00ceea1ddc3ee1cb9509577aef9f75124eb629204ac77d14577a639"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/robot_state/robot_state_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/robot_state/robot_state_client.py",
+      "size": 2106,
+      "sha256": "3d659ce8ce866bf966d01157064aca42a675b26d29a1a03f5e6d913b1f96bc83"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/sport/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/sport/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/sport/sport_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/sport/sport_api.py",
+      "size": 1440,
+      "sha256": "c21a47056e6a4dafeadbfb0af794a5c68dd99b60d3583678ac67c06b1cfef6be"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/sport/sport_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/sport/sport_client.py",
+      "size": 10949,
+      "sha256": "95dea0e3a9c8feff64c9c8c6f81eafe40a177ae25ce4ffa9e5d9d8343eb3d2e7"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/video/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/video/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/video/video_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/video/video_api.py",
+      "size": 171,
+      "sha256": "8bb53f1840021558e955e292460d3f4d7f668787969e5730f1e91c2ebf805eba"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/video/video_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/video/video_client.py",
+      "size": 482,
+      "sha256": "90e5295dc1f706f1a224b6ab38a4c830189fe3aa77c0f8ce743768e426896f84"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/vui/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/vui/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/vui/vui_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/vui/vui_api.py",
+      "size": 303,
+      "sha256": "8d3c45fe84c5ab5a9130e8536dd4df3290e80fef5849e540679e2a288c297c6d"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/go2/vui/vui_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/go2/vui/vui_client.py",
+      "size": 2137,
+      "sha256": "0a5b7b6ced82c139dc47da49bb83477090b69be234b576aaa6bd04f1693af12c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h1/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h1/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h1/loco/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h1/loco/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h1/loco/h1_loco_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h1/loco/h1_loco_api.py",
+      "size": 600,
+      "sha256": "46a17a2144eb0c97b1a1a99ead7162c091de5967196fcd981a7aa02fd992a9f8"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h1/loco/h1_loco_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h1/loco/h1_loco_client.py",
+      "size": 2439,
+      "sha256": "50f58f65e13aa09c73f998426c3164001503088ea93f4ddd6b3f2865d1f60884"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h2/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h2/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h2/loco/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h2/loco/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h2/loco/h2_loco_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h2/loco/h2_loco_api.py",
+      "size": 995,
+      "sha256": "ba32ab2d624536b4636b15d76e13ba5de9214fe351c4e9c53152368933164968"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/h2/loco/h2_loco_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/h2/loco/h2_loco_client.py",
+      "size": 7605,
+      "sha256": "fc9c2076989a20774662726a9a1f15a1c1ec4ab348bc14a7e90017f63af04ee5"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/__init__.py",
+      "size": 271,
+      "sha256": "32e41f377806fbd3e2a6d62dc4386d55a5e82fd1261a4a9d182a2cfbf86797ac"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/builtin_interfaces/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/builtin_interfaces/__init__.py",
+      "size": 167,
+      "sha256": "ce7836c6b08eece21752d06270bdafc63a0faf0dc637a43ade3e2e9b8bba474f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/builtin_interfaces/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/builtin_interfaces/msg/__init__.py",
+      "size": 173,
+      "sha256": "7c95109cdd2041cce0259b7108ee2845c9031262841d231cb8840cf41e2c18fe"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/builtin_interfaces/msg/dds_/_Time_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/builtin_interfaces/msg/dds_/_Time_.py",
+      "size": 625,
+      "sha256": "ea94f7622321d79df206441ead2eded0a0fed5863dd58d27005a26436d584e1f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/builtin_interfaces/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/builtin_interfaces/msg/dds_/__init__.py",
+      "size": 186,
+      "sha256": "662d71714d12ee9920e998fd22bee426df6811db020b1ee951a4004ca7e091f3"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/default.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/default.py",
+      "size": 10522,
+      "sha256": "b3101722e07534c667d4c673677a8a5d57643f307cfdeb11f4761ebc456b18ea"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/__init__.py",
+      "size": 162,
+      "sha256": "2aefbe7a2032d34cf076a1d8001011d8bfa3b81543b6a03183288b17df6978e7"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/__init__.py",
+      "size": 168,
+      "sha256": "0f374cde971de23eb9dbfde357a07e8594a1a8e0ec8d214fd1dc7b07b12f9483"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Point32_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Point32_.py",
+      "size": 635,
+      "sha256": "fc8495ef8a777896fc65dab9300692d7bb0bd8607708ee35aa5c0452ee66335a"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PointStamped_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PointStamped_.py",
+      "size": 760,
+      "sha256": "c258986e8fbea38afd14fbefbf64ff5ea3ab4630e59dfd65bbf272109e593d9b"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Point_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Point_.py",
+      "size": 629,
+      "sha256": "f14a8983124895d5781f99ad8ba50919c6622909598e75bb8aea5407f4352e9b"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Pose2D_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Pose2D_.py",
+      "size": 636,
+      "sha256": "11d331c77cac12846b626680919304a39c55bd63d667f673687399dd077c8054"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PoseStamped_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PoseStamped_.py",
+      "size": 756,
+      "sha256": "7bcc9670d756755584bf9b123b98ef3a8c8c6ef906cef1c0898205d94bbb6422"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PoseWithCovarianceStamped_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PoseWithCovarianceStamped_.py",
+      "size": 812,
+      "sha256": "c8474d3663fdee4cfb120344ef03dce37faf124690d40edccf491dd151b42c79"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PoseWithCovariance_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_PoseWithCovariance_.py",
+      "size": 712,
+      "sha256": "c3384acb00b2e42f9668cd00614c84b8d6e6b6c4fa9e3a731e79c219b8500067"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Pose_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Pose_.py",
+      "size": 701,
+      "sha256": "a3402ffa46de1e2a5fde2bad696e136b2d9a741667836e713c7b31a9f58475bb"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_QuaternionStamped_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_QuaternionStamped_.py",
+      "size": 786,
+      "sha256": "6f709a0c09b987eba4b44efeb724980f1c574d73d8e0bd7149260a2c3a1ebd83"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Quaternion_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Quaternion_.py",
+      "size": 665,
+      "sha256": "b133ae3ffd24dc6190996d818a1385ab9f9319e2dda9aaa789177e70a19e4eb3"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_TwistStamped_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_TwistStamped_.py",
+      "size": 761,
+      "sha256": "8be06afafe2c8f621f8c4cde5b2a4504c4e52ba0c4cc63da0804fa58a8401e97"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_TwistWithCovarianceStamped_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_TwistWithCovarianceStamped_.py",
+      "size": 817,
+      "sha256": "0c002a0157868ce50227d0370f48f5b942ada2a1d7e96eaf8b7622e50e28f1c9"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_TwistWithCovariance_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_TwistWithCovariance_.py",
+      "size": 717,
+      "sha256": "761ee8be8d35f84dcba8261143dcffc115337a533a95627772f5daeafeab08da"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Twist_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Twist_.py",
+      "size": 697,
+      "sha256": "620fd0d1d477b97f77cdba351ec8e0782406036d551be2569b74b131f9b13e60"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Vector3_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/_Vector3_.py",
+      "size": 635,
+      "sha256": "82e4728bd2e99e311e8bae5216f1fb20ba53c075fabbdf2f155974c2174e95f0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/geometry_msgs/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/geometry_msgs/msg/dds_/__init__.py",
+      "size": 1043,
+      "sha256": "fcc8ac771fd2cc62294b2a16c0f9f4cda9831f109779df70670e1db8b492a647"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/nav_msgs/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/nav_msgs/__init__.py",
+      "size": 157,
+      "sha256": "9caa80ac26be9642ec46bb6dead20273848e381d41fb4eb3edf6ed3431553bee"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/nav_msgs/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/nav_msgs/msg/__init__.py",
+      "size": 163,
+      "sha256": "15229534f52deb21d1138d18fb39c6054e0c638093effbba81c2406cc1a56ab8"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/nav_msgs/msg/dds_/_MapMetaData_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/nav_msgs/msg/dds_/_MapMetaData_.py",
+      "size": 882,
+      "sha256": "1805a7b05517b94d640e4d39f14f572480e7311bd5ae85f876fd06f8fb17d35f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/nav_msgs/msg/dds_/_OccupancyGrid_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/nav_msgs/msg/dds_/_OccupancyGrid_.py",
+      "size": 788,
+      "sha256": "3edf9453724d9445ab1cf019a51fcef37ed50fa0e05fdbd0569f858144d69c27"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/nav_msgs/msg/dds_/_Odometry_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/nav_msgs/msg/dds_/_Odometry_.py",
+      "size": 882,
+      "sha256": "b00c39e39d9066ecd9b9fb4ad774f1cf2d9772e209b42a417634299eb7c44c77"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/nav_msgs/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/nav_msgs/msg/dds_/__init__.py",
+      "size": 306,
+      "sha256": "cf8e9471ca0d304b7bc1ee329fef3b360dcc0076f448b3fa632bb87da8b9744b"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/sensor_msgs/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/sensor_msgs/__init__.py",
+      "size": 160,
+      "sha256": "e9d4c0450812b2e1f52a64232f9e6482e966a7a4be16d561f21abe1b8a3ffe93"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/sensor_msgs/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/sensor_msgs/msg/__init__.py",
+      "size": 166,
+      "sha256": "77f33f9fd7a371685a6c6a870047689a876bade2e6316f895a13041ae17b8dd0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/sensor_msgs/msg/dds_/PointField_Constants/_PointField_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/sensor_msgs/msg/dds_/PointField_Constants/_PointField_.py",
+      "size": 550,
+      "sha256": "bf818a64ae10aa98e86ea5a382474574de599a7248ba3982a9dbf32c2bbff2fb"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/sensor_msgs/msg/dds_/PointField_Constants/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/sensor_msgs/msg/dds_/PointField_Constants/__init__.py",
+      "size": 344,
+      "sha256": "469e7fa152a1c7a778530e6ac5c3451efbb69389f569045b91b0d87d190b690a"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/sensor_msgs/msg/dds_/_PointCloud2_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/sensor_msgs/msg/dds_/_PointCloud2_.py",
+      "size": 957,
+      "sha256": "91a9917ee12e6bc30598b9dd6c8e5284c6b96fe24aabe1831b65899fa2853849"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/sensor_msgs/msg/dds_/_PointField_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/sensor_msgs/msg/dds_/_PointField_.py",
+      "size": 664,
+      "sha256": "90f532023f9c0da4f999cf6d476347ca0e1febc6db08b61d19f0e7ca18d77a27"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/sensor_msgs/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/sensor_msgs/msg/dds_/__init__.py",
+      "size": 312,
+      "sha256": "ed73e0cfb4d0d94ea07c3e35160a73543de2ad07e76ab54cd1c9cf7ede2e9dbe"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/std_msgs/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/std_msgs/__init__.py",
+      "size": 157,
+      "sha256": "681bf5d378bf582a89ef5b79a71d4b743088191e1a300ec01a0a415946b22f70"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/std_msgs/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/std_msgs/msg/__init__.py",
+      "size": 163,
+      "sha256": "06c63955a5036a764946a1540b0fc4aa2e60cd9b20ec371120362608063c7b1c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/std_msgs/msg/dds_/_Header_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/std_msgs/msg/dds_/_Header_.py",
+      "size": 701,
+      "sha256": "9dd04e5f3076dd7bada7a007a0a57a58af9f8d9eb0efcd64212ec6562c51414c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/std_msgs/msg/dds_/_String_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/std_msgs/msg/dds_/_String_.py",
+      "size": 568,
+      "sha256": "b11e1293c473c79e301607907489063e0d7b118395524709b810a03e4aa0a626"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/std_msgs/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/std_msgs/msg/dds_/__init__.py",
+      "size": 223,
+      "sha256": "d9d3b8c598d5387c28cb65e103b3e8af1071798c18560c27529d0f78de37f141"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/__init__.py",
+      "size": 160,
+      "sha256": "17d2a41f162443103f271261b375eadb7abdfe323906b3b3a98c09b4055a705c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/__init__.py",
+      "size": 166,
+      "sha256": "0b6a9c8eea1a48b9160c4af3bd1db920005093cfaecde00ae9312341fb1815e7"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestHeader_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestHeader_.py",
+      "size": 793,
+      "sha256": "cedcd0fe5e2ea280e4d0fcf95ba3eb2a8a6087d7c99de1d4361aefc1c8bf36fa"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestIdentity_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestIdentity_.py",
+      "size": 634,
+      "sha256": "5956cf7260a4871a66d02867cd8bf7b4cff545de4e2bb67754edfced227d14f0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestLease_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestLease_.py",
+      "size": 601,
+      "sha256": "810f7237d44111f8a72323d97ddcefee9ebd1d1002db1c206c0b5fc133f30680"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestPolicy_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_RequestPolicy_.py",
+      "size": 628,
+      "sha256": "e83b1b5ea4c0c366c37c66937be9aa04d362b3c8314db33bec035d8755f99dd1"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_Request_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_Request_.py",
+      "size": 693,
+      "sha256": "5702725b61f3e5cb0fa373ab569c24934655b17391b3696bdf64f91c013660d7"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_ResponseHeader_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_ResponseHeader_.py",
+      "size": 730,
+      "sha256": "9a502cc7d83f552ae12ae29ebb8017b5dc99d050f36ec229d607b3bc99df68d0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_ResponseStatus_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_ResponseStatus_.py",
+      "size": 609,
+      "sha256": "6847677af6d5a0dbbc9f653b4dfffa5d22c45b7cde229b409cec4218a2d3e59e"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/_Response_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/_Response_.py",
+      "size": 692,
+      "sha256": "37c3cf084917a403abec30f59b246b7e8e20bf699e5f6c01a55de310160cacd6"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_api/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_api/msg/dds_/__init__.py",
+      "size": 616,
+      "sha256": "dceb760e1ac7e493ba852819f76cafebd3a10d5bf4864961154d051d7c6f6c91"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/__init__.py",
+      "size": 159,
+      "sha256": "2966ffd4d7d8971c555c45020b5fbd9bcd526a65527da44546e5e876df526f32"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/__init__.py",
+      "size": 165,
+      "sha256": "f023f6ba33cffd5a41e2e94c32ec352f21d36991a8f49abecfca32bd5faf6690"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_AudioData_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_AudioData_.py",
+      "size": 636,
+      "sha256": "bb8b1af877d007d2eb30b5c5ee92d5dfd8c0993fe2fe2e16b3d74948d88d6166"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_BmsCmd_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_BmsCmd_.py",
+      "size": 622,
+      "sha256": "75ade3d3cc52dca553db5edd41dc65a4ffe774b267939c2ef299846b2c536b16"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_BmsState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_BmsState_.py",
+      "size": 844,
+      "sha256": "abcc0497c43007b2648b19ac6538d264555fde90d23427ff9cda150320725e46"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_Error_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_Error_.py",
+      "size": 606,
+      "sha256": "dedc8e7a45715b0bc82d7569c938afd14db66df7763c5ca869260af0650e9b11"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_Go2FrontVideoData_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_Go2FrontVideoData_.py",
+      "size": 751,
+      "sha256": "f641c34591249cb1f4fd4977697e6440843ff8c8040ca13ac98374f03a6df34e"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_HeightMap_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_HeightMap_.py",
+      "size": 773,
+      "sha256": "147a5c0543d82b75e35cb820596b68317e4a1086dbf58ad19785b55c8c782b31"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_IMUState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_IMUState_.py",
+      "size": 774,
+      "sha256": "9465b3f1d8f2ddaafe449cf8d27969ec398d4b56d690c8ca5f9a8ea09f67d475"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_InterfaceConfig_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_InterfaceConfig_.py",
+      "size": 673,
+      "sha256": "bf0fcfc627a7e0fdbc3f208102caf815b0b824ed59903d916d1899bbfe5abc4d"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_LidarState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_LidarState_.py",
+      "size": 1141,
+      "sha256": "7a04fde6c354b85b87f661d2e56c373d715bfdefe7c4550dbd710e4ecd8f73eb"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_LowCmd_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_LowCmd_.py",
+      "size": 1104,
+      "sha256": "5d0098eef648cf017267d105bde5407b40496cc0df791f15ed7a3e5e77981fe8"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_LowState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_LowState_.py",
+      "size": 1426,
+      "sha256": "0d370ae286a529f9f727519e1b6abfa9189595d78f2b29db3316886a5b1d51e4"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorCmd_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorCmd_.py",
+      "size": 740,
+      "sha256": "0784882cf61368413ab4e4e9b428ca770eb4537cf3000d2388ebfb49971bb64c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorCmds_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorCmds_.py",
+      "size": 626,
+      "sha256": "c3978e73801e3682ea65db99d74510121296e8b2059a5a99fe777b10414f2e40"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorState_.py",
+      "size": 859,
+      "sha256": "193465a3b93aae23b1a685941fdaeaaff42ac9b2d24caa0e34aef3f32363bcab"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorStates_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_MotorStates_.py",
+      "size": 636,
+      "sha256": "18651ed4e6f1ac8d0f0c7ed79c52386826fc7896d05267c9201800a8001259d2"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_PathPoint_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_PathPoint_.py",
+      "size": 734,
+      "sha256": "7d139390fb646af819e2fc2c594413bcf6dee3f1788ee3410dc0da4c77fcd7d3"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_Req_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_Req_.py",
+      "size": 579,
+      "sha256": "d1fc29f3394f53f2157d1bc5da2c211013b281ae1871bfb01c4b35c2f57e6fea"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_Res_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_Res_.py",
+      "size": 617,
+      "sha256": "d8ea5e0252d765121e56cdf4a947e3d8f9588504d5aa5fa80b28af346cc6ee05"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_SportModeState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_SportModeState_.py",
+      "size": 1289,
+      "sha256": "8f05eea51a6822727a14572e656bb59a84a899ac264c96c8c7104d2acccf5909"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_TimeSpec_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_TimeSpec_.py",
+      "size": 613,
+      "sha256": "b7d083cd135887e7810733c02fe1ebb9748dff1a6ee47d6c7dcb5775490ffbfb"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_UwbState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_UwbState_.py",
+      "size": 1084,
+      "sha256": "f05ab82976ec61eaeb2412eadeff4e50e39839b98840559fb347723ae01d468f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_UwbSwitch_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_UwbSwitch_.py",
+      "size": 594,
+      "sha256": "cc7f973666e4eb76d263b4124dd1a515bdf7190ddc64809de58eeb9ee22be5e3"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/_WirelessController_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/_WirelessController_.py",
+      "size": 707,
+      "sha256": "f6e2bddf415ed8fabe56924a21579b014fcd599f092d91a0c37adcb02357b777"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_go/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_go/msg/dds_/__init__.py",
+      "size": 1307,
+      "sha256": "0759e89df1394e0076c13fbb872dcb89ba0b34fec1da781591295787af78ea01"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/.idlpy_manifest",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/.idlpy_manifest",
+      "size": 187,
+      "sha256": "a54ffe2d0a62516a33546624ebfe367332d6ed3a9b922df147c776b71e73c89d"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/__init__.py",
+      "size": 159,
+      "sha256": "2be522ac4c24ddb2906f4725a2245e0cba8632b46a46a7ea1c186a71cc6a7fc4"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/.idlpy_manifest",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/.idlpy_manifest",
+      "size": 198,
+      "sha256": "2646b8e0cc2a35cf49b8d013dd1bfb9708eb8df78c03dd11da0734215e9f35fa"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/__init__.py",
+      "size": 165,
+      "sha256": "3702f3dac2b540a82dd0668ec0076d0dbb04019804c3e2ef4e3ef35428743f55"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/.idlpy_manifest",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/.idlpy_manifest",
+      "size": 265,
+      "sha256": "d49a80312add7dc4af8271c1897463a7002c240519aff85cd4129372261415b5"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_BmsCmd_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_BmsCmd_.py",
+      "size": 623,
+      "sha256": "042984eba84a6082e7f08eabd078599aaf7645e51c4f1a95a1b78429d343c87b"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_BmsState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_BmsState_.py",
+      "size": 992,
+      "sha256": "115f2d1b43e993ccda8ad7572ec4e6213474fb4536a6a17a5413eb144ca52423"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_HandCmd_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_HandCmd_.py",
+      "size": 687,
+      "sha256": "c7b4fb827507d9d8028c3d6a1ae1706240c16cc8e05ec4e4f1193b58e6561f3f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_HandState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_HandState_.py",
+      "size": 1012,
+      "sha256": "f9cd6aeb3e10f8c2c59f65c4c1cd39ba2d515b7d4e6d8138c0ba80f52812455c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_IMUState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_IMUState_.py",
+      "size": 774,
+      "sha256": "f41533674e588ed3c4613f95a553bb5ee99b6356084208d7d25ee90897871497"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_LowCmd_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_LowCmd_.py",
+      "size": 762,
+      "sha256": "a23cec88e4bf782263ac2bea29d3908c9d21a44a14361ffc0bf3424cd36597ae"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_LowState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_LowState_.py",
+      "size": 953,
+      "sha256": "97f746a693aff14a8a1c2ea2bbd7790722bb784554e0402173ed491ad9d957f2"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_MainBoardState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_MainBoardState_.py",
+      "size": 754,
+      "sha256": "6c181057c869c9bef8daa53ab2e396c2f48226e9a8be4e7e6da2b88747d122fd"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_MotorCmd_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_MotorCmd_.py",
+      "size": 724,
+      "sha256": "710a8321be4d6731093b6f8328c70ab11606372561ed01a7af9a187143f54c4d"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_MotorState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_MotorState_.py",
+      "size": 867,
+      "sha256": "cffb489830dbfb7091454279d031224f0968c066fad0b1204e309426a0d82910"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/_PressSensorState_.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/_PressSensorState_.py",
+      "size": 732,
+      "sha256": "1920e21f70df982a4b0cd1e3ae7ed7a80a8389541e52c43e815df2bf7147bddc"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/idl/unitree_hg/msg/dds_/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/idl/unitree_hg/msg/dds_/__init__.py",
+      "size": 696,
+      "sha256": "877b1aa3a79dee70d9615eba56e9a856a50d741b491e74f4793a5200ce326f98"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/r1/loco/r1_loco_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/r1/loco/r1_loco_api.py",
+      "size": 301,
+      "sha256": "9a25069376bee3876bcb9e61e8260ed0d433445ff273fc35b496317eef8f8a7a"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/r1/loco/r1_loco_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/r1/loco/r1_loco_client.py",
+      "size": 2453,
+      "sha256": "673d6ad5738cab6ebaa6c71e2700fed85fc556c6069be4d4e4de0d157994fb44"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/client.py",
+      "size": 4032,
+      "sha256": "20840192dee42525b64ecc3a3e8d5ec5d1d7e122b7bfc4236c482cb2b0f6e186"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/client_base.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/client_base.py",
+      "size": 5078,
+      "sha256": "2a815a5c798be95df1c8a4af525873c2ee47d5e0bbfbcc8a4ccf2d991a341321"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/client_stub.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/client_stub.py",
+      "size": 2363,
+      "sha256": "37c860bb4783c2f13b24bc369ebf99b2131a21dfb49f0f7a8b74e79960d879b0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/internal.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/internal.py",
+      "size": 743,
+      "sha256": "38896942088a7b0d03e3d9e5fa06ef3aee81e8ec6d52e0a9a640e35aaf955343"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/lease_client.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/lease_client.py",
+      "size": 2883,
+      "sha256": "dcfbcb7a91296fe3aa3743df8f1c3fed6527f48c957de0f749772da8069fd4c8"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/lease_server.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/lease_server.py",
+      "size": 4163,
+      "sha256": "a16058e0d3f03188677e32b6662023b886f123c1b500e447a98bb0c1bd6edafc"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/request_future.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/request_future.py",
+      "size": 1149,
+      "sha256": "a82ed0f0f09cd531be9962af1b624d83447be1682afcb3319022600a9de4d072"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/server.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/server.py",
+      "size": 4070,
+      "sha256": "80e114fc190cd2394d48ce0f4e8187fcafc28339fe41ba0a38b4c5fb14ba2ff9"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/server_base.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/server_base.py",
+      "size": 991,
+      "sha256": "f2e5bd96960e12d6519aee602141770c2658b289eee554621d2eb9c9cdbe947a"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/rpc/server_stub.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/rpc/server_stub.py",
+      "size": 2688,
+      "sha256": "8e62b3940f0122bdf7f390f505c41892cf0d56f6735c2ee5521825f7ea67fabd"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/client/obstacles_avoid_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/client/obstacles_avoid_client_example.py",
+      "size": 2764,
+      "sha256": "22b6e2dccfeafaa283915c3762fa3781dc036e7024846275da4fe1f5055f6b83"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/client/robot_service_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/client/robot_service_client_example.py",
+      "size": 1594,
+      "sha256": "8c9c6ef46d91c8d80128c0d0657a2f35f1077213fae325565ed10fe622d10792"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/client/sport_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/client/sport_client_example.py",
+      "size": 3182,
+      "sha256": "4545d0ab56b0118b88c4f13cddd5057ae288af4aae8bd1f081411ed11dd00baa"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/client/video_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/client/video_client_example.py",
+      "size": 724,
+      "sha256": "98c5f35deea78ab886b97bc0032f42eaaf9585ae45a5689472283dd9507c62bf"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/client/vui_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/client/vui_client_example.py",
+      "size": 1879,
+      "sha256": "5782453477459998752ded708346d062432c9fd4f5ffbec3c076ca6be90fde3b"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/crc/test_crc.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/crc/test_crc.py",
+      "size": 715,
+      "sha256": "17817cbac7789554e8d7b2a7e162a9b6c8fb7e0602ea528956ec026d9315ae3f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/helloworld/helloworld.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/helloworld/helloworld.py",
+      "size": 148,
+      "sha256": "64a1cc0ab1689ab9553e856cb1fcf0c8037ae58c47f449d13f5e6a96e00ebef2"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/helloworld/publisher.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/helloworld/publisher.py",
+      "size": 500,
+      "sha256": "8c1d50616041bb088aaa669fb0dd08ec0278cb6faab08923b0b8825c6181447d"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/helloworld/subscriber.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/helloworld/subscriber.py",
+      "size": 373,
+      "sha256": "796b74f380624d513bab9bfff3ccbeb6f6e47697d02338303c8dfb3ed6b95795"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/lowlevel/lowlevel_control.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/lowlevel/lowlevel_control.py",
+      "size": 1966,
+      "sha256": "f2588eaef87c933cc6f2faaeb42450f67943a88af1c6dd9185e2d475e724064c"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/lowlevel/read_lowstate.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/lowlevel/read_lowstate.py",
+      "size": 784,
+      "sha256": "bb056311e1d64c374399ecfd19567a1f6a8dddf6533f6f7295315325c4574737"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/lowlevel/sub_lowstate.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/lowlevel/sub_lowstate.py",
+      "size": 448,
+      "sha256": "c22d574370eff593f37119899382748de19e3686ff85937ace2543fd1c6476b0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/lowlevel/unitree_go2_const.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/lowlevel/unitree_go2_const.py",
+      "size": 345,
+      "sha256": "7685d8c384f268ebfebd569dea5b6f1e40ba6ec3ae29e8535334193f257d1034"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/rpc/test_api.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/rpc/test_api.py",
+      "size": 143,
+      "sha256": "753290c91eb9961de53b0bc2f95da8f39dcdd85e362e01ba19b9b1513daef85e"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/rpc/test_client_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/rpc/test_client_example.py",
+      "size": 1496,
+      "sha256": "641a729fdbc07e68694a0e72cadbd0b7f17c131b18b6d57a6c9f06c1148bdcd0"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/test/rpc/test_server_example.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/test/rpc/test_server_example.py",
+      "size": 1017,
+      "sha256": "cef1c190b682ad548e3ecefe192a0252716790f0189c89ccc468c4ff71e90499"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/__init__.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/__init__.py",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/bqueue.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/bqueue.py",
+      "size": 1603,
+      "sha256": "0ea1299b91f2d3c6f4ed8605064ebc3e079c1439cdf111bd30881d560166fc3f"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/clib_lookup.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/clib_lookup.py",
+      "size": 386,
+      "sha256": "0c3a68c755ec3249b0f70b7fc42efbc072d2b71db123796af232a5e7ea4b45b3"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/crc.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/crc.py",
+      "size": 8585,
+      "sha256": "b95a530423f72c5acc96811f75677699cb3a185b6327353e7c44b355a425a20e"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/future.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/future.py",
+      "size": 2960,
+      "sha256": "959880bb2cf32e5db47d2aac90034c623cb413dc5573fef13c01b3902273d8f6"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/hz_sample.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/hz_sample.py",
+      "size": 643,
+      "sha256": "ee63af36fda2b11475d16d06776c3aec69748bd8e1efb4cf394d802e0b0506db"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/joystick.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/joystick.py",
+      "size": 8216,
+      "sha256": "d021e6c5fcd0e6a740134ce9dc5f5f56f7542ec0e220117a3d175df86e7ab578"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/lib/crc_aarch64.so",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/lib/crc_aarch64.so",
+      "size": 7928,
+      "sha256": "a4db103653db78540d141ff4dc55216b83e5298280e639b2ad54a84ac2fae9a5"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/lib/crc_amd64.so",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/lib/crc_amd64.so",
+      "size": 15136,
+      "sha256": "b136a91a7e99c5cf914f465e131f63c897a17107939184a6f85d1a57cf315ade"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/singleton.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/singleton.py",
+      "size": 247,
+      "sha256": "0559be3069ea2d4450f25c3153567cb641b8bf7ac55226edddb5f119223f9477"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/thread.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/thread.py",
+      "size": 2688,
+      "sha256": "453166ef60d8eaa8008e1d18d8f9513e51582404522ef03ec23584aad351e726"
+    },
+    {
+      "path": "assets/sdk2_python/unitree_sdk2py/utils/timerfd.py",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py/utils/timerfd.py",
+      "size": 1319,
+      "sha256": "5ca58f4d0661d62c773b883a1fb923bd6230935b1683d1449f05dc32ad6b7f0a"
+    },
+    {
+      "path": "licenses/unitree_ros2.LICENSE",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/LICENSE",
+      "size": 1559,
+      "sha256": "a5d73fc4aca9074e3e6fe0b1a0ba763cf9514b2249b7390ed20fe8d53630bf25"
+    },
+    {
+      "path": "licenses/unitree_sdk2_python.LICENSE",
+      "archive": "unitree_sdk2_python",
+      "member": "unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/LICENSE",
+      "size": 1559,
+      "sha256": "a5d73fc4aca9074e3e6fe0b1a0ba763cf9514b2249b7390ed20fe8d53630bf25"
+    },
+    {
+      "path": "ros_ws/src/unitree/LICENSE",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/LICENSE",
+      "size": 1559,
+      "sha256": "a5d73fc4aca9074e3e6fe0b1a0ba763cf9514b2249b7390ed20fe8d53630bf25"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/CMakeLists.txt",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/CMakeLists.txt",
+      "size": 1729,
+      "sha256": "61029416c795499036c0314866f43a794090fdf24ad3eff5d9cef08ec771fe16"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/Request.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/Request.msg",
+      "size": 52,
+      "sha256": "095718e795b7fb08210f32fad9b2ce519ca2b0a0976054e772bc89e48fbe14bc"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/RequestHeader.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/RequestHeader.msg",
+      "size": 64,
+      "sha256": "0783c0fd13fa9cd588bc2cd2b7961c98f1312ab7c1e730d62eae43901c093ab3"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/RequestIdentity.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/RequestIdentity.msg",
+      "size": 22,
+      "sha256": "ae144634bbd4b142308d3801fe0fe1712b4fad442fe15cca3552fcce127be2fd"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/RequestLease.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/RequestLease.msg",
+      "size": 8,
+      "sha256": "b16d384a7334bf5f9d59a90800984ba0e5fdf0b5bed931f2ce11557d0f49f879"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/RequestPolicy.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/RequestPolicy.msg",
+      "size": 27,
+      "sha256": "b93c83f07a266ed0de9071be1242d7d7c5cd247a5ec494cfd16720d1a41161ee"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/Response.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/Response.msg",
+      "size": 48,
+      "sha256": "deeb19c6fec4bf67790d33a9e4a391f717840e274f6882e968d7d65c57402a13"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/ResponseHeader.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/ResponseHeader.msg",
+      "size": 47,
+      "sha256": "808649ac643d66fa0620c11cec50d7d8f5cba576094cd50a941093b2f7ac673b"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/msg/ResponseStatus.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/msg/ResponseStatus.msg",
+      "size": 10,
+      "sha256": "1102bc217ff8add7007d6bd6ffb6d6f183ee1c9b029d20cd5b09cc7134a6ac41"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_api/package.xml",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_api/package.xml",
+      "size": 706,
+      "sha256": "2acf54b778c17736c36c325fe4fc76e396083b0c9e19a14426fe15b6f435a8bf"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/CMakeLists.txt",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/CMakeLists.txt",
+      "size": 2158,
+      "sha256": "db42b8667068305431f574031edb0889e0f31e458edccab2d427383b655622b7"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/AudioData.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/AudioData.msg",
+      "size": 30,
+      "sha256": "c875fbedf1b48aa990cbdf061cf2fe406a91152966e155df488d0eb6bbcba9f9"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/BmsCmd.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/BmsCmd.msg",
+      "size": 26,
+      "sha256": "59861adb50b81c76bd1c792e6db604a0cf67e46f781a957bbe422d40e3e60415"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/BmsState.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/BmsState.msg",
+      "size": 137,
+      "sha256": "0f7ad8e09f8fd02999da9aa222ab0ecb848d9f70136af78a5ec7a10631959828"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/Error.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/Error.msg",
+      "size": 26,
+      "sha256": "dcb46b69ed65270bb96c729ad94743b9557d166c048efc5c273eed9cedfa7139"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/Go2FrontVideoData.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/Go2FrontVideoData.msg",
+      "size": 72,
+      "sha256": "86078978dd1f90357a6ff41e16f28eb16ccedb15a7302b17d5f5738128fddddf"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/HeightMap.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/HeightMap.msg",
+      "size": 654,
+      "sha256": "e7b732d004e8a482a19ca231ea85095aa3902584a7dc0a849d1cc6fd210ebfdd"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/IMUState.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/IMUState.msg",
+      "size": 100,
+      "sha256": "95b5b2aa84fbbea748a560f18cc3950a6091c5822aa1dba326aa183327cb8198"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/InterfaceConfig.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/InterfaceConfig.msg",
+      "size": 39,
+      "sha256": "03004edb03d062c83309cf233d2135570538b15c1bf837cbf4f1d515766f3695"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/LidarState.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/LidarState.msg",
+      "size": 396,
+      "sha256": "cb3dac931714cabba31604f73d1c69eeaf5ae3d1a2d06bac71d68c54d2d6d5e3"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/LowCmd.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/LowCmd.msg",
+      "size": 228,
+      "sha256": "5254dae41aaee1c32d879affa5b5393e35303f405e68d65e39fd9606497659ee"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/LowState.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/LowState.msg",
+      "size": 403,
+      "sha256": "927537585595e44ab6753741c78410f43c0fe190f3f2f47825fdb57793ed19e5"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/MotorCmd.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/MotorCmd.msg",
+      "size": 83,
+      "sha256": "067edd164076ca83f13b251a152ac4fe15cdec501a08f845a1ca4f0829dd90b1"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/MotorCmds.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/MotorCmds.msg",
+      "size": 15,
+      "sha256": "85679ea65fae74079c6e094674f600f9f33dabeb4410be51730cc2ee6e6e42cb"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/MotorState.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/MotorState.msg",
+      "size": 151,
+      "sha256": "e4c7440b1f096b723e48c626c21ef6b77d828d19af0ce5bd90e28a80590014a0"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/MotorStates.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/MotorStates.msg",
+      "size": 19,
+      "sha256": "aeb5cf4202e80f24b67bdc7480f745f9bcb3cf17b639bc97b43193827cb8b22f"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/PathPoint.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/PathPoint.msg",
+      "size": 87,
+      "sha256": "f669eeecb1e279267cef687e2b9485a520e7c7a841a8e1f337611304606e457c"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/Req.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/Req.msg",
+      "size": 23,
+      "sha256": "b356c1bb1e19aa07f6d7fcf38d5e5ea1888f64ecd9f5f28566e71d4aa97e01f9"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/Res.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/Res.msg",
+      "size": 36,
+      "sha256": "07d84bf89cc9680b066a21f4d0c40833a94b8401cb8ff6df783cd445c88edeef"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/SportModeCmd.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/SportModeCmd.msg",
+      "size": 208,
+      "sha256": "21dc358a1d4cf1f4660c9327c2feb9a85ba67139099b1c506d6a4566dc83b2d0"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/SportModeState.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/SportModeState.msg",
+      "size": 307,
+      "sha256": "4034e8c6805e002c5ad2327912f52219c712853a51a518378acb1d22764d122c"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/TimeSpec.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/TimeSpec.msg",
+      "size": 212,
+      "sha256": "1bab331c842af6a6847f471cf2aad56ad38139c901b9df436470e7b42f86369f"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/UwbState.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/UwbState.msg",
+      "size": 307,
+      "sha256": "8813add9680f3c448c4e35d62a49058709f992024867529754d3cd774fd9686b"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/UwbSwitch.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/UwbSwitch.msg",
+      "size": 13,
+      "sha256": "4aa32edaaa274891d5997de5355e000a0dcdd51d7c0702f7b25bbde0b7492dc4"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/msg/WirelessController.msg",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/msg/WirelessController.msg",
+      "size": 55,
+      "sha256": "ce175fee57fa89c6edfd0d57e8395e5b75788b62ad6d19a393dc68e0f2fddd6d"
+    },
+    {
+      "path": "ros_ws/src/unitree/unitree_go/package.xml",
+      "archive": "unitree_ros2",
+      "member": "unitree_ros2-668d1ec5a05d1c38d3306bdca7d59f2ba3581a88/cyclonedds_ws/src/unitree/unitree_go/package.xml",
+      "size": 705,
+      "sha256": "6a23b69425841653e4f4ed1231a1305c4c6f40c15d83225260ff82aba6df62f5"
+    }
+  ],
+  "compatibility_notes": {
+    "response_binary": "Pinned unitree_api ROS Response.msg uses int8[] binary; pinned Python SDK Response_ uses sequence[uint8]. Preserved unchanged; actual ROS-to-SDK DDS type matching must be validated before claiming compatibility.",
+    "execution": "Source acquisition does not import or execute the SDK and does not open DDS participants."
+  }
+}

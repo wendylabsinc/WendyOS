@@ -32,14 +32,17 @@ type Loopback interface {
 	NodePath(id uint32) (string, bool)
 }
 
-// Graph identifies an app-local ROS 2 graph. Participants are created inside
-// NetworkNamespacePID for both loopback-only and externally reachable ROS 2
-// discovery, without exposing either graph to the host namespace.
+// Graph identifies an app's ROS 2 graph. Isolated graphs are discovered inside
+// NetworkNamespacePID; host-network graphs reuse the host's discovery.
 type Graph struct {
 	Key                 string
 	InstanceKey         string
 	DomainID            int
 	NetworkNamespacePID uint32
+	// HostNetwork graphs share the agent's network namespace, so their
+	// discovery must reuse host participants instead of registering the same
+	// robot camera again under the app's identity.
+	HostNetwork bool
 	// Verify confirms that InstanceKey still owns NetworkNamespacePID after a
 	// stable namespace handle is captured but before it is entered, and once
 	// more before discovery starts.
@@ -70,6 +73,14 @@ type participantState struct {
 	domainID    int
 	netnsPID    uint32
 	graphKey    string
+	retired     bool
+}
+
+// Writer GUIDs are only meaningful within the participant's DDS graph. An
+// app-local discovery must never take frame delivery away from a host camera.
+type cameraWriterKey struct {
+	source *participantState
+	guid   rtps.GUID
 }
 
 type cameraState struct {
@@ -77,6 +88,7 @@ type cameraState struct {
 	pumpMu      sync.Mutex
 	endpoint    rtps.Endpoint
 	participant *rtps.Participant
+	source      *participantState
 	subscribed  bool
 	ready       chan struct{}
 	readyClosed bool
@@ -101,7 +113,7 @@ type Manager struct {
 	participants map[string]*participantState
 	cameras      map[uint32]*cameraState
 	byKey        map[string]*cameraState
-	byWriter     map[rtps.GUID]*cameraState
+	byWriter     map[cameraWriterKey]*cameraState
 	containerUse bool
 	started      bool
 	wg           sync.WaitGroup
@@ -117,7 +129,7 @@ func NewManager(ctx context.Context, logger *zap.Logger, loopback Loopback, regi
 		ctx: ctx, cancel: cancel, logger: logger, loopback: loopback, graphs: graphs,
 		registry: r, newWriter: newFrameWriter,
 		participants: map[string]*participantState{}, cameras: map[uint32]*cameraState{},
-		byKey: map[string]*cameraState{}, byWriter: map[rtps.GUID]*cameraState{},
+		byKey: map[string]*cameraState{}, byWriter: map[cameraWriterKey]*cameraState{},
 	}
 }
 
@@ -149,13 +161,17 @@ func (m *Manager) Start() {
 func (m *Manager) Refresh(ctx context.Context) { m.reconcile(ctx) }
 
 func (m *Manager) reconcile(ctx context.Context) {
+	m.reconcileInterfaces(ctx, eligibleInterfaces())
+}
+
+func (m *Manager) reconcileInterfaces(ctx context.Context, hostInterfaces []string) {
 	desired := map[string]bool{}
 	// Domain zero on physical wired interfaces covers robot-native graphs,
 	// including the Go2's /frontvideostream publisher.
 	// SECURITY: Domain 0 on these interfaces is intentionally a trusted robot-LAN
 	// boundary because standard ROS 2 discovery has no source authentication.
 	// The operator-facing docs require untrusted peers to be segmented away.
-	for _, iface := range eligibleInterfaces() {
+	for _, iface := range hostInterfaces {
 		desired[participantKey(iface, 0, 0, "host")] = true
 		m.ensureParticipant(iface, 0, 0, "host:"+iface, "host", nil)
 	}
@@ -165,6 +181,17 @@ func (m *Manager) reconcile(ctx context.Context) {
 			complete = true
 			for _, graph := range found {
 				if graph.DomainID >= 0 && graph.DomainID <= 232 && graph.NetworkNamespacePID != 0 {
+					if graph.HostNetwork {
+						// Host-network apps see the robot's existing graph. Keep the
+						// interface-based identity (and persisted camera ID) even when
+						// an app is deployed, restarted, or removed. Loopback also
+						// covers host-network apps using ROS_LOCALHOST_ONLY.
+						for _, iface := range append([]string{"lo"}, hostInterfaces...) {
+							desired[participantKey(iface, graph.DomainID, 0, "host")] = true
+							m.ensureParticipant(iface, graph.DomainID, 0, "host:"+iface, "host", nil)
+						}
+						continue
+					}
 					// App scope binds DDS to loopback; host scope selects a normal
 					// interface. Start one participant for each selection inside the
 					// namespace because the resolved discovery scope is intentionally
@@ -236,7 +263,7 @@ func (m *Manager) ensureParticipant(iface string, domain int, netnsPID uint32, g
 			case endpoint := <-p.Discovered():
 				m.registerEndpoint(state, endpoint)
 			case sample := <-p.Samples():
-				m.handleSample(sample)
+				m.handleSample(state, sample)
 			}
 		}
 	}()
@@ -246,8 +273,8 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 	m.mu.Lock()
 	var stale []*participantState
 	type staleCamera struct {
-		camera      *cameraState
-		participant *rtps.Participant
+		camera *cameraState
+		source *participantState
 	}
 	var staleCameras []staleCamera
 	for key, participant := range m.participants {
@@ -255,11 +282,13 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 			continue
 		}
 		delete(m.participants, key)
+		participant.retired = true
 		stale = append(stale, participant)
 		for _, cam := range m.cameras {
-			if cam.participant == participant.participant {
+			if cam.source == participant {
 				cam.active = false
-				staleCameras = append(staleCameras, staleCamera{camera: cam, participant: participant.participant})
+				delete(m.byWriter, cameraWriterKey{source: participant, guid: cam.endpoint.GUID})
+				staleCameras = append(staleCameras, staleCamera{camera: cam, source: participant})
 			}
 		}
 	}
@@ -270,7 +299,7 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 	for _, item := range staleCameras {
 		item.camera.pumpMu.Lock()
 		m.mu.Lock()
-		if !item.camera.active && item.camera.participant == item.participant && item.camera.writer != nil {
+		if !item.camera.active && item.camera.source == item.source && item.camera.writer != nil {
 			_ = item.camera.writer.Close()
 			item.camera.writer = nil
 			item.camera.ready = make(chan struct{})
@@ -293,13 +322,18 @@ func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) 
 	// Namespace identity prevents two isolated apps that happen to use the same
 	// domain and topic name from collapsing into one camera.
 	key := fmt.Sprintf("graph=%s;domain=%d;topic=%s", p.graphKey, p.domainID, topic)
+	m.mu.Lock()
+	if p.retired {
+		m.mu.Unlock()
+		return
+	}
 	id, err := m.registry.idFor(key)
 	if err != nil {
+		m.mu.Unlock()
 		m.logger.Warn("allocating ROS 2 camera ID failed", zap.String("topic", topic), zap.Error(err))
 		return
 	}
 
-	m.mu.Lock()
 	cam := m.byKey[key]
 	if cam == nil {
 		name := "ROS 2 " + topic
@@ -309,19 +343,19 @@ func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) 
 		cam = &cameraState{Camera: Camera{ID: id, Name: name, Topic: topic, Type: endpoint.Type, DomainID: p.domainID, Interface: p.iface}, ready: make(chan struct{})}
 		m.byKey[key], m.cameras[id] = cam, cam
 	}
-	if cam.participant == p.participant && cam.endpoint.GUID == endpoint.GUID {
+	if cam.source == p && cam.endpoint.GUID == endpoint.GUID {
 		cam.active = true
 		m.mu.Unlock()
 		return
 	}
 	if cam.endpoint.GUID != (rtps.GUID{}) {
-		delete(m.byWriter, cam.endpoint.GUID)
+		delete(m.byWriter, cameraWriterKey{source: cam.source, guid: cam.endpoint.GUID})
 	}
-	cam.endpoint, cam.participant = endpoint, p.participant
+	cam.endpoint, cam.participant, cam.source = endpoint, p.participant, p
 	cam.Type, cam.Interface = endpoint.Type, p.iface
 	cam.active = true
 	cam.subscribed = false
-	m.byWriter[endpoint.GUID] = cam
+	m.byWriter[cameraWriterKey{source: p, guid: endpoint.GUID}] = cam
 	wanted := m.containerUse || cam.viewRefs > 0
 	m.mu.Unlock()
 
@@ -382,10 +416,10 @@ func (m *Manager) ensureSubscribed(cam *cameraState) error {
 	return nil
 }
 
-func (m *Manager) handleSample(sample rtps.Sample) {
+func (m *Manager) handleSample(source *participantState, sample rtps.Sample) {
 	m.mu.Lock()
-	cam := m.byWriter[sample.Writer]
-	wanted := cam != nil && (cam.viewRefs > 0 || m.containerUse)
+	cam := m.byWriter[cameraWriterKey{source: source, guid: sample.Writer}]
+	wanted := cam != nil && cam.active && (cam.viewRefs > 0 || m.containerUse)
 	typeName := ""
 	if cam != nil {
 		typeName = cam.Type
@@ -405,6 +439,10 @@ func (m *Manager) handleSample(sample rtps.Sample) {
 	}
 	now := time.Now()
 	m.mu.Lock()
+	if !cam.active || cam.source != source || cam.endpoint.GUID != sample.Writer || (cam.viewRefs == 0 && !m.containerUse) {
+		m.mu.Unlock()
+		return
+	}
 	interval := frameInterval(typeName, len(sample.Payload))
 	if !cam.lastFrame.IsZero() && now.Sub(cam.lastFrame) < interval {
 		m.mu.Unlock()

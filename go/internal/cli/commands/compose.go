@@ -1322,7 +1322,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 			if dockerfile, err = prepareDockerBuildFile(ctxDir, dockerfile, gpuArch, sfOpts...); err != nil {
 				return fmt.Errorf("service %s: %w", name, err)
 			}
-			imageIdentity, err = computeBuildInputHash(ctxDir, dockerfile, platform, allBuildArgs, serviceEnvs[name])
+			imageIdentity, err = computeBuildInputHash(ctxDir, dockerfile, platform, resolvedStagefileBackend(ctx), allBuildArgs, serviceEnvs[name])
 			if err != nil {
 				return fmt.Errorf("hashing service %s build inputs: %w", name, err)
 			}

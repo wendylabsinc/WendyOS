@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -280,6 +281,10 @@ func (p *Participant) openSockets() error {
 	mc, err := net.ListenMulticastUDP("udp4", iface, group)
 	if err != nil {
 		return fmt.Errorf("rtps: joining %s:%d: %w", spdpMulticastAddr, mport, err)
+	}
+	if err := restrictMulticastToJoinedInterfaces(mc); err != nil {
+		mc.Close()
+		return fmt.Errorf("rtps: restricting multicast discovery to %s: %w", iface.Name, err)
 	}
 	_ = mc.SetReadBuffer(2 << 20)
 	p.mcast = mc
@@ -577,9 +582,10 @@ func (p *Participant) noteSEDPReceived(prefix GUIDPrefix, entity uint32, sn Sequ
 	p.mu.Unlock()
 }
 
-// handleSPDP records a peer and immediately unicasts our own announcement back
-// to its metatraffic locator, so it learns about us without waiting a full
-// announce interval.
+// handleSPDP records a peer and immediately replies on first discovery or a
+// locator change. Replying to every announcement makes two participants bounce
+// unicast SPDP replies indefinitely. Known, unchanged peers use the normal
+// periodic announcements from announceLoop instead.
 func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 	params, order, err := parseParameterList(d.Payload)
 	if err != nil {
@@ -598,9 +604,13 @@ func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 	}
 
 	p.mu.Lock()
-	_, seen := p.peers[prefix]
+	previous, seen := p.peers[prefix]
+	changed := !slices.Equal(previous, metaUnicast)
 	p.peers[prefix] = metaUnicast
 	p.mu.Unlock()
+	if seen && !changed {
+		return
+	}
 
 	if !seen {
 		p.statPeers.Add(1)
@@ -613,8 +623,8 @@ func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
 		p.logf("peer %x metatraffic=%v", prefix, addrs)
 	}
 
-	// Reply directly so the peer learns about us now rather than at its own
-	// announce interval, which on CycloneDDS defaults to 30s.
+	// A new peer or a changed endpoint learns about us immediately; repeated
+	// announcements cannot trigger a self-sustaining exchange of replies.
 	for _, l := range metaUnicast {
 		if addr, ok := l.UDPAddr(); ok {
 			p.sendTo(addr, p.spdpDatagram())

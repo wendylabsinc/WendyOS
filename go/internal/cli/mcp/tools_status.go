@@ -18,8 +18,7 @@ func (s *mcpServer) registerStatusTools(srv *server.MCPServer) {
 }
 
 func (s *mcpServer) handleWendyStatus(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	conn := s.GetConn()
-	connType := s.GetConnType()
+	conn, connType, target := s.connectionSnapshot()
 
 	if conn == nil {
 		out := map[string]any{
@@ -40,6 +39,9 @@ func (s *mcpServer) handleWendyStatus(_ context.Context, _ mcpgo.CallToolRequest
 		"connection_type":     connType,
 		"suggested_next_step": fmt.Sprintf("connected to %s via %s — ready to use container, wifi, hardware, telemetry, and os tools", host, connType),
 		"proxy_diagnostics":   s.proxyDiagnostics(),
+	}
+	if target.Device != "" {
+		out["command_target"] = target
 	}
 	return okResult(out), nil
 }

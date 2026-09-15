@@ -111,6 +111,7 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 			resp.StorageMedium = &storageMedium
 		}
 	}
+	resp.Featureset = appendGo2AgentFeature(resp.Featureset, runtime.GOOS, resp.GetDeviceType())
 
 	gpuProbe := s.discoverGPUs
 	if gpuProbe == nil {

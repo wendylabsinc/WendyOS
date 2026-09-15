@@ -1,0 +1,93 @@
+{
+  "redeployment": {
+    "event": "observer_complete",
+    "passed": true,
+    "vm_name": "go2-sim",
+    "epoch": 1,
+    "elapsed_seconds": 8.010083901999678,
+    "physics_time_advanced_seconds": 8.060000000007754,
+    "samples": 401,
+    "fresh_samples": 401,
+    "first_stamp_ns": 1789241099687675600,
+    "last_stamp_ns": 1789241107688056300,
+    "source_time_advanced_seconds": 8.000380494,
+    "last_source_age_seconds": 0.00672155,
+    "last_receipt_age_seconds": 0.005256932000065717
+  },
+  "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+  "agent_sha256": "51a0b6ac75257c62f94c4eea4e5b0184990ea5eae96d413a148759bcb3ca7799",
+  "observer": {
+    "passed": true,
+    "vm": "go2-sim",
+    "epoch": 8,
+    "elapsed_seconds": 45.008978970000044,
+    "physics_time_advanced_seconds": 45.06799999893428,
+    "samples": 2250,
+    "fresh_samples": 2250,
+    "source_time_advanced_seconds": 44.981002702,
+    "typed_inspection": {
+      "passed": true,
+      "topic": "/lowstate",
+      "type": "unitree_go/msg/LowState",
+      "field": "bms_state",
+      "soc": 90,
+      "cell_voltages_mv": [
+        3600,
+        3600,
+        3600,
+        3600,
+        3600,
+        3600,
+        3600,
+        3600,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "note": "Decoded concurrently while the read-only ROS observer application was running."
+    }
+  },
+  "checks": [
+    {
+      "check": "reconnect_preserves_paused_world",
+      "passed": true,
+      "epoch": 8,
+      "time": 1567.1999999767645,
+      "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997"
+    },
+    {
+      "check": "explicit_runtime_restart",
+      "passed": true,
+      "epoch": 1,
+      "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997"
+    },
+    {
+      "check": "stopped_runtime_status_is_read_only",
+      "passed": true
+    },
+    {
+      "check": "reconnect_restarts_stopped_runtime",
+      "passed": true,
+      "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+      "epoch": 1
+    },
+    {
+      "check": "automatic_worker_crash_recovery",
+      "passed": true,
+      "previous_uptime_seconds": 28.329841278000004,
+      "new_uptime_seconds": 10.829845576000025,
+      "epoch": 1,
+      "armed": false
+    }
+  ],
+  "passed": true,
+  "notes": [
+    "The observer app exited normally without resetting the world; typed native inspection ran concurrently.",
+    "Worker crash recovery was observed through HTTP only, without a reconnect that could start it.",
+    "Peer VM shutdown completed before the sustained performance run."
+  ]
+}

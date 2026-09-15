@@ -103,7 +103,7 @@ The CLI implements the ESP32 ROM bootloader protocol directly over the USB seria
 
 The device reboots automatically using the reset sequence appropriate to its native USB or UART transport. Before flashing, the CLI embeds the selected WiFi credentials, device name, and pre-enrollment state into the firmware image's `wendy_conf` partition.
 
-To provision WiFi after first boot, use `wendy device setup` or the BLE provisioning flow — see [BLE connectivity](../../../../wendy-agent/connectivity/ble.md).
+To provision WiFi after first boot, use `wendy device wifi connect`.
 
 ---
 

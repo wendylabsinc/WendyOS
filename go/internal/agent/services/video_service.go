@@ -760,6 +760,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, rosRuntime ...ROS2
 					}
 					out = append(out, ros2camera.Graph{
 						Key: key, InstanceKey: target.ContainerID, DomainID: target.DomainID, NetworkNamespacePID: target.TaskPID,
+						HostNetwork: target.HostNetwork,
 						Verify: func(ctx context.Context) bool {
 							current, err := rosRuntime[0].FindROS2Containers(ctx)
 							if err != nil {

@@ -32,7 +32,7 @@ The printed URL uses a routable IP address reported by the device instead of the
 Regular ESP-IDF projects are the recommended app model for ESP32 targets. Wendy recognizes a project by its standard top-level `CMakeLists.txt`/`project.cmake` include or an `sdkconfig` file. Add a `wendy.json` with `"platform": "wendy-lite"`, then run:
 
 ```bash
-wendy run --device <name>
+wendy run
 ```
 
 The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 5.5.4 is available through `eim`, runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
@@ -164,6 +164,7 @@ On a **Windows host**, `wendy run` returns an actionable error for Swift project
 | `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
 | `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker` or `apple-container`. Cannot be combined with `--build-host`. |
+| `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
 | `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
 | `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
 | `--prefix <dir>` | Run from a project directory other than the current working directory. |

@@ -1,0 +1,145 @@
+{
+  "schema": "wendy.g1-training-source-import.v1",
+  "captured_date": "2026-09-15",
+  "source_host": "wendy-LEGION-T7-34IAS10",
+  "source_root": "/home/wendy/g1-reference-residual-u2525-top-contact-local-20260915-v1/source",
+  "external_contact_audit": "/home/wendy/g1-three-table-mimic-1000-20260913/release-v3/rgbd_evaluation.py",
+  "source_runtime_versions": {
+    "torch": "2.8.0+cu128",
+    "mujoco": "3.12.0",
+    "numpy": "1.26.4",
+    "Pillow": "11.3.0",
+    "imageio-ffmpeg": "0.6.0",
+    "pytest": "8.4.2"
+  },
+  "scope": "Native CPU MuJoCo plus CUDA recurrent PPO, local 5090 continuation from update 2525",
+  "files": {
+    "recurrent_bc/baseline/closed_loop_contract.py": {
+      "deployed_sha256": "c7788d101ec6e302e68b78f08f9e6ecaeb01dfd65da5ae6ccc71225e49e7d37e",
+      "imported_sha256": "c7788d101ec6e302e68b78f08f9e6ecaeb01dfd65da5ae6ccc71225e49e7d37e"
+    },
+    "recurrent_bc/baseline/export_visual.py": {
+      "deployed_sha256": "a2be3d7e926a3dd1c495ec65f8510a0cf49d4e2e0d7ce0bcfa5d052187d5ca0d",
+      "imported_sha256": "e7575b636e7d9fcf3ce8522fbaa9e066b74e67dfa097a1440a92b106f5668560"
+    },
+    "recurrent_bc/baseline/visual_policy.py": {
+      "deployed_sha256": "109b7f0e060ffd3ecdf214a4fc938238404ecdf89394ab76b823837642c1c432",
+      "imported_sha256": "109b7f0e060ffd3ecdf214a4fc938238404ecdf89394ab76b823837642c1c432"
+    },
+    "recurrent_bc/recurrent_policy.py": {
+      "deployed_sha256": "da0832f5456a50554eaffcec456cb1081b2678325daf6c1dc77f4717c73285d8",
+      "imported_sha256": "da0832f5456a50554eaffcec456cb1081b2678325daf6c1dc77f4717c73285d8"
+    },
+    "reference_rl/contact_location.py": {
+      "deployed_sha256": "15743aad55cea6a859770c14caf85b8dd4403bda7f60457213174a3912fd3da5",
+      "imported_sha256": "15743aad55cea6a859770c14caf85b8dd4403bda7f60457213174a3912fd3da5"
+    },
+    "reference_rl/cpu_environment.py": {
+      "deployed_sha256": "8aa743096ddc1a5db8b7310d9c92b10dabfe68268f69ed3a3520bb5ec21fbe38",
+      "imported_sha256": "43bac81eed1f284932aa3beceef1df17c9a22b80a59995d5153e359a225638e7"
+    },
+    "reference_rl/cpu_policy_video.py": {
+      "deployed_sha256": "cb11bf91de63dee8603465940eef77312b5c61d0f48494b65e0b576f42b81e2f",
+      "imported_sha256": "cb11bf91de63dee8603465940eef77312b5c61d0f48494b65e0b576f42b81e2f"
+    },
+    "reference_rl/cpu_process_mesh_environment.py": {
+      "deployed_sha256": "3edefb515e2592d065ce4feffcdeb197dd7d43157d27c08b032c6b650eb529d8",
+      "imported_sha256": "3edefb515e2592d065ce4feffcdeb197dd7d43157d27c08b032c6b650eb529d8"
+    },
+    "reference_rl/cpu_run.py": {
+      "deployed_sha256": "aa07aca9a7026d921a9927da9cd581bde2fd3aa7fd8d1837a3c7f9bcd4cce71d",
+      "imported_sha256": "f0761b826bd9db12b381809a3344e79a3aff18c836f0647de7499900a8125c32"
+    },
+    "reference_rl/grip_reward.py": {
+      "deployed_sha256": "f60734d887a38c503a9dd9f1f72b96bac804fbc9dc3542dcdb71b121acd6530c",
+      "imported_sha256": "f60734d887a38c503a9dd9f1f72b96bac804fbc9dc3542dcdb71b121acd6530c"
+    },
+    "reference_rl/http_collective.py": {
+      "deployed_sha256": "c9922239c4e6aac9c296064bba1b5cf95d594bf77abd3b85dfe7fdc1acc84400",
+      "imported_sha256": "c9922239c4e6aac9c296064bba1b5cf95d594bf77abd3b85dfe7fdc1acc84400"
+    },
+    "reference_rl/palm_reward.py": {
+      "deployed_sha256": "6ad807cf5096eb4c2d9b261884a05463319240685293554af88c275a3eab5cee",
+      "imported_sha256": "6ad807cf5096eb4c2d9b261884a05463319240685293554af88c275a3eab5cee"
+    },
+    "reference_rl/policy.py": {
+      "deployed_sha256": "9e617c72e84ebc1a767939ed924e9c0fa7e943049219a1bba3b9da36f5c50227",
+      "imported_sha256": "9e617c72e84ebc1a767939ed924e9c0fa7e943049219a1bba3b9da36f5c50227"
+    },
+    "reference_rl/recurrent_residual.py": {
+      "deployed_sha256": "cf905a1a4db80e1a93455d33cb90974c0fd77ad482674e739d9debba8aa45800",
+      "imported_sha256": "cf905a1a4db80e1a93455d33cb90974c0fd77ad482674e739d9debba8aa45800"
+    },
+    "reference_rl/reference_bank.py": {
+      "deployed_sha256": "c0f9657083edc969b48017ee2e370b06a12bdcbf908bb471e5974f3e569bcc76",
+      "imported_sha256": "c0f9657083edc969b48017ee2e370b06a12bdcbf908bb471e5974f3e569bcc76"
+    },
+    "reference_rl/release_audit.py": {
+      "deployed_sha256": "7e1bdbc8e553a21ec51401e06a627154f47f59cd116dba7cc0f03aa09d55ae40",
+      "imported_sha256": "7e1bdbc8e553a21ec51401e06a627154f47f59cd116dba7cc0f03aa09d55ae40"
+    },
+    "reference_rl/rgbd_evaluation.py": {
+      "deployed_sha256": "8860cb936ddc62adf576bd9b4fe081eec1aa22494038eb220175abd22204947b",
+      "imported_sha256": "8860cb936ddc62adf576bd9b4fe081eec1aa22494038eb220175abd22204947b"
+    },
+    "reference_rl/sensor_contract.py": {
+      "deployed_sha256": "9b4325116a7610a77ec0b416b456c316c098657f283077733cdfd99c7d77042b",
+      "imported_sha256": "9b4325116a7610a77ec0b416b456c316c098657f283077733cdfd99c7d77042b"
+    },
+    "reference_rl/test_contact_location.py": {
+      "deployed_sha256": "f9e500a5b4aee9136e446b946fe1b3badf056dd3eb4eaedafe53e903c93eebca",
+      "imported_sha256": "f9e500a5b4aee9136e446b946fe1b3badf056dd3eb4eaedafe53e903c93eebca"
+    },
+    "reference_rl/test_grip_reward.py": {
+      "deployed_sha256": "2ab5c5edb990dc554b950918dce8f36ec850e5dc077f0ddea7e86d835d1ae06a",
+      "imported_sha256": "2ab5c5edb990dc554b950918dce8f36ec850e5dc077f0ddea7e86d835d1ae06a"
+    },
+    "reference_rl/test_no_force_ceiling.py": {
+      "deployed_sha256": "131c997c6b89038ea80f812565e30e46745e6122a5643e1892e216722fb08c0a",
+      "imported_sha256": "131c997c6b89038ea80f812565e30e46745e6122a5643e1892e216722fb08c0a"
+    },
+    "reference_rl/test_palm_reward.py": {
+      "deployed_sha256": "8a91709562c2ad6c4096c8a1e9f082c0d8532edf3ba49040a7504cb991dbe620",
+      "imported_sha256": "8a91709562c2ad6c4096c8a1e9f082c0d8532edf3ba49040a7504cb991dbe620"
+    },
+    "reference_rl/test_policy.py": {
+      "deployed_sha256": "6aedf37e32805c0b0fd41524391a9443c0efad40b8eafe2e88b5952af010bad8",
+      "imported_sha256": "6aedf37e32805c0b0fd41524391a9443c0efad40b8eafe2e88b5952af010bad8"
+    },
+    "reference_rl/test_recurrent_residual.py": {
+      "deployed_sha256": "360cff1e709dea72992c09baee130fca9d2b4438300ca0b3fe45a881a61e4e75",
+      "imported_sha256": "360cff1e709dea72992c09baee130fca9d2b4438300ca0b3fe45a881a61e4e75"
+    },
+    "reference_rl/test_reference_bank.py": {
+      "deployed_sha256": "5f744b16b4f57c8741de01a9b14b98178f4fc229385e812507c0d782104cf138",
+      "imported_sha256": "5f744b16b4f57c8741de01a9b14b98178f4fc229385e812507c0d782104cf138"
+    },
+    "reference_rl/test_reward_rebalance.py": {
+      "deployed_sha256": "4bda56195bb47a2b8967f47b9487f82ca4701f3b7420dcb57e72b4e30d302a8e",
+      "imported_sha256": "4bda56195bb47a2b8967f47b9487f82ca4701f3b7420dcb57e72b4e30d302a8e"
+    },
+    "reference_rl/test_sensor_contract.py": {
+      "deployed_sha256": "64f7ebc4ed877a233eca3bb01ab0828eb746fbae5e85b9193a68acd9223585f5",
+      "imported_sha256": "64f7ebc4ed877a233eca3bb01ab0828eb746fbae5e85b9193a68acd9223585f5"
+    },
+    "reference_rl/test_three_finger_reward.py": {
+      "deployed_sha256": "6e095169270be02de22908bbfdaced972a5794d54bf4907f75f5dff9946e469d",
+      "imported_sha256": "6e095169270be02de22908bbfdaced972a5794d54bf4907f75f5dff9946e469d"
+    }
+  },
+  "packaging_changes": [
+    "Require --data-root and --cache-root instead of machine-local constants",
+    "Bundle rgbd_evaluation.py beside cpu_environment.py and hash it in new checkpoint contracts",
+    "Keep only sha and atomic from the shared export_visual.py helper module",
+    "Correct cpu_environment.py docstring to distinguish CPU physics and OpenGL rendering"
+  ],
+  "excluded": [
+    "datasets",
+    "checkpoints",
+    "model binaries",
+    "videos",
+    "feature caches",
+    "machine-specific systemd services",
+    "GPU MJWarp and Runpod deployment orchestration"
+  ]
+}

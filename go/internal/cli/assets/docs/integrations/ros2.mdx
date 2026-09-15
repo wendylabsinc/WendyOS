@@ -1,6 +1,6 @@
 ---
 title: Wendy for ROS 2
-description: Inspect and debug live ROS 2 systems on a WendyOS device from the CLI, with no SSH. Nodes, topics, services, parameters, actions, lifecycle nodes, components, and rosbags.
+description: Inspect and debug live ROS 2 systems on devices running Wendy Agent, including Unitree robots, with no SSH or ROS 2 app deployment required.
 ---
 
 `wendy device ros2` brings the full `ros2` command-line experience to a remote
@@ -19,11 +19,19 @@ CycloneDDS (default), Fast DDS, RTI Connext, or GurumDDS.
 
 ## How it works
 
-The agent discovers ROS 2 app containers (those deployed with a `frameworks.ros2`
-config in `wendy.json`) and starts a CLI sidecar in the same DDS domain. Your
-`ros2` commands run inside that sidecar over gRPC.
+The agent discovers running ROS 2 app containers (those deployed with a
+`frameworks.ros2` config in `wendy.json`) and starts CLI sidecars in their DDS
+domains. When no ROS 2 app is running, it automatically starts a standalone CLI
+sidecar on the host network to reach the device's system DDS graph. This works
+with Unitree robots without deploying an app or installing the `ros2` CLI on
+the host. Your commands run inside the sidecar over gRPC.
 
-ROS 2 discovery is app-local by default: Wendy injects `ROS_LOCALHOST_ONLY=1`
+The system sidecar uses the stock `ros:humble-ros-base` image with Fast DDS and
+UDP discovery. The device downloads the image on first use and caches it for
+later commands. It uses domain 0 by default; pass `--domain` to select another
+domain.
+
+ROS 2 app discovery is app-local by default: Wendy injects `ROS_LOCALHOST_ONLY=1`
 so unrelated apps and robots do not discover each other. A bridge or inspection
 tool that intentionally needs the device's wider ROS 2 graph can opt in with
 `"discoveryScope": "host"` in `frameworks.ros2`; pair it with a host-network
@@ -63,14 +71,18 @@ Existing projects need no scaffolding — add the `frameworks.ros2` key to
 
 ## Prerequisites
 
-- A ROS 2 app running on the device. See
-  [Multi-app deployments](/docs/guides/multi-app-deployments) for a complete
-  talker/listener stack and the host-networking entitlement DDS discovery needs.
+- A device running Wendy Agent, with a system DDS graph or ROS 2 apps to inspect.
+  A running app with `frameworks.ros2` is optional. See
+  [Multi-app deployments](/docs/guides/multi-app-deployments) for an app-based
+  talker/listener stack.
 - A device selected as your default (or pass `--device`). See
   [Discovering devices](/docs/device/discovering-devices).
 
+Use `wendy device ros2 topics` to inspect a Unitree robot's system graph directly.
+The system sidecar's first use requires internet access to download its image.
+
 Every subcommand accepts `--domain` to override the `ROS_DOMAIN_ID`. By default it
-is read from the app's ROS 2 config, so you rarely need to set it. That includes
+is 0 for the system graph or read from the running app's ROS 2 config. That includes
 auto-derived domains: an app whose `frameworks.ros2` omits `domainId` gets a
 stable domain hashed from its `appId` (in the 0 to 232 range), and the CLI
 follows it automatically. Every subcommand also honors the global `--json` flag
@@ -121,6 +133,72 @@ Monitor a topic's publish rate:
 ```bash
 wendy device ros2 hz /chatter
 ```
+
+`echo` and `hz` need the topic's generated message packages inside the CLI
+sidecar. The stock system image includes standard ROS 2 messages, but custom
+types such as `unitree_go/msg/LowState` require additional packages. A topic can
+appear in `topics` and `topic info` even when its message package is unavailable
+for decoding.
+
+## Inspect LiDAR in Wendy Chat
+
+Wendy Chat and MCP clients can use the read-only `ros2_lidar_summary` tool for
+`sensor_msgs/msg/PointCloud2` and `sensor_msgs/msg/LaserScan`. It subscribes with
+sensor-compatible QoS and decodes data on the device, returning nearest returns
+by angular sector, bounded XYZ samples, and frame, timestamp, freshness, and
+coverage information. Update both the local CLI and device agent to use it.
+
+First use `ros2_topics` to discover the actual topic and message type. Use
+`ros2_topic_info` to inspect publishers and endpoint QoS if data is missing.
+For example, after discovering `/utlidar/cloud_deskewed` on the robot's host
+graph in domain 0, pass these arguments to `ros2_lidar_summary`:
+
+```json
+{
+  "scope": "host",
+  "domain_id": 0,
+  "topic": "/utlidar/cloud_deskewed",
+  "message_type": "sensor_msgs/msg/PointCloud2",
+  "count": 1,
+  "duration_seconds": 10,
+  "min_z": -1,
+  "max_z": 2,
+  "min_range": 0.05,
+  "max_range": 20,
+  "sample_points": 32
+}
+```
+
+Keep the scope and domain consistent with discovery. The default `scope: "app"`
+preserves the app's ROS 2 environment; host inspection requires an explicit
+`domain_id`. Topic names are examples: a robot may publish a different cloud or
+a laser scan. For a discovered scan topic, set `message_type` to
+`sensor_msgs/msg/LaserScan`.
+
+Directions refer to the **output frame's axes**, not automatically to the robot.
+If the discovered cloud is in `odom` or `map`, verify the robot's body frame and
+set `target_frame` to that frame to obtain robot-relative sectors. For example,
+add `"target_frame": "base_link"` only when that is the robot's verified body
+frame. The tool requests TF at the source measurement timestamp; a missing
+transform is reported rather than treating untransformed points as body-relative.
+Height filters use meters in the output frame. Choose them for the sensor and
+the obstacle heights of interest.
+
+The tool limits observation duration, message count, decoded points, sample
+points, and output bytes. Inspect its coverage and filtering diagnostics before
+interpreting distances: an empty sector, dropped points, or no messages do not
+establish clear space. Raw samples are a small selection, not a complete cloud.
+Custom fields such as `/utlidar/range_info` need their documented meaning before
+they can be described as directional distances.
+
+The returned `source_age_seconds` is a signed timestamp offset against
+`clock_basis`, not proof that the publisher and device clocks are synchronized.
+Source freshness remains unverified without that clock relationship; do not
+compare ROS stamps to the chat session clock. Set `use_sim_time: true` when the
+sensor uses a verified ROS simulation clock. A LiDAR summary is a bounded
+observation, not a continuously running collision-avoidance system.
+See [Robot diagnostics with MCP](/docs/integrations/robot-diagnostics) for the
+broader observation and navigation workflow.
 
 ## Parameters
 

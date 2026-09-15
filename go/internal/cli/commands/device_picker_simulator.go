@@ -20,8 +20,10 @@ const simulatorRefreshInterval = 2 * time.Second
 
 // simulatorChoice is what selecting a Simulator row means.
 type simulatorChoice struct {
-	Name   string
-	Create bool // the store is empty: provision before starting
+	Name       string
+	Create     bool // the store is empty: provision before starting
+	RobotKind  string
+	RobotState string
 
 	// Address is the forwarded agent address, empty unless the VM is running
 	// with a port forward.
@@ -29,11 +31,13 @@ type simulatorChoice struct {
 }
 
 type simulatorVMsMsg struct {
-	vms []vm.Status
-	err error
+	vms    []vm.Status
+	robots map[string]simulatorRobotInfo
+	err    error
 }
 
 type simulatorPickerModel struct {
+	ctx    context.Context
 	picker tui.PickerModel
 	err    error
 	loaded bool
@@ -47,6 +51,7 @@ type simulatorPickerModel struct {
 
 func newSimulatorPickerModel(ctx context.Context) simulatorPickerModel {
 	m := simulatorPickerModel{
+		ctx:    ctx,
 		picker: tui.NewPickerWithTitleAndColumns("Select a simulator", simulatorPickerColumns()),
 	}
 	m.picker.RemoveHint = "remove"
@@ -158,7 +163,11 @@ func nextSimulatorName(existing []vm.Status) string {
 func (m simulatorPickerModel) refreshCmd() tea.Cmd {
 	return func() tea.Msg {
 		statuses, err := vmStatusesFn()
-		return simulatorVMsMsg{vms: statuses, err: err}
+		var robots map[string]simulatorRobotInfo
+		if err == nil {
+			robots = readSimulatorRobots(m.ctx, statuses)
+		}
+		return simulatorVMsMsg{vms: statuses, robots: robots, err: err}
 	}
 }
 
@@ -175,6 +184,8 @@ func simulatorPickerColumns() []tui.PickerColumn {
 	return []tui.PickerColumn{
 		{Title: "Name", MinWidth: 12, Required: true, Value: func(i tui.PickerItem) string { return i.Name }},
 		{Title: "State", MinWidth: 8, Required: true, Value: func(i tui.PickerItem) string { return i.Type }},
+		{Title: "Profile", MinWidth: 11, Value: func(i tui.PickerItem) string { return i.Size }},
+		{Title: "Robot", MinWidth: 10, Value: func(i tui.PickerItem) string { return i.Parameters }},
 		{Title: "Address", MinWidth: 16, Value: func(i tui.PickerItem) string { return i.Address }},
 		{Title: "Version", MinWidth: 10, Value: func(i tui.PickerItem) string { return i.OSVersion }},
 	}
@@ -184,6 +195,10 @@ func simulatorPickerColumns() []tui.PickerColumn {
 // still offers one row, so a fresh machine has something to select rather than
 // an empty tab that explains nothing.
 func simulatorRows(statuses []vm.Status) []tui.PickerItem {
+	return simulatorRowsWithRobots(statuses, nil)
+}
+
+func simulatorRowsWithRobots(statuses []vm.Status, robots map[string]simulatorRobotInfo) []tui.PickerItem {
 	if len(statuses) == 0 {
 		return []tui.PickerItem{{
 			Name: "Simulator",
@@ -200,12 +215,17 @@ func simulatorRows(statuses []vm.Status) []tui.PickerItem {
 	items := make([]tui.PickerItem, 0, len(statuses))
 	for _, st := range statuses {
 		choice := &simulatorChoice{Name: st.Name, Address: vmAddress(st)}
+		robot := robots[st.Name]
+		choice.RobotKind, choice.RobotState = robot.Kind, robot.State
 		items = append(items, tui.PickerItem{
-			Name:      st.Name,
-			Type:      vmStateLabel(st),
-			Address:   choice.Address,
-			OSVersion: st.Meta.ImageVersion,
-			Value:     choice,
+			Name:       st.Name,
+			Type:       vmStateLabel(st),
+			Address:    choice.Address,
+			OSVersion:  st.Meta.ImageVersion,
+			Size:       firstNonEmpty(robot.Kind, "Generic"),
+			Parameters: robot.State,
+			Hint:       robot.Hint,
+			Value:      choice,
 		})
 	}
 	return items
@@ -222,7 +242,7 @@ func (m simulatorPickerModel) Update(msg tea.Msg) (simulatorPickerModel, tea.Cmd
 			}
 			// Set, not add: a VM removed elsewhere has to disappear rather
 			// than linger as a row that cannot be selected.
-			updated, cmd := m.picker.Update(tui.PickerSetMsg{Items: simulatorRows(msg.vms)})
+			updated, cmd := m.picker.Update(tui.PickerSetMsg{Items: simulatorRowsWithRobots(msg.vms, msg.robots)})
 			m.picker = updated.(tui.PickerModel)
 			// The store read is the scan, and it just finished: without this the
 			// banner claims it is still looking.

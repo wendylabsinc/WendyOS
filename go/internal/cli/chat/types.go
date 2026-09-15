@@ -62,7 +62,7 @@ type Executor interface {
 
 type ApproveFunc func(context.Context, ToolCall) (bool, error)
 
-// Event types are text, tool_start, tool_result, and status.
+// Event types are text, tool_start, tool_result, status, and memory.
 type Event struct {
 	Type string
 	Text string

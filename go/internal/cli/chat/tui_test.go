@@ -153,6 +153,182 @@ func TestUICancelActiveTurnThenExitWhenIdle(t *testing.T) {
 	}
 }
 
+func TestUIEnterQueuesFollowupsAndRunsThemInOrder(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	provider := uiProviderFunc(func(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (Message, error) {
+		prompt := messages[len(messages)-1].Content
+		started <- prompt
+		if prompt == "first request" {
+			emit("first ")
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return Message{}, ctx.Err()
+			}
+			emit("result")
+		}
+		return Message{Content: "done"}, nil
+	})
+	m := uiModel(t, provider, &uiExecutor{}, false)
+	m.submit("first request")
+	for m.turnReply == "" {
+		m.Update(uiNextEvent(t, m))
+	}
+	for _, prompt := range []string{"second request", "third request\nwith detail"} {
+		m.composer.SetValue(prompt)
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if m.composer.Value() != "" {
+			t.Fatal("Enter must clear the composer after queuing a message")
+		}
+	}
+	if m.turnID != 1 || len(m.queuedPrompts) != 2 {
+		t.Fatal("followups must queue without replacing the active worker")
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "2 queued") || !strings.Contains(view, "Next: second request") {
+		t.Fatalf("queued messages are not visible:\n%s", view)
+	}
+	for _, size := range [][2]int{{80, 24}, {40, 14}, {20, 10}, {100, 28}} {
+		m.resize(size[0], size[1])
+		if got := len(strings.Split(m.View(), "\n")); got > size[1] {
+			t.Fatalf("size %v: queue added rows beyond the terminal: %d", size, got)
+		}
+	}
+	close(release)
+	uiDrainTurn(t, m)
+	for _, want := range []string{"first request", "second request", "third request\nwith detail"} {
+		select {
+		case got := <-started:
+			if got != want {
+				t.Fatalf("started %q, want %q", got, want)
+			}
+		default:
+			t.Fatalf("queued prompt %q was not started", want)
+		}
+	}
+	if len(m.queuedPrompts) != 0 || m.turnID != 3 {
+		t.Fatal("queue did not drain after completing each turn")
+	}
+	for _, entry := range m.transcript {
+		if entry.kind == "assistant" && entry.text == "first result" {
+			return
+		}
+	}
+	t.Fatal("queuing a message interrupted the current streamed reply in the transcript")
+}
+
+func TestUICancelClearAndQuitDiscardQueuedWork(t *testing.T) {
+	for _, action := range []string{"esc", "ctrl+c", "/clear", "/quit", "/exit", "/setup"} {
+		t.Run(action, func(t *testing.T) {
+			var calls atomic.Int32
+			provider := uiProviderFunc(func(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (Message, error) {
+				calls.Add(1)
+				<-ctx.Done()
+				return Message{}, ctx.Err()
+			})
+			m := uiModel(t, provider, &uiExecutor{}, false)
+			m.submit("active request")
+			m.submit("queued request")
+			switch action {
+			case "esc":
+				m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			case "ctrl+c":
+				m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+			default:
+				m.composer.SetValue(action)
+				m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			}
+			if !m.canceling || len(m.queuedPrompts) != 0 {
+				t.Fatal("canceling, clearing, or leaving chat must cancel the worker and discard queued requests")
+			}
+			uiDrainTurn(t, m)
+			if m.turnID != 1 || calls.Load() > 1 {
+				t.Fatal("discarded followup was executed")
+			}
+			if action == "/clear" && (len(m.transcript) != 1 || m.transcript[0].title != "Conversation cleared" || len(m.opts.Engine.Messages()) != 1 || m.opts.Engine.Messages()[0].Role != "system") {
+				t.Fatal("/clear must wait for cancellation and then reset the conversation")
+			}
+		})
+	}
+}
+
+func TestUIQueueRejectsBlankMessagesAndCredentials(t *testing.T) {
+	m := uiModel(t, nil, &uiExecutor{}, false)
+	m.active = true
+	for _, prompt := range []string{" \n ", "sk-proj-obviously_fake_test_key_1234567890"} {
+		m.composer.SetValue(prompt)
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	}
+	if len(m.queuedPrompts) != 0 || m.composer.Value() != "" {
+		t.Fatal("blank messages and standalone credentials must never reach the queue")
+	}
+	m.composer.SetValue("/help")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(m.queuedPrompts) != 0 || !strings.Contains(m.transcript[len(m.transcript)-1].text, "queues it while Wendy is working") {
+		t.Fatal("local commands must remain available while working")
+	}
+}
+
+func TestUIMemoryNoticePreservesReplyForVoice(t *testing.T) {
+	m := uiModel(t, nil, &uiExecutor{}, false)
+	m.handleEvent(Event{Type: "text", Text: "Your task is complete."})
+	m.handleEvent(Event{Type: "memory", Text: "Saved a useful procedure."})
+	if m.turnReply != "Your task is complete." || m.transcript[len(m.transcript)-1].title != "Memory" {
+		t.Fatal("memory notices must be visible without replacing the final spoken answer")
+	}
+}
+
+func TestUIMemoryCommandsStayLocalAndClearKeepsNotes(t *testing.T) {
+	store, err := NewMemoryStore(t.TempDir(), t.TempDir(), "test-device")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := store.Save(context.Background(), MemoryInput{
+		Scope: "workspace", Kind: "preference", Title: "Preferred container", Content: "Use the app container.", Evidence: "The user explicitly requested this.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := uiModel(t, nil, NewMemoryTools(&uiExecutor{}, store), false)
+	m.active = true
+	enter := func(prompt string) {
+		m.composer.SetValue(prompt)
+		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if len(m.queuedPrompts) != 0 || m.events != nil || m.turnID != 0 {
+			t.Fatal("memory commands must run locally without queuing a model request")
+		}
+	}
+	enter("/memory")
+	if text, _ := m.transcriptContent(120); !strings.Contains(text, entry.ID[:8]) || !strings.Contains(text, entry.Content) || strings.Contains(text, entry.ID) {
+		t.Fatal("/memory must show a readable preview and a short deletion ID")
+	}
+	enter("/memory " + entry.ID[:8])
+	if text, _ := m.transcriptContent(120); !strings.Contains(text, entry.Evidence) {
+		t.Fatal("/memory <id> must open the complete note locally")
+	}
+	enter("/memory off")
+	if m.opts.Engine.MemoryEnabled() {
+		t.Fatal("/memory off did not pause memory")
+	}
+	enter("/memory on")
+	if !m.opts.Engine.MemoryEnabled() {
+		t.Fatal("/memory on did not enable memory")
+	}
+	m.active = false
+	enter("/clear")
+	entries, err := store.Search(context.Background(), "", "", 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("/clear deleted remembered notes: %v, %v", entries, err)
+	}
+	m.active = true
+	enter("/forget " + entry.ID[:8])
+	entries, err = store.Search(context.Background(), "", "", 10)
+	if err != nil || len(entries) != 0 || m.transcript[len(m.transcript)-1].title != "Note forgotten" {
+		t.Fatalf("/forget did not delete the selected note: %v, %v", entries, err)
+	}
+}
+
 func TestUIToolApprovalAllowsDeniesAndAutoApproves(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -285,6 +461,33 @@ func TestUIResizeKeepsDraftAndCaretVisible(t *testing.T) {
 		}
 		if view := ansi.Strip(m.View()); !strings.Contains(view, "DRAFT_END") {
 			t.Fatalf("size %v: draft caret disappeared until another keypress:\n%s", size, view)
+		}
+	}
+}
+
+func TestUIComposerBoxHasOneBorderWithinTerminal(t *testing.T) {
+	m := uiModel(t, nil, &uiExecutor{}, false)
+	for _, draft := range []string{"", "Rotate around until you see my colleague", strings.Repeat("draft words 硬件 👩🏽‍💻 ", 30)} {
+		m.composer.SetValue(draft)
+		for _, size := range [][2]int{{120, 40}, {80, 24}, {40, 14}, {180, 60}} {
+			m.resize(size[0], size[1])
+			for _, extraWidth := range []int{0, 20} {
+				if extraWidth > 0 {
+					// Rendering must also bound stale textarea geometry without
+					// clipping the right border out of the final frame.
+					m.composer.SetWidth(size[0] + extraWidth)
+				}
+				box := ansi.Strip(m.composerView())
+				lines := strings.Split(box, "\n")
+				if len(lines) != 5 || !strings.HasSuffix(lines[0], "╮") || !strings.HasSuffix(lines[4], "╯") {
+					t.Fatalf("composer lost its complete border: %q", box)
+				}
+				for row, line := range lines {
+					if got := ansi.StringWidth(line); got != size[0]-2 {
+						t.Fatalf("size %v, draft %q, row %d: box width %d, want %d: %q", size, draft, row, got, size[0]-2, line)
+					}
+				}
+			}
 		}
 	}
 }

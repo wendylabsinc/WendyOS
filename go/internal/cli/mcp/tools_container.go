@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
 )
 
 func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
@@ -75,7 +78,7 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("container_stats", statsOpts...), s.handleContainerStats)
 
 	attachOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Attach to a running container and collect a bounded snapshot of its output"),
+		mcpgo.WithDescription("Start or restart a container and collect a bounded snapshot of its output. This interrupts an existing running task. For passive log inspection use telemetry_logs with app_name. To run a command inside an existing container use container_exec."),
 		mcpgo.WithString("app_name",
 			mcpgo.Required(),
 			mcpgo.Description("App name of the container to attach to"),
@@ -90,9 +93,20 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 			mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)"),
 		),
 	}
-	attachOpts = append(attachOpts, readOnly()...)
+	attachOpts = append(attachOpts, destructive()...)
 	attachOpts = append(attachOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("container_attach", attachOpts...), s.handleContainerAttach)
+
+	execOpts := []mcpgo.ToolOption{
+		mcpgo.WithDescription("Run an explicit command inside a running container on the connected device, including a cloud-connected device. Uses the current connection; no separate CLI connection is needed. The command array is passed directly without shell expansion, with no TTY and closed stdin. To run a script, explicitly pass its interpreter and arguments. Returns bounded stdout/stderr and the exit code; nonzero exits and timeouts are errors. This can change files or device state and requires approval."),
+		mcpgo.WithString("app_name", mcpgo.Required(), mcpgo.MinLength(1), mcpgo.MaxLength(256), mcpgo.Description("App/container name from container_list")),
+		mcpgo.WithArray("command", mcpgo.Required(), mcpgo.MinItems(1), mcpgo.MaxItems(128), mcpgo.WithStringItems(mcpgo.MaxLength(16384)), mcpgo.Description("Executable followed by its arguments, e.g. [\"python3\", \"-c\", \"print('hello')\"]. At most 65536 total argument bytes.")),
+		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(300), mcpgo.Description("Maximum time to wait for completion, default 30 seconds")),
+		mcpgo.WithInteger("max_bytes", mcpgo.Min(1), mcpgo.Max(1000000), mcpgo.Description("Maximum combined stdout/stderr bytes retained, default 100000; excess output is drained until exit or timeout")),
+	}
+	execOpts = append(execOpts, destructive()...)
+	execOpts = append(execOpts, localOnly()...)
+	srv.AddTool(mcpgo.NewTool("container_exec", execOpts...), s.handleContainerExec)
 }
 
 func (s *mcpServer) handleContainerList(ctx context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -151,6 +165,7 @@ func (s *mcpServer) handleContainerStart(ctx context.Context, req mcpgo.CallTool
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
+	defer s.refreshContainerMCPTools()
 	maxChunks := intParam(req, "max_chunks", 200)
 	var sb strings.Builder
 	chunks := 0
@@ -194,6 +209,7 @@ func (s *mcpServer) handleContainerStop(ctx context.Context, req mcpgo.CallToolR
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
+	s.refreshContainerMCPTools()
 	return okText(fmt.Sprintf("container %s stopped", appName)), nil
 }
 
@@ -214,6 +230,7 @@ func (s *mcpServer) handleContainerDelete(ctx context.Context, req mcpgo.CallToo
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
+	s.refreshContainerMCPTools()
 	return okText(fmt.Sprintf("container %s deleted", appName)), nil
 }
 
@@ -285,4 +302,118 @@ func (s *mcpServer) handleContainerAttach(ctx context.Context, req mcpgo.CallToo
 		}
 	}
 	return okTextBounded(sb.String(), "", intParam(req, "max_bytes", 100000)), nil
+}
+
+func (s *mcpServer) handleContainerExec(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	conn := s.GetConn()
+	if conn == nil {
+		return errNotConnected(), nil
+	}
+	var args struct {
+		AppName        string    `json:"app_name"`
+		Command        []*string `json:"command"`
+		TimeoutSeconds *int      `json:"timeout_seconds"`
+		MaxBytes       *int      `json:"max_bytes"`
+	}
+	raw, err := json.Marshal(req.GetArguments())
+	if err != nil || json.Unmarshal(raw, &args) != nil {
+		return errResult(errCodeInvalidArgument, "app_name must be a string, command a string array, and limits integers"), nil
+	}
+	if strings.TrimSpace(args.AppName) == "" || len(args.AppName) > 256 || strings.ContainsRune(args.AppName, 0) {
+		return errResult(errCodeInvalidArgument, "app_name must contain 1..256 bytes and no NUL"), nil
+	}
+	if len(args.Command) == 0 || len(args.Command) > 128 || args.Command[0] == nil || *args.Command[0] == "" {
+		return errResult(errCodeInvalidArgument, "command must contain an executable and at most 128 arguments"), nil
+	}
+	argumentBytes := 0
+	command := make([]string, len(args.Command))
+	for i, argument := range args.Command {
+		if argument == nil {
+			return errResult(errCodeInvalidArgument, "command arguments must be strings"), nil
+		}
+		command[i] = *argument
+		argumentBytes += len(*argument)
+		if len(*argument) > 16384 || strings.ContainsRune(*argument, 0) || argumentBytes > 65536 {
+			return errResult(errCodeInvalidArgument, "command arguments must have no NUL, at most 16384 bytes each and 65536 bytes total"), nil
+		}
+	}
+	timeoutSeconds, maxBytes := 30, 100000
+	if args.TimeoutSeconds != nil {
+		timeoutSeconds = *args.TimeoutSeconds
+	}
+	if args.MaxBytes != nil {
+		maxBytes = *args.MaxBytes
+	}
+	if timeoutSeconds < 1 || timeoutSeconds > 300 || maxBytes < 1 || maxBytes > 1000000 {
+		return errResult(errCodeInvalidArgument, "timeout_seconds must be 1..300 and max_bytes must be 1..1000000"), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	var stdout, stderr strings.Builder
+	remaining, truncated := maxBytes, false
+	appendOutput := func(destination *strings.Builder, data []byte) {
+		retained := min(remaining, len(data))
+		destination.Write(data[:retained])
+		remaining -= retained
+		truncated = truncated || retained < len(data)
+	}
+	result := func(exitCode *int32, failure error) *mcpgo.CallToolResult {
+		out := map[string]any{
+			"stdout": strings.ToValidUTF8(stdout.String(), ""), "stderr": strings.ToValidUTF8(stderr.String(), ""),
+			"truncated": truncated,
+		}
+		if exitCode != nil {
+			out["exit_code"] = *exitCode
+			if *exitCode != 0 {
+				out["error_code"] = "COMMAND_FAILED"
+				out["message"] = fmt.Sprintf("command exited with code %d", *exitCode)
+			}
+		}
+		if failure != nil {
+			out["error_code"], out["message"] = string(codeFromGRPC(failure)), grpcErrString(failure)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				out["error_code"], out["message"] = string(errCodeTimeout), "container exec timed out before completion was observed"
+			}
+		}
+		r := okResult(out)
+		r.IsError = failure != nil || (exitCode != nil && *exitCode != 0)
+		if r.IsError {
+			// Keep the failure visible before potentially large captured output.
+			// Hosts may truncate the JSON fallback before they can parse it.
+			summary := mcpgo.NewTextContent(fmt.Sprintf("[%s] %s", out["error_code"], out["message"]))
+			r.Content = append([]mcpgo.Content{summary}, r.Content...)
+		}
+		return r
+	}
+	stream, err := conn.ContainerService.ExecContainer(ctx, grpc.MaxCallRecvMsgSize(2*1024*1024))
+	if err != nil {
+		return result(nil, err), nil
+	}
+	if err := stream.Send(&agentpb.ExecContainerRequest{
+		RequestType: &agentpb.ExecContainerRequest_Start{Start: &agentpb.ExecContainerRequest_ExecStart{
+			AppName: args.AppName, Command: command, Tty: false,
+		}},
+	}); err != nil {
+		return result(nil, err), nil
+	}
+	if err := stream.CloseSend(); err != nil {
+		return result(nil, err), nil
+	}
+	for {
+		response, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				err = errors.New("container exec stream ended without an exit code; completion is unknown")
+			}
+			return result(nil, err), nil
+		}
+		switch output := response.ResponseType.(type) {
+		case *agentpb.ExecContainerResponse_StdoutData:
+			appendOutput(&stdout, output.StdoutData)
+		case *agentpb.ExecContainerResponse_StderrData:
+			appendOutput(&stderr, output.StderrData)
+		case *agentpb.ExecContainerResponse_ExitCode:
+			return result(&output.ExitCode, nil), nil
+		}
+	}
 }

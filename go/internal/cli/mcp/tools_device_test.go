@@ -106,6 +106,118 @@ func TestDeviceInfo_HasStructuredContent(t *testing.T) {
 	}
 }
 
+func TestDeviceInfo_Battery(t *testing.T) {
+	dischargingSeconds := int64(3600)
+	chargingSeconds := int64(1800)
+	zeroSeconds := int64(0)
+	for _, tc := range []struct {
+		name        string
+		battery     *agentpb.BatteryStats
+		wantPercent float64
+		wantState   string
+		wantSeconds *int64
+	}{
+		{
+			name: "discharging with estimate",
+			battery: &agentpb.BatteryStats{
+				Percent:          74.5,
+				State:            agentpb.BatteryState_BATTERY_STATE_DISCHARGING,
+				SecondsRemaining: &dischargingSeconds,
+			},
+			wantPercent: 74.5,
+			wantState:   "BATTERY_STATE_DISCHARGING",
+			wantSeconds: &dischargingSeconds,
+		},
+		{name: "battery unavailable"},
+		{
+			name:      "zero percent with unknown state and no estimate",
+			battery:   &agentpb.BatteryStats{},
+			wantState: "BATTERY_STATE_UNKNOWN",
+		},
+		{
+			name: "charging with estimate",
+			battery: &agentpb.BatteryStats{
+				Percent:          39.5,
+				State:            agentpb.BatteryState_BATTERY_STATE_CHARGING,
+				SecondsRemaining: &chargingSeconds,
+			},
+			wantPercent: 39.5,
+			wantState:   "BATTERY_STATE_CHARGING",
+			wantSeconds: &chargingSeconds,
+		},
+		{
+			name: "explicit zero estimate",
+			battery: &agentpb.BatteryStats{
+				Percent:          100,
+				State:            agentpb.BatteryState_BATTERY_STATE_FULL,
+				SecondsRemaining: &zeroSeconds,
+			},
+			wantPercent: 100,
+			wantState:   "BATTERY_STATE_FULL",
+			wantSeconds: &zeroSeconds,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeAgentServer{versionResp: &agentpb.GetAgentVersionResponse{Battery: tc.battery}}
+			conn, _ := startFakeAgentServer(t, fake)
+			srv := New(&config.Config{}, nil)
+			srv.SetConn(conn)
+			result, err := srv.callTool(context.Background(), "device_info", nil)
+			if err != nil {
+				t.Fatalf("device_info: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("unexpected error result: %v", result.Content)
+			}
+			var textPayload map[string]any
+			if err := json.Unmarshal([]byte(toolResultText(t, result)), &textPayload); err != nil {
+				t.Fatalf("invalid JSON text fallback: %v", err)
+			}
+			for _, output := range []struct {
+				name    string
+				payload map[string]any
+			}{
+				{name: "structured", payload: structuredMap(t, result)},
+				{name: "text", payload: textPayload},
+			} {
+				t.Run(output.name, func(t *testing.T) {
+					value, exists := output.payload["battery"]
+					if tc.battery == nil {
+						if exists {
+							t.Errorf("battery must be omitted when unavailable, got %v", value)
+						}
+						return
+					}
+					battery, ok := value.(map[string]any)
+					if !ok {
+						t.Fatalf("battery must be an object, got %T (%v)", value, value)
+					}
+					if battery["percent"] != tc.wantPercent {
+						t.Errorf("percent = %v, want %v", battery["percent"], tc.wantPercent)
+					}
+					if battery["state"] != tc.wantState {
+						t.Errorf("state = %v, want %s", battery["state"], tc.wantState)
+					}
+					seconds, exists := battery["seconds_remaining"]
+					if tc.wantSeconds == nil {
+						if exists {
+							t.Errorf("seconds_remaining must be omitted without an estimate, got %v", seconds)
+						}
+						return
+					}
+					var wantSeconds any = *tc.wantSeconds
+					if output.name == "text" {
+						wantSeconds = float64(*tc.wantSeconds)
+					}
+					if !exists || seconds != wantSeconds {
+						t.Errorf("seconds_remaining = %v, want %v", seconds, wantSeconds)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDeviceList_ReturnsConfiguredDevices(t *testing.T) {
 	cfg := &config.Config{
 		DefaultDevice: "mydevice.local:50051",

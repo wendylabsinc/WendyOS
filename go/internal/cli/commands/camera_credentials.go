@@ -171,9 +171,9 @@ const defaultCameraUser = "admin"
 
 // cameraPromptAllowed reports whether a password can be obtained without
 // blocking. An environment-supplied password counts, since it needs no prompt.
-func cameraPromptAllowed() bool {
+func cameraPromptAllowed(nonInteractive bool) bool {
 	if os.Getenv("WENDY_CAMERA_PASSWORD") != "" {
 		return true
 	}
-	return term.IsTerminal(int(os.Stdin.Fd()))
+	return !nonInteractive && term.IsTerminal(int(os.Stdin.Fd()))
 }

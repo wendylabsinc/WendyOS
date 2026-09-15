@@ -68,7 +68,7 @@ func TestVMCreateRejectsALocalImageCombinedWithAVersion(t *testing.T) {
 }
 
 func TestVMInteractiveSubcommandsAcceptAnOptionalName(t *testing.T) {
-	for _, name := range []string{"start", "stop", "logs", "rm"} {
+	for _, name := range []string{"create", "start", "stop", "logs", "rm"} {
 		c := vmSubcommand(t, name)
 		if err := c.Args(c, nil); err != nil {
 			t.Errorf("%q rejected an omitted name: %v", name, err)
@@ -79,11 +79,6 @@ func TestVMInteractiveSubcommandsAcceptAnOptionalName(t *testing.T) {
 		if err := c.Args(c, []string{"one", "two"}); err == nil {
 			t.Errorf("%q accepted two names", name)
 		}
-	}
-
-	create := vmSubcommand(t, "create")
-	if err := create.Args(create, nil); err == nil {
-		t.Error("create accepted an omitted name; it is not an interactive lifecycle command")
 	}
 }
 

@@ -29,10 +29,12 @@ type Engine struct {
 	messages  []Message
 	maxRounds int
 	nextID    uint64
+	memory    *MemoryTools
 }
 
 func NewEngine(provider Provider, executor Executor, system string) *Engine {
 	e := &Engine{provider: provider, executor: executor, system: system, maxRounds: defaultMaxRounds}
+	e.memory, _ = executor.(*MemoryTools)
 	e.Reset()
 	return e
 }
@@ -83,7 +85,12 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 	if emit == nil {
 		emit = func(Event) {}
 	}
+	if e.memory != nil {
+		e.memory.beginTurn()
+		defer e.learnMemory(ctx, prompt, emit)
+	}
 	e.messages = append(e.messages, Message{Role: "user", Content: prompt})
+	memoryWarned := false
 	for round := 0; round < e.maxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -102,7 +109,19 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		}
 		emit(Event{Type: "status", Text: "Thinking…"})
 		var streamed strings.Builder
-		message, err := e.provider.Stream(ctx, cloneMessages(e.messages), available, func(chunk string) {
+		messages := cloneMessages(e.messages)
+		if e.memory != nil {
+			messages = e.refreshMemoryHistory(ctx, messages)
+		}
+		if e.MemoryEnabled() {
+			var recallErr error
+			messages, recallErr = e.recallMemory(ctx, prompt, messages)
+			if recallErr != nil && !memoryWarned {
+				emit(Event{Type: "memory", Text: "Could not recall notes: " + recallErr.Error()})
+				memoryWarned = true
+			}
+		}
+		message, err := e.provider.Stream(ctx, messages, available, func(chunk string) {
 			streamed.WriteString(chunk)
 			emit(Event{Type: "text", Text: chunk})
 		})
@@ -196,6 +215,9 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					result = output.Text
 					if toolErr == nil {
 						images, toolErr = validateImages(output.Images)
+					}
+					if e.memory != nil && ctx.Err() == nil {
+						e.memory.observe(call, output, toolErr)
 					}
 					if toolErr != nil {
 						result = "Tool error: " + toolErr.Error()

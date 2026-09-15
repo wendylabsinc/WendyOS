@@ -37,7 +37,7 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	disconnectOpts = append(disconnectOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("device_disconnect", disconnectOpts...), s.handleDeviceDisconnect)
 
-	infoOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Get agent version, OS, CPU architecture, GPU info, and feature set of connected device")}
+	infoOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Get agent version, OS, CPU architecture, GPU info, feature set, and battery level of the connected device. Use this for battery percentage, charge state, and estimated seconds until empty (discharging) or full (charging). Battery is omitted when the agent has no reading; seconds_remaining is omitted when no estimate is available. Does not require a running ROS 2 app.")}
 	infoOpts = append(infoOpts, readOnly()...)
 	infoOpts = append(infoOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("device_info", infoOpts...), s.handleDeviceInfo)
@@ -149,16 +149,16 @@ func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolR
 	if err := s.ConnectTo(ctx, address); err != nil {
 		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", address, err.Error()), nil
 	}
-	s.SetConnType("direct")
 	return okText(fmt.Sprintf("connected to %s", address)), nil
 }
 
 func (s *mcpServer) handleDeviceDisconnect(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	conn := s.GetConn()
+	// Even when disconnected, invalidate any automatic connection still in flight.
+	s.SetConn(nil)
 	if conn == nil {
 		return okText("not connected"), nil
 	}
-	s.SetConn(nil)
 	return okText("disconnected"), nil
 }
 
@@ -233,6 +233,16 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	}
 	if resp.NpuVendor != nil {
 		info["npu_vendor"] = resp.GetNpuVendor()
+	}
+	if battery := resp.GetBattery(); battery != nil {
+		entry := map[string]any{
+			"percent": battery.GetPercent(),
+			"state":   battery.GetState().String(),
+		}
+		if battery.SecondsRemaining != nil {
+			entry["seconds_remaining"] = battery.GetSecondsRemaining()
+		}
+		info["battery"] = entry
 	}
 	return okResult(info), nil
 }

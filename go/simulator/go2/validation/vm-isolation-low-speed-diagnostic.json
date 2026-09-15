@@ -1,0 +1,5726 @@
+{
+  "passed": false,
+  "started_at": "2026-09-12T19:20:22.492601+00:00",
+  "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+  "harness_sha256": "7e01c0dd9d00cd6e4387ff665c8b56408c5e83d18058aabc87498a431fd7f37c",
+  "cli_sha256": "bd5e7ccd3e638e0edb62ca0c0cd4c26bea9d1a6191455825ce64c1fdd2927e51",
+  "endpoints": {
+    "go2-sim": "http://127.0.0.1:8890",
+    "go2-peer": "http://127.0.0.1:65461"
+  },
+  "commands": [
+    {
+      "argv": [
+        "/private/tmp/wendy-go2-cli",
+        "--device",
+        "vm:go2-sim",
+        "device",
+        "ros2",
+        "exec",
+        "--",
+        "topic",
+        "info",
+        "/lowstate",
+        "--verbose"
+      ],
+      "phase": "before",
+      "returncode": 0,
+      "output": "Connecting to simulator go2-sim...\nType: unitree_go/msg/LowState\n\nPublisher count: 1\n\nNode name: wendy_go2_observations\nNode namespace: /\nTopic type: unitree_go/msg/LowState\nEndpoint type: PUBLISHER\nGID: 01.10.9b.fe.b4.39.3e.3d.56.e7.59.32.00.00.1c.03.00.00.00.00.00.00.00.00\nQoS profile:\n  Reliability: RELIABLE\n  History (Depth): KEEP_LAST (1)\n  Durability: VOLATILE\n  Lifespan: Infinite\n  Deadline: Infinite\n  Liveliness: AUTOMATIC\n  Liveliness lease duration: Infinite\n\nSubscription count: 0\n\n"
+    },
+    {
+      "argv": [
+        "/private/tmp/wendy-go2-cli",
+        "--device",
+        "vm:go2-peer",
+        "device",
+        "ros2",
+        "exec",
+        "--",
+        "topic",
+        "info",
+        "/lowstate",
+        "--verbose"
+      ],
+      "phase": "before",
+      "returncode": 0,
+      "output": "Connecting to simulator go2-peer...\nType: unitree_go/msg/LowState\n\nPublisher count: 1\n\nNode name: wendy_go2_observations\nNode namespace: /\nTopic type: unitree_go/msg/LowState\nEndpoint type: PUBLISHER\nGID: 01.10.07.b4.ed.92.a1.17.62.06.38.b3.00.00.1c.03.00.00.00.00.00.00.00.00\nQoS profile:\n  Reliability: RELIABLE\n  History (Depth): KEEP_LAST (1)\n  Durability: VOLATILE\n  Lifespan: Infinite\n  Deadline: Infinite\n  Liveliness: AUTOMATIC\n  Liveliness lease duration: Infinite\n\nSubscription count: 0\n\n"
+    },
+    {
+      "argv": [
+        "/private/tmp/wendy-go2-cli",
+        "--device",
+        "vm:go2-peer",
+        "device",
+        "ros2",
+        "exec",
+        "--",
+        "topic",
+        "pub",
+        "/cmd_vel",
+        "geometry_msgs/msg/Twist",
+        "{linear: {x: 0.2}, angular: {z: 0.0}}",
+        "--rate",
+        "20",
+        "--times",
+        "120",
+        "--print",
+        "20",
+        "--qos-durability",
+        "volatile",
+        "--node-name",
+        "wendy_go2_two_vm_isolation"
+      ],
+      "phase": "peer_motion"
+    }
+  ],
+  "checks": [
+    {
+      "check": "independent_native_graphs_before",
+      "passed": true,
+      "publishers": {
+        "go2-sim": "01.10.9b.fe.b4.39.3e.3d.56.e7.59.32.00.00.1c.03.00.00.00.00.00.00.00.00",
+        "go2-peer": "01.10.07.b4.ed.92.a1.17.62.06.38.b3.00.00.1c.03.00.00.00.00.00.00.00.00"
+      }
+    }
+  ],
+  "samples": [
+    {
+      "elapsed_seconds": 0.037340374999985215,
+      "phase": "initial",
+      "primary": {
+        "time": 1413.3059999804036,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.233609956365121,
+          0.057559270664666616,
+          0.3326355000058804
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1848734.81991,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1835480.426301,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459252.498964,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1458368.157547,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1457751.750545,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1457708.831309,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1456668.345038,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1450371.295877,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1432493.456769,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1414816.508202,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1402179.252714,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 957373
+      },
+      "peer": {
+        "time": 619.9959999991628,
+        "epoch": 1,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.04051489830533938,
+          0.020952970085280253,
+          0.32354556354310854
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 0,
+          "rejected": 0,
+          "last_error": null,
+          "sources": []
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 309998
+      }
+    },
+    {
+      "elapsed_seconds": 1.8762826660004066,
+      "phase": "before_grant",
+      "primary": {
+        "time": 1415.1399999803602,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2388030839280284,
+          0.05186002200907851,
+          0.3318863996068945
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1850568.564879,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1837314.17127,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461086.243933,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460201.902516,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459585.495514,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1459542.576278,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1458502.090007,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452205.040846,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1434327.201738,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1416650.253171,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404012.997683,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958290
+      },
+      "peer": {
+        "time": 621.8299999991194,
+        "epoch": 1,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.040514908980693584,
+          0.02095295827529422,
+          0.3235455610267375
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 0,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 23.568158,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 310915
+      }
+    },
+    {
+      "elapsed_seconds": 1.9078580830009741,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1415.1699999803595,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2391049069832516,
+          0.05138953710286931,
+          0.3319101299312447
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1850599.479922,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1837345.086313,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461117.158976,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460232.817559,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459616.410557,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1459573.491321,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1458533.00505,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452235.955889,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1434358.116781,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1416681.168214,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404043.912726,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958305
+      },
+      "peer": {
+        "time": 621.8619999991187,
+        "epoch": 1,
+        "mode": "standing",
+        "armed": true,
+        "position": [
+          -0.04051478891005918,
+          0.02095295966950513,
+          0.3235455537076004
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.006,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 1,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 6.302595,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 310931
+      }
+    },
+    {
+      "elapsed_seconds": 2.0304690829998435,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1415.2939999803566,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2409950782752333,
+          0.049860778591643874,
+          0.3326000116246144
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1850722.416167,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1837468.022558,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461240.095221,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460355.753804,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459739.346802,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1459696.427566,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1458655.941295,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452358.892134,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1434481.053026,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1416804.104459,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404166.848971,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958367
+      },
+      "peer": {
+        "time": 621.9839999991158,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          -0.037439412256410586,
+          0.021236848020478462,
+          0.32290420648362034
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.12800000000000009,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 3,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 27.94762,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 310992
+      }
+    },
+    {
+      "elapsed_seconds": 2.151526375000685,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1415.4139999803538,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2426387483610688,
+          0.04943718305442749,
+          0.3342303612667569
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1850842.943463,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1837588.549854,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461360.622517,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460476.2811,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459859.874098,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1459816.954862,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1458776.468591,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452479.41943,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1434601.580322,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1416924.631755,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404287.376267,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958427
+      },
+      "peer": {
+        "time": 622.103999999113,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          -0.022854428911904385,
+          0.022208582433700982,
+          0.3201400966172084
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 5,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 48.92645,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311052
+      }
+    },
+    {
+      "elapsed_seconds": 2.2698110830006044,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1415.531999980351,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2435059193406754,
+          0.049311859431356866,
+          0.3349586295558644
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1850961.49792,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1837707.104311,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461479.176974,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460594.835557,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459978.428555,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1459935.509319,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1458895.023048,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452597.973887,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1434720.134779,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417043.186212,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404405.930724,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958486
+      },
+      "peer": {
+        "time": 622.2239999991101,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          -0.005474624407688056,
+          0.022093840109166034,
+          0.3177099799612576
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 8,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 17.719888,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311112
+      }
+    },
+    {
+      "elapsed_seconds": 2.3940524579993507,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1415.655999980348,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.244117156505897,
+          0.04919401588137756,
+          0.33524092885952955
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851085.499415,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1837831.105806,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461603.178469,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460718.837052,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460102.43005,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460059.510814,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459019.024543,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452721.975382,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1434844.136274,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417167.187707,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404529.932219,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958548
+      },
+      "peer": {
+        "time": 622.3479999991072,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.005941980522699888,
+          0.021780478641114404,
+          0.3138180218355194
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 10,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 41.874411,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311174
+      }
+    },
+    {
+      "elapsed_seconds": 2.5180121659996075,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1415.779999980345,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.244551092892716,
+          0.04919536610963891,
+          0.33526770365123154
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851209.383434,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1837954.989825,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461727.062488,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460842.721071,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460226.314069,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460183.394833,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459142.908562,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452845.859401,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1434968.020293,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417291.071726,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404653.816238,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958610
+      },
+      "peer": {
+        "time": 622.4699999991043,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.013936955543229369,
+          0.022078701404302074,
+          0.31175069797400967
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 13,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 14.888907,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311235
+      }
+    },
+    {
+      "elapsed_seconds": 2.638463708000927,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1415.8999999803423,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2448737915358046,
+          0.04933687500028628,
+          0.3351355563800195
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851329.97421,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838075.580601,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461847.653264,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460963.311847,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460346.904845,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460303.985609,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459263.499338,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1452966.450177,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435088.611069,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417411.662502,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404774.407014,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958670
+      },
+      "peer": {
+        "time": 622.5939999991014,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.018532754457346236,
+          0.021581440836513827,
+          0.3110735333574642
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 15,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 37.834132,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311297
+      }
+    },
+    {
+      "elapsed_seconds": 2.760243958000501,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.0239999803393,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.245170240279969,
+          0.049644424704611216,
+          0.3348937098484907
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851454.284009,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838199.8904,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461971.963063,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461087.621646,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460471.214644,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460428.295408,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459387.809137,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453090.759976,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435212.920868,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417535.972301,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1404898.716813,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958732
+      },
+      "peer": {
+        "time": 622.7139999990985,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.01956845000461475,
+          0.020444475027713658,
+          0.3119519018763885
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 18,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 10.406152,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311357
+      }
+    },
+    {
+      "elapsed_seconds": 2.8858232910006336,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.1479999803364,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2453039415717373,
+          0.05000700380953362,
+          0.3346440117327127
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851578.059953,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838323.666344,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462095.739007,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461211.39759,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460594.990588,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460552.071352,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459511.585081,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453214.53592,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435336.696812,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417659.748245,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405022.492757,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958794
+      },
+      "peer": {
+        "time": 622.8379999990956,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.02033997691248278,
+          0.018916547409824947,
+          0.3143234505949011
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 20,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 33.289961,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311419
+      }
+    },
+    {
+      "elapsed_seconds": 3.007229582999571,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.2699999803335,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2450735441096554,
+          0.05021251746390325,
+          0.3340759440091395
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851698.744851,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838444.351242,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462216.423905,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461332.082488,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460715.675486,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460672.75625,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459632.269979,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453335.220818,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435457.38171,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417780.433143,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405143.177655,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958855
+      },
+      "peer": {
+        "time": 622.9599999990927,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.02091068597349162,
+          0.016817509279168804,
+          0.3174300429246541
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 23,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 4.50363,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311480
+      }
+    },
+    {
+      "elapsed_seconds": 3.1265192499995464,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.3899999803307,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2437080376447602,
+          0.05020437045879692,
+          0.3334022685854634
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851819.009432,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838564.615823,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462336.688486,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461452.347069,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460835.940067,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460793.020831,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459752.53456,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453455.485399,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435577.646291,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1417900.697724,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405263.442236,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958915
+      },
+      "peer": {
+        "time": 623.0779999990899,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.021650924708601443,
+          0.01486670645386246,
+          0.3191735961208499
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 25,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 24.412449,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311539
+      }
+    },
+    {
+      "elapsed_seconds": 3.246913790999315,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.5099999803278,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2427229184694268,
+          0.050094776235145806,
+          0.33281527890101276
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1851938.79474,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838684.401131,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462456.473794,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461572.132377,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460955.725375,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1460912.806139,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459872.319868,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453575.270707,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435697.431599,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418020.483032,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405383.227544,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 958975
+      },
+      "peer": {
+        "time": 623.2039999990869,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.024478998616796782,
+          0.014662250938040454,
+          0.3208728231801049
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 27,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 47.585503,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311602
+      }
+    },
+    {
+      "elapsed_seconds": 3.369361332999688,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.631999980325,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2426775926309734,
+          0.04933180104724846,
+          0.3323302420608177
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852061.269484,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838806.875875,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462578.948538,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461694.607121,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461078.200119,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461035.280883,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1459994.794612,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453697.745451,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435819.906343,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418142.957776,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405505.702288,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959036
+      },
+      "peer": {
+        "time": 623.3239999990841,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.027446492263135357,
+          0.013928819553473882,
+          0.32133694040798166
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 30,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 17.695733,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311662
+      }
+    },
+    {
+      "elapsed_seconds": 3.4931542909998825,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.755999980322,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2434007486543475,
+          0.04786592405231875,
+          0.33206225794301913
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852184.747206,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1838930.353597,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462702.42626,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461818.084843,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461201.677841,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461158.758605,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460118.272334,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453821.223173,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1435943.384065,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418266.435498,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405629.18001,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959098
+      },
+      "peer": {
+        "time": 623.4459999990812,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.027401868707241143,
+          0.012137340800366095,
+          0.3207891318472828
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 32,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 38.513436,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311723
+      }
+    },
+    {
+      "elapsed_seconds": 3.616097374999299,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1416.8779999803191,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.245098754342324,
+          0.046191219989756435,
+          0.3326566928159765
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852307.472424,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839053.078815,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462825.151478,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461940.810061,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461324.403059,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461281.483823,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460240.997552,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1453943.948391,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436066.109283,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418389.160716,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405751.905228,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959159
+      },
+      "peer": {
+        "time": 623.5679999990783,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.02525744044936323,
+          0.00982441769824742,
+          0.3219597127466169
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 35,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 12.99274,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311784
+      }
+    },
+    {
+      "elapsed_seconds": 3.7396459160008817,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.0039999803162,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.246927056354406,
+          0.0456140638633966,
+          0.334220739684109
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852432.42518,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839178.031571,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462950.104234,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462065.762817,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461449.355815,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461406.436579,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460365.950308,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454068.901147,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436191.062039,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418514.113472,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405876.857984,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959222
+      },
+      "peer": {
+        "time": 623.6959999990753,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.025930746810812744,
+          0.008119825241647323,
+          0.3308236983068613
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 37,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 40.294738,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311848
+      }
+    },
+    {
+      "elapsed_seconds": 3.863257375000103,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.1259999803133,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2478671090262594,
+          0.04548295049048698,
+          0.335046154263973
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852555.006529,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839300.61292,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463072.685583,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462188.344166,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461571.937164,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461529.017928,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460488.531657,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454191.482496,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436313.643388,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418636.694821,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1405999.439333,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959283
+      },
+      "peer": {
+        "time": 623.8159999990725,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.031367875861474076,
+          0.007312619516020077,
+          0.33868015284856
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 40,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 10.622988,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311908
+      }
+    },
+    {
+      "elapsed_seconds": 3.9864319160005834,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.2499999803103,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2485075139136013,
+          0.045339760513496065,
+          0.3353127395430966
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852678.756582,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839424.362973,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463196.435636,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462312.094219,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461695.687217,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461652.767981,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460612.28171,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454315.232549,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436437.393441,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418760.444874,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406123.189386,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959345
+      },
+      "peer": {
+        "time": 623.9419999990695,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.03935623398225457,
+          0.007368044596519268,
+          0.3384142736886871
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 42,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 36.210015,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 311971
+      }
+    },
+    {
+      "elapsed_seconds": 4.112557500000548,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.3759999803074,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2489672136814147,
+          0.04530034338727679,
+          0.3353329371672744
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852804.947708,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839550.554099,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463322.626762,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462438.285345,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461821.878343,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461778.959107,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460738.472836,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454441.423675,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436563.584567,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1418886.636,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406249.380512,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959408
+      },
+      "peer": {
+        "time": 624.0659999990665,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.04693860783547418,
+          0.00770691728244408,
+          0.33774916996495347
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 45,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 10.153704,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312033
+      }
+    },
+    {
+      "elapsed_seconds": 4.23300612499952,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.4959999803045,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2492946358425232,
+          0.045401954632164274,
+          0.3351988586796904
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1852926.092195,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839671.698586,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463443.771249,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462559.429832,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461943.02283,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1461900.103594,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460859.617323,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454562.568162,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436684.729054,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419007.780487,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406370.524999,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959468
+      },
+      "peer": {
+        "time": 624.1859999990637,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.05389171659854445,
+          0.007979330097791613,
+          0.3373250339998974
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 47,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 31.746507,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312093
+      }
+    },
+    {
+      "elapsed_seconds": 4.3536411250006495,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.6159999803017,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.249574169966084,
+          0.045676617273368796,
+          0.3349689940899885
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853044.91073,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839790.517121,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463562.589784,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462678.248367,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462061.841365,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462018.922129,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1460978.435858,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454681.386697,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436803.547589,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419126.599022,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406489.343534,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959528
+      },
+      "peer": {
+        "time": 624.3099999990608,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.06100229410900513,
+          0.008166201501657719,
+          0.336721553027115
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 50,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 3.84106,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312155
+      }
+    },
+    {
+      "elapsed_seconds": 4.479618332999962,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.7439999802987,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2497171185776463,
+          0.046039705772865536,
+          0.3347049311044654
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853172.892508,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1839918.498899,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463690.571562,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462806.230145,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462189.823143,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462146.903907,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461106.417636,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454809.368475,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1436931.529367,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419254.5808,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406617.325312,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959592
+      },
+      "peer": {
+        "time": 624.4339999990578,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.06821623640162519,
+          0.008368507394832995,
+          0.3359421270173367
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 52,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 28.032462,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312217
+      }
+    },
+    {
+      "elapsed_seconds": 4.606888708000042,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.8699999802957,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2494870756572016,
+          0.04623049842564739,
+          0.3341116735953076
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853299.158405,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840044.764796,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463816.837459,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462932.496042,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462316.08904,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462273.169804,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461232.683533,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1454935.634372,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437057.795264,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419380.846697,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406743.591209,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959655
+      },
+      "peer": {
+        "time": 624.5599999990549,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.07447616201233946,
+          0.00936463590856021,
+          0.33538116278156244
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 55,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 7.514462,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312280
+      }
+    },
+    {
+      "elapsed_seconds": 4.73432854100065,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1417.9959999802927,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.248046643395074,
+          0.04627086888852747,
+          0.33346248268487677
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853426.142234,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840171.748625,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463943.821288,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463059.479871,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462443.072869,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462400.153633,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461359.667362,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455062.618201,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437184.779093,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419507.830526,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406870.575038,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959718
+      },
+      "peer": {
+        "time": 624.6879999990518,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.0782582042575613,
+          0.010379997785177404,
+          0.3339004999142858
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 57,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 32.667804,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312344
+      }
+    },
+    {
+      "elapsed_seconds": 4.856901208000636,
+      "phase": "peer_motion",
+      "primary": {
+        "time": 1418.1199999802898,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2471362239046215,
+          0.046162028384799096,
+          0.3328643016538597
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853549.821147,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840295.427538,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464067.500201,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463183.158784,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462566.751782,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462523.832546,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461483.346275,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455186.297114,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437308.458006,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419631.509439,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1406994.253951,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959780
+      },
+      "peer": {
+        "time": 624.809999999049,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.07934695424853709,
+          0.01009207637921312,
+          0.3328984250635451
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 60,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 4.662132,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312405
+      }
+    },
+    {
+      "elapsed_seconds": 4.912880249999944,
+      "phase": "before_peer_reset",
+      "primary": {
+        "time": 1418.1759999802885,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.247085655688277,
+          0.0458336675238264,
+          0.3326909718284509
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853604.552752,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840350.159143,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464122.231806,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463237.890389,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462621.483387,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462578.564151,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461538.07788,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455241.028719,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437363.189611,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419686.241044,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407048.985556,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959808
+      },
+      "peer": {
+        "time": 624.8679999990476,
+        "epoch": 1,
+        "mode": "moving",
+        "armed": true,
+        "position": [
+          0.0795491257758518,
+          0.00984627815025505,
+          0.33292644914792463
+        ],
+        "command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": "7b41f47f18f32c2200000000000000000000000000000000",
+          "accepted": 61,
+          "rejected": 2,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 10.559162,
+              "requires_restart": false
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312434
+      }
+    },
+    {
+      "elapsed_seconds": 4.945913666000706,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1418.2079999802877,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.247130099246008,
+          0.0456040173535607,
+          0.3325384761663926
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853638.249832,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840383.856223,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464155.928886,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463271.587469,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462655.180467,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462612.261231,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461571.77496,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455274.725799,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437396.886691,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419719.938124,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407082.682636,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959824
+      },
+      "peer": {
+        "time": 0.022000000000000006,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -3.424401255814457e-05,
+          -7.020952608765199e-06,
+          0.33832369942500895
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 3,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1.888345,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": false,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312454
+      }
+    },
+    {
+      "elapsed_seconds": 5.072915208000268,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1418.3339999802847,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.247901799416877,
+          0.044042424914968036,
+          0.332319206295576
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853764.4309,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840510.037291,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464282.109954,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463397.768537,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462781.361535,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462738.442299,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461697.956028,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455400.906867,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437523.067759,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419846.119192,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407208.863704,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959887
+      },
+      "peer": {
+        "time": 0.1440000000000001,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.0006894164500290689,
+          0.00011782031321450486,
+          0.35262100474241787
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 5,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 23.810322,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": false,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312515
+      }
+    },
+    {
+      "elapsed_seconds": 5.193851624999297,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1418.4559999802818,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2496599626073617,
+          0.0423485523774576,
+          0.3329734127002398
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1853885.069305,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840630.675696,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464402.748359,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463518.406942,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462901.99994,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462859.080704,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461818.594433,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455521.545272,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437643.706164,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1419966.757597,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407329.502109,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 959948
+      },
+      "peer": {
+        "time": 0.2640000000000002,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.0012568782028844515,
+          -0.0012580832317626081,
+          0.3652484345765392
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 7,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 43.379297,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": false,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312575
+      }
+    },
+    {
+      "elapsed_seconds": 5.31973941599972,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1418.5839999802788,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2514439779691826,
+          0.04175842787071699,
+          0.33453652580718485
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854012.368163,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840757.974554,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464530.047217,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463645.7058,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463029.298798,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1462986.379562,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1461945.893291,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455648.84413,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437771.005022,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420094.056455,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407456.800967,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960012
+      },
+      "peer": {
+        "time": 0.3900000000000003,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.0016215658498553547,
+          -0.002640043241199025,
+          0.3595798228848696
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 10,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 20.195381,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": false,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312638
+      }
+    },
+    {
+      "elapsed_seconds": 5.441127750000305,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1418.703999980276,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.25235191510042,
+          0.041593563426319265,
+          0.3352466433011528
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854133.686048,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1840879.292439,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464651.365102,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463767.023685,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463150.616683,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1463107.697447,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462067.211176,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455770.162015,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1437892.322907,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420215.37434,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407578.118852,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960072
+      },
+      "peer": {
+        "time": 0.5080000000000003,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.0015451454592963509,
+          -0.0035857139977134313,
+          0.358150031054475
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 12,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 38.432689,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312697
+      }
+    },
+    {
+      "elapsed_seconds": 5.562434375000521,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1418.8239999802731,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2529847566295806,
+          0.041418664800003224,
+          0.3354729205952581
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854254.559135,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1841000.165526,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464772.238189,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463887.896772,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463271.48977,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1463228.570534,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462188.084263,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1455891.035102,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1438013.195994,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420336.247427,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407698.991939,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960132
+      },
+      "peer": {
+        "time": 0.6320000000000005,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.0012673246204215783,
+          -0.004261056332248986,
+          0.3578661978116453
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 15,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 12.790092,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312759
+      }
+    },
+    {
+      "elapsed_seconds": 5.685444082999311,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1418.9479999802702,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.253449651893449,
+          0.04132867908910657,
+          0.3354791345291236
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854378.778969,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1841124.38536,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464896.458023,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464012.116606,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463395.709604,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1463352.790368,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462312.304097,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1456015.254936,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1438137.415828,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420460.467261,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407823.211773,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960194
+      },
+      "peer": {
+        "time": 0.7540000000000006,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.0009594545601494962,
+          -0.004693924429377036,
+          0.35728475493830336
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 17,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 34.634751,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312820
+      }
+    },
+    {
+      "elapsed_seconds": 5.809239583000817,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1419.0719999802673,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2537869050860813,
+          0.04138243581350888,
+          0.33534367899133133
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854501.431612,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1841247.038003,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1465019.110666,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464134.769249,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463518.362247,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1463475.443011,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462434.95674,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1456137.907579,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1438260.068471,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420583.119904,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1407945.864416,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960256
+      },
+      "peer": {
+        "time": 0.8780000000000007,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.0006558340713242736,
+          -0.005013842542418852,
+          0.35653624898821634
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 20,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 9.089108,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312882
+      }
+    },
+    {
+      "elapsed_seconds": 5.928397916000904,
+      "phase": "after_peer_reset",
+      "primary": {
+        "time": 1419.1919999802644,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2540604120929204,
+          0.04163333787845082,
+          0.33511272318174046
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854620.697511,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1841366.303902,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1465138.376565,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464254.035148,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463637.628146,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1463594.70891,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462554.222639,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1456257.173478,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1438379.33437,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420702.385803,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1408065.130315,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960316
+      },
+      "peer": {
+        "time": 1.0000000000000007,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -0.00036517708017659155,
+          -0.0052170438571890465,
+          0.3558287803357145
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 22,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 29.501498,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 312943
+      }
+    },
+    {
+      "elapsed_seconds": 6.048664583000573,
+      "phase": "control_window_end",
+      "primary": {
+        "time": 1419.3099999802616,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2542089036280328,
+          0.041957350164152044,
+          0.3348613589360419
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854740.107778,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1841485.714169,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1465257.786832,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464373.445415,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463757.038413,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1463714.119177,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462673.632906,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1456376.583745,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1438498.744637,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420821.79607,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1408184.540582,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960375
+      },
+      "peer": {
+        "time": 1.1240000000000008,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          -8.209338279177206e-05,
+          -0.005294897087273939,
+          0.35510197273549854
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 25,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 3.49132,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 313005
+      }
+    }
+  ],
+  "limits": {
+    "velocity_mps": 0.2,
+    "armed_seconds": 3.0,
+    "primary_maximum_drift_m": 0.03,
+    "peer_minimum_displacement_m": 0.2
+  },
+  "limitations": [
+    "Bounded two-VM test, not a sustained throughput benchmark.",
+    "Checks normal local DDS discovery and command ingress; no packet escape probe.",
+    "Primary position drift is measured over the command/reset observation window."
+  ],
+  "peer_publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+  "grant": {
+    "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+    "epoch": 1
+  },
+  "armed_seconds": 3.023340499999904,
+  "reset": {
+    "epoch": 2,
+    "requires_rearm": true
+  },
+  "error": "AssertionError: peer did not move using sustained ROS commands",
+  "publisher_output": "Connecting to simulator go2-peer...\n1789240823.849219 [0]       ros2: selected interface \"lo\" is not multicast-capable: disabling multicast\npublisher: beginning loop\npublishing #20: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.2, y=0.0, z=0.0), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))\n\npublishing #40: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.2, y=0.0, z=0.0), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))\n\npublishing #60: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.2, y=0.0, z=0.0), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))\n\npublishing #80: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.2, y=0.0, z=0.0), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))\n\npublishing #100: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.2, y=0.0, z=0.0), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))\n\npublishing #120: geometry_msgs.msg.Twist(linear=geometry_msgs.msg.Vector3(x=0.2, y=0.0, z=0.0), angular=geometry_msgs.msg.Vector3(x=0.0, y=0.0, z=0.0))\n\n",
+  "publisher_returncode": 0,
+  "cleanup": {
+    "go2-sim": {
+      "disarmed": true,
+      "status": {
+        "time": 1419.3499999802607,
+        "epoch": 8,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2542118585643431,
+          0.04203727194707123,
+          0.33476339220139784
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 1839,
+          "rejected": 50,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1854779.180618,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1841524.787009,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "8f0e5373124477d300000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1465296.859672,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "b16a85282247aa6b00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1464412.518255,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "ef896c0acaff8fca00000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1463796.111253,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "6b76d0a112ff804500000000000000000000000000000000",
+              "kind": "motion_switcher",
+              "age_ms": 1463753.192017,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "4271284da8e4b9f100000000000000000000000000000000",
+              "kind": "sport",
+              "age_ms": 1462712.705746,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "f4033084a4dc971900000000000000000000000000000000",
+              "kind": "lowcmd",
+              "age_ms": 1456415.656585,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "54213c6a1242c04500000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1438537.817477,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "055fa9713c48a35a00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1420860.86891,
+              "requires_restart": true
+            },
+            {
+              "publisher_gid": "90f509c59e0845bc00000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 1408223.613422,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-sim",
+        "physics_steps": 960395
+      }
+    },
+    "go2-peer": {
+      "disarmed": true,
+      "status": {
+        "time": 1.1680000000000008,
+        "epoch": 2,
+        "mode": "standing",
+        "armed": false,
+        "position": [
+          1.2131216618874942e-05,
+          -0.005292062895808399,
+          0.35484575457831946
+        ],
+        "command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "applied_command": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "ros_commands": {
+          "owner": null,
+          "accepted": 61,
+          "rejected": 25,
+          "last_error": null,
+          "sources": [
+            {
+              "publisher_gid": "7b41f47f18f32c2200000000000000000000000000000000",
+              "kind": "twist",
+              "age_ms": 48.145873,
+              "requires_restart": true
+            }
+          ]
+        },
+        "healthy": true,
+        "ready": true,
+        "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+        "vm_name": "go2-peer",
+        "physics_steps": 313027
+      }
+    }
+  },
+  "wall_seconds": 8.137610207999387
+}

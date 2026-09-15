@@ -226,6 +226,49 @@ func TestUIVoiceCorrectionCancelsOldTurnBeforeStartingNewAndDropsLateResult(t *t
 	}
 }
 
+func TestUIVoiceCorrectionRunsBeforeQueuedTextWithoutLosingItsReply(t *testing.T) {
+	started := make(chan string, 3)
+	provider := uiProviderFunc(func(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (Message, error) {
+		prompt := messages[len(messages)-1].Content
+		started <- prompt
+		if strings.Contains(prompt, "first task") {
+			<-ctx.Done()
+			return Message{}, ctx.Err()
+		}
+		return Message{Content: "Task finished."}, nil
+	})
+	m := uiModel(t, provider, &uiExecutor{}, false)
+	session := uiConnectVoice(t, m)
+	uiSendVoice(t, m, session, VoiceEvent{Type: "delegation", DelegationID: "old", Text: "first task"})
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("voice task did not start")
+	}
+	m.composer.SetValue("typed followup")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	uiSendVoice(t, m, session, VoiceEvent{Type: "delegation", DelegationID: "new", Text: "corrected task"})
+	uiDrainTurn(t, m)
+	for _, want := range []string{"corrected task", "typed followup"} {
+		select {
+		case got := <-started:
+			if !strings.Contains(got, want) {
+				t.Fatalf("started %q, want %q", got, want)
+			}
+		default:
+			t.Fatalf("request %q never started", want)
+		}
+	}
+	reply := uiNextVoiceReply(t, session)
+	if reply.id != "new" || reply.text != "Task finished." {
+		t.Fatalf("queued text lost or replaced the completed voice result: %+v", reply)
+	}
+	uiVoiceStopAndWait(t, m, session)
+	if len(session.replies) != 0 || len(m.queuedPrompts) != 0 {
+		t.Fatal("queued typed messages should provide voice context without speaking another reply")
+	}
+}
+
 func TestUIVoiceTypedMessagesRemainUsableAndContextOnly(t *testing.T) {
 	provider := uiProviderFunc(func(context.Context, []Message, []Tool, func(string)) (Message, error) {
 		return Message{Content: "Typed answer."}, nil
