@@ -24,8 +24,11 @@ See the [shared interface and clock requirements](../README.md). In particular,
 Woof publishes body-frame point clouds and native odometry, not `/scan` or `/odom`.
 The application requires synchronized capture clocks or an independently measured
 `GO2_SENSOR_CLOCK_OFFSET_SECONDS`. Waiting logs identify the readiness blocker
-and the most recent sensor rejection. They do not treat packet receipt as proof
-that a capture is fresh.
+and the underlying sensor rejection. Repeated errors are suppressed; changing
+waiting conditions print at most once every five seconds. Old or future captures
+include their age relative to the application clock. `/patrol/status` includes
+`sensor_errors` and `capture_age_seconds` for the latest checked captures.
+Packet receipt alone does not prove that a capture is fresh.
 
 ## Stop, inspect or restart a route
 
