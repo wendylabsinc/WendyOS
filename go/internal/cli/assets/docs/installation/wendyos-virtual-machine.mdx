@@ -63,8 +63,14 @@ The tab manages simulators without dropping to `wendy vm`:
 | `c` | Create one at the latest release, naming it `sim`, `sim-2`, … |
 | `s` | Power off the highlighted VM |
 | `r` | Delete it, once it is stopped |
+| `d` | Save the highlighted simulator as the default device |
+| `x` | Clear the saved default device |
 
-`wendy discover` shows the same tab with the same three keys; there `enter`
+The default uses the VM's name, so it still works when its forwarded port changes.
+Saving a default does not start the VM. Your next device command starts it when
+needed. The `✦` marker identifies the saved default when you reopen the picker.
+
+`wendy discover` shows the same tab with the same keys; there `enter`
 copies the VM's address instead of selecting it. For a specific name, version
 or disk size, use `wendy vm create`.
 

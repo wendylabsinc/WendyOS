@@ -7,9 +7,22 @@
       "distro": "humble",
       "rmw": "rmw_cyclonedds_cpp",
       "domainId": 0,
-      "discoveryScope": "app"
+      "discoveryScope": "host"
     }
   },
-  "entitlements": [{"type": "network", "mode": "host"}, {"type": "http", "port": 8904}],
-  "readiness": {"tcpSocket": {"port": 8904}}
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    },
+    {
+      "type": "http",
+      "port": 8904
+    }
+  ],
+  "readiness": {
+    "tcpSocket": {
+      "port": 8904
+    }
+  }
 }

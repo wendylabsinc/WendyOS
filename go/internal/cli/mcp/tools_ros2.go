@@ -41,7 +41,7 @@ func (s *mcpServer) registerROS2Tools(srv *server.MCPServer) {
 		}
 		opts := []mcpgo.ToolOption{
 			mcpgo.WithDescription(tool.description),
-			mcpgo.WithString("scope", mcpgo.Enum("app", "host"), mcpgo.Description("Inspection network: app (default) preserves app isolation; host explicitly observes the device/subnet DDS graph without a running ROS 2 app. Host requires domain_id and uses stock ROS Humble/FastRTPS; first use may download its inspector image.")),
+			mcpgo.WithString("scope", mcpgo.Enum("app", "host"), mcpgo.Description("Inspection network: app (default) preserves app isolation; host explicitly observes the device/subnet DDS graph without a running ROS 2 app. Host requires domain_id and uses ROS Humble/FastRTPS with pinned unitree_go and unitree_api types; first use may download its inspector image.")),
 			mcpgo.WithNumber("domain_id", mcpgo.Description("Integer ROS_DOMAIN_ID (0..232), required for host scope; app scope otherwise uses the app configuration")),
 			mcpgo.WithNumber("duration_seconds", mcpgo.Description(fmt.Sprintf("Maximum total RPC duration including discovery, integer 1..60 (default %d)", defaultDuration))),
 			mcpgo.WithNumber("max_bytes", mcpgo.Description("Maximum serialized result bytes, integer 2048..100000 (default 32000); oversized samples are omitted whole")),

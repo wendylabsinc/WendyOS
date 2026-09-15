@@ -12,7 +12,7 @@ from sensor_msgs.msg import CameraInfo, Image, LaserScan, PointCloud2, PointFiel
 
 from .camera import CAMERA_FRAME, CAMERA_HEIGHT, CAMERA_WIDTH, intrinsics
 from .lidar import Lidar
-from .sensors import PhysicsSampler, SCAN_ANGLES, SCAN_COUNT, SCAN_MAX, SCAN_MIN
+from .sensors import LIDAR_POSITION, PhysicsSampler, SCAN_ANGLES, SCAN_COUNT, SCAN_MAX, SCAN_MIN
 
 
 def timestamp(wall_ns):
@@ -31,6 +31,7 @@ class SlowObservations(Node):
         qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE)
         self.scan_pub = self.create_publisher(LaserScan, "/scan", qos)
         self.cloud_pub = self.create_publisher(PointCloud2, "/utlidar/cloud", qos)
+        self.body_cloud_pub = self.create_publisher(PointCloud2, "/utlidar/cloud_base", qos)
         self.image_pub = self.create_publisher(Image, "/camera/color/image_raw", qos)
         self.info_pub = self.create_publisher(CameraInfo, "/camera/color/camera_info", qos)
         self.scan = LaserScan()
@@ -40,11 +41,16 @@ class SlowObservations(Node):
         self.scan.scan_time, self.scan.time_increment = 0.1, 0.0
         self.scan.range_min, self.scan.range_max = SCAN_MIN, SCAN_MAX
         self.cloud = PointCloud2()
-        self.cloud.header.frame_id = "lidar_link"
+        self.cloud.header.frame_id = "utlidar_lidar"
         self.cloud.height, self.cloud.point_step = 1, 12
         self.cloud.is_bigendian, self.cloud.is_dense = False, True
         self.cloud.fields = [PointField(name=name, offset=index*4, datatype=PointField.FLOAT32, count=1)
                              for index, name in enumerate(("x", "y", "z"))]
+        self.body_cloud = PointCloud2()
+        self.body_cloud.header.frame_id = "base_link"
+        self.body_cloud.height, self.body_cloud.point_step = 1, 12
+        self.body_cloud.is_bigendian, self.body_cloud.is_dense = False, True
+        self.body_cloud.fields = self.cloud.fields
         self.image = Image()
         self.image.header.frame_id = CAMERA_FRAME
         self.image.height, self.image.width = CAMERA_HEIGHT, CAMERA_WIDTH
@@ -107,6 +113,11 @@ class SlowObservations(Node):
         # in Python. A bytes assignment would validate millions of ints/s and
         # hold the GIL long enough to delay physics and fast native state.
         cloud.data = array("B", result["xyz"].astype("<f4", copy=False).tobytes())
+        body_cloud = self.body_cloud
+        body_cloud.header.stamp = cloud.header.stamp
+        body_cloud.width, body_cloud.row_step = cloud.width, cloud.row_step
+        # The virtual lidar has identity rotation relative to the body.
+        body_cloud.data = array("B", (result["xyz"] + LIDAR_POSITION).astype("<f4").tobytes())
         with self.runtime.observation_lock:
             with self.runtime.lock:
                 if (not self.current(result["epoch"], generation)
@@ -114,6 +125,7 @@ class SlowObservations(Node):
                     return
             self.scan_pub.publish(scan)
             self.cloud_pub.publish(cloud)
+            self.body_cloud_pub.publish(body_cloud)
             if browser_lidar:
                 browser_lidar.publish(browser_record)
             self.samples["scan"] += 1

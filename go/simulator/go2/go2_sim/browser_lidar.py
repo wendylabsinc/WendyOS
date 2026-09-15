@@ -92,7 +92,7 @@ class BrowserLidar:
             sampler.epoch, sampler.mode = sim.epoch, sim.mode
             sampler.wall_timestamp_ns = time.time_ns()
         # Only the integration copy above touches live physics. Forward dynamics
-        # and all five rings use this worker's private data and ray-only model.
+        # and all lidar rings use this worker's private data and ray-only model.
         mujoco.mj_setState(sampler.model, sampler.data, sampler.integration_state, sampler.signature)
         mujoco.mj_forward(sampler.model, sampler.data)
         if lidar_identity != self.lidar_identity:

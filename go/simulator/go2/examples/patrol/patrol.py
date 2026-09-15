@@ -49,7 +49,8 @@ class PatrolController:
     WAYPOINT_TIMEOUT = 45.0
     ROUTE_TIMEOUT = 300.0
 
-    def __init__(self, waypoints=DEFAULT_WAYPOINTS, laps=1):
+    def __init__(self, waypoints=DEFAULT_WAYPOINTS, laps=1, *, allow_scan_gaps=False):
+        self.allow_scan_gaps = allow_scan_gaps
         self.waypoints = validate_route(waypoints, laps)
         self.laps = laps
         self.active = False
@@ -57,6 +58,7 @@ class PatrolController:
         self.command = (0.0, 0.0)
         self.pose = self.pose_at = self.scan_at = None
         self.front_clearance = self.body_clearance = None
+        self.scan_coverage = None
         self.targets, self.index = (), 0
         self.started_at = self.waypoint_at = self.last_tick = None
         self.distance = None
@@ -80,6 +82,7 @@ class PatrolController:
         return True
 
     def observe_scan(self, ranges, angle_min, increment, minimum, maximum, captured):
+        self.scan_coverage = None
         if (not all(finite(value) for value in (angle_min, increment, minimum, maximum, captured))
                 or not 0 < increment <= math.radians(5.01)
                 or not 0 <= minimum < maximum
@@ -94,15 +97,25 @@ class PatrolController:
                 or not 2 * math.pi - increment - 1e-4
                 <= (len(ranges) - 1) * increment <= 2 * math.pi + 1e-4):
             return self.reject_scan("invalid_scan_geometry")
-        # A patrol may turn either way. Require the whole horizontal circle to
-        # be observed; infinity/NaN are unknown, not invented clear space.
-        if not all(finite(value) and minimum <= value <= maximum for value in ranges):
+        observed = [finite(value) and minimum <= value <= maximum for value in ranges]
+        front_indices = [index for index in range(len(ranges))
+                         if abs(angle(angle_min + index * increment)) <= math.radians(30) + 1e-8]
+        self.scan_coverage = {"observed": sum(observed), "total": len(ranges),
+                              "front_observed": sum(observed[index] for index in front_indices),
+                              "front_total": len(front_indices)}
+        # Only positive infinity represents a sector with no projected return.
+        # Invalid measurements must not disappear when allowing gaps.
+        if any(not valid and value != math.inf for valid, value in zip(observed, ranges)):
             return self.reject_scan("unknown_scan")
-        front = [value for index, value in enumerate(ranges)
-                 if abs(angle(angle_min + index * increment)) <= math.radians(30) + 1e-8]
-        if not front:
+        if not front_indices:
             return self.reject_scan("invalid_scan_geometry")
-        self.front_clearance, self.body_clearance = float(min(front)), float(min(ranges))
+        if not all(observed) and not self.allow_scan_gaps:
+            return self.reject_scan("unknown_scan")
+        front = [ranges[index] for index in front_indices if observed[index]]
+        if not front:
+            return self.reject_scan("unknown_scan")
+        measured = [value for value, valid in zip(ranges, observed) if valid]
+        self.front_clearance, self.body_clearance = float(min(front)), float(min(measured))
         self.scan_at = float(captured)
         if self.active and self.blocked():
             self.stop("obstacle")
@@ -204,4 +217,6 @@ class PatrolController:
                 "target": self.targets[self.index] if self.index < len(self.targets) else None,
                 "distance": self.distance, "linear": self.command[0], "angular": self.command[1],
                 "front_clearance": self.front_clearance, "body_clearance": self.body_clearance,
+                "scan_coverage": self.scan_coverage,
+                "allow_scan_gaps": self.allow_scan_gaps,
                 "scan_age": age(self.scan_at), "odom_age": age(self.pose_at)}

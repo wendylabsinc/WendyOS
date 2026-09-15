@@ -114,6 +114,56 @@ def test_unknown_rear_ray_disarms_instead_of_inventing_clear_space(bad):
     assert controller.tick(1.05) == (0, 0)
 
 
+def test_gap_mode_accepts_sparse_returns_and_reports_actual_coverage():
+    controller = PatrolController(allow_scan_gaps=True)
+    ranges = [math.inf] * 360
+    ranges[180] = 4.0
+    assert observe(controller, 1, ranges=ranges)
+    assert controller.start(1)
+    assert controller.tick(1) == (controller.SPEED, 0)
+    status = controller.status(1)
+    assert status["scan_coverage"] == {"observed": 1, "total": 360, "front_observed": 1, "front_total": 61}
+    assert status["front_clearance"] == status["body_clearance"] == 4.0
+    json.dumps(status, allow_nan=False)
+    assert controller.tick(1 + OBSERVATION_TIMEOUT + 0.01) == (0, 0)
+
+
+@pytest.mark.parametrize("index,distance", [(180, 0.85), (90, 0.55), (0, 0.4)])
+def test_gap_mode_still_stops_for_measured_front_side_and_rear_obstacles(index, distance):
+    controller = PatrolController(allow_scan_gaps=True)
+    ranges = [math.inf] * 360
+    ranges[180] = 4.0
+    assert observe(controller, 1, ranges=ranges)
+    assert controller.start(1)
+    ranges[index] = distance
+    assert observe(controller, 1.05, ranges=ranges)
+    assert controller.reason == "obstacle"
+    assert not controller.active
+    assert controller.command == (0, 0)
+
+
+@pytest.mark.parametrize("bad", [math.nan, -math.inf, -1.0, 13.0, "clear", True])
+def test_gap_mode_does_not_ignore_invalid_measurements(bad):
+    controller = PatrolController(allow_scan_gaps=True)
+    observe(controller, 1)
+    assert controller.start(1)
+    ranges = [math.inf] * 360
+    ranges[180] = 4.0
+    ranges[0] = bad
+    assert not observe(controller, 1.05, ranges=ranges)
+    assert controller.tick(1.05) == (0, 0)
+
+
+@pytest.mark.parametrize("rear", [math.inf, 4.0])
+def test_gap_mode_rejects_empty_scans_and_scans_without_front_returns(rear):
+    controller = PatrolController(allow_scan_gaps=True)
+    ranges = [math.inf] * 360
+    ranges[0] = rear
+    assert not observe(controller, 1, ranges=ranges)
+    assert not controller.start(1)
+    assert controller.tick(1) == (0, 0)
+
+
 def test_incomplete_scan_and_invalid_pose_do_not_preserve_old_admission():
     controller = PatrolController()
     observe(controller, 1)

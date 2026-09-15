@@ -1,13 +1,18 @@
 # Go2 browser teleoperation
 
-Drive the virtual Go2 from a small browser control panel. Hold **W / S** to move
+This app uses the [shared native Go2 interfaces](../README.md) on hardware and
+in the simulator. The source manifest uses host discovery; managed VM deployment
+normalizes it to guest loopback. Use a CLI built from this checkout.
+
+
+Drive a Go2 robot or its simulator from a small browser control panel. Hold **W / S** to move
 forward or backward, **A / D** to strafe left or right, and **Q / E** to turn.
 The six buttons also support mouse and touch. Release a direction to stop that
 motion; **Space**, **Escape**, or **Stop / disable** ends the control session.
 
 The Python application uses ROS 2 and the standard-library HTTP server, with no
-pip or frontend dependencies. It publishes `geometry_msgs/msg/Twist` on
-`/cmd_vel` at 20 Hz, starting with zero velocity while the simulator gives its
+pip or frontend dependencies. It publishes `unitree_api/msg/Request` on
+`/api/sport/request` at 20 Hz, starting with zero velocity while the simulator gives its
 new publisher control. This is manual driving; it has no obstacle avoidance.
 
 ## Deploy to a Go2 VM
@@ -31,8 +36,8 @@ wendy run --device vm:<simulator-name> --build-type docker --no-restart
 The managed Go2 simulator automatically gives the new Teleop publisher control,
 replacing the previous driving app or browser controller. Its initial command
 is zero; it waits for you to enable controls and hold a direction before moving.
-The manifest selects the VM's ROS 2 Humble, CycloneDDS, domain 0 and loopback
-ROS bus, matching the other Go2 examples.
+The manifest selects ROS 2 Humble, CycloneDDS and domain 0. Managed VM
+deployment normalizes its hardware discovery setting to the loopback bus.
 
 After a simulator pause, world reset or **Release app control**, resume the
 world and then restart this application. Its new publisher receives control
@@ -97,3 +102,9 @@ node teleop.browser.mjs http://127.0.0.1:8903
 Set `PLAYWRIGHT_MODULE` to an existing Playwright module path if needed. This
 checks keyboard and pointer driving, release, focus loss, reload, disconnects,
 and mobile layout, and writes desktop/mobile screenshots to `/tmp`.
+
+## Sensor compatibility
+
+Teleop uses browser controls and does not check sensor capture clocks or lidar
+coverage. The temporary clock and scan-gap options in Patrol, Roam and Sensors
+do not apply here. Its 250 ms browser heartbeat timeout remains active.

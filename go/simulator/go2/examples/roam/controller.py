@@ -22,9 +22,8 @@ def angle(value):
 class RoamController:
     SCAN_TIMEOUT = 0.35
     POSE_TIMEOUT = 0.5
-    # The pinned walking policy sustains motion at .35; .25 can settle into a
-    # standing gait and trigger false stuck recoveries in an unobstructed room.
-    FORWARD_SPEED = 0.35
+    # The Go2 ignores forward speed requests below 0.5 m/s.
+    FORWARD_SPEED = 0.55
     TURN_SPEED = 0.4
     STOP_DISTANCE = 0.85
     CLEAR_DISTANCE = 1.15
@@ -34,7 +33,8 @@ class RoamController:
     PROGRESS_WINDOW = 3.0
     MIN_PROGRESS = 0.12
 
-    def __init__(self):
+    def __init__(self, *, allow_scan_gaps=False):
+        self.allow_scan_gaps = allow_scan_gaps
         self.active = False
         self.state = "stopped"
         self.reason = "not_started"
@@ -48,6 +48,8 @@ class RoamController:
         self._preferred_direction = 1
         self._turn_started = None
         self._turn_yaw = None
+        self._turn_paused = 0.0
+        self._coverage_gap_at = None
         self._progress_at = None
         self._progress_pose = None
         self._recoveries = 0
@@ -74,6 +76,11 @@ class RoamController:
             if self.active:
                 self.stop("invalid_scan")
             return False
+        if self.allow_scan_gaps and any(
+                not (finite(value) and range_min <= value <= range_max) and value != math.inf
+                for value in readings):
+            self.stop("invalid_scan")
+            return False
         rays = [(angle(angle_min + index * angle_increment),
                  float(value) if finite(value) and range_min <= value <= range_max else None)
                 for index, value in enumerate(readings)]
@@ -81,12 +88,15 @@ class RoamController:
         def sector(low, high):
             values = [distance for direction, distance in rays
                       if math.radians(low) - 1e-8 <= direction <= math.radians(high) + 1e-8]
-            complete = bool(values) and all(value is not None for value in values)
+            measured = [value for value in values if value is not None]
+            complete = bool(values) and len(measured) == len(values)
+            usable = bool(measured) and (complete or self.allow_scan_gaps)
             return {
-                "complete": complete,
-                "clearance": min(values) if complete else None,
-                "observed_clearance": min((value for value in values if value is not None), default=None),
-                "score": sum(min(value, 3.0) for value in values) / len(values) if complete else 0.0,
+                "complete": complete, "usable": usable,
+                "observed": len(measured), "total": len(values),
+                "clearance": min(measured) if usable else None,
+                "observed_clearance": min(measured, default=None),
+                "score": sum(min(value, 3.0) for value in measured) / len(measured) if usable else 0.0,
             }
 
         self._scan = {"front": sector(-25, 25), "left": sector(30, 100),
@@ -119,7 +129,7 @@ class RoamController:
         if self._scan is None:
             self.stop("invalid_scan")
             return False
-        if not self._scan["front"]["complete"]:
+        if not self._scan["front"]["usable"]:
             self.stop("unknown_forward_path")
             return False
         self.active = True
@@ -128,6 +138,7 @@ class RoamController:
         self._command = (0.0, 0.0)
         self._recoveries = 0
         self._turn_direction = 0
+        self._coverage_gap_at = None
         self._progress_at = float(now)
         self._progress_pose = self._pose[:2] if self._pose_fresh(now) else None
         return True
@@ -138,6 +149,8 @@ class RoamController:
         self._command = (0.0, 0.0)
         self._turn_direction = 0
         self._turn_started = self._turn_yaw = None
+        self._turn_paused = 0.0
+        self._coverage_gap_at = None
         self._progress_at = self._progress_pose = None
 
     def _begin_turn(self, now, reason):
@@ -145,8 +158,8 @@ class RoamController:
         allowed = {}
         for direction, side, sweep in ((1, left, self._scan["left_sweep"]),
                                        (-1, right, self._scan["right_sweep"])):
-            if (side["complete"] and side["clearance"] >= self.TURN_CLEARANCE
-                    and sweep["complete"] and sweep["clearance"] >= self.TURN_CLEARANCE):
+            if (side["usable"] and side["clearance"] >= self.TURN_CLEARANCE
+                    and sweep["usable"] and sweep["clearance"] >= self.TURN_CLEARANCE):
                 allowed[direction] = side["score"]
         if not allowed:
             self.stop("no_clear_turn")
@@ -160,6 +173,7 @@ class RoamController:
         self._turn_direction = direction
         self._preferred_direction = direction
         self._turn_started = float(now)
+        self._turn_paused = 0.0
         self._turn_yaw = self._pose[2] if self._pose_fresh(now) else None
         self.state, self.reason = "turning", reason
         self._progress_at = self._progress_pose = None
@@ -177,9 +191,27 @@ class RoamController:
         if self._scan is None:
             self.stop("invalid_scan")
             return self._command
-        if not self._scan["front"]["complete"]:
+        # Native lidar clouds can briefly omit the entire forward sector.
+        # Wait at zero velocity in gap mode; a prolonged loss still disarms.
+        # Check the deadline before accepting a recovered scan so a delayed
+        # tick cannot silently resume after the gap has expired.
+        if (self._coverage_gap_at is not None
+                and now - self._coverage_gap_at >= self.SCAN_TIMEOUT):
             self.stop("unknown_forward_path")
             return self._command
+        if not self._scan["front"]["usable"]:
+            if self.allow_scan_gaps:
+                if self._coverage_gap_at is None:
+                    self._coverage_gap_at = float(now)
+                self._command = (0.0, 0.0)
+            else:
+                self.stop("unknown_forward_path")
+            return self._command
+        if self._coverage_gap_at is not None:
+            if self.state == "turning":
+                self._turn_paused += now - self._coverage_gap_at
+            self._coverage_gap_at = None
+            self._progress_at = self._progress_pose = None
         front = self._scan["front"]["clearance"]
         if self.state == "cruising":
             if front <= self.STOP_DISTANCE:
@@ -201,7 +233,7 @@ class RoamController:
                         self._progress_at, self._progress_pose = float(now), self._pose[:2]
         if self.state == "turning":
             sweep = self._scan["left_sweep" if self._turn_direction > 0 else "right_sweep"]
-            # The initial turn sector was fully observed before committing.
+            # The initial turn sector met the configured coverage requirement.
             # Rotation can bring distant, out-of-range rear rays into that
             # sector; they never justify forward motion or a new turn choice.
             # Keep the forward corridor known and stop for any close return.
@@ -209,7 +241,7 @@ class RoamController:
                 self.stop("turn_path_blocked")
                 return self._command
             elapsed = now - self._turn_started
-            progress = elapsed * self.TURN_SPEED
+            progress = max(0.0, elapsed - self._turn_paused) * self.TURN_SPEED
             if self._turn_yaw is not None and self._pose_fresh(now):
                 progress = self._turn_direction * angle(self._pose[2] - self._turn_yaw)
             if progress >= self.TURN_ANGLE and front >= self.CLEAR_DISTANCE:
@@ -235,7 +267,12 @@ class RoamController:
             return self._scan[side]["clearance"] if self._scan else None
 
         return {
-            "active": self.active, "state": self.state, "reason": self.reason,
+            "active": self.active,
+            "state": "waiting_scan" if self._coverage_gap_at is not None else self.state,
+            "reason": "waiting_for_front_returns" if self._coverage_gap_at is not None else self.reason,
+            "allow_scan_gaps": self.allow_scan_gaps,
+            "scan_coverage": {name: {"observed": sector["observed"], "total": sector["total"]}
+                              for name, sector in self._scan.items()} if self._scan else None,
             "scan_age": age(self._scan_at), "pose_age": age(self._pose_at),
             "front_clearance": clearance("front"), "left_clearance": clearance("left"),
             "right_clearance": clearance("right"),

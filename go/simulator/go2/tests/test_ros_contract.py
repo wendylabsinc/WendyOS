@@ -282,11 +282,34 @@ class ObservationLifecycleTests(unittest.TestCase):
         self.slow_node.publish_camera()
         self.assertEqual(self.node.samples["camera"], 1)
 
+    def test_native_cloud_and_odometry_share_captures_with_standard_outputs(self):
+        import numpy as np
+        from go2_sim.sensors import LIDAR_POSITION
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            self.node.sample()
+            self.slow_node.sample()
+            if self.slow_node.cloud.width:
+                break
+            time.sleep(0.01)
+        raw, body = self.slow_node.cloud, self.slow_node.body_cloud
+        self.assertGreater(raw.width, 0)
+        self.assertEqual(raw.header.frame_id, "utlidar_lidar")
+        self.assertEqual(body.header.frame_id, "base_link")
+        self.assertEqual(raw.header.stamp, body.header.stamp)
+        self.assertEqual(raw.width, body.width)
+        xyz = np.frombuffer(bytes(raw.data), dtype="<f4").reshape(-1,3)
+        base = np.frombuffer(bytes(body.data), dtype="<f4").reshape(-1,3)
+        np.testing.assert_allclose(base, xyz + LIDAR_POSITION, atol=1e-6)
+        self.assertEqual(self.node.robot_odom_pub.topic_name, "/utlidar/robot_odom")
+        self.assertEqual(self.node.odom.header.frame_id, "odom")
+        self.assertEqual(self.node.odom.child_frame_id, "base_link")
+
     def test_runtime_lidar_fault_stops_real_ros_samples_while_physics_and_imu_continue(self):
         from sensor_msgs.msg import LaserScan, PointCloud2
         scans, clouds = [], []
         self.slow_node.create_subscription(LaserScan, "/scan", scans.append, self.node.qos)
-        self.slow_node.create_subscription(PointCloud2, "/utlidar/cloud", clouds.append, self.node.qos)
+        self.slow_node.create_subscription(PointCloud2, "/utlidar/cloud_base", clouds.append, self.node.qos)
 
         def pump(seconds):
             deadline = time.monotonic() + seconds
@@ -399,3 +422,29 @@ class ObservationLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(rclpy is None, "Humble rclpy is available in the ROS runtime image")
+class NativeStartupTests(unittest.TestCase):
+    def test_only_well_formed_bounded_move_can_acquire_control(self):
+        from rclpy.serialization import serialize_message
+        from unitree_api.msg import Request
+        from go2_sim.native_commands import NativeCommands
+        handler = object.__new__(NativeCommands)
+        def accepts(api=1008, parameter='{"x":0,"y":0,"z":0}', lease=0, priority=0):
+            request=Request()
+            request.header.identity.api_id=api
+            request.header.lease.id=lease
+            request.header.policy.priority=priority
+            request.parameter=parameter
+            return handler.can_auto_grant({'payload_hex':serialize_message(request).hex()})
+        self.assertTrue(accepts())
+        self.assertTrue(accepts(parameter='{"x":0.1,"y":0,"z":0}'))
+        for api in (1,1001,1003,1004,1005):
+            self.assertFalse(accepts(api=api))
+        for parameter in ('{}','{"x":true,"y":0,"z":0}','{"x":1,"y":0,"z":0}',
+                          '{"x":NaN,"y":0,"z":0}','not json'):
+            self.assertFalse(accepts(parameter=parameter))
+        self.assertFalse(accepts(lease=1))
+        self.assertFalse(accepts(priority=1))
+        self.assertFalse(handler.can_auto_grant({'payload_hex':'garbage'}))

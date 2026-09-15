@@ -209,7 +209,7 @@ func TestRobotROSRejectsExplicitConflictsBeforeBuild(t *testing.T) {
 		"domain":     func(c *appconfig.AppConfig) { n := 42; c.Frameworks.ROS2.DomainID = &n },
 		"distro":     func(c *appconfig.AppConfig) { c.Frameworks.ROS2.Distro = "jazzy" },
 		"middleware": func(c *appconfig.AppConfig) { c.Frameworks.ROS2.RMW = "fastdds" },
-		"discovery":  func(c *appconfig.AppConfig) { c.Frameworks.ROS2.DiscoveryScope = "host" },
+		"discovery":  func(c *appconfig.AppConfig) { c.Frameworks.ROS2.DiscoveryScope = "invalid" },
 		"network": func(c *appconfig.AppConfig) {
 			c.Entitlements = []appconfig.Entitlement{{Type: appconfig.EntitlementNetwork, Mode: "bridge"}}
 		},
@@ -958,5 +958,20 @@ func TestRobotAgentMaintenanceBypassIsLimitedToExplicitAgentUpdateCommands(t *te
 	}
 	if calls != 2 {
 		t.Fatalf("maintenance commands bypassed normal VM connection selection: %d", calls)
+	}
+}
+
+func TestRobotROSNormalizesHardwareDiscoveryWithoutChangingSource(t *testing.T) {
+	cfg := &appconfig.AppConfig{AppID: "example.go2", Frameworks: &appconfig.FrameworksConfig{ROS2: &appconfig.ROS2Config{DiscoveryScope: "host"}},
+		Services: map[string]*appconfig.ServiceConfig{"driver": {Context: "driver", Frameworks: &appconfig.FrameworksConfig{ROS2: &appconfig.ROS2Config{DiscoveryScope: "host"}}}}}
+	got, err := normalizeRobotROSConfig(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetROS2Config().ResolvedDiscoveryScope() != "app" || got.ResolveROS2ConfigForService("driver").ResolvedDiscoveryScope() != "app" {
+		t.Fatal("hardware manifest escaped the guest loopback bus")
+	}
+	if cfg.GetROS2Config().ResolvedDiscoveryScope() != "host" || cfg.ResolveROS2ConfigForService("driver").ResolvedDiscoveryScope() != "host" {
+		t.Fatal("source manifest was changed")
 	}
 }

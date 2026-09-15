@@ -22,10 +22,13 @@ const (
 	ros2HostSidecarName = "wendy-ros2-host-inspector"
 	// A separate label keeps host inspection out of app discovery, default
 	// Exec selection, anchor verification, and app-sidecar reconciliation.
-	labelKeyROS2HostSidecar = "sh.wendy/ros2.host-inspector"
-	ros2HostProfilePath     = "/var/wendy/ros2-host-inspection/fastdds.xml"
-	ros2HostProfileMount    = "/etc/wendy-fastdds.xml"
-	ros2HostImage           = "docker.io/library/ros:humble-ros-base"
+	labelKeyROS2HostSidecar      = "sh.wendy/ros2.host-inspector"
+	ros2HostProfilePath          = "/var/wendy/ros2-host-inspection/fastdds.xml"
+	ros2HostProfileMount         = "/etc/wendy-fastdds.xml"
+	ros2HostImage                = "ghcr.io/wendylabsinc/wendy-ros2-inspector:humble-unitree-v1"
+	labelKeyROS2InspectorVersion = "sh.wendy/ros2.inspector.version"
+	ros2InspectorVersion         = "humble-unitree-v1"
+	ros2InspectorSetup           = "/opt/wendy-ros2/install/setup.sh"
 )
 
 // Explicit UDP transports avoid FastRTPS assuming it can share sample buffers
@@ -54,6 +57,7 @@ func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label st
 	defer c.mu.Unlock()
 	ctx = c.withNamespace(ctx)
 	sidecar := services.ROS2Sidecar{Name: name, Distro: ros2inspection.HostDistro, RMW: ros2inspection.FastRTPSRMW, DomainID: domain}
+	var outdated containerd.Container
 	if existing, err := c.client.LoadContainer(ctx, name); err == nil {
 		labels, lerr := existing.Labels(ctx)
 		if lerr != nil {
@@ -62,7 +66,7 @@ func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label st
 		if labels[label] != ros2inspection.HostDistro {
 			return services.ROS2Sidecar{}, fmt.Errorf("container name %q is already in use by a different workload", name)
 		}
-		if task, terr := existing.Task(ctx, nil); terr == nil {
+		if task, terr := existing.Task(ctx, nil); terr == nil && labels[labelKeyROS2InspectorVersion] == ros2InspectorVersion {
 			if st, serr := task.Status(ctx); serr == nil && st.Status == containerd.Running {
 				return sidecar, nil
 			}
@@ -70,9 +74,7 @@ func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label st
 		if c.sidecarHasActiveExecsLocked(name) {
 			return services.ROS2Sidecar{}, fmt.Errorf("host inspector is restarting with an inspection in flight; retry")
 		}
-		if err := c.deleteROS2Sidecar(ctx, existing); err != nil {
-			return services.ROS2Sidecar{}, err
-		}
+		outdated = existing
 	} else if !errdefs.IsNotFound(err) {
 		return services.ROS2Sidecar{}, fmt.Errorf("loading host inspector: %w", err)
 	}
@@ -104,9 +106,15 @@ func (c *Client) ensureStandaloneROS2Sidecar(ctx context.Context, name, label st
 	if err != nil {
 		return services.ROS2Sidecar{}, err
 	}
+	// Keep the previous inspector intact if fetching the new image fails.
+	if outdated != nil {
+		if err := c.deleteROS2Sidecar(ctx, outdated); err != nil {
+			return services.ROS2Sidecar{}, err
+		}
+	}
 	ctr, err := c.client.NewContainer(ctx, name,
 		containerd.WithImage(image), containerd.WithNewSnapshot(name, image),
-		containerd.WithContainerLabels(map[string]string{label: ros2inspection.HostDistro, labelKeyROS2RMW: ros2inspection.FastRTPSRMW}),
+		containerd.WithContainerLabels(map[string]string{label: ros2inspection.HostDistro, labelKeyROS2RMW: ros2inspection.FastRTPSRMW, labelKeyROS2InspectorVersion: ros2InspectorVersion}),
 		containerd.WithNewSpec(oci.WithSpecFromBytes(specJSON)),
 	)
 	if err != nil {

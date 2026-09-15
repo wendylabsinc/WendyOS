@@ -34,7 +34,7 @@ def odom(x=0, source=10_000_000_000):
 
 
 def scan():
-    return NS(header=header("lidar_link"), ranges=[1, math.inf, math.nan, -1, 13, 2],
+    return NS(header=header("base_link"), ranges=[1, math.inf, math.nan, -1, 13, 2],
               angle_min=-math.pi, angle_increment=math.pi / 3, range_min=0.1, range_max=12)
 
 
@@ -93,6 +93,29 @@ def test_repeated_and_reordered_samples_do_not_refresh_rate_or_freshness():
     assert store.snapshot(22.1)["topics"]["camera"]["rate_hz"] == 0
 
 
+@pytest.mark.parametrize("source", [1_000_000_000, 4_310_489_014_000_000])
+def test_clock_bypass_uses_arrival_timeout_and_rejects_replays(source):
+    store = SensorStore(ignore_capture_age=True)
+    assert store.observe("camera", camera(source), wall_ns=10_000_000_000, now=20)
+    status = store.snapshot(20)
+    assert status["ignore_capture_age"] is True
+    assert status["topics"]["camera"]["age_ms"] == 0
+    assert status["topics"]["camera"]["capture_age_seconds"] == pytest.approx((10_000_000_000-source)/1e9)
+    assert store.camera_png(20.1) is not None
+    for replay in (source, source - 1):
+        assert not store.observe("camera", camera(replay), wall_ns=10_500_000_000, now=20.5)
+    assert store.camera_png(20.61) is None
+    assert store.snapshot(20.61)["topics"]["camera"]["state"] == "stale"
+
+
+def test_clock_bypass_accepts_partial_scan_and_rejects_zero_timestamp():
+    store = SensorStore(ignore_capture_age=True)
+    message = scan()
+    assert store.observe("scan", message, wall_ns=20_000_000_000, now=20)
+    assert store.snapshot(20)["topics"]["scan"]["data"]["coverage"] == pytest.approx(1/3)
+    assert not store.observe("camera", camera(0), wall_ns=10_000_000_000, now=20)
+
+
 def test_unknown_lidar_is_null_in_strict_json_and_has_no_invented_clearance():
     values = scan_values(scan())
     assert values["ranges"] == [1, None, None, None, None, 2]
@@ -136,7 +159,7 @@ def test_joint_and_imu_data_remain_finite_and_valid():
     invalid = deepcopy(joint)
     invalid.position = [0.1]
     assert not store.observe("joints", invalid, wall_ns=10_000_000_000, now=20)
-    imu = NS(header=header("imu_link"), linear_acceleration=NS(x=0, y=0, z=9.81),
+    imu = NS(header=header("utlidar_imu"), linear_acceleration=NS(x=0, y=0, z=9.81),
              angular_velocity=NS(x=0, y=0, z=0.1), orientation=NS(x=0, y=0, z=0, w=1))
     assert store.observe("imu", imu, wall_ns=10_000_000_000, now=20)
     json.dumps(store.snapshot(20), allow_nan=False)

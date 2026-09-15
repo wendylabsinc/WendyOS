@@ -1,0 +1,65 @@
+name: ROS 2 inspector
+
+on:
+  pull_request:
+    paths:
+      - 'go/ros2/inspector/**'
+      - 'go/internal/shared/ros2inspection/**'
+      - '.github/workflows/ros2-inspector.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the tested inspector image for agent releases
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Build
+        run: docker build -f go/ros2/inspector/Dockerfile -t inspector:test .
+      - name: Test native audio and LiDAR
+        run: |
+          python3 -m unittest discover -s go/ros2/inspector -p test_audio.py
+          docker run --rm --network none -e ROS_LOCALHOST_ONLY=1 -v "$PWD:/repo:ro" inspector:test python3 /repo/go/ros2/inspector/integration_test.py
+          docker run --rm --network none -e ROS_LOCALHOST_ONLY=1 -v "$PWD:/repo:ro" inspector:test python3 /repo/go/internal/shared/ros2inspection/lidar_probe_integration.py
+      - name: Publish architecture image
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/wendylabsinc/wendy-ros2-inspector:humble-unitree-v1-${{ matrix.arch }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag inspector:test "$IMAGE"
+          docker push "$IMAGE"
+  manifest:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Publish multi-platform manifest
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/wendylabsinc/wendy-ros2-inspector:humble-unitree-v1
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools create --tag "$IMAGE" "$IMAGE-amd64" "$IMAGE-arm64"

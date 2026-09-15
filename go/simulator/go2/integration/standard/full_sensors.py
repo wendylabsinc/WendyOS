@@ -99,7 +99,7 @@ class FullSensorChecks:
                       "invalid camera calibration")
                 self.remember(self.camera_info, stamp, (message.width, message.height))
             elif name == "cloud":
-                check(message.header.frame_id == "lidar_link", "point cloud frame mismatch")
+                check(message.header.frame_id == "utlidar_lidar", "point cloud frame mismatch")
                 check(not message.is_bigendian and message.height == 1 and message.point_step == 12
                       and message.row_step == message.width * 12
                       and len(message.data) == message.row_step

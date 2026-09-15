@@ -62,8 +62,8 @@ func virtualRobotOverlayKind(labels map[string]string) (string, error) {
 	return "", nil
 }
 
-// Both paths are fixed build-time values. No app-supplied path or shell text is
-// sourced. The standalone host inspector keeps its existing read-only path.
+// Overlay paths are fixed build-time values. No app-supplied path or shell text
+// is sourced. The standalone inspector uses its own native hardware overlay.
 func ros2SourceAndExecForOverlay(distro string, go2 bool) string {
 	kind := ""
 	if go2 {
@@ -79,6 +79,8 @@ func ros2SourceAndExecForRobot(distro, kind string) string {
 		setup = go2ROSSetup
 	case "g1":
 		setup = g1ROSSetup
+	case "unitree":
+		setup = ros2InspectorSetup
 	default:
 		return ros2SourceAndExec(distro)
 	}

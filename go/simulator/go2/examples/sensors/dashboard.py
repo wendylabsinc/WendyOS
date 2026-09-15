@@ -1,4 +1,4 @@
-"""Read-only ROS sensor dashboard for the Wendy Go2 simulator."""
+"""Read-only dashboard for native Go2 ROS sensors and optional standard extensions."""
 
 import argparse
 from collections import deque
@@ -12,11 +12,13 @@ import time
 from urllib.parse import urlsplit
 import zlib
 
+from go2_io import CLOUD_TOPIC, ODOM_TOPIC, cloud_scan, sensor_wall_ns
+
 
 TOPICS = {
-    "odom": ("/odom", "odom"),
-    "imu": ("/imu/data", "imu_link"),
-    "scan": ("/scan", "lidar_link"),
+    "odom": (ODOM_TOPIC, "odom"),
+    "imu": ("/utlidar/imu", "utlidar_imu"),
+    "scan": (CLOUD_TOPIC, "base_link"),
     "joints": ("/joint_states", None),
     "camera": ("/camera/color/image_raw", "camera_optical_frame"),
 }
@@ -79,7 +81,8 @@ def png_image(metadata, pixels):
 
 
 class SensorStore:
-    def __init__(self):
+    def __init__(self, *, ignore_capture_age=False):
+        self.ignore_capture_age = ignore_capture_age
         self.lock = threading.RLock()
         self.samples = {}
         self.errors = {}
@@ -91,14 +94,17 @@ class SensorStore:
         self.camera_cache = None
 
     def observe(self, key, message, *, wall_ns=None, now=None):
-        wall_ns = time.time_ns() if wall_ns is None else wall_ns
+        wall_ns = sensor_wall_ns(time.time_ns() if wall_ns is None else wall_ns)
         now = time.monotonic() if now is None else now
         try:
             stamp = message.header.stamp
+            if (type(stamp.sec) is not int or type(stamp.nanosec) is not int
+                    or not math.isfinite(wall_ns) or not math.isfinite(now)):
+                raise ValueError("Invalid capture timestamp or application clock")
             source = stamp.sec * 1_000_000_000 + stamp.nanosec
             age = (wall_ns - source) / 1e9
             if (not 0 <= stamp.nanosec < 1_000_000_000 or source <= 0
-                    or not -0.05 <= age < STALE_AFTER):
+                    or (not self.ignore_capture_age and not -0.05 <= age < STALE_AFTER)):
                 raise ValueError("Old or invalid capture timestamp")
             expected_frame = TOPICS[key][1]
             if expected_frame and message.header.frame_id != expected_frame:
@@ -127,7 +133,8 @@ class SensorStore:
                 previous = self.samples.get(key)
                 if previous and source <= previous["stamp_ns"]:
                     raise ValueError("Repeated or reordered capture")
-                self.samples[key] = {"stamp_ns": source, "captured": now - max(0, age), "data": data}
+                self.samples[key] = {"stamp_ns": source, "captured": now if self.ignore_capture_age else now - max(0, age),
+                                     "capture_age_seconds": age, "data": data}
                 self.receipts[key].append(now)
                 self.errors.pop(key, None)
                 if key == "camera":
@@ -161,8 +168,9 @@ class SensorStore:
                                "age_ms": max(0, age) * 1000 if age is not None else None,
                                "rate_hz": len(receipts) / 2, "error": self.errors.get(key),
                                "data": sample["data"] if sample else None,
-                               "stamp_ns": str(sample["stamp_ns"]) if sample else None}
-            return {"topics": topics, "trail": list(self.trail), "trail_total": self.trail_total}
+                               "stamp_ns": str(sample["stamp_ns"]) if sample else None,
+                               "capture_age_seconds": sample["capture_age_seconds"] if sample else None}
+            return {"ignore_capture_age": self.ignore_capture_age, "topics": topics, "trail": list(self.trail), "trail_total": self.trail_total}
 
     def camera_png(self, now=None):
         now = time.monotonic() if now is None else now
@@ -218,13 +226,19 @@ def make_node(store):
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy
-    from sensor_msgs.msg import Image, Imu, JointState, LaserScan
+    from sensor_msgs.msg import Image, Imu, JointState, PointCloud2
 
     node = Node("wendy_go2_sensor_dashboard")
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
-    for key, kind in (("odom", Odometry), ("imu", Imu), ("scan", LaserScan),
+    def observe_cloud(message):
+        try:
+            store.observe("scan", cloud_scan(message))
+        except (ValueError, TypeError, AttributeError) as error:
+            with store.lock:
+                store.errors["scan"] = str(error)
+    for key, kind in (("odom", Odometry), ("imu", Imu), ("scan", PointCloud2),
                       ("joints", JointState), ("camera", Image)):
-        node.create_subscription(kind, TOPICS[key][0], lambda message, key=key: store.observe(key, message), qos)
+        node.create_subscription(kind, TOPICS[key][0], (observe_cloud if key == "scan" else lambda message, key=key: store.observe(key, message)), qos)
     return node
 
 
@@ -232,11 +246,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8904)
+    parser.add_argument("--ignore-capture-age", action="store_true",
+                        help="use local arrival time for sensor timeouts with unsynchronized clocks")
     args, ros_args = parser.parse_known_args()
     import rclpy
     from rclpy.executors import ExternalShutdownException
 
-    store = SensorStore()
+    store = SensorStore(ignore_capture_age=args.ignore_capture_age)
+    if args.ignore_capture_age:
+        print("Capture age checks disabled. Sensor timeouts use local arrival time.", flush=True)
     server = make_server(store, args.host, args.port)
     rclpy.init(args=ros_args)
     node = make_node(store)
