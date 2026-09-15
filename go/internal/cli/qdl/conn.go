@@ -15,5 +15,6 @@ type Conn interface {
 }
 
 // ErrUSBAccess reports that the OS refused access to a device in EDL mode —
-// on Linux a missing udev rule, on macOS a driver that already claimed it.
+// on Linux a missing udev rule, on macOS a driver that already claimed it,
+// or on Windows a missing/inaccessible WinUSB binding.
 var ErrUSBAccess = errors.New("qdl: the OS refused access to the device in EDL mode")

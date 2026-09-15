@@ -914,12 +914,17 @@ func TestClassifyBuildAndDeliveryResult(t *testing.T) {
 	}
 }
 
+// TestBuildctlHelperProcess is the test binary standing in for buildctl. It
+// does nothing unless a test re-executed the binary with
+// WENDY_BUILDCTL_TEST_HELPER set; the value selects the behaviour.
 func TestBuildctlHelperProcess(t *testing.T) {
-	if os.Getenv("WENDY_BUILDCTL_TEST_HELPER") != "oversized-line" {
-		return
+	switch os.Getenv("WENDY_BUILDCTL_TEST_HELPER") {
+	case "oversized-line":
+		_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 2*1024*1024))
+		os.Exit(0)
+	case "oci-export":
+		buildctlHelperExport(t)
 	}
-	_, _ = os.Stdout.Write(bytes.Repeat([]byte("x"), 2*1024*1024))
-	os.Exit(0)
 }
 
 func (s *stubBuildStream) Send(p *agentpbv2.BuildImageProgress) error {

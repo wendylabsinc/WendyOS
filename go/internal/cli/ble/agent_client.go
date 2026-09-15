@@ -1,3 +1,12 @@
+// Package ble is the Wendy protocol layer over the generic BLE central in
+// internal/shared/ble: the WendyOS agent's RPC over mTLS-over-L2CAP, its TLS
+// configuration, and Wendy Lite Wi-Fi provisioning over GATT. Every Wendy UUID,
+// PSM and framing rule the CLI needs lives here; internal/shared/ble/central
+// and .../scan know none of it.
+//
+// The Lite info service is the exception — it sits in internal/shared/ble,
+// which is also named ble, because internal/shared/discovery needs it. No file
+// currently imports both; a future one must alias.
 package ble
 
 import (
@@ -5,21 +14,29 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/ble/central"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/protobuf/proto"
 )
 
-const (
-	// WendyOS BLE agent L2CAP PSM
-	wendyAgentL2CAPPSM = 128
-)
+// agentReadTimeout bounds how long we wait for an agent reply. The BLE
+// net.Conn blocks indefinitely without a deadline — liteclient's read loop
+// needs that — and there is no higher-level timeout on this path, so the
+// deadline has to be set here.
+const agentReadTimeout = 30 * time.Second
+
+// DefaultL2CAPPSM is the PSM the WendyOS agent's L2CAP server listens on (see
+// agent/bluetooth/l2cap_server_linux.go, which must agree with this). It is the
+// fallback when discovery did not report the device's own PSM.
+const DefaultL2CAPPSM uint16 = 128
 
 // AgentClient communicates with a WendyOS agent over BLE L2CAP using
 // protobuf-framed messages (UInt16 BE length prefix) over mTLS.
 type AgentClient struct {
-	conn    *Connection
+	conn    *central.Connection
 	tlsConn *tls.Conn
 }
 
@@ -27,12 +44,12 @@ type AgentClient struct {
 // L2CAP channel, and performs the mTLS handshake. tlsConfig must include a
 // client certificate issued by the same PKI as the agent's server certificate.
 func ConnectAgent(device *models.BluetoothDevice, tlsConfig *tls.Config) (*AgentClient, error) {
-	conn, err := Connect(device.Address, 10)
+	conn, err := central.Connect(device.Address, 10)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", device.DisplayName, err)
 	}
 
-	psm := uint16(wendyAgentL2CAPPSM)
+	psm := DefaultL2CAPPSM
 	if device.L2CAPPSM != 0 {
 		psm = device.L2CAPPSM
 	}
@@ -42,7 +59,7 @@ func ConnectAgent(device *models.BluetoothDevice, tlsConfig *tls.Config) (*Agent
 		return nil, fmt.Errorf("opening L2CAP channel (PSM %d): %w", psm, err)
 	}
 
-	tlsConn := tls.Client(newL2CAPNetConn(conn), tlsConfig)
+	tlsConn := tls.Client(central.NewL2CAPStream(conn), tlsConfig)
 	if err := tlsConn.Handshake(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("BLE mTLS handshake: %w", err)
@@ -73,13 +90,24 @@ func (c *AgentClient) sendCommand(cmd *agentpb.BluetoothCommand) (*agentpb.Bluet
 		return nil, fmt.Errorf("sending command: %w", err)
 	}
 
-	// Read the 2-byte length header, then the body.
+	// Read the 2-byte length header, then the body. The deadline is per-read
+	// (reset between header and body) rather than one budget for the whole exchange:
+	// long-running commands must still begin replying within agentReadTimeout, and
+	// once a reply starts arriving the rest of it should follow promptly.
+	defer c.tlsConn.SetReadDeadline(time.Time{}) //nolint:errcheck
+
 	var header [2]byte
+	if err := c.tlsConn.SetReadDeadline(time.Now().Add(agentReadTimeout)); err != nil {
+		return nil, fmt.Errorf("setting response deadline: %w", err)
+	}
 	if _, err := io.ReadFull(c.tlsConn, header[:]); err != nil {
 		return nil, fmt.Errorf("reading response header: %w", err)
 	}
 	msgLen := binary.BigEndian.Uint16(header[:])
 	body := make([]byte, msgLen)
+	if err := c.tlsConn.SetReadDeadline(time.Now().Add(agentReadTimeout)); err != nil {
+		return nil, fmt.Errorf("setting response deadline: %w", err)
+	}
 	if _, err := io.ReadFull(c.tlsConn, body); err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}

@@ -373,6 +373,19 @@ func TestBuildGStreamerArgs_V4L2PinsH264Level(t *testing.T) {
 	}
 }
 
+func TestBuildGStreamerArgs_V4L2LetsTheDriverPickItsInputFormat(t *testing.T) {
+	// v4l2h264enc wraps whatever M2M driver the board has, and the accepted input
+	// format is the driver's: bcm2835-codec takes I420, qcom-iris NV12 only.
+	// Pinning one fails to link on boards wanting the other.
+	req := &agentpb.StreamVideoRequest{}
+	args := mustBuildGStreamerArgs(t, "/usr/bin/gst-launch-1.0", "/dev/video0", req, "v4l2h264enc", true)
+	joined := strings.Join(args, " ")
+	const want = "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc"
+	if !strings.Contains(joined, want) {
+		t.Errorf("v4l2h264enc input caps must offer both formats (%q): %v", want, args)
+	}
+}
+
 func TestBuildGStreamerArgs_NVV4L2HardwareEncoder(t *testing.T) {
 	req := &agentpb.StreamVideoRequest{}
 	args := mustBuildGStreamerArgs(t, "/usr/bin/gst-launch-1.0", "/dev/video0", req, "nvv4l2h264enc", true)

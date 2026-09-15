@@ -23,7 +23,7 @@ func writeFile(t *testing.T, dir, rel, content string) {
 
 func hashOrFatal(t *testing.T, dir string, args map[string]string) string {
 	t.Helper()
-	h, err := computeBuildInputHash(dir, "", "linux/arm64", args, nil)
+	h, err := computeBuildInputHash(dir, "", "linux/arm64", "", args, nil)
 	if err != nil {
 		t.Fatalf("computeBuildInputHash: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestComputeBuildInputHash_PerDockerfileIgnoreAllowlist(t *testing.T) {
 
 	hash := func() string {
 		t.Helper()
-		h, err := computeBuildInputHash(dir, "Dockerfile.generated", "linux/arm64", nil, nil)
+		h, err := computeBuildInputHash(dir, "Dockerfile.generated", "linux/arm64", "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -188,7 +188,7 @@ func TestComputeBuildInputHash_NestedNegationDescends(t *testing.T) {
 
 	hash := func() string {
 		t.Helper()
-		h, err := computeBuildInputHash(dir, "Dockerfile.generated", "linux/arm64", nil, nil)
+		h, err := computeBuildInputHash(dir, "Dockerfile.generated", "linux/arm64", "", nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,15 +248,15 @@ func TestComputeBuildInputHash_EnvChangesHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	base, err := computeBuildInputHash(dir, "", "linux/arm64", nil, nil)
+	base, err := computeBuildInputHash(dir, "", "linux/arm64", "", nil, nil)
 	if err != nil {
 		t.Fatalf("computeBuildInputHash: %v", err)
 	}
-	withEnv, err := computeBuildInputHash(dir, "", "linux/arm64", nil, []string{"LOG_LEVEL=debug"})
+	withEnv, err := computeBuildInputHash(dir, "", "linux/arm64", "", nil, []string{"LOG_LEVEL=debug"})
 	if err != nil {
 		t.Fatalf("computeBuildInputHash: %v", err)
 	}
-	changed, err := computeBuildInputHash(dir, "", "linux/arm64", nil, []string{"LOG_LEVEL=info"})
+	changed, err := computeBuildInputHash(dir, "", "linux/arm64", "", nil, []string{"LOG_LEVEL=info"})
 	if err != nil {
 		t.Fatalf("computeBuildInputHash: %v", err)
 	}
@@ -269,30 +269,27 @@ func TestComputeBuildInputHash_EnvChangesHash(t *testing.T) {
 	}
 }
 
-func TestBuildInputHashSaltIsV2(t *testing.T) {
-	// The v1→v2 bump deliberately invalidates fingerprints recorded while
-	// the stale-manifest bug (2026-08-08) could pair a current input hash
-	// with a stale deploy. Do not revert to v1; bump again only with a
-	// matching migration rationale.
+func TestBuildInputHashSalt(t *testing.T) {
+	// The fingerprint is salted so a change to the hash inputs can invalidate
+	// every recorded fingerprint by changing the salt. Assert the salt is the
+	// current bare string and carries no lingering version suffix.
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h, err := computeBuildInputHash(dir, "Dockerfile", "linux/arm64", nil, nil)
+	h, err := computeBuildInputHash(dir, "Dockerfile", "linux/arm64", "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Recompute what v1 would have produced by checking the source constant
-	// is gone: the simplest stable assertion is on the salt itself.
 	data, err := os.ReadFile("deployfastpath.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"wendy-deploy-fingerprint-v2\n"`) {
-		t.Fatalf("deploy fingerprint salt must be v2 (see comment); hash was %s", h)
+	if !strings.Contains(string(data), `"wendy-deploy-fingerprint\n"`) {
+		t.Fatalf("deploy fingerprint salt must be %q; hash was %s", "wendy-deploy-fingerprint", h)
 	}
-	if strings.Contains(string(data), `"wendy-deploy-fingerprint-v1\n"`) {
-		t.Fatal("v1 salt string still present in deployfastpath.go")
+	if strings.Contains(string(data), `"wendy-deploy-fingerprint-v`) {
+		t.Fatal("a versioned deploy fingerprint salt string still lingers in deployfastpath.go")
 	}
 }
 

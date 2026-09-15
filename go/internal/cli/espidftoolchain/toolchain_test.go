@@ -177,6 +177,107 @@ func TestProjectTarget(t *testing.T) {
 	}
 }
 
+func TestReadSdkconfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string // sdkconfig content; "" means no file
+		keys    []string
+		want    map[string]any
+		wantErr bool
+	}{
+		{
+			name: "boolean option, unrequested option left out",
+			content: "CONFIG_ESP_CONSOLE_UART_DEFAULT=y\n" +
+				"CONFIG_ESP_CONSOLE_SECONDARY_NONE=y\n",
+			keys: []string{"CONFIG_ESP_CONSOLE_UART_DEFAULT"},
+			want: map[string]any{"CONFIG_ESP_CONSOLE_UART_DEFAULT": true},
+		},
+		{
+			name:    "option that is not set is absent",
+			content: "# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set\n",
+			keys:    []string{"CONFIG_ESP_CONSOLE_UART_DEFAULT"},
+			want:    map[string]any{},
+		},
+		{
+			name:    "string values, an empty one distinct from unset",
+			content: "CONFIG_IDF_TARGET=\"esp32c6\"\nCONFIG_WENDY_WIFI_SSID=\"\"\n",
+			keys:    []string{"CONFIG_IDF_TARGET", "CONFIG_WENDY_WIFI_SSID"},
+			want: map[string]any{
+				"CONFIG_IDF_TARGET":      "esp32c6",
+				"CONFIG_WENDY_WIFI_SSID": "",
+			},
+		},
+		{
+			name:    "unbalanced quote is kept as-is, not stripped",
+			content: "CONFIG_IDF_TARGET=\"esp32c6\n",
+			keys:    []string{"CONFIG_IDF_TARGET"},
+			want: map[string]any{
+				"CONFIG_IDF_TARGET": "\"esp32c6",
+			},
+		},
+		{
+			name:    "integer values, decimal and hex",
+			content: "CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200\nCONFIG_PARTITION_TABLE_OFFSET=0x8000\n",
+			keys:    []string{"CONFIG_ESP_CONSOLE_UART_BAUDRATE", "CONFIG_PARTITION_TABLE_OFFSET"},
+			want: map[string]any{
+				"CONFIG_ESP_CONSOLE_UART_BAUDRATE": 115200,
+				"CONFIG_PARTITION_TABLE_OFFSET":    32768,
+			},
+		},
+		{
+			name:    "trailing comment after a value is not stripped",
+			content: "CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200 # default baud rate\n",
+			keys:    []string{"CONFIG_ESP_CONSOLE_UART_BAUDRATE"},
+			want: map[string]any{
+				"CONFIG_ESP_CONSOLE_UART_BAUDRATE": "115200 # default baud rate",
+			},
+		},
+		{
+			name: "deprecated alias is not the requested option",
+			content: "# CONFIG_ESP_CONSOLE_UART_DEFAULT is not set\n" +
+				"#\n# Deprecated options for backward compatibility\n#\n" +
+				"CONFIG_CONSOLE_UART_DEFAULT=y\n# End of deprecated options\n",
+			keys: []string{"CONFIG_ESP_CONSOLE_UART_DEFAULT"},
+			want: map[string]any{},
+		},
+		{
+			name:    "no keys requested",
+			content: "CONFIG_ESP_CONSOLE_UART_DEFAULT=y\n",
+			keys:    nil,
+			want:    map[string]any{},
+		},
+		{
+			name:    "missing sdkconfig",
+			content: "",
+			keys:    []string{"CONFIG_ESP_CONSOLE_UART_DEFAULT"},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.content != "" {
+				if err := os.WriteFile(filepath.Join(dir, "sdkconfig"), []byte(tt.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := ReadSdkconfig(dir, tt.keys)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ReadSdkconfig() = %#v, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadSdkconfig() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ReadSdkconfig() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 // stubExecCommandContext replaces execCommandContext for the duration of the
 // test, recording each invocation and delegating to fake to pick the command
 // actually run.

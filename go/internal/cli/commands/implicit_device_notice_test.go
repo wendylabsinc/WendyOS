@@ -27,8 +27,25 @@ func TestImplicitDeviceLinesDoesNotCallSoleCloudDeviceADefault(t *testing.T) {
 	if strings.Contains(lines[0], "default") {
 		t.Errorf("line = %q, must not describe a sole cloud device as a default", lines[0])
 	}
-	if !strings.Contains(lines[0], "only device enrolled") {
-		t.Errorf("line = %q, want it to explain why this device was chosen", lines[0])
+	if !strings.Contains(lines[0], "only device currently online") {
+		t.Errorf("line = %q, want it to say the choice was among ONLINE devices, not enrolled ones", lines[0])
+	}
+	if strings.Contains(lines[0], "enrolled") {
+		t.Errorf("line = %q, must not claim the org has only one enrolled device (offline devices are hidden)", lines[0])
+	}
+}
+
+func TestImplicitDeviceHintForSoleCloudDevicePointsAtOfflineDevices(t *testing.T) {
+	lines := implicitDeviceLines("thor.local", implicitSoleCloudDevice, true)
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want the device line plus a hint", len(lines))
+	}
+	hint := lines[1]
+	if !strings.Contains(hint, "--device") || !strings.Contains(hint, "wendy cloud discover --all") {
+		t.Errorf("hint = %q, want --device and 'wendy cloud discover --all'", hint)
+	}
+	if strings.Contains(hint, "set-default") {
+		t.Errorf("hint = %q, must not suggest set-default: the cloud path never consults it", hint)
 	}
 }
 

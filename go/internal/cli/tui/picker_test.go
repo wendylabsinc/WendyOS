@@ -817,6 +817,106 @@ func TestPickerModel_DXIgnoredWithoutCallbacks(t *testing.T) {
 	}
 }
 
+func TestPickerModel_EnrollHighlightedItem(t *testing.T) {
+	for _, quit := range []bool{false, true} {
+		t.Run(map[bool]string{false: "flash", true: "quit"}[quit], func(t *testing.T) {
+			m := sectionedPicker(t)
+			for i := 0; i < 2; i++ {
+				updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+				m = updated.(PickerModel)
+			}
+			var enrolled PickerItem
+			m.OnEnrollItem = func(item PickerItem) (string, bool) {
+				enrolled = item
+				return "Enrollment requested.", quit
+			}
+			m.flashIsError = true
+
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+			m = updated.(PickerModel)
+			if enrolled.Value != "c5" {
+				t.Fatalf("enrolled value = %v, want c5 (highlighted row after section header)", enrolled.Value)
+			}
+			if m.Selected() != nil || m.Cancelled() {
+				t.Fatal("enrollment must not select a device or mark the picker cancelled")
+			}
+			if !strings.Contains(m.View(), "Enrollment requested.") || m.flashIsError {
+				t.Fatal("enrollment confirmation must be rendered without stale error styling")
+			}
+			if quit {
+				if cmd == nil {
+					t.Fatal("expected enrollment to close the picker")
+				}
+				if _, ok := cmd().(tea.QuitMsg); !ok {
+					t.Fatal("expected a quit command")
+				}
+			} else if cmd != nil {
+				t.Fatal("enrollment flash must leave the picker open")
+			}
+		})
+	}
+}
+
+func TestPickerModel_EnrollRequiresSelectableItem(t *testing.T) {
+	for _, name := range []string{"empty", "section header"} {
+		t.Run(name, func(t *testing.T) {
+			m := NewPicker()
+			if name == "section header" {
+				m = sectionedPicker(t)
+				m.table.SetCursor(0)
+			}
+			m.OnEnrollItem = func(PickerItem) (string, bool) {
+				t.Fatal("enrollment called without a selectable item")
+				return "", true
+			}
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+			m = updated.(PickerModel)
+			if cmd != nil || m.Selected() != nil || m.Cancelled() || m.flashMessage != "" {
+				t.Fatal("enrollment without a selectable item must leave the picker open and unchanged")
+			}
+		})
+	}
+}
+
+func TestPickerModel_EnrollHintAndAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		callback   bool
+		filterable bool
+		wantHint   bool
+	}{
+		{name: "unavailable"},
+		{name: "available", callback: true, wantHint: true},
+		{name: "filterable", callback: true, filterable: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := sectionedPicker(t)
+			m.Filterable = tc.filterable
+			called := false
+			if tc.callback {
+				m.OnEnrollItem = func(PickerItem) (string, bool) {
+					called = true
+					return "", false
+				}
+			}
+			if got := strings.Contains(m.View(), ", e enroll"); got != tc.wantHint {
+				t.Fatalf("enroll hint present = %v, want %v", got, tc.wantHint)
+			}
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+			m = updated.(PickerModel)
+			if called != tc.wantHint {
+				t.Fatalf("enrollment called = %v, want %v", called, tc.wantHint)
+			}
+			if cmd != nil || m.Selected() != nil || m.Cancelled() {
+				t.Fatal("picker unexpectedly closed or selected an item")
+			}
+			if tc.filterable && m.filter != "e" {
+				t.Fatalf("filter = %q, want e", m.filter)
+			}
+		})
+	}
+}
+
 // ── Section headers ──────────────────────────────────────────────────
 
 // sectionedPicker builds a one-shot picker whose items belong to two ordered

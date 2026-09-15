@@ -12,299 +12,141 @@ concurrency:
 jobs:
   detect-api-changes:
     name: Detect API surface changes
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Repository secrets are unavailable to forks and Dependabot. Never execute
+    # their PR code or give them a credentialed model-review fallback.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: runs-on,runner=2cpu-linux-x64
-    outputs:
-      api-changed: ${{ steps.detect.outputs.api-changed }}
-      risk: ${{ steps.detect.outputs.risk }}
     permissions:
       contents: read
-      pull-requests: read
-    steps:
-      - name: Check out base
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: base
-          persist-credentials: false
-
-      - name: Check out head
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: head
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: base/go.mod
-          cache-dependency-path: |
-            base/go.sum
-            head/go.sum
-
-      # Constructing the Cobra command tree compiles the full CLI, including
-      # its ALSA and libusb cgo dependencies.
-      - name: Install native CLI dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
-
-      - name: Get changed files
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" \
-            --jq '.[].filename' > "$RUNNER_TEMP/api-review-changed-files.txt"
-          test -s "$RUNNER_TEMP/api-review-changed-files.txt"
-
-      - name: Detect CLI and protobuf API changes
-        id: detect
-        env:
-          BASE_DIR: ${{ github.workspace }}/base
-          HEAD_DIR: ${{ github.workspace }}/head
-          CHANGED_FILES: ${{ runner.temp }}/api-review-changed-files.txt
-          ADDITIONS: ${{ github.event.pull_request.additions }}
-          DELETIONS: ${{ github.event.pull_request.deletions }}
-        run: |
-          set -euo pipefail
-
-          base_snapshot="$RUNNER_TEMP/base-cli-surface.json"
-          head_snapshot="$RUNNER_TEMP/head-cli-surface.json"
-          base_proto_manifest="$RUNNER_TEMP/base-protobuf.manifest"
-          head_proto_manifest="$RUNNER_TEMP/head-protobuf.manifest"
-          proto_diff="$RUNNER_TEMP/protobuf.diff"
-
-          detector_source="$BASE_DIR/go/cmd/api-surface-snapshot/main.go"
-          if [[ ! -f "$detector_source" ]]; then
-            # Bootstrap only: the PR that introduces this workflow cannot load
-            # the detector from a base revision that predates it.
-            # SECURITY: This job is restricted above to same-repository PRs,
-            # so only repository writers can exercise this one-time fallback.
-            detector_source="$HEAD_DIR/go/cmd/api-surface-snapshot/main.go"
-            echo "::notice::Using the head API detector for the bootstrap PR"
-          fi
-          base_detector="$(mktemp -d "$BASE_DIR/go/cmd/api-surface-snapshot-ci.XXXXXX")"
-          cp "$detector_source" "$base_detector/main.go"
-          (
-            cd "$BASE_DIR"
-            go run "./go/cmd/$(basename "$base_detector")" > "$base_snapshot"
-          )
-
-          # After the bootstrap PR, detector_source always comes from the
-          # trusted base revision. The PR may change CLI code, but it cannot
-          # change what the detector observes.
-          # SECURITY: Evaluating the head's Cobra surface necessarily loads its
-          # command package. The same-repository guard limits this to trusted
-          # writers; checkout credentials are not persisted, and GH_TOKEN is
-          # scoped only to the earlier changed-files step.
-          trusted_detector="$(mktemp -d "$HEAD_DIR/go/cmd/api-surface-snapshot-ci.XXXXXX")"
-          cp "$detector_source" "$trusted_detector/main.go"
-          (
-            cd "$HEAD_DIR"
-            go run "./go/cmd/$(basename "$trusted_detector")" > "$head_snapshot"
-          )
-
-          cli_changed=false
-          proto_changed=false
-          critical_flow_changed=false
-          cli_risk="$(
-            cd "$BASE_DIR"
-            go run "./go/cmd/$(basename "$base_detector")" compare "$base_snapshot" "$head_snapshot"
-          )"
-
-          if ! cmp -s "$base_snapshot" "$head_snapshot"; then
-            cli_changed=true
-          fi
-
-          protobuf_manifest() {
-            local checkout="$1"
-            (
-              cd "$checkout"
-              find . -path './.git' -prune -o -type f -name '*.proto' -print0 \
-                | sort -z \
-                | xargs -0 sha256sum
-            )
-          }
-          protobuf_manifest "$BASE_DIR" > "$base_proto_manifest"
-          protobuf_manifest "$HEAD_DIR" > "$head_proto_manifest"
-          diff_status=0
-          diff -u "$base_proto_manifest" "$head_proto_manifest" > "$proto_diff" || diff_status=$?
-          if [[ "$diff_status" == 1 ]]; then
-            proto_changed=true
-          elif [[ "$diff_status" != 0 ]]; then
-            echo "Could not compare protobuf manifests (diff exit $diff_status)" >&2
-            exit "$diff_status"
-          fi
-
-          risk="$cli_risk"
-          if [[ "$proto_changed" == true ]]; then
-            if (
-              cd "$HEAD_DIR"
-              sha256sum --check "$base_proto_manifest" --status
-            ); then
-              if [[ "$risk" == low ]]; then
-                risk=mid
-              fi
-            else
-              risk=high
-            fi
-          fi
-
-          line_changes=$((ADDITIONS + DELETIONS))
-          changed_file_count="$(wc -l < "$CHANGED_FILES" | tr -d ' ')"
-          if (( line_changes >= 1000 || changed_file_count >= 25 )); then
-            risk=high
-          elif [[ "$risk" == low ]] && (( line_changes >= 250 || changed_file_count >= 10 )); then
-            risk=mid
-          fi
-
-          critical_pattern='(^go/installer/|^go/internal/cli/commands/(apps_install|auth|cloud_run|deploy|device_osupdate|docker|fleet_run|helpers_cloudauth|os_cmd|os_install|os_provision|run|update|watch)[^/]*\.go$|^Proto/.*(auth|deploy|install|provision|update).*\.proto$)'
-          critical_files="$(grep -Ei "$critical_pattern" "$CHANGED_FILES" | grep -Ev '_test\.go$' || true)"
-          if [[ -n "$critical_files" ]]; then
-            critical_flow_changed=true
-            risk=high
-          fi
-
-          if [[ "$cli_changed" == true || "$proto_changed" == true ]]; then
-            echo "api-changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "api-changed=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "risk=$risk" >> "$GITHUB_OUTPUT"
-
-          {
-            echo "### API review detection"
-            echo
-            echo "| Surface | Changed |"
-            echo "| --- | --- |"
-            echo "| Wendy CLI commands and flags | $cli_changed |"
-            echo "| Protobuf definitions | $proto_changed |"
-            echo "| Critical install/deploy/auth/update flow | $critical_flow_changed |"
-            echo "| Changed files / lines | $changed_file_count / $line_changes |"
-            echo "| Testing risk | $risk |"
-            if [[ "$critical_flow_changed" == true ]]; then
-              echo
-              echo "#### Changed critical-flow files"
-              echo '```text'
-              echo "$critical_files"
-              echo '```'
-            fi
-            if [[ "$cli_changed" == true ]]; then
-              echo
-              echo '<details><summary>CLI surface diff</summary>'
-              echo
-              echo '```diff'
-              diff -u "$base_snapshot" "$head_snapshot" | sed -n '1,500p' || true
-              echo '```'
-              echo '</details>'
-            fi
-            if [[ "$proto_changed" == true ]]; then
-              echo
-              echo "#### Changed protobuf definitions"
-              echo '```diff'
-              cat "$proto_diff"
-              echo '```'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  mark-api-review:
-    name: Label risk and request API review
-    needs: detect-api-changes
-    if: needs.detect-api-changes.result == 'success'
-    runs-on: runs-on,runner=2cpu-linux-x64
-    permissions:
       issues: write
       pull-requests: write
+    env:
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      CLAUDE_MODEL: claude-opus-4-8
     steps:
-      - name: Add label and request Joannis
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          API_CHANGED: ${{ needs.detect-api-changes.outputs.api-changed }}
-          RISK: ${{ needs.detect-api-changes.outputs.risk }}
+      - name: Check out trusted base review automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          script: |
-            const apiLabel = {
-              name: 'api-review',
-              color: 'B60205',
-              description: 'Changes a public CLI or protobuf API surface',
-            };
-            const riskLabels = {
-              low: {
-                name: 'risk: low',
-                color: '0E8A16',
-                description: 'Low estimated risk; focused testing is sufficient',
-              },
-              mid: {
-                name: 'risk: mid',
-                color: 'FBCA04',
-                description: 'Medium estimated risk; test changes and adjacent workflows',
-              },
-              high: {
-                name: 'risk: high',
-                color: 'B60205',
-                description: 'High estimated risk; thoroughly test compatibility and affected workflows',
-              },
-            };
-            const pull_number = context.payload.pull_request.number;
-            const {owner, repo} = context.repo;
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: review-automation
+          sparse-checkout: .github/scripts
+          persist-credentials: false
 
-            async function ensureLabel(label) {
-              try {
-                await github.rest.issues.getLabel({owner, repo, name: label.name});
-              } catch (error) {
-                if (error.status !== 404) throw error;
-                await github.rest.issues.createLabel({owner, repo, ...label});
-              }
-            }
+      - name: Bootstrap review automation when absent from base
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
+          if [[ -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" ]]; then
+            exit 0
+          fi
+          if [[ -e "$scripts_dir/api_review.py" || -e "$scripts_dir/api_review_comment.py" ]]; then
+            echo "::error::Base revision contains incomplete API review automation."
+            exit 1
+          fi
 
-            async function removeLabel(name) {
-              try {
-                await github.rest.issues.removeLabel({owner, repo, issue_number: pull_number, name});
-              } catch (error) {
-                if (error.status !== 404) throw error;
-              }
-            }
+          # Bootstrap only: the introducing PR predates these scripts on base.
+          # Only same-repository writers can reach this step. Download only the
+          # four review automation files at the event's immutable head SHA;
+          # application code is never checked out, compiled, or executed.
+          echo "::notice::Bootstrapping API review automation from the same-repository PR"
+          bootstrap_dir="$(mktemp -d)"
+          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py; do
+            gh api --method GET \
+              "repos/$REPO/contents/.github/scripts/$filename" \
+              -f ref="$EXPECTED_HEAD_SHA" --jq '.content' \
+              | base64 --decode > "$bootstrap_dir/$filename"
+            test -s "$bootstrap_dir/$filename"
+          done
+          mkdir -p "$scripts_dir"
+          cp "$bootstrap_dir/"*.py "$scripts_dir/"
 
-            const risk = process.env.RISK;
-            if (!Object.hasOwn(riskLabels, risk)) {
-              throw new Error(`Unexpected testing risk: ${risk}`);
-            }
-            await ensureLabel(riskLabels[risk]);
-            for (const [level, label] of Object.entries(riskLabels)) {
-              if (level !== risk) await removeLabel(label.name);
-            }
-            await github.rest.issues.addLabels({
-              owner,
-              repo,
-              issue_number: pull_number,
-              labels: [riskLabels[risk].name],
-            });
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
 
-            if (process.env.API_CHANGED !== 'true') {
-              await removeLabel(apiLabel.name);
-              return;
-            }
+      - name: Test API review automation
+        run: |
+          set -euo pipefail
+          python3 review-automation/.github/scripts/api_review_test.py
+          python3 review-automation/.github/scripts/api_review_comment_test.py
 
-            await ensureLabel(apiLabel);
-            await github.rest.issues.addLabels({owner, repo, issue_number: pull_number, labels: [apiLabel.name]});
+      - name: Fetch complete PR metadata and diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          metadata_tmp="$(mktemp)"
+          diff_tmp="$(mktemp)"
+          current_metadata_tmp="$(mktemp)"
+          gh api "repos/$REPO/pulls/$PR_NUMBER" > "$metadata_tmp"
+          jq -e --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.head.sha == $head and .base.sha == $base' "$metadata_tmp" > /dev/null
+          # Removed lines in a PR diff belong to its merge base, which can
+          # differ from the target branch tip used by the stale-run checks.
+          diff_base_sha="$(gh api "repos/$REPO/compare/$EXPECTED_BASE_SHA...$EXPECTED_HEAD_SHA" \
+            --jq '.merge_base_commit.sha')"
+          if [[ ! "$diff_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not identify the PR diff's immutable merge base."
+            exit 1
+          fi
+          gh api -H "Accept: application/vnd.github.diff" \
+            "repos/$REPO/pulls/$PR_NUMBER" > "$diff_tmp"
+          # The PR endpoint is live. Reject a revision change during fetching,
+          # rather than reviewing a diff against mismatched metadata or links.
+          gh api "repos/$REPO/pulls/$PR_NUMBER" > "$current_metadata_tmp"
+          jq -e --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.head.sha == $head and .base.sha == $base' "$current_metadata_tmp" > /dev/null
+          jq --arg diff_base_sha "$diff_base_sha" '. + {diff_base_sha: $diff_base_sha}' \
+            "$metadata_tmp" > "$RUNNER_TEMP/api-review-pr-meta.json"
+          mv "$diff_tmp" "$RUNNER_TEMP/api-review-pr.diff"
 
-            const reviewer = 'joannis';
-            if (context.payload.pull_request.user.login.toLowerCase() === reviewer) {
-              core.info('Joannis authored this pull request; GitHub does not allow self-review requests.');
-              return;
-            }
+      - name: Install Anthropic SDK
+        run: pip install --quiet anthropic==0.97.0
 
-            const pull = await github.rest.pulls.get({owner, repo, pull_number});
-            const alreadyRequested = pull.data.requested_reviewers.some(
-              ({login}) => login.toLowerCase() === reviewer,
-            );
-            if (!alreadyRequested) {
-              await github.rest.pulls.requestReviewers({
-                owner,
-                repo,
-                pull_number,
-                reviewers: [reviewer],
-              });
-            }
+      # Review the complete diff semantically. Snapshot or protobuf-file hashes
+      # confuse comments/formatting with API decisions, and cannot find durable
+      # contracts such as network constants, storage paths, or config formats.
+      - name: Review API decisions and testing risk
+        id: review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 review-automation/.github/scripts/api_review.py review \
+            --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
+            --diff "$RUNNER_TEMP/api-review-pr.diff" \
+            --repo "$REPO" \
+            --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" \
+            --expected-base-sha "$EXPECTED_BASE_SHA" \
+            --output "$RUNNER_TEMP/api-review-result.json" \
+            --model "$CLAUDE_MODEL"
+
+      # Publish incomplete reviews too, retaining the failed check and previous
+      # accepted decisions. Checkboxes track the maintainer's API acceptance;
+      # unchecked decisions are not an additional merge gate.
+      - name: Publish API decision checklist and labels
+        if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          result_file="$RUNNER_TEMP/api-review-result.json"
+          if [[ ! -f "$result_file" ]]; then
+            echo "::error::API review produced no result; no review comment or labels were changed."
+            exit 1
+          fi
+          python3 review-automation/.github/scripts/api_review_comment.py publish \
+            --result "$result_file" \
+            --repo "$REPO" \
+            --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" \
+            --expected-base-sha "$EXPECTED_BASE_SHA"

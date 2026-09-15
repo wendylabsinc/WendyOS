@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audio"
+	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -437,5 +438,79 @@ func TestCaptureTargetNoInputs(t *testing.T) {
 	_, err := captureTarget(context.Background(), 0)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("error = %v, want codes.FailedPrecondition", err)
+	}
+}
+
+// TestNameSensorLinkMounts asserts the ALSA-fallback listing replaces the one
+// generic snd-aloop Loopback capture row with one named row per active mount —
+// using the pairing name when set and asset-<id> otherwise — and leaves every
+// other device untouched.
+func TestNameSensorLinkMounts(t *testing.T) {
+	const loopCard = 2
+	loopback := audio.Node{
+		ID:          audio.EncodeAlsaID(loopCard, 1, false),
+		Name:        "plughw:2,1",
+		Description: "card 2: Loopback [Loopback], device 1: Loopback PCM [Loopback PCM]",
+	}
+	usb := audio.Node{
+		ID:          audio.EncodeAlsaID(0, 0, false),
+		Name:        "plughw:0,0",
+		Description: "card 0: USB [USB Audio Device], device 0: USB Audio [USB Audio]",
+	}
+
+	svc := NewAudioService(zap.NewNop())
+	svc.SetSensorLinkNaming(
+		func() []audioloop.Mount {
+			return []audioloop.Mount{
+				{Sub: 0, SourceAssetID: 286, ChannelID: 1, SensorName: "mic0"},
+				{Sub: 3, SourceAssetID: 999, ChannelID: 1, SensorName: "mic0"},
+			}
+		},
+		func(id int32) (string, bool) {
+			if id == 286 {
+				return "parakeet-demo", true
+			}
+			return "", false
+		},
+	)
+
+	got := svc.nameSensorLinkMounts([]audio.Node{usb, loopback})
+	if len(got) != 3 {
+		t.Fatalf("expected 3 rows (usb + 2 mounts), got %d: %+v", len(got), got)
+	}
+	if got[0] != usb {
+		t.Errorf("first row = %+v, want the USB device unchanged", got[0])
+	}
+
+	byName := map[string]audio.Node{}
+	for _, n := range got {
+		byName[n.Name] = n
+	}
+	paired, ok := byName["plughw:2,1,0"]
+	if !ok {
+		t.Fatalf("missing named row plughw:2,1,0; got %+v", got)
+	}
+	if paired.Description != "sensor-link: parakeet-demo · mic0" {
+		t.Errorf("paired description = %q, want %q", paired.Description, "sensor-link: parakeet-demo · mic0")
+	}
+	if paired.IsSink {
+		t.Errorf("named mount row must be a capture (input) device")
+	}
+	if sub, ok := audio.AlsaSubdevice(paired.ID); !ok || sub != 0 {
+		t.Errorf("paired ID subdevice = (%d,%v), want (0,true)", sub, ok)
+	}
+	unpaired, ok := byName["plughw:2,1,3"]
+	if !ok {
+		t.Fatalf("missing named row plughw:2,1,3; got %+v", got)
+	}
+	if unpaired.Description != "sensor-link: asset-999 · mic0" {
+		t.Errorf("unpaired description = %q, want %q", unpaired.Description, "sensor-link: asset-999 · mic0")
+	}
+
+	// No mounts: the Loopback row is returned untouched.
+	svc.SetSensorLinkNaming(func() []audioloop.Mount { return nil }, nil)
+	same := svc.nameSensorLinkMounts([]audio.Node{usb, loopback})
+	if len(same) != 2 || same[1] != loopback {
+		t.Errorf("with no mounts, nodes must be unchanged, got %+v", same)
 	}
 }

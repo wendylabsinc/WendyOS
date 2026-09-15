@@ -8,6 +8,23 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
+func TestHydrateIsolationDoesNotRestoreRemovedIsolation(t *testing.T) {
+	c := &Client{logger: zap.NewNop(), appIsolation: map[string]string{"myapp": ""}}
+	c.hydrateIsolation("myapp", map[string]string{labelKeyIsolation: "shared-network"})
+	if got := c.appIsolation["myapp"]; got != "" {
+		t.Fatalf("old sibling restored removed isolation: %q", got)
+	}
+}
+
+func TestHydrateIsolationRecordsEmptyAsLoaded(t *testing.T) {
+	c := &Client{logger: zap.NewNop()}
+	c.hydrateIsolation("myapp", map[string]string{})
+	c.hydrateIsolation("myapp", map[string]string{labelKeyIsolation: "isolated"})
+	if value, loaded := c.appIsolation["myapp"]; !loaded || value != "" {
+		t.Fatalf("empty isolation was not authoritative: %q, loaded=%v", value, loaded)
+	}
+}
+
 // TestHydrateIsolation_SetsFromLabelWhenEmpty is the RED test for the reboot bug:
 // after a fresh process start (or right after ListBootContainers reads a
 // container's persisted labels), the in-memory appIsolation cache is empty for

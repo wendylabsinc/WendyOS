@@ -16,8 +16,10 @@ import (
 const defaultUSBSysfsRoot = "/sys/bus/usb/devices"
 
 // discoverUSB enumerates USB devices from sysfs and returns those that look like
-// a Wendy device (by name) or an Espressif ESP32-C6 (by VID:PID). Reading sysfs
-// directly avoids shelling out to lsusb and parsing its human-readable output.
+// a Wendy device (by name), excluding Espressif ESP32 boards (by VID:PID)
+// even when the name also matches — those are Wendy Lite boards, listed
+// separately via serial/WendyCom discovery. Reading sysfs directly avoids
+// shelling out to lsusb and parsing its human-readable output.
 func discoverUSB(_ context.Context) ([]models.USBDevice, error) {
 	return discoverUSBAt(defaultUSBSysfsRoot)
 }
@@ -77,8 +79,10 @@ func readSysfsAttr(dir, attr string) string {
 
 // usbDeviceFromSysfs builds a USBDevice from sysfs attribute values. vid and pid
 // are hex strings without the "0x" prefix (as exposed by sysfs). It reports
-// false when the device is neither a Wendy device (by name) nor an ESP32-C6 (by
-// VID:PID), matching the filtering previously performed on lsusb output.
+// false when the device is not a Wendy device (by name), or when it matches
+// the Espressif ESP32 VID:PID even if the name also matches — Wendy Lite
+// boards are listed separately via serial/WendyCom discovery and must never
+// appear here too.
 func usbDeviceFromSysfs(vid, pid, manufacturer, product string) (models.USBDevice, bool) {
 	vid = strings.ToLower(vid)
 	pid = strings.ToLower(pid)
@@ -88,28 +92,20 @@ func usbDeviceFromSysfs(vid, pid, manufacturer, product string) (models.USBDevic
 	name := strings.TrimSpace(manufacturer + " " + product)
 	isWendy := strings.Contains(strings.ToLower(name), "wendy")
 
-	if !isWendy && !isESP32 {
+	if !isWendy || isESP32 {
 		return models.USBDevice{}, false
 	}
 
 	dev := models.USBDevice{
-		IsWendyDevice: isWendy || isESP32,
-		IsESP32:       isESP32,
+		IsWendyDevice: isWendy,
 		VendorID:      "0x" + vid,
 		ProductID:     "0x" + pid,
 		Name:          name,
 	}
 	if dev.Name == "" {
-		if isESP32 {
-			dev.Name = "ESP32-C6"
-		} else {
-			dev.Name = "Wendy Device"
-		}
+		dev.Name = "Wendy Device"
 	}
 	dev.DisplayName = dev.Name
-	if isESP32 {
-		dev.DisplayName = "ESP32-C6"
-	}
 
 	return dev, true
 }

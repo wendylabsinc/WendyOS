@@ -11,15 +11,17 @@ import (
 // name one. The two cases need different wording: the direct path falls back to
 // the device recorded by `wendy device set-default`, while the cloud path never
 // consults that setting and instead auto-selects when the org has exactly one
-// enrolled device. Calling the latter a "default" would be untrue.
+// device online. Calling the latter a "default" would be untrue.
 type implicitDeviceReason int
 
 const (
 	// implicitDefaultDevice is the hostname from config, used because neither
 	// --device nor an interactive pick supplied one.
 	implicitDefaultDevice implicitDeviceReason = iota
-	// implicitSoleCloudDevice is the org's only enrolled cloud asset, selected
-	// without asking because there was nothing to choose between.
+	// implicitSoleCloudDevice is the org's only cloud asset currently online,
+	// selected without asking because there was nothing to choose between.
+	// The cloud roster is online-only, so this says nothing about how many
+	// devices are enrolled.
 	implicitSoleCloudDevice
 )
 
@@ -63,12 +65,20 @@ func implicitDeviceLines(name string, reason implicitDeviceReason, withHint bool
 	var lines []string
 	switch reason {
 	case implicitSoleCloudDevice:
-		lines = append(lines, "Using "+name+", the only device enrolled in this organisation.")
+		lines = append(lines, "Using "+name+", the only device currently online in this organisation.")
 	default:
 		lines = append(lines, "Using default device "+name+".")
 	}
 	if withHint {
-		lines = append(lines, "Target a different device for one command with --device, or change the default with 'wendy device set-default'.")
+		switch reason {
+		case implicitSoleCloudDevice:
+			// The cloud path never consults the saved default, so offering
+			// set-default here would mislead; what the user needs to know is
+			// that offline devices are hidden from the roster.
+			lines = append(lines, "Target a different device with --device; offline devices are hidden, 'wendy cloud discover --all' lists every enrolled device.")
+		default:
+			lines = append(lines, "Target a different device for one command with --device, or change the default with 'wendy device set-default'.")
+		}
 	}
 	return lines
 }

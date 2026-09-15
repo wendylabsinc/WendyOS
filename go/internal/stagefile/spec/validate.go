@@ -77,6 +77,13 @@ func (f *File) Validate() error {
 		if !isFinal && s.Entrypoint != nil {
 			return fmt.Errorf("stage %q: entrypoint is only allowed on the final stage (%q)", s.Name, finalName)
 		}
+		// An entrypoint with no argv is not a container that starts and does
+		// nothing — it is a broken ENTRYPOINT [] line, and with source: set
+		// it is a bash wrapper that execs nothing. healthcheck.exec already
+		// carries the same guard for the same reason.
+		if s.Entrypoint != nil && len(s.Entrypoint.Exec) == 0 {
+			return fmt.Errorf("stage %q: entrypoint.exec must be non-empty", s.Name)
+		}
 		if !isFinal && s.User != "" {
 			return fmt.Errorf("stage %q: user is only allowed on the final stage (%q)", s.Name, finalName)
 		}
@@ -495,6 +502,13 @@ func validateCopy(entries []CopyEntry, priorNames map[string]bool) error {
 			return fmt.Errorf("copy from %q: paths must be non-empty", e.From)
 		}
 		for _, p := range e.Paths {
+			// An empty entry is not a no-op: ir.Lower defaults an omitted
+			// dest to Paths[0], so `paths: [""]` compiles to a COPY with a
+			// missing source and a blank destination — a Dockerfile that
+			// builds the wrong thing rather than one that fails to build.
+			if p == "" {
+				return fmt.Errorf("copy from %q: a paths entry must not be empty", e.From)
+			}
 			if p == "/" {
 				return fmt.Errorf("copy from %q: copying \"/\" is not allowed; list the specific paths you need", e.From)
 			}

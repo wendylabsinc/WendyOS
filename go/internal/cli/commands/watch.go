@@ -53,6 +53,7 @@ func newWatchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type when a Dockerfile sits alongside Package.swift or Python markers: docker, swift, or python")
 	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Build file to build from: a Dockerfile, Containerfile, or Stagefile (e.g. Dockerfile.prod, prod.stagefile.yaml)")
 	cmd.Flags().StringVar(&opts.builder, "builder", "", "Image builder to force for Dockerfile/Containerfile builds: docker or apple-container")
+	cmd.Flags().StringVar(&opts.stagefileBackend, "stagefile-backend", "", "Stagefile compiler backend: dockerfile (default) or llb")
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Redeploy without showing logs or running openURL and cli postStart actions")
 	cmd.Flags().StringVar(&opts.prefix, "prefix", "", "Project directory to watch instead of the current working directory")
