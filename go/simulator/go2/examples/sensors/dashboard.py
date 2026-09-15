@@ -81,7 +81,8 @@ def png_image(metadata, pixels):
 
 
 class SensorStore:
-    def __init__(self):
+    def __init__(self, *, ignore_capture_age=False):
+        self.ignore_capture_age = ignore_capture_age
         self.lock = threading.RLock()
         self.samples = {}
         self.errors = {}
@@ -97,10 +98,13 @@ class SensorStore:
         now = time.monotonic() if now is None else now
         try:
             stamp = message.header.stamp
+            if (type(stamp.sec) is not int or type(stamp.nanosec) is not int
+                    or not math.isfinite(wall_ns) or not math.isfinite(now)):
+                raise ValueError("Invalid capture timestamp or application clock")
             source = stamp.sec * 1_000_000_000 + stamp.nanosec
             age = (wall_ns - source) / 1e9
             if (not 0 <= stamp.nanosec < 1_000_000_000 or source <= 0
-                    or not -0.05 <= age < STALE_AFTER):
+                    or (not self.ignore_capture_age and not -0.05 <= age < STALE_AFTER)):
                 raise ValueError("Old or invalid capture timestamp")
             expected_frame = TOPICS[key][1]
             if expected_frame and message.header.frame_id != expected_frame:
@@ -129,7 +133,8 @@ class SensorStore:
                 previous = self.samples.get(key)
                 if previous and source <= previous["stamp_ns"]:
                     raise ValueError("Repeated or reordered capture")
-                self.samples[key] = {"stamp_ns": source, "captured": now - max(0, age), "data": data}
+                self.samples[key] = {"stamp_ns": source, "captured": now if self.ignore_capture_age else now - max(0, age),
+                                     "capture_age_seconds": age, "data": data}
                 self.receipts[key].append(now)
                 self.errors.pop(key, None)
                 if key == "camera":
@@ -163,8 +168,9 @@ class SensorStore:
                                "age_ms": max(0, age) * 1000 if age is not None else None,
                                "rate_hz": len(receipts) / 2, "error": self.errors.get(key),
                                "data": sample["data"] if sample else None,
-                               "stamp_ns": str(sample["stamp_ns"]) if sample else None}
-            return {"topics": topics, "trail": list(self.trail), "trail_total": self.trail_total}
+                               "stamp_ns": str(sample["stamp_ns"]) if sample else None,
+                               "capture_age_seconds": sample["capture_age_seconds"] if sample else None}
+            return {"ignore_capture_age": self.ignore_capture_age, "topics": topics, "trail": list(self.trail), "trail_total": self.trail_total}
 
     def camera_png(self, now=None):
         now = time.monotonic() if now is None else now
@@ -240,11 +246,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8904)
+    parser.add_argument("--ignore-capture-age", action="store_true",
+                        help="use local arrival time for sensor timeouts with unsynchronized clocks")
     args, ros_args = parser.parse_known_args()
     import rclpy
     from rclpy.executors import ExternalShutdownException
 
-    store = SensorStore()
+    store = SensorStore(ignore_capture_age=args.ignore_capture_age)
+    if args.ignore_capture_age:
+        print("Capture age checks disabled. Sensor timeouts use local arrival time.", flush=True)
     server = make_server(store, args.host, args.port)
     rclpy.init(args=ros_args)
     node = make_node(store)

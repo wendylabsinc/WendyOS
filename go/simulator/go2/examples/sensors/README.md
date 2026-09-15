@@ -2,8 +2,7 @@
 
 This app uses the [shared native Go2 interfaces](../README.md) on hardware and
 in the simulator. The source manifest uses host discovery; managed VM deployment
-normalizes it to guest loopback. Sensor clocks must satisfy the shared freshness
-requirements. Use a CLI built from this checkout.
+normalizes it to guest loopback. The Docker launch uses local arrival time for sensor timeouts. Use a CLI built from this checkout.
 
 
 A read-only browser app showing the robot's front camera, planar lidar scan,
@@ -34,7 +33,7 @@ pixels are encoded as PNG with the standard library.
 In a ROS-enabled shell on the same bus, you can also run:
 
 ```sh
-python3 dashboard.py --host 127.0.0.1 --port 8904
+python3 dashboard.py --ignore-capture-age --host 127.0.0.1 --port 8904
 ```
 
 This requires the simulator's ROS publishers; a standalone browser preview
@@ -50,7 +49,7 @@ without ROS cannot supply this dashboard.
    and left is left. Unknown, infinite and out-of-range returns are omitted;
    the coverage percentage shows how much of the scan is valid.
 3. Disable the camera, pause lidar, or pause the world in the sandbox. After
-   600 ms without a fresh capture, the affected sensor turns stale. Stale camera
+   600 ms without an accepted update, the affected sensor turns stale. Stale camera
    images and lidar returns disappear. Retained motion readings stay visible
    with their sensor's stale indicator.
 4. Restore sensors to resume observation automatically. This app never moves
@@ -66,8 +65,13 @@ without ROS cannot supply this dashboard.
 
 Odometry includes drift and is not a map. The dashboard measures received
 messages, not the simulator's internal production rate. Wrong frames, malformed
-payloads, repeated captures, captures older than 600 ms, and timestamps more than
-50 ms in the future are rejected. Delayed messages retain their capture age.
+payloads and repeated captures are rejected. The Docker command temporarily uses
+`--ignore-capture-age`, accepting unsynchronized capture clocks and expiring each
+sensor 600 ms after its last accepted arrival. The dashboard already displays
+partial lidar clouds without inventing returns in gaps. `/api/status` includes
+`ignore_capture_age` and each sensor's `capture_age_seconds` for diagnosis.
+Remove the flag to reject captures older than 600 ms or more than 50 ms in the
+future, and preserve capture age for delayed messages.
 
 `GET /api/status` returns a JSON snapshot; `GET /camera.png` returns the latest
 fresh exposure or HTTP 503 while no fresh camera frame is available. The page

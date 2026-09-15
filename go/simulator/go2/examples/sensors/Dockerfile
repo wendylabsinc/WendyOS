@@ -13,4 +13,4 @@ WORKDIR /app
 COPY go2_io.py ./
 COPY dashboard.py index.html ./
 EXPOSE 8904
-CMD ["python3", "/app/dashboard.py"]
+CMD ["python3", "/app/dashboard.py", "--ignore-capture-age"]

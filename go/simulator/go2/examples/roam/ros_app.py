@@ -11,7 +11,7 @@ import time
 
 from go2_io import CLOUD_TOPIC, ODOM_TOPIC, SPORT_TOPIC, cloud_scan, sport_request, sensor_wall_ns
 
-from controller import RoamController
+from controller import RoamController, finite
 
 
 MAX_SOURCE_AGE = 0.35
@@ -43,31 +43,45 @@ def pose_values(message):
 
 
 class ExposureGate:
-    """Map fresh, strictly advancing ROS capture stamps to monotonic time."""
+    """Admit advancing captures, optionally using arrival time for their age."""
 
-    def __init__(self):
+    def __init__(self, *, ignore_capture_age=False):
+        self.ignore_capture_age = ignore_capture_age
         self.last_stamps = {}
         self.clock_anchor = None
+        self.rejections = {}
+        self.ages = {}
 
     def capture_time(self, topic, stamp, *, wall_ns=None, monotonic=None):
         wall_ns = sensor_wall_ns(time.time_ns() if wall_ns is None else wall_ns)
         monotonic = time.monotonic() if monotonic is None else monotonic
+        self.ages.pop(topic, None)
+        if (type(stamp.sec) is not int or type(stamp.nanosec) is not int
+                or not 0 <= stamp.nanosec < 1_000_000_000
+                or not finite(wall_ns) or not finite(monotonic)):
+            self.rejections[topic] = "malformed_capture_stamp"
+            return None
         source = stamp.sec * 1_000_000_000 + stamp.nanosec
         age = (wall_ns - source) / 1e9
-        if (not 0 <= stamp.nanosec < 1_000_000_000 or source <= 0
-                or not -0.05 <= age < MAX_SOURCE_AGE
-                or source <= self.last_stamps.get(topic, -1)):
+        self.ages[topic] = age
+        reason = ("nonpositive_capture_stamp" if source <= 0 else
+                  "capture_in_future" if not self.ignore_capture_age and age < -0.05 else
+                  "capture_too_old" if not self.ignore_capture_age and age >= MAX_SOURCE_AGE else
+                  "capture_not_advancing" if source <= self.last_stamps.get(topic, -1) else None)
+        if reason:
+            self.rejections[topic] = reason
             return None
+        self.rejections.pop(topic, None)
         self.last_stamps[topic] = source
-        # Preserve exposure age; delayed packets must not buy another full
-        # freshness interval merely by arriving at the controller now.
+        if self.ignore_capture_age:
+            return monotonic
         if self.clock_anchor is None:
             self.clock_anchor = (wall_ns, monotonic)
         anchor_wall, anchor_monotonic = self.clock_anchor
         return min(monotonic, anchor_monotonic + (source - anchor_wall) / 1e9)
 
 
-def make_node(*, autostart=False):
+def make_node(*, autostart=False, ignore_capture_age=False, allow_scan_gaps=False):
     from unitree_api.msg import Request
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
@@ -79,8 +93,8 @@ def make_node(*, autostart=False):
     class RoamingApp(Node):
         def __init__(self):
             super().__init__("wendy_go2_roam")
-            self.controller = RoamController()
-            self.exposures = ExposureGate()
+            self.controller = RoamController(allow_scan_gaps=allow_scan_gaps)
+            self.exposures = ExposureGate(ignore_capture_age=ignore_capture_age)
             self.latest_odom = None
             self.observed = {}
             self.autostart_pending = autostart
@@ -126,6 +140,8 @@ def make_node(*, autostart=False):
             else:
                 self.observed.pop("scan", None)
                 self.observation_error = "Scan coverage is incomplete"
+            if not self.controller.active:
+                self.publish_command(0.0, 0.0)
 
         def odom(self, message):
             pose = pose_values(message)
@@ -171,7 +187,8 @@ def make_node(*, autostart=False):
         def tick(self):
             now = time.monotonic()
             stale = stale_observation(self.observed, now)
-            if self.autostart_pending and stale is None:
+            if (self.autostart_pending and stale is None and self.controller._scan
+                    and self.controller._scan["front"]["usable"]):
                 self.autostart_pending = False
                 self.controller.start(now)
             if self.controller.active and stale:
@@ -179,7 +196,9 @@ def make_node(*, autostart=False):
             self.publish_command(*self.controller.tick(now))
             status = self.controller.status(now)
             status.update(autostart_pending=self.autostart_pending,
-                          observation_error=self.observation_error)
+                          observation_error=self.observation_error,
+                          ignore_capture_age=self.exposures.ignore_capture_age,
+                          capture_age_seconds=dict(self.exposures.ages))
             self.status_pub.publish(String(data=json.dumps(status, allow_nan=False)))
 
     return RoamingApp()
@@ -191,10 +210,20 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--autostart", action="store_true",
-                        help="start once after fresh scan and odometry arrive")
+                        help="start once after accepted scan and odometry arrive")
+    parser.add_argument("--ignore-capture-age", action="store_true",
+                        help="use local arrival time for sensor timeouts with unsynchronized clocks")
+    parser.add_argument("--allow-scan-gaps", action="store_true",
+                        help="allow missing returns; require measured clearance in each sector used for motion")
     args, ros_args = parser.parse_known_args()
     rclpy.init(args=ros_args)
-    node = make_node(autostart=args.autostart)
+    node = make_node(autostart=args.autostart, ignore_capture_age=args.ignore_capture_age,
+                     allow_scan_gaps=args.allow_scan_gaps)
+    if args.ignore_capture_age:
+        print("Capture age checks disabled. Sensor timeouts use local arrival time.", flush=True)
+    if args.allow_scan_gaps:
+        print("Scan gaps allowed. Obstacle checks use measured returns; unobserved obstacles may be missed.",
+              flush=True)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

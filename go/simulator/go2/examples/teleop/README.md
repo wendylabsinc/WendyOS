@@ -102,3 +102,9 @@ node teleop.browser.mjs http://127.0.0.1:8903
 Set `PLAYWRIGHT_MODULE` to an existing Playwright module path if needed. This
 checks keyboard and pointer driving, release, focus loss, reload, disconnects,
 and mobile layout, and writes desktop/mobile screenshots to `/tmp`.
+
+## Sensor compatibility
+
+Teleop uses browser controls and does not check sensor capture clocks or lidar
+coverage. The temporary clock and scan-gap options in Patrol, Roam and Sensors
+do not apply here. Its 250 ms browser heartbeat timeout remains active.

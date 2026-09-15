@@ -90,6 +90,51 @@ def test_distant_unknown_rear_returns_do_not_strand_a_clear_forward_corridor():
     assert controller.tick(0) == (0.35, 0)
 
 
+def test_gap_mode_drives_with_front_returns_but_requires_observed_turn_sectors():
+    controller = RoamController(allow_scan_gaps=True)
+    scan = [math.inf] * 360
+    scan[180] = 4.0
+    observe(controller, 0, scan)
+    assert controller.start(0)
+    assert controller.tick(0) == (0.35, 0)
+    assert controller.status(0)["scan_coverage"]["front"] == {"observed": 1, "total": 51}
+    scan[180] = 0.6
+    observe(controller, 0.1, scan)
+    assert controller.tick(0.1) == (0, 0)
+    assert controller.reason == "no_clear_turn"
+
+
+def test_gap_mode_turns_using_measured_clearance_and_stops_for_close_return():
+    controller = RoamController(allow_scan_gaps=True)
+    scan = [math.inf] * 360
+    scan[180], scan[240] = 0.6, 2.0
+    observe(controller, 0, scan)
+    assert controller.start(0)
+    assert controller.tick(0) == (0, 0.4)
+    scan[240] = 0.2
+    observe(controller, 0.1, scan)
+    assert controller.tick(0.1) == (0, 0)
+    assert controller.reason == "turn_path_blocked"
+
+
+@pytest.mark.parametrize("bad", [math.nan, -math.inf, -1, 13, True, "clear"])
+def test_gap_mode_rejects_invalid_readings(bad):
+    controller = RoamController(allow_scan_gaps=True)
+    scan = [math.inf] * 360
+    scan[180], scan[0] = 4.0, bad
+    assert not observe(controller, 0, scan)
+    assert not controller.start(0)
+
+
+def test_gap_mode_rejects_empty_front_sector():
+    controller = RoamController(allow_scan_gaps=True)
+    scan = [math.inf] * 360
+    scan[0] = 4.0
+    observe(controller, 0, scan)
+    assert not controller.start(0)
+    assert controller.reason == "unknown_forward_path"
+
+
 @pytest.mark.parametrize("values,increment", [([4] * 180, math.pi / 180),
                                              ([4] * 360, 0), ([4] * 360, math.nan),
                                              ([4] * 36, math.pi / 18), (None, math.pi / 180)])

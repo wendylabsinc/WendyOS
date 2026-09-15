@@ -106,11 +106,12 @@ def horizontal_scan(sample):
 
 
 class RoamApp:
-    def __init__(self, client, *, period=0.05, sensor_period=0.1):
+    def __init__(self, client, *, period=0.05, sensor_period=0.1, allow_scan_gaps=False):
+        self.allow_scan_gaps = allow_scan_gaps
         self.client = client
         self.period, self.sensor_period = period, sensor_period
         self.lock = threading.RLock()
-        self.controller = RoamController()
+        self.controller = RoamController(allow_scan_gaps=self.allow_scan_gaps)
         self._token = None
         self._identity = None
         self._epoch = None
@@ -193,7 +194,7 @@ class RoamApp:
             self.last_scan_time = self.last_pose_time = None
             self.last_position = None
             self.distance = 0.0
-            self.controller = RoamController()
+            self.controller = RoamController(allow_scan_gaps=self.allow_scan_gaps)
             state = self.client.get("/api/status")
             self._check_status(state)
             if state.get("armed"):
@@ -332,8 +333,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--simulator", default="http://127.0.0.1:8898")
     parser.add_argument("--port", type=int, default=8901)
+    parser.add_argument("--allow-scan-gaps", action="store_true",
+                        help="allow missing lidar returns in otherwise observed motion sectors")
     args = parser.parse_args()
-    app = RoamApp(SimulatorClient(args.simulator))
+    app = RoamApp(SimulatorClient(args.simulator), allow_scan_gaps=args.allow_scan_gaps)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.app = app
     def shutdown(*_):
