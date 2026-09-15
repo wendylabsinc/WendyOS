@@ -193,6 +193,14 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab", "shift+tab":
+			if cfg, err := config.Load(); err == nil {
+				m.local.refreshTable()
+				m.sim.picker.SetDefaultKey(cfg.DefaultDevice)
+				m.cloud.defaultDevice = cfg.DefaultDevice
+				if m.cloudAuth != nil {
+					m.cloud.refreshTable()
+				}
+			}
 			m.active = cycleTab(deviceTabOrder(), m.active, tabCycleDelta(msg.String()))
 			if m.active == devicePickerCloudTab && m.cloudAuth != nil && !m.cloudStarted {
 				m.cloudStarted = true

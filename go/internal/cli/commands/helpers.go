@@ -873,6 +873,8 @@ type SelectedDevice struct {
 	// selections with no hostname to key on, which are left unenforced (see
 	// enforceSelectedDevicePin).
 	PinKey string
+	// DefaultSelector preserves a cloud target after its tunnel is connected.
+	DefaultSelector string
 }
 
 // Close releases any resources held by this SelectedDevice.
@@ -1176,12 +1178,12 @@ func connectToAgent(ctx context.Context, opts ...resolveOption) (*grpcclient.Age
 		}
 		device = loaded.DefaultDevice
 	}
-	if name, matched, err := simulatorName(device); err != nil {
-		return nil, err
-	} else if matched {
-		picked, err := connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, cfg.suppressUpdateCheck)
+	if picked, matched, err := connectNamedDeviceSelector(ctx, device, cfg.suppressUpdateCheck); matched {
 		if err != nil {
 			return nil, err
+		}
+		if deviceFlag == "" {
+			noteImplicitDevice(device, implicitDefaultDevice)
 		}
 		return picked.Agent, nil
 	}
@@ -3237,10 +3239,11 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 
 	rt := phaseTimer()
 
-	if name, matched, err := simulatorName(device); err != nil {
-		return nil, err
-	} else if matched {
-		return connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, cfg.suppressUpdateCheck)
+	if picked, matched, err := connectNamedDeviceSelector(ctx, device, cfg.suppressUpdateCheck); matched {
+		if err == nil && isDefault {
+			noteImplicitDevice(device, implicitDefaultDevice)
+		}
+		return picked, err
 	}
 
 	// Check if the device flag matches a known provider key.
@@ -3886,24 +3889,8 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	}
 
 	// Allow 'd' to set default and 'x' to unset default from the picker.
-	picker.OnSetDefault = func(item tui.PickerItem) string {
-		deviceID := pickerItemDeviceID(item)
-		if deviceID == "" {
-			return ""
-		}
-		if cfg, err := config.Load(); err == nil {
-			cfg.DefaultDevice = deviceID
-			_ = config.Save(cfg)
-		}
-		return fmt.Sprintf("Default device set to %s.", item.Name)
-	}
-	picker.OnUnsetDefault = func() string {
-		if cfg, err := config.Load(); err == nil {
-			cfg.DefaultDevice = ""
-			_ = config.Save(cfg)
-		}
-		return "Default device cleared."
-	}
+	picker.OnSetDefault = setPickerDefault
+	picker.OnUnsetDefault = unsetPickerDefault
 
 	// Cancel continuous discovery when the picker exits.
 	discoverCtx, discoverCancel := context.WithCancel(ctx)
@@ -4033,12 +4020,16 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 	}
 	switch choice.Tab {
 	case devicePickerCloudTab:
+		selector, err := cloudDeviceDefault(cloudAuth, choice.Cloud)
+		if err != nil {
+			return nil, err
+		}
 		cliLogln("Connecting to %s via cloud tunnel...", choice.Cloud.GetName())
 		conn, err := connectCloudAsset(ctx, cloudAuth, choice.Cloud, dm.cloud.brokerURL)
 		if err != nil {
 			return nil, err
 		}
-		return &SelectedDevice{Agent: conn}, nil
+		return &SelectedDevice{Agent: conn, DefaultSelector: selector}, nil
 	case devicePickerSimulatorTab:
 		return connectSimulatorChoiceFn(ctx, choice.Simulator, suppressUpdateCheck)
 	default:

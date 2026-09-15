@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 // defaultSimulatorVMName is the VM provisioned for someone who never named one.
@@ -55,6 +56,11 @@ func newSimulatorPickerModel(ctx context.Context) simulatorPickerModel {
 		picker: tui.NewPickerWithTitleAndColumns("Select a simulator", simulatorPickerColumns()),
 	}
 	m.picker.RemoveHint = "remove"
+	m.picker.OnSetDefault = setPickerDefault
+	m.picker.OnUnsetDefault = unsetPickerDefault
+	if cfg, err := config.Load(); err == nil {
+		m.picker.DefaultKey = cfg.DefaultDevice
+	}
 	m.picker.OnStopItem = func(item tui.PickerItem) (string, bool) { return stopSimulatorRow(ctx, item) }
 	m.picker.OnRemoveItem = removeSimulatorRow
 	// Quits the picker: creating downloads an image behind its own progress
@@ -219,6 +225,7 @@ func simulatorRowsWithRobots(statuses []vm.Status, robots map[string]simulatorRo
 		choice.RobotKind, choice.RobotState = robot.Kind, robot.State
 		items = append(items, tui.PickerItem{
 			Name:       st.Name,
+			DedupKey:   vmDeviceIDPrefix + st.Name,
 			Type:       vmStateLabel(st),
 			Address:    choice.Address,
 			OSVersion:  st.Meta.ImageVersion,
