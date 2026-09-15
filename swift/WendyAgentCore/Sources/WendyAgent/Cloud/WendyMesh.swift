@@ -2,7 +2,7 @@ public import Foundation
 
 /// Cloud identity loaded from the Wendy CLI configuration and passed to the
 /// network extension only for the lifetime of a tunnel connection.
-public struct WendyCloudCredentials: Codable, Equatable, Sendable {
+public struct WendyCloudCredentials: Codable, Equatable, Sendable, CustomDebugStringConvertible {
     public let pemCertificate: String
     public let pemCertificateChain: String
     public let pemPrivateKey: String
@@ -21,6 +21,13 @@ public struct WendyCloudCredentials: Codable, Equatable, Sendable {
         self.pemPrivateKey = pemPrivateKey
         self.organizationID = organizationID
         self.userID = userID
+    }
+
+    // Credentials cross into the Network Extension as an ephemeral JSON start option because
+    // that process boundary cannot carry a non-serializable key handle. Keep them out of the
+    // persistent provider configuration and redact all PEM and identity values from diagnostics.
+    public var debugDescription: String {
+        "WendyCloudCredentials(<redacted>)"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -137,7 +144,7 @@ public enum WendyMeshDNS {
     }
 
     public static func frameForTCP(_ message: Data) -> Data {
-        precondition(message.count <= Int(UInt16.max))
+        guard message.count <= Int(UInt16.max) else { return Data() }
         let count = UInt16(message.count)
         var result = Data([UInt8(count >> 8), UInt8(count & 0xff)])
         result.append(message)
@@ -170,10 +177,15 @@ public enum WendyMeshDNS {
         var offset = 12
         var labels: [String] = []
         while offset < bytes.count {
-            let count = Int(bytes[offset])
+            let lengthOctet = bytes[offset]
+            let count = Int(lengthOctet)
             offset += 1
             if count == 0 { break }
-            guard count <= 63, offset + count <= bytes.count else { return nil }
+            // Compression pointers are valid in DNS generally, but this intentionally minimal
+            // authoritative codec does not follow attacker-controlled offsets.
+            guard lengthOctet & 0xc0 == 0, count <= 63, offset + count <= bytes.count else {
+                return nil
+            }
             labels.append(String(decoding: bytes[offset..<(offset + count)], as: UTF8.self))
             offset += count
         }
@@ -245,8 +257,12 @@ public enum WendyICMPv4 {
         let bytes = [UInt8](packet)
         guard bytes.count >= 20, bytes[0] >> 4 == 4 else { return nil }
         let headerLength = Int(bytes[0] & 0x0f) * 4
+        let totalLength = Int(bytes[2]) << 8 | Int(bytes[3])
         guard headerLength >= 20,
-            bytes.count >= headerLength + 8,
+            totalLength >= headerLength + 8,
+            totalLength <= bytes.count,
+            bytes[6] & 0x3f == 0,
+            bytes[7] == 0,
             bytes[9] == 1,
             bytes[headerLength] == 8,
             bytes[headerLength + 1] == 0
@@ -258,7 +274,7 @@ public enum WendyICMPv4 {
             destinationAddress: dotted(bytes[16...19]),
             identifier: UInt16(bytes[headerLength + 4]) << 8 | UInt16(bytes[headerLength + 5]),
             sequence: UInt16(bytes[headerLength + 6]) << 8 | UInt16(bytes[headerLength + 7]),
-            payload: Data(bytes[(headerLength + 8)...])
+            payload: Data(bytes[(headerLength + 8)..<totalLength])
         )
     }
 
@@ -281,6 +297,12 @@ public enum WendyICMPv4 {
         sequence: UInt16,
         payload: Data
     ) -> Data {
+        guard payload.count <= Int(UInt16.max) - 28,
+            let sourceOctets = octets(source),
+            let destinationOctets = octets(destination)
+        else {
+            return Data()
+        }
         var icmp: [UInt8] = [
             type, 0, 0, 0,
             UInt8(identifier >> 8), UInt8(identifier & 0xff),
@@ -298,8 +320,8 @@ public enum WendyICMPv4 {
             0, 0, 0x40, 0,
             64, 1, 0, 0,
         ]
-        ip.append(contentsOf: octets(source))
-        ip.append(contentsOf: octets(destination))
+        ip.append(contentsOf: sourceOctets)
+        ip.append(contentsOf: destinationOctets)
         let ipChecksum = checksum(ip)
         ip[10] = UInt8(ipChecksum >> 8)
         ip[11] = UInt8(ipChecksum & 0xff)
@@ -320,9 +342,10 @@ public enum WendyICMPv4 {
         bytes.map(String.init).joined(separator: ".")
     }
 
-    private static func octets(_ address: String) -> [UInt8] {
-        let octets = address.split(separator: ".").compactMap { UInt8($0) }
-        precondition(octets.count == 4)
-        return octets
+    private static func octets(_ address: String) -> [UInt8]? {
+        let parts = address.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        let octets = parts.compactMap { UInt8($0) }
+        return octets.count == 4 ? octets : nil
     }
 }
