@@ -22,9 +22,8 @@ def angle(value):
 class RoamController:
     SCAN_TIMEOUT = 0.35
     POSE_TIMEOUT = 0.5
-    # The pinned walking policy sustains motion at .35; .25 can settle into a
-    # standing gait and trigger false stuck recoveries in an unobstructed room.
-    FORWARD_SPEED = 0.35
+    # The Go2 ignores forward speed requests below 0.5 m/s.
+    FORWARD_SPEED = 0.55
     TURN_SPEED = 0.4
     STOP_DISTANCE = 0.85
     CLEAR_DISTANCE = 1.15
@@ -49,6 +48,8 @@ class RoamController:
         self._preferred_direction = 1
         self._turn_started = None
         self._turn_yaw = None
+        self._turn_paused = 0.0
+        self._coverage_gap_at = None
         self._progress_at = None
         self._progress_pose = None
         self._recoveries = 0
@@ -137,6 +138,7 @@ class RoamController:
         self._command = (0.0, 0.0)
         self._recoveries = 0
         self._turn_direction = 0
+        self._coverage_gap_at = None
         self._progress_at = float(now)
         self._progress_pose = self._pose[:2] if self._pose_fresh(now) else None
         return True
@@ -147,6 +149,8 @@ class RoamController:
         self._command = (0.0, 0.0)
         self._turn_direction = 0
         self._turn_started = self._turn_yaw = None
+        self._turn_paused = 0.0
+        self._coverage_gap_at = None
         self._progress_at = self._progress_pose = None
 
     def _begin_turn(self, now, reason):
@@ -169,6 +173,7 @@ class RoamController:
         self._turn_direction = direction
         self._preferred_direction = direction
         self._turn_started = float(now)
+        self._turn_paused = 0.0
         self._turn_yaw = self._pose[2] if self._pose_fresh(now) else None
         self.state, self.reason = "turning", reason
         self._progress_at = self._progress_pose = None
@@ -186,9 +191,27 @@ class RoamController:
         if self._scan is None:
             self.stop("invalid_scan")
             return self._command
-        if not self._scan["front"]["usable"]:
+        # Native lidar clouds can briefly omit the entire forward sector.
+        # Wait at zero velocity in gap mode; a prolonged loss still disarms.
+        # Check the deadline before accepting a recovered scan so a delayed
+        # tick cannot silently resume after the gap has expired.
+        if (self._coverage_gap_at is not None
+                and now - self._coverage_gap_at >= self.SCAN_TIMEOUT):
             self.stop("unknown_forward_path")
             return self._command
+        if not self._scan["front"]["usable"]:
+            if self.allow_scan_gaps:
+                if self._coverage_gap_at is None:
+                    self._coverage_gap_at = float(now)
+                self._command = (0.0, 0.0)
+            else:
+                self.stop("unknown_forward_path")
+            return self._command
+        if self._coverage_gap_at is not None:
+            if self.state == "turning":
+                self._turn_paused += now - self._coverage_gap_at
+            self._coverage_gap_at = None
+            self._progress_at = self._progress_pose = None
         front = self._scan["front"]["clearance"]
         if self.state == "cruising":
             if front <= self.STOP_DISTANCE:
@@ -218,7 +241,7 @@ class RoamController:
                 self.stop("turn_path_blocked")
                 return self._command
             elapsed = now - self._turn_started
-            progress = elapsed * self.TURN_SPEED
+            progress = max(0.0, elapsed - self._turn_paused) * self.TURN_SPEED
             if self._turn_yaw is not None and self._pose_fresh(now):
                 progress = self._turn_direction * angle(self._pose[2] - self._turn_yaw)
             if progress >= self.TURN_ANGLE and front >= self.CLEAR_DISTANCE:
@@ -244,7 +267,9 @@ class RoamController:
             return self._scan[side]["clearance"] if self._scan else None
 
         return {
-            "active": self.active, "state": self.state, "reason": self.reason,
+            "active": self.active,
+            "state": "waiting_scan" if self._coverage_gap_at is not None else self.state,
+            "reason": "waiting_for_front_returns" if self._coverage_gap_at is not None else self.reason,
             "allow_scan_gaps": self.allow_scan_gaps,
             "scan_coverage": {name: {"observed": sector["observed"], "total": sector["total"]}
                               for name, sector in self._scan.items()} if self._scan else None,

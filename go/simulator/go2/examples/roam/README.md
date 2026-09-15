@@ -6,7 +6,8 @@ normalizes it to guest loopback. The Docker launch enables the temporary clock a
 
 
 This small application walks the virtual Go2 around its room, stops before
-obstacles, and turns toward open space using lidar and odometry. **Start** and
+obstacles, and turns toward open space using lidar and odometry. It requests a
+forward speed of 0.55 m/s to stay above the Go2's 0.5 m/s minimum. **Start** and
 **Stop** control the roaming behavior. The controller limits its velocity
 requests and stops when observations become stale or unusable. Fresh sensor
 data alone cannot restart a stopped controller.
@@ -82,6 +83,11 @@ captures still fail admission. Delayed captures arriving now cannot be detected.
 one measured front return before driving and measured side/sweep clearance before
 turning. Empty sectors needed for motion still block that motion. Obstacle
 thresholds use the closest measured returns. Obstacles in gaps can be missed.
+If a forward sector briefly has no returns, the controller requests zero velocity
+and reports `waiting_scan`. It resumes only when usable front returns recover
+within 350 ms, checking the new clearance before moving. A longer gap disarms the
+controller and requires a new Start request. Stale or invalid observations and
+explicit stops also remain latched.
 `/roam/status` includes `allow_scan_gaps`, `ignore_capture_age`, `scan_coverage`
 and `capture_age_seconds`. Remove either flag to restore its strict check.
 The local preview also accepts `app.py --allow-scan-gaps`; its simulator freshness

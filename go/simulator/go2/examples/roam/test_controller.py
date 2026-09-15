@@ -40,7 +40,7 @@ def test_explicit_start_and_stop_are_required_and_commands_are_bounded():
     observe(controller, 0)
     assert controller.tick(0) == (0, 0)
     assert controller.start(0)
-    assert controller.tick(0) == (0.35, 0)
+    assert controller.tick(0) == (0.55, 0)
     controller.stop("operator_stop")
     observe(controller, 0.1)
     assert controller.tick(0.1) == (0, 0)
@@ -61,7 +61,7 @@ def test_old_or_duplicate_scans_and_poses_cannot_overwrite_newer_observations():
     controller = moving(10)
     assert not observe(controller, 9, front=0.2)
     assert not observe(controller, 10, front=0.2)
-    assert controller.tick(10) == (0.35, 0)
+    assert controller.tick(10) == (0.55, 0)
     assert controller.observe_pose(1, 2, 0.2, 10)
     assert not controller.observe_pose(100, 100, 2, 9)
     assert not controller.observe_pose(100, 100, 2, 10)
@@ -87,7 +87,7 @@ def test_distant_unknown_rear_returns_do_not_strand_a_clear_forward_corridor():
     scan[-30:] = [math.inf] * 30
     observe(controller, 0, scan)
     assert controller.start(0)
-    assert controller.tick(0) == (0.35, 0)
+    assert controller.tick(0) == (0.55, 0)
 
 
 def test_gap_mode_drives_with_front_returns_but_requires_observed_turn_sectors():
@@ -96,7 +96,7 @@ def test_gap_mode_drives_with_front_returns_but_requires_observed_turn_sectors()
     scan[180] = 4.0
     observe(controller, 0, scan)
     assert controller.start(0)
-    assert controller.tick(0) == (0.35, 0)
+    assert controller.tick(0) == (0.55, 0)
     assert controller.status(0)["scan_coverage"]["front"] == {"observed": 1, "total": 51}
     scan[180] = 0.6
     observe(controller, 0.1, scan)
@@ -178,7 +178,7 @@ def test_heading_feedback_handles_wrap_and_requires_clearance_hysteresis():
     assert controller.tick(4.1) == (0, 0.4), "clearing entry threshold alone must not resume forward"
     observe(controller, 4.2, front=1.3)
     controller.observe_pose(0, 0, yaw + math.pi / 2 + 0.02, 4.2)
-    assert controller.tick(4.2) == (0.35, 0)
+    assert controller.tick(4.2) == (0.55, 0)
 
 
 def test_time_bounded_turn_works_without_odometry_but_stalled_heading_cannot_fake_progress():
@@ -186,7 +186,7 @@ def test_time_bounded_turn_works_without_odometry_but_stalled_heading_cannot_fak
     observe(controller, 0.1, front=0.6)
     controller.tick(0.1)
     observe(controller, 4.1, front=2)
-    assert controller.tick(4.1) == (0.35, 0)
+    assert controller.tick(4.1) == (0.55, 0)
     controller = moving()
     controller.observe_pose(0, 0, 0, 0)
     observe(controller, 0.1, front=0.6)
@@ -227,7 +227,7 @@ def test_stuck_forward_motion_enters_bounded_recovery_but_actual_progress_keeps_
     controller.tick(0)
     observe(controller, 3.1)
     controller.observe_pose(0.6, 0, 0, 3.1)
-    assert controller.tick(3.1) == (0.35, 0)
+    assert controller.tick(3.1) == (0.55, 0)
 
 
 @pytest.mark.parametrize("bad_time", [math.nan, math.inf, -1, True])
@@ -236,3 +236,82 @@ def test_bad_clock_stops_and_status_remains_json_safe(bad_time):
     assert controller.tick(bad_time) == (0, 0)
     assert controller.status(0)["reason"] == "invalid_clock"
     json.dumps(controller.status(bad_time), allow_nan=False)
+
+
+def test_gap_mode_waits_at_zero_then_resumes_on_fresh_front_returns():
+    controller = RoamController(allow_scan_gaps=True)
+    observe(controller, 0)
+    assert controller.start(0)
+    assert controller.tick(0) == (0.55, 0)
+    observe(controller, 0.1, front=math.inf)
+    assert controller.tick(0.1) == (0, 0)
+    assert controller.active
+    assert controller.status(0.1)["state"] == "waiting_scan"
+    assert controller.status(0.1)["reason"] == "waiting_for_front_returns"
+    assert controller.tick(0.15) == (0, 0)
+    observe(controller, 0.2)
+    assert controller.tick(0.2) == (0.55, 0)
+    assert controller.status(0.2)["state"] == "cruising"
+
+
+@pytest.mark.parametrize("recovered_before_tick", [False, True])
+def test_gap_mode_prolonged_loss_latches_even_if_returns_arrive_before_next_tick(recovered_before_tick):
+    controller = RoamController(allow_scan_gaps=True)
+    observe(controller, 0)
+    assert controller.start(0)
+    observe(controller, 0.1, front=math.inf)
+    assert controller.tick(0.1) == (0, 0)
+    observe(controller, 0.3, front=math.inf)
+    assert controller.tick(0.3) == (0, 0)
+    observe(controller, 0.46, front=4 if recovered_before_tick else math.inf)
+    assert controller.tick(0.46) == (0, 0)
+    assert not controller.active
+    assert controller.reason == "unknown_forward_path"
+    observe(controller, 0.5)
+    assert controller.tick(0.5) == (0, 0)
+    assert controller.start(0.5)
+
+
+@pytest.mark.parametrize("cause", ["operator_stop", "stale_scan", "invalid_scan"])
+def test_gap_wait_never_rearms_after_a_latched_stop(cause):
+    controller = RoamController(allow_scan_gaps=True)
+    observe(controller, 0)
+    assert controller.start(0)
+    observe(controller, 0.1, front=math.inf)
+    assert controller.tick(0.1) == (0, 0)
+    if cause == "operator_stop":
+        controller.stop(cause)
+    elif cause == "stale_scan":
+        controller.tick(0.46)
+    else:
+        observe(controller, 0.2, front=math.nan)
+    assert controller.reason == cause
+    observe(controller, 0.5)
+    assert controller.tick(0.5) == (0, 0)
+    assert not controller.active
+
+
+def test_gap_recovery_rechecks_obstacles_before_forward_motion():
+    controller = RoamController(allow_scan_gaps=True)
+    observe(controller, 0)
+    assert controller.start(0)
+    observe(controller, 0.1, front=math.inf)
+    assert controller.tick(0.1) == (0, 0)
+    observe(controller, 0.2, front=0.6)
+    assert controller.tick(0.2) == (0, 0.4)
+    assert controller.reason == "obstacle"
+
+
+def test_gap_during_turn_does_not_count_waiting_as_rotation():
+    controller = RoamController(allow_scan_gaps=True)
+    observe(controller, 0, front=0.6)
+    assert controller.start(0)
+    assert controller.tick(0) == (0, 0.4)
+    for step in range(1, 39):
+        now = step / 10
+        observe(controller, now, front=math.inf if step == 1 else 4)
+        assert controller.tick(now) == ((0, 0) if step == 1 else (0, 0.4))
+    observe(controller, 4.0)
+    assert controller.tick(4.0) == (0, 0.4)
+    observe(controller, 4.1)
+    assert controller.tick(4.1) == (0.55, 0)
