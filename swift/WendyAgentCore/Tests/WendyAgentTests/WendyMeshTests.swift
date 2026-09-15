@@ -117,6 +117,7 @@ struct WendyMeshTests {
         #expect(ipv6Endpoint.port == 50052)
 
         #expect(throws: (any Error).self) { try parseCloudEndpoint("localhost:0") }
+        #expect(throws: (any Error).self) { try parseCloudEndpoint("::1") }
         #expect(throws: (any Error).self) { try parseCloudEndpoint("[::1]junk") }
     }
 
