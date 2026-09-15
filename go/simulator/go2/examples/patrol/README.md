@@ -66,7 +66,7 @@ Routes allow 1 to 16 waypoints within 3 m of the start, 1 to 5 laps, and at most
 must remain within ±5 m on both odom axes. Each waypoint has a 45-second deadline;
 the route has a five-minute deadline.
 
-Commands are bounded to 0.35 m/s forward and ±0.4 rad/s yaw. Patrol turns in place
+Commands are bounded to 0.55 m/s forward and ±0.4 rad/s yaw. Patrol turns in place
 before walking and accepts arrival within 25 cm. It requires more than 85 cm
 forward clearance and 55 cm elsewhere among measured returns.
 

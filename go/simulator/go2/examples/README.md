@@ -25,6 +25,13 @@ it remains a complete standalone Docker/Wendy build context. After changing
 `--check` to verify those copies. Message definitions come from the simulator's
 pinned `unitree_ros2` inputs, not a moving upstream branch.
 
+## Forward speed
+
+Use 0.55 m/s as the default forward speed in every driving example. The physical
+Go2 ignores forward requests below 0.5 m/s. Zero remains the stop command; this
+minimum does not apply to yaw rates in rad/s. Teleop preserves its forward
+component on diagonals and reduces lateral motion to stay within its total cap.
+
 ## Sensor contract
 
 Autonomous examples project `/utlidar/cloud_base`, frame `base_link`, into
@@ -72,4 +79,5 @@ Go2 control arbitration remains the robot firmware's responsibility.
 
 The examples do not change posture or switch the robot's motion mode.
 Patrol and Roam stop on observation faults and need a new Start after a route
-has begun. Teleop expires browser heartbeats after 250 ms.
+has begun. In gap mode, Roam waits at zero velocity for brief missing front
+returns and can resume within 350 ms; longer gaps require a new Start. Teleop expires browser heartbeats after 250 ms.

@@ -40,7 +40,8 @@ def validate_route(waypoints, laps):
 class PatrolController:
     """Follow a bounded route once; every fault requires an explicit new start."""
 
-    SPEED = 0.35
+    # The Go2 ignores forward requests below 0.5 m/s.
+    SPEED = 0.55
     TURN_SPEED = 0.4
     ARRIVAL_DISTANCE = 0.25
     FRONT_CLEARANCE = 0.85

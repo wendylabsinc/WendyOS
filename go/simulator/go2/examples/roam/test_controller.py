@@ -315,3 +315,19 @@ def test_gap_during_turn_does_not_count_waiting_as_rotation():
     assert controller.tick(4.0) == (0, 0.4)
     observe(controller, 4.1)
     assert controller.tick(4.1) == (0.55, 0)
+
+
+def test_repeated_short_gaps_do_not_disable_stuck_detection():
+    controller = RoamController(allow_scan_gaps=True)
+    observe(controller, 0)
+    controller.observe_pose(0, 0, 0, 0)
+    assert controller.start(0)
+    for step in range(1, 51):
+        now = step / 10
+        observe(controller, now, front=math.inf if step % 4 == 0 else 4)
+        controller.observe_pose(0, 0, 0, now)
+        controller.tick(now)
+        if controller.reason == "stuck_recovery":
+            break
+    assert controller.state == "turning"
+    assert controller.reason == "stuck_recovery"

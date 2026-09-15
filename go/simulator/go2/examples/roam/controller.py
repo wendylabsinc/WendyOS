@@ -208,10 +208,12 @@ class RoamController:
                 self.stop("unknown_forward_path")
             return self._command
         if self._coverage_gap_at is not None:
+            paused = now - self._coverage_gap_at
             if self.state == "turning":
-                self._turn_paused += now - self._coverage_gap_at
+                self._turn_paused += paused
+            if self._progress_at is not None:
+                self._progress_at += paused
             self._coverage_gap_at = None
-            self._progress_at = self._progress_pose = None
         front = self._scan["front"]["clearance"]
         if self.state == "cruising":
             if front <= self.STOP_DISTANCE:

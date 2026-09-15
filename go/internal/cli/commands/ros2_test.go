@@ -589,6 +589,22 @@ func TestROS2RPCError_FailedPreconditionIsNonNil(t *testing.T) {
 	}
 }
 
+func TestROS2RPCError_LegacyAgentRequiresUpdateForSystemGraph(t *testing.T) {
+	err := ros2RPCError(status.Error(codes.FailedPrecondition,
+		"no running ROS 2 containers found; deploy an app with a frameworks.ros2 config first"))
+	if err == nil || !strings.Contains(err.Error(), "wendy device update") || !strings.Contains(err.Error(), "without deploying an app") {
+		t.Fatalf("legacy agent should explain how to enable system inspection: %v", err)
+	}
+}
+
+func TestROS2RPCError_ExplicitAppScopePreservesError(t *testing.T) {
+	msg := "no running ROS 2 containers found; use explicit host inspection with a domain ID for robot/host sensors, or deploy an app with a frameworks.ros2 config for app-scoped inspection"
+	err := ros2RPCError(status.Error(codes.FailedPrecondition, msg))
+	if err == nil || err.Error() != msg {
+		t.Fatalf("app-scoped error = %v, want %q", err, msg)
+	}
+}
+
 // TestROS2RPCError_UnimplementedIsNonNil ensures an agent that is too old to
 // support ROS 2 inspection still causes a non-zero exit.
 func TestROS2RPCError_UnimplementedIsNonNil(t *testing.T) {

@@ -15,7 +15,7 @@ from teleop import (ControlError, DEADMAN_SECONDS, PUBLISH_SECONDS, TeleopContro
                     ZERO, handler_for, make_node, parse_json, velocity)
 
 
-def request(session="test", sequence=1, keys=None, speed=0.3, turn_speed=0.6):
+def request(session="test", sequence=1, keys=None, speed=0.55, turn_speed=0.6):
     return {"session": session, "sequence": sequence, "keys": ["w"] if keys is None else keys,
             "speed": speed, "turn_speed": turn_speed}
 
@@ -35,7 +35,7 @@ def test_startup_idle_and_release_publish_zero_immediately(rig):
     session = control.enable({})["session"]
     control.drive(request(session))
     control.tick()
-    assert commands[-1] == (0.3, 0.0, 0.0)
+    assert commands[-1] == (0.55, 0.0, 0.0)
     control.release({"session": session, "sequence": 2})
     assert commands[-1] == ZERO
     assert not control.status()["enabled"]
@@ -147,7 +147,7 @@ def test_concurrent_timer_cannot_publish_nonzero_after_release():
             unblock.set()
         tick.result(timeout=2)
         stop.result(timeout=2)
-    assert commands[-2:] == [(0.3, 0.0, 0.0), ZERO]
+    assert commands[-2:] == [(0.55, 0.0, 0.0), ZERO]
 
 
 def test_shutdown_prevents_new_sessions(rig):
@@ -161,7 +161,8 @@ def test_shutdown_prevents_new_sessions(rig):
 def test_velocity_caps_diagonals_and_cancels_opposite_keys():
     x, y, yaw = velocity(request(keys=["w", "a", "q"], speed=99, turn_speed=99))
     assert (x*x + y*y)**0.5 == pytest.approx(0.6)
-    assert 0 < y <= 0.4
+    assert x == 0.6
+    assert y == 0
     assert yaw == 1.0
     assert velocity(request(keys=["w", "s", "a", "d", "q", "e"])) == ZERO
     assert velocity(request(speed=-1, turn_speed=-1, keys=["s", "e"])) == ZERO
@@ -221,7 +222,7 @@ def test_http_page_and_control_round_trip(http, rig):
     session = json.loads(body)["session"]
     assert http("/api/drive", json.dumps(request(session)).encode())[0] == 200
     rig[0].tick()
-    assert rig[2][-1][0] == 0.3
+    assert rig[2][-1][0] == 0.55
     assert http("/api/release", json.dumps({"session": session, "sequence": 2}).encode())[0] == 200
     assert rig[2][-1] == ZERO
     assert http("/api/drive", json.dumps(request(session, sequence=3)).encode())[0] == 409
@@ -270,4 +271,24 @@ def test_ros_adapter_starts_zero_and_publishes_sport_at_20_hz(monkeypatch):
     session = node.control.enable({})["session"]
     node.control.drive(request(session, keys=["a", "e"]))
     timers[0][1]()
-    assert json.loads(commands[-1].parameter) == {"x": 0.0, "y": 0.3, "z": -0.6}
+    assert json.loads(commands[-1].parameter) == {"x": 0.0, "y": 0.4, "z": -0.6}
+
+
+@pytest.mark.parametrize("forward,sign", [("w", 1), ("s", -1)])
+@pytest.mark.parametrize("side", ["a", "d"])
+def test_default_diagonal_preserves_forward_minimum(forward, sign, side):
+    x, y, yaw = velocity(request(keys=[forward, side]))
+    assert x == sign * 0.55
+    assert 0 < abs(y) <= 0.4
+    assert (x*x + y*y)**0.5 == pytest.approx(0.6)
+    assert yaw == 0
+
+
+@pytest.mark.parametrize("walking_speed", [0.1, 0.3, 0.5, 0.54])
+def test_forward_speed_below_minimum_is_rejected(walking_speed):
+    with pytest.raises(ControlError, match="at least 0.55"):
+        velocity(request(speed=walking_speed))
+
+
+def test_zero_speed_still_stops_translation():
+    assert velocity(request(keys=["w", "a"], speed=0)) == ZERO

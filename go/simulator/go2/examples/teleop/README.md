@@ -77,6 +77,10 @@ panel has no login; use it on your local simulator network.
   A page reload never restores its old controls.
 - The server rejects malformed requests and nonfinite speeds. Translation is
   capped at 0.6 m/s overall, lateral velocity at 0.4 m/s, and yaw at 1 rad/s.
+  Walking pace defaults to 0.55 m/s; nonzero settings below 0.55 m/s are
+  rejected because the Go2 ignores forward requests below 0.5 m/s. Diagonal
+  input reduces lateral velocity to preserve the forward speed within the
+  total translation cap.
   Opposite keys cancel each other. The panel shows requested velocities;
   simulator permission and constraints determine actual movement.
 

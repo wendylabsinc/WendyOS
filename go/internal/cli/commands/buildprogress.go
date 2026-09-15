@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/sirupsen/logrus"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
 
@@ -37,6 +38,23 @@ func setBuildProgressOut(w io.Writer) func() {
 	prev := buildProgressOut
 	buildProgressOut = w
 	return func() { buildProgressOut = prev }
+}
+
+// runBuildProgressProgram keeps in-process BuildKit/containerd diagnostics from
+// moving the cursor underneath the live renderer. These libraries also use the
+// global logger, so a logger on the build context alone does not catch them.
+// The CLI owns one interactive build view, shared by all service workers.
+func runBuildProgressProgram(prog *tea.Program) (tea.Model, error) {
+	logger := logrus.StandardLogger()
+	out := logger.Out
+	logs := &boundedBuffer{max: maxRawBuildCapture}
+	logger.SetOutput(logs)
+	defer func() {
+		// SetOutput waits for in-flight log writes before we read the buffer.
+		logger.SetOutput(out)
+		_, _ = out.Write(logs.Bytes())
+	}()
+	return prog.Run()
 }
 
 // maxRawBuildCapture bounds the raw buildx log retained for failure replay.
@@ -320,7 +338,7 @@ func runBuildWithProgress(ctx context.Context, title string, dumpRawOnFailure fu
 		buildErrC <- err
 	}()
 
-	final, runErr := prog.Run()
+	final, runErr := runBuildProgressProgram(prog)
 	if runErr != nil {
 		cancelBuild()
 		<-buildErrC

@@ -813,7 +813,7 @@ func buildServicesParallelCore(
 
 	var progressErr error
 	if prog != nil {
-		final, runErr := prog.Run()
+		final, runErr := runBuildProgressProgram(prog)
 		if runErr != nil {
 			cancelBuild()
 			progressErr = fmt.Errorf("build progress TUI: %w", runErr)

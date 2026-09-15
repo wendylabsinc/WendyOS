@@ -52,7 +52,7 @@ def test_default_square_completes_with_bounded_commands():
         observe(controller, now, (x, y, heading))
         linear, angular = controller.tick(now)
         visited.add(controller.index)
-        assert 0 <= linear <= 0.35
+        assert linear in (0.0, 0.55)
         assert abs(angular) <= 0.4
         if not controller.active:
             break

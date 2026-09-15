@@ -99,7 +99,13 @@ func ros2RPCError(err error) error {
 	case codes.Unimplemented:
 		return fmt.Errorf("this device's agent does not support ROS 2 inspection; update it with `wendy device update`")
 	case codes.FailedPrecondition:
-		return errors.New(status.Convert(err).Message())
+		msg := status.Convert(err).Message()
+		// Older agents require an app even for system graph discovery. Their
+		// deployment advice is misleading now that the agent supports a fallback.
+		if msg == "no running ROS 2 containers found; deploy an app with a frameworks.ros2 config first" {
+			return errors.New("this device's agent requires a running ROS 2 app; update it with `wendy device update` to inspect the system graph without deploying an app")
+		}
+		return errors.New(msg)
 	case codes.DeadlineExceeded:
 		return errROS2Timeout
 	case codes.ResourceExhausted:

@@ -188,7 +188,7 @@ def test_unsynchronized_autostart_still_stops_when_either_stream_expires(
     deliver_observations(node, source)
     node.tick()
     assert node.controller.active
-    assert last_command(node) == (0.35, 0)
+    assert last_command(node) == (0.55, 0)
     assert json.loads(node.status_pub.messages[-1].data)["ignore_capture_age"] is True
 
     monkeypatch.setattr(ros_app.time, "monotonic", lambda: 50.36)
@@ -217,7 +217,7 @@ def test_ros_node_publishes_zero_on_startup_and_requires_start_service(node):
     response = node.start(None, SimpleNamespace())
     assert response.success
     node.tick()
-    assert last_command(node) == (0.35, 0)
+    assert last_command(node) == (0.55, 0)
     assert node.status_pub.messages[-1].data
 
 
@@ -284,7 +284,7 @@ def test_autostart_waits_for_both_observations_then_requests_motion_once(autosta
     node.tick()
     assert node.controller.active
     assert not node.autostart_pending
-    assert last_command(node) == (0.35, 0)
+    assert last_command(node) == (0.55, 0)
     targets = node.controller.targets
     pose.pose.pose.position.x = 0.2
     pose.header.stamp = stamp(9_950_000_000)
@@ -424,7 +424,7 @@ def test_sparse_native_cloud_autostarts_and_measured_obstacle_stops(node_factory
     node.cloud(cloud)
     node.tick()
     assert node.controller.active
-    assert last_command(node) == (0.35, 0)
+    assert last_command(node) == (0.55, 0)
     status = json.loads(node.status_pub.messages[-1].data)
     assert status["scan_coverage"] == {"observed": 1, "total": 72, "front_observed": 1, "front_total": 13}
     assert status["allow_scan_gaps"] is True

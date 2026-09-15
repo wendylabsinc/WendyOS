@@ -2109,7 +2109,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// entirely for darwin agents and go straight to the registry push below.
 	isDarwinAgent := strings.EqualFold(agentOS, appconfig.PlatformDarwin)
 
-	// Detached fast path: when nothing that affects the image has changed since
+	// Fast path: when nothing that affects the image has changed since
 	// the last successful deploy to this device, skip the build entirely and
 	// just ensure the existing container is running. Best-effort — a missing or
 	// mismatched fingerprint, a missing app, or any RPC error falls through to
@@ -2127,10 +2127,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	if hashErr == nil {
 		desiredHash, hashErr = computeDeployDesiredHash(inputHash, appCfg, opts.userArgs, deployEnv, resolveRestartPolicy(opts))
 	}
-	if !isDarwinAgent && opts.detach && !opts.deploy && hashErr == nil {
-		if done, _ := tryDeployFastPath(ctx, conn, appCfg, deviceKey, desiredHash, opts); done {
+	if !isDarwinAgent && !opts.deploy && hashErr == nil {
+		if done, err := tryDeployFastPath(ctx, conn, appCfg, deviceKey, desiredHash, opts); done {
 			mark("fast-path (skipped build)")
-			return nil
+			return err
 		}
 	}
 
@@ -2168,16 +2168,21 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		// image's layers, even on a later failure, so the fallback branch below
 		// can size the registry push it's about to fall back to (WDY-2432).
 		var stats chunkDeployStats
-		diffIDs, hint, err := deployByChunkDiff(ctx, conn, cwd, appCfg, platform, opts.dockerfile, buildArgs, deployEnv, opts, &stats)
-		ociHint = hint
-		if err == nil {
+		deployed := false
+		onStarted := func(diffIDs []string) {
+			deployed = true
 			if hashErr == nil {
-				// Record the layer diff IDs we deployed so the next run's fast path
-				// can verify the device still holds this content before skipping the
-				// build (WDY-1824).
+				// Persist at the agent's Started acknowledgement. Log streaming can
+				// last indefinitely or be canceled after a successful deployment.
 				saveDeployFingerprint(appCfg.AppID, deviceKey, deployFingerprint{InputHash: desiredHash, AppVersion: appCfg.Version, LayerDiffIDs: diffIDs})
 			}
-			return nil
+		}
+		_, hint, err := deployByChunkDiff(ctx, conn, cwd, appCfg, platform, opts.dockerfile, buildArgs, deployEnv, opts, &stats, onStarted)
+		ociHint = hint
+		if err == nil || deployed {
+			// Once started, a log-stream failure must not trigger another build
+			// and deployment through the registry fallback.
+			return err
 		} else if isChunkDeployCancellation(ctx, err) {
 			// The deploy was cancelled — either the context (e.g. `wendy watch`
 			// superseded it with a newer change) or the user backing out of the
@@ -2466,6 +2471,12 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	}
 	cliLogln("Container %s created.", containerDisplayName(appCfg))
 
+	return startExistingContainer(ctx, conn, appCfg, opts)
+}
+
+// startExistingContainer starts a previously created container without building
+// or recreating it, preserving the usual readiness, hook, and output lifecycle.
+func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) error {
 	if opts.detach {
 		stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 			AppName: appCfg.ContainerName(),
@@ -2979,6 +2990,12 @@ func resolveRestartPolicy(opts runOptions) *agentpb.RestartPolicy {
 // Started message triggers readiness + the host-side postStart hook (again
 // mirroring startAndStreamContainer), then log streaming continues.
 func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, stream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], appCfg *appconfig.AppConfig, opts runOptions) error {
+	return streamRunContainerWithStarted(ctx, conn, stream, appCfg, opts, nil)
+}
+
+// onStarted commits deployment state before readiness or long-lived logs. It
+// runs once, only after the agent confirms that the container has started.
+func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentConnection, stream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], appCfg *appconfig.AppConfig, opts runOptions, onStarted func()) error {
 	// The attached-mode postStart hook is tied to hookCtx so it is terminated
 	// when the stream ends (matching startAndStreamContainer's runCtx handling).
 	// Cleanup runs in a defer so the hook is killed and reaped on every exit
@@ -2992,6 +3009,7 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 	runner := &serviceHookRunner{conn: conn, opts: opts}
 	defer func() { hookCancel(); runner.reap() }()
 	hookFired := false
+	started := false
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
@@ -3001,6 +3019,12 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 			return fmt.Errorf("receiving container output: %w", err)
 		}
 		if resp.GetStarted() != nil {
+			if !started {
+				started = true
+				if onStarted != nil && !opts.deploy {
+					onStarted()
+				}
+			}
 			rc("  ↳ runcontainer: device create+start")
 			if opts.deploy {
 				cliLogln("Container %s created (not started).", containerDisplayName(appCfg))
@@ -3034,6 +3058,9 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 		if out := resp.GetStderrOutput(); out != nil {
 			_, _ = os.Stderr.Write(out.GetData())
 		}
+	}
+	if !started {
+		return fmt.Errorf("agent closed the stream before confirming the container started")
 	}
 	cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
 	return nil
@@ -3170,7 +3197,7 @@ type ociReuseHint struct {
 // soon as a layer read succeeds — including on failure paths below that point
 // — so a caller whose overall deploy still fails can decide how to handle a
 // registry-push fallback without re-reading the layers itself.
-func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, platform, dockerfile string, buildArgs map[string]string, deployEnv []string, opts runOptions, stats *chunkDeployStats) ([]string, *ociReuseHint, error) {
+func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, platform, dockerfile string, buildArgs map[string]string, deployEnv []string, opts runOptions, stats *chunkDeployStats, onStarted func([]string)) ([]string, *ociReuseHint, error) {
 	mark := phaseTimer()
 	var hint *ociReuseHint
 
@@ -3401,7 +3428,11 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	if err != nil {
 		return nil, hint, err
 	}
-	if err := streamRunContainer(rpcCtx, pushConn, stream, appCfg, opts); err != nil {
+	if err := streamRunContainerWithStarted(rpcCtx, pushConn, stream, appCfg, opts, func() {
+		if onStarted != nil {
+			onStarted(layerDiffIDs(headers))
+		}
+	}); err != nil {
 		mark("runcontainer (assemble+create+start[+readiness])")
 		return nil, hint, err
 	}

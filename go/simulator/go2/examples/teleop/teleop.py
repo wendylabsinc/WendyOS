@@ -14,6 +14,8 @@ from go2_io import SPORT_TOPIC, sport_request
 
 DEADMAN_SECONDS = 0.25
 PUBLISH_SECONDS = 0.05
+FORWARD_SPEED = 0.55
+MAX_TRANSLATION = 0.6
 KEYS = frozenset("wsadqe")
 ZERO = (0.0, 0.0, 0.0)
 
@@ -52,12 +54,15 @@ def velocity(payload):
             or any(not isinstance(key, str) or key not in KEYS for key in pressed)
             or len(set(pressed)) != len(pressed)):
         raise ControlError("Keys must be unique members of w, s, a, d, q, e")
-    linear, angular = speed(payload["speed"], 0.6), speed(payload["turn_speed"], 1.0)
+    linear, angular = speed(payload["speed"], MAX_TRANSLATION), speed(payload["turn_speed"], 1.0)
+    if 0 < linear < FORWARD_SPEED:
+        raise ControlError("Walking speed must be zero or at least 0.55 m/s")
     x = linear * (("w" in pressed) - ("s" in pressed))
     y = min(linear, 0.4) * (("a" in pressed) - ("d" in pressed))
-    length = math.hypot(x, y)
-    if length > linear:
-        x, y = x * linear / length, y * linear / length
+    # Preserve the forward component on diagonals; scaling both axes can
+    # lower it below the Go2 minimum. Limit lateral motion to the total cap.
+    lateral_limit = math.sqrt(max(0.0, MAX_TRANSLATION**2 - x*x))
+    y = math.copysign(min(abs(y), lateral_limit), y)
     return x, y, angular * (("q" in pressed) - ("e" in pressed))
 
 
