@@ -88,6 +88,8 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceEnrollCmd(),
 		newDeviceUnenrollCmd(),
 		newDeviceRenameCmd(),
+		newDevicePairCmd(),
+		newDeviceUnpairCmd(),
 		newDeviceUpdateCmd(),
 		newDeviceSyncTimeCmd(),
 		newDeviceCacheCmd(),
@@ -207,7 +209,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:    use,
-		Short:  "Show agent version, OS, architecture, GPU, and hardware info for the target device",
+		Short:  "Show agent version, OS, architecture, GPU, NPU, and hardware info for the target device",
 		Hidden: deprecated,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -225,13 +227,15 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			}
 			defer target.Close()
 
-			var agentVersion, osName, osVersion, cpuArch, deviceType, storageMedium, gpuVendor, jetpackVersion, cudaVersion, gpuArch string
+			var agentVersion, osName, osVersion, cpuArch, deviceType, storageMedium, gpuVendor, jetpackVersion, cudaVersion, gpuArch, npuVendor string
 			var diskUsedBytes, diskTotalBytes *int64
 			var memTotalBytes int64
 			var cpuCount uint32
 			var partitions []*agentpb.DiskPartition
+			var containerStorage *agentpb.DiskPartition
+			var gpuCapabilities []*agentpb.GpuCapabilities
 			var netInterfaces []*agentpb.NetworkInterface
-			var hasGPU bool
+			var hasGPU, hasNPU bool
 			var providerInfo *providers.ProviderDeviceInfo
 			// nil for mains-powered devices, for agents predating the field,
 			// and for the BLE/provider paths that never report one.
@@ -268,11 +272,15 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				jetpackVersion = resp.GetJetpackVersion()
 				cudaVersion = resp.GetCudaVersion()
 				gpuArch = resp.GetGpuArch()
+				hasNPU = resp.GetHasNpu()
+				npuVendor = resp.GetNpuVendor()
 				diskUsedBytes = resp.DiskUsedBytes
 				diskTotalBytes = resp.DiskTotalBytes
 				memTotalBytes = resp.GetMemTotalBytes()
 				cpuCount = resp.GetCpuCount()
 				partitions = resp.GetPartitions()
+				containerStorage = resp.GetContainerStorage()
+				gpuCapabilities = resp.GetGpuCapabilities()
 				netInterfaces = resp.GetNetworkInterfaces()
 				battery = resp.GetBattery()
 			} else if target.External != nil && target.Provider != nil {
@@ -339,6 +347,12 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if cpuCount > 0 {
 					out["cpuCount"] = cpuCount
 				}
+				if containerStorage != nil {
+					out["containerStorage"] = map[string]any{"mountpoint": containerStorage.GetMountpoint(), "filesystem": containerStorage.GetFilesystem(), "device": containerStorage.GetDevice(), "usedBytes": containerStorage.GetUsedBytes(), "totalBytes": containerStorage.GetTotalBytes()}
+				}
+				if len(gpuCapabilities) > 0 {
+					out["gpuCapabilities"] = gpuCapabilitiesJSON(gpuCapabilities)
+				}
 				if len(partitions) > 0 {
 					parts := make([]map[string]any, len(partitions))
 					for i, p := range partitions {
@@ -352,7 +366,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 					}
 					out["partitions"] = parts
 				}
-				if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes); ok {
+				if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes, containerStorage); ok {
 					out["diskWarning"] = map[string]any{
 						"mountpoint":       alert.Mountpoint,
 						"usedPercent":      alert.UsedPercent,
@@ -370,6 +384,10 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				}
 				if gpuArch != "" {
 					out["gpuArch"] = gpuArch
+				}
+				out["hasNpu"] = hasNPU
+				if npuVendor != "" {
+					out["npuVendor"] = npuVendor
 				}
 				if len(netInterfaces) > 0 {
 					ifaces := make([]map[string]any, len(netInterfaces))
@@ -421,12 +439,12 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			if storageMedium != "" {
 				fmt.Printf("%s %s\n", tui.Dim("Storage:"), tui.Value(storageMedium))
 			}
-			if len(partitions) > 0 {
-				fmt.Print(formatPartitionTable(partitions))
+			if len(partitions) > 0 || containerStorage != nil {
+				fmt.Print(formatPartitionTable(partitions, containerStorage))
 			} else if diskUsedBytes != nil && diskTotalBytes != nil {
 				fmt.Printf("%s %s\n", tui.Dim("Disk Usage:"), tui.Value(formatDiskUsage(*diskUsedBytes, *diskTotalBytes)))
 			}
-			if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes); ok {
+			if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes, containerStorage); ok {
 				fmt.Println(tui.WarningMessage(diskUsageWarningText(alert)))
 			}
 			if len(netInterfaces) > 0 {
@@ -438,6 +456,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 					vendor = "unknown"
 				}
 				fmt.Printf("%s %s\n", tui.Dim("GPU:"), tui.Value(vendor))
+				if compute := formatGPUCompute(gpuCapabilities); compute != "" {
+					fmt.Printf("%s %s\n", tui.Dim("GPU Compute:"), tui.Value(compute))
+				}
 				if jetpackVersion != "" {
 					fmt.Printf("%s %s\n", tui.Dim("JetPack:"), tui.Value(jetpackVersion))
 				}
@@ -447,6 +468,13 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if gpuArch != "" {
 					fmt.Printf("%s %s\n", tui.Dim("GPU Arch:"), tui.Value(gpuArch))
 				}
+			}
+			if hasNPU {
+				vendor := npuVendor
+				if vendor == "" {
+					vendor = "unknown"
+				}
+				fmt.Printf("%s %s\n", tui.Dim("NPU:"), tui.Value(vendor))
 			}
 			if providerInfo != nil {
 				fmt.Printf("%s %s\n", tui.Dim("WASM Apps:"), tui.Value(yesNo(providerInfo.WasmAppSupport)))
@@ -587,7 +615,7 @@ func newDeviceGetDefaultCmd() *cobra.Command {
 // pickDeviceForDefault runs the interactive device picker and returns a
 // hostname or provider key suitable for storing as the default device.
 func pickDeviceForDefault(ctx context.Context) (string, error) {
-	selected, err := pickDevice(ctx, nil, false, false)
+	selected, err := pickDevice(ctx, nil, false, false, false)
 	if err != nil {
 		return "", err
 	}
@@ -764,7 +792,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
 			if err != nil {
 				return err
 			}

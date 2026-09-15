@@ -135,9 +135,10 @@ func qemuInstallHint() string {
 // socketVMNetStartTimeout bounds the wait for the daemon to bind its socket.
 const socketVMNetStartTimeout = 10 * time.Second
 
-// installSocketVMNetFn and startSocketVMNetFn run the two Homebrew commands
-// socket_vmnet needs; indirected so tests never invoke Homebrew.
+// Indirect discovery and the two Homebrew commands so tests do not depend on
+// the host's socket_vmnet installation or invoke Homebrew.
 var (
+	findSocketVMNetFn    = vm.FindSocketVMNet
 	installSocketVMNetFn = installSocketVMNetViaBrew
 	startSocketVMNetFn   = startSocketVMNetService
 )
@@ -148,7 +149,7 @@ var (
 // Two steps, because the socket only exists once the service runs: `brew
 // install` alone leaves the path missing and would look like a failed install.
 func ensureSocketVMNet(ctx context.Context, hostOS, brewPrefix string) (string, error) {
-	socket, err := vm.FindSocketVMNet(hostOS, brewPrefix)
+	socket, err := findSocketVMNetFn(hostOS, brewPrefix)
 	if err == nil {
 		return socket, nil
 	}
@@ -181,7 +182,7 @@ func ensureSocketVMNet(ctx context.Context, hostOS, brewPrefix string) (string, 
 	// reports "not found" and tells the user to install what they just did.
 	deadline := time.Now().Add(socketVMNetStartTimeout)
 	for {
-		socket, err = vm.FindSocketVMNet(hostOS, brewPrefix)
+		socket, err = findSocketVMNetFn(hostOS, brewPrefix)
 		if err == nil || time.Now().After(deadline) {
 			return socket, err
 		}

@@ -96,6 +96,11 @@ message GetBuildCapabilitiesResponse {
   uint64 buildkit_root_free_bytes = 10;
   uint64 buildkit_root_total_bytes = 11;
   bool buildkit_root_inspection_supported = 12;
+
+  // True when this agent delivers images by chunks into a device's content
+  // store and honours BuildSpec.chunking. A client MUST check this before
+  // sending CHUNKING_MODE_FORCE — see that field.
+  bool chunk_delivery = 13;
 }
 
 // ChunkManifest reconstructs a byte stream from chunks already written through
@@ -129,6 +134,28 @@ message PushTarget {
   uint32 registry_port = 2;
   // "repository:tag" only — never a host component.
   string repository = 3;
+  // mTLS gRPC port of this target's agent. The CLI copies the port from the
+  // connection that actually reached this device; zero is a legacy client and
+  // makes the build host use its configured/default target-agent port.
+  uint32 agent_port = 4;
+}
+
+// ChunkingMode is how the finished image reaches each device. It carries the
+// CLI's --chunking flag to the build host, so the flag means the same thing
+// whether the laptop delivers the image or the build host does.
+enum ChunkingMode {
+  // Not set: a CLI that predates the field. Treated as AUTO.
+  CHUNKING_MODE_UNSPECIFIED = 0;
+  // By chunks into the device's content store when its agent can receive
+  // them; through its registry otherwise, and the build log says so.
+  CHUNKING_MODE_AUTO = 1;
+  // By chunks only. A device whose agent cannot receive them is a delivery
+  // failure, never a quiet registry push: the mode exists so a chunk-delivery
+  // problem is surfaced rather than masked by a slower path.
+  CHUNKING_MODE_FORCE = 2;
+  // Through the device's registry only, one buildctl pass per device, as this
+  // feature delivered before chunked delivery existed.
+  CHUNKING_MODE_OFF = 3;
 }
 
 message BuildSpec {
@@ -158,6 +185,14 @@ message BuildSpec {
   // A server reading this MUST prefer it over push_target and fall back only
   // when it is empty. A client MUST NOT set both.
   repeated PushTarget push_targets = 8;
+
+  // How the image is delivered to each target. An agent that predates chunked
+  // delivery cannot see this field and pushes through the registry regardless,
+  // so a client sending CHUNKING_MODE_FORCE MUST check
+  // GetBuildCapabilitiesResponse.chunk_delivery first, for the reason
+  // multi_target_delivery is checked: proto3 discards what the receiver does
+  // not know, and a silent registry push is exactly what FORCE forbids.
+  ChunkingMode chunking = 9;
 
   // Field 3 was push_reference, a "host:port/repo:tag" string resolved through
   // DNS. Replaced by push_target — see that message for why.

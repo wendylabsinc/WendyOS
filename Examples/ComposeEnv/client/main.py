@@ -38,6 +38,13 @@ print("[client] server response:", flush=True)
 print(json.dumps(data, indent=2), flush=True)
 
 compose_env = data.get("from_compose_environment", {})
+if os.environ.get("CHECK_CLI_OVERRIDES") == "1":
+    expected = {"APP_MODE": "cli", "GREETING": "", "MAX_WORKERS": "7"}
+    local = {key: os.environ.get(key) for key in expected}
+    if local != expected or compose_env != expected:
+        print(f"[client] CLI overrides mismatch: client={local}, server={compose_env}", flush=True)
+        sys.exit(1)
+    print("[client] CLI overrides reached both services (last key wins, empty preserved)", flush=True)
 all_set = all(v != "<not set>" for v in compose_env.values())
 if all_set:
     print("[client] ✓ all compose environment: vars reached the server container", flush=True)

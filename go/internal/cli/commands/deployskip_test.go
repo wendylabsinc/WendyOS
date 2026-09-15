@@ -85,7 +85,7 @@ func (f *multiSvcContainerClient) QueryLayers(_ context.Context, in *agentpb.Que
 func writeServiceContext(t *testing.T, cwd, rel, platform string) string {
 	t.Helper()
 	writeFile(t, filepath.Join(cwd, rel), "Dockerfile", "FROM scratch\n")
-	h, err := computeBuildInputHash(filepath.Join(cwd, rel), "", platform, nil, nil)
+	h, err := computeBuildInputHash(filepath.Join(cwd, rel), "", platform, "", nil, nil)
 	if err != nil {
 		t.Fatalf("computeBuildInputHash: %v", err)
 	}

@@ -28,6 +28,7 @@ const (
 	langRust   = "rust"
 	langNode   = "node"
 	langCpp    = "cpp"
+	langMojo   = "mojo"
 
 	assistantClaude = "claude"
 	assistantCodex  = "codex"
@@ -118,6 +119,7 @@ type initOptions struct {
 // Questions for WendyOS devices.
 var wendyOSEntitlementQuestions = []entitlementQuestion{
 	{"Will your app run AI or GPU-accelerated workloads?", appconfig.EntitlementGPU, "GPU access for AI inference or compute"},
+	{"Will your app run inference on the NPU?", appconfig.EntitlementNPU, "NPU access for on-device inference"},
 	{"Does your app need Bluetooth peripheral access?", appconfig.EntitlementBluetooth, "Bluetooth Low Energy peripherals"},
 	{"Does your app need USB peripheral access?", appconfig.EntitlementUSB, "USB device access"},
 	{"Does your app need GPIO pin access?", appconfig.EntitlementGPIO, "General-purpose I/O pins"},
@@ -257,7 +259,7 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.appID, "app-id", "", "Application ID to write into wendy.json")
 	cmd.Flags().BoolVar(&opts.here, "here", false, "Scaffold into the current directory instead of creating a subdirectory")
 	cmd.Flags().StringVar(&opts.target, "target", "", "Target platform: wendyos (writes \"linux\" to wendy.json), wendy-lite, or darwin")
-	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, or cpp")
+	cmd.Flags().StringVar(&opts.language, "language", "", "Project language: python, swift, rust, node, cpp, or mojo")
 	cmd.Flags().StringVar(&opts.template, "template", "", "Project template (e.g. simple-api, fullstack)")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", fmt.Sprintf("Branch of the templates repo to use (default: %s)", templateRepoBranch))
 	cmd.Flags().StringSliceVar(&opts.vars, "var", nil, "Template variable override (repeatable, KEY=VALUE)")
@@ -603,23 +605,9 @@ func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) 
 }
 
 // resolveTemplateLanguage picks the language for the template flow.
-// Wendy Lite and native macOS always use Swift; WendyOS offers the languages
-// available for the selected template.
+// All targets, including Wendy Lite, offer the languages available for
+// the selected template (e.g. native Mojo/MAX chat on Darwin).
 func resolveTemplateLanguage(target, tmpl string, meta *repoMeta, opts initOptions) (string, error) {
-	if target == targetWendyLite || target == targetDarwin {
-		if opts.languageSet && normalizeInitChoice(opts.language) != langSwift {
-			return "", fmt.Errorf("%s templates require %s", target, langSwift)
-		}
-		languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
-		if err != nil {
-			return "", err
-		}
-		if !templateLanguageAvailable(langSwift, languages) {
-			return "", fmt.Errorf("template %q is not available for language %q (available: %s)", tmpl, langSwift, repoMetaLanguageKeys(languages))
-		}
-		return langSwift, nil
-	}
-
 	languages, err := templateLanguagesForTemplate(context.Background(), meta, tmpl, opts.branch)
 	if err != nil {
 		return "", err
@@ -1807,8 +1795,8 @@ func validateInitLanguage(target, language string) error {
 	if target == targetWendyLite && language != langSwift {
 		return fmt.Errorf("%s requires %s", targetWendyLite, langSwift)
 	}
-	if target == targetDarwin && language != langSwift {
-		return fmt.Errorf("%s requires %s", targetDarwin, langSwift)
+	if target == targetDarwin && language != langSwift && language != langMojo {
+		return fmt.Errorf("%s requires swift or mojo", targetDarwin)
 	}
 	return nil
 }
@@ -2097,9 +2085,15 @@ func isCommandAvailable(name string) bool {
 	return err == nil
 }
 
-// defaultEntitlements returns sensible default entitlements based on language and template.
+// defaultEntitlements returns sensible default entitlements based on project type and template.
 // Used by helpers.go when auto-generating a wendy.json during build.
-func defaultEntitlements(language, template string) []appconfig.Entitlement {
+func defaultEntitlements(projectType, template string) []appconfig.Entitlement {
+	// ESP-IDF targets run on bare-metal microcontrollers, which don't support
+	// the entitlement-gated capabilities (network, audio, GPU, Bluetooth).
+	if projectType == "esp-idf" {
+		return nil
+	}
+
 	entitlements := []appconfig.Entitlement{
 		{Type: appconfig.EntitlementNetwork},
 	}
@@ -2117,7 +2111,7 @@ func defaultEntitlements(language, template string) []appconfig.Entitlement {
 			appconfig.Entitlement{Type: appconfig.EntitlementGPU},
 		)
 	default:
-		if language == "python" {
+		if projectType == "python" {
 			entitlements = append(entitlements,
 				appconfig.Entitlement{Type: appconfig.EntitlementGPU},
 			)

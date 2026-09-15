@@ -2,20 +2,28 @@
 // YAML build descriptor (build.stagefile.yaml) that compiles to a real
 // Dockerfile with structural safety guarantees a hand-written Dockerfile
 // doesn't get by default (lockfile digest-pinning, shell-safe quoting, no
-// raw-shell escape hatch). It exposes a single entry point, CompileFile.
+// raw-shell escape hatch). It can emit either a Dockerfile or a direct BuildKit
+// LLB definition from the same lowered graph.
 // Vendored from github.com/joannisorlandos/stagefile (same author) so
 // wendy build/wendy run has no external dependency on that private repo.
 package stagefile
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"github.com/moby/buildkit/client/llb"
 
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/codegen"
 	dockerignorepkg "github.com/wendylabsinc/wendy/go/internal/stagefile/dockerignore"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/gpu"
+	"github.com/wendylabsinc/wendy/go/internal/stagefile/ir"
+	"github.com/wendylabsinc/wendy/go/internal/stagefile/llbgen"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/lock"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/spec"
 )
@@ -29,6 +37,20 @@ var baseResolver lock.Resolver = lock.CraneResolver
 // reaches, and a package var for the same reason baseResolver is: so tests
 // can exercise the memoization without fetching anything.
 var baseHasher lock.Hasher = lock.HTTPHasher
+
+// baseConfigResolver is CompileToLLB's counterpart to baseResolver: the
+// underlying registry lookup for a base image's raw OCI config, indirected
+// through a package var so tests can exercise sharedConfigResolver's
+// memoization without touching a live registry.
+var baseConfigResolver lock.ConfigResolver = lock.CraneConfigResolver
+
+// sharedConfigResolver is the process-wide config resolver CompileToLLB uses,
+// for the same reason sharedResolver is memoized: a compose project's services
+// typically share both a base image and a target platform, and their compiles
+// run concurrently.
+var sharedConfigResolver = lock.MemoizeConfig(func(ref, platform string) ([]byte, error) {
+	return baseConfigResolver(ref, platform)
+})
 
 // sharedResolver is the process-wide resolver CompileFile uses. Memoizing here
 // rather than per-call is what makes a compose project cheap: its services each
@@ -238,14 +260,269 @@ func compileFile(dir, source, platform, gpuArch, buildProfile string, resolver l
 }
 
 func compileFileWithFramework(dir, source, platform, gpuArch, buildProfile, ros2Distro, ros2RMW string, resolver lock.Resolver, hasher lock.Hasher) (dockerfile, dockerignore string, err error) {
+	rs, err := resolveSpec(dir, source, gpuArch, buildProfile, ros2Distro, ros2RMW, resolver, hasher)
+	if err != nil {
+		return "", "", err
+	}
+
+	// The project directory is the cache scope: it is what makes two different
+	// projects' compiler caches distinct, and it is stable across the rebuilds
+	// of one project that the caches exist to speed up.
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
+	g, err := ir.Lower(rs.file, ir.Options{
+		Images: rs.images, Downloads: rs.downloads, Platform: platform,
+		CUDAProfile: rs.cudaProfile, CacheScope: absDir,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	dockerfile, err = codegen.GenerateGraph(g, rs.images)
+	if err != nil {
+		return "", "", err
+	}
+	localPaths, err := dockerignorepkg.LocalPathsFromGraph(g)
+	if err != nil {
+		return "", "", err
+	}
+	dockerignore = dockerignorepkg.Derive(localPaths)
+	return dockerfile, dockerignore, nil
+}
+
+// LLBBuild is everything solve.Run needs from a Stagefile compilation. Keeping
+// the final base config beside the definition prevents CLI callers from doing
+// a second registry lookup after compilation.
+type LLBBuild struct {
+	Definition *llb.Definition
+	Config     *llbgen.ImageConfig
+	BaseConfig []byte
+}
+
+// CompileToLLB reads a Stagefile from dir and compiles it to a BuildKit LLB
+// definition plus the image metadata needed by the exporter. It accepts the
+// same options as CompileFile, including variants, GPU targets, debug profiles,
+// ROS 2 runtime packages, and download progress.
+func CompileToLLB(dir, platform string, opts ...Option) (*LLBBuild, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	source := o.source
+	if source == "" {
+		source = SourceName
+	}
+	if !IsSourceName(source) {
+		return nil, fmt.Errorf("%q is not a Stagefile name: expected %s or a variant of it such as prod%s", source, SourceName, sourceSuffix)
+	}
+	hasher := sharedHasher
+	if o.progress != nil {
+		hasher = func(url string) (string, error) {
+			o.progress(url)
+			return sharedHasher(url)
+		}
+	}
+	return compileToLLB(dir, source, platform, o.gpuArch, o.buildProfile, o.ros2Distro, o.ros2RMW, sharedResolver, hasher, sharedConfigResolver)
+}
+
+// compileToLLB is the resolver-injectable implementation behind CompileToLLB.
+func compileToLLB(dir, source, platform, gpuArch, buildProfile, ros2Distro, ros2RMW string, resolver lock.Resolver, hasher lock.Hasher, configResolver lock.ConfigResolver) (*LLBBuild, error) {
+	rs, err := resolveSpec(dir, source, gpuArch, buildProfile, ros2Distro, ros2RMW, resolver, hasher)
+	if err != nil {
+		return nil, err
+	}
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		absDir = dir
+	}
+	g, err := ir.Lower(rs.file, ir.Options{
+		Images: rs.images, Downloads: rs.downloads, Platform: platform,
+		CUDAProfile: rs.cudaProfile, CacheScope: absDir,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Base-image configs, resolved at the platform each stage actually builds
+	// for. Target stages resolve at the target; a `platform: build` stage's base
+	// runs on the build platform, so its config is resolved there too — otherwise
+	// Emit's checkConfigPlatform rejects a target-arch config against the
+	// build-arch stage (F2). pin: false bases live only in the local daemon and
+	// have no registry config, so they are read from `docker image inspect` (F3).
+	targetRefs, buildRefs := configRefsByPlatform(g)
+	configs, err := lock.ResolveConfigs(targetRefs, rs.images, platform, configResolver)
+	if err != nil {
+		return nil, err
+	}
+	if len(buildRefs) > 0 {
+		buildConfigs, err := lock.ResolveConfigs(buildRefs, rs.images, buildPlatform(), configResolver)
+		if err != nil {
+			return nil, err
+		}
+		for ref, cfg := range buildConfigs {
+			configs[ref] = cfg
+		}
+	}
+	for _, ref := range pinFalseRefs(g) {
+		cfg, err := localImageConfig(ref)
+		if err != nil {
+			return nil, err
+		}
+		configs[ref] = cfg
+	}
+
+	def, cfg, err := llbgen.Emit(g, llbgen.Options{
+		Images: rs.images, Configs: configs, Platform: platform,
+		BuildPlatform: buildPlatform(), ContextDir: absDir,
+	})
+	if err != nil {
+		return nil, err
+	}
+	baseConfig, err := llbgen.FinalBaseConfig(g, configs)
+	if err != nil {
+		return nil, err
+	}
+	return &LLBBuild{Definition: def, Config: cfg, BaseConfig: baseConfig}, nil
+}
+
+// buildPlatform is the platform a `platform: build` stage compiles under. It is
+// deliberately not runtime.GOOS/GOARCH: buildkitd runs Linux — inside a
+// container under Docker Desktop on macOS, natively on Linux — so a darwin build
+// platform names an OS no daemon can satisfy (F2). linux plus the host
+// architecture is the daemon's own native platform in every supported setup: the
+// Docker Desktop VM matches the host arch, and Linux CI is linux/<hostarch>
+// already.
+func buildPlatform() string {
+	return "linux/" + runtime.GOARCH
+}
+
+// configRefsByPlatform splits the graph's pinned external base-image refs into
+// those a target stage uses (resolved at the target platform) and those used
+// exclusively by `platform: build` stages (resolved at the build platform). A
+// ref used by any target stage stays in the target set; only build-exclusive
+// refs move. Stage-derived and pin: false bases are handled elsewhere and are
+// skipped here. Both slices are in stage order for stable error reporting.
+func configRefsByPlatform(g *ir.Graph) (target, build []string) {
+	usedByTarget := map[string]bool{}
+	start := 0
+	for _, st := range g.Stages {
+		im := g.Nodes[start].Image
+		start = st.Final + 1
+		if im == nil || im.FromStage || im.Unpinned {
+			continue
+		}
+		if im.Platform != llbgen.BuildPlatformSentinel {
+			usedByTarget[im.Ref] = true
+		}
+	}
+	seenT := map[string]bool{}
+	seenB := map[string]bool{}
+	start = 0
+	for _, st := range g.Stages {
+		im := g.Nodes[start].Image
+		start = st.Final + 1
+		if im == nil || im.FromStage || im.Unpinned {
+			continue
+		}
+		if im.Platform == llbgen.BuildPlatformSentinel && !usedByTarget[im.Ref] {
+			if !seenB[im.Ref] {
+				seenB[im.Ref] = true
+				build = append(build, im.Ref)
+			}
+			continue
+		}
+		if !seenT[im.Ref] {
+			seenT[im.Ref] = true
+			target = append(target, im.Ref)
+		}
+	}
+	return target, build
+}
+
+// pinFalseRefs returns the graph's pin: false external base-image refs, in stage
+// order without duplicates. They carry no registry digest, so their configs come
+// from the local daemon rather than lock.ResolveConfigs.
+func pinFalseRefs(g *ir.Graph) []string {
+	seen := map[string]bool{}
+	var refs []string
+	start := 0
+	for _, st := range g.Stages {
+		im := g.Nodes[start].Image
+		start = st.Final + 1
+		if im == nil || im.FromStage || !im.Unpinned {
+			continue
+		}
+		if !seen[im.Ref] {
+			seen[im.Ref] = true
+			refs = append(refs, im.Ref)
+		}
+	}
+	return refs
+}
+
+// localImageConfig reads a pin: false base image's OCI image config from the
+// local Docker daemon. A pin: false image lives only in the daemon store and has
+// no registry digest, so no registry-backed resolver can serve it. Docker's
+// inspect JSON already carries the OCI config object under "Config" (Env,
+// WorkingDir, Entrypoint, Cmd, User, Healthcheck, Shell), so only the top-level
+// platform keys need translating to their OCI spelling; Emit's checkConfigPlatform
+// then validates the local image's architecture against the stage's.
+func localImageConfig(ref string) ([]byte, error) {
+	out, err := exec.Command("docker", "image", "inspect", ref).Output()
+	if err != nil {
+		return nil, fmt.Errorf("resolving local image config for %q (pin: false): docker image inspect failed — build the image locally, or set pin: true to resolve it from a registry: %w", ref, err)
+	}
+	var inspected []struct {
+		Architecture string          `json:"Architecture"`
+		Os           string          `json:"Os"`
+		Variant      string          `json:"Variant"`
+		Config       json.RawMessage `json:"Config"`
+	}
+	if err := json.Unmarshal(out, &inspected); err != nil {
+		return nil, fmt.Errorf("parsing docker inspect output for %q: %w", ref, err)
+	}
+	if len(inspected) == 0 {
+		return nil, fmt.Errorf("docker inspect returned no image for %q", ref)
+	}
+	img := inspected[0]
+	oci := map[string]json.RawMessage{
+		"architecture": mustJSON(img.Architecture),
+		"os":           mustJSON(img.Os),
+	}
+	if img.Variant != "" {
+		oci["variant"] = mustJSON(img.Variant)
+	}
+	if len(img.Config) > 0 && string(img.Config) != "null" {
+		oci["config"] = img.Config
+	}
+	return json.Marshal(oci)
+}
+
+// mustJSON marshals a plain string, which cannot fail.
+func mustJSON(s string) json.RawMessage {
+	dt, _ := json.Marshal(s)
+	return dt
+}
+
+// resolvedSpec is the parse+lock+resolve result shared by both backends.
+type resolvedSpec struct {
+	file        *spec.File
+	images      map[string]string
+	downloads   map[string]string
+	cudaProfile *gpu.Profile
+}
+
+func resolveSpec(dir, source, gpuArch, buildProfile, ros2Distro, ros2RMW string, resolver lock.Resolver, hasher lock.Hasher) (*resolvedSpec, error) {
 	sourcePath := filepath.Join(dir, source)
 	raw, err := os.ReadFile(sourcePath)
 	if err != nil {
-		return "", "", fmt.Errorf("reading %s: %w", sourcePath, err)
+		return nil, fmt.Errorf("reading %s: %w", sourcePath, err)
 	}
 	f, err := spec.Parse(raw)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	applyBuildProfile(f, buildProfile)
 	applyROS2Runtime(f, ros2Distro, ros2RMW)
@@ -253,43 +530,26 @@ func compileFileWithFramework(dir, source, platform, gpuArch, buildProfile, ros2
 	lockPath := filepath.Join(dir, LockName(source))
 	existing, err := lock.Load(lockPath)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	updated, _, err := lock.Resolve(existing, spec.SourceHash(raw), imageRefs(f), nil, resolver)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	if _, err := updated.ResolveDownloads(downloadURLs(f), nil, hasher); err != nil {
-		return "", "", err
+		return nil, err
 	}
-	// Resolved before Save so a first GPU build records its profile in the
-	// same write as its image digests, and after Resolve so it can reuse a
-	// profile an earlier build already pinned.
 	cudaProfile, err := resolveCUDAProfile(f, gpuArch, updated)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	if err := updated.Save(lockPath); err != nil {
-		return "", "", err
+		return nil, err
 	}
-
-	// The project directory is the cache scope: it is what makes two different
-	// projects' compiler caches distinct, and it is stable across the rebuilds
-	// of one project that the caches exist to speed up. An absolute path means
-	// moving a checkout starts from a cold cache, which is the right trade —
-	// the alternative keys are either not unique per project or not stable
-	// across an edit.
-	absDir, err := filepath.Abs(dir)
-	if err != nil {
-		absDir = dir
-	}
-	dockerfile, err = codegen.Generate(f, updated.Images, updated.Downloads, platform, cudaProfile,
-		codegen.WithCacheScope(absDir))
-	if err != nil {
-		return "", "", err
-	}
-	dockerignore = dockerignorepkg.Derive(dockerignorepkg.LocalPaths(f))
-	return dockerfile, dockerignore, nil
+	return &resolvedSpec{
+		file: f, images: updated.Images, downloads: updated.Downloads,
+		cudaProfile: cudaProfile,
+	}, nil
 }
 
 // applyROS2Runtime appends the RMW implementation package implied by the

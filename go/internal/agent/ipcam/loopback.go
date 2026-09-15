@@ -318,7 +318,7 @@ func (l *Loopback) EnsureNodes(ctx context.Context) error {
 // the IP-camera supervisor and the ROS 2 camera bridge so module detection and
 // the control-device ABI have one owner.
 func (l *Loopback) EnsureNode(ctx context.Context, id uint32, label string) error {
-	if id < LoopbackBandStart || id > IDBandEnd {
+	if id < LoopbackBandStart || id > MCUBandEnd {
 		return fmt.Errorf("camera ID %d is outside Wendy's loopback band", id)
 	}
 	if err := ctx.Err(); err != nil {

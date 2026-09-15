@@ -3,6 +3,7 @@ package ble
 import (
 	"fmt"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/ble/central"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
@@ -33,13 +34,13 @@ const (
 // LiteClient communicates with a Wendy Lite (ESP32) device over BLE GATT
 // for WiFi provisioning.
 type LiteClient struct {
-	conn *Connection
+	conn *central.Connection
 }
 
 // ConnectLite establishes a BLE connection to a Wendy Lite device and
 // discovers its GATT services.
 func ConnectLite(device *models.BluetoothDevice) (*LiteClient, error) {
-	conn, err := Connect(device.Address, 10)
+	conn, err := central.Connect(device.Address, 10)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", device.DisplayName, err)
 	}

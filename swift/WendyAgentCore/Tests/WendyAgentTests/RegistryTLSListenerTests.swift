@@ -239,7 +239,7 @@ struct RegistryTLSListenerTests {
         await Self.stop(task)
     }
 
-    @Test("a handshake without a client certificate is rejected")
+    @Test("a missing client certificate is rejected without stopping the listener")
     func rejectsMissingClientCert() async throws {
         let ca = try TestPKI.makeCA()
         let (port, task) = try await Self.startListener(
@@ -248,10 +248,14 @@ struct RegistryTLSListenerTests {
 
         let response = try await Self.tlsGET(port: port, clientIdentity: nil)
         #expect(!response.contains("200 OK"))
+
+        let trusted = try TestPKI.makeIdentity(commonName: "wendy/user/tester", ca: ca)
+        let subsequentResponse = try await Self.tlsGET(port: port, clientIdentity: trusted)
+        #expect(subsequentResponse.contains("200 OK"))
         await Self.stop(task)
     }
 
-    @Test("a client certificate from a different CA is rejected")
+    @Test("an untrusted client certificate is rejected without stopping the listener")
     func rejectsUntrustedClientCert() async throws {
         let ca = try TestPKI.makeCA()
         let otherCA = try TestPKI.makeCA(commonName: "Impostor CA")
@@ -262,10 +266,14 @@ struct RegistryTLSListenerTests {
         let impostor = try TestPKI.makeIdentity(commonName: "wendy/user/impostor", ca: otherCA)
         let response = try await Self.tlsGET(port: port, clientIdentity: impostor)
         #expect(!response.contains("200 OK"))
+
+        let trusted = try TestPKI.makeIdentity(commonName: "wendy/user/tester", ca: ca)
+        let subsequentResponse = try await Self.tlsGET(port: port, clientIdentity: trusted)
+        #expect(subsequentResponse.contains("200 OK"))
         await Self.stop(task)
     }
 
-    @Test("plain HTTP against the TLS listener fails fast")
+    @Test("plain HTTP is rejected without stopping the TLS listener")
     func rejectsPlainHTTP() async throws {
         let ca = try TestPKI.makeCA()
         let (port, task) = try await Self.startListener(
@@ -274,6 +282,10 @@ struct RegistryTLSListenerTests {
 
         let response = try await Self.plainGET(port: port)
         #expect(!response.contains("200 OK"))
+
+        let trusted = try TestPKI.makeIdentity(commonName: "wendy/user/tester", ca: ca)
+        let subsequentResponse = try await Self.tlsGET(port: port, clientIdentity: trusted)
+        #expect(subsequentResponse.contains("200 OK"))
         await Self.stop(task)
     }
 

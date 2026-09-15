@@ -835,6 +835,19 @@ func (s *VideoService) StartDiscovery() {
 // first would race that guarantee — a reconcile already past its own
 // shuttingDown check could still start a new supervisor moments after ctx
 // cancellation fires but before Loopback.Shutdown gets a chance to run.
+// Loopback exposes the v4l2loopback node manager shared
+// by ROS 2 cameras and, from Task 8, MCU sensor sources, so both share one
+// module-detection state and one set of live node paths rather than each
+// probing/managing it twice. The return type matches mcusource.Loopback
+// structurally without importing that package here.
+func (s *VideoService) Loopback() interface {
+	RemoveCamera(id uint32)
+	EnsureNode(ctx context.Context, id uint32, label string) error
+	NodePath(id uint32) (string, bool)
+} {
+	return s.loopback
+}
+
 func (s *VideoService) Shutdown() {
 	if s.ros2Cameras != nil {
 		s.ros2Cameras.Shutdown()
@@ -2949,8 +2962,8 @@ func isValidGSTElementName(name string) bool {
 }
 
 // encoderSegment returns the GStreamer pipeline segment for the given encoder element.
-// H.264 encoders force I420 (4:2:0) input to avoid 4:4:4 output paths that can make
-// encoders such as x264enc select profile 244 (High 4:4:4 Predictive), which
+// H.264 encoders are offered only 8-bit 4:2:0 input, to avoid 4:4:4 output paths that can
+// make encoders such as x264enc select profile 244 (High 4:4:4 Predictive), which
 // VideoToolbox and most hardware decoders reject. This input cap does not by itself
 // enforce a specific H.264 output profile; explicit profile caps are added only where needed
 // (for example, v4l2h264enc is capped to baseline below).
@@ -2971,12 +2984,15 @@ func encoderSegment(encoder string, hasH264Parse bool, gop int) string {
 		enc = "videoconvert ! video/x-raw,format=NV12 ! nvvidconv ! " +
 			"video/x-raw(memory:NVMM),format=NV12 ! nvv4l2h264enc" + kf
 	case "v4l2h264enc":
+		// This element wraps whatever M2M driver the board has, so the input
+		// format belongs to the driver: bcm2835-codec takes I420, qcom-iris NV12.
+		//
 		// The Raspberry Pi bcm2835-codec rejects frames ("Failed to process
 		// frame") unless the output H.264 level is pinned — a bare or
 		// profile-only capsfilter lets it negotiate a level the driver can't
 		// process. level 4 covers up to 1080p30, the encoder's ceiling
 		// (verified on a Pi 4, WDY-1603).
-		enc = "videoconvert ! video/x-raw,format=I420 ! v4l2h264enc" + kf + " ! video/x-h264,profile=baseline,level=(string)4"
+		enc = "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc" + kf + " ! video/x-h264,profile=baseline,level=(string)4"
 	case "x264enc":
 		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency" + kf + " ! video/x-h264,profile=high"
 	case "openh264enc":

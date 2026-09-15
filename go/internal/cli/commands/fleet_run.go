@@ -56,6 +56,7 @@ func newFleetRunCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type when ambiguous: docker, swift, or python")
 	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Build file to build from: a Dockerfile, Containerfile, or Stagefile")
 	cmd.Flags().StringVar(&opts.builder, "builder", "", "Image builder to force: docker or apple-container")
+	cmd.Flags().StringVar(&opts.stagefileBackend, "stagefile-backend", "", "Stagefile compiler backend: dockerfile (default) or llb")
 	cmd.Flags().StringVar(&opts.gpuArch, "gpu-arch", "", fmt.Sprintf("GPU architecture a Stagefile cuda: stage targets (%s); read from the device when one is selected", strings.Join(gpu.KnownArches(), ", ")))
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging + host networking")
 	cmd.Flags().StringVar(&opts.service, "service", "", "Build and deploy only the named service and its dependencies")
@@ -77,9 +78,14 @@ type fleetRunResult struct {
 }
 
 func runFleetRun(ctx context.Context, opts runOptions, group, cloudGRPC, brokerURL string, lan bool, central string, timeout time.Duration) error {
-	if _, err := normalizeImageBuilder(opts.builder); err != nil {
+	normalizedBuilder, err := normalizeImageBuilder(opts.builder)
+	if err != nil {
 		return err
 	}
+	if _, err := stagefileBackendLLB(opts.stagefileBackend, normalizedBuilder); err != nil {
+		return err
+	}
+	ctx = withStagefileBackend(ctx, opts.stagefileBackend)
 	if err := validateChunkingMode(opts.chunking); err != nil {
 		return err
 	}

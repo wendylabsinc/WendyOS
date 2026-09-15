@@ -80,7 +80,8 @@ struct `'wendy device drivers install'` {
     @Test
     func `rejects --signature without --file`() async throws {
         try await self.scenario.run(authenticated: false) { cli, _ in
-            try await cli.sh("wendy device drivers install acme --signature AAAA --json") { result in
+            try await cli.sh("wendy device drivers install acme --signature AAAA --json") {
+                result in
                 #expect(result.status.isFailure)
                 #expect(result.stderr.contains("--signature is only valid with --file"))
             }
