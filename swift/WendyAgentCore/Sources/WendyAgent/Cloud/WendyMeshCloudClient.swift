@@ -1,6 +1,7 @@
 public import Foundation
 import GRPCCore
 import GRPCNIOTransportHTTP2
+import Logging
 import SwiftProtobuf
 import WendyCloudGRPC
 
@@ -82,6 +83,8 @@ public enum WendyCloudTunnel {
 
 /// One long-lived multiplexed UDP/ICMP broker session for a mesh device.
 public actor WendyCloudDatagramSession {
+    private static let logger = Logger(label: "sh.wendy.agent.mesh-datagram")
+
     public struct Configuration: Sendable {
         public let assetID: Int32
         public let cloudGRPC: String
@@ -147,8 +150,14 @@ public actor WendyCloudDatagramSession {
                     }
                 }
             } catch {
-                // All session exits are reported through the close callback. A
-                // future datagram causes the extension cache to open a new one.
+                // Cancellation is the normal explicit-close path. Surface other transport and
+                // authentication failures without including credentials in the log metadata.
+                if !Task.isCancelled {
+                    Self.logger.warning(
+                        "Mesh datagram session closed with an error",
+                        metadata: ["error": "\(String(reflecting: error))"]
+                    )
+                }
             }
             await session.didClose()
         }
@@ -243,16 +252,59 @@ public actor WendyCloudDatagramSession {
     }
 }
 
-private func parseCloudEndpoint(_ endpoint: String) throws -> (host: String, port: Int) {
-    if let colon = endpoint.lastIndex(of: ":"),
-        let port = Int(endpoint[endpoint.index(after: colon)...]),
-        port > 0
-    {
-        return (String(endpoint[..<colon]), port)
-    }
+func parseCloudEndpoint(_ rawEndpoint: String) throws -> (host: String, port: Int) {
+    let endpoint = rawEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !endpoint.isEmpty else {
         throw RPCError(code: .invalidArgument, message: "Wendy cloud endpoint is empty")
     }
+
+    func invalidEndpoint(_ reason: String) -> RPCError {
+        RPCError(code: .invalidArgument, message: "Wendy cloud endpoint \(reason)")
+    }
+
+    func port(_ value: Substring) throws -> Int {
+        guard let result = Int(value), (1...Int(UInt16.max)).contains(result) else {
+            throw invalidEndpoint("has an invalid port")
+        }
+        return result
+    }
+
+    if endpoint.first == "[" {
+        guard let closingBracket = endpoint.firstIndex(of: "]") else {
+            throw invalidEndpoint("has invalid IPv6 brackets")
+        }
+        let host = endpoint[endpoint.index(after: endpoint.startIndex)..<closingBracket]
+        guard !host.isEmpty else {
+            throw invalidEndpoint("has an empty host")
+        }
+        let remainder = endpoint[endpoint.index(after: closingBracket)...]
+        if remainder.isEmpty {
+            return (String(host), 443)
+        }
+        guard remainder.first == ":" else {
+            throw invalidEndpoint("has invalid trailing data")
+        }
+        return (String(host), try port(remainder.dropFirst()))
+    }
+
+    let colonCount = endpoint.reduce(into: 0) { count, character in
+        if character == ":" { count += 1 }
+    }
+    if colonCount == 0 {
+        return (endpoint, 443)
+    }
+    if colonCount == 1, let colon = endpoint.firstIndex(of: ":") {
+        let host = endpoint[..<colon]
+        guard !host.isEmpty else {
+            throw invalidEndpoint("has an empty host")
+        }
+        let portText = endpoint[endpoint.index(after: colon)...]
+        return (String(host), try port(portText))
+    }
+
+    // A bare IPv6 literal has no unambiguous port separator. Keep the default port; callers that
+    // need an explicit port use standard bracket notation (`[::1]:50052`). Custom/self-hosted
+    // endpoints remain supported, while full TLS verification binds the connection to this host.
     return (endpoint, 443)
 }
 
