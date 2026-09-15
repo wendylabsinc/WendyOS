@@ -1,0 +1,206 @@
+syntax = "proto3";
+
+package wendycloud.v1;
+
+import "cloud/apps.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+
+// Exposes bounded, provider-owned settings through Wendy Cloud. App Settings V1
+// uses the existing V1 Organization, Asset, and App identities. A future V2
+// service may preserve these semantics while adopting V2 resource identities.
+service AppSettingsService {
+  rpc AppSettingsList(AppSettingsListRequest) returns (AppSettingsListResponse);
+  rpc AppSettingsGet(AppSettingsGetRequest) returns (AppSettings);
+  rpc AppSettingsUpdate(AppSettingsUpdateRequest) returns (AppSettingsUpdateResponse);
+  rpc AppSettingsPerformControlAction(AppSettingsPerformControlActionRequest) returns (AppSettingsPerformControlActionResponse);
+}
+
+message AppSettingsScope {
+  // Exactly one scope is required.
+  oneof value {
+    AppSettingsScopeOrganization organization = 1;
+    AppSettingsScopeDevice device = 2;
+  }
+}
+
+message AppSettingsScopeOrganization {
+  // Existing wendycloud.v1 Organization ID.
+  int32 id = 1;
+}
+
+message AppSettingsScopeDevice {
+  // Existing wendycloud.v1 Asset ID. Cloud derives its organization.
+  int32 id = 1;
+}
+
+message AppSettingsListRequest {
+  AppSettingsScope scope = 1;
+  // Mutually exclusive App ID anchors. Traversal is newest-first by
+  // (App.created_at, App.id).
+  optional string before_app_id = 2;
+  optional string after_app_id = 3;
+  // Required in the range 1...100.
+  int32 limit = 4;
+}
+
+message AppSettingsListResponse {
+  repeated App apps = 1;
+  bool more_available = 2;
+}
+
+message AppSettingsGetRequest {
+  string app_id = 1;
+  AppSettingsScope scope = 2;
+}
+
+message AppSettingsUpdateRequest {
+  string app_id = 1;
+  AppSettingsScope scope = 2;
+  // Atomic per-control patch. Omitted keys are unchanged and an explicit
+  // NullValue clears the value at the requested scope.
+  map<string, AppSettingsValue> changes = 3;
+  bool restart_if_required = 4;
+}
+
+message AppSettingsPerformControlActionRequest {
+  string app_id = 1;
+  AppSettingsScope scope = 2;
+  string control_key = 3;
+}
+
+// Success is represented by the RPC status. Dedicated empty responses allow
+// additive response metadata later.
+message AppSettingsUpdateResponse {}
+message AppSettingsPerformControlActionResponse {}
+
+message AppSettings {
+  string app_id = 1;
+  AppSettingsScope scope = 2;
+  // At most 10 named sections. Keys are unique within this document.
+  repeated AppSettingsSection sections = 3;
+  // At most 100 controls. Keys are unique within this document.
+  repeated AppSettingsControl controls = 4;
+  // One-shot instruction to call AppSettingsGet once after this duration.
+  optional google.protobuf.Duration poll_after = 5;
+}
+
+message AppSettingsSection {
+  // Required stable key, 1...256 UTF-8 bytes.
+  string key = 1;
+  // Optional user-facing text, 1...256 UTF-8 bytes when present.
+  optional string title = 2;
+  // Optional user-facing text, 1...1024 UTF-8 bytes when present.
+  optional string detail = 3;
+}
+
+message AppSettingsControl {
+  // Required stable key, 1...256 UTF-8 bytes, unique across all controls.
+  string key = 1;
+  // Required user-facing title, 1...256 UTF-8 bytes.
+  string title = 2;
+  // Optional user-facing detail, 1...1024 UTF-8 bytes when present.
+  optional string detail = 3;
+  // Optional key of a declared section. Omitted means the anonymous section.
+  optional string section = 4;
+  // Omitted means enabled. Disabled controls remain visible but cannot be
+  // changed or invoked.
+  optional bool is_enabled = 5;
+
+  // Exactly one typed control is required.
+  oneof control {
+    AppSettingsControlToggle toggle = 10;
+    AppSettingsControlSingleSelect single_select = 11;
+    AppSettingsControlMultiSelect multi_select = 12;
+    AppSettingsControlSlider slider = 13;
+    AppSettingsControlButton button = 14;
+    AppSettingsControlStatus status = 15;
+  }
+}
+
+message AppSettingsControlToggle {
+  // Required when the control is enabled.
+  optional bool value = 1;
+  bool requires_restart = 2;
+}
+
+message AppSettingsControlSelectOption {
+  // Required stable key, 1...256 UTF-8 bytes.
+  string key = 1;
+  // Required user-facing title, 1...256 UTF-8 bytes.
+  string title = 2;
+  // Optional user-facing detail, 1...1024 UTF-8 bytes when present.
+  optional string detail = 3;
+}
+
+message AppSettingsControlSingleSelect {
+  // Required when the control is enabled and must name one declared option.
+  optional AppSettingsControlSelectOption value = 1;
+  // At most 100 options with unique keys.
+  repeated AppSettingsControlSelectOption options = 2;
+  bool requires_restart = 3;
+}
+
+message AppSettingsControlMultiSelect {
+  // At most 100 duplicate-free selections, each naming a declared option.
+  repeated AppSettingsControlSelectOption value = 1;
+  // At most 100 options with unique keys.
+  repeated AppSettingsControlSelectOption options = 2;
+  bool requires_restart = 3;
+}
+
+message AppSettingsControlSlider {
+  // Required and finite when the control is enabled.
+  optional double value = 1;
+  double minimum = 2;
+  double maximum = 3;
+  // Positive, finite, and no larger than maximum - minimum when present.
+  optional double step = 4;
+  bool requires_restart = 5;
+}
+
+enum AppSettingsControlStyle {
+  APP_SETTINGS_CONTROL_STYLE_UNSPECIFIED = 0;
+  APP_SETTINGS_CONTROL_STYLE_STANDARD = 1;
+  APP_SETTINGS_CONTROL_STYLE_PROMINENT = 2;
+  // Clients require explicit confirmation before invocation.
+  APP_SETTINGS_CONTROL_STYLE_DESTRUCTIVE = 3;
+}
+
+message AppSettingsControlButton {
+  // APP_SETTINGS_CONTROL_STYLE_UNSPECIFIED is invalid.
+  AppSettingsControlStyle style = 1;
+}
+
+enum AppSettingsControlStatusState {
+  APP_SETTINGS_CONTROL_STATUS_STATE_UNSPECIFIED = 0;
+  APP_SETTINGS_CONTROL_STATUS_STATE_NEUTRAL = 1;
+  APP_SETTINGS_CONTROL_STATUS_STATE_ACTIVE = 2;
+  APP_SETTINGS_CONTROL_STATUS_STATE_SUCCESS = 3;
+  APP_SETTINGS_CONTROL_STATUS_STATE_WARNING = 4;
+  APP_SETTINGS_CONTROL_STATUS_STATE_ERROR = 5;
+}
+
+message AppSettingsControlStatus {
+  // APP_SETTINGS_CONTROL_STATUS_STATE_UNSPECIFIED is invalid.
+  AppSettingsControlStatusState state = 1;
+  // Optional finite value in 0...1. Valid only for ACTIVE status.
+  optional double progress = 2;
+}
+
+message AppSettingsValue {
+  // Exactly one value is required. NullValue clears the requested scope's
+  // explicit value rather than setting an application-level null.
+  oneof value {
+    bool toggle = 1;
+    string single_select = 2;
+    AppSettingsValueMultiSelect multi_select = 3;
+    double slider = 4;
+    google.protobuf.NullValue null = 5;
+  }
+}
+
+message AppSettingsValueMultiSelect {
+  // At most 100 duplicate-free option keys.
+  repeated string keys = 1;
+}

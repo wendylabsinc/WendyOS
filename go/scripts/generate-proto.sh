@@ -109,6 +109,7 @@ done
 CLOUD_PKG="$MODULE/go/proto/gen/cloudpb"
 CLOUD_PROTOS=(
     "cloud/apps.proto"
+    "cloud/app_settings.proto"
     "cloud/assets.proto"
     "cloud/certificates.proto"
     "cloud/deployments.proto"
