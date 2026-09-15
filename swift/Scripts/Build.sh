@@ -49,6 +49,9 @@ ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-wendy-notary-profile}"
 ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/Support/WendyAgentMac.entitlements"
 SYSTEM_EXTENSION_ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/WendyNet/WendyNet.entitlements"
+RUNTIME_RESOURCES_PATH="$SWIFT_DIR/WendyAgentMac/Resources/runtime"
+RUNTIME_KERNEL_PATH="$RUNTIME_RESOURCES_PATH/vmlinuz-arm64"
+RUNTIME_INITRAMFS_PATH="$RUNTIME_RESOURCES_PATH/initramfs-arm64.img"
 
 if [[ "$DEV_BUILD" -eq 1 ]]; then
   BUILD_CONFIGURATION="Debug"
@@ -89,6 +92,13 @@ if [ ! -f "$SYSTEM_EXTENSION_ENTITLEMENTS_PATH" ]; then
   echo "Missing entitlements file: $SYSTEM_EXTENSION_ENTITLEMENTS_PATH" >&2
   exit 1
 fi
+for runtime_artifact in "$RUNTIME_KERNEL_PATH" "$RUNTIME_INITRAMFS_PATH"; do
+  if [ ! -r "$runtime_artifact" ]; then
+    echo "Missing runtime guest artifact: $runtime_artifact" >&2
+    echo "Run WendyAgentMac/RuntimeGuest/build.sh before packaging." >&2
+    exit 1
+  fi
+done
 
 sign_path() {
   local path="$1"
