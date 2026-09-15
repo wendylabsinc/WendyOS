@@ -384,8 +384,7 @@ func TestServiceHookRunner_CloudNoReportedIPSkipsHookAndReadiness(t *testing.T) 
 
 // TestServiceHookRunner_ReadinessTimeoutSuppressesAutomaticHTTPSideEffects
 // verifies that a timed-out HTTP readiness gate warns without claiming success
-// or opening a synthesized browser URL, while an explicitly configured hook
-// retains the established multi-service non-fatal behavior and still runs.
+// or running explicit host hooks before readiness succeeds.
 func TestServiceHookRunner_ReadinessTimeoutSuppressesAutomaticHTTPSideEffects(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("host-side postStart cli hook uses `touch`, unavailable on Windows")
@@ -429,7 +428,9 @@ func TestServiceHookRunner_ReadinessTimeoutSuppressesAutomaticHTTPSideEffects(t 
 	if len(*calls) != 0 {
 		t.Fatalf("browserOpen calls = %v, want none after readiness timeout", *calls)
 	}
-	waitForFile(t, sentinel, 5*time.Second)
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatal("postStart hook ran before readiness succeeded")
+	}
 	if containerFake.listContainersCalls == 0 {
 		t.Errorf("ListContainers never called; expected warnReadiness's exit-detail lookup to run")
 	}
@@ -1285,8 +1286,7 @@ func TestStartAndStreamServices_Detached_NoHostSideWork(t *testing.T) {
 
 // TestStartAndStreamServices_Attached_ReadinessTimeoutNonFatal keeps the
 // documented contract that a non-cancellation readiness timeout warns without
-// failing the command: the run still returns nil and the explicitly configured
-// cli hook still fires. Detached runs do not probe, so attached is the only
+// failing the command: the run still returns nil and host hooks remain gated. Detached runs do not probe, so attached is the only
 // mode this applies to.
 func TestStartAndStreamServices_Attached_ReadinessTimeoutNonFatal(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -1311,9 +1311,9 @@ func TestStartAndStreamServices_Attached_ReadinessTimeoutNonFatal(t *testing.T) 
 			Hooks:       &appconfig.HooksConfig{PostStart: &appconfig.HookCommand{CLI: fmt.Sprintf("touch %q", sentinel)}},
 		},
 	}
-	// Hold the log stream open until the hook has run, so the teardown
-	// (runCancel then reap) cannot suppress it first.
-	fake := &hookSvcContainerClient{deadline: time.Now().Add(20 * time.Second)}
+	// Hold the log stream past the initial deadline to verify the warning
+	// without running a host hook for a service that never becomes ready.
+	fake := &hookSvcContainerClient{deadline: time.Now().Add(2 * time.Second)}
 	fake.shouldEOF = func() bool { _, statErr := os.Stat(sentinel); return statErr == nil }
 	conn := newLifecycleTestConn("127.0.0.1", nil)
 	conn.ContainerService = fake
@@ -1322,7 +1322,9 @@ func TestStartAndStreamServices_Attached_ReadinessTimeoutNonFatal(t *testing.T) 
 		func(string) error { return nil }, svcCfgs, svcCfgs, nil); err != nil {
 		t.Fatalf("startAndStreamServices returned %v, want nil (readiness timeout must be non-fatal)", err)
 	}
-	waitForFile(t, sentinel, 5*time.Second)
+	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
+		t.Fatal("postStart hook ran before readiness succeeded")
+	}
 	if fake.listContainersCalls() == 0 {
 		t.Error("no ListContainers call: the readiness failure was never reported through warnReadiness")
 	}

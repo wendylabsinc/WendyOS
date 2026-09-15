@@ -56,14 +56,18 @@ The network entitlement allows the container to access the device's network. If 
 
 A "network" type entitlement can have the following values:
 
-- **network**: A string representing the network type. Can be `host` (default) or `none`.
+- **mode**: `host` shares the device's network for LAN access; `bridge` provides
+  outbound DNS/downloads through NAT without LAN port publishing; `none` provides
+  only loopback. Declare a mode explicitly. Omitting the entire entitlement gives
+  an ordinary container only loopback, and `wendy run` warns before building.
+  In a shared-network group, secondaries inherit the primary service's namespace.
 
 > Note: NetworkMode `none` does not support remote debugging.
 
 ```json
 {
     "type": "network",
-    "network": "host"
+    "mode": "host"
 }
 ```
 

@@ -102,6 +102,7 @@ actor StubLinuxBackend: LinuxContainerBackend {
 final class PIDStub: @unchecked Sendable {
     private let queue = DispatchQueue(label: "wendy.tests.pid-stub")
     private var paths: [Int32: String]
+    private var births: [Int32: UInt64] = [:]
     private var signals: [(pid: Int32, signal: Int32)] = []
     /// When true, a pid is dropped from `paths` the moment it is signalled, so
     /// the survivor wait returns immediately instead of polling for real time.
@@ -114,6 +115,27 @@ final class PIDStub: @unchecked Sendable {
 
     var lookup: PIDExecutablePathLookup {
         { [self] pid in queue.sync { paths[pid] } }
+    }
+
+    var birthLookup: PIDBirthTimeLookup {
+        { [self] pid in queue.sync { paths[pid] == nil ? nil : births[pid] } }
+    }
+
+    func restoreBirths(_ apps: [WendyApp]) {
+        queue.sync {
+            for app in apps {
+                guard let pid = app.info.pid, let birth = app.pidBirthTime, let path = paths[pid]
+                else { continue }
+                if births[pid] == nil {
+                    births[pid] =
+                        path == app.native?.executablePath || path == "/bin/sh" ? birth : birth + 1
+                }
+            }
+        }
+    }
+
+    func setBirth(_ pid: Int32, _ birth: UInt64) {
+        queue.sync { births[pid] = birth }
     }
 
     var send: PIDSignalSender {
@@ -885,7 +907,9 @@ struct ContainerServiceSupervisorTests {
         await restarted.stopAllApps()
     }
 
-    @Test("reconcile terminates a surviving process whose executable matches the app binary")
+    @Test(
+        "reconcile identifies a surviving script by birth time despite its interpreter executable"
+    )
     func reconcileTerminatesMatchingSurvivor() async throws {
         let appsBase = try makeSupervisorTempDir()
         defer { cleanupSupervisorPath(appsBase) }
@@ -898,7 +922,7 @@ struct ContainerServiceSupervisorTests {
         let persistedPID = try await simulateDisorderlyExit(service: service, appID: appID)
 
         // The pid is still running this app's binary: it is ours.
-        let binaryPath = "\(appsBase)/\(appID)/sleep.sh"
+        let binaryPath = "/bin/sh"
         let pids = PIDStub(paths: [persistedPID: binaryPath])
         let restarted = makeService(appsBase: appsBase, pids: pids)
 
@@ -907,6 +931,24 @@ struct ContainerServiceSupervisorTests {
         #expect(pids.sentSignals().map(\.pid) == [persistedPID])
         #expect(pids.sentSignals().map(\.signal) == [SIGTERM])
         #expect(await restarted.appInfo(forAppID: appID)?.status == .running)
+        await restarted.stopAllApps()
+    }
+
+    @Test("a reused PID running the same executable is never signalled or adopted")
+    func reusedPIDWithDifferentBirthIsNotOurs() async throws {
+        let appsBase = try makeSupervisorTempDir()
+        defer { cleanupSupervisorPath(appsBase) }
+        let appID = "sh.wendy.tests.ReusedPID"
+        try writeSupervisorSleepScript(appsBase: appsBase, appID: appID, name: "sleep.sh")
+        let original = makeService(appsBase: appsBase)
+        try await createNativeApp(service: original, appID: appID, cmd: "sleep.sh")
+        let pid = try await simulateDisorderlyExit(service: original, appID: appID)
+        let pids = PIDStub(paths: [pid: "\(appsBase)/\(appID)/sleep.sh"])
+        pids.setBirth(pid, 1)
+        let restarted = makeService(appsBase: appsBase, pids: pids)
+        await restarted.reconcileApps()
+        #expect(pids.sentSignals().isEmpty)
+        #expect(await restarted.appInfo(forAppID: appID)?.pid != pid)
         await restarted.stopAllApps()
     }
 
@@ -977,10 +1019,20 @@ private func makeService(
 ) -> ContainerService {
     let lookup: PIDExecutablePathLookup
     let send: PIDSignalSender
+    let birthLookup: PIDBirthTimeLookup
     if let pids {
+        if let data = try? Data(
+            contentsOf: URL(fileURLWithPath: appsBase).appendingPathComponent("info.json")
+        ),
+            let apps = try? JSONDecoder().decode([WendyApp].self, from: data)
+        {
+            pids.restoreBirths(apps)
+        }
+        birthLookup = pids.birthLookup
         lookup = pids.lookup
         send = pids.send
     } else {
+        birthLookup = { NativeProcessConfiguration.birthTime(forPID: $0) }
         lookup = { ContainerService.executablePath(forPID: $0) }
         send = { pid, signal in _ = Darwin.kill(pid, signal) }
     }
@@ -993,6 +1045,7 @@ private func makeService(
         supervisorInterval: supervisorInterval,
         restartFloor: restartFloor,
         pidExecutablePath: lookup,
+        pidBirthTime: birthLookup,
         sendSignal: send
     )
 }

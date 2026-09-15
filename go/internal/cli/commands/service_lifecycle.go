@@ -11,9 +11,8 @@ import (
 
 // serviceHookRunner runs the per-service "wait for readiness → announce URL →
 // fire postStart" sequence for multi-service runs (compose + services map).
-// A readiness failure warns and still fires explicitly configured hooks, but
-// suppresses the success announcement and HTTP-entitlement-synthesized browser
-// open. Context cancellation suppresses every side effect, as does a watch
+// Readiness gates all explicit and synthesized host actions. A slow running
+// service remains under observation until ready, stopped, or canceled. Context cancellation suppresses every side effect, as does a watch
 // session that has already completed the sequence for this container.
 //
 // Zero-value-ready except conn: construct with
@@ -92,34 +91,17 @@ func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.
 		return
 	}
 
-	readinessSucceeded := true
-	if err := waitForReadiness(ctx, readiness, hookHost); err != nil {
-		if ctx.Err() != nil {
-			// Canceled (e.g. Ctrl+C, or the run ending) — stay silent and skip
-			// the hook entirely; this is not a readiness failure to report.
-			return
+	if err := waitForAttachedReadiness(ctx, r.conn, cfg, hookHost); err != nil {
+		if ctx.Err() == nil {
+			warnReadiness(ctx, r.conn, cfg.AppID, err)
 		}
-		// containerExitDetail (invoked by warnReadiness) matches on the GROUP
-		// appID: the agent's ListContainers groups per-service containers under
-		// the group app-ID label, reports AppContainer.AppName as the bare
-		// group appID, and aggregates exit code/reason onto that group entry —
-		// so pass cfg.AppID, never cfg.ContainerName().
-		warnReadiness(ctx, r.conn, cfg.AppID, err)
-		readinessSucceeded = false
+		return
 	}
 	if ctx.Err() != nil {
 		return
 	}
-	// Watch claims host-side actions only after readiness succeeds. A failed
-	// attempt releases the claim so a later deploy can try again.
-	if r.opts.isWatch() && !readinessSucceeded {
-		return
-	}
-
 	effectiveCfg := cfg
-	// A failed probe must not synthesize an automatic browser open from an HTTP
-	// entitlement. Explicit hooks still run after a non-cancellation timeout.
-	if readinessSucceeded && hooks != cfg.Hooks {
+	if hooks != cfg.Hooks {
 		clone := *cfg
 		clone.Hooks = hooks
 		effectiveCfg = &clone

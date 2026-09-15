@@ -19,7 +19,7 @@ const (
 	InterfaceExternal  InterfaceType = "external"
 )
 
-// ESP32 USB identifiers (Espressif ESP32-C6).
+// ESP32 USB identifiers (Espressif ESP32 board).
 const (
 	ESP32VendorID  = "0x303a"
 	ESP32ProductID = "0x1001"
@@ -37,7 +37,6 @@ type USBDevice struct {
 	Hostname          string `json:"hostname,omitempty"`
 	AgentVersion      string `json:"agentVersion,omitempty"`
 	IsWendyDevice     bool   `json:"isWendyDevice"`
-	IsESP32           bool   `json:"isESP32,omitempty"`
 }
 
 func (d USBDevice) HumanReadable() string {
@@ -54,8 +53,14 @@ type LANDevice struct {
 	DisplayName string `json:"displayName"`
 	Hostname    string `json:"hostname"`
 	IPAddress   string `json:"ipAddress,omitempty"`
-	Port        int    `json:"port"`
-	IsMTLS      bool   `json:"isMTLS,omitempty"`
+	// Addresses is the union of every IP this device was seen at across
+	// interfaces and sightings (e.g. a WiFi IPv4, a USB link-local, an IPv6),
+	// IPAddress-first. It lets the dial ladder try every reachable path when
+	// the primary is unreachable; IPAddress stays the primary for display and
+	// back-compat.
+	Addresses []string `json:"addresses,omitempty"`
+	Port      int      `json:"port"`
+	IsMTLS    bool     `json:"isMTLS,omitempty"`
 	// AssetID is the cloud asset ID from the assetid TXT record; 0 when the
 	// device is unprovisioned or pre-mesh.
 	AssetID int32 `json:"assetId,omitempty"`
@@ -64,16 +69,23 @@ type LANDevice struct {
 	MeshName string `json:"meshName,omitempty"`
 	// OrgID is the device's cloud organization id from the `orgid` TXT record;
 	// 0 when unprovisioned or pre-mesh.
-	OrgID            int32  `json:"orgId,omitempty"`
-	InterfaceType    string `json:"interfaceType"`
-	NetworkInterface string `json:"-"`
-	USB              string `json:"usb,omitempty"`
-	IsWendyDevice    bool   `json:"isWendyDevice"`
-	AgentVersion     string `json:"agentVersion,omitempty"`
-	DeviceType       string `json:"deviceType,omitempty"`
-	OS               string `json:"os,omitempty"`
-	OSVersion        string `json:"osVersion,omitempty"`
-	CPUArchitecture  string `json:"cpuArchitecture,omitempty"`
+	OrgID int32 `json:"orgId,omitempty"`
+	// Sensorlink is true when Caps contains "sensors" (from the `caps=` TXT
+	// record, or the legacy `sensorlink=true` TXT record it supersedes),
+	// meaning the device can act as a remote sensor source for pairing.
+	Sensorlink bool `json:"sensorlink,omitempty"`
+	// Caps is the device's advertised capability list from the `caps=`
+	// comma-separated TXT record (e.g. "sensors,foo"); nil when unadvertised.
+	Caps             []string `json:"caps,omitempty"`
+	InterfaceType    string   `json:"interfaceType"`
+	NetworkInterface string   `json:"-"`
+	USB              string   `json:"usb,omitempty"`
+	IsWendyDevice    bool     `json:"isWendyDevice"`
+	AgentVersion     string   `json:"agentVersion,omitempty"`
+	DeviceType       string   `json:"deviceType,omitempty"`
+	OS               string   `json:"os,omitempty"`
+	OSVersion        string   `json:"osVersion,omitempty"`
+	CPUArchitecture  string   `json:"cpuArchitecture,omitempty"`
 }
 
 func (d LANDevice) HumanReadable() string {
@@ -182,6 +194,27 @@ type DiscoveredDevice struct {
 	OS              string
 	OSVersion       string
 	CPUArchitecture string
+	// Sensorlink is copied from LAN.Sensorlink when a LAN sighting is merged
+	// in; false when the device has no LAN sighting.
+	Sensorlink bool
+	// Caps is copied from LAN.Caps when a LAN sighting is merged in; nil when
+	// the device has no LAN sighting.
+	Caps []string
+	// IsMTLS is copied from LAN.IsMTLS when a LAN sighting is merged in; false
+	// when the device has no LAN sighting.
+	IsMTLS bool
+	// AssetID and OrgID are copied from the LAN sighting's cloud asset/org TXT
+	// records; zero when the device has no LAN sighting or is unprovisioned.
+	AssetID int32
+	OrgID   int32
+	// IPAddress is copied from the LAN sighting; empty when the device has no
+	// LAN sighting.
+	IPAddress string
+	// Addresses is copied from the LAN sighting's Addresses union (every IP the
+	// device was seen at across interfaces); nil when the device has no LAN
+	// sighting. IPAddress is the primary; this is the full set the dial ladder
+	// may try.
+	Addresses []string
 
 	LAN       *LANDevice
 	Bluetooth *BluetoothDevice
@@ -295,6 +328,13 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 			OS:              d.OS,
 			OSVersion:       d.OSVersion,
 			CPUArchitecture: d.CPUArchitecture,
+			Sensorlink:      d.Sensorlink,
+			Caps:            d.Caps,
+			IsMTLS:          d.IsMTLS,
+			AssetID:         d.AssetID,
+			OrgID:           d.OrgID,
+			IPAddress:       d.IPAddress,
+			Addresses:       d.Addresses,
 			LAN:             d,
 		}
 		register(merged, d.HostKey(), strings.ToLower(d.DisplayName))

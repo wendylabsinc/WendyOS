@@ -979,6 +979,13 @@ func buildImageToOCILayout(ctx context.Context, cwd, dockerfile, platform string
 	if err != nil {
 		return err
 	}
+	handled, err := maybeBuildStagefileLLBToOCI(ctx, cwd, dockerfile, platform, normalized, dest, "", stdout)
+	if err != nil {
+		return err
+	}
+	if handled {
+		return nil
+	}
 	if normalized == imageBuilderAppleContainer {
 		return buildImageToOCILayoutWithAppleContainer(ctx, cwd, dockerfile, platform, buildArgs, dest, stdout, stderr)
 	}
@@ -1002,8 +1009,14 @@ func buildImageToOCILayoutDirWithDocker(ctx context.Context, cwd, dockerfile, pl
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
 		return fmt.Errorf("creating OCI layout directory: %w", err)
 	}
-	if err := buildImageWithBuildxOCIExport(ctx, cwd, dockerfile, platform, buildArgs, destDir, true, stdout, stderr); err != nil {
+	handled, err := maybeBuildStagefileLLBToOCI(ctx, cwd, dockerfile, platform, imageBuilderDocker, "", destDir, stdout)
+	if err != nil {
 		return err
+	}
+	if !handled {
+		if err := buildImageWithBuildxOCIExport(ctx, cwd, dockerfile, platform, buildArgs, destDir, true, stdout, stderr); err != nil {
+			return err
+		}
 	}
 	// The export appended this build's manifest; drop every older entry so
 	// readers and GC see exactly one current image. Prune is hygiene, not

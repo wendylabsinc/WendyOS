@@ -107,7 +107,7 @@ func TestSimulatorTabSurvivesAnUnreadableStore(t *testing.T) {
 }
 
 func TestDevicePickerShowsAllThreeTabs(t *testing.T) {
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
 	view := m.View()
 	for _, want := range []string{"Local", "Simulator", "Cloud", "tab switch"} {
 		if !strings.Contains(view, want) {
@@ -117,7 +117,7 @@ func TestDevicePickerShowsAllThreeTabs(t *testing.T) {
 }
 
 func TestDevicePickerCyclesThroughSimulator(t *testing.T) {
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
 	for _, want := range []devicePickerTab{devicePickerSimulatorTab, devicePickerCloudTab, devicePickerLocalTab} {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
 		m = updated.(devicePickerModel)
@@ -131,7 +131,7 @@ func TestDevicePickerChoiceReportsTheConfirmingTab(t *testing.T) {
 	// The regression test for the bug the tagged struct exists to prevent: a
 	// child keeps a selection from an earlier visit, and a fixed-order payload
 	// check would let that stale pick beat the tab the user confirmed on.
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
 	m, _ = m.updateSimulator(tea.WindowSizeMsg{Width: 120, Height: 30})
 	m, _ = m.updateSimulator(simulatorVMsMsg{vms: []vm.Status{stoppedVM("dev", "")}})
 	m.active = devicePickerSimulatorTab
@@ -151,7 +151,7 @@ func TestDevicePickerChoiceReportsTheConfirmingTab(t *testing.T) {
 }
 
 func TestDevicePickerChoiceIsEmptyWhenCancelled(t *testing.T) {
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
 	m.cancelled = true
 	if _, ok := m.choice(); ok {
 		t.Error("choice() reported a selection after the picker was cancelled")
@@ -160,7 +160,7 @@ func TestDevicePickerChoiceIsEmptyWhenCancelled(t *testing.T) {
 
 func TestDevicePickerChoiceIsEmptyWhenQuittingToLogIn(t *testing.T) {
 	// The login and org-switch retry flows must keep working unchanged.
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
 	m.hasChosen, m.action = true, devicePickerLogin
 	if _, ok := m.choice(); ok {
 		t.Error("choice() reported a selection while quitting to log in")

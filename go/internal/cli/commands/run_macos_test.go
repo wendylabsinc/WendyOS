@@ -58,6 +58,15 @@ func (s *fakeMacContainerServer) CreateContainer(_ context.Context, req *agentpb
 	return &agentpb.CreateContainerResponse{}, nil
 }
 
+func (s *fakeMacContainerServer) ListContainers(_ *agentpb.ListContainersRequest, stream grpc.ServerStreamingServer[agentpb.ListContainersResponse]) error {
+	for _, req := range s.state.createReqs {
+		if err := stream.Send(&agentpb.ListContainersResponse{Container: &agentpb.AppContainer{AppName: req.AppName, RunningState: agentpb.AppRunningState_RUNNING}}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *fakeMacContainerServer) StartContainer(req *agentpb.StartContainerRequest, _ grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
 	s.state.startReqs = append(s.state.startReqs, proto.Clone(req).(*agentpb.StartContainerRequest))
 	return nil

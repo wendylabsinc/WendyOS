@@ -164,6 +164,16 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 		}
 		info["partitions"] = parts
 	}
+	if p := resp.GetContainerStorage(); p != nil {
+		info["container_storage"] = map[string]any{"mountpoint": p.GetMountpoint(), "filesystem": p.GetFilesystem(), "device": p.GetDevice(), "used_bytes": p.GetUsedBytes(), "total_bytes": p.GetTotalBytes()}
+	}
+	if gpus := resp.GetGpuCapabilities(); len(gpus) > 0 {
+		entries := make([]map[string]any, 0, len(gpus))
+		for _, gpu := range gpus {
+			entries = append(entries, map[string]any{"vendor": gpu.GetVendor(), "path": gpu.GetPath(), "compute_backends": append([]string{}, gpu.GetComputeBackends()...)})
+		}
+		info["gpu_capabilities"] = entries
+	}
 	if resp.HasGpu != nil {
 		info["has_gpu"] = resp.GetHasGpu()
 	}
@@ -178,6 +188,12 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	}
 	if resp.GpuArch != nil {
 		info["gpu_arch"] = resp.GetGpuArch()
+	}
+	if resp.HasNpu != nil {
+		info["has_npu"] = resp.GetHasNpu()
+	}
+	if resp.NpuVendor != nil {
+		info["npu_vendor"] = resp.GetNpuVendor()
 	}
 	return okResult(info), nil
 }

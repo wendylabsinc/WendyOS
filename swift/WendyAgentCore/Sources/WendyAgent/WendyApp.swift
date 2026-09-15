@@ -6,6 +6,9 @@ struct WendyApp: Codable {
         var binaryName: String
         var args: [String]
         var currentDirectory: String?
+        /// Optional for compatibility with applications saved by older agents.
+        var executablePath: String? = nil
+        var environment: [String: String]? = nil
     }
 
     struct ContainerMetadata: Codable, Equatable {
@@ -45,6 +48,9 @@ struct WendyApp: Codable {
     /// survived a disorderly agent exit. Set only by `ContainerService.loadApps`
     /// and cleared once reconcile has considered it.
     var persistedPID: Int32? = nil
+    /// Kernel process birth time (microseconds since epoch). Unlike a PID or
+    /// executable path this also identifies scripts and survives exec().
+    var pidBirthTime: UInt64? = nil
 
     enum CodingKeys: String, CodingKey {
         case info
@@ -52,6 +58,7 @@ struct WendyApp: Codable {
         case container
         case restartPolicy
         case stoppedByUser
+        case pidBirthTime
     }
 
     init(
@@ -65,7 +72,8 @@ struct WendyApp: Codable {
         failureCount: Int = 0,
         lastRestart: Date? = nil,
         lastExitCode: Int32? = nil,
-        persistedPID: Int32? = nil
+        persistedPID: Int32? = nil,
+        pidBirthTime: UInt64? = nil
     ) {
         self.info = info
         self.native = native
@@ -78,6 +86,7 @@ struct WendyApp: Codable {
         self.lastRestart = lastRestart
         self.lastExitCode = lastExitCode
         self.persistedPID = persistedPID
+        self.pidBirthTime = pidBirthTime
     }
 
     /// Custom decode so `restartPolicy`/`stoppedByUser` default sensibly when
@@ -122,5 +131,6 @@ struct WendyApp: Codable {
         self.lastRestart = nil
         self.lastExitCode = nil
         self.persistedPID = nil
+        self.pidBirthTime = try values.decodeIfPresent(UInt64.self, forKey: .pidBirthTime)
     }
 }

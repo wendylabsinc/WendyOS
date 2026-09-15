@@ -129,7 +129,7 @@ func (l *tunnelLink) recv(timeout time.Duration) (*wendypb.WendyComMessage, erro
 	}
 }
 
-func (l *tunnelLink) maxChunk() int {
+func (l *tunnelLink) preferredChunkSize() int {
 	return chunkSize
 }
 

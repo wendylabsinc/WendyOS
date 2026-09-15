@@ -80,6 +80,7 @@ hello-esp32/
 ├── wendy.json
 └── main/
     ├── CMakeLists.txt
+    ├── idf_component.yml
     └── main.c
 ```
 
@@ -103,14 +104,57 @@ Add a Wendy manifest using the `wendy-lite` device platform:
 }
 ```
 
-Your app code uses normal ESP-IDF components and APIs. Wendy does not require a custom application SDK or wrapper.
+Your project also needs the **`wendy_core`** component. Declare it as a dependency in `main/idf_component.yml`:
+
+```yaml
+dependencies:
+  idf:
+    version: ">=5.5.0"
+  wendy_core:
+    git: "https://github.com/wendylabsinc/wendy-lite.git"
+    path: "components/wendy_core"
+```
+
+Then require it from your component in `main/CMakeLists.txt`:
+
+```cmake
+idf_component_register(SRCS "main.c"
+                    INCLUDE_DIRS "."
+                    REQUIRES wendy_core)
+```
+
+Then call `wendy_core_init()` as the very first thing in `app_main()`:
+
+```c
+#include "wendy_core.h"
+
+void app_main(void)
+{
+    ESP_ERROR_CHECK(wendy_core_init());
+
+    /* Your application starts here. */
+}
+```
+
+`wendy_core` is what makes the device manageable by the Wendy CLI and reachable through Wendy Cloud. Apart from that, your app code uses normal ESP-IDF components and APIs — no other custom SDK or wrapper is required. See [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for the full walkthrough, including which peripherals (USB, Wi-Fi, BLE) Wendy Lite owns and your app must not configure itself.
+
+### Start from a Template
+
+The quickest way to start is from a template instead of building this by hand:
+
+```sh
+mkdir my-app && cd my-app
+wendy init --template blink-rgb-led
+```
+
+This scaffolds a minimal project with the manifest and `wendy_core` already wired up.
 
 ## Deploy
 
 From the ESP-IDF project directory, run:
 
 ```bash
-wendy run --device <name>
+wendy run
 ```
 
 Wendy:
@@ -122,18 +166,12 @@ Wendy:
 5. Uploads the native application firmware, reboots the ESP32, and reconnects.
 6. Streams the ESP-IDF console output back to your terminal.
 
-Use the usual ESP-IDF tools such as `idf.py menuconfig` and component manifests as normal. You can also build or flash with `idf.py` directly whenever you want the conventional ESP-IDF workflow.
-
-## Wi-Fi Provisioning
-
-Wendy devices advertise over BLE for headless Wi-Fi provisioning. Run `wendy device setup` to send Wi-Fi credentials and, when applicable, cloud enrollment information. Once connected, the board is discoverable over mDNS and can receive deployments over the network.
-
 ## Optional WASM Apps
 
 Wendy Lite can also run Swift and other WebAssembly guests on firmware variants with WASM support. This path is useful when application portability is more important than direct access to the complete ESP-IDF API. See the [Wendy Lite reference](/docs/advanced/wendy-lite) for the WASM SDK, host API, and deployment details.
 
 ## Next Steps
 
-- Start from the native [ESP32-C6 NeoPixel example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/ESP32c6-NeoPixel)
+- Read [Native Apps for Wendy Lite](/docs/advanced/wendy-lite/native-apps) for more details
 - Read the [`wendy run` reference](/docs/advanced/clients/wendy-cli/commands/run)
 - Read the [`wendy install` ESP32 reference](/docs/advanced/clients/wendy-cli/commands/os/install#esp32-wendy-lite-path)

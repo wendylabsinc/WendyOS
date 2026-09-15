@@ -85,14 +85,14 @@ func TestTelemetryLogs_NotConnected(t *testing.T) {
 func TestTelemetryLogs_ReturnsJSON(t *testing.T) {
 	fake := &fakeTelemetryServer{
 		logBatches: []*agentpb.StreamLogsResponse{
-			{Logs: &collogspb.ExportLogsServiceRequest{}},
+			{}, {}, {Logs: &collogspb.ExportLogsServiceRequest{}}, {},
 		},
 	}
 	conn := startFakeTelemetryServer(t, fake)
 	srv := New(&config.Config{}, nil)
 	srv.SetConn(conn)
 
-	result, err := srv.callTool(context.Background(), "telemetry_logs", nil)
+	result, err := srv.callTool(context.Background(), "telemetry_logs", map[string]any{"max_batches": 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

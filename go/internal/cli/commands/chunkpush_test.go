@@ -3,7 +3,9 @@ package commands
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -407,6 +409,50 @@ func TestPushLayerByChunksBatchesLongUploads(t *testing.T) {
 	wantStreams := (fake.chunksWritten + maxChunksPerWriteStream - 1) / maxChunksPerWriteStream
 	if fake.writeStreams != wantStreams {
 		t.Fatalf("WriteChunks streams = %d, want %d for %d chunks", fake.writeStreams, wantStreams, fake.chunksWritten)
+	}
+}
+
+func TestResolvedChunkLayerUploadSendsDuplicateHashOnce(t *testing.T) {
+	chunkData := []byte("the same content appears twice")
+	f, err := os.CreateTemp(t.TempDir(), "duplicate-layer-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(append(append([]byte(nil), chunkData...), chunkData...)); err != nil {
+		t.Fatal(err)
+	}
+	dl := &decompressedLayer{f: f, size: int64(2 * len(chunkData)), diffID: "sha256:duplicate-layer"}
+	t.Cleanup(dl.Close)
+	h := sha256.Sum256(chunkData)
+	resolved := &resolvedChunkLayer{
+		header: &agentpb.RunContainerLayerHeader{
+			DiffId:      dl.diffID,
+			ChunkHashes: [][]byte{h[:], h[:]},
+		},
+		dl: dl,
+		refs: []chunk.Ref{
+			{Hash: h, Offset: 0, Len: uint64(len(chunkData))},
+			{Hash: h, Offset: uint64(len(chunkData)), Len: uint64(len(chunkData))},
+		},
+	}
+	fake := &fakeContainerClient{
+		queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
+			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
+		},
+	}
+	progress := newChunkPushProgress()
+	if err := resolved.upload(context.Background(), fake, nil, nil, progress); err != nil {
+		t.Fatal(err)
+	}
+	if fake.chunksWritten != 1 {
+		t.Fatalf("device received %d copies of one missing hash, want 1", fake.chunksWritten)
+	}
+	snapshot := progress.Snapshot()
+	if snapshot.TotalChunks != 1 || snapshot.MissingChunks != 1 || snapshot.SentChunks != 1 {
+		t.Fatalf("progress total/missing/sent = %d/%d/%d, want 1/1/1", snapshot.TotalChunks, snapshot.MissingChunks, snapshot.SentChunks)
+	}
+	if snapshot.PlannedBytes != int64(len(chunkData)) || snapshot.SentBytes != int64(len(chunkData)) {
+		t.Fatalf("progress planned/sent bytes = %d/%d, want %d/%d", snapshot.PlannedBytes, snapshot.SentBytes, len(chunkData), len(chunkData))
 	}
 }
 

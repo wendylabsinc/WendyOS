@@ -76,19 +76,20 @@ type AgentConnection struct {
 	// connection identity can't be re-derived from Host alone (e.g. the cloud
 	// tunnel, which is pinned to a specific asset id). nil for plain LAN
 	// connections, where the caller re-dials Host directly.
-	Reconnect           func(context.Context) (*AgentConnection, error)
-	AgentService        agentpb.WendyAgentServiceClient
-	ContainerService    agentpb.WendyContainerServiceClient
-	ShellService        agentpb.WendyShellServiceClient
-	AudioService        agentpb.WendyAudioServiceClient
-	AudioServiceV2      agentpbv2.WendyAudioServiceClient
-	VideoService        agentpb.WendyVideoServiceClient
-	ProvisioningService agentpb.WendyProvisioningServiceClient
-	TelemetryService    agentpb.WendyTelemetryServiceClient
-	FileSyncService     agentpb.WendyFileSyncServiceClient
-	TimeSyncService     agentpbv2.WendyTimeSyncServiceClient
-	BuildService        agentpbv2.WendyBuildServiceClient
-	DriverService       agentpbv2.WendyDriverServiceClient
+	Reconnect            func(context.Context) (*AgentConnection, error)
+	AgentService         agentpb.WendyAgentServiceClient
+	ContainerService     agentpb.WendyContainerServiceClient
+	ShellService         agentpb.WendyShellServiceClient
+	AudioService         agentpb.WendyAudioServiceClient
+	AudioServiceV2       agentpbv2.WendyAudioServiceClient
+	VideoService         agentpb.WendyVideoServiceClient
+	ProvisioningService  agentpb.WendyProvisioningServiceClient
+	TelemetryService     agentpb.WendyTelemetryServiceClient
+	FileSyncService      agentpb.WendyFileSyncServiceClient
+	TimeSyncService      agentpbv2.WendyTimeSyncServiceClient
+	BuildService         agentpbv2.WendyBuildServiceClient
+	SensorPairingService agentpbv2.WendySensorPairingServiceClient
+	DriverService        agentpbv2.WendyDriverServiceClient
 	// cachedAgentVersion retains a successful liveness probe performed while
 	// establishing this connection. Direct-agent connects already call
 	// GetAgentVersion to force gRPC's lazy dial and authenticate the peer; run
@@ -565,21 +566,22 @@ func (c *AgentConnection) PinMismatch() (*devicepin.PinMismatchError, bool) {
 
 func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 	return &AgentConnection{
-		Conn:                conn,
-		identityMismatch:    new(atomic.Pointer[certs.IdentityMismatchError]),
-		pinMismatch:         new(atomic.Pointer[devicepin.PinMismatchError]),
-		AgentService:        agentpb.NewWendyAgentServiceClient(conn),
-		ContainerService:    agentpb.NewWendyContainerServiceClient(conn),
-		ShellService:        agentpb.NewWendyShellServiceClient(conn),
-		AudioService:        agentpb.NewWendyAudioServiceClient(conn),
-		AudioServiceV2:      agentpbv2.NewWendyAudioServiceClient(conn),
-		VideoService:        agentpb.NewWendyVideoServiceClient(conn),
-		ProvisioningService: agentpb.NewWendyProvisioningServiceClient(conn),
-		TelemetryService:    agentpb.NewWendyTelemetryServiceClient(conn),
-		FileSyncService:     agentpb.NewWendyFileSyncServiceClient(conn),
-		TimeSyncService:     agentpbv2.NewWendyTimeSyncServiceClient(conn),
-		BuildService:        agentpbv2.NewWendyBuildServiceClient(conn),
-		DriverService:       agentpbv2.NewWendyDriverServiceClient(conn),
+		Conn:                 conn,
+		identityMismatch:     new(atomic.Pointer[certs.IdentityMismatchError]),
+		pinMismatch:          new(atomic.Pointer[devicepin.PinMismatchError]),
+		AgentService:         agentpb.NewWendyAgentServiceClient(conn),
+		ContainerService:     agentpb.NewWendyContainerServiceClient(conn),
+		ShellService:         agentpb.NewWendyShellServiceClient(conn),
+		AudioService:         agentpb.NewWendyAudioServiceClient(conn),
+		AudioServiceV2:       agentpbv2.NewWendyAudioServiceClient(conn),
+		VideoService:         agentpb.NewWendyVideoServiceClient(conn),
+		ProvisioningService:  agentpb.NewWendyProvisioningServiceClient(conn),
+		TelemetryService:     agentpb.NewWendyTelemetryServiceClient(conn),
+		FileSyncService:      agentpb.NewWendyFileSyncServiceClient(conn),
+		TimeSyncService:      agentpbv2.NewWendyTimeSyncServiceClient(conn),
+		BuildService:         agentpbv2.NewWendyBuildServiceClient(conn),
+		SensorPairingService: agentpbv2.NewWendySensorPairingServiceClient(conn),
+		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
 	}
 }
 

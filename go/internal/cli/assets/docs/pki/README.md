@@ -57,7 +57,7 @@ The pin is deliberately not a certificate fingerprint — a device legitimately 
 | Same org + cloud + asset (renewed or re-enrolled cert) | Connects normally |
 | Different org or cloud host | Refused, no prompt |
 | Same org + cloud, **different asset id** | Refused, no prompt — the hostname now resolves to a different machine, or the device was wiped and re-enrolled as a new asset |
-| **No mTLS identity at all**, on a hostname that was pinned | Refused, no prompt — an enrolled device does not drop its certificate on its own; it has been reflashed or factory reset, or another machine has taken its name |
+| **No mTLS identity at all**, on a hostname that was pinned | Refused, no prompt — the device may have been unenrolled, reflashed, or reset, or another machine may have taken its name |
 | No mTLS identity, hostname never pinned | Connects normally (ordinary out-of-the-box device) |
 
 The asset id is read only from a certificate that passed chain and org verification, so an impostor cannot assert its way past the pin. On the dial ladder, a wrong-device rejection aborts the whole ladder immediately — no further certificate or port is tried — and a hostname that carries any pin at all is never offered the unauthenticated plaintext rung, regardless of what its (attacker-controlled) mDNS TXT records claim about it.
@@ -74,6 +74,17 @@ This clears the local pin only — it never dials the device, so it works even w
 Both forms are accepted because the two stores are keyed differently. The identity-change refusals above name a hostname, and the hostname form clears it. The **SPKI** refusal (point 4 above) can only name the certificate identity URN, because that is what `known_devices.json` is keyed by and there is often no hostname to offer: `wendy device list` and the device picker dial the device's IP, and an agent that never advertises `orgid` in its mDNS records leaves nothing locally that maps a name to an asset. Copy the URN out of the refusal and pass it back — it clears the SPKI entry and any `devicePins` entry naming the same asset.
 
 Unpinning by hostname also clears pins filed under the device's *other* names (the cloud roster's asset name, its mesh name), because one device is legitimately pinned under several — but only when those pins name the same organisation and asset. Those alternate names come from mDNS, which is unauthenticated, so a pin naming a *different* asset is a different device's pin and is left alone. Whatever is cleared is printed, one line per entry, so an unpin never removes trust state silently.
+
+### Re-enrolling after an intentional reset or organization move
+
+Unenrolling a device does not clear the identity saved by this CLI. If you intentionally unenrolled, reset, or reflashed it, or know it is moving to another organization, clear the old local pin before retrying enrollment:
+
+```sh
+wendy device unpin wendyos-ccr1.local
+wendy device enroll --device wendyos-ccr1.local
+```
+
+Use the hostname printed in the refusal. Unpinning does not enroll the device or delete its cloud asset. If unenrollment reported a cloud cleanup failure, finish that cleanup in the Wendy Cloud dashboard separately. If the identity change was unexpected, keep the pin and verify the device first; check `wendy auth login` if this CLI is missing the organization's credentials.
 
 ## Pin sources and precedence
 

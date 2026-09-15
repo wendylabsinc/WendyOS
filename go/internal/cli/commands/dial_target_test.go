@@ -592,9 +592,10 @@ func TestWrongDeviceAbortsLadder(t *testing.T) {
 	if err == nil {
 		t.Fatal("ladder returned no error for a wrong-device rejection")
 	}
-	want := `device "orin.local" is pinned to asset 42 in organization 7, but the host answering presented asset 43 in organization 7`
-	if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "wendy device unpin orin.local") {
-		t.Fatalf("err = %v, want the identity refusal naming both identities and the unpin escape hatch", err)
+	for _, want := range []string{`device "orin.local" identity changed`, "asset 42 in organization 7", "asset 43 in organization 7", "wendy device unpin orin.local", "changed this device's organization"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want the identity refusal to include %q", err, want)
+		}
 	}
 	if mtlsErr == nil {
 		t.Fatal("mtlsErr = nil, want the mTLS probe failure preserved alongside the refusal")

@@ -299,6 +299,10 @@ func installDragonwing(ctx context.Context, version string, nightly, force bool,
 		}
 	}
 
+	if err := prepareDragonwingHost(dev); err != nil {
+		return err
+	}
+
 	flashCtx, cancelFlash := context.WithCancel(ctx)
 	defer cancelFlash()
 
@@ -465,11 +469,11 @@ func pickDragonwingEDLDevice() (qdl.DeviceInfo, error) {
 	items := make([]tui.PickerItem, 0, len(devices))
 	byAddress := make(map[string]qdl.DeviceInfo, len(devices))
 	for _, d := range devices {
-		key := fmt.Sprintf("%d/%d", d.Bus, d.Address)
+		key := d.Key()
 		byAddress[key] = d
 		items = append(items, tui.PickerItem{
 			Name:        dragonwingTargetLabel(d),
-			Description: fmt.Sprintf("bus %d device %d", d.Bus, d.Address),
+			Description: d.String(),
 			Value:       key,
 		})
 	}
@@ -589,6 +593,9 @@ func dragonwingUSBAccessHint() string {
 			"Add your user to the "+briefKey.Render("plugdev")+" group, replug the cable and retry,",
 			"or re-run the flash with sudo.",
 		)
+	} else if runtime.GOOS == "windows" {
+		lines = append(lines, "Run the install command again to install or repair the Qualcomm EDL WinUSB binding.",
+			"Accept the administrator prompt, and close other flashing tools that may have the board open.")
 	} else {
 		lines = append(lines, "Re-run the flash with sudo so wendy can claim the device.")
 	}
