@@ -615,7 +615,7 @@ func newDeviceGetDefaultCmd() *cobra.Command {
 // pickDeviceForDefault runs the interactive device picker and returns a
 // hostname or provider key suitable for storing as the default device.
 func pickDeviceForDefault(ctx context.Context) (string, error) {
-	selected, err := pickDevice(ctx, nil, false, false)
+	selected, err := pickDevice(ctx, nil, false, false, false)
 	if err != nil {
 		return "", err
 	}
@@ -792,7 +792,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
 			if err != nil {
 				return err
 			}

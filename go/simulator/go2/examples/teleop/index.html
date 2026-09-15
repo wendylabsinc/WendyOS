@@ -53,7 +53,7 @@
     <section aria-labelledby="controls-title">
       <h2 id="controls-title">Drive controls</h2>
       <div class="actions"><button id="enable">Enable controls</button><button id="disable" disabled>Stop / disable</button></div>
-      <p id="notice" role="status" aria-live="polite">Grant this app control in the simulator, then enable this tab.</p>
+      <p id="notice" role="status" aria-live="polite">Enable this tab, then hold a direction to drive.</p>
       <div class="pad" aria-label="Hold these buttons or their letter keys to drive">
         <button class="direction" data-key="q" disabled aria-label="Q: turn left"><strong>↶ Q</strong><span>Turn left</span></button>
         <button class="direction" data-key="w" disabled aria-label="W: forward"><strong>↑ W</strong><span>Forward</span></button>
@@ -76,7 +76,7 @@
         <div class="reading"><span>Turn left</span><b id="yaw">0.00 rad/s</b></div>
         <div class="reading"><span>Heartbeat timeout</span><b>250 ms</b></div>
       </div>
-      <p class="hint">These are velocity requests. The robot moves only while the simulator grants this ROS publisher control. Open the sandbox alongside this page to see its movement.</p>
+      <p class="hint">Managed Go2 gives new apps control automatically. In manual mode, grant Teleop control in the sandbox first. Open the sandbox alongside this page to watch the robot.</p>
       <p class="hint">Switching tabs, losing focus, or losing the connection disables this tab. Enable again to continue.</p>
     </section>
   </div>
@@ -174,7 +174,7 @@
   window.addEventListener('blur', () => disable('Tab lost focus. Enable again to continue.'));
   document.addEventListener('visibilitychange', () => { if (document.hidden) disable('Tab hidden. Enable again to continue.'); });
   window.addEventListener('pagehide', () => disable());
-  window.addEventListener('pageshow', () => disable('Grant this app control in the simulator, then enable this tab.'));
+  window.addEventListener('pageshow', () => disable('Enable this tab, then hold a direction to drive.'));
   setInterval(heartbeat, 100);
   let polling = false;
   async function status() {

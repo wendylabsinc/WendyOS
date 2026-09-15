@@ -172,7 +172,7 @@ def main():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--autostart", action="store_true",
-                        help="start once after fresh scan and odometry arrive; still requires a sandbox grant")
+                        help="start once after fresh scan and odometry arrive")
     args, ros_args = parser.parse_known_args()
     rclpy.init(args=ros_args)
     node = make_node(autostart=args.autostart)

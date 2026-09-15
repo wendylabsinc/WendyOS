@@ -268,7 +268,11 @@ def main():
         server.daemon_threads = True
         serving = threading.Thread(target=server.serve_forever, daemon=True)
         serving.start()
-        node.get_logger().info(f"Teleop HTTP listening on {args.host}:{args.port}; grant this ROS publisher in the sandbox")
+        node.get_logger().info(
+            f"Teleop HTTP listening on {args.host}:{args.port}. "
+            "Managed Go2 gives new apps control automatically. "
+            "In manual mode, grant Teleop control in the sandbox. "
+            "Enable the control panel and hold a direction to drive.")
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass

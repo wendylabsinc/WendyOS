@@ -93,18 +93,32 @@ agent loads fixed filter modules only for a validated managed Go2 runtime on a
 WendyOS VM. Both address families must be protected before DDS starts.
 
 Standard applications publish `geometry_msgs/msg/Twist` on `/cmd_vel`.
-Start the publisher with a zero command, open the sandbox, select its ROS
-command source, and choose **Give app control**. Exactly one browser or DDS
-publisher owns actuation. A grant is required for native sport and LowCmd
-control too. The runtime discovers the actual middleware publisher identity;
+On a managed Go2 VM, `wendy run` starts a new driving app with control
+automatically. Its first fresh command grants control to its DDS publisher,
+replacing the previous walking or browser controller. Start a publisher with
+zero velocity so handoff stops the previous command before the app moves.
+Each publisher gets one automatic grant. Older publishers cannot take control
+back by continuing to send commands. Exactly one browser or DDS publisher owns
+actuation. Native sport and LowCmd applications still need **Give app control**
+in the sandbox. The runtime uses the actual middleware publisher identity;
 it does not guess ownership from a node name.
+Automatic handoff requires the robot to be standing or walking in sport mode.
+It does not switch out of native joint control or a posture transition.
+
+Automatic handoff follows publisher startup, including apps started outside
+`wendy run`. Restarting the runtime discovers still-running publishers again,
+and the last newly discovered eligible publisher takes control. Standalone
+runtimes use manual grants by default; set `GO2_AUTO_APP_CONTROL=1` to enable
+the same automatic handoff. The sandbox's source selector and **Give app
+control** remain available to grant an eligible publisher control when the
+robot has no owner.
 
 The source selector shows ROS node names, including **Patrol**, **Roam**, and
 **Teleop** for the samples. If a name is unavailable, it uses a stable numbered
 label such as **Velocity app 1**. The full publisher identity is available in
 the option's tooltip. Status updates preserve your selection and leave an open
 selector alone. An app marked **restart app** needs a new publisher after a
-pause or reset before it can receive control.
+pause, reset or release before it can receive control.
 
 | Observations | Nominal rate |
 | --- | --- |
@@ -158,9 +172,11 @@ the same seeded mask to scan and cloud. Fault settings persist across world rese
 Velocity commands expire after 200 ms and are acceleration-limited to
 0.8 m/s forward, 0.5 m/s lateral and 1 rad/s yaw. External LowCmd expires after
 40 ms and enters damping. It never falls back into autonomous walking.
-Pause and reset revoke all grants and reject publishers from the previous
-world. Restart the command publisher and explicitly grant it again. Resume
-does not rearm controls. Fallen robots require reset.
+Pause, reset and **Release app control** revoke grants and block existing
+publishers. Resume the world before restarting a driving app to get a new
+automatic grant. A publisher first seen while the world is paused or otherwise
+unable to accept control does not receive an automatic grant later. Resume
+alone does not rearm controls. Fallen robots require reset.
 
 HTTP endpoints are `/api/health`, `/api/status`, `/api/profile`, `/api/scene`,
 `/api/scene/state`, `/api/scene/lidar` and `/camera.jpg`. The scene endpoint

@@ -24,14 +24,14 @@ loopback ROS bus. The Dockerfile runs `ros_app.py --autostart`. The app first
 publishes zero velocity, waits for fresh sensors and clear space, then begins
 requesting the route. You do not need to call `/patrol/start` for this first run.
 
-Open the simulator sandbox, select this application's publisher under
-**ROS command source**, and choose **Give app control**. The simulator accepts
-motion only after that explicit grant. The app cannot grant itself control.
-Release a previous app or manual control owner first.
+The managed Go2 simulator automatically gives the new Patrol publisher
+control, replacing the previous driving app or browser controller. Run the
+command above with the world running to walk the route. Open the sandbox to
+watch it; no **Give app control** click is needed.
 
-Grant control soon after deploying. The first waypoint's 45-second deadline
-starts when the route starts, including time waiting for the grant. If that
-deadline expires, grant control and request a new route with the command below.
+If another app takes control during the route, Patrol's waypoint deadline
+continues to run. Restart Patrol to return control to it and start a new route
+from the current pose.
 The terminal logs report waiting, waypoint progress and the reason for a stop.
 
 ## Stop, inspect or run another route
@@ -108,10 +108,10 @@ sensor ages in seconds. `autostart_pending` is true while automatic startup is
 waiting for observations and clear space. The status describes the app's
 requests; it does not report ownership of the simulator's command grant.
 
-After a simulator pause or world reset, restart the ROS app and explicitly
-grant its newly discovered publisher again. Resuming the simulator does not
-restore the old grant. Stop the app before handing the robot to another
-controller.
+After a simulator pause, world reset or **Release app control**, resume the
+world and then restart the ROS app to get a new automatic grant. Starting the
+app while paused does not defer its grant until resume. Existing publishers
+cannot automatically take control back from a newer app.
 
 ## ROS-free checks
 

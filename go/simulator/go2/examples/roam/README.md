@@ -46,9 +46,10 @@ wendy run --device vm:<simulator-name> --build-type docker --no-restart
 
 The supplied manifest selects ROS 2 Humble, CycloneDDS, domain 0 and the Go2 VM's
 loopback ROS bus. The Docker image runs `ros_app.py --autostart`, which starts the
-controller once fresh lidar and odometry arrive. Open the simulator sandbox,
-select this application's source under **ROS command source**, and choose
-**Give app control**. Velocity requests can move the robot only after that grant.
+controller once fresh lidar and odometry arrive. The managed Go2 simulator
+automatically gives its new publisher control, replacing the previous driving
+app or browser controller. Run the command with the world running to start
+exploring. Open the sandbox to watch; no **Give app control** click is needed.
 
 In a ROS-enabled shell on the same VM bus, use the Trigger services to control
 the behavior and inspect its status:
@@ -71,9 +72,11 @@ source timestamps older than 350 ms. Delayed observations retain their capture
 age. Missing or unknown lidar coverage causes the controller to stop.
 
 After stale observations, issue a new Start request once sensors recover.
-After a simulator pause or world reset, restart the ROS application and explicitly
-grant its newly discovered publisher again. Resuming the simulator alone does
-not restore the old grant. The ROS adapter never grants itself control.
+After a simulator pause, world reset or **Release app control**, resume the
+world and then restart the ROS application. Its new publisher receives control
+automatically. Starting the app while paused does not defer its grant until
+resume. Existing publishers cannot automatically take control back from a
+newer app; restart Roam to return control to it.
 
 ## Check the controller, local runner and ROS observation admission
 

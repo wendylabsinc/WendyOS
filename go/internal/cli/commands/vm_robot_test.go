@@ -466,6 +466,9 @@ func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
 			prefix := map[string]string{"go2": "GO2_", "g1": "G1_"}[kind]
 			want := []string{prefix + "VM_NAME=robot", prefix + "SOURCE_DIGEST=" + profile.SourceDigest,
 				prefix + "WORLD=indoor", prefix + "SEED=42", prefix + "VISUAL_DETAIL=full"}
+			if kind == vm.RobotKindGo2 {
+				want = append(want, "GO2_AUTO_APP_CONTROL=1")
+			}
 			if got := runtime.environment("robot", profile); !reflect.DeepEqual(got, want) {
 				t.Fatalf("runtime environment changed the profile contract: got %v want %v", got, want)
 			}

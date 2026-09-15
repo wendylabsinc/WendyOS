@@ -40,7 +40,7 @@ await page.route(`${origin}/**`, route => {
   }
   if (request.method() === 'POST') {
     posts.push({ path, body: request.postDataJSON() });
-    return route.fulfill({ contentType: 'application/json', body: '{}' });
+    return route.fulfill({ contentType: 'application/json', body: path === '/api/arm' ? '{"token":"browser-owner"}' : '{}' });
   }
   return route.fulfill({ status: 404 });
 });
@@ -48,7 +48,7 @@ await page.route(`${origin}/**`, route => {
 async function poll(count = 1) {
   const target = statusPolls + count;
   await page.waitForFunction(minimum =>
-    Number(document.querySelector('#mode').textContent.split('-')[1]) >= minimum, target);
+    parseInt(document.querySelector('#mode').textContent.split('-')[1], 10) >= minimum, target);
 }
 
 async function rememberOptions() {
@@ -189,12 +189,29 @@ try {
   assert.equal(await page.locator('#obstacle-y').inputValue(), '-2.1',
     'Status must leave obstacle coordinates available for editing');
 
+  fixture.ros_commands = { owner: null, sources: [], auto_control: true };
+  fixture.armed = true;
+  await poll();
+  assert.match(await page.locator('#owner').textContent(), /New velocity apps get control automatically/);
+  await page.click('#arm');
+  assert.equal(await page.locator('#arm').getAttribute('aria-pressed'), 'true');
+  fixture.ros_commands = { owner: first.publisher_gid, sources: [first], auto_control: true };
+  await poll();
+  assert.equal(await page.locator('#owner').textContent(), 'Patrol has robot control.');
+  assert.equal(await page.locator('#arm').getAttribute('aria-pressed'), 'false',
+    'Automatic app handoff must clear the previous browser control session');
+  const commandsAfterHandoff = posts.filter(request => request.path === '/api/command').length;
+  await poll();
+  assert.equal(posts.filter(request => request.path === '/api/command').length, commandsAfterHandoff,
+    'Browser commands must stop once a new app takes control');
+
   assert.deepEqual(errors, [], 'The real sandbox controls must run without browser exceptions');
   console.log(JSON.stringify({ passed: true, statusPolls, checks: [
     'stable waiting option', 'stable publisher option nodes', 'user source selection',
     'reordered discovery', 'friendly source and owner names', 'selected publisher grant',
     'deferred focused source changes', 'source addition and expiry',
     'publisher restart and recovery', 'revoked selection remains empty', 'sensor and obstacle edits',
+    'automatic app control hint', 'browser session ends on app handoff',
   ] }));
 } finally {
   await browser.close();

@@ -94,7 +94,9 @@ class Runtime:
         if ros:
             from .commands import ROSCommands
             from .ros import ROSBridge
-            self.ros_commands = ROSCommands(self, os.environ.get("GO2_COMMAND_SOCKET", "/run/wendy-go2/commands.sock"))
+            self.ros_commands = ROSCommands(
+                self, os.environ.get("GO2_COMMAND_SOCKET", "/run/wendy-go2/commands.sock"),
+                auto_control=os.environ.get("GO2_AUTO_APP_CONTROL") == "1")
             self.ros_bridge = ROSBridge(self)
 
     @property

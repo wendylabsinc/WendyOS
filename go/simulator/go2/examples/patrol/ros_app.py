@@ -147,8 +147,8 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
                 if self.autostart_pending:
                     print("Patrol is waiting for fresh lidar, odometry and clear space.", flush=True)
                 elif self.controller.active:
-                    print(f"Patrol is requesting waypoint {self.controller.index + 1}/{len(self.controller.targets)}. "
-                          "Walking requires Give app control in the simulator.", flush=True)
+                    print(f"Patrol is requesting waypoint {self.controller.index + 1}/{len(self.controller.targets)}.",
+                          flush=True)
                 else:
                     print(f"Patrol stopped: {self.controller.reason}. "
                           "It will not restart automatically. "
@@ -164,7 +164,7 @@ def main():
                         help='JSON [forward, left] offsets in metres, e.g. "[[1,0],[1,1],[0,1],[0,0]]"')
     parser.add_argument("--laps", type=int, default=1, help="finite number of laps, from 1 to 5")
     parser.add_argument("--autostart", action="store_true",
-                        help="start one route after fresh observations arrive; still needs the sandbox control grant")
+                        help="start one route after fresh observations arrive")
     args, ros_args = parser.parse_known_args()
     try:
         PatrolController(args.waypoints, args.laps)
@@ -178,9 +178,9 @@ def main():
     node = make_node(args.waypoints, args.laps, autostart=args.autostart)
     print("Go2 patrol started. " + ("The route starts automatically after fresh observations arrive. "
           if args.autostart else "Call /patrol/start to begin a route. ") +
-          "Select Patrol under ROS command source and choose Give app control in the simulator. "
-          "Each waypoint has a 45-second deadline, including time waiting for this grant. "
-          "After a pause or reset, restart this app and grant it again.", flush=True)
+          "Managed Go2 gives new apps control automatically. "
+          "In manual mode, select Patrol and choose Give app control in the simulator. "
+          "After a pause or reset, resume the world and then restart this app.", flush=True)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

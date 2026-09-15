@@ -59,9 +59,13 @@ func robotRuntimeForKind(kind string) (robotRuntime, error) {
 }
 
 func (r robotRuntime) environment(name string, profile vm.RobotProfile) []string {
-	return []string{r.envPrefix + "VM_NAME=" + name, r.envPrefix + "SOURCE_DIGEST=" + profile.SourceDigest,
+	env := []string{r.envPrefix + "VM_NAME=" + name, r.envPrefix + "SOURCE_DIGEST=" + profile.SourceDigest,
 		r.envPrefix + "WORLD=" + profile.World, r.envPrefix + "SEED=" + strconv.FormatUint(uint64(profile.Seed), 10),
 		r.envPrefix + "VISUAL_DETAIL=" + profile.VisualDetail}
+	if profile.Kind == vm.RobotKindGo2 {
+		env = append(env, "GO2_AUTO_APP_CONTROL=1")
+	}
+	return env
 }
 
 func (r robotRuntime) validateSource(name string, profile vm.RobotProfile) error {

@@ -12,7 +12,7 @@ import socket
 import threading
 import time
 
-from .simulation import COMMAND_TIMEOUT
+from .simulation import COMMAND_TIMEOUT, VELOCITY_LIMITS
 
 
 def publisher_label(envelope):
@@ -28,11 +28,13 @@ def publisher_label(envelope):
 
 
 class ROSCommands:
-    def __init__(self, runtime, path, *, monotonic_ns=time.monotonic_ns, wall_ns=time.time_ns):
+    def __init__(self, runtime, path, *, auto_control=False,
+                 monotonic_ns=time.monotonic_ns, wall_ns=time.time_ns):
         self.runtime = runtime
         self.path = Path(path)
         self.clock = monotonic_ns
         self.wall_clock = wall_ns
+        self.auto_control = auto_control
         self.sources = {}
         self.blocked = set()
         self.owner = None
@@ -91,6 +93,7 @@ class ROSCommands:
     def status(self):
         now = self.clock()
         return {
+            "auto_control": self.auto_control,
             "owner": self.owner if self.token == self.runtime.sim.owner else None,
             "accepted": self.accepted, "rejected": self.rejected,
             "last_error": self.last_error,
@@ -100,6 +103,17 @@ class ROSCommands:
                          "requires_restart": gid in self.blocked}
                         for gid, source in self.sources.items()],
         }
+
+    def _auto_grant(self, gid):
+        """Transfer sport control once, at discovery, under the runtime lock."""
+        sim = self.runtime.sim
+        if (gid in self.blocked or sim.mode not in {"standing", "moving"}
+                or sim.control_mode != "sport" or getattr(self.runtime, "error", None)):
+            return
+        self.runtime.ensure_running()
+        if sim.owner is not None:
+            sim.release(sim.owner)
+        self.grant(gid)
 
     def admit(self, envelope):
         """Validate a received datagram; caller holds the runtime lock."""
@@ -122,13 +136,20 @@ class ROSCommands:
         source_age = self.wall_clock() - source_time
         if source_age < -50_000_000 or source_age >= int(COMMAND_TIMEOUT * 1e9):
             raise ValueError("expired DDS command")
-        if kind == "twist" and (not isinstance(velocity, list) or len(velocity) != 3 or
-                any(isinstance(v, bool) or not isinstance(v, (int, float)) or
-                    not math.isfinite(v) for v in velocity)):
-            raise ValueError("invalid velocity")
+        if kind == "twist":
+            if (not isinstance(velocity, list) or len(velocity) != 3 or
+                    any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in velocity)):
+                raise ValueError("invalid velocity")
+            # Check limits before isfinite, which can overflow on a huge JSON integer.
+            if any(abs(v) > limit for v, limit in zip(velocity, VELOCITY_LIMITS.tolist())):
+                raise ValueError(f"velocity exceeds limits {VELOCITY_LIMITS.tolist()}")
+            if any(not math.isfinite(v) for v in velocity):
+                raise ValueError("invalid velocity")
         if gid not in self.sources and len(self.sources) >= 4096:
             raise ValueError("publisher registry full; restart the runtime")
         previous = self.sources.get(gid)
+        if previous and kind != previous["kind"]:
+            raise ValueError("DDS publisher command kind changed")
         if previous and (received <= previous["last_received_ns"] or
                          source_time <= previous["source_timestamp_ns"]):
             self.rejected += 1
@@ -140,6 +161,12 @@ class ROSCommands:
             label = publisher_label(previous or {})
         self.sources[gid] = {"kind": kind, "last_received_ns": received,
                              "source_timestamp_ns": source_time, **label}
+        if previous is None and self.auto_control and kind == "twist":
+            # Recording discovery consumes the attempt even when paused or unhealthy.
+            # The discovery packet predates its grant and must never drive the robot.
+            self._auto_grant(gid)
+            self.rejected += 1
+            return False
         owned = (gid == self.owner and gid not in self.blocked and self.token is not None and
                  self.token == self.runtime.sim.owner and received > self.granted_ns and
                  source_time > self.granted_wall_ns)
