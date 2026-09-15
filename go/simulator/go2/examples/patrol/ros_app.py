@@ -16,19 +16,29 @@ class ExposureGate:
     def __init__(self):
         self.last_stamps = {}
         self.clock_anchor = None
+        self.rejections = {}
+        self.ages = {}
 
     def capture_time(self, topic, stamp, *, wall_ns=None, monotonic=None):
         wall_ns = sensor_wall_ns(time.time_ns() if wall_ns is None else wall_ns)
         monotonic = time.monotonic() if monotonic is None else monotonic
+        self.ages.pop(topic, None)
         if (type(stamp.sec) is not int or type(stamp.nanosec) is not int
                 or not 0 <= stamp.nanosec < 1_000_000_000
                 or not finite(wall_ns) or not finite(monotonic)):
+            self.rejections[topic] = "malformed_capture_stamp"
             return None
         source = stamp.sec * 1_000_000_000 + stamp.nanosec
         age = (wall_ns - source) / 1e9
-        if (source <= 0 or not -0.05 <= age < OBSERVATION_TIMEOUT
-                or source <= self.last_stamps.get(topic, -1)):
+        self.ages[topic] = age
+        reason = ("nonpositive_capture_stamp" if source <= 0 else
+                  "capture_in_future" if age < -0.05 else
+                  "capture_too_old" if age >= OBSERVATION_TIMEOUT else
+                  "capture_not_advancing" if source <= self.last_stamps.get(topic, -1) else None)
+        if reason:
+            self.rejections[topic] = reason
             return None
+        self.rejections.pop(topic, None)
         self.last_stamps[topic] = source
         if self.clock_anchor is None:
             self.clock_anchor = (wall_ns, monotonic)
@@ -77,6 +87,8 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             self.controller = PatrolController(waypoints, laps)
             self.autostart_pending = autostart
             self.last_report = None
+            self.last_wait_report_at = -math.inf
+            self.sensor_errors = {}
             self.exposures = ExposureGate()
             self.latest_odom = None
             self.drive = self.create_publisher(Request, SPORT_TOPIC, QoSProfile(depth=1))
@@ -97,24 +109,31 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             self.publish_command(0.0, 0.0)
 
         def cloud(self, message):
+            if self.latest_odom is None:
+                self.sensor_errors["scan"] = "waiting_for_odometry_orientation"
+                self.controller.reject_scan(self.sensor_errors.get("odom", "waiting_for_odometry_orientation"))
+                self.publish_command(0.0, 0.0)
+                return
             try:
-                if self.latest_odom is None:
-                    raise ValueError("waiting_for_odometry_orientation")
                 self.scan(cloud_scan(message, self.latest_odom))
             except (ValueError, TypeError, AttributeError) as error:
-                self.controller.reject_scan("invalid_point_cloud: " + str(error))
+                self.sensor_errors["scan"] = "invalid_point_cloud: " + str(error)
+                self.controller.reject_scan(self.sensor_errors["scan"])
                 self.publish_command(0.0, 0.0)
 
         def scan(self, message):
             if not scan_metadata_valid(message):
+                self.sensor_errors["scan"] = "invalid_scan_frame_or_metadata"
                 self.controller.reject_scan("invalid_scan_frame_or_metadata")
                 self.publish_command(0.0, 0.0)
                 return
             captured = self.exposures.capture_time("scan", message.header.stamp)
             if captured is None:
-                self.controller.reject_scan("invalid_scan_exposure")
+                self.sensor_errors["scan"] = "scan_" + self.exposures.rejections["scan"]
+                self.controller.reject_scan(self.sensor_errors["scan"])
                 self.publish_command(0.0, 0.0)
                 return
+            self.sensor_errors.pop("scan", None)
             self.controller.observe_scan(message.ranges, message.angle_min, message.angle_increment,
                                          message.range_min, message.range_max, captured)
             if not self.controller.active:
@@ -124,10 +143,13 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             pose = pose_values(message)
             captured = self.exposures.capture_time("odom", message.header.stamp) if pose else None
             if pose is None or captured is None:
+                self.sensor_errors["odom"] = ("invalid_odometry_pose_or_frame" if pose is None else
+                                               "odometry_" + self.exposures.rejections["odom"])
                 self.latest_odom = None
                 self.controller.pose = self.controller.pose_at = None
-                self.stop_controller("invalid_odometry_exposure_or_pose")
+                self.stop_controller(self.sensor_errors["odom"])
                 return
+            self.sensor_errors.pop("odom", None)
             if not self.controller.observe_pose(*pose, captured):
                 self.latest_odom = None
                 self.publish_command(0.0, 0.0)
@@ -160,14 +182,27 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             status["autostart_pending"] = self.autostart_pending
             blocker = self.controller.observation_error(now)
             status["readiness_error"] = blocker
+            status["sensor_errors"] = dict(self.sensor_errors)
+            status["capture_age_seconds"] = dict(self.exposures.ages)
             self.status_pub.publish(String(data=json.dumps(status, allow_nan=False)))
-            report = (self.controller.active, self.controller.reason, self.controller.index,
-                      blocker if self.autostart_pending else None)
+            # Missing cloud orientation is a consequence of rejected odometry.
+            # Keep that root cause stable across alternating sensor callbacks.
+            rejection = self.sensor_errors.get("odom") or self.sensor_errors.get("scan") or self.controller.reason
+            report = (("waiting", blocker, rejection) if self.autostart_pending else
+                      (self.controller.active, self.controller.reason, self.controller.index))
             if report != self.last_report:
+                if self.autostart_pending and now - self.last_wait_report_at < 5.0:
+                    return
                 self.last_report = report
                 if self.autostart_pending:
-                    print(f"Patrol waiting: {blocker}; last sensor result: {self.controller.reason}. "
-                          f"Expecting {CLOUD_TOPIC} and {ODOM_TOPIC}.", flush=True)
+                    self.last_wait_report_at = now
+                    detail = ""
+                    if rejection.endswith(("capture_too_old", "capture_in_future")):
+                        topic = "odom" if self.sensor_errors.get("odom") else "scan"
+                        detail = (f" Capture age: {self.exposures.ages[topic]:.3f}s. Check sensor/application "
+                                  "clock synchronization and GO2_SENSOR_CLOCK_OFFSET_SECONDS.")
+                    print(f"Patrol waiting: {blocker}; sensor result: {rejection}. "
+                          f"Expecting {CLOUD_TOPIC} and {ODOM_TOPIC}.{detail}", flush=True)
                 elif self.controller.active:
                     print(f"Patrol is requesting waypoint {self.controller.index + 1}/{len(self.controller.targets)}.",
                           flush=True)

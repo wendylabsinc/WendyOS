@@ -361,3 +361,54 @@ def test_malformed_cloud_invalidates_admission_before_autostart(autostart_node):
     assert not node.controller.active
     assert node.controller.scan_at is None
     assert last_command(node)==(0,0)
+
+
+@pytest.mark.parametrize("source,reason,age", [
+    (9_000_000_000, "capture_too_old", 1.0),
+    (11_000_000_000, "capture_in_future", -1.0),
+])
+def test_capture_rejection_reports_clock_direction_and_age(source, reason, age):
+    gate = ros_app.ExposureGate()
+    assert gate.capture_time("odom", stamp(source), wall_ns=10_000_000_000, monotonic=50) is None
+    assert gate.rejections["odom"] == reason
+    assert gate.ages["odom"] == age
+    assert gate.capture_time("odom", stamp(9_900_000_000), wall_ns=10_000_000_000, monotonic=50)
+    assert "odom" not in gate.rejections
+
+
+def test_rejected_odometry_and_dependent_clouds_do_not_alternate_waiting_logs(autostart_node, capsys, monkeypatch):
+    node = autostart_node
+    pose = odometry()
+    pose.header.stamp = stamp(1_000_000_000)
+    for index in range(100):
+        monkeypatch.setattr(ros_app.time, "monotonic", lambda: 50.0 + index)
+        node.odom(pose)
+        node.tick()
+        node.cloud(SimpleNamespace())
+        node.tick()
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert "odometry_capture_too_old" in lines[0]
+    assert "Capture age: 9.000s" in lines[0]
+    status = json.loads(node.status_pub.messages[-1].data)
+    assert status["sensor_errors"] == {"odom": "odometry_capture_too_old", "scan": "waiting_for_odometry_orientation"}
+    assert not node.controller.active
+    assert last_command(node) == (0, 0)
+
+
+def test_changed_waiting_errors_are_rate_limited_but_start_is_immediate(autostart_node, capsys, monkeypatch):
+    node = autostart_node
+    node.tick()
+    pose = odometry()
+    pose.header.stamp = stamp(1_000_000_000)
+    node.odom(pose)
+    node.tick()
+    assert len(capsys.readouterr().out.splitlines()) == 1
+    monkeypatch.setattr(ros_app.time, "monotonic", lambda: 55.0)
+    monkeypatch.setattr(ros_app.time, "time_ns", lambda: 15_000_000_000)
+    node.tick()
+    assert "odometry_capture_too_old" in capsys.readouterr().out
+    deliver_observations(node, 14_900_000_000)
+    node.tick()
+    assert node.controller.active
+    assert "waypoint 1/4" in capsys.readouterr().out
