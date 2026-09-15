@@ -305,7 +305,7 @@ class Acceptance:
                 and ("camera_link", "camera_optical_frame") in state["transforms"], "camera TF chain missing")
         require(before_image_hashes and any(digest not in before_image_hashes for _, digest in state["images"]),
                 "robot camera pixels did not change following physical motion")
-        require(cloud.header.frame_id == "lidar_link" and cloud.width > 360 and cloud.height == 1
+        require(cloud.header.frame_id == "utlidar_lidar" and cloud.width > 360 and cloud.height == 1
                 and len(cloud.data) == cloud.row_step, "3D lidar payload is malformed or flat")
         fields = {field.name: field for field in cloud.fields}
         require(all(name in fields and fields[name].datatype == 7 and fields[name].count == 1

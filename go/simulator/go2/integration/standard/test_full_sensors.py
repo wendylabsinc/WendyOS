@@ -52,7 +52,7 @@ class FullSensorTests(unittest.TestCase):
         scan.angle_min, scan.angle_increment = 0., math.pi / 2
         scan.ranges = [1., math.inf, 2.]
         cloud = PointCloud2()
-        cloud.header.frame_id = "lidar_link"
+        cloud.header.frame_id = "utlidar_lidar"
         cloud.height, cloud.width, cloud.point_step, cloud.row_step = 1, 3, 12, 36
         cloud.fields = [PointField(name=name, offset=index*4, datatype=7, count=1)
                         for index, name in enumerate(("x", "y", "z"))]

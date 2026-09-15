@@ -1,4 +1,4 @@
-"""Read-only ROS sensor dashboard for the Wendy Go2 simulator."""
+"""Read-only dashboard for native Go2 ROS sensors and optional standard extensions."""
 
 import argparse
 from collections import deque
@@ -12,11 +12,13 @@ import time
 from urllib.parse import urlsplit
 import zlib
 
+from go2_io import CLOUD_TOPIC, ODOM_TOPIC, cloud_scan, sensor_wall_ns
+
 
 TOPICS = {
-    "odom": ("/odom", "odom"),
-    "imu": ("/imu/data", "imu_link"),
-    "scan": ("/scan", "lidar_link"),
+    "odom": (ODOM_TOPIC, "odom"),
+    "imu": ("/utlidar/imu", "utlidar_imu"),
+    "scan": (CLOUD_TOPIC, "base_link"),
     "joints": ("/joint_states", None),
     "camera": ("/camera/color/image_raw", "camera_optical_frame"),
 }
@@ -91,7 +93,7 @@ class SensorStore:
         self.camera_cache = None
 
     def observe(self, key, message, *, wall_ns=None, now=None):
-        wall_ns = time.time_ns() if wall_ns is None else wall_ns
+        wall_ns = sensor_wall_ns(time.time_ns() if wall_ns is None else wall_ns)
         now = time.monotonic() if now is None else now
         try:
             stamp = message.header.stamp
@@ -218,13 +220,19 @@ def make_node(store):
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy
-    from sensor_msgs.msg import Image, Imu, JointState, LaserScan
+    from sensor_msgs.msg import Image, Imu, JointState, PointCloud2
 
     node = Node("wendy_go2_sensor_dashboard")
     qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
-    for key, kind in (("odom", Odometry), ("imu", Imu), ("scan", LaserScan),
+    def observe_cloud(message):
+        try:
+            store.observe("scan", cloud_scan(message))
+        except (ValueError, TypeError, AttributeError) as error:
+            with store.lock:
+                store.errors["scan"] = str(error)
+    for key, kind in (("odom", Odometry), ("imu", Imu), ("scan", PointCloud2),
                       ("joints", JointState), ("camera", Image)):
-        node.create_subscription(kind, TOPICS[key][0], lambda message, key=key: store.observe(key, message), qos)
+        node.create_subscription(kind, TOPICS[key][0], (observe_cloud if key == "scan" else lambda message, key=key: store.observe(key, message)), qos)
     return node
 
 

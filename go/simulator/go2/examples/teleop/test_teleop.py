@@ -236,7 +236,7 @@ def test_http_rejects_cross_origin_wrong_content_type_and_oversize(http):
     assert http("/missing", b"{}")[0] == 404
 
 
-def test_ros_adapter_starts_zero_and_publishes_twist_at_20_hz(monkeypatch):
+def test_ros_adapter_starts_zero_and_publishes_sport_at_20_hz(monkeypatch):
     commands, timers, publishers = [], [], []
 
     class FakeNode:
@@ -252,20 +252,22 @@ def test_ros_adapter_starts_zero_and_publishes_twist_at_20_hz(monkeypatch):
 
     class Twist:
         def __init__(self):
-            self.linear = SimpleNamespace(x=0.0, y=0.0, z=0.0)
-            self.angular = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+            self.header = SimpleNamespace(identity=SimpleNamespace(id=0, api_id=0),
+                                          policy=SimpleNamespace(noreply=False))
+            self.parameter = ""
 
     for name, module in {
         "rclpy.node": SimpleNamespace(Node=FakeNode),
         "rclpy.qos": SimpleNamespace(QoSProfile=lambda **kwargs: SimpleNamespace(**kwargs)),
-        "geometry_msgs.msg": SimpleNamespace(Twist=Twist),
+        "unitree_api.msg": SimpleNamespace(Request=Twist),
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
     node = make_node()
-    assert publishers == [(Twist, "/cmd_vel", 1)]
-    assert commands[0].linear.x == commands[0].linear.y == commands[0].angular.z == 0.0
+    assert publishers == [(Twist, "/api/sport/request", 1)]
+    assert json.loads(commands[0].parameter) == {"x": 0.0, "y": 0.0, "z": 0.0}
+    assert commands[0].header.identity.api_id == 1008
     assert timers[0][0] == PUBLISH_SECONDS == 0.05
     session = node.control.enable({})["session"]
     node.control.drive(request(session, keys=["a", "e"]))
     timers[0][1]()
-    assert (commands[-1].linear.x, commands[-1].linear.y, commands[-1].angular.z) == (0.0, 0.3, -0.6)
+    assert json.loads(commands[-1].parameter) == {"x": 0.0, "y": 0.3, "z": -0.6}

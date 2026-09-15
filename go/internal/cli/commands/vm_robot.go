@@ -767,7 +767,8 @@ func runVMRobot(cmd *cobra.Command, action, name string) error {
 }
 
 // Resolve a declared ROS app onto the selected robot's bus in memory. The
-// source manifest remains unchanged and explicit conflicting choices fail
+// source manifest remains unchanged. Host discovery is mapped to the isolated
+// guest bus; explicit conflicting domain, middleware or environment choices fail
 // before any image build or deployment.
 func prepareRobotAppConfig(conn *grpcclient.AgentConnection, cfg *appconfig.AppConfig, overrides []string) (*appconfig.AppConfig, error) {
 	if conn == nil || conn.SimulatorName == "" {
@@ -805,8 +806,8 @@ func normalizeRobotROSConfig(cfg *appconfig.AppConfig, overrides []string) (*app
 		if ros.ResolvedRMW() != "rmw_cyclonedds_cpp" {
 			return nil, nil, fmt.Errorf("%s: managed robot requires CycloneDDS", scope)
 		}
-		if ros.ResolvedDiscoveryScope() != "app" {
-			return nil, nil, fmt.Errorf("%s: managed robot requires discoveryScope app on guest loopback", scope)
+		if ros.ResolvedDiscoveryScope() == "" {
+			return nil, nil, fmt.Errorf("%s: invalid ROS discovery scope", scope)
 		}
 		for _, entry := range env {
 			key, value, _ := strings.Cut(entry, "=")

@@ -62,13 +62,12 @@
     },
     {
       "topics": [
-        "/imu/data",
-        "/utlidar/imu"
+        "/imu/data"
       ],
       "type": "sensor_msgs/msg/Imu",
       "nominal_hz": 200,
       "frame": "imu_link",
-      "note": "aliases of one virtual body IMU"
+      "note": "virtual body IMU; native alias uses frame utlidar_imu"
     },
     {
       "topics": [
@@ -79,7 +78,8 @@
     },
     {
       "topics": [
-        "/odom"
+        "/odom",
+        "/utlidar/robot_odom"
       ],
       "type": "nav_msgs/msg/Odometry",
       "nominal_hz": 50,
@@ -101,7 +101,7 @@
       ],
       "type": "sensor_msgs/msg/PointCloud2",
       "nominal_hz": 10,
-      "frame": "lidar_link",
+      "frame": "utlidar_lidar",
       "condition": "lidar_enabled"
     },
     {
@@ -141,6 +141,25 @@
       ],
       "type": "std_msgs/msg/UInt64",
       "transient_local": true
+    },
+    {
+      "topics": [
+        "/utlidar/cloud_base"
+      ],
+      "type": "sensor_msgs/msg/PointCloud2",
+      "nominal_hz": 10,
+      "frame": "base_link",
+      "condition": "lidar_enabled",
+      "note": "same capture and returns as /utlidar/cloud transformed by virtual lidar mount"
+    },
+    {
+      "topics": [
+        "/utlidar/imu"
+      ],
+      "type": "sensor_msgs/msg/Imu",
+      "nominal_hz": 200,
+      "frame": "utlidar_imu",
+      "note": "same virtual body IMU as /imu/data"
     }
   ],
   "observation_qos": {
@@ -297,12 +316,13 @@
   "fidelity": {
     "joints_imu_contacts": "derived from actual MuJoCo state",
     "odometry": "velocity integration with declared bias and covariance; exact pose is separate",
-    "lidar": "synthetic simultaneous five-ring pattern at elevations -30,-15,0,15,30 degrees with 360 azimuth rays each; 0.1-12 metre range; scan is the shared horizontal ring",
+    "lidar": "synthetic simultaneous 25-ring pattern from -30 to +30 degrees in 2.5-degree steps with 360 azimuth rays each; 0.1-12 metre range; scan is the shared horizontal ring",
     "camera": "ideal pinhole virtual front mount, vertical FOV 60 degrees, zero distortion",
     "battery": "synthetic constant 90 percent SOC and 28.8 V; current, temperature, cycles and discharge dynamics are unmodeled",
     "serial_and_version": "explicit simulation identifiers",
     "firmware_calibrated": false,
-    "physical_robot_used_for_validation": false
+    "physical_robot_used_for_validation": false,
+    "physical_interface_observation": "Woof ROS graph and odometry/cloud/IMU headers inspected on 2026-09-15; physical motion and calibration not validated"
   },
   "reset": "revokes owners, rejects old publishers, clears controller history and pending observations; command publishers must restart and be explicitly granted again",
   "unsupported": [

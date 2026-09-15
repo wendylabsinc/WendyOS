@@ -1,7 +1,7 @@
-"""Coherent MuJoCo rays for a virtual five-ring lidar attachment.
+"""Coherent MuJoCo rays for a virtual multi-ring lidar attachment.
 
 This is a declared synthetic pattern, not a calibrated Unitree factory lidar:
-360 azimuth samples at each of -30, -15, 0, 15, and 30 degrees elevation. The
+360 azimuth samples on 25 rings from -30 to +30 degrees in 2.5-degree steps. The
 middle ring uses the existing /scan angles exactly. All rays share one capture
 time and the copied lidar site's pose; no rolling scan or motion distortion is
 modeled. XYZ points use lidar_link coordinates (X forward, Y left, Z up).
@@ -9,7 +9,7 @@ modeled. XYZ points use lidar_link coordinates (X forward, Y left, Z up).
 Pinned MuJoCo 3.3.7's mj_multiRay spherical broadphase misses valid elevated
 wall intersections. A private model copy disables that broadphase by setting
 body_bvhadr to -1. The batch then dispatches the same exact geom intersections
-as mj_ray in one native call, avoiding 1800 Python/GIL transitions per scan.
+as mj_ray in one native call, avoiding 9000 Python/GIL transitions per scan.
 Only captured derived geom transforms are copied into the ray-only MjData;
 this model is never used for dynamics and the shared physics model is untouched.
 See src/engine/engine_ray.c (mju_multiRayPrepare and mju_singleRay) at tag 3.3.7.
@@ -32,8 +32,8 @@ import numpy as np
 from .sensors import SCAN_ANGLES, SCAN_COUNT, SCAN_MAX, SCAN_MIN
 
 
-ELEVATIONS_DEGREES = (-30.0, -15.0, 0.0, 15.0, 30.0)
-HORIZONTAL_RING = 2
+ELEVATIONS_DEGREES = tuple(-30.0 + 2.5 * index for index in range(25))
+HORIZONTAL_RING = ELEVATIONS_DEGREES.index(0.0)
 RAY_COUNT = len(ELEVATIONS_DEGREES) * SCAN_COUNT
 
 

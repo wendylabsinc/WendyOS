@@ -52,6 +52,7 @@ class RobotObservations(Node):
         self.lidar_imu_pub = self.create_publisher(Imu, "/utlidar/imu", self.qos)
         self.joint_pub = self.create_publisher(JointState, "/joint_states", self.qos)
         self.odom_pub = self.create_publisher(Odometry, "/odom", self.qos)
+        self.robot_odom_pub = self.create_publisher(Odometry, "/utlidar/robot_odom", self.qos)
         self.truth_pub = self.create_publisher(PoseStamped, "/simulation/ground_truth", self.qos)
         self.epoch_pub = self.create_publisher(UInt64, "/simulation/epoch", QoSProfile(
             depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
@@ -71,8 +72,11 @@ class RobotObservations(Node):
             self.native_state = NativeState(self, runtime)
             self.native_commands = NativeCommands(self, runtime)
             runtime.ros_commands.native_handler = self.native_commands.receive
+            runtime.ros_commands.native_auto_grant = self.native_commands.can_auto_grant
         # Publishers serialize synchronously. Reuse owned message instances on
         # this worker instead of rebuilding fixed fields at every sensor tick.
+        self.lidar_imu = Imu()
+        self.lidar_imu.header.frame_id = "utlidar_imu"
         self.imu = Imu()
         self.imu.header.frame_id = "imu_link"
         self.imu.orientation_covariance = covariance(3, [0.0025] * 3)
@@ -95,7 +99,8 @@ class RobotObservations(Node):
 
     def publish_mounts(self):
         transforms = []
-        for name, position in (("imu_link", IMU_POSITION), ("lidar_link", LIDAR_POSITION),
+        for name, position in (("imu_link", IMU_POSITION), ("utlidar_imu", IMU_POSITION),
+                               ("lidar_link", LIDAR_POSITION), ("utlidar_lidar", LIDAR_POSITION),
                                ("camera_link", CAMERA_POSITION)):
             tf = TransformStamped()
             tf.header.stamp = self.get_clock().now().to_msg()
@@ -172,7 +177,15 @@ class RobotObservations(Node):
         vector(imu.linear_acceleration, state["specific_force_body"])
         self.imu_pub.publish(imu)
         # This alias represents the same virtual IMU, not a second physical site.
-        self.lidar_imu_pub.publish(imu)
+        lidar_imu = self.lidar_imu
+        lidar_imu.header.stamp = stamp
+        lidar_imu.orientation = imu.orientation
+        lidar_imu.orientation_covariance = imu.orientation_covariance
+        lidar_imu.angular_velocity = imu.angular_velocity
+        lidar_imu.angular_velocity_covariance = imu.angular_velocity_covariance
+        lidar_imu.linear_acceleration = imu.linear_acceleration
+        lidar_imu.linear_acceleration_covariance = imu.linear_acceleration_covariance
+        self.lidar_imu_pub.publish(lidar_imu)
         self.samples["imu"] += 1
 
     def publish_motion(self, state, stamp, body_velocity):
@@ -192,6 +205,7 @@ class RobotObservations(Node):
         vector(odom.twist.twist.linear, body_velocity)
         vector(odom.twist.twist.angular, state["angular_velocity_body"] + [0, 0, 0.0002])
         self.odom_pub.publish(odom)
+        self.robot_odom_pub.publish(odom)
         self.samples["odom"] += 1
         tf = self.odom_tf
         tf.header = odom.header
