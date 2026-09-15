@@ -7,8 +7,13 @@
       "distro": "humble",
       "rmw": "rmw_cyclonedds_cpp",
       "domainId": 0,
-      "discoveryScope": "app"
+      "discoveryScope": "host"
     }
   },
-  "entitlements": [{"type": "network", "mode": "host"}]
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    }
+  ]
 }

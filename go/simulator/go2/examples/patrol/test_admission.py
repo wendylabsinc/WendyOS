@@ -27,7 +27,7 @@ def odometry(frame="odom", child="base_link", quaternion=(0, 0, 0, 1), x=1):
 
 
 def scan(**overrides):
-    fields = dict(header=SimpleNamespace(frame_id="lidar_link"), angle_min=-math.pi,
+    fields = dict(header=SimpleNamespace(frame_id="base_footprint"), angle_min=-math.pi,
                   angle_max=math.pi - math.pi / 180, angle_increment=math.pi / 180,
                   range_min=0.1, range_max=12.0, ranges=[4.0] * 360)
     fields.update(overrides)
@@ -78,7 +78,7 @@ def test_valid_scan_metadata_is_accepted():
     assert ros_app.scan_metadata_valid(scan())
 
 
-@pytest.mark.parametrize("overrides", [dict(header=SimpleNamespace(frame_id="base_link")),
+@pytest.mark.parametrize("overrides", [dict(header=SimpleNamespace(frame_id="camera_link")),
     dict(angle_increment=0), dict(angle_increment=float("nan")), dict(angle_max=0),
     dict(range_min=-1), dict(range_min=12), dict(range_max=float("inf"))])
 def test_invalid_scan_frame_or_geometry_is_rejected(overrides):
@@ -112,13 +112,14 @@ def node_factory(monkeypatch):
 
     class Twist:
         def __init__(self):
-            self.linear = SimpleNamespace(x=0.0, y=0.0, z=0.0)
-            self.angular = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+            self.header = SimpleNamespace(identity=SimpleNamespace(id=0, api_id=0),
+                                          policy=SimpleNamespace(noreply=False))
+            self.parameter = ""
 
     for name, module in {
-        "geometry_msgs.msg": SimpleNamespace(Twist=Twist),
+        "unitree_api.msg": SimpleNamespace(Request=Twist),
         "nav_msgs.msg": SimpleNamespace(Odometry=object),
-        "sensor_msgs.msg": SimpleNamespace(LaserScan=object),
+        "sensor_msgs.msg": SimpleNamespace(PointCloud2=object),
         "std_msgs.msg": SimpleNamespace(String=SimpleNamespace),
         "std_srvs.srv": SimpleNamespace(Trigger=object),
         "rclpy.node": SimpleNamespace(Node=Node),
@@ -153,8 +154,11 @@ def deliver_observations(node, captured=9_900_000_000):
 
 def last_command(node):
     command = node.drive.messages[-1]
-    assert command.linear.y == command.linear.z == command.angular.x == command.angular.y == 0
-    return command.linear.x, command.angular.z
+    assert command.header.identity.api_id == 1008
+    assert command.header.policy.noreply
+    values = json.loads(command.parameter)
+    assert values["y"] == 0
+    return values["x"], values["z"]
 
 
 def test_ros_node_publishes_zero_on_startup_and_requires_start_service(node):
@@ -195,7 +199,7 @@ def test_bad_observation_stops_ros_publisher_before_next_timer_tick(node, fault)
         laser = scan()
         laser.header.stamp = stamp(9_900_000_000 if fault == "replayed_scan" else 9_920_000_000)
         if fault == "scan_frame":
-            laser.header.frame_id = "base_link"
+            laser.header.frame_id = "camera_link"
         if fault == "obstacle":
             laser.ranges[180] = 0.5
         node.scan(laser)
@@ -337,3 +341,23 @@ def test_completed_automatic_route_holds_zero_with_new_observations(autostart_no
     node.tick()
     assert node.controller.state == "complete"
     assert last_command(node) == (0, 0)
+
+
+def test_callback_scheduling_jitter_does_not_reverse_capture_order():
+    gate=ros_app.ExposureGate()
+    first=gate.capture_time('odom',stamp(9_900_000_000),wall_ns=10_000_000_000,monotonic=50)
+    # The second callback is descheduled between reading wall and monotonic clocks.
+    second=gate.capture_time('odom',stamp(9_920_000_000),wall_ns=10_020_000_000,monotonic=50.08)
+    third=gate.capture_time('odom',stamp(9_940_000_000),wall_ns=10_040_000_000,monotonic=50.08)
+    assert first < second < third
+    assert (first,second,third)==pytest.approx((49.9,49.92,49.94))
+
+
+def test_malformed_cloud_invalidates_admission_before_autostart(autostart_node):
+    node=autostart_node
+    deliver_observations(node)
+    node.cloud(SimpleNamespace(header=SimpleNamespace(frame_id='odom')))
+    node.tick()
+    assert not node.controller.active
+    assert node.controller.scan_at is None
+    assert last_command(node)==(0,0)

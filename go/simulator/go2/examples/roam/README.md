@@ -1,12 +1,18 @@
 # Go2 roaming example
 
+This app uses the [shared native Go2 interfaces](../README.md) on hardware and
+in the simulator. The source manifest uses host discovery; managed VM deployment
+normalizes it to guest loopback. Sensor clocks must satisfy the shared freshness
+requirements. Use a CLI built from this checkout.
+
+
 This small application walks the virtual Go2 around its room, stops before
 obstacles, and turns toward open space using lidar and odometry. **Start** and
 **Stop** control the roaming behavior. The controller limits its velocity
 requests and stops when observations become stale or incomplete. Fresh sensor
 data alone cannot restart a stopped controller.
 
-Use this example with the Wendy Go2 simulator. It is a reactive obstacle-avoidance
+Use the ROS app with physical Go2 robots or the Wendy Go2 simulator. It is a reactive obstacle-avoidance
 example; it does not build a map or plan routes.
 
 ## Run beside the local browser preview
@@ -30,22 +36,23 @@ original sandbox tab before starting. If that tab is no longer available,
 **Pause** then **Resume** in the sandbox releases the old owner. Then choose
 **Start exploring** in the application.
 
-## Deploy the ROS application to a Go2 VM
+## Deploy the ROS application
 
-The ROS adapter reads `/scan` (`sensor_msgs/msg/LaserScan`) and `/odom`
-(`nav_msgs/msg/Odometry`), then publishes velocity requests on `/cmd_vel`
-(`geometry_msgs/msg/Twist`) at 20 Hz. It uses the same controller as the local
+The ROS adapter reads `/utlidar/cloud_base` (`sensor_msgs/msg/PointCloud2`) and `/utlidar/robot_odom`
+(`nav_msgs/msg/Odometry`), then publishes velocity requests on `/api/sport/request`
+(`unitree_api/msg/Request`) at 20 Hz. It uses the same controller as the local
 application. Its observations and commands travel through ROS; the deployed
 image contains no simulator or physics implementation.
 
 From this directory:
 
 ```sh
-wendy run --device vm:<simulator-name> --build-type docker --no-restart
+wendy run --device Woof --build-type docker --no-restart
+# Or: wendy run --device vm:<simulator-name> --build-type docker --no-restart
 ```
 
 The supplied manifest selects ROS 2 Humble, CycloneDDS, domain 0 and the Go2 VM's
-loopback ROS bus. The Docker image runs `ros_app.py --autostart`, which starts the
+native Go2 ROS bus. The Docker image runs `ros_app.py --autostart`, which starts the
 controller once fresh lidar and odometry arrive. The managed Go2 simulator
 automatically gives its new publisher control, replacing the previous driving
 app or browser controller. Run the command with the world running to start
@@ -66,7 +73,7 @@ Status includes the controller state, stop reason, clearance, velocity requests
 and sensor ages. `/roam/stop` immediately requests zero velocity; **Release app
 control** in the simulator also removes the application's command ownership.
 
-The adapter accepts scans in `lidar_link` and odometry from `odom` to
+The adapter projects body-frame clouds in `base_link` and odometry from `odom` to
 `base_link`. It rejects invalid poses, wrong frames, reordered observations and
 source timestamps older than 350 ms. Delayed observations retain their capture
 age. Missing or unknown lidar coverage causes the controller to stop.

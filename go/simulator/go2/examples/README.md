@@ -1,91 +1,61 @@
-# Go2 sample apps
+# Go2 examples
 
-Small, standalone applications for the [Wendy Go2 simulator](../README.md).
-Each directory is its own deployable project with a Dockerfile and `wendy.json`.
-They use standard ROS 2 Humble messages and the simulator VM's loopback bus.
+These examples use the same native ROS interfaces on a physical Go2 and the
+managed Go2 simulator. There is no simulator-specific drive backend.
 
-| App | Try it for | Interface |
+| App | Inputs | Commands |
 | --- | --- | --- |
-| [Roam](roam/README.md) | Autonomous exploration with reactive obstacle avoidance | Local browser controls or ROS start/stop services |
-| [Patrol](patrol/README.md) | A finite square or configurable route, using odometry and lidar | ROS start/stop services and status topic |
-| [Teleop](teleop/README.md) | Manual driving with hold-to-drive keys or touch buttons | Browser at port **8903** |
-| [Sensors](sensors/README.md) | Camera, lidar, odometry trail, IMU, joints and capture freshness | Read-only browser at port **8904** |
+| Patrol | `/utlidar/cloud_base`, `/utlidar/robot_odom` | `/api/sport/request` |
+| Roam | `/utlidar/cloud_base`, `/utlidar/robot_odom` | `/api/sport/request` |
+| Teleop | Browser hold-to-drive controls | `/api/sport/request` |
+| Sensors | Native cloud, odometry and IMU; optional standard camera/joints | Read only |
 
-## Run a sample
+From an example directory, run `wendy run --device Woof --build-type docker` for
+hardware or `wendy run --device vm:<name> --build-type docker` for a simulator.
+Use a CLI built from this checkout. The manifest requests host discovery for
+hardware; managed VM deployment converts it to isolated guest loopback discovery
+without changing the source manifest. Raw Docker defaults to subnet discovery.
+For an isolated simulator container, override both discovery variables or use
+its explicit loopback CycloneDDS configuration.
 
-Create and start a Go2 simulator using a CLI built from this checkout:
+The driving examples build their pinned Unitree Request types into their own
+images. Shared Python I/O and message inputs are copied into each directory so
+it remains a complete standalone Docker/Wendy build context. After changing
+`common/go2_io.py`, run `../tools/sync_examples.py` from this directory. Use
+`--check` to verify those copies. Message definitions come from the simulator's
+pinned `unitree_ros2` inputs, not a moving upstream branch.
 
-```sh
-wendy vm create go2-sim --profile go2
-wendy vm robot start go2-sim
-wendy vm robot open go2-sim
-```
+## Sensor contract
 
-From the sample's directory, deploy it:
+Autonomous examples project `/utlidar/cloud_base`, frame `base_link`, into
+72 sectors of 5 degrees. Each sector retains the closest return in the body-height
+band from -0.2 to +0.4 metres relative to the body origin. For motion, the cloud
+is first leveled using roll/pitch from valid odometry within 100 ms of the cloud
+capture. XY remains relative to the robot heading. The floor below that
+band is excluded. Missing sectors remain unknown. The converter accepts padded,
+organized clouds, little/big endian data, extra fields and FLOAT32/FLOAT64 XYZ.
+It validates dimensions and field offsets before reading any points.
+This obstacle slice does not establish clearance at every height or model drop-offs.
+The simulator uses 25 elevation rings to support the horizontal obstacle slice
+while walking. The virtual lidar pattern and mounting calibration remain synthetic.
+Occluded sectors can stop a patrol even if the nearest visible obstacle is distant.
 
-```sh
-wendy run --device vm:go2-sim --build-type docker --no-restart
-```
+Odometry uses `/utlidar/robot_odom`, from `odom` to `base_link`. Sensor captures
+must advance and be younger than 350 ms for motion. The default assumes clocks
+are synchronized. If the sensor processor uses a different wall clock, set
+`GO2_SENSOR_CLOCK_OFFSET_SECONDS` to its independently measured offset, defined
+as sensor clock minus application clock. Apply it through `wendy run --env`.
+The app never estimates this offset from packet receipt, which could conceal
+delayed data. Invalid, old or replayed observations continue to block motion.
+Woof's inspected sensor headers were offset from its application clock; topic
+compatibility alone does not correct that clock setup.
 
-For example, run that command from `teleop/`. Wendy opens
-`http://127.0.0.1:8903` when the app is ready. Wendy forwards the declared HTTP port for a VM using
-the default user networking. Shared-network VMs use their guest IP instead.
-The sensor dashboard runs on a separate port so you can deploy it alongside any
-driving sample. See each app's README for controls and configuration.
+All driving examples send Move, API 1008, with `x`, `y`, `z` velocities and an
+initial zero request. The managed simulator grants a new publisher control only
+for a valid initial bounded Move, and discards that pre-grant request. Old publishers
+cannot take control back. Pause/reset still require a new publisher. Physical
+Go2 control arbitration remains the robot firmware's responsibility.
 
-Driving samples publish zero on startup so the sandbox can discover their ROS
-publisher. The managed Go2 simulator automatically gives the new publisher
-control, replacing the previous driving app or browser controller. Running
-Patrol walks its route once observations are ready; Roam starts exploring.
-Teleop waits for **Enable controls** in its page.
-Patrol prints its progress and stop reasons in the `wendy run` logs.
-Only one publisher can drive at a time. Older publishers cannot automatically
-take control back; restart an earlier driving app to return control to it.
-The sandbox still offers **Give app control** when the robot has no owner.
-The sensor dashboard needs no grant and does not take control.
-
-After a simulator pause, world reset or **Release app control**, resume the
-world and then restart the driving app. A resumed world does not restore old
-grants. Starting an app while paused does not defer its automatic grant until
-resume. See [command ownership](../README.md#sandbox-and-command-lifetime).
-Sensor recovery alone does not restart a stopped patrol or roam controller.
-
-These examples target the virtual robot. Patrol follows direct waypoint legs;
-teleop is manual driving. Read their documented limits before adapting them.
-Only [Roam's local runner](roam/README.md#run-beside-the-local-browser-preview)
-supports the standalone HTTP simulator preview; the deployed apps require ROS.
-
-## Development checks
-
-With the simulator's [development environment](../README.md#compatibility-and-validation)
-installed, run all sample tests from this directory:
-
-```sh
-../.venv/bin/python -m pytest -q roam patrol teleop sensors
-```
-
-The tests cover controller behavior, source timestamp admission, HTTP endpoints,
-camera encoding and command lifetime without importing ROS. The Dockerfiles
-provide the ROS dependencies for deployment. Browser pages use no build step
-or external assets.
-
-Validated on 2026-09-15: all 196 sample tests passed and all three new Docker
-images built. In a disposable managed Go2 Docker runtime, patrol completed its
-default square with automatic startup in 25.43 seconds, returning within
-24.0 cm; the sensor dashboard
-received all five ROS streams and passed camera dropout/recovery checks.
-Teleop passed an isolated ROS command test for startup zero, 20 Hz publishing,
-driving, release and heartbeat expiry. Both browser pages passed desktop/mobile
-checks, including disconnected states, with no JavaScript errors.
-
-The updated runtime and Patrol were also deployed to `go2-sim`. The live page
-displayed named publishers and preserved selection through status polling.
-After an initial stale-scan stop while awaiting control, an explicit Start
-completed the square in about 30 seconds and held zero commands. Physical
-robot operation has not been tested.
-
-Automatic control handoff was then verified on `go2-sim`: launching Patrol
-with `wendy run --detach` took control from a still-publishing Roam app.
-Roam did not reclaim control. After resetting the world and launching Patrol
-again, it completed all four waypoints in 28.6 seconds and held zero commands,
-without a manual grant or a `/patrol/start` call.
+The examples do not change posture or switch the robot's motion mode.
+Patrol and Roam stop on observation faults and need a new Start after a route
+has begun. Teleop expires browser heartbeats after 250 ms.

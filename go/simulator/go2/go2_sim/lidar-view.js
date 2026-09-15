@@ -17,7 +17,7 @@ export class LidarView {
     this.group.name = 'lidar-overlay';
     this.group.visible = false;
     this.group.userData = { pointCount: 0, fresh: false, status: 'waiting' };
-    this.positions = new Float32Array(1800 * 3);
+    this.positions = new Float32Array(9000 * 3);
     this.geometry = new THREE.BufferGeometry();
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
     this.geometry.setDrawRange(0, 0);

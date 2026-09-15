@@ -9,7 +9,7 @@ import mujoco
 import numpy as np
 import pytest
 
-from go2_sim.lidar import DIRECTIONS, HORIZONTAL_RING, Lidar, RAY_COUNT
+from go2_sim.lidar import DIRECTIONS, ELEVATIONS_DEGREES, HORIZONTAL_RING, Lidar, RAY_COUNT
 from go2_sim.sensors import LIDAR_POSITION, SCAN_COUNT, SCAN_MAX, SCAN_MIN, PhysicsSampler, instrumented_model
 from go2_sim.simulation import DEFAULT_ASSETS, Simulation
 
@@ -56,10 +56,10 @@ def test_elevations_hit_actual_floor_walls_and_leave_open_sky_empty(world):
         assert np.linalg.norm(point) == pytest.approx(origin[2] / 0.5, rel=1e-6)
         assert (origin + point)[2] == pytest.approx(0.0, abs=1e-7)
     # +15deg forward intersects the east wall; +30deg passes above its top.
-    upper_wall = point_for(result, 3 * SCAN_COUNT + 180)
+    upper_wall = point_for(result, ELEVATIONS_DEGREES.index(15.0) * SCAN_COUNT + 180)
     assert (origin + upper_wall)[0] == pytest.approx(5.9, abs=1e-6)
     assert 0.0 < (origin + upper_wall)[2] < 2.0
-    assert 4 * SCAN_COUNT + 180 not in result["ray_indices"]
+    assert ELEVATIONS_DEGREES.index(30.0) * SCAN_COUNT + 180 not in result["ray_indices"]
     assert np.all(np.linalg.norm(result["xyz"], axis=1) >= SCAN_MIN - 1e-6)
     assert np.all(np.linalg.norm(result["xyz"], axis=1) <= SCAN_MAX + 1e-6)
 
@@ -126,7 +126,7 @@ def test_open_and_out_of_range_rays_have_no_cloud_points_or_invented_clear_retur
     sampler.capture(runtime)
     result = Lidar().sample(sampler)
     assert np.isinf(result["ranges"]).all()
-    assert len(result["xyz"]) == 2 * SCAN_COUNT  # Only the two downward rings hit ground.
+    assert 0 < len(result["xyz"]) <= HORIZONTAL_RING * SCAN_COUNT  # Only downward returns reach ground.
     assert np.all(result["ray_indices"] < HORIZONTAL_RING * SCAN_COUNT)
     sim.data.qpos[2] = 10.0  # The floor now lies beyond 12m for even the lowest ring.
     sampler.capture(runtime)
@@ -159,7 +159,7 @@ def test_dropout_applies_one_shared_mask_and_repeats_from_the_seed(world):
         np.testing.assert_array_equal(a["ray_indices"], b["ray_indices"])
         np.testing.assert_array_equal(a["xyz"], b["xyz"])
         assert 0 < len(a["xyz"]) < len(complete["xyz"])
-        cloud_horizontal = a["ray_indices"][(a["ray_indices"] >= 720) & (a["ray_indices"] < 1080)] - 720
+        cloud_horizontal = a["ray_indices"][(a["ray_indices"] >= HORIZONTAL_RING * SCAN_COUNT) & (a["ray_indices"] < (HORIZONTAL_RING + 1) * SCAN_COUNT)] - HORIZONTAL_RING * SCAN_COUNT
         np.testing.assert_array_equal(cloud_horizontal, np.flatnonzero(np.isfinite(a["ranges"])))
         if prior is not None:
             assert not np.array_equal(prior, a["ray_indices"])

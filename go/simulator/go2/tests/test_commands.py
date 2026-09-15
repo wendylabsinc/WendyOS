@@ -402,3 +402,24 @@ def test_publisher_cannot_change_command_kind_under_its_grant(automatic_bus, fir
     assert commands.sources["a" * 48]["kind"] == first_kind
     assert commands.runtime.sim.owner == token
     assert commands.admit(envelope(clock) | {"kind": first_kind})
+
+
+def test_native_zero_move_handoff_obeys_epoch_and_publisher_fences(automatic_bus):
+    commands, clock = automatic_bus
+    commands.native_auto_grant = lambda message: message.get('initial_zero') is True
+    commands.native_handler = lambda message, owned: owned
+    packet = envelope(clock) | {'kind': 'sport', 'initial_zero': True}
+    assert not commands.admit(packet)
+    assert commands.owner == 'a' * 48
+    clock.tick()
+    assert commands.admit(envelope(clock) | {'kind': 'sport'})
+    clock.tick()
+    assert not commands.admit(envelope(clock, 'b'*48) | {'kind': 'sport', 'initial_zero': True})
+    assert commands.owner == 'b' * 48
+    clock.tick()
+    assert not commands.admit(envelope(clock) | {'kind': 'sport', 'initial_zero': True})
+    commands.revoke()
+    commands.runtime.sim.reset()
+    clock.tick()
+    assert not commands.admit(envelope(clock, 'b'*48) | {'kind': 'sport', 'initial_zero': True})
+    assert commands.owner is None

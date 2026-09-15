@@ -5,6 +5,8 @@ import json
 import math
 import time
 
+from go2_io import CLOUD_TOPIC, ODOM_TOPIC, SPORT_TOPIC, cloud_scan, sport_request, sensor_wall_ns
+
 from patrol import DEFAULT_WAYPOINTS, OBSERVATION_TIMEOUT, PatrolController, finite
 
 
@@ -13,9 +15,10 @@ class ExposureGate:
 
     def __init__(self):
         self.last_stamps = {}
+        self.clock_anchor = None
 
     def capture_time(self, topic, stamp, *, wall_ns=None, monotonic=None):
-        wall_ns = time.time_ns() if wall_ns is None else wall_ns
+        wall_ns = sensor_wall_ns(time.time_ns() if wall_ns is None else wall_ns)
         monotonic = time.monotonic() if monotonic is None else monotonic
         if (type(stamp.sec) is not int or type(stamp.nanosec) is not int
                 or not 0 <= stamp.nanosec < 1_000_000_000
@@ -27,7 +30,10 @@ class ExposureGate:
                 or source <= self.last_stamps.get(topic, -1)):
             return None
         self.last_stamps[topic] = source
-        return monotonic - max(0.0, age)
+        if self.clock_anchor is None:
+            self.clock_anchor = (wall_ns, monotonic)
+        anchor_wall, anchor_monotonic = self.clock_anchor
+        return min(monotonic, anchor_monotonic + (source - anchor_wall) / 1e9)
 
 
 def pose_values(message):
@@ -49,7 +55,7 @@ def pose_values(message):
 def scan_metadata_valid(message):
     fields = (message.angle_min, message.angle_max, message.angle_increment,
               message.range_min, message.range_max)
-    return (message.header.frame_id == "lidar_link" and all(finite(value) for value in fields)
+    return (message.header.frame_id == "base_footprint" and all(finite(value) for value in fields)
             and 0 < message.angle_increment <= math.radians(5.01)
             and 0 <= message.range_min < message.range_max
             and abs(message.angle_max - message.angle_min
@@ -57,11 +63,11 @@ def scan_metadata_valid(message):
 
 
 def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
-    from geometry_msgs.msg import Twist
+    from unitree_api.msg import Request
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy
-    from sensor_msgs.msg import LaserScan
+    from sensor_msgs.msg import PointCloud2
     from std_msgs.msg import String
     from std_srvs.srv import Trigger
 
@@ -72,24 +78,32 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             self.autostart_pending = autostart
             self.last_report = None
             self.exposures = ExposureGate()
-            self.drive = self.create_publisher(Twist, "/cmd_vel", QoSProfile(depth=1))
+            self.latest_odom = None
+            self.drive = self.create_publisher(Request, SPORT_TOPIC, QoSProfile(depth=1))
             self.status_pub = self.create_publisher(String, "/patrol/status", QoSProfile(depth=1))
             sensors = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
-            self.create_subscription(LaserScan, "/scan", self.scan, sensors)
-            self.create_subscription(Odometry, "/odom", self.odom, sensors)
+            self.create_subscription(PointCloud2, CLOUD_TOPIC, self.cloud, sensors)
+            self.create_subscription(Odometry, ODOM_TOPIC, self.odom, sensors)
             self.create_service(Trigger, "/patrol/start", self.start)
             self.create_service(Trigger, "/patrol/stop", self.stop)
             self.create_timer(0.05, self.tick)
             self.publish_command(0.0, 0.0)
 
         def publish_command(self, linear, angular):
-            message = Twist()
-            message.linear.x, message.angular.z = linear, angular
-            self.drive.publish(message)
+            self.drive.publish(sport_request(Request, linear, 0.0, angular))
 
         def stop_controller(self, reason):
             self.controller.stop(reason)
             self.publish_command(0.0, 0.0)
+
+        def cloud(self, message):
+            try:
+                if self.latest_odom is None:
+                    raise ValueError("waiting_for_odometry_orientation")
+                self.scan(cloud_scan(message, self.latest_odom))
+            except (ValueError, TypeError, AttributeError) as error:
+                self.controller.reject_scan("invalid_point_cloud: " + str(error))
+                self.publish_command(0.0, 0.0)
 
         def scan(self, message):
             if not scan_metadata_valid(message):
@@ -110,11 +124,15 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             pose = pose_values(message)
             captured = self.exposures.capture_time("odom", message.header.stamp) if pose else None
             if pose is None or captured is None:
+                self.latest_odom = None
                 self.controller.pose = self.controller.pose_at = None
                 self.stop_controller("invalid_odometry_exposure_or_pose")
                 return
             if not self.controller.observe_pose(*pose, captured):
+                self.latest_odom = None
                 self.publish_command(0.0, 0.0)
+            else:
+                self.latest_odom = message
 
         def start(self, request, response):
             self.autostart_pending = False
@@ -140,19 +158,23 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             self.publish_command(*self.controller.tick(now))
             status = self.controller.status(now)
             status["autostart_pending"] = self.autostart_pending
+            blocker = self.controller.observation_error(now)
+            status["readiness_error"] = blocker
             self.status_pub.publish(String(data=json.dumps(status, allow_nan=False)))
-            report = (self.controller.active, self.controller.reason, self.controller.index)
+            report = (self.controller.active, self.controller.reason, self.controller.index,
+                      blocker if self.autostart_pending else None)
             if report != self.last_report:
                 self.last_report = report
                 if self.autostart_pending:
-                    print("Patrol is waiting for fresh lidar, odometry and clear space.", flush=True)
+                    print(f"Patrol waiting: {blocker}; last sensor result: {self.controller.reason}. "
+                          f"Expecting {CLOUD_TOPIC} and {ODOM_TOPIC}.", flush=True)
                 elif self.controller.active:
                     print(f"Patrol is requesting waypoint {self.controller.index + 1}/{len(self.controller.targets)}.",
                           flush=True)
                 else:
                     print(f"Patrol stopped: {self.controller.reason}. "
                           "It will not restart automatically. "
-                          "Start a new route with: wendy --device vm:<simulator-name> device ros2 call "
+                          "Start a new route with: wendy --device <device> device ros2 call "
                           "/patrol/start std_srvs/srv/Trigger '{}'", flush=True)
 
     return PatrolApp()
@@ -178,9 +200,7 @@ def main():
     node = make_node(args.waypoints, args.laps, autostart=args.autostart)
     print("Go2 patrol started. " + ("The route starts automatically after fresh observations arrive. "
           if args.autostart else "Call /patrol/start to begin a route. ") +
-          "Managed Go2 gives new apps control automatically. "
-          "In manual mode, select Patrol and choose Give app control in the simulator. "
-          "After a pause or reset, resume the world and then restart this app.", flush=True)
+          f"Using {CLOUD_TOPIC}, {ODOM_TOPIC} and {SPORT_TOPIC}.", flush=True)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
