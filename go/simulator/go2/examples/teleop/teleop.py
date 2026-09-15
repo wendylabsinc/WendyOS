@@ -9,6 +9,8 @@ import secrets
 import threading
 import time
 
+from go2_io import SPORT_TOPIC, sport_request
+
 
 DEADMAN_SECONDS = 0.25
 PUBLISH_SECONDS = 0.05
@@ -229,21 +231,19 @@ def handler_for(control):
 
 
 def make_node():
-    from geometry_msgs.msg import Twist
+    from unitree_api.msg import Request
     from rclpy.node import Node
     from rclpy.qos import QoSProfile
 
     class TeleopNode(Node):
         def __init__(self):
             super().__init__("wendy_go2_teleop")
-            self.drive = self.create_publisher(Twist, "/cmd_vel", QoSProfile(depth=1))
+            self.drive = self.create_publisher(Request, SPORT_TOPIC, QoSProfile(depth=1))
             self.control = TeleopControl(self.publish_command)
             self.create_timer(PUBLISH_SECONDS, self.control.tick)
 
         def publish_command(self, x, y, yaw):
-            message = Twist()
-            message.linear.x, message.linear.y, message.angular.z = x, y, yaw
-            self.drive.publish(message)
+            self.drive.publish(sport_request(Request, x, y, yaw))
 
     return TeleopNode()
 
@@ -270,8 +270,7 @@ def main():
         serving.start()
         node.get_logger().info(
             f"Teleop HTTP listening on {args.host}:{args.port}. "
-            "Managed Go2 gives new apps control automatically. "
-            "In manual mode, grant Teleop control in the sandbox. "
+            f"Sending native Go2 Move requests on {SPORT_TOPIC}. "
             "Enable the control panel and hold a direction to drive.")
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

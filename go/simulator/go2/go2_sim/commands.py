@@ -47,6 +47,7 @@ class ROSCommands:
         self.socket = None
         self.thread = None
         self.native_handler = None
+        self.native_auto_grant = None
 
     def start(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -161,7 +162,10 @@ class ROSCommands:
             label = publisher_label(previous or {})
         self.sources[gid] = {"kind": kind, "last_received_ns": received,
                              "source_timestamp_ns": source_time, **label}
-        if previous is None and self.auto_control and kind == "twist":
+        eligible = previous is None and self.auto_control and (
+            kind == "twist" or (kind == "sport" and self.native_auto_grant is not None
+                                and self.native_auto_grant(envelope)))
+        if eligible:
             # Recording discovery consumes the attempt even when paused or unhealthy.
             # The discovery packet predates its grant and must never drive the robot.
             self._auto_grant(gid)

@@ -63,3 +63,55 @@ def test_finite_odometry_quaternion_is_converted_to_yaw():
 ])
 def test_wrong_frames_and_invalid_robot_poses_are_rejected(message):
     assert pose_values(message) is None
+
+
+def test_cloud_before_odometry_keeps_autostart_pending(monkeypatch):
+    import json
+    import struct
+    import sys
+    import ros_app
+
+    class Node:
+        def __init__(self, name):
+            pass
+        def create_publisher(self, *args):
+            return SimpleNamespace(publish=lambda message: None)
+        def create_subscription(self, *args):
+            pass
+        def create_service(self, *args):
+            pass
+        def create_timer(self, *args):
+            pass
+
+    def request():
+        return SimpleNamespace(header=SimpleNamespace(identity=SimpleNamespace(),
+                                                      policy=SimpleNamespace()), parameter='')
+
+    for name, module in {
+        'rclpy.node': SimpleNamespace(Node=Node),
+        'rclpy.qos': SimpleNamespace(QoSProfile=SimpleNamespace,
+                                    ReliabilityPolicy=SimpleNamespace(BEST_EFFORT=1)),
+        'unitree_api.msg': SimpleNamespace(Request=request),
+        'nav_msgs.msg': SimpleNamespace(Odometry=object),
+        'sensor_msgs.msg': SimpleNamespace(PointCloud2=object),
+        'std_msgs.msg': SimpleNamespace(String=SimpleNamespace),
+        'std_srvs.srv': SimpleNamespace(Trigger=object),
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(ros_app.time, 'monotonic', lambda: 50.0)
+    monkeypatch.setattr(ros_app.time, 'time_ns', lambda: 10_000_000_000)
+    node = ros_app.make_node(autostart=True)
+    cloud = SimpleNamespace(header=SimpleNamespace(frame_id='base_link', stamp=stamp(9_900_000_000)),
+        width=72, height=1, point_step=12, row_step=864, is_bigendian=False,
+        fields=[SimpleNamespace(name=n, offset=i*4, datatype=7, count=1) for i,n in enumerate('xyz')],
+        data=b''.join(struct.pack('<fff', 3*math.cos(i*math.pi/36), 3*math.sin(i*math.pi/36), 0)
+                      for i in range(72)))
+    node.cloud(cloud)
+    node.tick()
+    assert node.autostart_pending and not node.controller.active
+    pose = odometry(x=0)
+    pose.header.stamp = cloud.header.stamp
+    node.odom(pose)
+    node.cloud(cloud)
+    node.tick()
+    assert node.controller.active and not node.autostart_pending

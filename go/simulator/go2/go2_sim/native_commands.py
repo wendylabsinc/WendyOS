@@ -9,7 +9,7 @@ from rclpy.serialization import deserialize_message
 from unitree_api.msg import Request, Response
 from unitree_go.msg import LowCmd
 
-from .simulation import LOW_LEVEL_TIMEOUT
+from .simulation import LOW_LEVEL_TIMEOUT, VELOCITY_LIMITS
 from .unitree_crc import low_cmd_crc
 
 
@@ -35,6 +35,26 @@ class NativeCommands:
             except queue.Empty:
                 return
             self.publishers[kind].publish(response)
+
+    def can_auto_grant(self, envelope):
+        """Only a valid bounded Move may hand over managed app ownership.
+
+        Queries, posture changes, malformed data and LowCmd never acquire it.
+        """
+        try:
+            payload = envelope.get("payload_hex")
+            if not isinstance(payload, str) or len(payload) > 3840:
+                return False
+            request = deserialize_message(bytes.fromhex(payload), Request)
+            values = json.loads(request.parameter)
+            return (request.header.identity.api_id == 1008 and not request.binary
+                    and request.header.lease.id == 0 and request.header.policy.priority == 0
+                    and isinstance(values, dict) and set(values) == {"x", "y", "z"}
+                    and all(type(values[axis]) in (int, float) and math.isfinite(values[axis])
+                            and abs(values[axis]) <= limit
+                            for axis, limit in zip(("x", "y", "z"), VELOCITY_LIMITS)))
+        except Exception:
+            return False
 
     def receive(self, envelope, *, owned):
         kind = envelope["kind"]

@@ -34,7 +34,7 @@ def odom(x=0, source=10_000_000_000):
 
 
 def scan():
-    return NS(header=header("lidar_link"), ranges=[1, math.inf, math.nan, -1, 13, 2],
+    return NS(header=header("base_link"), ranges=[1, math.inf, math.nan, -1, 13, 2],
               angle_min=-math.pi, angle_increment=math.pi / 3, range_min=0.1, range_max=12)
 
 
@@ -136,7 +136,7 @@ def test_joint_and_imu_data_remain_finite_and_valid():
     invalid = deepcopy(joint)
     invalid.position = [0.1]
     assert not store.observe("joints", invalid, wall_ns=10_000_000_000, now=20)
-    imu = NS(header=header("imu_link"), linear_acceleration=NS(x=0, y=0, z=9.81),
+    imu = NS(header=header("utlidar_imu"), linear_acceleration=NS(x=0, y=0, z=9.81),
              angular_velocity=NS(x=0, y=0, z=0.1), orientation=NS(x=0, y=0, z=0, w=1))
     assert store.observe("imu", imu, wall_ns=10_000_000_000, now=20)
     json.dumps(store.snapshot(20), allow_nan=False)

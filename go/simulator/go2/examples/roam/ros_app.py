@@ -1,4 +1,4 @@
-"""ROS 2 adapter for the Go2 simulator's reactive roaming example.
+"""Native ROS 2 adapter for reactive roaming on Go2 robots and the simulator.
 
 Sensor observations and velocity requests use ROS only. The sandbox's explicit
 command grant determines whether these requests can move the virtual robot.
@@ -8,6 +8,8 @@ import argparse
 import json
 import math
 import time
+
+from go2_io import CLOUD_TOPIC, ODOM_TOPIC, SPORT_TOPIC, cloud_scan, sport_request, sensor_wall_ns
 
 from controller import RoamController
 
@@ -45,9 +47,10 @@ class ExposureGate:
 
     def __init__(self):
         self.last_stamps = {}
+        self.clock_anchor = None
 
     def capture_time(self, topic, stamp, *, wall_ns=None, monotonic=None):
-        wall_ns = time.time_ns() if wall_ns is None else wall_ns
+        wall_ns = sensor_wall_ns(time.time_ns() if wall_ns is None else wall_ns)
         monotonic = time.monotonic() if monotonic is None else monotonic
         source = stamp.sec * 1_000_000_000 + stamp.nanosec
         age = (wall_ns - source) / 1e9
@@ -58,15 +61,18 @@ class ExposureGate:
         self.last_stamps[topic] = source
         # Preserve exposure age; delayed packets must not buy another full
         # freshness interval merely by arriving at the controller now.
-        return monotonic - max(0.0, age)
+        if self.clock_anchor is None:
+            self.clock_anchor = (wall_ns, monotonic)
+        anchor_wall, anchor_monotonic = self.clock_anchor
+        return min(monotonic, anchor_monotonic + (source - anchor_wall) / 1e9)
 
 
 def make_node(*, autostart=False):
-    from geometry_msgs.msg import Twist
+    from unitree_api.msg import Request
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy
-    from sensor_msgs.msg import LaserScan
+    from sensor_msgs.msg import PointCloud2
     from std_msgs.msg import String
     from std_srvs.srv import Trigger
 
@@ -75,22 +81,34 @@ def make_node(*, autostart=False):
             super().__init__("wendy_go2_roam")
             self.controller = RoamController()
             self.exposures = ExposureGate()
+            self.latest_odom = None
             self.observed = {}
             self.autostart_pending = autostart
             self.observation_error = None
-            self.drive = self.create_publisher(Twist, "/cmd_vel", QoSProfile(depth=1))
+            self.drive = self.create_publisher(Request, SPORT_TOPIC, QoSProfile(depth=1))
             self.status_pub = self.create_publisher(String, "/roam/status", QoSProfile(depth=1))
             sensors = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)
-            self.create_subscription(LaserScan, "/scan", self.scan, sensors)
-            self.create_subscription(Odometry, "/odom", self.odom, sensors)
+            self.create_subscription(PointCloud2, CLOUD_TOPIC, self.cloud, sensors)
+            self.create_subscription(Odometry, ODOM_TOPIC, self.odom, sensors)
             self.create_service(Trigger, "/roam/start", self.start)
             self.create_service(Trigger, "/roam/stop", self.stop)
             self.create_timer(0.05, self.tick)
             self.publish_command(0.0, 0.0)
 
+        def cloud(self, message):
+            try:
+                if self.latest_odom is None:
+                    raise ValueError("waiting_for_odometry_orientation")
+                self.scan(cloud_scan(message, self.latest_odom))
+            except (ValueError, TypeError, AttributeError) as error:
+                self.observed.pop("scan", None)
+                self.observation_error = str(error)
+                self.controller.stop("invalid_point_cloud: " + str(error))
+                self.publish_command(0.0, 0.0)
+
         def scan(self, message):
             metadata = (message.angle_min, message.angle_increment, message.range_min, message.range_max)
-            if (message.header.frame_id != "lidar_link"
+            if (message.header.frame_id != "base_footprint"
                     or not all(math.isfinite(value) for value in metadata)
                     or message.angle_increment <= 0 or message.range_min < 0
                     or message.range_max <= message.range_min):
@@ -112,13 +130,16 @@ def make_node(*, autostart=False):
         def odom(self, message):
             pose = pose_values(message)
             if pose is None:
+                self.latest_odom = None
                 self.observation_error = "Invalid odometry frame or pose"
                 return
             captured = self.exposures.capture_time("odom", message.header.stamp)
             if captured is None:
+                self.latest_odom = None
                 self.observation_error = "Stale or reordered odometry exposure"
                 return
             if self.controller.observe_pose(*pose, captured):
+                self.latest_odom = message
                 self.observed["odom"] = captured
 
         def start(self, request, response):
@@ -145,9 +166,7 @@ def make_node(*, autostart=False):
             self.publish_command(0.0, 0.0)
 
         def publish_command(self, linear, angular):
-            message = Twist()
-            message.linear.x, message.angular.z = linear, angular
-            self.drive.publish(message)
+            self.drive.publish(sport_request(Request, linear, 0.0, angular))
 
         def tick(self):
             now = time.monotonic()
