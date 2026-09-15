@@ -37,9 +37,9 @@ The agent runs ros2 commands in CLI sidecars for running apps configured with
 device's system DDS graph, including Unitree robots, on domain 0. Use --domain
 to select another domain. No ROS 2 app deployment or SSH is required.
 
-System inspection uses a cached Humble/Fast DDS CLI image, downloaded on first
-use. Custom message types require their ROS 2 packages for commands like echo
-and hz.
+System inspection uses a cached Humble/Fast DDS CLI image with pinned unitree_go
+and unitree_api types, downloaded on first use. Other custom message types still
+require their ROS 2 packages. Use lidar sample for bounded geometry observations.
 
 To add ROS 2 to a project: wendy project frameworks add ros2
 For the full "frameworks.ros2" config shape (domainId, rmw, distro,
@@ -56,6 +56,7 @@ discoveryScope) and how it's used: wendy docs ros2`,
 		newROS2ParamCmd(),
 		newROS2EchoCmd(),
 		newROS2HzCmd(),
+		newROS2LidarCmd(),
 		newROS2GraphCmd(),
 		newROS2BagCmd(),
 		newROS2DoctorCmd(),
