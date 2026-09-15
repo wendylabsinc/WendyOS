@@ -2810,6 +2810,91 @@ func TestApplyNPU_PassesDeviceTreeModel(t *testing.T) {
 	}
 }
 
+// TestApplyNPU_DefaultsToUnsignedProcessDomain pins the process domain to the one the
+// granted node may create: the kernel refuses a signed domain on the non-secure FastRPC
+// node, and the vendor runtime reads this attribute straight from the environment.
+func TestApplyNPU_DefaultsToUnsignedProcessDomain(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp": {10, 262},
+	}, &[2]int64{251, 0})
+
+	spec := npuSpec(t)
+
+	if !slices.Contains(spec.Process.Env, "FASTRPC_PROCESS_ATTRS=8") {
+		t.Errorf("Env = %v, want FASTRPC_PROCESS_ATTRS=8 selecting the unsigned process domain", spec.Process.Env)
+	}
+}
+
+// TestApplyNPU_AddsUnsignedBitToAppProcessAttrs merges rather than replaces: the
+// attribute is a bitmask, so an image value that omits the unsigned bit must gain it
+// while keeping its own flags, or the DSP is silently lost.
+func TestApplyNPU_AddsUnsignedBitToAppProcessAttrs(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp": {10, 262},
+	}, &[2]int64{251, 0})
+
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec.Process.Env = append(spec.Process.Env, "FASTRPC_PROCESS_ATTRS=4")
+	cfg := &appconfig.AppConfig{
+		AppID:        "test-app",
+		Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementNPU}},
+	}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	var count int
+	for _, e := range spec.Process.Env {
+		if strings.HasPrefix(e, "FASTRPC_PROCESS_ATTRS=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("Env = %v, want exactly one FASTRPC_PROCESS_ATTRS entry", spec.Process.Env)
+	}
+	if !slices.Contains(spec.Process.Env, "FASTRPC_PROCESS_ATTRS=12") {
+		t.Errorf("Env = %v, want the app's flag 4 kept and the unsigned bit 8 added", spec.Process.Env)
+	}
+}
+
+// TestApplyNPU_EnvWinsOverLaterDuplicate pins OCI last-wins semantics: the codebase
+// appends duplicates deliberately, so rewriting an earlier entry would be overridden.
+func TestApplyNPU_EnvWinsOverLaterDuplicate(t *testing.T) {
+	installFakeFastrpcDevTree(t, map[string][2]int64{
+		"fastrpc-cdsp": {10, 262},
+	}, &[2]int64{251, 0})
+
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec.Process.Env = append(spec.Process.Env,
+		"FASTRPC_PROCESS_ATTRS=4",
+		"MACHINE_NAME=Wrong Board",
+		"FASTRPC_PROCESS_ATTRS=4", // a later duplicate, as the env merge can produce
+	)
+	cfg := &appconfig.AppConfig{
+		AppID:        "test-app",
+		Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementNPU}},
+	}
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyEntitlements() error = %v", err)
+	}
+
+	// The effective value is the last assignment of each key.
+	effective := map[string]string{}
+	for _, e := range spec.Process.Env {
+		if k, v, ok := strings.Cut(e, "="); ok {
+			effective[k] = v
+		}
+	}
+	if effective["FASTRPC_PROCESS_ATTRS"] != "12" {
+		t.Errorf("effective FASTRPC_PROCESS_ATTRS = %q, want 12; Env = %v",
+			effective["FASTRPC_PROCESS_ATTRS"], spec.Process.Env)
+	}
+	if effective["MACHINE_NAME"] != "Acme Board" {
+		t.Errorf("effective MACHINE_NAME = %q, want the host model; Env = %v",
+			effective["MACHINE_NAME"], spec.Process.Env)
+	}
+}
+
 // TestApplyNPU_LeavesFirmwareMasked pins the hardening default: the entitlement must
 // never widen /sys/firmware, which carries SMBIOS serials and ACPI tables.
 func TestApplyNPU_LeavesFirmwareMasked(t *testing.T) {
