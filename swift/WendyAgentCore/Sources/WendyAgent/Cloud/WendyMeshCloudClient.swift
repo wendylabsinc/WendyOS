@@ -291,6 +291,9 @@ func parseCloudEndpoint(_ rawEndpoint: String) throws -> (host: String, port: In
         if character == ":" { count += 1 }
     }
     if colonCount == 0 {
+        // SECURITY: This endpoint comes from locally provisioned configuration, not tunnel
+        // traffic. Wendy supports custom/self-hosted clouds, so an allowlist would break a
+        // supported trust boundary; full TLS verification instead binds it to the configured host.
         return (endpoint, 443)
     }
     if colonCount == 1, let colon = endpoint.firstIndex(of: ":") {
@@ -302,10 +305,9 @@ func parseCloudEndpoint(_ rawEndpoint: String) throws -> (host: String, port: In
         return (String(host), try port(portText))
     }
 
-    // A bare IPv6 literal has no unambiguous port separator. Keep the default port; callers that
-    // need an explicit port use standard bracket notation (`[::1]:50052`). Custom/self-hosted
-    // endpoints remain supported, while full TLS verification binds the connection to this host.
-    return (endpoint, 443)
+    // A bare IPv6 literal has no unambiguous port separator. Require standard bracket notation
+    // even when using the default port so configuration mistakes fail closed.
+    throw invalidEndpoint("requires brackets around IPv6 literals")
 }
 
 private func clientMetadata(for credentials: WendyCloudCredentials) -> Metadata {
