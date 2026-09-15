@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         category: "AppDelegate"
     )
     private let wendyAgent = WendyAgent(configuration: .default)
+    private let meshVPN = MeshVPNController()
     private let welcomeAndPermissions = WelcomeAndPermissions()
     private var statusMenuController: StatusMenuController?
     private var welcomeAndPermissionsWindow: NSWindow?
@@ -29,8 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Task {
             self.statusMenuController = await StatusMenuController(
                 wendyAgent: self.wendyAgent,
+                meshVPN: self.meshVPN,
                 delegate: self
             )
+
+            await self.meshVPN.connectAutomatically()
 
             // Registered before start() so the services the agent builds at
             // startup capture it. A self-update must end this process without
@@ -66,6 +70,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         self.showWelcomeAndPermissionsWindow()
     }
 
+    func statusMenuController(
+        _ controller: StatusMenuController,
+        didSetMeshVPNEnabled enabled: Bool
+    ) {
+        Task {
+            if enabled {
+                await self.meshVPN.connect()
+            } else {
+                await self.meshVPN.disable()
+            }
+        }
+    }
+
+    func statusMenuControllerDidSelectNetworkExtensionSettings(
+        _ controller: StatusMenuController
+    ) {
+        self.openNetworkExtensionSettings()
+    }
+
     func statusMenuControllerDidSelectQuit(_ controller: StatusMenuController) {
         self.performQuit()
     }
@@ -86,6 +109,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     /// relaunch watcher opens the freshly-installed bundle once this PID exits.
     private func performUpdateQuit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    private func openNetworkExtensionSettings() {
+        guard
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+            )
+        else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func windowWillClose(_ notification: Notification) {
