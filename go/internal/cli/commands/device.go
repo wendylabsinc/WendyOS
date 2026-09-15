@@ -529,8 +529,8 @@ func yesNo(v bool) string {
 
 func newDeviceSetDefaultCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "set-default [hostname]",
-		Short: "Set the default device hostname",
+		Use:   "set-default [device]",
+		Short: "Set a local, cloud or simulator device as the default",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var device string
@@ -542,6 +542,10 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 					return err
 				}
 				device = sel
+			}
+			_, isCloud, selectorErr := parseCloudDeviceSelector(device)
+			if selectorErr != nil {
+				return selectorErr
 			}
 
 			cfg, err := config.Load()
@@ -555,6 +559,11 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Default device set to: %s\n", tui.Device(device))
+			// Cloud identity is scoped by endpoint, organization and asset ID.
+			// It has no LAN hostname pin to clear or repopulate.
+			if isCloud {
+				return nil
+			}
 
 			// Naming a device here is an explicit assertion that this is the one
 			// the user means, so any pin recorded for it is dropped first: that
@@ -643,6 +652,9 @@ func pickDeviceForDefault(ctx context.Context) (string, error) {
 func defaultDeviceNameFor(selected *SelectedDevice) (string, error) {
 	if selected == nil {
 		return "", fmt.Errorf("no device selected")
+	}
+	if selected.DefaultSelector != "" {
+		return selected.DefaultSelector, nil
 	}
 	if selected.Agent != nil {
 		if selected.PinKey != "" {
