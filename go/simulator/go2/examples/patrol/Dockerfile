@@ -17,4 +17,4 @@ ENV PYTHONPATH=/opt/go2_msgs/install/local/lib/python3.10/dist-packages \
 WORKDIR /app
 COPY go2_io.py ./
 COPY patrol.py ros_app.py ./
-CMD ["python3", "/app/ros_app.py", "--autostart"]
+CMD ["python3", "/app/ros_app.py", "--autostart", "--ignore-capture-age", "--allow-scan-gaps"]

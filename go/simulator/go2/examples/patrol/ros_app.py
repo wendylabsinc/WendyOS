@@ -11,9 +11,10 @@ from patrol import DEFAULT_WAYPOINTS, OBSERVATION_TIMEOUT, PatrolController, fin
 
 
 class ExposureGate:
-    """Admit advancing wall-clock capture stamps without resetting their age."""
+    """Admit advancing captures, optionally using arrival time for their age."""
 
-    def __init__(self):
+    def __init__(self, *, ignore_capture_age=False):
+        self.ignore_capture_age = ignore_capture_age
         self.last_stamps = {}
         self.clock_anchor = None
         self.rejections = {}
@@ -32,14 +33,16 @@ class ExposureGate:
         age = (wall_ns - source) / 1e9
         self.ages[topic] = age
         reason = ("nonpositive_capture_stamp" if source <= 0 else
-                  "capture_in_future" if age < -0.05 else
-                  "capture_too_old" if age >= OBSERVATION_TIMEOUT else
+                  "capture_in_future" if not self.ignore_capture_age and age < -0.05 else
+                  "capture_too_old" if not self.ignore_capture_age and age >= OBSERVATION_TIMEOUT else
                   "capture_not_advancing" if source <= self.last_stamps.get(topic, -1) else None)
         if reason:
             self.rejections[topic] = reason
             return None
         self.rejections.pop(topic, None)
         self.last_stamps[topic] = source
+        if self.ignore_capture_age:
+            return monotonic
         if self.clock_anchor is None:
             self.clock_anchor = (wall_ns, monotonic)
         anchor_wall, anchor_monotonic = self.clock_anchor
@@ -72,7 +75,8 @@ def scan_metadata_valid(message):
                     - (len(message.ranges) - 1) * message.angle_increment) < 1e-4)
 
 
-def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
+def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False, ignore_capture_age=False,
+              allow_scan_gaps=False):
     from unitree_api.msg import Request
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
@@ -84,12 +88,12 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
     class PatrolApp(Node):
         def __init__(self):
             super().__init__("wendy_go2_patrol")
-            self.controller = PatrolController(waypoints, laps)
+            self.controller = PatrolController(waypoints, laps, allow_scan_gaps=allow_scan_gaps)
             self.autostart_pending = autostart
             self.last_report = None
             self.last_wait_report_at = -math.inf
             self.sensor_errors = {}
-            self.exposures = ExposureGate()
+            self.exposures = ExposureGate(ignore_capture_age=ignore_capture_age)
             self.latest_odom = None
             self.drive = self.create_publisher(Request, SPORT_TOPIC, QoSProfile(depth=1))
             self.status_pub = self.create_publisher(String, "/patrol/status", QoSProfile(depth=1))
@@ -134,8 +138,9 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
                 self.publish_command(0.0, 0.0)
                 return
             self.sensor_errors.pop("scan", None)
-            self.controller.observe_scan(message.ranges, message.angle_min, message.angle_increment,
-                                         message.range_min, message.range_max, captured)
+            if not self.controller.observe_scan(message.ranges, message.angle_min, message.angle_increment,
+                                                message.range_min, message.range_max, captured):
+                self.sensor_errors["scan"] = self.controller.reason
             if not self.controller.active:
                 self.publish_command(0.0, 0.0)
 
@@ -184,6 +189,7 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
             status["readiness_error"] = blocker
             status["sensor_errors"] = dict(self.sensor_errors)
             status["capture_age_seconds"] = dict(self.exposures.ages)
+            status["ignore_capture_age"] = self.exposures.ignore_capture_age
             self.status_pub.publish(String(data=json.dumps(status, allow_nan=False)))
             # Missing cloud orientation is a consequence of rejected odometry.
             # Keep that root cause stable across alternating sensor callbacks.
@@ -197,6 +203,13 @@ def make_node(waypoints=DEFAULT_WAYPOINTS, laps=1, *, autostart=False):
                 if self.autostart_pending:
                     self.last_wait_report_at = now
                     detail = ""
+                    if rejection == "unknown_scan" and self.controller.scan_coverage is not None:
+                        coverage = self.controller.scan_coverage
+                        detail = (f" Observed sectors: {coverage['observed']}/{coverage['total']}; "
+                                  f"front: {coverage['front_observed']}/{coverage['front_total']}. "
+                                  + ("Scan gaps are allowed, but a usable front return and valid measurements are required."
+                                     if self.controller.allow_scan_gaps else
+                                     "Sectors without usable returns are unknown; full coverage is required."))
                     if rejection.endswith(("capture_too_old", "capture_in_future")):
                         topic = "odom" if self.sensor_errors.get("odom") else "scan"
                         detail = (f" Capture age: {self.exposures.ages[topic]:.3f}s. Check sensor/application "
@@ -221,7 +234,11 @@ def main():
                         help='JSON [forward, left] offsets in metres, e.g. "[[1,0],[1,1],[0,1],[0,0]]"')
     parser.add_argument("--laps", type=int, default=1, help="finite number of laps, from 1 to 5")
     parser.add_argument("--autostart", action="store_true",
-                        help="start one route after fresh observations arrive")
+                        help="start one route after accepted observations arrive")
+    parser.add_argument("--ignore-capture-age", action="store_true",
+                        help="use local arrival time for sensor timeouts when sensor clocks are unsynchronized")
+    parser.add_argument("--allow-scan-gaps", action="store_true",
+                        help="allow unobserved sectors; require a front return and stop for measured obstacles")
     args, ros_args = parser.parse_known_args()
     try:
         PatrolController(args.waypoints, args.laps)
@@ -232,10 +249,16 @@ def main():
     from rclpy.executors import ExternalShutdownException
 
     rclpy.init(args=ros_args)
-    node = make_node(args.waypoints, args.laps, autostart=args.autostart)
-    print("Go2 patrol started. " + ("The route starts automatically after fresh observations arrive. "
+    node = make_node(args.waypoints, args.laps, autostart=args.autostart,
+                     ignore_capture_age=args.ignore_capture_age, allow_scan_gaps=args.allow_scan_gaps)
+    print("Go2 patrol started. " + ("The route starts automatically after accepted observations arrive. "
           if args.autostart else "Call /patrol/start to begin a route. ") +
           f"Using {CLOUD_TOPIC}, {ODOM_TOPIC} and {SPORT_TOPIC}.", flush=True)
+    if args.ignore_capture_age:
+        print("Capture age checks disabled. Sensor timeouts use local arrival time.", flush=True)
+    if args.allow_scan_gaps:
+        print("Scan gaps allowed. Obstacle checks use measured returns; unobserved obstacles may be missed.",
+              flush=True)
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):

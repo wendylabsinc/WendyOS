@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import math
+import struct
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -57,10 +58,25 @@ def test_old_future_and_zero_stamps_do_not_refresh_sensor_gate(source):
 
 @pytest.mark.parametrize("sec,nanosec", [(9, -1), (9, 1_000_000_000),
     (9, float("nan")), (float("inf"), 0), (9.0, 0), (True, 0)])
-def test_malformed_stamp_fields_are_rejected(sec, nanosec):
-    gate = ros_app.ExposureGate()
+@pytest.mark.parametrize("ignore_capture_age", [False, True])
+def test_malformed_stamp_fields_are_rejected(sec, nanosec, ignore_capture_age):
+    gate = ros_app.ExposureGate(ignore_capture_age=ignore_capture_age)
     assert gate.capture_time("scan", SimpleNamespace(sec=sec, nanosec=nanosec),
                              wall_ns=10_000_000_000, monotonic=50) is None
+
+
+@pytest.mark.parametrize("source", [1_000_000_000, 4_310_489_014_000_000])
+def test_ignore_capture_age_uses_arrival_time_and_requires_advancing_stamps(source):
+    gate = ros_app.ExposureGate(ignore_capture_age=True)
+    for topic in ("scan", "odom"):
+        assert gate.capture_time(topic, stamp(source), wall_ns=10_000_000_000, monotonic=50) == 50
+        assert gate.ages[topic] == pytest.approx((10_000_000_000 - source) / 1e9)
+        for replay in (source, source - 1):
+            assert gate.capture_time(topic, stamp(replay), wall_ns=10_010_000_000, monotonic=50.01) is None
+            assert gate.rejections[topic] == "capture_not_advancing"
+        assert gate.capture_time(topic, stamp(source + 1), wall_ns=10_020_000_000, monotonic=50.02) == 50.02
+    assert gate.capture_time("scan", stamp(0), wall_ns=10_000_000_000, monotonic=50) is None
+    assert gate.rejections["scan"] == "nonpositive_capture_stamp"
 
 
 def test_unit_quaternion_is_converted_to_heading():
@@ -159,6 +175,37 @@ def last_command(node):
     values = json.loads(command.parameter)
     assert values["y"] == 0
     return values["x"], values["z"]
+
+
+@pytest.mark.parametrize("missing_topic", ["scan", "odom"])
+@pytest.mark.parametrize("clock_offset_seconds", [-4_310_479.014, 4_310_479.014])
+def test_unsynchronized_autostart_still_stops_when_either_stream_expires(
+        node_factory, monkeypatch, missing_topic, clock_offset_seconds):
+    node = node_factory(autostart=True, ignore_capture_age=True)
+    source = 10_000_000_000_000_000
+    wall = source - round(clock_offset_seconds * 1e9)
+    monkeypatch.setattr(ros_app.time, "time_ns", lambda: wall)
+    deliver_observations(node, source)
+    node.tick()
+    assert node.controller.active
+    assert last_command(node) == (0.35, 0)
+    assert json.loads(node.status_pub.messages[-1].data)["ignore_capture_age"] is True
+
+    monkeypatch.setattr(ros_app.time, "monotonic", lambda: 50.36)
+    monkeypatch.setattr(ros_app.time, "time_ns", lambda: wall + 360_000_000)
+    if missing_topic == "scan":
+        message = odometry(x=0)
+        message.pose.pose.position.y = 0
+        message.header.stamp = stamp(source + 360_000_000)
+        node.odom(message)
+    else:
+        message = scan()
+        message.header.stamp = stamp(source + 360_000_000)
+        node.scan(message)
+    node.tick()
+    assert not node.controller.active
+    assert node.controller.reason == "stale_" + missing_topic
+    assert last_command(node) == (0, 0)
 
 
 def test_ros_node_publishes_zero_on_startup_and_requires_start_service(node):
@@ -361,6 +408,48 @@ def test_malformed_cloud_invalidates_admission_before_autostart(autostart_node):
     assert not node.controller.active
     assert node.controller.scan_at is None
     assert last_command(node)==(0,0)
+
+
+def test_sparse_native_cloud_autostarts_and_measured_obstacle_stops(node_factory, monkeypatch):
+    node = node_factory(autostart=True, ignore_capture_age=True, allow_scan_gaps=True)
+    pose = odometry(x=0)
+    pose.pose.pose.position.y = 0
+    pose.header.stamp = stamp(1_000_000_000)
+    node.odom(pose)
+    cloud = SimpleNamespace(header=SimpleNamespace(stamp=pose.header.stamp, frame_id="base_link"),
+        width=1, height=1, point_step=12, row_step=12, is_bigendian=False,
+        data=struct.pack("<fff", 4.0, 0, 0.1),
+        fields=[SimpleNamespace(name=name, offset=index * 4, count=1, datatype=7)
+                for index, name in enumerate("xyz")])
+    node.cloud(cloud)
+    node.tick()
+    assert node.controller.active
+    assert last_command(node) == (0.35, 0)
+    status = json.loads(node.status_pub.messages[-1].data)
+    assert status["scan_coverage"] == {"observed": 1, "total": 72, "front_observed": 1, "front_total": 13}
+    assert status["allow_scan_gaps"] is True
+    monkeypatch.setattr(ros_app.time, "monotonic", lambda: 50.05)
+    cloud.header.stamp = stamp(1_050_000_000)
+    cloud.data = struct.pack("<fff", 0.4, 0, 0.1)
+    node.cloud(cloud)
+    assert not node.controller.active
+    assert node.controller.reason == "obstacle"
+    assert last_command(node) == (0, 0)
+
+
+def test_unknown_scan_log_reports_coverage_and_sensor_error(autostart_node, capsys):
+    node = autostart_node
+    deliver_observations(node, 9_800_000_000)
+    laser = scan()
+    laser.header.stamp = stamp(9_900_000_000)
+    laser.ranges[0] = math.inf
+    node.scan(laser)
+    node.tick()
+    assert "Observed sectors: 359/360; front: 61/61" in capsys.readouterr().out
+    status = json.loads(node.status_pub.messages[-1].data)
+    assert status["sensor_errors"]["scan"] == "unknown_scan"
+    assert status["scan_coverage"]["observed"] == 359
+    assert last_command(node) == (0, 0)
 
 
 @pytest.mark.parametrize("source,reason,age", [
