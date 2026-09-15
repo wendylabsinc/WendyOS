@@ -294,8 +294,35 @@ func TestAlsaVolumeNoControl(t *testing.T) {
 
 func TestArecordCommand(t *testing.T) {
 	cmd := ArecordCommand(context.Background(), "plughw:1,0", 44100, 2)
-	want := []string{"arecord", "-q", "-D", "plughw:1,0", "-f", "S16_LE", "-r", "44100", "-c", "2", "-t", "raw", "-"}
+	want := []string{
+		"arecord", "-q", "-D", "plughw:1,0", "-f", "S16_LE", "-r", "44100", "-c", "2", "-t", "raw",
+		"--period-time=10000", "--buffer-time=40000", "-",
+	}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Errorf("ArecordCommand args = %v, want %v", cmd.Args, want)
+	}
+}
+
+// TestArecordCommandBoundsDeviceBacklog pins the buffering flags at every
+// sample rate. Without them arecord accepts the driver default, which measured
+// 208 ms of backlog on a Jetson Orin Nano: audio already that stale by the time
+// a caller reads it, and far outside the delay envelope the audio capture
+// adapter publishes as its uncertainty. The flags are the only thing keeping
+// this path inside that envelope, and nothing else would notice their loss.
+func TestArecordCommandBoundsDeviceBacklog(t *testing.T) {
+	for _, rate := range []uint32{16000, 44100, 48000} {
+		cmd := ArecordCommand(context.Background(), "plughw:0,0", rate, 1)
+		for _, want := range []string{"--period-time=10000", "--buffer-time=40000"} {
+			found := false
+			for _, arg := range cmd.Args {
+				if arg == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("ArecordCommand at %d Hz does not bound the device buffer: %v lacks %q", rate, cmd.Args, want)
+			}
+		}
 	}
 }

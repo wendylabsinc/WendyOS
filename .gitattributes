@@ -1,3 +1,10 @@
 # Mark generated protobuf/gRPC Swift files so GitHub collapses them in PRs
 swift/Sources/*/Proto/**/*.pb.swift    linguist-generated=true
 swift/Sources/*/Proto/**/*.grpc.swift  linguist-generated=true
+
+# Mark generated protobuf/gRPC Go files so GitHub collapses them in PRs, and so
+# the AI security review spends its byte budget on hand-written code only
+# (.github/scripts/security_review.py reads these patterns).
+go/proto/gen/**                        linguist-generated=true
+*.pb.go                                linguist-generated=true
+*_grpc.pb.go                           linguist-generated=true

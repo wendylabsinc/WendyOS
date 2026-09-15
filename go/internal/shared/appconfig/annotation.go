@@ -23,6 +23,12 @@ const EntitlementAnnotationKeyPrefix = "sh.wendy/entitlement."
 // an identifier followed by '='. Entitlements with no parameters produce an
 // empty string.
 //
+// The format therefore assumes no list element contains ',' or '='. Pins and
+// ports are numeric and cannot. Allowlist entries are author-supplied strings,
+// so the assumption is enforced upstream at validation time by
+// validateAllowlistEntries in appconfig.go, which is the only place able to
+// tell the author what to change.
+//
 // Examples:
 //
 //	bluetooth                → ""

@@ -222,6 +222,43 @@ func (m *AppSystemAPISocketManager) ReleaseApp(appID string) {
 	}
 }
 
+// SweepOrphanedRoots removes System API socket directories that belong to none
+// of the given app identities. See AppDataSocketManager.SweepOrphanedRoots for
+// why a directory can outlive every owner able to release it, and why restore
+// is the one place the live set is known exactly.
+func (m *AppSystemAPISocketManager) SweepOrphanedRoots(activeAppIDs []string) {
+	live := make(map[string]struct{}, len(activeAppIDs))
+	for _, appID := range activeAppIDs {
+		live[appSystemAPIKey(appID)] = struct{}{}
+	}
+	entries, err := os.ReadDir(AppSystemAPISocketRootPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			m.logger.Warn("cannot sweep app System API directories", zap.Error(err))
+		}
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		key := entry.Name()
+		if _, ok := live[key]; ok {
+			continue
+		}
+		if m.sockets[key] != nil {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(AppSystemAPISocketRootPath, key)); err != nil {
+			m.logger.Warn("cannot remove orphaned app System API directory", zap.String("directory", key), zap.Error(err))
+			continue
+		}
+		m.logger.Info("removed orphaned app System API directory", zap.String("directory", key))
+	}
+}
+
 func (m *AppSystemAPISocketManager) authorize(socket *appSystemAPISocket) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		capability := systemAPICapabilityForMethod(info.FullMethod)

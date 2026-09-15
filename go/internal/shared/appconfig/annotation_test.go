@@ -3,6 +3,7 @@ package appconfig
 import (
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -232,5 +233,70 @@ func TestSplitAnnotationParams(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("splitAnnotationParams(%q) = %v; want %v", tc.input, got, tc.want)
 		}
+	}
+}
+
+// TestValidateRejectsAllowlistDelimiters covers the codec assumption that
+// EntitlementAnnotationValue makes and cannot itself enforce: an entitlement
+// travels to the device as a container label of comma-separated key=value
+// pairs, with the allowlist folded into one segment by joining on commas. An
+// entry containing a comma is silently split into two entries, and one
+// containing ",key=" terminates the allowlist and overwrites a sibling field.
+// Validation is where an author can still be told, so it is where the two
+// characters are refused.
+func TestValidateRejectsAllowlistDelimiters(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry string
+		// corrupts records whether today's codec actually mangles the entry. A
+		// comma does; a bare '=' does not, and is refused only because it is
+		// the pair separator itself (see validateAllowlistEntries).
+		corrupts bool
+	}{
+		{"comma splits the entry in two", "/dev/video0,/dev/video1", true},
+		{"comma plus key overwrites a sibling field", "/dev/video0,mode=host", true},
+		{"bare equals", "name=/dev/video0", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &AppConfig{
+				AppID:        "com.example.app",
+				Entitlements: []Entitlement{{Type: EntitlementCamera, Mode: "detect", Allowlist: []string{tc.entry}}},
+			}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate() accepted allowlist entry %q", tc.entry)
+			}
+			if !strings.Contains(err.Error(), "allowlist[0]") {
+				t.Fatalf("error does not name the offending entry: %v", err)
+			}
+
+			// Show what the codec would have done with it, so the test states
+			// the harm rather than only the rule.
+			round := ParseEntitlementAnnotation(EntitlementCamera, EntitlementAnnotationValue(cfg.Entitlements[0]))
+			intact := len(round.Allowlist) == 1 && round.Allowlist[0] == tc.entry && round.Mode == "detect"
+			if tc.corrupts && intact {
+				t.Fatalf("entry %q survives the codec intact; the rule may no longer be needed", tc.entry)
+			}
+			if !tc.corrupts && !intact {
+				t.Fatalf("entry %q now corrupts the codec; validateAllowlistEntries should say so", tc.entry)
+			}
+		})
+	}
+}
+
+// TestValidateAcceptsOrdinaryAllowlistEntries confirms the rule rejects nothing
+// that any shipped source identifier grammar produces.
+func TestValidateAcceptsOrdinaryAllowlistEntries(t *testing.T) {
+	cfg := &AppConfig{
+		AppID: "com.example.app",
+		Entitlements: []Entitlement{{
+			Type:      EntitlementCamera,
+			Mode:      "detect",
+			Allowlist: []string{"/dev/video0", "/dev/video1", "v4l2:/dev/video2", "usb-046d_C920-video-index0"},
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected ordinary allowlist entries: %v", err)
 	}
 }
