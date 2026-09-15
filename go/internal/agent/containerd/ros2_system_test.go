@@ -90,7 +90,7 @@ func newROS2ContainerTestClient(t *testing.T, records []containers.Container, ru
 func TestROS2SystemFallbackEligibleWithoutRunningApp(t *testing.T) {
 	for _, stoppedApp := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stopped_app_%t", stoppedApp), func(t *testing.T) {
-			records := []containers.Container{{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble"}}}
+			records := []containers.Container{{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble", labelKeyROS2InspectorVersion: ros2InspectorVersion}}}
 			if stoppedApp {
 				records = append(records, containers.Container{ID: "stopped-app", Labels: map[string]string{appconfig.ROS2AnnotationKey: "distro=humble,domain_id=42"}})
 			}
@@ -111,7 +111,7 @@ func TestROS2SystemFallbackEligibleWithoutRunningApp(t *testing.T) {
 func TestROS2RunningAppKeepsItsSidecarWithSystemCLIAvailable(t *testing.T) {
 	name := ros2SidecarName("")
 	c := newROS2ContainerTestClient(t, []containers.Container{
-		{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble"}},
+		{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble", labelKeyROS2InspectorVersion: ros2InspectorVersion}},
 		{ID: "app", Labels: map[string]string{appconfig.ROS2AnnotationKey: "distro=humble,domain_id=42"}},
 		{ID: name, Labels: map[string]string{labelKeyROS2Sidecar: "humble", labelKeyROS2AnchorID: "app", labelKeyROS2AnchorPID: "20"}},
 	}, map[string]uint32{ros2SystemSidecarName: 10, "app": 20, name: 30})
@@ -122,7 +122,7 @@ func TestROS2RunningAppKeepsItsSidecarWithSystemCLIAvailable(t *testing.T) {
 }
 
 func TestROS2SystemCLIReusesRunningContainerWithoutApp(t *testing.T) {
-	c := newROS2ContainerTestClient(t, []containers.Container{{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble"}}}, map[string]uint32{ros2SystemSidecarName: 10})
+	c := newROS2ContainerTestClient(t, []containers.Container{{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble", labelKeyROS2InspectorVersion: ros2InspectorVersion}}}, map[string]uint32{ros2SystemSidecarName: 10})
 	sidecar, err := c.ensureStandaloneROS2Sidecar(context.Background(), ros2SystemSidecarName, labelKeyROS2SystemSidecar, 0, ros2SystemSidecarSpec("/profile.xml"))
 	if err != nil || sidecar.Name != ros2SystemSidecarName || sidecar.DomainID != 0 || sidecar.RMW != ros2inspection.FastRTPSRMW {
 		t.Fatalf("system reuse: %+v, %v", sidecar, err)
@@ -136,9 +136,23 @@ func TestROS2SystemCLIRejectsNameCollision(t *testing.T) {
 	}
 }
 
+func TestROS2StandaloneUpgradeWaitsForActiveCommands(t *testing.T) {
+	for _, tc := range []struct{ name, label string }{
+		{ros2SystemSidecarName, labelKeyROS2SystemSidecar},
+		{ros2HostSidecarName, labelKeyROS2HostSidecar},
+	} {
+		c := newROS2ContainerTestClient(t, []containers.Container{{ID: tc.name,
+			Labels: map[string]string{tc.label: "humble"}}}, map[string]uint32{tc.name: 10})
+		c.ros2ExecRefs = map[string]int{tc.name: 1}
+		if _, err := c.ensureStandaloneROS2Sidecar(context.Background(), tc.name, tc.label, 0, ros2HostSidecarSpec("/profile.xml")); err == nil {
+			t.Fatal("reused an outdated inspector instead of waiting for the active command")
+		}
+	}
+}
+
 func TestROS2RecordingVerifiesOnlySelectedSidecar(t *testing.T) {
 	c := newROS2ContainerTestClient(t, []containers.Container{
-		{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble"}},
+		{ID: ros2SystemSidecarName, Labels: map[string]string{labelKeyROS2SystemSidecar: "humble", labelKeyROS2InspectorVersion: ros2InspectorVersion}},
 		{ID: "stale-app-sidecar", Labels: map[string]string{labelKeyROS2Sidecar: "humble", labelKeyROS2AnchorID: "gone", labelKeyROS2AnchorPID: "20"}},
 	}, map[string]uint32{ros2SystemSidecarName: 10, "stale-app-sidecar": 30})
 	if err := c.VerifyROS2SidecarNamed(context.Background(), ros2SystemSidecarName); err != nil {
@@ -156,7 +170,7 @@ func TestROS2RecordingDetectsUnavailableSystemCLI(t *testing.T) {
 		name   string
 		labels map[string]string
 	}{
-		{"stopped", map[string]string{labelKeyROS2SystemSidecar: "humble"}},
+		{"stopped", map[string]string{labelKeyROS2SystemSidecar: "humble", labelKeyROS2InspectorVersion: ros2InspectorVersion}},
 		{"wrong identity", map[string]string{labelKeyROS2HostSidecar: "humble"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

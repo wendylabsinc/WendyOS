@@ -99,6 +99,9 @@ func TestROS2LidarExecKeepsOverlayAndHostScope(t *testing.T) {
 		if strings.Contains(args[2], go2ROSSetup) == host {
 			t.Fatalf("incorrect Go2 overlay for host=%t: %q", host, args[2])
 		}
+		if strings.Contains(args[2], ros2InspectorSetup) != host {
+			t.Fatalf("incorrect native hardware overlay for host=%t: %q", host, args[2])
+		}
 	}
 	for _, input := range [][]string{{"topic", "pub", "/cmd_vel"}, {"service", "call", "/move"}, {"run", "python3", "-c", "pass"}} {
 		if _, err := ros2ExecArgs("humble", false, true, services.ROS2ExecOptions{Args: input}); err == nil {

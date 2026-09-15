@@ -26,8 +26,8 @@ sidecar on the host network to reach the device's system DDS graph. This works
 with Unitree robots without deploying an app or installing the `ros2` CLI on
 the host. Your commands run inside the sidecar over gRPC.
 
-The system sidecar uses the stock `ros:humble-ros-base` image with Fast DDS and
-UDP discovery. The device downloads the image on first use and caches it for
+The system sidecar uses a versioned ROS Humble image with Fast DDS, UDP
+discovery, and pinned `unitree_go` and `unitree_api` message types. The device downloads the image on first use and caches it for
 later commands. It uses domain 0 by default; pass `--domain` to select another
 domain.
 
@@ -147,6 +147,15 @@ Wendy Chat and MCP clients can use the read-only `ros2_lidar_summary` tool for
 sensor-compatible QoS and decodes data on the device, returning nearest returns
 by angular sector, bounded XYZ samples, and frame, timestamp, freshness, and
 coverage information. Update both the local CLI and device agent to use it.
+
+The CLI exposes the same geometry sampler:
+
+```sh
+wendy device ros2 lidar sample /utlidar/cloud_deskewed --scope host --domain 0 --sample-points 64
+```
+
+It returns JSON summaries. Use complete PointCloud2 messages and matching IMU/TF
+streams for SLAM, either through a host-network ROS app or a recorded ROS bag.
 
 First use `ros2_topics` to discover the actual topic and message type. Use
 `ros2_topic_info` to inspect publishers and endpoint QoS if data is missing.
@@ -323,3 +332,21 @@ into Foxglove Studio with [Wendy for Foxglove](/docs/integrations/foxglove).
   stack with `wendy.json` services or `docker-compose.yml`.
 - [Entitlements](/docs/device/entitlements): the host-network access ROS 2
   discovery requires.
+
+## Native Unitree audio packets
+
+Standalone inspection can decode `unitree_go/msg/AudioData` on discovered audio
+input and output topics, plus `unitree_api` audiohub requests and responses.
+With no ROS app running, sample packet metadata through the system CLI:
+
+```sh
+wendy device ros2 exec run wendy_ros2_inspection audio sample /audioreceiver --count 3
+```
+
+Add `--include-data` to retain each packet as base64. The helper also provides
+`publish <topic> --time-frame <value> --data-base64 <payload>` for a single
+already encoded packet. Confirm topic direction and payload format against the
+robot firmware. AudioData contains only `time_frame` and bytes, so the inspector
+does not infer a codec, sample rate or channel count and does not expose an ALSA
+microphone or speaker. With apps running, use MCP `ros2_topic_sample` in explicit
+host scope to inspect native audio independently of the app's packages.

@@ -927,11 +927,11 @@ func ros2ExecArgsForRobot(distro, robotKind string, hostInspector bool, opts ser
 	if !ros2DistroPattern.MatchString(distro) {
 		return nil, fmt.Errorf("invalid distro %q on ROS 2 sidecar", distro)
 	}
-	if robotKind != "" && robotKind != "go2" && robotKind != "g1" {
+	if robotKind != "" && robotKind != "go2" && robotKind != "g1" && robotKind != "unitree" {
 		return nil, fmt.Errorf("invalid virtual robot ROS overlay kind")
 	}
 	if hostInspector {
-		robotKind = ""
+		robotKind = "unitree"
 	}
 	script := ros2SourceAndExecForRobot(distro, robotKind)
 	if opts.Lidar != nil {
@@ -1005,6 +1005,12 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 		return -1, fmt.Errorf("domain ID %d out of range [%d,%d]", opts.DomainID, appconfig.ROS2DomainIDMin, appconfig.ROS2DomainIDMax)
 	}
 	robotKind := ""
+	if hostInspector || systemCLI {
+		if labels[labelKeyROS2InspectorVersion] != ros2InspectorVersion {
+			return -1, fmt.Errorf("standalone ROS 2 inspector needs an image upgrade; retry inspection")
+		}
+		robotKind = "unitree"
+	}
 	if !hostInspector && !systemCLI {
 		robotKind, err = virtualRobotOverlayKind(labels)
 		if err != nil {
