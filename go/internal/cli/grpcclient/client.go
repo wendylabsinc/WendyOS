@@ -60,6 +60,11 @@ var tlsDebugWriter io.Writer = os.Stderr
 type AgentConnection struct {
 	Conn *grpc.ClientConn
 	Host string // hostname or IP of the connected agent
+	// MeshHost is the device's stable mesh DNS name
+	// (device-<assetID>.mesh.wendy.internal). Cloud transports populate it so
+	// developer-side traffic can use the desktop VPN when it is active instead
+	// of relying on a device-reported LAN address.
+	MeshHost string
 	// Addr is the full host:port this connection dialed — the endpoint that
 	// actually answered, mTLS port included. Empty for unix-socket and
 	// pre-built (NewFromConn) connections.
