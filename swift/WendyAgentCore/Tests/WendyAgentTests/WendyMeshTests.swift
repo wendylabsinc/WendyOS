@@ -33,6 +33,7 @@ struct WendyMeshTests {
         )
         #expect(object["pem_certificate"] as? String == "cert")
         #expect(object["organization_id"] as? Int == 7)
+        #expect(credentials.debugDescription == "WendyCloudCredentials(<redacted>)")
     }
 
     @Test("mesh DNS answers enrolled device names")
@@ -57,6 +58,14 @@ struct WendyMeshTests {
         #expect(Array(response.suffix(4)) == [10, 99, 2, 1])
     }
 
+    @Test("malformed and oversized DNS messages are rejected without trapping")
+    func rejectsUnsafeDNSMessages() {
+        var compressedQuestion = dnsQuery("device-1.mesh.wendy.internal")
+        compressedQuestion[12] = 0xc0
+        #expect(WendyMeshDNS.answer(compressedQuestion) { _ in (10, 99, 0, 1) } == nil)
+        #expect(WendyMeshDNS.frameForTCP(Data(count: Int(UInt16.max) + 1)).isEmpty)
+    }
+
     @Test("DNS-over-TCP framing preserves partial messages")
     func dnsTCPFraming() {
         let first = WendyMeshDNS.frameForTCP(Data([1, 2, 3]))
@@ -66,6 +75,49 @@ struct WendyMeshTests {
         buffer.append(contentsOf: second.dropFirst(3))
         #expect(WendyMeshDNS.extractTCPMessages(from: &buffer) == [Data([4, 5])])
         #expect(buffer.isEmpty)
+    }
+
+    @Test("malformed ICMP packets and replies are rejected without trapping")
+    func rejectsUnsafeICMPPackets() {
+        let truncated = Data([
+            0x45, 0, 0, 32, 0, 0, 0x40, 0, 64, 1, 0, 0,
+            192, 168, 1, 4, 10, 99, 0, 42,
+            8, 0, 0, 0, 0x12, 0x34, 0, 9,
+        ])
+        #expect(WendyICMPv4.parseEchoRequest(truncated) == nil)
+
+        let invalidAddress = WendyICMPv4.EchoRequest(
+            sourceAddress: "invalid",
+            destinationAddress: "10.99.0.42",
+            identifier: 1,
+            sequence: 1,
+            payload: Data()
+        )
+        #expect(WendyICMPv4.makeEchoReply(to: invalidAddress, payload: Data()).isEmpty)
+        #expect(
+            WendyICMPv4.makeEchoReply(
+                to: invalidAddress,
+                payload: Data(count: Int(UInt16.max))
+            ).isEmpty
+        )
+    }
+
+    @Test("cloud endpoints handle defaults, ports, and IPv6 without ambiguous parsing")
+    func cloudEndpoints() throws {
+        let defaultEndpoint = try parseCloudEndpoint("cloud.wendy.dev")
+        #expect(defaultEndpoint.host == "cloud.wendy.dev")
+        #expect(defaultEndpoint.port == 443)
+
+        let explicitEndpoint = try parseCloudEndpoint("localhost:50052")
+        #expect(explicitEndpoint.host == "localhost")
+        #expect(explicitEndpoint.port == 50052)
+
+        let ipv6Endpoint = try parseCloudEndpoint("[::1]:50052")
+        #expect(ipv6Endpoint.host == "::1")
+        #expect(ipv6Endpoint.port == 50052)
+
+        #expect(throws: (any Error).self) { try parseCloudEndpoint("localhost:0") }
+        #expect(throws: (any Error).self) { try parseCloudEndpoint("[::1]junk") }
     }
 
     @Test("ICMP echo replies reverse endpoints and retain echo fields")
