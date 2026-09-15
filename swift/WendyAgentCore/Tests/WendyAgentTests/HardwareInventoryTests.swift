@@ -7,6 +7,61 @@ import WendyAgentGRPC
 
 @Suite("HardwareInventory parsing")
 struct HardwareInventoryParsingTests {
+    @Test("device metadata distinguishes Metal capability from legacy absence")
+    func metalMetadata() async throws {
+        let service = AgentService(
+            gpuDiscovery: GPUDiscovery(devices: {
+                [.init(name: "Apple GPU", vendor: "apple", computeBackends: ["metal"])]
+            }),
+            reportedVersion: { "test" }
+        )
+        let response = try await service.getAgentVersion(
+            request: ServerRequest(
+                metadata: [:],
+                message: Wendy_Agent_Services_V1_GetAgentVersionRequest()
+            ),
+            context: makeHardwareContext()
+        ).message
+        #expect(response.hasGpu_p)
+        #expect(response.gpuVendor == "apple")
+        #expect(response.gpuCapabilities.map(\.vendor) == ["apple"])
+        #expect(response.gpuCapabilities.map(\.computeBackends) == [["metal"]])
+    }
+
+    @Test("advertises the native-process feature without a version suffix")
+    func advertisesNativeProcessFeature() async throws {
+        let service = AgentService(
+            gpuDiscovery: GPUDiscovery(devices: { [] }),
+            reportedVersion: { "test" }
+        )
+        let response = try await service.getAgentVersion(
+            request: ServerRequest(
+                metadata: [:],
+                message: Wendy_Agent_Services_V1_GetAgentVersionRequest()
+            ),
+            context: makeHardwareContext()
+        ).message
+        #expect(response.featureset.contains("native-process"))
+        #expect(!response.featureset.contains { $0.hasSuffix("-v1") })
+    }
+
+    @Test("device metadata lists no GPU entries when Metal finds no device")
+    func noMetalDevices() async throws {
+        let service = AgentService(
+            gpuDiscovery: GPUDiscovery(devices: { [] }),
+            reportedVersion: { "test" }
+        )
+        let response = try await service.getAgentVersion(
+            request: ServerRequest(
+                metadata: [:],
+                message: Wendy_Agent_Services_V1_GetAgentVersionRequest()
+            ),
+            context: makeHardwareContext()
+        ).message
+        #expect(!response.hasGpu_p)
+        #expect(response.gpuCapabilities.isEmpty)
+    }
+
     @Test("parses GPU from SPDisplaysDataType")
     func parsesGPU() {
         let json = Data(

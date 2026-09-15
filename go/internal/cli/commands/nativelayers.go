@@ -26,6 +26,9 @@ import (
 
 	"github.com/klauspost/compress/gzip"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile"
+	"github.com/wendylabsinc/wendy/go/internal/stagefile/cachekey"
+	"github.com/wendylabsinc/wendy/go/internal/stagefile/ir"
+	"github.com/wendylabsinc/wendy/go/internal/stagefile/lock"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile/spec"
 )
 
@@ -34,10 +37,16 @@ import (
 // install-referenced file (pip requirements, package.json + lockfile), local
 // copies feeding NON-final stages, the platform, and the sorted build args.
 // Any change here means the deps layers may differ → the buildx path must run.
-func nativeDepsHash(cwd, dockerfile, platform string, buildArgs map[string]string, sf *spec.File) (string, error) {
+func nativeDepsHash(cwd, dockerfile, platform, backend string, buildArgs map[string]string, sf *spec.File) (string, error) {
 	h := sha256.New()
-	io.WriteString(h, "wendy-native-deps-v1\n")
+	// Salt for the native-deps key. Changing this string invalidates every
+	// recorded key — do that whenever the hash inputs below change (as they did
+	// when the effective Stagefile backend was added, so switching backends with
+	// no source change forces the buildx path instead of reusing the other
+	// backend's deps layers).
+	io.WriteString(h, "wendy-native-deps\n")
 	io.WriteString(h, "platform="+platform+"\n")
+	io.WriteString(h, "backend="+backend+"\n")
 
 	keys := make([]string, 0, len(buildArgs))
 	for k := range buildArgs {
@@ -74,6 +83,76 @@ func nativeDepsHash(cwd, dockerfile, platform string, buildArgs map[string]strin
 		if err := hashContextPath(h, cwd, p); err != nil {
 			return "", err
 		}
+	}
+	semanticKey, err := nativeSemanticDepsKey(cwd, dockerfile, platform, sf)
+	if err != nil {
+		return "", err
+	}
+	io.WriteString(h, "semantic="+semanticKey+"\n")
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// nativeSemanticDepsKey keys the semantic graph immediately before the final
+// stage's app COPY layers. The existing byte-level inputs above remain during
+// rollout as a conservative second guard; this key starts using the same
+// dependency boundary the compiler and future cache tiers understand.
+func nativeSemanticDepsKey(cwd, dockerfile, platform string, sf *spec.File) (string, error) {
+	for _, stage := range sf.Stages {
+		if stage.CUDA {
+			// Selecting the pinned GPU profile needs the device gpu_arch, which is
+			// not available at this local reuse seam. The Dockerfile+lock guards
+			// above remain authoritative for these builds.
+			return "cuda-deferred", nil
+		}
+	}
+	source, ok := stagefileSourceForGenerated(dockerfile)
+	if !ok {
+		return "", fmt.Errorf("%s is not generated from a Stagefile", dockerfile)
+	}
+	l, err := lock.Load(filepath.Join(cwd, stagefile.LockName(source)))
+	if err != nil {
+		return "", err
+	}
+	if l == nil {
+		return "lock-deferred", nil
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		abs = cwd
+	}
+	g, err := ir.Lower(sf, ir.Options{Images: l.Images, Downloads: l.Downloads, Platform: platform, CacheScope: abs})
+	if err != nil {
+		return "", err
+	}
+	final := g.Stages[len(g.Stages)-1]
+	start := 0
+	if len(g.Stages) > 1 {
+		start = g.Stages[len(g.Stages)-2].Final + 1
+	}
+	frontier := final.Final
+	for i := start; i <= final.Final; i++ {
+		n := g.Nodes[i]
+		if n.Copy != nil && n.Copy.FromLocal {
+			frontier = n.Inputs[0]
+			break
+		}
+	}
+	paths := nativeDepsPaths(sf)
+	files := make(map[string]string, len(paths))
+	for _, path := range paths {
+		digest, err := digestContextPath(cwd, path)
+		if err != nil {
+			return "", err
+		}
+		files[path] = digest
+	}
+	return cachekey.Key(g, frontier, cachekey.Inputs{Images: l.Images, Files: files, Platform: platform})
+}
+
+func digestContextPath(cwd, rel string) (string, error) {
+	h := sha256.New()
+	if err := hashContextPath(h, cwd, rel); err != nil {
+		return "", err
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -287,11 +366,11 @@ func nativeBuildEligibility(cwd, dockerfile string) (*spec.File, bool) {
 // The caller must hold the layout directory lock for the whole call. buildx is
 // responsible only for updating the layout; pushing or chunking it remains the
 // caller's concern.
-func buildOrUpdateOCILayout(cwd, dockerfile, platform string, buildArgs map[string]string, layoutDir string, buildx func() error) (native bool, err error) {
+func buildOrUpdateOCILayout(cwd, dockerfile, platform, backend string, buildArgs map[string]string, layoutDir string, buildx func() error) (native bool, err error) {
 	sf, eligible := nativeBuildEligibility(cwd, dockerfile)
 	depsHash := ""
 	if eligible {
-		if h, hashErr := nativeDepsHash(cwd, dockerfile, platform, buildArgs, sf); hashErr == nil {
+		if h, hashErr := nativeDepsHash(cwd, dockerfile, platform, backend, buildArgs, sf); hashErr == nil {
 			depsHash = h
 		} else {
 			eligible = false

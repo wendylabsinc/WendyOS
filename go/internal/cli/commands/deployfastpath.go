@@ -211,13 +211,15 @@ func saveDeployFingerprint(appID, deviceKey string, fp deployFingerprint) {
 // .dockerignore pattern we cannot confidently parse is simply not applied (so a
 // file is hashed rather than skipped). This can only cause an unnecessary
 // rebuild, never a missed change.
-func computeBuildInputHash(cwd, dockerfile, platform string, buildArgs map[string]string, deployEnv []string) (string, error) {
+func computeBuildInputHash(cwd, dockerfile, platform, backend string, buildArgs map[string]string, deployEnv []string) (string, error) {
 	h := sha256.New()
-	// v2: invalidates fingerprints recorded while the stale-manifest bug
-	// (fixed 2026-08-08 in this PR) could pair a fresh input hash with a
-	// stale deploy — forces one honest rebuild per app after upgrade.
-	io.WriteString(h, "wendy-deploy-fingerprint-v2\n")
+	// Salt for the deploy fingerprint. Changing this string invalidates every
+	// recorded fingerprint, forcing one honest rebuild per app — do that
+	// whenever the hash inputs below change (as they did when the effective
+	// Stagefile backend was added).
+	io.WriteString(h, "wendy-deploy-fingerprint\n")
 	io.WriteString(h, "platform="+platform+"\n")
+	io.WriteString(h, "backend="+backend+"\n")
 
 	// deployEnv arrives sorted from resolveServiceEnv; --env order is the
 	// user's and is hashed as given.

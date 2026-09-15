@@ -56,6 +56,8 @@ V2_AGENT_PROTOS=(
     "wendy/agent/services/v2/ros2_service.proto"
     "wendy/agent/services/v2/timesync_service.proto"
     "wendy/agent/services/v2/build_service.proto"
+    "wendy/agent/services/v2/sensor_pairing_service.proto"
+    "wendy/agent/services/v2/sensor_service.proto"
 )
 
 V2_AGENT_M_OPTS=""
@@ -63,6 +65,13 @@ for p in "${V2_AGENT_PROTOS[@]}"; do
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=M${p}=${V2_AGENT_PKG}"
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=M${p}=${V2_AGENT_PKG}"
 done
+
+# sensor_service.proto (v2) imports wendy/lite/sensorlink.proto; map that
+# import to the existing sensorlinkpb package so the v2 service reuses the
+# shared SensorManifest/SensorFrame types instead of duplicating them.
+SENSORLINK_PKG="$MODULE/go/proto/gen/sensorlinkpb"
+V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"
+V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"
 
 # ---- OpenTelemetry protos ----
 #
@@ -205,5 +214,14 @@ protoc \
     --go-grpc_opt=Mwendy_com_tunnel_service.proto="$TUNNEL_PKG" \
     wendy_com_tunnel_msg.proto \
     wendy_com_tunnel_service.proto
+
+echo "Generating Wendy Lite sensorlink protos..."
+SENSORLINK_PKG="$MODULE/go/proto/gen/sensorlinkpb"
+mkdir -p "$GEN_DIR/sensorlinkpb"
+protoc \
+    --proto_path="$PROTO_DIR" \
+    --go_out="$GEN_DIR/sensorlinkpb" \
+    --go_opt=module="$SENSORLINK_PKG" \
+    "$PROTO_DIR/wendy/lite/sensorlink.proto"
 
 echo "Proto generation complete!"

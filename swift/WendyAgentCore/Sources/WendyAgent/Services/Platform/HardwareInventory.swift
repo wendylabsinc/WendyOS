@@ -22,6 +22,7 @@ protocol HardwareDiscovering: Sendable {
 /// intentionally omitted.
 struct HardwareInventory: HardwareDiscovering {
     private let systemProfilerPath = "/usr/sbin/system_profiler"
+    var gpuDiscovery = GPUDiscovery()
 
     func discover(categoryFilter: String?) async throws -> [HardwareCapability] {
         async let displays = dataType("SPDisplaysDataType")
@@ -37,6 +38,23 @@ struct HardwareInventory: HardwareDiscovering {
             audio: await audio,
             storage: await storage
         )
+        let gpus = gpuDiscovery.devices()
+        if !gpus.isEmpty {
+            caps.removeAll { $0.category == "gpu" }
+            caps.append(
+                contentsOf: gpus.map { gpu in
+                    HardwareCapability(
+                        category: "gpu",
+                        devicePath: "",
+                        description: gpu.name,
+                        properties: [
+                            "vendor": gpu.vendor,
+                            "compute_backends": gpu.computeBackends.joined(separator: ","),
+                        ]
+                    )
+                }
+            )
+        }
         caps.append(contentsOf: Self.networkCapabilities())
 
         if let categoryFilter, !categoryFilter.isEmpty {

@@ -1217,14 +1217,16 @@ type WendyComDeviceInfo struct {
 	Os              string                 `protobuf:"bytes,1,opt,name=os,proto3" json:"os,omitempty"` // typically "wendy-lite"
 	OsVersion       string                 `protobuf:"bytes,2,opt,name=os_version,json=osVersion,proto3" json:"os_version,omitempty"`
 	CpuArchitecture string                 `protobuf:"bytes,3,opt,name=cpu_architecture,json=cpuArchitecture,proto3" json:"cpu_architecture,omitempty"`
-	// Board can be "esp32c6", but this doesn't mean that this field contains
-	// the SoC name. Here "esp32c6" means "generic esp32c6 board". Should
-	// probably be replaced by "esp32c6-generic" in the future.
-	Board            string `protobuf:"bytes,4,opt,name=board,proto3" json:"board,omitempty"`
+	// SoC name, e.g. "esp32c6" or "esp32s3".
+	Target           string `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
 	WasmAppSupport   bool   `protobuf:"varint,5,opt,name=wasm_app_support,json=wasmAppSupport,proto3" json:"wasm_app_support,omitempty"`
 	NativeAppSupport bool   `protobuf:"varint,6,opt,name=native_app_support,json=nativeAppSupport,proto3" json:"native_app_support,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Board identifier, e.g. "esp32c6_generic" or "esp32s3_seeed_xiao_native".
+	// Empty when the board is not known, which is typically the case when
+	// wendy-lite is compiled and flashed manually.
+	Board         string `protobuf:"bytes,7,opt,name=board,proto3" json:"board,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WendyComDeviceInfo) Reset() {
@@ -1278,9 +1280,9 @@ func (x *WendyComDeviceInfo) GetCpuArchitecture() string {
 	return ""
 }
 
-func (x *WendyComDeviceInfo) GetBoard() string {
+func (x *WendyComDeviceInfo) GetTarget() string {
 	if x != nil {
-		return x.Board
+		return x.Target
 	}
 	return ""
 }
@@ -1297,6 +1299,13 @@ func (x *WendyComDeviceInfo) GetNativeAppSupport() bool {
 		return x.NativeAppSupport
 	}
 	return false
+}
+
+func (x *WendyComDeviceInfo) GetBoard() string {
+	if x != nil {
+		return x.Board
+	}
+	return ""
 }
 
 // Command sent host -> device — the oneof variant identifies the command.
@@ -2361,15 +2370,16 @@ const file_wendy_lite_wendy_com_msg_proto_rawDesc = "" +
 	"\x02io\x18\x01 \x01(\x0e2\x12.WendyComConsoleIoR\x02io\x12\x10\n" +
 	"\x03gap\x18\x02 \x01(\bR\x03gap\x12\x12\n" +
 	"\x04data\x18\x03 \x01(\fR\x04data\"\x14\n" +
-	"\x12WendyComConsoleEnd\"\xdc\x01\n" +
+	"\x12WendyComConsoleEnd\"\xf4\x01\n" +
 	"\x12WendyComDeviceInfo\x12\x0e\n" +
 	"\x02os\x18\x01 \x01(\tR\x02os\x12\x1d\n" +
 	"\n" +
 	"os_version\x18\x02 \x01(\tR\tosVersion\x12)\n" +
-	"\x10cpu_architecture\x18\x03 \x01(\tR\x0fcpuArchitecture\x12\x14\n" +
-	"\x05board\x18\x04 \x01(\tR\x05board\x12(\n" +
+	"\x10cpu_architecture\x18\x03 \x01(\tR\x0fcpuArchitecture\x12\x16\n" +
+	"\x06target\x18\x04 \x01(\tR\x06target\x12(\n" +
 	"\x10wasm_app_support\x18\x05 \x01(\bR\x0ewasmAppSupport\x12,\n" +
-	"\x12native_app_support\x18\x06 \x01(\bR\x10nativeAppSupport\"\xc2\a\n" +
+	"\x12native_app_support\x18\x06 \x01(\bR\x10nativeAppSupport\x12\x14\n" +
+	"\x05board\x18\a \x01(\tR\x05board\"\xc2\a\n" +
 	"\x0fWendyComCommand\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\rR\trequestId\x12)\n" +

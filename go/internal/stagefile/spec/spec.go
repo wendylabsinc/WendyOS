@@ -237,8 +237,16 @@ type UvInstall struct {
 	Dev    bool     `yaml:"dev,omitempty"`
 }
 
+// NpmManifest is the manifest file npm, yarn, and pnpm all read alongside
+// their lockfile. Both ir.Lower (which records it on the node, so codegen
+// and cachekey share one value) and dockerignore (which allowlists it) use
+// this constant, so the compiled build and the build context can't drift on
+// which file is present. It lives here, next to NpmLockfile, so the
+// manifest and lockfile names are decided in one place.
+const NpmManifest = "package.json"
+
 // NpmLockfile returns the lockfile filename a manager value expects
-// alongside package.json (empty string defaults to "npm"). Both codegen
+// alongside NpmManifest (empty string defaults to "npm"). Both codegen
 // (to COPY and RUN against the right file) and dockerignore (to allowlist
 // it) call this so the two packages can't drift out of sync on which file
 // each manager uses.

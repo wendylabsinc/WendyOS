@@ -44,11 +44,12 @@ type devicePickerModel struct {
 	defaultOrg   int32
 	active       devicePickerTab
 	action       devicePickerAction
+	enroll       *errDevicePickerEnroll
 	cancelled    bool
 	windowWidth  int
 }
 
-func newDevicePickerModel(ctx context.Context, local tui.PickerModel, auth *config.AuthConfig, defaultOrg int32) devicePickerModel {
+func newDevicePickerModel(ctx context.Context, local tui.PickerModel, auth *config.AuthConfig, defaultOrg int32, disableEnroll bool) devicePickerModel {
 	m := devicePickerModel{
 		local:      local,
 		sim:        newSimulatorPickerModel(ctx),
@@ -57,6 +58,24 @@ func newDevicePickerModel(ctx context.Context, local tui.PickerModel, auth *conf
 	}
 	if auth != nil {
 		m.cloud = newCloudDiscoverModel(ctx, auth, os.Getenv("WENDY_BROKER_URL"), false, true, nil)
+	}
+	// The enroll shortcut is suppressed for commands that enroll the picked
+	// device themselves (device enroll / cloud enroll-device); otherwise it
+	// would enroll once here and again when the command runs.
+	if auth != nil && !disableEnroll {
+		// The request is shared across model copies. Enrollment needs the
+		// terminal for its prompts, so only capture the row here; the caller
+		// runs it after the picker and its discovery streams have stopped.
+		m.enroll = &errDevicePickerEnroll{}
+		enroll := m.enroll
+		m.local.OnEnrollItem = func(item tui.PickerItem) (string, bool) {
+			entry, ok := item.Value.(*pickerEntry)
+			if !ok || entry == nil || entry.mergedDevice == nil || entry.mergedDevice.LAN == nil {
+				return "Enrollment requires a WendyOS LAN or USB network connection.", false
+			}
+			enroll.item = &item
+			return "", true
+		}
 	}
 	return m
 }
@@ -127,6 +146,10 @@ func (m devicePickerModel) loadOrgNameCmd() tea.Cmd {
 func (m devicePickerModel) updateLocal(msg tea.Msg) (devicePickerModel, tea.Cmd) {
 	updated, cmd := m.local.Update(msg)
 	m.local = updated.(tui.PickerModel)
+	if m.enroll != nil && m.enroll.item != nil {
+		m.action = devicePickerEnroll
+		return m, tea.Quit
+	}
 	if m.local.Selected() != nil {
 		m.chosen, m.hasChosen = devicePickerLocalTab, true
 		return m, tea.Quit

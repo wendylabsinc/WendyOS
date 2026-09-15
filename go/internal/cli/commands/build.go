@@ -30,9 +30,10 @@ type BuildResult struct {
 }
 
 type buildOptions struct {
-	buildType  string
-	dockerfile string
-	builder    string
+	buildType        string
+	dockerfile       string
+	builder          string
+	stagefileBackend string
 	// gpuArch names the GPU architecture a cuda: stage is compiled for when
 	// there is no device to ask. With a device selected it is redundant —
 	// the device reports its own.
@@ -67,9 +68,14 @@ func newBuildCmd() *cobra.Command {
 			if opts.dockerfile != "" && opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
 				return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
 			}
-			if _, err := normalizeImageBuilder(opts.builder); err != nil {
+			normalizedBuilder, err := normalizeImageBuilder(opts.builder)
+			if err != nil {
 				return err
 			}
+			if _, err := stagefileBackendLLB(opts.stagefileBackend, normalizedBuilder); err != nil {
+				return err
+			}
+			cmd.SetContext(withStagefileBackend(cmd.Context(), opts.stagefileBackend))
 			if opts.maxConcurrency < 0 {
 				return fmt.Errorf("--max-concurrency must be >= 0 (0 = default limit of 4)")
 			}
@@ -262,6 +268,7 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().StringVar(&opts.buildType, "build-type", "", "Build type to use when multiple project markers are present: docker, swift, or python")
 	cmd.Flags().StringVar(&opts.dockerfile, "dockerfile", "", "Build file to build from: a Dockerfile, Containerfile, or Stagefile (e.g. Dockerfile.prod, Containerfile, prod.stagefile.yaml); shows a selection menu when multiple build files exist")
 	cmd.Flags().StringVar(&opts.builder, "builder", "", "Image builder to force for Dockerfile/Containerfile builds: docker, apple-container, or buildkit")
+	cmd.Flags().StringVar(&opts.stagefileBackend, "stagefile-backend", "", "Stagefile compiler backend: dockerfile (default) or llb")
 	cmd.Flags().StringVar(&opts.gpuArch, "gpu-arch", "", fmt.Sprintf("GPU architecture a Stagefile cuda: stage targets (%s); taken from the device when one is selected", strings.Join(gpu.KnownArches(), ", ")))
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Build compiled languages unoptimized (swift build -c debug, cargo without --release) instead of the release default")
 	cmd.Flags().StringVar(&opts.buildHost, "build-host", "", "WendyOS device to build the image on instead of this machine (e.g. a DGX Spark)")
@@ -601,6 +608,11 @@ func buildProject(ctx context.Context, dir string, option *BuildOption, appID, p
 
 	switch option.Type {
 	case "compose":
+		if useLLB, err := stagefileBackendLLB(stagefileBackendFromContext(ctx), normalizedBuilder); err != nil {
+			return err
+		} else if useLLB {
+			return fmt.Errorf("--stagefile-backend=llb is not supported by `wendy build` for Compose projects; use `wendy run` or build a Stagefile service directly")
+		}
 		if normalizedBuilder == imageBuilderAppleContainer {
 			return fmt.Errorf("Apple Container builder does not support Compose builds; use --builder docker")
 		}
@@ -709,6 +721,13 @@ func buildDockerProjectWithBuilder(ctx context.Context, builder, dir, imageName,
 	normalized, err := normalizeImageBuilder(builder)
 	if err != nil {
 		return err
+	}
+	handled, err := maybeBuildStagefileLLBToDocker(ctx, dir, dockerfile, imageName, platform, normalized)
+	if err != nil {
+		return err
+	}
+	if handled {
+		return nil
 	}
 	if !imageBuilderWasExplicit(builder) && shouldAutoAttemptAppleContainerBuilder() {
 		// The auto-attempt path must not prompt or start services as a side effect:

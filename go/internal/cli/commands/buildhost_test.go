@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -275,8 +276,12 @@ func TestConsumeBuildProgress_StopsAtResultWithoutWaitingForEOF(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if err := consumeBuildProgress(recv, &out); err != nil {
+	result, err := consumeBuildProgress(recv, &out)
+	if err != nil {
 		t.Fatalf("consumeBuildProgress: %v", err)
+	}
+	if result == nil || result.GetImageDigest() != "sha256:abc" {
+		t.Fatalf("result = %#v, want terminal build result", result)
 	}
 	if !strings.Contains(out.String(), "[app 1/2] FROM python") {
 		t.Fatalf("log lines must still be forwarded, got %q", out.String())
@@ -286,8 +291,96 @@ func TestConsumeBuildProgress_StopsAtResultWithoutWaitingForEOF(t *testing.T) {
 // EOF without a result is still a clean end: an older agent may not send one.
 func TestConsumeBuildProgress_StopsAtEOF(t *testing.T) {
 	recv := func() (*agentpbv2.BuildImageProgress, error) { return nil, io.EOF }
-	if err := consumeBuildProgress(recv, io.Discard); err != nil {
+	result, err := consumeBuildProgress(recv, io.Discard)
+	if err != nil {
 		t.Fatalf("a stream that just ends must not be an error, got %v", err)
+	}
+	if result != nil {
+		t.Fatalf("legacy EOF result = %#v, want nil", result)
+	}
+}
+
+func TestReportedDeliveryError_PreventsStartingFailedOrUnreportedTarget(t *testing.T) {
+	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
+		{AssetId: 1, Delivered: true},
+		{AssetId: 2, Error: "mesh link dropped"},
+	}}
+
+	if err := reportedDeliveryError(result, 1); err != nil {
+		t.Fatalf("delivered target rejected: %v", err)
+	}
+	if err := reportedDeliveryError(result, 2); err == nil || !strings.Contains(err.Error(), "mesh link dropped") {
+		t.Fatalf("failed target error = %v, want delivery reason", err)
+	}
+	if err := reportedDeliveryError(result, 3); err == nil || !strings.Contains(err.Error(), "no delivery result") {
+		t.Fatalf("unreported target error = %v, want fail-closed error", err)
+	}
+}
+
+func TestReportedDeliveryError_PreservesLegacySingleTargetContract(t *testing.T) {
+	for _, result := range []*agentpbv2.BuildImageResult{nil, {ImageDigest: "sha256:legacy"}} {
+		if err := reportedDeliveryError(result, 7); err != nil {
+			t.Fatalf("legacy result %#v rejected: %v", result, err)
+		}
+	}
+}
+
+func TestStartAfterReportedDelivery_DoesNotStartAStaleImage(t *testing.T) {
+	started := false
+	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
+		{AssetId: 7, Error: "target delivery failed"},
+	}}
+	err := startAfterReportedDelivery(result, 7, func() error {
+		started = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "target delivery failed") {
+		t.Fatalf("error = %v, want target delivery failure", err)
+	}
+	if started {
+		t.Fatal("container start was attempted after delivery failed; it could use a stale :latest image")
+	}
+}
+
+func TestStartAfterReportedDelivery_StartsDeliveredTarget(t *testing.T) {
+	started := false
+	result := &agentpbv2.BuildImageResult{Deliveries: []*agentpbv2.DeliveryResult{
+		{AssetId: 7, Delivered: true},
+	}}
+	if err := startAfterReportedDelivery(result, 7, func() error {
+		started = true
+		return nil
+	}); err != nil {
+		t.Fatalf("delivered target rejected: %v", err)
+	}
+	if !started {
+		t.Fatal("delivered target was not started")
+	}
+}
+
+func TestConnectedTargetAgentPortUsesEndpointThatAnswered(t *testing.T) {
+	tests := []struct {
+		name    string
+		addr    string
+		want    uint32
+		wantErr bool
+	}{
+		{name: "IPv4 custom port", addr: "192.0.2.10:51002", want: 51002},
+		{name: "IPv6 custom port", addr: "[fe80::1%en0]:52002", want: 52002},
+		{name: "cloud default", addr: "", want: uint32(defaultAgentPort + agentMTLSPortOffset)},
+		{name: "missing port", addr: "192.0.2.10", wantErr: true},
+		{name: "out of range", addr: "192.0.2.10:70000", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := connectedTargetAgentPort(&grpcclient.AgentConnection{Addr: tt.addr})
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("port = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -650,5 +743,43 @@ func TestAssessBuildkitRootSpace_ExactPolicyBoundaries(t *testing.T) {
 				t.Fatalf("warning = %q, wantWarning %v", warning, tc.wantWarning)
 			}
 		})
+	}
+}
+
+// --chunking=force must fail loudly against a build host whose agent would
+// discard the mode and push through the registry; auto and off still work
+// there, because a registry push is what off asks for and what auto accepts.
+func TestCheckChunkDeliverySupported_ForceNeedsACapableHost(t *testing.T) {
+	old := &agentpbv2.GetBuildCapabilitiesResponse{}
+	err := checkChunkDeliverySupported("spark-office", old, chunkingForce)
+	if err == nil || !strings.Contains(err.Error(), "spark-office") || !strings.Contains(err.Error(), "force") {
+		t.Fatalf("force against an old build host must be refused, naming the host and the flag; got %v", err)
+	}
+	for _, mode := range []string{"", chunkingAuto, chunkingOff} {
+		if err := checkChunkDeliverySupported("spark-office", old, mode); err != nil {
+			t.Fatalf("--chunking=%q must still work against an older build host: %v", mode, err)
+		}
+	}
+	newer := &agentpbv2.GetBuildCapabilitiesResponse{ChunkDelivery: true}
+	for _, mode := range []string{"", chunkingAuto, chunkingForce, chunkingOff} {
+		if err := checkChunkDeliverySupported("spark-office", newer, mode); err != nil {
+			t.Fatalf("--chunking=%q against a capable build host: %v", mode, err)
+		}
+	}
+}
+
+// The flag reaches the build host as the same three modes, with empty meaning
+// auto as it does locally.
+func TestBuildChunkingMode_CarriesTheFlag(t *testing.T) {
+	cases := map[string]agentpbv2.ChunkingMode{
+		"":            agentpbv2.ChunkingMode_CHUNKING_MODE_AUTO,
+		chunkingAuto:  agentpbv2.ChunkingMode_CHUNKING_MODE_AUTO,
+		chunkingForce: agentpbv2.ChunkingMode_CHUNKING_MODE_FORCE,
+		chunkingOff:   agentpbv2.ChunkingMode_CHUNKING_MODE_OFF,
+	}
+	for in, want := range cases {
+		if got := buildChunkingMode(in); got != want {
+			t.Errorf("buildChunkingMode(%q) = %v, want %v", in, got, want)
+		}
 	}
 }

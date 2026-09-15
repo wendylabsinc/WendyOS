@@ -80,7 +80,8 @@ func TestOfferPortBusyRetry_MultipleHolders_Pluralized(t *testing.T) {
 	var askedQuestion string
 	withStubs(t,
 		func(string) []portHolder {
-			return []portHolder{{pid: 1, command: "a"}, {pid: 2, command: ""}}
+			// PID 1 can be a protected ancestor when these tests run in a container.
+			return []portHolder{{pid: 424241, command: "a"}, {pid: 424242, command: ""}}
 		},
 		killOK(&killed),
 		func(q string) bool { askedQuestion = q; return true },

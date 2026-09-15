@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -406,8 +407,18 @@ func (s *TelemetryService) StreamLogs(req *agentpb.StreamLogsRequest, stream grp
 
 	s.logger.Info("StreamLogs client connected", zap.String("sub_id", id))
 
+	// A single sender owns both logs and empty application heartbeats. Reset
+	// after each successful write so busy streams don't emit extra messages.
+	heartbeat := time.NewTimer(15 * time.Second)
+	defer heartbeat.Stop()
+
 	for {
 		select {
+		case <-heartbeat.C:
+			if err := stream.Send(&agentpb.StreamLogsResponse{}); err != nil {
+				return err
+			}
+			heartbeat.Reset(15 * time.Second)
 		case <-ctx.Done():
 			return ctx.Err()
 		case logReq, ok := <-ch:
@@ -428,6 +439,7 @@ func (s *TelemetryService) StreamLogs(req *agentpb.StreamLogsRequest, stream grp
 			}); err != nil {
 				return err
 			}
+			heartbeat.Reset(15 * time.Second)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -554,6 +555,7 @@ func (s *lanStream) handleSighting(svc MDNSService) {
 		return
 	}
 
+	prevAddrs := st.dev.Addresses
 	updated := applySighting(st.dev, dev)
 	if !st.probeFailed {
 		// Multi-homed churn guard: while the address the session already holds
@@ -565,6 +567,15 @@ func (s *lanStream) handleSighting(svc MDNSService) {
 	targetMoved := probeTargetChanged(st.dev, updated)
 	changed := mdnsFieldsChanged(st.dev, updated)
 	returning := !st.confirmed
+	// preferStableTarget picks ONE primary IPAddress, but a multi-homed device
+	// answers on several interfaces (WiFi, USB link-local, IPv6) and the CLI may
+	// only be able to reach it on one of them. Union every sighted address so the
+	// dial ladder can try them all instead of collapsing to the primary alone.
+	// Address-only updates must reach CollectLAN and picker subscribers too:
+	// otherwise they retain the earlier event without the reachable sibling.
+	updated.Addresses = unionAddresses([]string{updated.IPAddress}, prevAddrs...)
+	updated.Addresses = unionAddresses(updated.Addresses, dev.IPAddress)
+	changed = changed || !slices.Equal(prevAddrs, updated.Addresses)
 	st.dev = updated
 	if targetMoved {
 		// Nothing has verified this address yet, so the row must stop claiming
@@ -969,6 +980,29 @@ func stripZone(addr string) string {
 		return addr[:i]
 	}
 	return addr
+}
+
+// unionAddresses returns existing with each addr appended if not already
+// present, dropping blanks and preserving first-seen order. It accumulates every
+// interface a device answers on across sightings so the dial ladder can try them
+// all; callers put the primary address first.
+func unionAddresses(existing []string, addrs ...string) []string {
+	out := make([]string, 0, len(existing)+len(addrs))
+	seen := make(map[string]bool, len(existing)+len(addrs))
+	add := func(a string) {
+		if a == "" || seen[a] {
+			return
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	for _, a := range existing {
+		add(a)
+	}
+	for _, a := range addrs {
+		add(a)
+	}
+	return out
 }
 
 // mdnsFieldsChanged reports whether anything a live sighting carries (address

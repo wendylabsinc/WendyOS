@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audio"
+	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -38,11 +39,26 @@ import (
 type AudioService struct {
 	agentpb.UnimplementedWendyAudioServiceServer
 	logger *zap.Logger
+
+	// sensorLinkMounts and pairingName, when set, let the ALSA fallback name a
+	// snd-aloop Loopback capture subdevice after the remote sensor-link source
+	// it carries. Both nil on a device with no sensor pairings wired.
+	sensorLinkMounts func() []audioloop.Mount
+	pairingName      func(sourceAssetID int32) (string, bool)
 }
 
 // NewAudioService creates a new AudioService.
 func NewAudioService(logger *zap.Logger) *AudioService {
 	return &AudioService{logger: logger}
+}
+
+// SetSensorLinkNaming wires the audioloop mount table and pairing-name lookup so
+// ListAudioDevices can rename mounted Loopback capture subdevices after their
+// remote source. Called once at startup, after the sensor-pairing supervisor is
+// built (both are nil until then). mounts or pairingName may be nil.
+func (s *AudioService) SetSensorLinkNaming(mounts func() []audioloop.Mount, pairingName func(int32) (string, bool)) {
+	s.sensorLinkMounts = mounts
+	s.pairingName = pairingName
 }
 
 // pipewireUnavailable reports whether this call must use the ALSA fallback, and
@@ -88,6 +104,7 @@ func (s *AudioService) ListAudioDevices(ctx context.Context, req *agentpb.ListAu
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to enumerate audio devices: %v", err)
 		}
+		nodes = s.nameSensorLinkMounts(nodes)
 	} else {
 		var err error
 		nodes, defaults, err = audio.ListNodes(ctx)
@@ -113,6 +130,53 @@ func (s *AudioService) ListAudioDevices(ctx context.Context, req *agentpb.ListAu
 	}
 	return &agentpb.ListAudioDevicesResponse{Devices: devices}, nil
 }
+
+// nameSensorLinkMounts replaces the one generic snd-aloop "Loopback" capture row
+// (plughw:<card>,1) with one row per active sensor-link mount, each named after
+// the remote source it carries — turning an unrecognizable "plughw:2,1 /
+// Loopback PCM" into "plughw:2,1,0 / sensor-link: parakeet-demo · mic0". Every
+// other device, and the Loopback card when nothing is mounted, is returned
+// unchanged. ALSA-path only: node IDs here are ALSA-encoded, so this must not
+// run over PipeWire node IDs.
+func (s *AudioService) nameSensorLinkMounts(nodes []audio.Node) []audio.Node {
+	if s.sensorLinkMounts == nil {
+		return nodes
+	}
+	mounts := s.sensorLinkMounts()
+	if len(mounts) == 0 {
+		return nodes
+	}
+	out := make([]audio.Node, 0, len(nodes)+len(mounts))
+	for _, n := range nodes {
+		card, device, isSink := audio.DecodeAlsaID(n.ID)
+		// The consumer captures from the snd-aloop card's device 1; that is the
+		// row whose subdevices carry the mounted mics.
+		if isSink || device != loopbackCaptureDevice || !strings.Contains(n.Description, "Loopback") {
+			out = append(out, n)
+			continue
+		}
+		for _, m := range mounts {
+			label := fmt.Sprintf("asset-%d", m.SourceAssetID)
+			if s.pairingName != nil {
+				if name, ok := s.pairingName(m.SourceAssetID); ok {
+					label = name
+				}
+			}
+			out = append(out, audio.Node{
+				ID:          audio.EncodeAlsaSubdeviceID(card, uint64(m.Sub)),
+				Name:        fmt.Sprintf("plughw:%d,%d,%d", card, device, m.Sub),
+				Description: fmt.Sprintf("sensor-link: %s · %s", label, m.SensorName),
+				IsSink:      false,
+			})
+		}
+	}
+	return out
+}
+
+// loopbackCaptureDevice mirrors audio.loopbackCaptureDevice (the snd-aloop
+// device the consumer captures from); duplicated as an untyped constant to keep
+// it unexported in the audio package.
+const loopbackCaptureDevice = 1
 
 // volumeQueryConcurrency bounds the wpctl processes nodeVolumes has in flight.
 const volumeQueryConcurrency = 8
@@ -356,6 +420,13 @@ func alsaCaptureTarget(ctx context.Context, deviceID uint32) (captureSource, err
 	}
 
 	if deviceID != 0 {
+		// A sensor-link mount row's ID encodes a snd-aloop subdevice that
+		// ListAlsaNodes does not enumerate, so resolve it directly to its
+		// plughw:<card>,1,<sub> capture handle rather than failing FindNode.
+		if sub, ok := audio.AlsaSubdevice(deviceID); ok {
+			card, device, _ := audio.DecodeAlsaID(deviceID)
+			return captureSource{alsaDevice: fmt.Sprintf("plughw:%d,%d,%d", card, device, sub)}, nil
+		}
 		node, ok := audio.FindNode(nodes, deviceID)
 		if !ok {
 			return captureSource{}, status.Errorf(codes.NotFound, "no audio device with ID %d", deviceID)

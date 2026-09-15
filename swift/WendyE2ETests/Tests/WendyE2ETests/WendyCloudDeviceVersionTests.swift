@@ -25,7 +25,7 @@ struct `'wendy cloud device version'` {
                 #expect(result.status.isSuccess)
                 #expect(
                     result.stdout.contains(
-                        "Show agent version, OS, architecture, GPU, and hardware info"
+                        "Show agent version, OS, architecture, GPU, NPU, and hardware info"
                     )
                 )
                 #expect(result.stdout.contains("wendy cloud device version [flags]"))

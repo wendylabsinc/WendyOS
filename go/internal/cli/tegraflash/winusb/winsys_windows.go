@@ -28,7 +28,6 @@ var (
 	procCertStrToNameW                    = modcrypt32.NewProc("CertStrToNameW")
 	procCertSetCertificateContextProperty = modcrypt32.NewProc("CertSetCertificateContextProperty")
 	procCryptEncodeObject                 = modcrypt32.NewProc("CryptEncodeObject")
-	procCertGetNameStringW                = modcrypt32.NewProc("CertGetNameStringW")
 
 	// wintrust — catalog build
 	procCryptCATOpen           = modwintrust.NewProc("CryptCATOpen")

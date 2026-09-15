@@ -145,6 +145,39 @@ func TestResolveListenDeviceID(t *testing.T) {
 			t.Fatalf("got id=%d err=%v, want 257/nil", id, err)
 		}
 	})
+
+	loop0 := mkDev(200, "plughw:2,0", "Loopback [Loopback], device 0: Loopback PCM", inT)
+	loop1 := mkDev(201, "plughw:2,1", "Loopback [Loopback], device 1: Loopback PCM", inT)
+
+	t.Run("loopback-only auto-selects without --all", func(t *testing.T) {
+		// A remote-sensor mic exposed via snd-aloop is the only input; it must be
+		// used without --all rather than erroring "no microphone detected".
+		id, chosen, err := resolveListenDeviceID([]*agentpb.AudioDevice{admaif, loop1}, 0, false, false, neverPick)
+		if err != nil || id != 201 || chosen.GetId() != 201 {
+			t.Fatalf("got id=%d chosen=%v err=%v, want 201", id, chosen, err)
+		}
+	})
+
+	t.Run("physical mic preferred over loopback when both exist", func(t *testing.T) {
+		id, chosen, err := resolveListenDeviceID([]*agentpb.AudioDevice{loop0, usb}, 0, false, true, neverPick)
+		if err != nil || id != 513 || chosen.GetId() != 513 {
+			t.Fatalf("got id=%d chosen=%v err=%v, want physical 513", id, chosen, err)
+		}
+	})
+
+	t.Run("--id overrides even when a physical mic is present", func(t *testing.T) {
+		id, _, err := resolveListenDeviceID([]*agentpb.AudioDevice{usb, loop1}, 201, false, true, neverPick)
+		if err != nil || id != 201 {
+			t.Fatalf("got id=%d err=%v, want explicit 201", id, err)
+		}
+	})
+
+	t.Run("multiple loopback fallback, non-interactive picks first", func(t *testing.T) {
+		id, _, err := resolveListenDeviceID([]*agentpb.AudioDevice{loop0, loop1}, 0, false, false, neverPick)
+		if err != nil || id != 200 {
+			t.Fatalf("got id=%d err=%v, want first loopback 200", id, err)
+		}
+	})
 }
 
 func TestJitterDepthChunks(t *testing.T) {
