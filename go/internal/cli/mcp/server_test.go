@@ -156,7 +156,7 @@ func TestDeadTools_NotRegistered(t *testing.T) {
 	s.registerProvisioningTools(srv)
 	s.registerOSTools(srv)
 	s.registerCloudTools(srv)
-	s.registerContainerMCPTools(context.Background(), srv) // no active connection; no-op
+	s.reconcileAppTools(context.Background(), srv) // no active connection; no-op
 
 	tools := srv.ListTools()
 	for _, name := range []string{"filesync_sync", "cloud_run", "cloud_device_connect"} {
