@@ -393,14 +393,15 @@ export: {annotation: cvat}
 // text has not changed must keep hashing to exactly the same value; changing
 // this constant to match new output is defeating the test.
 //
-// It was re-pinned exactly once, when the digest stopped covering a
+// It was first re-pinned when the digest stopped covering a
 // marshalled Campaign struct and started covering the enumerated list of
 // author-declared plan fields in planDigestInput. That change is the whole
 // point: under the old scheme every campaign on the fleet changed revision
 // whenever an agent release added a field to the struct, and TestCampaign
 // RevisionIgnoresUnrelatedStructFields is the guard that it cannot happen
-// again. Re-pinning is allowed only alongside a revisionSchema bump.
-const drainDigestPinRevision = "db663ad55675808849a6dfe0a869ada20a008d0ccd5155cac860a3aac049a458"
+// again. Schema 2 adds inference and immediate notification fields.
+// Re-pinning is allowed only alongside a revisionSchema bump.
+const drainDigestPinRevision = "a11f0b6b3485ec1c3273421fc3ff8b07f541d0c8d101af105e1a8b59d49d431f"
 
 func TestCampaignDrainValidation(t *testing.T) {
 	withDrain := func(drain string) []byte {
