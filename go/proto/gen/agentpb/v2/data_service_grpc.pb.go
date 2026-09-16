@@ -8,6 +8,7 @@ package agentpbv2
 
 import (
 	context "context"
+	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -19,6 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	DataService_ExportRecording_FullMethodName = "/wendy.agent.services.v2.DataService/ExportRecording"
 	DataService_Sources_FullMethodName         = "/wendy.agent.services.v2.DataService/Sources"
 	DataService_Start_FullMethodName           = "/wendy.agent.services.v2.DataService/Start"
 	DataService_Stop_FullMethodName            = "/wendy.agent.services.v2.DataService/Stop"
@@ -52,6 +54,9 @@ const (
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceClient interface {
+	// Operator-only snapshot of retained durable records, including those
+	// received while no episode was active. Does not delete or acknowledge upload.
+	ExportRecording(ctx context.Context, in *DataRecordingExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[recordingpb.StoredRecord], error)
 	Sources(ctx context.Context, in *DataSourcesRequest, opts ...grpc.CallOption) (*DataSourcesResponse, error)
 	Start(ctx context.Context, in *DataStartRequest, opts ...grpc.CallOption) (*DataEpisode, error)
 	Stop(ctx context.Context, in *DataStopRequest, opts ...grpc.CallOption) (*DataEpisode, error)
@@ -72,6 +77,25 @@ type dataServiceClient struct {
 func NewDataServiceClient(cc grpc.ClientConnInterface) DataServiceClient {
 	return &dataServiceClient{cc}
 }
+
+func (c *dataServiceClient) ExportRecording(ctx context.Context, in *DataRecordingExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[recordingpb.StoredRecord], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[0], DataService_ExportRecording_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DataRecordingExportRequest, recordingpb.StoredRecord]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataService_ExportRecordingClient = grpc.ServerStreamingClient[recordingpb.StoredRecord]
 
 func (c *dataServiceClient) Sources(ctx context.Context, in *DataSourcesRequest, opts ...grpc.CallOption) (*DataSourcesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -135,7 +159,7 @@ func (c *dataServiceClient) Inspect(ctx context.Context, in *DataInspectRequest,
 
 func (c *dataServiceClient) Download(ctx context.Context, in *DataDownloadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataDownloadChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[0], DataService_Download_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[1], DataService_Download_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -212,6 +236,9 @@ func (c *dataServiceClient) CampaignTrigger(ctx context.Context, in *DataCampaig
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceServer interface {
+	// Operator-only snapshot of retained durable records, including those
+	// received while no episode was active. Does not delete or acknowledge upload.
+	ExportRecording(*DataRecordingExportRequest, grpc.ServerStreamingServer[recordingpb.StoredRecord]) error
 	Sources(context.Context, *DataSourcesRequest) (*DataSourcesResponse, error)
 	Start(context.Context, *DataStartRequest) (*DataEpisode, error)
 	Stop(context.Context, *DataStopRequest) (*DataEpisode, error)
@@ -233,6 +260,9 @@ type DataServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDataServiceServer struct{}
 
+func (UnimplementedDataServiceServer) ExportRecording(*DataRecordingExportRequest, grpc.ServerStreamingServer[recordingpb.StoredRecord]) error {
+	return status.Error(codes.Unimplemented, "method ExportRecording not implemented")
+}
 func (UnimplementedDataServiceServer) Sources(context.Context, *DataSourcesRequest) (*DataSourcesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Sources not implemented")
 }
@@ -286,6 +316,17 @@ func RegisterDataServiceServer(s grpc.ServiceRegistrar, srv DataServiceServer) {
 	}
 	s.RegisterService(&DataService_ServiceDesc, srv)
 }
+
+func _DataService_ExportRecording_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(DataRecordingExportRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DataServiceServer).ExportRecording(m, &grpc.GenericServerStream[DataRecordingExportRequest, recordingpb.StoredRecord]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataService_ExportRecordingServer = grpc.ServerStreamingServer[recordingpb.StoredRecord]
 
 func _DataService_Sources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DataSourcesRequest)
@@ -527,6 +568,11 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ExportRecording",
+			Handler:       _DataService_ExportRecording_Handler,
+			ServerStreams: true,
+		},
 		{
 			StreamName:    "Download",
 			Handler:       _DataService_Download_Handler,

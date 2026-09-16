@@ -226,7 +226,11 @@ func reconcileModelIO(dir string, mf *Manifest) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return inputs || outcomes, nil
+	binaryOutcomes, err := reconcileStreamOutcomes(dir, mf)
+	if err != nil {
+		return false, err
+	}
+	return inputs || outcomes || binaryOutcomes, nil
 }
 
 // reconcileModelInputs recounts the model-input ledger into the manifest's

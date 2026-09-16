@@ -128,6 +128,9 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			applySystemAPI(spec, opts.SystemAPISocketDir)
 		case appconfig.EntitlementEpisodeWrite:
 			applyDataSocket(spec, opts.DataSocketDir)
+			if len(ent.Streams) > 0 {
+				spec.Process.Env = append(spec.Process.Env, "WENDY_DATA_STREAM_DIR=/run/wendy/data/"+appconfig.RecordingServiceDirectory(cfg.ServiceName))
+			}
 		case appconfig.EntitlementAdmin:
 			applyAdmin(spec)
 		case appconfig.EntitlementBuild:

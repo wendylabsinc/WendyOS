@@ -73,6 +73,7 @@ var errPeerCredUnavailable = errors.New("peer credentials are unavailable on thi
 var AppDataSocketRootPath = "/var/lib/wendy/app-data"
 
 type appDataSocket struct {
+	streams  map[string]*recordingSocket
 	appID    string
 	listener net.Listener
 	owners   map[string]struct{}
@@ -183,6 +184,7 @@ func (m *AppDataSocketManager) Release(appID, service string) {
 		m.mu.Unlock()
 		return
 	}
+	m.closeRecordingSockets(s, &service)
 	delete(s.owners, systemAPIOwner(service))
 	if len(s.owners) > 0 {
 		m.mu.Unlock()
@@ -197,6 +199,9 @@ func (m *AppDataSocketManager) ReleaseApp(appID string) {
 	key := appDataKey(appID)
 	m.mu.Lock()
 	s := m.sockets[key]
+	if s != nil {
+		m.closeRecordingSockets(s, nil)
+	}
 	delete(m.sockets, key)
 	m.mu.Unlock()
 	if s != nil {
@@ -274,6 +279,7 @@ func (m *AppDataSocketManager) stopAll() {
 	m.mu.Lock()
 	var all []*appDataSocket
 	for k, s := range m.sockets {
+		m.closeRecordingSockets(s, nil)
 		all = append(all, s)
 		delete(m.sockets, k)
 	}

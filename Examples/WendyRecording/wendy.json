@@ -1,0 +1,36 @@
+{
+  "appId": "sh.wendy.examples.recording",
+  "entitlements": [
+    {
+      "type": "episode-write",
+      "streams": {
+        "notes": {
+          "mode": "lightweight",
+          "mediaType": "text/plain; charset=utf-8"
+        },
+        "temperature": {
+          "mode": "lightweight",
+          "mediaType": "text/csv",
+          "timeSeries": {
+            "clock": "CLOCK_BOOTTIME",
+            "timestampField": "time_ns",
+            "channels": [{ "name": "temperature", "type": "float64", "unit": "Cel" }]
+          }
+        },
+        "samples": {
+          "mode": "durable",
+          "mediaType": "application/protobuf",
+          "schema": "wendy.agent.apps.v1.TimeSeriesBatch",
+          "timeSeries": {
+            "clock": "CLOCK_BOOTTIME",
+            "channels": [{ "name": "temperature", "type": "float64", "unit": "Cel" }]
+          }
+        },
+        "snapshots": {
+          "mode": "durable",
+          "mediaType": "image/jpeg"
+        }
+      }
+    }
+  ]
+}

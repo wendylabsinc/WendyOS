@@ -75,7 +75,11 @@ var (
 const AdHocEpisodeKey = ""
 
 type Manager struct {
-	mu sync.Mutex
+	streamMu          sync.Mutex
+	recordings        *recordingStore
+	streamPreRoll     []bufferedStreamRecord
+	streamPreRollSize int
+	mu                sync.Mutex
 	// campaignMu serializes campaign plan writes. It is separate from mu
 	// because deploying a plan touches no episode state and must not queue
 	// behind (or block) recording, and because DeployCampaign resolves audio
@@ -360,6 +364,10 @@ func NewManager(root string) (*Manager, error) {
 	}
 	m := &Manager{root: root, downloads: make(map[string]int), active: make(map[string]*activeEpisode),
 		maxQuota: DefaultMaxQuotaBytes, reserve: DefaultReserveBytes}
+	m.recordings = &recordingStore{root: filepath.Join(root, ".recordings"), journals: map[string]*recordingJournal{}}
+	if err := m.restoreStreamPreRoll(); err != nil {
+		return nil, err
+	}
 	if err := m.recoverPartials(); err != nil {
 		return nil, err
 	}
@@ -596,6 +604,17 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 	if capturesApplications {
 		manifest.PreRollLost = m.preRollLostInWindowLocked(origin, opts.PreRollDuration)
 		preRollCount, earliestPreRoll, err := m.flushPreRoll(dir, origin, opts.PreRollDuration)
+		if err == nil {
+			n, earliest, e := m.flushStreamPreRoll(dir, origin, opts.PreRollDuration)
+			err = e
+			preRollCount += n
+			if earliest != nil && (earliestPreRoll == nil || *earliest < *earliestPreRoll) {
+				earliestPreRoll = earliest
+			}
+			if n > 0 {
+				manifest.ModelIO.BinaryOutcomeLog = RecordingLogFile
+			}
+		}
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			return Manifest{}, err
@@ -609,6 +628,12 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 			if earliestPreRoll != nil {
 				manifest.Sources[i].ActualOffset = *earliestPreRoll
 			}
+		}
+	}
+	if manifest.ModelIO.BinaryOutcomeLog != "" {
+		if _, err := reconcileStreamOutcomes(dir, &manifest); err != nil {
+			_ = os.RemoveAll(dir)
+			return Manifest{}, err
 		}
 	}
 	if err := writeManifest(dir, manifest); err != nil {
@@ -912,6 +937,9 @@ func scanEpisodeStore(root string) (storeScan, error) {
 		size := dirBytes(dir)
 		scan.used += size
 		switch {
+		case e.Name() == ".recordings":
+			scan.partialBytes += size
+			continue
 		case strings.HasSuffix(e.Name(), ".partial"):
 			scan.partialBytes += size
 			continue
@@ -1918,6 +1946,9 @@ func (m *Manager) recoverPartial(dir string) error {
 		}
 		return nil
 	})
+	if err := repairRecordingTail(filepath.Join(dir, RecordingLogFile)); err != nil {
+		return err
+	}
 	reason := "agent_restart"
 	if current := bootID(); mf.BootID != "" && mf.BootID != current {
 		reason = "reboot"
@@ -2054,6 +2085,17 @@ func sealFiles(dir string) ([]File, error) {
 		if rel == "manifest.json" || strings.HasSuffix(rel, ".tmp") {
 			return nil
 		}
+		if filepath.Ext(p) == ".wdr" {
+			f, err := os.OpenFile(p, os.O_RDWR, 0)
+			if err != nil {
+				return err
+			}
+			err = f.Sync()
+			f.Close()
+			if err != nil {
+				return err
+			}
+		}
 		h, n, e := checksum(p)
 		if e != nil {
 			return e
@@ -2073,6 +2115,8 @@ func sealFiles(dir string) ([]File, error) {
 
 func payloadFormat(path string) (string, string) {
 	switch strings.ToLower(filepath.Ext(path)) {
+	case ".wdr":
+		return "wendy-recording-v1", "application/octet-stream"
 	case ".mcap":
 		return "mcap", "application/vnd.mcap"
 	case ".db3":
@@ -2110,7 +2154,7 @@ func payloadFormat(path string) (string, string) {
 // catalog.
 func sourceForPath(path string) string {
 	switch path {
-	case "events.jsonl":
+	case "events.jsonl", RecordingLogFile:
 		return "applications"
 	case "telemetry.jsonl":
 		return "telemetry"

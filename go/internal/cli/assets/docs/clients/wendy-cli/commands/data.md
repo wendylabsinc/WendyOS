@@ -483,3 +483,30 @@ by the agent from its environment file.
 
 Episodes remain locally inspectable and downloadable regardless of network or
 UTC confidence.
+
+## Application recording streams
+
+The `episode-write` entitlement can declare named streams with `mode` set to
+`lightweight` or `durable`, plus a `mediaType` and an optional schema. Lightweight
+streams accept native bytes over Unix `SOCK_SEQPACKET` sockets without an SDK.
+Durable streams accept Protobuf envelopes and acknowledge after local storage sync,
+including when no episode is active. The agent injects `WENDY_DATA_STREAM_DIR`;
+each stream is available at `<directory>/<stream>.sock`.
+
+Supported payloads include text, CSV, JSON, CBOR, Protobuf, Arrow IPC, JPEG, PNG
+and custom binary layouts. Time-series streams declare their channels and clock;
+sample timestamps remain separate from agent receipt time. See the repository's
+`Examples/WendyRecording` for configuration, senders and an export reader.
+
+```sh
+wendy data export-stream <app-id> <stream> --service <service-name> -o records.wdr
+```
+
+Omit `--service` for a single-service app with no explicit service name. Export
+writes a snapshot of retained durable records and refuses to overwrite an existing
+file. It does not delete records, change cloud upload state or include volatile
+lightweight records. The journal retains segments for at least 24 hours after the
+newest record, subject to device clock accuracy across reboots, and rejects new
+records at 64 MiB per stream. Deduplication applies only while records are retained.
+Payloads and metadata are exported in checksummed Protobuf `.wdr` frames. Episodes
+also include these frames in `records.wdr`, alongside legacy `events.jsonl`.

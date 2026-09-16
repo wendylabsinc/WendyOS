@@ -133,7 +133,7 @@ var allowedKeys = map[string][]string{
 	EntitlementSerial:        {"type", "device"},
 	EntitlementMCP:           {"type", "port"},
 	EntitlementDisplay:       {"type"},
-	EntitlementEpisodeWrite:  {"type"},
+	EntitlementEpisodeWrite:  {"type", "streams"},
 	EntitlementNotifications: {"type"},
 	EntitlementAdmin:         {"type"},
 	EntitlementBuild:         {"type"},
@@ -359,15 +359,16 @@ type PortMapping struct {
 
 // Entitlement represents a single entitlement entry in wendy.json.
 type Entitlement struct {
-	Type      string        `json:"type"`
-	Mode      string        `json:"mode,omitempty"`      // Network, Bluetooth, Video
-	Allowlist []string      `json:"allowlist,omitempty"` // Camera, Video
-	Name      string        `json:"name,omitempty"`      // Persist
-	Path      string        `json:"path,omitempty"`      // Persist
-	Device    string        `json:"device,omitempty"`    // I2C, Serial
-	Pins      []int         `json:"pins,omitempty"`      // GPIO
-	Ports     []PortMapping `json:"ports,omitempty"`     // Network
-	Port      int           `json:"port,omitempty"`      // MCP, HTTP
+	Streams   map[string]RecordingStream `json:"streams,omitempty"`
+	Type      string                     `json:"type"`
+	Mode      string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video
+	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video
+	Name      string                     `json:"name,omitempty"`      // Persist
+	Path      string                     `json:"path,omitempty"`      // Persist
+	Device    string                     `json:"device,omitempty"`    // I2C, Serial
+	Pins      []int                      `json:"pins,omitempty"`      // GPIO
+	Ports     []PortMapping              `json:"ports,omitempty"`     // Network
+	Port      int                        `json:"port,omitempty"`      // MCP, HTTP
 	// User and Password are optional credentials for a network camera. Local
 	// cameras need none, so they are only consulted for an IP camera that reports
 	// it has no stored login. Supplying them here means an unattended deploy does
@@ -456,7 +457,14 @@ func validateAllowlistEntries(allowlist []string, prefix string, index int) erro
 // "entitlement" for top-level or "services[\"foo\"].entitlement" for service-
 // level entitlements).
 func validateEntitlements(entitlements []Entitlement, prefix string) error {
+	episodeWriteSeen := false
 	for i, e := range entitlements {
+		if e.Type == EntitlementEpisodeWrite {
+			if episodeWriteSeen {
+				return fmt.Errorf("%s: duplicate episode-write entitlement", prefix)
+			}
+			episodeWriteSeen = true
+		}
 		if e.Type == "" {
 			return fmt.Errorf("%s[%d]: type is required", prefix, i)
 		}
@@ -468,6 +476,10 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 		}
 
 		switch e.Type {
+		case EntitlementEpisodeWrite:
+			if err := ValidateRecordingStreams(e.Streams); err != nil {
+				return fmt.Errorf("%s[%d]: %w", prefix, i, err)
+			}
 		case EntitlementNetwork:
 			if e.Mode != "" && e.Mode != "host" && e.Mode != "host-admin" && e.Mode != "none" && e.Mode != "mesh" && e.Mode != "bridge" {
 				return fmt.Errorf("%s[%d]: network mode must be \"host\", \"host-admin\", \"none\", \"bridge\", or \"mesh\", got %q", prefix, i, e.Mode)

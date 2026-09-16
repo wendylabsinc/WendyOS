@@ -155,7 +155,8 @@ type ModelIO struct {
 	InputLedger string `json:"input_ledger"`
 	// OutcomeLog is the episode-relative path of the application records,
 	// including predictions and the samples they reference.
-	OutcomeLog string `json:"outcome_log"`
+	OutcomeLog       string `json:"outcome_log"`
+	BinaryOutcomeLog string `json:"binary_outcome_log,omitempty"`
 	// JoinKeys are the ledger fields a prediction's "inputs" entries match on.
 	JoinKeys []string `json:"join_keys"`
 	// PayloadLocator explains how a ledger entry reaches its payload bytes.
