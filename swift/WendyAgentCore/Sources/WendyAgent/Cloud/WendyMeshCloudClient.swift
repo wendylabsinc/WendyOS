@@ -323,15 +323,9 @@ private func clientMetadata(
     for credentials: WendyCloudCredentials,
     fullMethod: String
 ) throws -> Metadata {
-    var metadata = try LegacyCertificateProofSigner(credentials: credentials).metadata(
-        fullMethod: fullMethod
-    )
-    if let userID = credentials.userID, !userID.isEmpty {
-        let identity = "URI=urn:wendy:org:\(credentials.organizationID):user:\(userID)"
-        metadata.addString(identity, forKey: "x-wendy-client-cert")
-        metadata.addString(identity, forKey: "x-forwarded-client-cert")
-    }
-    return metadata
+    // SECURITY: Client-written XFCC headers are never authentication. Cloud Run terminates TLS,
+    // so cloud #565 verifies this method-bound possession proof against the issuance ledger.
+    try LegacyCertificateProofSigner(credentials: credentials).metadata(fullMethod: fullMethod)
 }
 
 private func makeCloudTransport(
