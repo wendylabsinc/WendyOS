@@ -327,7 +327,21 @@ The nodes are bind-mounted from the host, so the group ownership and POSIX ACL t
 
 FastRPC identifies the board from the device-tree model and refuses a session without it, so the entitlement passes it in as `MACHINE_NAME`. The container keeps the default `/sys/firmware` mask, which also hides the DMI and ACPI trees.
 
-It grants **device nodes, not libraries**. The host's `/usr` is not visible to the container, so an app that runs a model must carry its own runtime: the FastRPC transport library (with its `.so.1`/`.so` symlinks and `ldconfig`), the `/usr/share/qcom/conf.d/*.yaml` device-tree-model mapping, the Hexagon skels at the path that mapping names, and a base image with **glibc 2.38 or newer**. `DSP_LIBRARY_PATH` names the parent `dsp/` directory and does not substitute for the mapping file.
+It grants the device nodes plus the **driver-locked layer only** — what an app cannot obtain and what is tied to this host:
+
+| Injected | Why |
+| --- | --- |
+| FastRPC transport, at `/opt/wendyos/npu/lib` | locked to the host kernel's driver |
+| `/usr/share/qcom/conf.d/*.yaml` / `*.yml` and the board's `fastrpc_shell*` | locked to the board and its DSP firmware |
+| The board's `libc++.so*` and `libc++abi.so*` under `/usr/share/qcom/<soc>/<vendor>/<board>/dsp/<domain>/` | Hexagon C++ runtime supplied with the board's DSP firmware |
+
+Nothing is mounted into `/usr/lib` or `/usr/bin`. The transport prefix is prepended to `LD_LIBRARY_PATH`, so it wins over a bundled copy that may not match this kernel — that is deliberate. The board-locked files above, including the Hexagon C++ libraries, are bound at their canonical paths and **do** take precedence over an image's own copies of those same files; an app should not ship them. These DSP libraries are separate from any CPU-side C++ runtime the app needs in its base image.
+
+Everything else is the app's to bundle and pin: `libQnn*`, `libQairt*`, `libGenie*`, the Hexagon skel matching the board's DSP arch, and any `genie-*`/`qnn-*` tools it runs. These are a free public SDK download. An app's skels are **not** shadowed; keep them outside `/usr/share/qcom` and point `ADSP_LIBRARY_PATH` at them, which resolves ahead of the board's tree.
+
+The entitlement also sets `FASTRPC_PROCESS_ATTRS`, because the granted nodes only ever create an unsigned process domain. It is a bitmask: an app's valid decimal value is kept and the unsigned bit is OR'd into it, so set other flags freely. An absent, empty, or invalid value defaults to `8` (the unsigned bit).
+
+Base image requirements: **glibc 2.38 or newer** (bookworm's 2.36 is too old), plus `libyaml-0.so.2` and `libbsd.so.0`, which the injected transport links against and which `debian:trixie-slim` does not ship — on Debian install `libyaml-0-2` and `libbsd0`.
 
 ### `camera`
 

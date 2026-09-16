@@ -22,7 +22,11 @@ public enum WendyCloudDirectory {
         cloudGRPC: String,
         credentials: WendyCloudCredentials
     ) async throws -> [WendyCloudDevice] {
-        try await withClient(cloudGRPC: cloudGRPC, credentials: credentials) { grpc, metadata in
+        try await withClient(
+            cloudGRPC: cloudGRPC,
+            credentials: credentials,
+            fullMethod: "wendycloud.v1.AssetService/ListAssets"
+        ) { grpc, metadata in
             let client = Wendycloud_V1_AssetService.Client(wrapping: grpc)
             var request = Wendycloud_V1_ListAssetsRequest()
             request.organizationID = credentials.organizationID
@@ -56,7 +60,11 @@ public enum WendyCloudTunnel {
         readFlow: @escaping @Sendable () async throws -> Data?,
         writeFlow: @escaping @Sendable (Data) async throws -> Void
     ) async throws {
-        try await withClient(cloudGRPC: cloudGRPC, credentials: credentials) { grpc, metadata in
+        try await withClient(
+            cloudGRPC: cloudGRPC,
+            credentials: credentials,
+            fullMethod: "wendycloud.v1.TunnelBrokerService/ClientTunnel"
+        ) { grpc, metadata in
             let client = Wendycloud_V1_TunnelBrokerService.Client(wrapping: grpc)
             try await client.clientTunnel(metadata: metadata) { writer in
                 try await writer.write(
@@ -127,7 +135,8 @@ public actor WendyCloudDatagramSession {
             do {
                 try await withClient(
                     cloudGRPC: configuration.cloudGRPC,
-                    credentials: configuration.credentials
+                    credentials: configuration.credentials,
+                    fullMethod: "wendycloud.v1.TunnelBrokerService/ClientTunnel"
                 ) { grpc, metadata in
                     let client = Wendycloud_V1_TunnelBrokerService.Client(wrapping: grpc)
                     try await client.clientTunnel(metadata: metadata) { writer in
@@ -310,12 +319,18 @@ func parseCloudEndpoint(_ rawEndpoint: String) throws -> (host: String, port: In
     throw invalidEndpoint("requires brackets around IPv6 literals")
 }
 
-private func clientMetadata(for credentials: WendyCloudCredentials) -> Metadata {
-    guard let userID = credentials.userID, !userID.isEmpty else { return [:] }
-    let identity = "URI=urn:wendy:org:\(credentials.organizationID):user:\(userID)"
-    var metadata = Metadata()
-    metadata.addString(identity, forKey: "x-wendy-client-cert")
-    metadata.addString(identity, forKey: "x-forwarded-client-cert")
+private func clientMetadata(
+    for credentials: WendyCloudCredentials,
+    fullMethod: String
+) throws -> Metadata {
+    var metadata = try LegacyCertificateProofSigner(credentials: credentials).metadata(
+        fullMethod: fullMethod
+    )
+    if let userID = credentials.userID, !userID.isEmpty {
+        let identity = "URI=urn:wendy:org:\(credentials.organizationID):user:\(userID)"
+        metadata.addString(identity, forKey: "x-wendy-client-cert")
+        metadata.addString(identity, forKey: "x-forwarded-client-cert")
+    }
     return metadata
 }
 
@@ -343,13 +358,14 @@ private func makeCloudTransport(
 private func withClient<Result: Sendable>(
     cloudGRPC: String,
     credentials: WendyCloudCredentials,
+    fullMethod: String,
     _ body:
         @Sendable @escaping (
             GRPCClient<HTTP2ClientTransport.Posix>, Metadata
         ) async throws -> Result
 ) async throws -> Result {
     let transport = try makeCloudTransport(endpoint: cloudGRPC, credentials: credentials)
-    let metadata = clientMetadata(for: credentials)
+    let metadata = try clientMetadata(for: credentials, fullMethod: fullMethod)
     return try await withGRPCClient(transport: transport) { client in
         try await body(client, metadata)
     }

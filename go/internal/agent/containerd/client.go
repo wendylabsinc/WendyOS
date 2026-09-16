@@ -1304,6 +1304,9 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	if needsNvidiaCDI(appCfg) {
 		c.applyNvidiaCDI(spec)
 	}
+	if needsQualcommNPURuntime(appCfg) {
+		c.applyQualcommNPURuntime(spec)
+	}
 
 	var systemAPISocketDir string
 	systemAPIRefOwned := false
@@ -2715,6 +2718,22 @@ func hasHostNetworkEntitlement(appCfg *appconfig.AppConfig) bool {
 // oci package's hook of the same name.
 var boardDetect = board.Detect
 
+// applyQualcommNPURuntime bind-mounts the host's Qualcomm AI runtime into an
+// npu-entitled container; a board with no DSP is left untouched.
+func (c *Client) applyQualcommNPURuntime(spec *localoci.Spec) {
+	result := cdi.ApplyQualcommNPURuntime(spec)
+	if !result.HasDSP {
+		// No grantable FastRPC node, so the entitlement is inert on this board.
+		return
+	}
+	if !result.TransportApplied {
+		c.logger.Warn("npu entitlement granted but Qualcomm FastRPC transport was not applied",
+			zap.Int("mounts", result.Mounts))
+		return
+	}
+	c.logger.Info("Applied Qualcomm NPU runtime", zap.Int("mounts", result.Mounts))
+}
+
 // needsNvidiaCDI reports whether CreateContainer should apply the host's
 // NVIDIA CDI spec (library mounts, extra device nodes, driver env vars) to
 // this app's OCI spec. Both the explicit gpu entitlement AND — on a Jetson —
@@ -2742,6 +2761,14 @@ func needsNvidiaCDI(appCfg *appconfig.AppConfig) bool {
 	// the two in step, and keeps a Raspberry Pi display app — which has no NVIDIA
 	// anything — out of applyNvidiaCDI's "no CDI spec found" warning path.
 	return appCfg.HasEntitlement(appconfig.EntitlementDisplay) && boardDetect().IsJetson()
+}
+
+// needsQualcommNPURuntime reports whether the container should receive the host's
+// Qualcomm AI runtime. The npu entitlement grants the FastRPC transport and the
+// dma-buf heap but no userspace to drive them, so without this an entitled app holds
+// a DSP it cannot reach.
+func needsQualcommNPURuntime(appCfg *appconfig.AppConfig) bool {
+	return appCfg.HasEntitlement(appconfig.EntitlementNPU)
 }
 
 // entitlementsUseHostNetwork reports whether the entitlements put the container
