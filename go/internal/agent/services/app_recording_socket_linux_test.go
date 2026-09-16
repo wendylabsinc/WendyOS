@@ -158,3 +158,53 @@ func TestRecordingPacketRejectsWrongPeer(t *testing.T) {
 		t.Fatal("wrong app admitted")
 	}
 }
+
+// Exercise real Linux packet boundaries and acknowledgements while a small
+// journal repeatedly fills and drains. No target-device throughput is asserted.
+func TestRecordingPacketContinuousVibration(t *testing.T) {
+	m, capture := recordingSocketTestManager(t)
+	cfg := appconfig.RecordingStream{Mode: "durable", MediaType: "application/octet-stream", Storage: &appconfig.RecordingStorage{MaxBytes: 1 << 20, RetentionSeconds: proto.Int64(0)}}
+	dir, err := m.EnsureStreams("test.app", "", map[string]appconfig.RecordingStream{"vibration": cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := dialRecording(t, dir, "", "vibration")
+	c.SetDeadline(time.Now().Add(20 * time.Second))
+	payload := make([]byte, 2560*3*4)
+	for i := range payload {
+		payload[i] = byte(i)
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for i := 0; i < 128; i++ {
+		<-ticker.C // Stay below the existing 200-packet/sec per-app limit.
+		id := fmt.Sprint(i)
+		b, err := proto.Marshal(&recordingpb.Record{Id: id, Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = c.Write(b); err != nil {
+			t.Fatal(err)
+		}
+		ack := receiveRecordingAck(t, c)
+		if ack.State != recordingpb.Ack_COMMITTED || ack.Id != id {
+			t.Fatal("batch not committed", ack)
+		}
+		if (i+1)%16 == 0 {
+			count := 0
+			token, err := capture.ExportRecordingCheckpoint("test.app", "", "vibration", true, func(r *recordingpb.StoredRecord) error {
+				if r.Record.Id != fmt.Sprint(i-15+count) || !bytes.Equal(r.Record.Payload, payload) {
+					return fmt.Errorf("lost, reordered or changed vibration batch")
+				}
+				count++
+				return nil
+			})
+			if err != nil || count != 16 {
+				t.Fatal("export", count, err)
+			}
+			if err = capture.AcknowledgeRecordingExport("test.app", "", "vibration", token); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
 	"google.golang.org/protobuf/proto"
 )
@@ -28,15 +29,18 @@ const (
 	RecordingLogFile      = "records.wdr"
 )
 
-// Journals retain records for 24 hours and reject new data at 64 MiB per
-// (app, service, stream). No acknowledged, unexpired segment is evicted to
-// make room. Record IDs deduplicate within the retained journal only.
+// Journals have configurable byte and age limits per (app, service, stream).
+// Only expiry or an authenticated export acknowledgement reclaims records.
+// Record IDs deduplicate within the retained journal only.
 type recordingStore struct {
 	mu       sync.Mutex
 	root     string
 	journals map[string]*recordingJournal
 }
 type recordingJournal struct {
+	init        sync.Once
+	initErr     error
+	state       recordingJournalState
 	nextSegment uint64
 	mu          sync.Mutex
 	dir         string
@@ -48,11 +52,12 @@ type recordingJournal struct {
 	syncFile    func(*os.File) error
 }
 type recordingSegment struct {
-	path    string
-	size    int64
-	last    time.Time
-	created time.Time
-	ids     []string
+	sequence uint64
+	path     string
+	size     int64
+	last     time.Time
+	created  time.Time
+	ids      []string
 }
 type recordingID struct {
 	hash [32]byte
@@ -64,17 +69,17 @@ func recordingKey(app, service, stream string) string {
 }
 func (s *recordingStore) journal(app, service, stream string) (*recordingJournal, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	key := recordingKey(app, service, stream)
-	if j := s.journals[key]; j != nil {
-		return j, nil
+	j := s.journals[key]
+	if j == nil {
+		j = &recordingJournal{dir: filepath.Join(s.root, key), ids: map[string]recordingID{}, now: time.Now, syncFile: func(f *os.File) error { return f.Sync() }}
+		s.journals[key] = j
 	}
-	j := &recordingJournal{dir: filepath.Join(s.root, key), ids: map[string]recordingID{}, now: time.Now, syncFile: func(f *os.File) error { return f.Sync() }}
-	if err := j.recover(); err != nil {
-		return nil, err
-	}
-	s.journals[key] = j
-	return j, nil
+	s.mu.Unlock()
+	// Recovery may read gigabytes. Other streams can initialize and commit
+	// while this journal recovers.
+	j.init.Do(func() { j.initErr = j.recover() })
+	return j, j.initErr
 }
 
 func syncDirectory(path string) error {
@@ -161,6 +166,9 @@ func (j *recordingJournal) recover() error {
 	if err := syncDirectory(filepath.Dir(filepath.Dir(filepath.Dir(j.dir)))); err != nil {
 		return err
 	}
+	if err := j.loadState(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(j.dir)
 	if err != nil {
 		return err
@@ -176,6 +184,12 @@ func (j *recordingJournal) recover() error {
 		if err != nil || sequence == ^uint64(0) {
 			return errors.New("invalid recording segment name")
 		}
+		if j.state.AcknowledgedThrough != nil && sequence <= *j.state.AcknowledgedThrough {
+			if err := os.Remove(filepath.Join(j.dir, entry.Name())); err != nil {
+				return err
+			}
+			continue
+		}
 		if sequence >= j.nextSegment {
 			j.nextSegment = sequence + 1
 		}
@@ -187,7 +201,7 @@ func (j *recordingJournal) recover() error {
 		if e != nil {
 			return e
 		}
-		seg := &recordingSegment{path: p}
+		seg := &recordingSegment{path: p, sequence: sequence}
 		for {
 			r, n, e := ReadRecording(f)
 			if e == io.EOF && n == 0 {
@@ -228,10 +242,16 @@ func (j *recordingJournal) recover() error {
 		j.segments = append(j.segments, seg)
 		j.size += seg.size
 	}
+	if err := j.saveState(); err != nil {
+		return err
+	}
 	return j.expire()
 }
 func (j *recordingJournal) expire() error {
-	cutoff := j.now().Add(-recordingRetention)
+	if j.state.RetentionSeconds == 0 {
+		return nil
+	}
+	cutoff := j.now().Add(-time.Duration(j.state.RetentionSeconds) * time.Second)
 	changed := false
 	for len(j.segments) > 0 && j.segments[0].last.Before(cutoff) {
 		seg := j.segments[0]
@@ -250,11 +270,14 @@ func (j *recordingJournal) expire() error {
 	}
 	return nil
 }
-func (j *recordingJournal) append(r *recordingpb.StoredRecord) (bool, error) {
+func (j *recordingJournal) appendConfigured(r *recordingpb.StoredRecord, storage *appconfig.RecordingStorage) (bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.failure != nil {
 		return false, j.failure
+	}
+	if err := j.configure(storage); err != nil {
+		return false, err
 	}
 	if err := j.expire(); err != nil {
 		return false, err
@@ -267,15 +290,27 @@ func (j *recordingJournal) append(r *recordingpb.StoredRecord) (bool, error) {
 		return true, nil
 	}
 	size := int64(proto.Size(r) + 8)
-	if j.size+size > recordingQuotaBytes {
+	if j.size+size > j.state.MaxBytes {
 		return false, errors.New("recording quota reached; unexpired records retained")
+	}
+	if len(j.ids) >= 1_000_000 {
+		return false, errors.New("recording ID limit reached; export retained records or batch samples")
 	}
 	var seg *recordingSegment
 	if len(j.segments) > 0 {
 		seg = j.segments[len(j.segments)-1]
 	}
-	if seg == nil || seg.size+size > recordingSegmentBytes || j.now().Sub(seg.created) > time.Hour {
-		p := filepath.Join(j.dir, fmt.Sprintf("%020d.wdr", j.nextSegment))
+	if seg == nil || j.state.SealedThrough != nil && seg.sequence <= *j.state.SealedThrough || seg.size+size > recordingSegmentBytes || j.now().Sub(seg.created) > time.Hour {
+		sequence := j.nextSegment
+		if sequence == ^uint64(0) {
+			return false, errors.New("recording segment sequence exhausted")
+		}
+		j.nextSegment++
+		// Never reuse a sequence, including after every segment is reclaimed.
+		if err := j.saveState(); err != nil {
+			return false, err
+		}
+		p := filepath.Join(j.dir, fmt.Sprintf("%020d.wdr", sequence))
 		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			return false, err
@@ -283,8 +318,7 @@ func (j *recordingJournal) append(r *recordingpb.StoredRecord) (bool, error) {
 		if err = f.Close(); err != nil {
 			return false, err
 		}
-		j.nextSegment++
-		seg = &recordingSegment{path: p, created: j.now()}
+		seg = &recordingSegment{path: p, sequence: sequence, created: j.now()}
 		j.segments = append(j.segments, seg)
 	}
 	f, err := os.OpenFile(seg.path, os.O_WRONLY|os.O_APPEND, 0)
@@ -314,20 +348,12 @@ func (j *recordingJournal) append(r *recordingpb.StoredRecord) (bool, error) {
 	return false, nil
 }
 
-// snapshot opens bounded readers while locked, then releases the journal for
-// writers. Unlinking expired segments cannot invalidate these open readers.
-func (j *recordingJournal) snapshot() ([]*os.File, []int64, error) {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if j.failure != nil {
-		return nil, nil, j.failure
-	}
-	if err := j.expire(); err != nil {
-		return nil, nil, err
-	}
+// Open bounded readers under the journal lock; unlinking reclaimed segments
+// cannot invalidate an in-flight export's descriptors.
+func (j *recordingJournal) openSnapshot(segments []*recordingSegment) ([]*os.File, []int64, error) {
 	var files []*os.File
 	var sizes []int64
-	for _, seg := range j.segments {
+	for _, seg := range segments {
 		f, err := os.Open(seg.path)
 		if err != nil {
 			for _, f := range files {
@@ -341,16 +367,20 @@ func (j *recordingJournal) snapshot() ([]*os.File, []int64, error) {
 	return files, sizes, nil
 }
 func (m *Manager) ExportRecording(app, service, stream string, visit func(*recordingpb.StoredRecord) error) error {
+	_, err := m.ExportRecordingCheckpoint(app, service, stream, false, visit)
+	return err
+}
+func (m *Manager) ExportRecordingCheckpoint(app, service, stream string, checkpoint bool, visit func(*recordingpb.StoredRecord) error) (string, error) {
 	if _, err := os.Stat(filepath.Join(m.recordings.root, recordingKey(app, service, stream))); err != nil {
-		return err
+		return "", err
 	}
 	j, err := m.recordings.journal(app, service, stream)
 	if err != nil {
-		return err
+		return "", err
 	}
-	files, sizes, err := j.snapshot()
+	files, sizes, token, err := j.snapshotCheckpoint(checkpoint)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() {
 		for _, f := range files {
@@ -365,12 +395,12 @@ func (m *Manager) ExportRecording(app, service, stream string, visit func(*recor
 				break
 			}
 			if err != nil {
-				return err
+				return "", err
 			}
 			if err = visit(v); err != nil {
-				return err
+				return "", err
 			}
 		}
 	}
-	return nil
+	return token, nil
 }

@@ -75,13 +75,24 @@ unknown outcome; reusing an ID with changed content is rejected. Deduplication i
 bounded by journal retention. These are local persistence guarantees, not cloud
 upload acknowledgements or a guarantee that a campaign started successfully.
 
-The journal works without an active episode. It retains segments for at least
-24 hours after their newest record, subject to device clock accuracy across reboots.
-It rotates at 4 MiB or one hour, and rejects
-new records once a stream reaches 64 MiB of unexpired data. Expiration runs on
-access and agent startup. It never evicts an unexpired record to make space.
-Durable writes sync before acknowledgement. An I/O failure closes that journal
-to new commits until recovery; no memory-only fallback is used.
+The journal works without an active episode. By default it retains segments for
+at least 24 hours after their newest record, subject to device clock accuracy
+across reboots, and rejects new records at 64 MiB per stream. Configure durable
+streams' `storage.maxBytes` to set a different limit, from 1 MiB to 1 TiB.
+`storage.retentionSeconds` sets age expiry, from zero to one year. Omit it for
+24 hours, or set zero to retain records until an operator acknowledges export.
+The agent persists this policy so it also applies at restart before an app connects.
+
+Segments rotate at 4 MiB, one hour, or an export checkpoint. Expiration runs on
+access and agent startup. The agent never evicts an unexpired, unexported record
+to make space. It also caps retained IDs at one million per stream. Batch samples
+rather than assigning each sample a record. Deduplication ends when the record is
+reclaimed or expires.
+
+Durable writes sync each batch before acknowledgement. Journals use independent
+locks, so a stalled journal sync does not hold the shared episode/pre-roll lock.
+An I/O failure closes that journal to new commits until recovery; no memory-only
+fallback is used.
 
 Recent same-boot durable records repopulate the bounded pre-roll ring after agent
 restart. Previous-boot records remain exportable but cannot be placed on a new
@@ -138,8 +149,65 @@ wendy data export-stream sh.wendy.examples.recording samples -o samples.wdr
 python3 read_export.py samples.wdr extracted-samples
 ```
 
-Export takes a bounded snapshot of the retained journal. It does not delete records
-or change upload state. The CLI refuses to overwrite an existing output file.
+Plain export takes a snapshot of the retained journal without deleting records or
+changing cloud upload state. The CLI refuses to overwrite an existing output file.
+Add `--reclaim` to export the oldest chunk and reclaim it after saving it safely.
+A chunk includes whole segments until it reaches 16 MiB or 64 segments, so its
+size can exceed 16 MiB by one segment. Repeat to drain a larger backlog.
+
+The operator RPC returns an opaque checkpoint in the
+`wendy-recording-checkpoint` trailer only after a successful checkpointed export.
+`AcknowledgeRecordingExport` reclaims that snapshot. The CLI syncs both the output
+file and its directory before sending this acknowledgement. Export alone, an
+interrupted download, or a local write failure never acknowledges reclamation.
+Checkpoint seals and reclamation watermarks survive agent restart. Tokens are
+specific to the stream; old or repeated acknowledgements cannot delete newer data.
+Concurrent exports may overlap, and a lost acknowledgement may cause duplicate
+exports. Deduplicate overlapping exports by stream identity and record ID.
+
+## Continuous vibration capture
+
+The `vibration` example declares interleaved little-endian float32 x/y/z samples,
+a 1 GiB spool, and `retentionSeconds: 0`. Each durable envelope supplies uniform
+`SampleTiming` with its actual acquisition start, interval and sample count. The
+agent treats the sample array as opaque bytes; only the envelope needs Protobuf.
+No conversion of sensor readings into individual Protobuf fields is required.
+
+At 25,600 samples/sec per axis, 100 ms batches contain 2,560 samples per axis,
+30 KiB of payload, and require ten commits/sec. The payload rate is 307,200 bytes/sec.
+At 100,000 samples/sec per axis it is 1.2 MB/sec. A 1 GiB spool holds approximately
+58 minutes at the first rate, or 15 minutes at the second, before metadata overhead.
+These are capacity calculations, not measured device throughput.
+
+Keep this command running on the receiving machine:
+
+```sh
+wendy data export-stream sh.wendy.examples.recording vibration \
+  --follow --reclaim --interval 1s -o ./vibration-capture
+```
+
+`--follow` creates a destination directory under an existing parent and writes
+separate `.wdr` files. It exports, syncs and reclaims chunks repeatedly while the
+application keeps recording. Temporary RPC connection failures retry at the chosen
+interval. Restarting the command with the same directory preserves existing files;
+failed acknowledgements may produce duplicate exports. Local disk failures stop
+the command without acknowledging unsaved data.
+
+The receiver must keep up and have enough disk space; this command does not rotate
+or delete its local files. If it is offline long enough to fill the device spool,
+new durable records receive `REJECTED` and retained records stay intact. Producers
+must retry the same envelope and ID after backpressure or an unknown outcome, and
+provide acquisition buffering if the sensor cannot pause. Size the spool for the
+expected outage, and monitor the receiver. This is continuous operator export,
+not an automatic Cloud upload service.
+
+Use 50 to 100 ms acquisition batches as a starting point and measure commit latency on
+the device's actual storage. The `BenchmarkRecordingVibration` Go benchmark covers
+30 KiB, 60 KiB and 120,000-byte batches, including periodic export and reclamation.
+It measures the journal path, not sensor acquisition, socket transport or networking.
+
+## Episode copies
+
 Active episodes selecting `applications` also receive stream records in `records.wdr`;
 they are checksummed and uploaded with the other episode files. The manifest's
 `model_io.binary_outcome_log` identifies this additional outcome log alongside

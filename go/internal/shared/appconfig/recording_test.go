@@ -25,3 +25,21 @@ func TestRecordingStreamsValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestRecordingStorageValidation(t *testing.T) {
+	for _, tc := range []struct {
+		quota, retention int64
+		mode             string
+		valid            bool
+	}{
+		{1 << 30, 0, "durable", true}, {1 << 20, 3600, "durable", true}, {0, 86400, "durable", true},
+		{1 << 20, 0, "lightweight", false}, {-1, 0, "durable", false}, {1, 0, "durable", false},
+		{1 << 41, 0, "durable", false}, {1 << 20, -1, "durable", false}, {1 << 20, 31536001, "durable", false},
+	} {
+		cfg := RecordingStream{Mode: tc.mode, MediaType: "application/octet-stream", Storage: &RecordingStorage{MaxBytes: tc.quota, RetentionSeconds: &tc.retention}}
+		err := ValidateRecordingStreams(map[string]RecordingStream{"samples": cfg})
+		if (err == nil) != tc.valid {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+	}
+}

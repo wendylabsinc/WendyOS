@@ -19,7 +19,29 @@ type RecordingStream struct {
 	Event      string               `json:"event,omitempty"`
 	Model      string               `json:"model,omitempty"`
 	TimeSeries *RecordingTimeSeries `json:"timeSeries,omitempty"`
+	Storage    *RecordingStorage    `json:"storage,omitempty"`
 }
+
+// RecordingStorage bounds the durable spool. Zero retention disables age expiry;
+// records then remain until an operator acknowledges export. Nil uses 24 hours.
+type RecordingStorage struct {
+	MaxBytes         int64  `json:"maxBytes,omitempty"`
+	RetentionSeconds *int64 `json:"retentionSeconds,omitempty"`
+}
+
+func ValidateRecordingStorage(s *RecordingStorage) error {
+	if s == nil {
+		return nil
+	}
+	if s.MaxBytes != 0 && (s.MaxBytes < 1<<20 || s.MaxBytes > 1<<40) {
+		return fmt.Errorf("storage maxBytes must be 1 MiB..1 TiB")
+	}
+	if s.RetentionSeconds != nil && (*s.RetentionSeconds < 0 || *s.RetentionSeconds > 365*24*60*60) {
+		return fmt.Errorf("storage retentionSeconds must be 0..31536000")
+	}
+	return nil
+}
+
 type RecordingTimeSeries struct {
 	Clock          string             `json:"clock"`
 	TimestampField string             `json:"timestampField,omitempty"`
@@ -43,6 +65,12 @@ func ValidateRecordingStreams(streams map[string]RecordingStream) error {
 		}
 		if s.Mode != "lightweight" && s.Mode != "durable" {
 			return fmt.Errorf("stream %s: mode must be lightweight or durable", name)
+		}
+		if s.Storage != nil && s.Mode != "durable" {
+			return fmt.Errorf("stream %s: storage requires durable mode", name)
+		}
+		if err := ValidateRecordingStorage(s.Storage); err != nil {
+			return fmt.Errorf("stream %s: %w", name, err)
 		}
 		if len(s.MediaType) > 256 {
 			return fmt.Errorf("stream %s: mediaType too long", name)

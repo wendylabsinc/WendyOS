@@ -20,18 +20,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataService_ExportRecording_FullMethodName = "/wendy.agent.services.v2.DataService/ExportRecording"
-	DataService_Sources_FullMethodName         = "/wendy.agent.services.v2.DataService/Sources"
-	DataService_Start_FullMethodName           = "/wendy.agent.services.v2.DataService/Start"
-	DataService_Stop_FullMethodName            = "/wendy.agent.services.v2.DataService/Stop"
-	DataService_Status_FullMethodName          = "/wendy.agent.services.v2.DataService/Status"
-	DataService_Episodes_FullMethodName        = "/wendy.agent.services.v2.DataService/Episodes"
-	DataService_Inspect_FullMethodName         = "/wendy.agent.services.v2.DataService/Inspect"
-	DataService_Download_FullMethodName        = "/wendy.agent.services.v2.DataService/Download"
-	DataService_CampaignDeploy_FullMethodName  = "/wendy.agent.services.v2.DataService/CampaignDeploy"
-	DataService_Campaigns_FullMethodName       = "/wendy.agent.services.v2.DataService/Campaigns"
-	DataService_CampaignInspect_FullMethodName = "/wendy.agent.services.v2.DataService/CampaignInspect"
-	DataService_CampaignTrigger_FullMethodName = "/wendy.agent.services.v2.DataService/CampaignTrigger"
+	DataService_ExportRecording_FullMethodName            = "/wendy.agent.services.v2.DataService/ExportRecording"
+	DataService_AcknowledgeRecordingExport_FullMethodName = "/wendy.agent.services.v2.DataService/AcknowledgeRecordingExport"
+	DataService_Sources_FullMethodName                    = "/wendy.agent.services.v2.DataService/Sources"
+	DataService_Start_FullMethodName                      = "/wendy.agent.services.v2.DataService/Start"
+	DataService_Stop_FullMethodName                       = "/wendy.agent.services.v2.DataService/Stop"
+	DataService_Status_FullMethodName                     = "/wendy.agent.services.v2.DataService/Status"
+	DataService_Episodes_FullMethodName                   = "/wendy.agent.services.v2.DataService/Episodes"
+	DataService_Inspect_FullMethodName                    = "/wendy.agent.services.v2.DataService/Inspect"
+	DataService_Download_FullMethodName                   = "/wendy.agent.services.v2.DataService/Download"
+	DataService_CampaignDeploy_FullMethodName             = "/wendy.agent.services.v2.DataService/CampaignDeploy"
+	DataService_Campaigns_FullMethodName                  = "/wendy.agent.services.v2.DataService/Campaigns"
+	DataService_CampaignInspect_FullMethodName            = "/wendy.agent.services.v2.DataService/CampaignInspect"
+	DataService_CampaignTrigger_FullMethodName            = "/wendy.agent.services.v2.DataService/CampaignTrigger"
 )
 
 // DataServiceClient is the client API for DataService service.
@@ -57,6 +58,8 @@ type DataServiceClient interface {
 	// Operator-only snapshot of retained durable records, including those
 	// received while no episode was active. Does not delete or acknowledge upload.
 	ExportRecording(ctx context.Context, in *DataRecordingExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[recordingpb.StoredRecord], error)
+	// Reclaim only a successfully exported snapshot after the receiver syncs it.
+	AcknowledgeRecordingExport(ctx context.Context, in *DataRecordingExportAckRequest, opts ...grpc.CallOption) (*DataRecordingExportAckResponse, error)
 	Sources(ctx context.Context, in *DataSourcesRequest, opts ...grpc.CallOption) (*DataSourcesResponse, error)
 	Start(ctx context.Context, in *DataStartRequest, opts ...grpc.CallOption) (*DataEpisode, error)
 	Stop(ctx context.Context, in *DataStopRequest, opts ...grpc.CallOption) (*DataEpisode, error)
@@ -96,6 +99,16 @@ func (c *dataServiceClient) ExportRecording(ctx context.Context, in *DataRecordi
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DataService_ExportRecordingClient = grpc.ServerStreamingClient[recordingpb.StoredRecord]
+
+func (c *dataServiceClient) AcknowledgeRecordingExport(ctx context.Context, in *DataRecordingExportAckRequest, opts ...grpc.CallOption) (*DataRecordingExportAckResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataRecordingExportAckResponse)
+	err := c.cc.Invoke(ctx, DataService_AcknowledgeRecordingExport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *dataServiceClient) Sources(ctx context.Context, in *DataSourcesRequest, opts ...grpc.CallOption) (*DataSourcesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -239,6 +252,8 @@ type DataServiceServer interface {
 	// Operator-only snapshot of retained durable records, including those
 	// received while no episode was active. Does not delete or acknowledge upload.
 	ExportRecording(*DataRecordingExportRequest, grpc.ServerStreamingServer[recordingpb.StoredRecord]) error
+	// Reclaim only a successfully exported snapshot after the receiver syncs it.
+	AcknowledgeRecordingExport(context.Context, *DataRecordingExportAckRequest) (*DataRecordingExportAckResponse, error)
 	Sources(context.Context, *DataSourcesRequest) (*DataSourcesResponse, error)
 	Start(context.Context, *DataStartRequest) (*DataEpisode, error)
 	Stop(context.Context, *DataStopRequest) (*DataEpisode, error)
@@ -262,6 +277,9 @@ type UnimplementedDataServiceServer struct{}
 
 func (UnimplementedDataServiceServer) ExportRecording(*DataRecordingExportRequest, grpc.ServerStreamingServer[recordingpb.StoredRecord]) error {
 	return status.Error(codes.Unimplemented, "method ExportRecording not implemented")
+}
+func (UnimplementedDataServiceServer) AcknowledgeRecordingExport(context.Context, *DataRecordingExportAckRequest) (*DataRecordingExportAckResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AcknowledgeRecordingExport not implemented")
 }
 func (UnimplementedDataServiceServer) Sources(context.Context, *DataSourcesRequest) (*DataSourcesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Sources not implemented")
@@ -327,6 +345,24 @@ func _DataService_ExportRecording_Handler(srv interface{}, stream grpc.ServerStr
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DataService_ExportRecordingServer = grpc.ServerStreamingServer[recordingpb.StoredRecord]
+
+func _DataService_AcknowledgeRecordingExport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataRecordingExportAckRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).AcknowledgeRecordingExport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_AcknowledgeRecordingExport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).AcknowledgeRecordingExport(ctx, req.(*DataRecordingExportAckRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _DataService_Sources_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DataSourcesRequest)
@@ -526,6 +562,10 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "wendy.agent.services.v2.DataService",
 	HandlerType: (*DataServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "AcknowledgeRecordingExport",
+			Handler:    _DataService_AcknowledgeRecordingExport_Handler,
+		},
 		{
 			MethodName: "Sources",
 			Handler:    _DataService_Sources_Handler,

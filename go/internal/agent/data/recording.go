@@ -111,9 +111,6 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 	if err := validateStreamRecord(cfg, r); err != nil {
 		return false, err
 	}
-	// Serializing intake preserves receipt ordering in the bounded pre-roll ring.
-	m.streamMu.Lock()
-	defer m.streamMu.Unlock()
 	receipt, err := readBootTime()
 	if err != nil {
 		return false, err
@@ -126,11 +123,15 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 		if err != nil {
 			return false, err
 		}
-		duplicate, err := j.append(stored)
+		duplicate, err := j.appendConfigured(stored, cfg.Storage)
 		if err != nil || duplicate {
 			return duplicate, err
 		}
 	}
+	// Journal commits use per-stream locks. Slow storage on one stream must
+	// not hold the shared episode/pre-roll intake lock.
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
 	m.mu.Lock()
 	m.bufferStreamLocked(stored)
 	for _, a := range m.openEpisodesLocked() {
@@ -202,11 +203,16 @@ func appendRecording(path string, r *recordingpb.StoredRecord) error {
 	return f.Close()
 }
 func (m *Manager) bufferStreamLocked(r *recordingpb.StoredRecord) {
-	m.evictPreRoll(r.ReceiptBoottimeNanos)
 	size := proto.Size(r) + 8
-	m.streamPreRoll = append(m.streamPreRoll, bufferedStreamRecord{r, size})
+	// Independent journal commits may finish out of receipt order.
+	i := sort.Search(len(m.streamPreRoll), func(i int) bool { return m.streamPreRoll[i].record.ReceiptBoottimeNanos > r.ReceiptBoottimeNanos })
+	m.streamPreRoll = append(m.streamPreRoll, bufferedStreamRecord{})
+	copy(m.streamPreRoll[i+1:], m.streamPreRoll[i:])
+	m.streamPreRoll[i] = bufferedStreamRecord{r, size}
 	m.streamPreRollSize += size
-	cutoff := r.ReceiptBoottimeNanos - preRollWindow.Nanoseconds()
+	now := m.streamPreRoll[len(m.streamPreRoll)-1].record.ReceiptBoottimeNanos
+	m.evictPreRoll(now)
+	cutoff := now - preRollWindow.Nanoseconds()
 	for len(m.streamPreRoll) > 0 && (m.streamPreRoll[0].record.ReceiptBoottimeNanos < cutoff || m.streamPreRollSize > streamPreRollBytes) {
 		first := m.streamPreRoll[0]
 		m.streamPreRollSize -= first.size
@@ -346,22 +352,21 @@ func (m *Manager) restoreStreamPreRoll() error {
 			m.warnf("recording journal %s unavailable: %v", entry.Name(), err)
 			continue
 		}
+		j.init.Do(func() {}) // Already recovered during startup.
 		m.recordings.journals[entry.Name()] = j
-		files, sizes, err := j.snapshot()
-		if err != nil {
-			return err
-		}
-		for i, f := range files {
-			reader := io.NewSectionReader(f, 0, sizes[i])
+		for _, segment := range j.segments {
+			f, err := os.Open(segment.path)
+			if err != nil {
+				return err
+			}
+			reader := io.NewSectionReader(f, 0, segment.size)
 			for {
 				r, _, e := ReadRecording(reader)
 				if e == io.EOF {
 					break
 				}
 				if e != nil {
-					for _, f := range files {
-						f.Close()
-					}
+					f.Close()
 					return e
 				}
 				if r.ReceiptBootId == currentBoot && r.ReceiptBoottimeNanos >= now-preRollWindow.Nanoseconds() && r.ReceiptBoottimeNanos <= now {

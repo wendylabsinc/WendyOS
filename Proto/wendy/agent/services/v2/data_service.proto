@@ -22,6 +22,8 @@ service DataService {
   // Operator-only snapshot of retained durable records, including those
   // received while no episode was active. Does not delete or acknowledge upload.
   rpc ExportRecording(DataRecordingExportRequest) returns (stream wendy.agent.apps.v1.StoredRecord);
+  // Reclaim only a successfully exported snapshot after the receiver syncs it.
+  rpc AcknowledgeRecordingExport(DataRecordingExportAckRequest) returns (DataRecordingExportAckResponse);
   rpc Sources(DataSourcesRequest) returns (DataSourcesResponse);
   rpc Start(DataStartRequest) returns (DataEpisode);
   rpc Stop(DataStopRequest) returns (DataEpisode);
@@ -131,4 +133,16 @@ message DataRecordingExportRequest {
   string app_id = 1;
   string service = 2;
   string stream = 3;
+  // Export the oldest chunk of whole segments, capped at 16 MiB plus one
+  // segment or 64 segments. Seal it and return an opaque token in the
+  // wendy-recording-checkpoint response trailer on successful completion.
+  // Export alone never reclaims records. An empty snapshot has no token.
+  bool checkpoint = 4;
 }
+message DataRecordingExportAckRequest {
+  string app_id = 1;
+  string service = 2;
+  string stream = 3;
+  string checkpoint = 4;
+}
+message DataRecordingExportAckResponse {}

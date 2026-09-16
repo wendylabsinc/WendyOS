@@ -1188,10 +1188,15 @@ func (x *DataCampaignsResponse) GetCampaigns() []*DataCampaign {
 }
 
 type DataRecordingExportRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	AppId         string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	Service       string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`
-	Stream        string                 `protobuf:"bytes,3,opt,name=stream,proto3" json:"stream,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	AppId   string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	Service string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`
+	Stream  string                 `protobuf:"bytes,3,opt,name=stream,proto3" json:"stream,omitempty"`
+	// Export the oldest chunk of whole segments, capped at 16 MiB plus one
+	// segment or 64 segments. Seal it and return an opaque token in the
+	// wendy-recording-checkpoint response trailer on successful completion.
+	// Export alone never reclaims records. An empty snapshot has no token.
+	Checkpoint    bool `protobuf:"varint,4,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1245,6 +1250,117 @@ func (x *DataRecordingExportRequest) GetStream() string {
 		return x.Stream
 	}
 	return ""
+}
+
+func (x *DataRecordingExportRequest) GetCheckpoint() bool {
+	if x != nil {
+		return x.Checkpoint
+	}
+	return false
+}
+
+type DataRecordingExportAckRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	AppId         string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	Service       string                 `protobuf:"bytes,2,opt,name=service,proto3" json:"service,omitempty"`
+	Stream        string                 `protobuf:"bytes,3,opt,name=stream,proto3" json:"stream,omitempty"`
+	Checkpoint    string                 `protobuf:"bytes,4,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataRecordingExportAckRequest) Reset() {
+	*x = DataRecordingExportAckRequest{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataRecordingExportAckRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataRecordingExportAckRequest) ProtoMessage() {}
+
+func (x *DataRecordingExportAckRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataRecordingExportAckRequest.ProtoReflect.Descriptor instead.
+func (*DataRecordingExportAckRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *DataRecordingExportAckRequest) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *DataRecordingExportAckRequest) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+func (x *DataRecordingExportAckRequest) GetStream() string {
+	if x != nil {
+		return x.Stream
+	}
+	return ""
+}
+
+func (x *DataRecordingExportAckRequest) GetCheckpoint() string {
+	if x != nil {
+		return x.Checkpoint
+	}
+	return ""
+}
+
+type DataRecordingExportAckResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DataRecordingExportAckResponse) Reset() {
+	*x = DataRecordingExportAckResponse{}
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DataRecordingExportAckResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DataRecordingExportAckResponse) ProtoMessage() {}
+
+func (x *DataRecordingExportAckResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_data_service_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DataRecordingExportAckResponse.ProtoReflect.Descriptor instead.
+func (*DataRecordingExportAckResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_data_service_proto_rawDescGZIP(), []int{23}
 }
 
 var File_wendy_agent_services_v2_data_service_proto protoreflect.FileDescriptor
@@ -1321,13 +1437,26 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\tplan_json\x18\x06 \x01(\fR\bplanJson\x12\x1a\n" +
 	"\bwarnings\x18\a \x03(\tR\bwarnings\"\\\n" +
 	"\x15DataCampaignsResponse\x12C\n" +
-	"\tcampaigns\x18\x01 \x03(\v2%.wendy.agent.services.v2.DataCampaignR\tcampaigns\"e\n" +
+	"\tcampaigns\x18\x01 \x03(\v2%.wendy.agent.services.v2.DataCampaignR\tcampaigns\"\x85\x01\n" +
 	"\x1aDataRecordingExportRequest\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x18\n" +
 	"\aservice\x18\x02 \x01(\tR\aservice\x12\x16\n" +
-	"\x06stream\x18\x03 \x01(\tR\x06stream2\xe2\t\n" +
+	"\x06stream\x18\x03 \x01(\tR\x06stream\x12\x1e\n" +
+	"\n" +
+	"checkpoint\x18\x04 \x01(\bR\n" +
+	"checkpoint\"\x88\x01\n" +
+	"\x1dDataRecordingExportAckRequest\x12\x15\n" +
+	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x18\n" +
+	"\aservice\x18\x02 \x01(\tR\aservice\x12\x16\n" +
+	"\x06stream\x18\x03 \x01(\tR\x06stream\x12\x1e\n" +
+	"\n" +
+	"checkpoint\x18\x04 \x01(\tR\n" +
+	"checkpoint\" \n" +
+	"\x1eDataRecordingExportAckResponse2\xf2\n" +
+	"\n" +
 	"\vDataService\x12k\n" +
-	"\x0fExportRecording\x123.wendy.agent.services.v2.DataRecordingExportRequest\x1a!.wendy.agent.apps.v1.StoredRecord0\x01\x12d\n" +
+	"\x0fExportRecording\x123.wendy.agent.services.v2.DataRecordingExportRequest\x1a!.wendy.agent.apps.v1.StoredRecord0\x01\x12\x8d\x01\n" +
+	"\x1aAcknowledgeRecordingExport\x126.wendy.agent.services.v2.DataRecordingExportAckRequest\x1a7.wendy.agent.services.v2.DataRecordingExportAckResponse\x12d\n" +
 	"\aSources\x12+.wendy.agent.services.v2.DataSourcesRequest\x1a,.wendy.agent.services.v2.DataSourcesResponse\x12X\n" +
 	"\x05Start\x12).wendy.agent.services.v2.DataStartRequest\x1a$.wendy.agent.services.v2.DataEpisode\x12V\n" +
 	"\x04Stop\x12(.wendy.agent.services.v2.DataStopRequest\x1a$.wendy.agent.services.v2.DataEpisode\x12a\n" +
@@ -1352,31 +1481,33 @@ func file_wendy_agent_services_v2_data_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_data_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_data_service_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_wendy_agent_services_v2_data_service_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_wendy_agent_services_v2_data_service_proto_goTypes = []any{
-	(*DataSource)(nil),                 // 0: wendy.agent.services.v2.DataSource
-	(*DataSourcesRequest)(nil),         // 1: wendy.agent.services.v2.DataSourcesRequest
-	(*DataSourcesResponse)(nil),        // 2: wendy.agent.services.v2.DataSourcesResponse
-	(*DataCalibration)(nil),            // 3: wendy.agent.services.v2.DataCalibration
-	(*DataStartRequest)(nil),           // 4: wendy.agent.services.v2.DataStartRequest
-	(*DataStopRequest)(nil),            // 5: wendy.agent.services.v2.DataStopRequest
-	(*DataStatusRequest)(nil),          // 6: wendy.agent.services.v2.DataStatusRequest
-	(*DataEpisodesRequest)(nil),        // 7: wendy.agent.services.v2.DataEpisodesRequest
-	(*DataInspectRequest)(nil),         // 8: wendy.agent.services.v2.DataInspectRequest
-	(*DataDownloadRequest)(nil),        // 9: wendy.agent.services.v2.DataDownloadRequest
-	(*DataEpisode)(nil),                // 10: wendy.agent.services.v2.DataEpisode
-	(*DataStatusResponse)(nil),         // 11: wendy.agent.services.v2.DataStatusResponse
-	(*DataEpisodesResponse)(nil),       // 12: wendy.agent.services.v2.DataEpisodesResponse
-	(*DataInspectResponse)(nil),        // 13: wendy.agent.services.v2.DataInspectResponse
-	(*DataDownloadChunk)(nil),          // 14: wendy.agent.services.v2.DataDownloadChunk
-	(*DataCampaignDeployRequest)(nil),  // 15: wendy.agent.services.v2.DataCampaignDeployRequest
-	(*DataCampaignsRequest)(nil),       // 16: wendy.agent.services.v2.DataCampaignsRequest
-	(*DataCampaignInspectRequest)(nil), // 17: wendy.agent.services.v2.DataCampaignInspectRequest
-	(*DataCampaignTriggerRequest)(nil), // 18: wendy.agent.services.v2.DataCampaignTriggerRequest
-	(*DataCampaign)(nil),               // 19: wendy.agent.services.v2.DataCampaign
-	(*DataCampaignsResponse)(nil),      // 20: wendy.agent.services.v2.DataCampaignsResponse
-	(*DataRecordingExportRequest)(nil), // 21: wendy.agent.services.v2.DataRecordingExportRequest
-	(*recordingpb.StoredRecord)(nil),   // 22: wendy.agent.apps.v1.StoredRecord
+	(*DataSource)(nil),                     // 0: wendy.agent.services.v2.DataSource
+	(*DataSourcesRequest)(nil),             // 1: wendy.agent.services.v2.DataSourcesRequest
+	(*DataSourcesResponse)(nil),            // 2: wendy.agent.services.v2.DataSourcesResponse
+	(*DataCalibration)(nil),                // 3: wendy.agent.services.v2.DataCalibration
+	(*DataStartRequest)(nil),               // 4: wendy.agent.services.v2.DataStartRequest
+	(*DataStopRequest)(nil),                // 5: wendy.agent.services.v2.DataStopRequest
+	(*DataStatusRequest)(nil),              // 6: wendy.agent.services.v2.DataStatusRequest
+	(*DataEpisodesRequest)(nil),            // 7: wendy.agent.services.v2.DataEpisodesRequest
+	(*DataInspectRequest)(nil),             // 8: wendy.agent.services.v2.DataInspectRequest
+	(*DataDownloadRequest)(nil),            // 9: wendy.agent.services.v2.DataDownloadRequest
+	(*DataEpisode)(nil),                    // 10: wendy.agent.services.v2.DataEpisode
+	(*DataStatusResponse)(nil),             // 11: wendy.agent.services.v2.DataStatusResponse
+	(*DataEpisodesResponse)(nil),           // 12: wendy.agent.services.v2.DataEpisodesResponse
+	(*DataInspectResponse)(nil),            // 13: wendy.agent.services.v2.DataInspectResponse
+	(*DataDownloadChunk)(nil),              // 14: wendy.agent.services.v2.DataDownloadChunk
+	(*DataCampaignDeployRequest)(nil),      // 15: wendy.agent.services.v2.DataCampaignDeployRequest
+	(*DataCampaignsRequest)(nil),           // 16: wendy.agent.services.v2.DataCampaignsRequest
+	(*DataCampaignInspectRequest)(nil),     // 17: wendy.agent.services.v2.DataCampaignInspectRequest
+	(*DataCampaignTriggerRequest)(nil),     // 18: wendy.agent.services.v2.DataCampaignTriggerRequest
+	(*DataCampaign)(nil),                   // 19: wendy.agent.services.v2.DataCampaign
+	(*DataCampaignsResponse)(nil),          // 20: wendy.agent.services.v2.DataCampaignsResponse
+	(*DataRecordingExportRequest)(nil),     // 21: wendy.agent.services.v2.DataRecordingExportRequest
+	(*DataRecordingExportAckRequest)(nil),  // 22: wendy.agent.services.v2.DataRecordingExportAckRequest
+	(*DataRecordingExportAckResponse)(nil), // 23: wendy.agent.services.v2.DataRecordingExportAckResponse
+	(*recordingpb.StoredRecord)(nil),       // 24: wendy.agent.apps.v1.StoredRecord
 }
 var file_wendy_agent_services_v2_data_service_proto_depIdxs = []int32{
 	0,  // 0: wendy.agent.services.v2.DataSourcesResponse.sources:type_name -> wendy.agent.services.v2.DataSource
@@ -1385,31 +1516,33 @@ var file_wendy_agent_services_v2_data_service_proto_depIdxs = []int32{
 	10, // 3: wendy.agent.services.v2.DataEpisodesResponse.episodes:type_name -> wendy.agent.services.v2.DataEpisode
 	19, // 4: wendy.agent.services.v2.DataCampaignsResponse.campaigns:type_name -> wendy.agent.services.v2.DataCampaign
 	21, // 5: wendy.agent.services.v2.DataService.ExportRecording:input_type -> wendy.agent.services.v2.DataRecordingExportRequest
-	1,  // 6: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
-	4,  // 7: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
-	5,  // 8: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
-	6,  // 9: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
-	7,  // 10: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
-	8,  // 11: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
-	9,  // 12: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
-	15, // 13: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
-	16, // 14: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
-	17, // 15: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
-	18, // 16: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
-	22, // 17: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
-	2,  // 18: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
-	10, // 19: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
-	10, // 20: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
-	11, // 21: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
-	12, // 22: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
-	13, // 23: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
-	14, // 24: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
-	19, // 25: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
-	20, // 26: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
-	19, // 27: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
-	10, // 28: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
-	17, // [17:29] is the sub-list for method output_type
-	5,  // [5:17] is the sub-list for method input_type
+	22, // 6: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:input_type -> wendy.agent.services.v2.DataRecordingExportAckRequest
+	1,  // 7: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
+	4,  // 8: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
+	5,  // 9: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
+	6,  // 10: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
+	7,  // 11: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
+	8,  // 12: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
+	9,  // 13: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
+	15, // 14: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
+	16, // 15: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
+	17, // 16: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
+	18, // 17: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
+	24, // 18: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
+	23, // 19: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:output_type -> wendy.agent.services.v2.DataRecordingExportAckResponse
+	2,  // 20: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
+	10, // 21: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
+	10, // 22: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
+	11, // 23: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
+	12, // 24: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
+	13, // 25: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
+	14, // 26: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
+	19, // 27: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
+	20, // 28: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
+	19, // 29: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
+	10, // 30: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
+	18, // [18:31] is the sub-list for method output_type
+	5,  // [5:18] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name
@@ -1426,7 +1559,7 @@ func file_wendy_agent_services_v2_data_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_data_service_proto_rawDesc), len(file_wendy_agent_services_v2_data_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   22,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -452,8 +452,41 @@
                         }
                       }
                     }
+                  },
+                  "storage": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "maxBytes": {
+                        "type": "integer",
+                        "anyOf": [{ "const": 0 }, { "minimum": 1048576, "maximum": 1099511627776 }],
+                        "description": "Durable spool byte limit; omitted or zero defaults to 64 MiB."
+                      },
+                      "retentionSeconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 31536000,
+                        "description": "Age expiry; defaults to 86400. Zero retains until export acknowledgement."
+                      }
+                    }
                   }
-                }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "required": [
+                        "storage"
+                      ]
+                    },
+                    "then": {
+                      "properties": {
+                        "mode": {
+                          "const": "durable"
+                        }
+                      }
+                    }
+                  }
+                ]
               }
             }
           },
