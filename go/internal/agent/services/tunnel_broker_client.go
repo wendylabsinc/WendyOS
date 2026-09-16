@@ -232,8 +232,8 @@ func brokerDialOpts(logger *zap.Logger, orgID, assetID int32, certPEM, keyPEM, c
 		return nil, nil, err
 	}
 
-	identityURI := fmt.Sprintf("wendy://asset/%d/%d", orgID, assetID)
-	certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:asset:%d", orgID, assetID)
+	identityURI := fmt.Sprintf("urn:wendy:org:%d:asset:%d", orgID, assetID)
+	certHeader := "URI=" + identityURI
 	legacyMD := metadata.Pairs(
 		"x-wendy-client-cert", certHeader,
 		"x-forwarded-client-cert", certHeader,
