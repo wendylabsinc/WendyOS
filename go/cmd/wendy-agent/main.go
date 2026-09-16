@@ -168,6 +168,7 @@ func main() {
 
 	services.CleanupOldBackups(logger)
 	cdi.EnsureNVIDIACDISpec(logger)
+	cdi.EnsureQualcommNPURuntime(logger)
 
 	var networkMgr services.NetworkManager
 	if nm := agentnet.NewNMCLINetworkManager(logger); nm != nil {
