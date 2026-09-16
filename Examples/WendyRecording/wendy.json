@@ -1,0 +1,50 @@
+{
+  "appId": "sh.wendy.examples.recording",
+  "entitlements": [
+    {
+      "type": "episode-write",
+      "streams": {
+        "notes": {
+          "mode": "lightweight",
+          "mediaType": "text/plain; charset=utf-8"
+        },
+        "temperature": {
+          "mode": "lightweight",
+          "mediaType": "text/csv",
+          "timeSeries": {
+            "clock": "CLOCK_BOOTTIME",
+            "timestampField": "time_ns",
+            "channels": [{ "name": "temperature", "type": "float64", "unit": "Cel" }]
+          }
+        },
+        "samples": {
+          "mode": "durable",
+          "mediaType": "application/protobuf",
+          "schema": "wendy.agent.apps.v1.TimeSeriesBatch",
+          "timeSeries": {
+            "clock": "CLOCK_BOOTTIME",
+            "channels": [{ "name": "temperature", "type": "float64", "unit": "Cel" }]
+          }
+        },
+        "vibration": {
+          "mode": "durable",
+          "mediaType": "application/octet-stream",
+          "schema": "example.vibration.xyz-float32-le-interleaved.v1",
+          "storage": { "maxBytes": 1073741824, "retentionSeconds": 0 },
+          "timeSeries": {
+            "clock": "CLOCK_BOOTTIME",
+            "channels": [
+              { "name": "x", "type": "float32", "unit": "m/s2" },
+              { "name": "y", "type": "float32", "unit": "m/s2" },
+              { "name": "z", "type": "float32", "unit": "m/s2" }
+            ]
+          }
+        },
+        "snapshots": {
+          "mode": "durable",
+          "mediaType": "image/jpeg"
+        }
+      }
+    }
+  ]
+}

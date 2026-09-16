@@ -1,0 +1,84 @@
+syntax = "proto3";
+package wendy.agent.apps.v1;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb";
+
+// One SOCK_SEQPACKET message on a durable stream. Lightweight streams send
+// only their native payload bytes. Neither endpoint uses a length prefix.
+message Record {
+  // Unique within (app, service, stream) for the retention period. Retrying
+  // identical content returns DUPLICATE; reusing an ID with new content fails.
+  string id = 1;
+  bytes payload = 2;
+  optional int64 client_boottime_nanos = 3;
+  string boot_id = 4;
+  repeated SampleRef inputs = 5;
+  optional double uncertainty = 6;
+  // Timing of samples, not the time the batch reached the recorder.
+  SampleTiming timing = 7;
+}
+message SampleRef { string source_id = 1; uint64 sample_id = 2; }
+message SampleTiming {
+  // CLOCK_BOOTTIME, UNIX, or a named device clock described by the schema.
+  string clock = 1;
+  string boot_id = 2;
+  uint32 count = 3;
+  // Choose timestamps for irregular sampling, or start + positive period for
+  // uniform sampling. All times are signed integer nanoseconds.
+  repeated int64 timestamps_nanos = 4;
+  optional int64 start_nanos = 5;
+  optional int64 period_nanos = 6;
+}
+message Ack {
+  enum State { STATE_UNSPECIFIED = 0; COMMITTED = 1; DUPLICATE = 2; REJECTED = 3; }
+  string id = 1;
+  State state = 2;
+  string error = 3;
+}
+message Channel { string name = 1; string type = 2; string unit = 3; }
+message StreamDescriptor {
+  string media_type = 1;
+  string schema = 2;
+  repeated Channel channels = 3;
+  string clock = 4;
+  // For lightweight time series, identifies the timestamp column/field in
+  // the payload. The recorder does not parse it or replace it with receipt time.
+  string timestamp_field = 5;
+  string event = 6;
+  string model = 7;
+}
+// Internal journal/export record. Apps never construct this message.
+message StoredRecord {
+  Record record = 1;
+  string app_id = 2;
+  string service = 3;
+  string stream = 4;
+  StreamDescriptor stream_descriptor = 5;
+  int64 receipt_boottime_nanos = 6;
+  string receipt_boot_id = 7;
+  int64 receipt_unix_nanos = 8;
+  int64 episode_nanos = 9;
+  bool client_timestamp_accepted = 10;
+  bool preroll = 11;
+}
+
+// Optional payload schema for application/protobuf time series. Column order
+// follows StreamDescriptor.channels. All columns have timing.count values.
+// Set stream schema to "wendy.agent.apps.v1.TimeSeriesBatch" when using this.
+message TimeSeriesBatch {
+  SampleTiming timing = 1;
+  repeated SampleColumn columns = 2;
+}
+message SampleColumn {
+  oneof values {
+    Float32Values float32_values = 1;
+    Float64Values float64_values = 2;
+    Int64Values int_values = 3;
+    Uint64Values uint_values = 4;
+    BoolValues bool_values = 5;
+  }
+}
+message Float32Values { repeated float values = 1; }
+message Float64Values { repeated double values = 1; }
+message Int64Values { repeated sint64 values = 1; }
+message Uint64Values { repeated uint64 values = 1; }
+message BoolValues { repeated bool values = 1; }

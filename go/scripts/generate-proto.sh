@@ -58,6 +58,7 @@ V2_AGENT_PROTOS=(
     "wendy/agent/services/v2/build_service.proto"
     "wendy/agent/services/v2/sensor_pairing_service.proto"
     "wendy/agent/services/v2/sensor_service.proto"
+    "wendy/agent/services/v2/data_service.proto"
 )
 
 V2_AGENT_M_OPTS=""
@@ -111,6 +112,7 @@ CLOUD_PROTOS=(
     "cloud/apps.proto"
     "cloud/assets.proto"
     "cloud/certificates.proto"
+    "cloud/data_ingest.proto"
     "cloud/deployments.proto"
     "cloud/mesh.proto"
     "cloud/notifications.proto"
@@ -275,3 +277,7 @@ protoc --proto_path="$PROTO_DIR" \
     --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
     --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
     wendycloud/tunnel/v2/tunnel.proto wendyauth/v1/envelope.proto
+
+# App recording envelopes (no generated SDK is needed for lightweight streams).
+protoc --proto_path="$PROTO_DIR" --go_out="$GO_DIR" --go_opt=module="$MODULE/go" \
+    wendy/agent/apps/v1/recording.proto

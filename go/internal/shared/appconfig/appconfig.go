@@ -48,6 +48,16 @@ const (
 	EntitlementSerial    = "serial"
 	EntitlementMCP       = "mcp"
 	EntitlementDisplay   = "display"
+	// EntitlementEpisodeWrite grants write access to the device's episode
+	// recorder through the app-private episode event socket, and nothing else.
+	// The app pushes its own event and prediction records into whatever
+	// episodes are active, so it writes into the recorded training corpus. It
+	// is stronger than "may log something": campaign triggers match on
+	// application event names and prediction attributes, so an app holding this
+	// entitlement can start recordings. It grants no read access to sensors:
+	// reading is native, through the agent-fed node the camera entitlement
+	// grants.
+	EntitlementEpisodeWrite = "episode-write"
 	// EntitlementNotifications grants access only to the app-attributed Wendy
 	// System Notification API. It does not expose the Agent control plane.
 	EntitlementNotifications = "notifications"
@@ -85,6 +95,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementSerial,
 	EntitlementMCP,
 	EntitlementDisplay,
+	EntitlementEpisodeWrite,
 	EntitlementNotifications,
 	EntitlementAdmin,
 	EntitlementBuild,
@@ -122,6 +133,7 @@ var allowedKeys = map[string][]string{
 	EntitlementSerial:        {"type", "device"},
 	EntitlementMCP:           {"type", "port"},
 	EntitlementDisplay:       {"type"},
+	EntitlementEpisodeWrite:  {"type", "streams"},
 	EntitlementNotifications: {"type"},
 	EntitlementAdmin:         {"type"},
 	EntitlementBuild:         {"type"},
@@ -347,15 +359,16 @@ type PortMapping struct {
 
 // Entitlement represents a single entitlement entry in wendy.json.
 type Entitlement struct {
-	Type      string        `json:"type"`
-	Mode      string        `json:"mode,omitempty"`      // Network, Bluetooth, Video
-	Allowlist []string      `json:"allowlist,omitempty"` // Camera, Video
-	Name      string        `json:"name,omitempty"`      // Persist
-	Path      string        `json:"path,omitempty"`      // Persist
-	Device    string        `json:"device,omitempty"`    // I2C, Serial
-	Pins      []int         `json:"pins,omitempty"`      // GPIO
-	Ports     []PortMapping `json:"ports,omitempty"`     // Network
-	Port      int           `json:"port,omitempty"`      // MCP, HTTP
+	Streams   map[string]RecordingStream `json:"streams,omitempty"`
+	Type      string                     `json:"type"`
+	Mode      string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video
+	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video
+	Name      string                     `json:"name,omitempty"`      // Persist
+	Path      string                     `json:"path,omitempty"`      // Persist
+	Device    string                     `json:"device,omitempty"`    // I2C, Serial
+	Pins      []int                      `json:"pins,omitempty"`      // GPIO
+	Ports     []PortMapping              `json:"ports,omitempty"`     // Network
+	Port      int                        `json:"port,omitempty"`      // MCP, HTTP
 	// User and Password are optional credentials for a network camera. Local
 	// cameras need none, so they are only consulted for an IP camera that reports
 	// it has no stored login. Supplying them here means an unattended deploy does
@@ -404,20 +417,69 @@ func LoadFromBytes(data []byte) (*AppConfig, error) {
 	return &cfg, nil
 }
 
+// validateAllowlistEntries rejects the two characters an allowlist entry may
+// not contain.
+//
+// An entitlement travels to the device as a container label whose value is a
+// comma-separated list of key=value pairs, with list-valued fields such as the
+// allowlist folded into one segment by joining on commas
+// (EntitlementAnnotationValue in annotation.go).
+//
+// A comma corrupts that encoding outright. The parser splits on the commas that
+// precede a new "key=" and cannot tell those apart from a comma inside an
+// entry, so an entry containing one is silently split into two allowlist
+// entries, and an entry containing ",key=" is worse: it terminates the
+// allowlist and overwrites a sibling field of the entitlement, such as the
+// mode.
+//
+// An '=' does not corrupt anything today, because the parser takes only the
+// first '=' of a segment as the separator and keeps the rest as the value. It
+// is refused anyway: '=' IS the pair separator, so an entry carrying one is
+// ambiguous by construction, and it is the one character that would turn any
+// future change to the key-detection rule into silent corruption of exactly
+// this field.
+//
+// No source identifier the platform emits today contains either character, so
+// this rejects nothing that works. It is enforced here, at the point where the
+// value enters the system from an author's wendy.json, rather than at the codec,
+// because the codec has no way to report a problem to the person who can fix it.
+func validateAllowlistEntries(allowlist []string, prefix string, index int) error {
+	for j, entry := range allowlist {
+		if strings.ContainsAny(entry, ",=") {
+			return fmt.Errorf("%s[%d]: allowlist[%d] must not contain ',' or '=', got %q; those characters delimit the container label the entitlement is carried in and would corrupt it", prefix, index, j, entry)
+		}
+	}
+	return nil
+}
+
 // validateEntitlements checks a slice of entitlements for required fields and
 // valid types. The prefix string is used in error messages (e.g.
 // "entitlement" for top-level or "services[\"foo\"].entitlement" for service-
 // level entitlements).
 func validateEntitlements(entitlements []Entitlement, prefix string) error {
+	episodeWriteSeen := false
 	for i, e := range entitlements {
+		if e.Type == EntitlementEpisodeWrite {
+			if episodeWriteSeen {
+				return fmt.Errorf("%s: duplicate episode-write entitlement", prefix)
+			}
+			episodeWriteSeen = true
+		}
 		if e.Type == "" {
 			return fmt.Errorf("%s[%d]: type is required", prefix, i)
 		}
 		if !slices.Contains(ValidEntitlementTypes, e.Type) {
 			return fmt.Errorf("%s[%d]: unknown type %q", prefix, i, e.Type)
 		}
+		if err := validateAllowlistEntries(e.Allowlist, prefix, i); err != nil {
+			return err
+		}
 
 		switch e.Type {
+		case EntitlementEpisodeWrite:
+			if err := ValidateRecordingStreams(e.Streams); err != nil {
+				return fmt.Errorf("%s[%d]: %w", prefix, i, err)
+			}
 		case EntitlementNetwork:
 			if e.Mode != "" && e.Mode != "host" && e.Mode != "host-admin" && e.Mode != "none" && e.Mode != "mesh" && e.Mode != "bridge" {
 				return fmt.Errorf("%s[%d]: network mode must be \"host\", \"host-admin\", \"none\", \"bridge\", or \"mesh\", got %q", prefix, i, e.Mode)

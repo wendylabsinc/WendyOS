@@ -762,3 +762,72 @@ func (l *Loopback) fireIdleGrace(camID uint32, cp *camPump, gen uint64) {
 
 	supCancel()
 }
+
+// Auxiliary nodes: v4l2loopback nodes that are NOT backed by a registered
+// network camera.
+//
+// The two-plane camera path needs a node for a LOCAL camera, fed from the
+// agent's own producer hub rather than from an RTSP pump. Everything above is
+// keyed to the network camera registry (the node number IS the camera's
+// registry ID), so those nodes have no registry entry to hang off. Rather than
+// stand up a second node manager beside this one, they reuse the same module
+// detection, the same create and remove primitives, and the same "module
+// missing is not an error" posture. Only the numbering and the lifetime differ,
+// and both belong to the caller.
+
+// AllocateAuxNodeNumber returns a free v4l2loopback node number for a node that
+// has no camera registry entry, or ErrBandExhausted if there is none.
+//
+// Numbers come from the TOP of the same reserved band the registry allocates
+// from, downward, because the registry allocates the lowest free number upward.
+// The two therefore only meet once the band is genuinely full, and a number
+// already held by a registered camera or by an existing node is skipped
+// outright, so the two allocators cannot hand out the same number.
+//
+// The band is capped by the kernel's VIDEO_NUM_DEVICES of 256, so there is no
+// room above it to give auxiliary nodes a band of their own. Sharing with a
+// skip check is the honest option; silently reusing a camera's number would
+// point an app at the wrong camera's frames.
+func (l *Loopback) AllocateAuxNodeNumber() (int, error) {
+	taken := map[int]struct{}{}
+	for _, cam := range l.reg.List() {
+		taken[int(cam.ID)] = struct{}{}
+	}
+	for nr := IDBandEnd; nr >= IDBandStart; nr-- {
+		if _, ok := taken[nr]; ok {
+			continue
+		}
+		if l.deps.nodeExists(nr) {
+			continue
+		}
+		return nr, nil
+	}
+	return 0, ErrBandExhausted
+}
+
+// EnsureAuxNode creates the node at nr if it does not already exist.
+//
+// Like EnsureNodes it is idempotent and treats a missing module as "nothing to
+// do" rather than an error, so a build without v4l2loopback simply has no data
+// plane instead of failing container start.
+func (l *Loopback) EnsureAuxNode(_ context.Context, nr int, label string) error {
+	if err := l.Available(); err != nil {
+		return nil
+	}
+	if l.deps.nodeExists(nr) {
+		return nil
+	}
+	return l.deps.addNode(nr, label)
+}
+
+// RemoveAuxNode deletes the node at nr. Unlike RemoveCamera there is no pump
+// supervisor to stop first: an auxiliary node's pump is owned by whoever created
+// it, and must already have been stopped before this is called.
+func (l *Loopback) RemoveAuxNode(nr int) {
+	if err := l.Available(); err != nil {
+		return
+	}
+	if err := l.deps.removeNode(nr); err != nil {
+		l.logger.Warn("removing auxiliary v4l2loopback node", zap.Int("nr", nr), zap.Error(err))
+	}
+}

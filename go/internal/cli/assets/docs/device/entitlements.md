@@ -50,6 +50,42 @@ after socket restoration; no redeploy is required. Stopped containers retain
 their mount and can reconnect when started again. The directory remains until
 the last entitled service container is deleted.
 
+## Wendy Data (episode-write)
+
+Use `{ "type": "episode-write" }` when an app needs to write into the device's
+recorded dataset: it submits structured events or predictions to the episode
+recorder. The agent gives each app a private socket and derives the trusted app
+identity from that socket; the administrative agent socket is never exposed.
+
+The name says write, because that is what it grants, and the grant is stronger
+than plain logging: campaign triggers match on application event names and
+prediction attributes, so an app holding `episode-write` can start recordings.
+It grants no read access to any sensor. Reading is native: an app opens the
+agent-fed device node granted by `camera`, and frame identity arrives in-band
+with the frames.
+
+| Boundary | Value |
+|---|---|
+| Read-only mount | `/run/wendy/data` |
+| Injected environment | `WENDY_DATA_SOCKET=/run/wendy/data/data.sock` |
+| Supplementary group | GID `2000` |
+| Maximum record | 64 KiB, versioned length-prefixed JSON |
+| Acknowledgements | `buffered`, `recorded`, or `rejected` |
+| Socket restoration | Recreated from persisted container labels after agent/daemon restart |
+
+When no Episode is active, accepted records enter the bounded application
+pre-roll buffer. They can trigger an armed campaign by event name or model
+uncertainty. Running containers reconnect after socket restoration without a
+redeploy. Apps without `episode-write` receive neither this mount nor the
+environment
+variable.
+
+A `prediction` record may carry an optional `inputs` list of
+`{source_id, sample_id}` naming the harness samples it was computed from (see
+Wendy Sensors). The agent records the references in the Episode so
+`(input, outcome)` pairs can be reconstructed offline; a record without them is
+still accepted.
+
 ## Network
 
 The network entitlement allows the container to access the device's network. If the device is connected to WiFi, Ethernet or otherwise, the container will have access to make TCP and UDP connections to the internet.
