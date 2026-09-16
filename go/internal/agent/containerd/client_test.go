@@ -1650,3 +1650,22 @@ func TestRecreateRuncStateDirAndRetry_MkdirFails(t *testing.T) {
 		t.Errorf("got %v, want original error %v preserved", got, origErr)
 	}
 }
+
+// The npu entitlement grants the FastRPC transport but no userspace to drive it, so
+// an entitled app must also pull in the host's Qualcomm runtime — the counterpart of
+// what needsNvidiaCDI does for a Jetson.
+func TestNeedsQualcommNPURuntime(t *testing.T) {
+	npu := &appconfig.AppConfig{
+		Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementNPU}},
+	}
+	if !needsQualcommNPURuntime(npu) {
+		t.Error("npu entitlement should pull in the Qualcomm runtime")
+	}
+
+	gpu := &appconfig.AppConfig{
+		Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementGPU}},
+	}
+	if needsQualcommNPURuntime(gpu) {
+		t.Error("a gpu-only app must not get the Qualcomm NPU runtime")
+	}
+}
