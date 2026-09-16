@@ -535,7 +535,18 @@ var (
 const (
 	// The -secure nodes are the signed-PD path and are root-only; never granted.
 	fastrpcSecureSuffix = "-secure"
+
+	// Process-attribute bitmask the vendor runtime reads, and the bit selecting the
+	// unsigned process domain -- the only domain the granted nodes may create.
+	fastrpcProcessAttrsEnv = "FASTRPC_PROCESS_ATTRS"
+	fastrpcUnsignedPDBit   = 8
 )
+
+// IsGrantableFastrpcNode reports whether a FastRPC node is one this entitlement may
+// grant. Exported so the runtime provisioning cannot drift from the grant rule.
+func IsGrantableFastrpcNode(path string) bool {
+	return !strings.HasSuffix(path, fastrpcSecureSuffix)
+}
 
 // applyNPU grants the FastRPC transport to the on-SoC DSPs.
 //
@@ -553,7 +564,7 @@ func applyNPU(spec *Spec) {
 	// signed-PD nodes skipped here.
 	var granted bool
 	for _, node := range matches {
-		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+		if !IsGrantableFastrpcNode(node) {
 			continue
 		}
 		if _, _, err := addScopedCharDevice(spec, node); err != nil {
@@ -575,11 +586,15 @@ func applyNPU(spec *Spec) {
 		spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, gid)
 	}
 
+	// The vendor runtime needs the unsigned process domain to drive the nodes granted
+	// here; without it device creation fails with an error that names nothing.
+	spec.Process.Env = withUnsignedPD(spec.Process.Env)
+
 	// FastRPC identifies the board from the device-tree model. Passing it in lets the
 	// container stay behind the default /sys/firmware mask, which also covers the DMI
 	// and ACPI trees.
 	if model := hostDeviceTreeModel(); model != "" {
-		spec.Process.Env = append(spec.Process.Env, "MACHINE_NAME="+model)
+		spec.Process.Env = setEnvValue(spec.Process.Env, "MACHINE_NAME", model)
 	}
 }
 
@@ -1568,6 +1583,48 @@ func applyInput(spec *Spec) {
 		Major:  &major,
 		Access: "rw",
 	})
+}
+
+// setEnvValue drops every existing assignment of key and appends the new one. OCI is
+// last-wins and this codebase appends duplicates deliberately, so only a trailing entry
+// is effective; dropping the rest keeps the spec on disk unambiguous.
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	kept := make([]string, 0, len(env)+1)
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			kept = append(kept, e)
+		}
+	}
+	return append(kept, prefix+value)
+}
+
+// envValue returns the effective assignment of key, which is the last one.
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	value, found := "", false
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			value, found = e[len(prefix):], true
+		}
+	}
+	return value, found
+}
+
+// withUnsignedPD sets the unsigned-domain bit while keeping any other flags the image
+// chose. The value is a bitmask, so one that omits this bit would cost it the DSP.
+func withUnsignedPD(env []string) []string {
+	current, found := envValue(env, fastrpcProcessAttrsEnv)
+	if !found {
+		return setEnvValue(env, fastrpcProcessAttrsEnv, strconv.Itoa(fastrpcUnsignedPDBit))
+	}
+	v, err := strconv.Atoi(current)
+	if err != nil {
+		// Invalid input must not disable the unsigned domain required by the
+		// granted nodes. Discard malformed flags and apply the required default.
+		return setEnvValue(env, fastrpcProcessAttrsEnv, strconv.Itoa(fastrpcUnsignedPDBit))
+	}
+	return setEnvValue(env, fastrpcProcessAttrsEnv, strconv.Itoa(v|fastrpcUnsignedPDBit))
 }
 
 // appendUnique appends a value to a slice only if it is not already present.

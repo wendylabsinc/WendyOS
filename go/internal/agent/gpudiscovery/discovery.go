@@ -84,8 +84,8 @@ func Discover(root string) []Device {
 	// non-secure nodes are the app-usable transport: that is the driver-level
 	// evidence for the qnn backend, the same bar /dev/nvidiactl sets for CUDA.
 	// The root-only "-secure" nodes are the signed-PD path and prove nothing
-	// about what an app can reach. The QNN runtime itself ships in the app
-	// image, so no host library is required.
+	// about what an app can reach. The npu entitlement supplies the runtime from
+	// the host, so a usable node is the whole requirement.
 	qnn := slices.ContainsFunc(glob("/dev/fastrpc-*"), func(node string) bool {
 		return !strings.HasSuffix(node, "-secure")
 	})
