@@ -42,7 +42,7 @@ struct LegacyCertificateProofSigner: Sendable {
                 message: "Wendy cloud certificate serial is invalid"
             )
         }
-        self.identityURI = "wendy://user/\(userID)"
+        self.identityURI = "urn:wendy:org:\(credentials.organizationID):user:\(userID)"
         self.certificateSerial = serialBytes.map(Self.hexByte).joined()
         self.privateKey = privateKey
     }
