@@ -42,7 +42,7 @@ def main():
     from ros_app import make_node
 
     rclpy.init()
-    node = make_node(waypoints=((0.5,0), (0.5,-0.5), (0,-0.5), (0,0)), autostart=True)
+    node = make_node(((0.5,0), (0.5,-0.5), (0,-0.5), (0,0)), autostart=True)
     started = time.monotonic()
     origin = initial['position'][:2]
     visited = set()
