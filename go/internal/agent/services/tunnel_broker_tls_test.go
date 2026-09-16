@@ -91,7 +91,7 @@ func TestBrokerDialOptsAddsFreshCertificateProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := first.Get("x-wendy-certificate-uri"); len(got) != 1 || got[0] != "wendy://asset/7/42" {
+	if got := first.Get("x-wendy-certificate-uri"); len(got) != 1 || got[0] != "urn:wendy:org:7:asset:42" {
 		t.Fatalf("unexpected proof identity: %v", got)
 	}
 	if got := first.Get("x-wendy-certificate-serial"); len(got) != 1 || got[0] != "01" {

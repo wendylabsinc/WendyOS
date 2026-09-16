@@ -119,9 +119,9 @@ func DialBroker(auth *config.AuthConfig, brokerURL string, extra ...grpc.DialOpt
 	}
 	identityURI := ""
 	if cert.UserID != "" {
-		identityURI = fmt.Sprintf("wendy://user/%s", cert.UserID)
+		identityURI = fmt.Sprintf("urn:wendy:org:%d:user:%s", cert.OrganizationID, cert.UserID)
 	} else if cert.AssetID != 0 {
-		identityURI = fmt.Sprintf("wendy://asset/%d/%d", cert.OrganizationID, cert.AssetID)
+		identityURI = fmt.Sprintf("urn:wendy:org:%d:asset:%d", cert.OrganizationID, cert.AssetID)
 	}
 	proofSigner, err := legacycertproof.New(identityURI, cert.PemCertificate, privateKeyPEM)
 	if err != nil {
