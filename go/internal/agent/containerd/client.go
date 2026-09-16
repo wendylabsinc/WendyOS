@@ -295,7 +295,7 @@ func (c *Client) RestoreAppSystemAPISockets(ctx context.Context) {
 		appID, serviceName := labels[labelKeyAppID], labels[labelKeyServiceName]
 		entitlements := parseEntitlementsFromAnnotations(labels)
 		if c.dataSocketProvider != nil && entitlementsContain(entitlements, appconfig.EntitlementEpisodeWrite) {
-			if _, err := c.dataSocketProvider.Ensure(appID, serviceName); err != nil {
+			if _, err := ensureDataSockets(c.dataSocketProvider, appID, serviceName, entitlements); err != nil {
 				c.logger.Warn("restore app data socket failed", zap.String(logfields.AppID, appID), zap.Error(err))
 			}
 		}
@@ -1414,7 +1414,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		if c.dataSocketProvider == nil {
 			return fmt.Errorf("episode-write entitlement unavailable: app data socket manager is not configured")
 		}
-		dataSocketDir, err = c.dataSocketProvider.Ensure(appID, serviceName)
+		dataSocketDir, err = ensureDataSockets(c.dataSocketProvider, appID, serviceName, appCfg.Entitlements)
 		if err != nil {
 			return fmt.Errorf("preparing app data socket: %w", err)
 		}
@@ -4779,4 +4779,18 @@ func (c *Client) requireDBusProxy(cfg *appconfig.AppConfig, containerName string
 		return fmt.Errorf("cannot start container %q: the bluetooth entitlement requires xdg-dbus-proxy to filter D-Bus access, which is not available on this device", containerName)
 	}
 	return nil
+}
+
+func ensureDataSockets(provider AppDataSocketProvider, appID, service string, entitlements []appconfig.Entitlement) (string, error) {
+	streams := appconfig.RecordingStreams(entitlements)
+	if len(streams) == 0 {
+		return provider.Ensure(appID, service)
+	}
+	p, ok := provider.(interface {
+		EnsureStreams(string, string, map[string]appconfig.RecordingStream) (string, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("agent does not support recording streams")
+	}
+	return p.EnsureStreams(appID, service, streams)
 }

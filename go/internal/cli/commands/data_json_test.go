@@ -20,6 +20,7 @@ import (
 // download tests can exercise the resume and verification paths without a
 // device; the offset the command asked to resume from is recorded.
 type stubDataClient struct {
+	agentpbv2.DataServiceClient
 	downloadOffset int64
 }
 

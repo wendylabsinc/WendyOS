@@ -277,3 +277,7 @@ protoc --proto_path="$PROTO_DIR" \
     --go-grpc_opt=Mwendycloud/tunnel/v2/tunnel.proto="$RELAY_PKG" \
     --go-grpc_opt=Mwendyauth/v1/envelope.proto="$AUTH_PKG" \
     wendycloud/tunnel/v2/tunnel.proto wendyauth/v1/envelope.proto
+
+# App recording envelopes (no generated SDK is needed for lightweight streams).
+protoc --proto_path="$PROTO_DIR" --go_out="$GO_DIR" --go_opt=module="$MODULE/go" \
+    wendy/agent/apps/v1/recording.proto

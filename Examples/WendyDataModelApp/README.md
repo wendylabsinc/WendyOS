@@ -273,3 +273,7 @@ consumer knows how much of the episode is usable as training data.
 
 With `upload.when: always`, finished episodes upload whenever the device
 has connectivity.
+
+For SDK-free opaque packets, durable Protobuf envelopes, additional media types,
+and batched time series, see [application recording streams](../WendyRecording/README.md).
+This example continues to use the compatible legacy JSON endpoint.

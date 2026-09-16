@@ -2939,3 +2939,29 @@ func TestApplyGPU_QualcommWithoutRenderNodeAddsNoDevices(t *testing.T) {
 		t.Error("Qualcomm host must not get the NVIDIA major-195 fallback rule")
 	}
 }
+
+func TestApplyRecordingStreamEnvironment(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "wr-oci-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	listener, err := net.Listen("unix", filepath.Join(dir, "data.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	cfg := &appconfig.AppConfig{AppID: "test.app", ServiceName: "worker", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementEpisodeWrite, Streams: map[string]appconfig.RecordingStream{"notes": {Mode: "lightweight", MediaType: "text/plain"}}}}}
+	spec := DefaultSpec("/rootfs", []string{"/bin/true"})
+	if err := ApplyEntitlements(spec, cfg, ApplyOptions{DataSocketDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	want := "WENDY_DATA_STREAM_DIR=/run/wendy/data/" + appconfig.RecordingServiceDirectory("worker")
+	if !slices.Contains(spec.Process.Env, want) {
+		t.Fatalf("missing stream directory: %v", spec.Process.Env)
+	}
+	mount, ok := mountForDest(spec, "/run/wendy/data")
+	if !ok || !slices.Contains(mount.Options, "ro") {
+		t.Fatal("recording mount must remain read-only")
+	}
+}

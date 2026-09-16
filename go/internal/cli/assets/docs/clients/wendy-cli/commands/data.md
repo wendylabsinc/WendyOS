@@ -483,3 +483,51 @@ by the agent from its environment file.
 
 Episodes remain locally inspectable and downloadable regardless of network or
 UTC confidence.
+
+## Application recording streams
+
+The `episode-write` entitlement can declare named streams with `mode` set to
+`lightweight` or `durable`, plus a `mediaType` and an optional schema. Lightweight
+streams accept native bytes over Unix `SOCK_SEQPACKET` sockets without an SDK.
+Durable streams accept Protobuf envelopes and acknowledge after local storage sync,
+including when no episode is active. The agent injects `WENDY_DATA_STREAM_DIR`;
+each stream is available at `<directory>/<stream>.sock`.
+
+Supported payloads include text, CSV, JSON, CBOR, Protobuf, Arrow IPC, JPEG, PNG
+and custom binary layouts. Time-series streams declare their channels and clock;
+sample timestamps remain separate from agent receipt time. See the repository's
+`Examples/WendyRecording` for configuration, senders and an export reader.
+
+```sh
+wendy data export-stream <app-id> <stream> --service <service-name> -o records.wdr
+```
+
+Omit `--service` for a single-service app with no explicit service name. Export
+writes a snapshot of retained durable records and refuses to overwrite an existing
+file. Plain export does not delete records, change cloud upload state or include
+volatile lightweight records. `--reclaim` exports the oldest chunk, syncs its local
+file and directory, then acknowledges that checkpoint for device reclamation.
+Chunks contain whole segments up to 16 MiB plus one segment, or 64 segments.
+
+For continuous capture, use an output directory under an existing parent:
+
+```sh
+wendy data export-stream <app-id> <stream> --follow --reclaim --interval 1s -o capture
+```
+
+This writes separate files, retries temporary RPC failures and reclaims only saved
+chunks. Local storage failures stop export. A lost acknowledgement or overlapping
+exports can produce duplicates; use record IDs and stream identity to deduplicate.
+Existing destination files are preserved. The receiver must keep up and manage its
+own storage; the CLI never deletes local capture files.
+
+Durable stream configuration accepts `storage.maxBytes` from 1 MiB to 1 TiB and
+`storage.retentionSeconds` from 0 to 31536000. Defaults remain 64 MiB and 24 hours.
+Zero retention disables age expiry, retaining records until export acknowledgement.
+Set a larger spool, such as 1 GiB, for continuous capture. A full journal rejects
+new data without overwriting retained records; producers must buffer and retry.
+Deduplication applies only while records are retained, with at most one million
+retained IDs per stream. Age retention across reboots depends on device clock accuracy.
+This export path does not update cloud upload state.
+Payloads and metadata are exported in checksummed Protobuf `.wdr` frames. Episodes
+also include these frames in `records.wdr`, alongside legacy `events.jsonl`.
