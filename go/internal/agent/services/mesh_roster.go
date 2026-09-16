@@ -122,7 +122,7 @@ func (r *MeshRoster) Sync(ctx context.Context) error {
 		return nil
 	}
 
-	dialOpts, md, err := brokerDialOpts(r.logger, orgID, assetID, certPEM, keyPEM, chainPEM)
+	dialOpts, requestMetadata, err := brokerDialOpts(r.logger, orgID, assetID, certPEM, keyPEM, chainPEM)
 	if err != nil {
 		return err
 	}
@@ -132,6 +132,10 @@ func (r *MeshRoster) Sync(ctx context.Context) error {
 	}
 	defer conn.Close()
 	client := cloudpb.NewMeshRosterServiceClient(conn)
+	md, err := requestMetadata(cloudpb.MeshRosterService_GetMeshRoster_FullMethodName)
+	if err != nil {
+		return err
+	}
 	callCtx, cancel := context.WithTimeout(metadata.NewOutgoingContext(ctx, md), 10*time.Second)
 	defer cancel()
 	resp, err := client.GetMeshRoster(callCtx, &cloudpb.GetMeshRosterRequest{})
