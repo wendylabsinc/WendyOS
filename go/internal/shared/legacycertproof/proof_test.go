@@ -18,7 +18,7 @@ import (
 
 func TestMetadataSignsMethodBoundProof(t *testing.T) {
 	certificatePEM, privateKeyPEM, certificate, key := testIdentity(t)
-	signer, err := New("wendy://user/user-a", certificatePEM, privateKeyPEM)
+	signer, err := New("urn:wendy:org:7:user:user-a", certificatePEM, privateKeyPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestMetadataSignsMethodBoundProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	serial := hex.EncodeToString(certificate.SerialNumber.Bytes())
-	if got := proof.Get(IdentityHeader); len(got) != 1 || got[0] != "wendy://user/user-a" {
+	if got := proof.Get(IdentityHeader); len(got) != 1 || got[0] != "urn:wendy:org:7:user:user-a" {
 		t.Fatalf("unexpected identity metadata: %v", got)
 	}
 	if got := proof.Get(CertificateSerialHeader); len(got) != 1 || got[0] != serial {
@@ -42,7 +42,7 @@ func TestMetadataSignsMethodBoundProof(t *testing.T) {
 	nonce := proof.Get(NonceHeader)[0]
 	canonical, err := canonicalBytes(
 		"wendycloud.v1.TunnelBrokerService/ClientTunnel",
-		"wendy://user/user-a",
+		"urn:wendy:org:7:user:user-a",
 		serial,
 		"1700000000",
 		nonce,
@@ -61,7 +61,7 @@ func TestMetadataSignsMethodBoundProof(t *testing.T) {
 
 	wrongCanonical, err := canonicalBytes(
 		"wendycloud.v1.TunnelBrokerService/RegisterPresence",
-		"wendy://user/user-a",
+		"urn:wendy:org:7:user:user-a",
 		serial,
 		"1700000000",
 		nonce,
@@ -78,7 +78,7 @@ func TestMetadataSignsMethodBoundProof(t *testing.T) {
 func TestNewRejectsMismatchedKey(t *testing.T) {
 	certificatePEM, _, _, _ := testIdentity(t)
 	_, otherKeyPEM, _, _ := testIdentity(t)
-	if _, err := New("wendy://asset/1/2", certificatePEM, otherKeyPEM); err == nil {
+	if _, err := New("urn:wendy:org:1:asset:2", certificatePEM, otherKeyPEM); err == nil {
 		t.Fatal("expected mismatched certificate and key to fail")
 	}
 }

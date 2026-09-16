@@ -62,7 +62,7 @@ struct WendyMeshTests {
         let timestamp = try value("x-wendy-certificate-timestamp")
         let nonce = try value("x-wendy-certificate-nonce")
         let signature = try #require(base64URLData(try value("x-wendy-certificate-signature")))
-        #expect(uri == "wendy://user/user-a")
+        #expect(uri == "urn:wendy:org:7:user:user-a")
         #expect(serial.count >= 2)
         #expect(base64URLData(nonce)?.count == 16)
 
