@@ -36,6 +36,16 @@ type Discoverer struct {
 	localIPv4s func() []string
 	reachable  func(address string) bool
 	probeOne   func(source string, deadline time.Time) ([][]byte, error)
+	// resolveStreams asks a camera for its RTSP paths (ResolveStreamPaths in
+	// production). Only cameras whose registry entry has no paths yet are
+	// asked, once per round, so a camera that never answers costs one bounded
+	// call a round and not a stall.
+	resolveStreams func(ctx context.Context, cam Camera, cred Credential) (StreamPaths, error)
+
+	// Credentials, when set, supplies the stored login for a camera by MAC so
+	// ONVIF calls can authenticate. Nil means every call goes out without one,
+	// which is enough for cameras that serve ONVIF open.
+	Credentials func(mac string) (Credential, bool)
 }
 
 // NewDiscoverer returns a discoverer writing into reg.
@@ -48,6 +58,7 @@ func NewDiscoverer(reg *Registry, logger *zap.Logger) *Discoverer {
 	}
 	d.localIPv4s = listLocalIPv4s
 	d.probeOne = probeFrom
+	d.resolveStreams = ResolveStreamPaths
 	d.reachable = func(address string) bool {
 		conn, err := net.DialTimeout("tcp",
 			net.JoinHostPort(address, strconv.Itoa(cameraHTTPPort)), livenessTimeout)
@@ -122,6 +133,7 @@ func (d *Discoverer) Once(ctx context.Context) ([]Camera, error) {
 				zap.String("mac", mac), zap.Error(err))
 			continue
 		}
+		cam = d.learnStreamPaths(ctx, cam)
 		found = append(found, cam)
 	}
 
@@ -129,6 +141,41 @@ func (d *Discoverer) Once(ctx context.Context) ([]Camera, error) {
 	// already know about directly.
 	d.refreshLiveness()
 	return found, nil
+}
+
+// learnStreamPaths fills a camera's RTSP paths from ONVIF the first time it is
+// seen without them. Until 2026-09-13 nothing did, so every camera that was
+// not a Reolink was streamed at the Reolink default paths and answered 404;
+// `camera test` said "the stream path may be wrong" and `camera view` failed
+// its pipeline. A failure here is logged and leaves the entry as it was: the
+// camera is still registered, and the next round asks again.
+func (d *Discoverer) learnStreamPaths(ctx context.Context, cam Camera) Camera {
+	if cam.StreamSub != "" && cam.StreamMain != "" {
+		return cam
+	}
+	if cam.ONVIFAddr == "" || d.resolveStreams == nil {
+		return cam
+	}
+	var cred Credential
+	if d.Credentials != nil {
+		cred, _ = d.Credentials(cam.MAC)
+	}
+	paths, err := d.resolveStreams(ctx, cam, cred)
+	if err != nil {
+		d.logger.Debug("camera did not report its stream paths",
+			zap.String("mac", cam.MAC), zap.String("address", cam.Address), zap.Error(err))
+		return cam
+	}
+	updated, err := d.reg.Upsert(Camera{MAC: cam.MAC, StreamSub: paths.Sub, StreamMain: paths.Main})
+	if err != nil {
+		d.logger.Warn("recording camera stream paths failed",
+			zap.String("mac", cam.MAC), zap.Error(err))
+		return cam
+	}
+	d.logger.Info("learned camera stream paths from ONVIF",
+		zap.String("mac", cam.MAC), zap.String("address", cam.Address),
+		zap.String("sub", paths.Sub), zap.String("main", paths.Main))
+	return updated
 }
 
 // multicastProbe sends a WS-Discovery Probe out of every local IPv4 address and
