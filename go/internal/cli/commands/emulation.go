@@ -49,7 +49,8 @@ func platformBuildArch(platform string) string {
 // emulatedBuildNotice returns the notice for a local build of platform on a
 // hostOS/hostArch machine, or "" when the build runs natively or either
 // architecture is unknown. buildHostSupported says whether this project could
-// use --build-host instead: remote builds take single-service projects only.
+// use --build-host instead: remote builds take container image projects
+// (single- or multi-service), not Compose or host-process shapes.
 //
 // hostOS matters for exactly one pair: an arm64 host building a 32-bit arm
 // (AArch32) target. Everywhere except Apple silicon, the kernel runs AArch32
@@ -71,7 +72,7 @@ func emulatedBuildNotice(hostOS, hostArch, platform string, buildHostSupported b
 	if buildHostSupported {
 		return msg + fmt.Sprintf(" Or pass --build-host=DEVICE to build on a WendyOS device with a native %s CPU.", nativeBuildCPUs(target))
 	}
-	return msg + " (--build-host, which builds on a WendyOS device, supports single-service projects only.)"
+	return msg + " (--build-host, which builds on a WendyOS device, does not support this project type.)"
 }
 
 // nativeBuildCPUs names the device CPUs that build target natively. An arm64
