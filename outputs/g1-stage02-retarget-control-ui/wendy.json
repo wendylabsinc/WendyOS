@@ -1,0 +1,12 @@
+{
+  "appId": "g1-stage02-retarget-control-ui",
+  "version": "0.2.0-rate-selector",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" }
+  ],
+  "readiness": {
+    "tcpSocket": { "port": 8122 },
+    "timeoutSeconds": 30
+  }
+}

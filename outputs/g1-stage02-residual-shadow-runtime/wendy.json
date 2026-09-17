@@ -1,0 +1,14 @@
+{
+  "appId": "g1-stage02-residual-shadow-runtime",
+  "version": "0.3.2-stage02-persistent-distance-trace",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network" },
+    { "type": "gpu" },
+    { "type": "persist", "name": "g1-stage02-policy-runs", "path": "/run-data" }
+  ],
+  "readiness": {
+    "tcpSocket": { "port": 8117 },
+    "timeoutSeconds": 180
+  }
+}

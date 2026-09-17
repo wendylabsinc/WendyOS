@@ -1,0 +1,21 @@
+{
+  "schema": "wendy.g1.policy-candidate.v1",
+  "candidate_id": "reference-residual-gru-stage02-wide-u0016",
+  "checkpoint_sha256": "3aaf0c8279e9190a6d47740f6dfdd427ff4fb495ab7e1ae11334e1e1d3573738",
+  "training_contract_sha256": "7d29bbe1ec5eaada8c3e4dcd362c5d315705172e34def9901f9fa01056ae045e",
+  "reference_contract_sha256": "05fd43a10a2968141aaba140a82cc39ce683aa19418cc24938bea29f6aae5002",
+  "reference_rollout_sha256": "8dddda350bfafd6dbe81696a4cca13d8b0c101cf095aa4e353e6520d011ae28e",
+  "reference_manifest_sha256": "ca8e0a83b16b35110b5d11ffc46069817dda4347e0c0c038c2f600154f2b46e2",
+  "architecture": "reference-residual-gru-v1",
+  "checkpoint_update": 16,
+  "v2_updates": 32,
+  "embedded_actor_input_dim": 316,
+  "effective_actor_input_dim": 316,
+  "action_dim": 15,
+  "control_hz": 40,
+  "camera_hz": 20,
+  "owned_indices": [12, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42],
+  "motion_capability": false,
+  "physical_motion_authorized": false,
+  "qualification": "simulator-only; motion-disabled staging and shadow inference"
+}

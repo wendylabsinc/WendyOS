@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""Read-only status viewer for the G1 object-retarget sweep on Runpod."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+
+SWEEP_ROOT = "/workspace/g1-object-retarget-sweep-20260917"
+NETWORK_VOLUME_ID = "4ujarub7y6"
+
+REMOTE_READER = r'''
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+
+def load(path):
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def rate(value):
+    if isinstance(value, dict):
+        return value.get("rate")
+    return value
+
+
+def evaluation(path):
+    data = load(path)
+    if not data:
+        return None
+    conditionals = data.get("conditionals", {})
+    return {
+        "path": str(path),
+        "episodes": data.get("episodes"),
+        "successes": data.get("successes"),
+        "success_rate": data.get("success_rate"),
+        "catastrophic": data.get("catastrophic_episodes"),
+        "score": data.get("score"),
+        "opposed_given_contact": rate(conditionals.get("opposed_given_contact")),
+        "zone_given_lift8": rate(conditionals.get("zone_given_lift8")),
+        "release_given_landing": rate(conditionals.get("release_given_landing")),
+        "success_given_lift8": rate(conditionals.get("success_given_lift8")),
+    }
+
+
+process = subprocess.run(
+    ["pgrep", "-af", "run_zone_arm|zone_evaluate|gpu_run|run_retarget_screen"],
+    text=True,
+    capture_output=True,
+)
+
+screen = {}
+for path in sorted((root / "screen").glob("gain-*.json")):
+    if path.name.endswith("-launch.json"):
+        continue
+    item = evaluation(path)
+    if item:
+        screen[path.stem.removeprefix("gain-")] = item
+
+confirm = {}
+for path in sorted((root / "confirm-4cm").glob("gain-*.json")):
+    item = evaluation(path)
+    if item:
+        confirm[path.stem.removeprefix("gain-")] = item
+
+training = {}
+training_root = root / "training-sweep"
+if training_root.exists():
+    for arm in sorted(path for path in training_root.iterdir() if path.is_dir()):
+        evaluations = {}
+        for path in sorted(arm.glob("evaluation-u*.json")):
+            item = evaluation(path)
+            if item:
+                evaluations[path.stem.removeprefix("evaluation-")] = item
+        training[arm.name] = {
+            "status": load(arm / "status.json"),
+            "completion": load(arm / "completion.json"),
+            "evaluations": evaluations,
+        }
+
+print(json.dumps({
+    "root": str(root),
+    "exists": root.exists(),
+    "selected": load(root / "selected-policy.json"),
+    "selected_markdown": str(root / "SELECTED_POLICY.md"),
+    "validation": load(root / "retarget-validation.json"),
+    "active_processes": [line for line in process.stdout.splitlines() if line.strip()],
+    "screen_2cm": screen,
+    "confirm_4cm": confirm,
+    "training": training,
+}))
+'''
+
+
+def run_json(command: list[str]) -> object:
+    completed = subprocess.run(command, text=True, capture_output=True)
+    if completed.returncode:
+        message = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(message or f"command failed: {' '.join(command)}")
+    return json.loads(completed.stdout)
+
+
+def discover_pod() -> dict:
+    pods = run_json(["runpodctl", "pod", "list"])
+    candidates = [
+        pod for pod in pods
+        if pod.get("runtimeStatus") == "running"
+    ]
+    errors = []
+    for summary in candidates:
+        try:
+            pod = run_json(["runpodctl", "pod", "get", summary["id"]])
+        except Exception as exc:  # keep trying other mounted pods
+            errors.append(f"{summary.get('id')}: {exc}")
+            continue
+        if pod.get("networkVolumeId") != NETWORK_VOLUME_ID:
+            continue
+        ssh = pod.get("ssh") or {}
+        key = (ssh.get("ssh_key") or {}).get("path")
+        if ssh.get("ip") and ssh.get("port") and key:
+            return pod
+    detail = "; ".join(errors)
+    suffix = f" ({detail})" if detail else ""
+    raise RuntimeError(
+        f"no running pod with network volume {NETWORK_VOLUME_ID} and SSH access{suffix}"
+    )
+
+
+def read_remote(pod: dict) -> dict:
+    ssh = pod["ssh"]
+    key = ssh["ssh_key"]["path"]
+    command = [
+        "ssh",
+        "-i", key,
+        "-p", str(ssh["port"]),
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=10",
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"root@{ssh['ip']}",
+        "python", "-", SWEEP_ROOT,
+    ]
+    completed = subprocess.run(
+        command,
+        input=REMOTE_READER,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode:
+        raise RuntimeError(completed.stderr.strip() or "SSH status read failed")
+    return json.loads(completed.stdout)
+
+
+def percent(value: object) -> str:
+    return "n/a" if value is None else f"{100 * float(value):.1f}%"
+
+
+def result_line(name: str, item: dict) -> str:
+    successes = item.get("successes")
+    episodes = item.get("episodes")
+    success = f"{successes}/{episodes} ({percent(item.get('success_rate'))})"
+    return (
+        f"{name:<24} {success:<20} "
+        f"opp {percent(item.get('opposed_given_contact')):<7} "
+        f"zone {percent(item.get('zone_given_lift8')):<7} "
+        f"cat {item.get('catastrophic', 'n/a')}"
+    )
+
+
+def render(pod: dict, data: dict) -> None:
+    print(f"G1 object-retarget status | {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z}")
+    print(
+        f"Runpod: {pod.get('name')} ({pod.get('id')}) | "
+        f"${pod.get('costPerHr', 0):.2f}/hr | read-only"
+    )
+    print(f"Artifacts: {data.get('root')}")
+
+    selected = data.get("selected") or {}
+    if selected:
+        retarget = selected.get("object_retarget") or {}
+        print(
+            "Selected: untouched Stage 2 + object retarget "
+            f"gain={retarget.get('gain')} damping={retarget.get('damping')} "
+            f"smoothing={retarget.get('smoothing')}"
+        )
+        print(f"Checkpoint SHA: {selected.get('selected_checkpoint_sha256')}")
+    else:
+        print("Selected: selection manifest not found")
+
+    processes = data.get("active_processes") or []
+    print(f"Active sweep processes: {len(processes)}")
+    for process in processes:
+        print(f"  {process}")
+
+    screen = data.get("screen_2cm") or {}
+    if screen:
+        print("\nHeld-out gain screen (±2 cm, ±1 rad)")
+        for gain, item in screen.items():
+            print(result_line(f"gain {gain}", item))
+
+    confirm = data.get("confirm_4cm") or {}
+    if confirm:
+        print("\nWider confirmation (±4 cm, ±1 rad)")
+        for gain, item in confirm.items():
+            print(result_line(f"gain {gain}", item))
+
+    training = data.get("training") or {}
+    if training:
+        print("\nPPO continuations")
+        for arm, details in training.items():
+            state = (details.get("status") or {}).get("state", "unknown")
+            print(f"{arm}: {state}")
+            for update, item in (details.get("evaluations") or {}).items():
+                print("  " + result_line(update, item))
+
+    print(f"\nReport: {data.get('selected_markdown')}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Show the G1 object-retarget sweep from its Runpod network volume."
+    )
+    parser.add_argument(
+        "--watch",
+        nargs="?",
+        const=30.0,
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help="refresh continuously (default interval: 30 seconds)",
+    )
+    parser.add_argument("--json", action="store_true", help="print raw JSON")
+    args = parser.parse_args()
+
+    while True:
+        try:
+            pod = discover_pod()
+            data = read_remote(pod)
+            if args.watch and sys.stdout.isatty() and not args.json:
+                print("\033[2J\033[H", end="")
+            if args.json:
+                print(json.dumps({"pod": pod, "sweep": data}, indent=2))
+            else:
+                render(pod, data)
+        except (RuntimeError, json.JSONDecodeError, OSError) as exc:
+            print(f"g1-retarget-status: {exc}", file=sys.stderr)
+            if not args.watch:
+                return 1
+        if not args.watch:
+            return 0
+        time.sleep(max(args.watch, 1.0))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,80 @@
+{
+  "schema": "gpu-supported-placement-reference-v1",
+  "source_full_task_qualified": true,
+  "recording": "/home/wendy/g1-supported-placement-v2-20260916/candidate-01",
+  "recording_sha256": "1a18bfba2806783460c4691d53c436021cff79d8e5c5ccdaf1899d64652d3a2f",
+  "recording_result_sha256": "a014f4b43fc3ca3feb297d2c5f61913cdf06c8b47d7cea940d5c23e2c0211c51",
+  "recording_contract_sha256": "eca12b3e6919484d1e5afc016a668ebda8accd6566d6e85cde6dcba54ca7a208",
+  "original_reference": "/home/wendy/g1-three-table-mimic-1000-20260913/campaign-v2/attempt-000001",
+  "physics": "CUDA MJWarp",
+  "engine": {
+    "repository": "https://github.com/google-deepmind/mujoco_warp",
+    "commit": "b32c082e9a47300609b441d0cdeff67ecf0a5b4e",
+    "pull_request": 1653,
+    "source_sha256": {
+      "collision_convex.py": "146f9bc8d321ba05f1393079dffe4570fc219b9eeca78f8d792f3ec5db507120",
+      "collision_gjk.py": "963fd3a3f42d9307526cb21dafe8d34565cd2ac33782e65319a83da17e958045",
+      "io.py": "ffee30607c17c1b480f0496316133043af8233058c3c80614a35ddfc285e257b"
+    },
+    "verified_source": "/home/wendy/g1-top-contact-gpu1653-validation/upstream/mujoco_warp/_src",
+    "version": "3.12.0"
+  },
+  "contact_physics": {
+    "version": "grasp-slip-v1",
+    "friction_impratio": 10.0,
+    "cone": 0,
+    "noslip_iterations": 0
+  },
+  "frames": 1200,
+  "duration_s": 30.0,
+  "action_alignment": "pre-step state[t], applied targets[t+1] from GPU archive",
+  "qualification_scope": "Complete nominal 30-second CUDA MJWarp replay; not randomized or hardware qualification",
+  "files_sha256": {
+    "model.mjb": "2702eb2f60a0879f9ec53d522e6aad1866ac1dc7ba1d85e75291658e77b1d190",
+    "result.json": "3f64e006c3c540163c144126f8d5497b1871e0dcdc3fd9fb14b7d41f02d265e4",
+    "rollout.npz": "8dddda350bfafd6dbe81696a4cca13d8b0c101cf095aa4e353e6520d011ae28e"
+  },
+  "parent_reference": "/home/wendy/g1-table-contact-reference-20260916/final/reference",
+  "parent_reference_sha256": "ebe94a40fcc739ea6e22a3102e80591cea3b3c9a6566307e4f35a182c8c48b00",
+  "retiming": {
+    "duration_s": 30.0,
+    "settle_s": 2.0,
+    "knots": [
+      [
+        0,
+        0
+      ],
+      [
+        11.022458628841608,
+        75
+      ],
+      [
+        22.25,
+        120
+      ],
+      [
+        24.471037668798864,
+        145
+      ],
+      [
+        26.671037668798864,
+        161
+      ],
+      [
+        29,
+        190.35
+      ],
+      [
+        30,
+        190.35
+      ]
+    ],
+    "smooth": false,
+    "source_duration_s": 190.375
+  },
+  "reference_replay_qualified": true,
+  "replay_result": "/home/wendy/g1-reference-30s-20260916/v4/lower22-replay/result.json",
+  "replay_result_sha256": "1f14c693a72b58dcb40fcba970ea974408019cb76ed15f8999c11f716c167c6f",
+  "replay_rollout_sha256": "0727effe11d304e60932e53d640399c15bf4010ecd09063af1092483519e2a71",
+  "retiming_source_sha256": "33b243d3c4c75bcea0530bf356f279fa35657748cd90a4993d240a90b7902777"
+}

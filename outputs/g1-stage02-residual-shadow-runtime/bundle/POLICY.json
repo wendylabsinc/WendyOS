@@ -1,0 +1,33 @@
+{
+  "schema": "wendy.g1.reference-residual-runtime-bundle.v1",
+  "runtime_abi": "g1-reference-residual-gru-316x15-40hz-v1",
+  "candidate_id": "reference-residual-gru-stage02-wide-u0016",
+  "checkpoint_update": 16,
+  "checkpoint_sha256": "3aaf0c8279e9190a6d47740f6dfdd427ff4fb495ab7e1ae11334e1e1d3573738",
+  "reference_contract_sha256": "05fd43a10a2968141aaba140a82cc39ce683aa19418cc24938bea29f6aae5002",
+  "reference_result_path": "reference/selected-reference/result.json",
+  "policy_contract": {
+    "architecture": "reference-residual-gru-v1",
+    "observation_dimension": 316,
+    "action_dimension": 15,
+    "owned_indices": [12, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42],
+    "control_hz": 40,
+    "camera_hz": 20,
+    "recurrent_memory": "GRU-128"
+  },
+  "files": {
+    "checkpoint.pt": "3aaf0c8279e9190a6d47740f6dfdd427ff4fb495ab7e1ae11334e1e1d3573738",
+    "reference-contract.npz": "05fd43a10a2968141aaba140a82cc39ce683aa19418cc24938bea29f6aae5002",
+    "reference/selected-reference/result.json": "3f64e006c3c540163c144126f8d5497b1871e0dcdc3fd9fb14b7d41f02d265e4",
+    "source/recurrent_bc/baseline/visual_policy.py": "109b7f0e060ffd3ecdf214a4fc938238404ecdf89394ab76b823837642c1c432",
+    "source/recurrent_bc/recurrent_policy.py": "da0832f5456a50554eaffcec456cb1081b2678325daf6c1dc77f4717c73285d8",
+    "source/reference_rl/recurrent_residual.py": "cf905a1a4db80e1a93455d33cb90974c0fd77ad482674e739d9debba8aa45800",
+    "source/reference_rl/policy.py": "9e617c72e84ebc1a767939ed924e9c0fa7e943049219a1bba3b9da36f5c50227",
+    "source/reference_rl/sensor_contract.py": "9b4325116a7610a77ec0b416b456c316c098657f283077733cdfd99c7d77042b"
+  },
+  "qualification": {
+    "simulation_only": true,
+    "physical_robot_qualified": false,
+    "note": "Runtime compatibility is not physical task qualification."
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "schema": "g1.object-retarget-selection.v1",
+  "simulation_only": true,
+  "selected_checkpoint": "/workspace/g1-object-retarget-sweep-20260917/stage2-winner.pt",
+  "selected_checkpoint_sha256": "3aaf0c8279e9190a6d47740f6dfdd427ff4fb495ab7e1ae11334e1e1d3573738",
+  "object_retarget": {
+    "gain": 1.0,
+    "damping": 0.03,
+    "smoothing": 0.2,
+    "position_source_required_on_robot": "perception-derived can XY displacement in the policy/world frame; simulator truth is not an admissible robot input"
+  },
+  "heldout": {
+    "plus_minus_2cm": {
+      "episodes": 256,
+      "successes": 256,
+      "catastrophic": 0
+    },
+    "plus_minus_4cm": {
+      "episodes": 256,
+      "successes": 196,
+      "catastrophic": 1
+    }
+  },
+  "selection": "Use the untouched Stage 2 checkpoint plus deterministic object retargeting. Reject both PPO continuation arms.",
+  "physical_robot_qualified": false
+}

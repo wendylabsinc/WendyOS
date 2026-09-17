@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+if [ -x /opt/homebrew/bin/python3 ]; then
+  exec /opt/homebrew/bin/python3 "$(dirname "$0")/deploy_sim_policy.py" "$@"
+fi
+
+exec python3 "$(dirname "$0")/deploy_sim_policy.py" "$@"

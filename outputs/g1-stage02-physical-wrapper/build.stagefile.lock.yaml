@@ -1,0 +1,4 @@
+version: 1
+sourceHash: sha256:8218cfd42710e2f8370f02f193cb157b70b6dde863338d697ca005d5130ca183
+images:
+    127.0.0.1:65010/g1-reference-residual-adapter-base:stage02: sha256:67c0b87aec96f8a63142ba8e134da1801d19d53cbac38b864310f82ff8539802

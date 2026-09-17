@@ -1,0 +1,76 @@
+FROM dustynv/pytorch:2.7-r36.4.0-cu128-24.04
+
+USER root
+WORKDIR /app
+
+ADD --checksum=sha256:928170c9e743257c063c235a610473cfec4be917a36f91a61a890ba2bfc47c94 https://repo.download.nvidia.com/jetson/common/pool/main/n/nvidia-l4t-dla-compiler/nvidia-l4t-dla-compiler_36.4.3-20250107174145_arm64.deb /opt/vendor/nvidia-l4t-dla-compiler.deb
+ADD --checksum=sha256:249bcd286f2dcb64bddc08fdedd7ec50101c3274df6e189f8e5ee753f52de6ad https://github.com/unitreerobotics/unitree_sdk2_python/archive/a035adeaa6f8ea171bef9a43e8477abb87a0b35e.tar.gz /tmp/unitree-sdk.tar.gz
+
+RUN rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates cmake g++ gcc git make \
+    && git init /tmp/cyclonedds \
+    && git -C /tmp/cyclonedds remote add origin https://github.com/eclipse-cyclonedds/cyclonedds.git \
+    && git -C /tmp/cyclonedds fetch --depth 1 origin 2cdd114cbd18340c606573b4cc8dc20cc161ec5a \
+    && git -C /tmp/cyclonedds checkout --detach FETCH_HEAD \
+    && cmake -S /tmp/cyclonedds -B /tmp/cyclonedds-build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/cyclonedds -DBUILD_DDSPERF=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF \
+    && cmake --build /tmp/cyclonedds-build --parallel 4 \
+    && cmake --install /tmp/cyclonedds-build \
+    && mkdir -p /opt/sdk-source \
+    && tar -xzf /tmp/unitree-sdk.tar.gz -C /opt/sdk-source \
+    && CYCLONEDDS_HOME=/opt/cyclonedds pip3 install --no-cache-dir --index-url https://pypi.org/simple cyclonedds==0.10.2 pyquaternion \
+    && rm -rf /var/lib/apt/lists/* /tmp/cyclonedds /tmp/cyclonedds-build /tmp/unitree-sdk.tar.gz
+
+ENV CYCLONEDDS_HOME=/opt/cyclonedds
+ENV LD_LIBRARY_PATH=/opt/cyclonedds/lib:/usr/lib/aarch64-linux-gnu:/usr/lib/aarch64-linux-gnu/nvidia:/usr/lib/aarch64-linux-gnu/tegra:/usr/local/cuda/compat:/usr/local/cuda/lib64
+ENV PYTHONPATH=/app:/opt/sdk-source/unitree_sdk2_python-a035adeaa6f8ea171bef9a43e8477abb87a0b35e
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+ENV G1_ALLOWED_MODE_MACHINE=6
+ENV G1_COMMAND_WATCHDOG_S=2.0
+ENV G1_DDS_INTERFACE=enP8p1s0
+ENV G1_ENFORCE_CONTROL_DEADLINE=false
+ENV G1_ENTRY_HAND_SPEED_LIMIT_RAD_S=0.30
+ENV G1_ENTRY_MAXIMUM_STEP_RAD=0.04
+ENV G1_ENTRY_OWNERSHIP_RAMP_S=1.0
+ENV G1_ENTRY_POSITION_LIMIT_RAD=0.06
+ENV G1_ENTRY_SPEED_LIMIT_RAD_S=0.06
+ENV G1_ENTRY_TRACKING_ABORT_RAD=0.22
+ENV G1_FAULT_HOLD_LOG_INTERVAL_STEPS=400
+ENV G1_FAULT_RELEASE_DURATION_S=1.0
+ENV G1_FSM_BRIDGE_URL=http://127.0.0.1:8100
+ENV G1_MAXIMUM_CAMERA_AGE_S=1.0
+ENV G1_MAXIMUM_POLICY_STEP_RAD=0.052
+ENV G1_MAXIMUM_POLICY_TRACKING_ERROR_RAD=0.44
+ENV G1_MAXIMUM_STATE_SKEW_S=0.05
+ENV G1_MOTION_ENABLED=true
+ENV G1_PHYSICAL_CONTROL_HZ=40
+ENV G1_PHYSICAL_PORT=8121
+ENV G1_POLICY_BUNDLE=/bundle
+ENV G1_POLICY_CONTROL_DEVICE=cpu
+ENV G1_POLICY_CPU_THREADS=1
+ENV G1_POLICY_DEVICE=cuda
+ENV G1_REQUIRED_FSM_ID=500
+ENV G1_REQUIRE_ENTRY_SETTLE=false
+ENV G1_RETREAT_MAXIMUM_SPEED_RAD_S=0.08
+ENV G1_RETREAT_TRACKING_ABORT_RAD=0.22
+ENV G1_RUNTIME_MODE=physical_policy
+ENV G1_RUN_LOG_DIR=/var/lib/wendy/g1-stage02-runs
+ENV G1_SEGMENTATION_URL=http://127.0.0.1:8003
+ENV G1_TIMING_LOG_INTERVAL_STEPS=40
+ENV JETSON_RUNTIME_ROOT=/opt/nvidia/jetpack-36.4.3
+
+COPY base_runtime/runtime /app/runtime
+COPY base_runtime/physical_io /app/physical_io
+COPY physical_overlay/physical_io/service.py /app/physical_io/service.py
+COPY physical_overlay/runtime/physical_policy.py /app/runtime/physical_policy.py
+COPY physical_overlay/runtime/inference_client.py /app/runtime/inference_client.py
+COPY physical_bundle/reference-contract.npz /bundle/reference-contract.npz
+
+RUN python3 -m py_compile /app/runtime/physical_policy.py /app/runtime/inference_client.py /app/physical_io/service.py \
+    && grep -q _retreat_along_commanded_path /app/runtime/physical_policy.py \
+    && grep -q reference-residual-safe-retreat-request /app/physical_io/service.py
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=4 CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8121/health', timeout=2)"]
+CMD ["python3", "-m", "runtime.bootstrap"]

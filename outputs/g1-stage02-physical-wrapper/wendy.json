@@ -1,0 +1,12 @@
+{
+  "appId": "g1-stage02-physical-wrapper",
+  "version": "0.5.1-stage02-safe-retreat",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network" }
+  ],
+  "readiness": {
+    "tcpSocket": { "port": 8121 },
+    "timeoutSeconds": 60
+  }
+}

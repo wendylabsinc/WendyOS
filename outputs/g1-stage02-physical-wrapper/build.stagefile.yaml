@@ -1,0 +1,60 @@
+version: 1
+stages:
+  - name: app
+    from: 127.0.0.1:65010/g1-reference-residual-adapter-base:stage02
+    workdir: /app
+    user: root
+    env:
+      PYTHONUNBUFFERED: "1"
+      G1_ALLOWED_MODE_MACHINE: "6"
+      G1_COMMAND_WATCHDOG_S: "2.0"
+      G1_DDS_INTERFACE: enP8p1s0
+      G1_ENFORCE_CONTROL_DEADLINE: "false"
+      G1_ENTRY_HAND_SPEED_LIMIT_RAD_S: "0.30"
+      G1_ENTRY_MAXIMUM_STEP_RAD: "0.04"
+      G1_ENTRY_OWNERSHIP_RAMP_S: "1.0"
+      G1_ENTRY_POSITION_LIMIT_RAD: "0.06"
+      G1_ENTRY_SPEED_LIMIT_RAD_S: "0.06"
+      G1_ENTRY_TRACKING_ABORT_RAD: "0.22"
+      G1_FAULT_HOLD_LOG_INTERVAL_STEPS: "400"
+      G1_FAULT_RELEASE_DURATION_S: "1.0"
+      G1_FSM_BRIDGE_URL: "http://127.0.0.1:8100"
+      G1_MAXIMUM_CAMERA_AGE_S: "1.0"
+      G1_MAXIMUM_POLICY_STEP_RAD: "0.052"
+      G1_MAXIMUM_POLICY_TRACKING_ERROR_RAD: "0.44"
+      G1_MAXIMUM_STATE_SKEW_S: "0.05"
+      G1_MOTION_ENABLED: "true"
+      G1_PHYSICAL_CONTROL_HZ: "40"
+      G1_PHYSICAL_PORT: "8121"
+      G1_POLICY_BUNDLE: /bundle
+      G1_POLICY_CONTROL_DEVICE: cpu
+      G1_POLICY_CPU_THREADS: "1"
+      G1_POLICY_DEVICE: cuda
+      G1_REQUIRED_FSM_ID: "500"
+      G1_REQUIRE_ENTRY_SETTLE: "false"
+      G1_RETREAT_MAXIMUM_SPEED_RAD_S: "0.08"
+      G1_RETREAT_TRACKING_ABORT_RAD: "0.22"
+      G1_RUNTIME_MODE: physical_policy
+      G1_RUN_LOG_DIR: /var/lib/wendy/g1-stage02-runs
+      G1_SEGMENTATION_URL: http://127.0.0.1:8003
+      G1_TIMING_LOG_INTERVAL_STEPS: "40"
+    copy:
+      - from: local
+        paths: [physical_overlay/physical_io/service.py]
+        dest: /app/physical_io/service.py
+      - from: local
+        paths: [physical_overlay/runtime/physical_policy.py]
+        dest: /app/runtime/physical_policy.py
+      - from: local
+        paths: [physical_overlay/runtime/inference_client.py]
+        dest: /app/runtime/inference_client.py
+      - from: local
+        paths: [physical_bundle/reference-contract.npz]
+        dest: /bundle/reference-contract.npz
+    healthcheck:
+      exec: [python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8121/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      startPeriod: 20s
+      retries: 4
+    cmd: [python3, -m, runtime.bootstrap]

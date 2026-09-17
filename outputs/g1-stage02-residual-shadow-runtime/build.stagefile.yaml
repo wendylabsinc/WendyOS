@@ -1,0 +1,41 @@
+version: 1
+stages:
+  - name: app
+    from: dustynv/pytorch:2.7-r36.4.0-cu128-24.04
+    workdir: /
+    user: root
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /
+      G1_RUNTIME_PACKAGE: g1_runtime
+      G1_RUNTIME_MODE: inference
+      G1_POLICY_BUNDLE: /bundle
+      G1_INFERENCE_PORT: "8117"
+      G1_RUN_LOG_DIR: /run-data
+      G1_SEGMENTATION_URL: http://127.0.0.1:8003
+      G1_MAXIMUM_CAMERA_AGE_S: "1.0"
+      G1_POLICY_DEVICE: cuda
+      G1_POLICY_CONTROL_DEVICE: cpu
+      G1_POLICY_CPU_THREADS: "1"
+      G1_MOTION_ENABLED: "false"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      JETSON_RUNTIME_ROOT: /opt/nvidia/jetpack-36.4.3
+    download:
+      - url: https://repo.download.nvidia.com/jetson/common/pool/main/n/nvidia-l4t-dla-compiler/nvidia-l4t-dla-compiler_36.4.3-20250107174145_arm64.deb
+        sha256: 928170c9e743257c063c235a610473cfec4be917a36f91a61a890ba2bfc47c94
+        dest: /opt/vendor/nvidia-l4t-dla-compiler.deb
+    copy:
+      - from: local
+        paths: [runtime]
+        dest: /g1_runtime
+      - from: local
+        paths: [bundle]
+        dest: /bundle
+    healthcheck:
+      exec: [python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8117/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      startPeriod: 90s
+      retries: 6
+    cmd: [python3, -m, g1_runtime.bootstrap]

@@ -1,0 +1,174 @@
+{
+  "schema": "g1.object-retarget.motion-zero-handoff.v1",
+  "created_for": "readiness/deployment integration only; no robot command or motion authorization",
+  "physical_robot_authority": false,
+  "selected_checkpoint": {
+    "path": "/workspace/g1-object-retarget-sweep-20260917/stage2-winner.pt",
+    "sha256": "3aaf0c8279e9190a6d47740f6dfdd427ff4fb495ab7e1ae11334e1e1d3573738"
+  },
+  "reference": {
+    "path": "/workspace/g1-object-retarget-sweep-20260917/runtime/selected-reference",
+    "sha256": "8dddda350bfafd6dbe81696a4cca13d8b0c101cf095aa4e353e6520d011ae28e",
+    "frames": 1200,
+    "duration_s": 30.0,
+    "nominal_can_initial_world_m": [
+      -0.4065316004367646,
+      -0.25460527455266807,
+      0.832
+    ],
+    "target_marker_world_m": [
+      0.4352455040397655,
+      -0.14886689092330266,
+      0.7702
+    ]
+  },
+  "retarget": {
+    "gain": 1.0,
+    "damping": 0.03,
+    "smoothing": 0.2,
+    "input": "perception-derived can XY displacement in the calibrated policy/world frame",
+    "gains_path": "/workspace/g1-object-retarget-sweep-20260917/physical-handoff-motion-zero/retarget-gains-f32.npy",
+    "gains_shape": [
+      1200,
+      43,
+      2
+    ],
+    "gains_dtype": "float32",
+    "shift_weights_path": "/workspace/g1-object-retarget-sweep-20260917/physical-handoff-motion-zero/retarget-shift-weights-f32.npy",
+    "manifest": {
+      "schema": "g1.object-relative-reference-retarget.v1",
+      "joint_indices": [
+        12,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35
+      ],
+      "joint_names": [
+        "waist_yaw_joint",
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        "right_wrist_pitch_joint",
+        "right_wrist_yaw_joint"
+      ],
+      "damping": 0.03,
+      "smoothing": 0.2,
+      "maximum_linear_xy_response_error": 0.05678333151731807,
+      "p95_regularized_condition_number": 46.10812545187072,
+      "maximum_gain_rad_per_m": 5.451785909256764,
+      "shift_weight_start": 1.0,
+      "shift_weight_end": 0.0031420476734638214
+    }
+  },
+  "camera_reference": {
+    "path": "/workspace/g1-object-retarget-sweep-20260917/physical-handoff-motion-zero/nominal-can-camera-reference.npz",
+    "camera_name": "robot_rgbd",
+    "image_size": [
+      320,
+      240
+    ],
+    "nominal_can_camera_shape": [
+      1200,
+      3
+    ],
+    "camera_position_world_shape": [
+      1200,
+      3
+    ],
+    "camera_rotation_world_from_camera_shape": [
+      1200,
+      3,
+      3
+    ],
+    "intrinsic_K_derived_from_mujoco_fovy": [
+      [
+        156.38704474094467,
+        0.0,
+        160.0
+      ],
+      [
+        0.0,
+        156.38704474094467,
+        120.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "files": {
+    "/workspace/g1-object-retarget-sweep-20260917/stage2-winner.pt": {
+      "sha256": "3aaf0c8279e9190a6d47740f6dfdd427ff4fb495ab7e1ae11334e1e1d3573738",
+      "bytes": 5433069
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/source/object_retarget.py": {
+      "sha256": "ea519bbf39b946a49ce993f8694a657d5fa960a32efd9bcaf7207f4213b34ed8",
+      "bytes": 4001
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/source/gpu_environment.py": {
+      "sha256": "aa45e5c7aff8ca2a2813b9bf3942467d97b1616425e65d256054b05f661646ed",
+      "bytes": 36780
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/source/gpu_run.py": {
+      "sha256": "129f8d9ec7049d741500dc4aeb0f15c0acea0275699fb4eea2b07ff3aeee51d9",
+      "bytes": 29584
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/source/zone_evaluate.py": {
+      "sha256": "a693891ffb498810ee8ba8c442533707212164a0e02d00adfac635e1cdc7c9f9",
+      "bytes": 20303
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/selected-policy.json": {
+      "sha256": "c6633bf8a7ff3191f286d3c4d6a5dd9fe00f7432391f7b9eb5102a2c07381f87",
+      "bytes": 902
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/runtime/selected-reference/model.mjb": {
+      "sha256": "2702eb2f60a0879f9ec53d522e6aad1866ac1dc7ba1d85e75291658e77b1d190",
+      "bytes": 126262669
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/runtime/selected-reference/rollout.npz": {
+      "sha256": "8dddda350bfafd6dbe81696a4cca13d8b0c101cf095aa4e353e6520d011ae28e",
+      "bytes": 788540
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/runtime/selected-reference/result.json": {
+      "sha256": "3f64e006c3c540163c144126f8d5497b1871e0dcdc3fd9fb14b7d41f02d265e4",
+      "bytes": 7467
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/runtime/selected-reference/gpu-reference.json": {
+      "sha256": "ca8e0a83b16b35110b5d11ffc46069817dda4347e0c0c038c2f600154f2b46e2",
+      "bytes": 2916
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/physical-handoff-motion-zero/retarget-gains-f32.npy": {
+      "sha256": "07f4dd464045dbf02fe9ab54a47a947b139682e1f84547eaafe28e89e605a57e",
+      "bytes": 412928
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/physical-handoff-motion-zero/retarget-shift-weights-f32.npy": {
+      "sha256": "e3213b0a9c54201e6cf1f06ad18d0b74300550b51161b0c130a58d6ddb7435e4",
+      "bytes": 4928
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/physical-handoff-motion-zero/nominal-can-world-f64.npy": {
+      "sha256": "7c07d06e3e3ec814062cef75620866d6528b2800b778164dde05b3c91929f51b",
+      "bytes": 28928
+    },
+    "/workspace/g1-object-retarget-sweep-20260917/physical-handoff-motion-zero/nominal-can-camera-reference.npz": {
+      "sha256": "9933529153856d924ffa4c14ca0e4375a364a51529ecf9a369e951f3aedecf08",
+      "bytes": 406154
+    }
+  },
+  "limitations": [
+    "Simulation-selected only; not physical-robot qualified.",
+    "The simulator used ground-truth randomized can displacement. The robot must use perception-derived can position; simulator truth is forbidden.",
+    "The stored camera trajectory is nominal MuJoCo kinematics, not a calibration of the physical RGB-D camera.",
+    "A live detected camera-frame point must be transformed through a calibrated, timestamped camera-to-policy/world transform before applying the gains.",
+    "Perception confidence, latency, stale-frame rejection, offset clipping, and zero-motion dry-run comparison remain unqualified.",
+    "The retargeter corrects world XY translation only; it does not retarget can yaw, vertical displacement, or target placement geometry.",
+    "No artifact in this handoff grants physical motion authority."
+  ]
+}
