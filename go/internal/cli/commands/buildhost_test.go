@@ -422,8 +422,14 @@ func TestRejectUnsupportedBuildHostProject(t *testing.T) {
 		t.Fatalf("local builds remain supported: %v", err)
 	}
 	err := rejectUnsupportedBuildHostProject("spark-office", "Compose projects")
-	if err == nil || !strings.Contains(err.Error(), "single-service container image projects") {
+	if err == nil || !strings.Contains(err.Error(), "container image projects only") {
 		t.Fatalf("got %v, want a clear remote-build support boundary", err)
+	}
+	// The boundary must no longer be described as single-service: a service
+	// group builds remotely since WDY-3120, and a message saying otherwise
+	// sends a developer back to splitting one app into three.
+	if strings.Contains(err.Error(), "single-service") {
+		t.Fatalf("got %v, want a boundary that does not exclude multi-service projects", err)
 	}
 }
 

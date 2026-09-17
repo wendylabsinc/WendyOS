@@ -192,6 +192,19 @@ func computeServicePlans(cwd, platform, backend, gpuArch string, serviceEnvs map
 	return plans
 }
 
+// serviceImageRepo is the repository one service's image is built into and
+// deployed from: <app>-<service>, lowercased because a repository name must be.
+//
+// It is one function because the name has to be identical in three places that
+// never compare notes — the local build+push, the remote build's push target,
+// and the reference createService starts the container from. A divergence there
+// is silent: the build succeeds, the image lands under a name nothing reads,
+// and the container comes up on whatever older image still holds the expected
+// one.
+func serviceImageRepo(appID, service string) string {
+	return fmt.Sprintf("%s-%s", strings.ToLower(appID), strings.ToLower(service))
+}
+
 // serviceFingerprintKey namespaces a deploy fingerprint per service within an
 // app group, so each service's build inputs are tracked independently.
 func serviceFingerprintKey(appID, service string) string {
@@ -486,7 +499,20 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 
 	// Build all service images in parallel, then create and start containers.
-	failed, preparedContent, buildErr := buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
+	// With --build-host the builds happen on that device instead and it
+	// delivers each image here; everything from this point on is identical,
+	// because both paths land the same localhost:<port>/<app>-<service>:latest
+	// reference on this device (WDY-3120).
+	var (
+		failed          map[string]error
+		preparedContent map[string][]string
+		buildErr        error
+	)
+	if opts.buildHost != "" {
+		failed, buildErr = buildServicesRemote(ctx, conn, opts.buildHost, cwd, appCfg, services, platform, buildArgs, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
+	} else {
+		failed, preparedContent, buildErr = buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
+	}
 	if buildErr != nil {
 		return buildErr
 	}
@@ -550,8 +576,7 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 
 	createService := func(name string) error {
-		deviceImage := fmt.Sprintf("localhost:%d/%s-%s:latest", regPort,
-			strings.ToLower(appCfg.AppID), strings.ToLower(name))
+		deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, serviceImageRepo(appCfg.AppID, name))
 
 		serviceCfg := svcCfgs[name]
 		appConfigData, err := json.Marshal(serviceCfg)
@@ -749,7 +774,7 @@ func buildServicesParallelCore(
 
 			start := time.Now()
 			contextDir := filepath.Join(cwd, svc.Context)
-			repo := fmt.Sprintf("%s-%s", strings.ToLower(appID), strings.ToLower(name))
+			repo := serviceImageRepo(appID, name)
 			dockerfile, planned := dockerfiles[name]
 			var dockerfileErr error
 			if !planned {
@@ -933,7 +958,7 @@ func buildServicesParallelWithContent(
 		if failed[name] != nil || skip[name] {
 			continue
 		}
-		repo := fmt.Sprintf("%s-%s", strings.ToLower(appID), strings.ToLower(name))
+		repo := serviceImageRepo(appID, name)
 		if ids := content[repo]; len(ids) > 0 {
 			byService[name] = append([]string(nil), ids...)
 		}

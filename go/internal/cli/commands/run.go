@@ -1943,9 +1943,11 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		}
 	}
 	// Multi-service path: when wendy.json has a services map, build all images
-	// in parallel and manage the app group lifecycle.
+	// in parallel and manage the app group lifecycle. --build-host is honoured
+	// here too: each service is built on the build host and delivered straight
+	// to this device (WDY-3120).
 	if len(appCfg.Services) > 0 {
-		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "multi-service projects"); err != nil {
+		if err := rejectMultiServiceFleetRun(opts); err != nil {
 			return err
 		}
 		return runMultiServiceWithAgent(ctx, conn, cwd, appCfg, opts)

@@ -84,11 +84,32 @@ func resolveAndValidateRunBuildHost(flagValue, builder string) (string, error) {
 	return host, nil
 }
 
+// rejectUnsupportedBuildHostProject refuses --build-host for a project shape the
+// remote path cannot build. What is left after WDY-3120 is the set that never
+// produces a container image from a build context: Compose, provider targets,
+// Xcode, and host-toolchain Swift. Multi-service projects are NOT in it —
+// each service is an ordinary container image build and goes remote like any
+// other (see buildServicesRemote).
 func rejectUnsupportedBuildHostProject(host, project string) error {
 	if strings.TrimSpace(host) == "" {
 		return nil
 	}
-	return fmt.Errorf("build host %s cannot build %s; remote builds currently support single-service container image projects only (remove --build-host or clear defaultBuildHost to build locally)", host, project)
+	return fmt.Errorf("build host %s cannot build %s; remote builds support Dockerfile/Stagefile container image projects only (remove --build-host or clear defaultBuildHost to build locally)", host, project)
+}
+
+// rejectMultiServiceFleetRun refuses a fleet deploy of a service group.
+//
+// A fleet run delivers ONE image to several devices from a single build, and
+// the whole group lifecycle — dependency order, shared namespaces, readiness,
+// hooks — is orchestrated against one connection in runMultiServiceWithAgent.
+// Neither generalises to N devices yet, so a fleet flag here would deploy the
+// group to the primary and silently ignore the rest. That is the wrong-machine
+// failure --build-host's design refuses elsewhere, so it is refused here too.
+func rejectMultiServiceFleetRun(opts runOptions) error {
+	if len(opts.fleetDevices) == 0 {
+		return nil
+	}
+	return fmt.Errorf("a multi-service project cannot be deployed to several devices in one run (%s): its services are created and started as a group against one device; run it per device", strings.Join(opts.fleetDevices, ", "))
 }
 
 // splitFleetDevices reads a comma-separated --device value into the primary
@@ -320,7 +341,7 @@ func runRemoteBuild(
 		return err
 	}
 
-	pushTarget, err := targetPushTarget(ctx, target, appCfg)
+	pushTarget, err := targetPushTarget(ctx, target, appRepository(appCfg))
 	if err != nil {
 		return err
 	}
@@ -354,7 +375,7 @@ func runRemoteBuild(
 		if err := assertSamePlatform(ctx, name, conn, platform); err != nil {
 			return err
 		}
-		t, err := targetPushTarget(ctx, conn, appCfg)
+		t, err := targetPushTarget(ctx, conn, appRepository(appCfg))
 		if err != nil {
 			return fmt.Errorf("resolving %s as a delivery target: %w", name, err)
 		}
@@ -577,7 +598,22 @@ func connectBuildHost(ctx context.Context, host string) (*grpcclient.AgentConnec
 // resolves where the mesh DNS server runs, which excludes adopted Linux hosts
 // whose resolver already owns 127.0.0.53 — so a reachable peer looked
 // unreachable. The build host's peer dialer needs only the id (WDY-2356).
-func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (*agentpbv2.PushTarget, error) {
+// repository is "name:tag" — appRepository for a single-service app, the
+// per-service repo for one service of a group.
+func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, repository string) (*agentpbv2.PushTarget, error) {
+	t, err := targetPushTargetBase(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	t.Repository = repository
+	return t, nil
+}
+
+// targetPushTargetBase is targetPushTarget without the repository: everything
+// that says WHERE a finished image goes, for a caller delivering several images
+// to the one device (a service group) that should resolve that once rather than
+// re-querying the device's mesh identity, OS and port per image.
+func targetPushTargetBase(ctx context.Context, target *grpcclient.AgentConnection) (*agentpbv2.PushTarget, error) {
 	resp, err := target.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("determining the target device's mesh identity: %w", err)
@@ -597,9 +633,15 @@ func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, a
 	return &agentpbv2.PushTarget{
 		AssetId:      prov.Provisioned.GetAssetId(),
 		RegistryPort: uint32(registryPort(agentOS)),
-		Repository:   strings.ToLower(appCfg.AppID) + ":latest",
 		AgentPort:    agentPort,
 	}, nil
+}
+
+// appRepository is the image name a single-service app's remote build pushes
+// to. It must match the reference the deploy path then creates the container
+// from (localRegistryReference), so it is derived rather than formatted twice.
+func appRepository(appCfg *appconfig.AppConfig) string {
+	return strings.ToLower(appCfg.AppID) + ":latest"
 }
 
 // connectedTargetAgentPort reports the mTLS endpoint the CLI actually used.
