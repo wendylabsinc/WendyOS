@@ -119,9 +119,9 @@ func WithContainerStorageGate(g *ContainerStorageGate) ContainerServiceOption {
 
 // refuseIfStorageDegraded is called as the first statement of every RPC that
 // ingests or assembles image/container content, so a degraded storage gate
-// (or an already-open stream) is rejected before any containerd call is
-// made. Nil-safe: s.storageGate.Check() is nil-receiver safe, so an unset
-// gate never refuses.
+// is rejected before any containerd call is made. Nil-safe:
+// s.storageGate.Check() is nil-receiver safe, so an unset gate never
+// refuses.
 func (s *ContainerService) refuseIfStorageDegraded() error {
 	return s.storageGate.Check()
 }

@@ -281,11 +281,15 @@ func degradedContainerStorageGateForTest() *ContainerStorageGate {
 }
 
 // healthyContainerStorageGateForTest returns a *ContainerStorageGate that is
-// a permanent no-op (off WendyOS), for tests asserting that a healthy gate
-// never blocks ingestion.
+// genuinely expected (WendyOS host, bind unit loaded) but never degraded
+// (probe always reports containerd off root), for tests asserting that a
+// healthy gate never blocks ingestion. Using isWendyOS=false here would only
+// re-test the permanent no-op path (see TestContainerStorageGateNoopOffWendyOS)
+// instead of the expected=true && !degraded branch this helper is meant to
+// exercise (WDY-3127 M-D2).
 func healthyContainerStorageGateForTest() *ContainerStorageGate {
 	return newContainerStorageGate(zap.NewNop(),
-		func() bool { return false },
+		func() bool { return true },
 		func(string) bool { return true },
 		func() bool { return false },
 		func() (partitionUsage, bool) { return partitionUsage{}, false },

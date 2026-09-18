@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -167,8 +168,8 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	if p := resp.GetContainerStorage(); p != nil {
 		info["container_storage"] = map[string]any{"mountpoint": p.GetMountpoint(), "filesystem": p.GetFilesystem(), "device": p.GetDevice(), "used_bytes": p.GetUsedBytes(), "total_bytes": p.GetTotalBytes()}
 	}
-	if resp.ContainerStorageDegraded != nil {
-		info["container_storage_degraded"] = resp.GetContainerStorageDegraded()
+	if isWendyOSAgent(resp) {
+		info["container_storage_degraded"] = containerStorageDegraded(resp)
 	}
 	if gpus := resp.GetGpuCapabilities(); len(gpus) > 0 {
 		entries := make([]map[string]any, 0, len(gpus))
@@ -199,6 +200,45 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 		info["npu_vendor"] = resp.GetNpuVendor()
 	}
 	return okResult(info), nil
+}
+
+// isWendyOSAgent and containerStorageDegraded mirror
+// internal/cli/commands/container_storage.go's functions of the same name
+// exactly (WDY-3127): they can't be imported from here, since
+// internal/cli/commands already imports internal/cli/mcp (commands/mcp.go),
+// and importing it back would be a cycle. Keep both in sync with the
+// commands package's copies.
+//
+// isWendyOSAgent reports whether resp describes a WendyOS device, as
+// opposed to a generic Linux/macOS host running the agent directly.
+// os_version and device_type are only populated on WendyOS; either signal
+// is sufficient.
+func isWendyOSAgent(resp *agentpb.GetAgentVersionResponse) bool {
+	return strings.HasPrefix(resp.GetOsVersion(), "WendyOS-") || resp.GetDeviceType() != ""
+}
+
+// containerStorageDegraded reports whether container storage is stuck on
+// the OS root slot because the /data bind mount is not active (WDY-3127).
+// An explicit container_storage_degraded field (including an explicit
+// false) is honoured verbatim; older agents that don't set it get it
+// derived from a WendyOS device whose container storage mountpoint is "/"
+// while a "/data" partition exists.
+func containerStorageDegraded(resp *agentpb.GetAgentVersionResponse) bool {
+	if resp != nil && resp.ContainerStorageDegraded != nil {
+		return resp.GetContainerStorageDegraded()
+	}
+	if !isWendyOSAgent(resp) {
+		return false
+	}
+	if resp.GetContainerStorage().GetMountpoint() != "/" {
+		return false
+	}
+	for _, p := range resp.GetPartitions() {
+		if p.GetMountpoint() == "/data" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *mcpServer) handleDeviceSetDefault(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

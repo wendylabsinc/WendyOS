@@ -32,6 +32,7 @@ When the agent can identify the filesystem that holds `/var/lib/containerd`, it 
 | Field (JSON) | Human-readable label | Description |
 |---|---|---|
 | `containerStorage` | `(container storage)` suffix on the matching partition row | The mounted filesystem backing `/var/lib/containerd`: `mountpoint`, `filesystem`, `device`, `usedBytes`, and `totalBytes`. Image pulls and container layers consume this filesystem, so its usage feeds the disk-usage warning. |
+| `containerStorageDegraded` | warning line | `true` when container storage is on the OS root slot because the `/data` bind mount is inactive; deploys are refused until the device is power-cycled. WendyOS only. |
 
 ### GPU output fields
 

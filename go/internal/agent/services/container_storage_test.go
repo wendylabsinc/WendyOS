@@ -115,8 +115,12 @@ func TestDeviceMetadataReportsContainerStorageDegraded(t *testing.T) {
 		func() bool { return true },                                      // probe
 		func() (partitionUsage, bool) { return partitionUsage{}, false }, // describeUsage
 	)
+	// isWendyOS=true, unitLoaded=true, probe=false: a genuinely healthy
+	// expected gate, not the permanent no-op (WDY-3127 M-D2) — this exercises
+	// the expected=true && !degraded branch instead of re-testing the no-op
+	// path that TestContainerStorageGateNoopOffWendyOS already covers.
 	healthy := newContainerStorageGate(zap.NewNop(),
-		func() bool { return false },
+		func() bool { return true },
 		func(string) bool { return true },
 		func() bool { return false },
 		func() (partitionUsage, bool) { return partitionUsage{}, false },

@@ -102,6 +102,73 @@ func TestDeviceInfo_HasStructuredContent(t *testing.T) {
 	}
 }
 
+// TestDeviceInfo_ContainerStorageDegradedDerivedOnWendyOS asserts the MCP
+// device_info tool derives container_storage_degraded the same way
+// `device info --json` does (containerStorageDegraded(resp), explicit-or-
+// derived) rather than only honouring an explicit field from newer agents
+// (WDY-3127 M8).
+func TestDeviceInfo_ContainerStorageDegradedDerivedOnWendyOS(t *testing.T) {
+	osVersion := "WendyOS-1.0.0"
+	fake := &fakeAgentServer{versionResp: &agentpb.GetAgentVersionResponse{
+		Version:          "1.2.3",
+		Os:               "linux",
+		OsVersion:        &osVersion,
+		ContainerStorage: &agentpb.DiskPartition{Mountpoint: "/", Device: "/dev/nvme0n1p1"},
+		Partitions: []*agentpb.DiskPartition{
+			{Mountpoint: "/", Device: "/dev/nvme0n1p1"},
+			{Mountpoint: "/data", Device: "/dev/nvme0n1p2"},
+		},
+	}}
+	conn, _ := startFakeAgentServer(t, fake)
+	srv := New(&config.Config{}, nil)
+	srv.SetConn(conn)
+
+	result, err := srv.callTool(context.Background(), "device_info", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].(mcpgo.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("invalid JSON: %v\ntext: %s", err, text)
+	}
+	if got, ok := m["container_storage_degraded"].(bool); !ok || !got {
+		t.Errorf("container_storage_degraded = %v, want true (derived: WendyOS, container storage on /, /data partition exists but isn't mounted there)", m["container_storage_degraded"])
+	}
+}
+
+// TestDeviceInfo_ContainerStorageDegradedAbsentOffWendyOS asserts the field
+// stays absent for a non-WendyOS agent (e.g. plain Ubuntu, where container
+// storage on / is normal), matching `device info --json`'s
+// isWendyOSAgent(resp) gate (WDY-3127 M8).
+func TestDeviceInfo_ContainerStorageDegradedAbsentOffWendyOS(t *testing.T) {
+	fake := &fakeAgentServer{versionResp: &agentpb.GetAgentVersionResponse{
+		Version:          "1.2.3",
+		Os:               "linux",
+		ContainerStorage: &agentpb.DiskPartition{Mountpoint: "/", Device: "/dev/sda1"},
+		Partitions: []*agentpb.DiskPartition{
+			{Mountpoint: "/", Device: "/dev/sda1"},
+			{Mountpoint: "/data", Device: "/dev/sda2"},
+		},
+	}}
+	conn, _ := startFakeAgentServer(t, fake)
+	srv := New(&config.Config{}, nil)
+	srv.SetConn(conn)
+
+	result, err := srv.callTool(context.Background(), "device_info", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	text := result.Content[0].(mcpgo.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("invalid JSON: %v\ntext: %s", err, text)
+	}
+	if _, present := m["container_storage_degraded"]; present {
+		t.Errorf("container_storage_degraded = %v, want absent on a non-WendyOS agent", m["container_storage_degraded"])
+	}
+}
+
 func TestDeviceList_ReturnsConfiguredDevices(t *testing.T) {
 	cfg := &config.Config{
 		Auth: []config.AuthConfig{

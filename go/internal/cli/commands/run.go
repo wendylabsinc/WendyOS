@@ -2181,19 +2181,23 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			// --chunking=force opts out of the registry-push fallback so the
 			// failure is surfaced instead of silently masked by a slower path.
 			return fmt.Errorf("chunk-diff deploy failed and --chunking=force disables the registry-push fallback: %w", err)
+		} else if isImageBuildFailure(err) {
+			// The image build itself failed (e.g. a Dockerfile/build-command
+			// error). Checked BEFORE the storage branch below: a local build
+			// failure (e.g. the LOCAL BuildKit worker's disk is full) is a typed
+			// imageBuildFailedError whose text can itself mention ENOSPC, and
+			// that must not be misattributed to the device (WDY-3127 I1). The
+			// registry-push fallback rebuilds the same image from the same
+			// Dockerfile, so it would fail identically — and can even mask the
+			// real error behind an unrelated builder-setup failure. Surface the
+			// actionable build error directly instead of falling back. (#1166)
+			return err
 		} else if isDeviceOutOfSpace(err) || isContainerStorageDegradedError(err) {
 			// The device is out of space or its container storage is degraded
 			// (WDY-3127). The registry-push fallback below would just retry the
 			// same failure against the same full/degraded disk — surface the
 			// explanation and remedy instead.
 			return describeDeployStorageFailure(err, versionResp)
-		} else if isImageBuildFailure(err) {
-			// The image build itself failed (e.g. a Dockerfile/build-command
-			// error). The registry-push fallback rebuilds the same image from the
-			// same Dockerfile, so it would fail identically — and can even mask the
-			// real error behind an unrelated builder-setup failure. Surface the
-			// actionable build error directly instead of falling back. (#1166)
-			return err
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no
 			// Docker), the registry-push fallback below cannot run — it shells out
