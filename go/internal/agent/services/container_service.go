@@ -38,6 +38,12 @@ type ContainerService struct {
 	logManager *ContainerLogManager
 	monitor    ContainerMonitorRegistrar
 
+	// storageGate refuses image ingestion while /var/lib/containerd is being
+	// served from the OS root slot on a WendyOS host whose /data bind mount
+	// is inactive (WDY-3127). A nil storageGate (the default) never refuses;
+	// see refuseIfStorageDegraded.
+	storageGate *ContainerStorageGate
+
 	// imageVerifier checks the container image signature (see RunContainer)
 	// before the image is assembled or the container created. This verifies
 	// against the per-org PUBLISHER key sourced from provisioning/PKI (the
@@ -102,6 +108,24 @@ func WithMonitor(m ContainerMonitorRegistrar) ContainerServiceOption {
 	}
 }
 
+// WithContainerStorageGate wires the gate that refuses image ingestion while
+// container storage is on the OS root slot (WDY-3127). Omitting this option
+// leaves storageGate nil, which never refuses (see refuseIfStorageDegraded).
+func WithContainerStorageGate(g *ContainerStorageGate) ContainerServiceOption {
+	return func(s *ContainerService) {
+		s.storageGate = g
+	}
+}
+
+// refuseIfStorageDegraded is called as the first statement of every RPC that
+// ingests or assembles image/container content, so a degraded storage gate
+// (or an already-open stream) is rejected before any containerd call is
+// made. Nil-safe: s.storageGate.Check() is nil-receiver safe, so an unset
+// gate never refuses.
+func (s *ContainerService) refuseIfStorageDegraded() error {
+	return s.storageGate.Check()
+}
+
 func (s *ContainerService) ListLayers(_ *agentpb.ListLayersRequest, stream grpc.ServerStreamingServer[agentpb.LayerHeader]) error {
 	ctx := stream.Context()
 	layers, err := s.containerd.ListLayers(ctx)
@@ -119,6 +143,10 @@ func (s *ContainerService) ListLayers(_ *agentpb.ListLayersRequest, stream grpc.
 
 // Chunks are streamed directly to the content store without buffering the entire blob in memory.
 func (s *ContainerService) WriteLayer(stream grpc.BidiStreamingServer[agentpb.WriteLayerRequest, agentpb.WriteLayerResponse]) error {
+	if err := s.refuseIfStorageDegraded(); err != nil {
+		return err
+	}
+
 	ctx := stream.Context()
 
 	first, err := stream.Recv()
@@ -189,6 +217,10 @@ func (r *layerStreamReader) drain() {
 }
 
 func (s *ContainerService) CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest) (*agentpb.CreateContainerResponse, error) {
+	if err := s.refuseIfStorageDegraded(); err != nil {
+		return nil, err
+	}
+
 	appCfg, err := parseAppConfig(req.GetAppConfig())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid app config: %v", err)
@@ -206,6 +238,10 @@ func (s *ContainerService) CreateContainer(ctx context.Context, req *agentpb.Cre
 }
 
 func (s *ContainerService) CreateContainerWithProgress(req *agentpb.CreateContainerRequest, stream grpc.ServerStreamingServer[agentpb.CreateContainerProgressResponse]) error {
+	if err := s.refuseIfStorageDegraded(); err != nil {
+		return err
+	}
+
 	appCfg, err := parseAppConfig(req.GetAppConfig())
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "invalid app config: %v", err)
@@ -277,6 +313,10 @@ func (s *ContainerService) QueryLayers(ctx context.Context, req *agentpb.QueryLa
 }
 
 func (s *ContainerService) WriteChunks(stream grpc.ClientStreamingServer[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse]) error {
+	if err := s.refuseIfStorageDegraded(); err != nil {
+		return err
+	}
+
 	ctx := stream.Context()
 	for {
 		msg, err := stream.Recv()
@@ -307,6 +347,10 @@ func (s *ContainerService) WriteChunks(stream grpc.ClientStreamingServer[agentpb
 // CLI continues uploading later layers. RunContainer repeats the work through
 // idempotent fast paths, so a lost response cannot leave deploy state ambiguous.
 func (s *ContainerService) PrepareImage(ctx context.Context, req *agentpb.RunContainerLayersRequest) (*agentpb.PrepareImageResponse, error) {
+	if err := s.refuseIfStorageDegraded(); err != nil {
+		return nil, err
+	}
+
 	if err := s.verifyImageSignature(req.GetImageConfig(), req.GetImageSignature()); err != nil {
 		return nil, err
 	}
@@ -372,6 +416,10 @@ func (s *ContainerService) validateSignedLayerBinding(imageConfig []byte, layers
 }
 
 func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
+	if err := s.refuseIfStorageDegraded(); err != nil {
+		return err
+	}
+
 	ctx := stream.Context()
 
 	appCfg, err := parseAppConfig(req.GetAppConfig())
