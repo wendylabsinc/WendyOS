@@ -43,7 +43,7 @@ func (Joints) Requires() []robotinspect.Requirement {
 	return []robotinspect.Requirement{robotinspect.RequirementDDSDomain}
 }
 func (Joints) Provides() []string {
-	return []string{"joints.slots", "joints.live", "joints.temperature.max", "imu.temperature", "robot.mode_machine"}
+	return []string{"joints.slots", "joints.live", "joints.temperature.max", "imu.temperature", "robot.mode_machine", "identity.firmware.body"}
 }
 
 func (p Joints) Observe(ctx context.Context, env *robotinspect.Env) ([]robotinspect.Property, error) {
@@ -112,7 +112,21 @@ func (p Joints) Observe(ctx context.Context, env *robotinspect.Env) ([]robotinsp
 	// larger than these fields can hold and is not published here.
 	properties = append(properties,
 		textProperty(p.ID(), "topic:"+topic, "robot.mode_machine", fmt.Sprintf("%d", latest.ModeMachine)),
-		textProperty(p.ID(), "topic:"+topic, "robot.mode_pr", fmt.Sprintf("%d", latest.ModePR)))
+		textProperty(p.ID(), "topic:"+topic, "robot.mode_pr", fmt.Sprintf("%d", latest.ModePR)),
+	)
+
+	// LowState reserves a version field, and this robot publishes zeros in it. An
+	// unpopulated field is not a version, so it reads unknown rather than "0.0" — the
+	// difference between "the robot did not say" and "the robot said zero". The
+	// battery reports a real firmware version, separately.
+	if latest.Version == [2]uint32{} {
+		unknown := robotinspect.NewUnknown(robotinspect.ReasonSourceAbsent,
+			"the robot publishes an empty version field in LowState")
+		properties = append(properties, robotinspect.Property{ID: "identity.firmware.body", Unknown: &unknown})
+	} else {
+		properties = append(properties, textProperty(p.ID(), "topic:"+topic, "identity.firmware.body",
+			fmt.Sprintf("%d.%d", latest.Version[0], latest.Version[1])))
+	}
 
 	if temperature, err := robotinspect.NewQuantity(float64(latest.IMU.TemperatureC), robotinspect.Celsius); err == nil {
 		if observation, err := robotinspect.NewObservation(temperature, robotinspect.Measured, source,

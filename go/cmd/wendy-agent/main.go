@@ -301,11 +301,19 @@ func main() {
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
 	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
 	telemetrySvcV2 := services.NewTelemetryServiceV2(logger, broadcaster, telemetryBuf)
+	// Shared RTPS participants. Created here rather than further down because the
+	// ROS 2 service needs one at construction for raw topic sampling, which reads DDS
+	// directly instead of through the sidecar.
+	discoveryPool := rtps.NewPool()
+	defer discoveryPool.Close()
+
 	// ROS 2 inspection requires the containerd-backed sidecar runtime; the
-	// service is only registered when containerd connected (WDY-1332).
+	// service is only registered when containerd connected (WDY-1332). That gate
+	// also covers raw sampling, which does not itself need containerd — worth
+	// revisiting for a robot that runs no containers.
 	var ros2Svc *services.ROS2Service
 	if ctrdClient != nil {
-		ros2Svc = services.NewROS2Service(logger, ctrdClient, agentcontainerd.ROS2BagDir)
+		ros2Svc = services.NewROS2Service(logger, ctrdClient, agentcontainerd.ROS2BagDir, discoveryPool)
 	}
 
 	// OTEL receivers.
@@ -326,8 +334,6 @@ func main() {
 	go timesyncMgr.RunDirect(ctx)
 	go timesyncMgr.RunMulticast(ctx)
 
-	discoveryPool := rtps.NewPool()
-	defer discoveryPool.Close()
 	startROS2BatteryMonitor(ctx, logger, configPath, discoveryPool)
 
 	// The robot calibration store, at robotcal.DefaultRoot. On the disk-backed

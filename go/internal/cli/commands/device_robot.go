@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -102,7 +103,25 @@ type robotTopicSource interface {
 // runRobotInspect joins the graph, runs the probes whose transports are present, and
 // prints the document. It never writes to the robot: the registry only admits passive
 // probes, so there is no path from here to an actuator.
+// runRobotInspect converts a cancelled run into a single honest line.
+//
+// Ctrl-C otherwise surfaces as whatever the interrupted call happened to be doing — every
+// probe still in flight failing with "context canceled", or a device lookup reporting "no
+// device named 501 found". Both read as a fault in the robot or a typo by the reader,
+// which is exactly backwards: the robot did nothing wrong, and the reader is the one who
+// stopped it.
 func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
+	startedAt := time.Now()
+	err := inspectRobot(ctx, opts)
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("inspection cancelled after %s; nothing was commanded",
+			time.Since(startedAt).Round(time.Second))
+	}
+	return err
+}
+
+func inspectRobot(ctx context.Context, opts robotInspectOptions) error {
+
 	// The agent answers over a cloud tunnel, so the host half of the report works
 	// wherever the device is reachable. Failing to reach it is not fatal: a robot may
 	// be inspected from its own LAN with no Wendy agent in the picture at all.
@@ -113,11 +132,19 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 			// Recorded, not just logged. An unreachable agent is why half the report
 			// is missing, and a document that does not say so invites the reader to
 			// blame whatever else came back empty.
+			//
+			// Held rather than printed here: a lookup interrupted by Ctrl-C fails
+			// the same way, and announcing a missing device on the way out would be
+			// a lie about the robot.
 			opts.agentErr = err
-			cliLogln("Continuing without the agent: %v", err)
+			defer func() {
+				if ctx.Err() == nil {
+					cliLogln("Continuing without the agent: %v", err)
+				}
+			}()
 		} else {
 			defer conn.Close()
-			host = newAgentHostFacts(conn)
+			host = newAgentHostFacts(conn, opts.iface, opts.settle)
 			// The device name is whatever the agent calls itself, so a document is
 			// always traceable to a unit without the caller having to repeat it.
 			if facts, factsErr := host.HostFacts(ctx); factsErr == nil && facts != nil {
@@ -126,30 +153,46 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 		}
 	}
 
-	participant, err := rtps.NewParticipant(rtps.Config{
-		DomainID:  opts.domain,
-		Interface: opts.iface,
-	})
-	if err != nil {
-		return fmt.Errorf("joining DDS domain %d: %w", opts.domain, err)
-	}
-	defer participant.Close()
-
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	go participant.Run(runCtx)
 
-	// Discovery is announcement-driven, so the graph appears over a second or two
-	// rather than on request.
-	select {
-	case <-time.After(opts.settle):
-	case <-runCtx.Done():
-		return runCtx.Err()
+	// The agent leads and this machine's participant backs it up — see
+	// layeredTopicSource for why the order is the difference between a report that can
+	// see the robot's body and one that cannot.
+	//
+	// Asking the agent first is also what keeps this quick. Joining a DDS domain here
+	// means waiting out discovery, and on a laptop that wait buys nothing: the robot's
+	// graph is on its own network and the agent is already inside it. So the local
+	// participant is created only when the agent cannot read topics at all.
+	source := newLayeredTopicSource(runCtx, host, nil)
+	if source.agent == nil {
+		participant, err := rtps.NewParticipant(rtps.Config{
+			DomainID:  opts.domain,
+			Interface: opts.iface,
+		})
+		if err != nil {
+			return fmt.Errorf("joining DDS domain %d: %w", opts.domain, err)
+		}
+		defer participant.Close()
+		go participant.Run(runCtx)
+
+		// Discovery is announcement-driven, so the graph appears over a second or
+		// two rather than on request.
+		select {
+		case <-time.After(opts.settle):
+		case <-runCtx.Done():
+			return runCtx.Err()
+		}
+		source.local = robotprobe.NewDDSReader(robotprobe.NewParticipantLease(participant, runCtx.Done()))
 	}
 
-	reader := robotprobe.NewDDSReader(robotprobe.NewParticipantLease(participant, runCtx.Done()))
-	doc, err := probeRobot(runCtx, reader, host, opts)
+	doc, err := probeRobot(runCtx, source, host, opts)
 	if err != nil {
+		return err
+	}
+	// A cancelled run must not print a report: the probes still in flight all failed
+	// with "context canceled", and the wrapper turns that into one line instead.
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return writeRobotDocument(opts.out, doc, opts)
@@ -214,6 +257,7 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 			Device: opts.label, VendorKind: opts.vendorKind, Want: want,
 		})
 		noteAgentAbsence(&doc, opts)
+		noteLostConnection(&doc, host)
 		return doc, nil
 	}
 	env.Offer(robotinspect.RequirementDDSDomain, source)
@@ -246,17 +290,122 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		want = append(want, stream.Provides()...)
 	}
 
+	// The robot itself: its motors, the pack that powers them, and its hands. Each is
+	// registered only when something on the graph publishes the matching type, so a
+	// robot that is not a humanoid gets no humanoid rows rather than a column of
+	// unknowns — the same rule the camera probes above follow.
+	//
+	// These read vendor message types that no stock ROS image can decode, which is why
+	// the decoders live in internal/shared/rosmsg and are tested against bytes captured
+	// from a real robot. Nothing vendor-specific needs installing on the device.
+	if topics := source.TopicsOfType(rosmsg.TypeHGLowState); len(topics) > 0 {
+		joints := robotprobe.Joints{Topic: topics[0]}
+		if err := registry.Register(joints); err != nil {
+			return robotinspect.Document{}, err
+		}
+		want = append(want, joints.Provides()...)
+	}
+	if topics := source.TopicsOfType(rosmsg.TypeHGBmsState); len(topics) > 0 {
+		battery := robotprobe.RobotBattery{Topic: topics[0]}
+		if err := registry.Register(battery); err != nil {
+			return robotinspect.Document{}, err
+		}
+		want = append(want, battery.Provides()...)
+	}
+	// Hands come in pairs and are named by where they are, so unlike the probes above
+	// every matching topic is kept rather than the first.
+	if topics := source.TopicsOfType(rosmsg.TypeHGHandState); len(topics) > 0 {
+		hands := robotprobe.Hands{Topics: nameHandTopics(topics)}
+		if err := registry.Register(hands); err != nil {
+			return robotinspect.Document{}, err
+		}
+		want = append(want, hands.Provides()...)
+	}
+
 	doc := robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
 		Device:     opts.label,
 		VendorKind: opts.vendorKind,
 		Want:       want,
 	})
 	noteAgentAbsence(&doc, opts)
+	noteLostConnection(&doc, host)
+	// A silent downgrade to this machine's own participant explains an empty body
+	// section better than the empty section does.
+	if layered, ok := source.(*layeredTopicSource); ok && layered.degraded != "" {
+		doc.Skipped["agent-raw-topics"] = robotinspect.NewUnknown(
+			robotinspect.ReasonRequirementUnmet, layered.degraded)
+	}
 	return doc, nil
+}
+
+// noteLostConnection records a connection that dropped part-way through.
+//
+// Without it a tunnel that drops mid-run produces a report where every agent-backed probe
+// failed with the same handshake error and nothing says the connection is what broke — a
+// wall of identical failures that reads as a robot with seven broken subsystems. This says
+// it once, and says the run is worth repeating.
+func noteLostConnection(doc *robotinspect.Document, host robotprobe.HostFactsSource) {
+	facts, ok := host.(*agentHostFacts)
+	if !ok {
+		return
+	}
+	lost := facts.lostConnection()
+	if lost == nil {
+		return
+	}
+	// Fold everything that failed for this one reason into a single statement. Both
+	// strings come from the same error in this process, so this is asking "did this
+	// failure carry that error", not parsing a foreign message.
+	message := agentMessage(lost)
+	var folded []string
+	for id, unknown := range doc.Failed {
+		if strings.Contains(unknown.Detail, message) {
+			folded = append(folded, id)
+			delete(doc.Failed, id)
+		}
+	}
+	// A property that went unknown for the same reason keeps its row — it is still a
+	// property nobody answered — but stops restating the cause.
+	for i, property := range doc.Properties {
+		if property.Unknown == nil || !strings.Contains(property.Unknown.Detail, message) {
+			continue
+		}
+		doc.Properties[i].Unknown = &robotinspect.Unknown{
+			Reason: property.Unknown.Reason,
+			Detail: "the connection to the agent dropped; see the agent entry",
+		}
+	}
+	sort.Strings(folded)
+
+	detail := fmt.Sprintf("the connection to the agent dropped part-way through, so everything under it failed for that one reason rather than on its own merits — run it again: %s", message)
+	if len(folded) > 0 {
+		// Named, not merely counted: which probes were lost is the difference
+		// between "retry" and "that subsystem is broken".
+		detail = fmt.Sprintf("%s (this took out %s)", detail, strings.Join(folded, ", "))
+	}
+	doc.Failed["agent"] = robotinspect.NewUnknown(robotinspect.ReasonProbeFailed, detail)
 }
 
 // noteAgentAbsence records an unreachable agent in the document itself, so the reason
 // travels with the result rather than living only in a log line the reader may not have.
+// nameHandTopics labels each hand topic by the side it belongs to, so a reading is
+// attributable to a physical hand rather than to a topic path. A topic naming neither side
+// keeps its own name, which is honest about not knowing rather than guessing "left".
+func nameHandTopics(topics []string) map[string]string {
+	named := map[string]string{}
+	for _, topic := range topics {
+		name := topic
+		switch {
+		case strings.Contains(topic, "left"):
+			name = "left"
+		case strings.Contains(topic, "right"):
+			name = "right"
+		}
+		named[name] = topic
+	}
+	return named
+}
+
 func noteAgentAbsence(doc *robotinspect.Document, opts robotInspectOptions) {
 	switch {
 	case opts.agentErr != nil:
