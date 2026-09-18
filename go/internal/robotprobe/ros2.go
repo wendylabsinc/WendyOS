@@ -52,6 +52,36 @@ func (ROS2Graph) Provides() []string {
 	return []string{"ros2.topics", "ros2.nodes", "ros2.rmw", "ros2.topics.unsubscribed", "ros2.topics.unpublished"}
 }
 
+// rawGraph reports what DDS discovery alone can see. It is deliberately narrower than the
+// sidecar listing: discovery names writers, not the nodes behind them, and it carries no
+// subscriber counts — so the properties that need those read unknown with the reason,
+// rather than being quietly reported as zero.
+func rawGraph(ctx context.Context, probe string, lister RawTopicLister, sidecarErr error) ([]robotinspect.Property, bool) {
+	topics, err := lister.RawTopics(ctx)
+	if err != nil || len(topics) == 0 {
+		return nil, false
+	}
+
+	const origin = "agent:rtps"
+	names := map[string]struct{}{}
+	for _, topic := range topics {
+		names[topic.Name] = struct{}{}
+	}
+
+	properties := []robotinspect.Property{}
+	if property, ok := declared(probe, origin, "ros2.topics",
+		robotinspect.MustQuantity(float64(len(names)), robotinspect.Count)); ok {
+		properties = append(properties, property)
+	}
+
+	unknown := robotinspect.NewUnknown(robotinspect.ReasonRequirementUnmet,
+		fmt.Sprintf("read by DDS discovery, which sees writers rather than nodes; the node listing needs a ROS 2 container on the device: %v", sidecarErr))
+	for _, id := range []string{"ros2.nodes", "ros2.rmw", "ros2.topics.unsubscribed", "ros2.topics.unpublished"} {
+		properties = append(properties, robotinspect.Property{ID: id, Unknown: &unknown})
+	}
+	return properties, true
+}
+
 func (p ROS2Graph) Observe(ctx context.Context, env *robotinspect.Env) ([]robotinspect.Property, error) {
 	handle, ok := env.Handle(robotinspect.RequirementROS2Graph)
 	if !ok {
@@ -64,6 +94,15 @@ func (p ROS2Graph) Observe(ctx context.Context, env *robotinspect.Env) ([]roboti
 
 	topics, err := source.ROS2Topics(ctx)
 	if err != nil {
+		// The sidecar listing needs a ROS 2 container deployed on the device, and a
+		// robot publishing its whole body over DDS very often has none. Falling back
+		// to raw discovery turns "this probe failed" into the part of the graph that
+		// can still be seen, which on such a robot is most of it.
+		if lister, ok := handle.(RawTopicLister); ok {
+			if properties, ok := rawGraph(ctx, p.ID(), lister, err); ok {
+				return properties, nil
+			}
+		}
 		return nil, fmt.Errorf("ros2-graph: listing topics: %w", err)
 	}
 	nodes, err := source.ROS2Nodes(ctx)

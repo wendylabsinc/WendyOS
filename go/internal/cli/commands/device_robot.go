@@ -117,7 +117,7 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 			cliLogln("Continuing without the agent: %v", err)
 		} else {
 			defer conn.Close()
-			host = newAgentHostFacts(conn)
+			host = newAgentHostFacts(conn, opts.iface, opts.settle)
 			// The device name is whatever the agent calls itself, so a document is
 			// always traceable to a unit without the caller having to repeat it.
 			if facts, factsErr := host.HostFacts(ctx); factsErr == nil && facts != nil {
@@ -147,8 +147,12 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 		return runCtx.Err()
 	}
 
+	// The agent leads and this machine's participant backs it up — see
+	// layeredTopicSource for why the order is the difference between a report that can
+	// see the robot's body and one that cannot.
 	reader := robotprobe.NewDDSReader(robotprobe.NewParticipantLease(participant, runCtx.Done()))
-	doc, err := probeRobot(runCtx, reader, host, opts)
+	source := newLayeredTopicSource(runCtx, host, reader)
+	doc, err := probeRobot(runCtx, source, host, opts)
 	if err != nil {
 		return err
 	}
@@ -246,17 +250,73 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		want = append(want, stream.Provides()...)
 	}
 
+	// The robot itself: its motors, the pack that powers them, and its hands. Each is
+	// registered only when something on the graph publishes the matching type, so a
+	// robot that is not a humanoid gets no humanoid rows rather than a column of
+	// unknowns — the same rule the camera probes above follow.
+	//
+	// These read vendor message types that no stock ROS image can decode, which is why
+	// the decoders live in internal/shared/rosmsg and are tested against bytes captured
+	// from a real robot. Nothing vendor-specific needs installing on the device.
+	if topics := source.TopicsOfType(rosmsg.TypeHGLowState); len(topics) > 0 {
+		joints := robotprobe.Joints{Topic: topics[0]}
+		if err := registry.Register(joints); err != nil {
+			return robotinspect.Document{}, err
+		}
+		want = append(want, joints.Provides()...)
+	}
+	if topics := source.TopicsOfType(rosmsg.TypeHGBmsState); len(topics) > 0 {
+		battery := robotprobe.RobotBattery{Topic: topics[0]}
+		if err := registry.Register(battery); err != nil {
+			return robotinspect.Document{}, err
+		}
+		want = append(want, battery.Provides()...)
+	}
+	// Hands come in pairs and are named by where they are, so unlike the probes above
+	// every matching topic is kept rather than the first.
+	if topics := source.TopicsOfType(rosmsg.TypeHGHandState); len(topics) > 0 {
+		hands := robotprobe.Hands{Topics: nameHandTopics(topics)}
+		if err := registry.Register(hands); err != nil {
+			return robotinspect.Document{}, err
+		}
+		want = append(want, hands.Provides()...)
+	}
+
 	doc := robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
 		Device:     opts.label,
 		VendorKind: opts.vendorKind,
 		Want:       want,
 	})
 	noteAgentAbsence(&doc, opts)
+	// A silent downgrade to this machine's own participant explains an empty body
+	// section better than the empty section does.
+	if layered, ok := source.(*layeredTopicSource); ok && layered.degraded != "" {
+		doc.Skipped["agent-raw-topics"] = robotinspect.NewUnknown(
+			robotinspect.ReasonRequirementUnmet, layered.degraded)
+	}
 	return doc, nil
 }
 
 // noteAgentAbsence records an unreachable agent in the document itself, so the reason
 // travels with the result rather than living only in a log line the reader may not have.
+// nameHandTopics labels each hand topic by the side it belongs to, so a reading is
+// attributable to a physical hand rather than to a topic path. A topic naming neither side
+// keeps its own name, which is honest about not knowing rather than guessing "left".
+func nameHandTopics(topics []string) map[string]string {
+	named := map[string]string{}
+	for _, topic := range topics {
+		name := topic
+		switch {
+		case strings.Contains(topic, "left"):
+			name = "left"
+		case strings.Contains(topic, "right"):
+			name = "right"
+		}
+		named[name] = topic
+	}
+	return named
+}
+
 func noteAgentAbsence(doc *robotinspect.Document, opts robotInspectOptions) {
 	switch {
 	case opts.agentErr != nil:

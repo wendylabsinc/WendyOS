@@ -145,3 +145,55 @@ func TestROS2GraphIsPassive(t *testing.T) {
 		t.Errorf("class = %q, want passive", got)
 	}
 }
+
+// graphWithoutSidecar answers raw discovery but not the ROS 2 listing, which is what a
+// robot with no ROS 2 container deployed looks like — the common case for a robot that
+// publishes its body over DDS from its own firmware.
+type graphWithoutSidecar struct {
+	raw []RawTopic
+}
+
+func (g graphWithoutSidecar) ROS2Topics(context.Context) ([]ROS2Topic, error) {
+	return nil, errors.New("no running ROS 2 containers found")
+}
+func (g graphWithoutSidecar) ROS2Nodes(context.Context) ([]ROS2Node, error) {
+	return nil, errors.New("no running ROS 2 containers found")
+}
+func (g graphWithoutSidecar) RawTopics(context.Context) ([]RawTopic, error) { return g.raw, nil }
+
+func TestROS2GraphFallsBackToRawDiscovery(t *testing.T) {
+	env := robotinspect.NewEnv()
+	env.Offer(robotinspect.RequirementROS2Graph, graphWithoutSidecar{raw: []RawTopic{
+		{Name: "/lowstate", Type: "unitree_hg::msg::dds_::LowState_", WriterCount: 1},
+		{Name: "/lf/bmsstate", Type: "unitree_hg::msg::dds_::BmsState_", WriterCount: 1},
+		// One topic carrying two types still counts once, since the question is how
+		// many topics the robot has.
+		{Name: "/lowstate", Type: "unitree_go::msg::dds_::LowState_", WriterCount: 1},
+	}})
+
+	properties, err := ROS2Graph{}.Observe(context.Background(), env)
+	if err != nil {
+		t.Fatalf("the probe failed although discovery could see the graph: %v", err)
+	}
+
+	byID := map[string]robotinspect.Property{}
+	for _, property := range properties {
+		byID[property.ID] = property
+	}
+	topics, ok := byID["ros2.topics"]
+	if !ok || len(topics.Observations) != 1 {
+		t.Fatalf("no topic count: %+v", byID)
+	}
+	if got := topics.Observations[0].Quantity.Value(); got != 2 {
+		t.Fatalf("topic count = %v, want 2 distinct names", got)
+	}
+	// Discovery names writers, not nodes. Reporting zero nodes would be a lie; this
+	// has to read unknown, and the reason has to say why.
+	nodes, ok := byID["ros2.nodes"]
+	if !ok || nodes.Unknown == nil {
+		t.Fatalf("node count was not reported unknown: %+v", nodes)
+	}
+	if !strings.Contains(nodes.Unknown.Detail, "ROS 2 container") {
+		t.Fatalf("the reason does not name the cause: %q", nodes.Unknown.Detail)
+	}
+}

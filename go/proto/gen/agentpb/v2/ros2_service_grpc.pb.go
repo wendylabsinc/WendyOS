@@ -45,6 +45,8 @@ const (
 	ROS2Service_ListComponents_FullMethodName           = "/wendy.agent.services.v2.ROS2Service/ListComponents"
 	ROS2Service_LoadComponent_FullMethodName            = "/wendy.agent.services.v2.ROS2Service/LoadComponent"
 	ROS2Service_UnloadComponent_FullMethodName          = "/wendy.agent.services.v2.ROS2Service/UnloadComponent"
+	ROS2Service_StreamRawTopic_FullMethodName           = "/wendy.agent.services.v2.ROS2Service/StreamRawTopic"
+	ROS2Service_ListRawTopics_FullMethodName            = "/wendy.agent.services.v2.ROS2Service/ListRawTopics"
 )
 
 // ROS2ServiceClient is the client API for ROS2Service service.
@@ -94,6 +96,33 @@ type ROS2ServiceClient interface {
 	ListComponents(ctx context.Context, in *ListROS2ComponentsRequest, opts ...grpc.CallOption) (*ListROS2ComponentsResponse, error)
 	LoadComponent(ctx context.Context, in *LoadROS2ComponentRequest, opts ...grpc.CallOption) (*LoadROS2ComponentResponse, error)
 	UnloadComponent(ctx context.Context, in *UnloadROS2ComponentRequest, opts ...grpc.CallOption) (*UnloadROS2ComponentResponse, error)
+	// Raw sampling, which does not go through the sidecar.
+	//
+	// Every call above execs `ros2` in the CLI sidecar, so it can only read
+	// messages whose definitions that image carries. A robot publishing a
+	// vendor type cannot be read at all: `ros2 topic echo /lowstate` on a
+	// Unitree G1 answers "the message type 'unitree_hg/msg/LowState' is
+	// invalid", and that is where a humanoid keeps every joint, its battery
+	// and its hands.
+	//
+	// This streams the bytes instead, read by the agent's own RTPS
+	// participant, and lets the caller decode them. One call serves every
+	// vendor message on every robot, rather than a new RPC per message — and
+	// it is the only way to reach these at all from off the robot, since DDS
+	// discovery is multicast and never leaves the robot's own network.
+	//
+	// Read-only by construction: the participant has no writer.
+	StreamRawTopic(ctx context.Context, in *StreamRawTopicRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RawTopicSample], error)
+	// ListRawTopics reports the topics the agent's own RTPS participant can
+	// see, with the DDS type name each writer advertises.
+	//
+	// ListTopics above answers the same question by running `ros2 topic list`
+	// in a sidecar, which means it needs a ROS 2 container deployed and
+	// running on the device. This needs nothing: it is the discovery half of
+	// StreamRawTopic, and it is what lets a caller find out whether a robot
+	// publishes a topic worth reading on a device where no ROS 2 app has ever
+	// been deployed.
+	ListRawTopics(ctx context.Context, in *ListRawTopicsRequest, opts ...grpc.CallOption) (*ListRawTopicsResponse, error)
 }
 
 type rOS2ServiceClient struct {
@@ -412,6 +441,35 @@ func (c *rOS2ServiceClient) UnloadComponent(ctx context.Context, in *UnloadROS2C
 	return out, nil
 }
 
+func (c *rOS2ServiceClient) StreamRawTopic(ctx context.Context, in *StreamRawTopicRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RawTopicSample], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ROS2Service_ServiceDesc.Streams[6], ROS2Service_StreamRawTopic_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamRawTopicRequest, RawTopicSample]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ROS2Service_StreamRawTopicClient = grpc.ServerStreamingClient[RawTopicSample]
+
+func (c *rOS2ServiceClient) ListRawTopics(ctx context.Context, in *ListRawTopicsRequest, opts ...grpc.CallOption) (*ListRawTopicsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListRawTopicsResponse)
+	err := c.cc.Invoke(ctx, ROS2Service_ListRawTopics_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ROS2ServiceServer is the server API for ROS2Service service.
 // All implementations must embed UnimplementedROS2ServiceServer
 // for forward compatibility.
@@ -459,6 +517,33 @@ type ROS2ServiceServer interface {
 	ListComponents(context.Context, *ListROS2ComponentsRequest) (*ListROS2ComponentsResponse, error)
 	LoadComponent(context.Context, *LoadROS2ComponentRequest) (*LoadROS2ComponentResponse, error)
 	UnloadComponent(context.Context, *UnloadROS2ComponentRequest) (*UnloadROS2ComponentResponse, error)
+	// Raw sampling, which does not go through the sidecar.
+	//
+	// Every call above execs `ros2` in the CLI sidecar, so it can only read
+	// messages whose definitions that image carries. A robot publishing a
+	// vendor type cannot be read at all: `ros2 topic echo /lowstate` on a
+	// Unitree G1 answers "the message type 'unitree_hg/msg/LowState' is
+	// invalid", and that is where a humanoid keeps every joint, its battery
+	// and its hands.
+	//
+	// This streams the bytes instead, read by the agent's own RTPS
+	// participant, and lets the caller decode them. One call serves every
+	// vendor message on every robot, rather than a new RPC per message — and
+	// it is the only way to reach these at all from off the robot, since DDS
+	// discovery is multicast and never leaves the robot's own network.
+	//
+	// Read-only by construction: the participant has no writer.
+	StreamRawTopic(*StreamRawTopicRequest, grpc.ServerStreamingServer[RawTopicSample]) error
+	// ListRawTopics reports the topics the agent's own RTPS participant can
+	// see, with the DDS type name each writer advertises.
+	//
+	// ListTopics above answers the same question by running `ros2 topic list`
+	// in a sidecar, which means it needs a ROS 2 container deployed and
+	// running on the device. This needs nothing: it is the discovery half of
+	// StreamRawTopic, and it is what lets a caller find out whether a robot
+	// publishes a topic worth reading on a device where no ROS 2 app has ever
+	// been deployed.
+	ListRawTopics(context.Context, *ListRawTopicsRequest) (*ListRawTopicsResponse, error)
 	mustEmbedUnimplementedROS2ServiceServer()
 }
 
@@ -546,6 +631,12 @@ func (UnimplementedROS2ServiceServer) LoadComponent(context.Context, *LoadROS2Co
 }
 func (UnimplementedROS2ServiceServer) UnloadComponent(context.Context, *UnloadROS2ComponentRequest) (*UnloadROS2ComponentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnloadComponent not implemented")
+}
+func (UnimplementedROS2ServiceServer) StreamRawTopic(*StreamRawTopicRequest, grpc.ServerStreamingServer[RawTopicSample]) error {
+	return status.Error(codes.Unimplemented, "method StreamRawTopic not implemented")
+}
+func (UnimplementedROS2ServiceServer) ListRawTopics(context.Context, *ListRawTopicsRequest) (*ListRawTopicsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListRawTopics not implemented")
 }
 func (UnimplementedROS2ServiceServer) mustEmbedUnimplementedROS2ServiceServer() {}
 func (UnimplementedROS2ServiceServer) testEmbeddedByValue()                     {}
@@ -990,6 +1081,35 @@ func _ROS2Service_UnloadComponent_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ROS2Service_StreamRawTopic_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamRawTopicRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ROS2ServiceServer).StreamRawTopic(m, &grpc.GenericServerStream[StreamRawTopicRequest, RawTopicSample]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ROS2Service_StreamRawTopicServer = grpc.ServerStreamingServer[RawTopicSample]
+
+func _ROS2Service_ListRawTopics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListRawTopicsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ROS2ServiceServer).ListRawTopics(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ROS2Service_ListRawTopics_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ROS2ServiceServer).ListRawTopics(ctx, req.(*ListRawTopicsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ROS2Service_ServiceDesc is the grpc.ServiceDesc for ROS2Service service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1077,6 +1197,10 @@ var ROS2Service_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "UnloadComponent",
 			Handler:    _ROS2Service_UnloadComponent_Handler,
 		},
+		{
+			MethodName: "ListRawTopics",
+			Handler:    _ROS2Service_ListRawTopics_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1108,6 +1232,11 @@ var ROS2Service_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SendActionGoal",
 			Handler:       _ROS2Service_SendActionGoal_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamRawTopic",
+			Handler:       _ROS2Service_StreamRawTopic_Handler,
 			ServerStreams: true,
 		},
 	},

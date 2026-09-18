@@ -52,6 +52,35 @@ service ROS2Service {
     rpc ListComponents(ListROS2ComponentsRequest) returns (ListROS2ComponentsResponse);
     rpc LoadComponent(LoadROS2ComponentRequest) returns (LoadROS2ComponentResponse);
     rpc UnloadComponent(UnloadROS2ComponentRequest) returns (UnloadROS2ComponentResponse);
+
+    // Raw sampling, which does not go through the sidecar.
+    //
+    // Every call above execs `ros2` in the CLI sidecar, so it can only read
+    // messages whose definitions that image carries. A robot publishing a
+    // vendor type cannot be read at all: `ros2 topic echo /lowstate` on a
+    // Unitree G1 answers "the message type 'unitree_hg/msg/LowState' is
+    // invalid", and that is where a humanoid keeps every joint, its battery
+    // and its hands.
+    //
+    // This streams the bytes instead, read by the agent's own RTPS
+    // participant, and lets the caller decode them. One call serves every
+    // vendor message on every robot, rather than a new RPC per message — and
+    // it is the only way to reach these at all from off the robot, since DDS
+    // discovery is multicast and never leaves the robot's own network.
+    //
+    // Read-only by construction: the participant has no writer.
+    rpc StreamRawTopic(StreamRawTopicRequest) returns (stream RawTopicSample);
+
+    // ListRawTopics reports the topics the agent's own RTPS participant can
+    // see, with the DDS type name each writer advertises.
+    //
+    // ListTopics above answers the same question by running `ros2 topic list`
+    // in a sidecar, which means it needs a ROS 2 container deployed and
+    // running on the device. This needs nothing: it is the discovery half of
+    // StreamRawTopic, and it is what lets a caller find out whether a robot
+    // publishes a topic worth reading on a device where no ROS 2 app has ever
+    // been deployed.
+    rpc ListRawTopics(ListRawTopicsRequest) returns (ListRawTopicsResponse);
 }
 
 message ROS2Node {
@@ -395,4 +424,74 @@ message UnloadROS2ComponentRequest {
 
 message UnloadROS2ComponentResponse {
     string message = 1;
+}
+
+message StreamRawTopicRequest {
+    // Topic name, in either spelling: "/lowstate" or the DDS-mangled "rt/lowstate".
+    string topic = 1;
+    // DDS type name to require, e.g. "unitree_hg::msg::dds_::LowState_". Empty
+    // accepts any type published on the topic, which is what a caller wants when
+    // it is discovering rather than decoding.
+    string type = 2;
+    optional int32 domain_id = 3;
+    // Network interface to bind discovery to. A robot's own bus is often not the
+    // interface a route would choose — on a G1 the graph is on the internal
+    // network, not wifi — so this is explicit rather than inferred.
+    string interface = 4;
+    // How long to let discovery run before reading. Discovery is announcement
+    // driven, so a graph appears over a second or two rather than on request.
+    uint32 settle_ms = 5;
+    // Bounds on the read. The stream ends at whichever arrives first, and a
+    // caller that omits both gets the server's defaults rather than an unbounded
+    // subscription.
+    uint32 duration_ms = 6;
+    uint32 max_samples = 7;
+}
+
+message RawTopicSample {
+    // The serialized payload exactly as received, including its CDR
+    // encapsulation header, so a decoder sees what the robot sent.
+    bytes payload = 1;
+    // When the agent received it, for measuring arrival rather than capture.
+    int64 received_unix_nanos = 2;
+    // The resolved topic and type, which tell a caller what it actually matched
+    // when it asked for any type.
+    string topic = 3;
+    string type = 4;
+}
+
+message ListRawTopicsRequest {
+    // domain_id is the DDS domain to join. Zero is the ROS 2 default.
+    uint32 domain_id = 1;
+
+    // interface names the network interface to discover on. Empty lets the
+    // agent choose, which is right unless the robot's graph is on an
+    // interface a route would not pick.
+    string interface = 2;
+
+    // settle_ms is how long to let discovery run before answering. Discovery
+    // is announcement-driven, so a graph appears over a second or two rather
+    // than on request.
+    uint32 settle_ms = 3;
+}
+
+message ListRawTopicsResponse {
+    repeated RawTopic topics = 1;
+}
+
+message RawTopic {
+    // name is the ROS spelling of the topic, so "rt/lowstate" on the wire is
+    // reported as "/lowstate".
+    string name = 1;
+
+    // type is the DDS type name the writer advertises, for example
+    // "unitree_hg::msg::dds_::LowState_". It is the DDS spelling rather than
+    // the ROS one because that is what discovery carries, and translating it
+    // would mean claiming knowledge of a message this agent cannot decode.
+    string type = 2;
+
+    // writer_count is how many writers were discovered for this topic and
+    // type. More than one is worth knowing: it usually means two publishers
+    // are fighting over a topic.
+    uint32 writer_count = 3;
 }
