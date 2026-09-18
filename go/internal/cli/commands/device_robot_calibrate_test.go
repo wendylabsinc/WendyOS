@@ -114,24 +114,30 @@ func TestRobotProfilesListsTheShippedProfiles(t *testing.T) {
 	}
 }
 
-// TestCalibrationStoreRefusesRatherThanWritingToTheLaptop: a calibration is a
-// fact about the robot, and a per-robot fact stored per-laptop fails silently
-// the moment someone else connects.
-func TestCalibrationStoreRefusesRatherThanWritingToTheLaptop(t *testing.T) {
-	t.Setenv("WENDY_AGENT_SOCKET", "")
-	if _, err := resolveCalibrationStore(); err == nil {
-		t.Fatal("off-device calibration must refuse until there is a transport to the device's store")
-	} else if !strings.Contains(err.Error(), robotcal.DefaultRoot) {
-		t.Fatalf("the refusal must say where the store belongs, got: %v", err)
-	}
-
+// TestCalibrationStoreNeverLandsOnTheLaptop: a calibration is a fact about the
+// robot, and a per-robot fact stored per-laptop fails silently the moment
+// someone else connects. Both branches of resolveCalibrationStore must put the
+// record on the device — one by opening the file directly, one over the agent —
+// and neither may fall back to somewhere local.
+func TestCalibrationStoreNeverLandsOnTheLaptop(t *testing.T) {
+	// On-device, unchanged: the CLI is inside an admin-entitled container on the
+	// robot, so the store is a file it opens directly and no RPC is involved.
 	t.Setenv("WENDY_AGENT_SOCKET", "/var/lib/wendy/agent-control/agent.sock")
-	store, err := resolveCalibrationStore()
+	store, err := resolveCalibrationStore(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("on-device the store is a file the agent owns: %v", err)
 	}
 	if store.Describe() != robotcal.DefaultRoot {
 		t.Fatalf("store root = %q, want %q", store.Describe(), robotcal.DefaultRoot)
+	}
+
+	// Off-device with no connection there is nowhere on the robot to write, and
+	// the answer is a refusal rather than a file in $HOME.
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	if _, err := resolveCalibrationStore(t.Context(), nil); err == nil {
+		t.Fatal("with no connection to the device there is nowhere to put a calibration; want a refusal")
+	} else if !strings.Contains(err.Error(), "does not belong on this laptop") {
+		t.Fatalf("the refusal must say why, got: %v", err)
 	}
 }
 
