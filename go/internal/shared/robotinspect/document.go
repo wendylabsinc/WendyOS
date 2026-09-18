@@ -11,36 +11,6 @@ import (
 // reinterpretation is worse than a new version.
 const Schema = "wendy.robot.inspection.v1"
 
-// Legality is whether a robot will accept commands right now. The core does not decide
-// this; a vendor backend maps its own state machine onto it.
-type Legality string
-
-const (
-	LegalityYes     Legality = "yes"
-	LegalityNo      Legality = "no"
-	LegalityUnknown Legality = "unknown"
-)
-
-// VendorState is a robot's own control state, kept deliberately opaque. Vendor state
-// machines are numerous, renumbered between firmware versions, and documented
-// inconsistently — on one G1 the published guidance and the shipped bridge disagree
-// about which state accepts low-level commands. So the core stores Raw verbatim, prints
-// it under the backend's Label, and reasons only about ControlAuthority and
-// CommandLegality, which every robot has in some form.
-type VendorState struct {
-	// Raw is whatever the backend wants to surface, such as
-	// {"fsm_id": "801", "fsm_mode": "3"}. Never interpreted here.
-	Raw map[string]string
-	// Label is the backend's own rendering of Raw, for an operator to read.
-	Label string
-	// ControlAuthority names who holds the actuators: empty for nobody, a process or
-	// SDK name, or "unknown".
-	ControlAuthority string
-	CommandLegality  Legality
-	// LegalityReason explains a No or an Unknown in the backend's terms.
-	LegalityReason string
-}
-
 // Document is one inspection pass. It is the product; the text rendering is one view of
 // it.
 type Document struct {
@@ -57,9 +27,12 @@ type Document struct {
 	PassiveOnly bool
 	ProbesRun   []string
 	Properties  []Property
-	// Skipped is keyed by probe ID: what was not looked at, and why.
+	// Skipped is keyed by probe ID: probes that never ran, and why.
 	Skipped map[string]Unknown
-	Vendor  *VendorState
+	// Failed is keyed by probe ID: probes that ran and errored. Separate from Skipped
+	// because a probe that returned half its answers is not one that never ran, and
+	// filing it under "not run" tells an operator the opposite of what happened.
+	Failed map[string]Unknown
 }
 
 // Summary counts a document's verdicts. It is what the last line of the report prints
@@ -131,6 +104,7 @@ func Inspect(ctx context.Context, registry *Registry, env *Env, target Target) D
 		StartedAt:   started,
 		PassiveOnly: passiveOnly,
 		Skipped:     map[string]Unknown{},
+		Failed:      map[string]Unknown{},
 	}
 	for id, unknown := range plan.Skipped {
 		doc.Skipped[id] = unknown
@@ -142,7 +116,9 @@ func Inspect(ctx context.Context, registry *Registry, env *Env, target Target) D
 		doc.ProbesRun = append(doc.ProbesRun, probe.ID())
 		found, err := probe.Observe(ctx, env)
 		if err != nil {
-			doc.Skipped[probe.ID()] = NewUnknown(ReasonProbeFailed, err.Error())
+			// It ran. Whatever it returned is kept, and the failure is recorded as a
+			// failure rather than as a probe that was never attempted.
+			doc.Failed[probe.ID()] = NewUnknown(ReasonProbeFailed, err.Error())
 		}
 		for _, p := range found {
 			existing, seen := byID[p.ID]

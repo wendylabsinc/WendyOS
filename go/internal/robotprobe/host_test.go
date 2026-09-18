@@ -205,3 +205,53 @@ func TestHostProbesShareOneFetchThroughTheSource(t *testing.T) {
 		t.Errorf("findings = %d, want 0; host inventory has nothing to contradict", got)
 	}
 }
+
+// Two robots are compared by identifier, so a fact must be a value on a shared row and
+// not a row that only exists when the fact is true. compute.gpu.backend.cuda="present"
+// gave a robot without CUDA no row at all, which is not a comparison.
+func TestComputeListsBackendsOnOneRowSoTwoRobotsCompare(t *testing.T) {
+	withCUDA := orinNanoFacts()
+	withCUDA.ComputeBackends = []string{"cuda", "opencl"}
+	properties, err := Compute{}.Observe(context.Background(), hostEnv(&fakeHost{facts: withCUDA}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backends := findIn(t, properties, "compute.gpu.backends")
+	if got := backends.Observations[0].Text; got != "cuda opencl" {
+		t.Errorf("backends = %q, want them sorted on one row", got)
+	}
+
+	// A GPU that names none still leaves the row, so the comparison has two sides.
+	none := orinNanoFacts()
+	none.ComputeBackends = nil
+	properties, err = Compute{}.Observe(context.Background(), hostEnv(&fakeHost{facts: none}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := findIn(t, properties, "compute.gpu.backends")
+	if empty.Unknown == nil || empty.Unknown.Reason != robotinspect.ReasonSourceAbsent {
+		t.Errorf("backends = %+v, want an unknown rather than a missing row", empty.Unknown)
+	}
+}
+
+// Every property Provides names must appear, as a value or as an unknown. A promised row
+// that is simply absent reads as nobody having looked.
+func TestComputeKeepsEveryPromiseItMakes(t *testing.T) {
+	bare := &HostFacts{
+		// A host that answers almost nothing: no GPU, no versions, no board name.
+		CPUCount: 2, MemoryTotalBytes: 1 << 30,
+	}
+	properties, err := Compute{}.Observe(context.Background(), hostEnv(&fakeHost{facts: bare}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, p := range properties {
+		seen[p.ID] = true
+	}
+	for _, promised := range (Compute{}).Provides() {
+		if !seen[promised] {
+			t.Errorf("Provides names %q and the probe emitted no row for it", promised)
+		}
+	}
+}

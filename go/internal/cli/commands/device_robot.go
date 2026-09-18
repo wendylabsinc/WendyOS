@@ -215,7 +215,14 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 	}
 	env.Offer(robotinspect.RequirementDDSDomain, source)
 
-	// What the cameras claim about themselves.
+	// There are deliberately two camera paths, and they answer different questions.
+	//
+	// The agent path above works wherever the device is reachable and sees every
+	// camera, whatever it is attached by — that is the general one. These DDS probes
+	// only see cameras a ROS node is publishing, and only from the robot's own network
+	// segment. What they add is the one thing the agent cannot give: a camera's
+	// calibrated intrinsics, and so its field of view per axis. That is the number the
+	// whole effort started from, so the narrower path earns its place.
 	if topics := source.TopicsOfType(rosmsg.TypeCameraInfo); len(topics) > 0 {
 		camera := robotprobe.CameraInfo{Topics: topics}
 		if err := registry.Register(camera); err != nil {

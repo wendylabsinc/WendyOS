@@ -9,12 +9,6 @@ import (
 func TestRenderShowsTheG1CampaignAsAnOperatorWouldReadIt(t *testing.T) {
 	doc := Document{
 		Schema: Schema, Device: "unitree-g1-nx-2", VendorKind: "unitree-g1", PassiveOnly: true,
-		Vendor: &VendorState{
-			Raw:              map[string]string{"fsm_id": "801", "fsm_mode": "3"},
-			Label:            "main operation, ready",
-			ControlAuthority: "unitree-sdk",
-			CommandLegality:  LegalityYes,
-		},
 		Properties: []Property{
 			g1FieldOfView(t), g1FrameRate(t), g1Extrinsics(), g1WaistGate(t),
 		},
@@ -27,8 +21,6 @@ func TestRenderShowsTheG1CampaignAsAnOperatorWouldReadIt(t *testing.T) {
 
 	for _, want := range []string{
 		"unitree-g1-nx-2 (unitree-g1)",
-		"fsm_id=801",
-		"commands owned by: unitree-sdk",
 		"75 deg horizontal",
 		"43.4 deg vertical",
 		"incomparable",

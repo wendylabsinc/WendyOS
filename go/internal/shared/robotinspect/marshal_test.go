@@ -103,24 +103,6 @@ func TestJSONCarriesQualifiersAndTheComputedVerdict(t *testing.T) {
 	}
 }
 
-func TestJSONKeepsVendorStateOpaque(t *testing.T) {
-	doc := Document{Schema: Schema, Vendor: &VendorState{
-		Raw:              map[string]string{"fsm_id": "801", "fsm_mode": "3"},
-		Label:            "main operation, ready",
-		ControlAuthority: "unitree-sdk",
-		CommandLegality:  LegalityYes,
-	}}
-	raw, err := doc.CanonicalJSON()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{`"fsm_id": "801"`, `"fsm_mode": "3"`, `"controlAuthority": "unitree-sdk"`} {
-		if !strings.Contains(string(raw), want) {
-			t.Errorf("vendor state JSON missing %s:\n%s", want, raw)
-		}
-	}
-}
-
 // g1Document is the field-of-view row from the campaign, timestamped so the canonical
 // form can be shown to ignore it.
 func g1Document(t *testing.T, at time.Time) Document {
