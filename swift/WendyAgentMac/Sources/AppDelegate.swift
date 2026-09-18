@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         category: "AppDelegate"
     )
     private let wendyAgent = WendyAgent(configuration: .default)
+    private let localBuildService = WendyRuntimeVM()
     private let meshVPN = MeshVPNController()
     private let welcomeAndPermissions = WelcomeAndPermissions()
     private var statusMenuController: StatusMenuController?
@@ -30,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Task {
             self.statusMenuController = await StatusMenuController(
                 wendyAgent: self.wendyAgent,
+                localBuildService: self.localBuildService,
                 meshVPN: self.meshVPN,
                 delegate: self
             )
@@ -72,6 +74,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     func statusMenuController(
         _ controller: StatusMenuController,
+        didSetLocalBuildServiceEnabled enabled: Bool
+    ) {
+        Task {
+            if enabled {
+                await self.localBuildService.start()
+            } else {
+                await self.localBuildService.stop()
+            }
+        }
+    }
+
+    func statusMenuController(
+        _ controller: StatusMenuController,
         didSetMeshVPNEnabled enabled: Bool
     ) {
         Task {
@@ -101,8 +116,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Task {
             await self.statusMenuController?.invalidate()
             await self.wendyAgent.stop()
+            await self.localBuildService.stop()
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        self.localBuildService.requestStop()
     }
 
     /// Ends only the agent app after a committed self-update. The detached
