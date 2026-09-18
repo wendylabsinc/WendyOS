@@ -30,6 +30,10 @@ const (
 	// ReasonNotPassive: the only probe that could answer may actuate the robot, so
 	// inspection will not run it.
 	ReasonNotPassive = "NOT_PASSIVE"
+	// ReasonUncalibrated: the source exists but has no usable value in it, such as a
+	// camera publishing an all-zero intrinsic matrix. Distinct from absent, because
+	// the fix is to calibrate the device rather than to go looking elsewhere.
+	ReasonUncalibrated = "UNCALIBRATED"
 )
 
 // NewUnknown returns an Unknown with a reason and optional detail.
