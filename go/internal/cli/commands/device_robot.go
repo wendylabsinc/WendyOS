@@ -183,6 +183,13 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		// and ROS 2 alike. This is the general camera path: it answers on a robot
 		// with no ROS installed, and it works wherever the device is reachable
 		// rather than only on its own network segment.
+		// The robot's own ROS 2 graph, read through the agent's sidecar. This is the
+		// path that reaches a graph living on the robot's private network, which a
+		// participant on this machine cannot see.
+		if ros2, ok := host.(robotprobe.ROS2Source); ok {
+			env.Offer(robotinspect.RequirementROS2Graph, ros2)
+			probes = append(probes, robotprobe.ROS2Graph{})
+		}
 		if cameras, ok := host.(robotprobe.CameraSource); ok {
 			mode, err := parseCameraMode(opts.expectMode)
 			if err != nil {

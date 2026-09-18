@@ -38,6 +38,14 @@ type agentHostFacts struct {
 	camerasOnce sync.Once
 	cameras     []robotprobe.CameraDevice
 	camerasErr  error
+
+	topicsOnce sync.Once
+	topics     []robotprobe.ROS2Topic
+	topicsErr  error
+
+	nodesOnce sync.Once
+	nodes     []robotprobe.ROS2Node
+	nodesErr  error
 }
 
 func newAgentHostFacts(conn *grpcclient.AgentConnection) *agentHostFacts {
@@ -235,4 +243,54 @@ func transportName(transport agentpb.VideoTransport) string {
 
 func codecName(codec agentpb.VideoCodec) string {
 	return strings.TrimPrefix(codec.String(), "VIDEO_CODEC_")
+}
+
+// ROS2Topics and ROS2Nodes read the robot's graph through the agent's ROS 2 service.
+// The client is built here from the shared connection, the way the ros2 command does,
+// rather than widening AgentConnection for one caller.
+//
+// which runs the ros2 CLI in a sidecar on the device. That is why this works over a
+// cloud tunnel: DDS discovery is multicast and never leaves the robot's own network, but
+// the agent is already standing inside it.
+//
+// Both are cached: the graph does not change between two probes of one pass, and listing
+// it costs a round trip plus a process on the device.
+func (a *agentHostFacts) ROS2Topics(ctx context.Context) ([]robotprobe.ROS2Topic, error) {
+	a.topicsOnce.Do(func() {
+		resp, err := agentpbv2.NewROS2ServiceClient(a.conn.Conn).ListTopics(ctx,
+			&agentpbv2.ListROS2TopicsRequest{IncludeCounts: true})
+		if err != nil {
+			a.topicsErr = fmt.Errorf("listing ROS 2 topics: %s", agentMessage(err))
+			return
+		}
+		for _, topic := range resp.GetTopics() {
+			a.topics = append(a.topics, robotprobe.ROS2Topic{
+				Name:            topic.GetName(),
+				Types:           topic.GetTypes(),
+				PublisherCount:  int(topic.GetPublisherCount()),
+				SubscriberCount: int(topic.GetSubscriberCount()),
+				RMW:             topic.GetRmw(),
+			})
+		}
+	})
+	return a.topics, a.topicsErr
+}
+
+func (a *agentHostFacts) ROS2Nodes(ctx context.Context) ([]robotprobe.ROS2Node, error) {
+	a.nodesOnce.Do(func() {
+		resp, err := agentpbv2.NewROS2ServiceClient(a.conn.Conn).ListNodes(ctx,
+			&agentpbv2.ListROS2NodesRequest{})
+		if err != nil {
+			a.nodesErr = fmt.Errorf("listing ROS 2 nodes: %s", agentMessage(err))
+			return
+		}
+		for _, node := range resp.GetNodes() {
+			a.nodes = append(a.nodes, robotprobe.ROS2Node{
+				Name:      node.GetName(),
+				Namespace: node.GetNamespace(),
+				RMW:       node.GetRmw(),
+			})
+		}
+	})
+	return a.nodes, a.nodesErr
 }
