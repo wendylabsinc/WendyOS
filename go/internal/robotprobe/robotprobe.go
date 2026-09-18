@@ -25,6 +25,25 @@ type TopicReader interface {
 	Sample(ctx context.Context, topic, typeName string, window time.Duration, maxMessages int) ([][]byte, error)
 }
 
+// RawTopic is a topic seen by DDS discovery, named the way ROS names it and typed the way
+// DDS advertises it. The type stays in the DDS spelling because that is what the wire
+// carries: translating it would mean claiming to know a message the transport cannot
+// decode.
+type RawTopic struct {
+	Name string
+	Type string
+	// WriterCount is how many publishers were discovered. More than one usually means
+	// two of them are fighting over a topic.
+	WriterCount int
+}
+
+// RawTopicLister reports what a transport can see without any robot software installed.
+// It is what decides which probes have something to read, so a robot that is not a
+// humanoid gets no humanoid rows.
+type RawTopicLister interface {
+	RawTopics(ctx context.Context) ([]RawTopic, error)
+}
+
 // streamName identifies a camera stream from its topic, keeping the whole namespace
 // rather than one segment.
 //

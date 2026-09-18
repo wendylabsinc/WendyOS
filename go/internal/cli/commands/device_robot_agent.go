@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -46,10 +47,20 @@ type agentHostFacts struct {
 	nodesOnce sync.Once
 	nodes     []robotprobe.ROS2Node
 	nodesErr  error
+
+	// ddsInterface and ddsSettle are passed to every raw topic read, since the
+	// robot's graph is often not on the interface a route would pick.
+	ddsInterface string
+	ddsSettle    time.Duration
+
+	// lost holds the first transport failure, so a connection that dropped mid-run
+	// can be reported once instead of once per probe.
+	lostOnce sync.Once
+	lost     error
 }
 
-func newAgentHostFacts(conn *grpcclient.AgentConnection) *agentHostFacts {
-	return &agentHostFacts{conn: conn}
+func newAgentHostFacts(conn *grpcclient.AgentConnection, ddsInterface string, ddsSettle time.Duration) *agentHostFacts {
+	return &agentHostFacts{conn: conn, ddsInterface: ddsInterface, ddsSettle: ddsSettle}
 }
 
 func (a *agentHostFacts) HostFacts(ctx context.Context) (*robotprobe.HostFacts, error) {
@@ -185,7 +196,7 @@ func (a *agentHostFacts) SampleCamera(ctx context.Context, stableID string, wind
 		Framerate: mode.Framerate,
 	})
 	if err != nil {
-		return nil, classifyCameraError(err)
+		return nil, a.classifyCameraError(err)
 	}
 
 	var frames []robotprobe.CameraFrame
@@ -197,7 +208,7 @@ func (a *agentHostFacts) SampleCamera(ctx context.Context, stableID string, wind
 			if len(frames) > 0 || errors.Is(streamCtx.Err(), context.DeadlineExceeded) {
 				break
 			}
-			return nil, classifyCameraError(err)
+			return nil, a.classifyCameraError(err)
 		}
 		captured := robotprobe.CameraFrame{
 			Codec:       codecName(frame.GetCodec()),
@@ -218,11 +229,34 @@ func (a *agentHostFacts) SampleCamera(ctx context.Context, stableID string, wind
 // already publishes a machine-readable reason for a camera in use, which is exactly what
 // shared/streamreason exists for, so this reads that rather than matching on message
 // text; a FailedPrecondition is the fallback for an older agent.
-func classifyCameraError(err error) error {
+func (a *agentHostFacts) classifyCameraError(err error) error {
 	if streamreason.Has(err, streamreason.CameraInUse) || status.Code(err) == codes.FailedPrecondition {
-		return fmt.Errorf("%w: %s", robotprobe.ErrDeviceBusy, agentMessage(err))
+		return fmt.Errorf("%w: %s", robotprobe.ErrDeviceBusy, a.noteFailure(err))
 	}
-	return errors.New(agentMessage(err))
+	return errors.New(a.noteFailure(err))
+}
+
+// noteFailure renders an agent error for a report and, on the way, remembers a connection
+// that has gone away.
+//
+// Every RPC in this file formats its failure here, which makes it the one place that sees
+// them all. That matters because a tunnel that drops mid-run fails every probe
+// individually: the reader gets a wall of identical handshake errors and no statement that
+// the connection itself is what broke, which reads as a robot with seven broken subsystems.
+func (a *agentHostFacts) noteFailure(err error) string {
+	if code := status.Code(err); code == codes.Unavailable || code == codes.DeadlineExceeded {
+		a.lostOnce.Do(func() { a.lost = err })
+	}
+	return agentMessage(err)
+}
+
+// lostConnection reports the first transport failure seen, if any.
+func (a *agentHostFacts) lostConnection() error {
+	if a == nil {
+		return nil
+	}
+	a.lostOnce.Do(func() {})
+	return a.lost
 }
 
 // agentMessage strips the gRPC envelope so the report carries what the agent said rather
@@ -260,7 +294,7 @@ func (a *agentHostFacts) ROS2Topics(ctx context.Context) ([]robotprobe.ROS2Topic
 		resp, err := agentpbv2.NewROS2ServiceClient(a.conn.Conn).ListTopics(ctx,
 			&agentpbv2.ListROS2TopicsRequest{IncludeCounts: true})
 		if err != nil {
-			a.topicsErr = fmt.Errorf("listing ROS 2 topics: %s", agentMessage(err))
+			a.topicsErr = fmt.Errorf("listing ROS 2 topics: %s", a.noteFailure(err))
 			return
 		}
 		for _, topic := range resp.GetTopics() {
@@ -281,7 +315,7 @@ func (a *agentHostFacts) ROS2Nodes(ctx context.Context) ([]robotprobe.ROS2Node, 
 		resp, err := agentpbv2.NewROS2ServiceClient(a.conn.Conn).ListNodes(ctx,
 			&agentpbv2.ListROS2NodesRequest{})
 		if err != nil {
-			a.nodesErr = fmt.Errorf("listing ROS 2 nodes: %s", agentMessage(err))
+			a.nodesErr = fmt.Errorf("listing ROS 2 nodes: %s", a.noteFailure(err))
 			return
 		}
 		for _, node := range resp.GetNodes() {
@@ -301,7 +335,7 @@ func (a *agentHostFacts) ROS2Nodes(ctx context.Context) ([]robotprobe.ROS2Node, 
 func (a *agentHostFacts) LiveHostStats(ctx context.Context) (*robotprobe.LiveHostStats, error) {
 	resp, err := a.conn.ContainerService.GetResourceStats(ctx, &agentpb.GetResourceStatsRequest{})
 	if err != nil {
-		return nil, fmt.Errorf("reading resource stats: %s", agentMessage(err))
+		return nil, fmt.Errorf("reading resource stats: %s", a.noteFailure(err))
 	}
 	host := resp.GetHost()
 	if host == nil {
@@ -330,4 +364,98 @@ func (a *agentHostFacts) LiveHostStats(ctx context.Context) (*robotprobe.LiveHos
 		stats.GPUs = append(stats.GPUs, live)
 	}
 	return stats, nil
+}
+
+// errRawTopicUnsupported marks an agent too old to serve raw topic samples. It is a
+// sentinel rather than a message because the caller acts on it: it is the one failure that
+// justifies falling back to a participant on this machine.
+var errRawTopicUnsupported = errors.New("the agent does not serve raw topic samples")
+
+// Sample reads a topic's raw payloads through the agent, which satisfies
+// robotprobe.TopicReader. This is what lets the body probes — joints, the robot's own
+// battery, its hands — run from a laptop: their data lives on the robot's internal
+// network, which DDS discovery never leaves, and the agent is already standing inside it.
+//
+// The decoding stays on this side deliberately. One raw RPC serves every vendor message on
+// every robot, where a decoded RPC would need extending, redeploying and version-matching
+// for each new message a robot speaks.
+func (a *agentHostFacts) Sample(ctx context.Context, topic, typeName string, window time.Duration, maxMessages int) ([][]byte, error) {
+	stream, err := agentpbv2.NewROS2ServiceClient(a.conn.Conn).StreamRawTopic(ctx, &agentpbv2.StreamRawTopicRequest{
+		Topic: topic,
+		Type:  typeName,
+		// The robot's graph is not always on the interface a route would choose, so
+		// the caller's choice is passed through rather than inferred on the device.
+		Interface:  a.ddsInterface,
+		SettleMs:   uint32(a.ddsSettle.Milliseconds()),
+		DurationMs: uint32(window.Milliseconds()),
+		MaxSamples: uint32(maxMessages),
+	})
+	if err != nil {
+		return nil, a.rawTopicError(topic, err)
+	}
+
+	var payloads [][]byte
+	for {
+		sample, err := stream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if status.Code(err) == codes.NotFound {
+				// Nobody publishes it. That is an answer about the robot, and the
+				// probe turns it into a finding rather than an error.
+				return payloads, nil
+			}
+			if len(payloads) > 0 {
+				// A stream that carried samples and then broke has already
+				// answered the question it was asked.
+				break
+			}
+			return nil, a.rawTopicError(topic, err)
+		}
+		payloads = append(payloads, sample.GetPayload())
+		if maxMessages > 0 && len(payloads) >= maxMessages {
+			break
+		}
+	}
+	return payloads, nil
+}
+
+// RawTopics lists the topics the agent's own participant can see, which is how the body
+// probes find out whether a robot publishes anything worth reading.
+//
+// This deliberately does not go through ROS2Topics: that runs `ros2 topic list` in a
+// sidecar and so needs a ROS 2 container deployed on the device. Gating the body probes on
+// it would make them unavailable on exactly the robots they exist for — a G1 with no Wendy
+// app running still publishes its whole body, and the agent can see it.
+func (a *agentHostFacts) RawTopics(ctx context.Context) ([]robotprobe.RawTopic, error) {
+	resp, err := agentpbv2.NewROS2ServiceClient(a.conn.Conn).ListRawTopics(ctx, &agentpbv2.ListRawTopicsRequest{
+		Interface: a.ddsInterface,
+		SettleMs:  uint32(a.ddsSettle.Milliseconds()),
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return nil, errRawTopicUnsupported
+		}
+		return nil, fmt.Errorf("listing raw topics: %s", a.noteFailure(err))
+	}
+	topics := make([]robotprobe.RawTopic, 0, len(resp.GetTopics()))
+	for _, topic := range resp.GetTopics() {
+		topics = append(topics, robotprobe.RawTopic{
+			Name:        topic.GetName(),
+			Type:        topic.GetType(),
+			WriterCount: int(topic.GetWriterCount()),
+		})
+	}
+	return topics, nil
+}
+
+// rawTopicError keeps an old agent distinguishable from a real failure. Everything else
+// is flattened to a message, because by this point the gRPC status carries nothing the
+// reader of a report can act on.
+func (a *agentHostFacts) rawTopicError(topic string, err error) error {
+	if status.Code(err) == codes.Unimplemented {
+		return errRawTopicUnsupported
+	}
+	return fmt.Errorf("reading %s: %s", topic, a.noteFailure(err))
 }
