@@ -309,8 +309,7 @@ Notes:
   version, because a PR's version tag is constant across rebuilds — so pushing a
   new commit and re-running picks up the new build instead of silently no-op'ing.
 - `--pr` targets Linux disk-image devices (Raspberry Pi, Jetson Orin/Thor) and
-  the Dragonwing IQ-8275 EDL flash. It's
-  not offered for ESP32 firmware.
+  the Dragonwing EDL flash. It's not offered for ESP32 firmware.
 
 ---
 
