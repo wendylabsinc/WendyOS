@@ -202,6 +202,16 @@ func main() {
 	if ctrdErr != nil {
 		logger.Warn("Failed to connect to containerd (container features will be unavailable)", zap.Error(ctrdErr))
 	}
+
+	// WDY-3127: detect whether /var/lib/containerd is being served from the
+	// OS root slot because a WendyOS host's /data bind mount is inactive, so
+	// image ingestion can be refused before it fills or corrupts the root
+	// partition.
+	storageGate := services.NewContainerStorageGate(logger)
+	if storageGate.Degraded() {
+		logger.Error("container storage is on the OS root slot; image ingestion is disabled", zap.String("detail", storageGate.Message()))
+	}
+
 	// Typed separately from containerdClient: assigning a nil *containerd.Client
 	// into an interface yields a non-nil interface holding a nil pointer, which
 	// panics on first use rather than failing the service's nil check.
@@ -253,6 +263,7 @@ func main() {
 
 	installer := &services.AgentInstaller{}
 	agentSvc := services.NewAgentService(logger, networkMgr, hwDiscoverer, btManager, installer)
+	agentSvc.SetContainerStorageGate(storageGate)
 	// Pin the executable path while the mount topology this process started
 	// under is intact: merging and later removing a driver add-on leaves
 	// /proc/self/exe reporting a path that no longer resolves.
@@ -277,6 +288,7 @@ func main() {
 	if monitor != nil {
 		containerSvcOpts = append(containerSvcOpts, services.WithMonitor(&containerMonitorAdapter{m: monitor}))
 	}
+	containerSvcOpts = append(containerSvcOpts, services.WithContainerStorageGate(storageGate))
 	containerSvc := services.NewContainerService(logger, containerdClient,
 		containerSvcOpts...,
 	)
@@ -287,6 +299,7 @@ func main() {
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster, telemetryBuf)
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
+	deviceInfoSvc.SetContainerStorageGate(storageGate)
 	timeSyncSvc := services.NewTimeSyncService(logger, timesyncMgr)
 	wifiSvc := services.NewWiFiService(logger, networkMgr)
 	bluetoothSvc := services.NewBluetoothService(logger, btManager)
@@ -444,7 +457,7 @@ func main() {
 			registryAddr = addr
 		}
 
-		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig)
+		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig, registry.WithIngestGate(storageGate.Check))
 		if err != nil {
 			logger.Warn("Failed to start embedded dev registry (image push will be unavailable)", zap.Error(err))
 			return
