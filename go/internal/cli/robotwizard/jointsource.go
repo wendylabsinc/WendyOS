@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotcal"
@@ -19,6 +20,148 @@ type JointReading struct {
 	At        time.Time
 	Positions map[string]float64
 	Order     []string
+	// Status is what the source can say about each joint beside where it is:
+	// whether a person could move it by hand right now, and whatever it
+	// measured while deciding. A joint with no entry is one the source had
+	// nothing to say about, which is the ordinary case for a source that reads
+	// positions and nothing else.
+	Status map[string]JointStatus
+}
+
+// Mobility is a source's answer to one question: can a person move this joint
+// by hand right now?
+//
+// It is deliberately not a vendor state word. A unitree_hg robot answers with
+// motor mode 1; a Feetech servo bus answers with torque-enable register 40; a
+// brake answers with a solenoid. The wizard needs the answer, not the encoding,
+// so each backend translates its own robot into this and keeps its vocabulary
+// to itself. A wizard that learned "mode" would be a wizard that knows which
+// robot it is driving.
+//
+// The zero value is MobilityUnknown on purpose. A source that cannot tell says
+// nothing, and a hand sweep then proceeds exactly as it did before this
+// existed: the checks that use this refuse on evidence, never on the absence of
+// it.
+type Mobility int
+
+const (
+	// MobilityUnknown is a source that cannot tell. sensor_msgs/JointState
+	// carries positions and no torque state, so this is what that reports.
+	MobilityUnknown Mobility = iota
+	// MobilityFree is a joint a person can move: nothing is driving it.
+	MobilityFree
+	// MobilityHeld is a joint something is holding against the operator. It is
+	// not "absent" — a joint that is not fitted at all is missing from the
+	// reading entirely, and the two failures read very differently to whoever
+	// is standing in front of the robot.
+	MobilityHeld
+)
+
+func (m Mobility) String() string {
+	switch m {
+	case MobilityFree:
+		return "free"
+	case MobilityHeld:
+		return "held"
+	default:
+		return "unknown"
+	}
+}
+
+// MarshalJSON writes the word rather than the number, because a stored
+// calibration record is read by people and an integer here would need this
+// file to decode.
+func (m Mobility) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + m.String() + `"`), nil
+}
+
+// UnmarshalJSON reads a record an earlier run wrote, so a resumed sweep
+// restores what it knew. An unrecognised word is unknown rather than an error:
+// a record written by a later version must not make this one unable to read its
+// own session.
+func (m *Mobility) UnmarshalJSON(data []byte) error {
+	switch string(data) {
+	case `"free"`:
+		*m = MobilityFree
+	case `"held"`:
+		*m = MobilityHeld
+	default:
+		*m = MobilityUnknown
+	}
+	return nil
+}
+
+// JointStatus is what a source can say about one joint beside where it is.
+//
+// Every field is optional, and a source fills in what it actually measured.
+// Nothing here is derived: a backend that does not know a joint's temperature
+// leaves it out rather than reporting a zero, for the same reason an unfitted
+// joint is absent rather than at zero radians.
+type JointStatus struct {
+	Mobility Mobility `json:"mobility,omitempty"`
+	// HoldReason is why the joint is not free, in the source's own words — a
+	// phrase that completes "<joint> is …". "still energised (motor mode 1)"
+	// on a unitree_hg robot; "torque-enabled" on a servo bus. The wizard prints
+	// it and never parses it.
+	HoldReason string `json:"hold_reason,omitempty"`
+	// HoldRemedy is what the operator should do about it, again in the
+	// source's words, because freeing a robot's joints is a per-robot
+	// procedure and the wizard core knows no robot.
+	HoldRemedy string `json:"hold_remedy,omitempty"`
+	// TemperaturesC is every temperature sensor this joint reports, in the
+	// source's own order. More than one because a motor that reports its
+	// winding and its driver board separately is hiding whichever runs hotter
+	// the moment something averages them.
+	TemperaturesC []float64 `json:"temperatures_c,omitempty"`
+	// Volts is the joint's supply, nil when the source reports none. A pointer
+	// because zero volts is a reading — it is what an unfitted slot reports —
+	// and "not measured" must not arrive looking like it.
+	Volts *float64 `json:"volts,omitempty"`
+	// Vendor carries the source's own state words verbatim, uninterpreted:
+	// unitree_hg's motor mode is the one this exists for. Nothing switches on
+	// them. They are here so that a person diagnosing a robot can see what the
+	// robot actually said — an hour of live-robot time went into re-deriving
+	// exactly these numbers once, because the joint source had dropped them.
+	Vendor map[string]string `json:"vendor,omitempty"`
+}
+
+// Summary is the one line a person sees about a joint's condition, or "" when
+// the source measured nothing worth showing.
+func (s JointStatus) Summary() string {
+	var parts []string
+	switch s.Mobility {
+	case MobilityFree:
+		parts = append(parts, "free to move")
+	case MobilityHeld:
+		held := "held"
+		if s.HoldReason != "" {
+			held += " — " + s.HoldReason
+		}
+		parts = append(parts, held)
+	}
+	if len(s.TemperaturesC) > 0 {
+		temps := make([]string, 0, len(s.TemperaturesC))
+		for _, c := range s.TemperaturesC {
+			temps = append(temps, fmt.Sprintf("%.4g", c))
+		}
+		parts = append(parts, strings.Join(temps, "/")+" °C")
+	}
+	if s.Volts != nil {
+		parts = append(parts, fmt.Sprintf("%.4g V", *s.Volts))
+	}
+	for _, key := range sortedKeys(s.Vendor) {
+		parts = append(parts, fmt.Sprintf("%s %s", key, s.Vendor[key]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // JointSource reads live joint positions. It is read-only by construction:
@@ -73,10 +216,15 @@ func (e *UnsupportedBackendError) Error() string {
 // is what makes the joint-map check free: if the operator was asked to move one
 // joint and a different index moved, the sweep already has the evidence.
 type SampleWindow struct {
-	min      map[string]float64
-	max      map[string]float64
-	first    map[string]float64
-	last     map[string]float64
+	min   map[string]float64
+	max   map[string]float64
+	first map[string]float64
+	last  map[string]float64
+	// status is the newest condition the source reported for each joint. The
+	// newest rather than the first, because a motor that warmed up or was
+	// energised part-way through a sweep is exactly what somebody reading the
+	// record afterwards needs to see.
+	status   map[string]JointStatus
 	samples  int
 	order    []string
 	orderSet bool
@@ -85,10 +233,11 @@ type SampleWindow struct {
 // NewSampleWindow returns an empty window.
 func NewSampleWindow() *SampleWindow {
 	return &SampleWindow{
-		min:   make(map[string]float64),
-		max:   make(map[string]float64),
-		first: make(map[string]float64),
-		last:  make(map[string]float64),
+		min:    make(map[string]float64),
+		max:    make(map[string]float64),
+		first:  make(map[string]float64),
+		last:   make(map[string]float64),
+		status: make(map[string]JointStatus),
 	}
 }
 
@@ -97,6 +246,9 @@ func (w *SampleWindow) Add(r JointReading) {
 	if !w.orderSet && len(r.Order) > 0 {
 		w.order = append([]string(nil), r.Order...)
 		w.orderSet = true
+	}
+	for name, st := range r.Status {
+		w.status[name] = st
 	}
 	for name, v := range r.Positions {
 		if _, seen := w.min[name]; !seen {
@@ -119,6 +271,13 @@ func (w *SampleWindow) Samples() int { return w.samples }
 
 // Order is the joint order the source reported, if it reported one.
 func (w *SampleWindow) Order() []string { return w.order }
+
+// Status is the last condition the source reported for a joint during the
+// window, and whether it reported one at all.
+func (w *SampleWindow) Status(name string) (JointStatus, bool) {
+	st, ok := w.status[name]
+	return st, ok
+}
 
 // Span returns the extremes seen for a joint.
 func (w *SampleWindow) Span(name string) (robotcal.Span, bool) {

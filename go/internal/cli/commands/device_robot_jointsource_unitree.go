@@ -389,20 +389,68 @@ func (s *unitreeLowStateJointSource) pump(stream grpc.ServerStreamingClient[agen
 // be mistaken for a joint name. Dropping it would hide a robot driving something
 // the profile has never heard of, which is precisely the kind of disagreement
 // the sweep exists to surface.
+//
+// Beside each position goes what the motor said about itself. The wizard is told
+// whether the joint is free to move and, when it is not, why not and what to do
+// — never that the mode word was 1, which is a fact about unitree_hg and is none
+// of the wizard's business.
 func (s *unitreeLowStateJointSource) readingFrom(state *rosmsg.HGLowState) robotwizard.JointReading {
 	live := state.LiveMotors()
 	reading := robotwizard.JointReading{
 		At:        time.Now(),
 		Positions: make(map[string]float64, len(live)),
+		Status:    make(map[string]robotwizard.JointStatus, len(live)),
 	}
 	for _, index := range live {
 		name := fmt.Sprintf("slot[%d]", index)
 		if index < len(s.order) && s.order[index] != "" {
 			name = s.order[index]
 		}
-		reading.Positions[name] = float64(state.Motors[index].Position)
+		motor := state.Motors[index]
+		reading.Positions[name] = float64(motor.Position)
+		reading.Status[name] = unitreeJointStatus(motor)
 	}
 	return reading
+}
+
+// unitreeZeroTorqueRemedy is what an operator does about an energised arm.
+//
+// It asks for zero torque rather than damping deliberately. Damping does report
+// mode 0 on this robot — the 99-second capture shows the arms sagging under
+// gravity seconds after the transition — but it is still a commanded torque
+// opposing however fast the operator moves, so a range swept under damping is
+// the arm's travel against a brake rather than its travel. Zero torque is the
+// state the sweep's numbers mean something in.
+const unitreeZeroTorqueRemedy = "Put the robot into a true zero-torque state — not merely damping — " +
+	"and run this again."
+
+// unitreeJointStatus translates one motor into what the wizard understands.
+//
+// This is the whole of the vendor-to-platform translation, and it is on this
+// side of the boundary on purpose: mode is a unitree_hg concept, and a wizard
+// that switched on a mode number would be a wizard that knows which robot it is
+// driving. What crosses is "free" or "held, because …", which an SO-101 on a
+// Feetech bus can answer from torque-enable register 40 without either side
+// learning the other's vocabulary.
+func unitreeJointStatus(motor rosmsg.HGMotor) robotwizard.JointStatus {
+	volts := float64(motor.Voltage)
+	status := robotwizard.JointStatus{
+		Mobility: robotwizard.MobilityFree,
+		TemperaturesC: []float64{
+			float64(motor.TemperatureC[0]),
+			float64(motor.TemperatureC[1]),
+		},
+		Volts: &volts,
+		// Verbatim and uninterpreted, so the number that decides this is
+		// visible to whoever has to argue with it later.
+		Vendor: map[string]string{"mode": strconv.FormatUint(uint64(motor.Mode), 10)},
+	}
+	if motor.Energised() {
+		status.Mobility = robotwizard.MobilityHeld
+		status.HoldReason = fmt.Sprintf("still energised (motor mode %d)", motor.Mode)
+		status.HoldRemedy = unitreeZeroTorqueRemedy
+	}
+	return status
 }
 
 func (s *unitreeLowStateJointSource) publish(reading robotwizard.JointReading) {

@@ -3,6 +3,7 @@ package robotwizard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -159,6 +160,11 @@ type jointResult struct {
 	// against a vendor datasheet and one against a swept-far-enough floor are
 	// different claims.
 	RequiredFrom string `json:"required_from,omitempty"`
+	// Status is the condition the source last reported for this joint while it
+	// was being swept. A joint that travelled little is a different event when
+	// it was at 52 °C and energised than when it was cold and limp, and the
+	// record is the only place that difference survives the session.
+	Status *JointStatus `json:"status,omitempty"`
 	// Mismatch is set when a joint other than this one moved furthest during
 	// this joint's step.
 	//
@@ -265,11 +271,87 @@ func (m *jointRangeSweep) Preconditions(ctx context.Context, env *Env) error {
 			"the profile and the robot disagree about what joints exist, which is not something a "+
 			"sweep can measure past", source.Describe(), len(missing), strings.Join(missing, ", "))
 	}
+	if err := m.checkFreeToMove(reading); err != nil {
+		source.Close()
+		return err
+	}
 	env.Source = source
 
 	m.noteSourceOrder(env, reading.Order)
 	m.restore(env)
 	return nil
+}
+
+// checkFreeToMove refuses a hand sweep of a joint that something is holding.
+//
+// This is the whole procedure's premise, checked rather than assumed. A
+// nothing-powered sweep asks an operator to move each joint end to end by hand;
+// a joint that is being driven resists them and its encoder correctly reports
+// that nothing moved. The sweep then refuses for want of travel — a true
+// statement about a measurement that was never possible — and the operator has
+// spent the whole procedure pushing against a motor. That happened on
+// unitree-g1-nx-2: seven joints, 2843 samples, 0.0003 rad of travel, five
+// minutes, and every arm motor energised the entire time.
+//
+// It is a refusal rather than a warning (rule 7), and it happens here, beside
+// the other preconditions, so it lands before the safety announcement and
+// before anybody is asked to touch the robot.
+//
+// A joint that is not fitted at all is a different failure and keeps its own:
+// such a joint never reaches this check, because a source drops it from the
+// reading entirely and the missing-joints refusal above names it. Collapsing
+// the two would tell an operator to power something down when the real answer
+// is that their profile claims a joint this robot does not have.
+func (m *jointRangeSweep) checkFreeToMove(reading JointReading) error {
+	// Grouped by the source's own words, and kept in sweep order, so the common
+	// case — one reason, every joint — reads as one sentence naming them all.
+	type group struct {
+		reason, remedy string
+		joints         []string
+	}
+	var groups []*group
+	byReason := map[string]*group{}
+	for _, j := range m.joints {
+		st, ok := reading.Status[j]
+		if !ok || st.Mobility != MobilityHeld {
+			continue
+		}
+		reason := st.HoldReason
+		if reason == "" {
+			reason = "not free to move"
+		}
+		key := reason + "\x00" + st.HoldRemedy
+		g, seen := byReason[key]
+		if !seen {
+			g = &group{reason: reason, remedy: st.HoldRemedy}
+			byReason[key] = g
+			groups = append(groups, g)
+		}
+		g.joints = append(g.joints, j)
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+
+	clauses := make([]string, 0, len(groups))
+	var remedies []string
+	seenRemedy := map[string]bool{}
+	for _, g := range groups {
+		verb := "is"
+		if len(g.joints) > 1 {
+			verb = "are"
+		}
+		clauses = append(clauses, fmt.Sprintf("%s %s %s", strings.Join(g.joints, ", "), verb, g.reason))
+		if g.remedy != "" && !seenRemedy[g.remedy] {
+			seenRemedy[g.remedy] = true
+			remedies = append(remedies, g.remedy)
+		}
+	}
+	msg := strings.Join(clauses, "; ") + " and will resist you, reporting no travel."
+	if len(remedies) > 0 {
+		msg += " " + strings.Join(remedies, " ")
+	}
+	return errors.New(msg)
 }
 
 // noteSourceOrder records how the source's reported order compares with the
@@ -467,6 +549,9 @@ func (m *jointRangeSweep) solveOne(env *Env, joint string, idx int, window *Samp
 		Required:     &required,
 		RequiredFrom: from,
 	}
+	if status, ok := window.Status(joint); ok {
+		result.Status = &status
+	}
 	span, ok := window.Span(joint)
 	if !ok || window.Samples() < m.params.MinSamples {
 		// Too few readings is not a travel of zero: nothing was measured.
@@ -510,6 +595,14 @@ func (m *jointRangeSweep) reportOne(env *Env, r jointResult) {
 	}
 	env.Prompt.Infof("recorded  %.4g … %.4g %s  (travel %.4g, %d samples)", *r.Min, *r.Max, unit, *r.Travel, r.Samples)
 	env.Prompt.Infof("required  %.4g %s (%s)", *r.Required, unit, r.RequiredFrom)
+	// What the joint itself was doing while it was swept, when the source can
+	// say. Shown rather than only stored, because an operator watching a joint
+	// warm up is the person best placed to act on it.
+	if r.Status != nil {
+		if summary := r.Status.Summary(); summary != "" {
+			env.Prompt.Infof("joint     %s", summary)
+		}
+	}
 	if *r.Shortfall > 0 {
 		env.Prompt.Infof("! %.4g %s less travel than required", *r.Shortfall, unit)
 	}

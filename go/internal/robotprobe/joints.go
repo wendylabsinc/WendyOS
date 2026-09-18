@@ -3,6 +3,7 @@ package robotprobe
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotinspect"
@@ -196,6 +197,15 @@ func (p Joints) motorProperties(motor rosmsg.HGMotor, index int, source robotins
 	for sensor, celsius := range motor.TemperatureC {
 		add(fmt.Sprintf("%s.temperature.%d", prefix, sensor), float64(celsius), robotinspect.Celsius)
 	}
+
+	// The motor's own mode word, verbatim. It is reported for every live motor rather
+	// than only for the interesting value, because the interesting value is only
+	// interesting next to the others: mode 1 at 49 V and 50 °C is a motor holding
+	// position against anything that pushes it, and mode 0 at the same voltage is the
+	// same motor limp. Deriving either from position alone is impossible, which is what
+	// made a hand sweep against energised arms take an hour to explain.
+	properties = append(properties, textProperty(p.ID(), source.Origin,
+		prefix+".mode", strconv.FormatUint(uint64(motor.Mode), 10)))
 
 	// A non-zero error word is the motor reporting a fault. The bits are Unitree's, so
 	// the value travels verbatim and is not decoded into a story.

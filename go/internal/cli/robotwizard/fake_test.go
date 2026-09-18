@@ -26,6 +26,10 @@ type fakeSource struct {
 	// hanging under gravity swings its distal joints too, which is what the
 	// joint-map margin exists for.
 	moving []movedJoint
+	// status is what this robot says about each joint beside where it is. Empty
+	// is the ordinary source that reports positions and nothing else, which is
+	// what every test that does not care about it gets.
+	status map[string]JointStatus
 	high   bool
 	closed bool
 	tick   chan struct{}
@@ -79,7 +83,18 @@ func (f *fakeSource) Read(ctx context.Context) (JointReading, error) {
 	case f.tick <- struct{}{}:
 	default:
 	}
-	return JointReading{At: time.Now(), Positions: positions, Order: f.order}, nil
+	var status map[string]JointStatus
+	if len(f.status) > 0 {
+		status = make(map[string]JointStatus, len(f.status))
+		for j, s := range f.status {
+			// Only for joints this robot actually reports: a joint that is not
+			// fitted is absent from the whole reading, condition included.
+			if _, present := positions[j]; present {
+				status[j] = s
+			}
+		}
+	}
+	return JointReading{At: time.Now(), Positions: positions, Order: f.order, Status: status}, nil
 }
 
 func (f *fakeSource) Describe() string { return "fake joint source" }
