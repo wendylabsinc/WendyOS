@@ -167,6 +167,9 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	if p := resp.GetContainerStorage(); p != nil {
 		info["container_storage"] = map[string]any{"mountpoint": p.GetMountpoint(), "filesystem": p.GetFilesystem(), "device": p.GetDevice(), "used_bytes": p.GetUsedBytes(), "total_bytes": p.GetTotalBytes()}
 	}
+	if resp.ContainerStorageDegraded != nil {
+		info["container_storage_degraded"] = resp.GetContainerStorageDegraded()
+	}
 	if gpus := resp.GetGpuCapabilities(); len(gpus) > 0 {
 		entries := make([]map[string]any, 0, len(gpus))
 		for _, gpu := range gpus {

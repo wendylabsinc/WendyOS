@@ -49,7 +49,20 @@ func highDiskUsage(partitions []*agentpb.DiskPartition, legacyUsed, legacyTotal 
 	return diskUsageAlert{}, false
 }
 
-func diskUsageWarningText(alert diskUsageAlert) string {
+// diskUsageWarningText renders the disk-usage warning line. storageDegraded
+// indicates container storage is stuck on the OS root slot because the
+// /data bind mount is not active (WDY-3127); when the fullest partition is
+// also root, 'wendy device cache prune' cannot free the OS root slot, so the
+// prune advice is replaced with power-cycle guidance instead.
+func diskUsageWarningText(alert diskUsageAlert, storageDegraded bool) string {
+	if storageDegraded && alert.Mountpoint == "/" {
+		return fmt.Sprintf(
+			"disk / is %d%% full and container storage is on the OS root slot (the /data bind mount is not active). "+
+				"Power-cycle the device; if 'wendy device info' still shows container storage on /, the OS did not mount /data (WDY-3127). "+
+				"'wendy device cache prune' will not recover this.",
+			alert.UsedPercent,
+		)
+	}
 	mountpoint := alert.Mountpoint
 	if mountpoint == "" {
 		mountpoint = "the device disk"
@@ -75,6 +88,6 @@ func printRunDiskUsageWarning(resp *agentpb.GetAgentVersionResponse) {
 		return
 	}
 	if alert, ok := highDiskUsage(resp.GetPartitions(), resp.DiskUsedBytes, resp.DiskTotalBytes, resp.GetContainerStorage()); ok {
-		cliNotice("Warning: %s", diskUsageWarningText(alert))
+		cliNotice("Warning: %s", diskUsageWarningText(alert, containerStorageDegraded(resp)))
 	}
 }

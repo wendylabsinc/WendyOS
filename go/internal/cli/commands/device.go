@@ -240,6 +240,11 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			// nil for mains-powered devices, for agents predating the field,
 			// and for the BLE/provider paths that never report one.
 			var battery *agentpb.BatteryStats
+			// agentInfoResp is only set on the target.Agent branch below; it
+			// stays nil for the BLE and external-provider paths, which have no
+			// v1 GetAgentVersionResponse to derive container-storage state
+			// from (WDY-3127). All the helpers below are nil-safe.
+			var agentInfoResp *agentpb.GetAgentVersionResponse
 
 			if target.Bluetooth != nil && target.Bluetooth.IsWendyAgent() {
 				cliLogln("Connecting to %s via Bluetooth...", tui.Device(target.Bluetooth.DisplayName))
@@ -261,6 +266,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if respErr != nil {
 					return fmt.Errorf("getting agent version: %w", respErr)
 				}
+				agentInfoResp = resp
 				agentVersion = resp.GetVersion()
 				osName = resp.GetOs()
 				osVersion = resp.GetOsVersion()
@@ -366,6 +372,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 					}
 					out["partitions"] = parts
 				}
+				if isWendyOSAgent(agentInfoResp) {
+					out["containerStorageDegraded"] = containerStorageDegraded(agentInfoResp)
+				}
 				if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes, containerStorage); ok {
 					out["diskWarning"] = map[string]any{
 						"mountpoint":       alert.Mountpoint,
@@ -444,8 +453,12 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			} else if diskUsedBytes != nil && diskTotalBytes != nil {
 				fmt.Printf("%s %s\n", tui.Dim("Disk Usage:"), tui.Value(formatDiskUsage(*diskUsedBytes, *diskTotalBytes)))
 			}
+			degraded := containerStorageDegraded(agentInfoResp)
+			if degraded {
+				fmt.Println(tui.WarningMessage(containerStorageDegradedWarningText(agentInfoResp)))
+			}
 			if alert, ok := highDiskUsage(partitions, diskUsedBytes, diskTotalBytes, containerStorage); ok {
-				fmt.Println(tui.WarningMessage(diskUsageWarningText(alert)))
+				fmt.Println(tui.WarningMessage(diskUsageWarningText(alert, degraded)))
 			}
 			if len(netInterfaces) > 0 {
 				fmt.Print(formatNetworkInterfaces(netInterfaces))
