@@ -165,12 +165,16 @@ func (a *agentHostFacts) Cameras(ctx context.Context) ([]robotprobe.CameraDevice
 // SampleCamera streams frames for at most window, stopping at maxFrames. The frame count
 // is capped because this runs over a cloud tunnel as readily as on a LAN, and an
 // uncompressed stream is expensive to move.
-func (a *agentHostFacts) SampleCamera(ctx context.Context, stableID string, window time.Duration, maxFrames int) ([]robotprobe.CameraFrame, error) {
+func (a *agentHostFacts) SampleCamera(ctx context.Context, stableID string, window time.Duration, maxFrames int, mode robotprobe.CameraMode) ([]robotprobe.CameraFrame, error) {
 	streamCtx, stop := context.WithTimeout(ctx, window)
 	defer stop()
 
 	stream, err := a.conn.VideoService.StreamVideo(streamCtx, &agentpb.StreamVideoRequest{
 		StableId: stableID,
+		// Zero means the device default, which is what an inventory pass wants.
+		Width:     mode.Width,
+		Height:    mode.Height,
+		Framerate: mode.Framerate,
 	})
 	if err != nil {
 		return nil, classifyCameraError(err)

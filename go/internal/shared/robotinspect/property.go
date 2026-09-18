@@ -93,16 +93,17 @@ type Assessment struct {
 
 // Assess reconciles a property's observations.
 func (p Property) Assess() Assessment {
+	// A property can hold a claim and still have failed to be measured — asked for a
+	// capture mode, then the camera would not start. The claim is worth printing, but
+	// the verdict is unknown and must carry the reason, or the reason is lost exactly
+	// where it matters.
+	if p.Unknown != nil && !observedIn(p.Observations) {
+		return Assessment{Verdict: VerdictUnknown, Detail: describeUnknown(p.Unknown)}
+	}
+
 	switch len(p.Observations) {
 	case 0:
-		detail := ""
-		if p.Unknown != nil {
-			detail = p.Unknown.Reason
-			if p.Unknown.Detail != "" {
-				detail += ": " + p.Unknown.Detail
-			}
-		}
-		return Assessment{Verdict: VerdictUnknown, Detail: detail}
+		return Assessment{Verdict: VerdictUnknown, Detail: describeUnknown(p.Unknown)}
 	case 1:
 		return Assessment{Verdict: VerdictSingle, Detail: string(p.Observations[0].Kind) + " only, never checked against anything"}
 	}
@@ -144,6 +145,16 @@ func (p Property) Assess() Assessment {
 		return Assessment{Verdict: VerdictAgree}
 	}
 	return Assessment{Verdict: VerdictDisagree, Detail: describeSpread(low, high)}
+}
+
+func describeUnknown(unknown *Unknown) string {
+	if unknown == nil {
+		return ""
+	}
+	if unknown.Detail == "" {
+		return unknown.Reason
+	}
+	return unknown.Reason + ": " + unknown.Detail
 }
 
 // assessText reconciles textual observations. There is no tolerance for a firmware

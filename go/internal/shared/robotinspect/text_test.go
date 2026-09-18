@@ -137,3 +137,39 @@ func TestRenderPrintsTextualValues(t *testing.T) {
 		t.Errorf("report does not print the board:\n%s", out)
 	}
 }
+
+// A claim is not an observation. Asking a camera for a capture mode and then failing to
+// read a frame must keep the reason: the report says what was asked for, and says plainly
+// that nothing was seen and why. Losing that is the failure this whole schema exists to
+// prevent, and it happened in practice on a real robot.
+func TestAClaimDoesNotRetireAnUnknown(t *testing.T) {
+	requested, err := NewTextObservation("1280x720", Declared, Source{Probe: "camera", Origin: "requested"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := NewUnknown(ReasonProbeFailed, "failed to configure video device")
+
+	claimOnly := Property{ID: "camera.video4.resolution", Observations: []Observation{requested}, Unknown: &unknown}
+	assessment := claimOnly.Assess()
+	if assessment.Verdict != VerdictUnknown {
+		t.Fatalf("verdict = %q, want %q; a request observes nothing", assessment.Verdict, VerdictUnknown)
+	}
+	if !strings.Contains(assessment.Detail, "failed to configure") {
+		t.Errorf("detail %q lost the reason", assessment.Detail)
+	}
+
+	// A real look at the robot does retire it.
+	delivered, err := NewTextObservation("848x480", Measured, Source{Probe: "camera", Origin: "agent:stream_video"},
+		WithSampling(time.Second, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := Property{
+		ID:           "camera.video4.resolution",
+		Observations: []Observation{requested, delivered},
+		Unknown:      &unknown,
+	}
+	if got := observed.Assess().Verdict; got != VerdictDisagree {
+		t.Errorf("verdict = %q, want %q once something was actually measured", got, VerdictDisagree)
+	}
+}

@@ -24,7 +24,7 @@ func (f fakeCameras) Cameras(context.Context) ([]CameraDevice, error) {
 	return f.devices, f.listErr
 }
 
-func (f fakeCameras) SampleCamera(_ context.Context, stableID string, _ time.Duration, _ int) ([]CameraFrame, error) {
+func (f fakeCameras) SampleCamera(_ context.Context, stableID string, _ time.Duration, _ int, _ CameraMode) ([]CameraFrame, error) {
 	if f.dwell > 0 {
 		time.Sleep(f.dwell)
 	}
@@ -251,5 +251,83 @@ func TestSanitiseKeyKeepsIdentifiersDiffable(t *testing.T) {
 		if got := sanitiseKey(value); got != want {
 			t.Errorf("sanitiseKey(%q) = %q, want %q", value, got, want)
 		}
+	}
+}
+
+// The campaign's shape: a configuration asserting one thing and a robot delivering
+// another. The agent has no RPC for what a camera is set to, so the request is the claim
+// — recorded with origin "requested" so nobody can mistake it for something the camera
+// said about itself.
+func TestCameraComparesWhatWasAskedForAgainstWhatArrived(t *testing.T) {
+	source := fakeCameras{
+		dwell:   400 * time.Millisecond,
+		devices: []CameraDevice{{StableID: "rs", Path: "/dev/video4", Transport: "USB", Online: true}},
+		frames: map[string][]CameraFrame{
+			// Asked for 1280x720 at 30; the camera delivers 848x480 at about 5.
+			"rs": rawFrames(2, 848, 480, 30*time.Millisecond),
+		},
+	}
+	probe := Camera{
+		Window: 400 * time.Millisecond,
+		Mode:   CameraMode{Width: 1280, Height: 720, Framerate: 30},
+	}
+
+	properties, err := probe.Observe(context.Background(), cameraEnv(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Two probes' worth of observations land on one property, so merge them the way
+	// an inspection would.
+	byID := map[string][]robotinspect.Observation{}
+	for _, p := range properties {
+		byID[p.ID] = append(byID[p.ID], p.Observations...)
+	}
+
+	resolution := robotinspect.Property{ID: "camera.video4.resolution", Observations: byID["camera.video4.resolution"]}
+	assessment := resolution.Assess()
+	if assessment.Verdict != robotinspect.VerdictDisagree {
+		t.Fatalf("resolution verdict = %q, want %q (1280x720 asked, 848x480 delivered)",
+			assessment.Verdict, robotinspect.VerdictDisagree)
+	}
+	for _, want := range []string{"1280x720", "848x480"} {
+		if !strings.Contains(assessment.Detail, want) {
+			t.Errorf("detail %q should carry both resolutions", assessment.Detail)
+		}
+	}
+
+	rate := robotinspect.Property{ID: "camera.video4.rate", Observations: byID["camera.video4.rate"]}
+	if got := rate.Assess().Verdict; got != robotinspect.VerdictDisagree {
+		t.Errorf("rate verdict = %q, want %q (30 Hz asked, about 5 delivered)", got, robotinspect.VerdictDisagree)
+	}
+
+	// The request must never be attributed to the camera.
+	for _, o := range byID["camera.video4.resolution"] {
+		if o.Kind == robotinspect.Declared && o.Source.Origin != "requested" {
+			t.Errorf("the asked-for value is attributed to %q, not to the caller", o.Source.Origin)
+		}
+	}
+}
+
+// With no mode asked for, the probe reports delivery alone and invents no claim.
+func TestCameraWithoutARequestedModeMakesNoClaim(t *testing.T) {
+	source := fakeCameras{
+		dwell:   300 * time.Millisecond,
+		devices: []CameraDevice{{StableID: "rs", Path: "/dev/video4", Transport: "USB", Online: true}},
+		frames:  map[string][]CameraFrame{"rs": rawFrames(5, 848, 480, 20*time.Millisecond)},
+	}
+	properties, err := Camera{Window: 300 * time.Millisecond}.Observe(context.Background(), cameraEnv(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range properties {
+		for _, o := range p.Observations {
+			if o.Source.Origin == "requested" {
+				t.Errorf("%s carries a requested value when nothing was asked for", p.ID)
+			}
+		}
+	}
+	if got := findIn(t, properties, "camera.video4.resolution").Assess().Verdict; got != robotinspect.VerdictSingle {
+		t.Errorf("verdict = %q, want %q", got, robotinspect.VerdictSingle)
 	}
 }

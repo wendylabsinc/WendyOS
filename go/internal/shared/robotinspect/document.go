@@ -179,13 +179,29 @@ func Inspect(ctx context.Context, registry *Registry, env *Env, target Target) D
 // the same property.
 func mergeProperty(into *Property, from Property) {
 	into.Observations = append(into.Observations, from.Observations...)
-	if len(into.Observations) > 0 {
-		// An answer from any probe retires an unknown recorded by another.
-		into.Unknown = nil
-	} else if into.Unknown == nil {
+	if into.Unknown == nil {
 		into.Unknown = from.Unknown
+	}
+	// Only an actual observation of the thing retires an unknown. A declared value
+	// does not observe anything — it restates a datasheet, a config file, or what the
+	// caller asked for — so letting one clear the unknown lost the reason a
+	// measurement failed: the report would say "asked for 1280x720" and give no hint
+	// that nothing came back.
+	if observedIn(into.Observations) {
+		into.Unknown = nil
 	}
 	if into.Tolerance == nil {
 		into.Tolerance = from.Tolerance
 	}
+}
+
+// observedIn reports whether any observation is a look at the robot rather than a claim
+// about it.
+func observedIn(observations []Observation) bool {
+	for _, o := range observations {
+		if o.Kind == Measured || o.Kind == Derived {
+			return true
+		}
+	}
+	return false
 }

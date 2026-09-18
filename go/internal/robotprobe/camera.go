@@ -39,13 +39,35 @@ type CameraFrame struct {
 	ReceivedAt time.Time
 }
 
+// CameraMode is a capture configuration: a resolution, a frame rate, or both. A zero
+// field means "whatever the device defaults to".
+type CameraMode struct {
+	Width     uint32
+	Height    uint32
+	Framerate uint32
+}
+
+// Requested reports whether the mode asks for anything at all.
+func (m CameraMode) Requested() bool { return m.Width > 0 || m.Height > 0 || m.Framerate > 0 }
+
+// Resolution renders the requested resolution, or empty when none was asked for.
+func (m CameraMode) Resolution() string {
+	if m.Width == 0 || m.Height == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%dx%d", m.Width, m.Height)
+}
+
 // CameraSource enumerates and samples cameras through the agent.
 type CameraSource interface {
 	Cameras(ctx context.Context) ([]CameraDevice, error)
 	// SampleCamera collects frames from one camera for at most window, stopping early
 	// at maxFrames. Frames are capped rather than unbounded because this may run over
 	// a cloud tunnel, where an uncompressed stream is expensive.
-	SampleCamera(ctx context.Context, stableID string, window time.Duration, maxFrames int) ([]CameraFrame, error)
+	//
+	// mode configures capture where the transport supports it. A zero mode takes the
+	// device default, which is what a plain inventory pass wants.
+	SampleCamera(ctx context.Context, stableID string, window time.Duration, maxFrames int, mode CameraMode) ([]CameraFrame, error)
 }
 
 // ErrDeviceBusy reports that something else holds the camera. The transport recognises
@@ -69,6 +91,15 @@ const cameraSampleFrames = 15
 type Camera struct {
 	// Window is how long to sample each camera for.
 	Window time.Duration
+	// Mode is the capture configuration to ask each camera for. When set, it becomes
+	// the declared side of the comparison: "asked for 1280x720 at 30, received
+	// 848x480 at 5" is the finding, and it is the shape of the original error, where
+	// an app's configuration asserted 40 Hz and the robot delivered about five.
+	//
+	// The agent has no RPC reporting what a camera is currently set to, so a request
+	// is the only claim available to compare against. Left zero, the probe takes the
+	// device default and reports delivery alone.
+	Mode CameraMode
 }
 
 func (Camera) ID() string                { return "camera" }
@@ -157,8 +188,22 @@ func (p Camera) observeCamera(ctx context.Context, source CameraSource, camera C
 			robotinspect.Property{ID: prefix + ".rate", Unknown: &unknown}), nil
 	}
 
+	if resolution := p.Mode.Resolution(); resolution != "" {
+		properties = append(properties, requestedProperty(p.ID(), prefix+".resolution", resolution))
+	}
+	if p.Mode.Framerate > 0 {
+		if rate, err := robotinspect.NewQuantity(float64(p.Mode.Framerate), robotinspect.Hertz); err == nil {
+			if observation, err := robotinspect.NewObservation(rate, robotinspect.Declared,
+				robotinspect.Source{Probe: p.ID(), Origin: "requested"}); err == nil {
+				properties = append(properties, robotinspect.Property{
+					ID: prefix + ".rate", Observations: []robotinspect.Observation{observation},
+				})
+			}
+		}
+	}
+
 	started := time.Now()
-	frames, err := source.SampleCamera(ctx, camera.StableID, window, cameraSampleFrames)
+	frames, err := source.SampleCamera(ctx, camera.StableID, window, cameraSampleFrames, p.Mode)
 	elapsed := time.Since(started)
 	if elapsed > window {
 		elapsed = window
@@ -256,6 +301,20 @@ func (p Camera) observeCamera(ctx context.Context, source CameraSource, camera C
 		})
 	}
 	return properties, nil
+}
+
+// requestedProperty records what was asked for. The origin says "requested" rather than
+// naming a device, because this is the caller's claim and not the robot's — mislabelling
+// it as something the camera said would be the very substitution this schema exists to
+// prevent.
+func requestedProperty(probe, id, value string) robotinspect.Property {
+	observation, err := robotinspect.NewTextObservation(value, robotinspect.Declared,
+		robotinspect.Source{Probe: probe, Origin: "requested"})
+	if err != nil {
+		unknown := robotinspect.NewUnknown(robotinspect.ReasonSourceAbsent, err.Error())
+		return robotinspect.Property{ID: id, Unknown: &unknown}
+	}
+	return robotinspect.Property{ID: id, Observations: []robotinspect.Observation{observation}}
 }
 
 // medianFrameAge is the median gap between a frame's capture stamp and its arrival. The

@@ -370,3 +370,30 @@ func (stubHostFacts) HostFacts(context.Context) (*robotprobe.HostFacts, error) {
 		Interfaces: []robotprobe.HostInterface{{Name: "eth0", Addresses: []string{"192.168.1.40"}}},
 	}, nil
 }
+
+func TestParseCameraModeAcceptsEitherHalf(t *testing.T) {
+	for spec, want := range map[string]robotprobe.CameraMode{
+		"":            {},
+		"1280x720@30": {Width: 1280, Height: 720, Framerate: 30},
+		"1280x720":    {Width: 1280, Height: 720},
+		"@30":         {Framerate: 30},
+		"848X480@5":   {Width: 848, Height: 480, Framerate: 5},
+	} {
+		got, err := parseCameraMode(spec)
+		if err != nil {
+			t.Errorf("parseCameraMode(%q): %v", spec, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("parseCameraMode(%q) = %+v, want %+v", spec, got, want)
+		}
+	}
+}
+
+func TestParseCameraModeRejectsNonsense(t *testing.T) {
+	for _, spec := range []string{"720p", "1280x@30", "1280xabc", "@fast", "x"} {
+		if _, err := parseCameraMode(spec); err == nil {
+			t.Errorf("parseCameraMode(%q) was accepted", spec)
+		}
+	}
+}

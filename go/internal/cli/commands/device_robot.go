@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -30,13 +32,14 @@ func newDeviceRobotCmd() *cobra.Command {
 
 func newDeviceRobotInspectCmd() *cobra.Command {
 	var (
-		domain    int
-		iface     string
-		settle    time.Duration
-		window    time.Duration
-		vendorKin string
-		skipAgent bool
-		canonical bool
+		domain     int
+		iface      string
+		settle     time.Duration
+		window     time.Duration
+		vendorKin  string
+		skipAgent  bool
+		canonical  bool
+		expectMode string
 	)
 
 	cmd := &cobra.Command{
@@ -55,6 +58,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 				vendorKind: vendorKin,
 				skipAgent:  skipAgent,
 				canonical:  canonical,
+				expectMode: expectMode,
 				out:        cmd.OutOrStdout(),
 			})
 		},
@@ -67,6 +71,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&vendorKin, "kind", "", "Robot kind to record, such as unitree-g1")
 	cmd.Flags().BoolVar(&skipAgent, "no-agent", false, "Skip the agent and report only what the robot publishes")
 	cmd.Flags().BoolVar(&canonical, "canonical", false, "With --json, omit wall-clock fields so two passes diff on substance")
+	cmd.Flags().StringVar(&expectMode, "expect-mode", "", "Capture mode to ask each camera for, as WIDTHxHEIGHT@FPS; the report then compares it against what arrived")
 	return cmd
 }
 
@@ -79,6 +84,7 @@ type robotInspectOptions struct {
 	vendorKind string
 	skipAgent  bool
 	canonical  bool
+	expectMode string
 	out        io.Writer
 }
 
@@ -171,8 +177,12 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		// with no ROS installed, and it works wherever the device is reachable
 		// rather than only on its own network segment.
 		if cameras, ok := host.(robotprobe.CameraSource); ok {
+			mode, err := parseCameraMode(opts.expectMode)
+			if err != nil {
+				return robotinspect.Document{}, err
+			}
 			env.Offer(robotinspect.RequirementCameraTransport, cameras)
-			probes = append(probes, robotprobe.Camera{Window: opts.window})
+			probes = append(probes, robotprobe.Camera{Window: opts.window, Mode: mode})
 		}
 		for _, probe := range probes {
 			if err := registry.Register(probe); err != nil {
@@ -215,6 +225,39 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		VendorKind: opts.vendorKind,
 		Want:       want,
 	}), nil
+}
+
+// parseCameraMode reads WIDTHxHEIGHT@FPS, with either half optional: "1280x720",
+// "@30" and "1280x720@30" are all valid, and an empty string asks for nothing.
+func parseCameraMode(spec string) (robotprobe.CameraMode, error) {
+	if strings.TrimSpace(spec) == "" {
+		return robotprobe.CameraMode{}, nil
+	}
+	var mode robotprobe.CameraMode
+	resolution, rate, hasRate := strings.Cut(spec, "@")
+	if hasRate && rate != "" {
+		fps, err := strconv.ParseUint(rate, 10, 32)
+		if err != nil {
+			return mode, fmt.Errorf("--expect-mode: %q is not a frame rate", rate)
+		}
+		mode.Framerate = uint32(fps)
+	}
+	if resolution != "" {
+		width, height, ok := strings.Cut(strings.ToLower(resolution), "x")
+		if !ok {
+			return mode, fmt.Errorf("--expect-mode: %q is not WIDTHxHEIGHT", resolution)
+		}
+		w, err := strconv.ParseUint(width, 10, 32)
+		if err != nil {
+			return mode, fmt.Errorf("--expect-mode: %q is not a width", width)
+		}
+		h, err := strconv.ParseUint(height, 10, 32)
+		if err != nil {
+			return mode, fmt.Errorf("--expect-mode: %q is not a height", height)
+		}
+		mode.Width, mode.Height = uint32(w), uint32(h)
+	}
+	return mode, nil
 }
 
 func writeRobotDocument(out io.Writer, doc robotinspect.Document, opts robotInspectOptions) error {
