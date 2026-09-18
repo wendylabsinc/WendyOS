@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -518,6 +519,223 @@ func TestRefusalsHappenBeforeTheOperatorIsAskedForAnything(t *testing.T) {
 					"preconditions are checked before anything physical is requested", h.prompt.at)
 			}
 		})
+	}
+}
+
+// held is a joint something is driving, as a source that can tell reports it.
+func held(reason, remedy string) JointStatus {
+	return JointStatus{Mobility: MobilityHeld, HoldReason: reason, HoldRemedy: remedy}
+}
+
+// free is a joint a source has established nobody is driving.
+func free() JointStatus { return JointStatus{Mobility: MobilityFree} }
+
+// namesJoint reports whether a message names this joint as a word of its own.
+func namesJoint(msg, joint string) bool {
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(joint) + `\b`).MatchString(msg)
+}
+
+// TestASweptJointMustBeFreeToMove is the five minutes this check exists to
+// save. On unitree-g1-nx-2 an operator moved seven joints end to end against
+// arm motors that were energised the whole time; the encoders correctly
+// reported 0.0003 rad of travel and the procedure refused for want of travel —
+// after the sweep rather than before it.
+//
+// The refusal must name the joints, must come before the operator is asked for
+// anything (rule 7 and rule 1), and must stay distinct from the joint the robot
+// does not have at all.
+func TestASweptJointMustBeFreeToMove(t *testing.T) {
+	const (
+		energised = "still energised (motor mode 1)"
+		remedy    = "Put the robot into a true zero-torque state — not merely damping — and run this again."
+	)
+
+	tests := []struct {
+		name string
+		// status is what the robot says about each of its joints.
+		status map[string]JointStatus
+		// reports, when set, replaces the joints the robot reports at all.
+		reports   []string
+		errSubstr string
+		// wantNamed and wantUnnamed are joints the refusal must and must not
+		// name, which is what keeps a mixed robot from being described as
+		// entirely stuck.
+		wantNamed   []string
+		wantUnnamed []string
+	}{
+		{
+			name:   "a source that cannot tell sweeps as it always did",
+			status: nil,
+		},
+		{
+			name:   "every joint free",
+			status: map[string]JointStatus{"a": free(), "b": free(), "c": free()},
+		},
+		{
+			name:        "every joint energised",
+			status:      map[string]JointStatus{"a": held(energised, remedy), "b": held(energised, remedy), "c": held(energised, remedy)},
+			errSubstr:   "a, b, c are still energised (motor mode 1) and will resist you, reporting no travel. " + remedy,
+			wantNamed:   []string{"a", "b", "c"},
+			wantUnnamed: nil,
+		},
+		{
+			// The mixed case: one motor left energised among limp ones is the
+			// likeliest way this happens, and naming all three would send the
+			// operator looking at the wrong two.
+			name:        "one energised joint among free ones",
+			status:      map[string]JointStatus{"a": free(), "b": held(energised, remedy), "c": free()},
+			errSubstr:   "b is still energised (motor mode 1) and will resist you",
+			wantNamed:   []string{"b"},
+			wantUnnamed: []string{"a", "c"},
+		},
+		{
+			// Two joints, two reasons: each keeps its own words rather than
+			// being flattened into whichever was seen first.
+			name: "joints held for different reasons",
+			status: map[string]JointStatus{
+				"a": held(energised, remedy),
+				"b": free(),
+				"c": held("under a parking brake", "Release the brake."),
+			},
+			errSubstr:   "a is still energised (motor mode 1); c is under a parking brake and will resist you",
+			wantNamed:   []string{"a", "c"},
+			wantUnnamed: []string{"b"},
+		},
+		{
+			// A joint that is not fitted is a different failure with its own
+			// refusal, and it keeps it. Telling this operator to power
+			// something down would send them after a motor that is not there.
+			name:        "a joint the robot does not have",
+			reports:     []string{"a", "b"},
+			status:      map[string]JointStatus{"a": free(), "b": free()},
+			errSubstr:   "does not report 1 of the joints",
+			wantUnnamed: []string{"energised"},
+		},
+		{
+			// Both at once: the profile names a joint this robot does not have
+			// *and* the ones it does have are energised. The absent joint is
+			// the one that cannot be measured at all, so it is what the
+			// operator hears about first.
+			name:      "an absent joint outranks an energised one",
+			reports:   []string{"a", "b"},
+			status:    map[string]JointStatus{"a": held(energised, remedy), "b": free()},
+			errSubstr: "does not report 1 of the joints",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, fullSweep())
+			h.source.status = tt.status
+			if tt.reports != nil {
+				h.source.rest = map[string]float64{}
+				for _, j := range tt.reports {
+					h.source.rest[j] = 0
+				}
+				h.source.order = tt.reports
+			}
+
+			_, err := Run(context.Background(), h.deps, "joint-range")
+			if tt.errSubstr == "" {
+				if err != nil {
+					t.Fatalf("Run: %v — a robot whose joints are free must sweep", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want a refusal mentioning %q, got none", tt.errSubstr)
+			}
+			if !strings.Contains(err.Error(), tt.errSubstr) {
+				t.Fatalf("error = %v, want it to contain %q", err, tt.errSubstr)
+			}
+			// Which joints were named is read off the clause that names them,
+			// not off the whole message: the remedy is a sentence of English
+			// and this robot's joints are called a, b and c.
+			named, _, _ := strings.Cut(err.Error(), " and will resist you")
+			for _, joint := range tt.wantNamed {
+				if !namesJoint(named, joint) {
+					t.Errorf("error = %v, want it to name %q", err, joint)
+				}
+			}
+			for _, joint := range tt.wantUnnamed {
+				if namesJoint(named, joint) {
+					t.Errorf("error = %v, must not name %q", err, joint)
+				}
+			}
+			// The point of the whole check: nothing was asked of the operator,
+			// and the announcement to support a limp robot never happened.
+			if h.prompt.at != 0 {
+				t.Errorf("the operator was asked to move %d joints before the refusal; "+
+					"this check exists precisely to happen first", h.prompt.at)
+			}
+			if h.prompt.announcedContains("Nothing is powered during this procedure.") {
+				t.Error("the safety announcement was made before the refusal; a precondition " +
+					"refusal must land before the operator is told to support the robot")
+			}
+		})
+	}
+}
+
+// TestASweptJointCarriesWhatTheMotorSaid: the three numbers that distinguish
+// not-fitted from energised from free are recorded with the sweep, because
+// reconstructing them afterwards is what cost an hour of live-robot time.
+func TestASweptJointCarriesWhatTheMotorSaid(t *testing.T) {
+	h := newHarness(t, fullSweep())
+	volts := 48.5
+	h.source.status = map[string]JointStatus{
+		"a": {
+			Mobility:      MobilityFree,
+			TemperaturesC: []float64{49, 48},
+			Volts:         &volts,
+			Vendor:        map[string]string{"mode": "0"},
+		},
+		"b": free(),
+		"c": free(),
+	}
+
+	rec, err := Run(context.Background(), h.deps, "joint-range")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var payload struct {
+		Joints []struct {
+			Name   string       `json:"name"`
+			Status *JointStatus `json:"status"`
+		} `json:"joints"`
+	}
+	if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	var got *JointStatus
+	for _, j := range payload.Joints {
+		if j.Name == "a" {
+			got = j.Status
+		}
+	}
+	if got == nil {
+		t.Fatal("the stored record carries nothing about what joint a was doing while it was swept")
+	}
+	if got.Mobility != MobilityFree {
+		t.Errorf("mobility = %v, want it recorded as free", got.Mobility)
+	}
+	if got.Volts == nil || *got.Volts != volts {
+		t.Errorf("volts = %v, want %v", got.Volts, volts)
+	}
+	if len(got.TemperaturesC) != 2 {
+		t.Errorf("temperatures = %v, want both sensors", got.TemperaturesC)
+	}
+	if got.Vendor["mode"] != "0" {
+		t.Errorf("vendor = %v, want the robot's own mode word carried verbatim", got.Vendor)
+	}
+	// And the operator saw it while they were standing at the robot.
+	var shown bool
+	for _, line := range h.prompt.infos {
+		if strings.Contains(line, "48.5 V") {
+			shown = true
+		}
+	}
+	if !shown {
+		t.Error("the joint's condition was recorded but never shown")
 	}
 }
 

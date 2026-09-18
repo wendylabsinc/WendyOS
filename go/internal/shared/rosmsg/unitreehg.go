@@ -234,6 +234,30 @@ func (m HGMotor) Live() bool {
 	return m.Voltage != 0 || m.TemperatureC[0] != 0 || m.TemperatureC[1] != 0
 }
 
+// Energised reports whether this motor is powered and holding its position —
+// the state in which it resists a hand and its encoder truthfully reports that
+// nothing moved.
+//
+// Three states were measured on unitree-g1-nx-2, and it takes all of mode,
+// temperature and voltage to tell them apart:
+//
+//	mode 0, 0 °C,      0 V        not fitted   (slots 13, 14 and 29–34 there)
+//	mode 1, 45–52 °C, 49–52 V     energised, holding
+//	mode 0, 45–52 °C, 49–52 V     free, back-drivable by hand
+//
+// So mode alone is ambiguous: zero means both "no motor here" and "this motor
+// is limp". Live() settles the first half, and this settles the second. A
+// 99-second capture caught the transition and confirms the reading — the arms
+// sagged under gravity within seconds of mode dropping to 0, and moved at no
+// other time.
+//
+// Any non-zero mode counts. The mode word is Unitree's and this decoder does
+// not enumerate it; what can be said from the wire is that a motor reporting
+// mode 0 was the only one a person could move.
+func (m HGMotor) Energised() bool {
+	return m.Live() && m.Mode != 0
+}
+
 // LiveMotors returns the indices of every slot that is reporting, in wire order.
 // Indices are the message's own, so a caller can resolve one to a joint name
 // through its robot profile; they never shift because a slot is idle.

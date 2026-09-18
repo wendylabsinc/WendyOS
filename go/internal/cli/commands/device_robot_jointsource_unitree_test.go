@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/robotwizard"
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotcal"
 	"github.com/wendylabsinc/wendy/go/internal/shared/rosmsg"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -80,6 +81,12 @@ func hgVoltageOffset(index int) int {
 	return hgPositionOffset(index) + 20
 }
 
+// hgModeOffset locates the motor's mode word — the first byte of the motor, and
+// the field that says whether it is driving or limp.
+func hgModeOffset(index int) int {
+	return hgEncapsulation + hgMotorOffset(index)
+}
+
 // realG1Payload is the captured message, copied so a patch cannot leak between
 // tests.
 func realG1Payload(t *testing.T) []byte {
@@ -102,6 +109,13 @@ func driveSlot(payload []byte, index int, position float32) {
 	putFloat32(payload, hgPositionOffset(index), position)
 }
 
+// limpSlot clears a motor's mode word, which is the difference between an arm a
+// person can move and one that resists them. The capture was taken with every
+// motor energised, so this is how a test gets the other state.
+func limpSlot(payload []byte, index int) {
+	payload[hgModeOffset(index)] = 0
+}
+
 func TestThePatchHelpersAgreeWithTheDecoder(t *testing.T) {
 	payload := realG1Payload(t)
 	if len(payload) != 2092 {
@@ -122,6 +136,20 @@ func TestThePatchHelpersAgreeWithTheDecoder(t *testing.T) {
 	}
 	if got := state.Motors[31].Voltage; got != 48 {
 		t.Errorf("slot 31 voltage = %v, want the patched 48", got)
+	}
+	if got := state.Motors[22].Mode; got != 1 {
+		t.Errorf("slot 22 mode = %d, want the 1 the robot published", got)
+	}
+	limpSlot(payload, 22)
+	state, err = rosmsg.DecodeHGLowState(payload)
+	if err != nil {
+		t.Fatalf("clearing a mode word broke the payload, so the offset is wrong: %v", err)
+	}
+	if got := state.Motors[22].Mode; got != 0 {
+		t.Errorf("slot 22 mode = %d after being made limp, want 0", got)
+	}
+	if got := state.Motors[22].Position; got == 0 {
+		t.Error("clearing the mode word moved the position, so the two offsets overlap")
 	}
 }
 
@@ -305,6 +333,146 @@ func TestIdleSlotsNeverArriveAsAZeroAngle(t *testing.T) {
 	if got, present := reading.Positions["left_hip_pitch_joint"]; !present || got != 0 {
 		t.Errorf("slot 0 = (%v, present=%v); it is driven and at exactly zero radians, "+
 			"so it must still be reported", got, present)
+	}
+}
+
+// TestWhetherAJointCanBeMovedByHand covers the three states measured on
+// unitree-g1-nx-2, and the translation from this robot's vocabulary into the
+// wizard's.
+//
+// The capture is the robot as it actually was when an operator spent five
+// minutes sweeping it: every fitted motor at mode 1, 34–52 °C, 52 V, holding
+// position against their hands. Clearing a mode word is the only difference
+// between that and an arm they could move.
+func TestWhetherAJointCanBeMovedByHand(t *testing.T) {
+	// The joints of the right arm, which is the limb that sweep was run on.
+	rightArm := []int{22, 23, 24, 25, 26, 27, 28}
+
+	tests := []struct {
+		name string
+		// patch is what is done to the robot's own bytes before decoding.
+		patch func(payload []byte)
+		// want is the condition each named joint must be reported in.
+		want map[string]robotwizard.Mobility
+		// absent are joints that must carry no condition at all, because the
+		// robot is not reporting them.
+		absent []string
+		// reason, when set, must appear in the joint's hold reason.
+		reason string
+	}{
+		{
+			name:   "the robot as it was swept: every arm motor energised",
+			want:   map[string]robotwizard.Mobility{"right_shoulder_pitch_joint": robotwizard.MobilityHeld, "right_elbow_joint": robotwizard.MobilityHeld},
+			reason: "still energised (motor mode 1)",
+		},
+		{
+			name: "the same arm at zero torque",
+			patch: func(payload []byte) {
+				for _, index := range rightArm {
+					limpSlot(payload, index)
+				}
+			},
+			want: map[string]robotwizard.Mobility{"right_shoulder_pitch_joint": robotwizard.MobilityFree, "right_elbow_joint": robotwizard.MobilityFree},
+		},
+		{
+			name: "one motor left energised on an otherwise limp arm",
+			patch: func(payload []byte) {
+				for _, index := range rightArm {
+					if index != 25 {
+						limpSlot(payload, index)
+					}
+				}
+			},
+			want: map[string]robotwizard.Mobility{
+				"right_shoulder_pitch_joint": robotwizard.MobilityFree,
+				"right_elbow_joint":          robotwizard.MobilityHeld,
+			},
+			reason: "still energised (motor mode 1)",
+		},
+		{
+			// Mode 0 and nothing else: the waist roll and pitch slots are
+			// reserved on this unit and report no voltage and no temperature.
+			// They are absent from the reading entirely rather than free, so
+			// the sweep's "this robot does not have that joint" refusal is the
+			// one that fires, not "it is energised".
+			name:   "slots that are not fitted say nothing at all",
+			absent: []string{"waist_roll_joint", "waist_pitch_joint"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := realG1Payload(t)
+			if tt.patch != nil {
+				tt.patch(payload)
+			}
+			source, err := openG1JointSource(t, g1Streaming(t, payload), nil)
+			if err != nil {
+				t.Fatalf("opening: %v", err)
+			}
+			reading, err := source.Read(t.Context())
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+
+			for joint, want := range tt.want {
+				status, ok := reading.Status[joint]
+				if !ok {
+					t.Fatalf("%s carries no condition at all", joint)
+				}
+				if status.Mobility != want {
+					t.Errorf("%s = %v, want %v", joint, status.Mobility, want)
+				}
+				if want == robotwizard.MobilityHeld {
+					if !strings.Contains(status.HoldReason, tt.reason) {
+						t.Errorf("%s hold reason = %q, want it to contain %q", joint, status.HoldReason, tt.reason)
+					}
+					if status.HoldRemedy == "" {
+						t.Errorf("%s is refused with no way out; the operator needs to be told "+
+							"what to do about it", joint)
+					}
+				} else if status.HoldReason != "" {
+					t.Errorf("%s is free and carries the hold reason %q", joint, status.HoldReason)
+				}
+			}
+			for _, joint := range tt.absent {
+				if status, ok := reading.Status[joint]; ok {
+					t.Errorf("%s is not fitted on this robot and arrived as %v: an absent joint "+
+						"and a driven one are different failures with different answers", joint, status.Mobility)
+				}
+			}
+		})
+	}
+}
+
+// TestAJointCarriesWhatTheMotorMeasured: mode alone cannot tell "not fitted"
+// from "free", so all three numbers travel with the reading. They were dropped
+// before, and rebuilding them from a raw wire capture is what turned a
+// five-minute sweep into an hour of diagnosis.
+func TestAJointCarriesWhatTheMotorMeasured(t *testing.T) {
+	source, err := openG1JointSource(t, g1Streaming(t, realG1Payload(t)), nil)
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	reading, err := source.Read(t.Context())
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	status, ok := reading.Status["right_shoulder_pitch_joint"]
+	if !ok {
+		t.Fatal("the joint carries no condition")
+	}
+	// Slot 22 of the capture: mode 1, both sensors at 49 and 48 °C, 52 V.
+	if got := status.Vendor["mode"]; got != "1" {
+		t.Errorf("mode = %q, want the robot's own word carried verbatim", got)
+	}
+	if want := []float64{49, 48}; len(status.TemperaturesC) != 2 ||
+		status.TemperaturesC[0] != want[0] || status.TemperaturesC[1] != want[1] {
+		t.Errorf("temperatures = %v, want %v — both sensors, because averaging them hides "+
+			"whichever runs hotter", status.TemperaturesC, want)
+	}
+	if status.Volts == nil || *status.Volts != 52 {
+		t.Errorf("volts = %v, want 52", status.Volts)
 	}
 }
 
