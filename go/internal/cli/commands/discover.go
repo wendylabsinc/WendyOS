@@ -1193,6 +1193,7 @@ var deviceTypeNames = map[string]string{
 	"jetson-orin-nano":   "Jetson Orin Nano",
 	"jetson-agx-thor":    "Jetson AGX Thor",
 	"dragonwing-iq-8275": "Dragonwing IQ-8275",
+	"dragonwing-iq-9075": "Dragonwing IQ-9075",
 	"x86_64":             "x86-64",
 	"vm-arm64":           "ARM64 VM",
 	"vm-x86-64":          "x86-64 VM",

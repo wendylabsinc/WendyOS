@@ -12,8 +12,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
 
-// dragonwingEDLBriefingBox renders the steps needed before an IQ-8275 will show
-// up in the EDL scan.
+// dragonwingEDLBriefingBox renders the steps needed before a Dragonwing board
+// will show up in the EDL scan.
 func dragonwingEDLBriefingBox() string {
 	section := func(title string) string {
 		return briefMarker.Render("●") + " " + briefTitle.Render(title)

@@ -100,6 +100,12 @@ type deviceVersion struct {
 	EMMCFlashpackChecksum  string `json:"emmc_flashpack_checksum"`
 	EMMCFlashpackSizeBytes int64  `json:"emmc_flashpack_size_bytes"`
 
+	// Dragonwing EDL bundle; newer boards publish only here so older CLIs
+	// fail resolution instead of silently downloading the wrong artifact.
+	QcomflashPath      string `json:"qcomflash_path"`
+	QcomflashChecksum  string `json:"qcomflash_checksum"`
+	QcomflashSizeBytes int64  `json:"qcomflash_size_bytes"`
+
 	// Driver add-ons (systemd-sysext .raw) published for this OS version, one per
 	// (name, kernel). Written by the publisher's --extension-file; the CLI resolves
 	// install-by-name against these. Mirrors the publisher's ExtensionMetadata.
@@ -633,9 +639,6 @@ func getThorFlashpackInfo(version string, nightly bool, pr int) (*thorFlashpackI
 	}, nil
 }
 
-// dragonwingDeviceType is the manifest key / --device-type for the IQ-8275 EVK.
-const dragonwingDeviceType = "dragonwing-iq-8275"
-
 // dragonwingBundleInfo is the resolved qcomflash bundle download for a version.
 type dragonwingBundleInfo struct {
 	URL       string
@@ -644,31 +647,52 @@ type dragonwingBundleInfo struct {
 	Version   string
 }
 
-// getDragonwingBundleInfo resolves the qcomflash bundle to install. It reads
-// the generic image fields rather than a dedicated key: EDL flashing produces
-// no disk image, so the bundle tarball *is* the device's image artifact.
-func getDragonwingBundleInfo(version string, nightly bool, pr int) (*dragonwingBundleInfo, error) {
-	dm, version, err := resolveDeviceArtifact(dragonwingDeviceType, version, nightly, pr)
+func getDragonwingBundleInfo(board dragonwingBoard, version string, nightly bool, pr int) (*dragonwingBundleInfo, error) {
+	dm, version, err := resolveDeviceArtifact(board.deviceType, version, nightly, pr)
 	if err != nil {
 		return nil, err
 	}
-	return dragonwingBundleFrom(dm, version)
+	return dragonwingBundleFrom(dm, board, version)
 }
 
 // dragonwingBundleFrom picks the bundle for version out of a fetched manifest,
 // split from the fetch so the selection is testable.
-func dragonwingBundleFrom(dm *deviceManifest, version string) (*dragonwingBundleInfo, error) {
+func dragonwingBundleFrom(dm *deviceManifest, board dragonwingBoard, version string) (*dragonwingBundleInfo, error) {
 	v, ok := dm.Versions[version]
 	if !ok {
-		return nil, fmt.Errorf("version %s not found for %s", version, dragonwingDeviceType)
+		return nil, fmt.Errorf("version %s not found for %s", version, board.deviceType)
 	}
-	if v.Path == "" {
+	path, sum, size := v.QcomflashPath, v.QcomflashChecksum, v.QcomflashSizeBytes
+	var missing []string
+	if path == "" {
+		missing = append(missing, "qcomflash_path")
+	}
+	if sum == "" {
+		missing = append(missing, "qcomflash_checksum")
+	}
+	if size <= 0 {
+		missing = append(missing, "qcomflash_size_bytes")
+	}
+	switch len(missing) {
+	case 0:
+	case 3:
+		// No dedicated triple at all: an IQ-8275 bundle is also published
+		// under the generic image fields.
+		path, sum, size = v.Path, v.Checksum, v.SizeBytes
+	default:
+		// Falling back from a half-published triple would fetch a different
+		// artifact, and a size of zero skips the disk-space pre-flight the
+		// ~23x extraction depends on.
+		return nil, fmt.Errorf("version %s publishes an incomplete flash bundle: %s missing from the manifest",
+			version, strings.Join(missing, ", "))
+	}
+	if path == "" {
 		return nil, fmt.Errorf("version %s has no flash bundle in the manifest", version)
 	}
 	return &dragonwingBundleInfo{
-		URL:       gcsBaseURL + "/" + v.Path,
-		Checksum:  v.Checksum,
-		SizeBytes: v.SizeBytes,
+		URL:       gcsBaseURL + "/" + path,
+		Checksum:  sum,
+		SizeBytes: size,
 		Version:   version,
 	}, nil
 }

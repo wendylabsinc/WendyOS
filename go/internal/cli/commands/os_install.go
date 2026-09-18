@@ -239,7 +239,7 @@ type pickerDevice struct {
 // the generic download or tour flows, which would treat the bundle as an image
 // and could write it to a disk. (Thor's generic path is a real .img.zip.)
 func installedFromFlashBundle(deviceType string) bool {
-	return deviceType == dragonwingDeviceType
+	return strings.HasPrefix(deviceType, dragonwingDeviceTypePrefix)
 }
 
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
@@ -336,11 +336,11 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	}
 
 	// The Dragonwing flashes over EDL from a qcomflash bundle, not to a drive.
-	if flagDeviceType == dragonwingDeviceType {
-		if err := checkDragonwingFlags(rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
+	if board, ok := dragonwingBoardFor(flagDeviceType); ok {
+		if err := checkDragonwingFlags(board, rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
 			return err
 		}
-		return installDragonwing(ctx, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
+		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
 	}
 	fmt.Println("Fetching available devices...")
 
@@ -515,11 +515,11 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 
 	// Same for the Dragonwing: the picker reaches here with the flag empty, so
 	// route it away from the disk-image flow that would dd the bundle onto a drive.
-	if selected == dragonwingDeviceType {
-		if err := checkDragonwingFlags(rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
+	if board, ok := dragonwingBoardFor(selected); ok {
+		if err := checkDragonwingFlags(board, rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
 			return err
 		}
-		return installDragonwing(ctx, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
+		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
 	}
 
 	if selected == linuxDesktopValue {
