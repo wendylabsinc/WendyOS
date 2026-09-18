@@ -188,6 +188,13 @@ type Client struct {
 	// tests construct a bare *Client) — suppressRestarts no-ops in that case,
 	// same nil-tolerant treatment as meshDNS above.
 	restartMonitor restartSuppressor
+
+	// freeBytes and forceGC are test seams for PruneCache's free-space
+	// measurement and forced-GC pass. NewClient defaults them to
+	// filesystemFreeBytes and forceContainerdGC (via c.client.LeasesService());
+	// tests that construct a bare *Client and call PruneCache must set both.
+	freeBytes func(path string) (uint64, bool)
+	forceGC   func(ctx context.Context) error
 }
 
 // SetRestartSuppressor injects the container-restart monitor's suppression
@@ -298,7 +305,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 
 	snapshotter := probeSnapshotter(logger)
 
-	return &Client{
+	cl := &Client{
 		client:            c,
 		logger:            logger,
 		namespace:         "default",
@@ -316,7 +323,12 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 		chunkIndex:        idx,
 		staging:           newStaging(defaultChunkStagingDir),
 		snapshotter:       snapshotter,
-	}, nil
+	}
+	cl.freeBytes = filesystemFreeBytes
+	cl.forceGC = func(ctx context.Context) error {
+		return forceContainerdGC(ctx, cl.client.LeasesService())
+	}
+	return cl, nil
 }
 
 // probeSnapshotter returns "overlayfs" if the kernel supports overlay mounts,

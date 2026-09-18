@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -131,7 +132,12 @@ func (s *ContainerServiceV2) PruneCache(ctx context.Context, req *agentpbv2.Prun
 	if !ok {
 		return nil, status.Error(codes.Unimplemented, "container cache pruning is not supported")
 	}
-	result, err := pruner.PruneCache(ctx, req.GetDryRun())
+	opts := CachePruneOptions{DryRun: req.GetDryRun()}
+	if req.MinAgeSeconds != nil {
+		age := time.Duration(*req.MinAgeSeconds) * time.Second
+		opts.MinAge = &age
+	}
+	result, err := pruner.PruneCache(ctx, opts)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to prune container cache: %v", err)
 	}
@@ -141,6 +147,7 @@ func (s *ContainerServiceV2) PruneCache(ctx context.Context, req *agentpbv2.Prun
 		Snapshots:         result.Snapshots,
 		SnapshotBytes:     result.SnapshotBytes,
 		MinimumAgeSeconds: result.MinimumAgeSeconds,
+		ReclaimedBytes:    result.ReclaimedBytes,
 	}, nil
 }
 
