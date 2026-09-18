@@ -79,11 +79,19 @@ func preflightContainerStorage(resp *agentpb.GetAgentVersionResponse) error {
 }
 
 // containerStorageDegradedWarningText is the warning line 'wendy device info'
-// prints when container storage is on the OS root slot (WDY-3127).
+// prints when container storage is on the OS root slot (WDY-3127). Mirrors
+// containerStorageDegradedError.Error(): the "(/ on <device>)" parenthetical
+// is dropped entirely when the device name is unknown, instead of rendering
+// as "(/ on )".
 func containerStorageDegradedWarningText(resp *agentpb.GetAgentVersionResponse) string {
+	device := resp.GetContainerStorage().GetDevice()
+	if device == "" {
+		return "container storage is on the OS root slot; the /data bind mount is not active. " +
+			"Deploys are refused until the device is power-cycled (WDY-3127)."
+	}
 	return fmt.Sprintf(
 		"container storage is on the OS root slot (/ on %s); the /data bind mount is not active. "+
 			"Deploys are refused until the device is power-cycled (WDY-3127).",
-		resp.GetContainerStorage().GetDevice(),
+		device,
 	)
 }

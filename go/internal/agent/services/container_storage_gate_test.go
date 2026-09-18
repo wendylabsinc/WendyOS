@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -209,5 +211,91 @@ func TestBindMountUnitLoadedUsesSystemctl(t *testing.T) {
 	}
 	if bindMountUnitLoaded(containerStorageBindUnit) {
 		t.Fatal("bindMountUnitLoaded() = true, want false when systemctl errors")
+	}
+}
+
+// TestContainerStorageGateLogsNotWendyOSAtInfo asserts "not a WendyOS host"
+// — expected on every Ubuntu/macOS agent — logs at Info, not Warn; Warn is
+// reserved for a WendyOS host whose bind unit isn't loaded or whose
+// systemctl call failed (WDY-3127 M5).
+func TestContainerStorageGateLogsNotWendyOSAtInfo(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	newContainerStorageGate(zap.New(core),
+		func() bool { return false }, // isWendyOS
+		func(string) bool { return true },
+		func() bool { return false },
+		func() (partitionUsage, bool) { return partitionUsage{}, false },
+	)
+
+	entries := logs.FilterMessageSnippet("not a WendyOS host").All()
+	if len(entries) != 1 {
+		t.Fatalf("got %d log entries mentioning 'not a WendyOS host', want 1", len(entries))
+	}
+	if entries[0].Level != zap.InfoLevel {
+		t.Errorf("level = %v, want Info", entries[0].Level)
+	}
+}
+
+// TestContainerStorageGateLogsMissingBindUnitAtWarn asserts a WendyOS host
+// whose bind-mount unit is not loaded still logs at Warn — that combination
+// (WendyOS but no unit) is the one worth an operator's attention (WDY-3127
+// M5).
+func TestContainerStorageGateLogsMissingBindUnitAtWarn(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	newContainerStorageGate(zap.New(core),
+		func() bool { return true }, // isWendyOS
+		func(string) bool { return false },
+		func() bool { return false },
+		func() (partitionUsage, bool) { return partitionUsage{}, false },
+	)
+
+	entries := logs.FilterMessageSnippet("bind mount unit not loaded").All()
+	if len(entries) != 1 {
+		t.Fatalf("got %d log entries mentioning 'bind mount unit not loaded', want 1", len(entries))
+	}
+	if entries[0].Level != zap.WarnLevel {
+		t.Errorf("level = %v, want Warn", entries[0].Level)
+	}
+}
+
+// TestBindMountUnitLoadedFallsBackToUnitFileWhenSystemctlFails asserts that
+// when systemctl itself errors or times out (as opposed to a clean
+// "not-found"/"masked" answer), bindMountUnitLoaded falls back to checking
+// whether the unit file exists under /etc/systemd/system, then
+// /lib/systemd/system, rather than failing open silently (WDY-3127 M6).
+func TestBindMountUnitLoadedFallsBackToUnitFileWhenSystemctlFails(t *testing.T) {
+	origSystemctl := systemctlFn
+	origStat := unitFileStatFn
+	t.Cleanup(func() {
+		systemctlFn = origSystemctl
+		unitFileStatFn = origStat
+	})
+	systemctlFn = func(_ context.Context, _ ...string) ([]byte, error) {
+		return nil, errors.New("systemctl: timed out")
+	}
+
+	unitFileStatFn = func(path string) (os.FileInfo, error) {
+		if path == "/etc/systemd/system/"+containerStorageBindUnit {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	if !bindMountUnitLoaded(containerStorageBindUnit) {
+		t.Fatal("bindMountUnitLoaded() = false, want true when the unit file exists under /etc/systemd/system")
+	}
+
+	unitFileStatFn = func(path string) (os.FileInfo, error) {
+		if path == "/lib/systemd/system/"+containerStorageBindUnit {
+			return nil, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	if !bindMountUnitLoaded(containerStorageBindUnit) {
+		t.Fatal("bindMountUnitLoaded() = false, want true when the unit file exists under /lib/systemd/system")
+	}
+
+	unitFileStatFn = func(string) (os.FileInfo, error) { return nil, os.ErrNotExist }
+	if bindMountUnitLoaded(containerStorageBindUnit) {
+		t.Fatal("bindMountUnitLoaded() = true, want false when systemctl fails and no unit file exists in either directory")
 	}
 }

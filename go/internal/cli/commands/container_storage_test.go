@@ -151,3 +151,33 @@ func TestPreflightContainerStorageErrorWithoutPartitionDetails(t *testing.T) {
 		})
 	}
 }
+
+// TestContainerStorageDegradedWarningTextOmitsUnknownDevice mirrors
+// containerStorageDegradedError.Error(): when the container-storage
+// partition or its device name is missing, the "(/ on <device>)"
+// parenthetical must be dropped rather than rendered as "(/ on )" (WDY-3127
+// M-D4).
+func TestContainerStorageDegradedWarningTextOmitsUnknownDevice(t *testing.T) {
+	want := "container storage is on the OS root slot; the /data bind mount is not active. " +
+		"Deploys are refused until the device is power-cycled (WDY-3127)."
+
+	cases := []struct {
+		name string
+		resp *agentpb.GetAgentVersionResponse
+	}{
+		{name: "no container storage partition reported", resp: &agentpb.GetAgentVersionResponse{}},
+		{
+			name: "container storage partition reported with no device name",
+			resp: &agentpb.GetAgentVersionResponse{
+				ContainerStorage: &agentpb.DiskPartition{Mountpoint: "/"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containerStorageDegradedWarningText(tc.resp); got != want {
+				t.Fatalf("containerStorageDegradedWarningText() =\n%q\nwant\n%q", got, want)
+			}
+		})
+	}
+}

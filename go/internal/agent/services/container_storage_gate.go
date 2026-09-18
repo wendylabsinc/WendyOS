@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -53,7 +54,11 @@ func newContainerStorageGate(
 	g := &ContainerStorageGate{probe: probe, describeUsage: describeUsage}
 
 	if !isWendyOS() {
-		logger.Warn("container storage gate disabled: not a WendyOS host")
+		// Expected on every non-WendyOS agent (plain Ubuntu, macOS): not
+		// worth an operator's attention, so Info rather than Warn (WDY-3127
+		// M5). Warn is reserved below for a WendyOS host that unexpectedly
+		// lacks the bind-mount unit.
+		logger.Info("container storage gate disabled: not a WendyOS host")
 		return g
 	}
 	if !unitLoaded(containerStorageBindUnit) {
@@ -72,6 +77,15 @@ func newContainerStorageGate(
 // true at startup: a bind mount reappearing after containerd has already
 // opened its database on the root filesystem does not clear it, because
 // containerd is still writing to the rootfs inode underneath the new mount.
+//
+// A running app's container keeps writing to its rootfs upper dir on /
+// while degraded regardless — StartContainer is intentionally not gated,
+// only ingestion is. And if the bind is re-activated by hand while
+// containerd still holds meta.db open on the rootfs inode, an agent restart
+// re-snapshots as healthy even though containerd's own state is still on
+// root. The OS-side RequiresMountsFor (Part A) is what closes off the
+// realistic route to that state, by making containerd itself wait for the
+// bind mount before it ever opens meta.db on root.
 func (g *ContainerStorageGate) Degraded() bool {
 	if g == nil || !g.expected {
 		return false
@@ -112,15 +126,38 @@ func formatGigabytesOneDecimal(n int64) string {
 }
 
 // bindMountUnitLoaded reports whether systemd has the given unit loaded,
-// via `systemctl show -p LoadState --value <unit>`. Any systemctl failure,
-// or a LoadState other than "loaded" (e.g. "not-found" for an absent unit),
-// reports false.
+// via `systemctl show -p LoadState --value <unit>`. A clean answer other
+// than "loaded" (e.g. "not-found" for an absent unit, "masked") reports
+// false — that's a real answer, not a failure. When systemctl itself
+// errors or times out, this is the one moment a false negative matters
+// most: it would silently disable the gate on a host that actually needs
+// it. So instead it falls back to checking whether the unit file exists on
+// disk (WDY-3127 M6).
 func bindMountUnitLoaded(unit string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := systemctlFn(ctx, "show", "-p", "LoadState", "--value", unit)
 	if err != nil {
-		return false
+		return unitFileExists(unit)
 	}
 	return strings.TrimSpace(string(out)) == "loaded"
+}
+
+// unitFileStatFn is os.Stat, overridable in tests.
+var unitFileStatFn = os.Stat
+
+// systemdUnitDirs are systemd's two standard system-unit directories,
+// checked in order by unitFileExists.
+var systemdUnitDirs = []string{"/etc/systemd/system", "/lib/systemd/system"}
+
+// unitFileExists is bindMountUnitLoaded's systemctl-failure fallback: it
+// reports whether unit's file exists under either of systemd's standard
+// system-unit directories.
+func unitFileExists(unit string) bool {
+	for _, dir := range systemdUnitDirs {
+		if _, err := unitFileStatFn(dir + "/" + unit); err == nil {
+			return true
+		}
+	}
+	return false
 }
