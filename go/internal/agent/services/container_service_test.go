@@ -231,10 +231,19 @@ func (m *attachTestMock) StartContainerWithStdin(ctx context.Context, appName st
 
 func startContainerServer(t *testing.T, client ContainerdClient) (agentpb.WendyContainerServiceClient, func()) {
 	t.Helper()
+	return startContainerServerWithOptions(t, client)
+}
+
+// startContainerServerWithOptions is startContainerServer plus the ability to
+// pass ContainerServiceOptions (e.g. WithContainerStorageGate) through to
+// NewContainerService, for tests that need to configure the service under
+// test beyond its defaults.
+func startContainerServerWithOptions(t *testing.T, client ContainerdClient, opts ...ContainerServiceOption) (agentpb.WendyContainerServiceClient, func()) {
+	t.Helper()
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer()
 	logger := zap.NewNop()
-	svc := NewContainerService(logger, client)
+	svc := NewContainerService(logger, client, opts...)
 	agentpb.RegisterWendyContainerServiceServer(srv, svc)
 
 	go func() { _ = srv.Serve(lis) }()
@@ -257,6 +266,30 @@ func startContainerServer(t *testing.T, client ContainerdClient) (agentpb.WendyC
 		lis.Close()
 	}
 	return cl, cleanup
+}
+
+// degradedContainerStorageGateForTest returns a *ContainerStorageGate that
+// reports Degraded() == true unconditionally, for tests asserting that
+// ingestion RPCs are refused (WDY-3127).
+func degradedContainerStorageGateForTest() *ContainerStorageGate {
+	return newContainerStorageGate(zap.NewNop(),
+		func() bool { return true },                                      // isWendyOS
+		func(string) bool { return true },                                // unitLoaded
+		func() bool { return true },                                      // probe
+		func() (partitionUsage, bool) { return partitionUsage{}, false }, // describeUsage
+	)
+}
+
+// healthyContainerStorageGateForTest returns a *ContainerStorageGate that is
+// a permanent no-op (off WendyOS), for tests asserting that a healthy gate
+// never blocks ingestion.
+func healthyContainerStorageGateForTest() *ContainerStorageGate {
+	return newContainerStorageGate(zap.NewNop(),
+		func() bool { return false },
+		func(string) bool { return true },
+		func() bool { return false },
+		func() (partitionUsage, bool) { return partitionUsage{}, false },
+	)
 }
 
 func TestPostStartAgentHookFromContext(t *testing.T) {
@@ -1763,4 +1796,199 @@ func TestRunContainer_ForwardsEnv(t *testing.T) {
 			t.Fatalf("env[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
 		}
 	}
+}
+
+// ---------- ContainerStorageGate refusal (WDY-3127) ----------
+
+// TestContainerServiceWriteLayerRefusedWhenStorageDegraded asserts WriteLayer
+// refuses the RPC before touching containerd when the storage gate reports
+// the host degraded.
+func TestContainerServiceWriteLayerRefusedWhenStorageDegraded(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServerWithOptions(t, mock, WithContainerStorageGate(degradedContainerStorageGateForTest()))
+	defer cleanup()
+
+	stream, err := client.WriteLayer(context.Background())
+	if err != nil {
+		t.Fatalf("WriteLayer: %v", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("CloseSend: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition; err = %v", status.Code(err), err)
+	}
+	if mock.writtenDigest != "" {
+		t.Errorf("writtenDigest = %q, want empty; WriteLayer must not write to containerd while storage is degraded", mock.writtenDigest)
+	}
+}
+
+// TestContainerServiceWriteChunksRefusedWhenStorageDegraded asserts WriteChunks
+// refuses the RPC before staging any chunk when the storage gate reports the
+// host degraded.
+func TestContainerServiceWriteChunksRefusedWhenStorageDegraded(t *testing.T) {
+	fake := newFakeContainerd()
+	client, cleanup := startContainerServerWithOptions(t, fake, WithContainerStorageGate(degradedContainerStorageGateForTest()))
+	defer cleanup()
+
+	stream, err := client.WriteChunks(context.Background())
+	if err != nil {
+		t.Fatalf("WriteChunks: %v", err)
+	}
+	if _, err = stream.CloseAndRecv(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition; err = %v", status.Code(err), err)
+	}
+	if len(fake.stagedChunks) != 0 {
+		t.Errorf("stagedChunks = %d, want 0; WriteChunks must not stage a chunk while storage is degraded", len(fake.stagedChunks))
+	}
+}
+
+// TestContainerServicePrepareImageRefusedWhenStorageDegraded asserts
+// PrepareImage refuses the RPC before preparing anything when the storage
+// gate reports the host degraded.
+func TestContainerServicePrepareImageRefusedWhenStorageDegraded(t *testing.T) {
+	mock := &imagePrepareMock{}
+	client, cleanup := startContainerServerWithOptions(t, mock, WithContainerStorageGate(degradedContainerStorageGateForTest()))
+	defer cleanup()
+
+	_, err := client.PrepareImage(context.Background(), &agentpb.RunContainerLayersRequest{
+		ImageName:   "test-image:latest",
+		ImageConfig: []byte(`{}`),
+		Layers: []*agentpb.RunContainerLayerHeader{
+			{Digest: "sha256:layerdigest", Size: 10, DiffId: "sha256:layerdiffid"},
+		},
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition; err = %v", status.Code(err), err)
+	}
+	if mock.prepareCalls != 0 {
+		t.Errorf("prepareCalls = %d, want 0; PrepareImage must not prepare while storage is degraded", mock.prepareCalls)
+	}
+}
+
+// TestContainerServiceRunContainerRefusedWhenStorageDegraded asserts
+// RunContainer refuses the RPC before assembling or creating anything when
+// the storage gate reports the host degraded.
+func TestContainerServiceRunContainerRefusedWhenStorageDegraded(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServerWithOptions(t, mock, WithContainerStorageGate(degradedContainerStorageGateForTest()))
+	defer cleanup()
+
+	stream, err := client.RunContainer(context.Background(), &agentpb.RunContainerLayersRequest{
+		ImageName: "test-image:latest",
+		AppName:   "storage-degraded-app",
+		Layers: []*agentpb.RunContainerLayerHeader{
+			{Digest: "sha256:layerdigest", Size: 10, DiffId: "sha256:layerdiffid"},
+		},
+		ImageConfig: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("RunContainer: %v", err)
+	}
+	if err := drainRunContainerStream(stream); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition; err = %v", status.Code(err), err)
+	}
+	if mock.assembleImageCalls != 0 {
+		t.Errorf("assembleImageCalls = %d, want 0; RunContainer must not assemble the image while storage is degraded", mock.assembleImageCalls)
+	}
+	if len(mock.createReqs) != 0 {
+		t.Errorf("createReqs = %d, want 0; RunContainer must not create the container while storage is degraded", len(mock.createReqs))
+	}
+}
+
+// TestContainerServiceCreateContainerRefusedWhenStorageDegraded asserts
+// CreateContainer refuses the RPC before creating anything when the storage
+// gate reports the host degraded.
+func TestContainerServiceCreateContainerRefusedWhenStorageDegraded(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServerWithOptions(t, mock, WithContainerStorageGate(degradedContainerStorageGateForTest()))
+	defer cleanup()
+
+	_, err := client.CreateContainer(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "storage-degraded-app",
+	})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition; err = %v", status.Code(err), err)
+	}
+	if len(mock.createReqs) != 0 {
+		t.Errorf("createReqs = %d, want 0; CreateContainer must not create while storage is degraded", len(mock.createReqs))
+	}
+}
+
+// TestContainerServiceCreateContainerWithProgressRefusedWhenStorageDegraded
+// asserts CreateContainerWithProgress refuses the RPC before sending any
+// progress update or creating anything when the storage gate reports the
+// host degraded.
+func TestContainerServiceCreateContainerWithProgressRefusedWhenStorageDegraded(t *testing.T) {
+	mock := &mockContainerdClient{}
+	client, cleanup := startContainerServerWithOptions(t, mock, WithContainerStorageGate(degradedContainerStorageGateForTest()))
+	defer cleanup()
+
+	stream, err := client.CreateContainerWithProgress(context.Background(), &agentpb.CreateContainerRequest{
+		ImageName: "test-image:latest",
+		AppName:   "storage-degraded-app",
+	})
+	if err != nil {
+		t.Fatalf("CreateContainerWithProgress: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition; err = %v", status.Code(err), err)
+	}
+	if len(mock.createReqs) != 0 {
+		t.Errorf("createReqs = %d, want 0; CreateContainerWithProgress must not create while storage is degraded", len(mock.createReqs))
+	}
+}
+
+// TestContainerServiceAllowsIngestionWhenGateHealthy asserts ingestion
+// proceeds normally both when a healthy (non-degraded) gate is configured
+// and when no gate is configured at all (nil storageGate).
+func TestContainerServiceAllowsIngestionWhenGateHealthy(t *testing.T) {
+	t.Run("healthy gate", func(t *testing.T) {
+		mock := &mockContainerdClient{}
+		client, cleanup := startContainerServerWithOptions(t, mock, WithContainerStorageGate(healthyContainerStorageGateForTest()))
+		defer cleanup()
+
+		stream, err := client.WriteLayer(context.Background())
+		if err != nil {
+			t.Fatalf("WriteLayer: %v", err)
+		}
+		digest := "sha256:healthygate"
+		if err := stream.Send(&agentpb.WriteLayerRequest{Digest: digest, Data: []byte("data")}); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		if err := stream.CloseSend(); err != nil {
+			t.Fatalf("CloseSend: %v", err)
+		}
+		if _, err = stream.Recv(); err != nil {
+			t.Fatalf("recv response: %v", err)
+		}
+		if mock.writtenDigest != digest {
+			t.Errorf("writtenDigest = %q, want %q; a healthy gate must not block ingestion", mock.writtenDigest, digest)
+		}
+	})
+
+	t.Run("nil gate", func(t *testing.T) {
+		mock := &mockContainerdClient{}
+		client, cleanup := startContainerServer(t, mock) // no WithContainerStorageGate option -> nil storageGate
+		defer cleanup()
+
+		stream, err := client.WriteLayer(context.Background())
+		if err != nil {
+			t.Fatalf("WriteLayer: %v", err)
+		}
+		digest := "sha256:nilgate"
+		if err := stream.Send(&agentpb.WriteLayerRequest{Digest: digest, Data: []byte("data")}); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		if err := stream.CloseSend(); err != nil {
+			t.Fatalf("CloseSend: %v", err)
+		}
+		if _, err = stream.Recv(); err != nil {
+			t.Fatalf("recv response: %v", err)
+		}
+		if mock.writtenDigest != digest {
+			t.Errorf("writtenDigest = %q, want %q; a nil gate must not block ingestion", mock.writtenDigest, digest)
+		}
+	})
 }
