@@ -38,12 +38,15 @@ func newDeviceCachePruneCmd() *cobra.Command {
 		Short: "Release unused container layer and snapshot caches",
 		Long: "Releases Wendy's cache pins on container layer blobs and unpacked snapshots. With " +
 			"--all, releases every Wendy cache pin immediately (layer blobs and unpacked " +
-			"snapshots) and forces a synchronous containerd garbage-collection pass. Apps with a " +
-			"container on the device, running or stopped, keep their layers. Images whose " +
-			"container was deleted lose their unpacked snapshots and are re-unpacked on the next " +
-			"'wendy run' from the still-cached layer blobs. Do not run --all while a deploy to " +
-			"this device is in progress. --all cannot help when container storage is on the OS " +
-			"root slot (WDY-3127); power-cycle the device instead.",
+			"snapshots) and forces a synchronous containerd garbage-collection pass. By default " +
+			"only pins older than 24h are released; --min-age overrides that and --all releases " +
+			"everything. Apps with a container on the device, running or stopped, keep their " +
+			"layers. Images whose container was deleted lose their unpacked snapshots and are " +
+			"re-unpacked on the next 'wendy run' from the still-cached layer blobs. Apps removed " +
+			"with --cleanup also lose their image, so their layers are re-uploaded on the next " +
+			"run. Do not run --all while a deploy to this device is in progress. --all cannot " +
+			"help when container storage is on the OS root slot (WDY-3127); power-cycle the " +
+			"device instead.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			minAge, err := parsePruneMinAge(all, minAgeFlag)
@@ -55,7 +58,7 @@ func newDeviceCachePruneCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
-			return runDeviceCachePrune(cmd.Context(), conn, cmd.OutOrStdout(), devicePruneOptions{
+			return runDeviceCachePrune(cmd.Context(), conn, cmd.OutOrStdout(), cmd.ErrOrStderr(), devicePruneOptions{
 				dryRun:  dryRun,
 				minAge:  minAge,
 				jsonOut: jsonOutput,
@@ -64,7 +67,7 @@ func newDeviceCachePruneCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report eligible cache data without releasing it")
 	cmd.Flags().BoolVar(&all, "all", false, "Release every Wendy cache pin regardless of age")
-	cmd.Flags().StringVar(&minAgeFlag, "min-age", "", "Release cache pins older than this duration (e.g. 1h)")
+	cmd.Flags().StringVar(&minAgeFlag, "min-age", "", "Release cache pins older than this duration (default 24h; minimum 1s)")
 	cmd.MarkFlagsMutuallyExclusive("all", "min-age")
 	return cmd
 }
@@ -97,19 +100,22 @@ func parsePruneMinAge(all bool, minAge string) (*time.Duration, error) {
 	if d < 0 {
 		return nil, fmt.Errorf("--min-age must not be negative: %q", minAge)
 	}
+	if d > 0 && d < time.Second {
+		return nil, fmt.Errorf("--min-age must be at least 1s: %q", minAge)
+	}
 	return &d, nil
 }
 
-func runDeviceCachePrune(ctx context.Context, conn *grpcclient.AgentConnection, out io.Writer, opts devicePruneOptions) error {
+func runDeviceCachePrune(ctx context.Context, conn *grpcclient.AgentConnection, out, errOut io.Writer, opts devicePruneOptions) error {
 	client := agentpbv2.NewWendyContainerServiceClient(conn.Conn)
-	return runDeviceCachePruneRPC(ctx, client, out, opts)
+	return runDeviceCachePruneRPC(ctx, client, out, errOut, opts)
 }
 
-func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, out io.Writer, opts devicePruneOptions) error {
+func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, out, errOut io.Writer, opts devicePruneOptions) error {
 	req := &agentpbv2.PruneCacheRequest{DryRun: opts.dryRun}
 	var requestedSeconds *uint64
 	if opts.minAge != nil {
-		secs := uint64(opts.minAge.Seconds())
+		secs := uint64(*opts.minAge / time.Second)
 		req.MinAgeSeconds = proto.Uint64(secs)
 		requestedSeconds = &secs
 	}
@@ -122,29 +128,32 @@ func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, 
 		return fmt.Errorf("pruning device cache: %w", err)
 	}
 
+	// The warning belongs on stderr, and in both text and --json modes, so
+	// JSON consumers still see it even though it is not part of the JSON
+	// payload on stdout.
+	effectiveAge := resp.GetMinimumAgeSeconds()
+	if requestedSeconds != nil && effectiveAge != *requestedSeconds {
+		if _, err = fmt.Fprintf(errOut, "Warning: this device agent ignored --min-age/--all and used its default of %s; update it with 'wendy device update'.\n", formatCacheAge(effectiveAge)); err != nil {
+			return err
+		}
+	}
+
 	if opts.jsonOut {
 		data, err := json.MarshalIndent(map[string]any{
-			"dryRun":            opts.dryRun,
-			"contentBlobs":      resp.GetContentBlobs(),
-			"contentBytes":      resp.GetContentBytes(),
-			"snapshots":         resp.GetSnapshots(),
-			"snapshotBytes":     resp.GetSnapshotBytes(),
-			"minimumAgeSeconds": resp.GetMinimumAgeSeconds(),
-			"minAgeSeconds":     requestedSeconds,
-			"reclaimedBytes":    resp.ReclaimedBytes,
+			"dryRun":                 opts.dryRun,
+			"contentBlobs":           resp.GetContentBlobs(),
+			"contentBytes":           resp.GetContentBytes(),
+			"snapshots":              resp.GetSnapshots(),
+			"snapshotBytes":          resp.GetSnapshotBytes(),
+			"minimumAgeSeconds":      resp.GetMinimumAgeSeconds(),
+			"requestedMinAgeSeconds": requestedSeconds,
+			"reclaimedBytes":         resp.ReclaimedBytes,
 		}, "", "  ")
 		if err != nil {
 			return err
 		}
 		_, err = fmt.Fprintln(out, string(data))
 		return err
-	}
-
-	effectiveAge := resp.GetMinimumAgeSeconds()
-	if requestedSeconds != nil && effectiveAge != *requestedSeconds {
-		if _, err = fmt.Fprintf(out, "Warning: this device agent ignored --min-age/--all and pruned with its default of %s; update it with 'wendy device update'.\n", formatCacheAge(effectiveAge)); err != nil {
-			return err
-		}
 	}
 
 	totalObjects := resp.GetContentBlobs() + resp.GetSnapshots()

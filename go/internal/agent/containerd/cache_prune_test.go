@@ -16,11 +16,15 @@ import (
 )
 
 type fakeCacheContentStore struct {
-	infos   []content.Info
-	updates []content.Info
+	infos       []content.Info
+	updates     []content.Info
+	panicOnWalk bool
 }
 
 func (f *fakeCacheContentStore) Walk(_ context.Context, fn content.WalkFunc, _ ...string) error {
+	if f.panicOnWalk {
+		panic("fakeCacheContentStore: Walk panicked (test)")
+	}
 	for _, info := range f.infos {
 		if err := fn(info); err != nil {
 			return err
@@ -171,13 +175,17 @@ func TestPruneCutoffZeroMinAgeSelectsEverything(t *testing.T) {
 		t.Fatalf("ContentBlobs = %d, want 1 (a minutes-old entry must be selected at min age 0)", got.ContentBlobs)
 	}
 
+	// A negative min age is not a valid "release everything" request (only
+	// an explicit 0 means that) and must fail safe to the default grace
+	// period rather than releasing every pin regardless of age.
 	negative := -time.Hour
 	negCutoff, negEffective := pruneCutoff(now, &negative)
-	if negEffective != 0 {
-		t.Fatalf("negative min age effective = %v, want 0", negEffective)
+	if negEffective != cachePruneGracePeriod {
+		t.Fatalf("negative min age effective = %v, want %v (default grace period)", negEffective, cachePruneGracePeriod)
 	}
-	if !negCutoff.Equal(now) {
-		t.Fatalf("negative min age cutoff = %v, want %v", negCutoff, now)
+	wantNegCutoff := now.Add(-cachePruneGracePeriod)
+	if !negCutoff.Equal(wantNegCutoff) {
+		t.Fatalf("negative min age cutoff = %v, want %v", negCutoff, wantNegCutoff)
 	}
 }
 
@@ -283,9 +291,29 @@ func (a *fullSnapshotterAdapter) Usage(ctx context.Context, key string) (snapsho
 	return a.fake.Usage(ctx, key)
 }
 
+// fullLeasesManagerAdapter satisfies leases.Manager (which forceContainerdGC's
+// narrower leaseGCer only needs Create/Delete from) by embedding the
+// interface and delegating just those two methods to a fakeLeaseGCer, so the
+// fake can drive a real *containerd.Client via client.WithLeasesService.
+type fullLeasesManagerAdapter struct {
+	leases.Manager
+	fake *fakeLeaseGCer
+}
+
+func (a *fullLeasesManagerAdapter) Create(ctx context.Context, opts ...leases.Opt) (leases.Lease, error) {
+	return a.fake.Create(ctx, opts...)
+}
+
+func (a *fullLeasesManagerAdapter) Delete(ctx context.Context, l leases.Lease, opts ...leases.DeleteOpt) error {
+	return a.fake.Delete(ctx, l, opts...)
+}
+
 // newPruneCacheTestClient wires cs/sn into a real *containerd.Client with no
 // gRPC dial (address ""), so (*Client).PruneCache exercises its actual
-// c.client.ContentStore()/SnapshotService() calls against the fakes.
+// c.client.ContentStore()/SnapshotService() calls against the fakes. A fake
+// leases.Manager is wired in too (via WithLeasesService) so a test that
+// leaves c.forceGC unset (its NewClient-assigned default calls
+// c.client.LeasesService()) does not need a real containerd connection.
 func newPruneCacheTestClient(t *testing.T, cs *fakeCacheContentStore, sn *fakeCacheSnapshotter) *Client {
 	t.Helper()
 	cd, err := containerdclient.New("",
@@ -293,6 +321,7 @@ func newPruneCacheTestClient(t *testing.T, cs *fakeCacheContentStore, sn *fakeCa
 		containerdclient.WithServices(
 			containerdclient.WithContentStore(&fullContentStoreAdapter{fake: cs}),
 			containerdclient.WithSnapshotters(map[string]snapshots.Snapshotter{"native": &fullSnapshotterAdapter{fake: sn}}),
+			containerdclient.WithLeasesService(&fullLeasesManagerAdapter{fake: &fakeLeaseGCer{}}),
 		),
 	)
 	if err != nil {
@@ -430,5 +459,49 @@ func TestClientPruneCacheDoesNotHoldLockDuringGC(t *testing.T) {
 	}
 	if !lockWasFree {
 		t.Fatal("c.mu was still held while forceGC ran; the GC pass must run unlocked")
+	}
+}
+
+// TestClientPruneCacheReleasesLockWhenWalkPanics guards against the agent's
+// gRPC interceptor (which recovers handler panics and keeps serving) leaving
+// c.mu held forever after a panic inside the locked label walk (e.g. a
+// content-store Walk callback or sn.Usage). PruneCache must release c.mu via
+// defer, not an explicit Unlock() that a panic would skip.
+func TestClientPruneCacheReleasesLockWhenWalkPanics(t *testing.T) {
+	cs := &fakeCacheContentStore{panicOnWalk: true}
+	sn := &fakeCacheSnapshotter{}
+	c := newPruneCacheTestClient(t, cs, sn)
+	c.freeBytes = func(string) (uint64, bool) { return 0, true }
+	c.forceGC = func(context.Context) error { return nil }
+
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = c.PruneCache(context.Background(), services.CachePruneOptions{})
+	}()
+
+	if !c.mu.TryLock() {
+		t.Fatal("c.mu is still held after a panic inside the locked section; PruneCache must release it via defer")
+	}
+	c.mu.Unlock()
+}
+
+// TestClientPruneCacheWorksOnBareClient guards against a nil-pointer panic
+// when freeBytes/forceGC are only set by NewClient: a bare &Client{} (as
+// tests elsewhere in this package construct) must still be safe to call
+// PruneCache on. A dry run alone never reaches either seam, so this exercises
+// a real (non-dry) run, which does.
+func TestClientPruneCacheWorksOnBareClient(t *testing.T) {
+	old := time.Now().Add(-2 * time.Hour).Format(time.RFC3339)
+	cs := &fakeCacheContentStore{infos: []content.Info{
+		{Digest: digest.FromString("old"), Size: 100, Labels: map[string]string{labelKeyWendyLayer: "true", labelKeyGCRoot: old}},
+	}}
+	sn := &fakeCacheSnapshotter{}
+	c := newPruneCacheTestClient(t, cs, sn)
+	// Deliberately leave c.freeBytes/c.forceGC nil, unlike every other test
+	// in this file, to exercise PruneCache's own lazy fallback.
+
+	minAge := time.Hour
+	if _, err := c.PruneCache(context.Background(), services.CachePruneOptions{MinAge: &minAge}); err != nil {
+		t.Fatalf("PruneCache on a bare client: %v", err)
 	}
 }

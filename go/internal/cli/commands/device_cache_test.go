@@ -27,7 +27,7 @@ func (f *fakeDeviceCachePruneClient) PruneCache(_ context.Context, req *agentpbv
 
 func TestRunDeviceCachePruneRPCExplainsOldAgent(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{err: status.Error(codes.Unimplemented, "unknown method")}
-	err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, devicePruneOptions{})
+	err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, &bytes.Buffer{}, devicePruneOptions{})
 	if err == nil || !strings.Contains(err.Error(), "wendy device update") {
 		t.Fatalf("error = %v", err)
 	}
@@ -38,7 +38,7 @@ func TestRunDeviceCachePruneRPCDryRun(t *testing.T) {
 		ContentBlobs: 2, ContentBytes: 1_000, Snapshots: 3, SnapshotBytes: 2_000, MinimumAgeSeconds: 3600,
 	}}
 	var out bytes.Buffer
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, devicePruneOptions{dryRun: true}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{dryRun: true}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	if !fake.gotReq.GetDryRun() || !strings.Contains(out.String(), "Eligible: 3.0 kB") {
@@ -49,7 +49,7 @@ func TestRunDeviceCachePruneRPCDryRun(t *testing.T) {
 func TestRunDeviceCachePruneRPCJSON(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{ContentBlobs: 1, MinimumAgeSeconds: 3600}}
 	var out bytes.Buffer
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, devicePruneOptions{jsonOut: true}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{jsonOut: true}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	var got map[string]any
@@ -64,7 +64,7 @@ func TestRunDeviceCachePruneRPCJSON(t *testing.T) {
 func TestRunDeviceCachePruneRPCAllSendsZeroMinAge(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 0}}
 	zero := time.Duration(0)
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, devicePruneOptions{minAge: &zero}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, &bytes.Buffer{}, devicePruneOptions{minAge: &zero}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	if fake.gotReq.MinAgeSeconds == nil || *fake.gotReq.MinAgeSeconds != 0 {
@@ -75,7 +75,7 @@ func TestRunDeviceCachePruneRPCAllSendsZeroMinAge(t *testing.T) {
 func TestRunDeviceCachePruneRPCMinAgeSendsSeconds(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 3600}}
 	oneHour := time.Hour
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, devicePruneOptions{minAge: &oneHour}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, &bytes.Buffer{}, devicePruneOptions{minAge: &oneHour}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	if fake.gotReq.MinAgeSeconds == nil || *fake.gotReq.MinAgeSeconds != 3600 {
@@ -85,7 +85,7 @@ func TestRunDeviceCachePruneRPCMinAgeSendsSeconds(t *testing.T) {
 
 func TestRunDeviceCachePruneRPCDefaultSendsNoMinAge(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 86400}}
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, devicePruneOptions{}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &bytes.Buffer{}, &bytes.Buffer{}, devicePruneOptions{}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	if fake.gotReq.MinAgeSeconds != nil {
@@ -96,13 +96,16 @@ func TestRunDeviceCachePruneRPCDefaultSendsNoMinAge(t *testing.T) {
 func TestRunDeviceCachePruneRPCWarnsWhenAgentIgnoresMinAge(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 86400}}
 	oneHour := time.Hour
-	var out bytes.Buffer
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, devicePruneOptions{minAge: &oneHour}); err != nil {
+	var out, errOut bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &errOut, devicePruneOptions{minAge: &oneHour}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
-	const want = "Warning: this device agent ignored --min-age/--all and pruned with its default of 24h; update it with 'wendy device update'."
-	if !strings.Contains(out.String(), want) {
-		t.Fatalf("output = %q, want warning %q", out.String(), want)
+	const want = "Warning: this device agent ignored --min-age/--all and used its default of 24h; update it with 'wendy device update'."
+	if !strings.Contains(errOut.String(), want) {
+		t.Fatalf("stderr = %q, want warning %q", errOut.String(), want)
+	}
+	if strings.Contains(out.String(), "Warning:") {
+		t.Fatalf("stdout = %q, warning must go to stderr only", out.String())
 	}
 }
 
@@ -112,7 +115,7 @@ func TestRunDeviceCachePruneRPCReportsReclaimedBytes(t *testing.T) {
 		ContentBlobs: 1, ContentBytes: 1_000, MinimumAgeSeconds: 86400, ReclaimedBytes: &reclaimed,
 	}}
 	var out bytes.Buffer
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, devicePruneOptions{}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	const want = "Containerd reclaimed 5.0 kB on the container storage filesystem."
@@ -128,7 +131,7 @@ func TestRunDeviceCachePruneRPCZeroAgeWording(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 0}}
 	zero := time.Duration(0)
 	var out bytes.Buffer
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, devicePruneOptions{minAge: &zero}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{minAge: &zero}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	const want = "No cache entries are eligible for pruning.\n"
@@ -143,6 +146,30 @@ func TestParsePruneMinAgeRejectsNegative(t *testing.T) {
 	}
 }
 
+func TestParsePruneMinAgeRejectsSubSecond(t *testing.T) {
+	if _, err := parsePruneMinAge(false, "500ms"); err == nil {
+		t.Fatal("expected error for sub-second --min-age")
+	} else if !strings.Contains(err.Error(), "--min-age must be at least 1s") {
+		t.Fatalf("error = %v, want to mention the 1s minimum", err)
+	}
+
+	d, err := parsePruneMinAge(false, "1s")
+	if err != nil {
+		t.Fatalf("parsePruneMinAge(1s): %v", err)
+	}
+	if got := uint64(*d / time.Second); got != 1 {
+		t.Fatalf("1s => %d seconds, want 1", got)
+	}
+
+	d, err = parsePruneMinAge(false, "90m")
+	if err != nil {
+		t.Fatalf("parsePruneMinAge(90m): %v", err)
+	}
+	if got := uint64(*d / time.Second); got != 5400 {
+		t.Fatalf("90m => %d seconds, want 5400", got)
+	}
+}
+
 func TestRunDeviceCachePruneRPCJSONIncludesReclaimed(t *testing.T) {
 	reclaimed := uint64(2_000)
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{
@@ -150,7 +177,7 @@ func TestRunDeviceCachePruneRPCJSONIncludesReclaimed(t *testing.T) {
 	}}
 	oneHour := time.Hour
 	var out bytes.Buffer
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, devicePruneOptions{minAge: &oneHour, jsonOut: true}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{minAge: &oneHour, jsonOut: true}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	var got map[string]any
@@ -160,26 +187,46 @@ func TestRunDeviceCachePruneRPCJSONIncludesReclaimed(t *testing.T) {
 	if got["reclaimedBytes"] != float64(2_000) {
 		t.Fatalf("reclaimedBytes = %v, want 2000", got["reclaimedBytes"])
 	}
-	if got["minAgeSeconds"] != float64(3600) {
-		t.Fatalf("minAgeSeconds = %v, want 3600", got["minAgeSeconds"])
+	if got["requestedMinAgeSeconds"] != float64(3600) {
+		t.Fatalf("requestedMinAgeSeconds = %v, want 3600", got["requestedMinAgeSeconds"])
 	}
 }
 
 func TestRunDeviceCachePruneRPCJSONNullsWhenAbsent(t *testing.T) {
 	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{ContentBlobs: 1, MinimumAgeSeconds: 86400}}
 	var out bytes.Buffer
-	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, devicePruneOptions{jsonOut: true}); err != nil {
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{jsonOut: true}); err != nil {
 		t.Fatalf("runDeviceCachePruneRPC: %v", err)
 	}
 	var got map[string]any
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("JSON: %v", err)
 	}
-	if got["minAgeSeconds"] != nil {
-		t.Fatalf("minAgeSeconds = %v, want null", got["minAgeSeconds"])
+	if got["requestedMinAgeSeconds"] != nil {
+		t.Fatalf("requestedMinAgeSeconds = %v, want null", got["requestedMinAgeSeconds"])
 	}
 	if got["reclaimedBytes"] != nil {
 		t.Fatalf("reclaimedBytes = %v, want null", got["reclaimedBytes"])
+	}
+}
+
+func TestRunDeviceCachePruneRPCJSONModeWarnsOnStderr(t *testing.T) {
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 86400}}
+	oneHour := time.Hour
+	var out, errOut bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &errOut, devicePruneOptions{minAge: &oneHour, jsonOut: true}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	const want = "Warning: this device agent ignored --min-age/--all and used its default of 24h; update it with 'wendy device update'."
+	if !strings.Contains(errOut.String(), want) {
+		t.Fatalf("stderr = %q, want warning %q (JSON mode must still warn)", errOut.String(), want)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout must still be valid JSON, unaffected by the stderr warning: %v (stdout = %q)", err, out.String())
+	}
+	if got["requestedMinAgeSeconds"] != float64(3600) {
+		t.Fatalf("requestedMinAgeSeconds = %v, want 3600", got["requestedMinAgeSeconds"])
 	}
 }
 
@@ -198,7 +245,8 @@ func TestDeviceCachePruneMinAgeFlagRejectsNegativeBeforeRPC(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for negative --min-age")
 	}
-	if strings.Contains(err.Error(), "connect") {
-		t.Fatalf("negative --min-age should be rejected before attempting to connect: %v", err)
+	const want = "--min-age must not be negative"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want to contain %q", err, want)
 	}
 }

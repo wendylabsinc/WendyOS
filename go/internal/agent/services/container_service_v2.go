@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"google.golang.org/grpc"
@@ -134,6 +135,14 @@ func (s *ContainerServiceV2) PruneCache(ctx context.Context, req *agentpbv2.Prun
 	}
 	opts := CachePruneOptions{DryRun: req.GetDryRun()}
 	if req.MinAgeSeconds != nil {
+		// time.Duration(*req.MinAgeSeconds) * time.Second overflows (and can
+		// go negative) above this bound; pruneCutoff would otherwise map
+		// that wrapped-negative duration back to the default grace period,
+		// silently discarding an oversized but intended --min-age. Fail
+		// closed instead.
+		if *req.MinAgeSeconds > uint64(math.MaxInt64/int64(time.Second)) {
+			return nil, status.Error(codes.InvalidArgument, "min_age_seconds too large")
+		}
 		age := time.Duration(*req.MinAgeSeconds) * time.Second
 		opts.MinAge = &age
 	}

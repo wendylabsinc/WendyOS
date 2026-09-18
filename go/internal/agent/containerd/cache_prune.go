@@ -19,10 +19,11 @@ import (
 // covering the entire transfer until AssembleImage creates the final image
 // reference. A day safely covers even unusually large/slow edge deployments.
 //
-// `--all` (min age 0) bypasses this protection entirely: WriteLayer
-// (client.go ~:672-705) writes layers with a gc.root label and no lease, so
-// releasing every pin regardless of age must not run while a deploy to this
-// device is in progress.
+// `--all` (min age 0) bypasses this protection entirely: WriteLayer writes
+// layers with a gc.root label and no lease (AssembleLayerFromChunks, in
+// chunkstore.go, funnels into the same WriteLayer, so the chunk path is
+// covered by this statement too), so releasing every pin regardless of age
+// must not run while a deploy to this device is in progress.
 const cachePruneGracePeriod = 24 * time.Hour
 
 type cacheContentStore interface {
@@ -55,34 +56,55 @@ type snapshotCacheCandidate struct {
 // than waiting on containerd's background GC) and reports the free-space
 // delta on the container-storage filesystem as ReclaimedBytes.
 //
-// c.mu is held only around the label walk/update (pruneCacheRoots) below, not
-// around the forced GC pass or either free-space measurement. CreateContainerWithProgress,
-// StopContainer/stopOne and DeleteContainer also take c.mu, and a synchronous
-// GC sweep over the whole content store has no bound on how long it can run;
-// holding the lock across it would stall an unrelated deploy or stop for the
-// duration of the sweep. Neither the statfs call nor the lease create/delete
-// touches state c.mu protects, so releasing the lock before them is safe.
+// c.mu is held only around the label walk/update (pruneCacheRoots) and, on a
+// real (non-dry) run, the "before" free-space measurement taken immediately
+// after acquiring the lock — not around the forced GC pass or the "after"
+// measurement. CreateContainerWithProgress, StopContainer/stopOne and
+// DeleteContainer also take c.mu, and a synchronous GC sweep over the whole
+// content store has no bound on how long it can run; holding the lock across
+// it would stall an unrelated deploy or stop for the duration of the sweep.
+// The "before" statfs is a microsecond syscall with no GC under the lock, so
+// it is safe to take there; neither it nor the lease create/delete touches
+// state c.mu protects, so releasing the lock before the GC pass is safe. The
+// locked section is a closure with a deferred Unlock so a panic inside it
+// (e.g. a Walk callback or sn.Usage) cannot leave c.mu held forever — the
+// agent's gRPC interceptor recovers handler panics and keeps serving, so an
+// un-deferred Unlock skipped by a panic would hang every later
+// create/stop/delete.
 func (c *Client) PruneCache(ctx context.Context, opts services.CachePruneOptions) (services.CachePruneResult, error) {
 	ctx = c.withNamespace(ctx)
 	cutoff, effective := pruneCutoff(time.Now(), opts.MinAge)
+
+	// freeBytes/forceGC are set by NewClient; a bare *Client built directly
+	// by a test has neither, so fall back to the real implementations lazily
+	// rather than nil-deref below.
+	if c.freeBytes == nil {
+		c.freeBytes = filesystemFreeBytes
+	}
+	if c.forceGC == nil {
+		c.forceGC = func(ctx context.Context) error {
+			return forceContainerdGC(ctx, c.client.LeasesService())
+		}
+	}
 
 	// Dry runs never force GC or measure free space; skip "before" too so a
 	// dry run never touches the seam.
 	var before uint64
 	var okBefore bool
-	if !opts.DryRun {
-		before, okBefore = c.freeBytes(containerdRootDir)
-	}
-
-	c.mu.Lock()
-	result, err := pruneCacheRoots(
-		ctx,
-		c.client.ContentStore(),
-		c.client.SnapshotService(c.snapshotter),
-		cutoff,
-		opts.DryRun,
-	)
-	c.mu.Unlock()
+	result, err := func() (services.CachePruneResult, error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !opts.DryRun {
+			before, okBefore = c.freeBytes(containerdRootDir)
+		}
+		return pruneCacheRoots(
+			ctx,
+			c.client.ContentStore(),
+			c.client.SnapshotService(c.snapshotter),
+			cutoff,
+			opts.DryRun,
+		)
+	}()
 
 	result.MinimumAgeSeconds = uint64(effective / time.Second)
 	if err != nil || opts.DryRun {
@@ -100,14 +122,16 @@ func (c *Client) PruneCache(ctx context.Context, opts services.CachePruneOptions
 }
 
 // pruneCutoff computes the cutoff time and effective minimum age for a
-// PruneCache call. A nil minAge uses the agent's default grace period; a
-// negative minAge is treated as 0 (release every pin regardless of age).
+// PruneCache call. A nil minAge uses the agent's default grace period. Only
+// an explicit 0 means "release every pin regardless of age"; a negative
+// minAge is not a valid request for that and fails safe to the default grace
+// period instead of releasing everything.
 func pruneCutoff(now time.Time, minAge *time.Duration) (cutoff time.Time, effective time.Duration) {
 	switch {
 	case minAge == nil:
 		effective = cachePruneGracePeriod
 	case *minAge < 0:
-		effective = 0
+		effective = cachePruneGracePeriod
 	default:
 		effective = *minAge
 	}

@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"io"
+	"math"
 	"net"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -152,6 +154,23 @@ func TestContainerServiceV2_PruneCacheReportsReclaimedBytes(t *testing.T) {
 	}
 	if resp.ReclaimedBytes != nil {
 		t.Fatalf("ReclaimedBytes = %v, want nil when the pruner did not measure it", *resp.ReclaimedBytes)
+	}
+}
+
+// TestContainerServiceV2_PruneCacheRejectsOverflowingMinAge guards against
+// time.Duration(*req.MinAgeSeconds) * time.Second overflowing (and
+// potentially going negative) for a min_age_seconds value above
+// math.MaxInt64/int64(time.Second); the handler must reject it outright
+// rather than let a wrapped-negative duration reach pruneCutoff.
+func TestContainerServiceV2_PruneCacheRejectsOverflowingMinAge(t *testing.T) {
+	mc := &cachePruningContainerdClient{mockContainerdClient: &mockContainerdClient{}}
+	client, cleanup := startContainerV2Server(t, mc)
+	defer cleanup()
+
+	tooLarge := uint64(math.MaxInt64/int64(time.Second)) + 1
+	_, err := client.PruneCache(context.Background(), &agentpbv2.PruneCacheRequest{MinAgeSeconds: proto.Uint64(tooLarge)})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v; want InvalidArgument", status.Code(err))
 	}
 }
 
