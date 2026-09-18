@@ -288,6 +288,10 @@ func main() {
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
 	timeSyncSvc := services.NewTimeSyncService(logger, timesyncMgr)
+	// The robot calibration store, at robotcal.DefaultRoot. On the disk-backed
+	// /var/lib tree beside the camera registries: a calibration has to survive a
+	// reboot and be readable by the apps that run on it.
+	robotSvc := services.NewRobotService(logger, "")
 	wifiSvc := services.NewWiFiService(logger, networkMgr)
 	bluetoothSvc := services.NewBluetoothService(logger, btManager)
 	agentUpdateSvc := services.NewAgentUpdateService(logger, installer)
@@ -656,6 +660,14 @@ func main() {
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)
 		agentpbv2.RegisterWendySensorPairingServiceServer(srv, sensorSvc)
+		// The robot calibration store. Registered here rather than on the mTLS
+		// server only, like the other services that write device state (apps,
+		// wifi, build contexts): its writes are bounded to
+		// /var/lib/wendy/robot/units/<unit>/calibration.json, with the store's
+		// own unit-name rule keeping <unit> a plain lowercase token. That is a
+		// different class from the root shell, tunnel and driver services below,
+		// which are mTLS-only because they are host-root-equivalent.
+		agentpbv2.RegisterWendyRobotServiceServer(srv, robotSvc)
 		if ros2Svc != nil {
 			agentpbv2.RegisterROS2ServiceServer(srv, ros2Svc)
 		}

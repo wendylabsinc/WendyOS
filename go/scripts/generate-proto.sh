@@ -58,6 +58,7 @@ V2_AGENT_PROTOS=(
     "wendy/agent/services/v2/build_service.proto"
     "wendy/agent/services/v2/sensor_pairing_service.proto"
     "wendy/agent/services/v2/sensor_service.proto"
+    "wendy/agent/services/v2/robot_service.proto"
     "wendy/agent/services/v2/tunnel_service.proto"
 )
 
