@@ -67,10 +67,16 @@ var (
 	Amps            = NewUnit("A")
 	NewtonMetres    = NewUnit("Nm")
 	Ticks           = NewUnit("ticks")
-	Bytes           = NewUnit("B")
-	Pixels          = NewUnit("px")
-	Percent         = NewUnit("%")
-	Count           = NewUnit("count")
+	// VendorUnits is for a number a robot really publishes whose scale nobody has
+	// established. It exists so a reading can be reported without inventing a unit for
+	// it: a finger torque of "5861 Nm" is a fabrication, while "5861 vendor units" is
+	// the truth plus an admission. A property carrying this is a candidate for someone
+	// with the vendor's documentation to convert, not a number to compute with.
+	VendorUnits = NewUnit("vendor units")
+	Bytes       = NewUnit("B")
+	Pixels      = NewUnit("px")
+	Percent     = NewUnit("%")
+	Count       = NewUnit("count")
 )
 
 // Well-known axes. A backend may report any axis string; these are the ones the core

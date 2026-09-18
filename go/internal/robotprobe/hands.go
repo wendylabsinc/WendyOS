@@ -108,7 +108,15 @@ func (p Hands) observeHand(ctx context.Context, reader TopicReader, name, topic 
 		properties = append(properties,
 			instantProperty(id+".position", float64(motor.Position), robotinspect.Radians, source, nil,
 				robotinspect.WithAxis(fmt.Sprintf("%s%d", name, i))),
-			instantProperty(id+".torque", float64(motor.Torque), robotinspect.NewtonMetres, source, nil))
+			// Not Newton-metres, whatever the field is called. On a real Dex3 this
+			// reads ±1674.594 and 5861.080 — exact multiples of one quantum, so the
+			// number is a genuine fixed-point reading, but a finger cannot produce
+			// thousands of Nm. Everything around it decodes correctly (the rail
+			// voltage immediately after reads 24.50 V, which is exactly right), so
+			// this is the vendor's own scaling, not a misaligned field. Reported as
+			// it arrives, with no unit claimed.
+			instantProperty(id+".torque", float64(motor.Torque), robotinspect.VendorUnits, source,
+				map[string]string{"scale": "not established; the vendor does not document it"}))
 	}
 
 	// The pads' own count of readings they know they dropped. On the G1 this reads

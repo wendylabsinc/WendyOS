@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotinspect"
@@ -160,5 +161,43 @@ func TestHandsHonourTopicOverrides(t *testing.T) {
 	}
 	if got := findIn(t, properties, "hand.gripper.motors").Observations[0].Quantity.Value(); got != 3 {
 		t.Errorf("gripper motors = %v, want 3", got)
+	}
+}
+
+// A finger cannot produce thousands of Newton-metres. The field a Dex3 calls tau_est
+// carries a genuine fixed-point number on some other scale, so the probe must report it
+// without claiming a unit — the alternative is a plausible-looking fabrication that a
+// reader would compute with.
+func TestHandTorqueClaimsNoUnit(t *testing.T) {
+	reader := &topicBytes{byTopic: map[string][][]byte{
+		"/dex3/left/state": {handBytes(7, 5, 24.1, 74)},
+	}}
+	properties, err := Hands{}.Observe(context.Background(), ddsEnv(reader))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := 0
+	for _, property := range properties {
+		if !strings.HasSuffix(property.ID, ".torque") {
+			continue
+		}
+		if len(property.Observations) == 0 {
+			t.Fatalf("%s has no observation", property.ID)
+		}
+		unit := property.Observations[0].Quantity.Unit()
+		if unit == robotinspect.NewtonMetres {
+			t.Fatalf("%s claims Newton-metres for a reading that cannot be in them", property.ID)
+		}
+		if unit != robotinspect.VendorUnits {
+			t.Fatalf("%s reports %v, want vendor units", property.ID, unit)
+		}
+		if property.Observations[0].Conditions["scale"] == "" {
+			t.Fatalf("%s does not record that its scale is unestablished", property.ID)
+		}
+		seen++
+	}
+	if seen == 0 {
+		t.Fatal("no torque properties were checked")
 	}
 }
