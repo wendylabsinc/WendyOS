@@ -125,12 +125,25 @@ func probeRobot(ctx context.Context, source robotTopicSource, opts robotInspectO
 	registry := robotinspect.NewRegistry()
 	var want []string
 
+	// What the cameras claim about themselves.
 	if topics := source.TopicsOfType(rosmsg.TypeCameraInfo); len(topics) > 0 {
 		camera := robotprobe.CameraInfo{Topics: topics}
 		if err := registry.Register(camera); err != nil {
 			return robotinspect.Document{}, err
 		}
 		want = append(want, camera.Provides()...)
+	}
+
+	// What they actually deliver. Both probes answer camera.<stream>.resolution.width,
+	// and the inspection folds them onto one property — which is where a calibration
+	// taken at one resolution and a stream running at another becomes a finding
+	// instead of two unrelated rows.
+	if topics := source.TopicsOfType(rosmsg.TypeImage); len(topics) > 0 {
+		stream := robotprobe.CameraStream{Topics: topics, Window: opts.window}
+		if err := registry.Register(stream); err != nil {
+			return robotinspect.Document{}, err
+		}
+		want = append(want, stream.Provides()...)
 	}
 
 	env := robotinspect.NewEnv().Offer(robotinspect.RequirementDDSDomain, source)

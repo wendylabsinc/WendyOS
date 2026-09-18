@@ -18,11 +18,18 @@ import (
 type fakeTopicSource struct {
 	topics   map[string][]string
 	payloads map[string][][]byte
+	dwell    time.Duration
 }
 
 func (f fakeTopicSource) TopicsOfType(typeName string) []string { return f.topics[typeName] }
 
-func (f fakeTopicSource) Sample(_ context.Context, topic, _ string, _ time.Duration, _ int) ([][]byte, error) {
+func (f fakeTopicSource) Sample(_ context.Context, topic, _ string, window time.Duration, _ int) ([][]byte, error) {
+	// Occupy the window as a real sampling pass would, so a measured rate is derived
+	// from a span long enough to mean something.
+	if f.dwell > 0 {
+		time.Sleep(f.dwell)
+	}
+	_ = window
 	return f.payloads[topic], nil
 }
 
@@ -131,6 +138,84 @@ func TestWriteRobotDocumentSaysWhenTheGraphWasEmpty(t *testing.T) {
 	if !strings.Contains(report, "Nothing was commanded.") {
 		t.Errorf("report drops the read-only assurance:\n%s", report)
 	}
+}
+
+// The report an operator sees on a robot whose camera is calibrated at one resolution
+// and streaming at another — the shape this command exists to produce.
+func TestFullReportShowsTheDeclaredAgainstTheMeasured(t *testing.T) {
+	restore := jsonOutput
+	jsonOutput = false
+	defer func() { jsonOutput = restore }()
+
+	source := fakeTopicSource{
+		dwell: 300 * time.Millisecond,
+		topics: map[string][]string{
+			rosmsg.TypeCameraInfo: {"/camera/color/camera_info"},
+			rosmsg.TypeImage:      {"/camera/color/image_raw"},
+		},
+		payloads: map[string][][]byte{
+			// Intrinsics calibrated at 640x480 ...
+			"/camera/color/camera_info": {testCameraInfoPayload(640, 480, 603.33, 603.67)},
+			// ... while the stream delivers 848x480.
+			"/camera/color/image_raw": testImageFrames(9, 848, 480),
+		},
+	}
+
+	doc, err := probeRobot(context.Background(), source, robotInspectOptions{
+		label: "unitree-g1-nx-2", vendorKind: "unitree-g1", window: 300 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := writeRobotDocument(&out, doc, robotInspectOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	report := out.String()
+	t.Log("\n" + report)
+
+	if got := doc.Summarise().Disagree; got != 1 {
+		t.Errorf("disagreements = %d, want 1 (640 calibrated against 848 delivered)", got)
+	}
+	for _, want := range []string{"declared", "measured", "disagree", "Nothing was commanded."} {
+		if !strings.Contains(report, want) {
+			t.Errorf("report missing %q:\n%s", want, report)
+		}
+	}
+}
+
+func testImageFrames(n int, width, height uint32) [][]byte {
+	out := make([][]byte, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, testImagePayload(width, height))
+	}
+	return out
+}
+
+func testImagePayload(width, height uint32) []byte {
+	var buf []byte
+	align := func(n int) {
+		for len(buf)%n != 0 {
+			buf = append(buf, 0)
+		}
+	}
+	u32 := func(v uint32) { align(4); buf = binary.LittleEndian.AppendUint32(buf, v) }
+	str := func(s string) {
+		u32(uint32(len(s) + 1))
+		buf = append(buf, s...)
+		buf = append(buf, 0)
+	}
+	u32(1758207600)
+	u32(250000000)
+	str("camera_color_optical_frame")
+	u32(height)
+	u32(width)
+	str("rgb8")
+	buf = append(buf, 0)
+	u32(width * 3)
+	u32(width * height * 3)
+	buf = append(buf, make([]byte, 32)...)
+	return append([]byte{0x00, 0x01, 0x00, 0x00}, buf...)
 }
 
 func TestWriteRobotDocumentEmitsValidJSON(t *testing.T) {

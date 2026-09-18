@@ -30,6 +30,11 @@ const (
 	// ReasonNotPassive: the only probe that could answer may actuate the robot, so
 	// inspection will not run it.
 	ReasonNotPassive = "NOT_PASSIVE"
+	// ReasonWindowTooShort: sampling ended before enough time passed to derive a
+	// rate. Dividing a handful of messages by a near-zero window yields a number in
+	// the megahertz, which is precisely the kind of confident nonsense this package
+	// exists to keep out of a report.
+	ReasonWindowTooShort = "WINDOW_TOO_SHORT"
 	// ReasonUncalibrated: the source exists but has no usable value in it, such as a
 	// camera publishing an all-zero intrinsic matrix. Distinct from absent, because
 	// the fix is to calibrate the device rather than to go looking elsewhere.
