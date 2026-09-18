@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"cuelabs.dev/go/oci/ociregistry"
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -15,6 +19,8 @@ import (
 	"github.com/containerd/errdefs"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // testImageStore is a minimal in-memory images.Store for testing.
@@ -368,5 +374,175 @@ func TestPushBlobChunkedResumeGenuineMismatch(t *testing.T) {
 	}
 	if cs.abortCalled {
 		t.Error("must not abort the ingest on a genuine mid-stream mismatch")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// gatedRegistry (WDY-3127 ingest gate)
+// ---------------------------------------------------------------------------
+
+// fakeOCIRegistryCalls counts calls that reached a fakeOCIRegistry's methods,
+// letting a test assert whether gatedRegistry let a call through to the
+// backend or refused it beforehand.
+type fakeOCIRegistryCalls struct {
+	getBlob               int
+	getManifest           int
+	pushBlob              int
+	pushBlobChunked       int
+	pushBlobChunkedResume int
+	mountBlob             int
+	pushManifest          int
+}
+
+// newFakeOCIRegistry returns an ociregistry.Interface (via ociregistry.Funcs)
+// that records every call it receives and always succeeds, so tests can wrap
+// it in a gatedRegistry without needing a real containerd socket.
+func newFakeOCIRegistry(calls *fakeOCIRegistryCalls) *ociregistry.Funcs {
+	return &ociregistry.Funcs{
+		GetBlob_: func(_ context.Context, _ string, _ ociregistry.Digest) (ociregistry.BlobReader, error) {
+			calls.getBlob++
+			return nil, nil
+		},
+		GetManifest_: func(_ context.Context, _ string, _ ociregistry.Digest) (ociregistry.BlobReader, error) {
+			calls.getManifest++
+			return nil, nil
+		},
+		PushBlob_: func(_ context.Context, _ string, desc ociregistry.Descriptor, _ io.Reader) (ociregistry.Descriptor, error) {
+			calls.pushBlob++
+			return desc, nil
+		},
+		PushBlobChunked_: func(_ context.Context, _ string, _ int) (ociregistry.BlobWriter, error) {
+			calls.pushBlobChunked++
+			return nil, nil
+		},
+		PushBlobChunkedResume_: func(_ context.Context, _, _ string, _ int64, _ int) (ociregistry.BlobWriter, error) {
+			calls.pushBlobChunkedResume++
+			return nil, nil
+		},
+		MountBlob_: func(_ context.Context, _, _ string, _ ociregistry.Digest) (ociregistry.Descriptor, error) {
+			calls.mountBlob++
+			return ociregistry.Descriptor{}, nil
+		},
+		PushManifest_: func(_ context.Context, _ string, _ string, contents []byte, mediaType string) (ociregistry.Descriptor, error) {
+			calls.pushManifest++
+			return ociregistry.Descriptor{MediaType: mediaType, Size: int64(len(contents))}, nil
+		},
+	}
+}
+
+// failingGate returns a check function shaped like ContainerStorageGate.Check:
+// a gRPC FailedPrecondition status error whose message is the plain text a
+// caller should see (WDY-3127).
+func failingGate(msg string) func() error {
+	return func() error { return status.Error(codes.FailedPrecondition, msg) }
+}
+
+func healthyGate() func() error {
+	return func() error { return nil }
+}
+
+// assertStorageDegradedError checks that err marshals (per
+// ociregistry.MarshalError, the same path the HTTP handler uses) to HTTP 507
+// with a body containing the WENDY_STORAGE_DEGRADED code and the gate's
+// plain-text message -- not the "rpc error: code = ... desc = ..." wrapper.
+func assertStorageDegradedError(t *testing.T, err error, wantMsg string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if strings.Contains(err.Error(), "rpc error") {
+		t.Errorf("error %q leaks the gRPC status wrapper; want the plain gate message", err.Error())
+	}
+	body, httpStatus := ociregistry.MarshalError(err)
+	if httpStatus != http.StatusInsufficientStorage {
+		t.Errorf("HTTP status = %d, want %d", httpStatus, http.StatusInsufficientStorage)
+	}
+	if !strings.Contains(string(body), ErrCodeStorageDegraded) {
+		t.Errorf("body = %s, want it to contain %q", body, ErrCodeStorageDegraded)
+	}
+	if !strings.Contains(string(body), wantMsg) {
+		t.Errorf("body = %s, want it to contain %q", body, wantMsg)
+	}
+}
+
+// TestGatedRegistryRefusesWritesWhenStorageDegraded verifies that every write
+// method gatedRegistry overrides refuses with a 507 WENDY_STORAGE_DEGRADED
+// error and never reaches the backend when the gate reports an error.
+func TestGatedRegistryRefusesWritesWhenStorageDegraded(t *testing.T) {
+	const wantMsg = "container storage is on the OS root slot; image ingestion is disabled"
+	calls := &fakeOCIRegistryCalls{}
+	g := gatedRegistry{Interface: newFakeOCIRegistry(calls), check: failingGate(wantMsg)}
+	ctx := context.Background()
+
+	_, err := g.PushBlob(ctx, "repo", ociregistry.Descriptor{}, bytes.NewReader(nil))
+	assertStorageDegradedError(t, err, wantMsg)
+
+	_, err = g.PushBlobChunked(ctx, "repo", 4096)
+	assertStorageDegradedError(t, err, wantMsg)
+
+	_, err = g.PushBlobChunkedResume(ctx, "repo", "upload-id", 0, 4096)
+	assertStorageDegradedError(t, err, wantMsg)
+
+	_, err = g.MountBlob(ctx, "from-repo", "to-repo", digest.FromString("x"))
+	assertStorageDegradedError(t, err, wantMsg)
+
+	_, err = g.PushManifest(ctx, "repo", "latest", []byte("{}"), "application/vnd.oci.image.manifest.v1+json")
+	assertStorageDegradedError(t, err, wantMsg)
+
+	if *calls != (fakeOCIRegistryCalls{}) {
+		t.Errorf("backend was called while the gate was degraded: %+v", calls)
+	}
+}
+
+// TestGatedRegistryPassesReadsThrough verifies that gatedRegistry does not
+// gate read operations: they must reach the backend even while the gate
+// reports the storage as degraded.
+func TestGatedRegistryPassesReadsThrough(t *testing.T) {
+	calls := &fakeOCIRegistryCalls{}
+	g := gatedRegistry{Interface: newFakeOCIRegistry(calls), check: failingGate("degraded")}
+	ctx := context.Background()
+
+	if _, err := g.GetBlob(ctx, "repo", digest.FromString("x")); err != nil {
+		t.Fatalf("GetBlob: %v", err)
+	}
+	if _, err := g.GetManifest(ctx, "repo", digest.FromString("x")); err != nil {
+		t.Fatalf("GetManifest: %v", err)
+	}
+	if calls.getBlob != 1 || calls.getManifest != 1 {
+		t.Errorf("reads did not reach the backend: %+v", calls)
+	}
+}
+
+// TestGatedRegistryAllowsWritesWhenHealthy verifies that gatedRegistry lets
+// every gated write method through to the backend, unchanged, when the gate
+// reports no error.
+func TestGatedRegistryAllowsWritesWhenHealthy(t *testing.T) {
+	calls := &fakeOCIRegistryCalls{}
+	g := gatedRegistry{Interface: newFakeOCIRegistry(calls), check: healthyGate()}
+	ctx := context.Background()
+
+	if _, err := g.PushBlob(ctx, "repo", ociregistry.Descriptor{}, bytes.NewReader(nil)); err != nil {
+		t.Errorf("PushBlob: %v", err)
+	}
+	if _, err := g.PushBlobChunked(ctx, "repo", 4096); err != nil {
+		t.Errorf("PushBlobChunked: %v", err)
+	}
+	if _, err := g.PushBlobChunkedResume(ctx, "repo", "upload-id", 0, 4096); err != nil {
+		t.Errorf("PushBlobChunkedResume: %v", err)
+	}
+	if _, err := g.MountBlob(ctx, "from-repo", "to-repo", digest.FromString("x")); err != nil {
+		t.Errorf("MountBlob: %v", err)
+	}
+	desc, err := g.PushManifest(ctx, "repo", "latest", []byte("{}"), "application/vnd.oci.image.manifest.v1+json")
+	if err != nil {
+		t.Errorf("PushManifest: %v", err)
+	}
+	if desc.MediaType != "application/vnd.oci.image.manifest.v1+json" {
+		t.Errorf("PushManifest descriptor = %+v, want the backend's descriptor to come through unchanged", desc)
+	}
+
+	want := fakeOCIRegistryCalls{pushBlob: 1, pushBlobChunked: 1, pushBlobChunkedResume: 1, mountBlob: 1, pushManifest: 1}
+	if *calls != want {
+		t.Errorf("backend calls = %+v, want %+v", calls, want)
 	}
 }
