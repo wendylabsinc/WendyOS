@@ -23,9 +23,11 @@ control:
 
 joints:
   unit: rad
-  # Live joint positions. The agent reads this one, on the device: DDS discovery
-  # is multicast, so the robot's graph never leaves the robot's own network
-  # segment and only something standing inside it can hear /lowstate.
+  # Live joint positions. The agent samples the topic on the device and the CLI
+  # decodes what comes back: DDS discovery is multicast, so the robot's graph
+  # never leaves the robot's own network segment and only something standing
+  # inside it can hear /lowstate — but the bytes travel unchanged, so the agent
+  # never has to learn a robot family.
   #
   # `note` is what the wizard prints if a build cannot open the backend, so the
   # explanation lives with the robot rather than as a case arm in the CLI.
@@ -35,17 +37,25 @@ joints:
       topic: /lowstate
       position_field: motor_state.q
       # The interface the robot's DDS lives on, as seen from the device. Left
-      # empty the agent tries every eligible wired interface in turn, which is
-      # what finds a robot sharing a segment with the device's other networks.
+      # empty the device binds discovery to the first eligible wired interface,
+      # which is what an inspection of this robot found the body on; name one
+      # here if a device carries the robot on a second NIC.
       interface: ""
+      # How much of the topic to keep. Measured on unitree-g1-nx-2 on
+      # 2026-09-18, /lowstate publishes at about 1053 Hz and each message is
+      # 2092 bytes, which is 2.2 MB/s; a hand sweep does not move that fast.
+      # The discard happens in the CLI, because the agent's raw topic stream
+      # takes no minimum interval — so this bounds the decoding work and not
+      # the bandwidth, and every one of those bytes still crosses the tunnel.
+      min_interval_ms: "20"
     note: >-
       Checked against the real robot (unitree-g1-nx-2, 2026-09-18): it publishes
       no sensor_msgs/JointState. Joint positions are on /lowstate as
       unitree_hg/msg/LowState, a positionally indexed array with no joint names
       in it, and the agent's ROS 2 sidecar cannot even deserialise that type
       without the vendor's interface package ("The message type
-      'unitree_hg/msg/LowState' is invalid"). The agent therefore decodes the
-      CDR itself and streams the slots it finds; the names below are what turns
+      'unitree_hg/msg/LowState' is invalid"). The agent therefore streams the
+      topic's bytes and the CLI decodes the CDR; the names below are what turns
       a slot number back into a joint.
       This robot actuates 27 of the message's 35 slots. Slots 13 and 14 — waist
       roll and pitch — report nothing on this unit, so they arrive absent rather

@@ -19,15 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WendyRobotService_LoadUnit_FullMethodName             = "/wendy.agent.services.v2.WendyRobotService/LoadUnit"
-	WendyRobotService_PutRecord_FullMethodName            = "/wendy.agent.services.v2.WendyRobotService/PutRecord"
-	WendyRobotService_ClearRecord_FullMethodName          = "/wendy.agent.services.v2.WendyRobotService/ClearRecord"
-	WendyRobotService_PutSession_FullMethodName           = "/wendy.agent.services.v2.WendyRobotService/PutSession"
-	WendyRobotService_ClearSession_FullMethodName         = "/wendy.agent.services.v2.WendyRobotService/ClearSession"
-	WendyRobotService_SetProfileKind_FullMethodName       = "/wendy.agent.services.v2.WendyRobotService/SetProfileKind"
-	WendyRobotService_SetStableId_FullMethodName          = "/wendy.agent.services.v2.WendyRobotService/SetStableId"
-	WendyRobotService_StreamJointPositions_FullMethodName = "/wendy.agent.services.v2.WendyRobotService/StreamJointPositions"
-	WendyRobotService_DescribeStore_FullMethodName        = "/wendy.agent.services.v2.WendyRobotService/DescribeStore"
+	WendyRobotService_LoadUnit_FullMethodName       = "/wendy.agent.services.v2.WendyRobotService/LoadUnit"
+	WendyRobotService_PutRecord_FullMethodName      = "/wendy.agent.services.v2.WendyRobotService/PutRecord"
+	WendyRobotService_ClearRecord_FullMethodName    = "/wendy.agent.services.v2.WendyRobotService/ClearRecord"
+	WendyRobotService_PutSession_FullMethodName     = "/wendy.agent.services.v2.WendyRobotService/PutSession"
+	WendyRobotService_ClearSession_FullMethodName   = "/wendy.agent.services.v2.WendyRobotService/ClearSession"
+	WendyRobotService_SetProfileKind_FullMethodName = "/wendy.agent.services.v2.WendyRobotService/SetProfileKind"
+	WendyRobotService_SetStableId_FullMethodName    = "/wendy.agent.services.v2.WendyRobotService/SetStableId"
+	WendyRobotService_DescribeStore_FullMethodName  = "/wendy.agent.services.v2.WendyRobotService/DescribeStore"
 )
 
 // WendyRobotServiceClient is the client API for WendyRobotService service.
@@ -83,42 +82,6 @@ type WendyRobotServiceClient interface {
 	// topology). Not a raw serial: a servo bus on /dev/ttyACM1 renumbers across
 	// boots exactly as /dev/videoN does.
 	SetStableId(ctx context.Context, in *SetStableIdRequest, opts ...grpc.CallOption) (*SetStableIdResponse, error)
-	// StreamJointPositions reports where this robot's joints are, as fast as the
-	// robot publishes them and for as long as the client listens.
-	//
-	// It is here, on the device, because DDS discovery is multicast: a robot's
-	// ROS 2 graph lives on the robot's own network segment and a laptop cannot
-	// see it across a routed link or a cloud tunnel, however reachable the device
-	// is. The agent is already standing inside that segment — it joins the same
-	// domain to read the battery — so the calibration wizard reads joints the way
-	// it reads everything else, over this connection, and `wendy device robot
-	// calibrate` works from a laptop like every other command.
-	//
-	// Streaming rather than polled because the wizard samples continuously while
-	// an operator moves a joint by hand: the extremes of a sweep are what is
-	// being measured, and a poll-per-sample would put a round trip between two
-	// readings of a moving arm.
-	//
-	// Read-only by construction. There is no RPC here that could command a
-	// joint, which is what keeps a nothing-powered procedure nothing-powered.
-	//
-	// Failures are separated by code, because "the robot is silent" and "we could
-	// not listen" lead an operator to different places:
-	//
-	//	INVALID_ARGUMENT    a backend this agent cannot read, named with the ones
-	//	                    it can.
-	//	FAILED_PRECONDITION the device could not join a DDS domain at all — no
-	//	                    eligible interface, or the sockets would not open.
-	//	                    Nothing was heard because nothing was listening.
-	//	NOT_FOUND           the device listened and nothing published the topic.
-	//	                    Carries the ROBOT_JOINT_SOURCE_ABSENT reason so a
-	//	                    client can tell this from a tunnel that lost the
-	//	                    device, rather than matching on message text.
-	//	INTERNAL            bytes arrived on the topic and the decoder refused
-	//	                    them. The wire layout is not what this agent expects,
-	//	                    which is reported rather than decoded into plausible
-	//	                    wrong angles.
-	StreamJointPositions(ctx context.Context, in *StreamJointPositionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JointPositionSample], error)
 	// DescribeStore says where on the device the store physically is, for the
 	// operator and for error messages. The client calls it once when it opens the
 	// store, which doubles as the check that this agent serves the store at all:
@@ -205,25 +168,6 @@ func (c *wendyRobotServiceClient) SetStableId(ctx context.Context, in *SetStable
 	return out, nil
 }
 
-func (c *wendyRobotServiceClient) StreamJointPositions(ctx context.Context, in *StreamJointPositionsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JointPositionSample], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WendyRobotService_ServiceDesc.Streams[0], WendyRobotService_StreamJointPositions_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[StreamJointPositionsRequest, JointPositionSample]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WendyRobotService_StreamJointPositionsClient = grpc.ServerStreamingClient[JointPositionSample]
-
 func (c *wendyRobotServiceClient) DescribeStore(ctx context.Context, in *DescribeStoreRequest, opts ...grpc.CallOption) (*DescribeStoreResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DescribeStoreResponse)
@@ -287,42 +231,6 @@ type WendyRobotServiceServer interface {
 	// topology). Not a raw serial: a servo bus on /dev/ttyACM1 renumbers across
 	// boots exactly as /dev/videoN does.
 	SetStableId(context.Context, *SetStableIdRequest) (*SetStableIdResponse, error)
-	// StreamJointPositions reports where this robot's joints are, as fast as the
-	// robot publishes them and for as long as the client listens.
-	//
-	// It is here, on the device, because DDS discovery is multicast: a robot's
-	// ROS 2 graph lives on the robot's own network segment and a laptop cannot
-	// see it across a routed link or a cloud tunnel, however reachable the device
-	// is. The agent is already standing inside that segment — it joins the same
-	// domain to read the battery — so the calibration wizard reads joints the way
-	// it reads everything else, over this connection, and `wendy device robot
-	// calibrate` works from a laptop like every other command.
-	//
-	// Streaming rather than polled because the wizard samples continuously while
-	// an operator moves a joint by hand: the extremes of a sweep are what is
-	// being measured, and a poll-per-sample would put a round trip between two
-	// readings of a moving arm.
-	//
-	// Read-only by construction. There is no RPC here that could command a
-	// joint, which is what keeps a nothing-powered procedure nothing-powered.
-	//
-	// Failures are separated by code, because "the robot is silent" and "we could
-	// not listen" lead an operator to different places:
-	//
-	//	INVALID_ARGUMENT    a backend this agent cannot read, named with the ones
-	//	                    it can.
-	//	FAILED_PRECONDITION the device could not join a DDS domain at all — no
-	//	                    eligible interface, or the sockets would not open.
-	//	                    Nothing was heard because nothing was listening.
-	//	NOT_FOUND           the device listened and nothing published the topic.
-	//	                    Carries the ROBOT_JOINT_SOURCE_ABSENT reason so a
-	//	                    client can tell this from a tunnel that lost the
-	//	                    device, rather than matching on message text.
-	//	INTERNAL            bytes arrived on the topic and the decoder refused
-	//	                    them. The wire layout is not what this agent expects,
-	//	                    which is reported rather than decoded into plausible
-	//	                    wrong angles.
-	StreamJointPositions(*StreamJointPositionsRequest, grpc.ServerStreamingServer[JointPositionSample]) error
 	// DescribeStore says where on the device the store physically is, for the
 	// operator and for error messages. The client calls it once when it opens the
 	// store, which doubles as the check that this agent serves the store at all:
@@ -359,9 +267,6 @@ func (UnimplementedWendyRobotServiceServer) SetProfileKind(context.Context, *Set
 }
 func (UnimplementedWendyRobotServiceServer) SetStableId(context.Context, *SetStableIdRequest) (*SetStableIdResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetStableId not implemented")
-}
-func (UnimplementedWendyRobotServiceServer) StreamJointPositions(*StreamJointPositionsRequest, grpc.ServerStreamingServer[JointPositionSample]) error {
-	return status.Error(codes.Unimplemented, "method StreamJointPositions not implemented")
 }
 func (UnimplementedWendyRobotServiceServer) DescribeStore(context.Context, *DescribeStoreRequest) (*DescribeStoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DescribeStore not implemented")
@@ -513,17 +418,6 @@ func _WendyRobotService_SetStableId_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WendyRobotService_StreamJointPositions_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(StreamJointPositionsRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(WendyRobotServiceServer).StreamJointPositions(m, &grpc.GenericServerStream[StreamJointPositionsRequest, JointPositionSample]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WendyRobotService_StreamJointPositionsServer = grpc.ServerStreamingServer[JointPositionSample]
-
 func _WendyRobotService_DescribeStore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DescribeStoreRequest)
 	if err := dec(in); err != nil {
@@ -582,12 +476,6 @@ var WendyRobotService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WendyRobotService_DescribeStore_Handler,
 		},
 	},
-	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "StreamJointPositions",
-			Handler:       _WendyRobotService_StreamJointPositions_Handler,
-			ServerStreams: true,
-		},
-	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "wendy/agent/services/v2/robot_service.proto",
 }

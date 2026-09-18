@@ -30,7 +30,7 @@ func dialAgent(t *testing.T, root string) *grpc.ClientConn {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)
 	srv := grpc.NewServer()
-	agentpbv2.RegisterWendyRobotServiceServer(srv, services.NewRobotService(zap.NewNop(), root, nil))
+	agentpbv2.RegisterWendyRobotServiceServer(srv, services.NewRobotService(zap.NewNop(), root))
 	go func() { _ = srv.Serve(lis) }()
 	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),

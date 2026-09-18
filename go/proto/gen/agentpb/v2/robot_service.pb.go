@@ -1026,250 +1026,6 @@ func (*SetStableIdResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{17}
 }
 
-// StreamJointPositionsRequest selects the joint source to read.
-//
-// `backend` is named, not described, exactly as a calibration method is: the
-// set of backends belongs to the platform, and a profile picks one and
-// parameterises it. Letting a request describe a wire layout would make every
-// robot's profile a program the agent runs.
-type StreamJointPositionsRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// backend is the profile's joints.source.backend, e.g. "unitree-lowstate".
-	// Empty is INVALID_ARGUMENT rather than a default: guessing which robot this
-	// is, is the whole failure this field exists to prevent.
-	Backend string `protobuf:"bytes,1,opt,name=backend,proto3" json:"backend,omitempty"`
-	// topic is the DDS topic to read, in its ROS spelling ("/lowstate"). Empty
-	// takes the backend's own default. The wire spelling ("rt/lowstate") is
-	// matched too, so a caller never has to know about ROS 2's name mangling.
-	Topic string `protobuf:"bytes,2,opt,name=topic,proto3" json:"topic,omitempty"`
-	// domain_id is the DDS domain. Absent is ROS 2's default of 0 — which is a
-	// real domain, so it is optional rather than a zero that cannot be told from
-	// an unset field.
-	DomainId *int32 `protobuf:"varint,3,opt,name=domain_id,json=domainId,proto3,oneof" json:"domain_id,omitempty"`
-	// interface pins discovery to one of the device's network interfaces. Empty
-	// tries every eligible one in turn, which is what finds a robot whose DDS
-	// lives on a private segment beside the device's other networks.
-	Interface string `protobuf:"bytes,4,opt,name=interface,proto3" json:"interface,omitempty"`
-	// min_interval_millis throttles the stream. A humanoid publishes its whole
-	// body at several hundred hertz and a hand sweep does not move that fast, so
-	// the agent drops what the client cannot use rather than paying for it on a
-	// cloud tunnel. 0 takes the agent's default.
-	MinIntervalMillis uint32 `protobuf:"varint,5,opt,name=min_interval_millis,json=minIntervalMillis,proto3" json:"min_interval_millis,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
-}
-
-func (x *StreamJointPositionsRequest) Reset() {
-	*x = StreamJointPositionsRequest{}
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[18]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StreamJointPositionsRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StreamJointPositionsRequest) ProtoMessage() {}
-
-func (x *StreamJointPositionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[18]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StreamJointPositionsRequest.ProtoReflect.Descriptor instead.
-func (*StreamJointPositionsRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{18}
-}
-
-func (x *StreamJointPositionsRequest) GetBackend() string {
-	if x != nil {
-		return x.Backend
-	}
-	return ""
-}
-
-func (x *StreamJointPositionsRequest) GetTopic() string {
-	if x != nil {
-		return x.Topic
-	}
-	return ""
-}
-
-func (x *StreamJointPositionsRequest) GetDomainId() int32 {
-	if x != nil && x.DomainId != nil {
-		return *x.DomainId
-	}
-	return 0
-}
-
-func (x *StreamJointPositionsRequest) GetInterface() string {
-	if x != nil {
-		return x.Interface
-	}
-	return ""
-}
-
-func (x *StreamJointPositionsRequest) GetMinIntervalMillis() uint32 {
-	if x != nil {
-		return x.MinIntervalMillis
-	}
-	return 0
-}
-
-// JointSlot is one slot of the robot's joint array that is reporting.
-//
-// Only slots the robot actuates appear. A vendor message carries a fixed number
-// of slots and a given robot drives fewer of them — a G1 publishes 35 and
-// drives 27 — with no field saying which, so a slot that reports neither
-// voltage nor temperature is idle and is left out entirely. It must not arrive
-// as a zero angle: a zero reads as a joint sitting perfectly still, which is
-// indistinguishable from a joint that was swept and did not move, and that is
-// exactly the false calibration the wizard's rules exist to prevent. Absent and
-// zero are different answers and stay different, the way
-// CalibrationRecord.residual does.
-//
-// Indices never shift. Slot 13 is slot 13 whether or not anything is behind it,
-// because the client resolves a slot to a joint name through the profile's
-// order, by index.
-type JointSlot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Index         uint32                 `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
-	Position      float64                `protobuf:"fixed64,2,opt,name=position,proto3" json:"position,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *JointSlot) Reset() {
-	*x = JointSlot{}
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[19]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *JointSlot) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*JointSlot) ProtoMessage() {}
-
-func (x *JointSlot) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[19]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use JointSlot.ProtoReflect.Descriptor instead.
-func (*JointSlot) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{19}
-}
-
-func (x *JointSlot) GetIndex() uint32 {
-	if x != nil {
-		return x.Index
-	}
-	return 0
-}
-
-func (x *JointSlot) GetPosition() float64 {
-	if x != nil {
-		return x.Position
-	}
-	return 0
-}
-
-// JointPositionSample is one observation of the robot's joints.
-type JointPositionSample struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// observed_at_unix_nanos is the device's clock when the sample was decoded,
-	// not the robot's own timestamp. It orders samples within one stream and
-	// nothing more.
-	ObservedAtUnixNanos int64 `protobuf:"varint,1,opt,name=observed_at_unix_nanos,json=observedAtUnixNanos,proto3" json:"observed_at_unix_nanos,omitempty"`
-	// slot_count is how many slots the robot's message carries, including the
-	// idle ones left out of `slots`. Reporting both is what keeps the idle-slot
-	// rule from hiding anything: a reader sees 35 slots and 27 reporting.
-	SlotCount uint32       `protobuf:"varint,2,opt,name=slot_count,json=slotCount,proto3" json:"slot_count,omitempty"`
-	Slots     []*JointSlot `protobuf:"bytes,3,rep,name=slots,proto3" json:"slots,omitempty"`
-	// unit is what the wire format's positions are in — "rad" for every backend
-	// today. A free string for the reason Quantity.unit is one: the next robot
-	// reports ticks or degrees, and an enumeration here would have to be edited
-	// for each robot family.
-	Unit          string `protobuf:"bytes,4,opt,name=unit,proto3" json:"unit,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *JointPositionSample) Reset() {
-	*x = JointPositionSample{}
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *JointPositionSample) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*JointPositionSample) ProtoMessage() {}
-
-func (x *JointPositionSample) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use JointPositionSample.ProtoReflect.Descriptor instead.
-func (*JointPositionSample) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *JointPositionSample) GetObservedAtUnixNanos() int64 {
-	if x != nil {
-		return x.ObservedAtUnixNanos
-	}
-	return 0
-}
-
-func (x *JointPositionSample) GetSlotCount() uint32 {
-	if x != nil {
-		return x.SlotCount
-	}
-	return 0
-}
-
-func (x *JointPositionSample) GetSlots() []*JointSlot {
-	if x != nil {
-		return x.Slots
-	}
-	return nil
-}
-
-func (x *JointPositionSample) GetUnit() string {
-	if x != nil {
-		return x.Unit
-	}
-	return ""
-}
-
 type DescribeStoreRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1278,7 +1034,7 @@ type DescribeStoreRequest struct {
 
 func (x *DescribeStoreRequest) Reset() {
 	*x = DescribeStoreRequest{}
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[21]
+	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1290,7 +1046,7 @@ func (x *DescribeStoreRequest) String() string {
 func (*DescribeStoreRequest) ProtoMessage() {}
 
 func (x *DescribeStoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[21]
+	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1303,7 +1059,7 @@ func (x *DescribeStoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DescribeStoreRequest.ProtoReflect.Descriptor instead.
 func (*DescribeStoreRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{21}
+	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{18}
 }
 
 type DescribeStoreResponse struct {
@@ -1316,7 +1072,7 @@ type DescribeStoreResponse struct {
 
 func (x *DescribeStoreResponse) Reset() {
 	*x = DescribeStoreResponse{}
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[22]
+	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1328,7 +1084,7 @@ func (x *DescribeStoreResponse) String() string {
 func (*DescribeStoreResponse) ProtoMessage() {}
 
 func (x *DescribeStoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[22]
+	mi := &file_wendy_agent_services_v2_robot_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1341,7 +1097,7 @@ func (x *DescribeStoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DescribeStoreResponse.ProtoReflect.Descriptor instead.
 func (*DescribeStoreResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{22}
+	return file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *DescribeStoreResponse) GetRoot() string {
@@ -1422,27 +1178,10 @@ const file_wendy_agent_services_v2_robot_service_proto_rawDesc = "" +
 	"\x12SetStableIdRequest\x12\x12\n" +
 	"\x04unit\x18\x01 \x01(\tR\x04unit\x12\x1b\n" +
 	"\tstable_id\x18\x02 \x01(\tR\bstableId\"\x15\n" +
-	"\x13SetStableIdResponse\"\xcb\x01\n" +
-	"\x1bStreamJointPositionsRequest\x12\x18\n" +
-	"\abackend\x18\x01 \x01(\tR\abackend\x12\x14\n" +
-	"\x05topic\x18\x02 \x01(\tR\x05topic\x12 \n" +
-	"\tdomain_id\x18\x03 \x01(\x05H\x00R\bdomainId\x88\x01\x01\x12\x1c\n" +
-	"\tinterface\x18\x04 \x01(\tR\tinterface\x12.\n" +
-	"\x13min_interval_millis\x18\x05 \x01(\rR\x11minIntervalMillisB\f\n" +
-	"\n" +
-	"_domain_id\"=\n" +
-	"\tJointSlot\x12\x14\n" +
-	"\x05index\x18\x01 \x01(\rR\x05index\x12\x1a\n" +
-	"\bposition\x18\x02 \x01(\x01R\bposition\"\xb7\x01\n" +
-	"\x13JointPositionSample\x123\n" +
-	"\x16observed_at_unix_nanos\x18\x01 \x01(\x03R\x13observedAtUnixNanos\x12\x1d\n" +
-	"\n" +
-	"slot_count\x18\x02 \x01(\rR\tslotCount\x128\n" +
-	"\x05slots\x18\x03 \x03(\v2\".wendy.agent.services.v2.JointSlotR\x05slots\x12\x12\n" +
-	"\x04unit\x18\x04 \x01(\tR\x04unit\"\x16\n" +
+	"\x13SetStableIdResponse\"\x16\n" +
 	"\x14DescribeStoreRequest\"+\n" +
 	"\x15DescribeStoreResponse\x12\x12\n" +
-	"\x04root\x18\x01 \x01(\tR\x04root2\xe1\a\n" +
+	"\x04root\x18\x01 \x01(\tR\x04root2\xe3\x06\n" +
 	"\x11WendyRobotService\x12_\n" +
 	"\bLoadUnit\x12(.wendy.agent.services.v2.LoadUnitRequest\x1a).wendy.agent.services.v2.LoadUnitResponse\x12b\n" +
 	"\tPutRecord\x12).wendy.agent.services.v2.PutRecordRequest\x1a*.wendy.agent.services.v2.PutRecordResponse\x12h\n" +
@@ -1451,8 +1190,7 @@ const file_wendy_agent_services_v2_robot_service_proto_rawDesc = "" +
 	"PutSession\x12*.wendy.agent.services.v2.PutSessionRequest\x1a+.wendy.agent.services.v2.PutSessionResponse\x12k\n" +
 	"\fClearSession\x12,.wendy.agent.services.v2.ClearSessionRequest\x1a-.wendy.agent.services.v2.ClearSessionResponse\x12q\n" +
 	"\x0eSetProfileKind\x12..wendy.agent.services.v2.SetProfileKindRequest\x1a/.wendy.agent.services.v2.SetProfileKindResponse\x12h\n" +
-	"\vSetStableId\x12+.wendy.agent.services.v2.SetStableIdRequest\x1a,.wendy.agent.services.v2.SetStableIdResponse\x12|\n" +
-	"\x14StreamJointPositions\x124.wendy.agent.services.v2.StreamJointPositionsRequest\x1a,.wendy.agent.services.v2.JointPositionSample0\x01\x12n\n" +
+	"\vSetStableId\x12+.wendy.agent.services.v2.SetStableIdRequest\x1a,.wendy.agent.services.v2.SetStableIdResponse\x12n\n" +
 	"\rDescribeStore\x12-.wendy.agent.services.v2.DescribeStoreRequest\x1a..wendy.agent.services.v2.DescribeStoreResponseBAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
@@ -1467,70 +1205,64 @@ func file_wendy_agent_services_v2_robot_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_robot_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_robot_service_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
+var file_wendy_agent_services_v2_robot_service_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_wendy_agent_services_v2_robot_service_proto_goTypes = []any{
-	(*Quantity)(nil),                    // 0: wendy.agent.services.v2.Quantity
-	(*CalibrationRecord)(nil),           // 1: wendy.agent.services.v2.CalibrationRecord
-	(*CalibrationSession)(nil),          // 2: wendy.agent.services.v2.CalibrationSession
-	(*UnitRecord)(nil),                  // 3: wendy.agent.services.v2.UnitRecord
-	(*LoadUnitRequest)(nil),             // 4: wendy.agent.services.v2.LoadUnitRequest
-	(*LoadUnitResponse)(nil),            // 5: wendy.agent.services.v2.LoadUnitResponse
-	(*PutRecordRequest)(nil),            // 6: wendy.agent.services.v2.PutRecordRequest
-	(*PutRecordResponse)(nil),           // 7: wendy.agent.services.v2.PutRecordResponse
-	(*ClearRecordRequest)(nil),          // 8: wendy.agent.services.v2.ClearRecordRequest
-	(*ClearRecordResponse)(nil),         // 9: wendy.agent.services.v2.ClearRecordResponse
-	(*PutSessionRequest)(nil),           // 10: wendy.agent.services.v2.PutSessionRequest
-	(*PutSessionResponse)(nil),          // 11: wendy.agent.services.v2.PutSessionResponse
-	(*ClearSessionRequest)(nil),         // 12: wendy.agent.services.v2.ClearSessionRequest
-	(*ClearSessionResponse)(nil),        // 13: wendy.agent.services.v2.ClearSessionResponse
-	(*SetProfileKindRequest)(nil),       // 14: wendy.agent.services.v2.SetProfileKindRequest
-	(*SetProfileKindResponse)(nil),      // 15: wendy.agent.services.v2.SetProfileKindResponse
-	(*SetStableIdRequest)(nil),          // 16: wendy.agent.services.v2.SetStableIdRequest
-	(*SetStableIdResponse)(nil),         // 17: wendy.agent.services.v2.SetStableIdResponse
-	(*StreamJointPositionsRequest)(nil), // 18: wendy.agent.services.v2.StreamJointPositionsRequest
-	(*JointSlot)(nil),                   // 19: wendy.agent.services.v2.JointSlot
-	(*JointPositionSample)(nil),         // 20: wendy.agent.services.v2.JointPositionSample
-	(*DescribeStoreRequest)(nil),        // 21: wendy.agent.services.v2.DescribeStoreRequest
-	(*DescribeStoreResponse)(nil),       // 22: wendy.agent.services.v2.DescribeStoreResponse
-	nil,                                 // 23: wendy.agent.services.v2.CalibrationSession.StepsEntry
-	nil,                                 // 24: wendy.agent.services.v2.UnitRecord.CalibrationsEntry
-	nil,                                 // 25: wendy.agent.services.v2.UnitRecord.SessionsEntry
+	(*Quantity)(nil),               // 0: wendy.agent.services.v2.Quantity
+	(*CalibrationRecord)(nil),      // 1: wendy.agent.services.v2.CalibrationRecord
+	(*CalibrationSession)(nil),     // 2: wendy.agent.services.v2.CalibrationSession
+	(*UnitRecord)(nil),             // 3: wendy.agent.services.v2.UnitRecord
+	(*LoadUnitRequest)(nil),        // 4: wendy.agent.services.v2.LoadUnitRequest
+	(*LoadUnitResponse)(nil),       // 5: wendy.agent.services.v2.LoadUnitResponse
+	(*PutRecordRequest)(nil),       // 6: wendy.agent.services.v2.PutRecordRequest
+	(*PutRecordResponse)(nil),      // 7: wendy.agent.services.v2.PutRecordResponse
+	(*ClearRecordRequest)(nil),     // 8: wendy.agent.services.v2.ClearRecordRequest
+	(*ClearRecordResponse)(nil),    // 9: wendy.agent.services.v2.ClearRecordResponse
+	(*PutSessionRequest)(nil),      // 10: wendy.agent.services.v2.PutSessionRequest
+	(*PutSessionResponse)(nil),     // 11: wendy.agent.services.v2.PutSessionResponse
+	(*ClearSessionRequest)(nil),    // 12: wendy.agent.services.v2.ClearSessionRequest
+	(*ClearSessionResponse)(nil),   // 13: wendy.agent.services.v2.ClearSessionResponse
+	(*SetProfileKindRequest)(nil),  // 14: wendy.agent.services.v2.SetProfileKindRequest
+	(*SetProfileKindResponse)(nil), // 15: wendy.agent.services.v2.SetProfileKindResponse
+	(*SetStableIdRequest)(nil),     // 16: wendy.agent.services.v2.SetStableIdRequest
+	(*SetStableIdResponse)(nil),    // 17: wendy.agent.services.v2.SetStableIdResponse
+	(*DescribeStoreRequest)(nil),   // 18: wendy.agent.services.v2.DescribeStoreRequest
+	(*DescribeStoreResponse)(nil),  // 19: wendy.agent.services.v2.DescribeStoreResponse
+	nil,                            // 20: wendy.agent.services.v2.CalibrationSession.StepsEntry
+	nil,                            // 21: wendy.agent.services.v2.UnitRecord.CalibrationsEntry
+	nil,                            // 22: wendy.agent.services.v2.UnitRecord.SessionsEntry
 }
 var file_wendy_agent_services_v2_robot_service_proto_depIdxs = []int32{
 	0,  // 0: wendy.agent.services.v2.CalibrationRecord.residual:type_name -> wendy.agent.services.v2.Quantity
 	0,  // 1: wendy.agent.services.v2.CalibrationRecord.budget:type_name -> wendy.agent.services.v2.Quantity
-	23, // 2: wendy.agent.services.v2.CalibrationSession.steps:type_name -> wendy.agent.services.v2.CalibrationSession.StepsEntry
-	24, // 3: wendy.agent.services.v2.UnitRecord.calibrations:type_name -> wendy.agent.services.v2.UnitRecord.CalibrationsEntry
-	25, // 4: wendy.agent.services.v2.UnitRecord.sessions:type_name -> wendy.agent.services.v2.UnitRecord.SessionsEntry
+	20, // 2: wendy.agent.services.v2.CalibrationSession.steps:type_name -> wendy.agent.services.v2.CalibrationSession.StepsEntry
+	21, // 3: wendy.agent.services.v2.UnitRecord.calibrations:type_name -> wendy.agent.services.v2.UnitRecord.CalibrationsEntry
+	22, // 4: wendy.agent.services.v2.UnitRecord.sessions:type_name -> wendy.agent.services.v2.UnitRecord.SessionsEntry
 	3,  // 5: wendy.agent.services.v2.LoadUnitResponse.unit:type_name -> wendy.agent.services.v2.UnitRecord
 	1,  // 6: wendy.agent.services.v2.PutRecordRequest.record:type_name -> wendy.agent.services.v2.CalibrationRecord
 	2,  // 7: wendy.agent.services.v2.PutSessionRequest.session:type_name -> wendy.agent.services.v2.CalibrationSession
-	19, // 8: wendy.agent.services.v2.JointPositionSample.slots:type_name -> wendy.agent.services.v2.JointSlot
-	1,  // 9: wendy.agent.services.v2.UnitRecord.CalibrationsEntry.value:type_name -> wendy.agent.services.v2.CalibrationRecord
-	2,  // 10: wendy.agent.services.v2.UnitRecord.SessionsEntry.value:type_name -> wendy.agent.services.v2.CalibrationSession
-	4,  // 11: wendy.agent.services.v2.WendyRobotService.LoadUnit:input_type -> wendy.agent.services.v2.LoadUnitRequest
-	6,  // 12: wendy.agent.services.v2.WendyRobotService.PutRecord:input_type -> wendy.agent.services.v2.PutRecordRequest
-	8,  // 13: wendy.agent.services.v2.WendyRobotService.ClearRecord:input_type -> wendy.agent.services.v2.ClearRecordRequest
-	10, // 14: wendy.agent.services.v2.WendyRobotService.PutSession:input_type -> wendy.agent.services.v2.PutSessionRequest
-	12, // 15: wendy.agent.services.v2.WendyRobotService.ClearSession:input_type -> wendy.agent.services.v2.ClearSessionRequest
-	14, // 16: wendy.agent.services.v2.WendyRobotService.SetProfileKind:input_type -> wendy.agent.services.v2.SetProfileKindRequest
-	16, // 17: wendy.agent.services.v2.WendyRobotService.SetStableId:input_type -> wendy.agent.services.v2.SetStableIdRequest
-	18, // 18: wendy.agent.services.v2.WendyRobotService.StreamJointPositions:input_type -> wendy.agent.services.v2.StreamJointPositionsRequest
-	21, // 19: wendy.agent.services.v2.WendyRobotService.DescribeStore:input_type -> wendy.agent.services.v2.DescribeStoreRequest
-	5,  // 20: wendy.agent.services.v2.WendyRobotService.LoadUnit:output_type -> wendy.agent.services.v2.LoadUnitResponse
-	7,  // 21: wendy.agent.services.v2.WendyRobotService.PutRecord:output_type -> wendy.agent.services.v2.PutRecordResponse
-	9,  // 22: wendy.agent.services.v2.WendyRobotService.ClearRecord:output_type -> wendy.agent.services.v2.ClearRecordResponse
-	11, // 23: wendy.agent.services.v2.WendyRobotService.PutSession:output_type -> wendy.agent.services.v2.PutSessionResponse
-	13, // 24: wendy.agent.services.v2.WendyRobotService.ClearSession:output_type -> wendy.agent.services.v2.ClearSessionResponse
-	15, // 25: wendy.agent.services.v2.WendyRobotService.SetProfileKind:output_type -> wendy.agent.services.v2.SetProfileKindResponse
-	17, // 26: wendy.agent.services.v2.WendyRobotService.SetStableId:output_type -> wendy.agent.services.v2.SetStableIdResponse
-	20, // 27: wendy.agent.services.v2.WendyRobotService.StreamJointPositions:output_type -> wendy.agent.services.v2.JointPositionSample
-	22, // 28: wendy.agent.services.v2.WendyRobotService.DescribeStore:output_type -> wendy.agent.services.v2.DescribeStoreResponse
-	20, // [20:29] is the sub-list for method output_type
-	11, // [11:20] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	1,  // 8: wendy.agent.services.v2.UnitRecord.CalibrationsEntry.value:type_name -> wendy.agent.services.v2.CalibrationRecord
+	2,  // 9: wendy.agent.services.v2.UnitRecord.SessionsEntry.value:type_name -> wendy.agent.services.v2.CalibrationSession
+	4,  // 10: wendy.agent.services.v2.WendyRobotService.LoadUnit:input_type -> wendy.agent.services.v2.LoadUnitRequest
+	6,  // 11: wendy.agent.services.v2.WendyRobotService.PutRecord:input_type -> wendy.agent.services.v2.PutRecordRequest
+	8,  // 12: wendy.agent.services.v2.WendyRobotService.ClearRecord:input_type -> wendy.agent.services.v2.ClearRecordRequest
+	10, // 13: wendy.agent.services.v2.WendyRobotService.PutSession:input_type -> wendy.agent.services.v2.PutSessionRequest
+	12, // 14: wendy.agent.services.v2.WendyRobotService.ClearSession:input_type -> wendy.agent.services.v2.ClearSessionRequest
+	14, // 15: wendy.agent.services.v2.WendyRobotService.SetProfileKind:input_type -> wendy.agent.services.v2.SetProfileKindRequest
+	16, // 16: wendy.agent.services.v2.WendyRobotService.SetStableId:input_type -> wendy.agent.services.v2.SetStableIdRequest
+	18, // 17: wendy.agent.services.v2.WendyRobotService.DescribeStore:input_type -> wendy.agent.services.v2.DescribeStoreRequest
+	5,  // 18: wendy.agent.services.v2.WendyRobotService.LoadUnit:output_type -> wendy.agent.services.v2.LoadUnitResponse
+	7,  // 19: wendy.agent.services.v2.WendyRobotService.PutRecord:output_type -> wendy.agent.services.v2.PutRecordResponse
+	9,  // 20: wendy.agent.services.v2.WendyRobotService.ClearRecord:output_type -> wendy.agent.services.v2.ClearRecordResponse
+	11, // 21: wendy.agent.services.v2.WendyRobotService.PutSession:output_type -> wendy.agent.services.v2.PutSessionResponse
+	13, // 22: wendy.agent.services.v2.WendyRobotService.ClearSession:output_type -> wendy.agent.services.v2.ClearSessionResponse
+	15, // 23: wendy.agent.services.v2.WendyRobotService.SetProfileKind:output_type -> wendy.agent.services.v2.SetProfileKindResponse
+	17, // 24: wendy.agent.services.v2.WendyRobotService.SetStableId:output_type -> wendy.agent.services.v2.SetStableIdResponse
+	19, // 25: wendy.agent.services.v2.WendyRobotService.DescribeStore:output_type -> wendy.agent.services.v2.DescribeStoreResponse
+	18, // [18:26] is the sub-list for method output_type
+	10, // [10:18] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_robot_service_proto_init() }
@@ -1538,14 +1270,13 @@ func file_wendy_agent_services_v2_robot_service_proto_init() {
 	if File_wendy_agent_services_v2_robot_service_proto != nil {
 		return
 	}
-	file_wendy_agent_services_v2_robot_service_proto_msgTypes[18].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_robot_service_proto_rawDesc), len(file_wendy_agent_services_v2_robot_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   26,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

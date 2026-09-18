@@ -25,7 +25,7 @@ func startRobotServer(t *testing.T, root string) agentpbv2.WendyRobotServiceClie
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
 	srv := grpc.NewServer()
-	agentpbv2.RegisterWendyRobotServiceServer(srv, NewRobotService(zap.NewNop(), root, nil))
+	agentpbv2.RegisterWendyRobotServiceServer(srv, NewRobotService(zap.NewNop(), root))
 	go func() { _ = srv.Serve(lis) }()
 	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
@@ -172,7 +172,7 @@ func TestRobotServiceDescribesWhereTheStoreIs(t *testing.T) {
 	}
 
 	// An empty root means the device default, not an empty path.
-	svc := NewRobotService(zap.NewNop(), "", nil)
+	svc := NewRobotService(zap.NewNop(), "")
 	got, err := svc.DescribeStore(t.Context(), &agentpbv2.DescribeStoreRequest{})
 	if err != nil {
 		t.Fatalf("DescribeStore: %v", err)

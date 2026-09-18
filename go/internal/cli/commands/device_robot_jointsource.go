@@ -12,7 +12,6 @@ import (
 	"google.golang.org/grpc"
 	"gopkg.in/yaml.v3"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/robotjoints"
 	"github.com/wendylabsinc/wendy/go/internal/cli/robotwizard"
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotcal"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -29,11 +28,13 @@ const (
 	// driver speaks the ROS 2 convention.
 	backendROS2JointStates = "ros2-joint-states"
 	// backendUnitreeLowState reads a Unitree humanoid's whole body off
-	// unitree_hg/msg/LowState, through the agent. It is the vendor one, needed
-	// because a G1 publishes no sensor_msgs/JointState at all: its joints are a
-	// positionally indexed array with no names in it, on a type the agent's
-	// stock ROS 2 sidecar cannot deserialise.
-	backendUnitreeLowState = robotjoints.BackendUnitreeLowState
+	// unitree_hg/msg/LowState. It is the vendor one, needed because a G1
+	// publishes no sensor_msgs/JointState at all: its joints are a positionally
+	// indexed array with no names in it, on a type the agent's stock ROS 2
+	// sidecar cannot deserialise. The bytes come off the device through the
+	// generic raw topic stream and are decoded here, so the agent never has to
+	// learn a robot family.
+	backendUnitreeLowState = "unitree-lowstate"
 )
 
 func availableJointSourceBackends() []string {
