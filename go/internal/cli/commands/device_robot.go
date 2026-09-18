@@ -36,6 +36,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 		window    time.Duration
 		label     string
 		vendorKin string
+		skipAgent bool
 	)
 
 	cmd := &cobra.Command{
@@ -53,6 +54,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 				window:     window,
 				label:      label,
 				vendorKind: vendorKin,
+				skipAgent:  skipAgent,
 				out:        cmd.OutOrStdout(),
 			})
 		},
@@ -64,6 +66,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&window, "duration", 5*time.Second, "Sampling window for measured values")
 	cmd.Flags().StringVar(&label, "device", "", "Name to record the inspection against")
 	cmd.Flags().StringVar(&vendorKin, "kind", "", "Robot kind to record, such as unitree-g1")
+	cmd.Flags().BoolVar(&skipAgent, "no-agent", false, "Skip the agent and report only what the robot publishes")
 	return cmd
 }
 
@@ -74,6 +77,7 @@ type robotInspectOptions struct {
 	window     time.Duration
 	label      string
 	vendorKind string
+	skipAgent  bool
 	out        io.Writer
 }
 
@@ -89,6 +93,25 @@ type robotTopicSource interface {
 // prints the document. It never writes to the robot: the registry only admits passive
 // probes, so there is no path from here to an actuator.
 func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
+	// The agent answers over a cloud tunnel, so the host half of the report works
+	// wherever the device is reachable. Failing to reach it is not fatal: a robot may
+	// be inspected from its own LAN with no Wendy agent in the picture at all.
+	var host robotprobe.HostFactsSource
+	if !opts.skipAgent {
+		conn, err := connectToAgent(ctx)
+		if err != nil {
+			cliLogln("Continuing without the agent: %v", err)
+		} else {
+			defer conn.Close()
+			host = newAgentHostFacts(conn)
+			if opts.label == "" {
+				if facts, factsErr := host.HostFacts(ctx); factsErr == nil && facts != nil {
+					opts.label = facts.Hostname
+				}
+			}
+		}
+	}
+
 	participant, err := rtps.NewParticipant(rtps.Config{
 		DomainID:  opts.domain,
 		Interface: opts.iface,
@@ -111,7 +134,7 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 	}
 
 	reader := robotprobe.NewDDSReader(robotprobe.NewParticipantLease(participant, runCtx.Done()))
-	doc, err := probeRobot(runCtx, reader, opts)
+	doc, err := probeRobot(runCtx, reader, host, opts)
 	if err != nil {
 		return err
 	}
@@ -121,9 +144,31 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 // probeRobot registers a probe for every transport the source can actually serve, so a
 // robot that publishes no cameras simply has no camera rows rather than a wall of
 // failures.
-func probeRobot(ctx context.Context, source robotTopicSource, opts robotInspectOptions) (robotinspect.Document, error) {
+func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.HostFactsSource, opts robotInspectOptions) (robotinspect.Document, error) {
 	registry := robotinspect.NewRegistry()
+	env := robotinspect.NewEnv()
 	var want []string
+
+	// What the machine says about itself. This needs only the agent, so it works over
+	// a cloud tunnel and answers even on a robot with no ROS 2 graph at all.
+	if host != nil {
+		env.Offer(robotinspect.RequirementHostStats, host)
+		for _, probe := range []robotinspect.Probe{
+			robotprobe.Compute{}, robotprobe.Storage{}, robotprobe.Network{}, robotprobe.HostBattery{},
+		} {
+			if err := registry.Register(probe); err != nil {
+				return robotinspect.Document{}, err
+			}
+			want = append(want, probe.Provides()...)
+		}
+	}
+
+	if source == nil {
+		return robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
+			Device: opts.label, VendorKind: opts.vendorKind, Want: want,
+		}), nil
+	}
+	env.Offer(robotinspect.RequirementDDSDomain, source)
 
 	// What the cameras claim about themselves.
 	if topics := source.TopicsOfType(rosmsg.TypeCameraInfo); len(topics) > 0 {
@@ -146,7 +191,6 @@ func probeRobot(ctx context.Context, source robotTopicSource, opts robotInspectO
 		want = append(want, stream.Provides()...)
 	}
 
-	env := robotinspect.NewEnv().Offer(robotinspect.RequirementDDSDomain, source)
 	return robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
 		Device:     opts.label,
 		VendorKind: opts.vendorKind,
@@ -165,8 +209,8 @@ func writeRobotDocument(out io.Writer, doc robotinspect.Document, opts robotInsp
 	}
 
 	if len(doc.Properties) == 0 {
-		// Saying the graph was empty is the answer. Printing an empty report would
-		// read as "this robot has nothing", which is a different claim.
+		// Saying nothing was found is the answer. Printing an empty report would read
+		// as "this robot has nothing", which is a different claim.
 		_, err := fmt.Fprintf(out,
 			"No ROS 2 writers found on domain %d after %s.\nNothing was commanded.\n",
 			opts.domain, opts.settle)

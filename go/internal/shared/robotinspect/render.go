@@ -119,7 +119,7 @@ func renderProperty(b *strings.Builder, p Property) {
 		if conditions := o.conditionKey(); conditions != "" {
 			detail = fmt.Sprintf("%s, %s", detail, conditions)
 		}
-		fmt.Fprintf(b, "%-10s   %-9s %-26s (%s)\n", "", o.Kind, o.Quantity, detail)
+		fmt.Fprintf(b, "%-10s   %-9s %-26s (%s)\n", "", o.Kind, o.Display(), detail)
 	}
 
 	switch assessment.Verdict {

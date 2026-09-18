@@ -47,8 +47,10 @@ type wireProperty struct {
 }
 
 type wireObservation struct {
-	Kind       Kind              `json:"kind"`
-	Value      float64           `json:"value"`
+	Kind Kind `json:"kind"`
+	// Exactly one of Value or Text is present. A consumer switches on which.
+	Value      *float64          `json:"value,omitempty"`
+	Text       string            `json:"text,omitempty"`
 	Unit       string            `json:"unit,omitempty"`
 	Axis       string            `json:"axis,omitempty"`
 	Frame      string            `json:"frame,omitempty"`
@@ -138,12 +140,17 @@ func (d Document) wire(canonical bool) wireDocument {
 func (o Observation) wire(canonical bool) wireObservation {
 	out := wireObservation{
 		Kind:       o.Kind,
-		Value:      o.Quantity.value,
-		Unit:       o.Quantity.unit.symbol,
-		Axis:       o.Quantity.axis,
-		Frame:      o.Quantity.frame,
 		Source:     o.Source,
 		Conditions: o.Conditions,
+	}
+	if o.IsText() {
+		out.Text = o.Text
+	} else {
+		value := o.Quantity.value
+		out.Value = &value
+		out.Unit = o.Quantity.unit.symbol
+		out.Axis = o.Quantity.axis
+		out.Frame = o.Quantity.frame
 	}
 	if o.Sampling != nil {
 		out.Sampling = &wireSampling{

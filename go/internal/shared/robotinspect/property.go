@@ -98,6 +98,24 @@ func (p Property) Assess() Assessment {
 		return Assessment{Verdict: VerdictSingle, Detail: string(p.Observations[0].Kind) + " only, never checked against anything"}
 	}
 
+	// A property is either textual or numeric throughout. A mix means two sources
+	// disagree about what kind of fact this is, which is not a value disagreement.
+	texts, quantities := 0, 0
+	for _, o := range p.Observations {
+		if o.IsText() {
+			texts++
+		} else {
+			quantities++
+		}
+	}
+	if texts > 0 && quantities > 0 {
+		return Assessment{Verdict: VerdictIncomparable,
+			Detail: "not the same kind of fact: some sources report text and others a quantity"}
+	}
+	if texts > 0 {
+		return assessText(p.Observations)
+	}
+
 	groups := p.groupByComparability()
 	if len(groups) > 1 {
 		return Assessment{Verdict: VerdictIncomparable, Detail: describeGroups(groups)}
@@ -117,6 +135,19 @@ func (p Property) Assess() Assessment {
 		return Assessment{Verdict: VerdictAgree}
 	}
 	return Assessment{Verdict: VerdictDisagree, Detail: describeSpread(low, high)}
+}
+
+// assessText reconciles textual observations. There is no tolerance for a firmware
+// version or a board model: either every source says the same thing or they do not.
+func assessText(observations []Observation) Assessment {
+	first := observations[0]
+	for _, o := range observations[1:] {
+		if o.Text != first.Text {
+			return Assessment{Verdict: VerdictDisagree,
+				Detail: fmt.Sprintf("%s %q vs %s %q", first.Kind, first.Text, o.Kind, o.Text)}
+		}
+	}
+	return Assessment{Verdict: VerdictAgree}
 }
 
 // groupByComparability buckets observations that describe the same thing. The key

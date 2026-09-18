@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/robotprobe"
 	"github.com/wendylabsinc/wendy/go/internal/shared/rosmsg"
 )
 
@@ -46,7 +47,7 @@ func g1CameraSource() fakeTopicSource {
 }
 
 func TestProbeRobotReportsWhatTheCameraClaims(t *testing.T) {
-	doc, err := probeRobot(context.Background(), g1CameraSource(), robotInspectOptions{
+	doc, err := probeRobot(context.Background(), g1CameraSource(), nil, robotInspectOptions{
 		label: "unitree-g1-nx-2", vendorKind: "unitree-g1",
 	})
 	if err != nil {
@@ -76,7 +77,7 @@ func TestProbeRobotReportsWhatTheCameraClaims(t *testing.T) {
 
 // A robot with no cameras gets no camera rows, rather than a probe failure per topic.
 func TestProbeRobotRegistersNothingForAnEmptyGraph(t *testing.T) {
-	doc, err := probeRobot(context.Background(), fakeTopicSource{}, robotInspectOptions{label: "bare"})
+	doc, err := probeRobot(context.Background(), fakeTopicSource{}, nil, robotInspectOptions{label: "bare"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +94,7 @@ func TestWriteRobotDocumentRendersTheReportForAnOperator(t *testing.T) {
 	jsonOutput = false
 	defer func() { jsonOutput = restore }()
 
-	doc, err := probeRobot(context.Background(), g1CameraSource(), robotInspectOptions{label: "unitree-g1-nx-2"})
+	doc, err := probeRobot(context.Background(), g1CameraSource(), nil, robotInspectOptions{label: "unitree-g1-nx-2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +124,7 @@ func TestWriteRobotDocumentSaysWhenTheGraphWasEmpty(t *testing.T) {
 	jsonOutput = false
 	defer func() { jsonOutput = restore }()
 
-	doc, err := probeRobot(context.Background(), fakeTopicSource{}, robotInspectOptions{})
+	doc, err := probeRobot(context.Background(), fakeTopicSource{}, nil, robotInspectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +162,7 @@ func TestFullReportShowsTheDeclaredAgainstTheMeasured(t *testing.T) {
 		},
 	}
 
-	doc, err := probeRobot(context.Background(), source, robotInspectOptions{
+	doc, err := probeRobot(context.Background(), source, nil, robotInspectOptions{
 		label: "unitree-g1-nx-2", vendorKind: "unitree-g1", window: 300 * time.Millisecond,
 	})
 	if err != nil {
@@ -223,7 +224,7 @@ func TestWriteRobotDocumentEmitsValidJSON(t *testing.T) {
 	jsonOutput = true
 	defer func() { jsonOutput = restore }()
 
-	doc, err := probeRobot(context.Background(), g1CameraSource(), robotInspectOptions{label: "unitree-g1-nx-2"})
+	doc, err := probeRobot(context.Background(), g1CameraSource(), nil, robotInspectOptions{label: "unitree-g1-nx-2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,4 +288,71 @@ func testCameraInfoPayload(width, height uint32, fx, fy float64) []byte {
 		f64(v)
 	}
 	return append([]byte{0x00, 0x01, 0x00, 0x00}, buf...)
+}
+
+// A robot reachable through the cloud tunnel but with no visible ROS 2 graph still
+// produces a real report. This is the path that works when DDS multicast cannot reach
+// the machine running the command, which is most of the time.
+func TestProbeRobotReportsTheHostWithNoGraphAtAll(t *testing.T) {
+	doc, err := probeRobot(context.Background(), nil, &stubHostFacts{}, robotInspectOptions{
+		label: "unitree-g1-nx-2", vendorKind: "unitree-g1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Properties) == 0 {
+		t.Fatal("no properties from the agent alone; the host half must stand on its own")
+	}
+	if !doc.PassiveOnly {
+		t.Error("PassiveOnly = false")
+	}
+	for _, id := range []string{"compute.board", "compute.architecture", "storage.free"} {
+		found := false
+		for _, p := range doc.Properties {
+			if p.ID == id {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing %q from an agent-only report", id)
+		}
+	}
+	if _, err := doc.CanonicalJSON(); err != nil {
+		t.Errorf("document does not serialise: %v", err)
+	}
+}
+
+// Both halves together, which is what a reachable robot on its own LAN produces.
+func TestProbeRobotCombinesHostAndGraph(t *testing.T) {
+	doc, err := probeRobot(context.Background(), g1CameraSource(), &stubHostFacts{}, robotInspectOptions{
+		label: "unitree-g1-nx-2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawHost, sawCamera bool
+	for _, p := range doc.Properties {
+		if p.ID == "compute.board" {
+			sawHost = true
+		}
+		if p.ID == "camera.color.fov.vertical" {
+			sawCamera = true
+		}
+	}
+	if !sawHost || !sawCamera {
+		t.Errorf("host=%v camera=%v; a full pass needs both", sawHost, sawCamera)
+	}
+}
+
+type stubHostFacts struct{}
+
+func (stubHostFacts) HostFacts(context.Context) (*robotprobe.HostFacts, error) {
+	return &robotprobe.HostFacts{
+		Hostname: "unitree-g1-nx-2", DeviceType: "jetson-orin-nx",
+		CPUArchitecture: "arm64", CPUCount: 8, MemoryTotalBytes: 16000000000,
+		OS: "wendyos", OSVersion: "2026.08", AgentVersion: "dev",
+		HasGPU: true, GPUVendor: "nvidia", GPUArch: "sm_87", CUDAVersion: "13.2",
+		DiskTotalBytes: 120000000000, DiskUsedBytes: 40000000000, StorageMedium: "nvme",
+		Interfaces: []robotprobe.HostInterface{{Name: "eth0", Addresses: []string{"192.168.1.40"}}},
+	}, nil
 }
