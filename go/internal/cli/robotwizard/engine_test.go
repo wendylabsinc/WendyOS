@@ -211,6 +211,142 @@ func TestJointMapMismatchRefusesEvenWithinBudget(t *testing.T) {
 	}
 }
 
+// TestAJointMapMismatchSurvivesAResume is the crossing case, and the one that
+// matters most: rule 2 (resumable) must not disarm the joint-map check.
+//
+// The failure it guards against: an arm whose servo ids were swapped during a
+// bus repair. The operator sweeps the first joint, a different one moves, the
+// wizard catches it — and then they stop part-way through and come back. If the
+// refusal lived only in memory, the resumed run would qualify a robot whose
+// joint map is wrong, and a policy would drive the wrong servo at full
+// confidence. Each of the two behaviours is tested on its own elsewhere; only
+// their intersection shows this.
+func TestAJointMapMismatchSurvivesAResume(t *testing.T) {
+	ctx := context.Background()
+
+	// Run one: asked for a, b moves instead — then the operator stops at c.
+	first := newHarness(t, []step{
+		{sweeps: "b", min: -900, max: 900, samples: 8, action: StepDone},
+		{sweeps: "b", min: -600, max: 600, samples: 8, action: StepDone},
+		{action: StepAbort},
+	})
+	if _, err := Run(ctx, first.deps, "joint-range"); !errors.Is(err, ErrAborted) {
+		t.Fatalf("err = %v, want ErrAborted", err)
+	}
+
+	// Run two sweeps only the joint that is left, correctly.
+	second := newHarness(t, []step{
+		{sweeps: "c", min: -200, max: 200, samples: 8, action: StepDone},
+	})
+	second.deps.Store = first.store
+	rec, err := Run(ctx, second.deps, "joint-range")
+	if err == nil {
+		t.Fatal("the resumed run qualified a robot whose joint map does not match the profile")
+	}
+	if !strings.Contains(err.Error(), "joint map") {
+		t.Fatalf("error = %v, want it to name the joint map", err)
+	}
+	if rec.Qualified {
+		t.Fatal("a mismatch found before an interruption must still refuse after it")
+	}
+	if rec.Residual != nil {
+		t.Fatalf("residual = %v; a refusal must not leave a number the gate could pass", rec.Residual)
+	}
+	var payload struct {
+		JointMap []struct {
+			Asked string `json:"asked"`
+			Moved string `json:"moved"`
+		} `json:"joint_map_mismatches"`
+	}
+	if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.JointMap) != 1 || payload.JointMap[0].Asked != "a" || payload.JointMap[0].Moved != "b" {
+		t.Fatalf("joint map report = %+v, want the mismatch from before the interruption", payload.JointMap)
+	}
+}
+
+// TestAnUnderSampledJointCanBeSweptAgain: a step that collected too few
+// readings measured nothing, so it must not be checkpointed as answered. If it
+// were, every rerun would skip past the joint that failed and the procedure
+// would be pinned at NOT_MEASURED, with `calibrate clear` — which discards
+// every other joint's work — the only way out.
+func TestAnUnderSampledJointCanBeSweptAgain(t *testing.T) {
+	ctx := context.Background()
+	first := newHarness(t, []step{
+		{sweeps: "a", min: -600, max: 600, samples: 8, action: StepDone},
+		// One reading arrives before the operator answers: nothing measured.
+		{sweeps: "b", min: -600, max: 600, samples: 1, action: StepDone},
+		{action: StepAbort},
+	})
+	if _, err := Run(ctx, first.deps, "joint-range"); !errors.Is(err, ErrAborted) {
+		t.Fatalf("err = %v, want ErrAborted", err)
+	}
+	stored, err := first.store.Load(ctx, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := stored.Sessions["joint-range"]
+	if _, recorded := session.Steps["b"]; recorded {
+		t.Fatal("an under-sampled joint was checkpointed as answered, so it can never be re-swept")
+	}
+	if session.WasSkipped("b") {
+		t.Fatal("an under-sampled joint is not the same as one the operator skipped")
+	}
+	if _, recorded := session.Steps["a"]; !recorded {
+		t.Fatal("the joint that was measured should still be checkpointed")
+	}
+
+	// The rerun asks for b again, and for c, and then qualifies.
+	second := newHarness(t, []step{
+		{sweeps: "b", min: -600, max: 600, samples: 8, action: StepDone},
+		{sweeps: "c", min: -200, max: 200, samples: 8, action: StepDone},
+	})
+	second.deps.Store = first.store
+	rec, err := Run(ctx, second.deps, "joint-range")
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if second.prompt.at != 2 {
+		t.Fatalf("the rerun asked for %d steps, want 2 — the under-sampled joint and the one never reached", second.prompt.at)
+	}
+	if !rec.Qualified {
+		t.Fatalf("the re-swept joint should qualify the procedure; verdict %q", rec.Verdict())
+	}
+}
+
+// TestJointMapMarginLetsALimpRobotPass is the judgement call made explicit:
+// moving one joint by hand on a robot that hangs under gravity drags others
+// through joint space, so a profile can say how much of that is expected.
+func TestJointMapMarginLetsALimpRobotPass(t *testing.T) {
+	// The operator sweeps the joint they were asked for, and a limp neighbour
+	// flops slightly further as they do.
+	dragged := func() []step {
+		return []step{
+			{sweeps: "a", min: -600, max: 600, also: "b", alsoMin: -680, alsoMax: 680, samples: 8, action: StepDone},
+			{sweeps: "b", min: -600, max: 600, samples: 8, action: StepDone},
+			{sweeps: "c", min: -200, max: 200, samples: 8, action: StepDone},
+		}
+	}
+
+	// Strict by default: 1360 beats 1200, so this reads as a mismatch.
+	strict := newHarness(t, dragged())
+	if _, err := Run(context.Background(), strict.deps, "joint-range"); err == nil {
+		t.Fatal("with no margin, a neighbour moving furthest is a mismatch")
+	}
+
+	// A profile whose robot hangs says how much of that to expect.
+	lenient := newHarness(t, dragged())
+	lenient.deps.Profile.RequiresCalibration[0].Params["joint_map_margin"] = "300"
+	rec, err := Run(context.Background(), lenient.deps, "joint-range")
+	if err != nil {
+		t.Fatalf("a margin the profile declared should absorb this: %v", err)
+	}
+	if !rec.Qualified {
+		t.Fatalf("verdict = %q, want the sweep to qualify", rec.Verdict())
+	}
+}
+
 // TestAnInterruptedSweepResumes is rule 2. Two people and a gantry is not a
 // thing to ask for twice.
 func TestAnInterruptedSweepResumes(t *testing.T) {

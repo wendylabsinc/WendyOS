@@ -107,6 +107,16 @@ func (s Span) Travel() float64 { return s.Max - s.Min }
 type JointSourceSpec struct {
 	Backend string            `yaml:"backend" json:"backend"`
 	Params  map[string]string `yaml:"params,omitempty" json:"params,omitempty"`
+	// Note is what this robot's author has to say about the backend — usually
+	// why it is the one this machine needs, and what a build that cannot open
+	// it is missing. The platform prints it verbatim when it has to refuse and
+	// never interprets a word of it.
+	//
+	// It is here rather than in a case arm in the CLI so that explaining a
+	// vendor transport does not require naming that vendor in platform code. A
+	// switch on backend names is one refactor away from a switch that changes
+	// behaviour.
+	Note string `yaml:"note,omitempty" json:"note,omitempty"`
 }
 
 // Sensor is a logical role — "there is a head RGB-D camera" — not a device. The
@@ -160,7 +170,21 @@ type Procedure struct {
 // reservedProcedureIDs are the words a procedure id may not be, because
 // `calibrate <id>` shares its argument position with these subcommands and a
 // procedure called "status" would be unreachable.
-var reservedProcedureIDs = map[string]bool{"status": true, "clear": true}
+//
+// The CLI has a test asserting every subcommand it registers under `calibrate`
+// appears here, so adding one there and forgetting this cannot silently make a
+// profile id unreachable.
+var reservedProcedureIDs = map[string]bool{"status": true, "clear": true, "profiles": true}
+
+// ReservedProcedureIDs lists the ids a profile may not use, sorted.
+func ReservedProcedureIDs() []string {
+	out := make([]string, 0, len(reservedProcedureIDs))
+	for id := range reservedProcedureIDs {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
 
 // Validate refuses a profile the platform cannot act on, naming what is wrong.
 // Everything it checks is something the platform later relies on; anything it

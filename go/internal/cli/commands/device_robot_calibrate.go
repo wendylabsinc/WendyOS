@@ -61,7 +61,8 @@ func newDeviceRobotCalibrateCmd() *cobra.Command {
 	}
 
 	cmd.PersistentFlags().StringVar(&opts.profileKind, "profile", "",
-		"Robot profile to run against, such as unitree-g1 (default: what this unit was last calibrated as)")
+		"Robot profile to run against; `calibrate profiles` lists them "+
+			"(default: what this unit was last calibrated as)")
 	cmd.PersistentFlags().StringVar(&opts.unit, "unit", defaultRobotUnit,
 		"Which robot on this device, when it carries more than one (e.g. leader, follower)")
 	cmd.PersistentFlags().StringVar(&opts.stableID, "stable-id", "",

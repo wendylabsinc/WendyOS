@@ -28,10 +28,10 @@ type jointRangeSweep struct {
 	joints []string
 	// results are the per-joint outcomes, rebuilt from the session on resume so
 	// an interrupted sweep is indistinguishable from an uninterrupted one.
-	results map[string]jointResult
-	// mismatches are joints where a different joint moved than the one asked
-	// for.
-	mismatches  []jointMapMismatch
+	// Every conclusion the solve draws — including the joint-map refusal — is
+	// derived from these rather than accumulated beside them, so there is
+	// nothing a resume can fail to restore.
+	results     map[string]jointResult
 	orderNote   string
 	sourceOrder []string
 	explain     string
@@ -58,6 +58,19 @@ type jointRangeParams struct {
 	// SampleInterval is how often the source is polled while the operator moves
 	// a joint.
 	SampleInterval time.Duration
+	// JointMapMargin is how much further another joint has to travel than the
+	// one being swept before that counts as a joint-map mismatch, in the
+	// profile's joint unit. Zero — the default — is the strict reading: the
+	// joint asked for must be the one that moved most.
+	//
+	// It exists because moving one joint by hand on a limp robot does not move
+	// only that joint. On a humanoid arm hanging under gravity, rotating the
+	// shoulder lets the elbow and wrist flop, and they can swing through more
+	// joint space than the shoulder itself — which would make a strict check
+	// refuse constantly on exactly the robot the procedure was designed for. A
+	// profile whose robot behaves that way raises the margin; one whose joints
+	// hold their pose leaves it at zero and keeps the strict check.
+	JointMapMargin float64
 }
 
 const (
@@ -76,6 +89,8 @@ func parseJointRangeParams(in map[string]string) (jointRangeParams, error) {
 			p.MinTravelPerJoint, err = parseJointFloats(raw)
 		case "min_samples":
 			p.MinSamples, err = strconv.Atoi(raw)
+		case "joint_map_margin":
+			p.JointMapMargin, err = strconv.ParseFloat(raw, 64)
 		case "sample_interval_ms":
 			var ms int
 			if ms, err = strconv.Atoi(raw); err == nil {
@@ -83,8 +98,9 @@ func parseJointRangeParams(in map[string]string) (jointRangeParams, error) {
 			}
 		default:
 			return p, fmt.Errorf("unknown parameter %q for method %s: it takes min_travel, "+
-				"min_travel_per_joint, min_samples and sample_interval_ms. A profile parameterises a "+
-				"method; it does not describe one", key, robotcal.MethodJointRangeSweep)
+				"min_travel_per_joint, min_samples, joint_map_margin and sample_interval_ms. "+
+				"A profile parameterises a method; it does not describe one",
+				key, robotcal.MethodJointRangeSweep)
 		}
 		if err != nil {
 			return p, fmt.Errorf("parameter %q for method %s: %w", key, robotcal.MethodJointRangeSweep, err)
@@ -95,6 +111,10 @@ func parseJointRangeParams(in map[string]string) (jointRangeParams, error) {
 	}
 	if p.SampleInterval <= 0 {
 		p.SampleInterval = defaultSampleInterval
+	}
+	if p.JointMapMargin < 0 {
+		return p, fmt.Errorf("parameter %q for method %s: a negative margin would make the check "+
+			"refuse joints that moved correctly", "joint_map_margin", robotcal.MethodJointRangeSweep)
 	}
 	return p, nil
 }
@@ -139,6 +159,16 @@ type jointResult struct {
 	// against a vendor datasheet and one against a swept-far-enough floor are
 	// different claims.
 	RequiredFrom string `json:"required_from,omitempty"`
+	// Mismatch is set when a joint other than this one moved furthest during
+	// this joint's step.
+	//
+	// It lives on the result rather than in a field of the sweep because the
+	// result is what the session persists. A mismatch held only in memory is a
+	// mismatch that disappears the moment the operator interrupts the
+	// procedure, and the resumed run then qualifies a robot whose joint map is
+	// wrong — which is the failure this check exists to catch, re-introduced by
+	// the feature that makes the check bearable to run.
+	Mismatch *jointMapMismatch `json:"joint_map_mismatch,omitempty"`
 }
 
 type jointMapMismatch struct {
@@ -353,13 +383,22 @@ func (m *jointRangeSweep) Run(ctx context.Context, env *Env) (Outcome, error) {
 			return Outcome{}, err
 		}
 		m.results[joint] = result
-		encoded, err := json.Marshal(result)
-		if err != nil {
-			return Outcome{}, err
-		}
-		env.Session.Record(joint, encoded)
-		if err := env.Checkpoint(ctx); err != nil {
-			return Outcome{}, err
+		// Only a measured joint is checkpointed as answered. A step that
+		// collected too few readings measured nothing, and recording it would
+		// make Session.Done true for it forever: the procedure would be pinned
+		// at NOT_MEASURED and every rerun would skip straight past the joint
+		// that failed, leaving `calibrate clear` — which discards every other
+		// joint's work — as the only way out. One dropped sampling window on a
+		// flaky bus should cost that joint, not the whole sweep.
+		if result.Measured {
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				return Outcome{}, err
+			}
+			env.Session.Record(joint, encoded)
+			if err := env.Checkpoint(ctx); err != nil {
+				return Outcome{}, err
+			}
 		}
 		m.reportOne(env, result)
 	}
@@ -450,12 +489,15 @@ func (m *jointRangeSweep) solveOne(env *Env, joint string, idx int, window *Samp
 
 	// The joint-map check, free from the same sweep: the operator was asked to
 	// move exactly one joint, so that joint should be the one that moved most.
-	if moved, movedTravel := window.MostMoved(); moved != "" && moved != joint && movedTravel > travel {
-		m.mismatches = append(m.mismatches, jointMapMismatch{
+	// The margin is what a profile uses when moving one joint by hand reliably
+	// drags others through joint space — see jointRangeParams.JointMapMargin.
+	if moved, movedTravel := window.MostMoved(); moved != "" && moved != joint &&
+		movedTravel > travel+m.params.JointMapMargin {
+		result.Mismatch = &jointMapMismatch{
 			Asked: joint, AskedIndex: idx,
 			Moved: moved, MovedIndex: env.Profile.JointIndex(moved),
 			AskedTravel: travel, MovedTravel: movedTravel,
-		})
+		}
 	}
 	return result, nil
 }
@@ -491,12 +533,18 @@ func (m *jointRangeSweep) solve(env *Env) (Outcome, error) {
 	var worstJoint string
 	measured := 0
 	var unmeasured []string
+	var mismatches []jointMapMismatch
 	for _, joint := range m.joints {
 		r, ok := m.results[joint]
 		if !ok {
 			r = jointResult{Name: joint, Index: env.Profile.JointIndex(joint), SkipReason: "never reached"}
 		}
 		payload.Joints = append(payload.Joints, r)
+		// Read back off the result, so a mismatch found before an interruption
+		// still refuses the resumed run.
+		if r.Mismatch != nil {
+			mismatches = append(mismatches, *r.Mismatch)
+		}
 		if !r.Measured || r.Shortfall == nil {
 			unmeasured = append(unmeasured, joint)
 			continue
@@ -507,13 +555,13 @@ func (m *jointRangeSweep) solve(env *Env) (Outcome, error) {
 			worst, worstJoint = &v, joint
 		}
 	}
-	payload.JointMap = m.mismatches
+	payload.JointMap = mismatches
 	payload.Unmeasured = unmeasured
 
 	var outcome Outcome
-	if len(m.mismatches) > 0 {
-		names := make([]string, 0, len(m.mismatches))
-		for _, mm := range m.mismatches {
+	if len(mismatches) > 0 {
+		names := make([]string, 0, len(mismatches))
+		for _, mm := range mismatches {
 			names = append(names, fmt.Sprintf("asked for %s (index %d) and %s (index %d) moved instead",
 				mm.Asked, mm.AskedIndex, mm.Moved, mm.MovedIndex))
 		}

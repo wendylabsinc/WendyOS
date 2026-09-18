@@ -124,6 +124,26 @@ requires_calibration:
 			errSubstr: "reserved calibration id",
 		},
 		{
+			name: "and so would the other subcommands",
+			yaml: base + `
+requires_calibration:
+  - id: profiles
+    method: joint-range-sweep
+    budget: {value: 0.1, unit: rad}
+`,
+			errSubstr: "reserved calibration id",
+		},
+		{
+			name: "clear too",
+			yaml: base + `
+requires_calibration:
+  - id: clear
+    method: joint-range-sweep
+    budget: {value: 0.1, unit: rad}
+`,
+			errSubstr: "reserved calibration id",
+		},
+		{
 			name: "a method outside the fixed set",
 			yaml: base + `
 requires_calibration:

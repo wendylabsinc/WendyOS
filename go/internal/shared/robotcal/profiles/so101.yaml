@@ -30,9 +30,8 @@ joints:
   # platform never converts, it only requires that a budget is quoted in the
   # same unit.
   unit: tick
-  # `feetech-serial` is not implemented in this build. The reference procedure
-  # (Examples/SO101calibration) reads the bus directly with the Feetech SDK; a
-  # backend here would wrap the same bus behind a device binding.
+  # `feetech-serial` is not implemented in this build; `note` is what the wizard
+  # prints when it refuses.
   source:
     backend: feetech-serial
     params:
@@ -40,6 +39,10 @@ joints:
       # /dev/ttyACM1 swap between boots exactly as /dev/videoN does.
       stable_id: ""
       baud: "1000000"
+    note: >-
+      Reading a Feetech servo bus needs a device-side backend bound to the bus by
+      stable id, which is not in this change. Examples/SO101calibration reads the
+      same bus from inside an app today, with the Feetech SDK.
   order:
     - shoulder_pan
     - shoulder_lift

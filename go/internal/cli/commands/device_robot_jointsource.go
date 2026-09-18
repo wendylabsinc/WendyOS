@@ -32,35 +32,24 @@ const (
 func availableJointSourceBackends() []string { return []string{backendROS2JointStates} }
 
 // openJointSource resolves the backend a profile selected, over the agent
-// connection the caller already dialled. Backends that are named by a shipped
-// profile but not implemented here refuse by name and say what is missing —
-// they never silently degrade to another source.
+// connection the caller already dialled.
+//
+// One case arm per backend this build can actually open, and a single refusal
+// for everything else. A backend a profile names but this build cannot open is
+// refused by name, carrying whatever the profile had to say about it — not
+// silently degraded to another source, and not given a case arm of its own. A
+// switch on vendor names is one refactor away from a switch that changes
+// behaviour, and then the platform knows which robot it is talking to.
 func openJointSource(conn *grpc.ClientConn) robotwizard.JointSourceOpener {
 	return func(ctx context.Context, spec robotcal.JointSourceSpec) (robotwizard.JointSource, error) {
 		switch spec.Backend {
 		case backendROS2JointStates:
 			return newROS2JointSource(ctx, conn, spec.Params)
-		case "unitree-lowstate":
-			return nil, &robotwizard.UnsupportedBackendError{
-				Backend:   spec.Backend,
-				Available: availableJointSourceBackends(),
-				Detail: "the robot publishes its joints in a vendor message (unitree_hg/msg/LowState) " +
-					"as a positionally indexed array with no joint names in it, and the agent's ROS 2 " +
-					"sidecar cannot deserialise that type without the vendor's interface package. " +
-					"Reading it needs a vendor backend, which this change does not add",
-			}
-		case "feetech-serial":
-			return nil, &robotwizard.UnsupportedBackendError{
-				Backend:   spec.Backend,
-				Available: availableJointSourceBackends(),
-				Detail: "reading a Feetech servo bus needs a device-side backend bound to the bus by " +
-					"stable id; this change does not add one. Examples/SO101calibration reads the same " +
-					"bus from inside an app today",
-			}
 		default:
 			return nil, &robotwizard.UnsupportedBackendError{
 				Backend:   spec.Backend,
 				Available: availableJointSourceBackends(),
+				Detail:    spec.Note,
 			}
 		}
 	}

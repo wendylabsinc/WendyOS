@@ -46,6 +46,24 @@ func TestRobotCalibrateCommandTree(t *testing.T) {
 		})
 	}
 
+	// Every subcommand under `calibrate` shares its argument position with a
+	// procedure id, so a profile declaring a calibration by that name would be
+	// unreachable. Asserting the two lists agree is what keeps adding a
+	// subcommand from silently creating one.
+	reserved := map[string]bool{}
+	for _, id := range robotcal.ReservedProcedureIDs() {
+		reserved[id] = true
+	}
+	for _, sub := range calibrate.Commands() {
+		if sub.Name() == "help" || sub.Name() == "completion" {
+			continue
+		}
+		if !reserved[sub.Name()] {
+			t.Errorf("`calibrate %s` is registered but %q is not a reserved procedure id: "+
+				"a profile could declare a calibration by that name and it would be unreachable", sub.Name(), sub.Name())
+		}
+	}
+
 	for _, flag := range []string{"profile", "unit", "stable-id"} {
 		if calibrate.PersistentFlags().Lookup(flag) == nil {
 			t.Errorf("--%s is missing", flag)
@@ -119,28 +137,58 @@ func TestCalibrationStoreRefusesRatherThanWritingToTheLaptop(t *testing.T) {
 
 // TestJointSourceBackendsRefuseByName checks that a profile selecting a backend
 // this build cannot open is told what is missing, rather than silently falling
-// back to another source.
+// back to another source — and that the explanation comes from the profile
+// rather than from a case arm named after a vendor.
 func TestJointSourceBackendsRefuseByName(t *testing.T) {
 	open := openJointSource(nil)
-	tests := []struct {
-		backend   string
-		errSubstr string
-	}{
-		{backend: "unitree-lowstate", errSubstr: "vendor backend"},
-		{backend: "feetech-serial", errSubstr: "stable id"},
-		{backend: "something-invented", errSubstr: "ros2-joint-states"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.backend, func(t *testing.T) {
-			_, err := open(t.Context(), robotcal.JointSourceSpec{Backend: tt.backend})
+
+	t.Run("an unknown backend lists what this build can open", func(t *testing.T) {
+		_, err := open(t.Context(), robotcal.JointSourceSpec{Backend: "something-invented"})
+		if err == nil {
+			t.Fatal("want a refusal")
+		}
+		for _, want := range []string{"something-invented", backendROS2JointStates} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want it to mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("the profile's own explanation is quoted verbatim", func(t *testing.T) {
+		const note = "this bus needs a device-side backend bound by stable id"
+		_, err := open(t.Context(), robotcal.JointSourceSpec{Backend: "some-vendor-bus", Note: note})
+		if err == nil {
+			t.Fatal("want a refusal")
+		}
+		if !strings.Contains(err.Error(), note) {
+			t.Fatalf("error = %v, want it to carry the profile's note", err)
+		}
+	})
+
+	// The shipped profiles must each either open or refuse with something
+	// useful to say; a profile naming an unopenable backend and explaining
+	// nothing is the case this guards against.
+	for _, kind := range robotcal.ProfileKinds() {
+		t.Run(kind, func(t *testing.T) {
+			p, err := robotcal.LoadProfile(kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.Joints.Source.Backend == backendROS2JointStates {
+				t.Skip("this build can open it")
+			}
+			if p.Joints.Source.Note == "" {
+				t.Fatalf("profile %q selects backend %q, which this build cannot open, and says nothing "+
+					"about why — the explanation belongs in the profile, not in a case arm in the CLI",
+					kind, p.Joints.Source.Backend)
+			}
+			_, err = open(t.Context(), p.Joints.Source)
 			if err == nil {
-				t.Fatal("want a refusal")
+				t.Fatalf("expected a refusal for backend %q", p.Joints.Source.Backend)
 			}
-			if !strings.Contains(err.Error(), tt.backend) {
-				t.Errorf("the refusal must name the backend, got: %v", err)
-			}
-			if !strings.Contains(err.Error(), tt.errSubstr) {
-				t.Errorf("error = %v, want it to mention %q", err, tt.errSubstr)
+			if !strings.Contains(err.Error(), p.Joints.Source.Backend) ||
+				!strings.Contains(err.Error(), strings.SplitN(p.Joints.Source.Note, " ", 4)[0]) {
+				t.Fatalf("refusal = %v, want it to name the backend and quote the profile", err)
 			}
 		})
 	}

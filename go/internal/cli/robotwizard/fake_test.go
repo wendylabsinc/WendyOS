@@ -21,9 +21,11 @@ type fakeSource struct {
 	rest map[string]float64
 	// order is what the source reports its joint order as.
 	order []string
-	// moving is the joint that responds to the sweep, and span is how far.
-	moving string
-	span   robotcal.Span
+	// moving are the joints that respond to this step's sweep. More than one,
+	// because a limp robot does not move only the joint you push: an arm
+	// hanging under gravity swings its distal joints too, which is what the
+	// joint-map margin exists for.
+	moving []movedJoint
 	high   bool
 	closed bool
 	tick   chan struct{}
@@ -38,12 +40,17 @@ func newFakeSource(order []string) *fakeSource {
 	return &fakeSource{rest: rest, order: order, tick: make(chan struct{}, 4096)}
 }
 
-// sweep tells the fake which joint the next step will actually move, and by how
-// much.
-func (f *fakeSource) sweep(joint string, min, max float64) {
+// movedJoint is one joint that moves during a step, and how far.
+type movedJoint struct {
+	name string
+	span robotcal.Span
+}
+
+// sweep tells the fake which joints the next step will actually move.
+func (f *fakeSource) sweep(moved ...movedJoint) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.moving, f.span, f.high = joint, robotcal.Span{Min: min, Max: max}, false
+	f.moving, f.high = moved, false
 }
 
 func (f *fakeSource) Read(ctx context.Context) (JointReading, error) {
@@ -56,14 +63,16 @@ func (f *fakeSource) Read(ctx context.Context) (JointReading, error) {
 	for j, v := range f.rest {
 		positions[j] = v
 	}
-	if f.moving != "" {
-		// Alternating between the extremes gives a span whose first and last
-		// readings differ, which is what DirectionSign reads.
+	// Alternating between the extremes gives a span whose first and last
+	// readings differ, which is what DirectionSign reads.
+	for _, m := range f.moving {
 		if f.high {
-			positions[f.moving] = f.span.Max
+			positions[m.name] = m.span.Max
 		} else {
-			positions[f.moving] = f.span.Min
+			positions[m.name] = m.span.Min
 		}
+	}
+	if len(f.moving) > 0 {
 		f.high = !f.high
 	}
 	select {
@@ -101,7 +110,11 @@ type step struct {
 	// how far. An empty name means nothing moves.
 	sweeps   string
 	min, max float64
-	action   StepAction
+	// also is a second joint that moves during the same step — a limp joint
+	// dragged along by the one being swept.
+	also             string
+	alsoMin, alsoMax float64
+	action           StepAction
 	// samples is how many readings to let through before answering.
 	samples int
 }
@@ -138,17 +151,20 @@ func (p *fakePrompter) Step(string) (StepAction, error) {
 	}
 	s := p.steps[p.at]
 	p.at++
+	var moved []movedJoint
 	if s.sweeps != "" {
-		p.source.sweep(s.sweeps, s.min, s.max)
-	} else {
-		p.source.sweep("", 0, 0)
+		moved = append(moved, movedJoint{s.sweeps, robotcal.Span{Min: s.min, Max: s.max}})
 	}
+	if s.also != "" {
+		moved = append(moved, movedJoint{s.also, robotcal.Span{Min: s.alsoMin, Max: s.alsoMax}})
+	}
+	p.source.sweep(moved...)
 	if s.samples > 0 {
 		p.source.waitFor(s.samples)
 	}
 	// Stop moving before answering, so the sampling that runs on into the next
 	// step's window does not carry this joint's travel with it.
-	p.source.sweep("", 0, 0)
+	p.source.sweep()
 	return s.action, nil
 }
 
