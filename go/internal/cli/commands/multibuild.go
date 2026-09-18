@@ -494,6 +494,13 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		return buildErr
 	}
 
+	// Explain out-of-space and storage-degraded per-service failures (and stop
+	// them looking like ordinary build errors) before they're joined into the
+	// group error below (WDY-3127).
+	for name, err := range failed {
+		failed[name] = describeDeployStorageFailure(err, versionResp)
+	}
+
 	recordServiceDeployFingerprints(appCfg.AppID, appCfg.Version, deviceKey, services, skip, failed, hashes, preparedContent)
 
 	// Default (all-or-nothing): any build/push failure aborts the whole group so

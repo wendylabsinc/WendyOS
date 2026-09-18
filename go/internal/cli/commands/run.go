@@ -2300,6 +2300,12 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			// --chunking=force opts out of the registry-push fallback so the
 			// failure is surfaced instead of silently masked by a slower path.
 			return fmt.Errorf("chunk-diff deploy failed and --chunking=force disables the registry-push fallback: %w", err)
+		} else if isDeviceOutOfSpace(err) || isContainerStorageDegradedError(err) {
+			// The device is out of space or its container storage is degraded
+			// (WDY-3127). The registry-push fallback below would just retry the
+			// same failure against the same full/degraded disk — surface the
+			// explanation and remedy instead.
+			return describeDeployStorageFailure(err, versionResp)
 		} else if isImageBuildFailure(err) {
 			// The image build itself failed (e.g. a Dockerfile/build-command
 			// error). The registry-push fallback rebuilds the same image from the
@@ -2359,6 +2365,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		if err := tryPushExistingOCILayout(ctx, conn, regPort, ociHint, repo); err == nil {
 			cliSuccess("Reused already-built image for the registry push (skipped a redundant rebuild)")
 			pushed = true
+		} else if isDeviceOutOfSpace(err) || isContainerStorageDegradedError(err) {
+			// Rebuilding and pushing again would just fail identically against
+			// the same full/degraded disk — surface the explanation instead.
+			return describeDeployStorageFailure(err, versionResp)
 		} else if opts.debug {
 			cliLogln("Reusing the already-built image failed (%v); rebuilding instead.", err)
 		}
@@ -2376,7 +2386,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 				// the "building and pushing image" prefix adds nothing to it.
 				return err
 			}
-			return fmt.Errorf("building and pushing image: %w", err)
+			return describeDeployStorageFailure(fmt.Errorf("building and pushing image: %w", err), versionResp)
 		}
 	}
 
@@ -2564,7 +2574,8 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	if opts.deploy {
 		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
 		if err != nil {
-			return fmt.Errorf("creating container: %w", err)
+			versionResp, _ := conn.CachedAgentVersion()
+			return describeDeployStorageFailure(fmt.Errorf("creating container: %w", err), versionResp)
 		}
 		cliLogln("Container %s created (not started).", containerDisplayName(appCfg))
 		return nil
@@ -2572,7 +2583,8 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 
 	// Create the container with progress streaming.
 	if err := createContainerWithProgress(ctx, conn.ContainerService, createReq); err != nil {
-		return err
+		versionResp, _ := conn.CachedAgentVersion()
+		return describeDeployStorageFailure(err, versionResp)
 	}
 	cliLogln("Container %s created.", containerDisplayName(appCfg))
 
