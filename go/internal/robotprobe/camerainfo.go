@@ -44,7 +44,7 @@ func (p CameraInfo) Provides() []string {
 	for _, topic := range p.Topics {
 		stream := streamName(topic)
 		ids = append(ids,
-			fmt.Sprintf("camera.%s.resolution.width", stream),
+			fmt.Sprintf("camera.%s.resolution", stream),
 			fmt.Sprintf("camera.%s.fov.horizontal", stream),
 			fmt.Sprintf("camera.%s.fov.vertical", stream))
 	}
@@ -94,16 +94,12 @@ func (p CameraInfo) observeTopic(ctx context.Context, reader TopicReader, topic 
 	source := robotinspect.Source{Probe: p.ID(), Origin: origin}
 	properties := []robotinspect.Property{}
 
-	// The calibrated resolution is what the camera says it was measured at. It is the
-	// declared counterpart to whatever a stream sample actually delivers.
-	if width, err := robotinspect.NewQuantity(float64(info.Width), robotinspect.Count); err == nil {
-		if o, err := robotinspect.NewObservation(width, robotinspect.Declared, source); err == nil {
-			properties = append(properties, robotinspect.Property{
-				ID:           fmt.Sprintf("camera.%s.resolution.width", stream),
-				Observations: []robotinspect.Observation{o},
-			})
-		}
-	}
+	// The calibrated resolution is what the camera says its intrinsics belong to. It
+	// is the declared counterpart to whatever a stream sample actually delivers, and
+	// it is recorded whole: comparing only the width let a camera calibrated at
+	// 640x480 and delivering 640x360 read as agreement.
+	properties = append(properties,
+		textProperty(p.ID(), origin, fmt.Sprintf("camera.%s.resolution", stream), info.Resolution()))
 
 	horizontal, vertical, err := info.FieldOfView()
 	if err != nil {

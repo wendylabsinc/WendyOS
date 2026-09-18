@@ -129,7 +129,10 @@ func (r *DDSReader) subscribe(ep rtps.Endpoint) error {
 // published as "rt" plus the ROS name. Normalising both sides means a caller can ask for
 // either spelling and a report always prints the name an operator would type.
 func rosTopicName(topic string) string {
-	name := strings.TrimPrefix(topic, "rt")
+	// Trim "rt/" and not "rt": trimming the bare prefix turned a native DDS topic
+	// named rtps_status into /ps_status. This matches ros2camera.TopicName, which
+	// already had it right.
+	name := strings.TrimPrefix(topic, "rt/")
 	if !strings.HasPrefix(name, "/") {
 		name = "/" + name
 	}

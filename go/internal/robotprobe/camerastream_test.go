@@ -60,7 +60,7 @@ func TestCameraStreamAndCameraInfoTogetherProduceTheFinding(t *testing.T) {
 	env := robotinspect.NewEnv().Offer(robotinspect.RequirementDDSDomain, splitReader{info: info, stream: stream})
 	doc := robotinspect.Inspect(context.Background(), registry, env, robotinspect.Target{Device: "unitree-g1-nx-2"})
 
-	width := findProperty(t, doc, "camera.color.resolution.width")
+	width := findProperty(t, doc, "camera.color.resolution")
 	assessment := width.Assess()
 	if assessment.Verdict != robotinspect.VerdictDisagree {
 		t.Fatalf("resolution verdict = %q, want %q; 640 declared against 848 delivered is the finding",
@@ -126,7 +126,7 @@ func TestCameraStreamRefusesARateFromTooShortAWindow(t *testing.T) {
 		t.Error("a rate was reported from a window too short to measure one")
 	}
 	// The resolution seen in those frames is still perfectly good.
-	width := findIn(t, properties, "camera.color.resolution.width")
+	width := findIn(t, properties, "camera.color.resolution")
 	if len(width.Observations) != 1 {
 		t.Error("the measured resolution was discarded along with the rate")
 	}
@@ -170,7 +170,7 @@ func TestCameraStreamNamesEveryResolutionItSaw(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	width := findIn(t, properties, "camera.color.resolution.width")
+	width := findIn(t, properties, "camera.color.resolution")
 	conditions := width.Observations[0].Conditions
 	if got := conditions["resolutions"]; !strings.Contains(got, "848x480") || !strings.Contains(got, "640x480") {
 		t.Errorf("resolutions condition = %q, want both resolutions named", got)

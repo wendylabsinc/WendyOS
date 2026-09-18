@@ -24,18 +24,53 @@ type Unit struct {
 // Symbol returns the unit's printed symbol.
 func (u Unit) Symbol() string { return u.symbol }
 
-// The units a probe may report in. Angular and linear quantities require an axis because
-// a robot's declared field of view and its measured one are routinely quoted on
+// UnitOption declares what a unit's values cannot go without.
+type UnitOption func(*Unit)
+
+// RequiresAxis marks a unit whose values are meaningless without the axis they were
+// taken along.
+func RequiresAxis() UnitOption { return func(u *Unit) { u.requiresAxis = true } }
+
+// RequiresFrame marks a unit whose values are meaningless without a reference frame.
+func RequiresFrame() UnitOption { return func(u *Unit) { u.requiresFrame = true } }
+
+// NewUnit declares a unit. A vendor backend introduces its own this way rather than
+// editing this package — the same reasoning as Requirement being a plain string. A
+// servo bus reporting encoder ticks, or an AGV reporting a payload in kilograms, must
+// not need a change here to say so.
+func NewUnit(symbol string, opts ...UnitOption) Unit {
+	u := Unit{symbol: symbol}
+	for _, opt := range opts {
+		opt(&u)
+	}
+	return u
+}
+
+// The units the core probes report in. Angular and linear quantities require an axis
+// because a robot's declared field of view and its measured one are routinely quoted on
 // different axes; a translation additionally requires the frame it is measured in.
+//
+// Count is for a dimensionless tally and nothing else. Bytes and Pixels exist so that a
+// memory size and an image width are not both printed as a bare number that a consumer
+// cannot tell apart.
 var (
-	Degrees      = Unit{symbol: "deg", requiresAxis: true}
-	Millimetres  = Unit{symbol: "mm", requiresAxis: true, requiresFrame: true}
-	Hertz        = Unit{symbol: "Hz"}
-	Milliseconds = Unit{symbol: "ms"}
-	Celsius      = Unit{symbol: "C"}
-	Watts        = Unit{symbol: "W"}
-	Percent      = Unit{symbol: "%"}
-	Count        = Unit{symbol: ""}
+	Degrees         = NewUnit("deg", RequiresAxis())
+	Radians         = NewUnit("rad", RequiresAxis())
+	Millimetres     = NewUnit("mm", RequiresAxis(), RequiresFrame())
+	Metres          = NewUnit("m", RequiresAxis(), RequiresFrame())
+	MetresPerSecond = NewUnit("m/s")
+	Hertz           = NewUnit("Hz")
+	Milliseconds    = NewUnit("ms")
+	Celsius         = NewUnit("C")
+	Watts           = NewUnit("W")
+	Volts           = NewUnit("V")
+	Amps            = NewUnit("A")
+	NewtonMetres    = NewUnit("Nm")
+	Ticks           = NewUnit("ticks")
+	Bytes           = NewUnit("B")
+	Pixels          = NewUnit("px")
+	Percent         = NewUnit("%")
+	Count           = NewUnit("count")
 )
 
 // Well-known axes. A backend may report any axis string; these are the ones the core
@@ -55,6 +90,11 @@ type Quantity struct {
 	unit  Unit
 	axis  string
 	frame string
+	// set distinguishes a real zero from an unset quantity. Without it a count of
+	// zero equalled Quantity{} and was rejected as having no value, so the rows that
+	// matter most — no disk free, no interfaces, no joints found — silently vanished
+	// from the report instead of reading zero.
+	set bool
 }
 
 // QuantityOption supplies a qualifier to NewQuantity.
@@ -70,7 +110,7 @@ func WithFrame(frame string) QuantityOption { return func(q *Quantity) { q.frame
 
 // NewQuantity returns a quantity, or an error naming the qualifier the unit requires.
 func NewQuantity(value float64, unit Unit, opts ...QuantityOption) (Quantity, error) {
-	q := Quantity{value: value, unit: unit}
+	q := Quantity{value: value, unit: unit, set: true}
 	for _, opt := range opts {
 		opt(&q)
 	}
@@ -100,9 +140,9 @@ func (q Quantity) Unit() Unit     { return q.unit }
 func (q Quantity) Axis() string   { return q.axis }
 func (q Quantity) Frame() string  { return q.frame }
 
-// Zero reports whether q was never set. A Quantity{} carries no unit, so it can only
-// have come from a struct literal rather than a constructor.
-func (q Quantity) Zero() bool { return q == Quantity{} }
+// Zero reports whether q was never set, which is only possible for a struct literal
+// built outside the constructors. A quantity whose value is zero is not unset.
+func (q Quantity) Zero() bool { return !q.set }
 
 // comparableWith reports whether two quantities describe the same thing well enough to
 // be checked against each other. Differing axes are the case that matters: a declared

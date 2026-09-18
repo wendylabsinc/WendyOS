@@ -36,6 +36,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 		window    time.Duration
 		vendorKin string
 		skipAgent bool
+		canonical bool
 	)
 
 	cmd := &cobra.Command{
@@ -53,6 +54,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 				window:     window,
 				vendorKind: vendorKin,
 				skipAgent:  skipAgent,
+				canonical:  canonical,
 				out:        cmd.OutOrStdout(),
 			})
 		},
@@ -64,6 +66,7 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&window, "duration", 5*time.Second, "Sampling window for measured values")
 	cmd.Flags().StringVar(&vendorKin, "kind", "", "Robot kind to record, such as unitree-g1")
 	cmd.Flags().BoolVar(&skipAgent, "no-agent", false, "Skip the agent and report only what the robot publishes")
+	cmd.Flags().BoolVar(&canonical, "canonical", false, "With --json, omit wall-clock fields so two passes diff on substance")
 	return cmd
 }
 
@@ -75,6 +78,7 @@ type robotInspectOptions struct {
 	label      string
 	vendorKind string
 	skipAgent  bool
+	canonical  bool
 	out        io.Writer
 }
 
@@ -207,7 +211,14 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 
 func writeRobotDocument(out io.Writer, doc robotinspect.Document, opts robotInspectOptions) error {
 	if jsonOutput {
-		encoded, err := json.MarshalIndent(doc, "", "  ")
+		// The default carries timestamps, which is right for the record of one pass.
+		// --canonical drops them so two passes — the same robot next week, or the
+		// next unit off the line — differ only where the robots differ.
+		encode := func() ([]byte, error) { return json.MarshalIndent(doc, "", "  ") }
+		if opts.canonical {
+			encode = doc.CanonicalJSON
+		}
+		encoded, err := encode()
 		if err != nil {
 			return err
 		}

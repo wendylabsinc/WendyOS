@@ -52,6 +52,11 @@ type Observation struct {
 	Conditions map[string]string
 	Sampling   *Sampling
 	ObservedAt time.Time
+	// instant marks a value read off hardware at a moment rather than sampled over a
+	// window — a charge level, a temperature, a joint position. A rate without a
+	// window is meaningless, but a level has none to give, and requiring one pushed
+	// real measurements into the declared column to get past the validator.
+	instant bool
 }
 
 // IsText reports whether the observation carries a textual value.
@@ -86,6 +91,15 @@ func WithConditions(conditions map[string]string) ObservationOption {
 func WithSampling(window time.Duration, samples int) ObservationOption {
 	return func(o *Observation) { o.Sampling = &Sampling{Window: window, Samples: samples} }
 }
+
+// WithInstantReading marks a measurement taken at a moment rather than over a window,
+// which exempts it from the sampling requirement. Use it for a level, never for a rate.
+func WithInstantReading() ObservationOption {
+	return func(o *Observation) { o.instant = true }
+}
+
+// Instant reports whether the observation is a single reading rather than a sampled one.
+func (o Observation) Instant() bool { return o.instant }
 
 // WithObservedAt overrides the observation time, which otherwise defaults to now.
 func WithObservedAt(at time.Time) ObservationOption {
@@ -141,7 +155,7 @@ func (o Observation) validate() error {
 	if o.Kind == Measured {
 		// A rate or a level read off hardware still has to say how it was sampled;
 		// a textual fact is a reading, not a sample, so it is exempt.
-		if o.IsText() {
+		if o.IsText() || o.instant {
 			return nil
 		}
 		if o.Sampling == nil {

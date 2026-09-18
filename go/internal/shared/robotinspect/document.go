@@ -51,8 +51,9 @@ type Document struct {
 	VendorKind string
 	StartedAt  time.Time
 	FinishedAt time.Time
-	// PassiveOnly records that every probe run was classified passive. It is written
-	// from the plan rather than asserted by hand, so it cannot claim more than was done.
+	// PassiveOnly records that every probe actually run was classified passive. It is
+	// computed from the plan, so it cannot claim more than was done — it turns into
+	// "nothing was commanded" in the report, which has to be earned.
 	PassiveOnly bool
 	ProbesRun   []string
 	Properties  []Property
@@ -113,12 +114,22 @@ func Inspect(ctx context.Context, registry *Registry, env *Env, target Target) D
 	started := time.Now().UTC()
 	plan := registry.PassivePlan(env)
 
+	// PassiveOnly is derived from the plan, never asserted. It becomes an affirmative
+	// safety claim in the operator's report and in the stored document, so a probe
+	// misreporting its own class must not be able to turn into "nothing was commanded".
+	passiveOnly := true
+	for _, probe := range plan.Run {
+		if probe.Class() != ClassPassive {
+			passiveOnly = false
+		}
+	}
+
 	doc := Document{
 		Schema:      Schema,
 		Device:      target.Device,
 		VendorKind:  target.VendorKind,
 		StartedAt:   started,
-		PassiveOnly: true,
+		PassiveOnly: passiveOnly,
 		Skipped:     map[string]Unknown{},
 	}
 	for id, unknown := range plan.Skipped {

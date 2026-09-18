@@ -119,7 +119,7 @@ func TestCameraInfoReportsUncalibratedInsteadOfAnAngle(t *testing.T) {
 		t.Fatalf("the uncalibrated camera left no row at all; got %v", propertyIDs(properties))
 	}
 	// The resolution it claims is still worth having even with no usable intrinsics.
-	if !contains(propertyIDs(properties), "camera.depth.resolution.width") {
+	if !contains(propertyIDs(properties), "camera.depth.resolution") {
 		t.Errorf("dropped the declared resolution; got %v", propertyIDs(properties))
 	}
 }
@@ -202,9 +202,9 @@ func TestStreamNameReducesATopicToItsStream(t *testing.T) {
 		"/camera/color/camera_info":     "color",
 		"/camera/depth/camera_info":     "depth",
 		"camera/infra1/camera_info":     "infra1",
-		"/front_camera/rgb/camera_info": "rgb",
-		"/camera_info":                  "camera",
-		"":                              "camera",
+		"/front_camera/rgb/camera_info": "front_camera.rgb",
+		"/camera_info":                  "default",
+		"":                              "default",
 	} {
 		if got := streamName(topic); got != want {
 			t.Errorf("streamName(%q) = %q, want %q", topic, got, want)

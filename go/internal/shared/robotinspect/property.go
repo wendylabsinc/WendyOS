@@ -51,14 +51,23 @@ func (t Tolerance) admits(low, high float64) bool {
 // case worth an operator's attention.
 func defaultTolerance(u Unit) Tolerance {
 	switch u.symbol {
-	case Degrees.symbol, Millimetres.symbol, Percent.symbol:
+	case Degrees.symbol, Percent.symbol:
 		return Tolerance{Absolute: 1}
+	case Radians.symbol:
+		return Tolerance{Absolute: 0.02}
+	case Millimetres.symbol, Metres.symbol:
+		return Tolerance{Absolute: 1, Relative: 0.01}
 	case Hertz.symbol:
 		return Tolerance{Relative: 0.05}
 	case Celsius.symbol:
 		return Tolerance{Absolute: 2}
-	case Count.symbol:
+	case Count.symbol, Pixels.symbol, Ticks.symbol:
+		// A tally, a pixel dimension and an encoder tick are exact: one more or one
+		// fewer is a different answer, not noise.
 		return Tolerance{}
+	case Bytes.symbol:
+		// Two passes over a live filesystem never agree to the byte.
+		return Tolerance{Relative: 0.05}
 	default:
 		return Tolerance{Relative: 0.02}
 	}

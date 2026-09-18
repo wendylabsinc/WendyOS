@@ -148,7 +148,7 @@ func (p Compute) Observe(ctx context.Context, env *robotinspect.Env) ([]robotins
 		add("compute.cpu_count", robotinspect.MustQuantity(float64(facts.CPUCount), robotinspect.Count))
 	}
 	if facts.MemoryTotalBytes > 0 {
-		add("compute.memory_total", robotinspect.MustQuantity(float64(facts.MemoryTotalBytes), robotinspect.Count))
+		add("compute.memory_total", robotinspect.MustQuantity(float64(facts.MemoryTotalBytes), robotinspect.Bytes))
 	}
 	addText("os.name", facts.OS)
 	addText("os.version", facts.OSVersion)
@@ -199,12 +199,12 @@ func (p Storage) Observe(ctx context.Context, env *robotinspect.Env) ([]robotins
 	var properties []robotinspect.Property
 	if facts.DiskTotalBytes > 0 {
 		if property, ok := declared(p.ID(), origin, "storage.total",
-			robotinspect.MustQuantity(float64(facts.DiskTotalBytes), robotinspect.Count)); ok {
+			robotinspect.MustQuantity(float64(facts.DiskTotalBytes), robotinspect.Bytes)); ok {
 			properties = append(properties, property)
 		}
 		free := facts.DiskTotalBytes - facts.DiskUsedBytes
 		if property, ok := declared(p.ID(), origin, "storage.free",
-			robotinspect.MustQuantity(float64(free), robotinspect.Count)); ok {
+			robotinspect.MustQuantity(float64(free), robotinspect.Bytes)); ok {
 			properties = append(properties, property)
 		}
 	}
@@ -216,7 +216,7 @@ func (p Storage) Observe(ctx context.Context, env *robotinspect.Env) ([]robotins
 		// fills up first.
 		free := cs.TotalBytes - cs.UsedBytes
 		if property, ok := declared(p.ID(), origin+":"+cs.Mountpoint, "storage.apps.free",
-			robotinspect.MustQuantity(float64(free), robotinspect.Count)); ok {
+			robotinspect.MustQuantity(float64(free), robotinspect.Bytes)); ok {
 			properties = append(properties, property)
 		}
 	}
@@ -280,8 +280,8 @@ func (p HostBattery) Observe(ctx context.Context, env *robotinspect.Env) ([]robo
 		return []robotinspect.Property{{ID: "battery.host.charge", Unknown: &unknown}}, nil
 	}
 
-	// A charge level is read off the hardware, so it is measured rather than declared.
-	// It has no sampling window because it is a level, not a rate.
+	// A charge level is read off the hardware, so it is measured, not declared. It is
+	// an instant reading: there is no window to quote for a level.
 	quantity, err := robotinspect.NewQuantity(facts.Battery.Percent, robotinspect.Percent)
 	if err != nil {
 		return nil, err
@@ -290,9 +290,9 @@ func (p HostBattery) Observe(ctx context.Context, env *robotinspect.Env) ([]robo
 	if facts.Battery.State != "" {
 		conditions["state"] = facts.Battery.State
 	}
-	observation, err := robotinspect.NewObservation(quantity, robotinspect.Declared,
+	observation, err := robotinspect.NewObservation(quantity, robotinspect.Measured,
 		robotinspect.Source{Probe: p.ID(), Origin: "agent:device_info"},
-		robotinspect.WithConditions(conditions))
+		robotinspect.WithInstantReading(), robotinspect.WithConditions(conditions))
 	if err != nil {
 		return nil, err
 	}

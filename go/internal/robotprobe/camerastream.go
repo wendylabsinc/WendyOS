@@ -48,7 +48,7 @@ func (p CameraStream) Provides() []string {
 	for _, topic := range p.Topics {
 		stream := streamName(topic)
 		ids = append(ids,
-			fmt.Sprintf("camera.%s.resolution.width", stream),
+			fmt.Sprintf("camera.%s.resolution", stream),
 			fmt.Sprintf("camera.%s.rate", stream))
 	}
 	return ids
@@ -104,7 +104,7 @@ func (p CameraStream) observeTopic(ctx context.Context, reader TopicReader, topi
 			fmt.Sprintf("no frames on %s in %s", topic, window))
 		return []robotinspect.Property{
 			{ID: fmt.Sprintf("camera.%s.rate", stream), Unknown: &unknown},
-			{ID: fmt.Sprintf("camera.%s.resolution.width", stream), Unknown: &unknown},
+			{ID: fmt.Sprintf("camera.%s.resolution", stream), Unknown: &unknown},
 		}, nil
 	}
 
@@ -156,17 +156,15 @@ func (p CameraStream) observeTopic(ctx context.Context, reader TopicReader, topi
 		conditions["resolutions"] = strings.Join(sortedKeys(resolutions), ",")
 	}
 
-	width, err := robotinspect.NewQuantity(float64(header.Width), robotinspect.Count)
-	if err != nil {
-		return properties, err
-	}
-	observation, err := robotinspect.NewObservation(width, robotinspect.Measured, source,
+	// Recorded whole and as text, so it is compared exactly: a resolution is one fact
+	// and two thirds of a match is not a match.
+	observation, err := robotinspect.NewTextObservation(header.Resolution(), robotinspect.Measured, source,
 		sampling, robotinspect.WithConditions(conditions))
 	if err != nil {
 		return properties, err
 	}
 	return append(properties, robotinspect.Property{
-		ID:           fmt.Sprintf("camera.%s.resolution.width", stream),
+		ID:           fmt.Sprintf("camera.%s.resolution", stream),
 		Observations: []robotinspect.Observation{observation},
 	}), nil
 }

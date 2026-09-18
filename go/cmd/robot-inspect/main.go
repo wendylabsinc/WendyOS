@@ -34,6 +34,7 @@ func main() {
 	device := flag.String("device", "", "name to record the inspection against")
 	kind := flag.String("kind", "", "robot kind to record, such as unitree-g1")
 	asJSON := flag.Bool("json", false, "emit the document as JSON")
+	canonical := flag.Bool("canonical", false, "with -json, omit wall-clock fields so two passes diff on substance")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -41,7 +42,7 @@ func main() {
 
 	if err := run(ctx, options{
 		domain: *domain, iface: *iface, settle: *settle, window: *window,
-		device: *device, kind: *kind, asJSON: *asJSON,
+		device: *device, kind: *kind, asJSON: *asJSON, canonical: *canonical,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "robot-inspect: %v\n", err)
 		os.Exit(1)
@@ -49,13 +50,14 @@ func main() {
 }
 
 type options struct {
-	domain int
-	iface  string
-	settle time.Duration
-	window time.Duration
-	device string
-	kind   string
-	asJSON bool
+	domain    int
+	iface     string
+	settle    time.Duration
+	window    time.Duration
+	device    string
+	kind      string
+	asJSON    bool
+	canonical bool
 }
 
 func run(ctx context.Context, opts options) error {
@@ -108,7 +110,11 @@ func run(ctx context.Context, opts options) error {
 	})
 
 	if opts.asJSON {
-		encoded, err := json.MarshalIndent(doc, "", "  ")
+		encode := func() ([]byte, error) { return json.MarshalIndent(doc, "", "  ") }
+		if opts.canonical {
+			encode = doc.CanonicalJSON
+		}
+		encoded, err := encode()
 		if err != nil {
 			return err
 		}
