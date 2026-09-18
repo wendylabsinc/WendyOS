@@ -306,7 +306,10 @@ func TestProbeRobotReportsTheHostWithNoGraphAtAll(t *testing.T) {
 	if !doc.PassiveOnly {
 		t.Error("PassiveOnly = false")
 	}
-	for _, id := range []string{"compute.board", "compute.architecture", "storage.free"} {
+	for _, id := range []string{
+		"compute.board", "compute.architecture", "storage.free",
+		"hardware.camera.devices", "hardware.can.count", "clock.drift",
+	} {
 		found := false
 		for _, p := range doc.Properties {
 			if p.ID == id {
@@ -345,6 +348,17 @@ func TestProbeRobotCombinesHostAndGraph(t *testing.T) {
 }
 
 type stubHostFacts struct{}
+
+func (stubHostFacts) Hardware(context.Context) ([]robotprobe.HardwareDevice, error) {
+	return []robotprobe.HardwareDevice{
+		{Category: "camera", DevicePath: "/dev/video4", Description: "RealSense color"},
+		{Category: "can", DevicePath: "can0", Description: "CANable"},
+	}, nil
+}
+
+func (stubHostFacts) DeviceClock(context.Context) (time.Time, time.Duration, error) {
+	return time.Now().UTC().Add(800 * time.Microsecond), 3 * time.Millisecond, nil
+}
 
 func (stubHostFacts) HostFacts(context.Context) (*robotprobe.HostFacts, error) {
 	return &robotprobe.HostFacts{

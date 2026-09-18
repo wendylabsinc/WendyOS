@@ -34,7 +34,6 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 		iface     string
 		settle    time.Duration
 		window    time.Duration
-		label     string
 		vendorKin string
 		skipAgent bool
 	)
@@ -52,7 +51,6 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 				iface:      iface,
 				settle:     settle,
 				window:     window,
-				label:      label,
 				vendorKind: vendorKin,
 				skipAgent:  skipAgent,
 				out:        cmd.OutOrStdout(),
@@ -64,7 +62,6 @@ func newDeviceRobotInspectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&iface, "interface", "", "Network interface to bind discovery to (default: an eligible wired interface)")
 	cmd.Flags().DurationVar(&settle, "settle", 8*time.Second, "How long to let DDS discovery run before reading")
 	cmd.Flags().DurationVar(&window, "duration", 5*time.Second, "Sampling window for measured values")
-	cmd.Flags().StringVar(&label, "device", "", "Name to record the inspection against")
 	cmd.Flags().StringVar(&vendorKin, "kind", "", "Robot kind to record, such as unitree-g1")
 	cmd.Flags().BoolVar(&skipAgent, "no-agent", false, "Skip the agent and report only what the robot publishes")
 	return cmd
@@ -104,10 +101,10 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 		} else {
 			defer conn.Close()
 			host = newAgentHostFacts(conn)
-			if opts.label == "" {
-				if facts, factsErr := host.HostFacts(ctx); factsErr == nil && facts != nil {
-					opts.label = facts.Hostname
-				}
+			// The device name is whatever the agent calls itself, so a document is
+			// always traceable to a unit without the caller having to repeat it.
+			if facts, factsErr := host.HostFacts(ctx); factsErr == nil && facts != nil {
+				opts.label = facts.Hostname
 			}
 		}
 	}
@@ -153,9 +150,19 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 	// a cloud tunnel and answers even on a robot with no ROS 2 graph at all.
 	if host != nil {
 		env.Offer(robotinspect.RequirementHostStats, host)
-		for _, probe := range []robotinspect.Probe{
+		probes := []robotinspect.Probe{
 			robotprobe.Compute{}, robotprobe.Storage{}, robotprobe.Network{}, robotprobe.HostBattery{},
-		} {
+		}
+		// Hardware enumeration and the clock come off the same connection, but only
+		// when the caller supplied a source that can answer them.
+		if _, ok := host.(robotprobe.HardwareSource); ok {
+			probes = append(probes, robotprobe.Hardware{})
+		}
+		if clock, ok := host.(robotprobe.ClockSource); ok {
+			env.Offer(robotinspect.RequirementTimeSync, clock)
+			probes = append(probes, robotprobe.Clock{})
+		}
+		for _, probe := range probes {
 			if err := registry.Register(probe); err != nil {
 				return robotinspect.Document{}, err
 			}
