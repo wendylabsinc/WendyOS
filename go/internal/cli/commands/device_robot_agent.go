@@ -294,3 +294,40 @@ func (a *agentHostFacts) ROS2Nodes(ctx context.Context) ([]robotprobe.ROS2Node, 
 	})
 	return a.nodes, a.nodesErr
 }
+
+// LiveHostStats reads the host's moment-to-moment state through the same resource-stats
+// RPC `wendy device top` uses. Not cached: unlike an inventory, a temperature is only
+// true when it is read.
+func (a *agentHostFacts) LiveHostStats(ctx context.Context) (*robotprobe.LiveHostStats, error) {
+	resp, err := a.conn.ContainerService.GetResourceStats(ctx, &agentpb.GetResourceStatsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("reading resource stats: %s", agentMessage(err))
+	}
+	host := resp.GetHost()
+	if host == nil {
+		return nil, fmt.Errorf("the agent returned no host stats")
+	}
+
+	stats := &robotprobe.LiveHostStats{MemoryAvailableBytes: host.GetMemAvailableBytes()}
+	for _, zone := range host.GetThermalZones() {
+		stats.ThermalZones = append(stats.ThermalZones, robotprobe.ThermalZone{
+			Name: zone.GetName(), Celsius: zone.GetTempC(),
+		})
+	}
+	for _, gpu := range host.GetGpus() {
+		live := robotprobe.GPUStats{
+			Index:           gpu.GetIndex(),
+			Name:            gpu.GetName(),
+			UtilPercent:     gpu.GetUtilPercent(),
+			MemoryUsedBytes: gpu.GetMemUsedBytes(),
+		}
+		// A GPU reporting no temperature is different from one reporting zero, so the
+		// optional field stays optional rather than collapsing to 0.
+		if gpu.TempC != nil {
+			celsius := gpu.GetTempC()
+			live.Celsius = &celsius
+		}
+		stats.GPUs = append(stats.GPUs, live)
+	}
+	return stats, nil
+}

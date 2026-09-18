@@ -175,6 +175,9 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		if _, ok := host.(robotprobe.HardwareSource); ok {
 			probes = append(probes, robotprobe.Hardware{})
 		}
+		if _, ok := host.(robotprobe.LiveHostSource); ok {
+			probes = append(probes, robotprobe.Thermal{})
+		}
 		if clock, ok := host.(robotprobe.ClockSource); ok {
 			env.Offer(robotinspect.RequirementTimeSync, clock)
 			probes = append(probes, robotprobe.Clock{})
