@@ -986,7 +986,11 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 		CloudHost:       auth.CloudGRPC,
 	})
 	if err != nil {
-		return fmt.Errorf("enrolling device: %w", err)
+		// An ENOSPC here means the agent couldn't write its provisioning state;
+		// when container storage is also degraded (root-slot, WDY-3127), give
+		// the power-cycle remedy instead of a raw write failure.
+		versionResp, _ := conn.CachedAgentVersion()
+		return describeDeployStorageFailure(fmt.Errorf("enrolling device: %w", err), versionResp)
 	}
 
 	fmt.Printf("Device enrolled (org: %s / ID: %d, asset: %d).\n",
