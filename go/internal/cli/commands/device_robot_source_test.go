@@ -7,7 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/wendylabsinc/wendy/go/internal/robotprobe"
+	"github.com/wendylabsinc/wendy/go/internal/shared/robotinspect"
 	"github.com/wendylabsinc/wendy/go/internal/shared/rosmsg"
 )
 
@@ -181,5 +185,53 @@ func TestNewLayeredSourceKeepsTheAgentWhenDiscoveryMerelyFails(t *testing.T) {
 	}
 	if !strings.Contains(source.degraded, "no such interface") {
 		t.Fatalf("the reason does not carry the cause: %q", source.degraded)
+	}
+}
+
+// lostAgent is an adapter whose connection has already gone away.
+func lostAgent(err error) *agentHostFacts {
+	a := &agentHostFacts{}
+	a.noteFailure(err)
+	return a
+}
+
+func TestLostConnectionIsStatedOnceNotPerProbe(t *testing.T) {
+	dropped := status.Error(codes.Unavailable, `connection error: desc = "transport: authentication handshake failed"`)
+	message := agentMessage(dropped)
+
+	unknown := robotinspect.NewUnknown(robotinspect.ReasonProbeFailed, "reading resource stats: "+message)
+	doc := robotinspect.Document{
+		Failed: map[string]robotinspect.Unknown{
+			"camera":  robotinspect.NewUnknown(robotinspect.ReasonProbeFailed, "camera: listing cameras: "+message),
+			"storage": robotinspect.NewUnknown(robotinspect.ReasonProbeFailed, "storage: reading device info: "+message),
+			// A probe that failed on its own merits must survive: folding it away
+			// would hide a real defect behind a network blip.
+			"joints": robotinspect.NewUnknown(robotinspect.ReasonProbeFailed, "joints: decoding /lowstate: 4 bytes left over"),
+		},
+		Properties: []robotinspect.Property{{ID: "thermal.max", Unknown: &unknown}},
+	}
+
+	noteLostConnection(&doc, lostAgent(dropped))
+
+	if _, ok := doc.Failed["camera"]; ok {
+		t.Fatal("camera still restates the connection failure")
+	}
+	if _, ok := doc.Failed["storage"]; ok {
+		t.Fatal("storage still restates the connection failure")
+	}
+	if _, ok := doc.Failed["joints"]; !ok {
+		t.Fatal("a probe that failed on its own merits was folded away with the network blip")
+	}
+	agent, ok := doc.Failed["agent"]
+	if !ok {
+		t.Fatal("nothing says the connection dropped")
+	}
+	// Named rather than counted: which probes were lost is the difference between
+	// "retry" and "that subsystem is broken".
+	if !strings.Contains(agent.Detail, "camera, storage") {
+		t.Fatalf("the statement does not name what it took out: %q", agent.Detail)
+	}
+	if strings.Contains(doc.Properties[0].Unknown.Detail, "handshake") {
+		t.Fatalf("the property still restates the cause: %q", doc.Properties[0].Unknown.Detail)
 	}
 }

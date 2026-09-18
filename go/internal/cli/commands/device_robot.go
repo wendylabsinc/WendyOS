@@ -353,8 +353,37 @@ func noteLostConnection(doc *robotinspect.Document, host robotprobe.HostFactsSou
 	if lost == nil {
 		return
 	}
-	doc.Failed["agent"] = robotinspect.NewUnknown(robotinspect.ReasonProbeFailed,
-		fmt.Sprintf("the connection to the agent dropped part-way through, so everything below it failed for that one reason rather than on its own merits — run it again: %s", agentMessage(lost)))
+	// Fold everything that failed for this one reason into a single statement. Both
+	// strings come from the same error in this process, so this is asking "did this
+	// failure carry that error", not parsing a foreign message.
+	message := agentMessage(lost)
+	var folded []string
+	for id, unknown := range doc.Failed {
+		if strings.Contains(unknown.Detail, message) {
+			folded = append(folded, id)
+			delete(doc.Failed, id)
+		}
+	}
+	// A property that went unknown for the same reason keeps its row — it is still a
+	// property nobody answered — but stops restating the cause.
+	for i, property := range doc.Properties {
+		if property.Unknown == nil || !strings.Contains(property.Unknown.Detail, message) {
+			continue
+		}
+		doc.Properties[i].Unknown = &robotinspect.Unknown{
+			Reason: property.Unknown.Reason,
+			Detail: "the connection to the agent dropped; see the agent entry",
+		}
+	}
+	sort.Strings(folded)
+
+	detail := fmt.Sprintf("the connection to the agent dropped part-way through, so everything under it failed for that one reason rather than on its own merits — run it again: %s", message)
+	if len(folded) > 0 {
+		// Named, not merely counted: which probes were lost is the difference
+		// between "retry" and "that subsystem is broken".
+		detail = fmt.Sprintf("%s (this took out %s)", detail, strings.Join(folded, ", "))
+	}
+	doc.Failed["agent"] = robotinspect.NewUnknown(robotinspect.ReasonProbeFailed, detail)
 }
 
 // noteAgentAbsence records an unreachable agent in the document itself, so the reason
