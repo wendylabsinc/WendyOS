@@ -1,0 +1,145 @@
+# The Unitree G1, 29-DOF variant (no Dex3 hands).
+#
+# Every field the platform reads is here; everything else about this robot — its
+# URDF, its bring-up sequence, its torque limits — sits under `opaque` and is
+# carried without being interpreted. No platform code switches on `kind`: this
+# file is the only place G1 facts live.
+kind: unitree-g1
+display_name: Unitree G1 (29-DOF)
+
+control:
+  transport: dds
+  # The interface that carries motor commands. This is what the motion
+  # entitlement will gate (WDY-3128); calibration only records it.
+  interface: enP8p1s0
+  unpowered:
+    name: ZeroTorque
+    instruction: >-
+      Put the robot into its zero-torque state from the remote, and make sure it
+      is hanging from its gantry or held by a second person.
+    hazard: >-
+      Every joint goes limp at once, and the robot will fall if nothing is
+      supporting it.
+
+joints:
+  unit: rad
+  # Live joint positions. `unitree-lowstate` is NOT implemented in this build.
+  # Checked against the real robot (unitree-g1-nx-2, 2026-09-18): it publishes
+  # no sensor_msgs/JointState — joint positions are on /lowstate as
+  # unitree_hg/msg/LowState, a positionally indexed array with no joint names in
+  # it, and the agent's ROS 2 sidecar cannot even deserialise that type without
+  # the vendor's interface package ("The message type 'unitree_hg/msg/LowState'
+  # is invalid"). The wizard refuses by name rather than pretending.
+  source:
+    backend: unitree-lowstate
+    params:
+      topic: /lowstate
+      position_field: motor_state.q
+  # The command order a policy indexes into. Index 31 on this robot has to be
+  # the physical joint it was during training; that is what a sweep verifies.
+  order:
+    - left_hip_pitch_joint
+    - left_hip_roll_joint
+    - left_hip_yaw_joint
+    - left_knee_joint
+    - left_ankle_pitch_joint
+    - left_ankle_roll_joint
+    - right_hip_pitch_joint
+    - right_hip_roll_joint
+    - right_hip_yaw_joint
+    - right_knee_joint
+    - right_ankle_pitch_joint
+    - right_ankle_roll_joint
+    - waist_yaw_joint
+    - waist_roll_joint
+    - waist_pitch_joint
+    - left_shoulder_pitch_joint
+    - left_shoulder_roll_joint
+    - left_shoulder_yaw_joint
+    - left_elbow_joint
+    - left_wrist_roll_joint
+    - left_wrist_pitch_joint
+    - left_wrist_yaw_joint
+    - right_shoulder_pitch_joint
+    - right_shoulder_roll_joint
+    - right_shoulder_yaw_joint
+    - right_elbow_joint
+    - right_wrist_roll_joint
+    - right_wrist_pitch_joint
+    - right_wrist_yaw_joint
+  # Vendor-declared travel, read from the G1 model shipped in
+  # Examples/G1FruitNinjaMujoco/models/unitree_g1/g1_29dof.xml. On this robot
+  # the limits are a datasheet fact; on the SO-101 they are measured per arm,
+  # which is why `declared` is optional.
+  declared:
+    left_hip_pitch_joint: {min: -2.5307, max: 2.8798}
+    left_hip_roll_joint: {min: -0.5236, max: 2.9671}
+    left_hip_yaw_joint: {min: -2.7576, max: 2.7576}
+    left_knee_joint: {min: -0.087267, max: 2.8798}
+    left_ankle_pitch_joint: {min: -0.87267, max: 0.5236}
+    left_ankle_roll_joint: {min: -0.2618, max: 0.2618}
+    right_hip_pitch_joint: {min: -2.5307, max: 2.8798}
+    right_hip_roll_joint: {min: -2.9671, max: 0.5236}
+    right_hip_yaw_joint: {min: -2.7576, max: 2.7576}
+    right_knee_joint: {min: -0.087267, max: 2.8798}
+    right_ankle_pitch_joint: {min: -0.87267, max: 0.5236}
+    right_ankle_roll_joint: {min: -0.2618, max: 0.2618}
+    waist_yaw_joint: {min: -2.618, max: 2.618}
+    waist_roll_joint: {min: -0.52, max: 0.52}
+    waist_pitch_joint: {min: -0.52, max: 0.52}
+    left_shoulder_pitch_joint: {min: -3.0892, max: 2.6704}
+    left_shoulder_roll_joint: {min: -1.5882, max: 2.2515}
+    left_shoulder_yaw_joint: {min: -2.618, max: 2.618}
+    left_elbow_joint: {min: -1.0472, max: 2.0944}
+    left_wrist_roll_joint: {min: -1.97222, max: 1.97222}
+    left_wrist_pitch_joint: {min: -1.61443, max: 1.61443}
+    left_wrist_yaw_joint: {min: -1.61443, max: 1.61443}
+    right_shoulder_pitch_joint: {min: -3.0892, max: 2.6704}
+    right_shoulder_roll_joint: {min: -2.2515, max: 1.5882}
+    right_shoulder_yaw_joint: {min: -2.618, max: 2.618}
+    right_elbow_joint: {min: -1.0472, max: 2.0944}
+    right_wrist_roll_joint: {min: -1.97222, max: 1.97222}
+    right_wrist_pitch_joint: {min: -1.61443, max: 1.61443}
+    right_wrist_yaw_joint: {min: -1.61443, max: 1.61443}
+
+sensors:
+  - id: head-rgbd
+    type: rgbd
+    # A sensor pose is not constant: it is bolted to a link that moves. Naming
+    # the link rather than a world position is what makes one rule cover every
+    # sensor on every articulated robot.
+    attached_to: torso_link
+    nominal_pose:
+      xyz: [0.08, 0.0, 0.47]
+      quat: [1.0, 0.0, 0.0, 0.0]
+
+requires_calibration:
+  - id: right-arm-joint-range
+    title: Right arm joint range
+    method: joint-range-sweep
+    applies_to: right-arm
+    # The worst joint may show at most 0.30 rad less travel than declared.
+    budget: {value: 0.30, unit: rad}
+    joints:
+      - right_shoulder_pitch_joint
+      - right_shoulder_roll_joint
+      - right_shoulder_yaw_joint
+      - right_elbow_joint
+      - right_wrist_roll_joint
+      - right_wrist_pitch_joint
+      - right_wrist_yaw_joint
+
+  - id: head-rgbd-extrinsics
+    title: Head RGB-D extrinsics
+    method: fiducial-extrinsics
+    applies_to: head-rgbd
+    budget: {value: 0.010, unit: m}
+
+# Everything below is carried and handed to apps verbatim. The platform does not
+# read a line of it.
+opaque:
+  bringup:
+    sequence: [500, DAMP, LOCK_STAND, 801]
+    required_fsm_id: 500
+  description:
+    urdf: g1_29dof.urdf
