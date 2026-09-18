@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 type deviceCachePruneClient interface {
@@ -29,45 +31,107 @@ func newDeviceCacheCmd() *cobra.Command {
 }
 
 func newDeviceCachePruneCmd() *cobra.Command {
-	var dryRun bool
+	var dryRun, all bool
+	var minAgeFlag string
 	cmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Release unused container layer and snapshot caches",
-		Args:  cobra.NoArgs,
+		Long: "Releases Wendy's cache pins on container layer blobs and unpacked snapshots. With " +
+			"--all, releases every Wendy cache pin immediately (layer blobs and unpacked " +
+			"snapshots) and forces a synchronous containerd garbage-collection pass. Apps with a " +
+			"container on the device, running or stopped, keep their layers. Images whose " +
+			"container was deleted lose their unpacked snapshots and are re-unpacked on the next " +
+			"'wendy run' from the still-cached layer blobs. Do not run --all while a deploy to " +
+			"this device is in progress. --all cannot help when container storage is on the OS " +
+			"root slot (WDY-3127); power-cycle the device instead.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			minAge, err := parsePruneMinAge(all, minAgeFlag)
+			if err != nil {
+				return err
+			}
 			conn, err := connectToAgent(cmd.Context(), SuppressUpdateCheck())
 			if err != nil {
 				return err
 			}
 			defer conn.Close()
-			return runDeviceCachePrune(cmd.Context(), conn, cmd.OutOrStdout(), dryRun, jsonOutput)
+			return runDeviceCachePrune(cmd.Context(), conn, cmd.OutOrStdout(), devicePruneOptions{
+				dryRun:  dryRun,
+				minAge:  minAge,
+				jsonOut: jsonOutput,
+			})
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Report eligible cache data without releasing it")
+	cmd.Flags().BoolVar(&all, "all", false, "Release every Wendy cache pin regardless of age")
+	cmd.Flags().StringVar(&minAgeFlag, "min-age", "", "Release cache pins older than this duration (e.g. 1h)")
+	cmd.MarkFlagsMutuallyExclusive("all", "min-age")
 	return cmd
 }
 
-func runDeviceCachePrune(ctx context.Context, conn *grpcclient.AgentConnection, out io.Writer, dryRun, jsonOut bool) error {
-	client := agentpbv2.NewWendyContainerServiceClient(conn.Conn)
-	return runDeviceCachePruneRPC(ctx, client, out, dryRun, jsonOut)
+// devicePruneOptions drives runDeviceCachePruneRPC. minAge is nil when
+// neither --all nor --min-age was given (the agent applies its own
+// default); the zero duration means --all (release everything).
+type devicePruneOptions struct {
+	dryRun  bool
+	minAge  *time.Duration
+	jsonOut bool
 }
 
-func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, out io.Writer, dryRun, jsonOut bool) error {
-	resp, err := client.PruneCache(ctx, &agentpbv2.PruneCacheRequest{DryRun: dryRun})
+// parsePruneMinAge resolves --all/--min-age into the MinAgeSeconds value to
+// send: nil when neither flag was given (agent default), the zero duration
+// for --all, or the parsed duration for --min-age. Negative durations are
+// rejected here so the CLI never issues the RPC with a nonsensical value.
+func parsePruneMinAge(all bool, minAge string) (*time.Duration, error) {
+	if all {
+		zero := time.Duration(0)
+		return &zero, nil
+	}
+	if minAge == "" {
+		return nil, nil
+	}
+	d, err := time.ParseDuration(minAge)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --min-age %q: %w", minAge, err)
+	}
+	if d < 0 {
+		return nil, fmt.Errorf("--min-age must not be negative: %q", minAge)
+	}
+	return &d, nil
+}
+
+func runDeviceCachePrune(ctx context.Context, conn *grpcclient.AgentConnection, out io.Writer, opts devicePruneOptions) error {
+	client := agentpbv2.NewWendyContainerServiceClient(conn.Conn)
+	return runDeviceCachePruneRPC(ctx, client, out, opts)
+}
+
+func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, out io.Writer, opts devicePruneOptions) error {
+	req := &agentpbv2.PruneCacheRequest{DryRun: opts.dryRun}
+	var requestedSeconds *uint64
+	if opts.minAge != nil {
+		secs := uint64(opts.minAge.Seconds())
+		req.MinAgeSeconds = proto.Uint64(secs)
+		requestedSeconds = &secs
+	}
+
+	resp, err := client.PruneCache(ctx, req)
 	if err != nil {
 		if status.Code(err) == codes.Unimplemented {
 			return fmt.Errorf("this device agent does not support cache pruning; update it with 'wendy device update'")
 		}
 		return fmt.Errorf("pruning device cache: %w", err)
 	}
-	if jsonOut {
+
+	if opts.jsonOut {
 		data, err := json.MarshalIndent(map[string]any{
-			"dryRun":            dryRun,
+			"dryRun":            opts.dryRun,
 			"contentBlobs":      resp.GetContentBlobs(),
 			"contentBytes":      resp.GetContentBytes(),
 			"snapshots":         resp.GetSnapshots(),
 			"snapshotBytes":     resp.GetSnapshotBytes(),
 			"minimumAgeSeconds": resp.GetMinimumAgeSeconds(),
+			"minAgeSeconds":     requestedSeconds,
+			"reclaimedBytes":    resp.ReclaimedBytes,
 		}, "", "  ")
 		if err != nil {
 			return err
@@ -76,22 +140,38 @@ func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, 
 		return err
 	}
 
+	effectiveAge := resp.GetMinimumAgeSeconds()
+	if requestedSeconds != nil && effectiveAge != *requestedSeconds {
+		if _, err = fmt.Fprintf(out, "Warning: this device agent ignored --min-age/--all and pruned with its default of %s; update it with 'wendy device update'.\n", formatCacheAge(effectiveAge)); err != nil {
+			return err
+		}
+	}
+
 	totalObjects := resp.GetContentBlobs() + resp.GetSnapshots()
 	totalBytes := saturatingAdd(resp.GetContentBytes(), resp.GetSnapshotBytes())
 	if totalObjects == 0 {
-		_, err = fmt.Fprintf(out, "No cache entries older than %s are eligible for pruning.\n", formatCacheAge(resp.GetMinimumAgeSeconds()))
+		if effectiveAge == 0 {
+			_, err = fmt.Fprintln(out, "No cache entries are eligible for pruning.")
+			return err
+		}
+		_, err = fmt.Fprintf(out, "No cache entries older than %s are eligible for pruning.\n", formatCacheAge(effectiveAge))
 		return err
 	}
 	action := "Released"
-	if dryRun {
+	if opts.dryRun {
 		action = "Eligible"
 	}
 	if _, err = fmt.Fprintf(out, "%s: %s across %d layer blobs and %d snapshots.\n",
 		action, formatBytes(int64(min(totalBytes, uint64(math.MaxInt64)))), resp.GetContentBlobs(), resp.GetSnapshots()); err != nil {
 		return err
 	}
-	if !dryRun {
-		_, err = fmt.Fprintln(out, "Containerd will reclaim unreachable data in the background; current images and active apps are preserved.")
+	if !opts.dryRun {
+		if resp.ReclaimedBytes != nil {
+			_, err = fmt.Fprintf(out, "Containerd reclaimed %s on the container storage filesystem.\n",
+				formatBytes(int64(min(*resp.ReclaimedBytes, uint64(math.MaxInt64)))))
+		} else {
+			_, err = fmt.Fprintln(out, "Containerd will reclaim unreachable data in the background; current images and active apps are preserved.")
+		}
 	}
 	return err
 }
