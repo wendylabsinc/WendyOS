@@ -175,6 +175,9 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		if _, ok := host.(robotprobe.HardwareSource); ok {
 			probes = append(probes, robotprobe.Hardware{})
 		}
+		if _, ok := host.(robotprobe.LiveHostSource); ok {
+			probes = append(probes, robotprobe.Thermal{})
+		}
 		if clock, ok := host.(robotprobe.ClockSource); ok {
 			env.Offer(robotinspect.RequirementTimeSync, clock)
 			probes = append(probes, robotprobe.Clock{})
@@ -183,6 +186,13 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		// and ROS 2 alike. This is the general camera path: it answers on a robot
 		// with no ROS installed, and it works wherever the device is reachable
 		// rather than only on its own network segment.
+		// The robot's own ROS 2 graph, read through the agent's sidecar. This is the
+		// path that reaches a graph living on the robot's private network, which a
+		// participant on this machine cannot see.
+		if ros2, ok := host.(robotprobe.ROS2Source); ok {
+			env.Offer(robotinspect.RequirementROS2Graph, ros2)
+			probes = append(probes, robotprobe.ROS2Graph{})
+		}
 		if cameras, ok := host.(robotprobe.CameraSource); ok {
 			mode, err := parseCameraMode(opts.expectMode)
 			if err != nil {
@@ -208,7 +218,14 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 	}
 	env.Offer(robotinspect.RequirementDDSDomain, source)
 
-	// What the cameras claim about themselves.
+	// There are deliberately two camera paths, and they answer different questions.
+	//
+	// The agent path above works wherever the device is reachable and sees every
+	// camera, whatever it is attached by — that is the general one. These DDS probes
+	// only see cameras a ROS node is publishing, and only from the robot's own network
+	// segment. What they add is the one thing the agent cannot give: a camera's
+	// calibrated intrinsics, and so its field of view per axis. That is the number the
+	// whole effort started from, so the narrower path earns its place.
 	if topics := source.TopicsOfType(rosmsg.TypeCameraInfo); len(topics) > 0 {
 		camera := robotprobe.CameraInfo{Topics: topics}
 		if err := registry.Register(camera); err != nil {
