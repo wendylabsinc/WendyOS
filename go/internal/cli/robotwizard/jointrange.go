@@ -243,7 +243,7 @@ func (m *jointRangeSweep) Preconditions(ctx context.Context, env *Env) error {
 	if env.OpenJointSource == nil {
 		return fmt.Errorf("this build can open no joint sources, so nothing can read this robot's joints")
 	}
-	source, err := env.OpenJointSource(ctx, env.Profile.Joints.Source)
+	source, err := env.OpenJointSource(ctx, env.Profile.Joints)
 	if err != nil {
 		return err
 	}

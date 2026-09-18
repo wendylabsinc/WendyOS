@@ -64,7 +64,7 @@ func newHarness(t *testing.T, steps []step) *harness {
 		Unit:        "default",
 		Prompt:      prompt,
 		Interactive: true,
-		OpenJointSource: func(context.Context, robotcal.JointSourceSpec) (JointSource, error) {
+		OpenJointSource: func(context.Context, robotcal.Joints) (JointSource, error) {
 			return source, nil
 		},
 	}
@@ -467,8 +467,8 @@ func TestRefusalsHappenBeforeTheOperatorIsAskedForAnything(t *testing.T) {
 			name:      "a backend this build cannot open",
 			procedure: "joint-range",
 			mutate: func(h *harness) {
-				h.deps.OpenJointSource = func(_ context.Context, spec robotcal.JointSourceSpec) (JointSource, error) {
-					return nil, &UnsupportedBackendError{Backend: spec.Backend, Available: []string{"ros2-joint-states"}}
+				h.deps.OpenJointSource = func(_ context.Context, joints robotcal.Joints) (JointSource, error) {
+					return nil, &UnsupportedBackendError{Backend: joints.Source.Backend, Available: []string{"ros2-joint-states"}}
 				}
 			},
 			errSubstr: "no joint source backend",

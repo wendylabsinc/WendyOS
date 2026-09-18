@@ -23,22 +23,33 @@ control:
 
 joints:
   unit: rad
-  # Live joint positions. `unitree-lowstate` is NOT implemented in this build;
-  # `note` is what the wizard prints when it refuses, so the explanation lives
-  # with the robot rather than as a case arm in the CLI.
+  # Live joint positions. The agent reads this one, on the device: DDS discovery
+  # is multicast, so the robot's graph never leaves the robot's own network
+  # segment and only something standing inside it can hear /lowstate.
+  #
+  # `note` is what the wizard prints if a build cannot open the backend, so the
+  # explanation lives with the robot rather than as a case arm in the CLI.
   source:
     backend: unitree-lowstate
     params:
       topic: /lowstate
       position_field: motor_state.q
+      # The interface the robot's DDS lives on, as seen from the device. Left
+      # empty the agent tries every eligible wired interface in turn, which is
+      # what finds a robot sharing a segment with the device's other networks.
+      interface: ""
     note: >-
       Checked against the real robot (unitree-g1-nx-2, 2026-09-18): it publishes
       no sensor_msgs/JointState. Joint positions are on /lowstate as
       unitree_hg/msg/LowState, a positionally indexed array with no joint names
       in it, and the agent's ROS 2 sidecar cannot even deserialise that type
       without the vendor's interface package ("The message type
-      'unitree_hg/msg/LowState' is invalid"). Reading it needs a vendor backend,
-      which is not in this change.
+      'unitree_hg/msg/LowState' is invalid"). The agent therefore decodes the
+      CDR itself and streams the slots it finds; the names below are what turns
+      a slot number back into a joint.
+      This robot actuates 27 of the message's 35 slots. Slots 13 and 14 — waist
+      roll and pitch — report nothing on this unit, so they arrive absent rather
+      than as a zero angle, and a procedure that names them will refuse.
   # The command order a policy indexes into. Index 31 on this robot has to be
   # the physical joint it was during training; that is what a sweep verifies.
   order:

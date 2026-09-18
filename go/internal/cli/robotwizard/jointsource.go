@@ -36,7 +36,13 @@ type JointSource interface {
 // JointSourceOpener resolves the backend a profile selected. The set of
 // backends is the platform's, exactly as the set of methods is: a profile names
 // one and parameterises it, and cannot describe a new one.
-type JointSourceOpener func(ctx context.Context, spec robotcal.JointSourceSpec) (JointSource, error)
+//
+// It takes the whole joint contract rather than only the source spec because
+// not every robot's wire format carries joint names. A Unitree humanoid
+// publishes a positionally indexed array and nothing else, so the only thing
+// that can say which joint index 22 is, is the profile's own order — which is
+// exactly why the sweep checks that order rather than trusting it.
+type JointSourceOpener func(ctx context.Context, joints robotcal.Joints) (JointSource, error)
 
 // UnsupportedBackendError is the refusal a profile gets when it selects a
 // backend this build cannot open. It names what would be needed, because the
