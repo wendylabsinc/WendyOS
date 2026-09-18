@@ -13,6 +13,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/legacycertproof"
 )
 
 // DefaultBrokerPort is the tunnel broker's gRPC port used when brokerURL is
@@ -112,9 +113,24 @@ func DialBroker(auth *config.AuthConfig, brokerURL string, extra ...grpc.DialOpt
 	if err != nil {
 		return nil, err
 	}
+	privateKeyPEM, err := cert.PrivateKeyPEM()
+	if err != nil {
+		return nil, fmt.Errorf("loading broker proof private key: %w", err)
+	}
+	identityURI := ""
+	if cert.UserID != "" {
+		identityURI = fmt.Sprintf("urn:wendy:org:%d:user:%s", cert.OrganizationID, cert.UserID)
+	} else if cert.AssetID != 0 {
+		identityURI = fmt.Sprintf("urn:wendy:org:%d:asset:%d", cert.OrganizationID, cert.AssetID)
+	}
+	proofSigner, err := legacycertproof.New(identityURI, cert.PemCertificate, privateKeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("initializing broker certificate proof: %w", err)
+	}
 
 	opts := append([]grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithPerRPCCredentials(proofSigner),
 		grpc.WithInitialWindowSize(8 * 1024 * 1024),
 		grpc.WithInitialConnWindowSize(16 * 1024 * 1024),
 		grpc.WithReadBufferSize(256 * 1024),

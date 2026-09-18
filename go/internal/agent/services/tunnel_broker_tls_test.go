@@ -77,6 +77,34 @@ func TestBrokerTLSConfig_EmptyCertKeyPresentsNoClientCert(t *testing.T) {
 	}
 }
 
+func TestBrokerDialOptsAddsFreshCertificateProof(t *testing.T) {
+	certPEM, keyPEM := ecdsaCertKeyPEM(t)
+	_, requestMetadata, err := brokerDialOpts(zap.NewNop(), 7, 42, certPEM, keyPEM, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := requestMetadata("/wendycloud.v1.TunnelBrokerService/RegisterPresence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := requestMetadata("/wendycloud.v1.TunnelBrokerService/RegisterPresence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := first.Get("x-wendy-certificate-uri"); len(got) != 1 || got[0] != "urn:wendy:org:7:asset:42" {
+		t.Fatalf("unexpected proof identity: %v", got)
+	}
+	if got := first.Get("x-wendy-certificate-serial"); len(got) != 1 || got[0] != "01" {
+		t.Fatalf("unexpected proof certificate serial: %v", got)
+	}
+	if first.Get("x-wendy-certificate-signature")[0] == "" {
+		t.Fatal("proof signature is empty")
+	}
+	if first.Get("x-wendy-certificate-nonce")[0] == second.Get("x-wendy-certificate-nonce")[0] {
+		t.Fatal("successive RPC proofs reused a nonce")
+	}
+}
+
 // A malformed CA chain is a hard error (the broker's server cert can't be
 // validated without it) — unlike the client-cert fallback.
 func TestBrokerTLSConfig_MalformedChainErrors(t *testing.T) {
