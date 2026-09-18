@@ -93,24 +93,71 @@ func TestVerifyDragonwingBoard(t *testing.T) {
 	}
 }
 
-// Deliberately wider than the board registry: it mirrors the publisher's
-// prefix, so a board is filtered out before wendy can flash it.
-func TestInstalledFromFlashBundleMirrorsThePublisherPrefix(t *testing.T) {
+// The filter is driven by install_mode, so an EDL board nobody has added to the
+// registry is still kept out of the disk-image flow.
+func TestInstalledFromFlashBundleReadsTheManifest(t *testing.T) {
+	withMode := func(key, mode string) deviceInfo {
+		return deviceInfo{
+			Key:           key,
+			LatestVersion: "1.0.0",
+			Manifest:      &deviceManifest{Versions: map[string]deviceVersion{"1.0.0": {InstallMode: mode}}},
+		}
+	}
+
+	// An unknown board, unknown mode, no code change anywhere: still filtered.
+	if !installedFromFlashBundle(withMode("somevendor-board-3", "edl")) {
+		t.Error("an edl board outside the registry reached the disk-image flow")
+	}
+	for _, mode := range []string{"", "recovery"} {
+		if installedFromFlashBundle(withMode("raspberry-pi-5", mode)) {
+			t.Errorf("install_mode %q was treated as a flash bundle", mode)
+		}
+	}
+
+	// Without a manifest the device-type prefix is all we have.
 	for _, b := range dragonwingBoards {
-		if !installedFromFlashBundle(b.deviceType) {
-			t.Errorf("installedFromFlashBundle(%q) = false, want true", b.deviceType)
+		if !installedFromFlashBundle(deviceInfo{Key: b.deviceType}) {
+			t.Errorf("%s reached the disk-image flow with no manifest", b.deviceType)
 		}
 	}
 	if _, registered := dragonwingBoardFor("dragonwing-iq-9999"); registered {
 		t.Fatal("dragonwing-iq-9999 is registered; pick an unregistered device type")
 	}
-	if !installedFromFlashBundle("dragonwing-iq-9999") {
+	if !installedFromFlashBundle(deviceInfo{Key: "dragonwing-iq-9999"}) {
 		t.Error("an unregistered Dragonwing is not filtered out of the disk-image flow")
 	}
-	for _, deviceType := range []string{"", "raspberry-pi-5", "jetson-agx-thor", "dragonwing"} {
-		if installedFromFlashBundle(deviceType) {
-			t.Errorf("installedFromFlashBundle(%q) = true, want false", deviceType)
+	for _, key := range []string{"", "raspberry-pi-5", "jetson-agx-thor", "dragonwing"} {
+		if installedFromFlashBundle(deviceInfo{Key: key}) {
+			t.Errorf("installedFromFlashBundle(%q) = true, want false", key)
 		}
+	}
+
+	// The published 8275 manifest declares no install_mode at all, so the
+	// prefix has to hold on its own or the shipping board stops being filtered.
+	if !installedFromFlashBundle(withMode("dragonwing-iq-8275", "")) {
+		t.Error("a Dragonwing with no install_mode reached the disk-image flow")
+	}
+}
+
+// One rule, one place: the picker filter and the install dispatch both refuse a
+// device type by this, so they cannot drift apart.
+func TestIsFlashBundleDeviceType(t *testing.T) {
+	for _, b := range dragonwingBoards {
+		if !isFlashBundleDeviceType(b.deviceType) {
+			t.Errorf("%s is not recognised as a flash-bundle board", b.deviceType)
+		}
+	}
+	if !isFlashBundleDeviceType("dragonwing-iq-9999") {
+		t.Error("an unregistered Dragonwing is not recognised as a flash-bundle board")
+	}
+	for _, key := range []string{"", "dragonwing", "raspberry-pi-5", "jetson-agx-thor"} {
+		if isFlashBundleDeviceType(key) {
+			t.Errorf("isFlashBundleDeviceType(%q) = true, want false", key)
+		}
+	}
+	// The manifest-reading filter must agree with it, with or without a manifest.
+	if !installedFromFlashBundle(deviceInfo{Key: "dragonwing-iq-9999"}) {
+		t.Error("the filter and the device-type rule disagree")
 	}
 }
 
@@ -212,6 +259,27 @@ func TestDragonwingBundleFromRejectsAPartialTriple(t *testing.T) {
 				t.Errorf("error %q does not name the missing key %s", err, tc.wantKey)
 			}
 		})
+	}
+}
+
+// The generic fallback is held to the dedicated triple's bar: a zero size
+// silently disables the disk-space pre-flight the extraction depends on.
+func TestDragonwingBundleFromRejectsAZeroSize(t *testing.T) {
+	board, _ := dragonwingBoardFor("dragonwing-iq-8275")
+	dm := &deviceManifest{Versions: map[string]deviceVersion{
+		"0.19.3": {Path: "a/old.tar.gz", Checksum: "sha-old"},
+	}}
+	got, err := dragonwingBundleFrom(dm, board, "0.19.3")
+	if err == nil {
+		t.Fatalf("a bundle published with no size resolved to %+v", got)
+	}
+	if !strings.Contains(err.Error(), "size_bytes") {
+		t.Errorf("error %q does not name the missing field", err)
+	}
+	// Which matters because the pre-flight it protects is a no-op on a zero size.
+	if err := checkDragonwingDiskSpace(t.TempDir(), dragonwingPlan{
+		info: &dragonwingBundleInfo{SizeBytes: 0}}); err != nil {
+		t.Errorf("the disk-space pre-flight is not skipped on a zero size: %v", err)
 	}
 }
 

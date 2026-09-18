@@ -366,6 +366,11 @@ func getImageInfo(dm *deviceManifest, ver, storage string) (*imageInfo, error) {
 	if !ok {
 		return nil, fmt.Errorf("version %s not found in device manifest", ver)
 	}
+	// Guarding here rather than at the write covers `os download` and the VM
+	// path too, which also resolve an image through this.
+	if err := checkInstallMode(ver, v.InstallMode); err != nil {
+		return nil, err
+	}
 	t := resolveTriple(v, storage)
 	if t.imagePath == "" && t.zstPath == "" {
 		return nil, fmt.Errorf("version %s has no %s image artifact", ver, storage)
@@ -686,8 +691,19 @@ func dragonwingBundleFrom(dm *deviceManifest, board dragonwingBoard, version str
 		return nil, fmt.Errorf("version %s publishes an incomplete flash bundle: %s missing from the manifest",
 			version, strings.Join(missing, ", "))
 	}
+	// The generic fallback is held to the dedicated triple's bar: a size of zero
+	// skips the disk-space pre-flight, and the extraction then dies with ENOSPC
+	// part way through instead of refusing before the download.
+	var unusable []string
 	if path == "" {
-		return nil, fmt.Errorf("version %s has no flash bundle in the manifest", version)
+		unusable = append(unusable, "path")
+	}
+	if size <= 0 {
+		unusable = append(unusable, "size_bytes")
+	}
+	if len(unusable) > 0 {
+		return nil, fmt.Errorf("version %s has no usable flash bundle in the manifest: %s missing",
+			version, strings.Join(unusable, ", "))
 	}
 	return &dragonwingBundleInfo{
 		URL:       gcsBaseURL + "/" + path,

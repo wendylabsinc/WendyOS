@@ -1,6 +1,9 @@
 package commands
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func newTestManifest() *deviceManifest {
 	return &deviceManifest{
@@ -42,6 +45,21 @@ func TestGetImageInfoSDPicksSDTriple(t *testing.T) {
 	}
 	if info.ZstURL != gcsBaseURL+"/img/sd.img.zst" || info.BmapURL != gcsBaseURL+"/img/sd.bmap" {
 		t.Errorf("SD triple not selected: %+v", info)
+	}
+}
+
+// An artifact this build cannot write must be refused at resolution, which is
+// the one point `os install`, `os download` and the VM path all share.
+func TestGetImageInfoRejectsAnUnsupportedInstallMode(t *testing.T) {
+	dm := &deviceManifest{Versions: map[string]deviceVersion{
+		"1.0.0": {InstallMode: "edl", Path: "img/bundle.qcomflash.tar.gz"},
+	}}
+	_, err := getImageInfo(dm, "1.0.0", "sd")
+	if err == nil {
+		t.Fatal("an edl-mode version resolved to a writable image")
+	}
+	if !strings.Contains(err.Error(), "update wendy") {
+		t.Errorf("error %q does not name the remedy", err)
 	}
 }
 
