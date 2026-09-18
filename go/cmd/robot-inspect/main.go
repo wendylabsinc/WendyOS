@@ -117,11 +117,17 @@ func run(ctx context.Context, opts options) error {
 	// The body. Registered unconditionally: the probe reports an absent topic as a
 	// finding, which is the honest answer for a robot that is not a Unitree humanoid,
 	// and is different from never having looked.
-	joints := robotprobe.Joints{}
-	if err := registry.Register(joints); err != nil {
-		return err
+	// The body, its battery and its hands. All three are registered unconditionally:
+	// each reports an absent topic as a finding, which is the honest answer on a robot
+	// that is not a Unitree humanoid and is different from never having looked.
+	for _, probe := range []robotinspect.Probe{
+		robotprobe.Joints{}, robotprobe.RobotBattery{}, robotprobe.Hands{},
+	} {
+		if err := registry.Register(probe); err != nil {
+			return err
+		}
+		want = append(want, probe.Provides()...)
 	}
-	want = append(want, joints.Provides()...)
 
 	env := robotinspect.NewEnv().Offer(robotinspect.RequirementDDSDomain, reader)
 	doc := robotinspect.Inspect(runCtx, registry, env, robotinspect.Target{
