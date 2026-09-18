@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -171,7 +172,14 @@ func TestNewLayeredSourceKeepsTheAgentWhenDiscoveryMerelyFails(t *testing.T) {
 	if source.agent == nil {
 		t.Fatal("dropped the agent over a transient discovery failure")
 	}
-	if source.degraded != "" {
-		t.Fatalf("reported a downgrade that did not happen: %q", source.degraded)
+	// It still has to be recorded. The probes that read the robot itself are chosen
+	// from this listing, so a failure here removes every one of them from the report —
+	// and an unexplained absence reads as "this robot has no body" rather than "the
+	// body was never looked for".
+	if source.degraded == "" {
+		t.Fatal("a failed listing left the body out of the report with nothing to say why")
+	}
+	if !strings.Contains(source.degraded, "no such interface") {
+		t.Fatalf("the reason does not carry the cause: %q", source.degraded)
 	}
 }

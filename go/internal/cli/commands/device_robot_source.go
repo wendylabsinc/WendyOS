@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -61,9 +62,13 @@ func newLayeredTopicSource(ctx context.Context, host robotprobe.HostFactsSource,
 		// for the first sample to fail, since with no listing no probe runs.
 		source.agent = nil
 		source.degraded = oldAgentDowngrade
+	default:
+		// The probes that read the robot itself are chosen from this listing, so a
+		// failure here removes them from the report with nothing to show it
+		// happened. Saying so is the difference between "this robot has no body to
+		// read" and "the body could not be looked for".
+		source.degraded = fmt.Sprintf("the robot's own topics could not be listed, so nothing that reads its body was run: %v", err)
 	}
-	// Any other failure is left alone. The listing only picks which probes to run, and
-	// a probe that runs and finds nothing says so more honestly than one that never ran.
 	return source
 }
 

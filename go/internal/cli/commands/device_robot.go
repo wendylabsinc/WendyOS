@@ -257,6 +257,7 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 			Device: opts.label, VendorKind: opts.vendorKind, Want: want,
 		})
 		noteAgentAbsence(&doc, opts)
+		noteLostConnection(&doc, host)
 		return doc, nil
 	}
 	env.Offer(robotinspect.RequirementDDSDomain, source)
@@ -327,6 +328,7 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		Want:       want,
 	})
 	noteAgentAbsence(&doc, opts)
+	noteLostConnection(&doc, host)
 	// A silent downgrade to this machine's own participant explains an empty body
 	// section better than the empty section does.
 	if layered, ok := source.(*layeredTopicSource); ok && layered.degraded != "" {
@@ -334,6 +336,25 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 			robotinspect.ReasonRequirementUnmet, layered.degraded)
 	}
 	return doc, nil
+}
+
+// noteLostConnection records a connection that dropped part-way through.
+//
+// Without it a tunnel that drops mid-run produces a report where every agent-backed probe
+// failed with the same handshake error and nothing says the connection is what broke — a
+// wall of identical failures that reads as a robot with seven broken subsystems. This says
+// it once, and says the run is worth repeating.
+func noteLostConnection(doc *robotinspect.Document, host robotprobe.HostFactsSource) {
+	facts, ok := host.(*agentHostFacts)
+	if !ok {
+		return
+	}
+	lost := facts.lostConnection()
+	if lost == nil {
+		return
+	}
+	doc.Failed["agent"] = robotinspect.NewUnknown(robotinspect.ReasonProbeFailed,
+		fmt.Sprintf("the connection to the agent dropped part-way through, so everything below it failed for that one reason rather than on its own merits — run it again: %s", agentMessage(lost)))
 }
 
 // noteAgentAbsence records an unreachable agent in the document itself, so the reason
