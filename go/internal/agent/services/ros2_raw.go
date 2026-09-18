@@ -57,22 +57,10 @@ func (s *ROS2Service) StreamRawTopic(req *agentpbv2.StreamRawTopicRequest, strea
 	}
 	defer lease.Close()
 
-	// Discovery is announcement driven, so the graph appears over a second or two
-	// rather than on request.
 	settle := boundedDuration(req.GetSettleMs(), rawSettleDefault, rawSettleMaximum)
-	select {
-	case <-time.After(settle):
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-lease.Done():
-		return status.Error(codes.Unavailable, "the participant closed during discovery")
-	}
-
-	endpoint, ok := findRawEndpoint(lease.Endpoints(), topic, req.GetType())
-	if !ok {
-		// Nothing published it. That is an answer about the robot, not a failure of
-		// this call, and the caller distinguishes them by the code.
-		return status.Errorf(codes.NotFound, "no writer for %s after %s", topic, settle)
+	endpoint, err := waitForEndpoint(ctx, lease, topic, req.GetType(), settle)
+	if err != nil {
+		return err
 	}
 	if err := lease.Subscribe(endpoint); err != nil {
 		return status.Errorf(codes.Unavailable, "subscribing to %s: %v", topic, err)
@@ -175,14 +163,9 @@ func (s *ROS2Service) ListRawTopics(ctx context.Context, req *agentpbv2.ListRawT
 	defer lease.Close()
 
 	settle := boundedDuration(req.GetSettleMs(), rawListSettleDefault, rawSettleMaximum)
-	select {
-	case <-time.After(settle):
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-lease.Done():
-		return nil, status.Error(codes.Unavailable, "the participant closed during discovery")
+	if err := waitForQuietGraph(ctx, lease, settle); err != nil {
+		return nil, err
 	}
-
 	return &agentpbv2.ListRawTopicsResponse{Topics: summarizeEndpoints(lease.Endpoints())}, nil
 }
 
@@ -210,4 +193,71 @@ func summarizeEndpoints(endpoints []rtps.Endpoint) []*agentpbv2.RawTopic {
 		return topics[i].Type < topics[j].Type
 	})
 	return topics
+}
+
+// discoveryQuiet is how long the graph must stop changing before a listing is considered
+// complete. Announcements arrive in a burst, so a gap this long means the burst is over.
+const discoveryQuiet = 750 * time.Millisecond
+
+// waitForEndpoint returns as soon as a topic's writer is discovered, giving up after
+// settle.
+//
+// Sleeping out the full settle and then looking once would be simpler and much worse. The
+// pool keeps a participant warm across calls, so after the first read the graph is already
+// known — and an inspection reads four topics, which would pay the discovery wait four
+// times over for a writer it had already found. That is the difference between a report
+// that takes a minute and one that takes seconds.
+func waitForEndpoint(ctx context.Context, lease *rtps.Lease, topic, typeName string, settle time.Duration) (rtps.Endpoint, error) {
+	deadline := time.NewTimer(settle)
+	defer deadline.Stop()
+	for {
+		if endpoint, ok := findRawEndpoint(lease.Endpoints(), topic, typeName); ok {
+			return endpoint, nil
+		}
+		select {
+		case <-lease.Changed():
+			// Something joined or left; look again.
+		case <-deadline.C:
+			// Nothing published it. That is an answer about the robot rather than
+			// a failure of this call, and the caller tells them apart by the code.
+			return rtps.Endpoint{}, status.Errorf(codes.NotFound, "no writer for %s after %s", topic, settle)
+		case <-ctx.Done():
+			return rtps.Endpoint{}, ctx.Err()
+		case <-lease.Done():
+			return rtps.Endpoint{}, status.Error(codes.Unavailable, "the participant closed during discovery")
+		}
+	}
+}
+
+// waitForQuietGraph waits for discovery to stop producing new participants, capped at
+// settle. A listing cannot stop at the first arrival the way waitForEndpoint does — it has
+// no particular thing to wait for — so it waits for the announcements to go quiet instead,
+// which on a warm participant is immediate.
+func waitForQuietGraph(ctx context.Context, lease *rtps.Lease, settle time.Duration) error {
+	deadline := time.NewTimer(settle)
+	defer deadline.Stop()
+	quiet := time.NewTimer(discoveryQuiet)
+	defer quiet.Stop()
+	for {
+		select {
+		case <-lease.Changed():
+			if !quiet.Stop() {
+				select {
+				case <-quiet.C:
+				default:
+				}
+			}
+			quiet.Reset(discoveryQuiet)
+		case <-quiet.C:
+			return nil
+		case <-deadline.C:
+			// Still arriving when time ran out. Reporting what was seen so far
+			// beats reporting nothing.
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-lease.Done():
+			return status.Error(codes.Unavailable, "the participant closed during discovery")
+		}
+	}
 }
