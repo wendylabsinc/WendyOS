@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -110,5 +111,67 @@ func TestRejectMultiServiceFleetRun(t *testing.T) {
 func TestAppRepositoryIsLowercasedAppLatest(t *testing.T) {
 	if got, want := appRepository(&appconfig.AppConfig{AppID: "MyApp"}), "myapp:latest"; got != want {
 		t.Fatalf("appRepository = %q, want %q", got, want)
+	}
+}
+
+// A fingerprint recorded by an earlier local build must not silently bypass a
+// requested build host. Watch-mode preservation is added after this decision,
+// so returning an independent empty map also lets watch add its own skips
+// without mutating the persistent set.
+func TestServiceBuildSkipsRemoteDiscardsPersistentFingerprints(t *testing.T) {
+	persistent := map[string]bool{"api": true}
+	if got := serviceBuildSkips("", persistent); !got["api"] {
+		t.Fatal("local build lost its content-verified skip")
+	}
+
+	remote := serviceBuildSkips("spark-office", persistent)
+	if remote["api"] {
+		t.Fatal("remote build reused a fingerprint from an earlier local build")
+	}
+	remote["watch-preserved"] = true
+	if persistent["watch-preserved"] {
+		t.Fatal("remote watch skip map aliases the persistent skip map")
+	}
+}
+
+// Once a remote build is attempted, the preceding local-build fingerprint no
+// longer proves what :latest refers to. A failed RPC may have delivered content
+// before reporting its error, so only watch-preserved services are safe to keep.
+func TestInvalidateRemoteServiceDeployFingerprints(t *testing.T) {
+	isolateFingerprintCache(t)
+
+	const (
+		appID     = "group"
+		deviceKey = "device"
+	)
+	services := map[string]*appconfig.ServiceConfig{
+		"delivered": {},
+		"failed":    {},
+		"preserved": {},
+	}
+	for _, name := range []string{"delivered", "failed", "preserved"} {
+		saveDeployFingerprint(serviceFingerprintKey(appID, name), deviceKey, deployFingerprint{
+			InputHash:    name + "-hash",
+			LayerDiffIDs: []string{"sha256:" + name},
+		})
+	}
+
+	invalidateRemoteServiceDeployFingerprints(
+		appID,
+		deviceKey,
+		services,
+		map[string]bool{"preserved": true},
+	)
+
+	for _, name := range []string{"delivered", "failed"} {
+		if _, ok := loadDeployFingerprint(serviceFingerprintKey(appID, name), deviceKey); ok {
+			t.Fatalf("remote build attempt for %s retained the preceding local fingerprint", name)
+		}
+	}
+	for _, name := range []string{"preserved"} {
+		fp, ok := loadDeployFingerprint(serviceFingerprintKey(appID, name), deviceKey)
+		if !ok || fp.InputHash != name+"-hash" || !slices.Equal(fp.LayerDiffIDs, []string{"sha256:" + name}) {
+			t.Fatalf("%s fingerprint = %+v, present %v; want last known-good fingerprint retained", name, fp, ok)
+		}
 	}
 }

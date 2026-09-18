@@ -452,6 +452,12 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	sfOpts := debugStagefileOptions(opts.debug)
 	serviceEnvs := effectiveServiceEnvs(appCfg, services, opts.env)
 	skip, hashes, dockerfiles := planServicePushSkips(ctx, conn, cwd, appCfg.AppID, deviceKey, platform, serviceEnvs, services, buildArgs, sfOpts...)
+	// A remote build cannot report the layer identities required to create or
+	// refresh these persistent skip decisions. Do not let a fingerprint from an
+	// earlier local build silently bypass --build-host. Watch-mode preservation
+	// is added below and remains valid because it describes the current watch
+	// session rather than an image identity from a different build path.
+	skip = serviceBuildSkips(opts.buildHost, skip)
 
 	// Build the full per-service create configs before selecting watch work: a
 	// service is unchanged only when both its image inputs and its effective
@@ -517,7 +523,11 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		return buildErr
 	}
 
-	recordServiceDeployFingerprints(appCfg.AppID, appCfg.Version, deviceKey, services, skip, failed, hashes, preparedContent)
+	if opts.buildHost != "" {
+		invalidateRemoteServiceDeployFingerprints(appCfg.AppID, deviceKey, services, skip)
+	} else {
+		recordServiceDeployFingerprints(appCfg.AppID, appCfg.Version, deviceKey, services, skip, failed, hashes, preparedContent)
+	}
 
 	// Default (all-or-nothing): any build/push failure aborts the whole group so
 	// no half-deployed group is left behind. --keep-going deploys what built and
@@ -636,6 +646,31 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	// In --keep-going mode, exit non-zero after deploying the healthy subset so
 	// callers/CI still see that some services failed.
 	return partialErr
+}
+
+// serviceBuildSkips keeps persistent content-verified skips for local builds,
+// but remote builds start from an empty set. buildServicesRemote cannot report
+// the layer identities needed to prove that a previous fingerprint still
+// describes the image now registered on the device.
+func serviceBuildSkips(buildHost string, persistent map[string]bool) map[string]bool {
+	if strings.TrimSpace(buildHost) == "" {
+		return persistent
+	}
+	return map[string]bool{}
+}
+
+// invalidateRemoteServiceDeployFingerprints removes the old locally-verifiable
+// identity after a remote service build is attempted. It runs even when the
+// build reports an error because the remote RPC may have delivered content
+// before failing; retaining the old identity would not fail closed. Services
+// preserved by watch did not invoke the remote build and keep their fingerprint.
+func invalidateRemoteServiceDeployFingerprints(appID, deviceKey string, services map[string]*appconfig.ServiceConfig, skip map[string]bool) {
+	for name := range services {
+		if skip[name] {
+			continue
+		}
+		removeDeployFingerprint(serviceFingerprintKey(appID, name), deviceKey)
+	}
 }
 
 // recordServiceDeployFingerprints persists only successful build/preparations.

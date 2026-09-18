@@ -87,13 +87,14 @@ and silently drop the rest, which is the wrong-machine failure this feature's de
 refuses everywhere else.
 
 **No push-skip.** A remote build reports an image digest, not the uncompressed layer
-identities `QueryLayers` verifies, so it cannot prove what the device holds. The
-fingerprint recorder already treats an absent content list as "record nothing", which
-leaves any existing verifiable fingerprint intact and makes the next run's skip check
-fail closed. A remote multi-service run therefore rebuilds every selected service —
-correct, and no worse than the local multi-service path, whose push-skip is also
-inactive today. Restoring it needs the build host to report layer identities, which
-is its own change.
+identities `QueryLayers` verifies, so it cannot prove what the device holds. A remote
+run therefore ignores persistent skips recorded by earlier local builds and removes
+the preceding fingerprint after each remote build attempt (including an attempt that
+reports an error, because delivery may have preceded that error). This makes the next
+run fail closed rather than authorizing a skip from layer identities that describe an
+older image. Watch mode may still preserve a service already confirmed unchanged and
+running within that watch session. Restoring persistent push-skip needs the build host
+to report layer identities, which is its own change.
 
 **Capabilities are checked once per group**, not once per service: builder role,
 BuildKit presence, buildkit root space, platform support and chunk-delivery support

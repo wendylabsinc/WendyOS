@@ -35,10 +35,11 @@ import (
 //
 // It returns no prepared content. A remote build reports an image digest, not
 // the uncompressed layer identities QueryLayers verifies, so there is nothing
-// that could authorize a later push-skip. The fingerprint recorder treats an
-// absent content list as "do not record", which leaves any existing verifiable
-// fingerprint intact and makes the next run's skip check fail closed — the
-// correct answer while this path cannot prove what the device holds.
+// that could authorize a later push-skip. The caller therefore ignores
+// persistent skips on this path and invalidates the preceding fingerprint after
+// each remote build attempt. Watch-mode preservation remains separate: a
+// service already confirmed unchanged and running during this watch session
+// does not invoke this function's build callback at all.
 func buildServicesRemote(
 	ctx context.Context,
 	conn *grpcclient.AgentConnection,
