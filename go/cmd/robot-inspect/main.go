@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -34,11 +35,20 @@ func main() {
 	device := flag.String("device", "", "name to record the inspection against")
 	kind := flag.String("kind", "", "robot kind to record, such as unitree-g1")
 	asJSON := flag.Bool("json", false, "emit the document as JSON")
+	capture := flag.String("capture", "", "instead of inspecting, print one raw payload from this topic as base64, for use as a test fixture")
 	canonical := flag.Bool("canonical", false, "with -json, omit wall-clock fields so two passes diff on substance")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if *capture != "" {
+		if err := captureOne(ctx, *capture, options{domain: *domain, iface: *iface, settle: *settle}); err != nil {
+			fmt.Fprintf(os.Stderr, "robot-inspect: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := run(ctx, options{
 		domain: *domain, iface: *iface, settle: *settle, window: *window,
@@ -136,5 +146,40 @@ func run(ctx context.Context, opts options) error {
 		return nil
 	}
 	fmt.Print(robotinspect.Render(doc))
+	return nil
+}
+
+// captureOne prints a single raw payload so it can be saved as a test fixture.
+//
+// A decoder tested only against a message the same author reconstructed from a spec
+// proves the two agree, not that either matches the robot. Pinning it to bytes the robot
+// actually sent is what closes that gap, and the agent's own ROS 2 decoders keep captured
+// payloads as testdata for the same reason.
+func captureOne(ctx context.Context, topic string, opts options) error {
+	participant, err := rtps.NewParticipant(rtps.Config{DomainID: opts.domain, Interface: opts.iface})
+	if err != nil {
+		return fmt.Errorf("joining DDS domain %d: %w", opts.domain, err)
+	}
+	defer participant.Close()
+
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go participant.Run(runCtx)
+
+	select {
+	case <-time.After(opts.settle):
+	case <-runCtx.Done():
+		return runCtx.Err()
+	}
+
+	reader := robotprobe.NewDDSReader(robotprobe.NewParticipantLease(participant, runCtx.Done()))
+	payloads, err := reader.Sample(runCtx, topic, "", 5*time.Second, 1)
+	if err != nil {
+		return fmt.Errorf("sampling %s: %w", topic, err)
+	}
+	if len(payloads) == 0 {
+		return fmt.Errorf("nothing published %s", topic)
+	}
+	fmt.Printf("CAPTURE %s %d bytes\n%s\n", topic, len(payloads[0]), base64.StdEncoding.EncodeToString(payloads[0]))
 	return nil
 }

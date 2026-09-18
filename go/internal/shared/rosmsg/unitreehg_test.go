@@ -3,6 +3,8 @@ package rosmsg
 import (
 	"encoding/binary"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -197,5 +199,78 @@ func TestHGModeWordsAreNotTheFSMId(t *testing.T) {
 	// 801 does not fit in the field at all, which is the point.
 	if int(state.ModeMachine) == 801 {
 		t.Error("a uint8 held 801")
+	}
+}
+
+// A decoder tested only against a message its own author reconstructed from a spec
+// proves the two agree, not that either matches the robot. This pins it to bytes
+// unitree-g1-nx-2 actually published, captured on 2026-09-18 with the robot idle.
+//
+// The strongest assertion is simply that it decodes: the walk consumes every field
+// including the ones nothing reads and requires the payload to end exactly, so a layout
+// that is off by a single byte anywhere fails here rather than returning plausible
+// numbers. The captured payload is 2092 bytes — four of encapsulation plus the 2088 the
+// IDL implies — which is itself independent confirmation.
+func TestDecodeHGLowStateAgainstBytesTheRobotSent(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("testdata", "unitree_hg_lowstate.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) != 4+hgBodyBytes {
+		t.Fatalf("fixture is %d bytes, want %d", len(payload), 4+hgBodyBytes)
+	}
+
+	state, err := DecodeHGLowState(payload)
+	if err != nil {
+		t.Fatalf("the robot's own bytes did not decode: %v", err)
+	}
+
+	// The robot was idle when this was captured, which is what makes the next two
+	// assertions worth making: they are the signature that distinguishes a position
+	// vector from a velocity one, and so would catch the adjacent float fields having
+	// been read in the wrong order.
+	var live, distinct int
+	seen := map[float32]bool{}
+	var maxAbsPosition, maxAbsTorque float64
+	for _, motor := range state.Motors {
+		if motor.Voltage == 0 && motor.TemperatureC == [2]int16{} {
+			continue
+		}
+		live++
+		if !seen[motor.Position] {
+			seen[motor.Position] = true
+			distinct++
+		}
+		if abs := math.Abs(float64(motor.Position)); abs > maxAbsPosition {
+			maxAbsPosition = abs
+		}
+		if abs := math.Abs(float64(motor.Torque)); abs > maxAbsTorque {
+			maxAbsTorque = abs
+		}
+		// A motor on a healthy bus, not a float read from the wrong offset.
+		if motor.Voltage < 20 || motor.Voltage > 60 {
+			t.Errorf("motor voltage %v is outside anything a battery produces", motor.Voltage)
+		}
+		for sensor, celsius := range motor.TemperatureC {
+			if celsius < 0 || celsius > 120 {
+				t.Errorf("motor temperature[%d] = %d C is not a temperature", sensor, celsius)
+			}
+		}
+	}
+
+	if live < 20 {
+		t.Errorf("only %d live motors; a G1 drives 27", live)
+	}
+	// A pose: many different angles, spread over a radian or so.
+	if distinct < live/2 {
+		t.Errorf("%d distinct positions across %d motors; a position vector is varied", distinct, live)
+	}
+	if maxAbsPosition < 0.1 || maxAbsPosition > math.Pi {
+		t.Errorf("largest position %v rad does not look like a joint angle", maxAbsPosition)
+	}
+	// Holding still: torques near zero. If position and torque had been read in each
+	// other's place, these two bounds would be the wrong way round.
+	if maxAbsTorque > 20 {
+		t.Errorf("largest torque %v Nm is too large for an idle robot", maxAbsTorque)
 	}
 }
