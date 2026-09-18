@@ -200,3 +200,67 @@ func TestDecoder_SkipBytesPaysAlignment(t *testing.T) {
 		t.Fatalf("Uint8 = %v, %v; want 42, nil", v, err)
 	}
 }
+
+func TestDecoder_Float64(t *testing.T) {
+	// 1.5 as a little-endian double, after the CDR_LE encapsulation header.
+	payload := append([]byte{0x00, 0x01, 0x00, 0x00},
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x3f)
+	d, err := NewDecoder(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Float64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1.5 {
+		t.Errorf("Float64() = %v, want 1.5", got)
+	}
+	if d.Remaining() != 0 {
+		t.Errorf("Remaining() = %d, want 0", d.Remaining())
+	}
+}
+
+func TestDecoder_Float64ShortReadIsErrShort(t *testing.T) {
+	d, err := NewDecoder([]byte{0x00, 0x01, 0x00, 0x00, 0x01, 0x02})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Float64(); !errors.Is(err, ErrShort) {
+		t.Errorf("err = %v, want ErrShort", err)
+	}
+}
+
+func TestDecoder_SkipFloat64Seq(t *testing.T) {
+	// A five-element distortion vector, then a sentinel the decoder must land on.
+	// The doubles align to 8, so four bytes of padding follow the length prefix;
+	// getting that wrong is exactly what this test catches.
+	payload := []byte{0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00}
+	payload = append(payload, make([]byte, 4)...)
+	payload = append(payload, make([]byte, 5*8)...)
+	payload = append(payload, 0x2a, 0x00, 0x00, 0x00)
+	d, err := NewDecoder(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SkipFloat64Seq(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Uint32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 42 {
+		t.Errorf("sentinel = %d, want 42; the skip misaligned", got)
+	}
+}
+
+func TestDecoder_SkipFloat64SeqEmpty(t *testing.T) {
+	d, err := NewDecoder([]byte{0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SkipFloat64Seq(); err != nil {
+		t.Errorf("an empty sequence should skip cleanly: %v", err)
+	}
+}
