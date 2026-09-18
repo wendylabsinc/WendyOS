@@ -212,3 +212,34 @@ func decodeHGMotor(d *cdr.Decoder, index int) (HGMotor, error) {
 	}
 	return motor, nil
 }
+
+// Live reports whether anything is behind this slot.
+//
+// unitree_hg publishes a fixed HGMotorCount slots and a given robot drives fewer
+// of them — a G1 drives 27 for the body — with no field in the message saying
+// which. An unused slot reports zero volts and zero degrees on both of its
+// temperature sensors, so that is the test. It is deliberately not "position is
+// zero": a real joint can sit at exactly zero radians, and treating that as
+// absent would hide a joint that is there.
+//
+// The predicate lives here, next to the wire layout it is a fact about, because
+// two copies of it would eventually disagree — and the two callers are on
+// opposite sides of a gRPC boundary, where "idle" and "reporting zero" must mean
+// the same thing on both ends or a calibration is taken against a joint that was
+// never there.
+func (m HGMotor) Live() bool {
+	return m.Voltage != 0 || m.TemperatureC[0] != 0 || m.TemperatureC[1] != 0
+}
+
+// LiveMotors returns the indices of every slot that is reporting, in wire order.
+// Indices are the message's own, so a caller can resolve one to a joint name
+// through its robot profile; they never shift because a slot is idle.
+func (s *HGLowState) LiveMotors() []int {
+	live := make([]int, 0, len(s.Motors))
+	for i, motor := range s.Motors {
+		if motor.Live() {
+			live = append(live, i)
+		}
+	}
+	return live
+}

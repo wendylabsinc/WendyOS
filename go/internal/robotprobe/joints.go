@@ -194,18 +194,12 @@ func (p Joints) motorProperties(motor rosmsg.HGMotor, index int, source robotins
 
 // liveMotors picks out the slots that are actually driving something.
 //
-// unitree_hg publishes a fixed 35 motors and a G1 uses 29 of them, with no field saying
-// which. An unused slot reports zero volts and zero degrees, so a slot showing neither
-// voltage nor temperature is treated as absent. Both counts are reported, so nothing is
-// hidden by the heuristic: a reader can see 35 slots and 29 live.
+// The rule itself is rosmsg's, next to the wire layout it is a fact about, because the
+// agent applies the same one when it streams joints for a calibration sweep and the two
+// must not drift. Both counts are reported here, so nothing is hidden by the heuristic: a
+// reader can see 35 slots and 29 live.
 func liveMotors(state *rosmsg.HGLowState) []int {
-	var live []int
-	for i, motor := range state.Motors {
-		if motor.Voltage != 0 || motor.TemperatureC[0] != 0 || motor.TemperatureC[1] != 0 {
-			live = append(live, i)
-		}
-	}
-	return live
+	return state.LiveMotors()
 }
 
 // hottestMotor returns the highest temperature any live motor reports, from either of

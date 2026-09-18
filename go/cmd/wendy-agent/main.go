@@ -288,10 +288,6 @@ func main() {
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
 	timeSyncSvc := services.NewTimeSyncService(logger, timesyncMgr)
-	// The robot calibration store, at robotcal.DefaultRoot. On the disk-backed
-	// /var/lib tree beside the camera registries: a calibration has to survive a
-	// reboot and be readable by the apps that run on it.
-	robotSvc := services.NewRobotService(logger, "")
 	wifiSvc := services.NewWiFiService(logger, networkMgr)
 	bluetoothSvc := services.NewBluetoothService(logger, btManager)
 	agentUpdateSvc := services.NewAgentUpdateService(logger, installer)
@@ -333,6 +329,16 @@ func main() {
 	discoveryPool := rtps.NewPool()
 	defer discoveryPool.Close()
 	startROS2BatteryMonitor(ctx, logger, configPath, discoveryPool)
+
+	// The robot calibration store, at robotcal.DefaultRoot. On the disk-backed
+	// /var/lib tree beside the camera registries: a calibration has to survive a
+	// reboot and be readable by the apps that run on it.
+	//
+	// It is built here rather than beside the other services because its joint
+	// stream joins the robot's DDS domain, and it shares the one participant
+	// pool with camera discovery and the battery monitor — a device runs one
+	// participant per domain, not one per reader.
+	robotSvc := services.NewRobotService(logger, "", discoveryPool)
 
 	var videoROSRuntime []services.ROS2Runtime
 	if ctrdClient != nil {

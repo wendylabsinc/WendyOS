@@ -58,6 +58,42 @@ service WendyRobotService {
   // boots exactly as /dev/videoN does.
   rpc SetStableId(SetStableIdRequest) returns (SetStableIdResponse);
 
+  // StreamJointPositions reports where this robot's joints are, as fast as the
+  // robot publishes them and for as long as the client listens.
+  //
+  // It is here, on the device, because DDS discovery is multicast: a robot's
+  // ROS 2 graph lives on the robot's own network segment and a laptop cannot
+  // see it across a routed link or a cloud tunnel, however reachable the device
+  // is. The agent is already standing inside that segment — it joins the same
+  // domain to read the battery — so the calibration wizard reads joints the way
+  // it reads everything else, over this connection, and `wendy device robot
+  // calibrate` works from a laptop like every other command.
+  //
+  // Streaming rather than polled because the wizard samples continuously while
+  // an operator moves a joint by hand: the extremes of a sweep are what is
+  // being measured, and a poll-per-sample would put a round trip between two
+  // readings of a moving arm.
+  //
+  // Read-only by construction. There is no RPC here that could command a
+  // joint, which is what keeps a nothing-powered procedure nothing-powered.
+  //
+  // Failures are separated by code, because "the robot is silent" and "we could
+  // not listen" lead an operator to different places:
+  //   INVALID_ARGUMENT    a backend this agent cannot read, named with the ones
+  //                       it can.
+  //   FAILED_PRECONDITION the device could not join a DDS domain at all — no
+  //                       eligible interface, or the sockets would not open.
+  //                       Nothing was heard because nothing was listening.
+  //   NOT_FOUND           the device listened and nothing published the topic.
+  //                       Carries the ROBOT_JOINT_SOURCE_ABSENT reason so a
+  //                       client can tell this from a tunnel that lost the
+  //                       device, rather than matching on message text.
+  //   INTERNAL            bytes arrived on the topic and the decoder refused
+  //                       them. The wire layout is not what this agent expects,
+  //                       which is reported rather than decoded into plausible
+  //                       wrong angles.
+  rpc StreamJointPositions(StreamJointPositionsRequest) returns (stream JointPositionSample);
+
   // DescribeStore says where on the device the store physically is, for the
   // operator and for error messages. The client calls it once when it opens the
   // store, which doubles as the check that this agent serves the store at all:
@@ -204,6 +240,74 @@ message SetStableIdRequest {
 }
 
 message SetStableIdResponse {}
+
+// StreamJointPositionsRequest selects the joint source to read.
+//
+// `backend` is named, not described, exactly as a calibration method is: the
+// set of backends belongs to the platform, and a profile picks one and
+// parameterises it. Letting a request describe a wire layout would make every
+// robot's profile a program the agent runs.
+message StreamJointPositionsRequest {
+  // backend is the profile's joints.source.backend, e.g. "unitree-lowstate".
+  // Empty is INVALID_ARGUMENT rather than a default: guessing which robot this
+  // is, is the whole failure this field exists to prevent.
+  string backend = 1;
+  // topic is the DDS topic to read, in its ROS spelling ("/lowstate"). Empty
+  // takes the backend's own default. The wire spelling ("rt/lowstate") is
+  // matched too, so a caller never has to know about ROS 2's name mangling.
+  string topic = 2;
+  // domain_id is the DDS domain. Absent is ROS 2's default of 0 — which is a
+  // real domain, so it is optional rather than a zero that cannot be told from
+  // an unset field.
+  optional int32 domain_id = 3;
+  // interface pins discovery to one of the device's network interfaces. Empty
+  // tries every eligible one in turn, which is what finds a robot whose DDS
+  // lives on a private segment beside the device's other networks.
+  string interface = 4;
+  // min_interval_millis throttles the stream. A humanoid publishes its whole
+  // body at several hundred hertz and a hand sweep does not move that fast, so
+  // the agent drops what the client cannot use rather than paying for it on a
+  // cloud tunnel. 0 takes the agent's default.
+  uint32 min_interval_millis = 5;
+}
+
+// JointSlot is one slot of the robot's joint array that is reporting.
+//
+// Only slots the robot actuates appear. A vendor message carries a fixed number
+// of slots and a given robot drives fewer of them — a G1 publishes 35 and
+// drives 27 — with no field saying which, so a slot that reports neither
+// voltage nor temperature is idle and is left out entirely. It must not arrive
+// as a zero angle: a zero reads as a joint sitting perfectly still, which is
+// indistinguishable from a joint that was swept and did not move, and that is
+// exactly the false calibration the wizard's rules exist to prevent. Absent and
+// zero are different answers and stay different, the way
+// CalibrationRecord.residual does.
+//
+// Indices never shift. Slot 13 is slot 13 whether or not anything is behind it,
+// because the client resolves a slot to a joint name through the profile's
+// order, by index.
+message JointSlot {
+  uint32 index = 1;
+  double position = 2;
+}
+
+// JointPositionSample is one observation of the robot's joints.
+message JointPositionSample {
+  // observed_at_unix_nanos is the device's clock when the sample was decoded,
+  // not the robot's own timestamp. It orders samples within one stream and
+  // nothing more.
+  int64 observed_at_unix_nanos = 1;
+  // slot_count is how many slots the robot's message carries, including the
+  // idle ones left out of `slots`. Reporting both is what keeps the idle-slot
+  // rule from hiding anything: a reader sees 35 slots and 27 reporting.
+  uint32 slot_count = 2;
+  repeated JointSlot slots = 3;
+  // unit is what the wire format's positions are in — "rad" for every backend
+  // today. A free string for the reason Quantity.unit is one: the next robot
+  // reports ticks or degrees, and an enumeration here would have to be edited
+  // for each robot family.
+  string unit = 4;
+}
 
 message DescribeStoreRequest {}
 

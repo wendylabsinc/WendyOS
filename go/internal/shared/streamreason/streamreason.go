@@ -19,6 +19,13 @@ const (
 	// uncompressed frames to give (MJPEG or native H.264 capture, a network
 	// camera, one shared through PipeWire). The message names the cause.
 	RawUnavailable = "RAW_UNAVAILABLE"
+	// RobotJointSourceAbsent: StreamJointPositions listened on the device's DDS
+	// domain and nothing published the topic. The device is reachable and the
+	// agent could hear — the robot is simply not talking. It is a reason rather
+	// than a bare NOT_FOUND because a cloud tunnel that has lost the device
+	// answers NOT_FOUND too, and telling an operator "your robot is silent" when
+	// the truth is "we could not reach it" sends them to the wrong machine.
+	RobotJointSourceAbsent = "ROBOT_JOINT_SOURCE_ABSENT"
 )
 
 // Domain scopes the reasons to us, so a client can tell ours from a third party's.

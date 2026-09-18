@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotcal"
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotcal/robotcalpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -33,16 +34,30 @@ import (
 // <root>/units/<unit>/calibration.json, and robotcal.ValidUnit — which
 // FileStore applies to every operation — is what keeps <unit> a plain lowercase
 // token and therefore keeps those writes inside the store's own directory.
+//
+// The one thing here that is not the store is StreamJointPositions, in
+// robot_joints.go. It is on this service rather than a second one because it is
+// the same conversation — a calibration wizard reading a robot and writing what
+// it measured — and because the reason it exists at all is the reason this
+// service exists: the thing it needs is on the device and cannot be reached from
+// off it. A robot's DDS graph is multicast and never leaves the robot's network
+// segment, exactly as a calibration file never leaves the robot's disk.
 type RobotService struct {
 	agentpbv2.UnimplementedWendyRobotServiceServer
 	logger *zap.Logger
 	store  robotcal.Store
+	// joints is the participant pool StreamJointPositions joins the robot's DDS
+	// domain through, shared with camera discovery and the battery monitor so a
+	// device runs one participant per domain rather than one per reader. nil
+	// means this build cannot read joints at all, which that RPC says by name.
+	joints *rtps.Pool
 }
 
 // NewRobotService builds the service over a store rooted at root, or at
-// robotcal.DefaultRoot when root is empty.
-func NewRobotService(logger *zap.Logger, root string) *RobotService {
-	return &RobotService{logger: logger, store: robotcal.NewFileStore(root)}
+// robotcal.DefaultRoot when root is empty. joints may be nil, in which case
+// StreamJointPositions refuses rather than pretending a robot is silent.
+func NewRobotService(logger *zap.Logger, root string, joints *rtps.Pool) *RobotService {
+	return &RobotService{logger: logger, store: robotcal.NewFileStore(root), joints: joints}
 }
 
 // newRobotServiceWithStore is the seam tests use to drive a store they own.
