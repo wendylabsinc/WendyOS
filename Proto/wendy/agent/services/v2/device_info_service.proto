@@ -47,6 +47,8 @@ message GetDeviceInfoResponse {
     // an agent that reports has_gpu=true always lists at least one entry, so
     // has_gpu with an empty list identifies an older agent.
     repeated GpuCapabilities gpu_capabilities = 21;
+    // True when /var/lib/containerd is served from the OS root slot on a WendyOS host whose /data bind mount is inactive (WDY-3127). Absent on agents predating this field and on non-Linux hosts.
+    optional bool container_storage_degraded = 22;
 }
 
 // Usage information for a single mounted filesystem.

@@ -2055,10 +2055,15 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 const maxBuildPushAttempts = 3
 
 // shouldRetryPush decides whether a failed buildx build+push attempt is worth
-// retrying. Cancellation, the final attempt, and non-transient output never
-// retry; neither does a registry that actively refused the proxy's dial —
-// nothing is listening there, so every retry would fail identically.
+// retrying. An out-of-space or storage-degraded failure never retries — the
+// device's disk doesn't refill between attempts, so every retry would fail
+// identically (WDY-3127) — and neither does cancellation, the final attempt,
+// non-transient output, or a registry that actively refused the proxy's dial
+// (nothing is listening there, so every retry would fail identically).
 func shouldRetryPush(ctxErr error, attempt int, output string, dialErr error) bool {
+	if isNonRetryablePushOutput(output) {
+		return false
+	}
 	if ctxErr != nil || attempt >= maxBuildPushAttempts {
 		return false
 	}

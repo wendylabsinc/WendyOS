@@ -1967,6 +1967,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	printRunDiskUsageWarning(versionResp)
+	if err := preflightContainerStorage(versionResp); err != nil {
+		return err
+	}
 	mark("agent version metadata (in runWithAgent)")
 	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
@@ -2180,11 +2183,21 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			return fmt.Errorf("chunk-diff deploy failed and --chunking=force disables the registry-push fallback: %w", err)
 		} else if isImageBuildFailure(err) {
 			// The image build itself failed (e.g. a Dockerfile/build-command
-			// error). The registry-push fallback rebuilds the same image from the
-			// same Dockerfile, so it would fail identically — and can even mask the
+			// error). Checked BEFORE the storage branch below: a local build
+			// failure (e.g. the LOCAL BuildKit worker's disk is full) is a typed
+			// imageBuildFailedError whose text can itself mention ENOSPC, and
+			// that must not be misattributed to the device (WDY-3127 I1). The
+			// registry-push fallback rebuilds the same image from the same
+			// Dockerfile, so it would fail identically — and can even mask the
 			// real error behind an unrelated builder-setup failure. Surface the
 			// actionable build error directly instead of falling back. (#1166)
 			return err
+		} else if isDeviceOutOfSpace(err) || isContainerStorageDegradedError(err) {
+			// The device is out of space or its container storage is degraded
+			// (WDY-3127). The registry-push fallback below would just retry the
+			// same failure against the same full/degraded disk — surface the
+			// explanation and remedy instead.
+			return describeDeployStorageFailure(err, versionResp)
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no
 			// Docker), the registry-push fallback below cannot run — it shells out
@@ -2237,6 +2250,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		if err := tryPushExistingOCILayout(ctx, conn, regPort, ociHint, repo); err == nil {
 			cliSuccess("Reused already-built image for the registry push (skipped a redundant rebuild)")
 			pushed = true
+		} else if isDeviceOutOfSpace(err) || isContainerStorageDegradedError(err) {
+			// Rebuilding and pushing again would just fail identically against
+			// the same full/degraded disk — surface the explanation instead.
+			return describeDeployStorageFailure(err, versionResp)
 		} else if opts.debug {
 			cliLogln("Reusing the already-built image failed (%v); rebuilding instead.", err)
 		}
@@ -2254,7 +2271,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 				// the "building and pushing image" prefix adds nothing to it.
 				return err
 			}
-			return fmt.Errorf("building and pushing image: %w", err)
+			return describeDeployStorageFailure(fmt.Errorf("building and pushing image: %w", err), versionResp)
 		}
 	}
 
@@ -2442,7 +2459,8 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	if opts.deploy {
 		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
 		if err != nil {
-			return fmt.Errorf("creating container: %w", err)
+			versionResp, _ := conn.CachedAgentVersion()
+			return describeDeployStorageFailure(fmt.Errorf("creating container: %w", err), versionResp)
 		}
 		cliLogln("Container %s created (not started).", containerDisplayName(appCfg))
 		return nil
@@ -2450,7 +2468,8 @@ func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 
 	// Create the container with progress streaming.
 	if err := createContainerWithProgress(ctx, conn.ContainerService, createReq); err != nil {
-		return err
+		versionResp, _ := conn.CachedAgentVersion()
+		return describeDeployStorageFailure(err, versionResp)
 	}
 	cliLogln("Container %s created.", containerDisplayName(appCfg))
 
