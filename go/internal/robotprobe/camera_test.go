@@ -260,15 +260,15 @@ func TestSanitiseKeyKeepsIdentifiersDiffable(t *testing.T) {
 // said about itself.
 func TestCameraComparesWhatWasAskedForAgainstWhatArrived(t *testing.T) {
 	source := fakeCameras{
-		dwell:   400 * time.Millisecond,
+		dwell:   900 * time.Millisecond,
 		devices: []CameraDevice{{StableID: "rs", Path: "/dev/video4", Transport: "USB", Online: true}},
 		frames: map[string][]CameraFrame{
-			// Asked for 1280x720 at 30; the camera delivers 848x480 at about 5.
-			"rs": rawFrames(2, 848, 480, 30*time.Millisecond),
+			// Asked for 1280x720 at 30; the camera delivers 848x480 at about 5.5.
+			"rs": rawFrames(5, 848, 480, 30*time.Millisecond),
 		},
 	}
 	probe := Camera{
-		Window: 400 * time.Millisecond,
+		Window: 900 * time.Millisecond,
 		Mode:   CameraMode{Width: 1280, Height: 720, Framerate: 30},
 	}
 
@@ -330,4 +330,93 @@ func TestCameraWithoutARequestedModeMakesNoClaim(t *testing.T) {
 	if got := findIn(t, properties, "camera.video4.resolution").Assess().Verdict; got != robotinspect.VerdictSingle {
 		t.Errorf("verdict = %q, want %q", got, robotinspect.VerdictSingle)
 	}
+}
+
+// Asking for a mode a camera will not serve must not cost the measurement. The operator
+// wants both facts: the request was refused, and here is what the camera does instead.
+func TestCameraFallsBackToTheDefaultWhenARequestIsRefused(t *testing.T) {
+	refusals := map[string]error{"rs": errors.New("resolution 1280x720 not advertised by this camera")}
+	source := &refusingCameras{
+		refuseOnRequest: refusals,
+		devices:         []CameraDevice{{StableID: "rs", Path: "/dev/video4", Transport: "USB", Online: true}},
+		frames:          rawFrames(8, 848, 480, 30*time.Millisecond),
+		dwell:           400 * time.Millisecond,
+	}
+	probe := Camera{Window: 400 * time.Millisecond, Mode: CameraMode{Width: 1280, Height: 720, Framerate: 30}}
+
+	properties, err := probe.Observe(context.Background(), cameraEnv(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string][]robotinspect.Observation{}
+	for _, p := range properties {
+		byID[p.ID] = append(byID[p.ID], p.Observations...)
+	}
+
+	resolution := robotinspect.Property{ID: "camera.video4.resolution", Observations: byID["camera.video4.resolution"]}
+	if got := resolution.Assess().Verdict; got != robotinspect.VerdictDisagree {
+		t.Fatalf("verdict = %q, want %q: the request and the delivery must both be present",
+			got, robotinspect.VerdictDisagree)
+	}
+
+	// And the reason the delivery differs travels with it.
+	var carried bool
+	for _, o := range byID["camera.video4.resolution"] {
+		if strings.Contains(o.Conditions["requested_mode_refused"], "not advertised") {
+			carried = true
+		}
+	}
+	if !carried {
+		t.Error("the refusal reason was lost; the report would show a mismatch with no explanation")
+	}
+	if source.attempts != 2 {
+		t.Errorf("sampled %d times, want a request then a fallback", source.attempts)
+	}
+}
+
+// A rate needs enough arrivals, not just enough seconds. Real use produced "2 Hz" from
+// two frames for a camera that measures five over a longer window.
+func TestCameraRefusesARateFromTooFewFrames(t *testing.T) {
+	source := fakeCameras{
+		dwell:   1100 * time.Millisecond,
+		devices: []CameraDevice{{StableID: "rs", Path: "/dev/video2", Transport: "USB", Online: true}},
+		frames:  map[string][]CameraFrame{"rs": rawFrames(2, 848, 480, 30*time.Millisecond)},
+	}
+	properties, err := Camera{Window: time.Second}.Observe(context.Background(), cameraEnv(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rate := findIn(t, properties, "camera.video2.rate")
+	if rate.Unknown == nil || rate.Unknown.Reason != robotinspect.ReasonWindowTooShort {
+		t.Fatalf("rate = %+v, want an unknown rather than a confident 2 Hz", rate.Unknown)
+	}
+	if !strings.Contains(rate.Unknown.Detail, "too few") {
+		t.Errorf("detail %q should say the sample count was the problem", rate.Unknown.Detail)
+	}
+	// The resolution seen in those two frames is still perfectly good.
+	findIn(t, properties, "camera.video2.resolution")
+}
+
+// refusingCameras refuses a configured request once, then serves the default.
+type refusingCameras struct {
+	devices         []CameraDevice
+	frames          []CameraFrame
+	refuseOnRequest map[string]error
+	dwell           time.Duration
+	attempts        int
+}
+
+func (r *refusingCameras) Cameras(context.Context) ([]CameraDevice, error) { return r.devices, nil }
+
+func (r *refusingCameras) SampleCamera(_ context.Context, stableID string, _ time.Duration, _ int, mode CameraMode) ([]CameraFrame, error) {
+	r.attempts++
+	if r.dwell > 0 {
+		time.Sleep(r.dwell)
+	}
+	if mode.Requested() {
+		if err := r.refuseOnRequest[stableID]; err != nil {
+			return nil, err
+		}
+	}
+	return r.frames, nil
 }

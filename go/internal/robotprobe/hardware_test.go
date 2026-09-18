@@ -40,19 +40,19 @@ func TestHardwareCountsAndNamesEachCategory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := findIn(t, properties, "hardware.devices").Observations[0].Quantity.Value(); got != 5 {
+	if got := findIn(t, properties, "hardware.nodes").Observations[0].Quantity.Value(); got != 5 {
 		t.Errorf("device count = %v, want 5", got)
 	}
-	if got := findIn(t, properties, "hardware.camera.count").Observations[0].Quantity.Value(); got != 3 {
+	if got := findIn(t, properties, "hardware.camera.node_count").Observations[0].Quantity.Value(); got != 3 {
 		t.Errorf("camera count = %v, want 3", got)
 	}
-	if got := findIn(t, properties, "hardware.can.count").Observations[0].Quantity.Value(); got != 1 {
+	if got := findIn(t, properties, "hardware.can.node_count").Observations[0].Quantity.Value(); got != 1 {
 		t.Errorf("can count = %v, want 1", got)
 	}
 
 	// Paths are sorted so the same robot renders identically twice, and a camera that
 	// disappears shows up as a disagreement on this row rather than as a new row.
-	cameras := findIn(t, properties, "hardware.camera.devices").Observations[0]
+	cameras := findIn(t, properties, "hardware.camera.nodes").Observations[0]
 	if !cameras.IsText() {
 		t.Fatal("a device list is text, not a number")
 	}
@@ -75,10 +75,10 @@ func TestHardwareDeviceListDisagreesWhenACameraDisappears(t *testing.T) {
 	}
 
 	merged := robotinspect.Property{
-		ID: "hardware.camera.devices",
+		ID: "hardware.camera.nodes",
 		Observations: []robotinspect.Observation{
-			findIn(t, before, "hardware.camera.devices").Observations[0],
-			findIn(t, after, "hardware.camera.devices").Observations[0],
+			findIn(t, before, "hardware.camera.nodes").Observations[0],
+			findIn(t, after, "hardware.camera.nodes").Observations[0],
 		},
 	}
 	assessment := merged.Assess()
@@ -95,7 +95,7 @@ func TestHardwareReportsAnEmptyEnumerationAsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	devices := findIn(t, properties, "hardware.devices")
+	devices := findIn(t, properties, "hardware.nodes")
 	if devices.Unknown == nil || devices.Unknown.Reason != robotinspect.ReasonSourceAbsent {
 		t.Errorf("devices = %+v, want an unknown", devices.Unknown)
 	}
@@ -108,7 +108,7 @@ func TestHardwareFallsBackToDescriptionWhenThereIsNoPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := findIn(t, properties, "hardware.gpu.devices").Observations[0].Text; got != "NVIDIA Orin integrated" {
+	if got := findIn(t, properties, "hardware.gpu.nodes").Observations[0].Text; got != "NVIDIA Orin integrated" {
 		t.Errorf("gpu devices = %q", got)
 	}
 }
@@ -120,7 +120,7 @@ func TestHardwareGroupsUncategorisedDevices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findIn(t, properties, "hardware.other.devices")
+	findIn(t, properties, "hardware.other.nodes")
 }
 
 func TestHardwareSurfacesAnEnumerationFailure(t *testing.T) {

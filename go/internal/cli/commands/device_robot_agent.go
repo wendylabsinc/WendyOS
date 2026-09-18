@@ -212,9 +212,19 @@ func (a *agentHostFacts) SampleCamera(ctx context.Context, stableID string, wind
 // text; a FailedPrecondition is the fallback for an older agent.
 func classifyCameraError(err error) error {
 	if streamreason.Has(err, streamreason.CameraInUse) || status.Code(err) == codes.FailedPrecondition {
-		return fmt.Errorf("%w: %v", robotprobe.ErrDeviceBusy, err)
+		return fmt.Errorf("%w: %s", robotprobe.ErrDeviceBusy, agentMessage(err))
 	}
-	return err
+	return errors.New(agentMessage(err))
+}
+
+// agentMessage strips the gRPC envelope so the report carries what the agent said rather
+// than "rpc error: code = Internal desc = ...". The reason ends up inside a condition on
+// a measurement, where the wrapper is noise that pushes the actual cause off the line.
+func agentMessage(err error) string {
+	if st, ok := status.FromError(err); ok {
+		return st.Message()
+	}
+	return err.Error()
 }
 
 // transportName and codecName render the agent's enums without the wire prefixes, so the

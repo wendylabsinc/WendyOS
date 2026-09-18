@@ -3,6 +3,7 @@ package robotprobe
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -28,6 +29,34 @@ type CameraStream struct {
 
 // minRateWindow is the shortest span a frame rate can honestly be derived from.
 const minRateWindow = 250 * time.Millisecond
+
+// minRateSamples is the fewest frames a rate may be derived from. Real use found the
+// window guard alone was not enough: three frames in a one-second window reported
+// "3 Hz" for a camera that measures 5.02 Hz over five seconds. Two arrivals describe
+// one interval, which is an anecdote rather than a rate.
+const minRateSamples = 4
+
+// rateFrom derives a frame rate, or explains why it will not. Rounded to two decimals:
+// a figure like 7.849726239175133 claims a precision that fifteen samples cannot carry.
+func rateFrom(frames int, elapsed, window time.Duration, subject string) (robotinspect.Quantity, *robotinspect.Unknown) {
+	switch {
+	case elapsed < minRateWindow || elapsed*2 < window:
+		unknown := robotinspect.NewUnknown(robotinspect.ReasonWindowTooShort,
+			fmt.Sprintf("sampling %s ended after %s of %s", subject, elapsed, window))
+		return robotinspect.Quantity{}, &unknown
+	case frames < minRateSamples:
+		unknown := robotinspect.NewUnknown(robotinspect.ReasonWindowTooShort,
+			fmt.Sprintf("%s delivered %d frames in %s, too few to derive a rate from", subject, frames, elapsed))
+		return robotinspect.Quantity{}, &unknown
+	}
+	rounded := math.Round(float64(frames)/elapsed.Seconds()*100) / 100
+	quantity, err := robotinspect.NewQuantity(rounded, robotinspect.Hertz)
+	if err != nil {
+		unknown := robotinspect.NewUnknown(robotinspect.ReasonProbeFailed, err.Error())
+		return robotinspect.Quantity{}, &unknown
+	}
+	return quantity, nil
+}
 
 // DefaultStreamWindow is long enough to separate a five-frames-per-second stream from a
 // thirty without keeping an operator waiting.
@@ -116,15 +145,9 @@ func (p CameraStream) observeTopic(ctx context.Context, reader TopicReader, topi
 	// closed participant, and a few frames divided by a near-zero elapsed time reads
 	// as megahertz. Saying the window was too short is the honest answer.
 	rateID := fmt.Sprintf("camera.%s.rate", stream)
-	if elapsed < minRateWindow || elapsed*2 < window {
-		unknown := robotinspect.NewUnknown(robotinspect.ReasonWindowTooShort,
-			fmt.Sprintf("sampling %s ended after %s of %s", topic, elapsed, window))
-		properties = append(properties, robotinspect.Property{ID: rateID, Unknown: &unknown})
+	if rate, unknown := rateFrom(len(payloads), elapsed, window, topic); unknown != nil {
+		properties = append(properties, robotinspect.Property{ID: rateID, Unknown: unknown})
 	} else {
-		rate, err := robotinspect.NewQuantity(float64(len(payloads))/elapsed.Seconds(), robotinspect.Hertz)
-		if err != nil {
-			return properties, err
-		}
 		observation, err := robotinspect.NewObservation(rate, robotinspect.Measured, source, sampling)
 		if err != nil {
 			return properties, err

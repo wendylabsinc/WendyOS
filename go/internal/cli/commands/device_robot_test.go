@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -117,27 +118,68 @@ func TestWriteRobotDocumentRendersTheReportForAnOperator(t *testing.T) {
 	}
 }
 
-// An empty graph must say so. An empty report would read as "this robot has nothing",
-// which is a claim the inspection has not earned.
-func TestWriteRobotDocumentSaysWhenTheGraphWasEmpty(t *testing.T) {
+// An empty report must name what failed, per cause. Blaming the ROS graph when the agent
+// was unreachable sends the reader to the wrong place, which happened on a real tunnel
+// blip against the G1.
+func TestWriteRobotDocumentNamesEveryReasonNothingWasRead(t *testing.T) {
 	restore := jsonOutput
 	jsonOutput = false
 	defer func() { jsonOutput = restore }()
 
-	doc, err := probeRobot(context.Background(), fakeTopicSource{}, nil, robotInspectOptions{})
+	opts := robotInspectOptions{
+		domain:   3,
+		settle:   8 * time.Second,
+		agentErr: errors.New("connection refused"),
+	}
+	doc, err := probeRobot(context.Background(), fakeTopicSource{}, nil, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := writeRobotDocument(&out, doc, robotInspectOptions{domain: 3, settle: 8 * time.Second}); err != nil {
+	if err := writeRobotDocument(&out, doc, opts); err != nil {
 		t.Fatal(err)
 	}
 	report := out.String()
-	if !strings.Contains(report, "No ROS 2 writers found on domain 3") {
-		t.Errorf("report does not name the empty graph:\n%s", report)
+	for _, want := range []string{
+		"Nothing could be read from this robot.",
+		"agent —",
+		"connection refused",
+		"no writers on domain 3 after 8s",
+		"Nothing was commanded.",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("report missing %q:\n%s", want, report)
+		}
 	}
-	if !strings.Contains(report, "Nothing was commanded.") {
-		t.Errorf("report drops the read-only assurance:\n%s", report)
+}
+
+// --no-agent is a choice, not a failure, and the document records which it was.
+func TestProbeRobotRecordsWhyTheAgentHalfIsAbsent(t *testing.T) {
+	skipped, err := probeRobot(context.Background(), fakeTopicSource{}, nil,
+		robotInspectOptions{skipAgent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := skipped.Skipped["agent"].Detail; !strings.Contains(got, "--no-agent") {
+		t.Errorf("agent skip detail = %q, want it to name the flag", got)
+	}
+
+	failed, err := probeRobot(context.Background(), fakeTopicSource{}, nil,
+		robotInspectOptions{agentErr: errors.New("connection refused")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := failed.Skipped["agent"].Detail; !strings.Contains(got, "unreachable") {
+		t.Errorf("agent failure detail = %q, want it to say unreachable", got)
+	}
+
+	// Reached normally, nothing is recorded.
+	fine, err := probeRobot(context.Background(), fakeTopicSource{}, &stubHostFacts{}, robotInspectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, noted := fine.Skipped["agent"]; noted {
+		t.Error("a reachable agent was recorded as skipped")
 	}
 }
 
@@ -308,7 +350,7 @@ func TestProbeRobotReportsTheHostWithNoGraphAtAll(t *testing.T) {
 	}
 	for _, id := range []string{
 		"compute.board", "compute.architecture", "storage.free",
-		"hardware.camera.devices", "hardware.can.count", "clock.drift",
+		"hardware.camera.nodes", "hardware.can.node_count", "clock.drift",
 	} {
 		found := false
 		for _, p := range doc.Properties {

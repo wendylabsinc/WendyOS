@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -85,7 +86,9 @@ type robotInspectOptions struct {
 	skipAgent  bool
 	canonical  bool
 	expectMode string
-	out        io.Writer
+	// agentErr is why the agent half is absent, when it is.
+	agentErr error
+	out      io.Writer
 }
 
 // robotTopicSource is what an inspection needs from a transport: the topics it can see,
@@ -107,6 +110,10 @@ func runRobotInspect(ctx context.Context, opts robotInspectOptions) error {
 	if !opts.skipAgent {
 		conn, err := connectToAgent(ctx)
 		if err != nil {
+			// Recorded, not just logged. An unreachable agent is why half the report
+			// is missing, and a document that does not say so invites the reader to
+			// blame whatever else came back empty.
+			opts.agentErr = err
 			cliLogln("Continuing without the agent: %v", err)
 		} else {
 			defer conn.Close()
@@ -193,9 +200,11 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 	}
 
 	if source == nil {
-		return robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
+		doc := robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
 			Device: opts.label, VendorKind: opts.vendorKind, Want: want,
-		}), nil
+		})
+		noteAgentAbsence(&doc, opts)
+		return doc, nil
 	}
 	env.Offer(robotinspect.RequirementDDSDomain, source)
 
@@ -220,11 +229,42 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 		want = append(want, stream.Provides()...)
 	}
 
-	return robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
+	doc := robotinspect.Inspect(ctx, registry, env, robotinspect.Target{
 		Device:     opts.label,
 		VendorKind: opts.vendorKind,
 		Want:       want,
-	}), nil
+	})
+	noteAgentAbsence(&doc, opts)
+	return doc, nil
+}
+
+// noteAgentAbsence records an unreachable agent in the document itself, so the reason
+// travels with the result rather than living only in a log line the reader may not have.
+func noteAgentAbsence(doc *robotinspect.Document, opts robotInspectOptions) {
+	switch {
+	case opts.agentErr != nil:
+		doc.Skipped["agent"] = robotinspect.NewUnknown(robotinspect.ReasonRequirementUnmet,
+			fmt.Sprintf("the agent was unreachable, so nothing about the machine could be read: %v", opts.agentErr))
+	case opts.skipAgent:
+		doc.Skipped["agent"] = robotinspect.NewUnknown(robotinspect.ReasonRequirementUnmet,
+			"skipped by --no-agent, so only what the robot publishes was read")
+	}
+}
+
+func sortedSkipped(skipped map[string]robotinspect.Unknown) []string {
+	ids := make([]string, 0, len(skipped))
+	for id := range skipped {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func describeSkip(unknown robotinspect.Unknown) string {
+	if unknown.Detail == "" {
+		return unknown.Reason
+	}
+	return unknown.Reason + ": " + unknown.Detail
 }
 
 // parseCameraMode reads WIDTHxHEIGHT@FPS, with either half optional: "1280x720",
@@ -278,11 +318,17 @@ func writeRobotDocument(out io.Writer, doc robotinspect.Document, opts robotInsp
 	}
 
 	if len(doc.Properties) == 0 {
-		// Saying nothing was found is the answer. Printing an empty report would read
-		// as "this robot has nothing", which is a different claim.
-		_, err := fmt.Fprintf(out,
-			"No ROS 2 writers found on domain %d after %s.\nNothing was commanded.\n",
-			opts.domain, opts.settle)
+		// Nothing was found, and saying *why* matters more than saying it. Blaming
+		// the ROS graph for an empty report when the agent was unreachable sends the
+		// reader to the wrong place — which happened in practice on a tunnel blip.
+		var b strings.Builder
+		b.WriteString("Nothing could be read from this robot.\n")
+		for _, id := range sortedSkipped(doc.Skipped) {
+			fmt.Fprintf(&b, "  %s — %s\n", id, describeSkip(doc.Skipped[id]))
+		}
+		fmt.Fprintf(&b, "  ros2 — no writers on domain %d after %s\n", opts.domain, opts.settle)
+		b.WriteString("Nothing was commanded.\n")
+		_, err := io.WriteString(out, b.String())
 		return err
 	}
 

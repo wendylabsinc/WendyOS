@@ -202,12 +202,29 @@ func (p Camera) observeCamera(ctx context.Context, source CameraSource, camera C
 		}
 	}
 
-	started := time.Now()
-	frames, err := source.SampleCamera(ctx, camera.StableID, window, cameraSampleFrames, p.Mode)
-	elapsed := time.Since(started)
-	if elapsed > window {
-		elapsed = window
+	sample := func(mode CameraMode) ([]CameraFrame, time.Duration, error) {
+		started := time.Now()
+		frames, err := source.SampleCamera(ctx, camera.StableID, window, cameraSampleFrames, mode)
+		elapsed := time.Since(started)
+		if elapsed > window {
+			elapsed = window
+		}
+		return frames, elapsed, err
 	}
+
+	frames, elapsed, err := sample(p.Mode)
+
+	// A refused request must not cost the measurement. Asking for a mode the camera
+	// will not serve used to leave the report with a claim and nothing to check it
+	// against, which is worse than not asking: the operator wants to know both that
+	// the request was refused and what the camera does instead. So fall back to the
+	// device default and carry the refusal as a condition on what did arrive.
+	refusal := ""
+	if err != nil && p.Mode.Requested() && !errors.Is(err, ErrDeviceBusy) {
+		refusal = err.Error()
+		frames, elapsed, err = sample(CameraMode{})
+	}
+
 	if err != nil {
 		// Either way the camera's inventory survives and only the measurements are
 		// unknown; what differs is whether we can name the cause.
@@ -234,18 +251,17 @@ func (p Camera) observeCamera(ctx context.Context, source CameraSource, camera C
 	if frames[0].Fourcc != "" {
 		conditions["fourcc"] = frames[0].Fourcc
 	}
+	if refusal != "" {
+		// Attached to the measurement rather than filed separately, because it is
+		// the reason this is what arrived instead of what was asked for.
+		conditions["requested_mode_refused"] = refusal
+	}
 
 	// Rate, with the same honesty rule as the DDS sampler: too short a window cannot
 	// support a rate, and saying so beats reporting megahertz.
-	if elapsed < minRateWindow {
-		unknown := robotinspect.NewUnknown(robotinspect.ReasonWindowTooShort,
-			fmt.Sprintf("sampling %s ended after %s of %s", key, elapsed, window))
-		properties = append(properties, robotinspect.Property{ID: prefix + ".rate", Unknown: &unknown})
+	if rate, unknown := rateFrom(len(frames), elapsed, window, key); unknown != nil {
+		properties = append(properties, robotinspect.Property{ID: prefix + ".rate", Unknown: unknown})
 	} else {
-		rate, err := robotinspect.NewQuantity(float64(len(frames))/elapsed.Seconds(), robotinspect.Hertz)
-		if err != nil {
-			return properties, err
-		}
 		observation, err := robotinspect.NewObservation(rate, robotinspect.Measured, source_,
 			sampling, robotinspect.WithConditions(conditions))
 		if err != nil {

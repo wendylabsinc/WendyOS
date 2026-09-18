@@ -22,10 +22,15 @@ type HardwareSource interface {
 	Hardware(ctx context.Context) ([]HardwareDevice, error)
 }
 
-// Hardware reports what is physically attached: cameras, CAN interfaces, serial buses,
-// audio devices.
+// Hardware reports the device nodes the kernel exposes: video nodes, CAN interfaces,
+// serial buses, audio devices.
 //
-// Each category gets a count and the sorted list of device paths. The list is recorded as
+// Identifiers say "node" deliberately. A RealSense presents six video nodes for three
+// cameras, so "hardware.camera.count = 6" beside "camera.count = 3" read as a
+// contradiction when the two were counting different things. This probe counts what the
+// kernel exposes; the camera probe counts cameras.
+//
+// Each category gets a node count and the sorted list of paths. The list is recorded as
 // one textual value on purpose: inspect the same robot twice and a camera that has
 // disappeared shows up as a disagreement on that row, which is exactly the question an
 // operator asks when a sensor stops working. A row per device path would instead make
@@ -40,7 +45,7 @@ func (Hardware) Requires() []robotinspect.Requirement {
 
 // Provides cannot be known before enumeration, since categories depend on the robot.
 // The count of attached devices is always answerable, so that is what it promises.
-func (Hardware) Provides() []string { return []string{"hardware.devices"} }
+func (Hardware) Provides() []string { return []string{"hardware.nodes"} }
 
 func (p Hardware) Observe(ctx context.Context, env *robotinspect.Env) ([]robotinspect.Property, error) {
 	handle, ok := env.Handle(robotinspect.RequirementHostStats)
@@ -63,7 +68,7 @@ func (p Hardware) Observe(ctx context.Context, env *robotinspect.Env) ([]robotin
 	if len(devices) == 0 {
 		unknown := robotinspect.NewUnknown(robotinspect.ReasonSourceAbsent,
 			"the agent enumerated no attached hardware")
-		return []robotinspect.Property{{ID: "hardware.devices", Unknown: &unknown}}, nil
+		return []robotinspect.Property{{ID: "hardware.nodes", Unknown: &unknown}}, nil
 	}
 
 	byCategory := map[string][]string{}
@@ -82,7 +87,7 @@ func (p Hardware) Observe(ctx context.Context, env *robotinspect.Env) ([]robotin
 	}
 
 	properties := []robotinspect.Property{}
-	if property, ok := declared(p.ID(), origin, "hardware.devices",
+	if property, ok := declared(p.ID(), origin, "hardware.nodes",
 		robotinspect.MustQuantity(float64(len(devices)), robotinspect.Count)); ok {
 		properties = append(properties, property)
 	}
@@ -97,12 +102,12 @@ func (p Hardware) Observe(ctx context.Context, env *robotinspect.Env) ([]robotin
 		names := byCategory[category]
 		sort.Strings(names)
 		if property, ok := declared(p.ID(), origin,
-			fmt.Sprintf("hardware.%s.count", category),
+			fmt.Sprintf("hardware.%s.node_count", category),
 			robotinspect.MustQuantity(float64(len(names)), robotinspect.Count)); ok {
 			properties = append(properties, property)
 		}
 		properties = append(properties, textProperty(p.ID(), origin,
-			fmt.Sprintf("hardware.%s.devices", category), strings.Join(names, " ")))
+			fmt.Sprintf("hardware.%s.nodes", category), strings.Join(names, " ")))
 	}
 	return properties, nil
 }
