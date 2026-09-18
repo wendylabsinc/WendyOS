@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -149,7 +150,10 @@ func TestJointSourceBackendsRefuseByName(t *testing.T) {
 	open := openJointSource(nil)
 
 	t.Run("an unknown backend lists what this build can open", func(t *testing.T) {
-		_, err := open(t.Context(), robotcal.JointSourceSpec{Backend: "something-invented"})
+		_, err := open(t.Context(), robotcal.Joints{
+			Order:  []string{"a"},
+			Source: robotcal.JointSourceSpec{Backend: "something-invented"},
+		})
 		if err == nil {
 			t.Fatal("want a refusal")
 		}
@@ -162,7 +166,10 @@ func TestJointSourceBackendsRefuseByName(t *testing.T) {
 
 	t.Run("the profile's own explanation is quoted verbatim", func(t *testing.T) {
 		const note = "this bus needs a device-side backend bound by stable id"
-		_, err := open(t.Context(), robotcal.JointSourceSpec{Backend: "some-vendor-bus", Note: note})
+		_, err := open(t.Context(), robotcal.Joints{
+			Order:  []string{"a"},
+			Source: robotcal.JointSourceSpec{Backend: "some-vendor-bus", Note: note},
+		})
 		if err == nil {
 			t.Fatal("want a refusal")
 		}
@@ -180,7 +187,7 @@ func TestJointSourceBackendsRefuseByName(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if p.Joints.Source.Backend == backendROS2JointStates {
+			if slices.Contains(availableJointSourceBackends(), p.Joints.Source.Backend) {
 				t.Skip("this build can open it")
 			}
 			if p.Joints.Source.Note == "" {
@@ -188,7 +195,7 @@ func TestJointSourceBackendsRefuseByName(t *testing.T) {
 					"about why — the explanation belongs in the profile, not in a case arm in the CLI",
 					kind, p.Joints.Source.Backend)
 			}
-			_, err = open(t.Context(), p.Joints.Source)
+			_, err = open(t.Context(), p.Joints)
 			if err == nil {
 				t.Fatalf("expected a refusal for backend %q", p.Joints.Source.Backend)
 			}

@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -68,12 +69,21 @@ type ROS2Service struct {
 	// bagDir is the host directory holding rosbag2 recordings. Variable for
 	// tests; defaults to the containerd package's ROS2BagDir.
 	bagDir string
+	// pool backs StreamRawTopic, which reads DDS directly rather than through the
+	// sidecar. Nil in a service built without one, and that call then refuses.
+	pool *rtps.Pool
 }
 
 // NewROS2Service creates a new ROS2Service backed by the given runtime.
 // bagDir is the host directory where bag recordings are stored.
-func NewROS2Service(logger *zap.Logger, runtime ROS2Runtime, bagDir string) *ROS2Service {
-	return &ROS2Service{logger: logger, runtime: runtime, bagDir: bagDir}
+func NewROS2Service(logger *zap.Logger, runtime ROS2Runtime, bagDir string, pool ...*rtps.Pool) *ROS2Service {
+	service := &ROS2Service{logger: logger, runtime: runtime, bagDir: bagDir}
+	// Variadic so the many existing call sites and tests, which have no use for raw
+	// sampling, are unchanged.
+	if len(pool) > 0 {
+		service.pool = pool[0]
+	}
+	return service
 }
 
 // ros2SC is a resolved per-RMW sidecar plus the DDS domain to use for a call.

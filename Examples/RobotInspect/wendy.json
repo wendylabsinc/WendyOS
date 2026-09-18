@@ -3,9 +3,9 @@
   "platform": "linux",
   "version": "1.0.0",
   "entitlements": [
-    { "type": "network", "mode": "host" }
-  ],
-  "services": {
-    "inspect": { "context": "." }
-  }
+    {
+      "type": "network",
+      "mode": "host"
+    }
+  ]
 }

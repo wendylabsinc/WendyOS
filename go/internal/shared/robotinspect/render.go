@@ -24,10 +24,6 @@ func Render(d Document) string {
 		fmt.Fprintf(&b, "%s\n\n", header)
 	}
 
-	if d.Vendor != nil {
-		renderVendor(&b, d.Vendor)
-	}
-
 	for _, section := range sectionsOf(d.Properties) {
 		fmt.Fprintf(&b, "%s\n", section.name)
 		for _, p := range section.properties {
@@ -36,75 +32,34 @@ func Render(d Document) string {
 		b.WriteByte('\n')
 	}
 
-	if len(d.Skipped) > 0 {
-		b.WriteString("not run\n")
-		ids := make([]string, 0, len(d.Skipped))
-		for id := range d.Skipped {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			skipped := d.Skipped[id]
-			line := fmt.Sprintf("%s — %s", id, skipped.Reason)
-			if skipped.Detail != "" {
-				line = fmt.Sprintf("%s — %s: %s", id, skipped.Reason, skipped.Detail)
-			}
-			fmt.Fprintf(&b, "%-10s %s\n", "", line)
-		}
-		b.WriteByte('\n')
-	}
+	renderProbeNotes(&b, "not run", d.Skipped)
+	renderProbeNotes(&b, "failed", d.Failed)
 
 	renderSummary(&b, d)
 	return b.String()
 }
 
-func renderVendor(b *strings.Builder, v *VendorState) {
-	fmt.Fprintf(b, "%-10s", "state")
-	label := v.Label
-	if label == "" {
-		label = renderRaw(v.Raw)
-	} else if raw := renderRaw(v.Raw); raw != "" {
-		label = fmt.Sprintf("%s [%s]", label, raw)
+// renderProbeNotes lists probes under a heading that says what actually happened to
+// them. A probe that ran and errored appearing under "not run" is worse than silence.
+func renderProbeNotes(b *strings.Builder, heading string, notes map[string]Unknown) {
+	if len(notes) == 0 {
+		return
 	}
-	if label == "" {
-		label = "unknown"
+	b.WriteString(heading + "\n")
+	ids := make([]string, 0, len(notes))
+	for id := range notes {
+		ids = append(ids, id)
 	}
-	fmt.Fprintf(b, " %s\n", label)
-
-	authority := v.ControlAuthority
-	if authority == "" {
-		authority = "nobody"
+	sort.Strings(ids)
+	for _, id := range ids {
+		note := notes[id]
+		line := fmt.Sprintf("%s — %s", id, note.Reason)
+		if note.Detail != "" {
+			line = fmt.Sprintf("%s — %s: %s", id, note.Reason, note.Detail)
+		}
+		fmt.Fprintf(b, "%-10s %s\n", "", line)
 	}
-	fmt.Fprintf(b, "%-10s commands owned by: %s\n", "", authority)
-
-	legality := v.CommandLegality
-	if legality == "" {
-		legality = LegalityUnknown
-	}
-	line := fmt.Sprintf("accepts commands: %s", legality)
-	if v.LegalityReason != "" {
-		line += " — " + v.LegalityReason
-	}
-	fmt.Fprintf(b, "%-10s %s\n\n", "", line)
-}
-
-// renderRaw prints a backend's own state values without interpreting them. The core does
-// not know what any of these mean, and printing them unaltered is what lets an operator
-// check a vendor's own tooling against this report.
-func renderRaw(raw map[string]string) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(raw))
-	for k := range raw {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%s", k, raw[k]))
-	}
-	return strings.Join(parts, " ")
+	b.WriteByte('\n')
 }
 
 func renderProperty(b *strings.Builder, p Property) {

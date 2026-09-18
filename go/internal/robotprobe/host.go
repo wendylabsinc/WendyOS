@@ -3,6 +3,8 @@ package robotprobe
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotinspect"
 )
@@ -114,10 +116,13 @@ func (Compute) Requires() []robotinspect.Requirement {
 	return []robotinspect.Requirement{robotinspect.RequirementHostStats}
 }
 
+// Provides names only what this probe always emits, so an unmet promise cannot look
+// like an omission. Optional rows — jetpack version, NPU vendor — appear when the host
+// has them and are not promised.
 func (Compute) Provides() []string {
 	return []string{
 		"compute.board", "compute.architecture", "compute.cpu_count", "compute.memory_total",
-		"compute.gpu.vendor", "compute.gpu.arch", "compute.cuda_version", "compute.npu.vendor",
+		"compute.gpu.vendor", "compute.gpu.arch", "compute.gpu.backends",
 		"os.name", "os.version", "agent.version",
 	}
 }
@@ -135,8 +140,15 @@ func (p Compute) Observe(ctx context.Context, env *robotinspect.Env) ([]robotins
 			properties = append(properties, property)
 		}
 	}
+	// A promised row that is missing reads as nobody having looked. Where Provides
+	// names a property, an absent value becomes an explicit unknown rather than a
+	// silent omission — that is the difference between "this board has no CUDA" and
+	// "we did not check".
 	addText := func(id, value string) {
 		if value == "" {
+			unknown := robotinspect.NewUnknown(robotinspect.ReasonSourceAbsent,
+				"the agent reports no value for this")
+			properties = append(properties, robotinspect.Property{ID: id, Unknown: &unknown})
 			return
 		}
 		properties = append(properties, textProperty(p.ID(), origin, id, value))
@@ -158,19 +170,34 @@ func (p Compute) Observe(ctx context.Context, env *robotinspect.Env) ([]robotins
 		addText("compute.gpu.vendor", facts.GPUVendor)
 		addText("compute.gpu.arch", facts.GPUArch)
 		addText("compute.cuda_version", facts.CUDAVersion)
-		addText("compute.jetpack_version", facts.JetpackVersion)
-		for _, backend := range facts.ComputeBackends {
-			addText("compute.gpu.backend."+backend, "present")
+		if facts.JetpackVersion != "" {
+			properties = append(properties, textProperty(p.ID(), origin, "compute.jetpack_version", facts.JetpackVersion))
+		}
+		// One row listing the backends, not a row per backend whose value is the
+		// constant "present". With the data in the key, a robot without CUDA had no
+		// row rather than a different value, so two robots could not be compared on
+		// it at all — and comparing two robots is what the document is for.
+		backends := append([]string(nil), facts.ComputeBackends...)
+		sort.Strings(backends)
+		if len(backends) == 0 {
+			unknown := robotinspect.NewUnknown(robotinspect.ReasonSourceAbsent,
+				"the agent reports a GPU but names no compute backend")
+			properties = append(properties,
+				robotinspect.Property{ID: "compute.gpu.backends", Unknown: &unknown})
+		} else {
+			properties = append(properties, textProperty(p.ID(), origin,
+				"compute.gpu.backends", strings.Join(backends, " ")))
 		}
 	} else {
 		unknown := robotinspect.NewUnknown(robotinspect.ReasonSourceAbsent, "the agent reports no GPU on this host")
 		properties = append(properties,
 			robotinspect.Property{ID: "compute.gpu.vendor", Unknown: &unknown},
-			robotinspect.Property{ID: "compute.gpu.arch", Unknown: &unknown})
+			robotinspect.Property{ID: "compute.gpu.arch", Unknown: &unknown},
+			robotinspect.Property{ID: "compute.gpu.backends", Unknown: &unknown})
 	}
 
-	if facts.HasNPU {
-		addText("compute.npu.vendor", facts.NPUVendor)
+	if facts.HasNPU && facts.NPUVendor != "" {
+		properties = append(properties, textProperty(p.ID(), origin, "compute.npu.vendor", facts.NPUVendor))
 	}
 	return properties, nil
 }

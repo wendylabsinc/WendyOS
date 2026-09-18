@@ -12,11 +12,13 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,11 +36,20 @@ func main() {
 	device := flag.String("device", "", "name to record the inspection against")
 	kind := flag.String("kind", "", "robot kind to record, such as unitree-g1")
 	asJSON := flag.Bool("json", false, "emit the document as JSON")
+	capture := flag.String("capture", "", "instead of inspecting, print one raw payload from each topic as base64, for use as test fixtures; separate topics with ';' (a comma cannot survive `wendy run --user-args`)")
 	canonical := flag.Bool("canonical", false, "with -json, omit wall-clock fields so two passes diff on substance")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if *capture != "" {
+		if err := captureTopics(ctx, splitTopics(*capture), options{domain: *domain, iface: *iface, settle: *settle}); err != nil {
+			fmt.Fprintf(os.Stderr, "robot-inspect: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := run(ctx, options{
 		domain: *domain, iface: *iface, settle: *settle, window: *window,
@@ -104,6 +115,21 @@ func run(ctx context.Context, opts options) error {
 		want = append(want, probe.Provides()...)
 	}
 
+	// The body. Registered unconditionally: the probe reports an absent topic as a
+	// finding, which is the honest answer for a robot that is not a Unitree humanoid,
+	// and is different from never having looked.
+	// The body, its battery and its hands. All three are registered unconditionally:
+	// each reports an absent topic as a finding, which is the honest answer on a robot
+	// that is not a Unitree humanoid and is different from never having looked.
+	for _, probe := range []robotinspect.Probe{
+		robotprobe.Joints{}, robotprobe.RobotBattery{}, robotprobe.Hands{},
+	} {
+		if err := registry.Register(probe); err != nil {
+			return err
+		}
+		want = append(want, probe.Provides()...)
+	}
+
 	env := robotinspect.NewEnv().Offer(robotinspect.RequirementDDSDomain, reader)
 	doc := robotinspect.Inspect(runCtx, registry, env, robotinspect.Target{
 		Device: opts.device, VendorKind: opts.kind, Want: want,
@@ -127,5 +153,63 @@ func run(ctx context.Context, opts options) error {
 		return nil
 	}
 	fmt.Print(robotinspect.Render(doc))
+	return nil
+}
+
+// captureOne prints a single raw payload so it can be saved as a test fixture.
+//
+// splitTopics accepts either separator. A comma cannot be used when this flag is passed
+// through `wendy run --user-args`, which splits on commas itself — so only the first
+// topic ever reached the flag and the rest were silently dropped as positional
+// arguments, which is how a three-topic capture quietly became a one-topic capture.
+func splitTopics(spec string) []string {
+	return strings.FieldsFunc(spec, func(r rune) bool { return r == ',' || r == ';' })
+}
+
+// A decoder tested only against a message the same author reconstructed from a spec
+// proves the two agree, not that either matches the robot. Pinning it to bytes the robot
+// actually sent is what closes that gap, and the agent's own ROS 2 decoders keep captured
+// payloads as testdata for the same reason.
+func captureTopics(ctx context.Context, topics []string, opts options) error {
+	participant, err := rtps.NewParticipant(rtps.Config{DomainID: opts.domain, Interface: opts.iface})
+	if err != nil {
+		return fmt.Errorf("joining DDS domain %d: %w", opts.domain, err)
+	}
+	defer participant.Close()
+
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go participant.Run(runCtx)
+
+	select {
+	case <-time.After(opts.settle):
+	case <-runCtx.Done():
+		return runCtx.Err()
+	}
+
+	reader := robotprobe.NewDDSReader(robotprobe.NewParticipantLease(participant, runCtx.Done()))
+	// One topic failing must not cost the others: a fixture run is usually after
+	// several at once, and a robot that publishes three of four still gives three.
+	var captured int
+	for _, topic := range topics {
+		topic = strings.TrimSpace(topic)
+		if topic == "" {
+			continue
+		}
+		payloads, err := reader.Sample(runCtx, topic, "", 5*time.Second, 1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sampling %s: %v\n", topic, err)
+			continue
+		}
+		if len(payloads) == 0 {
+			fmt.Fprintf(os.Stderr, "nothing published %s\n", topic)
+			continue
+		}
+		fmt.Printf("CAPTURE %s %d bytes\n%s\n", topic, len(payloads[0]), base64.StdEncoding.EncodeToString(payloads[0]))
+		captured++
+	}
+	if captured == 0 {
+		return fmt.Errorf("captured nothing from %v", topics)
+	}
 	return nil
 }

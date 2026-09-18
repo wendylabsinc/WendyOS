@@ -28,6 +28,7 @@ WendyCLI.app/
 .wendy
 *.resolved
 go/wendy-agent
+go/robot-inspect
 go/wendy
 go/bin/
 go/local-pki-test

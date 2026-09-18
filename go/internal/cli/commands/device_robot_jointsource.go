@@ -27,9 +27,19 @@ const (
 	// to know which robot is publishing, and it works for any robot whose
 	// driver speaks the ROS 2 convention.
 	backendROS2JointStates = "ros2-joint-states"
+	// backendUnitreeLowState reads a Unitree humanoid's whole body off
+	// unitree_hg/msg/LowState. It is the vendor one, needed because a G1
+	// publishes no sensor_msgs/JointState at all: its joints are a positionally
+	// indexed array with no names in it, on a type the agent's stock ROS 2
+	// sidecar cannot deserialise. The bytes come off the device through the
+	// generic raw topic stream and are decoded here, so the agent never has to
+	// learn a robot family.
+	backendUnitreeLowState = "unitree-lowstate"
 )
 
-func availableJointSourceBackends() []string { return []string{backendROS2JointStates} }
+func availableJointSourceBackends() []string {
+	return []string{backendROS2JointStates, backendUnitreeLowState}
+}
 
 // openJointSource resolves the backend a profile selected, over the agent
 // connection the caller already dialled.
@@ -41,10 +51,13 @@ func availableJointSourceBackends() []string { return []string{backendROS2JointS
 // switch on vendor names is one refactor away from a switch that changes
 // behaviour, and then the platform knows which robot it is talking to.
 func openJointSource(conn *grpc.ClientConn) robotwizard.JointSourceOpener {
-	return func(ctx context.Context, spec robotcal.JointSourceSpec) (robotwizard.JointSource, error) {
+	return func(ctx context.Context, joints robotcal.Joints) (robotwizard.JointSource, error) {
+		spec := joints.Source
 		switch spec.Backend {
 		case backendROS2JointStates:
 			return newROS2JointSource(ctx, conn, spec.Params)
+		case backendUnitreeLowState:
+			return newUnitreeLowStateJointSource(ctx, conn, joints)
 		default:
 			return nil, &robotwizard.UnsupportedBackendError{
 				Backend:   spec.Backend,
