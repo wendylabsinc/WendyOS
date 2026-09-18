@@ -104,6 +104,15 @@ func run(ctx context.Context, opts options) error {
 		want = append(want, probe.Provides()...)
 	}
 
+	// The body. Registered unconditionally: the probe reports an absent topic as a
+	// finding, which is the honest answer for a robot that is not a Unitree humanoid,
+	// and is different from never having looked.
+	joints := robotprobe.Joints{}
+	if err := registry.Register(joints); err != nil {
+		return err
+	}
+	want = append(want, joints.Provides()...)
+
 	env := robotinspect.NewEnv().Offer(robotinspect.RequirementDDSDomain, reader)
 	doc := robotinspect.Inspect(runCtx, registry, env, robotinspect.Target{
 		Device: opts.device, VendorKind: opts.kind, Want: want,
