@@ -280,8 +280,16 @@ func TestInspectKeepsPartialAnswersFromAFailingProbe(t *testing.T) {
 	if len(doc.Properties) != 1 {
 		t.Fatalf("got %d properties, want the partial answer kept", len(doc.Properties))
 	}
-	if got := doc.Skipped["dds-graph"].Reason; got != ReasonProbeFailed {
-		t.Errorf("skip reason = %q, want %q", got, ReasonProbeFailed)
+	if got := doc.Failed["dds-graph"].Reason; got != ReasonProbeFailed {
+		t.Errorf("failure reason = %q, want %q", got, ReasonProbeFailed)
+	}
+	// It ran. Filing it as skipped would tell an operator the opposite of what
+	// happened, and the report prints those under a heading that says "not run".
+	if _, skipped := doc.Skipped["dds-graph"]; skipped {
+		t.Error("a probe that ran and errored was recorded as never run")
+	}
+	if len(doc.ProbesRun) != 1 || doc.ProbesRun[0] != "dds-graph" {
+		t.Errorf("ProbesRun = %v, want the probe that ran", doc.ProbesRun)
 	}
 }
 

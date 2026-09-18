@@ -25,7 +25,7 @@ type wireDocument struct {
 	Summary     wireSummary        `json:"summary"`
 	Properties  []wireProperty     `json:"properties"`
 	Skipped     map[string]Unknown `json:"skipped,omitempty"`
-	Vendor      *wireVendorState   `json:"vendor,omitempty"`
+	Failed      map[string]Unknown `json:"failed,omitempty"`
 }
 
 type wireSummary struct {
@@ -65,14 +65,6 @@ type wireSampling struct {
 	Samples  int   `json:"samples"`
 }
 
-type wireVendorState struct {
-	Raw              map[string]string `json:"raw,omitempty"`
-	Label            string            `json:"label,omitempty"`
-	ControlAuthority string            `json:"controlAuthority,omitempty"`
-	CommandLegality  Legality          `json:"commandLegality,omitempty"`
-	LegalityReason   string            `json:"legalityReason,omitempty"`
-}
-
 // MarshalJSON renders the document, timestamps included.
 func (d Document) MarshalJSON() ([]byte, error) { return json.Marshal(d.wire(false)) }
 
@@ -101,6 +93,7 @@ func (d Document) wire(canonical bool) wireDocument {
 		},
 		Properties: make([]wireProperty, 0, len(d.Properties)),
 		Skipped:    d.Skipped,
+		Failed:     d.Failed,
 	}
 	if !canonical {
 		started, finished := d.StartedAt, d.FinishedAt
@@ -124,15 +117,6 @@ func (d Document) wire(canonical bool) wireDocument {
 			wp.Observations = append(wp.Observations, o.wire(canonical))
 		}
 		out.Properties = append(out.Properties, wp)
-	}
-	if d.Vendor != nil {
-		out.Vendor = &wireVendorState{
-			Raw:              d.Vendor.Raw,
-			Label:            d.Vendor.Label,
-			ControlAuthority: d.Vendor.ControlAuthority,
-			CommandLegality:  d.Vendor.CommandLegality,
-			LegalityReason:   d.Vendor.LegalityReason,
-		}
 	}
 	return out
 }
