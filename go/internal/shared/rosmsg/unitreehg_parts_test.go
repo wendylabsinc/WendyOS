@@ -2,6 +2,9 @@ package rosmsg
 
 import (
 	"encoding/binary"
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -206,5 +209,87 @@ func TestDecodeHGHandStateRejectsATrailingTail(t *testing.T) {
 	longer := append(append([]byte{}, full...), 0, 0, 0, 0)
 	if _, err := DecodeHGHandState(longer); err == nil {
 		t.Error("a payload with a trailing tail decoded without error")
+	}
+}
+
+// Bytes unitree-g1-nx-2 published on 2026-09-18, captured read-only. Same reasoning as
+// the LowState fixture: a decoder checked only against a message its own author
+// reconstructed proves the two agree, not that either matches the robot.
+func TestDecodeHGBmsStateAgainstBytesTheRobotSent(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("testdata", "unitree_hg_bmsstate.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4 of encapsulation plus the 164 the IDL implies, worked out by hand.
+	if len(payload) != 168 {
+		t.Fatalf("fixture is %d bytes, want 168", len(payload))
+	}
+
+	bms, err := DecodeHGBmsState(payload)
+	if err != nil {
+		t.Fatalf("the robot's own bytes did not decode: %v", err)
+	}
+
+	// Bounds, not exact values: the pack was at whatever charge it happened to hold.
+	// These are the ones a misread field would fail.
+	if bms.ChargePercent == 0 || bms.ChargePercent > 100 {
+		t.Errorf("charge = %d%%, not a percentage", bms.ChargePercent)
+	}
+	if bms.HealthPercent == 0 || bms.HealthPercent > 100 {
+		t.Errorf("health = %d%%, not a percentage", bms.HealthPercent)
+	}
+	highest, ok := bms.HighestCellMillivolts()
+	if !ok || highest < 2500 || highest > 4500 {
+		t.Errorf("highest cell = %d mV, outside anything a lithium cell holds", highest)
+	}
+	lowest, _ := bms.LowestCellMillivolts()
+	if lowest > highest {
+		t.Errorf("lowest cell %d above highest %d", lowest, highest)
+	}
+	// A pack in service is balanced to within a few tens of millivolts. A field read
+	// from the wrong offset would not land there.
+	if spread := highest - lowest; spread > 500 {
+		t.Errorf("cell spread %d mV is too wide to be a working pack", spread)
+	}
+	if hottest, ok := bms.HottestCelsius(); ok && (hottest < 0 || hottest > 80) {
+		t.Errorf("hottest cell = %d C, not a battery temperature", hottest)
+	}
+}
+
+// A hand's message is variable length, so unlike LowState its size is not a layout
+// check on its own — the exact-consumption assertion inside the decoder is.
+func TestDecodeHGHandStateAgainstBytesTheRobotSent(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("testdata", "unitree_hg_handstate_left.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hand, err := DecodeHGHandState(payload)
+	if err != nil {
+		t.Fatalf("the robot's own bytes did not decode: %v", err)
+	}
+
+	// A Dex3 drives seven finger motors.
+	if len(hand.Motors) != 7 {
+		t.Errorf("motors = %d, want 7", len(hand.Motors))
+	}
+	if len(hand.PressSensors) == 0 {
+		t.Error("no pressure sensors; a Dex3 reports several")
+	}
+	for i, motor := range hand.Motors {
+		for sensor, celsius := range motor.TemperatureC {
+			if celsius < 0 || celsius > 120 {
+				t.Errorf("motor %d temperature[%d] = %d C, not a temperature", i, sensor, celsius)
+			}
+		}
+		if abs := math.Abs(float64(motor.Position)); abs > 2*math.Pi {
+			t.Errorf("motor %d position %v rad is beyond a finger's travel", i, abs)
+		}
+	}
+	for i, sensor := range hand.PressSensors {
+		for pad, celsius := range sensor.TemperatureC {
+			if celsius != 0 && (celsius < -40 || celsius > 120) {
+				t.Errorf("pressure sensor %d pad %d = %v C, not a temperature", i, pad, celsius)
+			}
+		}
 	}
 }

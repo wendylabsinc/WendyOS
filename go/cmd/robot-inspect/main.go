@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -35,7 +36,7 @@ func main() {
 	device := flag.String("device", "", "name to record the inspection against")
 	kind := flag.String("kind", "", "robot kind to record, such as unitree-g1")
 	asJSON := flag.Bool("json", false, "emit the document as JSON")
-	capture := flag.String("capture", "", "instead of inspecting, print one raw payload from this topic as base64, for use as a test fixture")
+	capture := flag.String("capture", "", "instead of inspecting, print one raw payload from each topic as base64, for use as test fixtures; separate topics with ';' (a comma cannot survive `wendy run --user-args`)")
 	canonical := flag.Bool("canonical", false, "with -json, omit wall-clock fields so two passes diff on substance")
 	flag.Parse()
 
@@ -43,7 +44,7 @@ func main() {
 	defer stop()
 
 	if *capture != "" {
-		if err := captureOne(ctx, *capture, options{domain: *domain, iface: *iface, settle: *settle}); err != nil {
+		if err := captureTopics(ctx, splitTopics(*capture), options{domain: *domain, iface: *iface, settle: *settle}); err != nil {
 			fmt.Fprintf(os.Stderr, "robot-inspect: %v\n", err)
 			os.Exit(1)
 		}
@@ -157,11 +158,19 @@ func run(ctx context.Context, opts options) error {
 
 // captureOne prints a single raw payload so it can be saved as a test fixture.
 //
+// splitTopics accepts either separator. A comma cannot be used when this flag is passed
+// through `wendy run --user-args`, which splits on commas itself — so only the first
+// topic ever reached the flag and the rest were silently dropped as positional
+// arguments, which is how a three-topic capture quietly became a one-topic capture.
+func splitTopics(spec string) []string {
+	return strings.FieldsFunc(spec, func(r rune) bool { return r == ',' || r == ';' })
+}
+
 // A decoder tested only against a message the same author reconstructed from a spec
 // proves the two agree, not that either matches the robot. Pinning it to bytes the robot
 // actually sent is what closes that gap, and the agent's own ROS 2 decoders keep captured
 // payloads as testdata for the same reason.
-func captureOne(ctx context.Context, topic string, opts options) error {
+func captureTopics(ctx context.Context, topics []string, opts options) error {
 	participant, err := rtps.NewParticipant(rtps.Config{DomainID: opts.domain, Interface: opts.iface})
 	if err != nil {
 		return fmt.Errorf("joining DDS domain %d: %w", opts.domain, err)
@@ -179,13 +188,28 @@ func captureOne(ctx context.Context, topic string, opts options) error {
 	}
 
 	reader := robotprobe.NewDDSReader(robotprobe.NewParticipantLease(participant, runCtx.Done()))
-	payloads, err := reader.Sample(runCtx, topic, "", 5*time.Second, 1)
-	if err != nil {
-		return fmt.Errorf("sampling %s: %w", topic, err)
+	// One topic failing must not cost the others: a fixture run is usually after
+	// several at once, and a robot that publishes three of four still gives three.
+	var captured int
+	for _, topic := range topics {
+		topic = strings.TrimSpace(topic)
+		if topic == "" {
+			continue
+		}
+		payloads, err := reader.Sample(runCtx, topic, "", 5*time.Second, 1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sampling %s: %v\n", topic, err)
+			continue
+		}
+		if len(payloads) == 0 {
+			fmt.Fprintf(os.Stderr, "nothing published %s\n", topic)
+			continue
+		}
+		fmt.Printf("CAPTURE %s %d bytes\n%s\n", topic, len(payloads[0]), base64.StdEncoding.EncodeToString(payloads[0]))
+		captured++
 	}
-	if len(payloads) == 0 {
-		return fmt.Errorf("nothing published %s", topic)
+	if captured == 0 {
+		return fmt.Errorf("captured nothing from %v", topics)
 	}
-	fmt.Printf("CAPTURE %s %d bytes\n%s\n", topic, len(payloads[0]), base64.StdEncoding.EncodeToString(payloads[0]))
 	return nil
 }

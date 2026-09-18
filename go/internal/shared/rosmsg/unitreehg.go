@@ -49,6 +49,10 @@ type HGIMU struct {
 // every motor's position, velocity, torque and temperature, the IMU, and the control
 // mode the robot is in.
 type HGLowState struct {
+	// Version is the body firmware, which is readable here and nowhere else without
+	// the vendor SDK. Carried as the two words the robot publishes, uninterpreted:
+	// how they compose into a version string is Unitree's business.
+	Version [2]uint32
 	// ModePR and ModeMachine are the robot's own mode words, carried verbatim because
 	// their meaning is Unitree's.
 	//
@@ -85,9 +89,8 @@ func DecodeHGLowState(payload []byte) (*HGLowState, error) {
 	}
 
 	var state HGLowState
-	// version: uint32[2]
-	for i := 0; i < 2; i++ {
-		if _, err := d.Uint32(); err != nil {
+	for i := range state.Version {
+		if state.Version[i], err = d.Uint32(); err != nil {
 			return nil, fmt.Errorf("version[%d]: %w", i, err)
 		}
 	}

@@ -274,3 +274,24 @@ func TestDecodeHGLowStateAgainstBytesTheRobotSent(t *testing.T) {
 		t.Errorf("largest torque %v Nm is too large for an idle robot", maxAbsTorque)
 	}
 }
+
+// LowState reserves a version field, and unitree-g1-nx-2 publishes zeros in it. The
+// field is decoded rather than skipped so a robot that does populate it is not missed,
+// but on this one there is no body firmware to report — which corrects an earlier claim
+// that it was readable here. The battery's firmware is real and separate.
+//
+// The probe must therefore not render this as "0.0", which would be a version-shaped
+// answer to a question the robot did not answer.
+func TestDecodeHGLowStateVersionIsUnpopulatedOnThisRobot(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("testdata", "unitree_hg_lowstate.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := DecodeHGLowState(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Version != [2]uint32{} {
+		t.Errorf("version = %v; if a robot starts populating this, the probe should surface it", state.Version)
+	}
+}
