@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
@@ -36,10 +37,16 @@ type AgentService struct {
 	hardwareDiscoverer       HardwareDiscoverer
 	discoverGPUs             func() []gpudiscovery.Device
 	discoverContainerStorage func() (partitionUsage, bool)
-	bluetoothManager         BluetoothManager
-	installer                *AgentInstaller
-	isWendyOSHost            func() bool
-	osUpdateStateDir         string
+
+	// storageGate reports container_storage_degraded in GetAgentVersion
+	// (WDY-3127). A nil storageGate (the default) leaves the field unset;
+	// see SetContainerStorageGate.
+	storageGate *ContainerStorageGate
+
+	bluetoothManager BluetoothManager
+	installer        *AgentInstaller
+	isWendyOSHost    func() bool
+	osUpdateStateDir string
 
 	// verifier checks the update binary's signature before install. Defaults
 	// to sigverify.DefaultVerifier (disabled until a real pinned key is
@@ -81,6 +88,13 @@ func NewAgentService(
 		verifier:           sigverify.DefaultVerifier,
 		restartFn:          scheduleAgentRestartExit,
 	}
+}
+
+// SetContainerStorageGate wires the gate whose Degraded() is reported as
+// container_storage_degraded in GetAgentVersion (WDY-3127). Leaving it unset
+// (nil) omits the field from the response entirely.
+func (s *AgentService) SetContainerStorageGate(g *ContainerStorageGate) {
+	s.storageGate = g
 }
 
 func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
@@ -149,6 +163,9 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 	}
 	if p, ok := storageProbe(); ok {
 		resp.ContainerStorage = &agentpb.DiskPartition{Mountpoint: p.mountpoint, Filesystem: p.filesystem, Device: p.device, UsedBytes: p.usedBytes, TotalBytes: p.totalBytes}
+	}
+	if s.storageGate != nil {
+		resp.ContainerStorageDegraded = proto.Bool(s.storageGate.Degraded())
 	}
 
 	resp.MemTotalBytes, resp.CpuCount = hostMemAndCPUCount()

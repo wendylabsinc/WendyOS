@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
@@ -22,10 +23,22 @@ type DeviceInfoService struct {
 	hardwareDiscoverer       HardwareDiscoverer
 	discoverGPUs             func() []gpudiscovery.Device
 	discoverContainerStorage func() (partitionUsage, bool)
+
+	// storageGate reports container_storage_degraded in GetDeviceInfo
+	// (WDY-3127). A nil storageGate (the default) leaves the field unset;
+	// see SetContainerStorageGate.
+	storageGate *ContainerStorageGate
 }
 
 func NewDeviceInfoService(logger *zap.Logger, hd HardwareDiscoverer) *DeviceInfoService {
 	return &DeviceInfoService{logger: logger, hardwareDiscoverer: hd}
+}
+
+// SetContainerStorageGate wires the gate whose Degraded() is reported as
+// container_storage_degraded in GetDeviceInfo (WDY-3127). Leaving it unset
+// (nil) omits the field from the response entirely.
+func (s *DeviceInfoService) SetContainerStorageGate(g *ContainerStorageGate) {
+	s.storageGate = g
 }
 
 func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDeviceInfoRequest) (*agentpbv2.GetDeviceInfoResponse, error) {
@@ -84,6 +97,9 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 	}
 	if p, ok := storageProbe(); ok {
 		resp.ContainerStorage = &agentpbv2.DiskPartition{Mountpoint: p.mountpoint, Filesystem: p.filesystem, Device: p.device, UsedBytes: p.usedBytes, TotalBytes: p.totalBytes}
+	}
+	if s.storageGate != nil {
+		resp.ContainerStorageDegraded = proto.Bool(s.storageGate.Degraded())
 	}
 
 	resp.MemTotalBytes, resp.CpuCount = hostMemAndCPUCount()
