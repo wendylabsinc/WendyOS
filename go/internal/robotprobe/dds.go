@@ -135,3 +135,20 @@ func rosTopicName(topic string) string {
 	}
 	return name
 }
+
+// participantLease adapts a directly created Participant to the Lease seam. A pooled
+// lease reports its own closure through Done(); a bare participant is driven by
+// Run(ctx), so its liveness is that context's.
+type participantLease struct {
+	*rtps.Participant
+	done <-chan struct{}
+}
+
+func (p participantLease) Done() <-chan struct{} { return p.done }
+
+// NewParticipantLease presents a participant the caller is running itself as a Lease.
+// done should be the Done channel of the context passed to Participant.Run, so a reader
+// stops waiting when the participant stops being driven.
+func NewParticipantLease(p *rtps.Participant, done <-chan struct{}) Lease {
+	return participantLease{Participant: p, done: done}
+}
