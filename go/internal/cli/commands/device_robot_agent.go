@@ -2,12 +2,18 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/wendylabsinc/wendy/go/internal/robotprobe"
+	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -28,6 +34,10 @@ type agentHostFacts struct {
 	hardwareOnce sync.Once
 	hardware     []robotprobe.HardwareDevice
 	hardwareErr  error
+
+	camerasOnce sync.Once
+	cameras     []robotprobe.CameraDevice
+	camerasErr  error
 }
 
 func newAgentHostFacts(conn *grpcclient.AgentConnection) *agentHostFacts {
@@ -125,4 +135,90 @@ func (a *agentHostFacts) DeviceClock(ctx context.Context) (time.Time, time.Durat
 		return time.Time{}, roundTrip, fmt.Errorf("reading the device clock: %w", err)
 	}
 	return time.Unix(0, resp.GetUnixNanos()).UTC(), roundTrip, nil
+}
+
+// Cameras enumerates every camera the agent knows about, whatever transport it arrives
+// on. Cached, like the other inventories.
+func (a *agentHostFacts) Cameras(ctx context.Context) ([]robotprobe.CameraDevice, error) {
+	a.camerasOnce.Do(func() {
+		resp, err := a.conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{})
+		if err != nil {
+			a.camerasErr = fmt.Errorf("listing cameras: %w", err)
+			return
+		}
+		for _, device := range resp.GetDevices() {
+			a.cameras = append(a.cameras, robotprobe.CameraDevice{
+				StableID:  device.GetStableId(),
+				Name:      device.GetName(),
+				Path:      device.GetPath(),
+				Model:     device.GetModel(),
+				Driver:    device.GetDriver(),
+				Transport: transportName(device.GetTransport()),
+				Topic:     device.GetTopic(),
+				Online:    device.GetOnline(),
+			})
+		}
+	})
+	return a.cameras, a.camerasErr
+}
+
+// SampleCamera streams frames for at most window, stopping at maxFrames. The frame count
+// is capped because this runs over a cloud tunnel as readily as on a LAN, and an
+// uncompressed stream is expensive to move.
+func (a *agentHostFacts) SampleCamera(ctx context.Context, stableID string, window time.Duration, maxFrames int) ([]robotprobe.CameraFrame, error) {
+	streamCtx, stop := context.WithTimeout(ctx, window)
+	defer stop()
+
+	stream, err := a.conn.VideoService.StreamVideo(streamCtx, &agentpb.StreamVideoRequest{
+		StableId: stableID,
+	})
+	if err != nil {
+		return nil, classifyCameraError(err)
+	}
+
+	var frames []robotprobe.CameraFrame
+	for maxFrames <= 0 || len(frames) < maxFrames {
+		frame, err := stream.Recv()
+		if err != nil {
+			// The window closing is the normal way this ends, so whatever arrived is
+			// the answer. A failure with nothing to show is reported.
+			if len(frames) > 0 || errors.Is(streamCtx.Err(), context.DeadlineExceeded) {
+				break
+			}
+			return nil, classifyCameraError(err)
+		}
+		captured := robotprobe.CameraFrame{
+			Codec:       codecName(frame.GetCodec()),
+			TimestampNs: frame.GetTimestampNs(),
+			ReceivedAt:  time.Now(),
+		}
+		if raw := frame.GetRawFormat(); raw != nil {
+			captured.Width = raw.GetWidth()
+			captured.Height = raw.GetHeight()
+			captured.Fourcc = raw.GetFourcc()
+		}
+		frames = append(frames, captured)
+	}
+	return frames, nil
+}
+
+// classifyCameraError marks the one case the report can name a cause for. The agent
+// already publishes a machine-readable reason for a camera in use, which is exactly what
+// shared/streamreason exists for, so this reads that rather than matching on message
+// text; a FailedPrecondition is the fallback for an older agent.
+func classifyCameraError(err error) error {
+	if streamreason.Has(err, streamreason.CameraInUse) || status.Code(err) == codes.FailedPrecondition {
+		return fmt.Errorf("%w: %v", robotprobe.ErrDeviceBusy, err)
+	}
+	return err
+}
+
+// transportName and codecName render the agent's enums without the wire prefixes, so the
+// report reads "USB" rather than "VIDEO_TRANSPORT_USB". The core never interprets either.
+func transportName(transport agentpb.VideoTransport) string {
+	return strings.TrimPrefix(transport.String(), "VIDEO_TRANSPORT_")
+}
+
+func codecName(codec agentpb.VideoCodec) string {
+	return strings.TrimPrefix(codec.String(), "VIDEO_CODEC_")
 }

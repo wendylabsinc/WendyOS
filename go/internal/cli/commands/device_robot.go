@@ -166,6 +166,14 @@ func probeRobot(ctx context.Context, source robotTopicSource, host robotprobe.Ho
 			env.Offer(robotinspect.RequirementTimeSync, clock)
 			probes = append(probes, robotprobe.Clock{})
 		}
+		// Cameras come through the agent, which already abstracts USB, CSI, network
+		// and ROS 2 alike. This is the general camera path: it answers on a robot
+		// with no ROS installed, and it works wherever the device is reachable
+		// rather than only on its own network segment.
+		if cameras, ok := host.(robotprobe.CameraSource); ok {
+			env.Offer(robotinspect.RequirementCameraTransport, cameras)
+			probes = append(probes, robotprobe.Camera{Window: opts.window})
+		}
 		for _, probe := range probes {
 			if err := registry.Register(probe); err != nil {
 				return robotinspect.Document{}, err
