@@ -99,6 +99,10 @@ message ListContainerStatsResponse {
 message PruneCacheRequest {
     // Reports what would be released without changing containerd metadata.
     bool dry_run = 1;
+    // Minimum age of a Wendy cache pin before it is released. Absent: the
+    // agent's default grace period (24h). 0: release every pin regardless of
+    // age (`wendy device cache prune --all`). WDY-3127.
+    optional uint64 min_age_seconds = 2;
 }
 
 message PruneCacheResponse {
@@ -113,4 +117,8 @@ message PruneCacheResponse {
     // Newly written cache entries are retained for this many seconds to avoid
     // disrupting an in-flight deployment between layer RPCs.
     uint64 minimum_age_seconds = 5;
+    // Bytes freed on the container-storage filesystem across the synchronous
+    // containerd GC pass the agent forces after releasing pins. Absent on
+    // dry runs and when the agent could not force GC or measure the delta.
+    optional uint64 reclaimed_bytes = 6;
 }
