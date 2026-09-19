@@ -1,0 +1,192 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "check": "explicit_twist_grant",
+      "passed": true,
+      "publisher_gid": "056fa1292be96f2800000000000000000000000000000000"
+    },
+    {
+      "check": "g1_sensor_contract",
+      "passed": true,
+      "physical_joints": 29,
+      "hg_slots": 35,
+      "maximum_motor_joint_error": 0.00035341307932196253,
+      "image_shape": [
+        640,
+        360,
+        "rgb8"
+      ],
+      "cloud_points": 1080,
+      "horizontal_returns": 360,
+      "hg_crc_checked": false
+    },
+    {
+      "check": "finite_full_reader_rates",
+      "passed": true,
+      "elapsed_seconds": 12.011092168999994,
+      "received_hz": {
+        "odom": 49.78731255958613,
+        "truth": 49.78731255958613,
+        "imu": 198.3166864831675,
+        "joints": 49.78731255958613,
+        "scan": 9.990765062124307,
+        "cloud": 9.990765062124307,
+        "image": 14.65312209111565,
+        "camera_info": 14.65312209111565,
+        "lowstate": 491.8786665585867
+      },
+      "minimum_hz": {
+        "odom": 40,
+        "truth": 40,
+        "joints": 40,
+        "imu": 160,
+        "scan": 8,
+        "cloud": 8,
+        "image": 12,
+        "camera_info": 12,
+        "lowstate": 400
+      },
+      "physics_hz": 500.2875604858747,
+      "policy_hz": 49.95382531062153
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "command": [
+        0.3,
+        0.0,
+        0.0
+      ],
+      "command_seconds": 3,
+      "physical_displacement": 0.6322608358190477,
+      "odometry_displacement": 0.6358359741393669,
+      "joint_travel": 0.5006468490655124,
+      "maximum_scan_change": 6.338753700256348,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "command": [
+        -0.3,
+        0.0,
+        0.0
+      ],
+      "command_seconds": 3,
+      "physical_displacement": -0.5982632525294966,
+      "odometry_displacement": -0.5959247613654058,
+      "joint_travel": 0.363367094086128,
+      "maximum_scan_change": 6.016014337539673,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "left_turn",
+      "command": [
+        0.3,
+        0.0,
+        0.2
+      ],
+      "command_seconds": 6,
+      "physical_displacement": 0.7746586240483369,
+      "odometry_displacement": 0.7758586240483349,
+      "joint_travel": 0.5169161275636068,
+      "maximum_scan_change": 5.627555668354034,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "explicit_twist_grant",
+      "passed": true,
+      "publisher_gid": "f431d9a1a6f3742e00000000000000000000000000000000"
+    },
+    {
+      "check": "stale_writer_fence",
+      "passed": true,
+      "operation": "pause",
+      "old_gid": "056fa1292be96f2800000000000000000000000000000000",
+      "replacement_gid": "f431d9a1a6f3742e00000000000000000000000000000000",
+      "epoch": 2
+    },
+    {
+      "check": "explicit_twist_grant",
+      "passed": true,
+      "publisher_gid": "cd29f5b1ffd6124900000000000000000000000000000000"
+    },
+    {
+      "check": "stale_writer_fence",
+      "passed": true,
+      "operation": "reset",
+      "old_gid": "f431d9a1a6f3742e00000000000000000000000000000000",
+      "replacement_gid": "cd29f5b1ffd6124900000000000000000000000000000000",
+      "epoch": 3
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "fresh_publisher_forward",
+      "command": [
+        0.3,
+        0.0,
+        0.0
+      ],
+      "command_seconds": 2,
+      "physical_displacement": 0.354250512475729,
+      "odometry_displacement": 0.3562540889492616,
+      "joint_travel": 0.516222503772711,
+      "maximum_scan_change": 5.863673210144043,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "g1_sensor_contract",
+      "passed": true,
+      "physical_joints": 29,
+      "hg_slots": 35,
+      "maximum_motor_joint_error": 6.27340733670434e-05,
+      "image_shape": [
+        640,
+        360,
+        "rgb8"
+      ],
+      "cloud_points": 1080,
+      "horizontal_returns": 360,
+      "hg_crc_checked": false
+    }
+  ],
+  "environment": {
+    "vm_name": "g1-sim",
+    "source_digest": "sha256:3b9728e303f90e73f1f6b482b4c5a73b2a926931a8d7d10ac81a239deee1b40e",
+    "robot_kind": "g1",
+    "profile_version": 1
+  },
+  "limitations": "Finite standard/HG ROS check; not the 600-second performance gate, native API/CRC acceptance or hardware fidelity.",
+  "elapsed_seconds": 60.656608416999916,
+  "received_counts": {
+    "odom": 2985,
+    "truth": 2985,
+    "imu": 11834,
+    "joints": 2985,
+    "scan": 600,
+    "cloud": 600,
+    "image": 876,
+    "camera_info": 876,
+    "lowstate": 29306
+  },
+  "overall_received_hz": {
+    "odom": 49.21145573255311,
+    "truth": 49.21145573255311,
+    "imu": 195.09828044858745,
+    "joints": 49.21145573255311,
+    "scan": 9.891749895990575,
+    "cloud": 9.891749895990575,
+    "image": 14.44195484814624,
+    "camera_info": 14.44195484814624,
+    "lowstate": 483.146037419833
+  },
+  "overall_rate_scope": "Entire run, including discovery, deliberate pause/reset and cleanup; threshold gate uses its separate uninterrupted window.",
+  "execution": "Separate ROS application process attached through the VM agent into the managed G1 container; no simulator Python imports.",
+  "log": "/private/tmp/g1-vm-standard.log"
+}

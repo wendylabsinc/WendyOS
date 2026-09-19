@@ -762,6 +762,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 					}
 					out = append(out, ros2camera.Graph{
 						Key: key, InstanceKey: target.ContainerID, DomainID: target.DomainID, NetworkNamespacePID: target.TaskPID,
+						HostNetwork: target.HostNetwork,
 						Verify: func(ctx context.Context) bool {
 							current, err := rosRuntime[0].FindROS2Containers(ctx)
 							if err != nil {
@@ -918,6 +919,8 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 			Path:      path,
 			Transport: transportToProto(transport),
 			Driver:    driver,
+			// Local cameras are listed only after a successful capture query.
+			Online: true,
 		}
 		// Empty for a camera with no /dev/v4l entry, which is not an error --
 		// the numeric id still addresses it, it is just not stable across a

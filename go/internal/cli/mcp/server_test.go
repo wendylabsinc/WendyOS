@@ -41,6 +41,11 @@ func TestStart_ServesWhileStartupConnectIsBlocked(t *testing.T) {
 		if _, ok := tools["wendy_status"]; !ok {
 			t.Fatal("stdio server started without built-in Wendy tools")
 		}
+		for _, name := range []string{"ros2_topics", "ros2_topic_info", "ros2_topic_sample", "ros2_topic_hz", "ros2_lidar_summary"} {
+			if _, ok := tools[name]; !ok {
+				t.Errorf("stdio server started without %s", name)
+			}
+		}
 	case <-time.After(time.Second):
 		t.Fatal("stdio server did not start while startup connection was blocked")
 	}
@@ -156,7 +161,6 @@ func TestDeadTools_NotRegistered(t *testing.T) {
 	s.registerProvisioningTools(srv)
 	s.registerOSTools(srv)
 	s.registerCloudTools(srv)
-	s.registerContainerMCPTools(context.Background(), srv) // no active connection; no-op
 
 	tools := srv.ListTools()
 	for _, name := range []string{"filesync_sync", "cloud_run", "cloud_device_connect"} {

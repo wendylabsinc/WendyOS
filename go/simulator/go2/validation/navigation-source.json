@@ -1,0 +1,48 @@
+{
+  "base_runtime_image": "sha256:ba294c6a14f2c8f60ab8adfae03bd8db91ea87c4f33762eb18afbf61fd008a1f",
+  "test_image": "sha256:9233cb19d020534831f37169c9e508835953f61d113681454280f4c173d758b6",
+  "network": "none; test app shares this isolated runtime namespace",
+  "environment": {
+    "GO2_NATIVE": "1",
+    "GO2_RENDER": "1"
+  },
+  "fixed_snapshot_sha256": {
+    "runtime": {
+      "__init__.py": "fcce4b00268817450fca3b816bf78ddf70c86c777dff74f07a3f706c8e3e51c8",
+      "camera.py": "bfcdb4ad84276785c0ab4c8943dd3c6086dfda41bdf84b8f160a2fad74e6d2b0",
+      "commands.py": "d2ef0a99ac4a8cd334e674d55f87f140fb273bfddafdb499d712b4ed72b618fa",
+      "index.html": "b0ad27abbd3ecba0792fbf06e26f366f5e077eed7c3dad1d8c2771d2ed14bba3",
+      "isolation.py": "2538426d038d5671bbf96617b688f1143c8ba8478574bceeacd6a73ca2c61138",
+      "lidar.py": "040933bfe6474403c5b43b8b5ad88f5511481493741a4cdffbfdf85c652acaaa",
+      "native_commands.py": "8530c26ba96826384730eec0da7de01ce0bf41977c53610ed409b40b94af0289",
+      "native_state.py": "6b4b4e7d636723407732e401deae9b91cdca73fc84184e9e26520a0128e806ca",
+      "observations.py": "8a0a9efd261e9180eb8e25c31169e3dc0dde5156c3c39c42df70bd4cdb07ba6d",
+      "policy.py": "8e5d80e63ffe5548b216f510ed3a39f713bce8b87fc11af442f5c106779c21c8",
+      "ros.py": "661d191af5d38b5ba9d2d29abb4b9ef9c2d9b3e004cbc3d37312854ee8beb0cc",
+      "runtime.py": "6b53868f6a4331fef0c8f8cf713d3f0bfd8b1c2da4927e2b760d0aec3e82f7c9",
+      "sensors.py": "7eb7149dc0075bb11db852e88fd44d3b1b56356e10aaa460cc18cb66625e25e1",
+      "server.py": "23a8d3e55dab13de4fc3614ce9d8b9c1c4934a0900c0adc324bcfe2ebcdaccbf",
+      "simulation.py": "02ff85a2e26ca434efeeb09c3dba1c2207f53875dfe2dd816f3cf868ac8904bc",
+      "slow_sensors.py": "39303da9649298c0e2c93853bb5871d25560f401dbc43195983f780f102e525b",
+      "unitree_crc.py": "64ec705d672599734217eb5bdab7ab386da5fb7e94e601b902e5c25a3b75248b"
+    },
+    "visuals": {
+      "base_0.obj": "ce7a2db397df2ee213f0858c838bbacdb1ce17b119bdff227b905c93acacc942",
+      "base_1.obj": "3b9b2607cf9caa239a61da8641c4aeffc28e96fa6adff1c0ee8c44729506414c",
+      "base_2.obj": "29cae463f95d678e4ede863c36c9b19b0d356b8340412add10670d70bdcc3095",
+      "base_3.obj": "7707157799e303b831840bba3ec70a7b461a21723d859470d828955c5e366272",
+      "base_4.obj": "087fe401d234461bf23b0b7e223827e0a8eb290f4235cc9255340cc109c34347",
+      "calf_0.obj": "2262a89ed9ccfdcbab5a9f3ebc9dd49deb37b34c4d91ab4f30fa11467be946b9",
+      "calf_1.obj": "adc45273f0e8753d574b0d2b44588ef908482e602c99f7747067ba0504cbc8b9",
+      "calf_mirror_0.obj": "f5059ccbfac53d77ed1c7d1232f49071108d42364ab54d1340807f15eb271020",
+      "calf_mirror_1.obj": "d8a65eb4e343b0102577ac6ab4054d72a40aa2ef96a9584020b2923fcba000a9",
+      "foot.obj": "a946c02c0ad6ca374d2d6e2f7f8ef0fa63630cd7d07fe85c383ddd83d0afb8f5",
+      "hip_0.obj": "486c8279c75c3679d5fad7f1bbf5227b7f1db3e462a2ece7f10cec7418b8101a",
+      "hip_1.obj": "7f9f0d51da7516a4558e1741637a13f0d22d5d3cb02f132f9bda09e4a8c6d2ab",
+      "thigh_0.obj": "a18c374d88a7fb5e81cc8d4d4be78fc1c7547dd7c72aab1e38e0b8d294a0250f",
+      "thigh_1.obj": "162bca49459087b523434afa71aa217cc509d81e0532a758cd8b939be2497b04",
+      "thigh_mirror_0.obj": "c2672f260a74dd51493d37fe7e9907e8d58cad4009f7398359e4de040a335478",
+      "thigh_mirror_1.obj": "f068470b0872b9a7ecdcdd0a5be259dec9f762c7d690c35dd7987c800df1ad8f"
+    }
+  }
+}

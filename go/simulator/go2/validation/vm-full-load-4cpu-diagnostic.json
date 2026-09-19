@@ -1,0 +1,320 @@
+{
+  "passed": false,
+  "complete_duration": false,
+  "reason": "Stopped after camera/observer throughput remained below the 14 Hz acceptance threshold.",
+  "runtime_source": "sha256:c6ac4bc4a84aff43f3b6c6a9304c3cda765fe6d8d285ca9eb8dec7612c9b4a93",
+  "vm": {
+    "name": "go2-sim",
+    "cpus": 4,
+    "memory_mib": 4096,
+    "base_image": "nightly-20260908T175754"
+  },
+  "checks": [
+    {
+      "check": "explicit_source_grant",
+      "passed": true,
+      "publisher_gid": "d238e3136320ea3f00000000000000000000000000000000"
+    },
+    {
+      "check": "sensor_contract",
+      "passed": true,
+      "scan_returns": 360,
+      "joints": 12
+    },
+    {
+      "check": "full_sensor_contract",
+      "passed": true,
+      "image_stamp_ns": 1789237362204465000,
+      "cloud_stamp_ns": 1789237362240138500,
+      "cloud_points": 1094,
+      "horizontal_returns": 360,
+      "errors": [],
+      "crc_checked": 30,
+      "lowstate_received": 291,
+      "latest_tick_ms": 580,
+      "distinct_recent_image_hashes": 6,
+      "crc_sampling": "every tenth received LowState, pinned SDK packer and bitwise CRC"
+    },
+    {
+      "check": "observed_source_rates",
+      "passed": true,
+      "hz": {
+        "odom": 49.95642190303128,
+        "imu": 199.92424494561558,
+        "joints": 49.95642190303128,
+        "scan": 9.969886922056766,
+        "truth": 49.95642190303128,
+        "image": 13.28280805522479,
+        "camera_info": 13.28280805522479,
+        "cloud": 9.969886922056766
+      }
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.6275966733954095,
+      "joint_travel": 0.4723273907759408,
+      "maximum_scan_change": 6.050989866256714
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.591441299093622,
+      "joint_travel": 0.5233130024758501,
+      "maximum_scan_change": 5.942270755767822
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.40733780014072557,
+      "joint_travel": 0.5014524035170326,
+      "maximum_scan_change": 5.4656713008880615
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.40820146604685503,
+      "joint_travel": 0.33897563832335853,
+      "maximum_scan_change": 5.3468544483184814
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.8913395312509722,
+      "joint_travel": 0.5799120235639047,
+      "maximum_scan_change": 4.403088927268982
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.9020567724606582,
+      "joint_travel": 0.5297727818042366,
+      "maximum_scan_change": 4.391818165779114
+    },
+    {
+      "check": "publisher_expiry",
+      "passed": true,
+      "target_cleared_seconds": 0.22322215299936943
+    },
+    {
+      "check": "explicit_source_grant",
+      "passed": true,
+      "publisher_gid": "5f10c0018096aad500000000000000000000000000000000"
+    },
+    {
+      "check": "reset_and_fresh_publisher",
+      "passed": true,
+      "old_gid": "d238e3136320ea3f00000000000000000000000000000000",
+      "new_gid": "5f10c0018096aad500000000000000000000000000000000",
+      "epoch": 3
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.31310774157255733
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2540947168696788
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2766696554789946
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.19091986098161945
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6132192259851424
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5244580490203596
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2805949536379765
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2671709942227091
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.26906404874578455
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.19444666302025518
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6144542227313472
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5220113778136025
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3162502419711158
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2839532403999382
+    }
+  ],
+  "retained_sample_count": 73,
+  "samples_note": "Diagnostic samples retained from bounded CLI output; gaps may be omitted. This is not the complete raw measurement stream.",
+  "first_sample": {
+    "event": "soak_sample",
+    "elapsed_seconds": 0.009491443999650073,
+    "phase": "begin",
+    "position": [
+      -0.11523170715055664,
+      0.012865850212640858,
+      0.35679253144366146
+    ],
+    "anchor_radius_m": 0.0006253729856463066,
+    "contacts": 4,
+    "mode": "standing",
+    "physical_constraints": {
+      "runtime_ready": true,
+      "standing_or_moving": true,
+      "epoch_unchanged": true,
+      "owner_unchanged": true,
+      "finite_state": true,
+      "joint_position_and_torque_limits": true,
+      "supported_height": true,
+      "upright": true,
+      "near_spawn": true,
+      "valid_contacts": true,
+      "fresh_ros_receipts": true,
+      "fresh_ros_source_stamps": true,
+      "advancing_ros_stamps": true,
+      "native_tick_tracks_physics": true,
+      "valid_full_sensor_payloads": true,
+      "contact_support_returns": true
+    },
+    "interval": null,
+    "runtime_trailing_command_p95_ms": 21.12754700010555,
+    "runtime_process_peak_rss_bytes": 788533248,
+    "full_sensors": {
+      "errors": [],
+      "crc_checked": 1449,
+      "lowstate_received": 14490,
+      "latest_tick_ms": 3094,
+      "distinct_recent_image_hashes": 120,
+      "crc_sampling": "every tenth received LowState, pinned SDK packer and bitwise CRC"
+    },
+    "error": null
+  },
+  "last_sample": {
+    "event": "soak_sample",
+    "elapsed_seconds": 101.77727928199965,
+    "phase": "left",
+    "position": [
+      -0.04521237158185367,
+      0.17107885558586575,
+      0.36624503031138034
+    ],
+    "anchor_radius_m": 0.17319305025654633,
+    "contacts": 3,
+    "mode": "moving",
+    "physical_constraints": {
+      "runtime_ready": true,
+      "standing_or_moving": true,
+      "epoch_unchanged": true,
+      "owner_unchanged": true,
+      "finite_state": true,
+      "joint_position_and_torque_limits": true,
+      "supported_height": true,
+      "upright": true,
+      "near_spawn": true,
+      "valid_contacts": true,
+      "fresh_ros_receipts": true,
+      "fresh_ros_source_stamps": true,
+      "advancing_ros_stamps": true,
+      "native_tick_tracks_physics": false,
+      "valid_full_sensor_payloads": true,
+      "contact_support_returns": true
+    },
+    "interval": {
+      "wall_seconds": 0.48840791400016315,
+      "real_time_factor": 0.9965091020409478,
+      "policy_hz": 50.22727328847128,
+      "observer_fps": 12.054545589233108,
+      "physics_hz": 498.2545510216351,
+      "received_hz": {
+        "odom": 22.52215757502309,
+        "imu": 88.04116142963571,
+        "joints": 22.52215757502309,
+        "scan": 4.094937740913289,
+        "truth": 22.52215757502309,
+        "image": 4.094937740913289,
+        "camera_info": 4.094937740913289,
+        "cloud": 4.094937740913289,
+        "lowstate": 219.07916913886095
+      },
+      "published_hz": {
+        "odom": 50.22727328847128,
+        "imu": 202.91818408542397,
+        "joints": 50.22727328847128,
+        "scan": 10.045454657694256,
+        "truth": 50.22727328847128,
+        "image": 12.054545589233108,
+        "camera_info": 12.054545589233108,
+        "cloud": 10.045454657694256,
+        "lowstate": 508.3000056793294
+      },
+      "command_hz": 6.142406611369934,
+      "command_gaps_over_200ms": 0
+    },
+    "runtime_trailing_command_p95_ms": 19.505958599802398,
+    "runtime_process_peak_rss_bytes": 794562560,
+    "full_sensors": {
+      "errors": [],
+      "crc_checked": 6512,
+      "lowstate_received": 65111,
+      "latest_tick_ms": 104582,
+      "distinct_recent_image_hashes": 120,
+      "crc_sampling": "every tenth received LowState, pinned SDK packer and bitwise CRC"
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "container_image": "wendy-go2-ros:dev",
+  "image_id": "ba294c6a14f2",
+  "source_files": {
+    "__init__.py": "fcce4b00268817450fca3b816bf78ddf70c86c777dff74f07a3f706c8e3e51c8",
+    "camera.py": "bfcdb4ad84276785c0ab4c8943dd3c6086dfda41bdf84b8f160a2fad74e6d2b0",
+    "commands.py": "d2ef0a99ac4a8cd334e674d55f87f140fb273bfddafdb499d712b4ed72b618fa",
+    "isolation.py": "2538426d038d5671bbf96617b688f1143c8ba8478574bceeacd6a73ca2c61138",
+    "lidar.py": "040933bfe6474403c5b43b8b5ad88f5511481493741a4cdffbfdf85c652acaaa",
+    "native_commands.py": "8530c26ba96826384730eec0da7de01ce0bf41977c53610ed409b40b94af0289",
+    "native_state.py": "6b4b4e7d636723407732e401deae9b91cdca73fc84184e9e26520a0128e806ca",
+    "observations.py": "8a0a9efd261e9180eb8e25c31169e3dc0dde5156c3c39c42df70bd4cdb07ba6d",
+    "policy.py": "8e5d80e63ffe5548b216f510ed3a39f713bce8b87fc11af442f5c106779c21c8",
+    "ros.py": "661d191af5d38b5ba9d2d29abb4b9ef9c2d9b3e004cbc3d37312854ee8beb0cc",
+    "runtime.py": "6b53868f6a4331fef0c8f8cf713d3f0bfd8b1c2da4927e2b760d0aec3e82f7c9",
+    "sensors.py": "7eb7149dc0075bb11db852e88fd44d3b1b56356e10aaa460cc18cb66625e25e1",
+    "server.py": "bcafe3ef8397b6c73931bec4aaf29f4b4aed15c7d8aacc391afb574aab6fc2e1",
+    "simulation.py": "02ff85a2e26ca434efeeb09c3dba1c2207f53875dfe2dd816f3cf868ac8904bc",
+    "slow_sensors.py": "39303da9649298c0e2c93853bb5871d25560f401dbc43195983f780f102e525b",
+    "unitree_crc.py": "64ec705d672599734217eb5bdab7ab386da5fb7e94e601b902e5c25a3b75248b"
+  },
+  "environment": {
+    "GO2_NATIVE": "1",
+    "GO2_VISUAL_DETAIL": "balanced",
+    "MUJOCO_GL": "osmesa",
+    "ROS_DISTRO": "humble",
+    "RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp",
+    "DDS_network": "container network none; loopback only"
+  },
+  "duration_per_case": 30,
+  "warmup_seconds": 5,
+  "limitations": [
+    "Producer counters, not subscriber delivery",
+    "Local ARM64 Docker; not the ten-minute target VM gate"
+  ],
+  "results": [
+    "full-lp1.json",
+    "full-lp2.json",
+    "full-lp4.json"
+  ]
+}

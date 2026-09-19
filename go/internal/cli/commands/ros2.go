@@ -30,11 +30,16 @@ func newROS2Cmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "ros2",
 		Short: "Inspect and debug live ROS 2 systems on the device",
-		Long: `Inspect and debug live ROS 2 systems running on a WendyOS device.
+		Long: `Inspect and debug live ROS 2 systems on a device running Wendy Agent.
 
-The agent discovers ROS 2 app containers (deployed with a "frameworks.ros2"
-config in wendy.json), starts a CLI sidecar in the same DDS domain, and runs
-ros2 commands there — no SSH and no setup.bash sourcing required.
+The agent runs ros2 commands in CLI sidecars for running apps configured with
+"frameworks.ros2". When no ROS 2 app is running, it automatically uses the
+device's system DDS graph, including Unitree robots, on domain 0. Use --domain
+to select another domain. No ROS 2 app deployment or SSH is required.
+
+System inspection uses a cached Humble/Fast DDS CLI image with pinned unitree_go
+and unitree_api types, downloaded on first use. Other custom message types still
+require their ROS 2 packages. Use lidar sample for bounded geometry observations.
 
 To add ROS 2 to a project: wendy project frameworks add ros2
 For the full "frameworks.ros2" config shape (domainId, rmw, distro,
@@ -51,6 +56,7 @@ discoveryScope) and how it's used: wendy docs ros2`,
 		newROS2ParamCmd(),
 		newROS2EchoCmd(),
 		newROS2HzCmd(),
+		newROS2LidarCmd(),
 		newROS2GraphCmd(),
 		newROS2BagCmd(),
 		newROS2DoctorCmd(),
@@ -93,7 +99,13 @@ func ros2RPCError(err error) error {
 	case codes.Unimplemented:
 		return fmt.Errorf("this device's agent does not support ROS 2 inspection; update it with `wendy device update`")
 	case codes.FailedPrecondition:
-		return errors.New(status.Convert(err).Message())
+		msg := status.Convert(err).Message()
+		// Older agents require an app even for system graph discovery. Their
+		// deployment advice is misleading now that the agent supports a fallback.
+		if msg == "no running ROS 2 containers found; deploy an app with a frameworks.ros2 config first" {
+			return errors.New("this device's agent requires a running ROS 2 app; update it with `wendy device update` to inspect the system graph without deploying an app")
+		}
+		return errors.New(msg)
 	case codes.DeadlineExceeded:
 		return errROS2Timeout
 	case codes.ResourceExhausted:
@@ -111,8 +123,9 @@ func ros2RPCError(err error) error {
 // user can act on. The unary RPCs are deadline-bounded (see ros2UnaryTimeout);
 // before that a sidecar stuck on DDS discovery hung the CLI indefinitely with
 // nothing on screen.
-var errROS2Timeout = errors.New("timed out waiting for the device's ROS 2 graph; the sidecar may " +
-	"be stuck on DDS discovery — try `wendy device ros2 doctor`, or narrow the query with --domain")
+var errROS2Timeout = errors.New("timed out preparing the ROS 2 CLI or waiting for the device's graph; " +
+	"first-use setup needs an image download — check the device's network connection and retry, " +
+	"or try `wendy device ros2 doctor` and check --domain")
 
 // Client-side deadlines for the non-streaming ROS 2 RPCs.
 //
@@ -125,9 +138,10 @@ var errROS2Timeout = errors.New("timed out waiting for the device's ROS 2 graph;
 // Streaming commands — echo, hz, bag record, exec, action send_goal — deliberately
 // get no deadline: they run until the user stops them.
 const (
-	// ros2UnaryTimeout covers a single targeted command plus, on a mixed-RMW
-	// device, its routing probe.
-	ros2UnaryTimeout = 45 * time.Second
+	// ros2UnaryTimeout includes first-use system CLI image preparation as well
+	// as discovery. Robots without app containers may need to download the
+	// image; the former 45-second deadline could abort that initial setup.
+	ros2UnaryTimeout = 5 * time.Minute
 	// ros2FanOutTimeout covers the commands that fan out one exec per node or per
 	// topic (graph, topics --all).
 	ros2FanOutTimeout = 5 * time.Minute
@@ -141,7 +155,7 @@ func ros2Ctx(parent context.Context, timeout time.Duration) (context.Context, co
 
 // ros2DomainFlag registers the shared --domain override flag.
 func ros2DomainFlag(cmd *cobra.Command, domain *int32) {
-	cmd.Flags().Int32Var(domain, "domain", -1, "ROS_DOMAIN_ID override (default: from the app's ros2 config)")
+	cmd.Flags().Int32Var(domain, "domain", -1, "ROS_DOMAIN_ID override (default: app config, or 0 for the system graph)")
 }
 
 func ros2DomainPtr(domain int32) *int32 {

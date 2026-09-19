@@ -31,6 +31,7 @@ func TestSanitizeLogText(t *testing.T) {
 		want string
 	}{
 		{"plain", "hello world", "hello world"},
+		{"unicode format controls dropped", "a\u202e\u2066b\u200bc\u200d\ufeff\nd", "abc\nd"},
 		{"carriage return dropped", "abc\rdef", "abcdef"},
 		{"cursor erase escape removed", "pulling manifest ⠋\x1b[2K", "pulling manifest ⠋"},
 		{"cursor up escape removed", "x\x1b[1Ay", "xy"},

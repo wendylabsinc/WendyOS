@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "passed": true,
+  "checked_at": "2026-09-14 09:52:32 UTC",
+  "environment": {
+    "vm": "g1-sim",
+    "os_image": "WendyOS 0.19.1",
+    "architecture": "arm64",
+    "acceleration": "hvf",
+    "cpus": 4,
+    "memory_mib": 4096,
+    "disk_gib": 24,
+    "agent_sha256": "f90859d214093c12fc3dd92b6dbcd9d012c3bc940a5a048c5eb9de66562ad2c8"
+  },
+  "checks": [
+    {
+      "check": "create_profile",
+      "passed": true,
+      "command": "vm create g1-sim --profile g1 --image <cached-image> --disk 24"
+    },
+    {
+      "check": "agent_update",
+      "passed": true,
+      "method": "device push-agent",
+      "binary_verified": true
+    },
+    {
+      "check": "managed_deployment",
+      "passed": true,
+      "app_id": "sh.wendy.simulator.g1",
+      "version": "0.1.0-3b9728e303f9"
+    },
+    {
+      "check": "typed_native_inspection",
+      "passed": true,
+      "topic": "/lowstate",
+      "type": "unitree_hg/msg/LowState",
+      "publisher": "wendy_g1_observations",
+      "echo_count": 1
+    },
+    {
+      "check": "managed_restart",
+      "passed": true,
+      "command": "vm robot restart g1-sim",
+      "ready_after_restart": true
+    },
+    {
+      "check": "final_unowned_state",
+      "passed": true
+    }
+  ],
+  "status": {
+    "vm_name": "g1-sim",
+    "simulation": true,
+    "profile_version": 1,
+    "robot_kind": "g1",
+    "source_digest": "sha256:3b9728e303f90e73f1f6b482b4c5a73b2a926931a8d7d10ac81a239deee1b40e",
+    "policy_bundle": "g1-29dof-velocity-v0-4960b847-v1",
+    "world": "indoor",
+    "clock_mode": "device",
+    "seed": 0,
+    "visual_detail": "balanced",
+    "dds_isolation": "udp-rtps-loopback",
+    "healthy": true,
+    "ready": true,
+    "mode": "standing",
+    "error": "",
+    "epoch": 1,
+    "sandbox_url": "http://127.0.0.1:52259"
+  },
+  "existing_go2_status": {
+    "vm_name": "go2-sim",
+    "simulation": true,
+    "profile_version": 1,
+    "robot_kind": "go2",
+    "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+    "policy_bundle": "go2-moe-cts-164k-0.6715-v1",
+    "world": "indoor",
+    "clock_mode": "device",
+    "seed": 0,
+    "visual_detail": "balanced",
+    "dds_isolation": "udp-rtps-loopback",
+    "healthy": true,
+    "ready": true,
+    "mode": "standing",
+    "error": "",
+    "epoch": 5,
+    "sandbox_url": "http://127.0.0.1:8890"
+  },
+  "final_control": {
+    "armed": false,
+    "owner": null,
+    "command": [
+      0,
+      0,
+      0
+    ],
+    "position": [
+      -0.6314807971513102,
+      -0.05806100558743434,
+      0.7864533085047941
+    ]
+  },
+  "validation": "vm-standard.json records the finite motion/readers/reset acceptance before the explicit restart. Native SDK acceptance ran in a separate local container, not this VM."
+}
+

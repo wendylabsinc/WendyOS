@@ -151,7 +151,7 @@ func TestPlayVideoWithGStreamer_MissingGStreamer(t *testing.T) {
 	stubNonInteractive(t)         // no install prompt for the missing binary
 
 	stream := &mockVideoStream{frames: []*agentpb.VideoFrame{{Data: []byte{0x00}, Codec: agentpb.VideoCodec_VIDEO_CODEC_H264}}}
-	err := playVideoWithGStreamer(context.Background(), stream)
+	err := playVideoWithGStreamer(context.Background(), stream, true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -167,7 +167,7 @@ func TestPlayVideoWithGStreamer_RemoteStreamErrorPrecedesMissingGStreamer(t *tes
 
 	remoteErr := status.Error(codes.Unimplemented, "Camera streaming is currently not supported by Wendy Agent for Mac.")
 	stream := &mockVideoStream{err: remoteErr}
-	err := playVideoWithGStreamer(context.Background(), stream)
+	err := playVideoWithGStreamer(context.Background(), stream, true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

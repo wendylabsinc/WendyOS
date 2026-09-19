@@ -579,3 +579,50 @@ func TestDeviceNeedsInstall(t *testing.T) {
 		})
 	}
 }
+
+// Exercise runCommand itself: resolveDockerfile already supported explicit
+// Stagefiles, but run skipped it whenever --dockerfile was supplied. HIL
+// supplies its inference build file through the same option.
+func TestRunCommandCompilesExplicitStagefileBeforeLoadingConfig(t *testing.T) {
+	for _, source := range []string{"build.stagefile.yaml", "inference.stagefile.yaml", "./build.stagefile.yaml", "./inference.stagefile.yaml"} {
+		t.Run(source, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, source), []byte(swiftStagefileSource), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Stop after build-file resolution, without a device or Docker.
+			if err := os.WriteFile(filepath.Join(dir, "wendy.json"), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := runCommand(context.Background(), runOptions{prefix: dir, dockerfile: source, yes: true, debug: true})
+			if err == nil || !strings.Contains(err.Error(), "wendy.json") {
+				t.Fatalf("expected config error after compilation, got %v", err)
+			}
+			generated, _ := generatedBuildFileFor(filepath.Clean(source))
+			b, err := os.ReadFile(filepath.Join(dir, generated))
+			if err != nil {
+				t.Fatalf("run did not compile explicit Stagefile: %v", err)
+			}
+			if !strings.Contains(string(b), "-c debug") {
+				t.Fatalf("explicit Stagefile lost --debug: %s", b)
+			}
+		})
+	}
+}
+
+func TestResolveStagefileGPUTargetIgnoresUnselectedCUDAStagefile(t *testing.T) {
+	dir := t.TempDir()
+	cuda := "version: 1\nstages:\n  - name: app\n    from: ubuntu:22.04\n    pin: false\n    cuda: true\n"
+	if err := os.WriteFile(filepath.Join(dir, stagefileSourceName), []byte(cuda), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cpu.stagefile.yaml"), []byte(swiftStagefileSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"Dockerfile", "cpu.stagefile.yaml"} {
+		got, err := resolveStagefileGPUTarget(context.Background(), dir, nil, runOptions{dockerfile: source})
+		if err != nil || got != nil {
+			t.Fatalf("%s unexpectedly resolved a GPU target: %v, %v", source, got, err)
+		}
+	}
+}

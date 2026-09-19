@@ -204,14 +204,15 @@ type PickerModel struct {
 	MergeItem func(existing *PickerItem, incoming PickerItem)
 
 	// OnSetDefault is called when the user presses 'd' on the highlighted item.
-	// The return value is shown as a flash confirmation; return "" for no message.
+	// The message is shown as a flash confirmation. An error preserves the
+	// previous default marker and is displayed instead of a success message.
 	// If nil, 'd' is ignored.
-	OnSetDefault func(item PickerItem) string
+	OnSetDefault func(item PickerItem) (string, error)
 
 	// OnUnsetDefault is called when the user presses 'x'.
-	// The return value is shown as a flash confirmation; return "" for no message.
+	// An error preserves the previous default marker and is displayed to the user.
 	// If nil, 'x' is ignored.
-	OnUnsetDefault func() string
+	OnUnsetDefault func() (string, error)
 
 	// OnRemoveItem is called when the user presses 'r' on the highlighted item.
 	// Returns (flash message, isError, replacement).
@@ -339,6 +340,12 @@ func NewPickerWithTitleAndColumns(title string, columns []PickerColumn) PickerMo
 
 func (m PickerModel) Init() tea.Cmd { return m.spinner.Tick }
 
+// SetDefaultKey refreshes the marker after another picker tab changes it.
+func (m *PickerModel) SetDefaultKey(key string) {
+	m.DefaultKey = key
+	m.refreshTable()
+}
+
 // anyProbePending reports whether any item still has a probe in flight, i.e.
 // whether the spinner has anything to animate.
 func (m PickerModel) anyProbePending() bool {
@@ -402,18 +409,28 @@ func (m PickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if dk == "" {
 						dk = strings.ToLower(item.Name)
 					}
-					m.DefaultKey = dk
-					m.flashMessage = m.OnSetDefault(item)
-					m.flashIsError = false
+					var err error
+					m.flashMessage, err = m.OnSetDefault(item)
+					m.flashIsError = err != nil
+					if err != nil {
+						m.flashMessage = err.Error()
+					} else {
+						m.DefaultKey = dk
+					}
 					m.refreshTable()
 				}
 			}
 			return m, nil
 		case key == "x" && !m.Filterable:
 			if m.OnUnsetDefault != nil {
-				m.DefaultKey = ""
-				m.flashMessage = m.OnUnsetDefault()
-				m.flashIsError = false
+				var err error
+				m.flashMessage, err = m.OnUnsetDefault()
+				m.flashIsError = err != nil
+				if err != nil {
+					m.flashMessage = err.Error()
+				} else {
+					m.DefaultKey = ""
+				}
 				m.refreshTable()
 			}
 			return m, nil

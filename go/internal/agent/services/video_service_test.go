@@ -181,21 +181,47 @@ func TestListV4L2Devices_GlobError(t *testing.T) {
 }
 
 func TestVideoService_ListVideoDevices(t *testing.T) {
-	svc := newTestVideoService(
-		func() ([]string, error) { return []string{"/dev/video0"}, nil },
-		func(base string) (string, error) { return "Test Camera", nil },
-	)
+	for _, transport := range []camera.Transport{camera.TransportUSB, camera.TransportCSI, camera.TransportUnknown} {
+		t.Run(transport.String(), func(t *testing.T) {
+			paths := []string{"/dev/video0"}
+			svc := newTestVideoService(
+				func() ([]string, error) { return paths, nil },
+				func(base string) (string, error) { return "Test Camera", nil },
+			)
+			t.Cleanup(svc.Shutdown)
+			svc.classifyTransport = func(string) (camera.Transport, string) { return transport, "" }
 
-	resp, err := svc.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(resp.GetDevices()) != 1 {
-		t.Fatalf("expected 1 device, got %d", len(resp.GetDevices()))
-	}
-	d := resp.GetDevices()[0]
-	if d.GetId() != 0 || d.GetName() != "Test Camera" || d.GetPath() != "/dev/video0" {
-		t.Errorf("unexpected device: id=%d name=%q path=%q", d.GetId(), d.GetName(), d.GetPath())
+			list := func() []*agentpb.VideoDevice {
+				t.Helper()
+				resp, err := svc.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return resp.GetDevices()
+			}
+			devices := list()
+			if len(devices) != 1 {
+				t.Fatalf("expected 1 device, got %d", len(devices))
+			}
+			d := devices[0]
+			if d.GetId() != 0 || d.GetName() != "Test Camera" || d.GetPath() != "/dev/video0" {
+				t.Errorf("unexpected device: id=%d name=%q path=%q", d.GetId(), d.GetName(), d.GetPath())
+			}
+			if !d.GetOnline() {
+				t.Error("enumerated local camera reported offline")
+			}
+
+			// A node that disappears between globbing and querying its capture
+			// capability must not survive as an online entry.
+			svc.hasVideoCapture = func(string) bool { return false }
+			if devices := list(); len(devices) != 0 {
+				t.Errorf("unqueryable camera remains listed: %v", devices)
+			}
+			paths = nil
+			if devices := list(); len(devices) != 0 {
+				t.Errorf("disconnected camera remains listed: %v", devices)
+			}
+		})
 	}
 }
 

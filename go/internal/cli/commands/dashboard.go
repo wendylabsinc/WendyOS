@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -768,8 +769,8 @@ func sanitizeLogText(s string) string {
 				b.WriteRune('\n')
 			case r == '\t':
 				b.WriteByte(' ')
-			case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
-				// C0 controls (incl. '\r'), DEL, and other C1 controls: drop.
+			case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || unicode.Is(unicode.Cf, r):
+				// Drop C0/C1 controls and Unicode format controls (bidi/zero-width).
 			default:
 				b.WriteRune(r)
 			}

@@ -38,6 +38,7 @@ type Graph struct {
 	InstanceKey         string
 	DomainID            int
 	NetworkNamespacePID uint32
+	HostNetwork         bool
 	// Verify confirms that InstanceKey still owns NetworkNamespacePID after a
 	// stable namespace handle is captured but before it is entered, and once
 	// more before discovery starts.
@@ -202,6 +203,14 @@ func (m *Manager) reconcile(ctx context.Context) {
 		if found, err := m.graphs(ctx); err == nil {
 			for _, graph := range found {
 				if graph.DomainID >= 0 && graph.DomainID <= 232 && graph.NetworkNamespacePID != 0 {
+					if graph.HostNetwork {
+						// Reuse host camera identities across app restarts.
+						for _, iface := range append([]string{"lo"}, ifaces...) {
+							desired[participantKey(iface, graph.DomainID, 0, "host")] = true
+							m.ensureParticipant(iface, graph.DomainID, 0, "host:"+iface, "host", nil)
+						}
+						continue
+					}
 					var verify func() bool
 					if graph.Verify != nil {
 						verify = func() bool { return graph.Verify(ctx) }

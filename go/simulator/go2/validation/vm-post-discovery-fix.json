@@ -1,0 +1,106 @@
+{
+  "scope": "Managed Go2 VM producer interval after updated agent, unchanged runtime and Mesa two-worker configuration; no external full-sensor subscriber",
+  "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+  "agent_sha256": "51a0b6ac75257c62f94c4eea4e5b0184990ea5eae96d413a148759bcb3ca7799",
+  "vm": {
+    "name": "go2-sim",
+    "cpus": 4,
+    "memory_mib": 4096
+  },
+  "wall_seconds": 33.65181108999991,
+  "rates": {
+    "observer_fps": 14.412300089968243,
+    "camera_fps": 14.412300089968243,
+    "lowstate_hz": 499.9433746672695,
+    "imu_hz": 199.98923629997168,
+    "physics_hz": 500.002806832589
+  },
+  "cpu_cores": 1.8172822210502932,
+  "trailing_render_stage_ms": {
+    "mj_forward": {
+      "samples": 300,
+      "mean": 0.24840231333503957,
+      "p95": 0.9153424000828638,
+      "max": 2.14631299991197
+    },
+    "work_total_thread_cpu": {
+      "samples": 300,
+      "mean": 31.992697816668667,
+      "p95": 38.0137445000031,
+      "max": 46.890415000007124
+    },
+    "observer_render": {
+      "samples": 300,
+      "mean": 38.69331082666955,
+      "p95": 45.76950810007929,
+      "max": 59.105840999791326
+    },
+    "camera_copy": {
+      "samples": 300,
+      "mean": 0.11316218666252098,
+      "p95": 0.5291360998967325,
+      "max": 1.293339000085325
+    },
+    "camera_jpeg": {
+      "samples": 300,
+      "mean": 1.0345053166687042,
+      "p95": 1.8987672000776004,
+      "max": 3.147250999973039
+    },
+    "capture_lock_wait": {
+      "samples": 300,
+      "mean": 0.03689109666917526,
+      "p95": 0.19007820000069847,
+      "max": 1.2444580002011207
+    },
+    "observer_jpeg": {
+      "samples": 300,
+      "mean": 1.144865939997241,
+      "p95": 2.015429249877343,
+      "max": 4.278287999795793
+    },
+    "camera_render": {
+      "samples": 300,
+      "mean": 23.562615879999765,
+      "p95": 29.287888299984388,
+      "max": 37.049712999987605
+    },
+    "publish_fence": {
+      "samples": 300,
+      "mean": 0.30497170332637324,
+      "p95": 2.0463524001002047,
+      "max": 5.151100999910341
+    },
+    "publish_fence_wait": {
+      "samples": 300,
+      "mean": 0.2979027266655976,
+      "p95": 2.0371457001829185,
+      "max": 5.061970000042493
+    },
+    "work_total": {
+      "samples": 300,
+      "mean": 65.37187333333648,
+      "p95": 78.81698040013136,
+      "max": 93.82422399994539
+    },
+    "capture_lock": {
+      "samples": 300,
+      "mean": 0.07401971000111492,
+      "p95": 0.2712519499823429,
+      "max": 1.2742930000513297
+    },
+    "observer_scene": {
+      "samples": 300,
+      "mean": 0.12604874999700164,
+      "p95": 0.5870348999224009,
+      "max": 1.869331999841961
+    },
+    "camera_scene": {
+      "samples": 300,
+      "mean": 0.06261723333636837,
+      "p95": 0.08062649989142305,
+      "max": 0.7998460000635532
+    }
+  },
+  "notes": "Agent build includes the verified SPDP reply-loop fix and concurrent host-network discovery fixes. This interval alone does not establish the full-reader 600-second acceptance gate."
+}

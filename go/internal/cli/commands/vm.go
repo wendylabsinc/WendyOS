@@ -34,21 +34,33 @@ func newVMCmd() *cobra.Command {
 	cmd.PersistentFlags().BoolVarP(&vmAssumeYes, "yes", "y", false,
 		"Accept prompts, including installing QEMU when it is missing")
 	cmd.AddCommand(newVMCreateCmd(), newVMStartCmd(), newVMStopCmd(),
-		newVMLogsCmd(), newVMListCmd(), newVMRemoveCmd())
+		newVMLogsCmd(), newVMListCmd(), newVMRemoveCmd(), newVMRobotCmd())
 	return cmd
 }
 
 func newVMCreateCmd() *cobra.Command {
-	var image, version string
+	var image, version, profile string
 	var diskGiB, prNumber int
 	var nightly bool
 
 	cmd := &cobra.Command{
-		Use:   "create <name>",
+		Use:   "create [name]",
 		Short: "Create a VM, downloading the WendyOS image if needed",
-		Args:  cobra.ExactArgs(1),
+		Long: "Create a VM, downloading the WendyOS image if needed.\n\n" +
+			"In an interactive terminal, prompts for the VM name and simulator profile " +
+			"when omitted. Pass a name and --profile to skip the prompts. " +
+			"With --yes or without an interactive terminal, a name is required " +
+			"and the profile defaults to generic.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runVMCreate(cmd, args[0], image, version, diskGiB, nightly, prNumber)
+			name, selectedProfile, err := resolveVMCreateInputs(args, profile, cmd.Flags().Changed("profile"))
+			if err != nil {
+				return err
+			}
+			if err := runVMCreate(cmd, name, image, version, diskGiB, nightly, prNumber); err != nil {
+				return err
+			}
+			return attachSimulatorProfile(name, selectedProfile)
 		},
 	}
 	cmd.Flags().StringVar(&image, "image", "", "Path to a local .wic disk image (default: download the published one)")
@@ -56,7 +68,55 @@ func newVMCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Create from a pull request's build, so a change can be tried before it merges")
 	cmd.Flags().IntVar(&diskGiB, "disk", 16, "Disk size in GiB (the image is grown to this size)")
+	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2 or g1 (provisioned on first connection)")
 	return cmd
+}
+
+// resolveVMCreateInputs prompts only for unanswered fields. Scripts retain the
+// generic profile default and must supply a name explicitly.
+func resolveVMCreateInputs(args []string, profile string, profileSet bool) (string, string, error) {
+	if err := validateSimulatorProfile(profile); err != nil {
+		return "", "", err
+	}
+	interactive := !jsonOutput && !vmAssumeYes && isInteractiveTerminalFn()
+	var name string
+	if len(args) > 0 {
+		name = args[0]
+	} else {
+		if !interactive {
+			return "", "", fmt.Errorf("no VM name specified; pass the VM name with 'wendy vm create <name>' or run interactively without --yes or --json")
+		}
+		var err error
+		name, err = promptVMCreateNameFn()
+		if errors.Is(err, tui.ErrCancelled) {
+			return "", "", ErrUserCancelled
+		}
+		if err != nil {
+			return "", "", err
+		}
+	}
+	if err := vm.ValidName(name); err != nil {
+		return "", "", err
+	}
+	if interactive && !profileSet {
+		var err error
+		profile, err = pickSimulatorProfileFn()
+		if err != nil {
+			return "", "", err
+		}
+		if err := validateSimulatorProfile(profile); err != nil {
+			return "", "", err
+		}
+	}
+	return name, profile, nil
+}
+
+var promptVMCreateNameFn = func() (string, error) {
+	store, err := vm.NewStore()
+	if err != nil {
+		return "", err
+	}
+	return tui.PromptText("VM name", "1-32 lowercase letters, digits or dashes", store.CheckCreatable)
 }
 
 // runVMCreate provisions a VM from a local image when one is named, and from the

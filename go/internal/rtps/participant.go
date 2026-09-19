@@ -320,6 +320,10 @@ func (p *Participant) openSockets() error {
 	if err != nil {
 		return fmt.Errorf("rtps: joining %s:%d: %w", spdpMulticastAddr, mport, err)
 	}
+	if err := restrictMulticastToJoinedInterfaces(mc); err != nil {
+		_ = mc.Close()
+		return fmt.Errorf("rtps: restricting multicast memberships: %w", err)
+	}
 	_ = mc.SetReadBuffer(2 << 20)
 	p.mcast = mc
 
