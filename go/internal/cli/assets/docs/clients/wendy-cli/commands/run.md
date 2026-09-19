@@ -205,6 +205,11 @@ delivery receives a registry push instead, and the build log says so.
 Use a remote host for builds that need its GPU or CPU architecture, such as an
 arm64 build that would otherwise use QEMU emulation on an x86 development machine.
 
+A multi-service `wendy.json` builds remotely too: every selected service is
+built on the host and delivered to the target. See
+[Multi-service apps: remote build host](../../../apps/wendy-services.md#remote-build-host)
+for how it differs from a local build. Compose projects cannot use `--build-host`.
+
 Your machine does not need a container builder. With `--build-host`, the CLI
 does not start Docker, Apple Container, or a local BuildKit daemon. The
 `--builder` flag selects a local builder and cannot be combined with `--build-host`.
