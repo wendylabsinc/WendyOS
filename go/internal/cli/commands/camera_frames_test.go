@@ -324,3 +324,27 @@ func TestCameraStreamDiagnostic_LeavesUnknownReasonsAlone(t *testing.T) {
 		t.Errorf("diagnostic rewrote an unrelated error: %q", got)
 	}
 }
+
+// When the agent says what holds the camera -- its own calibrated-frame
+// helper, on a RealSense -- the operator must read that, not be sent looking
+// for "another application".
+func TestCameraStreamDiagnostic_CameraInUsePrintsTheAgentsHint(t *testing.T) {
+	const hint = "This is a RealSense node: a calibrated frame stream holds it for as long as it runs"
+	err := streamreason.New(codes.FailedPrecondition,
+		"camera /dev/video4 is already in use by another application on this device. "+hint,
+		streamreason.CameraInUse,
+		map[string]string{"device": "/dev/video4", "hint": hint})
+	got := cameraStreamDiagnostic(err).Error()
+	if !strings.Contains(got, "calibrated frame stream") {
+		t.Errorf("diagnostic drops the agent's hint: %q", got)
+	}
+	if strings.Contains(got, "another application") {
+		t.Errorf("diagnostic still blames another application when the agent named its own stream: %q", got)
+	}
+
+	plain := streamreason.New(codes.FailedPrecondition, "camera /dev/video0 is already in use",
+		streamreason.CameraInUse, map[string]string{"device": "/dev/video0"})
+	if got := cameraStreamDiagnostic(plain).Error(); !strings.Contains(got, "another application") {
+		t.Errorf("a refusal with no hint lost its usual wording: %q", got)
+	}
+}

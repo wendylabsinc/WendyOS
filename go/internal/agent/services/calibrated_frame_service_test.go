@@ -919,3 +919,19 @@ func TestCalibratedFrames_AColourPlaneThatDoesNotMatchItsGeometryEndsTheCapture(
 	}
 	waitFor(t, "the capture to be released", func() bool { return fake.Closes() == 1 })
 }
+
+// The helper's pipeline claims the RealSense colour node, and StreamVideo
+// may already hold it. librealsense's message for that is not actionable,
+// so the refusal names the other stream -- on a RealSense, and only there.
+func TestOpenFailure_NamesStreamVideoOnARealSense(t *testing.T) {
+	sdk := errors.New("librealsense rs2_pipeline_start: failed to set power state")
+	got := openFailure("realsense:123456", sdk).Error()
+	for _, want := range []string{"failed to set power state", "StreamVideo", "camera view"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("refusal %q does not mention %q", got, want)
+		}
+	}
+	if plain := openFailure("fake:1", sdk).Error(); strings.Contains(plain, "StreamVideo") {
+		t.Errorf("a non-RealSense refusal names StreamVideo without grounds: %q", plain)
+	}
+}
