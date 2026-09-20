@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -354,6 +355,12 @@ func (s *CalibratedFrameService) runProducer(hub *frameHub, src framesource.Sour
 }
 
 // openFailure turns a source that would not open into an error naming the fix.
+//
+// On a RealSense the commonest reason after a missing helper is that
+// StreamVideo already holds the camera's colour node: the helper's pipeline
+// claims that node, and nothing coordinates the two (§14 of the design spec).
+// librealsense's own message for that is not something an operator can act
+// on, so the refusal names the other stream, as errCameraInUse names this one.
 func openFailure(name string, err error) error {
 	if errors.Is(err, framesource.ErrHelperNotInstalled) {
 		return streamreason.New(codes.FailedPrecondition,
@@ -361,7 +368,13 @@ func openFailure(name string, err error) error {
 			streamreason.CalibratedSourceUnavailable,
 			map[string]string{"source": name, "helper": framesource.HelperName})
 	}
-	return status.Errorf(codes.FailedPrecondition, "calibrated frame source %s could not be opened: %v", name, err)
+	msg := fmt.Sprintf("calibrated frame source %s could not be opened: %v", name, err)
+	if strings.HasPrefix(name, framesource.KindRealSense+":") {
+		msg += ". If a StreamVideo subscriber (`wendy device camera view`, the companion app) is streaming from this camera's " +
+			"colour node, that stream holds it: a RealSense cannot yet be shared between StreamVideo and calibrated frames. " +
+			"Stop that stream, then retry"
+	}
+	return status.Error(codes.FailedPrecondition, msg)
 }
 
 // pumpCalibratedFrames delivers this subscriber's latest frame until it is

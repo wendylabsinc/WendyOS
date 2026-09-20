@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -22,10 +24,37 @@ const reasonCameraInUse = streamreason.CameraInUse
 
 // errCameraInUse reports contention as a FailedPrecondition: the device is
 // healthy, its state is wrong, and the caller can retry once the holder stops.
+// When the agent can tell what is likely holding the node, the message and
+// the "hint" metadata say so -- see cameraHolderHint.
 func errCameraInUse(devicePath string) error {
-	return streamreason.New(codes.FailedPrecondition,
-		fmt.Sprintf("camera %s is already in use by another application on this device", devicePath),
-		reasonCameraInUse, map[string]string{"device": devicePath})
+	msg := fmt.Sprintf("camera %s is already in use by another application on this device", devicePath)
+	metadata := map[string]string{"device": devicePath}
+	if hint := cameraHolderHint(devicePath); hint != "" {
+		msg += ". " + hint
+		metadata["hint"] = hint
+	}
+	return streamreason.New(codes.FailedPrecondition, msg, reasonCameraInUse, metadata)
+}
+
+// cameraHolderHint names what is likely holding a node the agent could not
+// claim, when the agent can tell. A RealSense's colour node is claimed by the
+// calibrated-frame helper (wendy-realsense-source) for as long as a
+// StreamCalibratedFrames subscriber runs, and nothing in this service
+// coordinates with it -- the two cannot share a RealSense yet (see §14 of
+// specs/2026-09-20-calibrated-frame-sensor-source-design.md). "Another
+// application" would send an operator looking for a process that is the
+// agent's own, so the refusal names it. A seam so it can be answered without
+// a sysfs.
+var cameraHolderHint = func(devicePath string) string {
+	name, err := os.ReadFile(filepath.Join("/sys/class/video4linux", filepath.Base(devicePath), "name"))
+	if err != nil {
+		return ""
+	}
+	if !strings.Contains(strings.ToLower(string(name)), "realsense") {
+		return ""
+	}
+	return "This is a RealSense node: a calibrated frame stream (StreamCalibratedFrames, `wendy device camera frames`) " +
+		"holds it for as long as it runs, and a RealSense cannot yet be shared between that stream and StreamVideo"
 }
 
 // isCameraInUse reports whether err is the contention error above.

@@ -476,6 +476,12 @@ func cameraStreamDiagnostic(err error) error {
 		return fmt.Errorf("camera %s has no stored credentials. Run `wendy device camera login %s`", id, id)
 	case streamreason.CameraInUse:
 		device := info.GetMetadata()["device"]
+		if hint := info.GetMetadata()["hint"]; hint != "" {
+			// The agent knows what holds the node -- its own calibrated-frame
+			// helper, on a RealSense -- and "another application" would send
+			// the operator looking for the wrong thing.
+			return fmt.Errorf("camera %s is held on this device and could not be shared. %s. Stop that stream, then retry", device, hint)
+		}
 		return fmt.Errorf("camera %s is held by another application on this device and could not be shared with it. Stop the app holding it, then retry", device)
 	case streamreason.RequirementUnmet:
 		// The agent already wrote the sentence naming each missing property and

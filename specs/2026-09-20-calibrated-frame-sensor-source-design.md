@@ -81,11 +81,13 @@ the platform handed it a frame it could not trust.
 - Fan-out is latest-wins per subscriber: a slow analytics consumer never
   stalls a viewer, and never receives an aging window either.
 - The camera stays shared. Nothing about owning depth may re-introduce
-  exclusive ownership of the node.
+  exclusive ownership of the node. **Not yet met for a RealSense in
+  stage 1** — the helper holds the colour node while it streams; see §14.
 
 **Non-goals (v1)**
 - Replacing `StreamVideo`. Viewers, the companion app and the raw tap
-  are unchanged; this is an additional surface, not a migration.
+  are unchanged on every camera except a RealSense (§14); this is an
+  additional surface, not a migration.
 - Depth from a camera that has none. A colour-only camera publishes a
   calibrated frame with no depth plane and is refused to a consumer that
   required one — it is not given synthesised depth.
@@ -423,3 +425,40 @@ Stage 2 needs one decision this implementation deliberately did not take: a
 (`--depth-scale`, recorded as `PROVENANCE_ASSUMED`), or stage 2 ships a source
 that emits no depth plane at all. That is a product call about whether the
 platform may carry an asserted calibration, and it belongs to a human.
+
+## 14. Open, 2026-09-20 — the helper holds the RealSense colour node
+
+Found in review; not resolved by this branch. `wendy-realsense-source`
+starts one librealsense pipeline with colour and depth enabled, and on Linux
+that claims the D435i's RGB V4L2 node for streaming — exactly as the vendor
+SDK does inside `identity` today. Nothing in `video_service.go` or
+`deviceHub` knows the helper exists: no shared lock, no ownership table.
+So while a calibrated stream runs, `StreamVideo` on that node is refused
+with `CAMERA_IN_USE`, and if `StreamVideo` holds the node first, the
+calibrated subscriber is refused at `rs2_pipeline_start`. For the G1 case in
+§2 — `identity` on calibrated frames and `g1-rock-paper-scissors` on
+`StreamVideo`, same head camera — the lockout has moved from an app into
+the agent, and the app locked out is the one that was already sharing
+correctly. The §3 goal is therefore unmet for a RealSense, and the
+"`StreamVideo` unchanged" non-goal is false on any device whose head camera
+is one.
+
+**What stage 1 does about it:** the two refusals name each other, so an
+operator can tell what holds the camera. `CAMERA_IN_USE` on a RealSense
+node says a calibrated stream holds it; a calibrated open failure on a
+RealSense says `StreamVideo` may. That is diagnosis, not sharing.
+
+**What needs a decision** — either is a change to this design, not a patch:
+
+(a) **Bridge.** Serve `StreamVideo` on a RealSense RGB node from the
+    helper's colour plane: the calibrated hub feeds `deviceHub` as a
+    producer, so viewers, the companion app and the raw tap keep working
+    off one open of the camera. The larger change; it keeps the §3 goal
+    and the non-goal true.
+
+(b) **Refuse by name.** The video service recognises RealSense nodes and
+    refuses them with a reason pointing at the calibrated service; every
+    consumer of that camera, colour-only ones included, moves to
+    `StreamCalibratedFrames`. The smaller change; the non-goal becomes
+    false for a RealSense and must say so, and wendy-voice#62's
+    colour-over-`StreamVideo` path is off the table for a D435i.
