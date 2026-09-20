@@ -275,10 +275,16 @@ func (c *realSenseCapturer) Open(_ context.Context, opts CaptureOptions) (captur
 	if err := rsError(e); err != nil {
 		return nil, fmt.Errorf("enabling colour at %dx%d@%d: %w", width, height, fps, err)
 	}
-	C.rs2_config_enable_stream(cfg, C.RS2_STREAM_DEPTH, 0,
-		C.int(width), C.int(height), C.RS2_FORMAT_Z16, C.int(fps), &e)
+	// Depth is enabled at the SDK's default mode, NOT the colour geometry. The
+	// two sensors have independent mode tables: every D4xx tops depth out at
+	// 1280x720, so asking for depth at 1920x1080 fails rs2_pipeline_start with
+	// "Couldn't resolve requests" and the subscriber is told the camera could
+	// not be opened. The alignment block below produces colour-resolution
+	// depth from whatever native depth mode the device runs, which is the
+	// geometry the descriptor and every frame report.
+	C.rs2_config_enable_stream(cfg, C.RS2_STREAM_DEPTH, 0, 0, 0, C.RS2_FORMAT_Z16, 0, &e)
 	if err := rsError(e); err != nil {
-		return nil, fmt.Errorf("enabling depth at %dx%d@%d: %w", width, height, fps, err)
+		return nil, fmt.Errorf("enabling depth: %w", err)
 	}
 
 	cc.profile = C.rs2_pipeline_start_with_config(pipe, cfg, &e)
