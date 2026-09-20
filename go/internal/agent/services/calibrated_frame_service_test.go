@@ -895,3 +895,27 @@ func TestCalibratedFrames_JoiningARunningSourceDoesNotEnumerateAgain(t *testing.
 	<-firstErr
 	<-joinerErr
 }
+
+// A colour plane that does not carry the bytes its geometry claims is not a
+// frame. It is not skipped -- a subscriber waiting on frames that never come
+// is the silent failure this exists to remove -- the capture is ended, loudly.
+func TestCalibratedFrames_AColourPlaneThatDoesNotMatchItsGeometryEndsTheCapture(t *testing.T) {
+	fake := framesourcetest.NewFake("fake:1", 64, 48, alignedDepth, measuredIntrinsics, captureSettings)
+	svc := newCalibratedService(fake)
+
+	stream := newStreamStub(context.Background())
+	errCh := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, stream)
+
+	bad := framesourcetest.Frame(1, 64, 48)
+	bad.Colour = bad.Colour[:len(bad.Colour)/2]
+	fake.Push(bad)
+
+	err := awaitErr(t, errCh)
+	if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "colour") {
+		t.Fatalf("stream ended with %v; want Unavailable naming the colour plane", err)
+	}
+	if stream.count() != 0 {
+		t.Errorf("a colour plane a consumer would read past the end of was delivered (%d frames)", stream.count())
+	}
+	waitFor(t, "the capture to be released", func() bool { return fake.Closes() == 1 })
+}

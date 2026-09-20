@@ -1,6 +1,7 @@
 package framesource
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -230,5 +231,69 @@ func TestWhySourceLacks_NamesTheReasonNotJustTheProperty(t *testing.T) {
 	unavailable := &agentpbv2.CalibratedSource{Source: "realsense", UnavailableReason: "helper not installed"}
 	if got := WhySourceLacks(unavailable, alignedDepth); got != "helper not installed" {
 		t.Errorf("WhySourceLacks = %q", got)
+	}
+}
+
+// --- the colour plane: the one every consumer relies on ---
+
+// Depth was checked against its geometry; colour was not. A short colour
+// buffer passed through and a consumer slicing it by bytes_per_line * height
+// read past its end -- the same class of gap on the plane that matters most.
+func TestColourIsUnusable_EachWayAColourPlaneCanLie(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mut  func(f *agentpbv2.CalibratedFrame)
+		want string
+	}{
+		{"truncated", func(f *agentpbv2.CalibratedFrame) { f.Colour = f.Colour[:len(f.Colour)-1] }, "bytes"},
+		{"oversized", func(f *agentpbv2.CalibratedFrame) { f.Colour = append(f.Colour, 0) }, "bytes"},
+		{"stride too short", func(f *agentpbv2.CalibratedFrame) { f.ColourFormat.BytesPerLine = f.ColourFormat.Width }, "stride"},
+		{"no geometry", func(f *agentpbv2.CalibratedFrame) { f.ColourFormat = nil }, "geometry"},
+		{"zero height", func(f *agentpbv2.CalibratedFrame) { f.ColourFormat.Height = 0 }, "geometry"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := goodFrame()
+			tc.mut(f)
+			why := ColourIsUnusable(f)
+			if why == "" {
+				t.Fatal("a colour plane that does not match its geometry was accepted")
+			}
+			if !strings.Contains(why, tc.want) {
+				t.Errorf("reason %q does not mention %q", why, tc.want)
+			}
+		})
+	}
+}
+
+func TestColourIsUnusable_AcceptsAPlaneThatMatchesItsGeometry(t *testing.T) {
+	if why := ColourIsUnusable(goodFrame()); why != "" {
+		t.Errorf("a valid colour plane was refused: %s", why)
+	}
+	// A stride wider than the pixels is padding, not a lie; the byte count
+	// still has to match it.
+	f := goodFrame()
+	f.ColourFormat.BytesPerLine = f.ColourFormat.Width*3 + 8
+	f.Colour = make([]byte, int(f.ColourFormat.BytesPerLine)*int(f.ColourFormat.Height))
+	if why := ColourIsUnusable(f); why != "" {
+		t.Errorf("a padded stride was refused: %s", why)
+	}
+}
+
+// The request's geometry is client-chosen. A product that wraps 64 bits is a
+// small number, and the size gate would admit the stream it exists to refuse.
+func TestFrameBytesFor_FailsClosedWhenTheEstimateOverflows(t *testing.T) {
+	desc := &agentpbv2.CalibratedSource{
+		ColourWidth: 640, ColourHeight: 480,
+		MaxFrameBytes: FrameBytes(640*3, 480, 640*2, 480),
+	}
+	absurd := Options{Width: math.MaxUint32, Height: math.MaxUint32}
+	if got := FrameBytesFor(desc, absurd); got != math.MaxUint64 {
+		t.Errorf("FrameBytesFor(absurd) = %d; want the largest size there is, so the gate refuses", got)
+	}
+	// A large but honest request is still scaled exactly, not refused.
+	big := Options{Width: 4096, Height: 4096}
+	want := desc.GetMaxFrameBytes() * (4096 * 4096) / (640 * 480)
+	if got := FrameBytesFor(desc, big); got != want {
+		t.Errorf("FrameBytesFor(4096x4096) = %d, want %d", got, want)
 	}
 }
