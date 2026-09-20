@@ -29,6 +29,10 @@ type Fake struct {
 	closes int
 	// OpenErr, when set, makes Open fail.
 	OpenErr error
+	// Negotiated, when set, is what an opened stream reports it actually
+	// captures -- the descriptor a helper writes first -- as opposed to what
+	// the listing promised. Nil leaves the service on the listing alone.
+	Negotiated *agentpbv2.CalibratedSource
 	// LastOptions records the geometry the service asked for.
 	LastOptions framesource.Options
 }
@@ -102,6 +106,14 @@ func (f *Fake) Closes() int {
 type fakeStream struct {
 	f         *Fake
 	closeOnce sync.Once
+}
+
+// Negotiated reports Fake.Negotiated, the way a helper-backed stream reports
+// the descriptor its capture opened with.
+func (s *fakeStream) Negotiated() *agentpbv2.CalibratedSource {
+	s.f.mu.Lock()
+	defer s.f.mu.Unlock()
+	return s.f.Negotiated
 }
 
 func (s *fakeStream) Next(ctx context.Context) (*agentpbv2.CalibratedFrame, error) {

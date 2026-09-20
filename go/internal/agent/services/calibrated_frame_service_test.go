@@ -39,7 +39,7 @@ const (
 func newCalibratedService(sources ...framesource.Source) *CalibratedFrameService {
 	reg := framesource.NewRegistry(framesource.ProviderFunc(
 		func(context.Context) ([]framesource.Source, error) { return sources, nil }))
-	return NewCalibratedFrameService(zap.NewNop(), reg)
+	return NewCalibratedFrameService(context.Background(), zap.NewNop(), reg)
 }
 
 // calibratedStreamStub is the subscriber side. gate, when set, makes Send block
@@ -99,6 +99,24 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// waitForSubscribers blocks until the hub for name has n subscribers. Fan-out
+// is latest-wins with no replay, so a frame pushed before a joiner has actually
+// joined is one that joiner never sees.
+func waitForSubscribers(t *testing.T, svc *CalibratedFrameService, name string, n int) {
+	t.Helper()
+	waitFor(t, "subscribers to join", func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		hub := svc.hubs[name]
+		if hub == nil {
+			return false
+		}
+		hub.mu.Lock()
+		defer hub.mu.Unlock()
+		return len(hub.subs) == n
+	})
 }
 
 func awaitErr(t *testing.T, errCh chan error) error {
@@ -594,4 +612,286 @@ func TestCalibratedFrames_SourceThatWillNotOpenIsReportedNotSilentlyEmpty(t *tes
 	if !streamreason.Has(err, streamreason.CalibratedSourceUnavailable) {
 		t.Errorf("a helper that cannot start must say so by reason: %v", err)
 	}
+}
+
+// --- the hub's lifecycle: nobody is left waiting, and nothing joins a corpse ---
+
+// SIGTERM cancels the agent context and GracefulStop waits for open streams.
+// A capture whose subscriber never disconnects must be ended by the service,
+// not by the client, or the agent -- and the helper holding the camera -- hangs.
+func TestCalibratedFrames_ShutdownEndsEveryCaptureAndReleasesTheCamera(t *testing.T) {
+	fake := framesourcetest.NewFake("fake:1", 64, 48, alignedDepth, measuredIntrinsics, captureSettings)
+	svc := newCalibratedService(fake)
+
+	// A subscriber whose context never ends: the client is still connected.
+	stream := newStreamStub(context.Background())
+	errCh := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, stream)
+	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+
+	done := make(chan struct{})
+	go func() { svc.Shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Shutdown did not return while a subscriber was still connected")
+	}
+	if err := awaitErr(t, errCh); err != nil {
+		t.Errorf("a stream ended by shutdown returned %v; want a clean end", err)
+	}
+	if fake.Closes() != 1 {
+		t.Errorf("the capture was closed %d times; the camera must be released on shutdown", fake.Closes())
+	}
+	// Nothing new starts on a service that has shut down.
+	err := svc.StreamCalibratedFrames(&agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"},
+		newStreamStub(context.Background()))
+	if status.Code(err) != codes.Unavailable {
+		t.Errorf("a subscribe after shutdown returned %v; want Unavailable", err)
+	}
+}
+
+// publish returning false is the producer's cue to return -- but the hub
+// stays in the map until dropHub runs. A subscriber that joins in that window
+// must find the hub already marked finished, under the same lock, or it is
+// handed a doorbell nobody will ever ring.
+func TestFrameHub_LosingTheLastSubscriberMarksTheHubFinishedUnderTheLock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hub := &frameHub{
+		subs: map[int]*frameSub{}, ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		source:  "fake:1",
+		listing: framesourcetest.NewFake("fake:1", 64, 48, alignedDepth).Desc(),
+	}
+	if _, _, err := hub.join(framesource.Options{}, []agentpbv2.FrameRequirement{alignedDepth}, 0); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	// The only subscriber required depth; a depth-less frame ends it, and with
+	// it the capture.
+	if hub.publish(framesourcetest.ColourOnly(1, 64, 48)) {
+		t.Fatal("publish reported a live subscriber after closing the only one")
+	}
+	if _, _, err := hub.join(framesource.Options{}, nil, 0); !errors.Is(err, errHubEnding) {
+		t.Errorf("a join after the last subscriber was closed returned %v; want errHubEnding", err)
+	}
+}
+
+// A client that closes its stream and immediately reopens must get a capture,
+// not a clean EOF with no frames from the hub its old stream was tearing down.
+func TestCalibratedFrames_ReconnectingImmediatelyGetsAFreshCaptureNotAnEmptyStream(t *testing.T) {
+	fake := framesourcetest.NewFake("fake:1", 64, 48, alignedDepth, measuredIntrinsics, captureSettings)
+	svc := newCalibratedService(fake)
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	first := newStreamStub(firstCtx)
+	firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, first)
+	waitFor(t, "the first capture to start", func() bool { return fake.Opens() == 1 })
+	cancelFirst()
+	<-firstErr
+	// The old hub's producer may still be tearing down here; the subscriber
+	// that arrives now must not attach to it.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	second := newStreamStub(ctx)
+	secondErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, second)
+	waitFor(t, "a fresh capture to start", func() bool { return fake.Opens() == 2 })
+	fake.Push(framesourcetest.Frame(7, 64, 48))
+	waitFor(t, "the reconnected subscriber to receive a frame", func() bool { return second.count() == 1 })
+
+	cancel()
+	<-secondErr
+}
+
+// --- the capture's own descriptor, not the listing's promise ---
+
+// The first subscriber is admitted on the listing. If the helper then opens a
+// mode without depth, that subscriber must be refused up front -- "cannot
+// provide" -- not handed a depth-less first frame and told the source
+// "stopped providing". The operator's next move is different for each.
+func TestCalibratedFrames_FirstSubscriberIsReCheckedAgainstWhatTheCaptureOpened(t *testing.T) {
+	fake := framesourcetest.NewFake("fake:1", 64, 48, alignedDepth, measuredIntrinsics, captureSettings)
+	fake.Negotiated = &agentpbv2.CalibratedSource{
+		Source: "fake:1", Kind: "fake", Available: true,
+		ColourWidth: 64, ColourHeight: 48, ColourFourcc: "BGR3",
+		Provides: []agentpbv2.FrameRequirement{measuredIntrinsics, captureSettings}, // no depth after all
+	}
+	svc := newCalibratedService(fake)
+
+	stream := newStreamStub(context.Background())
+	errCh := run(svc, &agentpbv2.StreamCalibratedFramesRequest{
+		Source: "fake:1", Require: []agentpbv2.FrameRequirement{alignedDepth},
+	}, stream)
+
+	err := awaitErr(t, errCh)
+	if !streamreason.Has(err, streamreason.RequirementUnmet) {
+		t.Fatalf("stream ended with %v; want REQUIREMENT_UNMET", err)
+	}
+	msg := status.Convert(err).Message()
+	if !strings.Contains(msg, "cannot provide") || strings.Contains(msg, "stopped") {
+		t.Errorf("refusal reads %q; this capture never could, it did not stop", msg)
+	}
+	if stream.count() != 0 {
+		t.Errorf("subscriber received %d frames before being refused", stream.count())
+	}
+}
+
+// A capture started with defaults has zero opts; a joiner naming exactly the
+// size the helper reported must be admitted, and one naming another size must
+// be told the real numbers rather than "the source's default geometry".
+func TestCalibratedFrames_JoinerIsComparedAgainstTheNegotiatedGeometry(t *testing.T) {
+	fake := framesourcetest.NewFake("fake:1", 64, 48, alignedDepth, measuredIntrinsics, captureSettings)
+	fake.Negotiated = &agentpbv2.CalibratedSource{
+		Source: "fake:1", Kind: "fake", Available: true,
+		ColourWidth: 64, ColourHeight: 48, ColourFourcc: "BGR3",
+		DepthWidth: 64, DepthHeight: 48,
+		Provides:      []agentpbv2.FrameRequirement{alignedDepth, measuredIntrinsics, captureSettings},
+		MaxFrameBytes: framesource.FrameBytes(64*3, 48, 64*2, 48),
+	}
+	svc := newCalibratedService(fake)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := newStreamStub(ctx)
+	firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, first)
+	waitFor(t, "the capture to report its geometry", func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		hub := svc.hubs["fake:1"]
+		return hub != nil && hub.negotiatedDesc() != nil
+	})
+
+	joiner := newStreamStub(ctx)
+	joinerErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{
+		Source: "fake:1", Width: 64, Height: 48,
+	}, joiner)
+	waitForSubscribers(t, svc, "fake:1", 2)
+	fake.Push(framesourcetest.Frame(1, 64, 48))
+	waitFor(t, "the joiner naming the running size to receive a frame", func() bool { return joiner.count() == 1 })
+	if fake.Opens() != 1 {
+		t.Errorf("the joiner restarted the capture (%d opens)", fake.Opens())
+	}
+
+	err := svc.StreamCalibratedFrames(&agentpbv2.StreamCalibratedFramesRequest{
+		Source: "fake:1", Width: 32, Height: 24,
+	}, newStreamStub(context.Background()))
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("code = %v, want FailedPrecondition", status.Code(err))
+	}
+	if !strings.Contains(err.Error(), "64x48") {
+		t.Errorf("refusal does not name the geometry actually running: %v", err)
+	}
+	// A framerate cannot be confirmed from the descriptor, so a joiner naming
+	// one is told to leave it out rather than silently trusted.
+	err = svc.StreamCalibratedFrames(&agentpbv2.StreamCalibratedFramesRequest{
+		Source: "fake:1", Width: 64, Height: 48, Framerate: 30,
+	}, newStreamStub(context.Background()))
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "framerate") {
+		t.Errorf("a joiner naming a framerate got %v; want a refusal saying to omit it", err)
+	}
+
+	cancel()
+	<-firstErr
+	<-joinerErr
+}
+
+// A default-geometry request joins whatever is running, so it must be sized
+// against THAT, not against the listing's default: a subscriber admitted at
+// the 640x480 estimate and then sent 1080p frames dies on its first Recv,
+// which is the exact failure the size gate exists to prevent.
+func TestCalibratedFrames_JoinerIsSizedAgainstTheRunningCaptureNotTheListing(t *testing.T) {
+	t.Run("from the requested geometry", func(t *testing.T) {
+		fake := framesourcetest.NewFake("fake:1", 640, 480, alignedDepth, measuredIntrinsics, captureSettings)
+		svc := newCalibratedService(fake)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		first := newStreamStub(ctx)
+		firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{
+			Source: "fake:1", Width: 1920, Height: 1080, MaxFrameBytes: 16 << 20,
+		}, first)
+		waitFor(t, "the 1080p capture to start", func() bool { return fake.Opens() == 1 })
+
+		err := svc.StreamCalibratedFrames(&agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"},
+			newStreamStub(context.Background()))
+		if !streamreason.Has(err, streamreason.FrameTooLarge) {
+			t.Fatalf("a default-limit joiner of a 1080p capture was admitted: %v", err)
+		}
+		if !strings.Contains(err.Error(), "1920x1080") {
+			t.Errorf("refusal does not name the running geometry: %v", err)
+		}
+		cancel()
+		<-firstErr
+	})
+	t.Run("from the negotiated descriptor", func(t *testing.T) {
+		fake := framesourcetest.NewFake("fake:1", 640, 480, alignedDepth, measuredIntrinsics, captureSettings)
+		fake.Negotiated = &agentpbv2.CalibratedSource{
+			Source: "fake:1", Kind: "fake", Available: true,
+			ColourWidth: 1920, ColourHeight: 1080, ColourFourcc: "BGR3",
+			DepthWidth: 1920, DepthHeight: 1080,
+			Provides:      []agentpbv2.FrameRequirement{alignedDepth, measuredIntrinsics, captureSettings},
+			MaxFrameBytes: framesource.FrameBytes(1920*3, 1080, 1920*2, 1080),
+		}
+		svc := newCalibratedService(fake)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		first := newStreamStub(ctx)
+		firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1", MaxFrameBytes: 16 << 20}, first)
+		waitFor(t, "the capture to report its geometry", func() bool {
+			svc.mu.Lock()
+			defer svc.mu.Unlock()
+			hub := svc.hubs["fake:1"]
+			return hub != nil && hub.negotiatedDesc() != nil
+		})
+
+		err := svc.StreamCalibratedFrames(&agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"},
+			newStreamStub(context.Background()))
+		if !streamreason.Has(err, streamreason.FrameTooLarge) {
+			t.Fatalf("a default-limit joiner of a capture the helper opened at 1080p was admitted: %v", err)
+		}
+		cancel()
+		<-firstErr
+	})
+}
+
+// Enumerating forks the capture helper, and forking a second helper against a
+// camera the first is streaming from is the disturbance the Provider contract
+// forbids. A joiner naming a running source has no reason to enumerate at all.
+func TestCalibratedFrames_JoiningARunningSourceDoesNotEnumerateAgain(t *testing.T) {
+	fake := framesourcetest.NewFake("fake:1", 64, 48, alignedDepth, measuredIntrinsics, captureSettings)
+	var (
+		mu           sync.Mutex
+		enumerations int
+	)
+	reg := framesource.NewRegistry(framesource.ProviderFunc(func(context.Context) ([]framesource.Source, error) {
+		mu.Lock()
+		enumerations++
+		mu.Unlock()
+		return []framesource.Source{fake}, nil
+	}))
+	svc := NewCalibratedFrameService(context.Background(), zap.NewNop(), reg)
+	countEnumerations := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return enumerations
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first := newStreamStub(ctx)
+	firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, first)
+	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+	before := countEnumerations()
+
+	joiner := newStreamStub(ctx)
+	joinerErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, joiner)
+	waitForSubscribers(t, svc, "fake:1", 2)
+	fake.Push(framesourcetest.Frame(1, 64, 48))
+	waitFor(t, "the joiner to receive a frame", func() bool { return joiner.count() == 1 })
+	if got := countEnumerations(); got != before {
+		t.Errorf("joining a running source enumerated %d more time(s); the helper must not be forked against a camera it is streaming from", got-before)
+	}
+
+	cancel()
+	<-firstErr
+	<-joinerErr
 }
