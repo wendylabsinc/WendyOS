@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
@@ -42,13 +43,46 @@ func TestParseRequirements_RefusesATypoRatherThanIgnoringIt(t *testing.T) {
 
 // --- receive limit ---
 
-func TestRecvLimitFor_LeavesTheDefaultAloneForSmallFrames(t *testing.T) {
+// A request that names no geometry joins whatever is running, and a listing
+// cannot say what that is: another consumer may have the camera pinned at a
+// larger mode. Sizing from the listing's default would fail on the first Recv.
+func TestRecvLimitFor_ADefaultGeometryRequestAcceptsWhateverIsRunning(t *testing.T) {
 	sources := []*agentpbv2.CalibratedSource{{
 		Source: "realsense:1", ColourWidth: 640, ColourHeight: 480,
 		MaxFrameBytes: framesource.FrameBytes(640*3, 480, 640*2, 480),
 	}}
-	if got := recvLimitFor(sources, "realsense:1", framesource.Options{}); got != defaultClientRecvBytes {
+	got := recvLimitFor(sources, "realsense:1", framesource.Options{})
+	// At least the largest frame the agent will ever relay from a helper.
+	if got < framesource.MaxRecordBytes {
+		t.Errorf("limit = %d; a bare request joining a 1080p capture must be able to receive it", got)
+	}
+	// And the same figure is what the agent's size gate is told, so it cannot
+	// refuse a frame the client would have accepted.
+	if uint64(got) < framesource.FrameBytes(1920*3, 1080, 1920*2, 1080) {
+		t.Errorf("limit = %d does not cover a 1080p RGB-D frame", got)
+	}
+}
+
+func TestRecvLimitFor_LeavesTheDefaultAloneForSmallExplicitFrames(t *testing.T) {
+	sources := []*agentpbv2.CalibratedSource{{
+		Source: "realsense:1", ColourWidth: 640, ColourHeight: 480,
+		MaxFrameBytes: framesource.FrameBytes(640*3, 480, 640*2, 480),
+	}}
+	if got := recvLimitFor(sources, "realsense:1", framesource.Options{Width: 320, Height: 240}); got != defaultClientRecvBytes {
 		t.Errorf("limit = %d, want the grpc default %d", got, defaultClientRecvBytes)
+	}
+}
+
+// The agent's estimate fails closed on an absurd geometry; the client's limit
+// must not wrap on top of it.
+func TestRecvLimitFor_DoesNotWrapOnAnAbsurdGeometry(t *testing.T) {
+	sources := []*agentpbv2.CalibratedSource{{
+		Source: "realsense:1", ColourWidth: 640, ColourHeight: 480,
+		MaxFrameBytes: framesource.FrameBytes(640*3, 480, 640*2, 480),
+	}}
+	got := recvLimitFor(sources, "realsense:1", framesource.Options{Width: 1 << 31, Height: 1 << 31})
+	if got != math.MaxInt32 {
+		t.Errorf("limit = %d, want the ceiling %d", got, math.MaxInt32)
 	}
 }
 
@@ -73,7 +107,7 @@ func TestRecvLimitFor_RaisesTheLimitForALargeCapture(t *testing.T) {
 }
 
 func TestRecvLimitFor_UnknownSourceFallsBackToTheDefault(t *testing.T) {
-	if got := recvLimitFor(nil, "nothing", framesource.Options{}); got != defaultClientRecvBytes {
+	if got := recvLimitFor(nil, "nothing", framesource.Options{Width: 64, Height: 48}); got != defaultClientRecvBytes {
 		t.Errorf("limit = %d", got)
 	}
 }
@@ -168,6 +202,32 @@ func TestPipeCalibratedFramesToStdout_WritesColourThenDepth(t *testing.T) {
 	}
 	if !bytes.Equal(out.Bytes()[:len(f.GetColour())], f.GetColour()) {
 		t.Error("the colour plane is not the first thing on stdout")
+	}
+}
+
+// The layout is announced once. A consumer that did not require depth is
+// allowed to keep its colour when depth drops -- but a reader of --stdout was
+// told every frame is C bytes then D bytes, and would silently read frame
+// N+1's colour as frame N's depth from then on. That is a silent downgrade,
+// so the stream ends with an error instead.
+func TestPipeCalibratedFramesToStdout_EndsWithAnErrorWhenTheLayoutChanges(t *testing.T) {
+	full := frameWithCentreDepth(1000)
+	depthless := frameWithCentreDepth(1000)
+	depthless.FrameId = 13
+	depthless.Depth = nil
+	stream := &stubCalibratedStream{frames: []*agentpbv2.CalibratedFrame{full, depthless, full}}
+	var out bytes.Buffer
+	err := pipeCalibratedFramesToStdout(stream, &out, 0)
+	if err == nil {
+		t.Fatal("a frame that changed the announced layout was written silently")
+	}
+	for _, want := range []string{"frame 13", "layout", "--require aligned-depth"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	if want := len(full.GetColour()) + len(full.GetDepth().GetData()); out.Len() != want {
+		t.Errorf("wrote %d bytes, want exactly the one frame that matched the announced layout (%d)", out.Len(), want)
 	}
 }
 

@@ -158,7 +158,17 @@ func parseRequirements(values []string) ([]agentpbv2.FrameRequirement, error) {
 // device said its frames cost. One frame is one gRPC message and grpc-go's
 // default limit is 4 MiB, which a 1080p colour plane alone exceeds — so a
 // client that does not raise it cannot receive the stream it just asked for.
+//
+// A request that names no geometry joins whatever the source is already
+// capturing, and a listing cannot say what that is: another consumer may have
+// the camera pinned at a larger mode than its default, and sizing from the
+// default would fail on the first Recv -- the exact failure the limit exists
+// to prevent. The largest frame the agent relays is bounded by the helper
+// wire's record limit, so a joining request accepts up to that.
 func recvLimitFor(sources []*agentpbv2.CalibratedSource, name string, opts framesource.Options) int {
+	if opts.IsDefault() {
+		return framesource.MaxRecordBytes + recvLimitSlack
+	}
 	largest := uint64(0)
 	for _, s := range sources {
 		if name != "" && s.GetSource() != name {
@@ -168,12 +178,12 @@ func recvLimitFor(sources []*agentpbv2.CalibratedSource, name string, opts frame
 			largest = n
 		}
 	}
+	if largest > math.MaxInt32-recvLimitSlack {
+		return math.MaxInt32
+	}
 	limit := largest + recvLimitSlack
 	if limit < defaultClientRecvBytes {
 		return defaultClientRecvBytes
-	}
-	if limit > math.MaxInt32 {
-		return math.MaxInt32
 	}
 	return int(limit)
 }
@@ -234,12 +244,31 @@ func renderCalibratedSources(w io.Writer, sources []*agentpbv2.CalibratedSource)
 	return nil
 }
 
+// stdoutLayout is the byte layout announced on stderr: what a reader of
+// stdout has been told each frame consists of.
+type stdoutLayout struct {
+	colourBytes int
+	depthBytes  int
+}
+
+func layoutOf(f *agentpbv2.CalibratedFrame) stdoutLayout {
+	return stdoutLayout{colourBytes: len(f.GetColour()), depthBytes: len(f.GetDepth().GetData())}
+}
+
 // pipeCalibratedFramesToStdout writes the planes for a program to read: the
 // whole colour plane then the whole depth plane, per frame, with the geometry
 // and the depth scale announced once on stderr. Same contract as
 // `camera view --raw --stdout`, one plane richer.
+//
+// The layout is announced once, so it must hold for every frame. A subscriber
+// that did not require depth is allowed to keep receiving when depth drops
+// mid-run -- but a reader that was told "C bytes of colour then D of depth"
+// would then consume frame N+1's colour as frame N's depth, silently, from
+// that point on. That is the downgrade this command exists to make visible,
+// so the stream is ended with an error instead of written in a layout the
+// reader was never told about.
 func pipeCalibratedFramesToStdout(stream calibratedFrameStream, w io.Writer, count uint32) error {
-	announced := false
+	var announced *stdoutLayout
 	var seen uint32
 	for {
 		frame, err := stream.Recv()
@@ -249,9 +278,17 @@ func pipeCalibratedFramesToStdout(stream calibratedFrameStream, w io.Writer, cou
 		if err != nil {
 			return fmt.Errorf("receiving calibrated frames: %w", cameraStreamDiagnostic(err))
 		}
-		if !announced {
-			announced = true
+		if announced == nil {
 			announceCalibratedLayout(frame)
+			l := layoutOf(frame)
+			announced = &l
+		} else if got := layoutOf(frame); got != *announced {
+			return fmt.Errorf("frame %d does not match the layout announced on stderr "+
+				"(colour %d bytes, now %d; depth %d bytes, now %d); a reader of --stdout cannot follow that, "+
+				"so the stream was ended rather than written in a layout it was not told about. "+
+				"Add --require %s to be refused up front when the camera cannot keep providing depth",
+				frame.GetFrameId(), announced.colourBytes, got.colourBytes, announced.depthBytes, got.depthBytes,
+				framesource.SlugAlignedDepth)
 		}
 		if _, err := w.Write(frame.GetColour()); err != nil {
 			return fmt.Errorf("writing colour plane: %w", err)
@@ -367,9 +404,11 @@ func centreDistanceMetres(d *agentpbv2.DepthPlane) (float64, bool) {
 		return 0, false
 	}
 	x, y := d.GetWidth()/2, d.GetHeight()/2
-	offset := int(y)*int(d.GetBytesPerLine()) + int(x)*2
+	// uint64 throughout: the geometry is what the device sent, and int is 32
+	// bits on some of the ARM images this runs on. Fail closed, visibly.
+	offset := uint64(y)*uint64(d.GetBytesPerLine()) + uint64(x)*2
 	data := d.GetData()
-	if offset < 0 || offset+2 > len(data) {
+	if offset+2 > uint64(len(data)) {
 		return 0, false
 	}
 	raw := binary.LittleEndian.Uint16(data[offset : offset+2])
