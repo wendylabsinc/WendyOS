@@ -374,7 +374,7 @@ type deviceHub struct {
 	// before then waits, one that joins after a refusal is turned away up front.
 	// Protected by h.mu.
 	rawState  rawTapState
-	rawReason string
+	rawReason func() string // memoised; see rawNotOffered
 	rawFormat *agentpb.RawFormat
 }
 
@@ -520,14 +520,18 @@ func (h *deviceHub) rawOffered(format *agentpb.RawFormat) {
 // subscriber's own StreamVideo call still removes it. A raw subscriber left
 // waiting on a stream that will never deliver is exactly the silent failure
 // this whole feature exists to avoid.
-func (h *deviceHub) rawNotOffered(reason string) {
+//
+// The reason is a function: the refusals for a depth node probe the device to
+// say what it is, and that probe should run only if a raw subscriber ever
+// asks. It is evaluated here only when one is already waiting.
+func (h *deviceHub) rawNotOffered(reason func() string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.rawState = rawUnavailable
-	h.rawReason = reason
+	h.rawReason = memoiseReason(reason)
 	for _, sub := range h.subs {
 		if sub.raw && !sub.closed {
-			sub.err = errRawUnavailable(reason)
+			sub.err = errRawUnavailable(h.rawReason())
 			sub.closed = true
 			close(sub.ch)
 		}
@@ -538,9 +542,10 @@ func (h *deviceHub) rawNotOffered(reason string) {
 // is offered or still undecided.
 func (h *deviceHub) rawRefusal() error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.rawState == rawUnavailable {
-		return errRawUnavailable(h.rawReason)
+	state, reason := h.rawState, h.rawReason
+	h.mu.Unlock()
+	if state == rawUnavailable {
+		return errRawUnavailable(reason())
 	}
 	return nil
 }
@@ -1342,7 +1347,7 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 	if strings.HasPrefix(path, ipHubKeyPrefix) {
 		// The camera sends H.264 and the producer depayloads it without ever
 		// holding a decoded frame, so there is nothing raw to offer.
-		h.rawNotOffered("network cameras deliver encoded video only")
+		h.rawNotOffered(fixedReason("network cameras deliver encoded video only"))
 		err = s.runIPProducer(ctx, broadcast, path, req)
 	} else {
 		transport, _ := s.classifyTransport(filepath.Base(path))
@@ -1359,7 +1364,7 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 			s.logger.Info("CSI camera detected, using GStreamer", zap.String("device", path))
 			// The ISP pipeline (libcamerasrc / Argus) produces processed video for
 			// the encoder; the sensor's own frames never reach the agent as bytes.
-			h.rawNotOffered("CSI cameras are captured through the ISP pipeline; raw frames are not offered")
+			h.rawNotOffered(fixedReason("CSI cameras are captured through the ISP pipeline; raw frames are not offered"))
 			err = s.streamGStreamer(ctx, broadcast, path, req, transport, libcameraID, pipeWireSource{}, noRawSink{})
 		} else {
 			err = s.captureLocalCamera(ctx, broadcast, path, req, transport, libcameraID, h)
@@ -1418,7 +1423,7 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	send := func(data []byte, tsNs uint64, codec agentpb.VideoCodec) bool {
 		ok := broadcast(data, tsNs, codec)
 		if ok && nativePhase && !delivered {
-			sink.rawNotOffered("camera streams H.264 natively; raw frames are not offered")
+			sink.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
 		}
 		delivered = delivered || ok
 		return ok
@@ -2292,7 +2297,7 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 			zap.String("format", describeRawFormat(plan.raw)))
 		go s.pumpRawTap(ctx, rawR, plan.raw, sink, path)
 	} else {
-		sink.rawNotOffered(plan.rawWhy)
+		sink.rawNotOffered(plan.rawRefusalReason())
 	}
 
 	defer func() {
@@ -2578,6 +2583,40 @@ type gstPipelinePlan struct {
 	raw *agentpb.RawFormat
 	// rawWhy says why raw is not offered — the reason a raw subscriber is refused with.
 	rawWhy string
+	// rawWhyLazy is rawWhy for the refusals that have to ask the device what it
+	// IS (an open and a VIDIOC_ENUM_FRAMESIZES for Z16, see rawWhyDepthNode).
+	// Deferred so the probe runs only when a raw subscriber is actually
+	// refused, not on every pipeline start for viewers that never ask.
+	rawWhyLazy func() string
+}
+
+// rawRefusalReason is the reason a raw subscriber is refused with, as a
+// function so a probing refusal is not computed until it is needed.
+func (p gstPipelinePlan) rawRefusalReason() func() string {
+	if p.rawWhyLazy != nil {
+		return p.rawWhyLazy
+	}
+	return fixedReason(p.rawWhy)
+}
+
+// rawReason evaluates rawRefusalReason. Tests read this; production hands the
+// function to the hub instead.
+func (p gstPipelinePlan) rawReason() string { return p.rawRefusalReason()() }
+
+// fixedReason wraps a reason already in hand for rawSink.rawNotOffered.
+func fixedReason(reason string) func() string { return func() string { return reason } }
+
+// memoiseReason evaluates a reason at most once, however many refusals it is
+// printed in, and safely from any goroutine.
+func memoiseReason(reason func() string) func() string {
+	var (
+		once sync.Once
+		v    string
+	)
+	return func() string {
+		once.Do(func() { v = reason() })
+		return v
+	}
 }
 
 // buildGStreamerArgs constructs the gst-launch-1.0 argument list for V4L2 encode.
@@ -2712,9 +2751,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	case useMJPEG:
 		plan.rawWhy = fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", capW, capH)
 	case capW == 0 || capH == 0:
-		plan.rawWhy = rawWhyNoCaptureSize(devicePath)
+		plan.rawWhyLazy = func() string { return rawWhyNoCaptureSize(devicePath) }
 	case rawFormatFor(devicePath, capW, capH) == nil:
-		plan.rawWhy = rawWhyNoFormat(devicePath, capW, capH)
+		plan.rawWhyLazy = func() string { return rawWhyNoFormat(devicePath, capW, capH) }
 	case uint64(capH)*uint64(rawFormatFor(devicePath, capW, capH).bytesPerLine(capW)) > maxRawFrameBytes:
 		f := rawFormatFor(devicePath, capW, capH)
 		plan.rawWhy = fmt.Sprintf("a %dx%d %s frame exceeds the %d-byte raw frame limit",

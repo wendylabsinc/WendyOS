@@ -98,7 +98,9 @@ type rawSink interface {
 	wantRaw() bool
 	publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool
 	rawOffered(format *agentpb.RawFormat)
-	rawNotOffered(reason string)
+	// rawNotOffered takes the reason as a function: a refusal that has to
+	// probe the device is computed only if a raw subscriber ever asks.
+	rawNotOffered(reason func() string)
 }
 
 // noRawSink is the sink for producers whose raw decision was made by the caller.
@@ -107,7 +109,7 @@ type noRawSink struct{}
 func (noRawSink) wantRaw() bool                                      { return false }
 func (noRawSink) publishRaw([]byte, uint64, *agentpb.RawFormat) bool { return true }
 func (noRawSink) rawOffered(*agentpb.RawFormat)                      {}
-func (noRawSink) rawNotOffered(string)                               {}
+func (noRawSink) rawNotOffered(func() string)                        {}
 
 // errRawUnavailable is the answer a raw subscriber gets from a camera that has
 // no raw frames to give. Machine-readable reason so the CLI can name the fix.

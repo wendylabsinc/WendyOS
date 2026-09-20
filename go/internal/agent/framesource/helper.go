@@ -282,7 +282,8 @@ func (s *HelperSource) Open(ctx context.Context, opts Options) (Stream, error) {
 	// to fall back to a mode without alignment says so here, and the
 	// requirement check above this catches it before the first frame reaches a
 	// consumer.
-	negotiated, err := ReadSource(run.Records)
+	records := &recordReader{r: run.Records}
+	negotiated, err := readSource(records)
 	if err != nil {
 		run.Stop()
 		waitErr := run.Wait()
@@ -293,11 +294,14 @@ func (s *HelperSource) Open(ctx context.Context, opts Options) (Stream, error) {
 		return nil, fmt.Errorf("capture helper for %s ended before it described its stream: %w",
 			s.desc.GetSource(), err)
 	}
-	return &helperStream{run: run, negotiated: negotiated, source: s.desc.GetSource()}, nil
+	return &helperStream{run: run, records: records, negotiated: negotiated, source: s.desc.GetSource()}, nil
 }
 
 type helperStream struct {
-	run        *HelperRun
+	run *HelperRun
+	// records is the one reader on this helper's stdout; Next is the only
+	// caller, so its buffer is reused from frame to frame.
+	records    *recordReader
 	negotiated *agentpbv2.CalibratedSource
 	source     string
 	closeOnce  sync.Once
@@ -312,7 +316,7 @@ func (h *helperStream) Next(ctx context.Context) (*agentpbv2.CalibratedFrame, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	f, err := ReadFrame(h.run.Records)
+	f, err := readFrame(h.records)
 	if err != nil {
 		if errors.Is(err, io.EOF) {
 			// A clean end still means the camera stopped. Fold in whatever the

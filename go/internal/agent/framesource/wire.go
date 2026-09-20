@@ -66,20 +66,35 @@ func WriteRecord(w io.Writer, kind byte, msg proto.Message) error {
 	return err
 }
 
-// ReadRecord reads one record. It returns io.EOF only on a clean boundary — a
+// recordReader reads records from one stream, reusing its payload buffer
+// between them. A fresh buffer per record is a frame-sized allocation at
+// capture rate -- around 90 MB/s of garbage at 640x480@30 -- competing with
+// the H.264 pipeline for the collector on a Pi-class agent. A payload is only
+// alive until it is unmarshalled (proto.Unmarshal copies bytes fields, which
+// wireReuse_test asserts), so one grown buffer serves every record.
+type recordReader struct {
+	r   io.Reader
+	buf []byte
+}
+
+// read returns one record. It returns io.EOF only on a clean boundary — a
 // truncated record is io.ErrUnexpectedEOF, because a helper killed mid-frame
-// must not look like one that finished.
-func ReadRecord(r io.Reader) (kind byte, payload []byte, err error) {
+// must not look like one that finished. The payload aliases the reader's
+// buffer and is valid until the next read.
+func (rr *recordReader) read() (kind byte, payload []byte, err error) {
 	var header [5]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
+	if _, err := io.ReadFull(rr.r, header[:]); err != nil {
 		return 0, nil, err // io.EOF here is a clean end
 	}
 	n := binary.BigEndian.Uint32(header[1:])
 	if n > MaxRecordBytes {
 		return 0, nil, fmt.Errorf("helper announced a %d-byte record, over the %d-byte limit", n, MaxRecordBytes)
 	}
-	payload = make([]byte, n)
-	if _, err := io.ReadFull(r, payload); err != nil {
+	if uint64(cap(rr.buf)) < uint64(n) {
+		rr.buf = make([]byte, n)
+	}
+	payload = rr.buf[:n]
+	if _, err := io.ReadFull(rr.r, payload); err != nil {
 		if err == io.EOF {
 			err = io.ErrUnexpectedEOF
 		}
@@ -88,9 +103,19 @@ func ReadRecord(r io.Reader) (kind byte, payload []byte, err error) {
 	return header[0], payload, nil
 }
 
+// ReadRecord reads one record from r with a buffer of its own. See
+// recordReader.read for the contract.
+func ReadRecord(r io.Reader) (kind byte, payload []byte, err error) {
+	return (&recordReader{r: r}).read()
+}
+
 // ReadSource reads the descriptor record a helper emits first.
 func ReadSource(r io.Reader) (*agentpbv2.CalibratedSource, error) {
-	kind, payload, err := ReadRecord(r)
+	return readSource(&recordReader{r: r})
+}
+
+func readSource(rr *recordReader) (*agentpbv2.CalibratedSource, error) {
+	kind, payload, err := rr.read()
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +131,11 @@ func ReadSource(r io.Reader) (*agentpbv2.CalibratedSource, error) {
 
 // ReadFrame reads one frame record.
 func ReadFrame(r io.Reader) (*agentpbv2.CalibratedFrame, error) {
-	kind, payload, err := ReadRecord(r)
+	return readFrame(&recordReader{r: r})
+}
+
+func readFrame(rr *recordReader) (*agentpbv2.CalibratedFrame, error) {
+	kind, payload, err := rr.read()
 	if err != nil {
 		return nil, err
 	}

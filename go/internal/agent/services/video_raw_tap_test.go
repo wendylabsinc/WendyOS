@@ -63,7 +63,7 @@ func TestDeviceHub_RawNotOffered_TurnsAwayOnlyRawSubscribers(t *testing.T) {
 	defer h.unsubscribe(idEnc)
 	defer h.unsubscribe(idRaw)
 
-	h.rawNotOffered("camera streams H.264 natively; raw frames are not offered")
+	h.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
 
 	// The raw channel is closed and carries the reason; the encoded one is untouched.
 	if _, ok := <-chRaw; ok {
@@ -101,7 +101,7 @@ func TestDeviceHub_RawNotOffered_TurnsAwayOnlyRawSubscribers(t *testing.T) {
 func TestDeviceHub_ProducerTeardownSkipsAlreadyClosedRawSubscriber(t *testing.T) {
 	h, _ := newTestHub(t)
 	_, _, _ = h.subscribeKind(true)
-	h.rawNotOffered("no raw")
+	h.rawNotOffered(fixedReason("no raw"))
 	// runProducer's teardown closes every subscriber it has not closed already.
 	// A second close would panic; this is the loop it runs.
 	h.mu.Lock()
@@ -155,7 +155,7 @@ func TestGetOrCreateHub_RawRefusedUpFrontOnceProducerDeclined(t *testing.T) {
 		t.Fatalf("getOrCreateHub failed: %v", err)
 	}
 	defer h.unsubscribe(id)
-	h.rawNotOffered("camera is captured as MJPEG at 1280x720; raw frames are not offered")
+	h.rawNotOffered(fixedReason("camera is captured as MJPEG at 1280x720; raw frames are not offered"))
 
 	_, _, _, err = svc.getOrCreateHub(ctx, "/dev/video0", &agentpb.StreamVideoRequest{Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW})
 	if err == nil {
@@ -210,7 +210,7 @@ func TestPlan_TeesRawWhenTheDeviceAdvertisesYUYVAtTheCaptureSize(t *testing.T) {
 	joined := strings.Join(plan.args, " ")
 
 	if plan.raw == nil {
-		t.Fatalf("expected a raw tap, got none: %s", plan.rawWhy)
+		t.Fatalf("expected a raw tap, got none: %s", plan.rawReason())
 	}
 	if plan.raw.GetWidth() != 512 || plan.raw.GetHeight() != 484 || plan.raw.GetFourcc() != fourccYUYV || plan.raw.GetBytesPerLine() != 1024 {
 		t.Errorf("unexpected raw format %v", plan.raw)
@@ -242,8 +242,8 @@ func TestPlan_NoRawWhenYUYVIsNotAdvertisedAtThatSize(t *testing.T) {
 	if plan.raw != nil {
 		t.Fatalf("raw offered for a size the device does not advertise: %v", plan.raw)
 	}
-	if !strings.Contains(plan.rawWhy, "YUYV") {
-		t.Errorf("reason should name the missing format: %q", plan.rawWhy)
+	if !strings.Contains(plan.rawReason(), "YUYV") {
+		t.Errorf("reason should name the missing format: %q", plan.rawReason())
 	}
 	joined := strings.Join(plan.args, " ")
 	if strings.Contains(joined, "tee") || strings.Contains(joined, "fd=3") || strings.Contains(joined, "format=YUY2") {
@@ -261,8 +261,8 @@ func TestPlan_NoRawWhenMJPEGCaptureIsSelected(t *testing.T) {
 	if plan.raw != nil {
 		t.Fatalf("raw offered on an MJPEG capture: %v", plan.raw)
 	}
-	if !strings.Contains(plan.rawWhy, "MJPEG") {
-		t.Errorf("reason should say MJPEG: %q", plan.rawWhy)
+	if !strings.Contains(plan.rawReason(), "MJPEG") {
+		t.Errorf("reason should say MJPEG: %q", plan.rawReason())
 	}
 	if !strings.Contains(strings.Join(plan.args, " "), "jpegdec") {
 		t.Errorf("MJPEG pipeline lost its decoder: %v", plan.args)
@@ -279,8 +279,8 @@ func TestPlan_NoRawThroughPipeWire(t *testing.T) {
 	if plan.raw != nil {
 		t.Fatalf("raw offered on the PipeWire path: %v", plan.raw)
 	}
-	if !strings.Contains(plan.rawWhy, "PipeWire") {
-		t.Errorf("reason should say PipeWire: %q", plan.rawWhy)
+	if !strings.Contains(plan.rawReason(), "PipeWire") {
+		t.Errorf("reason should say PipeWire: %q", plan.rawReason())
 	}
 }
 
@@ -293,8 +293,8 @@ func TestPlan_RawFrameMustFitADefaultGRPCMessage(t *testing.T) {
 	if plan.raw != nil {
 		t.Fatalf("a 1080p YUYV frame (%d bytes) must not be offered raw", 1920*1080*2)
 	}
-	if !strings.Contains(plan.rawWhy, "exceeds") {
-		t.Errorf("reason should say the frame is too large: %q", plan.rawWhy)
+	if !strings.Contains(plan.rawReason(), "exceeds") {
+		t.Errorf("reason should say the frame is too large: %q", plan.rawReason())
 	}
 }
 
@@ -455,7 +455,7 @@ func TestPlan_OffersRawForAY16OnlyCamera(t *testing.T) {
 	withRawModes(t, map[uint32][][2]uint32{v4l2PixFmtY16: {{640, 480}}})
 	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{})
 	if plan.raw == nil {
-		t.Fatalf("raw not offered for a Y16 camera: %s", plan.rawWhy)
+		t.Fatalf("raw not offered for a Y16 camera: %s", plan.rawReason())
 	}
 	if got := plan.raw.GetFourcc(); got != "Y16 " {
 		t.Errorf("fourcc = %q, want %q", got, "Y16 ")
@@ -474,7 +474,7 @@ func TestPlan_GreyIsOneBytePerPixel(t *testing.T) {
 	withRawModes(t, map[uint32][][2]uint32{v4l2PixFmtGrey: {{640, 480}}})
 	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{})
 	if plan.raw == nil {
-		t.Fatalf("raw not offered for a GREY camera: %s", plan.rawWhy)
+		t.Fatalf("raw not offered for a GREY camera: %s", plan.rawReason())
 	}
 	if got := plan.raw.GetBytesPerLine(); got != 640 {
 		t.Errorf("bytes per line = %d, want %d", got, 640)
@@ -490,7 +490,7 @@ func TestPlan_PrefersYUYVWhenACameraOffersSeveral(t *testing.T) {
 	})
 	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{})
 	if plan.raw == nil || plan.raw.GetFourcc() != "YUYV" {
-		t.Fatalf("want YUYV preferred, got %+v (%s)", plan.raw, plan.rawWhy)
+		t.Fatalf("want YUYV preferred, got %+v (%s)", plan.raw, plan.rawReason())
 	}
 }
 
@@ -504,8 +504,8 @@ func TestPlan_RefusalNamesTheFormatsRawSupports(t *testing.T) {
 		t.Fatalf("raw offered for a camera advertising nothing: %+v", plan.raw)
 	}
 	for _, want := range []string{"YUYV", "Y16", "GREY"} {
-		if !strings.Contains(plan.rawWhy, want) {
-			t.Errorf("refusal %q should name %s", plan.rawWhy, want)
+		if !strings.Contains(plan.rawReason(), want) {
+			t.Errorf("refusal %q should name %s", plan.rawReason(), want)
 		}
 	}
 }
@@ -521,8 +521,8 @@ func TestPlan_DepthNodeIsRefusedAsDepthAtARequestedSize(t *testing.T) {
 	if plan.raw != nil {
 		t.Fatalf("raw offered for a depth-only camera: %+v", plan.raw)
 	}
-	if !strings.Contains(plan.rawWhy, "Z16") || !strings.Contains(plan.rawWhy, "depth") {
-		t.Errorf("refusal %q should name the node as Z16 depth", plan.rawWhy)
+	if !strings.Contains(plan.rawReason(), "Z16") || !strings.Contains(plan.rawReason(), "depth") {
+		t.Errorf("refusal %q should name the node as Z16 depth", plan.rawReason())
 	}
 }
 
@@ -539,8 +539,8 @@ func TestPlan_DepthNodeWithNoCaptureSizeIsRefusedAsDepth(t *testing.T) {
 	if plan.raw != nil {
 		t.Fatalf("raw offered for a depth-only camera: %+v", plan.raw)
 	}
-	if !strings.Contains(plan.rawWhy, "depth") {
-		t.Errorf("refusal %q should name the node as depth rather than claim it advertises no frame size", plan.rawWhy)
+	if !strings.Contains(plan.rawReason(), "depth") {
+		t.Errorf("refusal %q should name the node as depth rather than claim it advertises no frame size", plan.rawReason())
 	}
 }
 
@@ -553,7 +553,7 @@ func TestPlan_DepthAlongsideAPictureFormatStillOffersRaw(t *testing.T) {
 	})
 	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{})
 	if plan.raw == nil || plan.raw.GetFourcc() != "YUYV" {
-		t.Fatalf("want YUYV offered, got %+v (%s)", plan.raw, plan.rawWhy)
+		t.Fatalf("want YUYV offered, got %+v (%s)", plan.raw, plan.rawReason())
 	}
 }
 
@@ -567,5 +567,48 @@ func TestRawPixelFormats_ExcludeZ16(t *testing.T) {
 		if f.v4l2 == v4l2PixFmtZ16 {
 			t.Fatal("Z16 is in the raw format table; GStreamer's v4l2 element cannot capture it")
 		}
+	}
+}
+
+// The depth refusals ask the node what it IS -- an open and an enumeration of
+// Z16 sizes. That belongs on the path where a raw subscriber is refused, not
+// on every pipeline start for viewers that never ask for raw frames.
+func TestPlan_DepthProbeRunsOnlyWhenTheRefusalIsActuallyNeeded(t *testing.T) {
+	var z16Probes int
+	prev := enumerateRawFrameSizes
+	enumerateRawFrameSizes = func(_ string, pixfmt uint32) [][2]uint32 {
+		if pixfmt == v4l2PixFmtZ16 {
+			z16Probes++
+			return [][2]uint32{{640, 480}}
+		}
+		return nil
+	}
+	t.Cleanup(func() { enumerateRawFrameSizes = prev })
+
+	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{})
+	if plan.raw != nil {
+		t.Fatalf("raw offered for a depth-only camera: %+v", plan.raw)
+	}
+	if z16Probes != 0 {
+		t.Errorf("planning the pipeline probed Z16 %d time(s); nobody has asked for raw frames yet", z16Probes)
+	}
+	// Handed to a hub, the reason is evaluated once, however many subscribers
+	// are refused with it -- and only when the first one is.
+	h := &deviceHub{subs: map[int]*hubSubscriber{}}
+	h.rawNotOffered(plan.rawRefusalReason())
+	if z16Probes != 0 {
+		t.Errorf("recording that raw is not offered probed Z16 %d time(s); no raw subscriber has asked", z16Probes)
+	}
+	for i := 0; i < 3; i++ {
+		err := h.rawRefusal()
+		if err == nil {
+			t.Fatal("no refusal for a raw subscriber on a hub that offers no raw frames")
+		}
+		if !strings.Contains(err.Error(), "depth") {
+			t.Errorf("refusal %q should name the node as depth", err)
+		}
+	}
+	if z16Probes != 1 {
+		t.Errorf("three refusals probed Z16 %d time(s) in total, want the one memoised probe", z16Probes)
 	}
 }
