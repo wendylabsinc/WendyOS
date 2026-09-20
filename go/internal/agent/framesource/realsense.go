@@ -125,15 +125,23 @@ func (p *RealSenseProvider) launcher() (Launcher, error) {
 }
 
 // Sources enumerates what this provider can offer right now.
+//
+// It is called on every listing and every subscribe that has no running
+// capture to join, so it does as little as the answer needs. sysfs decides
+// whether a RealSense is attached at all; only then is the helper run to
+// enumerate it. A device with no RealSense never forks anything -- and a
+// device with one is not made to run a second helper, with a fresh
+// rs2_context querying the camera, for every listing while the kernel says
+// nothing is there.
 func (p *RealSenseProvider) Sources(ctx context.Context) ([]Source, error) {
 	attached := p.detect()
+	if len(attached) == 0 {
+		// No RealSense is not a problem to report: this is simply a device
+		// without one, whether or not the helper is installed.
+		return nil, nil
+	}
 	launcher, err := p.launcher()
 	if err != nil {
-		if len(attached) == 0 {
-			// No RealSense and no helper is not a problem to report: this is
-			// simply a device without one.
-			return nil, nil
-		}
 		return []Source{NewUnavailableSource(
 			unavailableRealSenseName, KindRealSense,
 			strings.Join(attached, ", "),
@@ -143,9 +151,6 @@ func (p *RealSenseProvider) Sources(ctx context.Context) ([]Source, error) {
 
 	descs, err := describeThroughHelper(ctx, launcher)
 	if err != nil {
-		if len(attached) == 0 {
-			return nil, nil
-		}
 		return []Source{NewUnavailableSource(
 			unavailableRealSenseName, KindRealSense,
 			strings.Join(attached, ", "),
@@ -153,7 +158,7 @@ func (p *RealSenseProvider) Sources(ctx context.Context) ([]Source, error) {
 				HelperName, launcher.Binary(), err),
 		)}, nil
 	}
-	if len(descs) == 0 && len(attached) > 0 {
+	if len(descs) == 0 {
 		return []Source{NewUnavailableSource(
 			unavailableRealSenseName, KindRealSense,
 			strings.Join(attached, ", "),
