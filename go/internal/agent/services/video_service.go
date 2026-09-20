@@ -45,6 +45,7 @@ const (
 	v4l2PixFmtUYVY          = 0x59565955 // 'UYVY'
 	v4l2PixFmtY16           = 0x20363159 // 'Y16 ' -- note the trailing space
 	v4l2PixFmtGrey          = 0x59455247 // 'GREY'
+	v4l2PixFmtZ16           = 0x2036315A // 'Z16 ' -- depth; named only so a refusal can say so (see rawPixelFormats)
 	v4l2FieldNone           = 1
 
 	v4l2CapVideoCapture = 0x00000001
@@ -2711,10 +2712,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	case useMJPEG:
 		plan.rawWhy = fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", capW, capH)
 	case capW == 0 || capH == 0:
-		plan.rawWhy = "camera advertises no discrete frame size to capture raw frames at"
+		plan.rawWhy = rawWhyNoCaptureSize(devicePath)
 	case rawFormatFor(devicePath, capW, capH) == nil:
-		plan.rawWhy = fmt.Sprintf("camera advertises none of %s at %dx%d; raw frames are not offered",
-			rawFormatNames(), capW, capH)
+		plan.rawWhy = rawWhyNoFormat(devicePath, capW, capH)
 	case uint64(capH)*uint64(rawFormatFor(devicePath, capW, capH).bytesPerLine(capW)) > maxRawFrameBytes:
 		f := rawFormatFor(devicePath, capW, capH)
 		plan.rawWhy = fmt.Sprintf("a %dx%d %s frame exceeds the %d-byte raw frame limit",

@@ -509,3 +509,63 @@ func TestPlan_RefusalNamesTheFormatsRawSupports(t *testing.T) {
 		}
 	}
 }
+
+// --- depth nodes ---
+
+// A RealSense depth node advertises Z16 and nothing the tap can capture. The
+// refusal it used to get listed the picture formats it lacks, which is true and
+// useless -- no setting on that node will ever produce one. Name what it is.
+func TestPlan_DepthNodeIsRefusedAsDepthAtARequestedSize(t *testing.T) {
+	withRawModes(t, map[uint32][][2]uint32{v4l2PixFmtZ16: {{640, 480}}})
+	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{})
+	if plan.raw != nil {
+		t.Fatalf("raw offered for a depth-only camera: %+v", plan.raw)
+	}
+	if !strings.Contains(plan.rawWhy, "Z16") || !strings.Contains(plan.rawWhy, "depth") {
+		t.Errorf("refusal %q should name the node as Z16 depth", plan.rawWhy)
+	}
+}
+
+// bestDefaultFrameSize enumerates YUYV and MJPEG only, so a depth node yields no
+// capture size at all and the refusal claimed the camera advertises none. It
+// advertises plenty -- just not in a format that is looked for.
+func TestPlan_DepthNodeWithNoCaptureSizeIsRefusedAsDepth(t *testing.T) {
+	withRawModes(t, map[uint32][][2]uint32{v4l2PixFmtZ16: {{640, 480}}})
+	prev := bestDefaultFrameSizeForDevice
+	bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) { return 0, 0 }
+	t.Cleanup(func() { bestDefaultFrameSizeForDevice = prev })
+
+	plan := mustPlan(t, &agentpb.StreamVideoRequest{}, map[string]bool{})
+	if plan.raw != nil {
+		t.Fatalf("raw offered for a depth-only camera: %+v", plan.raw)
+	}
+	if !strings.Contains(plan.rawWhy, "depth") {
+		t.Errorf("refusal %q should name the node as depth rather than claim it advertises no frame size", plan.rawWhy)
+	}
+}
+
+// A camera offering a picture format AND depth is a picture camera: naming the
+// depth must never take an offer away.
+func TestPlan_DepthAlongsideAPictureFormatStillOffersRaw(t *testing.T) {
+	withRawModes(t, map[uint32][][2]uint32{
+		v4l2PixFmtYUYV: {{640, 480}},
+		v4l2PixFmtZ16:  {{640, 480}},
+	})
+	plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 640, Height: 480}, map[string]bool{})
+	if plan.raw == nil || plan.raw.GetFourcc() != "YUYV" {
+		t.Fatalf("want YUYV offered, got %+v (%s)", plan.raw, plan.rawWhy)
+	}
+}
+
+// Z16 is named so refusals can be specific -- it is NOT a capture format. The
+// table pairs each fourcc with a GStreamer caps spelling, and gst-plugins-good
+// maps no Z16 (checked against 1.24 and main), so a row here would build caps
+// that cannot negotiate against the very node they were added for. See the note
+// above rawPixelFormats before changing this.
+func TestRawPixelFormats_ExcludeZ16(t *testing.T) {
+	for _, f := range rawPixelFormats {
+		if f.v4l2 == v4l2PixFmtZ16 {
+			t.Fatal("Z16 is in the raw format table; GStreamer's v4l2 element cannot capture it")
+		}
+	}
+}

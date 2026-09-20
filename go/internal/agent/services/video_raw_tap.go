@@ -164,6 +164,71 @@ var rawPixelFormats = []rawPixelFormat{
 	{fourcc: "GREY", v4l2: v4l2PixFmtGrey, gstFormat: "GRAY8", bytesPerLine: oneBytePerPixel},
 }
 
+// Z16 -- 16-bit depth, what a RealSense reports on its depth node -- is
+// deliberately NOT in the table above, and it is the one exclusion that is not
+// about packing. It IS packed and it IS sixteen bits per pixel, so the layout
+// RawFormat describes would be exact. Two other things stop it:
+//
+//   - GStreamer cannot capture it. Each entry pairs a fourcc with a caps
+//     spelling because v4l2src selects the V4L2 format from the caps, and
+//     gst-plugins-good's v4l2 format table has no V4L2_PIX_FMT_Z16 entry at
+//     all (checked against branches 1.24 and main). GRAY16_LE maps back to
+//     Y16/Y16_BE, which a depth node does not advertise, so those caps would
+//     fail to negotiate rather than deliver depth.
+//   - A depth frame is meaningless without its scale. Z16 counts device units;
+//     metres are units times a per-device depth scale that only the vendor SDK
+//     reports. RawFormat carries width, height, fourcc and stride -- no scale
+//     -- so a subscriber would get uint16 in unknown units with no way to
+//     notice. Guessing 1 mm is exactly the silent degradation this file exists
+//     to prevent.
+//
+// Depth belongs to a source that owns the sensor, pairs the two planes and
+// reports intrinsics and scale alongside them. That is
+// specs/2026-09-20-calibrated-frame-sensor-source-design.md, not another row
+// here.
+
+// advertisesDepth reports whether the device offers Z16 modes: at exactly this
+// size when one was chosen, anywhere when none was. It exists only to make a
+// refusal specific, so it is called on the refusal path and nowhere else.
+func advertisesDepth(devicePath string, width, height uint32) bool {
+	if width == 0 || height == 0 {
+		return len(enumerateRawFrameSizes(devicePath, v4l2PixFmtZ16)) > 0
+	}
+	return deviceSupportsRawSize(devicePath, v4l2PixFmtZ16, width, height)
+}
+
+// rawWhyDepthNode names what the node IS rather than what it lacks. Telling the
+// owner of a depth sensor that their camera advertises none of YUYV/UYVY/Y16/
+// GREY is true and useless: no setting on that node will ever produce one, and
+// the message sends them to debug a camera working exactly as designed.
+func rawWhyDepthNode() string {
+	return "camera is a depth node (Z16); the raw tap captures picture formats (" +
+		rawFormatNames() + ") and does not carry depth"
+}
+
+// rawWhyNoCaptureSize is the refusal for a camera no capture size could be
+// picked for. "Advertises no discrete frame size" is true of a driver without
+// VIDIOC_ENUM_FRAMESIZES -- and false of a depth node, which advertises plenty,
+// none of them in a format bestDefaultFrameSize looks for (it enumerates YUYV
+// and MJPEG only).
+func rawWhyNoCaptureSize(devicePath string) string {
+	if advertisesDepth(devicePath, 0, 0) {
+		return rawWhyDepthNode()
+	}
+	return "camera advertises no discrete frame size to capture raw frames at"
+}
+
+// rawWhyNoFormat is the refusal for a size the tap has no format for. The depth
+// case only ever REPLACES this refusal, never creates one: a camera offering a
+// picture format alongside depth still gets its raw frames.
+func rawWhyNoFormat(devicePath string, width, height uint32) string {
+	if advertisesDepth(devicePath, width, height) {
+		return rawWhyDepthNode()
+	}
+	return fmt.Sprintf("camera advertises none of %s at %dx%d; raw frames are not offered",
+		rawFormatNames(), width, height)
+}
+
 // rawFormatFor picks the format the tap will capture in: the first entry the
 // device advertises at exactly this size. Returns nil when the camera offers
 // none of them at that size, which is a refusal with a reason rather than a
