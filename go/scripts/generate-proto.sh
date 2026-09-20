@@ -56,6 +56,7 @@ V2_AGENT_PROTOS=(
     "wendy/agent/services/v2/ros2_service.proto"
     "wendy/agent/services/v2/timesync_service.proto"
     "wendy/agent/services/v2/build_service.proto"
+    "wendy/agent/services/v2/calibrated_frame_service.proto"
     "wendy/agent/services/v2/sensor_pairing_service.proto"
     "wendy/agent/services/v2/sensor_service.proto"
     "wendy/agent/services/v2/tunnel_service.proto"
@@ -66,6 +67,12 @@ for p in "${V2_AGENT_PROTOS[@]}"; do
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=M${p}=${V2_AGENT_PKG}"
     V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=M${p}=${V2_AGENT_PKG}"
 done
+
+# calibrated_frame_service.proto (v2) imports the v1 video service proto for
+# RawFormat: a colour plane's layout is exactly what a raw tap subscriber
+# already receives, and two descriptions of the same bytes drift apart. The v1
+# file is mapped by AGENT_M_OPTS (folded into ALL_M_OPTS below), so the
+# generated v2 package imports agentpb rather than re-declaring the message.
 
 # sensor_service.proto (v2) imports wendy/lite/sensorlink.proto; map that
 # import to the existing sensorlinkpb package so the v2 service reuses the

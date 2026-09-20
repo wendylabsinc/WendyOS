@@ -90,6 +90,11 @@ type AgentConnection struct {
 	BuildService         agentpbv2.WendyBuildServiceClient
 	SensorPairingService agentpbv2.WendySensorPairingServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
+	// CalibratedFrameService serves RGB-D frames: colour plus depth aligned to
+	// it, with the scale and intrinsics that make both measurable. Separate
+	// from VideoService because a measurement is not a picture — see
+	// Proto/wendy/agent/services/v2/calibrated_frame_service.proto.
+	CalibratedFrameService agentpbv2.WendyCalibratedFrameServiceClient
 	// cachedAgentVersion retains a successful liveness probe performed while
 	// establishing this connection. Direct-agent connects already call
 	// GetAgentVersion to force gRPC's lazy dial and authenticate the peer; run
@@ -582,6 +587,8 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		BuildService:         agentpbv2.NewWendyBuildServiceClient(conn),
 		SensorPairingService: agentpbv2.NewWendySensorPairingServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
+
+		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(conn),
 	}
 }
 
