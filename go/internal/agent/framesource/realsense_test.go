@@ -46,6 +46,28 @@ func TestRealSenseProvider_AttachedCameraWithNoHelperIsListedAndExplained(t *tes
 	}
 }
 
+// Enumerating forks the helper and has it create an rs2_context against
+// whatever is attached. When the kernel says nothing is, there is nothing to
+// ask about -- and nothing to disturb.
+func TestRealSenseProvider_NothingAttachedNeverRunsTheHelper(t *testing.T) {
+	launcher := &memoryLauncher{}
+	p := &RealSenseProvider{
+		Logger:   zap.NewNop(),
+		Detect:   func() []string { return nil },
+		Launcher: launcher,
+	}
+	sources, err := p.Sources(context.Background())
+	if err != nil {
+		t.Fatalf("Sources: %v", err)
+	}
+	if len(sources) != 0 {
+		t.Errorf("a device with no RealSense reported %d sources", len(sources))
+	}
+	if launcher.started != 0 {
+		t.Errorf("the helper was started %d time(s) with no RealSense attached", launcher.started)
+	}
+}
+
 // No camera and no helper is an ordinary device, not a problem to report.
 func TestRealSenseProvider_NoCameraAndNoHelperReportsNothing(t *testing.T) {
 	p := &RealSenseProvider{

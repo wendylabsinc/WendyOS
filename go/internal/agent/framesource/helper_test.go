@@ -57,7 +57,10 @@ func runFakeHelper(mode string) int {
 		}
 		return 0
 	case "fail":
+		// The line that names the cause, then the generic one a dying helper
+		// tends to print last. Both must survive into the exit error.
 		fmt.Fprintln(os.Stderr, "failed to set power state")
+		fmt.Fprint(os.Stderr, "exiting") // no trailing newline, like a crash
 		return 1
 	default:
 		return 2
@@ -254,8 +257,105 @@ func TestExecLauncher_FoldsTheHelpersStderrIntoItsExitError(t *testing.T) {
 	if err == nil {
 		t.Fatal("a helper that exited 1 reported no error")
 	}
-	if !strings.Contains(err.Error(), "failed to set power state") {
-		t.Errorf("error does not carry the helper's stderr: %v", err)
+	for _, want := range []string{"failed to set power state", "exiting"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not carry %q from the helper's stderr: %v", want, err)
+		}
+	}
+}
+
+func TestTailBuffer_KeepsEveryRetainedLineNotJustTheLast(t *testing.T) {
+	tail := &tailBuffer{limit: 1 << 10}
+	// Written the way a pipe delivers it: in pieces that do not respect lines.
+	for _, chunk := range []string{"failed to claim ", "USB interface\nexit", "ing"} {
+		if _, err := tail.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := tail.String(); got != "failed to claim USB interface; exiting" {
+		t.Errorf("tail = %q", got)
+	}
+}
+
+func TestTailBuffer_StaysWithinItsBudgetAndDropsTheOldest(t *testing.T) {
+	tail := &tailBuffer{limit: 24}
+	for _, line := range []string{"first line", "second line", "third line"} {
+		_, _ = tail.Write([]byte(line + "\n"))
+	}
+	got := tail.String()
+	if strings.Contains(got, "first") || !strings.Contains(got, "third") {
+		t.Errorf("tail = %q; the oldest line goes, the newest stays", got)
+	}
+	// A helper that never writes a newline is bounded too.
+	spin := &tailBuffer{limit: 16}
+	_, _ = spin.Write([]byte(strings.Repeat("x", 100)))
+	if n := len(spin.String()); n > 2*16 {
+		t.Errorf("an unterminated line grew to %d bytes against a 16-byte budget", n)
+	}
+}
+
+// --- where the helper is looked for ---
+
+func withHelperSearchDirs(t *testing.T, dirs ...string) {
+	t.Helper()
+	prev := helperSearchDirs
+	helperSearchDirs = dirs
+	t.Cleanup(func() { helperSearchDirs = prev })
+}
+
+func writeHelper(t *testing.T, dir string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(dir, HelperName)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile is subject to the umask; the mode under test is set explicitly.
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The image installs the helper in libexec. A copy left on the daemon's PATH
+// -- a developer build, an older package -- must not shadow it.
+func TestFindHelper_PrefersTheInstalledDirsOverPATH(t *testing.T) {
+	t.Setenv(HelperEnvOverride, "")
+	installed := writeHelper(t, t.TempDir(), 0o755)
+	onPath := writeHelper(t, t.TempDir(), 0o755)
+	withHelperSearchDirs(t, filepath.Dir(installed))
+	t.Setenv("PATH", filepath.Dir(onPath))
+
+	got, err := FindHelper(HelperName)
+	if err != nil || got != installed {
+		t.Fatalf("FindHelper = %q, %v; want the installed copy %q over the one on PATH", got, err, installed)
+	}
+}
+
+func TestFindHelper_FallsBackToPATHWhenNothingIsInstalled(t *testing.T) {
+	t.Setenv(HelperEnvOverride, "")
+	onPath := writeHelper(t, t.TempDir(), 0o755)
+	withHelperSearchDirs(t, filepath.Join(t.TempDir(), "absent"))
+	t.Setenv("PATH", filepath.Dir(onPath))
+
+	got, err := FindHelper(HelperName)
+	if err != nil || got != onPath {
+		t.Fatalf("FindHelper = %q, %v; want %q", got, err, onPath)
+	}
+}
+
+// The agent runs as root. A helper anyone can rewrite is a way to run
+// anything as root with the camera in hand.
+func TestFindHelper_RefusesAWorldWritableHelper(t *testing.T) {
+	t.Setenv(HelperEnvOverride, "")
+	writable := writeHelper(t, t.TempDir(), 0o777)
+	withHelperSearchDirs(t, filepath.Dir(writable))
+	t.Setenv("PATH", "")
+	if got, err := FindHelper(HelperName); err == nil {
+		t.Errorf("a world-writable helper was accepted: %q", got)
+	}
+	t.Setenv(HelperEnvOverride, writable)
+	if got, err := FindHelper(HelperName); err == nil {
+		t.Errorf("a world-writable helper was accepted through the override: %q", got)
 	}
 }
 

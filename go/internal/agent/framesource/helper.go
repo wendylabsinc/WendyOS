@@ -10,7 +10,7 @@ package framesource
 // report that it has no depth camera.
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -55,8 +56,10 @@ const HelperName = "wendy-realsense-source"
 // build, or a test's own stand-in.
 const HelperEnvOverride = "WENDY_REALSENSE_HELPER"
 
-// helperSearchDirs is where an installed helper is looked for, in order.
-// libexec first: this is a program the agent runs, not one a person does.
+// helperSearchDirs is where an installed helper is looked for, in order, and
+// BEFORE the daemon's PATH. libexec first: this is a program the agent runs,
+// not one a person does, and a stale copy somewhere on PATH must not shadow
+// the one the image installed.
 var helperSearchDirs = []string{
 	"/usr/libexec/wendy",
 	"/usr/local/libexec/wendy",
@@ -80,19 +83,25 @@ func FindHelper(name string) (string, error) {
 		}
 		return override, nil
 	}
-	if p, err := exec.LookPath(name); err == nil {
-		return p, nil
-	}
 	for _, dir := range helperSearchDirs {
 		candidate := filepath.Join(dir, name)
 		if err := executable(candidate); err == nil {
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("%w: no %s on PATH or in %v (set %s to point at one)",
+	if p, err := exec.LookPath(name); err == nil {
+		if err := executable(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%w: no %s in %v or on PATH (set %s to point at one)",
 		ErrHelperNotInstalled, name, helperSearchDirs, HelperEnvOverride)
 }
 
+// executable accepts a regular file the agent may run and nobody else may
+// rewrite. The agent runs as root: a helper anyone can write to is a way to
+// run anything as root with the camera in hand, so it is refused wherever it
+// was found -- the override included.
 func executable(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -100,6 +109,9 @@ func executable(path string) error {
 	}
 	if info.IsDir() || info.Mode()&0o111 == 0 {
 		return fmt.Errorf("not an executable file")
+	}
+	if info.Mode().Perm()&0o002 != 0 {
+		return fmt.Errorf("world-writable; refusing to run it")
 	}
 	return nil
 }
@@ -113,9 +125,10 @@ type ExecLauncher struct {
 func (l ExecLauncher) Binary() string { return l.Path }
 
 // maxHelperStderr bounds what is kept from a helper's stderr for the exit
-// error. Enough for a librealsense backend complaint, not enough to be a
-// memory story if the helper spins.
-const maxHelperStderr = 16 << 10
+// error. Enough for a librealsense backend complaint and the lines around it,
+// small enough to sit inside a gRPC status, and not a memory story if the
+// helper spins.
+const maxHelperStderr = 4 << 10
 
 func (l ExecLauncher) Start(ctx context.Context, args []string) (*HelperRun, error) {
 	cmd := exec.CommandContext(ctx, l.Path, args...)
@@ -123,10 +136,14 @@ func (l ExecLauncher) Start(ctx context.Context, args []string) (*HelperRun, err
 	if err != nil {
 		return nil, fmt.Errorf("piping %s stdout: %w", filepath.Base(l.Path), err)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("piping %s stderr: %w", filepath.Base(l.Path), err)
-	}
+	// exec.Cmd owns the stderr drain: it copies into tail on a goroutine of
+	// its own, and Wait returns only once that copy has finished, so the last
+	// line a dying helper wrote -- librealsense's reason for failing to claim
+	// the device -- is in the buffer by the time the exit error is built.
+	// Reading a StderrPipe ourselves is the pattern the os/exec docs warn
+	// about: Wait closes the pipe, and the tail is the part that gets lost.
+	tail := &tailBuffer{limit: maxHelperStderr, logger: l.Logger}
+	cmd.Stderr = tail
 	// The helper exits when its stdin closes, which is how it notices an agent
 	// that died without reaping it. A pipe we never write to gives it that
 	// signal for free.
@@ -137,22 +154,6 @@ func (l ExecLauncher) Start(ctx context.Context, args []string) (*HelperRun, err
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting %s: %w", l.Path, err)
 	}
-
-	tail := &tailBuffer{limit: maxHelperStderr}
-	var drained sync.WaitGroup
-	drained.Add(1)
-	go func() {
-		defer drained.Done()
-		sc := bufio.NewScanner(stderr)
-		sc.Buffer(make([]byte, 0, 4096), 64<<10)
-		for sc.Scan() {
-			line := sc.Text()
-			tail.add(line)
-			if l.Logger != nil {
-				l.Logger.Debug("realsense helper", zap.String("line", line))
-			}
-		}
-	}()
 
 	var once sync.Once
 	stop := func() {
@@ -167,7 +168,6 @@ func (l ExecLauncher) Start(ctx context.Context, args []string) (*HelperRun, err
 		Records: stdout,
 		Wait: func() error {
 			err := cmd.Wait()
-			drained.Wait()
 			if err == nil {
 				return nil
 			}
@@ -181,16 +181,47 @@ func (l ExecLauncher) Start(ctx context.Context, args []string) (*HelperRun, err
 }
 
 // tailBuffer keeps the last lines of a helper's stderr within a byte budget.
+// It is the io.Writer exec.Cmd drains stderr into, so it splits lines itself.
 type tailBuffer struct {
-	mu    sync.Mutex
-	limit int
-	lines []string
-	size  int
+	mu      sync.Mutex
+	limit   int
+	lines   []string
+	size    int
+	partial []byte // the unterminated last line, so far
+	logger  *zap.Logger
 }
 
-func (t *tailBuffer) add(line string) {
+func (t *tailBuffer) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	n := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			t.partial = append(t.partial, p...)
+			// A helper that writes forever without a newline is still bounded:
+			// it is a tail, so the end of the line is the part that is kept.
+			if len(t.partial) > t.limit {
+				t.partial = append(t.partial[:0], t.partial[len(t.partial)-t.limit:]...)
+			}
+			break
+		}
+		t.partial = append(t.partial, p[:i]...)
+		t.flushPartialLocked()
+		p = p[i+1:]
+	}
+	return n, nil
+}
+
+func (t *tailBuffer) flushPartialLocked() {
+	if len(t.partial) > t.limit {
+		t.partial = t.partial[len(t.partial)-t.limit:]
+	}
+	line := string(t.partial)
+	t.partial = t.partial[:0]
+	if t.logger != nil {
+		t.logger.Debug("realsense helper", zap.String("line", line))
+	}
 	t.lines = append(t.lines, line)
 	t.size += len(line) + 1
 	for t.size > t.limit && len(t.lines) > 1 {
@@ -199,13 +230,16 @@ func (t *tailBuffer) add(line string) {
 	}
 }
 
+// String is the retained tail, oldest line first. All of it, not the last
+// line alone: the line that names the cause -- "failed to claim USB
+// interface" -- is rarely the last thing a dying helper prints.
 func (t *tailBuffer) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if len(t.lines) == 0 {
-		return ""
+	if len(t.partial) > 0 {
+		t.flushPartialLocked()
 	}
-	return t.lines[len(t.lines)-1]
+	return strings.Join(t.lines, "; ")
 }
 
 // --- the Source ---
