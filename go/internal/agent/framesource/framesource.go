@@ -24,6 +24,8 @@ package framesource
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/bits"
 	"sort"
 	"strings"
 
@@ -262,6 +264,45 @@ func WhyFrameLacks(f *agentpbv2.CalibratedFrame, r agentpbv2.FrameRequirement) s
 
 // --- the four rules the source enforces, enforced once more at the boundary ---
 
+// ColourIsUnusable reports why a frame cannot be delivered at all: its colour
+// plane -- the one every consumer relies on -- does not carry the bytes its
+// geometry claims. Sanitise removes an untrustworthy depth plane and delivers
+// the rest; there is no rest without colour, so the producer ends the capture
+// rather than fan such a frame out. Passed on, a short colour buffer is read
+// past its end by any consumer that slices it by bytes_per_line * height, and
+// an oversized one is misread from the first row.
+func ColourIsUnusable(f *agentpbv2.CalibratedFrame) string {
+	cf := f.GetColourFormat()
+	if cf == nil || cf.GetWidth() == 0 || cf.GetHeight() == 0 {
+		return "no colour geometry"
+	}
+	minStride := uint64(cf.GetWidth()) * uint64(minBytesPerPixel(cf.GetFourcc()))
+	if uint64(cf.GetBytesPerLine()) < minStride {
+		return fmt.Sprintf("stride %d is too short for %d %s pixels",
+			cf.GetBytesPerLine(), cf.GetWidth(), strings.TrimSpace(cf.GetFourcc()))
+	}
+	if want := uint64(cf.GetBytesPerLine()) * uint64(cf.GetHeight()); uint64(len(f.GetColour())) != want {
+		return fmt.Sprintf("carries %d bytes, not the %d its geometry claims", len(f.GetColour()), want)
+	}
+	return ""
+}
+
+// minBytesPerPixel is the fewest bytes a row of a packed fourcc can spend per
+// pixel, for the stride check. A fourcc this table does not know is checked at
+// one byte per pixel, which still catches a stride shorter than the width.
+func minBytesPerPixel(fourcc string) uint32 {
+	switch strings.ToUpper(strings.TrimSpace(fourcc)) {
+	case "BGR3", "RGB3":
+		return 3
+	case "BGR4", "RGB4", "BGRA", "RGBA", "AR24", "XR24":
+		return 4
+	case "YUYV", "UYVY", "YVYU", "VYUY", "Y16", "Z16":
+		return 2
+	default:
+		return 1
+	}
+}
+
 // Sanitise makes a frame honest before it is fanned out, and reports what it
 // took away. It is applied once in the producer, so every subscriber sees the
 // same frame and nobody re-checks.
@@ -271,6 +312,7 @@ func WhyFrameLacks(f *agentpbv2.CalibratedFrame, r agentpbv2.FrameRequirement) s
 // plane carries as many bytes as its geometry claims. Anything else is REMOVED
 // rather than passed on, because a depth plane that is subtly wrong is worth
 // less than no depth plane at all — a consumer can refuse the second one.
+// The colour plane is the exception: see ColourIsUnusable.
 func Sanitise(f *agentpbv2.CalibratedFrame) []string {
 	var dropped []string
 	if d := f.GetDepth(); d != nil {
@@ -308,7 +350,7 @@ func depthIsUnusable(f *agentpbv2.CalibratedFrame) string {
 	if d.GetBytesPerLine() < minStride {
 		return fmt.Sprintf("stride %d is too short for %d 16-bit pixels", d.GetBytesPerLine(), d.GetWidth())
 	}
-	if want := int(d.GetBytesPerLine()) * int(d.GetHeight()); len(d.GetData()) != want {
+	if want := uint64(d.GetBytesPerLine()) * uint64(d.GetHeight()); uint64(len(d.GetData())) != want {
 		return fmt.Sprintf("carries %d bytes, not the %d its geometry claims", len(d.GetData()), want)
 	}
 	if d.GetAlignment() == agentpbv2.DepthPlane_ALIGNMENT_ALIGNED_TO_COLOUR {
@@ -345,6 +387,11 @@ func FrameBytes(colourBytesPerLine, colourHeight, depthBytesPerLine, depthHeight
 // Both the agent's subscribe-time refusal and the CLI's receive-limit sizing go
 // through this, so the number the client raises its limit to and the number the
 // agent compares against are the same number.
+//
+// The request's geometry is client-chosen, and base * requestedPixels does not
+// fit 64 bits for an absurd one. A wrapped product would be a SMALL number,
+// and the size gate would admit a stream it should refuse -- so the estimate
+// fails closed and reports the largest size there is.
 func FrameBytesFor(desc *agentpbv2.CalibratedSource, opts Options) uint64 {
 	base := desc.GetMaxFrameBytes()
 	defaultPixels := uint64(desc.GetColourWidth()) * uint64(desc.GetColourHeight())
@@ -352,5 +399,10 @@ func FrameBytesFor(desc *agentpbv2.CalibratedSource, opts Options) uint64 {
 	if base == 0 || defaultPixels == 0 || requestedPixels == 0 || requestedPixels == defaultPixels {
 		return base
 	}
-	return base * requestedPixels / defaultPixels
+	hi, lo := bits.Mul64(base, requestedPixels)
+	if hi >= defaultPixels {
+		return math.MaxUint64
+	}
+	quo, _ := bits.Div64(hi, lo, defaultPixels)
+	return quo
 }

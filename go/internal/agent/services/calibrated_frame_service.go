@@ -325,6 +325,18 @@ func (s *CalibratedFrameService) runProducer(hub *frameHub, src framesource.Sour
 			hub.finish(status.Errorf(codes.Unavailable, "calibrated frame source %s ended: %v", name, err))
 			return
 		}
+		// A colour plane that does not carry the bytes its geometry claims is
+		// not a frame with a flaw in it; it is not a frame. Every consumer
+		// slices colour by that geometry. Ending the capture is the loud answer:
+		// silently skipping such frames would leave every subscriber waiting on
+		// a stream that never delivers, which is the failure this service exists
+		// to remove.
+		if why := framesource.ColourIsUnusable(frame); why != "" {
+			hub.finish(status.Errorf(codes.Unavailable,
+				"calibrated frame source %s sent a colour plane that does not describe itself (%s); the capture was stopped",
+				name, why))
+			return
+		}
 		// Once, in the producer, so every subscriber sees the same frame and no
 		// consumer re-derives the rules.
 		if dropped := framesource.Sanitise(frame); len(dropped) > 0 && !warned {
