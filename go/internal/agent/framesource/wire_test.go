@@ -85,3 +85,36 @@ func TestWire_FrameWhereADescriptorWasExpectedIsAnError(t *testing.T) {
 		t.Error("a frame was accepted as a source descriptor")
 	}
 }
+
+// One buffer serves every record on a stream, so the frame handed to the hub
+// -- and retained by every subscriber -- must not alias it. If proto.Unmarshal
+// ever stopped copying bytes fields, this is the test that would say so.
+func TestWire_ReusesItsBufferAndTheFrameDoesNotAliasIt(t *testing.T) {
+	var buf bytes.Buffer
+	first := &agentpbv2.CalibratedFrame{FrameId: 1, Colour: bytes.Repeat([]byte{1}, 256)}
+	second := &agentpbv2.CalibratedFrame{FrameId: 2, Colour: bytes.Repeat([]byte{2}, 256)}
+	for _, f := range []*agentpbv2.CalibratedFrame{first, second} {
+		if err := WriteRecord(&buf, RecordFrame, f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rr := &recordReader{r: &buf}
+	got1, err := readFrame(rr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backing := &rr.buf[:1][0]
+	got2, err := readFrame(rr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if &rr.buf[:1][0] != backing {
+		t.Error("the second record did not reuse the first record's buffer")
+	}
+	if !bytes.Equal(got1.GetColour(), first.GetColour()) {
+		t.Error("the first frame's colour changed when the buffer was reused: the frame aliases the wire buffer")
+	}
+	if !bytes.Equal(got2.GetColour(), second.GetColour()) {
+		t.Error("the second frame's colour is wrong")
+	}
+}

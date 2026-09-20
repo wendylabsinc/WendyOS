@@ -195,8 +195,9 @@ func describeThroughHelper(ctx context.Context, launcher Launcher) ([]*agentpbv2
 	defer run.Stop()
 
 	var out []*agentpbv2.CalibratedSource
+	records := &recordReader{r: run.Records}
 	for {
-		src, err := ReadSource(run.Records)
+		src, err := readSource(records)
 		if err != nil {
 			if isCleanEnd(err) {
 				break
