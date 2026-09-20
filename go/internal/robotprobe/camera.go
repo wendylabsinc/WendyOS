@@ -179,8 +179,8 @@ func (p Camera) observeCamera(ctx context.Context, source CameraSource, camera C
 	}
 
 	// A camera the agent lists but reports offline is the most useful thing here, and
-	// it is not something to measure around.
-	if !camera.Online {
+	// it is not something to measure around — but only where the agent actually looked.
+	if reportsLiveness(camera.Transport) && !camera.Online {
 		unknown := robotinspect.NewUnknown(robotinspect.ReasonSourceAbsent,
 			fmt.Sprintf("the agent lists %s but reports it offline", key))
 		return append(properties,
@@ -397,4 +397,28 @@ func sanitiseKey(value string) string {
 		return "unknown"
 	}
 	return key
+}
+
+// reportsLiveness says whether the agent probes this transport's cameras, and so whether
+// its liveness flag carries a fact.
+//
+// A network camera is polled, and a ROS 2 camera is only listed while something publishes
+// it, so for those a false flag means the camera is down. A local V4L2 device is never
+// probed: the field is simply left at its zero value, and the proto says it means "the
+// most recent probe reached this camera" — which for a device that is never probed is
+// unknown, not down.
+//
+// Reading it as "offline" was inventing a physical conclusion from an unset field. On a G1
+// it condemned three working RealSense nodes on every run, accounted for six of the
+// report's unknowns, and returned early — skipping the measurement that would have
+// disproved it, and which is the one place this robot could produce a genuine
+// declared-versus-delivered disagreement. That is the exact failure this command exists to
+// catch, so it does not get to live inside it.
+func reportsLiveness(transport string) bool {
+	switch strings.ToUpper(transport) {
+	case "ROS2", "IP":
+		return true
+	default:
+		return false
+	}
 }

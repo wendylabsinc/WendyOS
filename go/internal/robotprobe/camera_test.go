@@ -420,3 +420,49 @@ func (r *refusingCameras) SampleCamera(_ context.Context, stableID string, _ tim
 	}
 	return r.frames, nil
 }
+
+// The agent never probes a local V4L2 device, so its liveness flag stays at the zero
+// value. Reading that as "offline" condemned three working RealSense nodes on a G1 every
+// run — and, worse, returned before measuring, so the reading that would have disproved it
+// was never taken.
+func TestCameraDoesNotCallALocalCameraOfflineOnAnUnsetFlag(t *testing.T) {
+	source := fakeCameras{
+		dwell: 300 * time.Millisecond,
+		// Online is false because nothing ever set it, which is the whole point.
+		devices: []CameraDevice{{StableID: "usb:0", Path: "/dev/video0", Transport: "USB"}},
+		frames:  map[string][]CameraFrame{"usb:0": rawFrames(8, 640, 480, 20*time.Millisecond)},
+	}
+
+	properties, err := Camera{Window: time.Second}.Observe(context.Background(), cameraEnv(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolution := findIn(t, properties, "camera.video0.resolution")
+	if resolution.Unknown != nil {
+		t.Fatalf("a working USB camera was reported unmeasurable: %s", resolution.Unknown.Detail)
+	}
+	if len(resolution.Observations) == 0 {
+		t.Fatal("the camera was never measured")
+	}
+}
+
+// Where the agent does probe, a false flag is a fact and must still be honoured.
+func TestCameraStillReportsAProbedCameraOffline(t *testing.T) {
+	for _, transport := range []string{"IP", "ROS2"} {
+		source := fakeCameras{
+			devices: []CameraDevice{{StableID: "cam", Transport: transport, Online: false}},
+		}
+		properties, err := Camera{Window: time.Second}.Observe(context.Background(), cameraEnv(source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resolution := findIn(t, properties, "camera.cam.resolution")
+		if resolution.Unknown == nil {
+			t.Fatalf("%s: an offline camera was measured anyway", transport)
+		}
+		if !strings.Contains(resolution.Unknown.Detail, "offline") {
+			t.Fatalf("%s: unexpected reason %q", transport, resolution.Unknown.Detail)
+		}
+	}
+}
