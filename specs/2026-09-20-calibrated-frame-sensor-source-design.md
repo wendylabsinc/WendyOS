@@ -352,3 +352,74 @@ the producer side (`video_raw_tap.go:54-58`).
 - `go/internal/agent/services/video_service.go` — share camera
   ownership/hub lifecycle with the new service
 - `go/internal/cli/commands/camera.go` — the consumer-side command
+
+---
+
+## 13. Amendment, 2026-09-20 — the cheaper path was weighed and not taken
+
+§7 was challenged during implementation, correctly, on a point of fact. This
+section records the re-examination rather than quietly editing §7, because the
+correction matters more than the conclusion.
+
+### 13.1 §7.1 over-claimed, and is now fixed
+
+"GStreamer cannot capture Z16" is true and was presented as though it bounded
+the **agent**. It does not. The agent is not GStreamer-only at the device
+layer: `streamV4L2Native` (`video_service.go:1878`) already opens a node, sets
+a pixel format with `VIDIOC_S_FMT`, allocates and maps buffers, polls and pumps
+`VIDIOC_DQBUF` itself, using `golang.org/x/sys/unix` directly. GStreamer builds
+the *capture pipeline*; it is not how the agent talks to the device. That loop
+is hardcoded to `v4l2PixFmtH264` and broadcasts `VIDEO_CODEC_H264`;
+parameterising its fourcc would capture Z16 with no new machinery.
+
+So a direct-V4L2 depth tap is **viable as a mechanism**, and cheap — tens of
+lines next to helpers that already exist. The note above `rawPixelFormats` has
+been corrected to say so.
+
+### 13.2 It still does not solve the problem in §2
+
+The question that decides it is not "can the agent read Z16 bytes" but "can the
+app in §2 then stop opening the camera exclusively". It cannot, for two
+reasons that §7.1 was never the real one:
+
+- **The scale.** Depth in device units is not depth. On a RealSense that scale
+  is `RS2_OPTION_DEPTH_UNITS` — a vendor XU control rather than a V4L2 one,
+  reachable only by reimplementing librealsense's DS5 extension-unit protocol.
+  It is also not the fixed device property it is often assumed to be: it
+  differs by model (a D405 ships 0.0001 m where a D435i ships 0.001 m) and it
+  is **writable**, so an advanced-mode visual preset changes it underneath a
+  hardcoded constant. A guessed 1 mm is right until someone tunes the camera
+  and then wrong by a factor of ten, silently — the §2 failure with a new
+  cause.
+- **The alignment.** `identity` does not merely want depth; its
+  `BadgeCameraPolicy.check` refuses to name anyone on an **unaligned** frame,
+  which is the consumer-side gate added after the incident. Two V4L2 nodes give
+  two clocks, no pairing and no extrinsics, so an unaligned depth tap is a
+  stream that app is already written to reject. It would keep librealsense
+  open, and every other app would stay locked off the camera.
+
+Adding `depth_scale_m` to `RawFormat` is wire-compatible and was considered.
+It does not help on its own: nothing in the agent could populate it, so it
+would ship as a permanent zero, and the alignment gap is untouched either way.
+
+### 13.3 What was chosen
+
+Staged, with the stages in this order:
+
+1. **Now (this branch).** The honest refusal for a depth node, the calibrated
+   frame contract, requirement refusals, latest-wins fan-out, the supervised
+   RealSense helper, and the consumer command. Alignment, scale and pairing are
+   produced once, at the source, by the only thing that has them.
+2. **Next, and explicitly not here.** A direct-V4L2 Z16 capture path,
+   generalising `streamV4L2Native` past its H.264 fourcc — built as a
+   `framesource.Source` behind the contract above, emitting
+   `ALIGNMENT_SENSOR_NATIVE` depth, **not** as another row in `rawPixelFormats`
+   whose message cannot say what its numbers mean. That serves depth cameras
+   librealsense does not cover, and a RealSense on an image with no helper.
+
+Stage 2 needs one decision this implementation deliberately did not take: a
+`SENSOR_NATIVE` source has no way to learn its own depth scale, and rule 2 of
+§4 says a plane without one is not sent. Either an operator declares the scale
+(`--depth-scale`, recorded as `PROVENANCE_ASSUMED`), or stage 2 ships a source
+that emits no depth plane at all. That is a product call about whether the
+platform may carry an asserted calibration, and it belongs to a human.
