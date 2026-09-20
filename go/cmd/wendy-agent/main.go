@@ -344,8 +344,9 @@ func main() {
 	// source runs as a helper process the agent supervises, so an image without
 	// that helper still LISTS an attached RealSense and says the helper is
 	// missing rather than reporting no depth camera.
-	calibratedFrameSvc := services.NewCalibratedFrameService(logger,
+	calibratedFrameSvc := services.NewCalibratedFrameService(ctx, logger,
 		framesource.NewRegistry(framesource.NewRealSenseProvider(logger)))
+	defer calibratedFrameSvc.Shutdown()
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.
 	videoSvc.StartDiscovery()
