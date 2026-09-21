@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pt
+*.npz
+*.mjb
+*.mp4
+*.log
+MUJOCO_LOG.TXT
+outputs/

@@ -1,0 +1,109 @@
+{
+  "passed": true,
+  "sdk_commit": "65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5",
+  "checks": [
+    {
+      "check": "sdk_initialized",
+      "passed": true,
+      "sdk_commit": "65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5",
+      "domain": 0,
+      "interface": "lo",
+      "crc_backend": "pinned SDK Python branch; Linux shared libraries absent from source archive"
+    },
+    {
+      "check": "real_sport_client_and_explicit_grant",
+      "passed": true,
+      "version": "1.0.0.1",
+      "publisher_gid": "5fc39029dda30ca100000000000000000000000000000000"
+    },
+    {
+      "check": "sdk_lowstate_crc_battery_and_joint_order",
+      "passed": true,
+      "crc_samples": 5,
+      "motor_slots": 20,
+      "maximum_joint_error_rad": 4.756722593590723e-08,
+      "sdk_order": "FR,FL,RR,RL"
+    },
+    {
+      "check": "sdk_sportmodestate_interoperability",
+      "passed": true,
+      "path_points": 10,
+      "samples": 67
+    },
+    {
+      "check": "sdk_signed_move_and_stop",
+      "passed": true,
+      "vx": 0.3,
+      "body_forward_displacement_m": 0.4888068406729681
+    },
+    {
+      "check": "sdk_signed_move_and_stop",
+      "passed": true,
+      "vx": -0.3,
+      "body_forward_displacement_m": -0.481023155435201
+    },
+    {
+      "check": "sdk_physical_postures",
+      "passed": true,
+      "lying_height": 0.07611120499992197,
+      "standing_height": 0.2927514330684595
+    },
+    {
+      "check": "real_sport_client_and_explicit_grant",
+      "passed": true,
+      "version": "1.0.0.1",
+      "publisher_gid": "62425f4186f1ab2900000000000000000000000000000000"
+    },
+    {
+      "check": "sdk_damp_reset_and_fresh_regrant",
+      "passed": true,
+      "old_gid": "5fc39029dda30ca100000000000000000000000000000000",
+      "new_gid": "62425f4186f1ab2900000000000000000000000000000000"
+    },
+    {
+      "check": "generated_ros_requests",
+      "passed": true,
+      "unsupported": 3203,
+      "invalid": 3204,
+      "denied": 3205,
+      "exact_correlation": true,
+      "noreply_respected": true,
+      "motion_switcher": "CheckMode only; mutations intentionally unsupported"
+    },
+    {
+      "check": "real_sport_client_and_explicit_grant",
+      "passed": true,
+      "version": "1.0.0.1",
+      "publisher_gid": "0bb569efa262e5e100000000000000000000000000000000"
+    },
+    {
+      "check": "sdk_lowcmd_physical_stand",
+      "passed": true,
+      "motor_slots": 20,
+      "sentinel_packets_accepted": true,
+      "lying_height": 0.07610671975022158,
+      "standing_height": 0.29280498385915665,
+      "invalid_crc_rejected": true,
+      "invalid_mode_rejected": true,
+      "policy_updates_during_stand": 0,
+      "max_command_gap_ms": 15.773635008372366
+    },
+    {
+      "check": "sdk_lowcmd_watchdog",
+      "passed": true,
+      "configured_timeout_ms": 40,
+      "observed_http_detection_ms": 41.00116703193635,
+      "owner_revoked": true,
+      "policy_did_not_resume": true,
+      "publisher_gid": "a650fe57704e3a6600000000000000000000000000000000"
+    }
+  ],
+  "error": null,
+  "unmodified_stock_stand_example_supported": false,
+  "validation_environment": {
+    "placement": "isolated ARM64 Linux Docker containers",
+    "runtime_image": "sha256:ba294c6a14f2c8f60ab8adfae03bd8db91ea87c4f33762eb18afbf61fd008a1f",
+    "duration_gate": false,
+    "date": "2026-09-12"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://wendy.sh/schemas/wendy.json",
+  "appId": "g1-coke-hil",
+  "version": "1.0.0",
+  "platform": "linux",
+  "entitlements": [
+    {"type": "gpu"},
+    {"type": "network", "mode": "host"},
+    {"type": "http", "port": 8098}
+  ],
+  "readiness": {
+    "tcpSocket": {"port": 8098},
+    "timeoutSeconds": 180
+  }
+}

@@ -10,16 +10,17 @@ wendy discover [flags]
 
 ## Description
 
-Without output or timeout flags, `wendy discover` opens a live TUI with two
+Without output or timeout flags, `wendy discover` opens a live TUI with three
 tabs:
 
-- **Local** discovers devices over LAN, USB, Bluetooth, and external providers.
+- **Nearby** discovers devices over LAN, USB, Bluetooth, and external providers.
+- **Simulator** lists local simulator devices.
 - **Cloud** lists online devices enrolled in the active Wendy Cloud
   organization.
 
 Use `tab` or `shift+tab` to switch tabs. Cloud discovery starts lazily on the
 first visit to the Cloud tab, so the command makes no cloud connection if you
-only use Local discovery.
+only use Nearby discovery.
 
 Local discovery combines these mechanisms and merges their results:
 
@@ -74,7 +75,7 @@ WENDY_SHOW_LOCAL_DEVICES=1 wendy discover
 
 ## Interactive TUI
 
-Without `--json` or an explicitly set `--timeout`, discover renders Local and
+Without `--json` or an explicitly set `--timeout`, discover renders Nearby, Simulator, and
 Cloud tables that refresh as devices come and go. A leading `✦` marks the
 current default device or organization.
 
@@ -82,18 +83,18 @@ current default device or organization.
 
 | Key | Action |
 |-----|--------|
-| `tab` / `shift+tab` | Switch between Local and Cloud tabs |
+| `tab` / `shift+tab` | Switch between Nearby, Simulator, and Cloud tabs |
 | `↑` / `↓` | Navigate the active device list |
 | `enter` | Copy the selected device as JSON; when logged out in Cloud, start login |
 | `a` | Copy all devices in the active tab as JSON |
 | `u` | Update the selected device's agent |
-| `d` / `x` | Set or clear the default device in Local |
+| `d` / `x` | Set or clear the default device in Nearby |
 | `o` | Switch the active organization in Cloud |
 | `q` / `Ctrl+C` | Quit |
 
-### Local tab
+### Nearby tab
 
-The Local tab shows devices found through the enabled local discovery
+The Nearby tab shows devices found through the enabled local discovery
 transports. The `--type` flag filters this tab only.
 
 ### Cloud tab
@@ -104,7 +105,7 @@ default organization with `✦ default`.
 
 If no cloud credentials are stored, the Cloud tab displays `Wendy Cloud login —
 Not logged in`. Press `enter` to start browser-based login; after login succeeds,
-discovery restarts with the Cloud tab available. Press `tab` to return to Local
+discovery restarts with the Cloud tab available. Press `tab` to return to Nearby
 or `q` to quit without logging in.
 
 ### Switching organizations (`o`)
@@ -119,7 +120,7 @@ yet have credentials.
   selected organization were stored; if not, it reports an error and you can
   repeat the flow.
 
-### Local table columns
+### Nearby table columns
 
 | Column | Description |
 |--------|-------------|

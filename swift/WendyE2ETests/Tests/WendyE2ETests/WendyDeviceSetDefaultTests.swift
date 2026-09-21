@@ -18,8 +18,10 @@ struct `'wendy device set-default'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy device set-default --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Set the default device hostname"))
-                #expect(result.stdout.contains("wendy device set-default [hostname] [flags]"))
+                #expect(
+                    result.stdout.contains("Set a local, cloud or simulator device as the default")
+                )
+                #expect(result.stdout.contains("wendy device set-default [device] [flags]"))
                 #expect(result.stdout.contains("--json"))
                 #expect(result.stderr == "")
             }

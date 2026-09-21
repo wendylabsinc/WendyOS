@@ -1802,6 +1802,8 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		// ListBootContainers (e.g. a direct restart of a single container).
 		// c.mu is already held here (muHeld), so use the lock-free core.
 		c.hydrateIsolationLocked(appID, labels)
+	} else {
+		return nil, fmt.Errorf("reading container labels before start: %w", lerr)
 	}
 	// The parsed name above can be ambiguous when app IDs contain underscores;
 	// repeat the check after authoritative labels resolve the actual app ID.
@@ -1843,6 +1845,12 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// skips the recovery hooks (NewTask will report an invalid stored spec).
 	storedSpec, storedSpecErr := container.Spec(ctx)
 	if storedSpecErr == nil {
+		// Managed virtual robot VMs may use legacy netfilter kernels. Prepare their
+		// fixed firewall modules on the host before the confined bootstrap;
+		// this path also runs after VM reboot and never holds c.mu.
+		if err := prepareGo2KernelModulesForStart(ctx, containerLabels, storedSpec); err != nil {
+			return nil, fmt.Errorf("preparing managed robot kernel support: %w", err)
+		}
 		c.recreateHostResolvConfForStart(storedSpec.Mounts)
 		c.recreateMeshResolvConfForStart(storedSpec.Mounts)
 

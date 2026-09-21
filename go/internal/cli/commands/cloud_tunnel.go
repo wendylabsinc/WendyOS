@@ -131,6 +131,9 @@ func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *clou
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
 		ChainPEM:      cert.PemCertificateChain,
 		ExpectedOrgID: int32(cert.OrganizationID),
+		ExpectedIdentity: &certs.WendyIdentity{
+			OrgID: int32(cert.OrganizationID), EntityType: "asset", EntityID: strconv.FormatInt(int64(asset.GetId()), 10),
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("building TLS verifier: %w", err)
@@ -477,6 +480,11 @@ func pickCloudDevice(ctx context.Context, auth *config.AuthConfig, deviceName, b
 // is set, it offers to log in again (the spinner has already exited, so the
 // terminal is free for the prompt) and retries once with the fresh credentials.
 func pickCloudDeviceWithRelogin(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, allowRelogin bool) (*cloudpb.Asset, error) {
+	return pickCloudDeviceMode(ctx, auth, deviceName, brokerURL, allowRelogin, false)
+}
+
+// forcePicker keeps HIL selection explicit even when just one device is online.
+func pickCloudDeviceMode(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, allowRelogin, forcePicker bool) (*cloudpb.Asset, error) {
 	if len(auth.Certificates) == 0 {
 		return nil, fmt.Errorf("auth entry has no certificates; re-run 'wendy auth login'")
 	}
@@ -489,7 +497,7 @@ func pickCloudDeviceWithRelogin(ctx context.Context, auth *config.AuthConfig, de
 		if fresh == nil {
 			return nil, nil, false
 		}
-		asset, err := pickCloudDeviceWithRelogin(ctx, fresh, deviceName, brokerURL, false)
+		asset, err := pickCloudDeviceMode(ctx, fresh, deviceName, brokerURL, false, forcePicker)
 		return asset, err, true
 	}
 
@@ -525,10 +533,14 @@ func pickCloudDeviceWithRelogin(ctx context.Context, auth *config.AuthConfig, de
 		}
 	}
 
+	return pickCloudDeviceFromRoster(ctx, auth, deviceName, brokerURL, assets, forcePicker)
+}
+
+func pickCloudDeviceFromRoster(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, assets []*cloudpb.Asset, forcePicker bool) (*cloudpb.Asset, error) {
 	// When running interactively with no --device and multiple assets, skip
 	// resolveCloudAsset (which now returns an enumerated error) and fall
 	// straight through to the interactive picker.
-	if isInteractiveTerminal() && deviceName == "" && len(assets) > 1 {
+	if isInteractiveTerminal() && deviceName == "" && (len(assets) > 1 || forcePicker) {
 		// fall through to picker below
 	} else {
 		asset, err := resolveCloudAsset(assets, deviceName)
@@ -555,12 +567,11 @@ func pickCloudDeviceWithRelogin(ctx context.Context, auth *config.AuthConfig, de
 	}
 
 	m := newCloudDiscoverModel(ctx, auth, brokerURL, false, true, assets)
-	p := tea.NewProgram(m)
-	finalModel, err := p.Run()
+	m.purpose = devicePickerPurposeFromContext(ctx)
+	cm, err := runCloudDevicePicker(m)
 	if err != nil {
 		return nil, fmt.Errorf("device picker: %w", err)
 	}
-	cm := finalModel.(cloudDiscoverModel)
 	if cm.quitting && cm.selected == nil {
 		return nil, ErrUserCancelled
 	}
@@ -568,6 +579,14 @@ func pickCloudDeviceWithRelogin(ctx context.Context, auth *config.AuthConfig, de
 		return nil, fmt.Errorf("no device selected")
 	}
 	return cm.selected, nil
+}
+
+var runCloudDevicePicker = func(m cloudDiscoverModel) (cloudDiscoverModel, error) {
+	finalModel, err := tea.NewProgram(m).Run()
+	if err != nil {
+		return cloudDiscoverModel{}, err
+	}
+	return finalModel.(cloudDiscoverModel), nil
 }
 
 func boolPtr(b bool) *bool { return &b }

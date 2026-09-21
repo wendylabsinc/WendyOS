@@ -378,7 +378,7 @@ func buildComposeServicesParallel(ctx context.Context, conn *grpcclient.AgentCon
 
 	var progressErr error
 	if prog != nil {
-		final, runErr := prog.Run()
+		final, runErr := runBuildProgressProgram(prog)
 		if runErr != nil {
 			cancelBuild()
 			progressErr = fmt.Errorf("compose build progress TUI: %w", runErr)

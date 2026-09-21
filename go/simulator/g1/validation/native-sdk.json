@@ -1,0 +1,146 @@
+{
+  "passed": true,
+  "source_digest": null,
+  "vm_name": null,
+  "simulation": true,
+  "robot_kind": "g1",
+  "checks": [
+    {
+      "check": "sdk_hg_observations",
+      "passed": true,
+      "motor_slots": 35,
+      "active_motors": 29,
+      "crc": 3224668687,
+      "maximum_joint_difference_rad": 0.00001434160685215985,
+      "signed_tick_age_seconds": 0.004000000000182524
+    },
+    {
+      "check": "sdk_hg_observations",
+      "passed": true,
+      "motor_slots": 35,
+      "active_motors": 29,
+      "crc": 2800813596,
+      "maximum_joint_difference_rad": 0.008209037191170943,
+      "signed_tick_age_seconds": 0.005999999999671601
+    },
+    {
+      "check": "sdk_loco_move_and_watchdog",
+      "passed": true,
+      "displacement_m": 0.6520706438826632,
+      "commanded_vx_mps": 0.3,
+      "publisher_gid": "442ec1620f7d4a1c00000000000000000000000000000000",
+      "commands": 57,
+      "maximum_publisher_gap_seconds": 0.1101846520032268
+    },
+    {
+      "check": "sdk_loco_damp_and_unsupported_apis",
+      "passed": true
+    },
+    {
+      "check": "sdk_loco_zero_torque",
+      "passed": true
+    },
+    {
+      "check": "sdk_lowcmd_pr_joint_motion_and_watchdog",
+      "passed": true,
+      "wrist_delta_rad": 0.09866157195674538,
+      "publisher_gid": "3cdce401abec68ee00000000000000000000000000000000",
+      "packets": 35,
+      "maximum_publisher_gap_seconds": 0.013493464000930544
+    },
+    {
+      "check": "independent_sdk_stock_ros_environment",
+      "passed": true,
+      "simulator_runtime_importable": false,
+      "hg_package": "/app/stock_ros/install/unitree_hg/local/lib/python3.10/dist-packages/unitree_hg/__init__.py",
+      "api_package": "/app/stock_ros/install/unitree_api/local/lib/python3.10/dist-packages/unitree_api/__init__.py",
+      "sdk_package": "/opt/wendy-g1/assets/sdk2_python/unitree_sdk2py/__init__.py"
+    }
+  ],
+  "harness_sha256": {
+    "exercise.py": "65df3573856f0a0d696b8eaf53525dd38303b53ca78922210147a0d6e4c479c3",
+    "common.py": "b6ac05e0cc67c9766cbcbebb117c013145616b47cc06b5fed5f3691ff93c9749"
+  },
+  "wall_seconds": 9.45577204500296,
+  "environment": {
+    "scope": "isolated ARM64 Linux containers; no VM or physical robot",
+    "runtime_image": "sha256:33e357bd556ba0f1e91c31b6ddc941dd755ca71e5d6ef6159c12dafb3f62b542",
+    "sdk_image": "sha256:799912359359707e3392764657fa699043648bdcaefccf2c658318bf3ba32d12",
+    "runtime_network": "none",
+    "sdk_network": "container:wendy-g1-native-runtime",
+    "render": false,
+    "native": true,
+    "vm_name": null,
+    "ros_domain_id": 0,
+    "interface": "lo"
+  },
+  "runtime_source_sha256": {
+    "g1_sim/__init__.py": "80f67d68ae9f93d000a4f43b0351c6d5b06babf5a2292327a4f0d392230b5bc0",
+    "g1_sim/camera.py": "bfcdb4ad84276785c0ab4c8943dd3c6086dfda41bdf84b8f160a2fad74e6d2b0",
+    "g1_sim/commands.py": "d2ef0a99ac4a8cd334e674d55f87f140fb273bfddafdb499d712b4ed72b618fa",
+    "g1_sim/isolation.py": "c713a4a7fb422b382eb180a2aac82e008e7c85fcc89c0ea0792c3aff66c4427a",
+    "g1_sim/isolation_legacy.py": "e70858f403a85852e3242524fc98c342111ef43c36015299e550dfb8877799d4",
+    "g1_sim/lidar.py": "040933bfe6474403c5b43b8b5ad88f5511481493741a4cdffbfdf85c652acaaa",
+    "g1_sim/native_commands.py": "b6a35dae85979f5791952c2a5c0534e8a3a3bb66cc4ddf07d59eba573e2738bc",
+    "g1_sim/native_state.py": "0cc2fa1cf3d198a7c02a2c042437b154cbc5b80604887c4444de5e87de2071fa",
+    "g1_sim/observations.py": "8a0a9efd261e9180eb8e25c31169e3dc0dde5156c3c39c42df70bd4cdb07ba6d",
+    "g1_sim/policy.py": "0a63172fa7f99d1be3840df26dfbda6801192f7d0c6ad5fe68d894dda314973f",
+    "g1_sim/ros.py": "25429a98b5b989c437ccbab3ca1c7545d14315fb7cd2322a3516d4a664525574",
+    "g1_sim/runtime.py": "789d52fbb79aad3e15eb1de1544c1edad95522065023b3486f80fd481e88659e",
+    "g1_sim/scene.py": "7bc10f6ce602d67549f108b323c1c753154703ff8f5ac621fb8d2c353337c65c",
+    "g1_sim/sensors.py": "1294e71382c360805b47f10828590c38dfa39f1088b362ebd541a05600da1134",
+    "g1_sim/server.py": "8e9acde218f1d98eb2adc03712e9a3f03901065b4b78a930593e5c18ce77b676",
+    "g1_sim/simulation.py": "d5fcbe494adfdba93e9a67e629248ba5703b65413e8b9acec39126a49669ef5b",
+    "g1_sim/slow_sensors.py": "9d0d9915e9af532a75cc2ff66bc121d6247070852630e16fc9170e5e443c7658",
+    "g1_sim/unitree_crc.py": "578de87ed0a21563900265dd831a362117a2569ef51251dd429ba150ae0630d5"
+  },
+  "runtime_lock_sha256": {
+    "assets.lock.json": "8fc72a9ee01ba4b158edb11293c585cc1ed8148340f401dbdf7c22fe1c984dd7",
+    "unitree.lock.json": "ff96e927cd25a60f43b8f3defd29f1b4bee234f2d13513788387bb271ad3898c",
+    "compatibility.json": "c8859fb9f3c3fb1f3d62e66844c7583ed50f76a6473d4a2ea32590a30ee28383"
+  },
+  "cleanup": {
+    "armed": false,
+    "mode": "damping",
+    "epoch": 4,
+    "time": 32.2899999999935,
+    "healthy": true,
+    "ready": false,
+    "error": null,
+    "ros_commands": {
+      "owner": null,
+      "accepted": 91,
+      "rejected": 12,
+      "last_error": null,
+      "sources": [
+        {
+          "publisher_gid": "442ec1620f7d4a1c00000000000000000000000000000000",
+          "kind": "sport",
+          "age_ms": 34259.333299,
+          "requires_restart": true
+        },
+        {
+          "publisher_gid": "48d6a93ad3e73e8500000000000000000000000000000000",
+          "kind": "sport",
+          "age_ms": 32301.72866,
+          "requires_restart": true
+        },
+        {
+          "publisher_gid": "3cdce401abec68ee00000000000000000000000000000000",
+          "kind": "lowcmd",
+          "age_ms": 30481.985804,
+          "requires_restart": true
+        }
+      ]
+    },
+    "runtime_stopped": true,
+    "runtime_removed": true,
+    "sdk_sidecar_removed": true
+  },
+  "limitations": [
+    "Finite functional native compatibility check; sustained sensor throughput was not measured.",
+    "Rendering disabled; camera/cloud semantic acceptance is a separate test.",
+    "Gait initiation at small commands is not established; this test explicitly commanded 0.3 m/s.",
+    "Runtime image precedes later server header/UI/documentation rebuilds; exact tested image and source hashes are recorded."
+  ]
+}

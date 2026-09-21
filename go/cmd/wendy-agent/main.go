@@ -47,6 +47,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbgadget"
+	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -325,13 +326,15 @@ func main() {
 	go timesyncMgr.RunDirect(ctx)
 	go timesyncMgr.RunMulticast(ctx)
 
-	startROS2BatteryMonitor(ctx, logger, configPath)
+	discoveryPool := rtps.NewPool()
+	defer discoveryPool.Close()
+	startROS2BatteryMonitor(ctx, logger, configPath, discoveryPool)
 
 	var videoROSRuntime []services.ROS2Runtime
 	if ctrdClient != nil {
 		videoROSRuntime = append(videoROSRuntime, ctrdClient)
 	}
-	videoSvc := services.NewVideoService(ctx, logger, videoROSRuntime...)
+	videoSvc := services.NewVideoService(ctx, logger, discoveryPool, videoROSRuntime...)
 	defer videoSvc.Shutdown()
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.

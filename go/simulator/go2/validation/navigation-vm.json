@@ -1,0 +1,15 @@
+{
+  "result": "passed",
+  "scope": "Separate ROS navigation application deployed to the managed VM",
+  "vm_name": "go2-sim",
+  "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+  "vm_resources": {"cpus": 4, "memory_mib": 4096},
+  "elapsed_seconds": 37.22694535400001,
+  "checks": {
+    "goal_arrival": {"passed": true, "odometry_error_m": 0.24682348626749756, "actual_displacement_m": 0.9646274680652467},
+    "robot_perception": {"passed": true, "image": [640, 360, "rgb8"], "finite_points": 1158, "matching_horizontal_returns": 360},
+    "obstacle_stop_and_resume": {"passed": true, "held_drift_m": 0.01604712155489957, "minimum_body_center_to_box_m": 0.8433824410954526, "arrival_error_m": 0.23400838143986283},
+    "stale_scan_stop": {"passed": true, "zero_command_delay_ms": 289.92867700003444, "physics_advanced_seconds": 2.217999999999756, "raw_scan_messages": 32, "fresh_goal_arrival_error_m": 0.24536974005042786, "automatic_resume": false}
+  },
+  "limitations": "Bounded reactive goal controller, not Nav2 or a precision navigation benchmark. This finite run does not establish the ten-minute full-reader performance gate."
+}

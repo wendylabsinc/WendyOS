@@ -16,6 +16,7 @@ optdepends=(
     'networkmanager: Wi-Fi support via NetworkManager'
     'connman: Wi-Fi support via ConnMan'
     'bluez: Bluetooth support'
+    'v4l2loopback-dkms>=0.15.0: Virtual camera support'
 )
 backup=('etc/wendy-agent/config.json' 'etc/default/wendy-agent')
 

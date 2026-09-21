@@ -8,12 +8,79 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	containerdlog "github.com/containerd/log"
+	"github.com/sirupsen/logrus"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 )
+
+type buildLibraryLogModel struct {
+	finished *atomic.Bool
+}
+
+func (m buildLibraryLogModel) Init() tea.Cmd {
+	return func() tea.Msg {
+		var wg sync.WaitGroup
+		for i := 0; i < 5; i++ {
+			wg.Go(func() {
+				containerdlog.L.Warn("failed check for fsverity support")
+			})
+		}
+		wg.Wait()
+		return tui.BuildAllDoneMsg{}
+	}
+}
+
+func (m buildLibraryLogModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(tui.BuildAllDoneMsg); ok {
+		m.finished.Store(true)
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m buildLibraryLogModel) View() string { return "Building 5 service(s)...\n" }
+
+type buildLibraryLogOutput struct {
+	bytes.Buffer
+	finished *atomic.Bool
+	leaked   atomic.Bool
+}
+
+func (w *buildLibraryLogOutput) Write(p []byte) (int, error) {
+	if !w.finished.Load() {
+		w.leaked.Store(true)
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestBuildProgressDefersLibraryLogsUntilViewCloses(t *testing.T) {
+	logger := logrus.StandardLogger()
+	original := logger.Out
+	t.Cleanup(func() { logger.SetOutput(original) })
+	finished := &atomic.Bool{}
+	out := &buildLibraryLogOutput{finished: finished}
+	logger.SetOutput(out)
+	prog := tui.NewProgressProgram(buildLibraryLogModel{finished: finished},
+		tea.WithInput(nil), tea.WithOutput(io.Discard))
+	if _, err := runBuildProgressProgram(prog); err != nil {
+		t.Fatal(err)
+	}
+	if out.leaked.Load() {
+		t.Fatal("library warning reached terminal while progress view was active")
+	}
+	if got := strings.Count(out.String(), "failed check for fsverity support"); got != 5 {
+		t.Fatalf("got %d warnings after build, want 5: %q", got, out.String())
+	}
+	if logger.Out != out {
+		t.Fatal("library logger output was not restored")
+	}
+}
 
 func TestRunBuildWithProgressCtrlCCancelsAndJoinsBuilder(t *testing.T) {
 	restoreInteractive := forceBuildProgressInteractive(true)

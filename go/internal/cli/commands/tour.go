@@ -1664,7 +1664,7 @@ func loadDevicesCmd() tea.Cmd {
 		// cannot apply, so offering one would guarantee a failure at the last
 		// step.
 		devices = slices.DeleteFunc(devices, func(d deviceInfo) bool {
-			return installedFromFlashBundle(d.Key)
+			return installedFromFlashBundle(d)
 		})
 		return tourDevicesLoadedMsg{devices: devices, err: err}
 	}

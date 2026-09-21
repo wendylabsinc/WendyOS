@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +38,7 @@ type Graph struct {
 	InstanceKey         string
 	DomainID            int
 	NetworkNamespacePID uint32
+	HostNetwork         bool
 	// Verify confirms that InstanceKey still owns NetworkNamespacePID after a
 	// stable namespace handle is captured but before it is entered, and once
 	// more before discovery starts.
@@ -63,8 +62,25 @@ type Camera struct {
 	Path      string
 }
 
+type discoveryLease interface {
+	Endpoints() []rtps.Endpoint
+	Changed() <-chan struct{}
+	Samples() <-chan rtps.Sample
+	Done() <-chan struct{}
+	Interface() string
+	Subscribe(rtps.Endpoint) error
+	Unsubscribe(rtps.GUID)
+	Close() error
+}
+
+type writerKey struct {
+	lease discoveryLease
+	guid  rtps.GUID
+}
+
 type participantState struct {
-	participant *rtps.Participant
+	participant discoveryLease
+	stopped     bool
 	cancel      context.CancelFunc
 	iface       string
 	domainID    int
@@ -76,7 +92,7 @@ type cameraState struct {
 	Camera
 	pumpMu      sync.Mutex
 	endpoint    rtps.Endpoint
-	participant *rtps.Participant
+	participant discoveryLease
 	subscribed  bool
 	ready       chan struct{}
 	readyClosed bool
@@ -97,31 +113,48 @@ type Manager struct {
 	registry  *registry
 	newWriter func(string) cameraWriter
 
-	mu           sync.Mutex
-	participants map[string]*participantState
-	cameras      map[uint32]*cameraState
-	byKey        map[string]*cameraState
-	byWriter     map[rtps.GUID]*cameraState
-	containerUse bool
-	started      bool
-	wg           sync.WaitGroup
+	reconcileMu     sync.Mutex
+	pool            *rtps.Pool
+	ownPool         bool
+	hostInterfaces  func() ([]string, error)
+	graphInterfaces func(rtps.Config) ([]string, error)
+	acquire         func(context.Context, rtps.Config) (discoveryLease, error)
+	mu              sync.Mutex
+	participants    map[string]*participantState
+	cameras         map[uint32]*cameraState
+	byKey           map[string]*cameraState
+	byWriter        map[writerKey]*cameraState
+	containerUse    bool
+	started         bool
+	wg              sync.WaitGroup
 }
 
-func NewManager(ctx context.Context, logger *zap.Logger, loopback Loopback, registryPath string, graphs GraphSource) *Manager {
+func NewManager(ctx context.Context, logger *zap.Logger, loopback Loopback, registryPath string, graphs GraphSource, pool *rtps.Pool) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
 	r := newRegistry(registryPath)
 	if err := r.load(); err != nil {
 		logger.Warn("loading ROS 2 camera registry failed", zap.Error(err))
 	}
+	ownPool := pool == nil
+	if ownPool {
+		pool = rtps.NewPool()
+	}
 	return &Manager{
 		ctx: ctx, cancel: cancel, logger: logger, loopback: loopback, graphs: graphs,
-		registry: r, newWriter: newFrameWriter,
+		registry: r, newWriter: newFrameWriter, pool: pool, ownPool: ownPool,
+		hostInterfaces: rtps.HostInterfaces, graphInterfaces: rtps.DiscoveryInterfaces,
+		acquire:      func(ctx context.Context, cfg rtps.Config) (discoveryLease, error) { return pool.Acquire(ctx, cfg) },
 		participants: map[string]*participantState{}, cameras: map[uint32]*cameraState{},
-		byKey: map[string]*cameraState{}, byWriter: map[rtps.GUID]*cameraState{},
+		byKey: map[string]*cameraState{}, byWriter: map[writerKey]*cameraState{},
 	}
 }
 
 func (m *Manager) Start() {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+	if m.ctx.Err() != nil {
+		return
+	}
 	m.mu.Lock()
 	if m.started {
 		m.mu.Unlock()
@@ -149,38 +182,72 @@ func (m *Manager) Start() {
 func (m *Manager) Refresh(ctx context.Context) { m.reconcile(ctx) }
 
 func (m *Manager) reconcile(ctx context.Context) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+	if m.ctx.Err() != nil || ctx.Err() != nil {
+		return
+	}
 	desired := map[string]bool{}
 	// Domain zero on physical wired interfaces covers robot-native graphs,
 	// including the Go2's /frontvideostream publisher.
 	// SECURITY: Domain 0 on these interfaces is intentionally a trusted robot-LAN
 	// boundary because standard ROS 2 discovery has no source authentication.
 	// The operator-facing docs require untrusted peers to be segmented away.
-	for _, iface := range eligibleInterfaces() {
+	ifaces, ifaceErr := m.hostInterfaces()
+	for _, iface := range ifaces {
 		desired[participantKey(iface, 0, 0, "host")] = true
 		m.ensureParticipant(iface, 0, 0, "host:"+iface, "host", nil)
 	}
-	complete := m.graphs == nil
+	complete := ifaceErr == nil
 	if m.graphs != nil {
 		if found, err := m.graphs(ctx); err == nil {
-			complete = true
 			for _, graph := range found {
 				if graph.DomainID >= 0 && graph.DomainID <= 232 && graph.NetworkNamespacePID != 0 {
-					// App scope binds DDS to loopback; host scope selects a normal
-					// interface. Start one participant for each selection inside the
-					// namespace because the resolved discovery scope is intentionally
-					// not exposed outside container configuration.
-					for _, iface := range []string{"lo", ""} {
+					if graph.HostNetwork {
+						// Reuse host camera identities across app restarts.
+						for _, iface := range append([]string{"lo"}, ifaces...) {
+							desired[participantKey(iface, graph.DomainID, 0, "host")] = true
+							m.ensureParticipant(iface, graph.DomainID, 0, "host:"+iface, "host", nil)
+						}
+						continue
+					}
+					var verify func() bool
+					if graph.Verify != nil {
+						verify = func() bool { return graph.Verify(ctx) }
+					}
+					ifaces, err := m.graphInterfaces(rtps.Config{NetworkNamespacePID: graph.NetworkNamespacePID, VerifyNetworkNamespace: verify})
+					if err != nil {
+						// Keep what this graph already has, but let every other
+						// stale participant go: one container whose namespace
+						// cannot be entered must not pin the rest until restart.
+						m.retainGraph(desired, graph)
+						m.logger.Debug("enumerating ROS 2 camera interfaces failed", zap.String("instance", graph.InstanceKey), zap.Uint32("network_namespace_pid", graph.NetworkNamespacePID), zap.Error(err))
+						continue
+					}
+					for _, iface := range ifaces {
 						desired[participantKey(iface, graph.DomainID, graph.NetworkNamespacePID, graph.InstanceKey)] = true
 						m.ensureParticipant(iface, graph.DomainID, graph.NetworkNamespacePID, graph.Key, graph.InstanceKey, graph.Verify)
 					}
 				}
 			}
 		} else {
+			complete = false
 			m.logger.Debug("listing ROS 2 camera graphs failed", zap.Error(err))
 		}
 	}
 	if complete {
 		m.stopStaleParticipants(desired)
+	}
+}
+
+// retainGraph marks the participants already serving graph as desired.
+func (m *Manager) retainGraph(desired map[string]bool, graph Graph) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, state := range m.participants {
+		if state.graphKey == graph.Key && state.netnsPID == graph.NetworkNamespacePID {
+			desired[key] = true
+		}
 	}
 }
 
@@ -200,21 +267,23 @@ func (m *Manager) ensureParticipant(iface string, domain int, netnsPID uint32, g
 	if verify != nil {
 		verifyNamespace = func() bool { return verify(m.ctx) }
 	}
-	p, err := rtps.NewParticipant(rtps.Config{
+	participantCtx, cancel := context.WithCancel(m.ctx)
+	p, err := m.acquire(participantCtx, rtps.Config{
 		DomainID: domain, Interface: iface, NetworkNamespacePID: netnsPID,
 		VerifyNetworkNamespace: verifyNamespace,
 	})
 	if err != nil {
+		cancel()
 		m.logger.Debug("starting ROS 2 camera discovery failed", zap.String("interface", iface), zap.Int("domain_id", domain), zap.Uint32("network_namespace_pid", netnsPID), zap.Error(err))
 		return
 	}
 	if verify != nil && !verify(m.ctx) {
+		cancel()
 		p.Close() //nolint:errcheck
 		m.logger.Debug("discarding ROS 2 camera namespace after container changed", zap.String("instance", instanceKey), zap.Uint32("network_namespace_pid", netnsPID))
 		return
 	}
-	participantCtx, cancel := context.WithCancel(m.ctx)
-	state := &participantState{participant: p, cancel: cancel, iface: iface, domainID: domain, netnsPID: netnsPID, graphKey: graphKey}
+	state := &participantState{participant: p, cancel: cancel, iface: p.Interface(), domainID: domain, netnsPID: netnsPID, graphKey: graphKey}
 	m.mu.Lock()
 	if _, raced := m.participants[key]; raced {
 		m.mu.Unlock()
@@ -225,18 +294,20 @@ func (m *Manager) ensureParticipant(iface string, domain int, netnsPID uint32, g
 	m.participants[key] = state
 	m.mu.Unlock()
 
-	m.wg.Add(2)
-	go func() { defer m.wg.Done(); p.Run(participantCtx) }()
+	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
+		defer p.Close()
 		for {
 			select {
 			case <-participantCtx.Done():
 				return
-			case endpoint := <-p.Discovered():
-				m.registerEndpoint(state, endpoint)
+			case <-p.Done():
+				return
+			case <-p.Changed():
+				m.syncEndpoints(state)
 			case sample := <-p.Samples():
-				m.handleSample(sample)
+				m.handleSample(p, sample)
 			}
 		}
 	}()
@@ -247,7 +318,7 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 	var stale []*participantState
 	type staleCamera struct {
 		camera      *cameraState
-		participant *rtps.Participant
+		participant discoveryLease
 	}
 	var staleCameras []staleCamera
 	for key, participant := range m.participants {
@@ -255,10 +326,12 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 			continue
 		}
 		delete(m.participants, key)
+		participant.stopped = true
 		stale = append(stale, participant)
 		for _, cam := range m.cameras {
 			if cam.participant == participant.participant {
 				cam.active = false
+				m.unsubscribeLocked(cam)
 				staleCameras = append(staleCameras, staleCamera{camera: cam, participant: participant.participant})
 			}
 		}
@@ -266,6 +339,7 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 	m.mu.Unlock()
 	for _, participant := range stale {
 		participant.cancel()
+		_ = participant.participant.Close()
 	}
 	for _, item := range staleCameras {
 		item.camera.pumpMu.Lock()
@@ -279,6 +353,77 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 		m.mu.Unlock()
 		item.camera.pumpMu.Unlock()
 	}
+	// A replacement lease may have replayed discovery while the old lease was
+	// still selected. Replay survivors after retirement so a restart or one
+	// container disappearing cannot leave a shared graph's camera inactive.
+	if len(stale) != 0 {
+		m.mu.Lock()
+		remaining := make([]*participantState, 0, len(m.participants))
+		for _, state := range m.participants {
+			remaining = append(remaining, state)
+		}
+		m.mu.Unlock()
+		for _, state := range remaining {
+			m.syncEndpoints(state)
+		}
+	}
+}
+
+// Read the complete snapshot on each coalesced notification. Removals deactivate
+// cameras and release subscriptions; late consumers see already discovered writers.
+func (m *Manager) syncEndpoints(p *participantState) {
+	endpoints := p.participant.Endpoints()
+	present := make(map[rtps.GUID]bool, len(endpoints))
+	for _, ep := range endpoints {
+		present[ep.GUID] = true
+	}
+	m.mu.Lock()
+	var removed []*cameraState
+	for _, cam := range m.cameras {
+		if cam.participant == p.participant && cam.active && !present[cam.endpoint.GUID] {
+			cam.active = false
+			m.unsubscribeLocked(cam)
+			removed = append(removed, cam)
+		}
+	}
+	m.mu.Unlock()
+	for _, cam := range removed {
+		cam.pumpMu.Lock()
+		m.mu.Lock()
+		if !cam.active {
+			m.closeWriterLocked(cam)
+		}
+		m.mu.Unlock()
+		cam.pumpMu.Unlock()
+	}
+	for _, ep := range endpoints {
+		key := fmt.Sprintf("graph=%s;domain=%d;topic=%s", p.graphKey, p.domainID, TopicName(ep.Topic))
+		m.mu.Lock()
+		cam := m.byKey[key]
+		// Keep the selected writer while it is present. Snapshot iteration order
+		// must not switch subscriptions among multiple publishers of one topic.
+		selected := cam != nil && cam.active && cam.endpoint.GUID != ep.GUID && (cam.participant != p.participant || present[cam.endpoint.GUID])
+		m.mu.Unlock()
+		if !selected {
+			m.registerEndpoint(p, ep)
+		}
+	}
+}
+
+func (m *Manager) unsubscribeLocked(cam *cameraState) {
+	if cam.subscribed && cam.participant != nil {
+		cam.participant.Unsubscribe(cam.endpoint.GUID)
+	}
+	cam.subscribed = false
+}
+
+func (m *Manager) closeWriterLocked(cam *cameraState) {
+	if cam.writer != nil {
+		_ = cam.writer.Close()
+		cam.writer = nil
+	}
+	cam.ready = make(chan struct{})
+	cam.readyClosed = false
 }
 
 func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) {
@@ -300,6 +445,10 @@ func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) 
 	}
 
 	m.mu.Lock()
+	if p.stopped || m.ctx.Err() != nil {
+		m.mu.Unlock()
+		return
+	}
 	cam := m.byKey[key]
 	if cam == nil {
 		name := "ROS 2 " + topic
@@ -309,19 +458,28 @@ func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) 
 		cam = &cameraState{Camera: Camera{ID: id, Name: name, Topic: topic, Type: endpoint.Type, DomainID: p.domainID, Interface: p.iface}, ready: make(chan struct{})}
 		m.byKey[key], m.cameras[id] = cam, cam
 	}
-	if cam.participant == p.participant && cam.endpoint.GUID == endpoint.GUID {
-		cam.active = true
+	if cam.active && cam.participant != p.participant && cam.endpoint.GUID == endpoint.GUID {
 		m.mu.Unlock()
 		return
 	}
-	if cam.endpoint.GUID != (rtps.GUID{}) {
-		delete(m.byWriter, cam.endpoint.GUID)
+	if cam.participant == p.participant && cam.endpoint.GUID == endpoint.GUID {
+		cam.active = true
+		wanted := m.containerUse || cam.viewRefs > 0
+		m.mu.Unlock()
+		if wanted {
+			_ = m.ensureSubscribed(cam)
+		}
+		return
 	}
+	if cam.endpoint.GUID != (rtps.GUID{}) {
+		delete(m.byWriter, writerKey{cam.participant, cam.endpoint.GUID})
+	}
+	m.unsubscribeLocked(cam)
 	cam.endpoint, cam.participant = endpoint, p.participant
 	cam.Type, cam.Interface = endpoint.Type, p.iface
 	cam.active = true
 	cam.subscribed = false
-	m.byWriter[endpoint.GUID] = cam
+	m.byWriter[writerKey{p.participant, endpoint.GUID}] = cam
 	wanted := m.containerUse || cam.viewRefs > 0
 	m.mu.Unlock()
 
@@ -360,32 +518,24 @@ func validTopicName(topic string) bool {
 
 func (m *Manager) ensureSubscribed(cam *cameraState) error {
 	m.mu.Lock()
-	if cam.subscribed {
-		m.mu.Unlock()
+	defer m.mu.Unlock()
+	if cam.subscribed || (!m.containerUse && cam.viewRefs == 0) {
 		return nil
 	}
-	p, endpoint := cam.participant, cam.endpoint
-	if p == nil {
-		m.mu.Unlock()
+	if cam.participant == nil || !cam.active {
 		return errors.New("ROS 2 camera publisher is unavailable")
 	}
-	cam.subscribed = true
-	m.mu.Unlock()
-	if err := p.Subscribe(endpoint); err != nil {
-		m.mu.Lock()
-		if cam.participant == p && cam.endpoint.GUID == endpoint.GUID {
-			cam.subscribed = false
-		}
-		m.mu.Unlock()
+	if err := cam.participant.Subscribe(cam.endpoint); err != nil {
 		return err
 	}
+	cam.subscribed = true
 	return nil
 }
 
-func (m *Manager) handleSample(sample rtps.Sample) {
+func (m *Manager) handleSample(p discoveryLease, sample rtps.Sample) {
 	m.mu.Lock()
-	cam := m.byWriter[sample.Writer]
-	wanted := cam != nil && (cam.viewRefs > 0 || m.containerUse)
+	cam := m.byWriter[writerKey{p, sample.Writer}]
+	wanted := cam != nil && cam.active && (cam.viewRefs > 0 || m.containerUse)
 	typeName := ""
 	if cam != nil {
 		typeName = cam.Type
@@ -405,6 +555,10 @@ func (m *Manager) handleSample(sample rtps.Sample) {
 	}
 	now := time.Now()
 	m.mu.Lock()
+	if !cam.active || cam.participant != p || cam.endpoint.GUID != sample.Writer || (cam.viewRefs == 0 && !m.containerUse) {
+		m.mu.Unlock()
+		return
+	}
 	interval := frameInterval(typeName, len(sample.Payload))
 	if !cam.lastFrame.IsZero() && now.Sub(cam.lastFrame) < interval {
 		m.mu.Unlock()
@@ -552,6 +706,9 @@ func (m *Manager) release(cam *cameraState) {
 		cam.viewRefs--
 	}
 	wanted := cam.viewRefs > 0 || m.containerUse
+	if !wanted {
+		m.unsubscribeLocked(cam)
+	}
 	if !wanted && cam.writer != nil {
 		_ = cam.writer.Close()
 		cam.writer = nil
@@ -593,6 +750,9 @@ func (m *Manager) SetContainerConsumers(names []string) {
 		for _, cam := range cameras {
 			cam.pumpMu.Lock()
 			m.mu.Lock()
+			if cam.viewRefs == 0 {
+				m.unsubscribeLocked(cam)
+			}
 			if cam.viewRefs == 0 && cam.writer != nil {
 				_ = cam.writer.Close()
 				cam.writer = nil
@@ -606,8 +766,14 @@ func (m *Manager) SetContainerConsumers(names []string) {
 }
 
 func (m *Manager) Shutdown() {
+	m.reconcileMu.Lock()
 	m.cancel()
+	m.stopStaleParticipants(nil)
+	m.reconcileMu.Unlock()
 	m.wg.Wait()
+	if m.ownPool {
+		_ = m.pool.Close()
+	}
 	m.mu.Lock()
 	cameras := make([]*cameraState, 0, len(m.cameras))
 	for _, cam := range m.cameras {
@@ -624,49 +790,4 @@ func (m *Manager) Shutdown() {
 		m.mu.Unlock()
 		cam.pumpMu.Unlock()
 	}
-}
-
-func eligibleInterfaces() []string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagMulticast == 0 || virtualInterface(iface.Name) || wirelessInterface(iface.Name) {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-				out = append(out, iface.Name)
-				break
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func virtualInterface(name string) bool {
-	name = strings.ToLower(name)
-	for _, prefix := range []string{"docker", "br-", "veth", "cni", "flannel", "virbr", "kube", "nerdctl", "tap", "tun"} {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func wirelessInterface(name string) bool {
-	name = strings.ToLower(name)
-	for _, prefix := range []string{"wl", "wifi", "ath", "ra"} {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
 }

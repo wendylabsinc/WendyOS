@@ -7,6 +7,7 @@
   "required": ["appId"],
   "additionalProperties": false,
   "properties": {
+    "hil": {"$ref": "#/$defs/hil"},
     "$schema": {
       "type": "string",
       "description": "Optional JSON Schema reference for editor support."
@@ -97,6 +98,79 @@
     }
   },
   "$defs": {
+    "hil": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Inference companion deployed by wendy run --hil for a local VM simulation.",
+      "required": [
+        "project",
+        "inputs",
+        "buildFile",
+        "simulatorBuildFile",
+        "port",
+        "urlEnv",
+        "healthPath"
+      ],
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "buildFilesByGPUArch": {
+          "type": "object",
+          "description": "Optional inference build file overrides keyed by the device GPU architecture, such as sm_121. Other devices use buildFile.",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "buildFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "simulatorBuildFile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "urlEnv": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "healthSchema": {
+          "type": "string",
+          "description": "Optional expected schema identifier in the health response."
+        },
+        "tokenEnv": {
+          "type": "string",
+          "pattern": "^$|^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Optional environment variable for a per-run bearer token. Empty disables token injection."
+        },
+        "healthPath": {
+          "type": "string",
+          "pattern": "^/(?!/)[^?#\\r\\n]*$"
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "entitlement": {
       "type": "object",
       "required": ["type"],

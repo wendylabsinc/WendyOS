@@ -158,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         let rootView = WelcomeAndPermissionsView(
             welcomeAndPermissions: self.welcomeAndPermissions,
             onPermissionRequestCompleted: { [weak self] in
+                guard self?.welcomeAndPermissionsWindow != nil else { return }
                 self?.reassertWelcomeAndPermissionsWindowPresentation()
             }
         )

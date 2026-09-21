@@ -76,8 +76,8 @@ func loginTargetsForAuth(auth *config.AuthConfig) (dashboard, grpc string) {
 	return dashboard, grpc
 }
 
-// reloadAuthEntry re-reads the stored auth entry matching prev (by gRPC
-// endpoint) after a re-login replaced its certificates, so a retry uses the
+// reloadAuthEntry re-reads the stored auth entry matching the dashboard, gRPC
+// endpoint, and organization after re-login, so a retry uses the
 // fresh credentials rather than the stale pointer the caller still holds.
 // Returns nil when nothing matches.
 func reloadAuthEntry(prev *config.AuthConfig) *config.AuthConfig {
@@ -89,7 +89,7 @@ func reloadAuthEntry(prev *config.AuthConfig) *config.AuthConfig {
 		return nil
 	}
 	for i := range cfg.Auth {
-		if cfg.Auth[i].CloudGRPC == prev.CloudGRPC {
+		if cfg.Auth[i].CloudDashboard == prev.CloudDashboard && cfg.Auth[i].CloudGRPC == prev.CloudGRPC && cloudAuthOrgID(&cfg.Auth[i]) == cloudAuthOrgID(prev) {
 			return &cfg.Auth[i]
 		}
 	}

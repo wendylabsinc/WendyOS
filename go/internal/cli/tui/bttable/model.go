@@ -84,6 +84,8 @@ const flashDuration = 4 * time.Second
 // Model is the Bubble Tea model for the interactive Bluetooth table.
 type Model struct {
 	peripherals []Peripheral
+	visible     []Peripheral
+	showUnnamed bool
 	table       tui.BubbleTable
 	spinner     spinner.Model
 
@@ -156,26 +158,38 @@ func btColumns() []bubbleTable.Column {
 }
 
 func (m *Model) refreshRows() {
+	selectedAddress := ""
+	if p, ok := m.selected(); ok {
+		selectedAddress = p.Address
+	}
+	m.visible = nil
 	rows := make([]bubbleTable.Row, 0, len(m.peripherals))
+	cursor := 0
 	for _, p := range m.peripherals {
+		name := tui.StripControl(p.Name)
+		if !m.showUnnamed && strings.TrimSpace(name) == "" {
+			continue
+		}
+		if p.Address == selectedAddress {
+			cursor = len(rows)
+		}
+		m.visible = append(m.visible, p)
 		rows = append(rows, bubbleTable.Row{
-			p.Name,
-			p.Address,
+			name,
+			tui.StripControl(p.Address),
 			DeviceTypeLabel(p.DeviceType),
 			yesNo(p.Paired),
 			yesNo(p.Connected),
 		})
 	}
 	m.table.SetRows(rows)
-	if cur := m.table.Cursor(); cur >= len(rows) && len(rows) > 0 {
-		m.table.SetCursor(len(rows) - 1)
-	}
+	m.table.SetCursor(cursor)
 	h := len(rows) + 2
 	if h < 6 {
 		h = 6
 	}
-	if m.height > 0 && h > m.height-6 {
-		h = m.height - 6
+	if m.height > 0 && h > m.height-7 {
+		h = max(1, m.height-7)
 	}
 	m.table.SetHeight(h)
 }
@@ -264,6 +278,11 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	switch km.String() {
+	case "h":
+		m.showUnnamed = !m.showUnnamed
+		m.refreshRows()
+		return m, nil
+
 	case "q", "ctrl+c", "esc":
 		m.result.Action = ActionQuit
 		m.done = true
@@ -333,10 +352,10 @@ func (m Model) updateBrowsing(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) selected() (Peripheral, bool) {
 	idx := m.table.Cursor()
-	if idx < 0 || idx >= len(m.peripherals) {
+	if idx < 0 || idx >= len(m.visible) {
 		return Peripheral{}, false
 	}
-	return m.peripherals[idx], true
+	return m.visible[idx], true
 }
 
 func (m Model) dispatchConnect(p Peripheral) (tea.Model, tea.Cmd) {
@@ -471,7 +490,7 @@ func (m *Model) setFlash(msg string, isErr bool) tea.Cmd {
 // setFlashText sets a message without scheduling an automatic clear, for
 // in-progress status that a follow-up message replaces.
 func (m *Model) setFlashText(msg string, isErr bool) {
-	m.flashMessage = msg
+	m.flashMessage = tui.StripControl(msg)
 	m.flashIsError = isErr
 	m.flashToken++
 }
@@ -489,10 +508,10 @@ func pruneUnseen(list []Peripheral, seen map[string]bool) []Peripheral {
 }
 
 func displayName(p Peripheral) string {
-	if p.Name != "" {
-		return p.Name
+	if name := tui.StripControl(p.Name); strings.TrimSpace(name) != "" {
+		return name
 	}
-	return p.Address
+	return tui.StripControl(p.Address)
 }
 
 var (
@@ -514,8 +533,12 @@ func (m Model) View() string {
 	}
 	sb.WriteString(m.viewLine(title) + "\n\n")
 
-	if len(m.peripherals) == 0 && !m.scanning {
-		sb.WriteString(m.viewLine(footerStyle.Render("No Bluetooth devices found. Press r to rescan.")) + "\n\n")
+	if len(m.visible) == 0 && !m.scanning {
+		text := "No Bluetooth devices found. Press r to rescan."
+		if len(m.peripherals) > 0 {
+			text = "No named Bluetooth devices found. Press h to show unnamed devices."
+		}
+		sb.WriteString(m.viewLine(footerStyle.Render(text)) + "\n\n")
 	} else {
 		sb.WriteString(m.table.View())
 		sb.WriteString("\n")
@@ -528,6 +551,11 @@ func (m Model) View() string {
 		}
 		sb.WriteString(m.viewLine(style.Render(m.flashMessage)) + "\n")
 	}
+	visibility := fmt.Sprintf("h show unnamed (%d hidden)", len(m.peripherals)-len(m.visible))
+	if m.showUnnamed {
+		visibility = "h hide unnamed"
+	}
+	sb.WriteString(m.viewLine(footerStyle.Render(visibility)) + "\n")
 
 	hint := "↑/↓ move · enter connect · d disconnect · f forget · r rescan · q quit"
 	if m.table.CanScroll() {

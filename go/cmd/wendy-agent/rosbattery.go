@@ -9,6 +9,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats/rosbattery"
+	"github.com/wendylabsinc/wendy/go/internal/rtps"
 )
 
 // startROS2BatteryMonitor registers a battery source backed by the device's DDS
@@ -22,7 +23,7 @@ import (
 // The monitor starts with the agent rather than lazily because
 // `wendy device info` is a one-shot call: a monitor that only began on first
 // use would return nothing the first time it was asked.
-func startROS2BatteryMonitor(ctx context.Context, logger *zap.Logger, configPath string) {
+func startROS2BatteryMonitor(ctx context.Context, logger *zap.Logger, configPath string, pool *rtps.Pool) {
 	cfg, err := rosbattery.LoadConfig(configPath)
 	if err != nil {
 		// A malformed config is worth saying out loud, but not worth refusing
@@ -38,7 +39,7 @@ func startROS2BatteryMonitor(ctx context.Context, logger *zap.Logger, configPath
 	// Info rather than Debug: which interface the monitor settled on, and
 	// whether it found a topic at all, are the first things anyone debugging a
 	// missing battery needs, and they are cheap — a handful of lines per scan.
-	monitor := rosbattery.NewMonitor(cfg, cache, func(format string, args ...any) {
+	monitor := rosbattery.NewMonitor(cfg, cache, pool, func(format string, args ...any) {
 		logger.Info(fmt.Sprintf(format, args...))
 	})
 
