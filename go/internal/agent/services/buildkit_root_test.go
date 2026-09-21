@@ -14,8 +14,15 @@ type fakeProc struct {
 
 func newFakeProc(t *testing.T) *fakeProc {
 	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "self", "ns"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("mnt:[1]", filepath.Join(dir, "self", "ns", "mnt")); err != nil {
+		t.Fatal(err)
+	}
 	return &fakeProc{
-		dir:               t.TempDir(),
+		dir:               dir,
 		defaultConfigPath: filepath.Join(t.TempDir(), "absent-buildkitd.toml"),
 	}
 }
@@ -24,6 +31,12 @@ func (p *fakeProc) add(t *testing.T, pid, cwd string, argv ...string) {
 	t.Helper()
 	pidDir := filepath.Join(p.dir, pid)
 	if err := os.MkdirAll(pidDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pidDir, "ns"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("mnt:[1]", filepath.Join(pidDir, "ns", "mnt")); err != nil {
 		t.Fatal(err)
 	}
 	var cmdline []byte
@@ -342,5 +355,106 @@ func TestBuildkitRootSpace_DoesNotWalkPastProcessBoundary(t *testing.T) {
 func TestBuildkitRootSpace_EmptyPathIsUnknown(t *testing.T) {
 	if total, free := buildkitRootSpace(""); total != 0 || free != 0 {
 		t.Fatalf("got (%d, %d), want zeroes", total, free)
+	}
+}
+
+func (p *fakeProc) isolateSocket(t *testing.T, pid, socketPath string, shared bool) {
+	t.Helper()
+	pidDir := filepath.Join(p.dir, pid)
+	root := t.TempDir()
+	for path, target := range map[string]string{"root": root, "ns/mnt": "mnt:[2]"} {
+		link := filepath.Join(pidDir, path)
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	isolated := pathInProcess(pidDir, socketPath)
+	if err := os.MkdirAll(filepath.Dir(isolated), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if shared {
+		// A hard link models the same filesystem object visible in two roots.
+		if err := os.Link(socketPath, isolated); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := os.WriteFile(isolated, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestBuildkitRoot_DistinguishesContainerSocketWithSamePath(t *testing.T) {
+	for _, inherited := range []bool{false, true} {
+		t.Run(map[bool]string{false: "explicit", true: "inherited"}[inherited], func(t *testing.T) {
+			proc := newFakeProc(t)
+			socketPath := filepath.Join(t.TempDir(), "buildkitd.sock")
+			if err := os.WriteFile(socketPath, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			address := "unix://" + socketPath
+			proc.add(t, "10", "/", "buildkitd", "--addr", address, "--root", "/host-cache")
+			containerAddress := address
+			if inherited {
+				containerAddress = "fd://"
+			}
+			proc.add(t, "20", "/", "buildkitd", "--addr", containerAddress, "--root", "/container-cache")
+			proc.isolateSocket(t, "20", socketPath, false)
+			proc.activateUnixSocket(t, "20", socketPath, "12345")
+			if got := mustBuildkitRoot(t, proc, address).displayPath; got != "/host-cache" {
+				t.Fatalf("got %q", got)
+			}
+		})
+	}
+}
+
+func TestBuildkitRoot_AcceptsSocketSharedAcrossMountNamespaces(t *testing.T) {
+	proc := newFakeProc(t)
+	socketPath := filepath.Join(t.TempDir(), "buildkitd.sock")
+	if err := os.WriteFile(socketPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	address := "unix://" + socketPath
+	proc.add(t, "10", "/", "buildkitd", "--addr", address, "--root", "/container-cache")
+	proc.isolateSocket(t, "10", socketPath, true)
+	if got := mustBuildkitRoot(t, proc, address).displayPath; got != "/container-cache" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestBuildkitRoot_MissingContainerSocketRemainsUnknown(t *testing.T) {
+	proc := newFakeProc(t)
+	socketPath := filepath.Join(t.TempDir(), "buildkitd.sock")
+	if err := os.WriteFile(socketPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	address := "unix://" + socketPath
+	proc.add(t, "10", "/", "buildkitd", "--addr", address, "--root", "/host-cache")
+	proc.add(t, "20", "/", "buildkitd", "--addr", address, "--root", "/container-cache")
+	proc.isolateSocket(t, "20", socketPath, false)
+	if err := os.Remove(pathInProcess(filepath.Join(proc.dir, "20"), socketPath)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := buildkitRoot(proc.dir, address, proc.defaultConfigPath); ok {
+		t.Fatal("uninspectable container socket must remain unknown")
+	}
+}
+
+func TestBuildkitRoot_RelativeSocketUsesDaemonWorkingDirectory(t *testing.T) {
+	agentDir, daemonDir := t.TempDir(), t.TempDir()
+	t.Chdir(agentDir)
+	for _, dir := range []string{agentDir, daemonDir} {
+		if err := os.WriteFile(filepath.Join(dir, "buildkit.sock"), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proc := newFakeProc(t)
+	proc.add(t, "10", daemonDir, "buildkitd", "--addr", "unix://buildkit.sock")
+	same, known := daemonSharesBuildkitSocket(filepath.Join(proc.dir, "10"), "buildkit.sock")
+	if same || !known {
+		t.Fatalf("same=%v known=%v; relative paths name different sockets", same, known)
 	}
 }

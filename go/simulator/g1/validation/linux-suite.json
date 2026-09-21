@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "image": "sha256:a0a92d42c02403177e1082423d8c84ddd6e79223d2949e385b6a5e816d4079ec",
+  "environment": {
+    "MUJOCO_GL": "osmesa",
+    "G1_TEST_RENDER": "1",
+    "network": "none",
+    "runtime_source": "baked image",
+    "tests": "read-only mounted workspace"
+  },
+  "result": {
+    "passed": 76,
+    "failed": 0,
+    "skipped": 0,
+    "duration_seconds": 27.1
+  },
+  "coverage": [
+    "policy observation/action mapping",
+    "unassisted floating physics and locomotion",
+    "real OSMesa camera RGB/segmentation in policy pose",
+    "camera lifecycle",
+    "sensors",
+    "lidar",
+    "runtime HTTP",
+    "command grants and watchdogs",
+    "observation queue",
+    "browser scene",
+    "nft and legacy isolation unit behavior"
+  ],
+  "runtime_source_hashes": {
+    "g1_sim/__init__.py": "80f67d68ae9f93d000a4f43b0351c6d5b06babf5a2292327a4f0d392230b5bc0",
+    "g1_sim/camera.py": "bfcdb4ad84276785c0ab4c8943dd3c6086dfda41bdf84b8f160a2fad74e6d2b0",
+    "g1_sim/commands.py": "d2ef0a99ac4a8cd334e674d55f87f140fb273bfddafdb499d712b4ed72b618fa",
+    "g1_sim/isolation.py": "c713a4a7fb422b382eb180a2aac82e008e7c85fcc89c0ea0792c3aff66c4427a",
+    "g1_sim/isolation_legacy.py": "e70858f403a85852e3242524fc98c342111ef43c36015299e550dfb8877799d4",
+    "g1_sim/lidar.py": "040933bfe6474403c5b43b8b5ad88f5511481493741a4cdffbfdf85c652acaaa",
+    "g1_sim/native_commands.py": "b6a35dae85979f5791952c2a5c0534e8a3a3bb66cc4ddf07d59eba573e2738bc",
+    "g1_sim/native_state.py": "0cc2fa1cf3d198a7c02a2c042437b154cbc5b80604887c4444de5e87de2071fa",
+    "g1_sim/observations.py": "8a0a9efd261e9180eb8e25c31169e3dc0dde5156c3c39c42df70bd4cdb07ba6d",
+    "g1_sim/policy.py": "0a63172fa7f99d1be3840df26dfbda6801192f7d0c6ad5fe68d894dda314973f",
+    "g1_sim/ros.py": "25429a98b5b989c437ccbab3ca1c7545d14315fb7cd2322a3516d4a664525574",
+    "g1_sim/runtime.py": "789d52fbb79aad3e15eb1de1544c1edad95522065023b3486f80fd481e88659e",
+    "g1_sim/scene.py": "7bc10f6ce602d67549f108b323c1c753154703ff8f5ac621fb8d2c353337c65c",
+    "g1_sim/sensors.py": "1294e71382c360805b47f10828590c38dfa39f1088b362ebd541a05600da1134",
+    "g1_sim/server.py": "f81e00d51d08864f1adb9879bd1346664c92d5c055f05c25eb1d2c74ed6c9d7a",
+    "g1_sim/simulation.py": "8d20578694f801d5ceb3091408b7611dbeac7947805b5b82da941173e484a515",
+    "g1_sim/slow_sensors.py": "9d0d9915e9af532a75cc2ff66bc121d6247070852630e16fc9170e5e443c7658",
+    "g1_sim/unitree_crc.py": "578de87ed0a21563900265dd831a362117a2569ef51251dd429ba150ae0630d5"
+  },
+  "runtime_source_matches_workspace": true,
+  "native_sdk_interface": {
+    "included": false,
+    "reason": "Managed image does not contain Python cyclonedds; collection with read-only pinned SDK mount fails for that dependency. Five interface tests passed separately in the native agent's SDK environment."
+  },
+  "mutations": {
+    "runtime": false,
+    "vm": false
+  },
+  "limitations": [
+    "Functional suite under concurrent local native/standard runtime load; no performance/rate claim.",
+    "No host-versus-Linux behavior differences observed in assertions; GL checks executed on Linux only."
+  ]
+}

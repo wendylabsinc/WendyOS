@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "bundle": "go2-moe-cts-164k-0.6715-v1",
+  "sources": {
+    "go2_rl_gym": {
+      "repository": "https://github.com/wty-yy/go2_rl_gym",
+      "commit": "30e74dc507bec7a642a8c98be26081f2c6f0822d"
+    },
+    "unitree_cpp_deploy": {
+      "repository": "https://github.com/wty-yy/unitree_cpp_deploy",
+      "commit": "a422ec4c5268b7922fecd40e74cbaea16ae3c8d9"
+    }
+  },
+  "files": [
+    {
+      "path": "robot/go2.xml",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/go2.xml",
+      "sha256": "ff15ca7849a759e54b2d3606dc9733b9301980d5fdfe9edf68b1cc108247b2f1",
+      "size": 11565,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/go2.xml"
+    },
+    {
+      "path": "robot/flat.xml",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/flat.xml",
+      "sha256": "0ad2696c6c53701dbba34f1a9a2158e1c1e4f491eb114263b0f86ecadc9e40ac",
+      "size": 855,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/flat.xml"
+    },
+    {
+      "path": "robot/assets/base_0.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/base_0.obj",
+      "sha256": "8cdc53719002a5ee737d867904e534a6d6fa930b616bdcc1b3131e577d4e46c0",
+      "size": 1330465,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/base_0.obj"
+    },
+    {
+      "path": "robot/assets/base_1.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/base_1.obj",
+      "sha256": "39d2f4724ff64dd5a0640c308fd98902a2946660a8d033ec8dbf368fd5af0dd6",
+      "size": 811791,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/base_1.obj"
+    },
+    {
+      "path": "robot/assets/base_2.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/base_2.obj",
+      "sha256": "29cae463f95d678e4ede863c36c9b19b0d356b8340412add10670d70bdcc3095",
+      "size": 294090,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/base_2.obj"
+    },
+    {
+      "path": "robot/assets/base_3.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/base_3.obj",
+      "sha256": "f51ba43bf300e68957a0c1aa83eaf3e4926f4ac7e64a0d6c33ae5d21fcbcf5f6",
+      "size": 379093,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/base_3.obj"
+    },
+    {
+      "path": "robot/assets/base_4.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/base_4.obj",
+      "sha256": "49ddec0129546e5dd2075d5beacf7f207baa2860aeff7626818e64d2efbf3821",
+      "size": 7776234,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/base_4.obj"
+    },
+    {
+      "path": "robot/assets/hip_0.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/hip_0.obj",
+      "sha256": "cc29932ab4d251ce3f72389ec4c1f757e44eee138b87e772b648c2bc76b506cd",
+      "size": 2863864,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/hip_0.obj"
+    },
+    {
+      "path": "robot/assets/hip_1.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/hip_1.obj",
+      "sha256": "3fd5bd9b2ef6abe622c0739d3c67eaa1679b19b47132951972c4892a779ea7cf",
+      "size": 2767918,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/hip_1.obj"
+    },
+    {
+      "path": "robot/assets/thigh_0.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/thigh_0.obj",
+      "sha256": "bb3edfe6a7b04f4f4dff1ce7b05d426ddce941e276cc6372fb542055893c71ec",
+      "size": 2841868,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/thigh_0.obj"
+    },
+    {
+      "path": "robot/assets/thigh_1.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/thigh_1.obj",
+      "sha256": "3a631822f9f7d2114b1b79dcdff5abf95103630abb7d91d1f3b8b18117132ed2",
+      "size": 1491320,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/thigh_1.obj"
+    },
+    {
+      "path": "robot/assets/thigh_mirror_0.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/thigh_mirror_0.obj",
+      "sha256": "07abaedce761f1dd48647384ac14ba1959276bc78d5a2a62051e8f1c6093933b",
+      "size": 2817674,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/thigh_mirror_0.obj"
+    },
+    {
+      "path": "robot/assets/thigh_mirror_1.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/thigh_mirror_1.obj",
+      "sha256": "db984a3e983eabbc9b38183427cca9ab0bb3bdb049f9eab030e06edda36579d6",
+      "size": 1482261,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/thigh_mirror_1.obj"
+    },
+    {
+      "path": "robot/assets/calf_0.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/calf_0.obj",
+      "sha256": "4a818cd563c5b7e2a271504442d05fd777d38cbaa028d4a10ad29c9f87bb355e",
+      "size": 877174,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/calf_0.obj"
+    },
+    {
+      "path": "robot/assets/calf_1.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/calf_1.obj",
+      "sha256": "51950c3a153ae3208592df86ea11c9d6756f8f645ebca5caf6910c61aeb03817",
+      "size": 326865,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/calf_1.obj"
+    },
+    {
+      "path": "robot/assets/calf_mirror_0.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/calf_mirror_0.obj",
+      "sha256": "6dc0406207a1c08a5953fd5962aca1a270fd06593d30d100205e05c1b32d4af2",
+      "size": 876538,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/calf_mirror_0.obj"
+    },
+    {
+      "path": "robot/assets/calf_mirror_1.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/calf_mirror_1.obj",
+      "sha256": "f84f5af90b914633165beb3a5493ee499169144c5797dcf04c6eb5842f74b31a",
+      "size": 327261,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/calf_mirror_1.obj"
+    },
+    {
+      "path": "robot/assets/foot.obj",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/resources/robots/go2/assets/foot.obj",
+      "sha256": "df9e78a7c0110d02557439010f2a5f11f0ec4fd907b32704145dbd6aa7affc0b",
+      "size": 1144729,
+      "source": "go2_rl_gym",
+      "upstream_path": "resources/robots/go2/assets/foot.obj"
+    },
+    {
+      "path": "policy/policy.onnx",
+      "url": "https://raw.githubusercontent.com/wty-yy/unitree_cpp_deploy/a422ec4c5268b7922fecd40e74cbaea16ae3c8d9/logs/go2/go2_moe_cts_164k_0.6715/exported/policy.onnx",
+      "sha256": "522ae37fb15246ebb7a58141e0b0a906ca6d61897810925d43d4fdd0609acb9f",
+      "size": 5192804,
+      "source": "unitree_cpp_deploy",
+      "upstream_path": "logs/go2/go2_moe_cts_164k_0.6715/exported/policy.onnx"
+    },
+    {
+      "path": "policy/deploy.yaml",
+      "url": "https://raw.githubusercontent.com/wty-yy/unitree_cpp_deploy/a422ec4c5268b7922fecd40e74cbaea16ae3c8d9/logs/go2/go2_moe_cts_164k_0.6715/params/deploy.yaml",
+      "sha256": "7d04bfd00a60cf858572597667d9f33e78b94f71dca2b101104162caef0aca00",
+      "size": 1831,
+      "source": "unitree_cpp_deploy",
+      "upstream_path": "logs/go2/go2_moe_cts_164k_0.6715/params/deploy.yaml"
+    },
+    {
+      "path": "policy/mujoco.yaml",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/deploy/deploy_mujoco/configs/go2.yaml",
+      "sha256": "cc7ffcde15c4e9535a1ec8eacf3470e810ceac6192da3077078f8f580c7fe58f",
+      "size": 1876,
+      "source": "go2_rl_gym",
+      "upstream_path": "deploy/deploy_mujoco/configs/go2.yaml"
+    },
+    {
+      "path": "licenses/go2_rl_gym.LICENSE",
+      "url": "https://raw.githubusercontent.com/wty-yy/go2_rl_gym/30e74dc507bec7a642a8c98be26081f2c6f0822d/LICENSE",
+      "sha256": "7e4c757f79c318aadd9ce07209811779779f635ffe3a286181748cc63e1bac36",
+      "size": 2783,
+      "source": "go2_rl_gym",
+      "upstream_path": "LICENSE"
+    },
+    {
+      "path": "licenses/unitree_cpp_deploy.LICENSE",
+      "url": "https://raw.githubusercontent.com/wty-yy/unitree_cpp_deploy/a422ec4c5268b7922fecd40e74cbaea16ae3c8d9/LICENSE",
+      "sha256": "6e0e72a9164bea9d08eb58415130bbe71c4b2d1f73b6c9a6bfb8eb48af32b6de",
+      "size": 12687,
+      "source": "unitree_cpp_deploy",
+      "upstream_path": "LICENSE"
+    }
+  ]
+}

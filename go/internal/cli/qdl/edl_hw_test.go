@@ -7,9 +7,9 @@ import (
 	"time"
 )
 
-// TestHardwareEDLHandshake talks to a real board in EDL mode. It uploads the
-// Firehose programmer, negotiates a session and resets the device. It programs
-// nothing, so storage is untouched.
+// TestHardwareEDLHandshake talks to a real board in EDL mode. It reads the chip
+// id, uploads the Firehose programmer, negotiates a session and resets the
+// device. It programs nothing, so storage is untouched.
 //
 // Run with: WENDY_HW_EDL_BUNDLE=<dir> go test -run TestHardwareEDLHandshake -v
 func TestHardwareEDLHandshake(t *testing.T) {
@@ -26,6 +26,15 @@ func TestHardwareEDLHandshake(t *testing.T) {
 	if len(devices) != 1 {
 		t.Fatalf("expected exactly one EDL device, found %d; disconnect other EDL devices", len(devices))
 	}
+
+	// A connection of its own, unlike the install: that reads the id on the
+	// connection it flashes with, where SWITCH_MODE hands the live session to
+	// the image transfer. Re-opening here does not exercise that handover.
+	id, err := ReadChipIDFor(devices[0])
+	if err != nil {
+		t.Fatalf("ReadChipIDFor: %v", err)
+	}
+	t.Logf("chip id: msm_id %#x", id.MsmID)
 
 	prog, err := os.ReadFile(filepath.Join(bundle, "prog_firehose_ddr.elf"))
 	if err != nil {

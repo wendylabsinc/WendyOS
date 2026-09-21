@@ -196,6 +196,9 @@ func daemonMatchesBuildkitAddress(pidDir string, addresses []string, want string
 	hasInheritedFD := false
 	for _, address := range addresses {
 		if sameBuildkitAddress(address, want) {
+			if socketPath, unixAddress := strings.CutPrefix(strings.TrimSpace(want), "unix://"); unixAddress {
+				return daemonSharesBuildkitSocket(pidDir, socketPath)
+			}
 			return true, true
 		}
 		if strings.TrimSpace(address) == "fd://" {
@@ -212,11 +215,42 @@ func daemonMatchesBuildkitAddress(pidDir string, addresses []string, want string
 		// cannot prove or disprove that association.
 		return false, false
 	}
+	if same, known := daemonSharesBuildkitSocket(pidDir, socketPath); !same || !known {
+		return same, known
+	}
 	matches, err := daemonOwnsUnixSocket(pidDir, socketPath)
 	if err != nil {
 		return false, false
 	}
 	return matches, true
+}
+
+// daemonSharesBuildkitSocket distinguishes identical socket paths in separate
+// containers. A pathname alone does not identify the socket the agent uses.
+func daemonSharesBuildkitSocket(pidDir, socketPath string) (same, known bool) {
+	// In the same mount namespace and root, an absolute path identifies the
+	// same object. Checking both also handles a daemon running in a chroot.
+	selfNS, selfErr := os.Readlink(filepath.Join(filepath.Dir(pidDir), "self", "ns", "mnt"))
+	daemonNS, daemonErr := os.Readlink(filepath.Join(pidDir, "ns", "mnt"))
+	if filepath.IsAbs(socketPath) && selfErr == nil && daemonErr == nil && selfNS == daemonNS {
+		selfRoot, selfErr := os.Stat("/")
+		daemonRoot, daemonErr := os.Stat(filepath.Join(pidDir, "root"))
+		if selfErr == nil && daemonErr == nil && os.SameFile(selfRoot, daemonRoot) {
+			return true, true
+		}
+	}
+
+	// Different namespaces can still share a socket through a bind mount.
+	// Compare filesystem identity through the daemon's root, not path text.
+	agentSocket, err := os.Stat(socketPath)
+	if err != nil {
+		return false, false
+	}
+	daemonSocket, err := os.Stat(pathInProcess(pidDir, socketPath))
+	if err != nil {
+		return false, false
+	}
+	return os.SameFile(agentSocket, daemonSocket), true
 }
 
 // daemonOwnsUnixSocket maps a filesystem Unix socket through /proc/net/unix to

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://wendy.sh/schemas/wendy.json",
+  "appId": "g1-coke-demo",
+  "version": "1.0.0",
+  "platform": "linux",
+  "hil": {
+    "project": "hil",
+    "inputs": ["coke_demo", "runtime", "bundle"],
+    "buildFile": "build.stagefile.yaml",
+    "buildFilesByGPUArch": {"sm_121": "spark.stagefile.yaml"},
+    "simulatorBuildFile": "Dockerfile",
+    "port": 8098,
+    "urlEnv": "COKE_POLICY_URL",
+    "healthPath": "/health",
+    "healthSchema": "wendy.coke.simulation-inference.v1",
+    "tokenEnv": "COKE_HIL_TOKEN",
+    "env": {
+      "COKE_POLICY_TIMEOUT": "15"
+    }
+  },
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    },
+    {
+      "type": "http",
+      "port": 8892
+    }
+  ],
+  "frameworks": {
+    "ros2": {
+      "distro": "humble",
+      "rmw": "rmw_cyclonedds_cpp",
+      "domainId": 0,
+      "discoveryScope": "app"
+    }
+  },
+  "env": {
+    "COKE_HOST": "127.0.0.1",
+    "COKE_PORT": "8892",
+    "MUJOCO_GL": "egl",
+    "PYOPENGL_PLATFORM": "egl",
+    "EGL_PLATFORM": "surfaceless",
+    "LIBGL_ALWAYS_SOFTWARE": "1"
+  },
+  "readiness": {
+    "tcpSocket": {
+      "port": 8892
+    },
+    "timeoutSeconds": 180
+  }
+}

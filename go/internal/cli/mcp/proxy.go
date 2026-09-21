@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
 	"google.golang.org/grpc/metadata"
 
@@ -22,6 +23,7 @@ func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appNam
 
 	pctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
+	var connections sync.WaitGroup
 
 	go func() {
 		defer func() { close(done) }()
@@ -30,7 +32,11 @@ func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appNam
 			if err != nil {
 				return
 			}
-			go serveMCPProxyConn(pctx, conn, appName, tcpConn)
+			connections.Add(1)
+			go func() {
+				defer connections.Done()
+				serveMCPProxyConn(pctx, conn, appName, tcpConn)
+			}()
 		}
 	}()
 
@@ -38,11 +44,14 @@ func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appNam
 		cancel()
 		ln.Close()
 		<-done
+		connections.Wait()
 	}, nil
 }
 
 func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, appName string, tcpConn net.Conn) {
 	defer tcpConn.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	md := metadata.Pairs("app-name", appName)
 	ctx = metadata.NewOutgoingContext(ctx, md)
@@ -53,9 +62,12 @@ func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	}
 
 	errc := make(chan error, 2)
+	var pumps sync.WaitGroup
+	pumps.Add(2)
 
 	// TCP → gRPC
 	go func() {
+		defer pumps.Done()
 		buf := make([]byte, 32*1024)
 		for {
 			n, readErr := tcpConn.Read(buf)
@@ -74,6 +86,7 @@ func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, ap
 
 	// gRPC → TCP
 	go func() {
+		defer pumps.Done()
 		for {
 			chunk, err := stream.Recv()
 			if err != nil {
@@ -91,4 +104,7 @@ func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	case <-ctx.Done():
 	case <-errc:
 	}
+	cancel()
+	_ = tcpConn.Close()
+	pumps.Wait()
 }

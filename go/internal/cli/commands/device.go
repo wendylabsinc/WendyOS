@@ -50,9 +50,10 @@ func newDeviceCmd() *cobra.Command {
 	}
 
 	cmd.AddGroup(
-		&cobra.Group{ID: "common", Title: "Common Commands:"},
+		&cobra.Group{ID: "monitor", Title: "Monitoring:"},
+		&cobra.Group{ID: "apps", Title: "Applications:"},
 		&cobra.Group{ID: "manage", Title: "Device Management:"},
-		&cobra.Group{ID: "hardware", Title: "Hardware:"},
+		&cobra.Group{ID: "hardware", Title: "Hardware & Connections:"},
 	)
 
 	addToGroup := func(groupID string, cmds ...*cobra.Command) {
@@ -62,20 +63,22 @@ func newDeviceCmd() *cobra.Command {
 		}
 	}
 
-	// Common Commands: the subcommands used in everyday workflows, surfaced at
-	// the top in rough order of usefulness.
-	addToGroup("common",
-		newAppsCmd(),
-		newDriversCmd(),
+	addToGroup("monitor",
 		newDeviceLogsCmd(),
 		newDeviceOSLogsCmd(),
-		newROS2Cmd(),
-		newFoxgloveCmd(),
 		newDeviceDashboardCmd(),
 		newTopCmd(),
 	)
+	addToGroup("apps",
+		newAppsCmd(),
+		newROS2Cmd(),
+		newFoxgloveCmd(),
+		newDeviceCacheCmd(),
+		newVolumesCmd(),
+	)
 	addToGroup("manage",
 		newDeviceInfoCmd(),
+		newDriversCmd(),
 		newDeviceAttachCmd(),
 		newDeviceShellCmd(),
 		newDeprecatedDeviceVersionCmd(),
@@ -88,14 +91,12 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceEnrollCmd(),
 		newDeviceUnenrollCmd(),
 		newDeviceRenameCmd(),
-		newDevicePairCmd(),
-		newDeviceUnpairCmd(),
 		newDeviceUpdateCmd(),
 		newDeviceSyncTimeCmd(),
-		newDeviceCacheCmd(),
-		newVolumesCmd(),
 	)
 	addToGroup("hardware",
+		newDevicePairCmd(),
+		newDeviceUnpairCmd(),
 		newWifiCmd(),
 		newBluetoothCmd(),
 		newAudioCmd(),
@@ -139,7 +140,7 @@ func newDevicePushAgentCmd() *cobra.Command {
 		Args:   cobra.ExactArgs(1),
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
+			ctx := robotAgentMaintenanceContext(cmd.Context())
 			binaryData, err := os.ReadFile(args[0])
 			if err != nil {
 				return fmt.Errorf("reading agent binary %q: %w", args[0], err)
@@ -529,9 +530,10 @@ func yesNo(v bool) string {
 
 func newDeviceSetDefaultCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "set-default [hostname]",
-		Short: "Set the default device hostname",
-		Args:  cobra.MaximumNArgs(1),
+		Hidden: true,
+		Use:    "set-default [device]",
+		Short:  "Set a local, cloud or simulator device as the default",
+		Args:   cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var device string
 			if len(args) > 0 {
@@ -542,6 +544,10 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 					return err
 				}
 				device = sel
+			}
+			_, isCloud, selectorErr := parseCloudDeviceSelector(device)
+			if selectorErr != nil {
+				return selectorErr
 			}
 
 			cfg, err := config.Load()
@@ -555,6 +561,11 @@ func newDeviceSetDefaultCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Default device set to: %s\n", tui.Device(device))
+			// Cloud identity is scoped by endpoint, organization and asset ID.
+			// It has no LAN hostname pin to clear or repopulate.
+			if isCloud {
+				return nil
+			}
 
 			// Naming a device here is an explicit assertion that this is the one
 			// the user means, so any pin recorded for it is dropped first: that
@@ -643,6 +654,9 @@ func pickDeviceForDefault(ctx context.Context) (string, error) {
 func defaultDeviceNameFor(selected *SelectedDevice) (string, error) {
 	if selected == nil {
 		return "", fmt.Errorf("no device selected")
+	}
+	if selected.DefaultSelector != "" {
+		return selected.DefaultSelector, nil
 	}
 	if selected.Agent != nil {
 		if selected.PinKey != "" {
@@ -2360,7 +2374,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 			"--pr N applies the OS image built by wendyos-builder PR #N instead of the manifest's latest — an unhardened debug build for testing PRs on hardware; it also works over the cloud tunnel. --pr cannot be combined with --artifact-url or --json. " +
 			"macOS agents receive the signed app-bundle zip (wendy-agent-macos-<arch>.zip) instead of a Linux binary; --binary accepts one of those zips for dev pushes to a Mac agent.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
+			ctx := robotAgentMaintenanceContext(cmd.Context())
 
 			if prNumber > 0 {
 				if artifactURL != "" {

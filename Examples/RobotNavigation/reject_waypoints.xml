@@ -1,0 +1,6 @@
+<!-- Only the supervised single-goal action is supported by this app. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <AlwaysFailure/>
+  </BehaviorTree>
+</root>

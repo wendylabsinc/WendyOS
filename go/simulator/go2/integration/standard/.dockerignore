@@ -1,0 +1,5 @@
+__pycache__
+test_*.py
+README.md
+vendor/README.md
+prepare_soak.py

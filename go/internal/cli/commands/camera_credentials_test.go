@@ -265,8 +265,18 @@ func TestResolveCameraCredentialsStoreFailure(t *testing.T) {
 // An environment password means no terminal is needed.
 func TestCameraPromptAllowedWithEnvironment(t *testing.T) {
 	t.Setenv("WENDY_CAMERA_PASSWORD", "x")
-	if !cameraPromptAllowed() {
+	if !cameraPromptAllowed(false) {
 		t.Fatal("an environment password should count as promptable")
+	}
+	if !cameraPromptAllowed(true) {
+		t.Fatal("non-interactive playback should still accept an environment password")
+	}
+}
+
+func TestCameraPromptDisabledNonInteractively(t *testing.T) {
+	t.Setenv("WENDY_CAMERA_PASSWORD", "")
+	if cameraPromptAllowed(true) {
+		t.Fatal("non-interactive playback must not prompt for a password")
 	}
 }
 

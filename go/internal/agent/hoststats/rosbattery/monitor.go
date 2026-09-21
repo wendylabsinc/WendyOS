@@ -2,7 +2,6 @@ package rosbattery
 
 import (
 	"context"
-	"net"
 	"strings"
 	"time"
 
@@ -33,103 +32,26 @@ const (
 // samples into a Cache, and silence past the staleness window drops back to
 // scanning.
 type Monitor struct {
-	cfg   Config
-	cache *Cache
-	logf  func(format string, args ...any)
+	acquire func(context.Context, rtps.Config) (*rtps.Lease, error)
+	cfg     Config
+	cache   *Cache
+	logf    func(format string, args ...any)
 	// lastIface is the interface that last produced a reading, tried first on
 	// the next scan so steady-state rescans do not re-walk the candidate list.
 	lastIface string
 }
 
-// virtualIfacePrefixes are interface names that never carry a robot's DDS
-// traffic. A device running containers accumulates a lot of these, and they
-// are all multicast-capable, so they crowd out the real network when picking
-// naively.
-var virtualIfacePrefixes = []string{
-	"docker", "br-", "veth", "cni", "flannel", "virbr", "kube", "nerdctl", "tap", "tun",
-}
+// Automatic host discovery policy is shared with camera discovery.
+type candidateIface = rtps.InterfaceCandidate
 
-// candidateIface is the part of a net.Interface that eligibility depends on,
-// split out so the filter can be tested without a host's real interface list.
-type candidateIface struct {
-	Name    string
-	Flags   net.Flags
-	HasIPv4 bool
-}
-
-// candidateInterfaces lists the host's interfaces worth trying for DDS
-// discovery. See eligibleInterfaces for the criteria.
 func candidateInterfaces() []string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return nil
-	}
-	out := make([]candidateIface, 0, len(ifaces))
-	for _, iface := range ifaces {
-		c := candidateIface{Name: iface.Name, Flags: iface.Flags}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-				c.HasIPv4 = true
-				break
-			}
-		}
-		out = append(out, c)
-	}
-	return eligibleInterfaces(out)
+	ifaces, _ := rtps.HostInterfaces()
+	return ifaces
 }
-
-// eligibleInterfaces narrows a host's interfaces to those worth trying for DDS
-// discovery: up, non-loopback, multicast-capable, with an IPv4 address, and
-// neither virtual nor wireless.
 func eligibleInterfaces(ifaces []candidateIface) []string {
-	var out []string
-	for _, iface := range ifaces {
-		f := iface.Flags
-		if f&net.FlagUp == 0 || f&net.FlagLoopback != 0 || f&net.FlagMulticast == 0 {
-			continue
-		}
-		if !iface.HasIPv4 {
-			continue
-		}
-		if isVirtualInterface(iface.Name) || isWireless(iface.Name) {
-			continue
-		}
-		out = append(out, iface.Name)
-	}
-	return out
+	return rtps.EligibleInterfaces(ifaces, true)
 }
-
-func isVirtualInterface(name string) bool {
-	for _, p := range virtualIfacePrefixes {
-		if strings.HasPrefix(name, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// isWireless reports whether a name looks like a wireless interface. Linux
-// predictable names use a "wl" prefix; the legacy names are wlanN and wifiN,
-// and some out-of-tree drivers use athN and raN. Mirrors the helper in
-// internal/agent/ipcam.
-//
-// A robot's DDS bus is a wired network. Announcing SPDP over WiFi puts
-// multicast discovery traffic onto whatever office or home network the device
-// happens to be associated with, where it can only find strangers' robots, so
-// auto-discovery skips wireless outright rather than merely deprioritising it.
-func isWireless(name string) bool {
-	name = strings.ToLower(name)
-	for _, p := range []string{"wl", "wifi", "ath", "ra"} {
-		if strings.HasPrefix(name, p) {
-			return true
-		}
-	}
-	return false
-}
+func isWireless(name string) bool { return rtps.IsWirelessInterface(name) }
 
 // moveToFront returns names with want first, if present.
 func moveToFront(names []string, want string) []string {
@@ -168,11 +90,11 @@ type Config struct {
 }
 
 // NewMonitor creates a monitor writing into cache. logf may be nil.
-func NewMonitor(cfg Config, cache *Cache, logf func(string, ...any)) *Monitor {
+func NewMonitor(cfg Config, cache *Cache, pool *rtps.Pool, logf func(string, ...any)) *Monitor {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &Monitor{cfg: cfg, cache: cache, logf: logf}
+	return &Monitor{cfg: cfg, cache: cache, acquire: pool.Acquire, logf: logf}
 }
 
 // Battery returns the newest non-stale reading, or nil.
@@ -256,7 +178,7 @@ func (m *Monitor) scanAndSubscribe(ctx context.Context) bool {
 // tryInterface runs one discovery cycle on a single interface, returning true
 // only if it found a battery topic and consumed from it.
 func (m *Monitor) tryInterface(ctx context.Context, iface string) bool {
-	p, err := rtps.NewParticipant(rtps.Config{
+	p, err := m.acquire(ctx, rtps.Config{
 		DomainID:  m.cfg.DomainID,
 		Interface: iface,
 		Logf:      m.logf,
@@ -267,24 +189,24 @@ func (m *Monitor) tryInterface(ctx context.Context, iface string) bool {
 	}
 	defer p.Close()
 
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go p.Run(runCtx)
-
-	found := map[string]rtps.Endpoint{}
 	deadline := time.After(discoverWindow)
 collect:
 	for {
 		select {
-		case ep := <-p.Discovered():
-			found[ep.Topic] = ep
 		case <-deadline:
 			break collect
-		case <-runCtx.Done():
+		case <-p.Done():
+			return false
+		case <-ctx.Done():
 			return false
 		}
 	}
 
+	// Snapshot at the deadline excludes endpoints disposed or expired during the scan.
+	found := map[string]rtps.Endpoint{}
+	for _, ep := range p.Endpoints() {
+		found[ep.Topic] = ep
+	}
 	target, ok := PickBatteryTopic(found, m.cfg.Topic, m.cfg.Type)
 	if !ok {
 		m.logf("ros2 battery: no battery topic among %d writers on %q", len(found), iface)
@@ -296,13 +218,13 @@ collect:
 	}
 	m.logf("ros2 battery: reading %s [%s] on %q", target.Topic, target.Type, iface)
 
-	m.consume(runCtx, p, target)
+	m.consume(ctx, p, target)
 	return true
 }
 
 // consume decodes samples into the cache until the topic goes quiet for longer
 // than the staleness window.
-func (m *Monitor) consume(ctx context.Context, p *rtps.Participant, ep rtps.Endpoint) {
+func (m *Monitor) consume(ctx context.Context, p *rtps.Lease, ep rtps.Endpoint) {
 	decode := decoderFor(ep.Type)
 	if decode == nil {
 		m.logf("ros2 battery: no decoder for %s", ep.Type)
@@ -312,6 +234,8 @@ func (m *Monitor) consume(ctx context.Context, p *rtps.Participant, ep rtps.Endp
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-p.Done():
 			return
 		case s := <-p.Samples():
 			reading, err := decode(s.Payload)

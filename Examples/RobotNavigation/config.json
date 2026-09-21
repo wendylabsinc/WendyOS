@@ -1,0 +1,36 @@
+{
+  "runtime": {
+    "navigation_frame": "odom",
+    "odometry_frame": "odom",
+    "base_frame": "base_link",
+    "motion_enabled": false,
+    "watchdog_commissioned": false,
+    "max_linear_speed": 0.25,
+    "max_angular_speed": 0.4
+  },
+  "guard": {
+    "footprint_radius": 0.55,
+    "clearance": 0.25,
+    "reaction_seconds": 0.75,
+    "braking_deceleration": 0.3,
+    "allow_infinite_ranges": false
+  },
+  "topics": {
+    "scan": "/scan",
+    "odometry": "/odom",
+    "imu": "/imu/data",
+    "rgb": "/camera/color/image_rect",
+    "depth": "/camera/aligned_depth_to_color/image_raw",
+    "camera_info": "/camera/color/camera_info",
+    "detections": "/robot_navigation/people"
+  },
+  "motor": {
+    "mode": "disabled",
+    "output_topic": "/cmd_vel",
+    "network_interface": "enP8p1s0",
+    "command_timeout": 0.2
+  },
+  "database": "/data/navigation.sqlite3",
+  "start_nav2": true,
+  "start_detector": true
+}

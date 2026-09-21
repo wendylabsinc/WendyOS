@@ -63,6 +63,7 @@ final class WelcomeAndPermissions: NSObject, CBCentralManagerDelegate, CLLocatio
     }
 
     private static let launchAtLoginEnabledKey = "launchAtLoginEnabled"
+    private static let locationRequestTimeout = Duration.seconds(60)
 
     private let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "sh.wendy.WendyAgentMac",
@@ -80,6 +81,7 @@ final class WelcomeAndPermissions: NSObject, CBCentralManagerDelegate, CLLocatio
     private var bluetoothContinuation: CheckedContinuation<PermissionStatus, Never>?
     private var locationManager: CLLocationManager?
     private var locationContinuation: CheckedContinuation<PermissionStatus, Never>?
+    private var locationRequestTimeoutTask: Task<Void, Never>?
 
     override init() {
         self.launchAtLoginEnabled = Self.currentLaunchAtLoginEnabled()
@@ -185,18 +187,11 @@ final class WelcomeAndPermissions: NSObject, CBCentralManagerDelegate, CLLocatio
         // Read the Sendable status here, in the nonisolated context: the
         // non-Sendable `manager` must not be captured into the MainActor hop.
         let authorizationStatus = manager.authorizationStatus
-        MainActor.assumeIsolated {
-            guard let locationContinuation = self.locationContinuation else {
-                self.refreshPermissionStatuses()
-                return
-            }
-            // The first callback fires immediately on delegate assignment with
-            // .notDetermined; wait for the user's actual decision.
-            guard authorizationStatus != .notDetermined else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
 
-            self.locationContinuation = nil
-            self.locationManager = nil
-            locationContinuation.resume(returning: self.currentLocationStatus())
+            self.locationStatus = self.locationStatus(for: authorizationStatus)
+            self.finishLocationRequestIfResolved()
         }
     }
 
@@ -205,6 +200,21 @@ final class WelcomeAndPermissions: NSObject, CBCentralManagerDelegate, CLLocatio
         self.cameraStatus = self.currentCameraStatus()
         self.microphoneStatus = self.currentMicrophoneStatus()
         self.locationStatus = self.currentLocationStatus()
+        self.finishLocationRequestIfResolved()
+    }
+
+    private func finishLocationRequestIfResolved(allowPending: Bool = false) {
+        guard allowPending || self.locationStatus != .pending,
+            let locationContinuation = self.locationContinuation
+        else {
+            return
+        }
+
+        self.locationContinuation = nil
+        self.locationManager = nil
+        self.locationRequestTimeoutTask?.cancel()
+        self.locationRequestTimeoutTask = nil
+        locationContinuation.resume(returning: self.locationStatus)
     }
 
     private func systemSettingsURL(for permission: Permission) -> URL? {
@@ -314,7 +324,12 @@ final class WelcomeAndPermissions: NSObject, CBCentralManagerDelegate, CLLocatio
 
     private func currentLocationStatus() -> PermissionStatus {
         let manager = self.locationManager ?? CLLocationManager()
-        switch manager.authorizationStatus {
+        return self.locationStatus(for: manager.authorizationStatus)
+    }
+
+    private func locationStatus(for authorizationStatus: CLAuthorizationStatus) -> PermissionStatus
+    {
+        switch authorizationStatus {
         case .authorizedAlways:
             return .allowed
         case .denied:
@@ -386,6 +401,18 @@ final class WelcomeAndPermissions: NSObject, CBCentralManagerDelegate, CLLocatio
             manager.delegate = self
             self.locationManager = manager
             manager.requestWhenInUseAuthorization()
+
+            self.locationRequestTimeoutTask = Task { [weak self] in
+                do {
+                    try await Task.sleep(for: Self.locationRequestTimeout)
+                } catch {
+                    return
+                }
+
+                guard let self else { return }
+                self.locationStatus = self.currentLocationStatus()
+                self.finishLocationRequestIfResolved(allowPending: true)
+            }
         }
     }
 

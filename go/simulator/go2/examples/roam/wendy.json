@@ -1,0 +1,19 @@
+{
+  "appId": "sh.wendy.simulator.go2.examples.roam",
+  "version": "0.1.0",
+  "platform": "linux",
+  "frameworks": {
+    "ros2": {
+      "distro": "humble",
+      "rmw": "rmw_cyclonedds_cpp",
+      "domainId": 0,
+      "discoveryScope": "host"
+    }
+  },
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host"
+    }
+  ]
+}

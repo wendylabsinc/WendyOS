@@ -63,8 +63,14 @@ The tab manages simulators without dropping to `wendy vm`:
 | `c` | Create one at the latest release, naming it `sim`, `sim-2`, … |
 | `s` | Power off the highlighted VM |
 | `r` | Delete it, once it is stopped |
+| `d` | Save the highlighted simulator as the default device |
+| `x` | Clear the saved default device |
 
-`wendy discover` shows the same tab with the same three keys; there `enter`
+The default uses the VM's name, so it still works when its forwarded port changes.
+Saving a default does not start the VM. Your next device command starts it when
+needed. The `✦` marker identifies the saved default when you reopen the picker.
+
+`wendy discover` shows the same tab with the same keys; there `enter`
 copies the VM's address instead of selecting it. For a specific name, version
 or disk size, use `wendy vm create`.
 
@@ -286,12 +292,18 @@ be reached through `wendy run` or `--device sim`. The subcommands below are all
 still available for when you need to look under the hood.
 
 ```sh
+wendy vm create        # prompt for a VM name and simulator profile
 wendy vm list          # every VM, with its state, address and version
 wendy vm start dev -d  # run it in the background instead of taking the terminal
 wendy vm logs dev -f   # the console of a backgrounded VM
 wendy vm stop dev      # request graceful guest shutdown
 wendy vm rm dev        # delete a VM and its disk
 ```
+
+`wendy vm create` prompts for a name and a profile: Generic WendyOS, Unitree Go2,
+or Unitree G1. Supply the name or `--profile generic|go2|g1` to skip that prompt.
+For scripts, pass the name explicitly; the profile defaults to `generic` without
+an interactive terminal, with `--json`, or with `--yes`.
 
 The VM name is optional for `start`, `stop`, `logs`, and `rm` in an interactive
 terminal. Leave it out to choose a VM from a list; scripts should continue to

@@ -1,0 +1,19 @@
+FROM ros:humble-ros-base
+ARG TARGETARCH
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    ROS_DOMAIN_ID=0 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+    GO2_SIMULATOR_URL=http://127.0.0.1:8890
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ros-humble-rmw-cyclonedds-cpp ros-humble-geometry-msgs \
+      ros-humble-sensor-msgs ros-humble-nav-msgs ros-humble-tf2-msgs \
+    && rm -rf /var/lib/apt/lists/*
+COPY build/overlay/install /opt/wendy-go2/ros_ws/install
+COPY build/overlay/UNITREE_ROS_LICENSE build/overlay/wendy-compatibility.json build/overlay/source.json /app/
+RUN python3 -c 'import json, sys; assert json.load(open("/app/source.json"))["architecture"] == sys.argv[1], "prepared native overlay architecture differs from the target image"' "$TARGETARCH"
+COPY vendor/pinned_sdk_crc.py vendor/UNITREE_SDK_LICENSE /app/
+COPY build/overlay/cyclonedds.xml /app/cyclonedds.xml
+WORKDIR /app
+COPY exercise.py full_sensors.py entrypoint-soak.sh ./
+RUN python3 -c 'import full_sensors; full_sensors.sdk_crc_oracle()'
+ENTRYPOINT ["/bin/bash", "/app/entrypoint-soak.sh"]
+CMD ["python3", "/app/exercise.py", "--full-sensors"]

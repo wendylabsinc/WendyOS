@@ -1,0 +1,1598 @@
+{
+  "passed": true,
+  "scope": "Continuous full-subscriber acceptance in the managed Go2 VM, with ROS velocity commands throughout",
+  "runtime_source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+  "agent_sha256": "51a0b6ac75257c62f94c4eea4e5b0184990ea5eae96d413a148759bcb3ca7799",
+  "agent_build_revision": "19642aaebd66d804c47170f9088d7a86376f7930",
+  "agent_build_had_working_tree_changes": true,
+  "vm": {
+    "name": "go2-sim",
+    "cpus": 4,
+    "memory_mib": 4096,
+    "os": "WendyOS-0.19.1",
+    "kernel": "6.18.39-yocto-standard",
+    "acceleration": "HVF on ARM64 macOS"
+  },
+  "rendering": {
+    "detail": "balanced",
+    "resolution": [
+      640,
+      360
+    ],
+    "mesa_workers": 2,
+    "python_switch_interval_ms": 5
+  },
+  "summary": {
+    "requested_seconds": 600.0,
+    "measured": {
+      "wall_seconds": 600.0148634050001,
+      "real_time_factor": 0.9998170750188754,
+      "policy_hz": 49.990853750979795,
+      "observer_fps": 14.826425569885524,
+      "physics_hz": 499.90853750979795,
+      "received_hz": {
+        "odom": 49.98876166131662,
+        "imu": 199.93504714070104,
+        "joints": 49.98876166131662,
+        "scan": 9.998085657339415,
+        "truth": 49.98876166131662,
+        "image": 14.826299384512657,
+        "camera_info": 14.826299384512657,
+        "cloud": 9.998085657339415,
+        "lowstate": 499.8226182233285
+      },
+      "published_hz": {
+        "odom": 49.98752047184988,
+        "imu": 199.93674877087983,
+        "joints": 49.98752047184988,
+        "scan": 9.998170750195959,
+        "truth": 49.98752047184988,
+        "image": 14.826425569885524,
+        "camera_info": 14.826425569885524,
+        "cloud": 9.998170750195959,
+        "lowstate": 499.8285388106799
+      },
+      "command_hz": 19.997837940059284,
+      "command_gaps_over_200ms": 0
+    },
+    "physical_constraints_passed": true,
+    "performance_targets": {
+      "window_at_least_600_seconds": true,
+      "real_time_factor_at_least_0_95": true,
+      "policy_hz_at_least_47_5": true,
+      "observer_fps_at_least_14": true,
+      "all_runtime_trailing_command_p95_under_100ms": true,
+      "no_command_refresh_gaps_over_200ms": true,
+      "received_imu_hz_at_least_190": true,
+      "received_odom_hz_at_least_47.5": true,
+      "received_joints_hz_at_least_47.5": true,
+      "received_scan_hz_at_least_9.5": true,
+      "received_truth_hz_at_least_47.5": true,
+      "received_image_hz_at_least_14": true,
+      "received_camera_info_hz_at_least_14": true,
+      "received_cloud_hz_at_least_9.5": true,
+      "received_lowstate_hz_at_least_475": true,
+      "native_crc_samples_cover_receipts": true
+    },
+    "acceptance_passed": true,
+    "sample_count": 1199,
+    "signed_motion_segments": 226,
+    "fall_samples": 0,
+    "fault_samples": 0,
+    "contact_samples": 1199,
+    "minimum_contacts": 1,
+    "maximum_contacts": 4,
+    "maximum_runtime_trailing_command_p95_ms": 20.30479104985261,
+    "runtime_peak_rss_bytes": 804646912,
+    "runtime_peak_rss_growth_bytes": 21102592,
+    "full_sensor_load": true,
+    "full_sensors": {
+      "errors": [],
+      "crc_checked": 31436,
+      "lowstate_received": 314353,
+      "latest_tick_ms": 602880,
+      "distinct_recent_image_hashes": 120,
+      "crc_sampling": "every tenth received LowState, pinned SDK packer and bitwise CRC"
+    },
+    "errors": [],
+    "runtime_errors": [],
+    "measurement_notes": "Receipt rates use this app's callbacks and monotonic wall time; publication, policy and rendering rates use runtime counter deltas. Ground-truth publication uses the odometry counter; Image and CameraInfo share the camera counter. Native LowState has no ROS header: freshness compares its genuine millisecond tick against current physics time, and every tenth receipt is checked with the pinned SDK's independent bitwise CRC. Other source stamps must be under 500ms old. Runtime latency is trailing-window admission-to-policy p95 and excludes DDS transit; raw per-command latency is unavailable. RSS is ru_maxrss (process lifetime peak), not current allocation. Physical checks are sampled at 2Hz; a short run cannot pass the 600s gate."
+  },
+  "functional_checks": [
+    {
+      "check": "explicit_source_grant",
+      "passed": true,
+      "publisher_gid": "50ab3c842c58759400000000000000000000000000000000"
+    },
+    {
+      "check": "sensor_contract",
+      "passed": true,
+      "scan_returns": 360,
+      "joints": 12
+    },
+    {
+      "check": "full_sensor_contract",
+      "passed": true,
+      "image_stamp_ns": 1789241302056884915,
+      "cloud_stamp_ns": 1789241302059134174,
+      "cloud_points": 1094,
+      "horizontal_returns": 360,
+      "errors": [],
+      "crc_checked": 32,
+      "lowstate_received": 312,
+      "latest_tick_ms": 604,
+      "distinct_recent_image_hashes": 9,
+      "crc_sampling": "every tenth received LowState, pinned SDK packer and bitwise CRC"
+    },
+    {
+      "check": "observed_source_rates",
+      "passed": true,
+      "hz": {
+        "odom": 49.98683495717898,
+        "imu": 200.18340703409905,
+        "joints": 49.98683495717898,
+        "scan": 10.004403998666637,
+        "truth": 49.98683495717898,
+        "image": 14.82520469477805,
+        "camera_info": 14.82520469477805,
+        "cloud": 10.004403998666637
+      }
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.6224473793015785,
+      "joint_travel": 0.4546440804894126,
+      "maximum_scan_change": 6.0263460874557495
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.6044663689547377,
+      "joint_travel": 0.5329976362766555,
+      "maximum_scan_change": 6.009001135826111
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.4208211974689565,
+      "joint_travel": 0.46904864863958506,
+      "maximum_scan_change": 5.372285604476929
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.41157446467132164,
+      "joint_travel": 0.3649692157716801,
+      "maximum_scan_change": 5.352509260177612
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.8680662729854904,
+      "joint_travel": 0.6033770912321947,
+      "maximum_scan_change": 4.3291085958480835
+    },
+    {
+      "check": "signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.9210372964638622,
+      "joint_travel": 0.538342189003278,
+      "maximum_scan_change": 4.461199402809143
+    },
+    {
+      "check": "publisher_expiry",
+      "passed": true,
+      "target_cleared_seconds": 0.21288389500023186
+    },
+    {
+      "check": "explicit_source_grant",
+      "passed": true,
+      "publisher_gid": "95101d820c45e08100000000000000000000000000000000"
+    },
+    {
+      "check": "reset_and_fresh_publisher",
+      "passed": true,
+      "old_gid": "50ab3c842c58759400000000000000000000000000000000",
+      "new_gid": "95101d820c45e08100000000000000000000000000000000",
+      "epoch": 3
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.30942347676904786
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.27639558500913686
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27518334258099864
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20189023351671542
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6415547055052425
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5245541150467711
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2717264385123812
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2456015718698099
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27522884473872905
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.15605746463195705
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5873566762724527
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4055991905018441
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3285319299386183
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.285729110114525
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27982764112229114
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.19504322049420525
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6195974684958436
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5240660773914936
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3253272286290763
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.261520741015246
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2573899778210476
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20019745633432884
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5299286135004482
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5143932473566155
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.26324714951497713
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.26899108303558167
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.26928884058518626
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.17385873620069248
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.611137415962537
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5219071071518916
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.32430136154892925
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.23953643903065885
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2776995698397306
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.18085849172898327
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.592176154628822
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5271553723143623
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3132541493012013
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2547453727696126
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.25767426480392863
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.1561123456660193
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5648637556471003
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5386586958114707
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3247890655018162
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.24488006134782045
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2779900983421579
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.17292640636954282
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.60162293152587
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4316965704448173
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3161386805444487
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.27958828970223987
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2716722184420115
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.1988491631494188
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5977359881186967
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.48125302472207293
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2947781135862274
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2551853212671468
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.24398020207826435
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.1943976931273169
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6075936274918914
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5091127275838871
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.32634285936152185
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.27994917270977526
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2638619070162052
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.18823734906764794
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5883108781232328
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.48777139583591594
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2549294070422147
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.250182745603207
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.26338849196092573
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.21257706137229002
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6307980141770564
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.49632342534157536
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3055874196488923
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2298642917194039
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2775761105879031
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.15939795831018694
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5663854029758608
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5311577520536854
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2780344663653286
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.24600371198841536
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27151775853877025
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.144575375649065
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5044633422831848
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4621080755009558
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.247724500033333
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2634235014587345
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27061517683611946
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.14133907954425814
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5450878592982842
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4297890096533273
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3317850965313646
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2564729243442437
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27105453242724414
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20323037218598838
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.634515721562661
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5177713403295264
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.30297819690278893
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.27005949003828894
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2552544896851323
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.18841852051535998
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6357103665613297
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5147709855463185
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.33548814638808805
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.284972912756108
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.28194363661823624
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.17965178673018095
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6069320278567085
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4166612051607055
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3388584747950037
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.27051546321526554
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2637328342374511
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.189881005719944
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.633411917389243
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5210131194253153
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.27554727624496683
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.26402800728812975
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.26200567227395505
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.17190891711668815
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5814766453418181
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.43172274244203673
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2681993486943114
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.25808032226700167
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.24135071565805313
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20155420326824922
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6011982120668398
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5036889205951264
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.28702854949650264
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.24295906540546838
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2555314753575402
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.18974771313898084
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.532912473407009
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5168054983379236
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2856129614605842
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2584788059288537
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.271533950333327
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.15265073785255076
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5711903070087259
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.40503320851103947
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.32003408006185474
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.25085905764381283
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27198153181424123
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20610132916327878
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6305361789117138
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5208395836930502
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3387922523949112
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.25813369890832494
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27637447751035904
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.1957236352964911
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6100383198150146
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.49964768212934596
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2648216066276721
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2585698670532955
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2604777622406394
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.19827641929914622
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5609940660245988
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5177324946389554
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.282319128099097
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2384533860886028
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2723677230625504
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.15603190097667705
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6103974620405405
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5335988886136225
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.31324247914923525
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.28449864454533164
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2646830601945398
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20529666262964527
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5823345557534236
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.48283057416493036
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3359315427237864
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.3008367343550782
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.26961828474101834
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20323761210019245
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6374759052501844
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5265500606610617
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.34281282775170785
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.25138551816386934
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2636554554231848
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.19750320402455757
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6328758123079767
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5199154645425274
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2678492553992878
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.24253550586073686
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27455871909727425
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.19070660026860786
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6099283840047607
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5045620531769557
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.31546359149623154
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2355827192281052
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2735443259530542
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.17932577754151177
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6293696714688608
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5350568743275985
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.33973847548610464
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.28106945817401285
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.27191492660708794
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20059720072138826
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6135520435933812
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.532323863135304
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.29198295905155913
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.3175687934781311
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2675699410517797
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.18523432348138233
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.5995348033819814
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.5383166543568018
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3275064036794198
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.29414813436618176
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.25028983667834587
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20249451970144436
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6008656098345876
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4836887590882645
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.29858767852164997
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.27253061889258196
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.28226927014435516
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.18736231131165432
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6171777652240817
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4774872183869528
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.2992196503851766
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.2713531364127832
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2593798154803946
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.18441805994302582
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_left",
+      "displacement": 0.6016705754690339
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "yaw_right",
+      "displacement": -0.4793581025242673
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "displacement": 0.3086219681988106
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "displacement": -0.26624484442707297
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "left",
+      "displacement": 0.2597853371747707
+    },
+    {
+      "check": "soak_signed_motion",
+      "passed": true,
+      "direction": "right",
+      "displacement": -0.20682519103764416
+    }
+  ],
+  "complete_sample_log": true,
+  "logged_sample_count": 1199,
+  "maximum_source_age_ms": {
+    "odom": 33.698915,
+    "imu": 17.930342,
+    "joints": 33.699706,
+    "truth": 33.699915,
+    "image": 147.18575,
+    "camera_info": 147.185875,
+    "scan": 126.898109,
+    "cloud": 126.898234
+  },
+  "native_tick_age_seconds": {
+    "minimum": -0.015999998869460796,
+    "maximum": 0.007999999903532284
+  },
+  "last_full_sensor_checks": {
+    "errors": [],
+    "crc_checked": 31436,
+    "lowstate_received": 314353,
+    "latest_tick_ms": 602880,
+    "distinct_recent_image_hashes": 120,
+    "crc_sampling": "every tenth received LowState, pinned SDK packer and bitwise CRC"
+  },
+  "raw_log": {
+    "path": "/private/tmp/go2-vm-full-load-final.log",
+    "sha256": "ba4d8d05f393c81dc30a8eaa7a057787b3c14ea3007516e529a8d7461da1484b",
+    "bytes": 2617750
+  },
+  "limitations": [
+    "Results apply to this accelerated ARM64 VM and pinned profile.",
+    "Native CRC is independently checked on every tenth received LowState.",
+    "Command latency is admission-to-policy trailing p95, excluding DDS transit.",
+    "Physical constraints are sampled at 2 Hz; this is not factory firmware or calibrated sensor parity."
+  ]
+}

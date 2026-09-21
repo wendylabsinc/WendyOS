@@ -34,6 +34,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
           path: review-automation
           sparse-checkout: .github/scripts
           persist-credentials: false
@@ -98,8 +99,10 @@ jobs:
             echo "::error::Could not identify the PR diff's immutable merge base."
             exit 1
           fi
-          gh api -H "Accept: application/vnd.github.diff" \
-            "repos/$REPO/pulls/$PR_NUMBER" > "$diff_tmp"
+          # The GitHub diff endpoint rejects PRs with more than 300 files.
+          # Read immutable Git objects without checking out or executing PR code.
+          git -C review-automation diff --no-ext-diff --no-textconv \
+            "$diff_base_sha" "$EXPECTED_HEAD_SHA" -- > "$diff_tmp"
           # The PR endpoint is live. Reject a revision change during fetching,
           # rather than reviewing a diff against mismatched metadata or links.
           gh api "repos/$REPO/pulls/$PR_NUMBER" > "$current_metadata_tmp"
