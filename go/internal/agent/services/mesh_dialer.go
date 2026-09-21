@@ -299,7 +299,9 @@ func (d *MeshDialer) meshDialLAN(ctx context.Context, hostport string, deviceID 
 // opening the tunnel; once established the stream survives past ctx.
 func (d *MeshDialer) meshDialBroker(ctx context.Context, deviceID int32, port uint16) (net.Conn, error) {
 	ident := d.identity()
-	opts, md, err := brokerDialOpts(d.logger, ident.orgID, ident.assetID, ident.certPEM, ident.keyPEM, ident.chainPEM)
+	opts, requestMetadata, err := brokerDialOpts(
+		d.logger, ident.orgID, ident.assetID, ident.certPEM, ident.keyPEM, ident.chainPEM,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +310,12 @@ func (d *MeshDialer) meshDialBroker(ctx context.Context, deviceID int32, port ui
 		return nil, err
 	}
 	sctx, cancel, established := dialBoundContext(ctx)
+	md, err := requestMetadata(cloudpb.TunnelBrokerService_ClientTunnel_FullMethodName)
+	if err != nil {
+		cancel()
+		cc.Close()
+		return nil, err
+	}
 	stream, err := cloudpb.NewTunnelBrokerServiceClient(cc).ClientTunnel(metadata.NewOutgoingContext(sctx, md))
 	if err != nil {
 		cancel()
