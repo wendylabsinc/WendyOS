@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "profile": "wendy.go2.virtual.v1",
+  "robot": "Unitree Go2",
+  "simulation": true,
+  "physics": {
+    "engine": "MuJoCo",
+    "version": "3.3.7",
+    "timestep_seconds": 0.002
+  },
+  "controller": {
+    "bundle": "go2-moe-cts-164k-0.6715-v1",
+    "nominal_hz": 50,
+    "factory_controller": false
+  },
+  "ros": {
+    "distro": "humble",
+    "rmw": "rmw_cyclonedds_cpp",
+    "domain_id": 0,
+    "interface": "lo"
+  },
+  "clock": {
+    "mode": "device",
+    "timestamps": "original wall-clock capture time",
+    "publishes_clock": false
+  },
+  "sources": {
+    "unitree_ros2": "668d1ec5a05d1c38d3306bdca7d59f2ba3581a88",
+    "unitree_sdk2_python": "65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5",
+    "asset_lock": "assets.lock.json",
+    "interface_lock": "unitree.lock.json",
+    "derived_interface_hashes": "wendy-compatibility.json",
+    "visual_lock": "visuals.lock.json"
+  },
+  "wire_adjustments": [
+    "SportModeState appends PathPoint[10] path_point to match the pinned SDK; entries remain zero because trajectory following is unsupported",
+    "Response.binary uses uint8[] to match the pinned SDK"
+  ],
+  "observations": [
+    {
+      "topics": [
+        "/lowstate"
+      ],
+      "type": "unitree_go/msg/LowState",
+      "nominal_hz": 500
+    },
+    {
+      "topics": [
+        "/lf/lowstate"
+      ],
+      "type": "unitree_go/msg/LowState",
+      "nominal_hz": 50
+    },
+    {
+      "topics": [
+        "/sportmodestate",
+        "/lf/sportmodestate"
+      ],
+      "type": "unitree_go/msg/SportModeState",
+      "nominal_hz": 50,
+      "condition": "sport control mode"
+    },
+    {
+      "topics": [
+        "/imu/data"
+      ],
+      "type": "sensor_msgs/msg/Imu",
+      "nominal_hz": 200,
+      "frame": "imu_link",
+      "note": "virtual body IMU; native alias uses frame utlidar_imu"
+    },
+    {
+      "topics": [
+        "/joint_states"
+      ],
+      "type": "sensor_msgs/msg/JointState",
+      "nominal_hz": 50
+    },
+    {
+      "topics": [
+        "/odom",
+        "/utlidar/robot_odom"
+      ],
+      "type": "nav_msgs/msg/Odometry",
+      "nominal_hz": 50,
+      "frame": "odom",
+      "child_frame": "base_link"
+    },
+    {
+      "topics": [
+        "/scan"
+      ],
+      "type": "sensor_msgs/msg/LaserScan",
+      "nominal_hz": 10,
+      "frame": "lidar_link",
+      "condition": "lidar_enabled"
+    },
+    {
+      "topics": [
+        "/utlidar/cloud"
+      ],
+      "type": "sensor_msgs/msg/PointCloud2",
+      "nominal_hz": 10,
+      "frame": "utlidar_lidar",
+      "condition": "lidar_enabled"
+    },
+    {
+      "topics": [
+        "/camera/color/image_raw"
+      ],
+      "type": "sensor_msgs/msg/Image",
+      "nominal_hz": 15,
+      "encoding": "rgb8",
+      "size": [
+        640,
+        360
+      ],
+      "frame": "camera_optical_frame",
+      "condition": "rendering and camera_enabled"
+    },
+    {
+      "topics": [
+        "/camera/color/camera_info"
+      ],
+      "type": "sensor_msgs/msg/CameraInfo",
+      "nominal_hz": 15,
+      "frame": "camera_optical_frame",
+      "condition": "rendering and camera_enabled"
+    },
+    {
+      "topics": [
+        "/simulation/ground_truth"
+      ],
+      "type": "geometry_msgs/msg/PoseStamped",
+      "nominal_hz": 50,
+      "frame": "simulation_world"
+    },
+    {
+      "topics": [
+        "/simulation/epoch"
+      ],
+      "type": "std_msgs/msg/UInt64",
+      "transient_local": true
+    },
+    {
+      "topics": [
+        "/utlidar/cloud_base"
+      ],
+      "type": "sensor_msgs/msg/PointCloud2",
+      "nominal_hz": 10,
+      "frame": "base_link",
+      "condition": "lidar_enabled",
+      "note": "same capture and returns as /utlidar/cloud transformed by virtual lidar mount"
+    },
+    {
+      "topics": [
+        "/utlidar/imu"
+      ],
+      "type": "sensor_msgs/msg/Imu",
+      "nominal_hz": 200,
+      "frame": "utlidar_imu",
+      "note": "same virtual body IMU as /imu/data"
+    }
+  ],
+  "observation_qos": {
+    "reliability": "reliable",
+    "durability": "volatile",
+    "depth": 1,
+    "exceptions": [
+      "/simulation/epoch",
+      "/tf",
+      "/tf_static"
+    ]
+  },
+  "sensor_mounts": [
+    {
+      "parent": "base_link",
+      "child": "imu_link",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "parent": "base_link",
+      "child": "lidar_link",
+      "translation_m": [
+        0.28,
+        0.0,
+        0.08
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "parent": "base_link",
+      "child": "camera_link",
+      "translation_m": [
+        0.4,
+        0.0,
+        0.04
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "parent": "camera_link",
+      "child": "camera_optical_frame",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        -0.5,
+        0.5,
+        -0.5,
+        0.5
+      ]
+    }
+  ],
+  "sensor_faults": {
+    "endpoint": {
+      "method": "POST",
+      "path": "/api/sensors",
+      "partial_updates": true,
+      "unknown_fields": "rejected"
+    },
+    "defaults": {
+      "lidar_enabled": true,
+      "camera_enabled": true,
+      "lidar_dropout": 0.0
+    },
+    "types": {
+      "lidar_enabled": "boolean",
+      "camera_enabled": "boolean",
+      "lidar_dropout": "finite number in [0,1]"
+    },
+    "disabled_lidar": "stops new scan and cloud messages; the separate virtual IMU alias continues",
+    "disabled_camera": "stops new RGB and CameraInfo messages and clears camera.jpg; the sandbox observer continues",
+    "dropout": "one seeded Bernoulli mask shared by scan and cloud; missing scan returns are positive infinity and missing cloud points are omitted",
+    "seed": "GO2_SEED; dropout stream restarts on world reset or a changed sensor configuration",
+    "reset_preserves_settings": true,
+    "physics_continues": true,
+    "control_ownership_unchanged": true,
+    "lifecycle": "changed settings invalidate in-flight observations and retained camera frames; unchanged updates do not advance generation"
+  },
+  "commands": {
+    "standard": {
+      "topic": "/cmd_vel",
+      "type": "geometry_msgs/msg/Twist",
+      "axes": [
+        "linear.x",
+        "linear.y",
+        "angular.z"
+      ]
+    },
+    "sport": {
+      "request": "/api/sport/request",
+      "response": "/api/sport/response",
+      "supported_api_ids": {
+        "1": "GetApiVersion",
+        "1001": "Damp",
+        "1002": "BalanceStand",
+        "1003": "StopMove",
+        "1004": "StandUp",
+        "1005": "StandDown",
+        "1008": "Move"
+      }
+    },
+    "motion_switcher": {
+      "request": "/api/motion_switcher/request",
+      "response": "/api/motion_switcher/response",
+      "supported_api_ids": {
+        "1": "GetApiVersion",
+        "1001": "CheckMode"
+      }
+    },
+    "low_level": {
+      "topic": "/lowcmd",
+      "type": "unitree_go/msg/LowCmd",
+      "motor_slots": 20,
+      "active_motors": 12,
+      "order": "FR,FL,RR,RL; hip,thigh,calf",
+      "crc": "Unitree CRC32"
+    },
+    "owner": "one explicitly granted DDS publisher or browser token",
+    "sport_watchdog_ms": 200,
+    "low_level_watchdog_ms": 40,
+    "velocity_limits": {
+      "vx_mps": 0.8,
+      "vy_mps": 0.5,
+      "yaw_rps": 1.0
+    },
+    "errors": {
+      "3203": "unsupported",
+      "3204": "invalid argument",
+      "3205": "control denied"
+    }
+  },
+  "fidelity": {
+    "joints_imu_contacts": "derived from actual MuJoCo state",
+    "odometry": "velocity integration with declared bias and covariance; exact pose is separate",
+    "lidar": "synthetic simultaneous 25-ring pattern from -30 to +30 degrees in 2.5-degree steps with 360 azimuth rays each; 0.1-12 metre range; scan is the shared horizontal ring",
+    "camera": "ideal pinhole virtual front mount, vertical FOV 60 degrees, zero distortion",
+    "battery": "synthetic constant 90 percent SOC and 28.8 V; current, temperature, cycles and discharge dynamics are unmodeled",
+    "serial_and_version": "explicit simulation identifiers",
+    "firmware_calibrated": false,
+    "physical_robot_used_for_validation": false,
+    "physical_interface_observation": "Woof ROS graph and odometry/cloud/IMU headers inspected on 2026-09-15; physical motion and calibration not validated"
+  },
+  "reset": "revokes owners, rejects old publishers, clears controller history and pending observations; command publishers must restart and be explicitly granted again",
+  "unsupported": [
+    "factory gait parity",
+    "stock low-level example's motion-switcher mutations",
+    "trajectory following",
+    "jumps and dances",
+    "cloud and firmware services",
+    "audio and AI services",
+    "factory video codecs and video APIs",
+    "lidar motion distortion",
+    "depth camera",
+    "factory sensor calibration",
+    "arbitrary ROS distributions or DDS vendors"
+  ],
+  "network_isolation": {
+    "status": "udp-rtps-loopback",
+    "nftables": "drop non-loopback UDP with the RTPS payload prefix",
+    "legacy_iptables": "fallback for kernels without nftables: drop non-loopback UDP containing RTPS bytes anywhere using KMP, in both IPv4 and IPv6",
+    "legacy_scope": "independent of DDS port/domain; may also reject unrelated UDP containing these bytes",
+    "startup": "fail closed until both address families verify; drop NET_ADMIN before participants start",
+    "unsupported": [
+      "DDS over TCP",
+      "opaque tunnels",
+      "privileged applications changing host firewall rules"
+    ]
+  }
+}

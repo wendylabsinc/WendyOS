@@ -1,9 +1,13 @@
 package rosbattery
 
 import (
+	"context"
+	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"net"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestEligibleInterfaces(t *testing.T) {
@@ -108,5 +112,20 @@ func TestMoveToFront(t *testing.T) {
 				t.Errorf("moveToFront(%v, %q) = %v, want %v", tc.names, tc.want, got, tc.out)
 			}
 		})
+	}
+}
+
+func TestExplicitWirelessBatteryInterfaceOverridesAutomaticPolicy(t *testing.T) {
+	pool := rtps.NewPool()
+	defer pool.Close()
+	m := NewMonitor(Config{Enabled: true, Interfaces: []string{"wlan0"}, DomainID: 7}, NewCache(time.Now), pool, nil)
+	var targets []rtps.Config
+	m.acquire = func(_ context.Context, cfg rtps.Config) (*rtps.Lease, error) {
+		targets = append(targets, cfg)
+		return nil, errors.New("no publisher")
+	}
+	m.scanAndSubscribe(context.Background())
+	if len(targets) != 1 || targets[0].Interface != "wlan0" || targets[0].DomainID != 7 || targets[0].NetworkNamespacePID != 0 {
+		t.Fatalf("targets = %+v", targets)
 	}
 }

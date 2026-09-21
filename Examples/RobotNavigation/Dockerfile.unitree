@@ -1,0 +1,39 @@
+# Optional Go2 motor transport. Build the default app first; its disabled
+# configuration and entrypoint are inherited unchanged.
+ARG BASE_IMAGE=robot-navigation:local
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# Compile only the Python binding against Humble's existing Cyclone DDS 0.10.5.
+# The binding's setup.py expects a flat prefix; this private symlink view adapts
+# ROS's multiarch layout without replacing its C libraries or loader settings.
+RUN set -eu; \
+    multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"; \
+    test -f "/opt/ros/humble/lib/${multiarch}/libddsc.so.0.10.5"; \
+    test -f /opt/ros/humble/include/dds/dds.h; \
+    mkdir -p /opt/unitree-cyclonedds; \
+    ln -s /opt/ros/humble/include /opt/unitree-cyclonedds/include; \
+    ln -s /opt/ros/humble/bin /opt/unitree-cyclonedds/bin; \
+    ln -s "/opt/ros/humble/lib/${multiarch}" /opt/unitree-cyclonedds/lib; \
+    CYCLONEDDS_HOME=/opt/unitree-cyclonedds \
+      pip3 install --no-cache-dir --no-build-isolation --no-binary=cyclonedds 'cyclonedds==0.10.5'
+
+# Upstream metadata requests Cyclone Python 0.10.2 and pip OpenCV. Keep the
+# explicitly installed 0.10.5 binding and the base image's apt NumPy/OpenCV;
+# --no-deps prevents silently introducing a second DDS or OpenCV runtime.
+# This commit also omits b2/__init__.py although its top-level package imports
+# b2. Add the missing package marker before building the wheel.
+RUN set -eu; \
+    curl -fsSL 'https://codeload.github.com/unitreerobotics/unitree_sdk2_python/tar.gz/db9b2d210081387fcd1e7ed9ac4c56a02983bb85' -o /tmp/unitree-sdk.tar.gz; \
+    echo 'e08979a5adb827666b3fd0c6f63948aa9182af12f27ab29ac6bc262dc198b2f9  /tmp/unitree-sdk.tar.gz' | sha256sum -c -; \
+    mkdir /tmp/unitree-sdk; \
+    tar -xzf /tmp/unitree-sdk.tar.gz --strip-components=1 -C /tmp/unitree-sdk; \
+    touch /tmp/unitree-sdk/unitree_sdk2py/b2/__init__.py; \
+    pip3 install --no-cache-dir --no-deps --no-build-isolation /tmp/unitree-sdk; \
+    rm -rf /tmp/unitree-sdk /tmp/unitree-sdk.tar.gz
+
+# Import-only compatibility check: no client construction, ChannelFactory
+# initialization, discovery, network interface access, or motion calls.
+RUN --network=none source /opt/ros/humble/setup.bash && \
+    python3 -c 'from importlib.metadata import version; from pathlib import Path; import cv2, numpy, rclpy; import cyclonedds.__library__ as library; from unitree_sdk2py.go2.sport.sport_client import SportClient; assert version("cyclonedds") == "0.10.5"; assert str(Path(library.library_path).resolve()).startswith("/opt/ros/humble/"); assert callable(SportClient.Move) and callable(SportClient.StopMove); print("Pinned Unitree Go2 imports verified against ROS Humble Cyclone DDS; no client initialized")'

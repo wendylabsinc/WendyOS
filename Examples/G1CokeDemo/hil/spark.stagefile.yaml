@@ -1,0 +1,31 @@
+version: 1
+stages:
+  - name: app
+    from: python:3.12-slim-bookworm
+    workdir: /app
+    # Spark needs Blackwell kernels. The explicit CUDA-tagged PyTorch wheel
+    # also installs its matching runtime libraries through pip dependencies.
+    env:
+      PYTHONUNBUFFERED: "1"
+      COKE_HIL_HOST: "0.0.0.0"
+      COKE_HIL_PORT: "8098"
+      COKE_HIL_DEVICE: cuda
+      COKE_HIL_CONTROL_DEVICE: cpu
+    install:
+      apt:
+        packages: [libgomp1]
+      pip:
+        - packages: ["torch==2.9.1+cu130"]
+          index: https://download.pytorch.org/whl/cu130
+        - packages: ["numpy==1.26.4"]
+    copy:
+      - from: local
+        paths: [coke_demo]
+        dest: /app/coke_demo
+      - from: local
+        paths: [runtime]
+        dest: /app/runtime
+      - from: local
+        paths: [bundle]
+        dest: /app/bundle
+    cmd: [python3, -m, coke_demo, hil-serve]

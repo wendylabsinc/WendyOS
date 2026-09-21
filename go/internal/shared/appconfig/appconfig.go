@@ -2,6 +2,7 @@
 package appconfig
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -247,7 +248,8 @@ var envVarNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // AppConfig represents the wendy.json application configuration.
 type AppConfig struct {
-	AppID string `json:"appId"`
+	AppID string     `json:"appId"`
+	HIL   *HILConfig `json:"hil,omitempty"`
 	// ServiceName is set when this AppConfig describes a single service within
 	// a multi-service app.  When non-empty the agent uses the
 	// {appId}_{serviceName} container naming convention (WDY-878).
@@ -311,6 +313,36 @@ type ReadinessConfig struct {
 // TCPSocketProbe checks readiness by dialing a TCP port.
 type TCPSocketProbe struct {
 	Port int `json:"port"`
+}
+
+// HILConfig describes the inference project used by run --hil.
+// Project, Inputs and SimulatorBuildFile are relative to the simulator project.
+// BuildFile and BuildFilesByGPUArch are relative to the inference project.
+type HILConfig struct {
+	Project             string            `json:"project"`
+	Inputs              []string          `json:"inputs"`
+	BuildFile           string            `json:"buildFile"`
+	BuildFilesByGPUArch map[string]string `json:"buildFilesByGPUArch,omitempty"`
+	SimulatorBuildFile  string            `json:"simulatorBuildFile"`
+	Port                int               `json:"port"`
+	URLEnv              string            `json:"urlEnv"`
+	HealthPath          string            `json:"healthPath"`
+	HealthSchema        string            `json:"healthSchema,omitempty"`
+	TokenEnv            string            `json:"tokenEnv,omitempty"`
+	Env                 map[string]string `json:"env,omitempty"`
+}
+
+// UnmarshalJSON rejects HIL typos before they can silently disable protocol checks.
+func (c *HILConfig) UnmarshalJSON(data []byte) error {
+	type plain HILConfig
+	var parsed plain
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&parsed); err != nil {
+		return fmt.Errorf("hil: %w", err)
+	}
+	*c = HILConfig(parsed)
+	return nil
 }
 
 // HooksConfig holds optional lifecycle hook commands.

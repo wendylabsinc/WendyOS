@@ -59,8 +59,9 @@ type clearedPin struct {
 // exactly when a pin most needs clearing.
 func newDeviceUnpinCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unpin <hostname|identity-urn>",
-		Short: "Clear the recorded identity pin for a device",
+		Hidden: true,
+		Use:    "unpin <hostname|identity-urn>",
+		Short:  "Clear the recorded identity pin for a device",
 		Long: "Clear the recorded identity pin for a device, so the next connection to it\n" +
 			"records a fresh identity instead of being challenged against the old one.\n" +
 			"Accepts either the hostname you connect to or the identity URN a refusal\n" +

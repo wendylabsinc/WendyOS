@@ -25,7 +25,7 @@ import (
 // or service to a given device from this machine. It lets run paths skip the
 // whole build → OCI export → chunk-diff → reassemble pipeline when nothing that
 // could affect the image or effective service configuration has changed. The
-// single-container detached path also uses it to ensure the existing container
+// single-container path also uses it to ensure the existing container
 // is running without recreating it.
 //
 // This is intentionally a local-only, best-effort optimization (WDY fast path):
@@ -501,11 +501,10 @@ func matchIgnorePattern(pat, clean string) bool {
 	return false
 }
 
-// tryDeployFastPath attempts to satisfy a detached run without building. It
-// returns (true, nil) when the app was confirmed up to date and is now running
-// (either it already was, or we started it). It returns (false, nil) whenever
-// the normal build/deploy path should run instead — no fingerprint, a mismatch,
-// the app missing from the device, or any RPC error (all safe fallbacks).
+// tryDeployFastPath returns false when the deployment cannot be verified and
+// the normal build path should run. Once verified, it returns true and handles
+// the requested lifecycle, including foreground logs. Lifecycle errors are
+// returned with true so they cannot trigger a redundant build and redeploy.
 func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, deviceKey, inputHash string, opts runOptions) (bool, error) {
 	fp, ok := loadDeployFingerprint(appCfg.AppID, deviceKey)
 	if !ok || fp.InputHash != inputHash {
@@ -527,11 +526,22 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		return false, nil
 	}
 
+	if !opts.detach {
+		cliLogln("No changes detected; reusing existing %s.", containerDisplayName(appCfg))
+		if state == agentpb.AppRunningState_RUNNING {
+			if opts.isWatch() {
+				cmd := runPostStartIfReady(ctx, opts.watchState.hookContext(ctx), conn, appCfg, opts)
+				opts.watchState.reapCommand(cmd)
+				return true, nil
+			}
+			return true, followExistingContainer(ctx, conn, appCfg, opts)
+		}
+		return true, startExistingContainer(ctx, conn, appCfg, opts)
+	}
+
 	if state == agentpb.AppRunningState_RUNNING {
 		cliLogln("No changes detected; %s is already up to date and running.", containerDisplayName(appCfg))
-		// No host-side postStart hook: the fast path only ever runs detached
-		// (see the opts.detach gate on tryDeployFastPath's caller), and
-		// detached deploys don't block on readiness — see
+		// Detached deploys don't run host-side postStart or block on readiness; see
 		// runPostStartIfReady's doc comment. The container is untouched, so the
 		// agent-side hook cannot re-run either.
 		return true, nil

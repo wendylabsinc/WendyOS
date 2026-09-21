@@ -1,0 +1,46 @@
+{
+  "passed": true,
+  "scope": "MuJoCo hallway with real ROS DDS and native Move requests",
+  "elapsed_s": 25.980836955000996,
+  "hallway": {
+    "layout": "corner",
+    "width_m": 1.4,
+    "wall_contacts": 0
+  },
+  "position": [
+    2.989926049331313,
+    4.3388574100009105,
+    0.3530557892022085
+  ],
+  "controller": {
+    "active": false,
+    "state": "stopped",
+    "reason": "blocked_or_dead_end",
+    "distance_m": 7.432780592293687,
+    "turns": 1,
+    "visited_cells": 8,
+    "command": [
+      0.0,
+      0.0
+    ],
+    "scan": {
+      "front": 0.5924404444688308,
+      "left": 0.6670730273006686,
+      "right": 0.7003864921658645,
+      "left_exit": 0.6878536520405091,
+      "right_exit": 0.712079297956878,
+      "radius": 0.6079179867315698,
+      "observed": 72,
+      "total": 72
+    },
+    "scan_age": 0.24115056100708898,
+    "odom_age": 0.09095083600550424,
+    "sensor_errors": {},
+    "ignore_capture_age": true,
+    "capture_age_seconds": {
+      "scan": 0.073916731,
+      "odom": 0.018144541
+    }
+  },
+  "native_commands_accepted": 550
+}

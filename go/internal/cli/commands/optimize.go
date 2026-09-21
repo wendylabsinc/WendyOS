@@ -73,8 +73,9 @@ func newOptimizeCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "optimize",
-		Short: "Analyze the project's build config for missed optimizations",
+		Use:    "optimize",
+		Short:  "Analyze the project's build config for missed optimizations",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if agenticFlag && fixFlag {
 				fmt.Fprintln(os.Stderr, "error: --agentic and --fix cannot be combined; --agentic only emits an analysis bundle")

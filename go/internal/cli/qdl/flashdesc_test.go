@@ -1,8 +1,10 @@
 package qdl
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -22,9 +24,10 @@ func TestParseRawProgramRealDescriptor(t *testing.T) {
 		t.Fatalf("ParseRawProgram: %v", err)
 	}
 
-	// 7 entries in the file, 2 of which (config, data) carry filename="" and
-	// must be skipped so a reflash leaves device identity and Wi-Fi alone.
-	wantLabels := []string{"efi", "rootfsA", "rootfsB", "PrimaryGPT", "BackupGPT"}
+	// Every entry is returned in descriptor order, config and data included:
+	// dropping the payload-less ones is LoadFlashPlan's job, so that a caller
+	// can seed one first.
+	wantLabels := []string{"efi", "config", "rootfsA", "rootfsB", "data", "PrimaryGPT", "BackupGPT"}
 	if len(got) != len(wantLabels) {
 		t.Fatalf("kept %d entries, want %d: %+v", len(got), len(wantLabels), got)
 	}
@@ -37,13 +40,21 @@ func TestParseRawProgramRealDescriptor(t *testing.T) {
 		}
 	}
 
+	// config and data are the partitions the flash must leave alone; the
+	// descriptor says so by giving them no payload.
+	for _, i := range []int{1, 4} {
+		if got[i].Filename != "" {
+			t.Errorf("entry %s has payload %q, want none", got[i].Label, got[i].Filename)
+		}
+	}
+
 	// Both slots are written from the same payload; a flash that skipped
 	// rootfsB would leave the inactive slot stale and break the first OTA.
-	if got[1].Filename != got[2].Filename {
-		t.Errorf("rootfsA/rootfsB payloads differ: %q vs %q", got[1].Filename, got[2].Filename)
+	if got[2].Filename != got[3].Filename {
+		t.Errorf("rootfsA/rootfsB payloads differ: %q vs %q", got[2].Filename, got[3].Filename)
 	}
-	if got[1].StartSector == got[2].StartSector {
-		t.Errorf("rootfsA and rootfsB share start_sector %q", got[1].StartSector)
+	if got[2].StartSector == got[3].StartSector {
+		t.Errorf("rootfsA and rootfsB share start_sector %q", got[2].StartSector)
 	}
 }
 
@@ -319,5 +330,261 @@ func TestSectorsForRejectsOverflowingOffset(t *testing.T) {
 		Label: "x", Filename: "p.img"}
 	if n, err := SectorsFor(e, 1024); err == nil {
 		t.Errorf("accepted an overflowing descriptor: %d sectors", n)
+	}
+}
+
+// realBundle stands up a directory holding the real descriptors plus a
+// sparse file of the exact declared size for every payload they name.
+func realBundle(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"rawprogram0.xml", "patch0.xml"} {
+		body, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, name, string(body))
+	}
+	for name, size := range map[string]int64{
+		"efi.bin":         524288 * 1024,
+		"rootfs.img":      12582912 * 1024,
+		"gpt_main0.bin":   24 * 1024,
+		"gpt_backup0.bin": 20 * 1024,
+	} {
+		sparse(t, filepath.Join(dir, name), size)
+	}
+	return dir
+}
+
+func sparse(t *testing.T, path string, size int64) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func labels(plan *FlashPlan) []string {
+	out := make([]string, len(plan.Programs))
+	for i, p := range plan.Programs {
+		out[i] = p.Label
+	}
+	return out
+}
+
+func TestLoadFlashPlanSeedsConfigInDescriptorOrder(t *testing.T) {
+	dir := realBundle(t)
+	seed := filepath.Join(t.TempDir(), "wendy-config.img")
+	sparse(t, seed, 262144*1024) // the size the descriptor declares for config
+
+	plan, err := LoadFlashPlan(dir)
+	if err != nil {
+		t.Fatalf("LoadFlashPlan: %v", err)
+	}
+	if err := plan.Seed("config", seed); err != nil {
+		t.Fatalf("Seed(config): %v", err)
+	}
+	// Position matters: the GPT entries must stay last, or the disk is
+	// repartitioned out from under the payloads already written.
+	want := []string{"efi", "config", "rootfsA", "rootfsB", "PrimaryGPT", "BackupGPT"}
+	if got := labels(plan); !slices.Equal(got, want) {
+		t.Fatalf("programs = %v, want %v", got, want)
+	}
+	cfg := plan.Programs[1]
+	if cfg.localPath != seed {
+		t.Errorf("config payload = %q, want the generated image %q", cfg.localPath, seed)
+	}
+	// Geometry must come from the descriptor, never from the caller.
+	if cfg.SectorSize != 4096 || cfg.NumSectors != 65536 || cfg.StartSector != "131078" {
+		t.Errorf("config geometry = %d bps / %d sectors @ %s, want the descriptor's",
+			cfg.SectorSize, cfg.NumSectors, cfg.StartSector)
+	}
+}
+
+func TestSeedNeverReachesData(t *testing.T) {
+	// data is the one partition the descriptor leaves unsized, so neither
+	// payload guard can bound a write to it. Blank is the only way in, and
+	// seeding must never arrive there by accident.
+	dir := realBundle(t)
+	seed := filepath.Join(t.TempDir(), "wendy-config.img")
+	sparse(t, seed, 262144*1024)
+
+	for name, withSeed := range map[string]bool{"plain flash": false, "seeded flash": true} {
+		plan, err := LoadFlashPlan(dir)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if withSeed {
+			if err := plan.Seed("config", seed); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+		}
+		if slices.Contains(labels(plan), "data") {
+			t.Errorf("%s: data is in the flash plan", name)
+		}
+	}
+}
+
+func TestLoadFlashPlanWithoutSeedIsUnchanged(t *testing.T) {
+	// A flash with nothing to seed must still leave config alone.
+	plan, err := LoadFlashPlan(realBundle(t))
+	if err != nil {
+		t.Fatalf("LoadFlashPlan: %v", err)
+	}
+	want := []string{"efi", "rootfsA", "rootfsB", "PrimaryGPT", "BackupGPT"}
+	if got := labels(plan); !slices.Equal(got, want) {
+		t.Fatalf("programs = %v, want %v", got, want)
+	}
+}
+
+func TestLoadFlashPlanRejectsUnseedablePartitions(t *testing.T) {
+	dir := realBundle(t)
+	seed := filepath.Join(t.TempDir(), "wendy-config.img")
+	sparse(t, seed, 262144*1024)
+
+	for name, tc := range map[string]struct{ label, want string }{
+		// Seeding a partition the bundle already supplies would flash
+		// something other than the build the manifest vouched for.
+		"already supplied": {"rootfsA", "already supplies"},
+		"not declared":     {"nonesuch", "declares no such partition"},
+		// data is sized by the device, so neither payload check can bound it.
+		"device-sized": {"data", "declares no size"},
+	} {
+		plan, err := LoadFlashPlan(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = plan.Seed(tc.label, seed)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want an error containing %q, got %v", name, tc.want, err)
+		}
+	}
+}
+
+func TestLoadFlashPlanChecksSeededPayloadSize(t *testing.T) {
+	// The descriptor's size_in_KB is the only integrity signal a payload
+	// carries, and a short config image would flash as a few sectors.
+	dir := realBundle(t)
+	seed := filepath.Join(t.TempDir(), "wendy-config.img")
+	sparse(t, seed, 4096)
+
+	plan, err := LoadFlashPlan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Seed("config", seed); err == nil || !strings.Contains(err.Error(), "descriptor declares") {
+		t.Fatalf("want a size-mismatch error, got %v", err)
+	}
+}
+
+func TestDescriptorCannotSupplyALocalPath(t *testing.T) {
+	// localPath bypasses SafeJoin, so it must be unreachable from XML: a
+	// descriptor naming a path outside the bundle stays contained.
+	dir := t.TempDir()
+	write(t, dir, "rawprogram0.xml", `<data><program label="x" filename="a.img" localPath="/etc/passwd"
+		SECTOR_SIZE_IN_BYTES="4096" start_sector="1" num_partition_sectors="1"/></data>`)
+	write(t, dir, "patch0.xml", `<patches><patch filename="DISK" SECTOR_SIZE_IN_BYTES="4096"
+		start_sector="1" byte_offset="1" size_in_bytes="4" value="0" what="x"/></patches>`)
+
+	_, err := LoadFlashPlan(dir)
+	if err == nil || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("want the payload to resolve inside the bundle and be missing, got %v", err)
+	}
+}
+
+func TestDeclaredGeometryComesFromTheDescriptor(t *testing.T) {
+	plan, err := LoadFlashPlan(realBundle(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The host builds its config image to these figures, so a copy of them
+	// drifting from the bundle would break every flash.
+	e, err := plan.Declared("config")
+	if err != nil || e.SizeKB != 262144 || e.SectorSize != 4096 {
+		t.Errorf("config = %v KB / %d bps (%v), want 262144/4096", e.SizeKB, e.SectorSize, err)
+	}
+	// A bundle that declares no config partition must be distinguishable, so a
+	// caller can skip seeding instead of failing the flash.
+	if _, err := plan.Declared("nonesuch"); !errors.Is(err, ErrNoSuchPartition) {
+		t.Errorf("unknown label = %v, want ErrNoSuchPartition", err)
+	}
+}
+
+func TestBlankTargetsDataExactly(t *testing.T) {
+	dir := realBundle(t)
+	zeros := filepath.Join(t.TempDir(), "wendy-zeros.bin")
+	sparse(t, zeros, 1<<20)
+
+	plan, err := LoadFlashPlan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Blank("data", zeros); err != nil {
+		t.Fatalf("Blank(data): %v", err)
+	}
+	var e ProgramEntry
+	for _, p := range plan.Programs {
+		if p.Label == "data" {
+			e = p
+		}
+	}
+	// Geometry must come from the descriptor, never from the caller: writing
+	// at the wrong LBA would land in a neighbouring partition.
+	if e.StartSector != "6488070" || e.SectorSize != 4096 {
+		t.Errorf("start=%s sector=%d, want the descriptor's 6488070/4096", e.StartSector, e.SectorSize)
+	}
+	// The descriptor leaves data unsized, so both payload guards are off until
+	// BlankEntry sets them from the file. Without that a wrong-sized payload
+	// would stream unbounded across the disk.
+	if e.NumSectors != 256 || e.SizeKB != 1024 {
+		t.Errorf("NumSectors=%d SizeKB=%v, want 256/1024 derived from the payload", e.NumSectors, e.SizeKB)
+	}
+	if n, err := SectorsFor(e, 1<<20); err != nil || n != 256 {
+		t.Errorf("SectorsFor = %d, %v; want 256", n, err)
+	}
+	// It must land in descriptor order, so the GPT entries still go last.
+	want := []string{"efi", "rootfsA", "rootfsB", "data", "PrimaryGPT", "BackupGPT"}
+	if got := labels(plan); !slices.Equal(got, want) {
+		t.Errorf("programs = %v, want %v", got, want)
+	}
+}
+
+func TestBlankRefusesUnsafeTargets(t *testing.T) {
+	dir := realBundle(t)
+	good := filepath.Join(t.TempDir(), "z.bin")
+	sparse(t, good, 1<<20)
+
+	plan, err := LoadFlashPlan(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ label, payload, want string }{
+		// Blanking a partition the bundle supplies would corrupt the build.
+		"bundle supplies it": {"rootfsA", good, "already supplies"},
+		"not declared":       {"nonesuch", good, "declares no such partition"},
+	} {
+		if err := plan.Blank(tc.label, tc.payload); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: want an error containing %q, got %v", name, tc.want, err)
+		}
+	}
+
+	// An oversized or mis-aligned payload is the failure that would overrun the
+	// partition, so it must be refused rather than truncated.
+	for name, size := range map[string]int64{
+		"too large":       (1 << 20) + 4096,
+		"not sector-wide": 4095,
+		"empty":           0,
+	} {
+		p := filepath.Join(t.TempDir(), name)
+		sparse(t, p, size)
+		if err := plan.Blank("data", p); err == nil {
+			t.Errorf("%s (%d bytes): want an error, got nil", name, size)
+		}
 	}
 }

@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>g1_command_ingress</name>
+  <version>0.1.0</version>
+  <description>Forward attributed ROS velocity and native Unitree commands to the local Wendy G1 simulator.</description>
+  <maintainer email="engineering@wendy.dev">Wendy Labs</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>rmw</depend>
+  <depend>unitree_api</depend>
+  <depend>unitree_hg</depend>
+  <test_depend>rclpy</test_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

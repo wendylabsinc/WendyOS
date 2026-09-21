@@ -162,3 +162,36 @@ func (m *metadataCaptureServer) StreamMCP(stream grpc.BidiStreamingServer[agentp
 	}
 	return nil
 }
+
+func TestStartMCPProxy_CloseCancelsIdleStreams(t *testing.T) {
+	conn, cleanup := newFakeAgentConn(t)
+	defer cleanup()
+	addr, closeProxy, err := startMCPProxy(context.Background(), conn, "robot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeProxy()
+	tcpConn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tcpConn.Close()
+	// An echoed byte proves both proxy pumps are running before cleanup.
+	if _, err := tcpConn.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(tcpConn, make([]byte, 1)); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan struct{})
+	go func() { closeProxy(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("proxy close did not join its idle stream handlers")
+	}
+	_ = tcpConn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := tcpConn.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("idle connection was not closed: %v", err)
+	}
+}

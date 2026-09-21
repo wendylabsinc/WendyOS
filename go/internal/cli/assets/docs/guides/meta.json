@@ -3,6 +3,8 @@
   "description": "Learn how to build with Wendy through practical examples",
   "pages": [
     "tutorials",
+    "chat",
+    "agent-service",
     "camera-exposure",
     "stagefile",
     "multi-app-deployments",

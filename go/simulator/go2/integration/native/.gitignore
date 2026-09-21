@@ -1,0 +1,3 @@
+.vm-deps/
+.vm-deps.*.tmp/
+__pycache__/

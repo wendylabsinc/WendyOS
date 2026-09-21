@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // MultiSpinnerServiceStatus describes the build state of a single service row.
@@ -173,23 +174,35 @@ func (m MultiSpinnerModel) View() string {
 		return ""
 	}
 
-	running := 0
-	for _, r := range m.rows {
-		if r.status == MultiSpinnerRunning || r.status == MultiSpinnerPending {
-			running++
-		}
-	}
-
 	var sb strings.Builder
-	nameStyle := lipgloss.NewStyle().Width(m.nameWidth)
-	sb.WriteString(fmt.Sprintf("%s %s\n", m.spinner.View(), msTitleStyle.Render(m.title)))
+	singleLine := strings.NewReplacer("\r", " ", "\n", " ", "\t", " ")
+	nameWidth := m.nameWidth
+	if m.width > 0 {
+		// Reserve at least half of the row after the status icon for detail.
+		nameWidth = min(nameWidth, max(1, (m.width-4)/2))
+	}
+	nameStyle := lipgloss.NewStyle().Width(nameWidth)
+	renderName := func(name string) string {
+		return nameStyle.Render(ansi.Truncate(singleLine.Replace(name), nameWidth-1, "…"))
+	}
+	writeLine := func(line string) {
+		// Details come from build output. Embedded newlines or long rows must
+		// not change the number of physical lines occupied by a service.
+		line = singleLine.Replace(line)
+		if m.width > 0 {
+			line = ansi.Truncate(line, m.width, "…")
+		}
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	writeLine(fmt.Sprintf("%s %s", m.spinner.View(), msTitleStyle.Render(m.title)))
 
 	for _, r := range m.rows {
 		switch r.status {
 		case MultiSpinnerPending:
-			sb.WriteString(fmt.Sprintf("  %s %s%s\n",
+			writeLine(fmt.Sprintf("  %s %s%s",
 				msDimStyle.Render("·"),
-				msDimStyle.Render(nameStyle.Render(r.name)),
+				msDimStyle.Render(renderName(r.name)),
 				msDimStyle.Render("waiting"),
 			))
 
@@ -198,25 +211,25 @@ func (m MultiSpinnerModel) View() string {
 			if detail == "" {
 				detail = "building..."
 			}
-			sb.WriteString(fmt.Sprintf("  %s %s%s\n",
+			writeLine(fmt.Sprintf("  %s %s%s",
 				m.spinner.View(),
-				nameStyle.Render(r.name),
+				renderName(r.name),
 				msDimStyle.Render(detail),
 			))
 
 		case MultiSpinnerDone:
 			note := fmt.Sprintf("built (%d cached, %d rebuilt) %s",
 				r.cached, r.rebuilt, r.dur.Round(time.Millisecond))
-			sb.WriteString(fmt.Sprintf("  %s %s%s\n",
+			writeLine(fmt.Sprintf("  %s %s%s",
 				msCheckStyle.Render("✓"),
-				nameStyle.Render(r.name),
+				renderName(r.name),
 				msDimStyle.Render(note),
 			))
 
 		case MultiSpinnerFailed:
-			sb.WriteString(fmt.Sprintf("  %s %s%s\n",
+			writeLine(fmt.Sprintf("  %s %s%s",
 				msCrossStyle.Render("✗"),
-				nameStyle.Render(r.name),
+				renderName(r.name),
 				msErrorStyle.Render("failed"),
 			))
 		}

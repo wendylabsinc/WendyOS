@@ -20,9 +20,11 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/ros2inspection"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -85,12 +87,16 @@ type ros2SC struct {
 
 // resolveSidecars ensures one sidecar per running RMW (WDY-1594) and returns
 // them with the effective domain: the --domain override when set, else each
-// sidecar's own default. Discovery commands run in all and merge; targeted
-// commands route to one.
+// sidecar's own default. Unscoped requests fall back to the system graph when no
+// ROS 2 app is running. Discovery commands run in all and merge; targeted commands
+// route to one.
 func (s *ROS2Service) resolveSidecars(ctx context.Context, override *int32) ([]ros2SC, error) {
-	sidecars, err := s.runtime.EnsureROS2Sidecars(ctx)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	scope, scopeErr := requestedROS2Scope(ctx)
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
+	if scope == ros2inspection.HostScope {
+		return nil, status.Error(codes.InvalidArgument, "host scope is restricted to topic listing, endpoint information, samples and rates")
 	}
 	ovr := -1
 	if override != nil {
@@ -99,6 +105,21 @@ func (s *ROS2Service) resolveSidecars(ctx context.Context, override *int32) ([]r
 			return nil, status.Errorf(codes.InvalidArgument, "domain ID %d out of range [%d,%d]", id, appconfig.ROS2DomainIDMin, appconfig.ROS2DomainIDMax)
 		}
 		ovr = id
+	}
+	sidecars, err := s.runtime.EnsureROS2Sidecars(ctx)
+	if errors.Is(err, ErrNoRunningROS2Containers) {
+		md, _ := metadata.FromIncomingContext(ctx)
+		_, explicitScope := md[ros2inspection.ScopeMetadata]
+		if runtime, ok := s.runtime.(ROS2SystemRuntime); ok && !explicitScope {
+			var sidecar ROS2Sidecar
+			sidecar, err = runtime.EnsureSystemROS2Sidecar(ctx)
+			if err == nil {
+				sidecars = []ROS2Sidecar{sidecar}
+			}
+		}
+	}
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	out := make([]ros2SC, 0, len(sidecars))
 	for _, sc := range sidecars {
@@ -246,7 +267,7 @@ func (s *ROS2Service) ListNodes(ctx context.Context, req *agentpbv2.ListROS2Node
 }
 
 func (s *ROS2Service) ListTopics(ctx context.Context, req *agentpbv2.ListROS2TopicsRequest) (*agentpbv2.ListROS2TopicsResponse, error) {
-	scs, err := s.resolveSidecars(ctx, req.DomainId)
+	scs, err := s.resolveInspectionSidecars(ctx, req.DomainId)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +335,7 @@ LOOP:
 }
 
 func (s *ROS2Service) GetTopicInfo(ctx context.Context, req *agentpbv2.GetROS2TopicInfoRequest) (*agentpbv2.GetROS2TopicInfoResponse, error) {
-	scs, err := s.resolveSidecars(ctx, req.DomainId)
+	scs, err := s.resolveInspectionSidecars(ctx, req.DomainId)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +621,12 @@ func (s *ROS2Service) Doctor(ctx context.Context, req *agentpbv2.ROS2DoctorReque
 
 func (s *ROS2Service) EchoTopic(req *agentpbv2.EchoROS2TopicRequest, stream grpc.ServerStreamingServer[agentpbv2.ROS2Message]) error {
 	ctx := stream.Context()
-	scs, err := s.resolveSidecars(ctx, req.DomainId)
+	if opts, err := requestedLidarOptions(ctx, req); err != nil {
+		return err
+	} else if opts != nil {
+		return s.echoLidar(req, stream, opts)
+	}
+	scs, err := s.resolveInspectionSidecars(ctx, req.DomainId)
 	if err != nil {
 		return err
 	}
@@ -615,11 +641,13 @@ func (s *ROS2Service) EchoTopic(req *agentpbv2.EchoROS2TopicRequest, stream grpc
 	pr, pw := io.Pipe()
 	execDone := make(chan error, 1)
 	go func() {
-		_, execErr := s.runtime.ExecROS2(execCtx, ROS2ExecOptions{
+		stderr := &ros2StderrTail{}
+		code, execErr := s.runtime.ExecROS2(execCtx, ROS2ExecOptions{
 			DomainID:    sc.domainID,
 			SidecarName: sc.name,
 			Args:        []string{"topic", "echo", req.GetTopic()},
-		}, pw, io.Discard)
+		}, pw, stderr)
+		execErr = ros2StreamExitError(code, execErr, stderr)
 		pw.CloseWithError(execErr)
 		execDone <- execErr
 	}()
@@ -645,6 +673,12 @@ func (s *ROS2Service) EchoTopic(req *agentpbv2.EchoROS2TopicRequest, stream grpc
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.TrimSpace(line) != "---" {
+			// Scanner bounds each line, but an array may span many lines.
+			// Bound the complete document before retaining another line.
+			if len(line)+1 > ros2EchoMaxMessageBytes-doc.Len() {
+				_ = drainAndWait()
+				return ros2ScanError("topic echo", req.GetTopic(), bufio.ErrTooLong, ros2EchoMaxMessageBytes)
+			}
 			doc.WriteString(line)
 			doc.WriteString("\n")
 			continue
@@ -684,7 +718,7 @@ func (s *ROS2Service) EchoTopic(req *agentpbv2.EchoROS2TopicRequest, stream grpc
 
 func (s *ROS2Service) MonitorHz(req *agentpbv2.MonitorROS2HzRequest, stream grpc.ServerStreamingServer[agentpbv2.ROS2HzSample]) error {
 	ctx := stream.Context()
-	scs, err := s.resolveSidecars(ctx, req.DomainId)
+	scs, err := s.resolveInspectionSidecars(ctx, req.DomainId)
 	if err != nil {
 		return err
 	}
@@ -699,11 +733,13 @@ func (s *ROS2Service) MonitorHz(req *agentpbv2.MonitorROS2HzRequest, stream grpc
 	pr, pw := io.Pipe()
 	execDone := make(chan error, 1)
 	go func() {
-		_, execErr := s.runtime.ExecROS2(execCtx, ROS2ExecOptions{
+		stderr := &ros2StderrTail{}
+		code, execErr := s.runtime.ExecROS2(execCtx, ROS2ExecOptions{
 			DomainID:    sc.domainID,
 			SidecarName: sc.name,
 			Args:        []string{"topic", "hz", req.GetTopic()},
-		}, pw, io.Discard)
+		}, pw, stderr)
+		execErr = ros2StreamExitError(code, execErr, stderr)
 		pw.CloseWithError(execErr)
 		execDone <- execErr
 	}()
@@ -860,7 +896,7 @@ func (s *ROS2Service) RecordBag(stream grpc.BidiStreamingServer[agentpbv2.Record
 			_ = stream.Send(&agentpbv2.RecordROS2BagResponse{
 				State:   agentpbv2.RecordROS2BagResponse_STATE_ERROR,
 				BagName: bagName,
-				Message: s.diagnoseRecorderExit(ctx, recorder.code, recorder.err, output.String()),
+				Message: s.diagnoseRecorderExit(ctx, sc.name, recorder.code, recorder.err, output.String()),
 			})
 			return nil
 		}
@@ -888,13 +924,18 @@ func (s *ROS2Service) RecordBag(stream grpc.BidiStreamingServer[agentpbv2.Record
 // the sidecar (and recorder) joined, killing the DDS session. Raw recorder
 // logs alone are misleading there, so check the anchor first and lead with
 // the actual cause.
-func (s *ROS2Service) diagnoseRecorderExit(ctx context.Context, exitCode int, execErr error, output string) string {
+func (s *ROS2Service) diagnoseRecorderExit(ctx context.Context, sidecarName string, exitCode int, execErr error, output string) string {
+	var verifyErr error
+	if runtime, ok := s.runtime.(ROS2NamedSidecarVerifier); ok {
+		verifyErr = runtime.VerifyROS2SidecarNamed(ctx, sidecarName)
+	} else {
+		verifyErr = s.runtime.VerifyROS2Sidecar(ctx)
+	}
 	var b strings.Builder
-	if verr := s.runtime.VerifyROS2Sidecar(ctx); verr != nil {
-		b.WriteString("the ROS 2 app containers were stopped or redeployed while recording; ")
-		b.WriteString("the recording session was attached to the previous app instance. ")
-		b.WriteString("Restart the recording once the app is running (")
-		b.WriteString(verr.Error())
+	if verifyErr != nil {
+		b.WriteString("the ROS 2 sidecar or its app was stopped or redeployed while recording; ")
+		b.WriteString("restart the recording once the ROS 2 graph is available (")
+		b.WriteString(verifyErr.Error())
 		b.WriteString(")")
 	} else {
 		fmt.Fprintf(&b, "recorder exited unexpectedly (exit code %d)", exitCode)

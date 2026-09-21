@@ -1,0 +1,6 @@
+mujoco==3.3.7
+numpy==1.26.4
+onnxruntime==1.23.2
+Pillow==11.3.0
+PyYAML==6.0.3
+

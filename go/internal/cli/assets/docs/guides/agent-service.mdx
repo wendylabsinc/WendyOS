@@ -1,0 +1,236 @@
+---
+title: Persistent agents and A2A
+description: Run Wendy agents independently of chat and wake them with tasks or sensor events.
+---
+
+# Persistent agents and A2A
+
+`wendy agent serve` hosts a durable task queue for one agent. Run multiple service
+instances with separate configurations, ports, and state directories for parallel
+reasoning, perception, control, or fleet work. Each instance has its own profile,
+model connection, memory, tool policy, and event triggers. Each processes one task
+at a time and can delegate a bounded batch of local children.
+
+The service can run on a developer computer, VM, or device. `workspace` refers to
+the computer hosting the service; `device` selects the Wendy device its tools
+connect to. The LLM endpoint can be local or hosted independently of that choice.
+Closing `wendy chat` does not stop a separately running service.
+
+## Start a service
+
+Generate a configuration, then replace the model ID with one served by your endpoint:
+
+```sh
+wendy agent example > agent.json
+```
+
+`workspace` resolves relative to the configuration file. The example has an empty
+`allow_tools` list. Reads and memory saves can run; mutations require an exact
+entry in `allow_tools`. For example, allowing `container_exec` grants execution
+inside device containers. It is a broad capability, including whatever the
+container's OS permissions permit. Tool policies are not OS sandboxes.
+
+Keep the access token in the environment. For a local shell:
+
+```sh
+export WENDY_AGENT_TOKEN="$(openssl rand -hex 32)"
+wendy agent serve --config ./agent.json --state-dir ./agent-state
+```
+
+In a second terminal with the same token:
+
+```sh
+wendy agent send --prompt "Inspect current device health" --wait
+wendy agent tasks
+wendy agent get --task TASK_ID
+wendy agent cancel --task TASK_ID
+```
+
+The service requires a token even on loopback. The default listener is
+`127.0.0.1:8787`. Remote listeners require `--tls-cert` and `--tls-key`; set
+`--public-url` to the reachable HTTPS base URL. Alternatively, use an SSH or
+Wendy tunnel to the loopback listener, or a TLS reverse proxy. Authentication
+uses `Authorization: Bearer TOKEN`. All authenticated callers share this
+service's task namespace and tool authority. Use separate service instances
+and credentials for separate trust boundaries.
+
+## Durable tasks and event triggers
+
+The service writes each accepted task before acknowledging it. Queued tasks
+resume after a restart. Tasks that were working when the process died become
+failed with an instruction to inspect effects before retrying. This prevents
+automatic repetition of a possibly completed device action. It does not provide
+exactly-once execution of external effects.
+
+Cancellation requests stop active model and tool work, but cannot undo completed
+effects. The next task waits until the canceled worker returns. Queued sensor
+events expire before execution if their observations have become stale.
+
+The default task timeout is 600 seconds. `task_timeout_seconds` accepts 1-3600.
+At most 64 tasks can be pending. `max_tasks` controls retained tasks, defaults to
+200, and accepts 1-1000. New submissions remove the oldest retained terminal task
+when needed. The last 4096 message/event receipts suppress duplicate submissions;
+reusing an ID with different content returns a conflict. Reusing an ID whose
+retained task has expired also returns a conflict while its receipt remains.
+Use `wendy agent send --request-id ID` to reuse a submission ID across client
+retries. `agent_remote` requires a stable `request_id` when sending a task.
+State belongs to the exact configuration that created it. Use a new state
+directory when changing configuration, so queued work cannot silently acquire a
+new model, profile, device, or tool policy.
+
+Sensor workers send observations to `POST /events`. The example configuration
+contains this trigger:
+
+```json
+{
+  "type": "person.detected",
+  "source": "front-camera",
+  "min_confidence": 0.85,
+  "consecutive": 3,
+  "max_gap_seconds": 2,
+  "cooldown_seconds": 30,
+  "max_age_seconds": 10,
+  "prompt": "Inspect this observation and report whether assistance is needed."
+}
+```
+
+Post an event with a unique ID, source timestamp, and the model's confidence:
+
+```sh
+wendy agent event --file observation.json
+```
+
+```json
+{
+  "id": "front-camera-frame-123",
+  "type": "person.detected",
+  "source": "front-camera",
+  "timestamp": "2026-09-16T10:00:00Z",
+  "confidence": 0.93,
+  "data": {"track_id": 7, "frame_reference": "frame-123.jpg"}
+}
+```
+
+Use the actual observation timestamp. Workers must publish low-confidence
+observations too if they should break a consecutive sequence. A gap longer than
+`max_gap_seconds` resets the sequence. Duplicate IDs do not advance it. Stale,
+future, or out-of-order observations do not trigger reasoning. Threshold state
+and cooldown survive service restarts. An event below the threshold returns
+`accepted: false` with a reason; an accepted event returns its durable task ID.
+
+Continuous camera/audio/LiDAR inference runs in deployed workers. Sensor agents
+can select pinned models, download them, and configure workers through authorized
+Wendy/container tools. Confidence thresholds belong to the selected model and
+application. The agent service does not itself decode live media, allocate GPUs,
+or implement actuator loops. Device-control agents supervise local motion
+controllers, which own resource limits, motion arbitration, watchdogs, and stops.
+
+## Remote agents through A2A
+
+The service implements the text task operations of the A2A 1.0 HTTP+JSON binding:
+
+| Endpoint | Operation |
+| --- | --- |
+| `GET /.well-known/agent-card.json` | Public discovery card |
+| `POST /message:send` | Submit a text task |
+| `GET /tasks/{id}` | Read task status and artifacts |
+| `GET /tasks` | List retained tasks with pagination |
+| `POST /tasks/{id}:cancel` | Request cancellation |
+
+Send `A2A-Version: 1.0`. Messages use `role: "ROLE_USER"`, `messageId`, and
+`parts: [{"text": "..."}]`. `configuration.returnImmediately: true` returns the
+task without waiting. Otherwise the request waits for a terminal result. Tasks
+use the A2A `TASK_STATE_*` values and return text artifacts. The implementation
+supports fresh tasks with optional context IDs, not continuation of an existing
+task. Context IDs group tasks; they do not restore conversation transcripts.
+Streaming, push notifications, binary parts, JSON-RPC, and extended cards are not
+supported or advertised. See the [A2A specification](https://a2a-protocol.org/v1.0.0/specification/).
+
+Chat can submit tasks to named peers configured by the user:
+
+```json
+{
+  "robot-brain": {
+    "url": "https://robot.example:8787",
+    "token_env": "ROBOT_AGENT_TOKEN",
+    "description": "Reasoning agent on the warehouse robot"
+  }
+}
+```
+
+```sh
+wendy chat --profile fleet --agent-peers ./peers.json
+```
+
+The `agent_remote` tool submits, polls, or cancels tasks. It requires approval and
+accepts a peer name, never a model-supplied URL or credential. Remote tasks use
+the destination service's tool policy. They survive the submitting chat and
+must be canceled explicitly. The same peer map can appear under `peers` in a
+service configuration; allow `agent_remote` there to authorize unattended remote
+delegation. Wendy services carry a delegation counter between peers and stop after four
+remote hops. Third-party agents must preserve that metadata for this limit to
+span their delegation. Local children cannot recursively spawn more agents or
+submit peer tasks. Per-profile child models use the `agent_models` map in service config.
+
+## Start on boot
+
+Run the foreground service under your OS service manager or as a Wendy
+application with persistent storage. For a Linux host with the CLI installed at
+`/usr/local/bin/wendy`, an example systemd unit is:
+
+```ini
+[Unit]
+Description=Wendy device reasoning agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wendy
+EnvironmentFile=/etc/wendy/device-brain.env
+ExecStart=/usr/local/bin/wendy agent serve --config /etc/wendy/device-brain.json --state-dir /var/lib/wendy/device-brain
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Create the service account and writable state directory, give that account access
+to its workspace and device credentials, and restrict the environment file to
+that account. Set `WENDY_AGENT_TOKEN` and any configured model keys in the
+environment file. Install the unit and enable it through systemd. When deploying
+in a Wendy container, mount `--state-dir` on persistent storage and supply model
+and agent credentials through the application's environment configuration.
+
+## Trust and observation data
+
+Clients and services require tokens of at least 16 characters. Generate random
+tokens and use separate credentials for each peer. Plain HTTP trusts local
+processes, including a process that takes over a forwarded port. Wendy pins
+`localhost` HTTP URLs and listeners to `127.0.0.1`; remote access requires HTTPS
+or an authenticated tunnel. Origin-header rejection only limits browser
+requests. The bearer secret grants the service's shared task and tool authority.
+
+Sensor event payloads are sent to the configured model, including hosted models.
+Redact sensitive fields at the producer. Wendy quotes the payload as untrusted
+JSON and adds system instructions that observations cannot authorize actions.
+Keep mutation allowlists narrow; prompt formatting is not an authorization
+boundary.
+
+Delegation depth bounds cooperative peers. It does not authenticate peers or
+prevent a malicious peer from resetting its counter. Establish peer trust and
+credentials separately, and apply network rate limits to remote services.
+
+Agent URLs must be origins without a path prefix, such as `https://agent.example`.
+Task-list pages may contain fewer tasks than `pageSize` to stay within the 1 MiB
+response limit. Follow `nextPageToken` until it is empty.
+
+Sensor ingress admits 10 new events per second with a burst of 10, shared across
+sources. Excess events receive HTTP 429 with `Retry-After: 1` before any state
+write. Producers must sample or back off; camera-rate streams should send derived
+observations rather than every frame. Retrying an already recorded event does not
+consume this budget. The limiter resets on service restart.
+
+Agent model map keys must be exact profile names, without surrounding whitespace.

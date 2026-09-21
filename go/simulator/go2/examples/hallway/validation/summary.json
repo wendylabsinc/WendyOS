@@ -1,0 +1,67 @@
+{
+  "source_sha256": {
+    "admission.py": "d9968732bed27df9fa70c9a684c0a4c445a289163eb0eff8d5fec401428ed7a1",
+    "controller.py": "8b75c6aae937bc5fa6d669149578f00ad3742281c48da680aefaea05cd820371",
+    "go2_io.py": "338725ea5186c9de385cce2965f542333b09a52c111c3ab78bc0b4089630714f",
+    "preview.py": "a808d2b2f1a86af8fe8f19598e462b2e9c8a1172427d3a4088caf22cc958f8ae",
+    "report.py": "f5232aaacd4ff36a9de9c81184e883b44a9f1efcc93572d73c021e710c4fe275",
+    "ros_app.py": "c76432cecd7a4c36e47f6640b935b17b42275f3fdf698a27eea05cbb3cf9bb1d",
+    "ros_smoke.py": "e24e2983d0b9c6bfa15270d87ed103a7dfc1e9988051aa1b66476312c9ad67e4",
+    "simulate.py": "6159703f91efc5a88b959841871b7c5e104243b2a72bff918903e7f9d2e8c1b8",
+    "test_admission.py": "261463c2897981eb459a61475dc414cbff15e9f1fd5ff4e4f246348b74ae8998",
+    "test_controller.py": "1ac49377d2394929a8641e35c327bcb07e71d2a98c6cf085889a5824d8f06444",
+    "test_physics.py": "c5b1f49d2c7b883213b4a332abb180dc32336b39b1316e5a65f915c5163981ee",
+    "world.py": "b0d1d2ec4c6bd8f5338cd7d9d5db90b138f0b7f9264df4fe9c53816bcb80caa3",
+    "Dockerfile": "bb4706263d187e24b7d7c5cadeab1b1d9055b91a83bcf473ee12f63edb7a7b52"
+  },
+  "controller_and_admission_tests": 26,
+  "physics_tests": 7,
+  "forward_speed_m_s": 0.55,
+  "hardware_motion_tested": false,
+  "ros": {
+    "passed": true,
+    "scope": "MuJoCo hallway with real ROS DDS and native Move requests",
+    "elapsed_s": 25.980836955000996,
+    "hallway": {
+      "layout": "corner",
+      "width_m": 1.4,
+      "wall_contacts": 0
+    },
+    "position": [
+      2.989926049331313,
+      4.3388574100009105,
+      0.3530557892022085
+    ],
+    "controller": {
+      "active": false,
+      "state": "stopped",
+      "reason": "blocked_or_dead_end",
+      "distance_m": 7.432780592293687,
+      "turns": 1,
+      "visited_cells": 8,
+      "command": [
+        0.0,
+        0.0
+      ],
+      "scan": {
+        "front": 0.5924404444688308,
+        "left": 0.6670730273006686,
+        "right": 0.7003864921658645,
+        "left_exit": 0.6878536520405091,
+        "right_exit": 0.712079297956878,
+        "radius": 0.6079179867315698,
+        "observed": 72,
+        "total": 72
+      },
+      "scan_age": 0.24115056100708898,
+      "odom_age": 0.09095083600550424,
+      "sensor_errors": {},
+      "ignore_capture_age": true,
+      "capture_age_seconds": {
+        "scan": 0.073916731,
+        "odom": 0.018144541
+      }
+    },
+    "native_commands_accepted": 550
+  }
+}

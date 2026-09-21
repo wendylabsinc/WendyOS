@@ -19,8 +19,9 @@ import (
 // certificate can call.
 func newDeviceBuildHostCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "build-host",
-		Short: "Manage whether this device accepts remote builds",
+		Hidden: true,
+		Use:    "build-host",
+		Short:  "Manage whether this device accepts remote builds",
 		Long: "A build host runs image builds submitted by `wendy run --build-host`.\n" +
 			"The role is off by default: running builds for other people is something a\n" +
 			"device opts into, not something it acquires by being reachable.",

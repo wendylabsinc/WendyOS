@@ -25,7 +25,7 @@ func TestDevicePickerShowsLocalAndCloudTabs(t *testing.T) {
 	m = updated.(devicePickerModel)
 
 	view := m.View()
-	for _, want := range []string{"Local", "Cloud", "tab switch", "local-pi"} {
+	for _, want := range []string{"Nearby", "Cloud", "tab switch", "local-pi"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("local picker view does not contain %q: %q", want, view)
 		}

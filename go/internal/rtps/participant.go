@@ -8,14 +8,15 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/ipv4"
 )
 
 // Standard DDS port mapping (RTPS 9.6.1.1) for the well-known ports we need.
-// Our own ports are ephemeral and advertised in SPDP, which sidesteps
-// participant-ID allocation entirely.
+// Wired-interface ports are ephemeral and advertised in SPDP. Loopback uses a
+// standard participant port so localhost-only peers can find us by unicast.
 const (
 	portBase          = 7400
 	domainIDGain      = 250
@@ -30,13 +31,12 @@ func spdpMulticastPort(domainID int) int { return portBase + domainIDGain*domain
 // us from a peer's participant table.
 const (
 	announceInterval   = 30 * time.Second
-	leaseSeconds       = 30
+	leaseSeconds       = 90
 	maxSampleSize      = 16 * 1024 * 1024
 	maxSampleFragments = 64 * 1024
 	maxFragmentSets    = 8
 	maxFragmentBytes   = 64 * 1024 * 1024
 	fragmentSetTTL     = 30 * time.Second
-	fragmentSweep      = fragmentSetTTL / 2
 )
 
 // Endpoint is a remote writer discovered over SEDP.
@@ -73,8 +73,7 @@ type fragmentSet struct {
 type Config struct {
 	DomainID int
 	// Interface is the network interface to bind discovery multicast to. Empty
-	// means every multicast-capable interface, which is rarely what you want on
-	// a robot with both a WiFi and an internal network.
+	// selects an eligible wired interface; explicit names override filtering.
 	Interface string
 	// NetworkNamespacePID creates the participant's sockets in the network
 	// namespace of this process. The sockets remain attached after the creating
@@ -87,7 +86,8 @@ type Config struct {
 	VerifyNetworkNamespace func() bool
 	// Logf, when set, receives progress lines. Discovery failures are usually
 	// silent by nature, so this is the only way to see what happened.
-	Logf func(format string, args ...any)
+	Logf      func(format string, args ...any)
+	namespace *networkNamespace // pinned by Pool during construction
 }
 
 // Participant is a read-only RTPS participant on one domain.
@@ -109,7 +109,16 @@ type Participant struct {
 	// peers maps a discovered participant to its metatraffic unicast locators.
 	// SEDP announcements must go here — a writer's data locators are a
 	// different endpoint and will not be read as discovery traffic.
-	peers map[GUIDPrefix][]Locator
+	peers      map[GUIDPrefix][]Locator
+	lastReply  map[GUIDPrefix]time.Time
+	peerExpiry map[GUIDPrefix]time.Time
+	// peerLease is the duration a peer advertised (0 = never expires), so any
+	// message from it can push peerExpiry out again without waiting for SPDP.
+	peerLease  map[GUIDPrefix]time.Duration
+	endpointSN map[GUID]SequenceNumber
+	leases     map[*Lease]struct{}
+	closed     chan struct{}
+	closeOnce  sync.Once
 	// ackCount tracks per-writer ACKNACK counts, which RTPS requires to
 	// increase monotonically or the writer ignores the request as a duplicate.
 	ackCount map[writerKey]uint32
@@ -131,17 +140,20 @@ type Participant struct {
 	// Counters, so a discovery failure says where it broke rather than only
 	// that it did. Discovery is silent by nature: nothing errors, packets
 	// simply never arrive.
-	statMcastPkts atomic.Int64
-	statUcastPkts atomic.Int64
-	statRTPS      atomic.Int64
-	statSPDP      atomic.Int64
-	statSEDP      atomic.Int64
-	statUserData  atomic.Int64
-	statPeers     atomic.Int64
-	statHeartbeat atomic.Int64
-	statData      atomic.Int64
-	statDataErr   atomic.Int64
-	statAcksSent  atomic.Int64
+	statMcastPkts         atomic.Int64
+	statUcastPkts         atomic.Int64
+	statRTPS              atomic.Int64
+	statSPDP              atomic.Int64
+	statSEDP              atomic.Int64
+	statUserData          atomic.Int64
+	statPeers             atomic.Int64
+	statHeartbeat         atomic.Int64
+	statData              atomic.Int64
+	statDataErr           atomic.Int64
+	statAcksSent          atomic.Int64
+	statRepliesSent       atomic.Int64
+	statRepliesSuppressed atomic.Int64
+	statLocalIgnored      atomic.Int64
 
 	// seenMu guards histograms of which writer entity IDs are actually sending,
 	// so a "nothing arrived" result can name what did arrive instead.
@@ -154,7 +166,7 @@ type Participant struct {
 	// announce tick. A single announcement is one UDP datagram: if it is lost,
 	// or arrives before the peer has finished discovering us, the subscription
 	// never matches and no data ever flows.
-	subAnnounce [][]byte
+	subAnnounce map[GUID][]byte
 
 	// fragmentsMu isolates potentially large fragment copies from participant
 	// bookkeeping such as subscription changes and discovery updates.
@@ -184,33 +196,39 @@ func (p *Participant) WriterHistogram() (data, heartbeat map[uint32]int) {
 
 // Stats is a snapshot of what the participant has actually seen on the wire.
 type Stats struct {
-	MulticastPackets int64
-	UnicastPackets   int64
-	RTPSMessages     int64
-	SPDPAnnounces    int64
-	SEDPAnnounces    int64
-	UserDataMessages int64
-	PeersSeen        int64
-	Heartbeats       int64
-	AcksSent         int64
-	DataSubmessages  int64
-	DataParseErrors  int64
+	MulticastPackets      int64
+	UnicastPackets        int64
+	RTPSMessages          int64
+	SPDPAnnounces         int64
+	SEDPAnnounces         int64
+	UserDataMessages      int64
+	PeersSeen             int64
+	Heartbeats            int64
+	AcksSent              int64
+	DataSubmessages       int64
+	DataParseErrors       int64
+	SPDPRepliesSent       int64
+	SPDPRepliesSuppressed int64
+	LocalMessagesIgnored  int64
 }
 
 // Stats reports receive counters.
 func (p *Participant) Stats() Stats {
 	return Stats{
-		MulticastPackets: p.statMcastPkts.Load(),
-		UnicastPackets:   p.statUcastPkts.Load(),
-		RTPSMessages:     p.statRTPS.Load(),
-		SPDPAnnounces:    p.statSPDP.Load(),
-		SEDPAnnounces:    p.statSEDP.Load(),
-		UserDataMessages: p.statUserData.Load(),
-		PeersSeen:        p.statPeers.Load(),
-		Heartbeats:       p.statHeartbeat.Load(),
-		AcksSent:         p.statAcksSent.Load(),
-		DataSubmessages:  p.statData.Load(),
-		DataParseErrors:  p.statDataErr.Load(),
+		MulticastPackets:      p.statMcastPkts.Load(),
+		UnicastPackets:        p.statUcastPkts.Load(),
+		RTPSMessages:          p.statRTPS.Load(),
+		SPDPAnnounces:         p.statSPDP.Load(),
+		SEDPAnnounces:         p.statSEDP.Load(),
+		UserDataMessages:      p.statUserData.Load(),
+		PeersSeen:             p.statPeers.Load(),
+		Heartbeats:            p.statHeartbeat.Load(),
+		AcksSent:              p.statAcksSent.Load(),
+		DataSubmessages:       p.statData.Load(),
+		DataParseErrors:       p.statDataErr.Load(),
+		SPDPRepliesSent:       p.statRepliesSent.Load(),
+		SPDPRepliesSuppressed: p.statRepliesSuppressed.Load(),
+		LocalMessagesIgnored:  p.statLocalIgnored.Load(),
 	}
 }
 
@@ -220,14 +238,19 @@ func (p *Participant) logf(format string, args ...any) {
 	}
 }
 
-// NewParticipant creates and starts a participant: it binds its sockets, joins
-// the domain's discovery multicast group, and begins announcing itself.
-func NewParticipant(cfg Config) (*Participant, error) {
-	p := &Participant{
+func newParticipant(cfg Config) *Participant {
+	return &Participant{
 		cfg:         cfg,
 		endpoints:   map[GUID]*Endpoint{},
 		subs:        map[uint32]GUID{},
 		peers:       map[GUIDPrefix][]Locator{},
+		lastReply:   map[GUIDPrefix]time.Time{},
+		peerExpiry:  map[GUIDPrefix]time.Time{},
+		peerLease:   map[GUIDPrefix]time.Duration{},
+		endpointSN:  map[GUID]SequenceNumber{},
+		leases:      map[*Lease]struct{}{},
+		closed:      make(chan struct{}),
+		subAnnounce: map[GUID][]byte{},
 		ackCount:    map[writerKey]uint32{},
 		sedpHighest: map[writerKey]SequenceNumber{},
 		subWriters:  map[GUID]struct{}{},
@@ -242,13 +265,29 @@ func NewParticipant(cfg Config) (*Participant, error) {
 		seqByWriter: map[uint32]SequenceNumber{},
 		fragments:   map[fragmentKey]*fragmentSet{},
 	}
+}
+
+// NewParticipant binds sockets and joins discovery. Run drives announcements and
+// receive loops; Close releases the sockets. Pool manages both for its leases.
+func NewParticipant(cfg Config) (*Participant, error) {
+	if cfg.DomainID < 0 || cfg.DomainID > 232 {
+		return nil, fmt.Errorf("rtps: invalid domain %d", cfg.DomainID)
+	}
+	p := newParticipant(cfg)
 	if _, err := rand.Read(p.prefix[:]); err != nil {
 		return nil, fmt.Errorf("rtps: generating GUID prefix: %w", err)
 	}
 	// The first two octets of a GUID prefix are conventionally the vendor ID.
 	p.prefix[0], p.prefix[1] = 0x01, 0x0f
 
-	if err := withNetworkNamespace(cfg.NetworkNamespacePID, cfg.VerifyNetworkNamespace, p.openSockets); err != nil {
+	localParticipants.Store(p.prefix, struct{}{})
+	open := func() error {
+		return withNetworkNamespace(cfg.NetworkNamespacePID, cfg.VerifyNetworkNamespace, p.openSockets)
+	}
+	if cfg.namespace != nil {
+		open = func() error { return cfg.namespace.run(p.openSockets) }
+	}
+	if err := open(); err != nil {
 		_ = p.Close()
 		return nil, err
 	}
@@ -281,10 +320,14 @@ func (p *Participant) openSockets() error {
 	if err != nil {
 		return fmt.Errorf("rtps: joining %s:%d: %w", spdpMulticastAddr, mport, err)
 	}
+	if err := restrictMulticastToJoinedInterfaces(mc); err != nil {
+		_ = mc.Close()
+		return fmt.Errorf("rtps: restricting multicast memberships: %w", err)
+	}
 	_ = mc.SetReadBuffer(2 << 20)
 	p.mcast = mc
 
-	uc, err := net.ListenUDP("udp4", &net.UDPAddr{IP: p.local, Port: 0})
+	uc, err := p.listenUnicast(iface.Flags&net.FlagLoopback != 0)
 	if err != nil {
 		mc.Close()
 		return fmt.Errorf("rtps: binding unicast socket: %w", err)
@@ -305,6 +348,30 @@ func (p *Participant) openSockets() error {
 	return nil
 }
 
+// CycloneDDS localhost-only discovery probes the standard metatraffic ports
+// instead of multicast. Listening on one of those ports makes us discoverable
+// without adding a unicast probe burst of our own. Bind atomically to skip ports
+// already owned by other DDS participants.
+func (p *Participant) listenUnicast(loopback bool) (*net.UDPConn, error) {
+	if !loopback {
+		return net.ListenUDP("udp4", &net.UDPAddr{IP: p.local})
+	}
+	for index := 0; index < 100; index++ {
+		port := spdpMulticastPort(p.cfg.DomainID) + 10 + 2*index
+		if port > 65535 {
+			break
+		}
+		conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: p.local, Port: port})
+		if err == nil {
+			return conn, nil
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("rtps: no available loopback discovery port on domain %d", p.cfg.DomainID)
+}
+
 // resolveInterface picks the interface to bind multicast to and records its
 // IPv4 address, which is what we advertise as our locator.
 func (p *Participant) resolveInterface() (*net.Interface, error) {
@@ -320,23 +387,15 @@ func (p *Participant) resolveInterface() (*net.Interface, error) {
 		p.local = ip
 		return iface, nil
 	}
-	// No interface named: take the first up, non-loopback, multicast-capable
-	// one that has an IPv4 address.
-	ifaces, err := net.Interfaces()
+	ifaces, err := HostInterfaces()
 	if err != nil {
-		return nil, fmt.Errorf("rtps: listing interfaces: %w", err)
+		return nil, err
 	}
-	for i := range ifaces {
-		f := ifaces[i].Flags
-		if f&net.FlagUp == 0 || f&net.FlagLoopback != 0 || f&net.FlagMulticast == 0 {
-			continue
-		}
-		if ip, err := firstIPv4(&ifaces[i]); err == nil {
-			p.local = ip
-			return &ifaces[i], nil
-		}
+	if len(ifaces) == 0 {
+		return nil, fmt.Errorf("rtps: no wired multicast-capable IPv4 interface")
 	}
-	return nil, fmt.Errorf("rtps: no multicast-capable IPv4 interface")
+	p.cfg.Interface = ifaces[0]
+	return p.resolveInterface()
 }
 
 func firstIPv4(iface *net.Interface) (net.IP, error) {
@@ -355,14 +414,85 @@ func firstIPv4(iface *net.Interface) (net.IP, error) {
 }
 
 // Close releases the participant's sockets.
+// localParticipants contains exact active GUID prefixes, never vendor IDs.
+var localParticipants sync.Map
+
 func (p *Participant) Close() error {
-	if p.mcast != nil {
-		p.mcast.Close()
-	}
-	if p.ucast != nil {
-		p.ucast.Close()
-	}
+	p.closeOnce.Do(func() {
+		if p.closed != nil {
+			close(p.closed)
+		}
+		if p.mcast != nil {
+			_ = p.mcast.Close()
+		}
+		if p.ucast != nil {
+			_ = p.ucast.Close()
+		}
+		localParticipants.Delete(p.prefix)
+	})
 	return nil
+}
+
+// Endpoints returns a fresh snapshot, including removal of expired peers.
+func (p *Participant) Endpoints() []Endpoint {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.expirePeersLocked(time.Now())
+	out := make([]Endpoint, 0, len(p.endpoints))
+	for _, ep := range p.endpoints {
+		copy := *ep
+		copy.Locators = append([]Locator(nil), ep.Locators...)
+		copy.Multicast = append([]Locator(nil), ep.Multicast...)
+		out = append(out, copy)
+	}
+	return out
+}
+
+func (p *Participant) discoveryChangedLocked() {
+	for l := range p.leases {
+		select {
+		case l.changed <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (p *Participant) expirePeersLocked(now time.Time) {
+	for prefix, expiry := range p.peerExpiry {
+		if !expiry.IsZero() && !now.Before(expiry) {
+			p.removePeerLocked(prefix)
+		}
+	}
+	// Keep a recent reservation even if the peer expires or disposes itself.
+	// A short advertised lease must not bypass the reply cooldown on rejoin.
+	for prefix, last := range p.lastReply {
+		if _, present := p.peers[prefix]; !present && now.Sub(last) >= announceInterval {
+			delete(p.lastReply, prefix)
+		}
+	}
+}
+
+func (p *Participant) removePeerLocked(prefix GUIDPrefix) {
+	delete(p.peers, prefix)
+	delete(p.peerExpiry, prefix)
+	delete(p.peerLease, prefix)
+	for key := range p.sedpHighest {
+		if key.prefix == prefix {
+			delete(p.sedpHighest, key)
+			delete(p.ackCount, key)
+		}
+	}
+	for guid := range p.endpointSN {
+		if guid.Prefix == prefix {
+			delete(p.endpointSN, guid)
+		}
+	}
+	for guid := range p.endpoints {
+		if guid.Prefix == prefix {
+			delete(p.endpoints, guid)
+		}
+	}
+	p.discoveryChangedLocked()
 }
 
 // Discovered returns the channel of writers found over SEDP.
@@ -374,6 +504,8 @@ func (p *Participant) Samples() <-chan Sample { return p.samples }
 // Run drives the participant until ctx is cancelled: it reads both sockets and
 // re-announces on a timer.
 func (p *Participant) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(4)
 	go func() { defer wg.Done(); p.readLoop(ctx, p.mcast, true) }()
@@ -381,7 +513,11 @@ func (p *Participant) Run(ctx context.Context) {
 	go func() { defer wg.Done(); p.announceLoop(ctx) }()
 	go func() { defer wg.Done(); p.fragmentCleanupLoop(ctx) }()
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-p.closed:
+	}
+	cancel()
 	p.Close()
 	wg.Wait()
 	p.fragmentsMu.Lock()
@@ -391,7 +527,7 @@ func (p *Participant) Run(ctx context.Context) {
 }
 
 func (p *Participant) fragmentCleanupLoop(ctx context.Context) {
-	t := time.NewTicker(fragmentSweep)
+	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -399,6 +535,9 @@ func (p *Participant) fragmentCleanupLoop(ctx context.Context) {
 			return
 		case now := <-t.C:
 			p.expireFragmentSets(now)
+			p.mu.Lock()
+			p.expirePeersLocked(now)
+			p.mu.Unlock()
 		}
 	}
 }
@@ -462,10 +601,12 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 	if err != nil {
 		return
 	}
-	if msg.Prefix == p.prefix {
-		return // our own announcement, echoed back by the multicast group
+	if _, local := localParticipants.Load(msg.Prefix); local || msg.Prefix == p.prefix {
+		p.statLocalIgnored.Add(1)
+		return
 	}
 	p.statRTPS.Add(1)
+	p.renewPeer(msg.Prefix)
 	for _, s := range msg.Submessages {
 		switch s.Kind {
 		case subHEARTBEAT:
@@ -481,9 +622,6 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 			p.seenMu.Lock()
 			p.seenData[d.WriterID]++
 			p.seenMu.Unlock()
-			if len(d.Payload) == 0 {
-				continue
-			}
 			switch d.WriterID {
 			case entitySPDPWriter:
 				p.statSPDP.Add(1)
@@ -493,8 +631,10 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 				p.noteSEDPReceived(msg.Prefix, d.WriterID, d.WriterSN)
 				p.handleSEDPPublication(d)
 			default:
-				p.statUserData.Add(1)
-				p.handleUserData(msg.Prefix, d)
+				if len(d.Payload) != 0 {
+					p.statUserData.Add(1)
+					p.handleUserData(msg.Prefix, d)
+				}
 			}
 		case subDATAFRAG:
 			p.statData.Add(1)
@@ -514,6 +654,17 @@ func (p *Participant) handle(pkt []byte, src *net.UDPAddr) {
 			p.handleUserDataFrag(msg.Prefix, f)
 		}
 	}
+}
+
+// renewPeer extends a known peer's lease on any message from it. CycloneDDS
+// renews a proxy participant the same way, so a lost SPDP datagram from a
+// short-lease peer does not tear down a stream that is still delivering.
+func (p *Participant) renewPeer(prefix GUIDPrefix) {
+	p.mu.Lock()
+	if lease, ok := p.peerLease[prefix]; ok && lease > 0 {
+		p.peerExpiry[prefix] = time.Now().Add(lease)
+	}
+	p.mu.Unlock()
 }
 
 // handleHeartbeat answers a SEDP publications writer so it replays its history.
@@ -581,51 +732,96 @@ func (p *Participant) noteSEDPReceived(prefix GUIDPrefix, entity uint32, sn Sequ
 // to its metatraffic locator, so it learns about us without waiting a full
 // announce interval.
 func (p *Participant) handleSPDP(prefix GUIDPrefix, d *DataSubmessage) {
+	if disposed, _ := discoveryDisposal(d); disposed {
+		p.mu.Lock()
+		p.removePeerLocked(prefix)
+		p.mu.Unlock()
+		return
+	}
 	params, order, err := parseParameterList(d.Payload)
 	if err != nil {
 		return
 	}
+	if _, err := parameterListLength(d.Payload[4:], order); err != nil {
+		return
+	}
 	var metaUnicast []Locator
+	seenLocators := map[string]bool{}
+	now := time.Now()
+	lease := time.Duration(leaseSeconds) * time.Second
 	for _, prm := range params {
-		if prm.id == pidMetatrafficUnicastLocator {
+		switch prm.id {
+		case pidParticipantGUID:
+			g, ok := paramGUID(prm.value, order)
+			if !ok || g.Prefix != prefix {
+				return
+			}
+		case pidParticipantLeaseDuration:
+			if len(prm.value) >= 8 {
+				sec, frac := order.Uint32(prm.value[:4]), order.Uint32(prm.value[4:8])
+				if sec == 0x7fffffff && frac == 0xffffffff {
+					lease = 0
+				} else if sec <= 0x7fffffff {
+					lease = time.Duration(sec)*time.Second + time.Duration((uint64(frac)*uint64(time.Second))>>32)
+				}
+			}
+		case pidMetatrafficUnicastLocator:
 			if l, ok := paramLocator(prm.value, order); ok {
-				metaUnicast = append(metaUnicast, l)
+				if addr, valid := l.UDPAddr(); valid && !addr.IP.IsMulticast() && !seenLocators[addr.String()] {
+					seenLocators[addr.String()] = true
+					metaUnicast = append(metaUnicast, l)
+				}
 			}
 		}
 	}
 	if len(metaUnicast) == 0 {
 		return
 	}
-
+	expiry := time.Time{}
+	if lease > 0 {
+		expiry = now.Add(lease)
+	}
 	p.mu.Lock()
 	_, seen := p.peers[prefix]
 	p.peers[prefix] = metaUnicast
+	p.peerExpiry[prefix] = expiry
+	p.peerLease[prefix] = lease
+	last := p.lastReply[prefix]
+	reply := last.IsZero() || now.Sub(last) >= announceInterval
+	// Reserve while locked: multicast and unicast receive loops race here.
+	if reply {
+		p.lastReply[prefix] = now
+	}
 	p.mu.Unlock()
-
 	if !seen {
 		p.statPeers.Add(1)
-		addrs := make([]string, 0, len(metaUnicast))
-		for _, l := range metaUnicast {
-			if a, ok := l.UDPAddr(); ok {
-				addrs = append(addrs, a.String())
-			}
-		}
-		p.logf("peer %x metatraffic=%v", prefix, addrs)
+		p.logf("peer %x metatraffic=%v", prefix, metaUnicast)
 	}
-
-	// Reply directly so the peer learns about us now rather than at its own
-	// announce interval, which on CycloneDDS defaults to 30s.
+	if !reply {
+		p.statRepliesSuppressed.Add(1)
+		return
+	}
+	dgram := p.spdpDatagram()
 	for _, l := range metaUnicast {
-		if addr, ok := l.UDPAddr(); ok {
-			p.sendTo(addr, p.spdpDatagram())
+		if addr, ok := l.UDPAddr(); ok && p.sendTo(addr, dgram) {
+			p.statRepliesSent.Add(1)
 		}
 	}
 }
 
 // handleSEDPPublication turns a remote publication announcement into an
-// Endpoint. A DATA with the D flag clear (a dispose) carries no payload we can
-// read, so those simply do not produce an endpoint.
+// Endpoint, or removes the endpoint named by a disposal key.
 func (p *Participant) handleSEDPPublication(d *DataSubmessage) {
+	if disposed, guid := discoveryDisposal(d); disposed {
+		p.mu.Lock()
+		if guid != (GUID{}) && d.WriterSN > p.endpointSN[guid] {
+			p.endpointSN[guid] = d.WriterSN
+			delete(p.endpoints, guid)
+			p.discoveryChangedLocked()
+		}
+		p.mu.Unlock()
+		return
+	}
 	params, order, err := parseParameterList(d.Payload)
 	if err != nil {
 		return
@@ -653,12 +849,22 @@ func (p *Participant) handleSEDPPublication(d *DataSubmessage) {
 			}
 		}
 	}
-	if ep.Topic == "" || ep.Type == "" {
+	if ep.Topic == "" || ep.Type == "" || ep.GUID == (GUID{}) {
 		return
 	}
 	p.mu.Lock()
+	if sn, ok := p.endpointSN[ep.GUID]; ok && d.WriterSN <= sn {
+		p.mu.Unlock()
+		return
+	}
+	p.endpointSN[ep.GUID] = d.WriterSN
 	_, seen := p.endpoints[ep.GUID]
 	p.endpoints[ep.GUID] = ep
+	if _, ok := p.peerExpiry[ep.GUID.Prefix]; !ok {
+		p.peerLease[ep.GUID.Prefix] = time.Duration(leaseSeconds) * time.Second
+		p.peerExpiry[ep.GUID.Prefix] = time.Now().Add(p.peerLease[ep.GUID.Prefix])
+	}
+	p.discoveryChangedLocked()
 	p.mu.Unlock()
 	if seen {
 		return
@@ -701,9 +907,18 @@ func (p *Participant) deliverUserData(writer GUID, sn SequenceNumber, payload []
 		SN:      sn,
 		Payload: payload,
 	}
-	select {
-	case p.samples <- s:
-	default: // drop rather than block the read loop; the newest sample wins
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.subWriters[writer]; !ok {
+		return
+	}
+	if len(p.leases) == 0 {
+		enqueueSample(p.samples, s)
+	}
+	for l := range p.leases {
+		if _, ok := l.subs[writer]; ok {
+			enqueueSample(l.samples, s)
+		}
 	}
 }
 
@@ -817,43 +1032,76 @@ func (p *Participant) dropFragmentSetLocked(key fragmentKey) {
 // discovery multicast group and directly to the writer's participant.
 func (p *Participant) Subscribe(ep Endpoint) error {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	select {
+	case <-p.closed:
+		return errors.New("rtps: participant closed")
+	default:
+	}
+	if _, ok := p.subWriters[ep.GUID]; ok {
+		return nil
+	}
 	entity := (p.nextEntity << 8) | entityUserReaderNoKey
 	p.nextEntity++
 	p.subs[entity] = ep.GUID
 	p.subWriters[ep.GUID] = struct{}{}
-	p.mu.Unlock()
-
 	reader := GUID{Prefix: p.prefix, EntityID: entity}
 	payload := p.subscriptionPayload(reader, ep)
-	data := buildData(entityUnknown, entitySEDPSubWriter, p.nextSeq(entitySEDPSubWriter), payload)
-	dgram := buildMessage(p.prefix, data)
+	p.seqByWriter[entitySEDPSubWriter]++
+	dgram := buildMessage(p.prefix, buildData(entityUnknown, entitySEDPSubWriter, p.seqByWriter[entitySEDPSubWriter], payload))
+	p.subAnnounce[ep.GUID] = dgram
+	p.sendDiscoveryLocked(dgram)
+	return nil
+}
 
+// Unsubscribe removes delivery and recurring announcements and disposes the reader.
+func (p *Participant) Unsubscribe(writer GUID) {
 	p.mu.Lock()
-	p.subAnnounce = append(p.subAnnounce, dgram)
-	p.mu.Unlock()
-
-	p.sendTo(&net.UDPAddr{
-		IP:   net.ParseIP(spdpMulticastAddr),
-		Port: spdpMulticastPort(p.cfg.DomainID),
-	}, dgram)
-
-	// Also unicast it to every known peer's *metatraffic* locator. Sending to
-	// the writer's data locators instead would be wrong: those belong to a
-	// different endpoint and are not read as discovery traffic.
-	p.mu.Lock()
-	var targets []Locator
-	for _, ls := range p.peers {
-		targets = append(targets, ls...)
+	defer p.mu.Unlock()
+	if _, ok := p.subWriters[writer]; !ok {
+		return
 	}
-	p.mu.Unlock()
-	for _, l := range targets {
-		if addr, ok := l.UDPAddr(); ok {
-			p.sendTo(addr, dgram)
+	delete(p.subWriters, writer)
+	delete(p.subAnnounce, writer)
+	for entity, guid := range p.subs {
+		if guid != writer {
+			continue
+		}
+		delete(p.subs, entity)
+		p.seqByWriter[entitySEDPSubWriter]++
+		dgram := buildMessage(p.prefix, buildDispose(entitySEDPSubWriter, p.seqByWriter[entitySEDPSubWriter], GUID{Prefix: p.prefix, EntityID: entity}))
+		p.sendDiscoveryLocked(dgram)
+	}
+}
+
+func (p *Participant) sendDiscoveryLocked(dgram []byte) {
+	p.sendTo(&net.UDPAddr{IP: net.ParseIP(spdpMulticastAddr), Port: spdpMulticastPort(p.cfg.DomainID)}, dgram)
+	seen := map[string]bool{}
+	for _, locators := range p.peers {
+		for _, loc := range locators {
+			if addr, ok := loc.UDPAddr(); ok && !seen[addr.String()] {
+				seen[addr.String()] = true
+				p.sendTo(addr, dgram)
+			}
 		}
 	}
-	p.logf("announced reader %s for %s [%s] to %d peer locators",
-		reader, ep.Topic, ep.Type, len(targets))
-	return nil
+}
+
+// Callers serialize producers. Never wait for a consumer, and keep the newest four.
+func enqueueSample(queue chan Sample, sample Sample) {
+	select {
+	case queue <- sample:
+		return
+	default:
+	}
+	select {
+	case <-queue:
+	default:
+	}
+	select {
+	case queue <- sample:
+	default:
+	}
 }
 
 // nextSeq returns the next sequence number for one of our writers.
@@ -917,30 +1165,17 @@ func (p *Participant) announce() {
 	}
 	p.sendTo(addr, p.spdpDatagram())
 
-	// Re-send any subscription announcements. Peers discovered after the first
-	// announcement would otherwise never learn about our reader.
 	p.mu.Lock()
-	dgrams := make([][]byte, len(p.subAnnounce))
-	copy(dgrams, p.subAnnounce)
-	var targets []Locator
-	for _, ls := range p.peers {
-		targets = append(targets, ls...)
-	}
-	p.mu.Unlock()
-
-	for _, d := range dgrams {
-		p.sendTo(addr, d)
-		for _, l := range targets {
-			if a, ok := l.UDPAddr(); ok {
-				p.sendTo(a, d)
-			}
-		}
+	defer p.mu.Unlock()
+	for _, dgram := range p.subAnnounce {
+		p.sendDiscoveryLocked(dgram)
 	}
 }
 
-func (p *Participant) sendTo(addr *net.UDPAddr, pkt []byte) {
+func (p *Participant) sendTo(addr *net.UDPAddr, pkt []byte) bool {
 	if p.ucast == nil {
-		return
+		return false
 	}
-	_, _ = p.ucast.WriteToUDP(pkt, addr)
+	_, err := p.ucast.WriteToUDP(pkt, addr)
+	return err == nil
 }

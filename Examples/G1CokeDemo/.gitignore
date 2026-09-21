@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+expert/
+bundle/
+output/
+validation-*.json
+MUJOCO_LOG.TXT
+.wendy-hil-*/

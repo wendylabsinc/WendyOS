@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestMultiSpinnerDoneRowShowsCacheCounts(t *testing.T) {
@@ -15,6 +18,35 @@ func TestMultiSpinnerDoneRowShowsCacheCounts(t *testing.T) {
 	v := m.View()
 	if !strings.Contains(v, "4 cached") || !strings.Contains(v, "2 rebuilt") {
 		t.Fatalf("done row missing cache counts:\n%s", v)
+	}
+}
+
+func TestMultiSpinnerRowsFitTerminal(t *testing.T) {
+	names := []string{"adapter", "benchmark", "fsm", "inference", strings.Repeat("long-service-", 12)}
+	m := NewMultiSpinner("Building 5 service(s)...", names)
+	m.rows[0].status = MultiSpinnerRunning
+	m.rows[0].detail = "pull dustynv/pytorch:2.7-r36.4.0-cu128-24.04 · " + strings.Repeat("downloading 界 ", 20)
+	m.rows[1].status = MultiSpinnerRunning
+	m.rows[1].detail = "compiling\r\nnext line\twith progress"
+	m.rows[2].status = MultiSpinnerDone
+	m.rows[2].dur = time.Minute
+	m.rows[3].status = MultiSpinnerFailed
+
+	for _, width := range []int{200, 80, 40, 10, 1, 100} {
+		next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		m = next.(MultiSpinnerModel)
+		lines := strings.Split(strings.TrimSuffix(m.View(), "\n"), "\n")
+		if len(lines) != len(names)+2 {
+			t.Fatalf("width %d: got %d lines, want %d", width, len(lines), len(names)+2)
+		}
+		for _, line := range lines {
+			if got := ansi.StringWidth(line); got > width {
+				t.Errorf("width %d: line occupies %d columns: %q", width, got, line)
+			}
+			if strings.ContainsAny(line, "\r\t") {
+				t.Errorf("control characters in row: %q", line)
+			}
+		}
 	}
 }
 

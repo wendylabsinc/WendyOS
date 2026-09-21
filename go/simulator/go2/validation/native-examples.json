@@ -1,0 +1,45 @@
+{
+  "date": "2026-09-15",
+  "environment": "isolated Docker network, real ROS 2 and MuJoCo, native example client",
+  "physical_motion_tested": false,
+  "route_m": [
+    [
+      0.5,
+      0
+    ],
+    [
+      0.5,
+      -0.5
+    ],
+    [
+      0,
+      -0.5
+    ],
+    [
+      0,
+      0
+    ]
+  ],
+  "completed": true,
+  "seconds": 18.000774019004893,
+  "return_error_m": 0.20356802267968216,
+  "native_commands_accepted": 421,
+  "post_completion_zero_seconds": 2,
+  "observations": [
+    "/utlidar/cloud_base",
+    "/utlidar/robot_odom"
+  ],
+  "commands": "/api/sport/request",
+  "limits": "The default 1 m route can stop for an occluded sector near the box. Missing sectors stay unknown. Physical sensor clock synchronization and calibration were not validated.",
+  "distance_comparison_repeat": {
+    "passed": true,
+    "seconds": 17.304081184993265,
+    "return_error_m": 0.20424309276633762,
+    "arrival_tolerance_m": 0.25,
+    "odom_error_at_completion_m": 0.2386874342333394,
+    "odom_error_after_hold_m": 0.20400903309884025,
+    "native_commands_accepted": 407,
+    "post_completion_zero_seconds": 2,
+    "measurement_note": "Odometry and simulator status are sampled after the zero-command hold, not at identical sensor timestamps."
+  }
+}

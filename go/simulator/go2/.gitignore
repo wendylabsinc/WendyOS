@@ -1,0 +1,18 @@
+assets/
+ros_ws/src/unitree/
+ros_ws/generated_unitree/
+ros_ws/build/
+ros_ws/install/
+ros_ws/log/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+results/
+
+# Reviewed browser dependencies are source inputs, unlike Go's vendor tree.
+!go2_sim/vendor/
+go2_sim/vendor/*
+!go2_sim/vendor/three.module.js
+!go2_sim/vendor/three.core.js
+!go2_sim/vendor/OrbitControls.js

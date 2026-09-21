@@ -1,0 +1,2 @@
+"""Coke demo application."""
+

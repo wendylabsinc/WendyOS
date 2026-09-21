@@ -482,8 +482,8 @@ func (rawCodec) Unmarshal(data []byte, v any) error {
 // black-holed transport that still reports Ready, or a device answering
 // slower than Connect's healthTimeout — makes every invocation pay a probe
 // timeout on top of the direct dial it falls back to; exiting instead lets
-// that direct dial prepare a healthy replacement. Three strikes rather than
-// one so a single canceled stream cannot evict a working broker.
+// that direct dial prepare a healthy replacement. Explicit local cancellation
+// is neutral because it says nothing about whether the upstream answered.
 const maxUnansweredRPCs = 3
 
 type activity struct {
@@ -508,14 +508,24 @@ func (a *activity) markBad() { a.badOnce.Do(func() { close(a.upstreamBad) }) }
 // answered when anything at all came back from the upstream — a message, a
 // clean end-of-stream, or an application-level error status — because any of
 // those proves the retained transport still reaches the device. Cancellations
-// and deadline expiries prove nothing (they are generated client-side) and a
-// run of them is exactly how a black-holed transport looks.
+// and deadline expiries prove nothing (they are generated client-side), but a
+// run of deadline expiries is exactly how a black-holed transport looks.
 func (a *activity) rpcAnswered() { a.failStreak.Store(0) }
 
 func (a *activity) rpcUnanswered() {
 	if a.failStreak.Add(1) >= maxUnansweredRPCs {
 		a.markBad()
 	}
+}
+
+// isLocalCancellation distinguishes an explicit cancel from an expired client
+// deadline, which grpc-go also surfaces as cancellation of the server context.
+func isLocalCancellation(ctx context.Context, err error) bool {
+	if status.Code(err) != codes.Canceled || !errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	deadline, hasDeadline := ctx.Deadline()
+	return !hasDeadline || time.Now().Before(deadline)
 }
 
 func (a *activity) noteUpstreamError(upstream *grpc.ClientConn, err error) {
@@ -555,10 +565,15 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 		activity.activeRPCs.Add(1)
 		activity.touch()
 		answered := false
+		locallyCanceled := false
 		defer func() {
 			if answered {
 				activity.rpcAnswered()
-			} else {
+			} else if !locallyCanceled {
+				// A caller may cancel several parallel RPCs after another part of
+				// the operation decides to fall back. Those locally generated
+				// cancellations say nothing about the retained transport, so they
+				// neither reset nor advance its unanswered-RPC streak.
 				activity.rpcUnanswered()
 			}
 			activity.activeRPCs.Add(-1)
@@ -575,6 +590,7 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 		}
 		upstreamStream, err := upstream.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}, method, callOpts...)
 		if err != nil {
+			locallyCanceled = isLocalCancellation(ctx, err)
 			activity.noteUpstreamError(upstream, err)
 			return err
 		}
@@ -629,6 +645,7 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 				return nil
 			}
 			if err != nil {
+				locallyCanceled = isLocalCancellation(ctx, err)
 				// An application-level status is still an answer — it proves
 				// the retained transport reaches the device. Only the errors a
 				// dead link produces (client-side cancellation or deadline,

@@ -10,8 +10,9 @@ import (
 
 func newDeviceSyncTimeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "sync-time",
-		Short: "Sync the clock on nearby WendyOS devices via Roughtime multicast",
+		Hidden: true,
+		Use:    "sync-time",
+		Short:  "Sync the clock on nearby WendyOS devices via Roughtime multicast",
 		Long: `Queries a Roughtime server for a cryptographically signed timestamp,
 then multicasts the signed proof to all WendyOS devices on the local network.
 Devices verify the Roughtime signature themselves — the Mac is an untrusted relay.`,

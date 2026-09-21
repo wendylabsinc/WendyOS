@@ -21,7 +21,7 @@ func newTestDiscoverTabsModel(authOrg int, defaultOrg int32) discoverTabsModel {
 func TestDiscoverTabsShowsLocalAndCloud(t *testing.T) {
 	m := newTestDiscoverTabsModel(0, 0)
 	view := m.View()
-	for _, want := range []string{"Local", "Cloud", "tab switch", "Scanning for WendyOS devices"} {
+	for _, want := range []string{"Nearby", "Cloud", "tab switch", "Scanning for WendyOS devices"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("local discover view does not contain %q: %q", want, view)
 		}
