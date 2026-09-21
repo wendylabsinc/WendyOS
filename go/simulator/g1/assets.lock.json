@@ -1,0 +1,352 @@
+{
+  "schema_version": 1,
+  "bundle": "g1-29dof-velocity-v0-4960b847-v1",
+  "sources": {
+    "unitree_mujoco": {
+      "repository": "https://github.com/unitreerobotics/unitree_mujoco",
+      "commit": "ae6a8403e272733e9996ef59990880330496177f"
+    },
+    "unitree_rl_lab": {
+      "repository": "https://github.com/unitreerobotics/unitree_rl_lab",
+      "commit": "4960b84732b0c2ec593dccbfe963fda1bcd7b1e3"
+    }
+  },
+  "files": [
+    {
+      "path": "robot/g1_29dof.xml",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/g1_29dof.xml",
+      "sha256": "423e28bd718b19f7a65cda539b6f794ddbb268b4b9bdbd85f4bd982b30729617",
+      "size": 36170,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/g1_29dof.xml"
+    },
+    {
+      "path": "robot/scene_29dof.xml",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/scene_29dof.xml",
+      "sha256": "e254f11acce2ec6f6efa5bf9b15e288bbd0ca29aeeabb1e1d0fea92f65436bbf",
+      "size": 872,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/scene_29dof.xml"
+    },
+    {
+      "path": "robot/meshes/pelvis.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/pelvis.STL",
+      "sha256": "5ba6bbc888e630550140d3c26763f10206da8c8bd30ed886b8ede41c61f57a31",
+      "size": 1060884,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/pelvis.STL"
+    },
+    {
+      "path": "robot/meshes/pelvis_contour_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/pelvis_contour_link.STL",
+      "sha256": "5cc5c2c7a312329e3feeb2b03d3fc09fc29705bd01864f6767e51be959662420",
+      "size": 1805184,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/pelvis_contour_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_hip_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_hip_pitch_link.STL",
+      "sha256": "4725168105ee768ee31638ef22b53f6be2d7641bfd7cfefe803488d884776fa4",
+      "size": 181684,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_hip_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_hip_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_hip_roll_link.STL",
+      "sha256": "91f25922ee8a7c3152790051bebad17b4d9cd243569c38fe340285ff93a97acf",
+      "size": 192184,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_hip_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_hip_yaw_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_hip_yaw_link.STL",
+      "sha256": "a16d88aa6ddac8083aa7ad55ed317bea44b1fa003d314fba88965b7ed0f3b55b",
+      "size": 296284,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_hip_yaw_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_knee_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_knee_link.STL",
+      "sha256": "8d92b9e3d3a636761150bb8025e32514c4602b91c7028d523ee42b3e632de477",
+      "size": 854884,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_knee_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_ankle_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_ankle_pitch_link.STL",
+      "sha256": "d49e3abc6f5b12e532062cd575b87b5ef40cd2a3fc18f54a1ca5bba4f773d51d",
+      "size": 71184,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_ankle_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_ankle_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_ankle_roll_link.STL",
+      "sha256": "c4092af943141d4d9f74232f3cfa345afc6565f46a077793b8ae0e68b39dc33f",
+      "size": 653384,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_ankle_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_hip_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_hip_pitch_link.STL",
+      "sha256": "e4f3c99d7f4a7d34eadbef9461fc66e3486cb5442db1ec50c86317d459f1a9c6",
+      "size": 181284,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_hip_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_hip_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_hip_roll_link.STL",
+      "sha256": "4c254ef66a356f492947f360dd931965477b631e3fcc841f91ccc46d945d54f6",
+      "size": 192684,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_hip_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_hip_yaw_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_hip_yaw_link.STL",
+      "sha256": "e479c2936ca2057e9eb2f7dff6c189b7419d7b8484dea0b298cbb36a2a6aa668",
+      "size": 296284,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_hip_yaw_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_knee_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_knee_link.STL",
+      "sha256": "63c4008449c9bbe701a6e2b557b7a252e90cf3a5abcf54cee46862b9a69f8ec8",
+      "size": 852284,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_knee_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_ankle_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_ankle_pitch_link.STL",
+      "sha256": "15be426539ec1be70246d4d82a168806db64a41301af8b35c197a33348c787a9",
+      "size": 71184,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_ankle_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_ankle_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_ankle_roll_link.STL",
+      "sha256": "4b66222ea56653e627711b56d0a8949b4920da5df091da0ceb343f54e884e3a5",
+      "size": 653784,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_ankle_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/waist_yaw_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/waist_yaw_link.STL",
+      "sha256": "2883f20e03f09b669b5b4ce10677ee6b5191c0934b584d7cbaef2d0662856ffb",
+      "size": 336284,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/waist_yaw_link.STL"
+    },
+    {
+      "path": "robot/meshes/waist_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/waist_roll_link.STL",
+      "sha256": "34f0aa73f41131230be4d25876c944fdf6c24d62553f199ff8b980c15e8913df",
+      "size": 24184,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/waist_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/torso_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/torso_link.STL",
+      "sha256": "e96d023f0368a4e3450b86ca5d4f10227d8141156a373e7da8cb3c93266523e0",
+      "size": 2232984,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/torso_link.STL"
+    },
+    {
+      "path": "robot/meshes/logo_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/logo_link.STL",
+      "sha256": "8571a0a19bc4916fa55f91449f51d5fdefd751000054865a842449429d5f155b",
+      "size": 243384,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/logo_link.STL"
+    },
+    {
+      "path": "robot/meshes/head_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/head_link.STL",
+      "sha256": "d297328b3569fc85074355e76cba6c889d19de5361224bcd3c5b8ce82e13b9b6",
+      "size": 337584,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/head_link.STL"
+    },
+    {
+      "path": "robot/meshes/waist_support_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/waist_support_link.STL",
+      "sha256": "1fae9e1bb609848a1667d32eed8d6083ae443538a306843056a2a660f1b2926a",
+      "size": 150484,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/waist_support_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_shoulder_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_shoulder_pitch_link.STL",
+      "sha256": "f0d1cfd02fcf0d42f95e678eeca33da3afbcc366ffba5c052847773ec4f31d52",
+      "size": 176784,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_shoulder_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_shoulder_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_shoulder_roll_link.STL",
+      "sha256": "fb9df21687773522598dc384f1a2945c7519f11cbc8bd372a49170316d6eee88",
+      "size": 400284,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_shoulder_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_shoulder_yaw_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_shoulder_yaw_link.STL",
+      "sha256": "1aa97e9748e924336567992181f78c7cd0652fd52a4afcca3df6b2ef6f9e712e",
+      "size": 249184,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_shoulder_yaw_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_elbow_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_elbow_link.STL",
+      "sha256": "fa752198accd104d5c4c3a01382e45165b944fbbc5acce085059223324e5bed3",
+      "size": 88784,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_elbow_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_wrist_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_wrist_roll_link.STL",
+      "sha256": "edc387c9a0ba8c2237e9b296d32531426fabeb6f53e58df45c76106bca74148c",
+      "size": 356184,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_wrist_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_wrist_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_wrist_pitch_link.STL",
+      "sha256": "b251d8e05047f695d0f536cd78c11973cfa4e78d08cfe82759336cc3471de3a9",
+      "size": 85984,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_wrist_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_wrist_yaw_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_wrist_yaw_link.STL",
+      "sha256": "83f8fb3a726bf9613d65dd14f0f447cb918c3c95b3938042a0c9c09749267d3b",
+      "size": 318684,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_wrist_yaw_link.STL"
+    },
+    {
+      "path": "robot/meshes/left_rubber_hand.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/left_rubber_hand.STL",
+      "sha256": "cff2221a690fa69303f61fce68f2d155c1517b52efb6ca9262dd56e0bc6e70fe",
+      "size": 2287484,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/left_rubber_hand.STL"
+    },
+    {
+      "path": "robot/meshes/right_shoulder_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_shoulder_pitch_link.STL",
+      "sha256": "24cdb387e0128dfe602770a81c56cdce3a0181d34d039a11d1aaf8819b7b8c02",
+      "size": 176784,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_shoulder_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_shoulder_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_shoulder_roll_link.STL",
+      "sha256": "962b97c48f9ce9e8399f45dd9522e0865d19aa9fd299406b2d475a8fc4a53e81",
+      "size": 401884,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_shoulder_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_shoulder_yaw_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_shoulder_yaw_link.STL",
+      "sha256": "a0b76489271da0c72461a344c9ffb0f0c6e64f019ea5014c1624886c442a2fe5",
+      "size": 249984,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_shoulder_yaw_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_elbow_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_elbow_link.STL",
+      "sha256": "1be925d7aa268bb8fddf5362b9173066890c7d32092c05638608126e59d1e2ab",
+      "size": 88784,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_elbow_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_wrist_roll_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_wrist_roll_link.STL",
+      "sha256": "a7ee9212ff5b94d6cb7f52bb1bbf3f352194d5b598acff74f4c77d340c5b344f",
+      "size": 356084,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_wrist_roll_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_wrist_pitch_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_wrist_pitch_link.STL",
+      "sha256": "d22f8f3b3127f15a63e5be1ee273cd5075786c3142f1c3d9f76cbf43d2a26477",
+      "size": 79584,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_wrist_pitch_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_wrist_yaw_link.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_wrist_yaw_link.STL",
+      "sha256": "bc9dece2d12509707e0057ba2e48df8f3d56db0c79410212963a25e8a50f61a6",
+      "size": 341484,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_wrist_yaw_link.STL"
+    },
+    {
+      "path": "robot/meshes/right_rubber_hand.STL",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/unitree_robots/g1/meshes/right_rubber_hand.STL",
+      "sha256": "99533b778bca6246144fa511bb9d4e555e075c641f2a0251e04372869cd99d67",
+      "size": 2192684,
+      "source": "unitree_mujoco",
+      "upstream_path": "unitree_robots/g1/meshes/right_rubber_hand.STL"
+    },
+    {
+      "path": "policy/policy.onnx",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_rl_lab/4960b84732b0c2ec593dccbfe963fda1bcd7b1e3/deploy/robots/g1_29dof/config/policy/velocity/v0/exported/policy.onnx",
+      "sha256": "610c27e463a8f666aa50a06346678c00b4df3859f10b54bcc1f817c28251406f",
+      "size": 1658204,
+      "source": "unitree_rl_lab",
+      "upstream_path": "deploy/robots/g1_29dof/config/policy/velocity/v0/exported/policy.onnx"
+    },
+    {
+      "path": "policy/deploy.yaml",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_rl_lab/4960b84732b0c2ec593dccbfe963fda1bcd7b1e3/deploy/robots/g1_29dof/config/policy/velocity/v0/params/deploy.yaml",
+      "sha256": "64b04c0596a7010f39f8ac6e9ec46dc750141063cdcf2d42c83ecc444e57bc63",
+      "size": 2403,
+      "source": "unitree_rl_lab",
+      "upstream_path": "deploy/robots/g1_29dof/config/policy/velocity/v0/params/deploy.yaml"
+    },
+    {
+      "path": "licenses/unitree_mujoco.LICENSE",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_mujoco/ae6a8403e272733e9996ef59990880330496177f/LICENSE",
+      "sha256": "a5d73fc4aca9074e3e6fe0b1a0ba763cf9514b2249b7390ed20fe8d53630bf25",
+      "size": 1559,
+      "source": "unitree_mujoco",
+      "upstream_path": "LICENSE"
+    },
+    {
+      "path": "licenses/unitree_rl_lab.LICENSE",
+      "url": "https://raw.githubusercontent.com/unitreerobotics/unitree_rl_lab/4960b84732b0c2ec593dccbfe963fda1bcd7b1e3/LICENCE",
+      "sha256": "ff28cacaef7b9919a0fb905136cf4ccffba5191522bf5d024c4339932c0edc28",
+      "size": 11362,
+      "source": "unitree_rl_lab",
+      "upstream_path": "LICENCE"
+    }
+  ]
+}

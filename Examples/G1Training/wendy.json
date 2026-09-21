@@ -1,0 +1,21 @@
+{
+  "appId": "sh.wendy.examples.g1-training",
+  "platform": "linux",
+  "version": "0.2.0",
+  "frameworks": {
+    "ros2": {
+      "domainId": 0,
+      "rmw": "rmw_cyclonedds_cpp",
+      "distro": "humble",
+      "discoveryScope": "app"
+    }
+  },
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8891 }
+  ],
+  "readiness": {
+    "tcpSocket": { "port": 8891 },
+    "timeoutSeconds": 60
+  }
+}

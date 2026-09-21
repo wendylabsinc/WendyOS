@@ -43,7 +43,7 @@ func (s *mcpServer) registerTelemetryTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("telemetry_logs", logsOpts...), s.handleTelemetryLogs)
 
 	metricsOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Stream a bounded snapshot of OTLP metrics from the connected device"),
+		mcpgo.WithDescription("Stream a bounded snapshot of OTLP metrics from the connected device. For the device's battery level and charge state, use device_info."),
 		mcpgo.WithString("app_name",
 			mcpgo.Description("Filter by app/container name (optional)"),
 		),

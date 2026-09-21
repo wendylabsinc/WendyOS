@@ -1,0 +1,131 @@
+{
+  "kind": "go2-dds-isolation",
+  "results": {
+    "legacy": {
+      "image": "sha256:aa52209afad82e816e2b1cae95af7248af14158903291c4d4b8f1837ba76c349",
+      "backend": "legacy",
+      "internal_network": true,
+      "started_at": "2026-09-12T18:16:07.773961+00:00",
+      "udp_ports": [
+        28901,
+        7417,
+        55213
+      ],
+      "runtime_sources": {
+        "isolation.py": "e152f190130288d20ab265d0c90da6de1afe5ab106b5b4d95731d5aaf9dd245b",
+        "isolation_legacy.py": "8760a3bcf601b1774d5b091b2aa4cee8252b3ac5c016ccb6fa991aa2ac9aee8e"
+      },
+      "ipv4": {
+        "baseline_rtps_and_marker_both_directions_all_ports": true,
+        "non_loopback_rtps_blocked_both_directions_all_ports": true,
+        "prefixed_rtps_marker": "blocked",
+        "loopback_rtps_and_marker_allowed_all_ports": true,
+        "ordinary_udp_allowed_both_directions_all_ports": true,
+        "http_tcp_allowed_both_directions": true,
+        "actual_receiver_counts_checked": true
+      },
+      "ipv6": {
+        "baseline_rtps_and_marker_both_directions_all_ports": true,
+        "non_loopback_rtps_blocked_both_directions_all_ports": true,
+        "prefixed_rtps_marker": "blocked",
+        "loopback_rtps_and_marker_allowed_all_ports": true,
+        "ordinary_udp_allowed_both_directions_all_ports": true,
+        "http_tcp_allowed_both_directions": true,
+        "actual_receiver_counts_checked": true
+      },
+      "passed": true,
+      "installation": {
+        "dds_isolation": "udp-rtps-loopback",
+        "backend": "iptables-legacy",
+        "families": [
+          "ipv4",
+          "ipv6"
+        ],
+        "chain": "WENDY_GO2_DDS",
+        "matcher": "UDP packet contains RTPS bytes (KMP); broader than a payload-prefix match"
+      },
+      "reinstall_idempotent": true,
+      "unrelated_rules_policies_and_earlier_accept_preserved": true,
+      "drop_counters": {
+        "ipv4": 12,
+        "ipv6": 12
+      },
+      "runtime_permissions": {
+        "net_admin_dropped": true,
+        "capabilities": {
+          "CapEff": 8448,
+          "CapPrm": 8448,
+          "CapInh": 0,
+          "CapBnd": 8448,
+          "CapAmb": 0
+        },
+        "denied_writers": [
+          "iptables-legacy",
+          "ip6tables-legacy"
+        ]
+      },
+      "foreign_reserved_object_preserved": true,
+      "cleanup_complete": true
+    },
+    "nft": {
+      "image": "sha256:aa52209afad82e816e2b1cae95af7248af14158903291c4d4b8f1837ba76c349",
+      "backend": "nft",
+      "internal_network": true,
+      "started_at": "2026-09-12T18:16:49.087761+00:00",
+      "udp_ports": [
+        28901,
+        7417,
+        55213
+      ],
+      "runtime_sources": {
+        "isolation.py": "e152f190130288d20ab265d0c90da6de1afe5ab106b5b4d95731d5aaf9dd245b",
+        "isolation_legacy.py": "8760a3bcf601b1774d5b091b2aa4cee8252b3ac5c016ccb6fa991aa2ac9aee8e"
+      },
+      "ipv4": {
+        "baseline_rtps_and_marker_both_directions_all_ports": true,
+        "non_loopback_rtps_blocked_both_directions_all_ports": true,
+        "prefixed_rtps_marker": "allowed",
+        "loopback_rtps_and_marker_allowed_all_ports": true,
+        "ordinary_udp_allowed_both_directions_all_ports": true,
+        "http_tcp_allowed_both_directions": true,
+        "actual_receiver_counts_checked": true
+      },
+      "ipv6": {
+        "baseline_rtps_and_marker_both_directions_all_ports": true,
+        "non_loopback_rtps_blocked_both_directions_all_ports": true,
+        "prefixed_rtps_marker": "allowed",
+        "loopback_rtps_and_marker_allowed_all_ports": true,
+        "ordinary_udp_allowed_both_directions_all_ports": true,
+        "http_tcp_allowed_both_directions": true,
+        "actual_receiver_counts_checked": true
+      },
+      "passed": true,
+      "installation": {
+        "dds_isolation": "udp-rtps-loopback",
+        "table": "inet wendy_go2"
+      },
+      "reinstall_idempotent": true,
+      "unrelated_rules_policies_and_earlier_accept_preserved": true,
+      "drop_counters": {
+        "input": 6,
+        "output": 6,
+        "forward": 0
+      },
+      "runtime_permissions": {
+        "net_admin_dropped": true,
+        "capabilities": {
+          "CapEff": 256,
+          "CapPrm": 256,
+          "CapInh": 0,
+          "CapBnd": 256,
+          "CapAmb": 0
+        },
+        "denied_writers": [
+          "nft"
+        ]
+      },
+      "foreign_reserved_object_preserved": true,
+      "cleanup_complete": true
+    }
+  }
+}

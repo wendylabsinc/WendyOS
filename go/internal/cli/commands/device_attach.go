@@ -46,8 +46,9 @@ func termSize(fd int) (rows, cols uint32) {
 
 func newDeviceAttachCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "attach <app> [-- command...]",
-		Short: "Attach an interactive PTY to a running app's container",
+		Hidden: true,
+		Use:    "attach <app> [-- command...]",
+		Short:  "Attach an interactive PTY to a running app's container",
 		Long: "Attach an interactive terminal to a running app's container, running\n" +
 			"`claude` by default (or a command given after `--`). Used to drive the\n" +
 			"claude-on-device app, but works for execing into any running container.",

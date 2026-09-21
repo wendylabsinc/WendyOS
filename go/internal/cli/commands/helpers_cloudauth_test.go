@@ -173,3 +173,22 @@ func TestOfferReloginOnUnauthenticated(t *testing.T) {
 		}
 	})
 }
+
+func TestReloadAuthEntryMatchesDashboardAndOrganization(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	entry := func(dashboard string, org int, user string) config.AuthConfig {
+		return config.AuthConfig{CloudDashboard: dashboard, CloudGRPC: "shared.example:443", Certificates: []config.CertificateInfo{{OrganizationID: org, UserID: user}}}
+	}
+	expected := entry("chosen.example", 42, "refreshed")
+	cfg := &config.Config{Auth: []config.AuthConfig{entry("other.example", 42, "wrong-dashboard"), entry("chosen.example", 43, "wrong-org"), expected}}
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	previous := entry("chosen.example", 42, "stale")
+	got := reloadAuthEntry(&previous)
+	if got == nil || got.Certificates[0].UserID != "refreshed" {
+		t.Fatalf("wrong reloaded identity: %+v", got)
+	}
+}

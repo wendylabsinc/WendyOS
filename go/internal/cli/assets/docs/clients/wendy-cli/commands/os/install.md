@@ -55,11 +55,11 @@ and the serial console is active. They are for testing the PR on hardware —
 the PR is closed.
 
 `--pr` is supported for Linux disk-image devices, for Jetson recovery (Orin
-Nano/AGX and AGX Thor) and for the Dragonwing IQ-8275 EDL flash. PR builds publish recovery flashpacks into the
-`pr/<N>/` sandbox, so `--pr` can drive a full recovery install (QSPI+storage for
-Orin, QSPI+NVMe for Thor) as well as `--pr --rootfs-only` raw imaging on Orin. It
-is not supported for ESP32 targets (Wendy Lite firmware is not built by the
-per-PR pipeline).
+Nano/AGX and AGX Thor) and for the Dragonwing EDL flash. PR builds publish
+recovery flashpacks into the `pr/<N>/` sandbox, so `--pr` can drive a full
+recovery install (QSPI+storage for Orin, QSPI+NVMe for Thor) as well as
+`--pr --rootfs-only` raw imaging on Orin. It is not supported for ESP32
+targets (Wendy Lite firmware is not built by the per-PR pipeline).
 `--pr` is mutually exclusive with `--nightly`, `--version`, and a positional
 image path.
 
@@ -158,15 +158,20 @@ A Stage 2 failure can leave the Thor booting only into the UEFI shell; the CLI p
 
 Every failure prints the path of the full flash log (`thor-flash-<timestamp>.log`), which contains the complete tooling output.
 
-## Dragonwing IQ-8275 path
+## Dragonwing path
 
 ```sh
 wendy install --device-type dragonwing-iq-8275
+wendy install --device-type dragonwing-iq-9075
 ```
 
-Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wendy downloads and verifies the bundle, and programs the board. Set DIP switch 3 OFF and power-cycle after success.
+Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wendy downloads and verifies the bundle, then reads the board's chip id before writing anything and refuses the flash if it belongs to a different Dragonwing. A board that does not answer, or reports an id Wendy does not know, is flashed anyway after a caution — verification only happens when the board answers. Set DIP switch 3 OFF and power-cycle after success.
 
-Both OS slots and the partition table are rewritten. Existing configuration and data are preserved when flashing a compatible WendyOS layout.
+**An EDL flash is a factory reset.** Both OS slots, the config partition and `/data` are rewritten, so device identity, cloud enrollment, saved Wi-Fi and application data are discarded and the board comes back as a new device.
+
+`/data` is blanked rather than overwritten: the flash clears the head of the filesystem and the device recreates it on first boot. That makes the old contents unreachable, but it is not a secure erase — blocks behind the superblock are only overwritten as they are reused. Do not rely on it before handing a board to someone else.
+
+Provisioning works as it does on Thor: the bundle ships no config image, so wendy builds one on the host and programs it into the config partition. `--wifi`, `--device-name` and `--pre-enroll` all apply, and a freshly downloaded `wendy-agent` is seeded on every flash.
 
 ## Linux Desktop / Headless Mac path
 

@@ -11,8 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/wendylabsinc/wendy/go/internal/cli/archive"
 )
 
 // Storage backends a Firehose programmer can be pointed at.
@@ -205,9 +203,9 @@ func SectorsFor(e ProgramEntry, size int64) (uint32, error) {
 // Program writes one partition, streaming the payload named by the entry from
 // dir. Progress is reported in bytes written of bytes to write.
 func (s *Session) Program(ctx context.Context, dir string, e ProgramEntry, progress func(done, total int64)) error {
-	path, err := archive.SafeJoin(dir, e.Filename)
-	if err != nil || path == "" {
-		return fmt.Errorf("flash descriptor names an unsafe payload path %q", e.Filename)
+	path, err := e.payloadPath(dir)
+	if err != nil {
+		return err
 	}
 	f, err := os.Open(path)
 	if err != nil {

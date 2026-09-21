@@ -1,0 +1,18 @@
+[project]
+name = "g1-coke-demo"
+version = "1.0.0"
+description = "G1 Coke expert simulation and exact learned-policy demo"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "numpy==2.2.6",
+  "torch==2.7.1",
+  "mujoco==3.12.0",
+  "imageio-ffmpeg==0.6.0",
+  "Pillow>=11,<13",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

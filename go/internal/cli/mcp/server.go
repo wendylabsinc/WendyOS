@@ -3,13 +3,11 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
-	"os"
+	"strings"
 	"sync"
 	"time"
 
-	mcpclient "github.com/mark3labs/mcp-go/client"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -17,12 +15,21 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
-	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc/status"
 )
 
 // ConnectFunc connects to a wendy agent at the given address (host:port).
 type ConnectFunc func(ctx context.Context, address string) (*grpcclient.AgentConnection, error)
+
+// commandTarget is the public, credential-free connection information a local
+// CLI child needs to reconnect to the same device independently of this session.
+// A zero value means this transport cannot be recreated from CLI arguments.
+type commandTarget struct {
+	Device    string `json:"device"`
+	Transport string `json:"transport"`
+	CloudGRPC string `json:"cloud_grpc,omitempty"`
+	BrokerURL string `json:"broker_url,omitempty"`
+}
 
 type mcpServer struct {
 	cfg              *config.Config
@@ -31,10 +38,12 @@ type mcpServer struct {
 	conn             *grpcclient.AgentConnection
 	connRevision     uint64
 	connType         string
+	commandTarget    commandTarget
 	cloudTunnels     map[string]*mcpCloudTunnel
 	discoverLANFn    func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
 	mu               sync.RWMutex
 	proxyDiag        []proxyDiagEntry
+	containerMCP     *containerMCPManager
 }
 
 // SetStartupConnect configures the optional device connection attempted after
@@ -64,16 +73,56 @@ func (s *mcpServer) GetConn() *grpcclient.AgentConnection {
 
 // SetConn replaces the active connection, closing the previous one.
 func (s *mcpServer) SetConn(conn *grpcclient.AgentConnection) {
+	s.setConnection(conn, "direct", directCommandTarget(conn, ""))
+}
+
+// setConnection publishes the connection and all of its routing metadata in
+// one update so callers never combine an old target with a new connection.
+func (s *mcpServer) setConnection(conn *grpcclient.AgentConnection, connType string, target commandTarget) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.conn != nil {
+	s.setConnectionLocked(conn, connType, target)
+}
+
+func (s *mcpServer) setConnectionLocked(conn *grpcclient.AgentConnection, connType string, target commandTarget) {
+	if s.conn != nil && s.conn != conn {
 		_ = s.conn.Close()
 	}
 	s.conn = conn
+	s.connType = connType
+	s.commandTarget = target
 	s.connRevision++
+	if s.containerMCP != nil {
+		s.containerMCP.invalidateLocked()
+	}
 	if conn == nil {
 		s.connType = ""
+		s.commandTarget = commandTarget{}
 	}
+}
+
+func directCommandTarget(conn *grpcclient.AgentConnection, address string) commandTarget {
+	if conn == nil || strings.HasPrefix(conn.Host, "unix:") {
+		return commandTarget{}
+	}
+	if conn.SimulatorName != "" {
+		// The named alias retains the VM's identity when its forwarded port changes.
+		address = "vm:" + conn.SimulatorName
+	} else if address == "" {
+		// Host alone loses custom ports; a prebuilt connection with no Addr
+		// cannot safely be replayed by guessing a default endpoint.
+		address = conn.Addr
+	}
+	if address == "" {
+		return commandTarget{}
+	}
+	return commandTarget{Device: address, Transport: "direct"}
+}
+
+func (s *mcpServer) connectionSnapshot() (*grpcclient.AgentConnection, string, commandTarget) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.conn, s.connType, s.commandTarget
 }
 
 // SetLANDiscoverer replaces the function device_list (and any other LAN
@@ -92,7 +141,15 @@ func (s *mcpServer) SetLANDiscoverer(fn func(ctx context.Context, timeout time.D
 func (s *mcpServer) SetConnType(t string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.conn == nil {
+		return
+	}
 	s.connType = t
+	if s.commandTarget.Transport != t {
+		// Legacy callers that only know the transport cannot reconstruct a
+		// cloud target from its local tunnel address.
+		s.commandTarget = commandTarget{}
+	}
 }
 
 func (s *mcpServer) GetConnType() string {
@@ -110,7 +167,7 @@ func (s *mcpServer) ConnectTo(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	s.SetConn(conn)
+	s.setConnection(conn, "direct", directCommandTarget(conn, address))
 	return nil
 }
 
@@ -146,8 +203,7 @@ func (s *mcpServer) ConnectToOnStartup(ctx context.Context, address string) erro
 		_ = conn.Close()
 		return nil
 	}
-	s.conn = conn
-	s.connRevision++
+	s.setConnectionLocked(conn, "direct", directCommandTarget(conn, address))
 	s.mu.Unlock()
 	return nil
 }
@@ -167,6 +223,7 @@ func (s *mcpServer) Start(ctx context.Context) error {
 	s.registerDeviceTools(srv)
 	s.registerContainerTools(srv)
 	s.registerTelemetryTools(srv)
+	s.registerROS2Tools(srv)
 	s.registerWiFiTools(srv)
 	s.registerBluetoothTools(srv)
 	s.registerHardwareTools(srv)
@@ -177,7 +234,9 @@ func (s *mcpServer) Start(ctx context.Context) error {
 
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	defer cancelStartup()
-	go s.runStartupConnect(startupCtx, srv)
+	stopContainerMCP := s.startContainerMCP(startupCtx, srv)
+	defer stopContainerMCP()
+	go s.runStartupConnect(startupCtx)
 
 	return serveStdio(srv)
 }
@@ -188,7 +247,7 @@ var serveStdio = func(srv *server.MCPServer) error {
 	return server.ServeStdio(srv)
 }
 
-func (s *mcpServer) runStartupConnect(ctx context.Context, srv *server.MCPServer) {
+func (s *mcpServer) runStartupConnect(ctx context.Context) {
 	s.mu.RLock()
 	connect := s.startupConnectFn
 	s.mu.RUnlock()
@@ -197,20 +256,6 @@ func (s *mcpServer) runStartupConnect(ctx context.Context, srv *server.MCPServer
 	}
 
 	connect(ctx)
-	if ctx.Err() != nil {
-		return
-	}
-
-	// MCPServer.AddTool is concurrency-safe and sends tools/list_changed to
-	// initialized clients, so container tools may be discovered after the host
-	// has completed its handshake with Wendy.
-	cleanups := s.registerContainerMCPTools(ctx, srv)
-	defer func() {
-		for _, cleanup := range cleanups {
-			cleanup()
-		}
-	}()
-	<-ctx.Done()
 }
 
 func errNotConnected() *mcpgo.CallToolResult {
@@ -244,116 +289,6 @@ func intParamAlias(req mcpgo.CallToolRequest, primary, alias string, defaultVal 
 		return v
 	}
 	return req.GetInt(alias, defaultVal)
-}
-
-// registerContainerMCPTools scans running containers for mcp_port > 0 and
-// registers each container's tools on srv, prefixed with the app name.
-// Errors per-container are warnings; they do not prevent the session from starting.
-func (s *mcpServer) registerContainerMCPTools(ctx context.Context, srv *server.MCPServer) []func() {
-	conn := s.GetConn()
-	if conn == nil {
-		return nil
-	}
-
-	stream, err := conn.ContainerService.ListContainers(ctx, &agentpb.ListContainersRequest{})
-	if err != nil {
-		s.recordProxyDiag("", "list-containers", err)
-		fmt.Fprintf(os.Stderr, "Warning: listing containers for MCP tools: %v\n", err)
-		return nil
-	}
-
-	var cleanups []func()
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			s.recordProxyDiag("", "read-container-list", err)
-			fmt.Fprintf(os.Stderr, "Warning: reading container list: %v\n", err)
-			return cleanups
-		}
-		c := resp.GetContainer()
-		if c == nil || c.GetMcpPort() == 0 || c.GetRunningState() != agentpb.AppRunningState_RUNNING {
-			continue
-		}
-		if cleanup := s.connectContainerMCPTools(ctx, srv, conn, c.GetAppName()); cleanup != nil {
-			cleanups = append(cleanups, cleanup)
-		}
-	}
-	return cleanups
-}
-
-// connectContainerMCPTools proxies a single container's MCP server into srv.
-// It retries Initialize up to 4 times with exponential backoff (2s, 4s, 8s).
-// On success it returns a cleanup function that closes the proxy; on failure it
-// returns nil (after cleaning up internally).
-func (s *mcpServer) connectContainerMCPTools(ctx context.Context, srv *server.MCPServer, conn *grpcclient.AgentConnection, appName string) func() {
-	addr, closeProxy, err := startMCPProxy(ctx, conn, appName)
-	if err != nil {
-		s.recordProxyDiag(appName, "proxy", err)
-		fmt.Fprintf(os.Stderr, "Warning: MCP proxy for %s: %v\n", appName, err)
-		return nil
-	}
-
-	mcpCli, err := mcpclient.NewStreamableHttpClient("http://" + addr)
-	if err != nil {
-		closeProxy()
-		s.recordProxyDiag(appName, "client", err)
-		fmt.Fprintf(os.Stderr, "Warning: MCP client for %s: %v\n", appName, err)
-		return nil
-	}
-
-	var initErr error
-	for attempt := 0; attempt < 4; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				closeProxy()
-				return nil
-			case <-time.After(time.Duration(1<<attempt) * time.Second):
-			}
-		}
-		_, initErr = mcpCli.Initialize(ctx, mcpgo.InitializeRequest{})
-		if initErr == nil {
-			break
-		}
-	}
-	if initErr != nil {
-		closeProxy()
-		s.recordProxyDiag(appName, "initialize", initErr)
-		fmt.Fprintf(os.Stderr, "Warning: MCP init for %s: %v\n", appName, initErr)
-		return nil
-	}
-
-	result, err := mcpCli.ListTools(ctx, mcpgo.ListToolsRequest{})
-	if err != nil {
-		closeProxy()
-		s.recordProxyDiag(appName, "list-tools", err)
-		fmt.Fprintf(os.Stderr, "Warning: listing MCP tools for %s: %v\n", appName, err)
-		return nil
-	}
-
-	prefix := sanitizeMCPPrefix(appName)
-	for _, tool := range result.Tools {
-		proxied := tool
-		proxied.Name = prefix + "__" + tool.Name
-		originalName := tool.Name
-		srv.AddTool(proxied, func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-			inner := mcpgo.CallToolRequest{}
-			inner.Params.Name = originalName
-			inner.Params.Arguments = req.Params.Arguments
-			result, err := mcpCli.CallTool(ctx, inner)
-			if err != nil {
-				return result, err
-			}
-			// Container-supplied tools are not held to the same output
-			// discipline as wendy's own tools; cap the result the same way
-			// okResultBounded/okTextBounded cap native ones (see results.go).
-			return capProxiedResult(result, defaultProxyMaxBytes), nil
-		})
-	}
-	return closeProxy
 }
 
 // sanitizeMCPPrefix converts an app name to a valid MCP tool name prefix

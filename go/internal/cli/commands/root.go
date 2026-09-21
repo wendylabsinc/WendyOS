@@ -132,25 +132,23 @@ func NewRootCmd() *cobra.Command {
 	)
 
 	// Develop & Deploy
-	initCmd := newInitCmd()
-	initCmd.GroupID = "develop"
-	runCmd := newRunCmd()
-	runCmd.GroupID = "develop"
 	// `wendy install` is the surfaced alias for `wendy os install` (the `os`
 	// group is hidden). A fresh command instance is used because a cobra
 	// command can only be attached to one parent.
 	installCmd := newOSInstallCmd()
 	installCmd.GroupID = "develop"
-	docsCmd := newDocsCmd()
-	docsCmd.GroupID = "develop"
+	initCmd := newInitCmd()
+	initCmd.GroupID = "develop"
+	runCmd := newRunCmd()
+	runCmd.GroupID = "develop"
+	chatCmd := newChatCmd()
+	chatCmd.GroupID = "develop"
 
 	// Manage
 	projectCmd := newProjectCmd()
 	projectCmd.GroupID = "manage"
 	deviceCmd := newDeviceCmd()
 	deviceCmd.GroupID = "manage"
-	fleetCmd := newFleetCmd()
-	fleetCmd.GroupID = "manage"
 
 	// Cloud
 	cloudCmd := newCloudCmd()
@@ -161,11 +159,20 @@ func NewRootCmd() *cobra.Command {
 	analyticsCmd.GroupID = "settings"
 	cacheCmd := newCacheCmd()
 	cacheCmd.GroupID = "settings"
+	docsCmd := newDocsCmd()
+	docsCmd.GroupID = "settings"
+	tourCmd := newTourCmd()
+	tourCmd.GroupID = "settings"
 
 	// Hidden commands: still fully functional, just omitted from `wendy --help`
 	// to keep the top-level surface focused on the common workflow. `auth`
 	// remains a working command for back-compat ('wendy cloud login' is the
 	// surfaced entry point); 'json' is already hidden in its constructor.
+	agentCmd := newAgentCmd()
+	agentCmd.Hidden = true
+	fleetCmd := newFleetCmd()
+	fleetCmd.Hidden = true
+	fleetCmd.GroupID = "manage"
 	buildCmd := newBuildCmd()
 	buildCmd.Hidden = true
 	watchCmd := newWatchCmd()
@@ -181,8 +188,6 @@ func NewRootCmd() *cobra.Command {
 	infoCmd.Hidden = true
 	utilsCmd := newUtilsCmd()
 	utilsCmd.Hidden = true
-	tourCmd := newTourCmd()
-	tourCmd.GroupID = "develop"
 	mcpCmd := newMCPCmd()
 	mcpCmd.Hidden = true
 	completionCmd := newCompletionCmd()
@@ -248,21 +253,24 @@ func NewRootCmd() *cobra.Command {
 	// above); hidden commands follow and never appear in help.
 	root.AddCommand(
 		// Develop & Deploy
+		installCmd,
 		initCmd,
 		runCmd,
-		installCmd,
-		docsCmd,
+		chatCmd,
 		// Manage
 		projectCmd,
 		deviceCmd,
 		newVMCmd(),
-		fleetCmd,
 		// Cloud
 		cloudCmd,
 		// Settings
 		analyticsCmd,
 		cacheCmd,
+		docsCmd,
+		tourCmd,
 		// Hidden
+		agentCmd,
+		fleetCmd,
 		bleCheckCmd,
 		sessionBrokerCmd,
 		bmapWriteCmd,
@@ -276,7 +284,6 @@ func NewRootCmd() *cobra.Command {
 		osCmd,
 		infoCmd,
 		utilsCmd,
-		tourCmd,
 		mcpCmd,
 		completionCmd,
 	)

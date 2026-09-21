@@ -4,7 +4,7 @@
 // It is not a DDS implementation. There is no reliable-reader state machine
 // (a BEST_EFFORT reader matches a RELIABLE writer under the RxO rule, which is
 // what ROS 2's default QoS offers), bounded DATA_FRAG reassembly, no security,
-// no content filtering, and no instance/dispose handling.
+// no content filtering, and discovery endpoint disposal only.
 package rtps
 
 import (
@@ -65,6 +65,7 @@ const (
 	pidBuiltinEndpointSet        = 0x0058
 	pidEndpointGUID              = 0x005a
 	pidKeyHash                   = 0x0070
+	pidStatusInfo                = 0x0071
 )
 
 // Builtin endpoint set bits advertised in SPDP: what this participant can do.
@@ -201,6 +202,7 @@ type DataSubmessage struct {
 	WriterID  uint32
 	WriterSN  SequenceNumber
 	InlineQoS []byte
+	Endian    binary.ByteOrder
 	Payload   []byte // serialized payload, including its encapsulation header
 }
 
@@ -239,6 +241,7 @@ func ParseData(s Submessage) (*DataSubmessage, error) {
 	// which matches no builtin writer and makes every SPDP announcement look
 	// like unaddressed user data.
 	d := &DataSubmessage{
+		Endian:   order,
 		ReaderID: binary.BigEndian.Uint32(b[4:8]),
 		WriterID: binary.BigEndian.Uint32(b[8:12]),
 	}
@@ -447,4 +450,42 @@ func buildData(readerID, writerID uint32, sn SequenceNumber, payload []byte) []b
 	body = append(body, payload...)
 	// 0x04 is the D (data present) flag.
 	return buildSubmessage(subDATA, 0x04, body)
+}
+
+// discoveryDisposal accepts both inline key hashes and serialized discovery keys.
+// StatusInfo is four octets, with DISPOSED/UNREGISTERED in the last octet.
+func discoveryDisposal(d *DataSubmessage) (bool, GUID) {
+	order := d.Endian
+	if order == nil {
+		order = binary.LittleEndian
+	}
+	inline := []byte{0, 3, 0, 0}
+	if order == binary.BigEndian {
+		inline[1] = 2
+	}
+	inline = append(inline, d.InlineQoS...)
+	params, _, _ := parseParameterList(inline)
+	payload, _, _ := parseParameterList(d.Payload)
+	var disposed bool
+	var guid GUID
+	for _, p := range append(params, payload...) {
+		switch p.id {
+		case pidStatusInfo:
+			disposed = disposed || (len(p.value) >= 4 && p.value[3]&3 != 0)
+		case pidKeyHash, pidEndpointGUID, pidParticipantGUID:
+			if g, ok := paramGUID(p.value, order); ok {
+				guid = g
+			}
+		}
+	}
+	return disposed, guid
+}
+
+func buildDispose(writer uint32, sn SequenceNumber, guid GUID) []byte {
+	qos := newPLBuilder()
+	qos.addGUID(pidKeyHash, guid)
+	qos.add(pidStatusInfo, []byte{0, 0, 0, 3})
+	data := buildData(entityUnknown, writer, sn, nil)
+	body := append(data[4:], qos.finish()[4:]...)
+	return buildSubmessage(subDATA, 0x02, body)
 }

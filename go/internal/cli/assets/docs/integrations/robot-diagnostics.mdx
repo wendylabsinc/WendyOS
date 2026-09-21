@@ -1,0 +1,162 @@
+---
+title: Robot diagnostics with MCP
+description: Discover robot app tools and inspect ROS 2 sensor data through bounded MCP observations.
+---
+
+Wendy exposes ROS 2 diagnostics to AI assistants over the active direct or cloud
+device connection. These tools help distinguish missing capabilities, failed
+subscriptions, and topics that produced no readings during an observation.
+
+## Inspect a sensor
+
+1. Call `wendy_status`, then connect using `device_connect` or `cloud_connect`.
+2. Call `ros2_topics` to discover topic names, message types, and middleware.
+3. Call `ros2_topic_info` with the selected `topic` to inspect publisher counts
+   and verbose endpoint information, including QoS.
+4. For `PointCloud2` or `LaserScan`, call `ros2_lidar_summary` for device-side
+   decoding, directional distances, and bounded XYZ samples. For other types,
+   call `ros2_topic_sample` for decoded messages, or `ros2_topic_hz` for rate
+   measurements from a subscription on the device.
+
+For example, after discovering an odometry topic named `/odom`, request:
+
+```json
+{
+  "topic": "/odom",
+  "count": 3,
+  "duration_seconds": 10,
+  "max_bytes": 32000
+}
+```
+
+Use these arguments with `ros2_topic_sample`. The same bounded observation
+parameters are available on `ros2_topic_hz`. The optional `domain_id` selects a
+DDS domain; otherwise the agent uses its ROS 2 app configuration. Inspect the
+tool schema for defaults and limits.
+
+The default `scope: "app"` uses Wendy's existing ROS 2 app sidecar and preserves
+its network isolation. See [Wendy for ROS 2](/docs/integrations/ros2) for app
+configuration, discovery scope, and middleware setup. Custom messages need
+compatible typesupport in the sidecar. A topic can appear in discovery even when
+its message cannot be decoded.
+
+## Inspect robot sensors without a ROS 2 app
+
+Robot firmware and host services can publish DDS sensor data while no Wendy
+ROS 2 app is running. Explicitly choose `scope: "host"` and the robot's known
+`domain_id` to inspect that graph. For example, if the robot uses domain 0:
+
+```json
+{ "scope": "host", "domain_id": 0, "duration_seconds": 60 }
+```
+
+Pass these arguments to `ros2_topics`, then keep the same scope and domain on
+`ros2_topic_info`, `ros2_topic_sample`, `ros2_topic_hz`, and
+`ros2_lidar_summary`. A domain override by itself continues to inspect the app
+graph; it never enables host inspection.
+
+Host inspection uses a separate stock ROS Humble/FastRTPS inspector on the device's
+host network. First use may download `ros:humble-ros-base`; retry if image preparation
+exceeds the bounded request. The inspector runs without root privileges or Linux
+capabilities, with its own IPC namespace, a read-only root, and UDP-only DDS. It
+does not expose host shared memory, alter an app's entitlements, or deploy an app.
+An idle inspector is retained for later requests; topic discovery runs without a
+persistent ROS daemon and subscriptions end with their request.
+
+Results include `inspection_scope`, `inspection_domain_id`, `inspection_rmw`,
+and `inspection_distro`. The client requires the agent to acknowledge host scope;
+an older agent cannot silently return app-scoped observations. Host inspection is
+limited to topic discovery, endpoint information, samples, rates, and LiDAR
+summaries. Service calls, actions, parameter changes, and raw ROS execution
+cannot select this scope.
+
+Standard ROS sensor/navigation types can be inspected when the publisher is
+reachable and its DDS/QoS settings interoperate. Custom Unitree message types are
+not bundled with the stock image: use an app image containing their typesupport
+or a robot adapter for decoded samples. No topics or readings still means unknown;
+check the domain, network interface/routing, middleware and publisher QoS.
+
+## Interpret the result
+
+- **Discovered** means a topic was found in the ROS graph. It does not prove
+  that samples are arriving. Topic lists omit publisher counts; use the targeted
+  info tool to inspect them.
+- **Observed** means the subscription returned messages or rate measurements
+  within the bounded request. Inspect the stop reason and any error as well.
+- **Unknown** means the request did not establish usable observations. It must
+  not be interpreted as clear space or a working sensor.
+- **Source freshness needs a known clock.** A generic topic tool reception
+  timestamp is measured at the MCP client and cannot establish acquisition age.
+  LiDAR summaries include source timestamps and device-side clock diagnostics;
+  `source_age_seconds` is a signed offset against `clock_basis` and does not
+  prove synchronization. Freshness remains unverified without a known clock
+  relationship. Do not compare sensor timestamps to the chat session clock.
+
+Observation stops at its count, duration, or output limit. Partial observations
+can therefore contain fewer samples than requested. Large images and raw point
+clouds can exceed the output budget. Use `ros2_lidar_summary` for standard LiDAR
+messages; it decodes and summarizes them on the device using sensor-compatible
+QoS. Its directions are in the reported output frame. Request a verified robot
+body frame with `target_frame` before interpreting sectors as robot-relative;
+the tool resolves TF at the source timestamp. Filtering, bounded point counts,
+and missing returns can leave coverage incomplete. See
+[Inspect LiDAR in Wendy Chat](/docs/integrations/ros2#inspect-lidar-in-wendy-chat)
+for examples and clock handling. Other large messages need a smaller diagnostic
+topic or an app that summarizes them locally. Topic info reports endpoint QoS;
+generic sampling and rate tools use the sidecar defaults and do not accept QoS
+overrides.
+
+With an updated Wendy agent, unsuccessful `echo` and `hz` processes return
+their exit failure and a bounded stderr tail, including decoding errors. Older
+agents may still turn these failures into empty streams; an empty observation
+continues to mean unknown.
+
+## Discover robot app capabilities
+
+A deployed app can expose its own MCP server with an entitlement:
+
+```json
+{ "type": "mcp", "port": 3000 }
+```
+
+Wendy prefixes each tool with the app name and refreshes app tools after device
+connection changes and as running apps change. An app deployed after the MCP
+session starts can therefore become available without restarting the session.
+Discovery is asynchronous; clients receive tool-list change notifications and
+can list tools again. `wendy_status` and `wendy://diagnostics` report proxy
+discovery failures.
+
+## From diagnostics to navigation
+
+ROS 2 observations support diagnosis. A robot's local runtime must establish
+readiness and maintain it throughout motion. That runtime needs sensor freshness
+and coverage, pose and measured velocity, valid coordinate transforms, a robot
+footprint, and tested stopping behavior.
+
+The repository's `Examples/RobotNavigation` app implements this layer with Nav2,
+a separate velocity guard, a motor watchdog, and persistent goal supervision.
+It exposes `robot_status`, `navigation_goal`, `navigation_status`,
+`navigation_renew`, `navigation_cancel`, and `robot_stop` through its app MCP
+entitlement. Tools appear under the app-name prefix after deployment. Defaults
+disable motor output and report the inputs and commissioning checks still needed.
+
+Use `robot_status` before submitting a goal. Goal acceptance does not establish
+arrival. `navigation_status` does not renew the finite supervision lease; renewal
+must be explicit. Cancellation inhibits velocity immediately, and remains
+stopping until Nav2's action has ended and fresh odometry confirms rest. Restarted
+goals are abandoned, never automatically resumed. Device speed, footprint,
+clearance, braking and watchdog configuration cannot be raised through MCP.
+
+For person approach, the app's `robot_observe` returns a matching annotated RGB
+frame and expiring target IDs. `approach_person` uses synchronized calibrated
+depth and capture-time TF to choose a standoff endpoint for the local planner.
+Missing depth/calibration or a stale/ambiguous target blocks submission. Target
+loss or excess motion cancels the goal without switching identity. The baseline
+HOG detector can miss seated people and cannot exclude mirrors; deployments need
+an appropriate detector and a commissioned environment.
+
+The app requires standard scan/odometry/IMU and calibrated RGB-D inputs. A host
+diagnostic topic or ordinary camera snapshot is not a substitute for those
+interfaces. The generic diagnostic tools do not perform navigation or provide a
+hardware emergency stop. See `Examples/RobotNavigation/README.md` for the isolated
+ROS simulation test, input contracts and device commissioning requirements.

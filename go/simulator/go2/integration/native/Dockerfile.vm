@@ -1,0 +1,16 @@
+# prepare_vm.py exports verified dependencies from the local native-test image.
+# A buildx OCI builder can consume these files without resolving a local FROM.
+FROM ros:humble-ros-base
+
+ENV ROS_DOMAIN_ID=0 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp ROS_LOCALHOST_ONLY=0 \
+    CYCLONEDDS_URI=file:///app/native/cyclonedds.vm.xml \
+    CYCLONEDDS_HOME=/opt/cyclonedds-sdk PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+COPY .vm-deps/root/ /
+WORKDIR /app/native
+COPY *.py ./
+COPY vm-entrypoint.sh cyclonedds.vm.xml ./
+# Offline validation uses SDK sources and separately compiled stock ROS only.
+# It neither starts a simulator nor initializes DDS.
+RUN /bin/bash /app/native/vm-entrypoint.sh python3 /app/native/verify_vm_image.py
+ENTRYPOINT ["/bin/bash", "/app/native/vm-entrypoint.sh"]
+CMD ["python3", "/app/native/exercise.py"]

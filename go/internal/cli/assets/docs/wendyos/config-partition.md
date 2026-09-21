@@ -17,6 +17,16 @@ Because the partition is FAT32, your computer mounts it automatically when you p
 
 Write files there, eject, and they are available at `/config` on the device on next boot.
 
+This applies to the boards that install from a disk image (Raspberry Pi, x86). The boards flashed over USB never present their storage to the host, so `wendy install` writes a FAT32 image instead and programs it like any other partition:
+
+| Board | How the partition is filled at install time |
+| --- | --- |
+| Raspberry Pi, x86 | Mounted on the host after the image is written |
+| Jetson Thor, Orin | The flashpack's `config-partition.fat32.img` is injected, then flashed |
+| Dragonwing IQ-8275, IQ-9075 | The bundle ships no config image, so wendy builds one on the host and programs it over EDL |
+
+On Dragonwing the partition is created by a first-boot service rather than by the image build, so it stands down when it already finds a FAT32 filesystem labelled `config` — otherwise it would reformat the seed away.
+
 ## Accessing it on the device
 
 The partition is mounted at `/config` on every boot (fstab `nofail`, so a missing or unformatted partition is not fatal):

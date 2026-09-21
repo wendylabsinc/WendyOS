@@ -129,8 +129,7 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 
 // TestTryDeployFastPath_StoppedRunsAgentHookOnly verifies that when the fast
 // path starts a stopped-but-unchanged app, the agent-side (in-container) hook
-// runs via StartContainer metadata and the host-side hook does not. The fast
-// path only ever runs detached, and detached deploys skip the readiness probe
+// runs via StartContainer metadata and the host-side hook does not. Detached deploys skip the readiness probe
 // the host hook is gated on.
 func TestTryDeployFastPath_StoppedRunsAgentHookOnly(t *testing.T) {
 	isolateFingerprintCache(t)
@@ -178,8 +177,7 @@ func TestTryDeployFastPath_StoppedRunsAgentHookOnly(t *testing.T) {
 		t.Fatalf("agent postStart hook metadata = %#v, want [%q]", got, agentHook)
 	}
 
-	// Host-side CLI postStart hook must NOT fire: the fast path only runs
-	// detached, and detached deploys do not block on the readiness probe that
+	// Host-side CLI postStart hook must NOT fire: detached deploys do not block on the readiness probe that
 	// gates the host hook (see runPostStartIfReady's doc comment). The
 	// agent-side hook asserted above is what still runs.
 	if len(*hookCommands) != 0 {
@@ -221,8 +219,7 @@ func TestStreamRunContainer_AttachedFiresHostPostStartHook(t *testing.T) {
 // TestTryDeployFastPath_RunningSkipsAllPostStartHooks verifies that when the
 // app is already running and unchanged, the fast path neither restarts the
 // container nor fires any postStart hook. The host hook is gated on a readiness
-// probe that costs the app's full boot time, which detached runs — the only kind
-// the fast path serves — must not pay; the agent hook requires a start RPC.
+// probe that costs the app's full boot time, which detached runs must not pay; the agent hook requires a start RPC.
 func TestTryDeployFastPath_RunningSkipsAllPostStartHooks(t *testing.T) {
 	isolateFingerprintCache(t)
 

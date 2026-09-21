@@ -20,7 +20,7 @@ func TestParseTegraVersions(t *testing.T) {
 }
 
 func TestTegraCSIPreflightMismatchHasErrorInfo(t *testing.T) {
-	s := NewVideoService(context.Background(), zap.NewNop())
+	s := NewVideoService(context.Background(), zap.NewNop(), nil)
 	s.readTegraRelease = func() ([]byte, error) { return []byte("# R38 (release), REVISION: 2.0"), nil }
 	s.dumpBootSlots = func(context.Context) ([]byte, error) { return []byte("Current version: 36.4.3"), nil }
 	err := s.preflightTegraCSI(context.Background())
@@ -40,7 +40,7 @@ func TestTegraCSIPreflightMismatchHasErrorInfo(t *testing.T) {
 }
 
 func TestTegraCSIPreflightUnknownDoesNotBlock(t *testing.T) {
-	s := NewVideoService(context.Background(), zap.NewNop())
+	s := NewVideoService(context.Background(), zap.NewNop(), nil)
 	s.readTegraRelease = func() ([]byte, error) { return nil, errors.New("missing") }
 	s.dumpBootSlots = func(context.Context) ([]byte, error) { return nil, errors.New("missing") }
 	if err := s.preflightTegraCSI(context.Background()); err != nil {

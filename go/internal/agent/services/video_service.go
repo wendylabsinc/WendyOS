@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -29,6 +30,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -671,7 +673,7 @@ type VideoService struct {
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
 // Call Shutdown to cancel all active producers and wait for them to exit.
-func NewVideoService(ctx context.Context, logger *zap.Logger, rosRuntime ...ROS2Runtime) *VideoService {
+func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, rosRuntime ...ROS2Runtime) *VideoService {
 	svcCtx, cancel := context.WithCancel(ctx)
 	svc := &VideoService{
 		logger: logger,
@@ -760,6 +762,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, rosRuntime ...ROS2
 					}
 					out = append(out, ros2camera.Graph{
 						Key: key, InstanceKey: target.ContainerID, DomainID: target.DomainID, NetworkNamespacePID: target.TaskPID,
+						HostNetwork: target.HostNetwork,
 						Verify: func(ctx context.Context) bool {
 							current, err := rosRuntime[0].FindROS2Containers(ctx)
 							if err != nil {
@@ -778,7 +781,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, rosRuntime ...ROS2
 			return out, nil
 		}
 	}
-	svc.ros2Cameras = ros2camera.NewManager(svcCtx, logger, svc.loopback, ros2CameraRegistryPath, graphs)
+	svc.ros2Cameras = ros2camera.NewManager(svcCtx, logger, svc.loopback, ros2CameraRegistryPath, graphs, pool)
 	return svc
 }
 
@@ -916,6 +919,8 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 			Path:      path,
 			Transport: transportToProto(transport),
 			Driver:    driver,
+			// Local cameras are listed only after a successful capture query.
+			Online: true,
 		}
 		// Empty for a camera with no /dev/v4l entry, which is not an error --
 		// the numeric id still addresses it, it is just not stable across a
@@ -2318,11 +2323,8 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 		}
 	}()
 
-	const chunkSize = 256 * 1024
-	buf := make([]byte, chunkSize)
-
 	// A mismatched pipeline stalls rather than fails: gst stays alive producing nothing and
-	// stdout.Read blocks on a pipe with no deadline, so `camera view` hung with no frame and no
+	// the read blocks on a pipe with no deadline, so `camera view` hung with no frame and no
 	// error. Kept under the dashboard player's 25s budget so this error wins that race.
 	var timedOut atomic.Bool
 	firstChunk := time.AfterFunc(firstFrameTimeout, func() {
@@ -2333,14 +2335,40 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 	})
 	defer firstChunk.Stop()
 
-	// gstMaxFrameRate is the maximum number of frame allocations per second from
-	// the GStreamer read loop. A misbehaving or adversarially replaced gst-launch
-	// binary could write at arbitrarily high rate; bounding the allocation rate
-	// prevents it from forcing excessive GC pressure. Chunks arriving faster than
-	// this are discarded — H.264/VP8 byte streams self-synchronise at I-frames.
-	const gstMaxFrameRate = 240
-	minFrameInterval := time.Second / gstMaxFrameRate
-	var lastFrameTime time.Time
+	// Plain bool, not atomic: the callback runs on this goroutine's read loop.
+	sawChunk := false
+	readErr := pumpEncodedStream(ctx, stdout, enc.codec, broadcast, func() {
+		sawChunk = true
+		firstChunk.Stop()
+	})
+	return gstStreamEnd(readErr, timedOut.Load(), sawChunk, ctx.Err())
+}
+
+// gstStreamEnd maps a finished read loop to a gRPC status. The timeout is
+// checked before the read outcome because enforcing it kills the producer, which
+// ends the read in EOF and so looks identical to a clean exit.
+func gstStreamEnd(readErr error, timedOut, sawChunk bool, ctxErr error) error {
+	if timedOut && !sawChunk {
+		return status.Errorf(codes.DeadlineExceeded,
+			"camera produced no video within %s", firstFrameTimeout)
+	}
+	if readErr == nil {
+		return nil
+	}
+	if ctxErr != nil {
+		return ctxErr
+	}
+	return status.Errorf(codes.Internal, "failed to read GStreamer output: %v", readErr)
+}
+
+// pumpEncodedStream forwards every byte to the hub. A Read returns an arbitrary
+// slice of a byte stream, not an access unit, so dropping one truncates whichever
+// unit was in flight; shedding load cannot happen here.
+func pumpEncodedStream(ctx context.Context, r io.Reader, codec agentpb.VideoCodec,
+	broadcast func([]byte, uint64, agentpb.VideoCodec) bool, onFirstChunk func()) error {
+	const chunkSize = 256 * 1024
+	buf := make([]byte, chunkSize)
+	first := true
 
 	for {
 		select {
@@ -2349,35 +2377,23 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 		default:
 		}
 
-		n, readErr := stdout.Read(buf)
+		n, readErr := r.Read(buf)
 		if n > 0 {
-			firstChunk.Stop()
-			now := time.Now()
-			passFrame := lastFrameTime.IsZero() || now.Sub(lastFrameTime) >= minFrameInterval
-			lastFrameTime = now // always update to prevent burst bypass after a gap
-			if passFrame {
-				if n > maxFrameBytes {
-					n = maxFrameBytes
-				}
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				if !broadcast(data, uint64(now.UnixNano()), enc.codec) {
-					return nil
-				}
+			if first {
+				first = false
+				onFirstChunk()
+			}
+			data := make([]byte, n)
+			copy(data, buf[:n])
+			if !broadcast(data, uint64(time.Now().UnixNano()), codec) {
+				return nil
 			}
 		}
 		if readErr != nil {
-			if timedOut.Load() && lastFrameTime.IsZero() {
-				return status.Errorf(codes.DeadlineExceeded,
-					"camera produced no video within %s", firstFrameTimeout)
+			if errors.Is(readErr, io.EOF) {
+				return nil
 			}
-			if readErr == io.EOF {
-				return nil // normal termination; defer surfaces stderr/exit errors
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return status.Errorf(codes.Internal, "failed to read GStreamer output: %v", readErr)
+			return readErr
 		}
 	}
 }

@@ -109,7 +109,7 @@ func TestSimulatorTabSurvivesAnUnreadableStore(t *testing.T) {
 func TestDevicePickerShowsAllThreeTabs(t *testing.T) {
 	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
 	view := m.View()
-	for _, want := range []string{"Local", "Simulator", "Cloud", "tab switch"} {
+	for _, want := range []string{"Nearby", "Simulator", "Cloud", "tab switch"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("picker view = %q, want it to contain %q", view, want)
 		}

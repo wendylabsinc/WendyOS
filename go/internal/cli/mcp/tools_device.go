@@ -13,8 +13,9 @@ import (
 
 func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	listOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("List wendy devices from config and known addresses. Pass scan=true to also run a live 3-second mDNS scan for devices on the local network."),
+		mcpgo.WithDescription("List configured devices and online cloud-enrolled devices from the selected Wendy Cloud auth session by default. Pass scan=true to also scan the local network (3 s). Connect cloud entries with cloud_connect using name and cloud_grpc. Use cloud_discover for offline devices or cloud-side filters. Cloud failures are returned as warnings alongside local devices."),
 		mcpgo.WithBoolean("scan", mcpgo.Description("If true, run a live mDNS scan (3 s) in addition to returning configured devices")),
+		mcpgo.WithString("cloud_grpc", mcpgo.Description("Cloud gRPC endpoint to use (optional when a default auth session is selected via 'wendy auth use')")),
 		mcpgo.WithNumber("max_bytes", mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)")),
 	}
 	listOpts = append(listOpts, readOnly()...)
@@ -36,7 +37,7 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	disconnectOpts = append(disconnectOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("device_disconnect", disconnectOpts...), s.handleDeviceDisconnect)
 
-	infoOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Get agent version, OS, CPU architecture, GPU info, and feature set of connected device")}
+	infoOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Get agent version, OS, CPU architecture, GPU info, feature set, and battery level of the connected device. Use this for battery percentage, charge state, and estimated seconds until empty (discharging) or full (charging). Battery is omitted when the agent has no reading; seconds_remaining is omitted when no estimate is available. Does not require a running ROS 2 app.")}
 	infoOpts = append(infoOpts, readOnly()...)
 	infoOpts = append(infoOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("device_info", infoOpts...), s.handleDeviceInfo)
@@ -54,16 +55,19 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	scan := req.GetBool("scan", false)
 
-	var devices []map[string]any
-	for _, auth := range s.cfg.Auth {
-		if auth.CloudGRPC != "" {
-			devices = append(devices, map[string]any{
-				"address": auth.CloudGRPC,
-				"type":    "cloud",
-				"source":  "config",
-			})
-		}
+	// Run cloud discovery alongside the optional LAN scan, so an unreachable
+	// cloud cannot extend local discovery by an unbounded amount of time.
+	type cloudResult struct {
+		devices []map[string]any
+		err     error
 	}
+	cloudResults := make(chan cloudResult, 1)
+	go func() {
+		devices, err := s.listCloudDevices(ctx, stringParam(req, "cloud_grpc"))
+		cloudResults <- cloudResult{devices: devices, err: err}
+	}()
+
+	var devices []map[string]any
 	if s.cfg.DefaultDevice != "" {
 		devices = append(devices, map[string]any{
 			"address": s.cfg.DefaultDevice,
@@ -99,7 +103,42 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 		}
 	}
 
-	return okListBounded("devices", devices, intParam(req, "max_bytes", 100000)), nil
+	cloud := <-cloudResults
+	devices = append(devices, cloud.devices...)
+	out := map[string]any{"devices": listOrEmpty(devices)}
+	if cloud.err != nil {
+		out["warnings"] = []map[string]any{{
+			"source":  "cloud",
+			"message": fmt.Sprintf("Cloud discovery unavailable: %s", cloud.err),
+		}}
+	}
+	return okResultBounded(out, intParam(req, "max_bytes", 100000)), nil
+}
+
+func (s *mcpServer) listCloudDevices(ctx context.Context, cloudGRPC string) ([]map[string]any, error) {
+	if len(s.cfg.Auth) == 0 && cloudGRPC == "" {
+		return nil, nil // Local-only installations do not require cloud login.
+	}
+	auth, err := s.cloudAuthEntry(cloudGRPC)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	assets, err := mcpListCloudAssets(ctx, auth, "", true)
+	if err != nil {
+		return nil, err
+	}
+	devices := make([]map[string]any, 0, len(assets))
+	for _, asset := range assets {
+		entry := cloudAssetToMap(asset)
+		entry["type"] = "cloud"
+		entry["source"] = "cloud"
+		entry["cloud_grpc"] = auth.CloudGRPC
+		entry["online"] = true // ListAssets requested active tunnel broker presence.
+		devices = append(devices, entry)
+	}
+	return devices, nil
 }
 
 func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -110,16 +149,16 @@ func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolR
 	if err := s.ConnectTo(ctx, address); err != nil {
 		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", address, err.Error()), nil
 	}
-	s.SetConnType("direct")
 	return okText(fmt.Sprintf("connected to %s", address)), nil
 }
 
 func (s *mcpServer) handleDeviceDisconnect(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	conn := s.GetConn()
+	// Even when disconnected, invalidate any automatic connection still in flight.
+	s.SetConn(nil)
 	if conn == nil {
 		return okText("not connected"), nil
 	}
-	s.SetConn(nil)
 	return okText("disconnected"), nil
 }
 
@@ -194,6 +233,16 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	}
 	if resp.NpuVendor != nil {
 		info["npu_vendor"] = resp.GetNpuVendor()
+	}
+	if battery := resp.GetBattery(); battery != nil {
+		entry := map[string]any{
+			"percent": battery.GetPercent(),
+			"state":   battery.GetState().String(),
+		}
+		if battery.SecondsRemaining != nil {
+			entry["seconds_remaining"] = battery.GetSecondsRemaining()
+		}
+		info["battery"] = entry
 	}
 	return okResult(info), nil
 }

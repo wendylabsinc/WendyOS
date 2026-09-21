@@ -216,12 +216,11 @@ func (s *mcpServer) handleCloudDiscover(ctx context.Context, req mcpgo.CallToolR
 }
 
 func (s *mcpServer) handleCloudConnect(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	conn, asset, err := s.connectToCloudAgent(ctx, stringParam(req, "cloud_grpc"), stringParam(req, "device_name"), stringParam(req, "broker_url"))
+	conn, asset, target, err := s.connectToCloudAgent(ctx, stringParam(req, "cloud_grpc"), stringParam(req, "device_name"), stringParam(req, "broker_url"))
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
-	s.SetConn(conn)
-	s.SetConnType("cloud")
+	s.setConnection(conn, "cloud", target)
 	return okText(fmt.Sprintf("connected to %s via cloud", asset.GetName())), nil
 }
 
@@ -466,6 +465,7 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	cmd := exec.CommandContext(runCtx, bin, args...)
 	reportProgress(ctx, tok, 0, 0, "running wendy…")
 	out, err := cmd.CombinedOutput()
+	s.refreshContainerMCPTools()
 	reportProgress(ctx, tok, 1, 1, "done")
 	text := strings.TrimSpace(string(out))
 	if runCtx.Err() != nil {
@@ -518,18 +518,30 @@ func (s *mcpServer) cloudAuthEntry(cloudGRPC string) (*config.AuthConfig, error)
 	return auth, err
 }
 
-func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL string) (*grpcclient.AgentConnection, *cloudpb.Asset, error) {
+func cloudCommandTarget(auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) commandTarget {
+	if auth == nil || auth.CloudGRPC == "" || asset.GetName() == "" {
+		return commandTarget{}
+	}
+	return commandTarget{
+		Device:    asset.GetName(),
+		Transport: "cloud",
+		CloudGRPC: auth.CloudGRPC,
+		BrokerURL: brokerURL,
+	}
+}
+
+func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL string) (*grpcclient.AgentConnection, *cloudpb.Asset, commandTarget, error) {
 	auth, err := s.cloudAuthEntry(cloudGRPC)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, commandTarget{}, err
 	}
 	asset, err := s.pickCloudAsset(ctx, auth, deviceName)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, commandTarget{}, err
 	}
 	brokerConn, err := clouddefaults.DialBroker(auth, brokerURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, commandTarget{}, err
 	}
 	cleanupBroker := true
 	defer func() {
@@ -545,18 +557,18 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 	certInfo := auth.Certificates[0]
 	keyPEM, err := certInfo.PrivateKeyPEM()
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading client key: %w", err)
+		return nil, nil, commandTarget{}, fmt.Errorf("loading client key: %w", err)
 	}
 	x509Cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading agent mTLS cert: %w", err)
+		return nil, nil, commandTarget{}, fmt.Errorf("loading agent mTLS cert: %w", err)
 	}
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
 		ChainPEM:      certInfo.PemCertificateChain,
 		ExpectedOrgID: int32(certInfo.OrganizationID),
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("building TLS verifier: %w", err)
+		return nil, nil, commandTarget{}, fmt.Errorf("building TLS verifier: %w", err)
 	}
 	tlsCfg := &tls.Config{
 		Certificates:       []tls.Certificate{x509Cert},
@@ -570,7 +582,7 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
+		return nil, nil, commandTarget{}, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
 	}
 	agentConn := grpcclient.NewFromConn(grpcConn)
 	agentConn.Host = asset.GetName()
@@ -581,7 +593,7 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 	}
 	agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
 	cleanupBroker = false
-	return agentConn, asset, nil
+	return agentConn, asset, cloudCommandTarget(auth, asset, brokerURL), nil
 }
 
 func (s *mcpServer) pickCloudAsset(ctx context.Context, auth *config.AuthConfig, deviceName string) (*cloudpb.Asset, error) {

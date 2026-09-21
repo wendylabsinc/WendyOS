@@ -289,6 +289,7 @@ func runRemoteBuild(
 		return fmt.Errorf("connecting to build host %s: %w", host, err)
 	}
 	defer builder.Close()
+	host = buildHostDisplayName(host, builder)
 
 	caps, err := builder.BuildService.GetBuildCapabilities(ctx, &agentpbv2.GetBuildCapabilitiesRequest{})
 	if err != nil {

@@ -117,7 +117,7 @@ func TestCameraControlStore_MergeAndReload(t *testing.T) {
 // isolated on-disk store.
 func newControlsTestService(t *testing.T) (*VideoService, *[]controlValue) {
 	t.Helper()
-	svc := NewVideoService(context.Background(), zap.NewNop())
+	svc := NewVideoService(context.Background(), zap.NewNop(), nil)
 	svc.controls = newCameraControlStore(filepath.Join(t.TempDir(), "cc.json"))
 	captured := &[]controlValue{}
 	svc.controlIndexFor = func(string) (map[string]uint32, error) {

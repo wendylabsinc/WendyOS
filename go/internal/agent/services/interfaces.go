@@ -3,9 +3,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/ros2inspection"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -262,6 +264,7 @@ type ROS2Target struct {
 	Distro      string // e.g. "humble"
 	DomainID    int    // resolved ROS_DOMAIN_ID
 	RMW         string // resolved RMW_IMPLEMENTATION (e.g. "rmw_cyclonedds_cpp"); "" if unset
+	HostNetwork bool   // OCI spec explicitly omits a private/joined network namespace
 	Running     bool
 	TaskPID     uint32 // pid of the container's init process; 0 when not running
 }
@@ -272,15 +275,37 @@ type ROS2Target struct {
 type ROS2Sidecar struct {
 	Name     string // sidecar container ID (per-RMW)
 	Distro   string
-	DomainID int    // default DDS domain, taken from the anchor app container
+	DomainID int    // default DDS domain, taken from the anchor app container or 0 for system ROS 2
 	RMW      string // the RMW this sidecar speaks (e.g. "rmw_cyclonedds_cpp"); "" = image default
 }
 
-// ROS2ExecOptions configures a single `ros2` invocation inside the sidecar.
+// ErrNoRunningROS2Containers identifies the absence of a running ROS 2 app,
+// allowing an unscoped request to inspect system ROS 2 without masking runtime
+// failures such as container discovery or sidecar provisioning errors.
+var ErrNoRunningROS2Containers = errors.New("no running ROS 2 containers found")
+
+// ROS2SystemRuntime optionally supports the device's system ROS 2 graph without
+// an app container. Unscoped requests use it only when no ROS 2 app is running;
+// explicitly scoped app and host inspection keep their own routing contracts.
+type ROS2SystemRuntime interface {
+	EnsureSystemROS2Sidecar(context.Context) (ROS2Sidecar, error)
+}
+
+// ROS2NamedSidecarVerifier optionally checks the exact sidecar used by a
+// recording, so unrelated app or system sidecars cannot affect its diagnosis.
+type ROS2NamedSidecarVerifier interface {
+	VerifyROS2SidecarNamed(context.Context, string) error
+}
+
+// ROS2ExecOptions configures a ROS 2 CLI invocation or a fixed sensor probe
+// inside the sidecar.
 type ROS2ExecOptions struct {
 	DomainID    int      // ROS_DOMAIN_ID for this invocation
 	Args        []string // arguments after `ros2`, passed without shell interpretation
 	SidecarName string   // which per-RMW sidecar to exec in; empty = the default/first
+	// Lidar selects the trusted point-cloud probe instead of the CLI. Args must
+	// be empty; callers cannot supply Python code or alter the probe executable.
+	Lidar *ros2inspection.LidarOptions
 }
 
 // ROS2Runtime abstracts the containerd-side ROS 2 sidecar plumbing used by
@@ -291,7 +316,7 @@ type ROS2Runtime interface {
 	// EnsureROS2Sidecars starts or reuses one CLI sidecar per distinct RMW in
 	// use by the running ROS 2 apps, and tears down sidecars whose RMW is no
 	// longer present. Returns one entry per live RMW graph (WDY-1594). Returns
-	// an error when no ROS 2 app is running.
+	// an error wrapping ErrNoRunningROS2Containers when no ROS 2 app is running.
 	EnsureROS2Sidecars(ctx context.Context) ([]ROS2Sidecar, error)
 	// StopROS2Sidecar stops and removes the sidecar if present.
 	StopROS2Sidecar(ctx context.Context) error
@@ -300,7 +325,7 @@ type ROS2Runtime interface {
 	// when the anchor container stopped or was replaced (e.g. the app was
 	// redeployed), which invalidates the sidecar's network namespace.
 	VerifyROS2Sidecar(ctx context.Context) error
-	// ExecROS2 runs `ros2 <args>` in the sidecar, streaming output to the
+	// ExecROS2 runs `ros2 <args>` or the fixed LiDAR probe in the sidecar, streaming output to the
 	// writers, and returns the exit code. Cancelling ctx sends SIGINT first
 	// so commands like `ros2 bag record` can finalize.
 	ExecROS2(ctx context.Context, opts ROS2ExecOptions, stdout, stderr io.Writer) (int, error)

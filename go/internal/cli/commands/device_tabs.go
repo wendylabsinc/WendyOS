@@ -41,7 +41,7 @@ func deviceTabLabel(t devicePickerTab) string {
 	case devicePickerCloudTab:
 		return "Cloud"
 	default:
-		return "Local"
+		return "Nearby"
 	}
 }
 

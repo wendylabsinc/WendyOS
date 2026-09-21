@@ -102,12 +102,29 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 		}, refreshCalls, retryCalls
 	}
 
+	t.Run("non-interactive option overrides terminal", func(t *testing.T) {
+		restore, refreshCalls, retryCalls := setup(true, true, nil)
+		defer restore()
+		confirmFn = func(string) bool {
+			t.Fatal("non-interactive connection prompted for certificate refresh")
+			return false
+		}
+		confirmDefaultNoFn = confirmFn
+		_, ok := offerCertRefreshAndRetry(context.Background(), true, certErr, func() (*grpcclient.AgentConnection, error) {
+			*retryCalls++
+			return nil, nil
+		})
+		if ok || *refreshCalls != 0 || *retryCalls != 0 {
+			t.Fatalf("non-interactive refresh = %v, refresh calls = %d, retry calls = %d", ok, *refreshCalls, *retryCalls)
+		}
+	})
+
 	t.Run("accepted refresh retries and returns connection", func(t *testing.T) {
 		restore, refreshCalls, retryCalls := setup(true, true, nil)
 		defer restore()
 
 		wantConn := &grpcclient.AgentConnection{Host: "device.local"}
-		conn, ok := offerCertRefreshAndRetry(context.Background(), certErr, func() (*grpcclient.AgentConnection, error) {
+		conn, ok := offerCertRefreshAndRetry(context.Background(), false, certErr, func() (*grpcclient.AgentConnection, error) {
 			*retryCalls++
 			return wantConn, nil
 		})
@@ -123,7 +140,7 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 		restore, refreshCalls, retryCalls := setup(true, false, nil)
 		defer restore()
 
-		_, ok := offerCertRefreshAndRetry(context.Background(), certErr, func() (*grpcclient.AgentConnection, error) {
+		_, ok := offerCertRefreshAndRetry(context.Background(), false, certErr, func() (*grpcclient.AgentConnection, error) {
 			*retryCalls++
 			return nil, nil
 		})
@@ -139,7 +156,7 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 		timeoutErr := newProvisionedAgentUnauthorizedError(
 			errors.New("dial tcp 192.168.1.50:50052: i/o timeout"))
 		wantConn := &grpcclient.AgentConnection{Host: "device.local"}
-		conn, ok := offerCertRefreshAndRetry(context.Background(), timeoutErr, func() (*grpcclient.AgentConnection, error) {
+		conn, ok := offerCertRefreshAndRetry(context.Background(), false, timeoutErr, func() (*grpcclient.AgentConnection, error) {
 			*retryCalls++
 			return wantConn, nil
 		})
@@ -157,7 +174,7 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 
 		timeoutErr := newProvisionedAgentUnauthorizedError(
 			errors.New("dial tcp 192.168.1.50:50052: i/o timeout"))
-		_, ok := offerCertRefreshAndRetry(context.Background(), timeoutErr, func() (*grpcclient.AgentConnection, error) {
+		_, ok := offerCertRefreshAndRetry(context.Background(), false, timeoutErr, func() (*grpcclient.AgentConnection, error) {
 			*retryCalls++
 			return nil, nil
 		})
@@ -170,7 +187,7 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 		restore, refreshCalls, _ := setup(false, true, nil)
 		defer restore()
 
-		_, ok := offerCertRefreshAndRetry(context.Background(), certErr, func() (*grpcclient.AgentConnection, error) {
+		_, ok := offerCertRefreshAndRetry(context.Background(), false, certErr, func() (*grpcclient.AgentConnection, error) {
 			return nil, nil
 		})
 		if ok || *refreshCalls != 0 {
@@ -182,7 +199,7 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 		restore, refreshCalls, _ := setup(true, true, nil)
 		defer restore()
 
-		_, ok := offerCertRefreshAndRetry(context.Background(), errors.New("connection refused"), func() (*grpcclient.AgentConnection, error) {
+		_, ok := offerCertRefreshAndRetry(context.Background(), false, errors.New("connection refused"), func() (*grpcclient.AgentConnection, error) {
 			return nil, nil
 		})
 		if ok || *refreshCalls != 0 {
@@ -194,7 +211,7 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 		restore, refreshCalls, retryCalls := setup(true, true, fmt.Errorf("cloud unreachable"))
 		defer restore()
 
-		_, ok := offerCertRefreshAndRetry(context.Background(), certErr, func() (*grpcclient.AgentConnection, error) {
+		_, ok := offerCertRefreshAndRetry(context.Background(), false, certErr, func() (*grpcclient.AgentConnection, error) {
 			*retryCalls++
 			return nil, nil
 		})
@@ -207,7 +224,7 @@ func TestOfferCertRefreshAndRetry(t *testing.T) {
 		restore, _, _ := setup(true, true, nil)
 		defer restore()
 
-		_, ok := offerCertRefreshAndRetry(context.Background(), certErr, func() (*grpcclient.AgentConnection, error) {
+		_, ok := offerCertRefreshAndRetry(context.Background(), false, certErr, func() (*grpcclient.AgentConnection, error) {
 			return nil, errors.New("still unauthorized")
 		})
 		if ok {

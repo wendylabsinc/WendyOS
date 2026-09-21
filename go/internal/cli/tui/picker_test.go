@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,6 +11,22 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 )
+
+func TestPickerFailedDefaultSavePreservesMarker(t *testing.T) {
+	m := NewPicker()
+	m.DefaultKey = "previous"
+	m.OnSetDefault = func(PickerItem) (string, error) { return "", errors.New("cannot save config") }
+	m.OnUnsetDefault = func() (string, error) { return "", errors.New("cannot save config") }
+	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{{Name: "new", DedupKey: "new"}}})
+	m = updated.(PickerModel)
+	for _, key := range []rune{'d', 'x'} {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+		m = updated.(PickerModel)
+		if m.DefaultKey != "previous" || !m.flashIsError || m.flashMessage != "cannot save config" {
+			t.Fatalf("failed save changed UI state: key=%q error=%t message=%q", m.DefaultKey, m.flashIsError, m.flashMessage)
+		}
+	}
+}
 
 func TestPickerModel_SelectsFromTable(t *testing.T) {
 	m := NewPickerWithTitle("Select a WiFi network")
@@ -597,8 +614,8 @@ func TestPickerModel_ShowsSelectedHintAtBottom(t *testing.T) {
 func TestPickerModel_DefaultKeyShowsStar(t *testing.T) {
 	m := NewPickerWithTitle("Select a device")
 	m.DefaultKey = "alpha"
-	m.OnSetDefault = func(item PickerItem) string { return "" }
-	m.OnUnsetDefault = func() string { return "" }
+	m.OnSetDefault = func(item PickerItem) (string, error) { return "", nil }
+	m.OnUnsetDefault = func() (string, error) { return "", nil }
 
 	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
 		{Name: "alpha", Type: "LAN", Value: "alpha"},
@@ -678,8 +695,8 @@ func TestPickerTableData_DefaultKeysShowStar(t *testing.T) {
 func TestPickerModel_DKeySetsDefault(t *testing.T) {
 	m := NewPickerWithTitle("Select a device")
 	var setItem PickerItem
-	m.OnSetDefault = func(item PickerItem) string { setItem = item; return "" }
-	m.OnUnsetDefault = func() string { return "" }
+	m.OnSetDefault = func(item PickerItem) (string, error) { setItem = item; return "", nil }
+	m.OnUnsetDefault = func() (string, error) { return "", nil }
 
 	// Add items.
 	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
@@ -704,8 +721,8 @@ func TestPickerModel_XKeyClearsDefault(t *testing.T) {
 	m := NewPickerWithTitle("Select a device")
 	m.DefaultKey = "alpha"
 	var unsetCalled bool
-	m.OnSetDefault = func(item PickerItem) string { return "" }
-	m.OnUnsetDefault = func() string { unsetCalled = true; return "" }
+	m.OnSetDefault = func(item PickerItem) (string, error) { return "", nil }
+	m.OnUnsetDefault = func() (string, error) { unsetCalled = true; return "", nil }
 
 	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
 		{Name: "alpha", Type: "LAN", Value: "alpha"},
