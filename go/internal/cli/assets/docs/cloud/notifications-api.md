@@ -218,6 +218,12 @@ appearance. Omit `notify.webhook` for Wendy Cloud delivery, or supply an HTTP(S)
 endpoint for webhook delivery. `episode_committed` remains manifest intent for
 notification after upload; it is separate from immediate delivery.
 
+Cloud delivery currently requires a legacy enrollment with positive numeric
+organization and asset IDs. Experimental direct-PKI/OIDC enrollments with only
+a SPIFFE principal cannot use this sender: it rejects them before sending with
+`FailedPrecondition`, reported in `inference_status.notification_error`. Use an
+explicit `notify.webhook` for immediate notifications on those devices.
+
 The agent uses its enrolled device credentials and a bounded, nonpersistent
 queue. There are at most three attempts, with 10-second timeouts and the same
 event UUID. `InvalidArgument`, `Unauthenticated`, `PermissionDenied`,
