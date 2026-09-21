@@ -33,8 +33,9 @@ var (
 
 func newAppsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "apps",
-		Short: "Manage applications on the target device",
+		Use:    "apps",
+		Short:  "Manage applications on the target device",
+		Hidden: true,
 	}
 
 	cmd.AddCommand(

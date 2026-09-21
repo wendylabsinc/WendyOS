@@ -1,0 +1,13 @@
+{
+  "appId": "sh.wendy.examples.robot-navigation",
+  "platform": "linux",
+  "version": "1.0.0",
+  "frameworks": {
+    "ros2": { "domainId": 0, "rmw": "rmw_cyclonedds_cpp", "distro": "humble", "discoveryScope": "host" }
+  },
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "mcp", "port": 8128 },
+    { "type": "persist", "name": "sh.wendy.examples.robot-navigation", "path": "/data" }
+  ]
+}

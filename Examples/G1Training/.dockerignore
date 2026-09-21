@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!wendy.json
+!wendy_app/
+!wendy_app/**
+**/__pycache__
+**/*.pyc

@@ -37,7 +37,7 @@ func newDiscoverCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "discover",
 		Short: "Discover local and cloud WendyOS devices",
-		Long:  "Continuously discover WendyOS devices in Local and Cloud tabs until Ctrl+C. Use --timeout to scan local devices once for a fixed duration.",
+		Long:  "Continuously discover WendyOS devices in Nearby, Simulator, and Cloud tabs until Ctrl+C. Use --timeout to scan local devices once for a fixed duration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var opts discovery.DiscoveryOptions
 
@@ -1193,6 +1193,7 @@ var deviceTypeNames = map[string]string{
 	"jetson-orin-nano":   "Jetson Orin Nano",
 	"jetson-agx-thor":    "Jetson AGX Thor",
 	"dragonwing-iq-8275": "Dragonwing IQ-8275",
+	"dragonwing-iq-9075": "Dragonwing IQ-9075",
 	"x86_64":             "x86-64",
 	"vm-arm64":           "ARM64 VM",
 	"vm-x86-64":          "x86-64 VM",

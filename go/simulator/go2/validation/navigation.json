@@ -1,0 +1,72 @@
+{
+  "result": "passed",
+  "full_sensor_acceptance": true,
+  "elapsed_seconds": 42.07000580099998,
+  "error": null,
+  "checks": [
+    {
+      "check": "navigation_readiness",
+      "passed": true,
+      "pose_covariance": [
+        0.01,
+        0.01,
+        0.005
+      ],
+      "publisher_gid": "124d46b68f821fae00000000000000000000000000000000"
+    },
+    {
+      "check": "goal_arrival",
+      "passed": true,
+      "goal": [
+        1.2005622197900956,
+        0.19406288581732956
+      ],
+      "odometry_error_m": 0.2450640528527604,
+      "actual_displacement_m": 0.962335824107386
+    },
+    {
+      "check": "robot_perception",
+      "passed": true,
+      "image": [
+        640,
+        360,
+        "rgb8"
+      ],
+      "points": 1183,
+      "matching_horizontal_returns": 360,
+      "capture_stamp_ns": 1789228387802681409
+    },
+    {
+      "check": "obstacle_stop_and_resume",
+      "passed": true,
+      "box": [
+        1.6996348229198233,
+        -0.0052170438571890465
+      ],
+      "held_drift_m": 0.017525536371253002,
+      "minimum_body_center_to_box_m": 0.8607189802041993,
+      "arrival_error_m": 0.24766470251227546
+    },
+    {
+      "check": "stale_scan_stop",
+      "passed": true,
+      "zero_command_delay_ms": 341.9328839997888,
+      "physics_advanced_seconds": 2.237999999999754,
+      "raw_scan_messages": 32,
+      "fresh_goal_arrival_error_m": 0.249721101021622,
+      "automatic_resume": false
+    }
+  ],
+  "finished_at_unix_ns": 1789228423105316314,
+  "runtime": {
+    "source_digest": "",
+    "policy_bundle": "go2-moe-cts-164k-0.6715-v1",
+    "clock_mode": "device",
+    "world": "indoor",
+    "visual_detail": "balanced"
+  },
+  "source_sha256": {
+    "exercise.py": "928077ce849471dd4c8a6c7ecc1afdc490520d8d8ae5d3b2cce6430701e7e60a",
+    "controller.py": "eea4432666ec906d1e62a46b4524dc4dc35ae971f72754cbc63033d29a2b54e5"
+  }
+}

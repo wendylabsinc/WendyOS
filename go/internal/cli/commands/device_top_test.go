@@ -164,7 +164,7 @@ func TestRenderTemperatureHeaderShowsCircleOnlyForAlert(t *testing.T) {
 		Alert:          thermalReading{Name: "go2/motor/fr-thigh", TempC: 66},
 		AlertThreshold: 70,
 	})
-	for _, want := range []string{"●", "Temp max", "66°C", "near 70°C warning"} {
+	for _, want := range []string{"●", "Temp: max", "66°C", "near 70°C warning"} {
 		if !strings.Contains(near, want) {
 			t.Fatalf("near header missing %q: %q", want, near)
 		}
@@ -412,6 +412,7 @@ func TestTopViewPutsThermalWarningInHeader(t *testing.T) {
 		width:    100,
 		height:   24,
 		havePrev: true,
+		storage:  &agentpb.DiskPartition{Mountpoint: "/data", TotalBytes: 100, UsedBytes: 20},
 		cur: topSample{host: &agentpb.HostStats{
 			MemTotalBytes: 100,
 			ThermalZones: []*agentpb.ThermalZone{
@@ -421,11 +422,19 @@ func TestTopViewPutsThermalWarningInHeader(t *testing.T) {
 		}},
 	}
 	view := m.View()
-	firstLine := strings.Split(view, "\n")[0]
-	for _, want := range []string{"●", "Temp max", "79°C", "Go2 fr thigh 66°C", "near 70°C warning"} {
-		if !strings.Contains(firstLine, want) {
+	var temperatureLine string
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Temp:") {
+			temperatureLine = line
+		}
+	}
+	for _, want := range []string{"●", "Temp: max", "79°C", "Go2 fr thigh 66°C", "near 70°C warning"} {
+		if !strings.Contains(temperatureLine, want) {
 			t.Fatalf("thermal header missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Count(view, "Temp:") != 1 || strings.Index(view, "Disk /data") > strings.Index(view, "Temp:") {
+		t.Fatalf("expected one temperature line below disk usage:\n%s", view)
 	}
 }
 
@@ -661,5 +670,33 @@ func TestTopView_NoBatteryMeterWithoutOne(t *testing.T) {
 	// The CPU and Mem meters still render.
 	if !strings.Contains(view, "CPU") || !strings.Contains(view, "Mem[") {
 		t.Fatalf("top view lost its existing meters:\n%s", view)
+	}
+}
+
+func TestTopKeyBarFitsNarrowTerminals(t *testing.T) {
+	for _, width := range []int{1, 20, 40, 57, 80} {
+		bar := (topModel{}).topKeyBar(width)
+		if got := visibleWidth(bar); got != width {
+			t.Fatalf("width %d rendered %d cells", width, got)
+		}
+	}
+}
+
+func TestTopDiskMountpointSanitizedForTerminal(t *testing.T) {
+	storage := &agentpb.DiskPartition{Mountpoint: "/data\x1b[2J\r\u202e", TotalBytes: 100, UsedBytes: 20}
+	m := topModel{width: 100, height: 24, storage: storage, actionStatus: "Started app\x1b[2J\r\u202e"}
+	var plain bytes.Buffer
+	if err := writeTopPlainSnapshot(&plain, topSample{}, topSample{storage: storage}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, view := range []string{m.View(), plain.String()} {
+		for _, control := range []string{"\x1b[2J", "\r", "\u202e"} {
+			if strings.Contains(view, control) {
+				t.Fatalf("mountpoint control survived: %q", view)
+			}
+		}
+		if !strings.Contains(view, "/data") {
+			t.Fatal("mountpoint text missing")
+		}
 	}
 }

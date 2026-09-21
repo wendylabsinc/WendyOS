@@ -17,6 +17,10 @@ first, then paired devices, then named devices (alphabetically by name), then
 anonymous peripherals (by descending RSSI — strongest signal first). Ties within
 each group fall back to address ascending.
 
+Unnamed peripherals are hidden by default. Press `h` to show them or hide them
+again. The table shows how many peripherals are hidden. This also applies to the
+Bluetooth tab in `wendy device pair`.
+
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` | Move the selection |
@@ -24,6 +28,7 @@ each group fall back to address ascending.
 | `enter` | Connect to the selected peripheral (pairs and trusts it) |
 | `d` | Disconnect the selected (connected) peripheral |
 | `f` | Forget the selected (paired) peripheral |
+| `h` | Show or hide unnamed peripherals |
 | `r` | Rescan |
 | `q` / `esc` | Quit |
 

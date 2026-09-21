@@ -1,0 +1,367 @@
+{
+  "result": "failed",
+  "scope": "Short full-subscriber diagnostic, managed go2-sim VM, 4 vCPU/4096MiB",
+  "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+  "failure": "Camera capture source stamp reached 556.6 ms age after 11.1 s of soak; ten-minute acceptance has not passed.",
+  "notes": "CLI retained output is bounded; these are retained samples, not a complete continuous log. Runtime timing snapshot was captured after subscriber stopped, and is not contemporaneous with the failure.",
+  "retained_sample_count": 23,
+  "last_sample": {
+    "event": "soak_sample",
+    "elapsed_seconds": 11.071363750999978,
+    "phase": "yaw_right",
+    "position": [
+      -0.05174316406473146,
+      0.047055132996220154,
+      0.3508199811982839
+    ],
+    "anchor_radius_m": 0.07314973305880608,
+    "contacts": 4,
+    "mode": "moving",
+    "physical_constraints": {
+      "runtime_ready": true,
+      "standing_or_moving": true,
+      "epoch_unchanged": true,
+      "owner_unchanged": true,
+      "finite_state": true,
+      "joint_position_and_torque_limits": true,
+      "supported_height": true,
+      "upright": true,
+      "near_spawn": true,
+      "valid_contacts": true,
+      "fresh_ros_receipts": true,
+      "fresh_ros_source_stamps": false,
+      "advancing_ros_stamps": true,
+      "native_tick_tracks_physics": true,
+      "valid_full_sensor_payloads": true,
+      "contact_support_returns": true
+    },
+    "interval": {
+      "wall_seconds": 0.5089791390000187,
+      "real_time_factor": 1.0371051584396567,
+      "policy_hz": 52.25723666554664,
+      "observer_fps": 4.01978743581128,
+      "physics_hz": 518.5525792196552,
+      "received_hz": {
+        "odom": 45.18849248947147,
+        "imu": 119.84774095033738,
+        "joints": 45.18849248947147,
+        "scan": 9.823585323798145,
+        "truth": 45.18849248947147,
+        "image": 1.9647170647596293,
+        "camera_info": 1.9647170647596293,
+        "cloud": 9.823585323798145,
+        "lowstate": 233.80133070639587
+      },
+      "published_hz": {
+        "odom": 46.22755551182972,
+        "imu": 122.60351679224405,
+        "joints": 46.22755551182972,
+        "scan": 10.0494685895282,
+        "truth": 46.22755551182972,
+        "image": 2.00989371790564,
+        "camera_info": 2.00989371790564,
+        "cloud": 10.0494685895282,
+        "lowstate": 237.16745871286554
+      },
+      "command_hz": 19.64717064759629,
+      "command_gaps_over_200ms": 0
+    },
+    "runtime_trailing_command_p95_ms": 20.47202355001616,
+    "runtime_process_peak_rss_bytes": 774057984,
+    "full_sensors": {
+      "errors": [],
+      "crc_checked": 1936,
+      "lowstate_received": 19356,
+      "latest_tick_ms": 14110,
+      "distinct_recent_image_hashes": 120,
+      "crc_sampling": "every tenth received LowState, pinned SDK packer and bitwise CRC"
+    },
+    "source_age_ms": {
+      "odom": 29.982073,
+      "imu": 29.982823,
+      "joints": 29.983239,
+      "scan": 132.421845,
+      "truth": 29.983864,
+      "cloud": 132.422553,
+      "image": 556.62115,
+      "camera_info": 556.6214
+    },
+    "error": null
+  },
+  "runtime_after_subscriber": {
+    "time": 308.58800000074535,
+    "epoch": 3,
+    "mode": "standing",
+    "control_mode": "sport",
+    "posture_phase": null,
+    "ncontact": 4,
+    "armed": false,
+    "position": [
+      0.2438973596324978,
+      0.3252798360339684,
+      0.3354659746820685
+    ],
+    "quaternion_wxyz": [
+      0.7202243722767656,
+      -0.0017089416516727638,
+      0.02440832249844967,
+      -0.693309575074354
+    ],
+    "linear_velocity_world": [
+      0.012529337619100554,
+      0.0051087571980055185,
+      0.008563849794406966
+    ],
+    "angular_velocity_body": [
+      -0.07195049095631276,
+      0.04680952731855462,
+      -0.0076200193630548245
+    ],
+    "command": [
+      0,
+      0,
+      0
+    ],
+    "applied_command": [
+      0,
+      0,
+      0
+    ],
+    "joints": {
+      "name": [
+        "FL_hip_joint",
+        "FL_thigh_joint",
+        "FL_calf_joint",
+        "FR_hip_joint",
+        "FR_thigh_joint",
+        "FR_calf_joint",
+        "RL_hip_joint",
+        "RL_thigh_joint",
+        "RL_calf_joint",
+        "RR_hip_joint",
+        "RR_thigh_joint",
+        "RR_calf_joint"
+      ],
+      "q": [
+        0.30791297202132023,
+        0.5135975074741352,
+        -1.249746473073125,
+        -0.15909735016283047,
+        0.3376764374639138,
+        -1.258971917416988,
+        -0.059225479636654255,
+        1.0587007006739702,
+        -1.092345386575424,
+        -0.2059187592648495,
+        0.6136287629476571,
+        -1.1594078920879354
+      ],
+      "dq": [
+        0.09054477283521654,
+        -0.07305978545266152,
+        0.0036959207608358645,
+        0.06524781764416492,
+        -0.026835976994127535,
+        0.010425656586432916,
+        0.050473554701532725,
+        -0.1136698276172943,
+        0.0036868625694420425,
+        -0.019425430261554116,
+        -0.21121432596275977,
+        0.3448717879314745
+      ],
+      "torque": [
+        -6.467450178634675,
+        0.033460116801942816,
+        7.057328723711572,
+        3.2191129819645936,
+        4.075201891720278,
+        3.849009516198496,
+        1.0174291459360667,
+        -5.904604335033654,
+        -2.11014104937541,
+        2.6572052011390284,
+        1.8327396973823686,
+        7.00815756200769
+      ]
+    },
+    "sensor_settings": {
+      "lidar_enabled": true,
+      "camera_enabled": true,
+      "lidar_dropout": 0
+    },
+    "sensor_generation": 0,
+    "ros_commands": {
+      "owner": null,
+      "accepted": 726,
+      "rejected": 24,
+      "last_error": null,
+      "sources": [
+        {
+          "publisher_gid": "c5ab7571c42032bd00000000000000000000000000000000",
+          "kind": "twist",
+          "age_ms": 307874.84371,
+          "requires_restart": true
+        },
+        {
+          "publisher_gid": "5534d1f48f08af9900000000000000000000000000000000",
+          "kind": "twist",
+          "age_ms": 294620.450101,
+          "requires_restart": true
+        }
+      ]
+    },
+    "ros": {
+      "running": true,
+      "fresh": true,
+      "samples": {
+        "imu": 74091,
+        "joints": 18680,
+        "odom": 18680,
+        "scan": 3750,
+        "cloud": 3750,
+        "camera": 4887
+      },
+      "snapshot_queue": {
+        "captured": 187441,
+        "consumed": 184187,
+        "overflow": 2413,
+        "expired": 841,
+        "pending": 0,
+        "capacity": 10,
+        "max_age_ms": 20
+      },
+      "image_publish_ms": {
+        "samples": 300,
+        "mean": 0.07790942332500587,
+        "p95": 0.09270909991414555,
+        "max": 2.5139939999689886
+      },
+      "native_samples": {
+        "lowstate": 184175,
+        "lf_lowstate": 18680,
+        "sportmodestate": 18680,
+        "lf_sportmodestate": 18680
+      }
+    },
+    "robot": "go2",
+    "simulation": true,
+    "profile_version": 1,
+    "robot_kind": "go2",
+    "source_digest": "sha256:965c98887d862356ac9d35ffcd0df3d79ffe6e808f784988d936572e8cc79997",
+    "vm_name": "go2-sim",
+    "dds_isolation": "udp-rtps-loopback",
+    "policy_bundle": "go2-moe-cts-164k-0.6715-v1",
+    "world": "indoor",
+    "clock_mode": "device",
+    "seed": 0,
+    "visual_detail": "balanced",
+    "healthy": true,
+    "ready": true,
+    "error": null,
+    "metrics": {
+      "wall_seconds": 376.31449268700004,
+      "real_time_factor": 0.9961933629588071,
+      "frames": 4890,
+      "camera_frames": 4888,
+      "fps": 12.994450373366998,
+      "physics_steps": 187441,
+      "physics_age_ms": 2.692418000037833,
+      "policy_updates": 18746,
+      "physics_timestep_seconds": 0.002,
+      "rss_bytes": 790179840,
+      "cpu_seconds": 637.602526,
+      "overruns": 7,
+      "policy_p95_ms": 1.012555850010699,
+      "physics_p95_ms": 0.7356611001057444,
+      "render_p95_ms": 107.61873155002066,
+      "render_stage_ms": {
+        "mj_forward": {
+          "samples": 300,
+          "mean": 0.228627769998108,
+          "p95": 1.025273149997475,
+          "max": 2.663038000036977
+        },
+        "work_total_thread_cpu": {
+          "samples": 300,
+          "mean": 30.012881836666104,
+          "p95": 32.196250400002675,
+          "max": 45.442829999984724
+        },
+        "observer_render": {
+          "samples": 300,
+          "mean": 43.055854709998975,
+          "p95": 52.95056724991696,
+          "max": 87.69519700001638
+        },
+        "camera_copy": {
+          "samples": 300,
+          "mean": 0.07847681999730109,
+          "p95": 0.2296289999549123,
+          "max": 1.0098540000171852
+        },
+        "camera_jpeg": {
+          "samples": 300,
+          "mean": 1.0131501566703112,
+          "p95": 1.9934171499926383,
+          "max": 3.859316000102808
+        },
+        "capture_lock_wait": {
+          "samples": 300,
+          "mean": 0.016693873333982385,
+          "p95": 0.005691949979791395,
+          "max": 0.9900670000888567
+        },
+        "observer_jpeg": {
+          "samples": 300,
+          "mean": 1.0911830366702209,
+          "p95": 2.2452050500874066,
+          "max": 3.954888999942341
+        },
+        "camera_render": {
+          "samples": 300,
+          "mean": 25.87130352333361,
+          "p95": 33.64723700003083,
+          "max": 49.185392000026695
+        },
+        "publish_fence": {
+          "samples": 300,
+          "mean": 0.4108342400032446,
+          "p95": 2.388734049901588,
+          "max": 4.453839000007065
+        },
+        "publish_fence_wait": {
+          "samples": 300,
+          "mean": 0.40388286666977063,
+          "p95": 2.379064199942606,
+          "max": 4.442047999987153
+        },
+        "work_total": {
+          "samples": 300,
+          "mean": 72.04647486666809,
+          "p95": 87.33606174997138,
+          "max": 135.16794000008758
+        },
+        "capture_lock": {
+          "samples": 300,
+          "mean": 0.05766536333074631,
+          "p95": 0.21600605007847745,
+          "max": 1.210647999982939
+        },
+        "observer_scene": {
+          "samples": 300,
+          "mean": 0.09657786999810014,
+          "p95": 0.4872686999533471,
+          "max": 2.348041999994166
+        },
+        "camera_scene": {
+          "samples": 300,
+          "mean": 0.13638691333615802,
+          "p95": 0.7290709500011876,
+          "max": 2.8236990000323203
+        }
+      },
+      "command_p95_ms": 20.706567800019116
+    }
+  }
+}

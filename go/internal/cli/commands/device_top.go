@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ import (
 
 // topSample is a normalized snapshot used to compute CPU% from deltas.
 type topSample struct {
+	storage      *agentpb.DiskPartition
 	host         *agentpb.HostStats
 	containers   map[string]uint64 // container ID -> cumulative cpu nanos
 	mem          map[string]int64  // container ID -> memory bytes
@@ -236,7 +238,14 @@ func listAppContainers(ctx context.Context, conn *grpcclient.AgentConnection) ([
 	return out, nil
 }
 
+type topJSONStorage struct {
+	Mountpoint string `json:"mountpoint"`
+	UsedBytes  int64  `json:"usedBytes"`
+	TotalBytes int64  `json:"totalBytes"`
+}
+
 type topJSONHost struct {
+	ContainerStorage   *topJSONStorage  `json:"containerStorage,omitempty"`
 	CPUPercent         float64          `json:"cpuPercent"`
 	CPUCount           uint32           `json:"cpuCount"`
 	MemUsedBytes       int64            `json:"memUsedBytes"`
@@ -288,6 +297,9 @@ type topJSONOutput struct {
 
 func buildTopJSON(prev, cur topSample, containers []*agentpb.AppContainer) topJSONOutput {
 	out := topJSONOutput{}
+	if cur.storage != nil {
+		out.Host.ContainerStorage = &topJSONStorage{Mountpoint: cur.storage.GetMountpoint(), UsedBytes: cur.storage.GetUsedBytes(), TotalBytes: cur.storage.GetTotalBytes()}
+	}
 	if cur.host != nil {
 		out.Host.CPUPercent = hostCPUPercent(prev, cur)
 		out.Host.CPUCount = cur.host.GetCpuCount()
@@ -370,6 +382,7 @@ func runTopSnapshot(ctx context.Context, conn *grpcclient.AgentConnection, asJSO
 		return err
 	}
 	cur := newTopSample(second, time.Now().UnixNano())
+	cur.storage, _ = fetchTopStorage(ctx, conn)
 
 	if asJSON {
 		data, err := json.MarshalIndent(buildTopJSON(prev, cur, containers), "", "  ")
@@ -383,6 +396,9 @@ func runTopSnapshot(ctx context.Context, conn *grpcclient.AgentConnection, asJSO
 }
 
 func writeTopPlainSnapshot(w io.Writer, prev, cur topSample, containers []*agentpb.AppContainer) error {
+	if cur.storage != nil {
+		fmt.Fprintf(w, "DISK %s: %s / %s\n", tui.StripControl(cur.storage.GetMountpoint()), formatBytes(cur.storage.GetUsedBytes()), formatBytes(cur.storage.GetTotalBytes()))
+	}
 	cpuCount := uint32(1)
 	if cur.host != nil && cur.host.GetCpuCount() > 0 {
 		cpuCount = cur.host.GetCpuCount()
@@ -427,7 +443,7 @@ func newTopCmd() *cobra.Command {
 	var interval time.Duration
 	cmd := &cobra.Command{
 		Use:   "top",
-		Short: "Live CPU, memory, GPU, and temperature for the device and its containers",
+		Short: "Live CPU, memory, disk, GPU, and temperature for the device and its containers",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
@@ -494,6 +510,17 @@ type topModel struct {
 	// cannot erase stop progress or its result.
 	actionSeq    uint64
 	stoppingApp  string
+	startingApp  string
+	pruningCache bool
+	storage      *agentpb.DiskPartition
+	storageErr   error
+
+	logsApp      string
+	logsSeq      uint64
+	logsCancel   context.CancelFunc
+	logsViewport viewport.Model
+	logsLines    []string
+	logsStatus   string
 	actionStatus string
 
 	// Ports for the currently selected app (always-on side panel).
@@ -529,7 +556,7 @@ func newTopModel(ctx context.Context, conn *grpcclient.AgentConnection, interval
 func (m topModel) Init() tea.Cmd {
 	go m.runStatsPoll()
 	go m.runContainersPoll()
-	return tea.Batch(waitForTopStats(m.statsCh), waitForTopContainers(m.containersCh))
+	return tea.Batch(waitForTopStats(m.statsCh), waitForTopContainers(m.containersCh), m.fetchStorageCmd())
 }
 
 func waitForTopStats(ch chan topStatsMsg) tea.Cmd {
@@ -715,9 +742,44 @@ func (m *topModel) rebuildRows() {
 
 func (m topModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case topStorageTickMsg:
+		return m, m.fetchStorageCmd()
+	case topStorageMsg:
+		m.storageErr = msg.err
+		if msg.err == nil {
+			m.storage = msg.storage
+		}
+		return m, tea.Tick(10*time.Second, func(time.Time) tea.Msg { return topStorageTickMsg{} })
+	case topStartResultMsg:
+		if msg.seq != m.actionSeq {
+			return m, nil
+		}
+		m.startingApp = ""
+		if msg.err != nil {
+			m.actionStatus = fmt.Sprintf("Error starting %s: %s", msg.app, userFacingGRPCError(msg.err))
+		} else {
+			m.actionStatus = "Started " + msg.app
+		}
+		return m, clearTopActionStatus(msg.seq)
+	case topPruneResultMsg:
+		if msg.seq != m.actionSeq {
+			return m, nil
+		}
+		m.pruningCache = false
+		if msg.err != nil {
+			m.actionStatus = "Error clearing cache: " + userFacingGRPCError(msg.err)
+		} else {
+			m.actionStatus = msg.text
+		}
+		return m, clearTopActionStatus(msg.seq)
+	case topLogsMsg:
+		return m.updateLogs(msg)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.logsApp != "" {
+			m.resizeLogs()
+		}
 		return m, nil
 
 	case topStatsMsg:
@@ -781,15 +843,42 @@ func (m topModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, clearTopActionStatus(msg.seq)
 
 	case topClearActionMsg:
-		if msg.seq == m.actionSeq && m.stoppingApp == "" {
+		if msg.seq == m.actionSeq && !m.actionBusy() {
 			m.actionStatus = ""
 		}
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.logsApp != "" {
+			return m.updateLogsKey(msg)
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "enter":
+			return m.openLogs()
+		case "s":
+			app := m.selectedAppName()
+			state, ok := m.selectedAppState()
+			if app == "" || !ok || m.actionBusy() {
+				return m, nil
+			}
+			m.actionSeq++
+			if state == agentpb.AppRunningState_RUNNING {
+				m.actionStatus = app + " is already running"
+				return m, clearTopActionStatus(m.actionSeq)
+			}
+			m.startingApp = app
+			m.actionStatus = "Starting " + app + "…"
+			return m, m.startAppCmd(app, m.actionSeq)
+		case "p":
+			if m.actionBusy() {
+				return m, nil
+			}
+			m.actionSeq++
+			m.pruningCache = true
+			m.actionStatus = "Clearing unused container cache…"
+			return m, m.pruneCacheCmd(m.actionSeq)
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -811,7 +900,7 @@ func (m topModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "x":
 			app := m.selectedAppName()
 			state, ok := m.selectedAppState()
-			if app == "" || !ok || m.stoppingApp != "" {
+			if app == "" || !ok || m.actionBusy() {
 				return m, nil
 			}
 			m.actionSeq++
@@ -927,6 +1016,9 @@ func topFormatRow(name, cpu, mem, state string, nameW int) string {
 }
 
 func (m topModel) View() string {
+	if m.logsApp != "" {
+		return m.logsView()
+	}
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -969,9 +1061,6 @@ func (m topModel) View() string {
 	if m.cur.host != nil {
 		h := m.cur.host
 		meterW := width - 2
-		if summary, ok := summarizeTemperature(h); ok {
-			top = append(top, renderTemperatureHeader(summary))
-		}
 		cpuRatio, cpuVal := 0.0, "—"
 		if m.havePrev {
 			pct := hostCPUPercent(m.prev, m.cur)
@@ -1013,17 +1102,28 @@ func (m topModel) View() string {
 			top = append(top, topMeter("GPU", g.GetUtilPercent()/100, val, meterW))
 		}
 
-		zones := m.displayThermalZones
-		// Some view tests construct a model directly instead of sending a stats
-		// message through Update. Use the sample's order for that initial frame.
-		if zones == nil {
-			zones = h.GetThermalZones()
-		}
-		if len(zones) > 0 {
-			top = append(top, topValDim.Render(" Temp: "+formatThermalZones(zones)))
-		}
 	} else if !m.isOffline() {
 		top = append(top, topValDim.Render(" Connecting…"))
+	}
+
+	if m.storage != nil && m.storage.GetTotalBytes() > 0 {
+		disk := m.storage
+		label := "Disk " + tui.StripControl(disk.GetMountpoint())
+		if m.storageErr != nil {
+			label += " (stale)"
+		}
+		top = append(top, topMeter(label, float64(disk.GetUsedBytes())/float64(disk.GetTotalBytes()), fmt.Sprintf("%s/%s", formatBytes(disk.GetUsedBytes()), formatBytes(disk.GetTotalBytes())), width-2))
+	} else if m.storageErr != nil {
+		top = append(top, topValDim.Render(" Disk: unavailable"))
+	}
+
+	if summary, ok := summarizeTemperature(m.cur.host); ok {
+		zones := m.displayThermalZones
+		// Use the sample's order before Update has established the display order.
+		if zones == nil {
+			zones = m.cur.host.GetThermalZones()
+		}
+		top = append(top, renderTemperatureHeader(summary, zones...))
 	}
 
 	running, stopped, crashLooping := 0, 0, 0
@@ -1042,7 +1142,7 @@ func (m topModel) View() string {
 		summary += fmt.Sprintf("  ↻ %d crash-looping", crashLooping)
 	}
 	top = append(top, topValDim.Render(summary))
-	statusLine := m.actionStatus
+	statusLine := tui.StripControl(m.actionStatus)
 	if statusLine == "" {
 		statusLine = m.flash
 	}
@@ -1186,7 +1286,10 @@ func (m topModel) topKeyBar(width int) string {
 		{"↑↓", "Nav"},
 		{"m", "Mem"},
 		{"c", "CPU"},
+		{"enter", "Logs"},
+		{"s", "Start"},
 		{"x", "Stop"},
+		{"p", "Clear cache"},
 		{"q", "Quit"},
 	}
 	var b strings.Builder
@@ -1199,14 +1302,14 @@ func (m topModel) topKeyBar(width int) string {
 	if plainLen < width {
 		b.WriteString(topKeyLabel.Render(strings.Repeat(" ", width-plainLen)))
 	}
-	return b.String()
+	return padOrCrop(b.String(), width)
 }
 
 func runTopDashboard(ctx context.Context, conn *grpcclient.AgentConnection, interval time.Duration) error {
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	m := newTopModel(cctx, conn, interval)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(cctx))
 	_, err := p.Run()
 	return err
 }
@@ -1402,8 +1505,21 @@ func thermalRiskLabel(risk thermalRisk) string {
 	return "near"
 }
 
-func renderTemperatureHeader(summary temperatureSummary) string {
-	line := " Temp max: " + formatTemperatureSummary(summary)
+func renderTemperatureHeader(summary temperatureSummary, zones ...*agentpb.ThermalZone) string {
+	line := " Temp: max " + formatTemperatureSummary(summary)
+	var remaining []*agentpb.ThermalZone
+	for _, zone := range zones {
+		if zone.GetName() == summary.Max.Name && zone.GetTempC() == summary.Max.TempC {
+			continue
+		}
+		if summary.Risk != thermalNormal && zone.GetName() == summary.Alert.Name && zone.GetTempC() == summary.Alert.TempC {
+			continue
+		}
+		remaining = append(remaining, zone)
+	}
+	if details := formatThermalZones(remaining); details != "" {
+		line += "  ·  " + details
+	}
 	switch summary.Risk {
 	case thermalNear:
 		return " " + topThermalNear.Render("●") + line

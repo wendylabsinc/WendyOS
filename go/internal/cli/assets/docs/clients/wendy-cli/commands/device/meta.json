@@ -12,6 +12,7 @@
     "volumes",
     "wifi",
     "bluetooth",
+    "pair",
     "build-host",
     "---Reference---",
     "enroll",

@@ -269,17 +269,26 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
         let input = try AVCaptureDeviceInput(device: device)
 
+        // Keep configuration in its own scope so the deferred commit runs
+        // before startRunning(). AVFoundation raises an uncaught Objective-C
+        // exception if capture starts while configuration is still open.
         captureSession.beginConfiguration()
-        defer { captureSession.commitConfiguration() }
-        guard captureSession.canAddInput(input) else { throw CameraError.cannotAddInput }
-        captureSession.addInput(input)
-        videoOutput.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ]
-        videoOutput.alwaysDiscardsLateVideoFrames = true
-        videoOutput.setSampleBufferDelegate(self, queue: queue)
-        guard captureSession.canAddOutput(videoOutput) else { throw CameraError.cannotAddOutput }
-        captureSession.addOutput(videoOutput)
+        do {
+            defer { captureSession.commitConfiguration() }
+            guard captureSession.canAddInput(input) else {
+                throw CameraError.cannotAddInput
+            }
+            captureSession.addInput(input)
+            videoOutput.videoSettings = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+            videoOutput.alwaysDiscardsLateVideoFrames = true
+            videoOutput.setSampleBufferDelegate(self, queue: queue)
+            guard captureSession.canAddOutput(videoOutput) else {
+                throw CameraError.cannotAddOutput
+            }
+            captureSession.addOutput(videoOutput)
+        }
 
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         try makeCompressionSession(width: dims.width, height: dims.height)

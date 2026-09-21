@@ -36,7 +36,7 @@ func newMCPServeCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			srv := wendymcp.New(cfg, connectWithAutoTLS)
+			srv := wendymcp.New(cfg, connectMCPDevice)
 			srv.SetLANDiscoverer(func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 				return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 			})
@@ -56,9 +56,7 @@ func newMCPServeCmd() *cobra.Command {
 					}
 				})
 			case address != "":
-				if _, _, err := net.SplitHostPort(address); err != nil {
-					address = hostPort(address, defaultAgentPort)
-				}
+				address = mcpStartupAddress(address)
 				startupAddress := address
 				srv.SetStartupConnect(func(connectCtx context.Context) {
 					if err := srv.ConnectToOnStartup(connectCtx, startupAddress); err != nil {
@@ -71,4 +69,17 @@ func newMCPServeCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVarP(&deviceFlag, "device", "d", "", "Device name or IP:port to connect on startup")
 	return cmd
+}
+
+func mcpStartupAddress(address string) string {
+	if _, matched, _ := parseCloudDeviceSelector(address); matched {
+		return address
+	}
+	if _, matched, err := simulatorName(address); matched || err != nil {
+		return address
+	}
+	if _, _, err := net.SplitHostPort(address); err != nil {
+		return hostPort(address, defaultAgentPort)
+	}
+	return address
 }

@@ -39,8 +39,9 @@ func shellWinSizeFrame(rows, cols uint32) *agentpb.HostShellRequest {
 
 func newDeviceShellCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "shell [-- command...]",
-		Short: "Open an interactive shell on the device host",
+		Hidden: true,
+		Use:    "shell [-- command...]",
+		Short:  "Open an interactive shell on the device host",
 		Long: "Open a full interactive TTY on the device host (the device's root\n" +
 			"filesystem, not a container), running the login shell by default or a\n" +
 			"command given after `--`. Uses the existing mTLS/PKI trust; the shell\n" +

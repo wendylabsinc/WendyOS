@@ -24,3 +24,15 @@ func TestProxyDiag_NilErrorNotRecorded(t *testing.T) {
 		t.Fatalf("expected no diagnostics recorded for nil error, got: %+v", d)
 	}
 }
+
+func TestProxyDiag_BoundsPeriodicFailures(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	s.recordProxyDiag("oldest", "connect", errors.New("offline"))
+	for i := 0; i < maxProxyDiagnostics; i++ {
+		s.recordProxyDiag("latest", "connect", errors.New("offline"))
+	}
+	d := s.proxyDiagnostics()
+	if len(d) != maxProxyDiagnostics || d[0].AppName != "latest" {
+		t.Fatalf("periodic failures were not bounded to the newest entries: %+v", d)
+	}
+}

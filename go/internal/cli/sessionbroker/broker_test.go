@@ -21,9 +21,11 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	grpcgzip "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 )
 
 type testAgentServer struct {
@@ -508,6 +510,102 @@ func TestServeKeepsPreparedBrokerWhileParentInvocationLives(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("broker did not stop on cancellation")
+	}
+}
+
+// canceledUploadServer leaves chunk requests pending until the CLI cancels
+// them, as happens when PrepareImage rejects a deployment on an older agent.
+// Version probes still answer, so the retained device connection is healthy.
+type canceledUploadServer struct {
+	agentpb.UnimplementedWendyContainerServiceServer
+	entered chan struct{}
+}
+
+func (s canceledUploadServer) QueryChunks(ctx context.Context, _ *agentpb.QueryChunksRequest) (*agentpb.QueryChunksResponse, error) {
+	s.entered <- struct{}{}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestServeSurvivesCanceledUploads(t *testing.T) {
+	for _, withDeadline := range []bool{false, true} {
+		name := "without deadline"
+		if withDeadline {
+			name = "before deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := shortTempDir(t)
+			lis, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const uploads = maxUnansweredRPCs + 1
+			entered := make(chan struct{}, uploads)
+			server := grpc.NewServer()
+			agentpb.RegisterWendyAgentServiceServer(server, testAgentServer{})
+			agentpb.RegisterWendyContainerServiceServer(server, canceledUploadServer{entered: entered})
+			go server.Serve(lis) //nolint:errcheck
+			defer server.Stop()
+			defer lis.Close()
+			upstream, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer upstream.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			spec := Spec{
+				Key: "cancel.local", Host: "cancel.local", Addr: lis.Addr().String(),
+				CertFingerprint: "public-cert-hash",
+				Expected:        certs.WendyIdentity{OrgID: 7, EntityType: "asset", EntityID: "47"},
+				ParentPID:       os.Getpid(),
+			}
+			socketPath, _, done := startServing(t, ctx, dir, spec, upstream, time.Hour)
+			proxy, err := grpcclient.ConnectSessionProxy(ctx, socketPath, spec.Host, spec.Addr, &config.CertificateInfo{OrganizationID: 7}, spec.Expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer proxy.Close()
+			uploadCtx, cancelUploads := context.WithCancel(ctx)
+			if withDeadline {
+				cancelUploads()
+				uploadCtx, cancelUploads = context.WithTimeout(ctx, time.Minute)
+			}
+			defer cancelUploads()
+			results := make(chan error, uploads)
+			for i := 0; i < uploads; i++ {
+				go func() {
+					_, err := proxy.ContainerService.QueryChunks(uploadCtx, &agentpb.QueryChunksRequest{})
+					results <- err
+				}()
+			}
+			for i := 0; i < uploads; i++ {
+				select {
+				case <-entered:
+				case <-time.After(2 * time.Second):
+					t.Fatal("upload did not reach the upstream")
+				}
+			}
+			cancelUploads()
+			for i := 0; i < uploads; i++ {
+				if err := <-results; status.Code(err) != codes.Canceled {
+					t.Fatalf("canceled upload: %v", err)
+				}
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("healthy broker exited after upload cancellation: %v", err)
+			default:
+			}
+			probeCtx, probeCancel := context.WithTimeout(ctx, time.Second)
+			defer probeCancel()
+			if _, err := proxy.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{}); err != nil {
+				t.Fatalf("broker unusable after upload cancellation: %v", err)
+			}
+			if _, err := os.Stat(socketPath); err != nil {
+				t.Fatalf("broker socket missing: %v", err)
+			}
+		})
 	}
 }
 

@@ -1425,3 +1425,16 @@ func TestFlashRetryAction_CancellationNeverRetries(t *testing.T) {
 		}
 	}
 }
+
+func TestSupportedInstallMode(t *testing.T) {
+	for _, mode := range []string{"", "recovery"} {
+		if !supportedInstallMode(mode) {
+			t.Errorf("supportedInstallMode(%q) = false, want true", mode)
+		}
+	}
+	for _, mode := range []string{"edl", "something-new"} {
+		if supportedInstallMode(mode) {
+			t.Errorf("supportedInstallMode(%q) = true, want false", mode)
+		}
+	}
+}

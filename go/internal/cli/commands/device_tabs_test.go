@@ -50,7 +50,7 @@ func TestDeviceTabsHeaderRendersOnlyTheGivenStrip(t *testing.T) {
 	// The guard that keeps `wendy discover` from silently growing a tab.
 	run := deviceTabsHeader(devicePickerLocalTab,
 		[]devicePickerTab{devicePickerLocalTab, devicePickerSimulatorTab, devicePickerCloudTab}, 0)
-	for _, want := range []string{"Local", "Simulator", "Cloud", "tab switch"} {
+	for _, want := range []string{"Nearby", "Simulator", "Cloud", "tab switch"} {
 		if !strings.Contains(run, want) {
 			t.Errorf("run picker header = %q, want it to contain %q", run, want)
 		}
@@ -63,7 +63,7 @@ func TestDeviceTabsHeaderRendersOnlyTheGivenStrip(t *testing.T) {
 		t.Errorf("two-tab header = %q, want no Simulator tab", twoTab)
 	}
 	discover := deviceTabsHeader(devicePickerLocalTab, deviceTabOrder(), 0)
-	for _, want := range []string{"Local", "Simulator", "Cloud"} {
+	for _, want := range []string{"Nearby", "Simulator", "Cloud"} {
 		if !strings.Contains(discover, want) {
 			t.Errorf("discover header = %q, want it to contain %q", discover, want)
 		}

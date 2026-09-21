@@ -9,6 +9,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
+const realtimeAudioAvailable = false
+
 func playRealtimeAudio(_ context.Context, _ interface {
 	Recv() (*agentpb.AudioChunk, error)
 }, _, _, _ uint32) error {

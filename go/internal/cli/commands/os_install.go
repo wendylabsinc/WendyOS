@@ -234,12 +234,36 @@ type pickerDevice struct {
 	Manifest   *deviceManifest // cached manifest for Linux devices
 }
 
-// installedFromFlashBundle reports whether a device type's manifest image is a
-// flash bundle rather than a writable disk image. Such a device must not reach
-// the generic download or tour flows, which would treat the bundle as an image
-// and could write it to a disk. (Thor's generic path is a real .img.zip.)
-func installedFromFlashBundle(deviceType string) bool {
-	return deviceType == dragonwingDeviceType
+// installedFromFlashBundle reports whether a device's manifest image is a flash
+// bundle rather than a writable disk image. Such a device must not reach the
+// generic download or tour flows, which would treat the bundle as an image and
+// could write it to a disk. (Thor's generic path is a real .img.zip.)
+//
+// The device-type prefix is a floor, not a fallback, so the manifest can only
+// widen the set: a new EDL board is excluded without a code change here.
+func installedFromFlashBundle(dev deviceInfo) bool {
+	if isFlashBundleDeviceType(dev.Key) {
+		return true
+	}
+	if dev.Manifest == nil {
+		return false
+	}
+	for _, v := range []string{dev.LatestVersion, dev.NightlyVersion} {
+		if v == "" {
+			continue
+		}
+		if ver, ok := dev.Manifest.Versions[v]; ok {
+			return !supportedInstallMode(ver.InstallMode)
+		}
+	}
+	return false
+}
+
+// isFlashBundleDeviceType reports whether a device type is flashed from a bundle
+// whatever its manifest says. The publisher does not yet write install_mode for
+// the EDL boards it already ships, so the device type has to carry the rule.
+func isFlashBundleDeviceType(deviceType string) bool {
+	return strings.HasPrefix(deviceType, dragonwingDeviceTypePrefix)
 }
 
 // pickLinuxDevice fetches available Linux devices from the manifest and presents
@@ -256,7 +280,7 @@ func pickLinuxDevice() (string, deviceInfo, error) {
 	deviceMap := make(map[string]deviceInfo)
 
 	for _, dev := range devices {
-		if dev.LatestVersion == "" || installedFromFlashBundle(dev.Key) {
+		if dev.LatestVersion == "" || installedFromFlashBundle(dev) {
 			continue
 		}
 		deviceMap[dev.Key] = dev
@@ -336,12 +360,11 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	}
 
 	// The Dragonwing flashes over EDL from a qcomflash bundle, not to a drive.
-	if flagDeviceType == dragonwingDeviceType {
-		if err := checkDragonwingFlags(rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride,
-			wifi, deviceName, preOpts); err != nil {
+	if board, ok := dragonwingBoardFor(flagDeviceType); ok {
+		if err := checkDragonwingFlags(board, rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
 			return err
 		}
-		return installDragonwing(ctx, flagVersion, nightly, force, prNumber)
+		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
 	}
 	fmt.Println("Fetching available devices...")
 
@@ -516,12 +539,17 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 
 	// Same for the Dragonwing: the picker reaches here with the flag empty, so
 	// route it away from the disk-image flow that would dd the bundle onto a drive.
-	if selected == dragonwingDeviceType {
-		if err := checkDragonwingFlags(rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride,
-			wifi, deviceName, preOpts); err != nil {
+	if board, ok := dragonwingBoardFor(selected); ok {
+		if err := checkDragonwingFlags(board, rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
 			return err
 		}
-		return installDragonwing(ctx, flagVersion, nightly, force, prNumber)
+		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
+	}
+	// A flash-bundle board with no registry entry has no install path here, and
+	// falling through would write its bundle to a drive. A version that declares
+	// the same through install_mode is refused by checkInstallMode below.
+	if isFlashBundleDeviceType(selected) {
+		return fmt.Errorf("%s installs from a flash bundle this version of wendy cannot write; update wendy", selected)
 	}
 
 	if selected == linuxDesktopValue {
@@ -548,6 +576,9 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	ver, ok := device.Manifest.Versions[selectedVersion]
 	if !ok {
 		return fmt.Errorf("version %q not found for %s", selectedVersion, device.Name)
+	}
+	if err := checkInstallMode(selectedVersion, ver.InstallMode); err != nil {
+		return err
 	}
 	if rootfsOnly && !isT234RecoveryDevice(selected) {
 		return fmt.Errorf("--rootfs-only is supported only for Jetson Orin recovery targets")
@@ -1510,6 +1541,22 @@ func manifestStorage(v deviceVersion, st StorageType, mediaFixed bool, override 
 	default:
 		return "sd"
 	}
+}
+
+// supportedInstallMode reports whether a version's artifact is one this build
+// can write: an unknown mode means it is not a writable disk image.
+func supportedInstallMode(mode string) bool {
+	return mode == "" || mode == "recovery"
+}
+
+// checkInstallMode rejects a version this build cannot install. It runs before
+// anything is elevated, confirmed or enrolled, so nothing is left behind.
+func checkInstallMode(version, mode string) error {
+	if supportedInstallMode(mode) {
+		return nil
+	}
+	return fmt.Errorf("version %s installs in %q mode, which this version of wendy cannot perform; update wendy",
+		version, mode)
 }
 
 // storageChoiceAmbiguous reports whether the image variant for a USB target

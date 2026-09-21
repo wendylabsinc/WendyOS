@@ -18,25 +18,6 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
-// sensorSourceItems filters discovered devices to sensor-source-capable ones
-// (advertising sensorlink=true) and builds picker rows for them.
-func sensorSourceItems(devs []models.DiscoveredDevice) []tui.PickerItem {
-	var items []tui.PickerItem
-	for i := range devs {
-		d := devs[i]
-		if !d.Sensorlink {
-			continue
-		}
-		items = append(items, tui.PickerItem{
-			Name:     d.DisplayName,
-			Address:  d.IPAddress,
-			DedupKey: fmt.Sprintf("asset-%d", d.AssetID),
-			Value:    &devs[i],
-		})
-	}
-	return items
-}
-
 // transportForDevice returns the sensor pairing transport to use for a
 // discovered source: "grpc" for an mTLS agent advertising the "sensors"
 // capability, "tcp" for a legacy/MCU sensorlink device.
@@ -172,8 +153,9 @@ func newDevicePairCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "pair",
-		Short: "Pair a sensor-source device (e.g. an ESP32) to this device",
-		Long:  "Select a sensor-source device on your network and mount its cameras, microphones, and sensors locally. Both devices must be in the same organization.",
+		Short: "Pair or forget Bluetooth, SensorLink, and IP camera devices",
+		Long:  "Discover, pair, and forget devices in the Bluetooth, SensorLink, and IP Cameras tabs. Bluetooth and IP cameras are discovered on the target device; SensorLink discovers sources on your local network. SensorLink devices must be in an organization you belong to.",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
@@ -197,52 +179,29 @@ func newDevicePairCmd() *cobra.Command {
 				return nil
 			}
 
-			// Discover, filter to sensor sources, pick one.
-			devs, err := discoverSensorSources(ctx) // wraps discovery.Discover + MergedDevices
-			if err != nil {
-				return err
+			pairCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			model := newDevicePairModel(
+				&btTUIHandler{ctx: pairCtx, agent: conn.AgentService},
+				&sensorPairHandler{
+					ctx: pairCtx, client: conn.SensorPairingService,
+					discover: discoverSensorSources, orgIDs: cliOrgIDs,
+					name: name, sensors: sensors,
+				},
+				&cameraPairHandler{ctx: pairCtx, client: conn.VideoService},
+			)
+			if cmd.Flags().Changed("name") || cmd.Flags().Changed("sensors") {
+				model.active = pairSensorLinkTab
 			}
-			items := sensorSourceItems(devs)
-			if len(items) == 0 {
-				return fmt.Errorf("no sensor-source devices found on your network")
+			if _, err := tea.NewProgram(model, tea.WithContext(pairCtx)).Run(); err != nil {
+				return fmt.Errorf("device pairing: %w", err)
 			}
-			sel, err := runPicker("Select a sensor source", items)
-			if err != nil {
-				return err
-			}
-			source := sel.Value.(*models.DiscoveredDevice)
-
-			cliOrgs, err := cliOrgIDs() // every org the CLI is logged in to
-			if err != nil {
-				return err
-			}
-			if err := orgAllowed(cliOrgs, source.OrgID); err != nil {
-				return err
-			}
-
-			// Send no address: the consumer resolves the source by its asset
-			// ID on its own LAN view (runner.resolveLANAddr). Pinning the IP
-			// the CLI happens to see freezes a stale/unreachable address —
-			// the CLI's network view is often not the consumer's (e.g. the
-			// consumer reaches a laptop only over its USB link, never the
-			// laptop's roaming WiFi IP). Identity is stable; the address isn't.
-			_, err = conn.SensorPairingService.AddSensorPairing(ctx, &agentpbv2.AddSensorPairingRequest{
-				SourceAssetId:   source.AssetID,
-				SourceAddress:   "",
-				Name:            pairingName(name, source),
-				SensorAllowlist: sensors,
-				Transport:       transportForDevice(*source),
-			})
-			if err != nil {
-				return cleanRPCError(err)
-			}
-			cliSuccess("Paired %s. Its sensors will appear on this device.", source.DisplayName)
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&listOnly, "list", false, "list current pairings")
-	cmd.Flags().StringVar(&name, "name", "", "friendly name for the pairing")
-	cmd.Flags().StringSliceVar(&sensors, "sensors", nil, "limit to these sensor names (default: all)")
+	cmd.Flags().BoolVar(&listOnly, "list", false, "list current SensorLink pairings")
+	cmd.Flags().StringVar(&name, "name", "", "friendly name for a SensorLink pairing")
+	cmd.Flags().StringSliceVar(&sensors, "sensors", nil, "limit a SensorLink pairing to these sensor names (default: all)")
 	return cmd
 }
 
@@ -251,9 +210,10 @@ func newDevicePairCmd() *cobra.Command {
 // that pairing directly (handy for scripts).
 func newDeviceUnpairCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "unpair [source-asset-id]",
-		Short: "Remove a sensor-source pairing",
-		Args:  cobra.MaximumNArgs(1),
+		Hidden: true,
+		Use:    "unpair [source-asset-id]",
+		Short:  "Remove a sensor-source pairing",
+		Args:   cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())

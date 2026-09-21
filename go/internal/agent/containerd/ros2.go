@@ -18,12 +18,14 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
+	runtimespec "github.com/opencontainers/runtime-spec/specs-go"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	localoci "github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/ros2inspection"
 )
 
 const (
@@ -126,9 +128,12 @@ func (c *Client) FindROS2Containers(ctx context.Context) ([]services.ROS2Target,
 		// sidecar per RMW (WDY-1593, WDY-1594). Drop an unrecognized value to ""
 		// (the image default) so it can never reach a sidecar environment and so
 		// naming/grouping stays consistent.
-		if spec, serr := ctr.Spec(ctx); serr == nil && spec.Process != nil {
-			if rmw := rmwFromEnv(spec.Process.Env); rmw == "" || appconfig.IsValidRMWImplementation(rmw) {
-				target.RMW = rmw
+		if spec, serr := ctr.Spec(ctx); serr == nil {
+			target.HostNetwork = ros2UsesHostNetwork(spec)
+			if spec != nil && spec.Process != nil {
+				if rmw := rmwFromEnv(spec.Process.Env); rmw == "" || appconfig.IsValidRMWImplementation(rmw) {
+					target.RMW = rmw
+				}
 			}
 		}
 		if task, terr := ctr.Task(ctx, nil); terr == nil {
@@ -140,6 +145,21 @@ func (c *Client) FindROS2Containers(ctx context.Context) ([]services.ROS2Target,
 		targets = append(targets, target)
 	}
 	return targets, nil
+}
+
+// ros2UsesHostNetwork recognizes the OCI representation of host networking.
+// Missing specs and explicit namespace paths remain app-scoped: neither proves
+// that discovery can safely reuse the host's camera participants.
+func ros2UsesHostNetwork(spec *runtimespec.Spec) bool {
+	if spec == nil || spec.Linux == nil {
+		return false
+	}
+	for _, ns := range spec.Linux.Namespaces {
+		if ns.Type == runtimespec.NetworkNamespace {
+			return false
+		}
+	}
+	return true
 }
 
 // rmwFromEnv returns the value of RMW_IMPLEMENTATION in a container's OCI spec
@@ -200,7 +220,8 @@ func (c *Client) EnsureROS2Sidecars(ctx context.Context) ([]services.ROS2Sidecar
 	if err != nil {
 		return nil, err
 	}
-	// One anchor per distinct RMW (first running wins), in stable listing order.
+	// One anchor per distinct RMW. Prefer the managed virtual robot image for its typed
+	// Unitree overlay; otherwise retain the first running target.
 	var order []string // sidecar names, deduped, first-seen order
 	anchorByName := map[string]*services.ROS2Target{}
 	for i := range targets {
@@ -209,7 +230,13 @@ func (c *Client) EnsureROS2Sidecars(ctx context.Context) ([]services.ROS2Sidecar
 			continue
 		}
 		name := ros2SidecarName(t.RMW)
-		if _, dup := anchorByName[name]; dup {
+		if current, dup := anchorByName[name]; dup {
+			if a, b := virtualRobotROS2Kind(t), virtualRobotROS2Kind(current); a != "" && b != "" && a != b {
+				return nil, fmt.Errorf("multiple virtual robot kinds share a ROS 2 graph; refusing to select a mismatched inspector")
+			}
+			if preferROS2Anchor(t, current) {
+				anchorByName[name] = t
+			}
 			continue
 		}
 		anchorByName[name] = t
@@ -218,7 +245,7 @@ func (c *Client) EnsureROS2Sidecars(ctx context.Context) ([]services.ROS2Sidecar
 	if len(order) == 0 {
 		// No running ROS 2 apps: tear down every leftover sidecar and fail.
 		c.teardownAllROS2SidecarsLocked(ctx)
-		return nil, fmt.Errorf("no running ROS 2 containers found; deploy an app with a frameworks.ros2 config first")
+		return nil, fmt.Errorf("%w; use explicit host inspection with a domain ID for robot/host sensors, or deploy an app with a frameworks.ros2 config for app-scoped inspection", services.ErrNoRunningROS2Containers)
 	}
 
 	// Tear down sidecars whose RMW is no longer running.
@@ -283,7 +310,8 @@ func (c *Client) ensureOneROS2Sidecar(ctx context.Context, anchor *services.ROS2
 		labels, _ := existing.Labels(ctx)
 		anchorAlive := labels[labelKeyROS2AnchorID] == anchor.ContainerID &&
 			labels[labelKeyROS2AnchorPID] == strconv.FormatUint(uint64(anchor.TaskPID), 10) &&
-			labels[labelKeyROS2Sidecar] == anchor.Distro
+			labels[labelKeyROS2Sidecar] == anchor.Distro &&
+			virtualRobotOverlayLabelsMatch(labels, anchor)
 		if anchorAlive {
 			if task, terr := existing.Task(ctx, nil); terr == nil {
 				if st, serr := task.Status(ctx); serr == nil && st.Status == containerd.Running {
@@ -420,6 +448,12 @@ func (c *Client) ensureOneROS2Sidecar(ctx context.Context, anchor *services.ROS2
 		labelKeyROS2AnchorID:  anchor.ContainerID,
 		labelKeyROS2AnchorPID: strconv.FormatUint(uint64(anchor.TaskPID), 10),
 		labelKeyROS2RMW:       rmw,
+	}
+	switch virtualRobotROS2Kind(anchor) {
+	case "go2":
+		labels[labelKeyGo2Overlay] = go2OverlayVersion
+	case "g1":
+		labels[labelKeyG1Overlay] = g1OverlayVersion
 	}
 	container, err := c.client.NewContainer(ctx, name,
 		containerd.WithImage(image),
@@ -589,18 +623,58 @@ func (c *Client) VerifyROS2Sidecar(ctx context.Context) error {
 		if lerr != nil {
 			return fmt.Errorf("reading sidecar labels: %w", lerr)
 		}
-		anchorPID, perr := strconv.ParseUint(labels[labelKeyROS2AnchorPID], 10, 32)
-		if perr != nil {
-			return fmt.Errorf("sidecar %s has no valid anchor PID label", sc.ID())
-		}
-		if verr := c.verifyROS2Anchor(ctx, &services.ROS2Target{
-			ContainerID: labels[labelKeyROS2AnchorID],
-			TaskPID:     uint32(anchorPID),
-		}); verr != nil {
+		if verr := c.verifyAppROS2SidecarAnchor(ctx, sc.ID(), labels); verr != nil {
 			return verr
 		}
 	}
 	return nil
+}
+
+// VerifyROS2SidecarNamed checks the sidecar used by one recording. A standalone
+// system CLI has no app anchor; unrelated app sidecars must not affect its
+// diagnosis, and an idle system CLI must not mask a lost app anchor.
+func (c *Client) VerifyROS2SidecarNamed(ctx context.Context, name string) error {
+	ctx = c.withNamespace(ctx)
+	sc, err := c.client.LoadContainer(ctx, name)
+	if err != nil {
+		return fmt.Errorf("loading ROS 2 sidecar %q: %w", name, err)
+	}
+	labels, err := sc.Labels(ctx)
+	if err != nil {
+		return fmt.Errorf("reading sidecar labels: %w", err)
+	}
+	if name == ros2SystemSidecarName || labels[labelKeyROS2SystemSidecar] != "" {
+		if name != ros2SystemSidecarName || labels[labelKeyROS2SystemSidecar] != "humble" || labels[labelKeyROS2HostSidecar] != "" || labels[labelKeyROS2Sidecar] != "" {
+			return fmt.Errorf("invalid system ROS 2 CLI identity")
+		}
+		task, err := sc.Task(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("system ROS 2 CLI task unavailable: %w", err)
+		}
+		st, err := task.Status(ctx)
+		if err != nil {
+			return fmt.Errorf("checking system ROS 2 CLI task: %w", err)
+		}
+		if st.Status != containerd.Running {
+			return fmt.Errorf("system ROS 2 CLI task no longer running")
+		}
+		return nil
+	}
+	if !ros2DistroPattern.MatchString(labels[labelKeyROS2Sidecar]) || labels[labelKeyROS2HostSidecar] != "" {
+		return fmt.Errorf("invalid app ROS 2 sidecar identity")
+	}
+	return c.verifyAppROS2SidecarAnchor(ctx, name, labels)
+}
+
+func (c *Client) verifyAppROS2SidecarAnchor(ctx context.Context, name string, labels map[string]string) error {
+	anchorPID, err := strconv.ParseUint(labels[labelKeyROS2AnchorPID], 10, 32)
+	if err != nil {
+		return fmt.Errorf("sidecar %s has no valid anchor PID label", name)
+	}
+	return c.verifyROS2Anchor(ctx, &services.ROS2Target{
+		ContainerID: labels[labelKeyROS2AnchorID],
+		TaskPID:     uint32(anchorPID),
+	})
 }
 
 // StopROS2Sidecar stops and removes all ROS 2 CLI sidecars if present.
@@ -608,6 +682,19 @@ func (c *Client) StopROS2Sidecar(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.teardownAllROS2SidecarsLocked(c.withNamespace(ctx))
+	for name, label := range map[string]string{ros2HostSidecarName: labelKeyROS2HostSidecar, ros2SystemSidecarName: labelKeyROS2SystemSidecar} {
+		if c.sidecarHasActiveExecsLocked(name) {
+			continue
+		}
+		if inspector, err := c.client.LoadContainer(c.withNamespace(ctx), name); err == nil {
+			labels, lerr := inspector.Labels(c.withNamespace(ctx))
+			if lerr == nil && labels[label] != "" {
+				if err := c.deleteROS2Sidecar(c.withNamespace(ctx), inspector); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -824,7 +911,57 @@ func (c *Client) sidecarHasActiveExecsLocked(name string) bool {
 	return c.ros2ExecRefs[name] > 0
 }
 
-// ExecROS2 runs `ros2 <args...>` inside the CLI sidecar, streaming stdout and
+// ros2ExecArgs builds an invocation from either CLI arguments or validated
+// options for the fixed LiDAR probe. All caller-controlled values remain argv
+// entries, never shell or Python source. Host inspection retains its CLI
+// allowlist and additionally permits only this trusted read-only probe.
+func ros2ExecArgs(distro string, go2Overlay, hostInspector bool, opts services.ROS2ExecOptions) ([]string, error) {
+	kind := ""
+	if go2Overlay {
+		kind = "go2"
+	}
+	return ros2ExecArgsForRobot(distro, kind, hostInspector, opts)
+}
+
+func ros2ExecArgsForRobot(distro, robotKind string, hostInspector bool, opts services.ROS2ExecOptions) ([]string, error) {
+	if !ros2DistroPattern.MatchString(distro) {
+		return nil, fmt.Errorf("invalid distro %q on ROS 2 sidecar", distro)
+	}
+	if robotKind != "" && robotKind != "go2" && robotKind != "g1" && robotKind != "unitree" {
+		return nil, fmt.Errorf("invalid virtual robot ROS overlay kind")
+	}
+	if hostInspector {
+		robotKind = "unitree"
+	}
+	script := ros2SourceAndExecForRobot(distro, robotKind)
+	if opts.Lidar != nil {
+		if len(opts.Args) != 0 {
+			return nil, fmt.Errorf("LiDAR inspection cannot include ROS 2 CLI arguments")
+		}
+		if err := opts.Lidar.Validate(); err != nil {
+			return nil, fmt.Errorf("invalid LiDAR inspection options: %w", err)
+		}
+		options, err := json.Marshal(opts.Lidar)
+		if err != nil {
+			return nil, fmt.Errorf("encoding LiDAR inspection options: %w", err)
+		}
+		// Keep exactly the same trusted ROS setup and optional Unitree overlay
+		// as CLI commands; replace only the fixed executable at the end.
+		script = strings.Replace(script, `exec ros2 "$@"`, `exec python3 -u -c "$@"`, 1)
+		return ros2ShellArgs(distro, script, []string{ros2inspection.LidarProbeScript, string(options)}), nil
+	}
+	args := opts.Args
+	if hostInspector {
+		var err error
+		args, err = hostROS2InspectionArgs(args)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return ros2ShellArgs(distro, script, args), nil
+}
+
+// ExecROS2 runs `ros2 <args...>` or the trusted LiDAR probe inside the CLI sidecar, streaming stdout and
 // stderr to the given writers, and returns the command's exit code. When ctx
 // is cancelled the process receives SIGINT and, after a grace period, SIGKILL
 // — the SIGINT-first order lets `ros2 bag record` finalize its output.
@@ -850,11 +987,39 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 		return -1, fmt.Errorf("reading ROS 2 sidecar labels: %w", err)
 	}
 	distro := labels[labelKeyROS2Sidecar]
-	if !ros2DistroPattern.MatchString(distro) {
-		return -1, fmt.Errorf("invalid distro %q on ROS 2 sidecar", distro)
+	hostInspector := labels[labelKeyROS2HostSidecar] != ""
+	systemCLI := labels[labelKeyROS2SystemSidecar] != ""
+	if systemCLI {
+		if name != ros2SystemSidecarName || labels[labelKeyROS2SystemSidecar] != "humble" || hostInspector {
+			return -1, fmt.Errorf("invalid system ROS 2 CLI identity")
+		}
+		distro = labels[labelKeyROS2SystemSidecar]
+	}
+	if hostInspector {
+		if name != ros2HostSidecarName || labels[labelKeyROS2HostSidecar] != "humble" {
+			return -1, fmt.Errorf("invalid host inspector identity")
+		}
+		distro = labels[labelKeyROS2HostSidecar]
 	}
 	if opts.DomainID < appconfig.ROS2DomainIDMin || opts.DomainID > appconfig.ROS2DomainIDMax {
 		return -1, fmt.Errorf("domain ID %d out of range [%d,%d]", opts.DomainID, appconfig.ROS2DomainIDMin, appconfig.ROS2DomainIDMax)
+	}
+	robotKind := ""
+	if hostInspector || systemCLI {
+		if labels[labelKeyROS2InspectorVersion] != ros2InspectorVersion {
+			return -1, fmt.Errorf("standalone ROS 2 inspector needs an image upgrade; retry inspection")
+		}
+		robotKind = "unitree"
+	}
+	if !hostInspector && !systemCLI {
+		robotKind, err = virtualRobotOverlayKind(labels)
+		if err != nil {
+			return -1, err
+		}
+	}
+	args, err := ros2ExecArgsForRobot(distro, robotKind, hostInspector, opts)
+	if err != nil {
+		return -1, err
 	}
 
 	task, err := container.Task(nctx, nil)
@@ -867,12 +1032,12 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 		return -1, fmt.Errorf("reading ROS 2 sidecar spec: %w", err)
 	}
 	pspec := spec.Process
-	// The ROS environment lives in /opt/ros/<distro>/setup.bash; the "$@"
+	// The ROS environment lives in /opt/ros/<distro>/setup.sh; the "$@"
 	// indirection keeps user-supplied args out of shell interpretation
 	// (SOC2-CC6, ISO27001-A.8, NIST-SI-10). See ros2ShellArgs for why this is
 	// /bin/sh rather than /bin/bash.
 	pspec.Terminal = false
-	pspec.Args = ros2ShellArgs(distro, ros2SourceAndExec(distro), opts.Args)
+	pspec.Args = args
 	// Copy pspec.Env before appending to avoid mutating the slice header returned
 	// by container.Spec (future callers might cache the spec or share the backing
 	// array across execs — defensive copy prevents env bleed-over, L5, WDY-1706).
@@ -882,9 +1047,12 @@ func (c *Client) ExecROS2(ctx context.Context, opts services.ROS2ExecOptions, st
 	// sidecar has to see the same graph as the app it is anchored to.
 	pspec.Env = append(append([]string(nil), pspec.Env...),
 		"ROS_DOMAIN_ID="+strconv.Itoa(opts.DomainID),
-		"ROS_LOCALHOST_ONLY=1",
-		"ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST",
 	)
+	discoveryEnv, err := c.ros2SidecarDiscoveryEnv(nctx, labels, hostInspector || systemCLI)
+	if err != nil {
+		return -1, err
+	}
+	pspec.Env = ros2WithDiscoveryEnv(pspec.Env, discoveryEnv)
 	// Match the anchor app's RMW so the CLI speaks the same DDS implementation;
 	// otherwise it falls to the image default and sees nothing on another RMW
 	// (WDY-1593). The label is written validated, but re-check before injecting

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go2 · Sensor desk</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; color: #e7edf6; background: #10151d; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1280px; padding: 32px 24px 48px; margin: auto; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+    h1 { font-size: clamp(26px, 5vw, 38px); margin: 7px 0; letter-spacing: -1px; }
+    h2 { font-size: 16px; margin: 0; }
+    p { color: #a4b2c5; margin: 8px 0; line-height: 1.5; }
+    .eyebrow { color: #82daca; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; }
+    .badge { font-size: 12px; padding: 7px 10px; border: 1px solid #39475c; border-radius: 20px; white-space: nowrap; }
+    .live { color: #82daca; } .stale { color: #ffc580; } .waiting { color: #a4b2c5; }
+    #connection { min-height: 24px; margin-bottom: 16px; }
+    .topics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+    .topic, article { border: 1px solid #2c384a; border-radius: 14px; background: #171f2b; padding: 18px; min-width: 0; }
+    .topic .rate { font-size: 25px; font-variant-numeric: tabular-nums; margin: 9px 0 5px; }
+    .topic .detail { color: #a4b2c5; font-size: 12px; line-height: 1.5; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .title { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+    .view { position: relative; display: grid; place-items: center; background: #0d131c; border-radius: 8px; overflow: hidden; aspect-ratio: 16 / 9; }
+    .view img { width: 100%; height: 100%; object-fit: contain; position: absolute; }
+    .view img[hidden] { display: none; }
+    .view span { padding: 20px; color: #a4b2c5; text-align: center; }
+    canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #0d131c; border-radius: 8px; }
+    .caption { font-size: 12px; margin-top: 12px; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 15px 0; }
+    .stats small { color: #a4b2c5; display: block; margin-bottom: 5px; }
+    .stats strong { font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .joints { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; }
+    .joint { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 7px 0; border-bottom: 1px solid #2c384a; }
+    .joint span { overflow-wrap: anywhere; } .joint b { font-weight: 500; white-space: nowrap; }
+    button { border: 1px solid #475973; border-radius: 7px; padding: 7px 10px; background: #212e40; color: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid #82daca; outline-offset: 3px; }
+    @media (max-width: 860px) { .topics { grid-template-columns: repeat(3, 1fr); } .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 480px) { main { padding: 24px 14px; } .topics { grid-template-columns: 1fr 1fr; } header { align-items: flex-start; } .stats { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div><div class="eyebrow">Wendy / Go2 simulator</div><h1>Sensor desk</h1><p>A live view through the robot's sensors.</p></div><span class="badge">Read only</span></header>
+  <p id="connection" role="status" aria-live="polite">Connecting to the sensor app…</p>
+  <section class="topics" id="topics" aria-label="Sensor delivery rates"></section>
+  <div class="grid">
+    <article>
+      <div class="title"><h2>Front camera</h2><span id="camera-state" class="badge waiting">Waiting</span></div>
+      <div class="view"><span id="camera-empty">Waiting for a ROS camera exposure</span><img id="camera" alt="Live Go2 front camera" hidden></div>
+      <p class="caption">The robot's RGB camera, independent of the simulator's orbit view.</p>
+    </article>
+    <article>
+      <div class="title"><h2>Lidar scan</h2><span id="scan-state" class="badge waiting">Waiting</span></div>
+      <canvas id="scan" width="720" height="405" aria-label="Top-down lidar scan, forward up and left to the left"></canvas>
+      <p class="caption" id="scan-caption">Forward is up · rings every 2 m · missing returns stay unknown</p>
+    </article>
+    <article>
+      <div class="title"><h2>Odometry trail</h2><button id="clear-trail">Clear trail view</button></div>
+      <canvas id="trail" width="720" height="405" aria-label="Recent odometry trail in metres"></canvas>
+      <div class="stats"><div><small>Position · odom frame</small><strong id="position">—</strong></div><div><small>Speed / heading</small><strong id="speed">—</strong></div></div>
+      <p class="caption">About two minutes of estimated motion. Axes: +x right, +y up. Odometry drifts; it is not ground truth.</p>
+    </article>
+    <article>
+      <div class="title"><h2>Motion & joints</h2><span id="motion-state" class="badge waiting">Waiting</span></div>
+      <div class="stats"><div><small>Acceleration x / y / z · m/s²</small><strong id="acceleration">—</strong></div><div><small>Angular velocity x / y / z · rad/s</small><strong id="rotation">—</strong></div></div>
+      <div class="joints" id="joints"></div>
+      <p class="caption">Joint angles in radians. Frozen values are marked stale when captures stop.</p>
+    </article>
+  </div>
+  <p class="caption">Delivery rates use a rolling two-second window. Pause the simulator or disable a sensor to observe freshness change. No control grant is needed.</p>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  const labels = {odom: 'Odometry', imu: 'IMU', scan: 'Lidar', joints: 'Joints', camera: 'Camera'};
+  let imageStamp = null, imageBusy = false, trailStart = 0, trailTotal = 0, latestStamp = null;
+  const fmt = (value, digits = 2) => Number.isFinite(value) ? value.toFixed(digits) : '—';
+  const triplet = values => values.map(v => fmt(v)).join(' / ');
+  function badge(id, topic) { $(id).textContent = topic.state; $(id).className = 'badge ' + topic.state; }
+  for (const [key, label] of Object.entries(labels)) {
+    const card = document.createElement('div'); card.className = 'topic';
+    const title = document.createElement('h2'); title.textContent = label;
+    const rate = document.createElement('div'); rate.className = 'rate'; rate.id = key + '-rate'; rate.textContent = '— Hz';
+    const detail = document.createElement('div'); detail.className = 'detail'; detail.id = key + '-detail'; detail.textContent = 'Waiting for sensor';
+    card.append(title, rate, detail); $('topics').append(card);
+  }
+  function canvas(id) { const c = $(id), ctx = c.getContext('2d'); ctx.clearRect(0, 0, c.width, c.height); return [ctx, c.width, c.height]; }
+  function scan(topic) {
+    const [ctx, w, h] = canvas('scan'), cx = w / 2, cy = h / 2, scale = (h / 2 - 22) / 12;
+    ctx.strokeStyle = '#2c384a'; ctx.fillStyle = '#92a4bd'; ctx.font = '12px system-ui';
+    for (let radius = 2; radius <= 12; radius += 2) { ctx.beginPath(); ctx.arc(cx, cy, radius * scale, 0, 2 * Math.PI); ctx.stroke(); ctx.fillText(radius + 'm', cx + radius * scale + 3, cy); }
+    ctx.fillStyle = '#82daca'; ctx.beginPath(); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx - 5, cy + 5); ctx.lineTo(cx + 5, cy + 5); ctx.closePath(); ctx.fill();
+    ctx.fillText('FORWARD', cx - 29, 17);
+    if (topic.state !== 'live') { $('scan-caption').textContent = 'Lidar ' + topic.state + ' · forward up · rings every 2 m'; return; }
+    topic.data.ranges.forEach((range, i) => { if (range === null) return; const angle = topic.data.angle_min + i * topic.data.angle_increment;
+      ctx.fillRect(cx - Math.sin(angle) * range * scale - 1.5, cy - Math.cos(angle) * range * scale - 1.5, 3, 3); });
+    $('scan-caption').textContent = `${fmt(topic.data.coverage * 100, 0)}% valid returns · nearest ${fmt(topic.data.nearest)} m · forward up · rings every 2 m`;
+  }
+  function trail(points, topic) {
+    const [ctx, w, h] = canvas('trail');
+    points = points.filter((_, i) => i + trailTotal - points.length >= trailStart);
+    if (!points.length) return;
+    const xs = points.map(p => p[0]), ys = points.map(p => p[1]);
+    const mx = (Math.min(...xs) + Math.max(...xs)) / 2, my = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const extent = Math.max(3, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    const scale = (h - 48) / extent;
+    const xy = p => [w / 2 + (p[0] - mx) * scale, h / 2 - (p[1] - my) * scale];
+    ctx.strokeStyle = '#2c384a';
+    for (let x = Math.floor(mx - w / scale / 2); x <= mx + w / scale / 2; x++) { const px = xy([x, 0])[0]; ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke(); }
+    for (let y = Math.floor(my - h / scale / 2); y <= my + h / scale / 2; y++) { const py = xy([0, y])[1]; ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke(); }
+    ctx.strokeStyle = topic.state === 'live' ? '#82daca' : '#697a90'; ctx.lineWidth = 2; ctx.beginPath();
+    points.forEach((p, i) => { const [x, y] = xy(p); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke(); ctx.lineWidth = 1;
+    const [x, y] = xy(points[points.length - 1]); ctx.fillStyle = ctx.strokeStyle; ctx.beginPath(); ctx.arc(x, y, 5, 0, 2 * Math.PI); ctx.fill();
+    if (topic.data) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 18 * Math.cos(topic.data.yaw), y - 18 * Math.sin(topic.data.yaw)); ctx.stroke(); }
+    ctx.fillStyle = '#92a4bd'; ctx.font = '12px system-ui'; ctx.fillText('1 m grid · ' + topic.state, 14, 22);
+  }
+  $('clear-trail').onclick = () => { trailStart = Math.max(0, trailTotal - 1); canvas('trail'); };
+  function render(data) {
+    const topics = data.topics;
+    for (const [key, topic] of Object.entries(topics)) {
+      $(key + '-rate').textContent = fmt(topic.rate_hz, 1) + ' Hz';
+      $(key + '-detail').textContent = topic.state + (topic.age_ms === null ? '' : ' · ' + fmt(topic.age_ms, 0) + ' ms old');
+      $(key + '-rate').className = 'rate ' + topic.state;
+      $(key + '-detail').title = topic.error || topic.topic;
+    }
+    badge('camera-state', topics.camera); badge('scan-state', topics.scan); badge('motion-state', topics.imu);
+    scan(topics.scan);
+    if (data.trail_total < trailTotal) trailStart = 0;
+    trailTotal = data.trail_total; trail(data.trail, topics.odom);
+    if (topics.odom.data) { $('position').textContent = triplet(topics.odom.data.position) + ' m'; $('speed').textContent = fmt(Math.hypot(...topics.odom.data.velocity)) + ' m/s · ' + fmt(topics.odom.data.yaw * 180 / Math.PI, 0) + '°'; }
+    if (topics.imu.data) { $('acceleration').textContent = triplet(topics.imu.data.acceleration); $('rotation').textContent = triplet(topics.imu.data.angular_velocity); }
+    $('joints').replaceChildren();
+    if (topics.joints.data) topics.joints.data.names.forEach((name, i) => { const row = document.createElement('div'); row.className = 'joint ' + topics.joints.state;
+      const label = document.createElement('span'); label.textContent = name; const value = document.createElement('b'); value.textContent = fmt(topics.joints.data.positions[i], 3); row.append(label, value); $('joints').append(row); });
+    latestStamp = topics.camera.state === 'live' ? topics.camera.stamp_ns : null;
+    if (!latestStamp) { $('camera').hidden = true; $('camera-empty').textContent = 'Camera ' + topics.camera.state + ' — waiting for a fresh exposure'; }
+    else if (latestStamp !== imageStamp && !imageBusy) {
+      imageBusy = true; const requested = latestStamp;
+      $('camera').onload = () => { imageBusy = false; imageStamp = requested; $('camera').hidden = latestStamp === null; };
+      $('camera').onerror = () => { imageBusy = false; $('camera').hidden = true; $('camera-empty').textContent = 'Waiting for a fresh ROS camera exposure'; };
+      $('camera').src = '/camera.png?t=' + requested;
+    }
+  }
+  async function poll() {
+    try { const response = await fetch('/api/status', {cache: 'no-store', signal: AbortSignal.timeout(1500)}); if (!response.ok) throw new Error('HTTP ' + response.status);
+      const data = await response.json(); render(data); const live = Object.values(data.topics).filter(t => t.state === 'live').length;
+      $('connection').textContent = `${live} of 5 sensors live · ROS 2 observations`; $('connection').className = live === 5 ? 'live' : 'waiting';
+    } catch (error) { $('connection').textContent = 'Dashboard disconnected — retrying'; $('connection').className = 'stale'; latestStamp = null; $('camera').hidden = true;
+      for (const key of Object.keys(labels)) { $(key + '-rate').className = 'rate stale'; $(key + '-detail').textContent = 'Disconnected'; }
+      for (const id of ['camera-state', 'scan-state', 'motion-state']) badge(id, {state: 'stale'}); canvas('scan');
+    } finally { setTimeout(poll, 250); }
+  }
+  poll();
+</script>
+</body>
+</html>

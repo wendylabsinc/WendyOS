@@ -182,7 +182,7 @@ func TestIsCameraInUse(t *testing.T) {
 // Which ioctl refuses a second consumer is driver- and timing-dependent, so every setup site
 // must reach CAMERA_IN_USE, not just S_FMT.
 func TestErrCaptureSetup_ClassifiesBusyAtEverySite(t *testing.T) {
-	svc := NewVideoService(context.Background(), zap.NewNop())
+	svc := NewVideoService(context.Background(), zap.NewNop(), nil)
 	for _, ioctl := range []string{
 		"VIDIOC_REQBUFS", "VIDIOC_QUERYBUF", "VIDIOC_QBUF", "VIDIOC_STREAMON", "VIDIOC_DQBUF",
 	} {
@@ -193,7 +193,7 @@ func TestErrCaptureSetup_ClassifiesBusyAtEverySite(t *testing.T) {
 }
 
 func TestErrCaptureSetup_OtherErrnosStayInternal(t *testing.T) {
-	svc := NewVideoService(context.Background(), zap.NewNop())
+	svc := NewVideoService(context.Background(), zap.NewNop(), nil)
 	for _, errno := range []unix.Errno{unix.EINVAL, unix.ENOMEM, unix.ENODEV} {
 		err := svc.errCaptureSetup("VIDIOC_REQBUFS", "/dev/video0", errno)
 		if isCameraInUse(err) {

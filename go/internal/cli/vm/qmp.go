@@ -94,6 +94,113 @@ func (s *Store) EnsureTCPPorts(ctx context.Context, name string, ports []int) er
 	return s.withQMP(ctx, name, func(q *qmpClient) error { return q.ensureTCPPorts(name, ports) })
 }
 
+// EnsureTCPPortMapping returns this VM's loopback forward for guestPort. An
+// existing forward wins over preferredHostPort; otherwise the preferred port is
+// tried once, falling back to an available port. Zero requests any available
+// host port. The caller can persist the returned port for the next boot.
+//
+// Lifecycle serialization prevents another CLI from replacing this VM or
+// allocating a competing mapping for it while QMP is being queried.
+func (s *Store) EnsureTCPPortMapping(ctx context.Context, name string, guestPort, preferredHostPort int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := ValidName(name); err != nil {
+		return 0, err
+	}
+	if guestPort < 1 || guestPort > 65535 {
+		return 0, fmt.Errorf("invalid guest TCP port %d", guestPort)
+	}
+	if preferredHostPort < 0 || preferredHostPort > 65535 {
+		return 0, fmt.Errorf("invalid preferred host TCP port %d", preferredHostPort)
+	}
+	lock, err := s.acquireLifecycleLock(name)
+	if err != nil {
+		return 0, err
+	}
+	defer lock.Close()
+	return s.ensureTCPPortMapping(ctx, name, guestPort, preferredHostPort)
+}
+
+// TCPPortMapping reads a VM's actual loopback listener without adding a
+// forward. A persisted host port alone is not evidence of endpoint ownership.
+func (s *Store) TCPPortMapping(ctx context.Context, name string, guestPort int) (int, error) {
+	if err := ValidName(name); err != nil {
+		return 0, err
+	}
+	if guestPort < 1 || guestPort > 65535 {
+		return 0, fmt.Errorf("invalid guest TCP port %d", guestPort)
+	}
+	st, err := s.Status(name)
+	if err != nil {
+		return 0, err
+	}
+	if !st.Running || st.State.NetMode != NetUser {
+		return 0, fmt.Errorf("VM %q is not running with user networking", name)
+	}
+	var port int
+	err = s.withQMP(ctx, name, func(q *qmpClient) error {
+		info, err := q.monitor("info usernet")
+		if err == nil {
+			port = tcpForwardHostPort(info, guestPort)
+		}
+		return err
+	})
+	return port, err
+}
+
+// The caller holds the lifecycle lock, including when the verified result will
+// be written into robot.json by EnsureRobotSandboxPort.
+func (s *Store) ensureTCPPortMapping(ctx context.Context, name string, guestPort, preferredHostPort int) (int, error) {
+	if !DetachSupported() {
+		return 0, fmt.Errorf("automatic VM port forwarding currently requires macOS or Linux")
+	}
+	var port int
+	err := s.withQMP(ctx, name, func(q *qmpClient) error {
+		var lastOutput string
+		for attempt := range 4 {
+			info, err := q.monitor("info usernet")
+			if err != nil {
+				return err
+			}
+			if port = tcpForwardHostPort(info, guestPort); port != 0 {
+				return nil
+			}
+			candidate := 0
+			if attempt == 0 {
+				candidate = preferredHostPort
+			}
+			ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", candidate))
+			if err != nil && candidate != 0 {
+				ln, err = net.Listen("tcp", "127.0.0.1:0")
+			}
+			if err != nil {
+				return err
+			}
+			candidate = ln.Addr().(*net.TCPAddr).Port
+			if err := ln.Close(); err != nil {
+				return err
+			}
+			lastOutput, err = q.monitor(fmt.Sprintf("hostfwd_add net0 tcp:127.0.0.1:%d-:%d", candidate, guestPort))
+			if err != nil {
+				return err
+			}
+			// QMP can report HMP failures as successful string responses. Only the
+			// VM's actual listener table proves ownership. A competing allocator
+			// can win the bind after our temporary reservation is released.
+			info, err = q.monitor("info usernet")
+			if err != nil {
+				return err
+			}
+			if port = tcpForwardHostPort(info, guestPort); port != 0 {
+				return nil
+			}
+		}
+		return fmt.Errorf("could not allocate a loopback forward for VM %q guest TCP port %d: %s", name, guestPort, strings.TrimSpace(lastOutput))
+	})
+	return port, err
+}
+
 func (s *Store) requestPowerdown(ctx context.Context, name string) error {
 	return s.withQMP(ctx, name, func(q *qmpClient) error {
 		return q.execute("system_powerdown", map[string]any{}, nil)

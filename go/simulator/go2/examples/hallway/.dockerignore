@@ -1,0 +1,10 @@
+.git
+**/.build
+**/.swiftpm
+node_modules
+target
+__pycache__
+*.pyc
+.venv
+dist
+build
