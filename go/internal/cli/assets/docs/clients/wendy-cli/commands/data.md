@@ -131,6 +131,19 @@ timestamps and boot ID.
 Event and model-uncertainty triggers are armed immediately after deployment.
 A complete plan is in `Examples/WendyDataCampaign` in the WendyOS repository.
 
+### Deployment and Cloud registration
+
+`wendy data campaign deploy [file]` validates the plan before contacting the
+device. With no filename in an interactive terminal, it offers `.yaml` and
+`.yml` files in the current directory. Enter selects a file; Escape or Ctrl-C
+cancels. Non-interactive and `--json` use requires an explicit filename.
+
+An enrolled device's campaign is registered in Cloud Apps as `campaign:<name>`
+using a matching operator session. Registration failures stop deployment.
+`--skip-cloud-registration` permits an offline deployment; unenrolled devices
+skip registration automatically. Existing app metadata and notification grants
+are preserved. An owner or admin must enable notifications separately.
+
 ## Campaign YAML reference
 
 A campaign file contains exactly one YAML document. Unknown fields are
@@ -312,7 +325,7 @@ revision hashes when redeployed; the YAML `version` remains `1`.
 |---|---|---|
 | `notify.on` | yes | `episode_committed`, `detection`, or `event`. |
 | `notify.event` | for `event` | Exact named application or inference event to match. |
-| `notify.webhook` | for `event`/`detection` | HTTP(S) endpoint without embedded credentials or a URL fragment. |
+| `notify.webhook` | no | For `event`/`detection`, an HTTP(S) endpoint without embedded credentials or a URL fragment. Omit it to deliver through Wendy Cloud. |
 
 `episode_committed` is cloud-side intent carried in the committed manifest;
 it does not open a device-side notification connection. `detection` requires
@@ -320,6 +333,12 @@ an inference block and sends an immediate notification when presence is detected
 `event` also works for matching application events, independently of episode
 capture triggers. Immediate notifications use a bounded queue and retries;
 delivery failures appear in `inference_status.notification_error` and agent logs.
+For Cloud delivery, enroll the device and enable the campaign's notification
+grant in Cloud Apps. Deployment registers `campaign:<name>` but never grants
+permission to send notifications. Permanent authentication, authorization,
+validation and protocol errors stop retries; transient failures get at most
+three attempts, each with a 10-second timeout and the same event UUID.
+
 Unknown keys inside `notify` are rejected for `event` and `detection`.
 For `episode_committed`, they warn at deployment and are ignored.
 

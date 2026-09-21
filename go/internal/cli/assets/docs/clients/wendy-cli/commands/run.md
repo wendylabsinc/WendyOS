@@ -497,3 +497,16 @@ cloud tunnel logs for the same interval; compare an idle subscription with one
 that emits a new log after ten minutes. Check WiFi roaming, link loss, NAT/proxy
 idle limits, and HTTP/2 GOAWAY/keepalive diagnostics before assigning a cause.
 The original direct-WiFi failure has no confirmed transport root cause.
+
+## Cloud catalog registration
+
+Before deploying to an enrolled device, `wendy run` registers each distinct
+`appId` in Cloud Apps using an operator session matching the device's Cloud
+endpoint and organization. Existing entries retain their metadata and grants.
+Multi-service and Compose deployments register shared app IDs only once.
+Registration does not enable notification permission; an owner or admin must
+grant it in Cloud app settings.
+
+Registration errors stop deployment. Use `--skip-cloud-registration` for an
+offline deployment, then deploy again without it to register later. Unenrolled
+devices skip registration automatically.

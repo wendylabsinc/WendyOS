@@ -209,3 +209,31 @@ MarkAsRead(MarkAsReadRequest) → MarkAsReadResponse
 ```
 
 Marks the requested Notification IDs as read and returns the number marked.
+
+## Campaign notifications and catalog registration
+
+A campaign with `notify.on: event` and `notify.event: <name>` sends an immediate
+notification for the matching event. `notify.on: detection` sends on an inference
+appearance. Omit `notify.webhook` for Wendy Cloud delivery, or supply an HTTP(S)
+endpoint for webhook delivery. `episode_committed` remains manifest intent for
+notification after upload; it is separate from immediate delivery.
+
+The agent uses its enrolled device credentials and a bounded, nonpersistent
+queue. There are at most three attempts, with 10-second timeouts and the same
+event UUID. `InvalidArgument`, `Unauthenticated`, `PermissionDenied`,
+`FailedPrecondition`, `AlreadyExists`, `Unimplemented`, and `DataLoss` stop
+retries. A mismatched response notification ID is `DataLoss`. Other failures
+are retried with backoff. Errors appear in agent logs and campaign
+`inference_status.notification_error`.
+
+### App catalog API
+
+The v1 `AppService` exposes `UpsertApp`, `GetApp`, `UpdateApp`, `DeleteApp`, and
+`ListApps`. It replaces the former `CreateApp` RPC; clients must regenerate
+against `Proto/cloud/apps.proto`. Mutations and `GetApp` carry both `id` and
+`organization_id`. `UpsertApp` accepts optional `name` and `details`; `UpdateApp`
+also accepts the owner/admin-controlled `can_send_notifications` grant.
+`ListApps` uses `organization_id`, optional `offset`, `limit`, and `filter`,
+returning `apps` and `total`. Pagination is offset-based, not page-token-based.
+Deployment registration uses GetApp first and UpsertApp only when absent, so it
+preserves existing metadata and never automatically grants notifications.
