@@ -7,6 +7,10 @@ protocol StatusMenuControllerDelegate: AnyObject {
     func statusMenuControllerDidSelectWelcomeAndPermissions(_ controller: StatusMenuController)
     func statusMenuController(
         _ controller: StatusMenuController,
+        didSetLocalBuildServiceEnabled enabled: Bool
+    )
+    func statusMenuController(
+        _ controller: StatusMenuController,
         didSetMeshVPNEnabled enabled: Bool
     )
     func statusMenuControllerDidSelectNetworkExtensionSettings(
@@ -21,11 +25,14 @@ final class StatusMenuController: NSObject {
 
     init(
         wendyAgent: WendyAgent,
+        localBuildService: WendyRuntimeVM,
         meshVPN: MeshVPNController,
         delegate: (any StatusMenuControllerDelegate)? = nil,
         bundle: Bundle = .main
     ) async {
         self.wendyAgent = wendyAgent
+        self.localBuildService = localBuildService
+        self.localBuildServiceState = localBuildService.state
         self.meshVPN = meshVPN
         self.meshVPNStatus = meshVPN.status
         self.delegate = delegate
@@ -43,6 +50,10 @@ final class StatusMenuController: NSObject {
         self.appsObservation = await self.wendyAgent.observeApps { @MainActor [weak self] apps in
             self?.update(apps: apps)
         }
+        self.localBuildServiceObservation = localBuildService.$state.sink {
+            @MainActor [weak self] state in
+            self?.update(localBuildServiceState: state)
+        }
         self.meshVPNObservation = meshVPN.$status.sink { @MainActor [weak self] status in
             self?.update(meshVPNStatus: status)
         }
@@ -57,14 +68,17 @@ final class StatusMenuController: NSObject {
     weak var delegate: (any StatusMenuControllerDelegate)?
 
     private let bundleDisplayName: String
+    private let localBuildService: WendyRuntimeVM
     private let meshVPN: MeshVPNController
     private let statusItem: NSStatusItem
     private let menu: NSMenu
     private var currentStatus: WendyAgentStatus
     private var currentApps: [WendyAppInfo]
+    private var localBuildServiceState: WendyRuntimeVM.State
     private var meshVPNStatus: MeshVPNController.Status
     private var statusObservation: WendyObservation?
     private var appsObservation: WendyObservation?
+    private var localBuildServiceObservation: AnyCancellable?
     private var meshVPNObservation: AnyCancellable?
 
     private var runningApps: [WendyAppInfo] {
@@ -81,6 +95,12 @@ final class StatusMenuController: NSObject {
 
     private func update(apps: [WendyAppInfo]) {
         self.currentApps = apps
+        self.rebuildMenu()
+    }
+
+    private func update(localBuildServiceState: WendyRuntimeVM.State) {
+        self.localBuildServiceState = localBuildServiceState
+        self.updateStatusButton()
         self.rebuildMenu()
     }
 
@@ -108,6 +128,26 @@ final class StatusMenuController: NSObject {
         )
         welcomeItem.target = self
         self.menu.addItem(welcomeItem)
+
+        self.menu.addItem(.separator())
+
+        let localBuildServiceItem = NSMenuItem(
+            title: self.localBuildServiceState.menuTitle,
+            action: #selector(self.localBuildServiceSelected),
+            keyEquivalent: ""
+        )
+        localBuildServiceItem.target = self
+        localBuildServiceItem.state = self.localBuildServiceState == .running ? .on : .off
+        localBuildServiceItem.isEnabled = self.localBuildServiceCanToggle
+        localBuildServiceItem.image = NSImage(
+            systemSymbolName: self.localBuildServiceState.menuImageName,
+            accessibilityDescription: "Local Build Service"
+        )
+        self.menu.addItem(localBuildServiceItem)
+
+        if let detail = self.localBuildServiceState.failureDetail {
+            self.menu.addItem(self.makeDisabledMenuItem(title: detail))
+        }
 
         self.menu.addItem(.separator())
 
@@ -229,8 +269,18 @@ final class StatusMenuController: NSObject {
         button.imagePosition = self.buttonImagePosition(for: self.currentStatus, image: image)
         button.imageScaling = .scaleProportionallyDown
         button.toolTip =
-            "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle); \(self.meshMenuTitle)"
+            "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle); "
+            + "\(self.localBuildServiceState.menuTitle); \(self.meshMenuTitle)"
         button.setAccessibilityTitle(self.bundleDisplayName)
+    }
+
+    private var localBuildServiceCanToggle: Bool {
+        switch self.localBuildServiceState {
+        case .stopped, .running:
+            true
+        case .starting, .stopping, .unavailable, .failed:
+            false
+        }
     }
 
     private var meshMenuTitle: String {
@@ -329,6 +379,14 @@ final class StatusMenuController: NSObject {
     }
 
     @objc
+    private func localBuildServiceSelected() {
+        self.delegate?.statusMenuController(
+            self,
+            didSetLocalBuildServiceEnabled: self.localBuildServiceState != .running
+        )
+    }
+
+    @objc
     private func meshVPNSelected() {
         self.delegate?.statusMenuController(
             self,
@@ -352,6 +410,8 @@ final class StatusMenuController: NSObject {
     }
 
     private func cancelObservations() async {
+        self.localBuildServiceObservation?.cancel()
+        self.localBuildServiceObservation = nil
         self.meshVPNObservation?.cancel()
         self.meshVPNObservation = nil
         await self.cancelStatusObservation()
