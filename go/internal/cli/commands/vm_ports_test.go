@@ -119,7 +119,7 @@ func TestVMHTTPIntegration(t *testing.T) {
 	if !ok || host != "127.0.0.1" {
 		t.Fatalf("host %q, ok %v", host, ok)
 	}
-	if err := waitForReadiness(ctx, effectiveReadiness(cfg), host); err != nil {
+	if err := waitForReadiness(ctx, effectiveReadiness(cfg), host, 0); err != nil {
 		t.Fatal(err)
 	}
 	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}

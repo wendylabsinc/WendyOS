@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
@@ -585,6 +586,7 @@ func (s *mcpServer) connectToCloudAgent(ctx context.Context, cloudGRPC, deviceNa
 	}
 	agentConn := grpcclient.NewFromConn(grpcConn)
 	agentConn.Host = asset.GetName()
+	agentConn.MeshHost = meshname.Device(asset.GetId())
 	agentConn.IsMTLS = true
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
 		return mcpOpenBrokerTunnel(ctx, brokerConn, auth, asset.GetId(), uint32(port))
