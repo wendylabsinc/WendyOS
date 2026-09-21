@@ -243,3 +243,13 @@ also accepts the owner/admin-controlled `can_send_notifications` grant.
 returning `apps` and `total`. Pagination is offset-based, not page-token-based.
 Deployment registration uses GetApp first and UpsertApp only when absent, so it
 preserves existing metadata and never automatically grants notifications.
+
+The vendored AppService contract matches Cloud's current v1 server. Earlier
+Companion schemas used different tags for update fields and page-token
+pagination, so those clients must be rebuilt with the current schema. The
+coordinated client ports are [Companion SDK #1](https://github.com/wendylabsinc/wendy-companion-sdk/pull/1)
+and [Companion iOS #223](https://github.com/wendylabsinc/wendy-companion-ios/pull/223).
+The shared wire fixtures cover organization scoping, metadata updates,
+notification grants and offset pagination. These source changes do not upgrade
+installed clients; release the updated clients against the matching Cloud v1
+contract. They do not change Cloud's separate v2 API.
