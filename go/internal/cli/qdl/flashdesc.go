@@ -4,6 +4,7 @@ package qdl
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,24 @@ type ProgramEntry struct {
 	// relative to the disk size (e.g. "NUM_DISK_SECTORS-5."); the programmer
 	// on the device evaluates it, so we must not parse or rewrite it.
 	StartSector string `xml:"start_sector,attr"`
+	// localPath is a payload the host generated rather than one the bundle
+	// shipped. Unexported so a descriptor can never set it, which is what lets
+	// it bypass the SafeJoin containment every bundle-supplied name goes through.
+	localPath string
+}
+
+// payloadPath resolves the file to stream for an entry. A host-generated
+// payload is trusted and used as-is; a bundle-supplied name must stay inside
+// the bundle.
+func (e ProgramEntry) payloadPath(dir string) (string, error) {
+	if e.localPath != "" {
+		return e.localPath, nil
+	}
+	path, err := archive.SafeJoin(dir, e.Filename)
+	if err != nil || path == "" {
+		return "", fmt.Errorf("flash descriptor names an unsafe payload path %q", e.Filename)
+	}
+	return path, nil
 }
 
 // PatchEntry is one <patch> element: an in-place edit of a few bytes, used to
@@ -59,13 +78,21 @@ type FlashPlan struct {
 	Dir      string
 	Programs []ProgramEntry
 	Patches  []PatchEntry
+
+	// declared is every <program> in descriptor order, payload-less ones
+	// included, so a caller can read a skipped partition's geometry and write
+	// to it; host holds what it supplied, keyed by label.
+	declared []ProgramEntry
+	host     map[string]ProgramEntry
 }
 
-// ParseRawProgram reads a rawprogram XML descriptor.
+// ParseRawProgram reads a rawprogram XML descriptor, returning every <program>
+// element in descriptor order.
 //
-// Entries with an empty filename are dropped, not flashed: that is how the
-// descriptor marks a partition to leave alone (on WendyOS, `config` and `data`,
-// which is why device identity and Wi-Fi credentials survive a reflash).
+// An entry with an empty filename is kept but left unvalidated: that is how the
+// descriptor marks a partition the bundle supplies nothing for. LoadFlashPlan
+// drops them, so a caller may first supply a payload, and so a malformed entry
+// nobody flashes cannot fail a flash.
 func ParseRawProgram(r io.Reader) ([]ProgramEntry, error) {
 	var doc struct {
 		Programs []ProgramEntry `xml:"program"`
@@ -75,24 +102,157 @@ func ParseRawProgram(r io.Reader) ([]ProgramEntry, error) {
 	}
 	out := make([]ProgramEntry, 0, len(doc.Programs))
 	for _, p := range doc.Programs {
-		if p.Filename == "" {
-			continue
-		}
-		// Bounded once, here: the sector size multiplies descriptor-supplied
-		// offsets downstream, so an implausible one must never get through.
-		if p.SectorSize < 512 || p.SectorSize > 64*1024 || p.SectorSize&(p.SectorSize-1) != 0 {
-			return nil, fmt.Errorf("program entry %q has an implausible sector size of %d bytes",
-				p.Label, p.SectorSize)
-		}
-		if p.StartSector == "" {
-			return nil, fmt.Errorf("program entry %q has no start_sector", p.Label)
-		}
-		if p.Sparse {
-			return nil, fmt.Errorf("program entry %q is sparse, which is not supported", p.Label)
+		if p.Filename != "" {
+			if err := validateEntry(p); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// ErrNoSuchPartition reports that the descriptor declares no such label, so a
+// caller can skip rather than fail a flash the bundle simply cannot take.
+var ErrNoSuchPartition = errors.New("the flash descriptor declares no such partition")
+
+// MaxBlankBytes bounds a blanking write. It only has to reach past whatever
+// superblock the device's first-boot initialiser probes for, and a small fixed
+// cap is what keeps the write inside a partition the descriptor never sizes.
+const MaxBlankBytes = 1 << 20
+
+// Declared returns the descriptor's entry for a partition, so a host-generated
+// payload is built to the bundle's own geometry rather than a copy of it.
+func (fp *FlashPlan) Declared(label string) (ProgramEntry, error) {
+	for _, p := range fp.declared {
+		if p.Label != label {
+			continue
+		}
+		if err := validateEntry(p); err != nil {
+			return ProgramEntry{}, err
+		}
+		return p, nil
+	}
+	return ProgramEntry{}, fmt.Errorf("%w: %q", ErrNoSuchPartition, label)
+}
+
+// Seed programs a host-generated payload into a partition the descriptor
+// declares but leaves alone. The payload must match the declared size exactly,
+// which is the only integrity signal such an entry carries.
+func (fp *FlashPlan) Seed(label, path string) error {
+	e, err := fp.hostEntry(label, path)
+	if err != nil {
+		return err
+	}
+	if e.SizeKB <= 0 || e.NumSectors == 0 {
+		return fmt.Errorf("cannot seed partition %q: the descriptor declares no size for it", label)
+	}
+	return fp.attach(e)
+}
+
+// Blank programs zeros over the head of a partition, so the device finds no
+// filesystem there and recreates one on first boot.
+//
+// Separate from Seed because a partition the descriptor leaves unsized (on
+// WendyOS the device-grown `data`) disables both payload guards; sizing the
+// entry from the zeros file switches them back on and bounds the write.
+func (fp *FlashPlan) Blank(label, zerosPath string) error {
+	e, err := fp.hostEntry(label, zerosPath)
+	if err != nil {
+		return err
+	}
+	size, err := payloadSize(zerosPath)
+	if err != nil {
+		return err
+	}
+	if size <= 0 || size > MaxBlankBytes {
+		return fmt.Errorf("blanking payload is %d bytes, want 1..%d", size, MaxBlankBytes)
+	}
+	if size%int64(e.SectorSize) != 0 {
+		return fmt.Errorf("blanking payload of %d bytes is not a whole number of %d-byte sectors",
+			size, e.SectorSize)
+	}
+	e.NumSectors = uint32(size / int64(e.SectorSize))
+	e.SizeKB = float64(size) / 1024
+	return fp.attach(e)
+}
+
+// hostEntry starts from the declared entry and points it at a host-generated
+// payload. FileOffset is cleared: it describes where in a bundle file that
+// partition's data begins, and says nothing about a file the host just wrote.
+func (fp *FlashPlan) hostEntry(label, path string) (ProgramEntry, error) {
+	e, err := fp.Declared(label)
+	if err != nil {
+		return ProgramEntry{}, err
+	}
+	if e.Filename != "" {
+		return ProgramEntry{}, fmt.Errorf("cannot write partition %q: the descriptor already supplies %q",
+			label, e.Filename)
+	}
+	e.Filename = filepath.Base(path)
+	e.localPath = path
+	e.FileOffset = 0
+	return e, nil
+}
+
+// attach validates the finished entry and puts it in its declared position, so
+// a host payload is programmed where the descriptor says and the GPT stays last.
+func (fp *FlashPlan) attach(e ProgramEntry) error {
+	if err := validateEntry(e); err != nil {
+		return err
+	}
+	if err := checkPayload(fp.Dir, e); err != nil {
+		return err
+	}
+	if fp.host == nil {
+		fp.host = make(map[string]ProgramEntry, 2)
+	}
+	fp.host[e.Label] = e
+	fp.rebuild()
+	return nil
+}
+
+// rebuild re-derives Programs from the descriptor, so every entry keeps its
+// declared order however many host payloads have been attached.
+func (fp *FlashPlan) rebuild() {
+	out := make([]ProgramEntry, 0, len(fp.declared))
+	for _, d := range fp.declared {
+		if e, ok := fp.host[d.Label]; ok {
+			out = append(out, e)
+			continue
+		}
+		if d.Filename == "" {
+			continue
+		}
+		out = append(out, d)
+	}
+	fp.Programs = out
+}
+
+func payloadSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("sizing payload: %w", err)
+	}
+	return info.Size(), nil
+}
+
+// validateEntry rejects an entry the flasher cannot safely act on. Every entry
+// that reaches the device passes through here, seeded ones included.
+func validateEntry(p ProgramEntry) error {
+	// Bounded once, here: the sector size multiplies descriptor-supplied
+	// offsets downstream, so an implausible one must never get through.
+	if p.SectorSize < 512 || p.SectorSize > 64*1024 || p.SectorSize&(p.SectorSize-1) != 0 {
+		return fmt.Errorf("program entry %q has an implausible sector size of %d bytes",
+			p.Label, p.SectorSize)
+	}
+	if p.StartSector == "" {
+		return fmt.Errorf("program entry %q has no start_sector", p.Label)
+	}
+	if p.Sparse {
+		return fmt.Errorf("program entry %q is sparse, which is not supported", p.Label)
+	}
+	return nil
 }
 
 // ParsePatches reads a patch XML descriptor, keeping only the entries the
@@ -119,7 +279,7 @@ func ParsePatches(r io.Reader) ([]PatchEntry, error) {
 
 // LoadFlashPlan resolves the descriptors in an extracted bundle directory.
 func LoadFlashPlan(dir string) (*FlashPlan, error) {
-	programs, err := parseFile(dir, "rawprogram0.xml", ParseRawProgram)
+	declared, err := parseFile(dir, "rawprogram0.xml", ParseRawProgram)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +287,8 @@ func LoadFlashPlan(dir string) (*FlashPlan, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan := &FlashPlan{Dir: dir, Programs: programs, Patches: patches}
+	plan := &FlashPlan{Dir: dir, Patches: patches, declared: declared}
+	plan.rebuild()
 	if len(plan.Programs) == 0 {
 		return nil, fmt.Errorf("%s lists no partitions to flash", filepath.Join(dir, "rawprogram0.xml"))
 	}
@@ -161,9 +322,9 @@ func parseFile[T any](dir, name string, parse func(io.Reader) ([]T, error)) ([]T
 // so a mismatch discovered while programming aborts after the whole rootfs has
 // already been written.
 func checkPayload(dir string, e ProgramEntry) error {
-	path, err := archive.SafeJoin(dir, e.Filename)
-	if err != nil || path == "" {
-		return fmt.Errorf("flash descriptor names an unsafe payload path %q", e.Filename)
+	path, err := e.payloadPath(dir)
+	if err != nil {
+		return err
 	}
 	info, err := os.Stat(path)
 	if err != nil {

@@ -193,6 +193,14 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "tab", "shift+tab":
+			if cfg, err := config.Load(); err == nil {
+				m.local.refreshTable()
+				m.sim.picker.SetDefaultKey(cfg.DefaultDevice)
+				m.cloud.defaultDevice = cfg.DefaultDevice
+				if m.cloudAuth != nil {
+					m.cloud.refreshTable()
+				}
+			}
 			m.active = cycleTab(deviceTabOrder(), m.active, tabCycleDelta(msg.String()))
 			if m.active == devicePickerCloudTab && m.cloudAuth != nil && !m.cloudStarted {
 				m.cloudStarted = true
@@ -255,7 +263,7 @@ func (m discoverTabsModel) View() string {
 		body.WriteString("Discover cloud devices\n")
 		body.WriteString(devicePickerOrgStyle.Render("  ☐  Wendy Cloud login   Not logged in"))
 		body.WriteString("\n")
-		body.WriteString(devicePickerOrgStyle.Render("  enter log in, tab local, q quit"))
+		body.WriteString(devicePickerOrgStyle.Render("  enter log in, tab nearby, q quit"))
 		body.WriteString("\n")
 		return body.String()
 	}

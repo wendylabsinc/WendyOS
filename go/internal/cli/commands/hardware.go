@@ -12,8 +12,9 @@ import (
 
 func newHardwareCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "hardware",
-		Short: "Query hardware capabilities on the target device",
+		Hidden: true,
+		Use:    "hardware",
+		Short:  "Query hardware capabilities on the target device",
 	}
 
 	cmd.AddCommand(newHardwareListCmd())

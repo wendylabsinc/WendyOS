@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Run the G1 Coke manipulation demo in a ROS 2 connected MuJoCo scene."><title>G1 Coke demo</title><link rel="stylesheet" href="/style.css"><link rel="icon" href="data:,"></head>
+<body>
+<header><a href="/" class="brand">wendy<span>/</span> G1 Coke demo</a><span id="connection" class="pill">Connecting</span></header>
+<main>
+  <section class="workspace" aria-label="Live simulation">
+    <div class="section-head"><div><span class="eyebrow">MuJoCo scene</span><h1>Coke pick and place</h1></div><button id="reset-view" class="subtle">Reset view</button></div>
+    <div id="viewer"><p>Loading the G1 and its training scene...</p></div>
+    <div class="scene-caption"><span>G1 + Dex3 · 43 joints · Fixed pelvis</span><span>Drag to orbit · Scroll to zoom</span></div>
+    <div class="timeline"><div><span id="phase">Loading scene</span><span id="time">0.0 / 188.0 s</span></div><progress id="progress" max="7518" value="0" aria-label="Run progress"></progress></div>
+    <div id="error" class="error" role="alert" hidden></div>
+    <div class="controls"><label>Controller<select id="mode"><option value="policy">Learned policy · update 2,525</option><option value="hil" disabled>Jetson policy · hardware in the loop</option><option value="expert">Expert reference replay</option><option value="ros">External ROS 2 commands</option></select></label><label>Run length<select id="steps"><option value="full">Full reference · 188 seconds</option><option value="400">10 seconds</option><option value="40">1 second</option></select></label><button id="run" class="primary" disabled>Run demo</button><button id="pause" disabled>Pause</button><button id="reset" disabled>Reset scene</button></div>
+  </section>
+  <aside>
+    <section class="camera-panel"><div class="section-head"><h2>Robot camera</h2><span id="visible" class="pill">Waiting</span></div><img id="camera" alt="Live RGB camera seen by the G1 policy" width="320" height="240"><div class="camera-meta"><span>RGB-D · 320 × 240</span><span>20 Hz simulation time</span></div><details><summary>Visible can mask</summary><img id="mask" alt="Visible can pixels from the same simulated camera exposure" width="320" height="240"></details></section>
+    <section><h2>This run</h2><dl class="metrics"><div><dt>Maximum lift</dt><dd id="lift">0.0 cm</dd></div><div><dt>Horizontal distance to marker</dt><dd id="distance">—</dd></div><div><dt>Policy inference</dt><dd id="inference">—</dd></div><div><dt>Physics / control</dt><dd>1,000 / 40 Hz</dd></div></dl><p id="hil-detail" class="small"></p></section>
+    <section><div class="section-head"><h2>ROS 2</h2><span id="ros" class="pill">Connecting</span></div><p class="small">Joint states, RGB-D camera, IMU, odometry, transforms, and trajectory commands.</p><code>/coke/g1</code><p id="ros-detail" class="small"></p></section>
+  </aside>
+  <details class="details"><summary>Scene and policy details</summary><p>The supplied update-2,525 weights control the exact attempt-000001 scene using its original recorded timing. This is a new simulation run. Its result is measured above.</p><p>The checkpoint's sealed 100-frame test uses attempt-000159, a different layout and reference. The expert replay is a separate controller. The can mask comes from visible MuJoCo geometry.</p><div class="joint-grid" id="joints"></div></details>
+</main><script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script><script type="module" src="/app.js"></script>
+</body></html>

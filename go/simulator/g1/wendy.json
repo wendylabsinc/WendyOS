@@ -1,0 +1,25 @@
+{
+  "appId": "sh.wendy.simulator.g1",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "host-admin"
+    }
+  ],
+  "readiness": {
+    "tcpSocket": {
+      "port": 8890
+    },
+    "timeoutSeconds": 120
+  },
+  "frameworks": {
+    "ros2": {
+      "distro": "humble",
+      "rmw": "rmw_cyclonedds_cpp",
+      "domainId": 0,
+      "discoveryScope": "app"
+    }
+  }
+}

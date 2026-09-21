@@ -255,3 +255,72 @@ func TestROS2Service_EchoTopic_ClientCancelIsNotAnError(t *testing.T) {
 		t.Fatalf("client cancel should not be an error, got: %v", err)
 	}
 }
+
+func TestROS2Service_SubscriptionFailurePreservesDiagnostics(t *testing.T) {
+	for _, command := range []string{"echo", "hz"} {
+		t.Run(command, func(t *testing.T) {
+			rt := &fakeROS2Runtime{
+				sidecar: ROS2Sidecar{Name: "sc", Distro: "humble", DomainID: 5},
+				execFn: func(_ context.Context, opts ROS2ExecOptions, _, stderr io.Writer) (int, error) {
+					if got := strings.Join(opts.Args, " "); got != "topic "+command+" /lowstate" {
+						t.Errorf("unexpected command: %s", got)
+					}
+					// Retain the final diagnostic even after a very long traceback.
+					_, _ = io.WriteString(stderr, strings.Repeat("traceback\n", 10000))
+					_, _ = io.WriteString(stderr, "Unknown package 'unitree_go'\n")
+					return 1, nil
+				},
+			}
+			svc := newTestROS2Service(t, rt, t.TempDir())
+			err := withDeadline(t, func() error {
+				if command == "echo" {
+					return svc.EchoTopic(&agentpbv2.EchoROS2TopicRequest{Topic: "/lowstate"},
+						&fakeServerStream[agentpbv2.ROS2Message]{ctx: context.Background()})
+				}
+				return svc.MonitorHz(&agentpbv2.MonitorROS2HzRequest{Topic: "/lowstate"},
+					&fakeServerStream[agentpbv2.ROS2HzSample]{ctx: context.Background()})
+			})
+			if status.Code(err) != codes.Internal || !strings.Contains(err.Error(), "Unknown package 'unitree_go'") || !strings.Contains(err.Error(), "exit 1") {
+				t.Fatalf("expected explicit subscription failure with decoding diagnostic, got %v", err)
+			}
+			if len(err.Error()) > ros2StderrMaxBytes+256 {
+				t.Fatalf("error retained unbounded stderr: %d bytes", len(err.Error()))
+			}
+		})
+	}
+}
+
+func TestROS2Service_EchoTopic_MultilineDocumentIsBounded(t *testing.T) {
+	payload := strings.Repeat("- 1234567890\n", ros2EchoMaxMessageBytes/10) + "---\n"
+	svc := newTestROS2Service(t, echoRuntime("/points", payload), t.TempDir())
+	stream := &fakeServerStream[agentpbv2.ROS2Message]{ctx: context.Background()}
+	err := withDeadline(t, func() error {
+		return svc.EchoTopic(&agentpbv2.EchoROS2TopicRequest{Topic: "/points"}, stream)
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected oversized document error, got %v", err)
+	}
+	if len(stream.sent) != 0 {
+		t.Fatal("oversized document must not be sent")
+	}
+}
+
+func TestROS2Service_EchoTopic_CountLimitIgnoresTeardownExit(t *testing.T) {
+	rt := &fakeROS2Runtime{
+		sidecar: ROS2Sidecar{Name: "sc", Distro: "humble", DomainID: 5},
+		execFn: func(ctx context.Context, _ ROS2ExecOptions, stdout, stderr io.Writer) (int, error) {
+			_, _ = io.WriteString(stdout, "data: 1\n---\n")
+			<-ctx.Done()
+			_, _ = io.WriteString(stderr, "subscription interrupted")
+			return 130, ctx.Err()
+		},
+	}
+	svc := newTestROS2Service(t, rt, t.TempDir())
+	stream := &fakeServerStream[agentpbv2.ROS2Message]{ctx: context.Background()}
+	err := withDeadline(t, func() error {
+		return svc.EchoTopic(&agentpbv2.EchoROS2TopicRequest{Topic: "/lowstate", Count: 1}, stream)
+	})
+	if err != nil || len(stream.sent) != 1 {
+		t.Fatalf("bounded subscription should succeed after one sample: samples=%d err=%v", len(stream.sent), err)
+	}
+}

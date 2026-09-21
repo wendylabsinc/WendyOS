@@ -200,32 +200,36 @@ func newOrgPicker(orgs []*cloudpb.Organization, cfg *config.Config, copyOnEnter 
 		picker.DefaultKey = strconv.Itoa(int(cfg.DefaultOrgID))
 	}
 
-	picker.OnSetDefault = func(item tui.PickerItem) string {
+	picker.OnSetDefault = func(item tui.PickerItem) (string, error) {
 		idStr, _ := item.Value.(string)
 		n, err := strconv.Atoi(idStr)
 		if err != nil {
-			return "Invalid org ID."
+			return "", fmt.Errorf("invalid org ID")
 		}
 		c, err := config.Load()
 		if err != nil {
-			return fmt.Sprintf("Could not save default: %v", err)
+			return "", fmt.Errorf("could not save default: %w", err)
 		}
 		c.DefaultOrgID = int32(n)
-		_ = config.Save(c)
-		if !credIDs[int32(n)] {
-			return fmt.Sprintf("Default set to %s. No local credentials — run 'wendy auth login' to authenticate.", item.Name)
+		if err := config.Save(c); err != nil {
+			return "", err
 		}
-		return fmt.Sprintf("Default set to %s.", item.Name)
+		if !credIDs[int32(n)] {
+			return fmt.Sprintf("Default set to %s. No local credentials — run 'wendy auth login' to authenticate.", item.Name), nil
+		}
+		return fmt.Sprintf("Default set to %s.", item.Name), nil
 	}
 
-	picker.OnUnsetDefault = func() string {
+	picker.OnUnsetDefault = func() (string, error) {
 		c, err := config.Load()
 		if err != nil {
-			return fmt.Sprintf("Could not clear default: %v", err)
+			return "", fmt.Errorf("could not clear default: %w", err)
 		}
 		c.DefaultOrgID = 0
-		_ = config.Save(c)
-		return "Default cleared."
+		if err := config.Save(c); err != nil {
+			return "", err
+		}
+		return "Default cleared.", nil
 	}
 
 	picker.OnRemoveItem = func(item tui.PickerItem) (string, bool, *tui.PickerItem) {

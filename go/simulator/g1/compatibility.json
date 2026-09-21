@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "profile": "wendy.g1.virtual.v1",
+  "robot": "Unitree G1 (29 DoF)",
+  "simulation": true,
+  "physics": {
+    "engine": "MuJoCo",
+    "version": "3.3.7",
+    "timestep_seconds": 0.002
+  },
+  "controller": {
+    "bundle": "g1-29dof-velocity-v0-4960b847-v1",
+    "nominal_hz": 50,
+    "factory_controller": false,
+    "low_speed_tracking": "Small commands from rest and yaw-only commands track weakly in this learned policy. Demonstrated gait inputs include vx=+/-0.3 m/s, vy=+/-0.3 m/s and vx=0.3 m/s with yaw=+/-0.2 rad/s. Commands are not amplified and the root is never animated."
+  },
+  "ros": {
+    "distro": "humble",
+    "rmw": "rmw_cyclonedds_cpp",
+    "domain_id": 0,
+    "interface": "lo"
+  },
+  "clock": {
+    "mode": "device",
+    "timestamps": "original wall-clock capture time",
+    "publishes_clock": false
+  },
+  "sources": {
+    "unitree_ros2": "668d1ec5a05d1c38d3306bdca7d59f2ba3581a88",
+    "unitree_sdk2_python": "65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5",
+    "asset_lock": "assets.lock.json",
+    "interface_lock": "unitree.lock.json",
+    "derived_interface_hashes": "wendy-compatibility.json"
+  },
+  "wire_adjustments": [
+    "Response.binary uses uint8[] to match the pinned SDK; all HG fields remain upstream unchanged"
+  ],
+  "observations": [
+    {
+      "topics": [
+        "/lowstate"
+      ],
+      "type": "unitree_hg/msg/LowState",
+      "nominal_hz": 500
+    },
+    {
+      "topics": [
+        "/lf/lowstate"
+      ],
+      "type": "unitree_hg/msg/LowState",
+      "nominal_hz": 50
+    },
+    {
+      "topics": [
+        "/imu/data",
+        "/utlidar/imu"
+      ],
+      "type": "sensor_msgs/msg/Imu",
+      "nominal_hz": 200,
+      "frame": "imu_link",
+      "note": "aliases of one virtual body IMU"
+    },
+    {
+      "topics": [
+        "/joint_states"
+      ],
+      "type": "sensor_msgs/msg/JointState",
+      "nominal_hz": 50
+    },
+    {
+      "topics": [
+        "/odom"
+      ],
+      "type": "nav_msgs/msg/Odometry",
+      "nominal_hz": 50,
+      "frame": "odom",
+      "child_frame": "base_link"
+    },
+    {
+      "topics": [
+        "/scan"
+      ],
+      "type": "sensor_msgs/msg/LaserScan",
+      "nominal_hz": 10,
+      "frame": "lidar_link",
+      "condition": "lidar_enabled"
+    },
+    {
+      "topics": [
+        "/utlidar/cloud"
+      ],
+      "type": "sensor_msgs/msg/PointCloud2",
+      "nominal_hz": 10,
+      "frame": "lidar_link",
+      "condition": "lidar_enabled"
+    },
+    {
+      "topics": [
+        "/camera/color/image_raw"
+      ],
+      "type": "sensor_msgs/msg/Image",
+      "nominal_hz": 15,
+      "encoding": "rgb8",
+      "size": [
+        640,
+        360
+      ],
+      "frame": "camera_optical_frame",
+      "condition": "rendering and camera_enabled"
+    },
+    {
+      "topics": [
+        "/camera/color/camera_info"
+      ],
+      "type": "sensor_msgs/msg/CameraInfo",
+      "nominal_hz": 15,
+      "frame": "camera_optical_frame",
+      "condition": "rendering and camera_enabled"
+    },
+    {
+      "topics": [
+        "/simulation/ground_truth"
+      ],
+      "type": "geometry_msgs/msg/PoseStamped",
+      "nominal_hz": 50,
+      "frame": "simulation_world"
+    },
+    {
+      "topics": [
+        "/simulation/epoch"
+      ],
+      "type": "std_msgs/msg/UInt64",
+      "transient_local": true
+    }
+  ],
+  "observation_qos": {
+    "reliability": "reliable",
+    "durability": "volatile",
+    "depth": 1,
+    "exceptions": [
+      "/simulation/epoch",
+      "/tf",
+      "/tf_static"
+    ]
+  },
+  "sensor_mounts": [
+    {
+      "parent": "base_link",
+      "child": "imu_link",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "parent": "base_link",
+      "child": "lidar_link",
+      "translation_m": [
+        0.16,
+        0,
+        -0.1
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "parent": "base_link",
+      "child": "camera_link",
+      "translation_m": [
+        0.12,
+        0,
+        0.45
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "parent": "camera_link",
+      "child": "camera_optical_frame",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        -0.5,
+        0.5,
+        -0.5,
+        0.5
+      ]
+    }
+  ],
+  "sensor_faults": {
+    "endpoint": {
+      "method": "POST",
+      "path": "/api/sensors",
+      "partial_updates": true,
+      "unknown_fields": "rejected"
+    },
+    "defaults": {
+      "lidar_enabled": true,
+      "camera_enabled": true,
+      "lidar_dropout": 0.0
+    },
+    "types": {
+      "lidar_enabled": "boolean",
+      "camera_enabled": "boolean",
+      "lidar_dropout": "finite number in [0,1]"
+    },
+    "disabled_lidar": "stops new scan and cloud messages; the separate virtual IMU alias continues",
+    "disabled_camera": "stops new RGB and CameraInfo messages and clears camera.jpg; the sandbox observer continues",
+    "dropout": "one seeded Bernoulli mask shared by scan and cloud; missing scan returns are positive infinity and missing cloud points are omitted",
+    "seed": "G1_SEED; dropout stream restarts on world reset or a changed sensor configuration",
+    "reset_preserves_settings": true,
+    "physics_continues": true,
+    "control_ownership_unchanged": true,
+    "lifecycle": "changed settings invalidate in-flight observations and retained camera frames; unchanged updates do not advance generation"
+  },
+  "commands": {
+    "standard": {
+      "topic": "/cmd_vel",
+      "type": "geometry_msgs/msg/Twist",
+      "axes": [
+        "linear.x",
+        "linear.y",
+        "angular.z"
+      ]
+    },
+    "motion_switcher": {
+      "request": "/api/motion_switcher/request",
+      "response": "/api/motion_switcher/response",
+      "supported_api_ids": {
+        "1": "GetApiVersion",
+        "1001": "CheckMode"
+      },
+      "api_version": "1.0.0.1"
+    },
+    "low_level": {
+      "topic": "/lowcmd",
+      "type": "unitree_hg/msg/LowCmd",
+      "motor_slots": 35,
+      "active_motors": 29,
+      "mode_pr": 0,
+      "mode_machine": 0,
+      "mode_machine_note": "declared simulator value; not a physical hardware model identifier",
+      "reserved_slots": "29\u201334 must remain zero",
+      "order": [
+        "left_hip_pitch",
+        "left_hip_roll",
+        "left_hip_yaw",
+        "left_knee",
+        "left_ankle_pitch",
+        "left_ankle_roll",
+        "right_hip_pitch",
+        "right_hip_roll",
+        "right_hip_yaw",
+        "right_knee",
+        "right_ankle_pitch",
+        "right_ankle_roll",
+        "waist_yaw",
+        "waist_roll",
+        "waist_pitch",
+        "left_shoulder_pitch",
+        "left_shoulder_roll",
+        "left_shoulder_yaw",
+        "left_elbow",
+        "left_wrist_roll",
+        "left_wrist_pitch",
+        "left_wrist_yaw",
+        "right_shoulder_pitch",
+        "right_shoulder_roll",
+        "right_shoulder_yaw",
+        "right_elbow",
+        "right_wrist_roll",
+        "right_wrist_pitch",
+        "right_wrist_yaw"
+      ],
+      "crc": "Unitree aligned HG record, non-reflected polynomial0x04C11DB7/init0xFFFFFFFF, excludes final crc word; not CRC of CDR bytes",
+      "crc_record_bytes": {
+        "command": 1004,
+        "state": 2092
+      },
+      "gains": {
+        "kp_max": 300,
+        "kd_max": 20
+      },
+      "joint_velocity_limit_radps": 40,
+      "torque_limits": "per-joint actuator ctrlrange from the pinned physical model",
+      "position_velocity_stop": "SDK PosStopF(float32(2.146e9)) and VelStopF16000 disable their gain channels",
+      "command_envelope_maximum_bytes": 4096
+    },
+    "owner": "one explicitly granted DDS publisher or browser token",
+    "low_level_watchdog_ms": 40,
+    "velocity_limits": {
+      "vx_mps": [
+        -0.5,
+        1.0
+      ],
+      "vy_mps": [
+        -0.3,
+        0.3
+      ],
+      "yaw_rps": [
+        -0.2,
+        0.2
+      ]
+    },
+    "errors": {
+      "3203": "unsupported",
+      "3204": "invalid argument",
+      "3205": "control denied"
+    },
+    "loco": {
+      "request": "/api/sport/request",
+      "response": "/api/sport/response",
+      "supported_api_ids": {
+        "1": "GetApiVersion",
+        "7001": "GetFsmId",
+        "7101": "SetFsmId: only 0 (ZeroTorque),1 (Damp),500 (Start)",
+        "7105": "SetVelocity / Move / StopMove"
+      },
+      "api_version": "1.0.0.0",
+      "transport_kind": "sport",
+      "get_fsm_id": {
+        "standing": 500,
+        "moving": 500,
+        "damping": 1,
+        "zero_torque": 0,
+        "lowlevel": 0,
+        "fallen": 1,
+        "fault": 1,
+        "paused": "underlying pre-pause mode"
+      },
+      "set_velocity": {
+        "parameters": {
+          "velocity": "[vx,vy,yaw_rate]",
+          "duration": "finite seconds in (0,864000]"
+        },
+        "lease": "minimum of duration and 200ms; stream fresh commands to continue",
+        "start": "FSM500 requires an already standing or moving sport controller; no implicit recovery or root-pose writes"
+      },
+      "unsupported_api_ids": [
+        7002,
+        7003,
+        7004,
+        7005,
+        7006,
+        7102,
+        7103,
+        7104,
+        7106,
+        7107,
+        7110,
+        7111
+      ],
+      "unsupported_fsm_ids": [
+        3,
+        702,
+        706
+      ]
+    },
+    "loco_watchdog_ms": 200
+  },
+  "fidelity": {
+    "joints_imu_contacts": "joints and IMU from actual copied MuJoCo state; HG has no Go2 foot-force fields",
+    "odometry": "velocity integration with declared bias and covariance; exact pose is separate",
+    "lidar": "synthetic simultaneous five-ring pattern at elevations -30,-15,0,15,30 degrees with 360 azimuth rays each; 0.1-12 metre range; scan is the shared horizontal ring",
+    "camera": "ideal pinhole virtual front mount, vertical FOV 60 degrees, zero distortion",
+    "battery": "no BMS or battery emulation in HG LowState; motor voltage and temperatures remain zero",
+    "serial_and_version": "HG version words [little-endian SIM\\0,1] identify simulation; HG has no serial field",
+    "firmware_calibrated": false,
+    "physical_robot_used_for_validation": false,
+    "mounts": "virtual pelvis IMU, waist-level navigation lidar, and head-height camera; not factory extrinsics"
+  },
+  "reset": "revokes owners, rejects old publishers, clears controller history and pending observations; command publishers must restart and be explicitly granted again",
+  "unsupported": [
+    "factory gait parity",
+    "stock low-level example's motion-switcher mutations",
+    "trajectory following",
+    "jumps and dances",
+    "cloud and firmware services",
+    "audio and AI services",
+    "factory video codecs and video APIs",
+    "lidar motion distortion",
+    "depth camera",
+    "factory sensor calibration",
+    "arbitrary ROS distributions or DDS vendors",
+    "AB parallel linkage low-level commands",
+    "G1 factory height/balance/speed modes",
+    "sit, squat and lie-to-stand transitions",
+    "arm tasks and hand services",
+    "SwitchToUserCtrl and SwitchToInternalCtrl",
+    "Go2 SportClient API IDs and SportModeState/BMS streams"
+  ],
+  "network_isolation": {
+    "status": "udp-rtps-loopback",
+    "nftables": "drop non-loopback UDP with the RTPS payload prefix",
+    "legacy_iptables": "fallback for kernels without nftables: drop non-loopback UDP containing RTPS bytes anywhere using KMP, in both IPv4 and IPv6",
+    "legacy_scope": "independent of DDS port/domain; may also reject unrelated UDP containing these bytes",
+    "startup": "fail closed until both address families verify; drop NET_ADMIN before participants start",
+    "unsupported": [
+      "DDS over TCP",
+      "opaque tunnels",
+      "privileged applications changing host firewall rules"
+    ]
+  }
+}

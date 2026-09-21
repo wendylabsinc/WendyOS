@@ -1,0 +1,216 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "check": "explicit_twist_grant",
+      "passed": true,
+      "publisher_gid": "d73479b6e48a9aae00000000000000000000000000000000"
+    },
+    {
+      "check": "g1_sensor_contract",
+      "passed": true,
+      "physical_joints": 29,
+      "hg_slots": 35,
+      "maximum_motor_joint_error": 0.0005927415658003587,
+      "image_shape": [
+        640,
+        360,
+        "rgb8"
+      ],
+      "cloud_points": 1080,
+      "horizontal_returns": 360,
+      "hg_crc_checked": false
+    },
+    {
+      "check": "finite_full_reader_rates",
+      "passed": true,
+      "elapsed_seconds": 12.011854757001856,
+      "received_hz": {
+        "odom": 50.117156107726565,
+        "truth": 50.117156107726565,
+        "imu": 200.21887116126643,
+        "joints": 50.117156107726565,
+        "scan": 9.990130785593335,
+        "cloud": 9.990130785593335,
+        "image": 14.568940728990281,
+        "camera_info": 14.568940728990281,
+        "lowstate": 500.5055523582261
+      },
+      "minimum_hz": {
+        "odom": 40,
+        "truth": 40,
+        "joints": 40,
+        "imu": 160,
+        "scan": 8,
+        "cloud": 8,
+        "image": 12,
+        "camera_info": 12,
+        "lowstate": 400
+      },
+      "physics_hz": 500.0892969088264,
+      "policy_hz": 50.03390501784662
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "forward",
+      "command": [
+        0.3,
+        0.0,
+        0.0
+      ],
+      "command_seconds": 3,
+      "physical_displacement": 0.6639014165312636,
+      "odometry_displacement": 0.666777058760799,
+      "joint_travel": 0.502254157729732,
+      "maximum_scan_change": 6.373468518257141,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "backward",
+      "command": [
+        -0.3,
+        0.0,
+        0.0
+      ],
+      "command_seconds": 3,
+      "physical_displacement": -0.5863478125531995,
+      "odometry_displacement": -0.5832781246847439,
+      "joint_travel": 0.4008889710607882,
+      "maximum_scan_change": 5.928422927856445,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "left_turn",
+      "command": [
+        0.3,
+        0.0,
+        0.2
+      ],
+      "command_seconds": 6,
+      "physical_displacement": 0.771994923716922,
+      "odometry_displacement": 0.77319892371692,
+      "joint_travel": 0.4477003257486597,
+      "maximum_scan_change": 5.507692813873291,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "explicit_twist_grant",
+      "passed": true,
+      "publisher_gid": "cf75c06a11ce604600000000000000000000000000000000"
+    },
+    {
+      "check": "stale_writer_fence",
+      "passed": true,
+      "operation": "pause",
+      "old_gid": "d73479b6e48a9aae00000000000000000000000000000000",
+      "replacement_gid": "cf75c06a11ce604600000000000000000000000000000000",
+      "epoch": 2
+    },
+    {
+      "check": "explicit_twist_grant",
+      "passed": true,
+      "publisher_gid": "ac0eb8aa5c90690a00000000000000000000000000000000"
+    },
+    {
+      "check": "stale_writer_fence",
+      "passed": true,
+      "operation": "reset",
+      "old_gid": "cf75c06a11ce604600000000000000000000000000000000",
+      "replacement_gid": "ac0eb8aa5c90690a00000000000000000000000000000000",
+      "epoch": 3
+    },
+    {
+      "check": "physical_signed_motion",
+      "passed": true,
+      "direction": "fresh_publisher_forward",
+      "command": [
+        0.3,
+        0.0,
+        0.0
+      ],
+      "command_seconds": 2,
+      "physical_displacement": 0.36009694574191814,
+      "odometry_displacement": 0.3620793342897725,
+      "joint_travel": 0.5215813881029342,
+      "maximum_scan_change": 5.888284206390381,
+      "robot_camera_changed": true
+    },
+    {
+      "check": "g1_sensor_contract",
+      "passed": true,
+      "physical_joints": 29,
+      "hg_slots": 35,
+      "maximum_motor_joint_error": 4.6156681178410874e-05,
+      "image_shape": [
+        640,
+        360,
+        "rgb8"
+      ],
+      "cloud_points": 1080,
+      "horizontal_returns": 360,
+      "hg_crc_checked": false
+    }
+  ],
+  "environment": {
+    "vm_name": "",
+    "source_digest": "",
+    "robot_kind": "g1",
+    "profile_version": 1
+  },
+  "limitations": "Finite standard/HG ROS check; not the 600-second performance gate, native API/CRC acceptance or hardware fidelity.",
+  "elapsed_seconds": 60.29626750499301,
+  "received_counts": {
+    "odom": 2983,
+    "truth": 2983,
+    "imu": 11930,
+    "joints": 2983,
+    "scan": 597,
+    "cloud": 597,
+    "image": 862,
+    "camera_info": 862,
+    "lowstate": 29816
+  },
+  "overall_received_hz": {
+    "odom": 49.472382345275086,
+    "truth": 49.472382345275086,
+    "imu": 197.85635983209244,
+    "joints": 49.472382345275086,
+    "scan": 9.901110378856595,
+    "cloud": 9.901110378856595,
+    "image": 14.296075622402656,
+    "camera_info": 14.296075622402656,
+    "lowstate": 494.4916366096956
+  },
+  "overall_rate_scope": "Entire run, including discovery, deliberate pause/reset and cleanup; threshold gate uses its separate uninterrupted window.",
+  "runtime_image": "sha256:a0a92d42c02403177e1082423d8c84ddd6e79223d2949e385b6a5e816d4079ec",
+  "resources": {
+    "cpus": 4,
+    "memory_bytes": 4294967296,
+    "environment": "isolated ARM64 Docker network namespace"
+  },
+  "source_files": {
+    "g1_sim/__init__.py": "80f67d68ae9f93d000a4f43b0351c6d5b06babf5a2292327a4f0d392230b5bc0",
+    "g1_sim/camera.py": "bfcdb4ad84276785c0ab4c8943dd3c6086dfda41bdf84b8f160a2fad74e6d2b0",
+    "g1_sim/commands.py": "d2ef0a99ac4a8cd334e674d55f87f140fb273bfddafdb499d712b4ed72b618fa",
+    "g1_sim/isolation.py": "c713a4a7fb422b382eb180a2aac82e008e7c85fcc89c0ea0792c3aff66c4427a",
+    "g1_sim/isolation_legacy.py": "e70858f403a85852e3242524fc98c342111ef43c36015299e550dfb8877799d4",
+    "g1_sim/lidar.py": "040933bfe6474403c5b43b8b5ad88f5511481493741a4cdffbfdf85c652acaaa",
+    "g1_sim/native_commands.py": "b6a35dae85979f5791952c2a5c0534e8a3a3bb66cc4ddf07d59eba573e2738bc",
+    "g1_sim/native_state.py": "0cc2fa1cf3d198a7c02a2c042437b154cbc5b80604887c4444de5e87de2071fa",
+    "g1_sim/observations.py": "8a0a9efd261e9180eb8e25c31169e3dc0dde5156c3c39c42df70bd4cdb07ba6d",
+    "g1_sim/policy.py": "0a63172fa7f99d1be3840df26dfbda6801192f7d0c6ad5fe68d894dda314973f",
+    "g1_sim/ros.py": "25429a98b5b989c437ccbab3ca1c7545d14315fb7cd2322a3516d4a664525574",
+    "g1_sim/runtime.py": "789d52fbb79aad3e15eb1de1544c1edad95522065023b3486f80fd481e88659e",
+    "g1_sim/scene.py": "7bc10f6ce602d67549f108b323c1c753154703ff8f5ac621fb8d2c353337c65c",
+    "g1_sim/sensors.py": "1294e71382c360805b47f10828590c38dfa39f1088b362ebd541a05600da1134",
+    "g1_sim/server.py": "f81e00d51d08864f1adb9879bd1346664c92d5c055f05c25eb1d2c74ed6c9d7a",
+    "g1_sim/simulation.py": "8d20578694f801d5ceb3091408b7611dbeac7947805b5b82da941173e484a515",
+    "g1_sim/slow_sensors.py": "9d0d9915e9af532a75cc2ff66bc121d6247070852630e16fc9170e5e443c7658",
+    "g1_sim/unitree_crc.py": "578de87ed0a21563900265dd831a362117a2569ef51251dd429ba150ae0630d5"
+  }
+}

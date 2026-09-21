@@ -148,7 +148,7 @@ func (f *fakeVideoStream) Send(frame *agentpb.VideoFrame) error {
 func newIPTestService(t *testing.T) *VideoService {
 	t.Helper()
 	dir := t.TempDir()
-	s := NewVideoService(context.Background(), zap.NewNop())
+	s := NewVideoService(context.Background(), zap.NewNop(), nil)
 	t.Cleanup(s.Shutdown)
 	s.registry = ipcam.NewRegistry(filepath.Join(dir, "cameras.json"))
 	if err := s.registry.Load(); err != nil {
@@ -508,7 +508,7 @@ func TestRefreshCamerasSurvivesProbeFailure(t *testing.T) {
 // A service with no network camera state must behave exactly as before, since
 // that is every device that has never seen one.
 func TestListWithoutRegistryIsUnaffected(t *testing.T) {
-	s := NewVideoService(context.Background(), zap.NewNop())
+	s := NewVideoService(context.Background(), zap.NewNop(), nil)
 	t.Cleanup(s.Shutdown)
 	s.registry = nil
 	s.credentials = nil

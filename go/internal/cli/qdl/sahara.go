@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// Sahara command ids. Only the subset needed to hand the device its Firehose
-// programmer is implemented; memory-debug and command mode are not.
+// Sahara command ids for image transfer; command mode lives in chipid.go.
 const (
 	saharaHello      uint32 = 0x01
 	saharaHelloResp  uint32 = 0x02

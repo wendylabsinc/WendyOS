@@ -1,0 +1,118 @@
+{
+  "kind": "live_producer_timing",
+  "elapsed": 30.030506429999832,
+  "mode": "standing",
+  "error": null,
+  "rates": {
+    "physics_steps": 499.9915680742679,
+    "policy_updates": 50.015806543293394,
+    "frames": 14.585168619149472,
+    "camera_frames": 14.585168619149472,
+    "cpu_seconds": 1.5644537367197595
+  },
+  "ros": {
+    "samples": {
+      "imu": 200.02992670144036,
+      "joints": 50.015806543293394,
+      "odom": 50.015806543293394,
+      "scan": 9.989841519965392,
+      "cloud": 9.989841519965392,
+      "camera": 14.585168619149472
+    },
+    "native_samples": {
+      "lowstate": 500.0248675460011,
+      "lf_lowstate": 50.015806543293394,
+      "sportmodestate": 50.015806543293394,
+      "lf_sportmodestate": 50.015806543293394
+    }
+  },
+  "snapshot_queue": {
+    "captured": 17385,
+    "consumed": 17371,
+    "overflow": 9,
+    "expired": 5,
+    "pending": 0,
+    "capacity": 10,
+    "max_age_ms": 20.0
+  },
+  "snapshot_queue_delta": {
+    "captured": 15015,
+    "consumed": 15016,
+    "overflow": 0,
+    "expired": 0
+  },
+  "targets": {
+    "physics": true,
+    "policy": true,
+    "imu": true,
+    "joints": true,
+    "lidar": true,
+    "cloud": true,
+    "lowstate": true,
+    "observer": true,
+    "camera": true
+  },
+  "rate_targets_met": true,
+  "timing_ms": {
+    "PhysicsSampler.state": {
+      "calls": 17372,
+      "mean": 0.027585286092562746,
+      "p95": 0.049006,
+      "p99": 0.09629825000000011
+    },
+    "PhysicsSampler.feet": {
+      "calls": 17372,
+      "mean": 0.05122870291273314,
+      "p95": 0.163561,
+      "p99": 0.22707039000000026
+    },
+    "NativeState.publish": {
+      "calls": 17372,
+      "mean": 0.2387841143218973,
+      "p95": 0.483766,
+      "p99": 0.5937494799999999
+    },
+    "RobotObservations.publish_imu": {
+      "calls": 6951,
+      "mean": 0.046520275787656454,
+      "p95": 0.065966,
+      "p99": 0.093032
+    },
+    "RobotObservations.publish_motion": {
+      "calls": 1738,
+      "mean": 0.15780717836593786,
+      "p95": 0.18657474999999993,
+      "p99": 0.2514650499999991
+    },
+    "RobotObservations.sample": {
+      "calls": 14096,
+      "mean": 0.4803423758513053,
+      "p95": 1.2840497499999999,
+      "p99": 1.8691150499999987
+    },
+    "SlowObservations.publish_camera": {
+      "calls": 2084,
+      "mean": 0.22954736084452976,
+      "p95": 1.1820105499999989,
+      "p99": 2.0309400399999977
+    },
+    "PhysicsSampler.capture": {
+      "calls": 348,
+      "mean": 0.08867595977011493,
+      "p95": 0.3227843499999998,
+      "p99": 0.6123406099999992
+    },
+    "Lidar.sample": {
+      "calls": 348,
+      "mean": 0.7054218333333333,
+      "p95": 1.8847865999999995,
+      "p99": 2.3592334099999968
+    },
+    "SlowObservations.sample": {
+      "calls": 2085,
+      "mean": 0.4245423160671463,
+      "p95": 1.9663109999999995,
+      "p99": 3.502144959999993
+    }
+  }
+}

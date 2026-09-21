@@ -72,6 +72,7 @@ type cloudAssetVersionMsg struct {
 }
 
 type cloudDiscoverModel struct {
+	purpose        devicePickerPurpose
 	ctx            context.Context
 	auth           *config.AuthConfig
 	brokerURL      string
@@ -91,6 +92,7 @@ type cloudDiscoverModel struct {
 	windowHeight   int
 	err            error
 	hasResults     bool
+	defaultDevice  string
 }
 
 func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerURL string, all, pickerMode bool, initialAssets []*cloudpb.Asset) cloudDiscoverModel {
@@ -108,6 +110,9 @@ func newCloudDiscoverModel(ctx context.Context, auth *config.AuthConfig, brokerU
 	if initialAssets != nil {
 		m.assets = initialAssets
 		m.hasResults = true
+	}
+	if cfg, err := config.Load(); err == nil {
+		m.defaultDevice = cfg.DefaultDevice
 	}
 	m.refreshTable()
 	return m
@@ -152,6 +157,7 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
+		msg.Height = max(1, msg.Height-strings.Count(m.purpose.header(msg.Width), "\n"))
 		m.windowHeight = msg.Height
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -190,6 +196,34 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "d":
+			cursor := m.table.Cursor()
+			if cursor < 0 || cursor >= len(m.assets) {
+				return m, nil
+			}
+			key, err := cloudDeviceDefault(m.auth, m.assets[cursor])
+			if err == nil {
+				err = saveDefaultDevice(key)
+			}
+			m.flashIsError = err != nil
+			if err != nil {
+				m.flashMessage = err.Error()
+			} else {
+				m.defaultDevice = key
+				m.flashMessage = fmt.Sprintf("Default device set to %s.", m.assets[cursor].GetName())
+				m.refreshTable()
+			}
+			return m, clearFlashAfter(3 * time.Second)
+		case "x":
+			message, err := unsetPickerDefault()
+			m.flashIsError = err != nil
+			if err != nil {
+				m.flashMessage = err.Error()
+			} else {
+				m.defaultDevice, m.flashMessage = "", message
+				m.refreshTable()
+			}
+			return m, clearFlashAfter(3 * time.Second)
 		case "q", "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
@@ -271,10 +305,11 @@ func (m cloudDiscoverModel) View() string {
 	var sb strings.Builder
 
 	if m.pickerMode {
+		sb.WriteString(m.purpose.header(m.windowWidth))
 		sb.WriteString(m.viewLine(scanStyle.Render("⟳ Fetching cloud devices...")) + "\n")
-		hint := "  ↑/↓ navigate, enter select, u update, q quit"
+		hint := "  ↑/↓ navigate, enter select, d default, x clear default, u update, q quit"
 		if m.table.CanScroll() {
-			hint = "  ↑/↓ navigate, ←/→ scroll, enter select, u update, q quit"
+			hint = "  ↑/↓ navigate, ←/→ scroll, enter select, d default, x clear default, u update, q quit"
 		}
 		sb.WriteString(m.viewLine(dimStyle.Render(hint)) + "\n")
 	} else {
@@ -282,9 +317,9 @@ func (m cloudDiscoverModel) View() string {
 		if m.updatingName != "" {
 			sb.WriteString(m.viewLine(dimStyle.Render("  working on "+m.updatingName+"... (q quit)")) + "\n")
 		} else {
-			hint := "  ↑/↓ navigate, enter copy, a copy all, u update, q quit"
+			hint := "  ↑/↓ navigate, enter copy, a copy all, d default, x clear default, u update, q quit"
 			if m.table.CanScroll() {
-				hint = "  ↑/↓ navigate, ←/→ scroll, enter copy, a copy all, u update, q quit"
+				hint = "  ↑/↓ navigate, ←/→ scroll, enter copy, a copy all, d default, x clear default, u update, q quit"
 			}
 			sb.WriteString(m.viewLine(dimStyle.Render(hint)) + "\n")
 		}
@@ -297,8 +332,12 @@ func (m cloudDiscoverModel) View() string {
 	}
 	if len(m.assets) > 0 {
 		sb.WriteString(m.table.View() + "\n")
-		// Cloud rows carry no provisioned/default markers, so the legend exists
-		// only to explain a warning glyph that is actually present.
+		for _, asset := range m.assets {
+			if key, err := cloudDeviceDefault(m.auth, asset); err == nil && key == m.defaultDevice {
+				sb.WriteString(m.viewLine(dimStyle.Render("  ✦ default device")) + "\n")
+				break
+			}
+		}
 		if legend := tui.DeviceWarningLegend(cloudLegendItems(m.assets, m.versions)); legend != "" {
 			sb.WriteString(m.viewLine(dimStyle.Render("  "+legend)) + "\n")
 		}
@@ -329,6 +368,11 @@ func (m cloudDiscoverModel) View() string {
 
 func (m *cloudDiscoverModel) refreshTable() {
 	rows := cloudDiscoverTableRows(m.assets, m.versions)
+	for i, asset := range m.assets {
+		if key, err := cloudDeviceDefault(m.auth, asset); err == nil && key == m.defaultDevice {
+			rows[i][0] = "✦"
+		}
+	}
 	m.table.SetColumns(discoverTableColumns(rows))
 	m.table.SetRows(rows)
 	if len(rows) > 0 && m.table.Cursor() < 0 {

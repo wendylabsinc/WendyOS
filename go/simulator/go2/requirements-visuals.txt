@@ -1,0 +1,3 @@
+# Build-time mesh simplification only; not needed by the physics runtime.
+numpy==1.26.4
+fast-simplification==0.1.12

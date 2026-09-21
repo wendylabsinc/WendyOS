@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "algorithm": {
+    "name": "fast-simplification quadric-error edge collapse",
+    "version": "0.1.12",
+    "numpy_version": "1.26.4",
+    "target_reduction": 0.7,
+    "aggressiveness": 7,
+    "weld": "exact positions within each original material mesh",
+    "normals": "area-weighted face-corner normals with 60-degree crease threshold",
+    "normal_decimal_places": 10,
+    "uv": "discarded; pinned MJCF uses solid materials",
+    "max_bounds_change_m": 0.002,
+    "bounds_failure": "retain the complete original mesh and normals"
+  },
+  "generator_sha256": "05bd5cec672c0a960f7fc13892ec0cce0ac19abbf3129942524b08df537b2f9b",
+  "input_asset_lock_sha256": "2cb77d9ff236617cf414816617d676d23ec9e6c623cc599d333e45f4432c9d16",
+  "physics_model_modified": false,
+  "input_render_triangles": 398432,
+  "output_render_triangles": 120417,
+  "files": [
+    {
+      "path": "base_0.obj",
+      "size": 287538,
+      "sha256": "ce7a2db397df2ee213f0858c838bbacdb1ce17b119bdff227b905c93acacc942",
+      "input": {
+        "path": "robot/assets/base_0.obj",
+        "size": 1330465,
+        "sha256": "8cdc53719002a5ee737d867904e534a6d6fa930b616bdcc1b3131e577d4e46c0"
+      },
+      "input_vertices": 8738,
+      "welded_vertices": 5016,
+      "input_triangles": 10130,
+      "clean_input_triangles": 10027,
+      "vertices": 1506,
+      "triangles": 3008,
+      "render_instances": 1,
+      "mjcf_materials": [
+        "black"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0006853681881767992,
+      "bounds_max_change_m": 0.0006853681881767992
+    },
+    {
+      "path": "base_1.obj",
+      "size": 135835,
+      "sha256": "3b9b2607cf9caa239a61da8641c4aeffc28e96fa6adff1c0ee8c44729506414c",
+      "input": {
+        "path": "robot/assets/base_1.obj",
+        "size": 811791,
+        "sha256": "39d2f4724ff64dd5a0640c308fd98902a2946660a8d033ec8dbf368fd5af0dd6"
+      },
+      "input_vertices": 6389,
+      "welded_vertices": 1950,
+      "input_triangles": 3962,
+      "clean_input_triangles": 3932,
+      "vertices": 586,
+      "triangles": 1178,
+      "render_instances": 1,
+      "mjcf_materials": [
+        "black"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.00029820924346771194,
+      "bounds_max_change_m": 0.00029820924346771194
+    },
+    {
+      "path": "base_2.obj",
+      "size": 294090,
+      "sha256": "29cae463f95d678e4ede863c36c9b19b0d356b8340412add10670d70bdcc3095",
+      "input": {
+        "path": "robot/assets/base_2.obj",
+        "size": 294090,
+        "sha256": "29cae463f95d678e4ede863c36c9b19b0d356b8340412add10670d70bdcc3095"
+      },
+      "input_vertices": 2120,
+      "welded_vertices": 1412,
+      "input_triangles": 2005,
+      "clean_input_triangles": 2005,
+      "vertices": 2120,
+      "triangles": 2005,
+      "render_instances": 1,
+      "mjcf_materials": [
+        "black"
+      ],
+      "retained_original": true,
+      "attempted_bounds_change_m": 0.04294345703125,
+      "bounds_max_change_m": 0.0
+    },
+    {
+      "path": "base_3.obj",
+      "size": 87478,
+      "sha256": "7707157799e303b831840bba3ec70a7b461a21723d859470d828955c5e366272",
+      "input": {
+        "path": "robot/assets/base_3.obj",
+        "size": 379093,
+        "sha256": "f51ba43bf300e68957a0c1aa83eaf3e4926f4ac7e64a0d6c33ae5d21fcbcf5f6"
+      },
+      "input_vertices": 2870,
+      "welded_vertices": 2161,
+      "input_triangles": 2320,
+      "clean_input_triangles": 2320,
+      "vertices": 723,
+      "triangles": 696,
+      "render_instances": 1,
+      "mjcf_materials": [
+        "white"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.00012200000000000405,
+      "bounds_max_change_m": 0.00012200000000000405
+    },
+    {
+      "path": "base_4.obj",
+      "size": 1614538,
+      "sha256": "087fe401d234461bf23b0b7e223827e0a8eb290f4235cc9255340cc109c34347",
+      "input": {
+        "path": "robot/assets/base_4.obj",
+        "size": 7776234,
+        "sha256": "49ddec0129546e5dd2075d5beacf7f207baa2860aeff7626818e64d2efbf3821"
+      },
+      "input_vertices": 46564,
+      "welded_vertices": 30997,
+      "input_triangles": 59511,
+      "clean_input_triangles": 59460,
+      "vertices": 9188,
+      "triangles": 17838,
+      "render_instances": 1,
+      "mjcf_materials": [
+        "gray"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.00016765374047100767,
+      "bounds_max_change_m": 0.00016765374047100767
+    },
+    {
+      "path": "hip_0.obj",
+      "size": 638588,
+      "sha256": "486c8279c75c3679d5fad7f1bbf5227b7f1db3e462a2ece7f10cec7418b8101a",
+      "input": {
+        "path": "robot/assets/hip_0.obj",
+        "size": 2863864,
+        "sha256": "cc29932ab4d251ce3f72389ec4c1f757e44eee138b87e772b648c2bc76b506cd"
+      },
+      "input_vertices": 19634,
+      "welded_vertices": 9008,
+      "input_triangles": 18056,
+      "clean_input_triangles": 18010,
+      "vertices": 2699,
+      "triangles": 5402,
+      "render_instances": 4,
+      "mjcf_materials": [
+        "metal"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0005413297424992185,
+      "bounds_max_change_m": 0.0005413297424992185
+    },
+    {
+      "path": "hip_1.obj",
+      "size": 540972,
+      "sha256": "7f9f0d51da7516a4558e1741637a13f0d22d5d3cb02f132f9bda09e4a8c6d2ab",
+      "input": {
+        "path": "robot/assets/hip_1.obj",
+        "size": 2767918,
+        "sha256": "3fd5bd9b2ef6abe622c0739d3c67eaa1679b19b47132951972c4892a779ea7cf"
+      },
+      "input_vertices": 18329,
+      "welded_vertices": 9411,
+      "input_triangles": 18972,
+      "clean_input_triangles": 18772,
+      "vertices": 2828,
+      "triangles": 5630,
+      "render_instances": 4,
+      "mjcf_materials": [
+        "gray"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0014535844581020432,
+      "bounds_max_change_m": 0.0014535844581020432
+    },
+    {
+      "path": "thigh_0.obj",
+      "size": 597736,
+      "sha256": "a18c374d88a7fb5e81cc8d4d4be78fc1c7547dd7c72aab1e38e0b8d294a0250f",
+      "input": {
+        "path": "robot/assets/thigh_0.obj",
+        "size": 2841868,
+        "sha256": "bb3edfe6a7b04f4f4dff1ce7b05d426ddce941e276cc6372fb542055893c71ec"
+      },
+      "input_vertices": 19093,
+      "welded_vertices": 9223,
+      "input_triangles": 18425,
+      "clean_input_triangles": 18354,
+      "vertices": 2759,
+      "triangles": 5506,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "metal"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0010756958536270733,
+      "bounds_max_change_m": 0.0010756958536270733
+    },
+    {
+      "path": "thigh_1.obj",
+      "size": 357662,
+      "sha256": "162bca49459087b523434afa71aa217cc509d81e0532a758cd8b939be2497b04",
+      "input": {
+        "path": "robot/assets/thigh_1.obj",
+        "size": 1491320,
+        "sha256": "3a631822f9f7d2114b1b79dcdff5abf95103630abb7d91d1f3b8b18117132ed2"
+      },
+      "input_vertices": 9591,
+      "welded_vertices": 5859,
+      "input_triangles": 11708,
+      "clean_input_triangles": 11706,
+      "vertices": 1761,
+      "triangles": 3510,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "gray"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0006701851690920149,
+      "bounds_max_change_m": 0.0006701851690920149
+    },
+    {
+      "path": "thigh_mirror_0.obj",
+      "size": 588330,
+      "sha256": "c2672f260a74dd51493d37fe7e9907e8d58cad4009f7398359e4de040a335478",
+      "input": {
+        "path": "robot/assets/thigh_mirror_0.obj",
+        "size": 2817674,
+        "sha256": "07abaedce761f1dd48647384ac14ba1959276bc78d5a2a62051e8f1c6093933b"
+      },
+      "input_vertices": 19051,
+      "welded_vertices": 9221,
+      "input_triangles": 18417,
+      "clean_input_triangles": 18350,
+      "vertices": 2759,
+      "triangles": 5505,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "metal"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0005308658799036067,
+      "bounds_max_change_m": 0.0005308658799036067
+    },
+    {
+      "path": "thigh_mirror_1.obj",
+      "size": 347556,
+      "sha256": "f068470b0872b9a7ecdcdd0a5be259dec9f762c7d690c35dd7987c800df1ad8f",
+      "input": {
+        "path": "robot/assets/thigh_mirror_1.obj",
+        "size": 1482261,
+        "sha256": "db984a3e983eabbc9b38183427cca9ab0bb3bdb049f9eab030e06edda36579d6"
+      },
+      "input_vertices": 9580,
+      "welded_vertices": 5859,
+      "input_triangles": 11708,
+      "clean_input_triangles": 11706,
+      "vertices": 1761,
+      "triangles": 3510,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "gray"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0005937968330409771,
+      "bounds_max_change_m": 0.0005937968330409771
+    },
+    {
+      "path": "calf_0.obj",
+      "size": 196572,
+      "sha256": "2262a89ed9ccfdcbab5a9f3ebc9dd49deb37b34c4d91ab4f30fa11467be946b9",
+      "input": {
+        "path": "robot/assets/calf_0.obj",
+        "size": 877174,
+        "sha256": "4a818cd563c5b7e2a271504442d05fd777d38cbaa028d4a10ad29c9f87bb355e"
+      },
+      "input_vertices": 5878,
+      "welded_vertices": 3248,
+      "input_triangles": 6512,
+      "clean_input_triangles": 6487,
+      "vertices": 977,
+      "triangles": 1946,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "gray"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0017143643423676858,
+      "bounds_max_change_m": 0.0017143643423676858
+    },
+    {
+      "path": "calf_1.obj",
+      "size": 73515,
+      "sha256": "adc45273f0e8753d574b0d2b44588ef908482e602c99f7747067ba0504cbc8b9",
+      "input": {
+        "path": "robot/assets/calf_1.obj",
+        "size": 326865,
+        "sha256": "51950c3a153ae3208592df86ea11c9d6756f8f645ebca5caf6910c61aeb03817"
+      },
+      "input_vertices": 2396,
+      "welded_vertices": 1038,
+      "input_triangles": 2053,
+      "clean_input_triangles": 2034,
+      "vertices": 316,
+      "triangles": 610,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "black"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0005148295780060541,
+      "bounds_max_change_m": 0.0005148295780060541
+    },
+    {
+      "path": "calf_mirror_0.obj",
+      "size": 195137,
+      "sha256": "f5059ccbfac53d77ed1c7d1232f49071108d42364ab54d1340807f15eb271020",
+      "input": {
+        "path": "robot/assets/calf_mirror_0.obj",
+        "size": 876538,
+        "sha256": "6dc0406207a1c08a5953fd5962aca1a270fd06593d30d100205e05c1b32d4af2"
+      },
+      "input_vertices": 5877,
+      "welded_vertices": 3248,
+      "input_triangles": 6512,
+      "clean_input_triangles": 6487,
+      "vertices": 977,
+      "triangles": 1946,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "gray"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.000945333453196251,
+      "bounds_max_change_m": 0.000945333453196251
+    },
+    {
+      "path": "calf_mirror_1.obj",
+      "size": 73840,
+      "sha256": "d8a65eb4e343b0102577ac6ab4054d72a40aa2ef96a9584020b2923fcba000a9",
+      "input": {
+        "path": "robot/assets/calf_mirror_1.obj",
+        "size": 327261,
+        "sha256": "f84f5af90b914633165beb3a5493ee499169144c5797dcf04c6eb5842f74b31a"
+      },
+      "input_vertices": 2399,
+      "welded_vertices": 1037,
+      "input_triangles": 2053,
+      "clean_input_triangles": 2033,
+      "vertices": 316,
+      "triangles": 609,
+      "render_instances": 2,
+      "mjcf_materials": [
+        "black"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.0003441237766956609,
+      "bounds_max_change_m": 0.0003441237766956609
+    },
+    {
+      "path": "foot.obj",
+      "size": 149958,
+      "sha256": "a946c02c0ad6ca374d2d6e2f7f8ef0fa63630cd7d07fe85c383ddd83d0afb8f5",
+      "input": {
+        "path": "robot/assets/foot.obj",
+        "size": 1144729,
+        "sha256": "df9e78a7c0110d02557439010f2a5f11f0ec4fd907b32704145dbd6aa7affc0b"
+      },
+      "input_vertices": 13190,
+      "welded_vertices": 2205,
+      "input_triangles": 4404,
+      "clean_input_triangles": 4404,
+      "vertices": 662,
+      "triangles": 1320,
+      "render_instances": 4,
+      "mjcf_materials": [
+        "black"
+      ],
+      "retained_original": false,
+      "attempted_bounds_change_m": 0.00016816135637829147,
+      "bounds_max_change_m": 0.00016816135637829147
+    }
+  ],
+  "generator_platform": "Linux/aarch64"
+}

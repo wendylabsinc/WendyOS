@@ -7,17 +7,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
-func TestSensorSourceItemsFiltersToCapable(t *testing.T) {
-	devs := []models.DiscoveredDevice{
-		{DisplayName: "hub", Sensorlink: true, AssetID: 5, OrgID: 3},
-		{DisplayName: "jetson", Sensorlink: false, AssetID: 6, OrgID: 3},
-	}
-	items := sensorSourceItems(devs)
-	if len(items) != 1 || items[0].Name != "hub" {
-		t.Fatalf("expected only the sensorlink device, got %+v", items)
-	}
-}
-
 func TestTransportForDevice(t *testing.T) {
 	agentDev := models.DiscoveredDevice{Sensorlink: true, IsMTLS: true, Caps: []string{"sensors"}, AssetID: 5}
 	if transportForDevice(agentDev) != "grpc" {

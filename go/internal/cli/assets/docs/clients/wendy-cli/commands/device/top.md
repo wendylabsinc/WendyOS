@@ -1,6 +1,6 @@
 # `wendy device top`
 
-Live CPU, memory, GPU, and temperature telemetry for the device and its containers — an `htop`-style monitor for a WendyOS device.
+Live CPU, memory, disk, GPU, and temperature telemetry for the device and its containers — an `htop`-style monitor for a WendyOS device.
 
 ## Usage
 
@@ -27,6 +27,10 @@ Only transport-level failures raise the banner. An error the agent itself return
 
 Apps are grouped the same way as [`wendy device dashboard`](dashboard.md): multi-service apps show a group header with one subrow per service. Running apps (`●`), stopped apps (`○`), and crash-looping apps (`↻`) have distinct row styling and are counted separately. Resource columns show unavailable values for stopped and crash-looping rows instead of presenting them as active zero-usage workloads. A side panel shows the listening ports of the currently selected running app.
 
+Press `Enter` to open the selected app's recent and live logs. Use the arrow keys or Page Up/Page Down to scroll, `End` to resume following, and `Esc` to return to the monitor. Press `s` to start the selected app.
+
+The disk meter shows the filesystem holding container storage, which is `/data` on WendyOS. It refreshes every ten seconds. Press `p` to clear unused container layer and snapshot caches. Current images and active apps remain intact; containerd reclaims unreachable data in the background.
+
 Press `x` to stop the selected app. For a multi-service app, this stops the whole app even when the cursor is on one of its service rows. Stop uses Wendy's normal graceful shutdown behavior and may escalate to a force kill when the app does not exit within its grace period.
 
 > **Note:** This command requires a recent device agent. Against an agent that's too old to report resource stats, the command reports that the agent doesn't support resource stats and suggests updating it with [`wendy device update`](update.md).
@@ -38,7 +42,11 @@ Press `x` to stop the selected app. For a multi-service app, this stops the whol
 | `↑` / `k`, `↓` / `j` | Move the selection up / down |
 | `c` | Sort apps by CPU usage (descending) |
 | `m` | Sort apps by memory usage (descending) |
+| `Enter` | Open recent and live logs for the selected app |
+| `Esc` | Return from logs to the monitor |
+| `s` | Start the selected app and all of its services |
 | `x` | Stop the selected app and all of its services |
+| `p` | Clear unused container caches |
 | `q` / `Ctrl+C` | Quit |
 
 ## Flags
@@ -90,6 +98,7 @@ Plain snapshots include a `STATE` column. JSON snapshots have this shape:
 }
 ```
 
+- `host.containerStorage` reports `mountpoint`, `usedBytes`, and `totalBytes` for the container filesystem, and is omitted when unavailable. Plain snapshots also show this disk usage.
 - `host.gpus` is omitted on devices that report no GPU.
 - `host.thermalZones` is omitted when the agent has no readable temperature source.
 - `host.maximumTemperature` is the hottest valid thermal-zone or GPU reading and is omitted when no temperature is available.
