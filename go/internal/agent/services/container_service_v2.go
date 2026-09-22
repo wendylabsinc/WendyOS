@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"math"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -131,7 +133,20 @@ func (s *ContainerServiceV2) PruneCache(ctx context.Context, req *agentpbv2.Prun
 	if !ok {
 		return nil, status.Error(codes.Unimplemented, "container cache pruning is not supported")
 	}
-	result, err := pruner.PruneCache(ctx, req.GetDryRun())
+	opts := CachePruneOptions{DryRun: req.GetDryRun()}
+	if req.MinAgeSeconds != nil {
+		// time.Duration(*req.MinAgeSeconds) * time.Second overflows (and can
+		// go negative) above this bound; pruneCutoff would otherwise map
+		// that wrapped-negative duration back to the default grace period,
+		// silently discarding an oversized but intended --min-age. Fail
+		// closed instead.
+		if *req.MinAgeSeconds > uint64(math.MaxInt64/int64(time.Second)) {
+			return nil, status.Error(codes.InvalidArgument, "min_age_seconds too large")
+		}
+		age := time.Duration(*req.MinAgeSeconds) * time.Second
+		opts.MinAge = &age
+	}
+	result, err := pruner.PruneCache(ctx, opts)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to prune container cache: %v", err)
 	}
@@ -141,6 +156,7 @@ func (s *ContainerServiceV2) PruneCache(ctx context.Context, req *agentpbv2.Prun
 		Snapshots:         result.Snapshots,
 		SnapshotBytes:     result.SnapshotBytes,
 		MinimumAgeSeconds: result.MinimumAgeSeconds,
+		ReclaimedBytes:    result.ReclaimedBytes,
 	}, nil
 }
 

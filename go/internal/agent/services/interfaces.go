@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/ros2inspection"
@@ -108,6 +109,15 @@ type ImagePreparer interface {
 	PrepareImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader, imageConfig []byte) error
 }
 
+// CachePruneOptions configures a ContainerdCachePruner.PruneCache call.
+type CachePruneOptions struct {
+	DryRun bool
+	// MinAge overrides the agent's default grace period before a cache pin
+	// is released. Nil selects the server default; a duration of 0 releases
+	// every pin regardless of age.
+	MinAge *time.Duration
+}
+
 // CachePruneResult describes Wendy-managed container cache pins released by a
 // ContainerdCachePruner. The byte counts are the aggregate sizes of the
 // affected objects, not a promise that all of those bytes are unreachable:
@@ -118,13 +128,18 @@ type CachePruneResult struct {
 	Snapshots         uint64
 	SnapshotBytes     uint64
 	MinimumAgeSeconds uint64
+	// ReclaimedBytes is the free-space delta measured on the container-storage
+	// filesystem across the synchronous containerd GC pass PruneCache forces
+	// after releasing pins. Nil when not measured (dry run, or the agent could
+	// not force GC or stat the filesystem).
+	ReclaimedBytes *uint64
 }
 
 // ContainerdCachePruner is an optional capability implemented by the real
 // containerd client. It remains separate from ContainerdClient so existing
 // service fakes do not need to implement maintenance operations.
 type ContainerdCachePruner interface {
-	PruneCache(ctx context.Context, dryRun bool) (CachePruneResult, error)
+	PruneCache(ctx context.Context, opts CachePruneOptions) (CachePruneResult, error)
 }
 
 // ContainerExecer is the optional capability to run a process inside a running
