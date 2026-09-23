@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -32,13 +33,15 @@ func newTestDriverService(t *testing.T, payload []byte) *DriverService {
 	t.Helper()
 	tmp := t.TempDir()
 	return &DriverService{
-		logger:          zap.NewNop(),
-		verifier:        sigverify.DefaultVerifier,
-		enabledDir:      filepath.Join(tmp, "enabled"),
-		modulesDir:      filepath.Join(tmp, "modules-load.d"),
-		bakedModulesDir: filepath.Join(tmp, "baked-modules-load.d"),
-		applyScript:     testExecutable(t, "true"),
-		unameR:          func() string { return "6.6.0-test" },
+		logger:            zap.NewNop(),
+		verifier:          sigverify.DefaultVerifier,
+		enabledDir:        filepath.Join(tmp, "enabled"),
+		modulesDir:        filepath.Join(tmp, "modules-load.d"),
+		bakedModulesDir:   filepath.Join(tmp, "baked-modules-load.d"),
+		privatePayloadDir: filepath.Join(tmp, "private-payloads"),
+		activeStateDir:    filepath.Join(tmp, "active-state"),
+		applyScript:       testExecutable(t, "true"),
+		unameR:            func() string { return "6.6.0-test" },
 		// Nothing resident by default, so a test never inherits the host's modules.
 		loadedModules: func() []string { return nil },
 		httpGet: func(_ context.Context, _ string) (io.ReadCloser, error) {
@@ -1181,5 +1184,98 @@ func TestFinalize_StageOnlyFromURLStillNeedsAKernel(t *testing.T) {
 	}, staged, digest)
 	if err == nil || !strings.Contains(err.Error(), "without a kernel version") {
 		t.Fatalf("finalize = %v, want a refusal for the missing kernel", err)
+	}
+}
+
+func TestPrivatePayloadStatusAndOverrides(t *testing.T) {
+	svc := newTestDriverService(t, nil)
+	svc.loadedModules = func() []string { return []string{"wendyos_hello", "override_mod"} }
+	name := "wendyos-hello"
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile("testdata/install-private.raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(svc.rawPath(testKernel, name), string(raw))
+	write(filepath.Join(svc.privatePayloadDir, name, "modules-load.conf"), "wendyos_hello\n")
+	check := func(wantLoaded bool, wantModule string) {
+		t.Helper()
+		resp, err := svc.ListDrivers(context.Background(), &agentpbv2.ListDriversRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Installed) != 1 {
+			t.Fatalf("installed = %v", resp.Installed)
+		}
+		d := resp.Installed[0]
+		if d.Loaded != wantLoaded || strings.Join(d.ModulesLoad, ",") != wantModule {
+			t.Fatalf("driver = %+v", d)
+		}
+	}
+	check(false, "wendyos_hello") // An inert/colliding package cannot borrow another driver's modules.
+	write(filepath.Join(svc.activeStateDir, name, "files"), "/usr/lib/modules/test/updates/wendyos/wendyos-hello/wendyos_hello.ko\n")
+	check(true, "wendyos_hello")
+	write(svc.confPath(testKernel, name), "override_mod\n")
+	check(true, "override_mod")
+	write(svc.confPath(testKernel, name), "")
+	check(false, "") // An explicit empty override disables autoload, as in the runtime.
+}
+
+func TestFinalizeReplacementReceipt(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		t.Run(fmt.Sprint("fresh=", fresh), func(t *testing.T) {
+			payload, err := os.ReadFile("testdata/install-private.raw")
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc := newTestDriverService(t, payload)
+			svc.loadedModules = func() []string { return []string{"wendyos_hello"} }
+			state := filepath.Join(svc.activeStateDir, "wendyos-hello")
+			if err := os.MkdirAll(state, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(state, "generation"), []byte("old\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(state, "replaced-modules"), []byte("wendyos-hello\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if fresh {
+				script := filepath.Join(t.TempDir(), "apply.sh")
+				if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'new\\n' > '"+filepath.Join(state, "generation")+"'\n"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				svc.applyScript = script
+			}
+			digest, staged := stageDriverRaw(t, svc, payload)
+			reboot, err := svc.finalize(context.Background(), DriverInstallSpec{Name: "wendyos-hello"}, staged, digest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reboot == fresh {
+				t.Fatalf("reboot=%v with fresh receipt=%v", reboot, fresh)
+			}
+		})
+	}
+}
+
+func TestParseMergedSysextNames(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{`[{"hierarchy":"/opt","extensions":"none"},{"hierarchy":"/usr","extensions":["intel-be202","another"]}]`, "intel-be202,another"},
+		{`[{"hierarchy":"/usr","extensions":"none"}]`, ""},
+		{`[{"hierarchy":"/usr","extensions":null}]`, ""},
+		{`not JSON`, ""},
+	} {
+		if got := strings.Join(parseMergedSysextNames([]byte(tc.input)), ","); got != tc.want {
+			t.Errorf("parse %q = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }

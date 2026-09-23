@@ -117,3 +117,10 @@ func TestImageModules(t *testing.T) {
 		t.Errorf("missing image = %v, want nil", got)
 	}
 }
+
+func TestImageModulesPrivatePayload(t *testing.T) {
+	got := imageModules(filepath.Join("testdata", "install-private.raw"), "wendyos-hello")
+	if len(got) != 1 || got[0] != "wendyos_hello" {
+		t.Fatalf("private modules = %v", got)
+	}
+}
