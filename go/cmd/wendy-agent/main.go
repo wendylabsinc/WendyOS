@@ -864,12 +864,19 @@ func main() {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := localmesh.RunConfiguredTCP(ctx, configPath, localmesh.TCPIdentity{
-					Org: orgID, Asset: assetID, Name: name, AgentPort: uint16(mtlsPortNum),
-					Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
-				})
-				if err != nil && !errors.Is(err, context.Canceled) {
-					logger.Error("configured local mesh stopped", zap.Error(err))
+				for ctx.Err() == nil {
+					err := localmesh.RunConfiguredTCP(ctx, configPath, localmesh.TCPIdentity{
+						Org: orgID, Asset: assetID, Name: name, AgentPort: uint16(mtlsPortNum),
+						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
+					})
+					if err != nil && !errors.Is(err, context.Canceled) {
+						logger.Error("configured local mesh stopped", zap.Error(err))
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(5 * time.Second):
+					}
 				}
 			}()
 		})
