@@ -47,6 +47,8 @@ expect it to take up to ~8 s to return.
 wendy device bluetooth list [--json]
 ```
 
+For a connected Bluetooth LE peripheral, the **Link timeout** column shows the link's supervision timeout: how long a silent link lasts before it is dropped. The agent holds BLE HID devices such as gamepads at 0.5 s; `(device)` marks a device whose own, longer value is in force. See [Bluetooth](/docs/hardware/bluetooth#game-controllers-and-other-hid-devices). With `--json` the values are `supervision_timeout_ms` and `requested_supervision_timeout_ms`.
+
 ### `wendy device bluetooth connect`
 
 Connects to a peripheral by address.
