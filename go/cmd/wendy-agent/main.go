@@ -44,6 +44,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshsession"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	agentnet "github.com/wendylabsinc/wendy/go/internal/agent/network"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
@@ -201,6 +203,7 @@ func main() {
 	// scope down at the mesh dialer / friendly-name resolver wiring, where the
 	// provisioning identity needed to build the roster becomes available.
 	var meshDNS *mesh.DNSServer
+	meshIngress := meshingress.NewRegistry()
 	containerdAddr := os.Getenv("WENDY_CONTAINERD_ADDR")
 	if containerdAddr == "" {
 		containerdAddr = agentcontainerd.DefaultAddress
@@ -219,6 +222,7 @@ func main() {
 	if ctrdErr == nil {
 		containerdClient = ctrdClient
 		defer ctrdClient.Close()
+		ctrdClient.SetMeshIngressRegistry(meshIngress)
 
 		// Inject the shared mesh DNS server so applyMeshEgress/teardownMeshEgress
 		// can resolve peer-device names for containers on the mesh network mode.
@@ -678,6 +682,7 @@ func main() {
 		// mTLS interceptor's grace behavior: MeshService skips the
 		// tenant-equality check rather than reject every caller.
 		meshSvc := services.NewMeshService(logger, configPath, deviceScope(provisioningSvc))
+		meshSvc.SetIngressAuthorizer(meshIngress)
 		buildSvc := services.NewBuildService(logger, services.BuildServiceOptions{
 			ConfigPath:   configPath,
 			Chunks:       buildChunkSource,
@@ -849,6 +854,10 @@ func main() {
 	}
 	alreadyProvisioned := certPEM != "" && keyPEM != ""
 	var localMeshStart sync.Once
+	var localMeshMu sync.RWMutex
+	var localMeshSnapshot func() localmesh.NodeSnapshot
+	var localMeshCredentials *localmesh.Credentials
+	var localMeshAppClient *meshsession.Client
 	startConfiguredLocalMesh := func(certPEM, chainPEM, keyPEM string, orgID, assetID int32) {
 		if runtime.GOOS != "linux" {
 			return
@@ -859,15 +868,67 @@ func main() {
 			}
 			return
 		}
+		credentials, err := localmesh.NewCredentials(orgID, assetID, certPEM, chainPEM, keyPEM)
+		if err != nil {
+			logger.Error("local mesh identity unavailable", zap.Error(err))
+			return
+		}
 		localMeshStart.Do(func() {
+			appClient, err := meshsession.NewClient(credentials)
+			if err != nil {
+				logger.Error("mesh app client unavailable", zap.Error(err))
+				return
+			}
+			localMeshMu.Lock()
+			localMeshCredentials = credentials
+			localMeshAppClient = appClient
+			localMeshMu.Unlock()
+			go func() { <-ctx.Done(); _ = appClient.Close() }()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ticker := time.NewTicker(time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+					}
+					localMeshMu.RLock()
+					snapshot := localMeshSnapshot
+					localMeshMu.RUnlock()
+					if snapshot == nil {
+						appClient.PruneRoutes(localmesh.NodeSnapshot{})
+					} else {
+						appClient.PruneRoutes(snapshot())
+					}
+				}
+			}()
+			sessionServer, err := meshsession.NewServer(credentials, meshIngress)
+			if err != nil {
+				logger.Error("mesh app session unavailable", zap.Error(err))
+			} else {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if err := sessionServer.Run(ctx, fmt.Sprintf(":%d", meshsession.Port)); err != nil && ctx.Err() == nil {
+						logger.Error("mesh app session stopped", zap.Error(err))
+					}
+				}()
+			}
 			name, _ := os.Hostname()
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for ctx.Err() == nil {
-					err := localmesh.RunConfiguredTCP(ctx, configPath, localmesh.TCPIdentity{
+					err := localmesh.RunConfiguredTCPObserved(ctx, configPath, localmesh.TCPIdentity{
 						Org: orgID, Asset: assetID, Name: name, AgentPort: uint16(mtlsPortNum),
 						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
+					}, func(snapshot func() localmesh.NodeSnapshot) {
+						localMeshMu.Lock()
+						localMeshSnapshot = snapshot
+						localMeshMu.Unlock()
 					})
 					if err != nil && !errors.Is(err, context.Canceled) {
 						logger.Error("configured local mesh stopped", zap.Error(err))
@@ -890,7 +951,9 @@ func main() {
 	// unenrolled device brokerURL/cert fields are empty, so DialDevice simply
 	// fails closed at runtime with a clear error instead of never starting.
 	cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+	var activeProvisioningIdentity provisioningIdentityTracker
 	if alreadyProvisioned {
+		activeProvisioningIdentity.Changed(certPEM, chainPEM, keyPEM, orgID, assetID)
 		startConfiguredLocalMesh(certPEM, chainPEM, keyPEM, orgID, assetID)
 	}
 	brokerURL := os.Getenv("WENDY_BROKER_URL")
@@ -904,7 +967,42 @@ func main() {
 		meshMetrics.Collect(ctx)
 	}()
 	meshDialer = services.NewMeshDialer(logger, brokerURL, orgID, assetID, certPEM, keyPEM, chainPEM, meshMetrics)
-	meshProxy := mesh.NewProxy(logger, meshDialer, meshMetrics)
+	meshDialer.SetLocalMeshDialer(func(dialCtx context.Context, peer int32, port uint16) (net.Conn, error) {
+		localMeshMu.RLock()
+		snapshot := localMeshSnapshot
+		credentials := localMeshCredentials
+		appClient := localMeshAppClient
+		localMeshMu.RUnlock()
+		if snapshot == nil || credentials == nil || appClient == nil {
+			return nil, meshsession.ErrNoRoute
+		}
+		address, err := meshsession.Resolve(snapshot(), credentials.Org, peer)
+		if err != nil {
+			appClient.Invalidate(peer)
+			return nil, err
+		}
+		return appClient.DialWithRetryCheck(dialCtx, peer, address, port, func() error {
+			localMeshMu.RLock()
+			currentSnapshot := localMeshSnapshot
+			localMeshMu.RUnlock()
+			if currentSnapshot == nil {
+				return meshsession.ErrNoRoute
+			}
+			currentAddress, err := meshsession.Resolve(currentSnapshot(), credentials.Org, peer)
+			if err != nil {
+				return err
+			}
+			if currentAddress != address {
+				return meshsession.ErrNoRoute
+			}
+			return nil
+		})
+	})
+	var appDialer mesh.PeerDialer = meshDialer
+	if _, err := os.Stat(filepath.Join(configPath, "local-mesh.json")); err == nil {
+		appDialer = services.NewMeshAppDialer(meshDialer)
+	}
+	meshProxy := mesh.NewProxy(logger, appDialer, meshMetrics)
 	if err := meshProxy.Start(fmt.Sprintf(":%d", mesh.ProxyPort)); err != nil {
 		logger.Warn("mesh proxy failed to start; mesh egress disabled", zap.Error(err))
 	}
@@ -1039,9 +1137,17 @@ func main() {
 			}
 		}()
 		keyPEM := string(keyData)
+		cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+		if activeProvisioningIdentity.Changed(certPEM, chainPEM, keyPEM, orgID, assetID) {
+			// The persisted identity is already durable. Let the provisioning RPC
+			// finish, then restart so the app server, pool, and every carrier
+			// replace their credentials together.
+			logger.Info("Provisioning identity rotated; restarting agent")
+			time.AfterFunc(5*time.Second, func() { os.Exit(0) })
+			return
+		}
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
-		cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
 		startConfiguredLocalMesh(certPEM, chainPEM, keyPEM, orgID, assetID)
 		// Refresh the mesh dialer with the fresh identity — like the mTLS
 		// server and tunnel broker above, it consumes cert material, and BLE

@@ -44,6 +44,7 @@ type Node struct {
 	kernel          *Kernel
 	cache           *IdentityCache
 	directory       *Directory
+	bundleHints     *bundleHintCache
 	store           *StateStore
 	state           PersistentState
 	routing         *Routing
@@ -88,7 +89,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	n := &Node{Credentials: credentials, kernel: kernel, cache: cache, directory: directory, store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
+	n := &Node{Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
 		advertisement: Manifest{Version: 1, Org: credentials.Org, Asset: credentials.Asset, Name: name, AgentPort: agentPort}, gateways: map[babel.RouterID]bool{}}
 	ok := false
 	defer func() {
@@ -160,6 +161,12 @@ func (n *Node) Run() error {
 		_ = n.kernel.Close()
 		_ = n.cache.Flush(time.Now())
 	}()
+	// NetworkManager can race dummy creation before its unmanaged-device policy
+	// takes effect. Verify the base state once before originating Babel routes,
+	// then keep repairing it as the agent runs.
+	if err := n.kernel.ReconcileBase(); err != nil {
+		return err
+	}
 	v4, _, _ := Addresses(n.Credentials.Org, n.Credentials.Asset)
 	if err := n.step(babel.Originate{Prefix: netip.PrefixFrom(v4, 32)}); err != nil {
 		return err
@@ -195,6 +202,12 @@ func (n *Node) Run() error {
 				return err
 			}
 		case <-maintenance.C:
+			n.gate.Lock()
+			err := n.kernel.ReconcileBase()
+			n.gate.Unlock()
+			if err != nil {
+				return err
+			}
 			n.refresh()
 			if err := n.step(babel.Tick{}); err != nil {
 				return err
@@ -271,6 +284,7 @@ func (n *Node) handle(e nodeEvent) error {
 		}
 		e.add.tun = tun
 		e.add.sync = NewSynchronizer(n.directory, n.cache)
+		e.add.sync.SeedKnownBundles(n.bundleHints.Known(e.add.asset, time.Now()))
 		n.peers[e.add.id] = e.add
 		local, peer, _ := LinkAddresses(n.Credentials.Asset, e.add.asset)
 		if err = n.step(babel.AddLink{Link: babel.Link{ID: e.add.id, Local: local, Peer: peer, Cost: 256, MaxPacket: DatagramLimit - 1}}); err != nil {
@@ -404,7 +418,6 @@ func (n *Node) Attach(ctx context.Context, asset int32, conn *quic.Conn) error {
 	if err = n.request(ctx, nodeEvent{add: p}); err != nil {
 		return err
 	}
-	defer n.request(n.ctx, nodeEvent{id: p.id, remove: true})
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -414,7 +427,6 @@ func (n *Node) Attach(ctx context.Context, asset int32, conn *quic.Conn) error {
 		case <-ctx.Done():
 		}
 		_ = conn.CloseWithError(0, "link stopped")
-		_ = p.tun.Close()
 	}()
 	var wg sync.WaitGroup
 	done := make(chan error, 4)
@@ -427,6 +439,9 @@ func (n *Node) Attach(ctx context.Context, asset int32, conn *quic.Conn) error {
 			case m := <-p.control:
 				if err := WriteControl(stream, m); err != nil {
 					return err
+				}
+				if m.Kind == "bundle" {
+					n.bundleHints.Written(p.asset, m.Bundle, time.Now())
 				}
 			}
 		}
@@ -447,9 +462,14 @@ func (n *Node) Attach(ctx context.Context, asset int32, conn *quic.Conn) error {
 	worker(func() error { return n.readTUN(ctx, p) })
 	worker(func() error { return n.readQUIC(ctx, p) })
 	err = <-done
+	// Keep the TUN alive while Babel withdraws its routes. Closing its last
+	// file descriptor first destroys the kernel link, making route deletion
+	// fail with ENODEV and stopping the shared routing engine.
+	removeErr := n.request(n.ctx, nodeEvent{id: p.id, remove: true})
 	cancel()
+	_ = p.tun.Close()
 	wg.Wait()
-	return err
+	return errors.Join(err, removeErr)
 }
 
 func (n *Node) readTUN(ctx context.Context, p *nodePeer) error {

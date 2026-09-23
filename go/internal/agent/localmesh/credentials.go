@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
@@ -16,11 +18,12 @@ import (
 // verifier. Reconstruct this object (and the session/cache) when provisioning or
 // trust changes. No mesh-specific private key or trust-on-first-use is created.
 type Credentials struct {
-	Org, Asset  int32
-	Certificate tls.Certificate
-	Signer      crypto.Signer
-	Verify      IdentityVerifier
-	peerTLS     func(int32) (*tls.Config, error)
+	Org, Asset     int32
+	Certificate    tls.Certificate
+	Signer         crypto.Signer
+	Verify         IdentityVerifier
+	peerTLS        func(int32) (*tls.Config, error)
+	peerTLSTickets func(int32, string, string) (*tls.Config, error)
 }
 
 func NewCredentials(org, asset int32, certPEM, chainPEM, keyPEM string) (*Credentials, error) {
@@ -94,7 +97,24 @@ func NewCredentials(org, asset int32, certPEM, chainPEM, keyPEM string) (*Creden
 		}
 		return Identity{org, int32(peer), expires}, nil
 	}
-	return &Credentials{Org: org, Asset: asset, Certificate: cert, Signer: signer, Verify: verify, peerTLS: func(peer int32) (*tls.Config, error) {
+	// The enrolled PEM material and ML-DSA-aware trust chain are immutable for
+	// this Credentials incarnation. Parse each peer's pinned TLS config once;
+	// callers receive a clone so carrier-specific ALPN and settings cannot
+	// change another connection. Provisioning/trust refresh creates a new
+	// Credentials object and therefore a fresh cache.
+	var peerMu sync.Mutex
+	peerConfigs := make(map[int32]*tls.Config)
+	type ticketScope struct {
+		cache tls.ClientSessionCache
+		store *TicketStore
+	}
+	ticketCaches := make(map[string]ticketScope)
+	credentials := &Credentials{Org: org, Asset: asset, Certificate: cert, Signer: signer, Verify: verify, peerTLS: func(peer int32) (*tls.Config, error) {
+		peerMu.Lock()
+		defer peerMu.Unlock()
+		if cached := peerConfigs[peer]; cached != nil {
+			return cached.Clone(), nil
+		}
 		c, err := mtls.NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM, nil, strconv.Itoa(int(peer)))
 		if err != nil {
 			return nil, err
@@ -105,8 +125,49 @@ func NewCredentials(org, asset int32, certPEM, chainPEM, keyPEM string) (*Creden
 		c.ClientAuth = tls.RequireAnyClientCert
 		c.ClientSessionCache = nil
 		c.SessionTicketsDisabled = true
-		return c, nil
-	}}, nil
+		if len(peerConfigs) >= 128 {
+			for old := range peerConfigs {
+				delete(peerConfigs, old)
+				break
+			}
+		}
+		peerConfigs[peer] = c
+		return c.Clone(), nil
+	}}
+	credentials.peerTLSTickets = func(peer int32, alpn, transport string) (*tls.Config, error) {
+		if alpn == "" || transport == "" {
+			return nil, errors.New("mesh ticket scope needs ALPN and transport")
+		}
+		cfg, err := credentials.PeerTLS(peer)
+		if err != nil {
+			return nil, err
+		}
+		key := fmt.Sprintf("%d/%d:%s/%d:%s", peer, len(alpn), alpn, len(transport), transport)
+		peerMu.Lock()
+		scope, found := ticketCaches[key]
+		if !found {
+			if len(ticketCaches) >= 128 {
+				for old := range ticketCaches {
+					delete(ticketCaches, old)
+					break
+				}
+			}
+			scope.cache = tls.NewLRUClientSessionCache(2)
+			scope.store = NewTicketStore()
+			ticketCaches[key] = scope
+		}
+		peerMu.Unlock()
+		cfg.NextProtos = []string{alpn}
+		cfg.ServerName = fmt.Sprintf("asset-%d.mesh.wendy.invalid", peer)
+		cfg.ClientSessionCache = scope.cache
+		// NAN and configured QUIC create a fresh listener per link. The
+		// shared store keeps compact server ticket handles valid across links.
+		scope.store.Configure(cfg)
+		// PeerTLS's VerifyConnection rechecks the current chain, org, peer
+		// asset and expiry even when Go skips Certificate on resumption.
+		return cfg, nil
+	}
+	return credentials, nil
 }
 
 func (c *Credentials) PeerTLS(peer int32) (*tls.Config, error) {
@@ -117,4 +178,14 @@ func (c *Credentials) PeerTLS(peer int32) (*tls.Config, error) {
 		return nil, err
 	}
 	return c.peerTLS(peer)
+}
+
+// PeerTLSWithTickets enables in-memory TLS 1.3 resumption for a specific peer,
+// ALPN and transport. QUIC and raw TLS never share tickets. The cache is
+// discarded with this Credentials instance when provisioning rotates.
+func (c *Credentials) PeerTLSWithTickets(peer int32, alpn, transport string) (*tls.Config, error) {
+	if c == nil || c.peerTLSTickets == nil {
+		return nil, errors.New("missing mesh credential ticket scope")
+	}
+	return c.peerTLSTickets(peer, alpn, transport)
 }
