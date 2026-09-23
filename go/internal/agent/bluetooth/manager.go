@@ -26,8 +26,25 @@ type Manager interface {
 	ReconnectTrusted(ctx context.Context)
 }
 
-func NewManager(logger *zap.Logger) Manager {
-	return newPlatformManager(logger)
+// ManagerOption configures NewManager.
+type ManagerOption func(*managerOptions)
+
+type managerOptions struct {
+	links LinkReporter
+}
+
+// WithLinkReporter makes Scan report each connected peripheral's BLE link
+// supervision timeout.
+func WithLinkReporter(r LinkReporter) ManagerOption {
+	return func(o *managerOptions) { o.links = r }
+}
+
+func NewManager(logger *zap.Logger, opts ...ManagerOption) Manager {
+	var o managerOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return newPlatformManager(logger, o)
 }
 
 // StartBLEPeripheral starts BLE advertising and the mTLS-protected L2CAP command server.

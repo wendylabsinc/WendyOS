@@ -86,10 +86,11 @@ type managedObjects = map[dbus.ObjectPath]map[string]map[string]dbus.Variant
 
 type BlueZManager struct {
 	logger *zap.Logger
+	links  LinkReporter // nil: Scan reports no link timeouts
 }
 
-func newPlatformManager(logger *zap.Logger) Manager {
-	return &BlueZManager{logger: logger}
+func newPlatformManager(logger *zap.Logger, o managerOptions) Manager {
+	return &BlueZManager{logger: logger, links: o.links}
 }
 
 // getManagedObjects enumerates every object BlueZ exposes (adapters, devices)
@@ -408,7 +409,9 @@ func (m *BlueZManager) collectPeripherals(ctx context.Context, conn *dbus.Conn, 
 		if !shouldListPeripheral(props, preexisting[path]) {
 			continue
 		}
-		peripherals = append(peripherals, deviceFromProps(props))
+		p := deviceFromProps(props)
+		annotateLink(p, m.links)
+		peripherals = append(peripherals, p)
 	}
 	return peripherals
 }
