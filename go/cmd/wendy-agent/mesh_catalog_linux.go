@@ -39,6 +39,7 @@ type catalogActivation struct {
 	catalog        *meshcatalog.Catalog
 	runtime        *meshcatalog.Runtime
 	cache          *localmesh.IdentityCache
+	snapshot       func() localmesh.NodeSnapshot
 	done           chan struct{}
 	retryDone      chan struct{}
 	gatewayDone    chan struct{}
@@ -102,7 +103,7 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 	}
 	runtime.SetGatewayChangeNotifier(notifyRoutes)
 	activeCtx, cancel := context.WithCancel(ctx)
-	a := &catalogActivation{org: credentials.Org, asset: credentials.Asset, ctx: activeCtx, cancel: cancel, catalog: catalog, runtime: runtime, cache: cache, done: make(chan struct{}), retryDone: make(chan struct{}), gatewayDone: make(chan struct{}), bridges: map[string]catalogBridgeRun{}, notifyRoutes: notifyRoutes}
+	a := &catalogActivation{org: credentials.Org, asset: credentials.Asset, ctx: activeCtx, cancel: cancel, catalog: catalog, runtime: runtime, cache: cache, snapshot: snapshot, done: make(chan struct{}), retryDone: make(chan struct{}), gatewayDone: make(chan struct{}), bridges: map[string]catalogBridgeRun{}, notifyRoutes: notifyRoutes}
 	m.mu.Lock()
 	if m.active != nil {
 		m.mu.Unlock()
@@ -334,7 +335,7 @@ func (m *meshCatalogManager) startBridge(a *catalogActivation, app catalogApp) e
 		return record.Key.Org == a.org && record.Key.Mesh == "default" &&
 			(record.Key.Asset != a.asset || record.Key.AppID != app.appID)
 	}
-	bridge, err := meshcatalog.NewMDNSBridge(scope, a.catalog, policy, a.runtime.Broadcast)
+	bridge, err := meshcatalog.NewMDNSBridge(scope, a.catalog, policy, a.runtime.Broadcast, a.snapshot)
 	if err != nil {
 		return err
 	}

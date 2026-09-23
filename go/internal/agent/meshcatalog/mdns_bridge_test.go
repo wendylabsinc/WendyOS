@@ -3,11 +3,32 @@ package meshcatalog
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/wendylabsinc/WendyOS/babel"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 )
+
+func bridgeRouteView(t *testing.T, now time.Time, asset int32) localmesh.NodeSnapshot {
+	t.Helper()
+	addr, _, err := localmesh.Addresses(64, asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := localmesh.RouterID(64, asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return localmesh.NodeSnapshot{
+		Devices: []localmesh.Manifest{{Org: 64, Asset: asset, Expires: now.Add(time.Minute).UnixMilli()}},
+		Routes:  []babel.Route{{Prefix: netip.PrefixFrom(addr, 32), RouterID: router, Link: 2}},
+	}
+}
+
+func emptyBridgeRouteView() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{} }
 
 func TestProjectionDeltaAnnouncesNewAndWithdrawsChangedRecords(t *testing.T) {
 	b := &MDNSBridge{projected: map[string]dns.RR{}}
@@ -87,7 +108,7 @@ func TestProjectionGoodbyesAndScopedAnswer(t *testing.T) {
 	catalog, _ := f.newCatalog(t, 533, "default", nil, nil)
 	scope := AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7,
 		AllowedTypes: []string{"_http._tcp"}, Ports: map[uint16]uint16{8080: 18080}}
-	bridge, err := NewMDNSBridge(scope, catalog, func(_ string, _ Record) bool { return true }, func(SignedRecord) {})
+	bridge, err := NewMDNSBridge(scope, catalog, func(_ string, _ Record) bool { return true }, func(SignedRecord) {}, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,12 +148,105 @@ func TestProjectionGoodbyesAndScopedAnswer(t *testing.T) {
 	}
 }
 
+func TestRemoteProjectionFollowsSignedRouteWithoutChangingService(t *testing.T) {
+	f := newFixture(t)
+	local, cache := f.newCatalog(t, 533, "default", nil, nil)
+	remote, _ := f.newCatalog(t, 535, "default", nil, nil)
+	if _, err := cache.Put(f.creds[535].Certificate.Certificate, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Publish(testSpec(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	w, err := remote.Publish(testSpec(), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.Accept(w, f.now); err != nil {
+		t.Fatal(err)
+	}
+	scope := AppScope{AppID: "com.wendy.browse", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7}
+	var view localmesh.NodeSnapshot
+	bridge, err := NewMDNSBridge(scope, local, func(string, Record) bool { return true },
+		func(SignedRecord) {}, func() localmesh.NodeSnapshot { return view })
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := func(now time.Time, want int) ([]dns.RR, []dns.RR) {
+		t.Helper()
+		records, err := bridge.projection(now)
+		if err != nil || len(records) != want {
+			t.Fatalf("projection at %s: records=%d, err=%v, want=%d", now, len(records), err, want)
+		}
+		return bridge.projectionDelta(records)
+	}
+	// The local app remains browseable without a remote Babel route. Host-LAN
+	// mDNS peer advertisements are a separate path and do not enter this catalog.
+	added, gone := project(f.now.Add(time.Second), 4)
+	if len(added) != 4 || len(gone) != 0 {
+		t.Fatalf("local-only projection: added=%d gone=%d", len(added), len(gone))
+	}
+	view = bridgeRouteView(t, f.now, 535)
+	added, gone = project(f.now.Add(2*time.Second), 8)
+	if len(added) != 4 || len(gone) != 0 {
+		t.Fatalf("route restored: added=%d gone=%d", len(added), len(gone))
+	}
+	view.Routes[0].RouterID++
+	added, gone = project(f.now.Add(2500*time.Millisecond), 4)
+	if len(added) != 0 || len(gone) != 4 {
+		t.Fatalf("spoofed route origin: added=%d gone=%d", len(added), len(gone))
+	}
+	view = bridgeRouteView(t, f.now, 535)
+	added, gone = project(f.now.Add(2700*time.Millisecond), 8)
+	if len(added) != 4 || len(gone) != 0 {
+		t.Fatalf("origin route recovered: added=%d gone=%d", len(added), len(gone))
+	}
+	view.Routes[0].Unreachable = true
+	added, gone = project(f.now.Add(3*time.Second), 4)
+	if len(added) != 0 || len(gone) != 4 {
+		t.Fatalf("route withdrawn: added=%d gone=%d", len(added), len(gone))
+	}
+	for _, rr := range gone {
+		if rr.Header().Ttl != 0 {
+			t.Fatalf("withdrawal lacks DNS goodbye: %v", rr)
+		}
+	}
+	view.Routes[0].Unreachable = false
+	added, gone = project(f.now.Add(4*time.Second), 8)
+	if len(added) != 4 || len(gone) != 0 {
+		t.Fatalf("route recovered: added=%d gone=%d", len(added), len(gone))
+	}
+	view.Devices[0].Withdraw = true
+	added, gone = project(f.now.Add(5*time.Second), 4)
+	if len(added) != 0 || len(gone) != 4 {
+		t.Fatalf("manifest withdrawn: added=%d gone=%d", len(added), len(gone))
+	}
+	view.Devices[0].Withdraw = false
+	view.Devices[0].Expires = f.now.Add(6 * time.Second).UnixMilli()
+	added, gone = project(f.now.Add(6*time.Second), 4)
+	if len(added) != 0 || len(gone) != 0 {
+		t.Fatalf("expired manifest projected remote service: added=%d gone=%d", len(added), len(gone))
+	}
+	records := local.Snapshot(f.now.Add(6 * time.Second))
+	if len(records) != 2 {
+		t.Fatalf("route loss erased signed catalog state: %d records", len(records))
+	}
+	for _, record := range records {
+		if record.Key.Asset == 535 && record.Generation != 1 {
+			t.Fatalf("route churn changed signed generation: %d", record.Generation)
+		}
+	}
+	// The route cannot resurrect an expired signed service.
+	view.Devices[0].Expires = f.now.Add(2 * time.Minute).UnixMilli()
+	project(f.now.Add(MaxLease), 0)
+}
+
 func TestBridgeLearnsBoundedServiceTypes(t *testing.T) {
 	f := newFixture(t)
 	catalog, _ := f.newCatalog(t, 533, "default", nil, nil)
 	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2),
 		BridgeIndex: 7, Ports: map[uint16]uint16{8080: 18080}}, catalog,
-		func(string, Record) bool { return true }, func(SignedRecord) {})
+		func(string, Record) bool { return true }, func(SignedRecord) {}, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +281,8 @@ func TestAppResponderTakesPrecedenceOverProjectedName(t *testing.T) {
 	}
 	scope := AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7,
 		Ports: map[uint16]uint16{8080: 18080}}
-	bridge, err := NewMDNSBridge(scope, local, func(_ string, r Record) bool { return r.Key.Asset != 533 }, func(SignedRecord) {})
+	view := bridgeRouteView(t, f.now, 535)
+	bridge, err := NewMDNSBridge(scope, local, func(_ string, r Record) bool { return r.Key.Asset != 533 }, func(SignedRecord) {}, func() localmesh.NodeSnapshot { return view })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +451,7 @@ func TestAppClaimLimitSuppressesProjectionUntilClaimsExpire(t *testing.T) {
 	}
 	scope := AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7,
 		Ports: map[uint16]uint16{8080: 18080}}
-	bridge, err := NewMDNSBridge(scope, catalog, func(string, Record) bool { return true }, func(SignedRecord) {})
+	bridge, err := NewMDNSBridge(scope, catalog, func(string, Record) bool { return true }, func(SignedRecord) {}, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}

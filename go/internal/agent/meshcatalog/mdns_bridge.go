@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 )
 
 // MDNSBridge serves one isolated app bridge. The container lifecycle supplies
@@ -18,6 +19,7 @@ type MDNSBridge struct {
 	collector *Collector
 	catalog   *Catalog
 	policy    BrowsePolicy
+	snapshot  func() localmesh.NodeSnapshot
 	emit      func(SignedRecord)
 	projected map[string]dns.RR
 	seenTypes map[string]time.Time
@@ -27,16 +29,16 @@ type MDNSBridge struct {
 	claimsOverflowTill time.Time
 }
 
-func NewMDNSBridge(scope AppScope, catalog *Catalog, policy BrowsePolicy, emit func(SignedRecord)) (*MDNSBridge, error) {
-	if policy == nil || emit == nil {
-		return nil, errors.New("missing scoped mDNS policy or relay")
+func NewMDNSBridge(scope AppScope, catalog *Catalog, policy BrowsePolicy, emit func(SignedRecord), snapshot func() localmesh.NodeSnapshot) (*MDNSBridge, error) {
+	if policy == nil || emit == nil || snapshot == nil {
+		return nil, errors.New("missing scoped mDNS policy, relay, or route snapshot")
 	}
 	collector, err := NewCollector(scope, catalog)
 	if err != nil {
 		return nil, err
 	}
 	return &MDNSBridge{scope: collector.scope, collector: collector, catalog: catalog,
-		policy: policy, emit: emit, projected: map[string]dns.RR{}, seenTypes: map[string]time.Time{},
+		policy: policy, emit: emit, snapshot: snapshot, projected: map[string]dns.RR{}, seenTypes: map[string]time.Time{},
 		appClaims: map[string]map[uint16]time.Time{}}, nil
 }
 
@@ -230,7 +232,22 @@ func (b *MDNSBridge) withdraw(now time.Time) error {
 
 func (b *MDNSBridge) projection(now time.Time) ([]dns.RR, error) {
 	b.pruneAppClaims(now)
+	// A catalog record can outlive its origin's route. Keep its signed lease
+	// and high-water receipt, but withdraw its DNS projection until the
+	// origin's signed manifest and exact host route are both live again.
+	view := b.snapshot()
+	reachable := make(map[int32]bool)
 	return ProjectDNS(b.catalog.Snapshot(now), b.scope.AppID, func(appID string, r Record) bool {
+		if r.Key.Asset != b.catalog.asset {
+			ok, checked := reachable[r.Key.Asset]
+			if !checked {
+				ok = eligibleSnapshot(view, b.catalog.org, r.Key.Asset, now)
+				reachable[r.Key.Asset] = ok
+			}
+			if !ok {
+				return false
+			}
+		}
 		return b.policy(appID, r) && !b.claimsOverflowTill.After(now) &&
 			!b.appClaimsName(projectedInstanceName(r)) && !b.appClaimsName(projectedHostName(r))
 	}, now)
