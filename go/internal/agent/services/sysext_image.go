@@ -114,7 +114,10 @@ func imageModules(rawPath, name string) []string {
 	if err != nil {
 		return nil
 	}
-	content, err := fs.ReadFile(imageModulesDir + name + ".conf")
+	content, err := fs.ReadFile("usr/lib/wendyos-driver-payloads/" + name + "/modules-load.conf")
+	if err != nil {
+		content, err = fs.ReadFile(imageModulesDir + name + ".conf")
+	}
 	if err != nil {
 		return nil
 	}
