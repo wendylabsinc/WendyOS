@@ -24,13 +24,15 @@ const (
 type ConfigureLocalMeshRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Presence means update; omitted fields preserve the saved value.
-	Participate   *bool `protobuf:"varint,1,opt,name=participate,proto3,oneof" json:"participate,omitempty"`
-	Roam          *bool `protobuf:"varint,2,opt,name=roam,proto3,oneof" json:"roam,omitempty"`
-	ShareUplink   *bool `protobuf:"varint,3,opt,name=share_uplink,json=shareUplink,proto3,oneof" json:"share_uplink,omitempty"`
-	Nan           *bool `protobuf:"varint,4,opt,name=nan,proto3,oneof" json:"nan,omitempty"`
-	Ble           *bool `protobuf:"varint,5,opt,name=ble,proto3,oneof" json:"ble,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Participate        *bool `protobuf:"varint,1,opt,name=participate,proto3,oneof" json:"participate,omitempty"`
+	Roam               *bool `protobuf:"varint,2,opt,name=roam,proto3,oneof" json:"roam,omitempty"`
+	ShareUplink        *bool `protobuf:"varint,3,opt,name=share_uplink,json=shareUplink,proto3,oneof" json:"share_uplink,omitempty"`
+	Nan                *bool `protobuf:"varint,4,opt,name=nan,proto3,oneof" json:"nan,omitempty"`
+	Ble                *bool `protobuf:"varint,5,opt,name=ble,proto3,oneof" json:"ble,omitempty"`
+	Ethernet           *bool `protobuf:"varint,6,opt,name=ethernet,proto3,oneof" json:"ethernet,omitempty"`
+	InfrastructureWifi *bool `protobuf:"varint,7,opt,name=infrastructure_wifi,json=infrastructureWifi,proto3,oneof" json:"infrastructure_wifi,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ConfigureLocalMeshRequest) Reset() {
@@ -98,6 +100,20 @@ func (x *ConfigureLocalMeshRequest) GetBle() bool {
 	return false
 }
 
+func (x *ConfigureLocalMeshRequest) GetEthernet() bool {
+	if x != nil && x.Ethernet != nil {
+		return *x.Ethernet
+	}
+	return false
+}
+
+func (x *ConfigureLocalMeshRequest) GetInfrastructureWifi() bool {
+	if x != nil && x.InfrastructureWifi != nil {
+		return *x.InfrastructureWifi
+	}
+	return false
+}
+
 type GetLocalMeshStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -143,6 +159,8 @@ type LocalMeshConfiguration struct {
 	Ble                bool                   `protobuf:"varint,5,opt,name=ble,proto3" json:"ble,omitempty"`
 	TcpListen          string                 `protobuf:"bytes,6,opt,name=tcp_listen,json=tcpListen,proto3" json:"tcp_listen,omitempty"`
 	ConfiguredTcpPeers uint32                 `protobuf:"varint,7,opt,name=configured_tcp_peers,json=configuredTcpPeers,proto3" json:"configured_tcp_peers,omitempty"`
+	Ethernet           bool                   `protobuf:"varint,8,opt,name=ethernet,proto3" json:"ethernet,omitempty"`
+	InfrastructureWifi bool                   `protobuf:"varint,9,opt,name=infrastructure_wifi,json=infrastructureWifi,proto3" json:"infrastructure_wifi,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -224,6 +242,20 @@ func (x *LocalMeshConfiguration) GetConfiguredTcpPeers() uint32 {
 		return x.ConfiguredTcpPeers
 	}
 	return 0
+}
+
+func (x *LocalMeshConfiguration) GetEthernet() bool {
+	if x != nil {
+		return x.Ethernet
+	}
+	return false
+}
+
+func (x *LocalMeshConfiguration) GetInfrastructureWifi() bool {
+	if x != nil {
+		return x.InfrastructureWifi
+	}
+	return false
 }
 
 type LocalMeshStatus struct {
@@ -315,19 +347,23 @@ var File_wendy_agent_services_v2_local_mesh_admin_service_proto protoreflect.Fil
 
 const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\n" +
-	"6wendy/agent/services/v2/local_mesh_admin_service.proto\x12\x17wendy.agent.services.v2\"\xeb\x01\n" +
+	"6wendy/agent/services/v2/local_mesh_admin_service.proto\x12\x17wendy.agent.services.v2\"\xe7\x02\n" +
 	"\x19ConfigureLocalMeshRequest\x12%\n" +
 	"\vparticipate\x18\x01 \x01(\bH\x00R\vparticipate\x88\x01\x01\x12\x17\n" +
 	"\x04roam\x18\x02 \x01(\bH\x01R\x04roam\x88\x01\x01\x12&\n" +
 	"\fshare_uplink\x18\x03 \x01(\bH\x02R\vshareUplink\x88\x01\x01\x12\x15\n" +
 	"\x03nan\x18\x04 \x01(\bH\x03R\x03nan\x88\x01\x01\x12\x15\n" +
-	"\x03ble\x18\x05 \x01(\bH\x04R\x03ble\x88\x01\x01B\x0e\n" +
+	"\x03ble\x18\x05 \x01(\bH\x04R\x03ble\x88\x01\x01\x12\x1f\n" +
+	"\bethernet\x18\x06 \x01(\bH\x05R\bethernet\x88\x01\x01\x124\n" +
+	"\x13infrastructure_wifi\x18\a \x01(\bH\x06R\x12infrastructureWifi\x88\x01\x01B\x0e\n" +
 	"\f_participateB\a\n" +
 	"\x05_roamB\x0f\n" +
 	"\r_share_uplinkB\x06\n" +
 	"\x04_nanB\x06\n" +
-	"\x04_ble\"\x1b\n" +
-	"\x19GetLocalMeshStatusRequest\"\xe6\x01\n" +
+	"\x04_bleB\v\n" +
+	"\t_ethernetB\x16\n" +
+	"\x14_infrastructure_wifi\"\x1b\n" +
+	"\x19GetLocalMeshStatusRequest\"\xb3\x02\n" +
 	"\x16LocalMeshConfiguration\x12 \n" +
 	"\vparticipate\x18\x01 \x01(\bR\vparticipate\x12\x12\n" +
 	"\x04roam\x18\x02 \x01(\bR\x04roam\x12!\n" +
@@ -336,7 +372,9 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\x03ble\x18\x05 \x01(\bR\x03ble\x12\x1d\n" +
 	"\n" +
 	"tcp_listen\x18\x06 \x01(\tR\ttcpListen\x120\n" +
-	"\x14configured_tcp_peers\x18\a \x01(\rR\x12configuredTcpPeers\"\x98\x02\n" +
+	"\x14configured_tcp_peers\x18\a \x01(\rR\x12configuredTcpPeers\x12\x1a\n" +
+	"\bethernet\x18\b \x01(\bR\bethernet\x12/\n" +
+	"\x13infrastructure_wifi\x18\t \x01(\bR\x12infrastructureWifi\"\x98\x02\n" +
 	"\x0fLocalMeshStatus\x12O\n" +
 	"\n" +
 	"configured\x18\x01 \x01(\v2/.wendy.agent.services.v2.LocalMeshConfigurationR\n" +

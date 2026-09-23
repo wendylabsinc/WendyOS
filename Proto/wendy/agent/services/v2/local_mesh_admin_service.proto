@@ -16,6 +16,8 @@ message ConfigureLocalMeshRequest {
   optional bool share_uplink = 3;
   optional bool nan = 4;
   optional bool ble = 5;
+  optional bool ethernet = 6;
+  optional bool infrastructure_wifi = 7;
 }
 
 message GetLocalMeshStatusRequest {}
@@ -28,6 +30,8 @@ message LocalMeshConfiguration {
   bool ble = 5;
   string tcp_listen = 6;
   uint32 configured_tcp_peers = 7;
+  bool ethernet = 8;
+  bool infrastructure_wifi = 9;
 }
 
 message LocalMeshStatus {

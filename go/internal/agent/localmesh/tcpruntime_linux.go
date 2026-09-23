@@ -219,6 +219,10 @@ func readTCPPreface(conn net.Conn, org int32) (int32, error) {
 }
 
 func attachTCP(ctx context.Context, node *Node, credentials *Credentials, peer int32, tcp net.Conn, server bool) error {
+	return attachTCPWithCost(ctx, node, credentials, peer, tcp, server, 256)
+}
+
+func attachTCPWithCost(ctx context.Context, node *Node, credentials *Credentials, peer int32, tcp net.Conn, server bool, cost uint16) error {
 	pc, err := NewTCPPacketConn(tcp)
 	if err != nil {
 		return err
@@ -234,7 +238,7 @@ func attachTCP(ctx context.Context, node *Node, credentials *Credentials, peer i
 		case <-done:
 		}
 	}()
-	tlsConfig, err := credentials.PeerTLSWithTickets(peer, LinkALPN, "configured-quic")
+	tlsConfig, err := credentials.PeerTLSWithTickets(peer, LinkALPN, LinkQUICSessionScope)
 	if err != nil {
 		return err
 	}
@@ -254,5 +258,10 @@ func attachTCP(ctx context.Context, node *Node, credentials *Credentials, peer i
 	if err != nil {
 		return fmt.Errorf("mesh QUIC peer %d: %w", peer, err)
 	}
-	return node.Attach(ctx, peer, conn)
+	// quic-go can return a nil accepted connection after rejecting an
+	// unauthenticated peer. Treat it as a failed handshake before Node sees it.
+	if conn == nil {
+		return fmt.Errorf("mesh QUIC peer %d: no authenticated connection", peer)
+	}
+	return node.AttachWithCost(ctx, peer, conn, cost)
 }

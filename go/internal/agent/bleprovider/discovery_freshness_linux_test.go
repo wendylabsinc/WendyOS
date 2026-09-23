@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 )
 
 func meshDeviceProps(uuid string, raw []byte) map[string]dbus.Variant {
@@ -109,6 +110,36 @@ func TestAdvertisementFreshnessTracksLiveMeshAmongOtherAdvertisements(t *testing
 	tracker.handle(&dbus.Signal{Name: "org.freedesktop.DBus.ObjectManager.InterfacesRemoved", Body: []any{path, []string{deviceInterface}}}, base)
 	if got, _ := tracker.candidates(objects, base); len(got) != 0 {
 		t.Fatalf("removed Device1 accepted: %+v", got)
+	}
+}
+
+func TestStaleBlueZCacheCannotRefreshRadioSelection(t *testing.T) {
+	uuid, _ := ServiceUUID(64)
+	adv, _ := NewAdvertisement(12, "field", DefaultPSM)
+	raw, _ := adv.MarshalBinary()
+	path := dbus.ObjectPath("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01")
+	props := meshDeviceProps(uuid, raw)
+	objects := managedObjects{path: {deviceInterface: props}}
+	selection := localmesh.NewPeerSelection(func() localmesh.NodeSnapshot {
+		return localmesh.NodeSnapshot{Links: []localmesh.PeerLink{{Asset: 15, Cost: 512}}}
+	})
+	r := &runtime{cfg: Config{MeshName: "field", Credentials: &localmesh.Credentials{Asset: 20}, Selection: selection}, uuid: uuid, freshness: newAdvertisementFreshness("/org/bluez/hci0", uuid, "field", 20)}
+	base := time.Now()
+	if got := r.discoveredCandidates(objects, base); len(got) != 0 {
+		t.Fatalf("cached peer before live advertisement: %+v", got)
+	}
+	if !selection.AllowRadio(15, localmesh.RadioBLE) {
+		t.Fatal("stale cached BLE peer suppressed an otherwise useful second radio")
+	}
+	r.freshness.observe(path, map[string]dbus.Variant{"ServiceData": props["ServiceData"]}, base)
+	if got := r.discoveredCandidates(objects, base); len(got) != 1 {
+		t.Fatalf("fresh BLE peer rejected: %+v", got)
+	}
+	if selection.AllowRadio(15, localmesh.RadioBLE) {
+		t.Fatal("live diverse BLE peer did not influence radio selection")
+	}
+	if got := r.discoveredCandidates(objects, base.Add(advertisementFreshnessTTL)); len(got) != 0 {
+		t.Fatalf("expired BLE peer retained: %+v", got)
 	}
 }
 

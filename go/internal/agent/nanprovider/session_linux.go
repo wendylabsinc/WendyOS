@@ -41,6 +41,7 @@ const NANLinkCost uint16 = 512
 type Provider struct {
 	Credentials *localmesh.Credentials
 	Node        LinkNode
+	Selection   *localmesh.PeerSelection
 	Logger      *zap.Logger
 }
 
@@ -142,7 +143,7 @@ func (p Provider) Run(parent context.Context) error {
 	peers := make(chan radioPeer, 8)
 	health := make(chan radioHealth, 32)
 	radioDone := make(chan error, 1)
-	go func() { radioDone <- runRadio(ctx, id, peers, health, logger) }()
+	go func() { radioDone <- runRadio(ctx, id, peers, health, p.Selection, logger) }()
 	// runRadio drains NDPs before returning. Do not remove the NDI until then.
 	defer func() { cancel(); <-radioDone }()
 	type worker struct {
@@ -181,7 +182,7 @@ func (p Provider) Run(parent context.Context) error {
 				<-previous.done
 				delete(running, peer.Asset)
 			}
-			if peer.NDI == "" || len(running) >= 3 {
+			if peer.NDI == "" || len(running) >= 3 || (p.Selection != nil && !p.Selection.AllowRadio(peer.Asset, localmesh.RadioNAN)) {
 				continue
 			}
 			peerCtx, peerCancel := context.WithCancel(ctx)
@@ -283,7 +284,7 @@ func (p Provider) attachPeer(ctx context.Context, id Identity, peer radioPeer, n
 	defer func() { _ = netlink.NeighDel(neighbor) }()
 	// Presence SSI only proposes an asset. The enrolled certificate pins the
 	// actual peer identity and organization during this QUIC handshake.
-	tlsConfig, err := p.Credentials.PeerTLSWithTickets(peer.Asset, localmesh.LinkALPN, "nan-quic")
+	tlsConfig, err := p.Credentials.PeerTLSWithTickets(peer.Asset, localmesh.LinkALPN, localmesh.LinkQUICSessionScope)
 	if err != nil {
 		return err
 	}

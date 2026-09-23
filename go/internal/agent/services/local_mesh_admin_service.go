@@ -82,12 +82,13 @@ func (s *LocalMeshAdminService) read(asset int32) (meshsharing.Config, localmesh
 
 func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
 	state, detail := "disabled", "Local mesh is disabled."
-	if sharing.Participate || carriers.NAN || carriers.BLE || carriers.Listen != "" {
+	if sharing.Participate || carriers.NAN || carriers.BLE || carriers.Ethernet || carriers.InfrastructureWiFi || carriers.Listen != "" {
 		state, detail = "pending-runtime", "Configuration is saved; awaiting runtime state."
 	}
 	out := &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{
 		Participate: sharing.Participate, Roam: sharing.Roam, ShareUplink: sharing.ShareUplink,
-		Nan: carriers.NAN, Ble: carriers.BLE, TcpListen: carriers.Listen, ConfiguredTcpPeers: uint32(len(carriers.Peers)),
+		Nan: carriers.NAN, Ble: carriers.BLE, Ethernet: carriers.Ethernet, InfrastructureWifi: carriers.InfrastructureWiFi,
+		TcpListen: carriers.Listen, ConfiguredTcpPeers: uint32(len(carriers.Peers)),
 	}, State: state, Detail: detail}
 	if s.runtime != nil {
 		runtime := s.runtime()
@@ -125,7 +126,7 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	if err != nil {
 		return nil, err
 	}
-	if req == nil || (req.Participate == nil && req.Roam == nil && req.ShareUplink == nil && req.Nan == nil && req.Ble == nil) {
+	if req == nil || (req.Participate == nil && req.Roam == nil && req.ShareUplink == nil && req.Nan == nil && req.Ble == nil && req.Ethernet == nil && req.InfrastructureWifi == nil) {
 		return nil, status.Error(codes.InvalidArgument, "specify at least one local mesh setting")
 	}
 	s.mu.Lock()
@@ -136,7 +137,7 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	}
 	previous := sharing
 	shareChanged := req.Participate != nil || req.Roam != nil || req.ShareUplink != nil
-	carrierChanged := req.Nan != nil || req.Ble != nil
+	carrierChanged := req.Nan != nil || req.Ble != nil || req.Ethernet != nil || req.InfrastructureWifi != nil
 	if req.Participate != nil {
 		sharing.Participate = *req.Participate
 	}
@@ -151,6 +152,12 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 	}
 	if req.Ble != nil {
 		carriers.BLE = *req.Ble
+	}
+	if req.Ethernet != nil {
+		carriers.Ethernet = *req.Ethernet
+	}
+	if req.InfrastructureWifi != nil {
+		carriers.InfrastructureWiFi = *req.InfrastructureWifi
 	}
 	if err = sharing.Validate(); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
@@ -175,7 +182,8 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 		actor, _ := userIdentityFromContext(ctx, "local mesh configuration")
 		s.logger.Info("local mesh configuration saved", zap.Int32("actorOrg", actor.OrgID), zap.String("actorUser", actor.EntityID),
 			zap.Bool("participate", sharing.Participate), zap.Bool("roam", sharing.Roam), zap.Bool("shareUplink", sharing.ShareUplink),
-			zap.Bool("nan", carriers.NAN), zap.Bool("ble", carriers.BLE))
+			zap.Bool("nan", carriers.NAN), zap.Bool("ble", carriers.BLE),
+			zap.Bool("ethernet", carriers.Ethernet), zap.Bool("infrastructureWifi", carriers.InfrastructureWiFi))
 	}
 	return s.response(sharing, carriers), nil
 }
