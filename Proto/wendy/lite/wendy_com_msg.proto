@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+import "sensorlink.proto";
+
 // Protocol version, exchanged in the handshake. The major number must match
 // on both sides; minor is informational.
 message WendyComProtocolVersion {
@@ -149,6 +151,9 @@ message WendyComCommand {
         WendyComConfPushBeginParams        conf_push_begin       = 13;
         WendyComConfPushDataParams         conf_push_data        = 14;
         WendyComConfPushEndParams          conf_push_end         = 15;
+        wendy.lite.sensorlink.GetSensorManifest sensor_link_get_manifest = 16;
+        wendy.lite.sensorlink.Subscribe         sensor_link_subscribe    = 17;
+        wendy.lite.sensorlink.Unsubscribe       sensor_link_unsubscribe  = 18;
     }
 }
 
@@ -170,6 +175,7 @@ message WendyComResponse {
     oneof data {
         WendyComDeviceIdentity   device_identity   = 3;
         WendyComDeviceInfo       device_info       = 4;
+        wendy.lite.sensorlink.SensorManifest sensor_link_manifest = 5;
     }
 }
 
@@ -231,5 +237,6 @@ message WendyComMessage {
         WendyComCommand   command   = 3;
         WendyComResponse  response  = 4;
         WendyComEvent     event     = 5;
+        wendy.lite.sensorlink.SensorFrame sensor_frame = 6;
     }
 }

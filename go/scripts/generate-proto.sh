@@ -225,17 +225,27 @@ protoc \
     --go-grpc_opt=module="$SYSTEM_PKG" \
     ${SYSTEM_PROTOS[@]}
 
+# wendy_com_msg.proto imports sensorlink.proto by bare filename, for the same
+# reason the tunnel protos do: in the wendy-lite project the two sit side by
+# side in one directory, and the file is shared with that project verbatim. So
+# proto_path points inside wendy/lite here too. sensorlink.proto is an input
+# only -- its Go code comes from the sensorlinkpb generation further down,
+# which the agent's v2 sensor service shares. The wendy-lite project generates
+# it into a sensorlinkpb package of its own under the same import path, so the
+# client code shared with that project names these types identically on both
+# sides.
 echo "Generating Wendy Lite protos..."
 LITE_PKG="$MODULE/go/proto/gen/litepb"
 mkdir -p "$GEN_DIR/litepb"
 protoc \
-    --proto_path="$PROTO_DIR" \
+    --proto_path="$PROTO_DIR/wendy/lite" \
     --go_out="$GEN_DIR/litepb" \
     --go_opt=module="$LITE_PKG" \
-    --go_opt=Mwendy/lite/wendy_com_msg.proto="$LITE_PKG" \
-    --go_opt=Mwendy/lite/wendy_conf.proto="$LITE_PKG" \
-    wendy/lite/wendy_com_msg.proto \
-    wendy/lite/wendy_conf.proto
+    --go_opt=Mwendy_com_msg.proto="$LITE_PKG" \
+    --go_opt=Mwendy_conf.proto="$LITE_PKG" \
+    --go_opt=Msensorlink.proto="$SENSORLINK_PKG" \
+    wendy_com_msg.proto \
+    wendy_conf.proto
 
 # The tunnel protos import each other by bare filename so they can be moved
 # to another project as-is; proto_path points inside wendy/lite accordingly.
@@ -262,6 +272,7 @@ protoc \
     --proto_path="$PROTO_DIR" \
     --go_out="$GEN_DIR/sensorlinkpb" \
     --go_opt=module="$SENSORLINK_PKG" \
+    --go_opt=Mwendy/lite/sensorlink.proto="$SENSORLINK_PKG" \
     "$PROTO_DIR/wendy/lite/sensorlink.proto"
 
 echo "Proto generation complete!"

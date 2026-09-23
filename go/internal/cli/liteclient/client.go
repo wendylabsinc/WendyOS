@@ -18,6 +18,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
+	"github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.bug.st/serial"
 	"google.golang.org/protobuf/proto"
 )
@@ -97,6 +98,12 @@ type subscription struct {
 	ch     chan *wendypb.WendyComMessage
 }
 
+// sensorFrameListener boxes a listener so registrations have an identity:
+// func values are not comparable, so the slice could not be pruned otherwise.
+type sensorFrameListener struct {
+	fn func(*sensorlinkpb.SensorFrame)
+}
+
 // WendyLiteClient drives one connection to one device: connect once, then
 // Close is terminal — create a new client to reconnect.
 type WendyLiteClient struct {
@@ -113,6 +120,13 @@ type WendyLiteClient struct {
 	mu      sync.Mutex // guards subs and readErr
 	subs    []*subscription
 	readErr error // set once the read loop dies; refuses new subscriptions
+
+	// Frames are delivered straight from the read loop, so their listeners
+	// must not wait on mu. The stored slice is never mutated once published:
+	// dispatch loads and ranges over it lock-free, and registration swaps in
+	// a fresh copy under listenerMu.
+	listenerMu           sync.Mutex
+	sensorFrameListeners atomic.Pointer[[]*sensorFrameListener]
 }
 
 func NewWendyLiteClient() *WendyLiteClient {
@@ -519,6 +533,67 @@ func (c *WendyLiteClient) GetDeviceInfo(timeout time.Duration) (*DeviceInfo, err
 	}, nil
 }
 
+// GetSensorManifest asks the device for its sensor-link manifest. The
+// returned type is the generated wendypb type directly, not a mirrored
+// client-package struct: sensor-link is a wire contract shared across
+// modules beyond this console, so there's no reason to hide it behind a
+// second type.
+func (c *WendyLiteClient) GetSensorManifest(timeout time.Duration) (*sensorlinkpb.SensorManifest, error) {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_SensorLinkGetManifest{
+			SensorLinkGetManifest: &sensorlinkpb.GetSensorManifest{},
+		},
+	}, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return nil, fmt.Errorf("device returned error: %w", err)
+	}
+	m := resp.GetSensorLinkManifest()
+	if m == nil {
+		return nil, fmt.Errorf("device returned no manifest")
+	}
+	return m, nil
+}
+
+// SensorLinkSubscribe asks the device to start streaming SensorFrames for
+// the given channel IDs.
+func (c *WendyLiteClient) SensorLinkSubscribe(channelIDs []uint32, timeout time.Duration) error {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_SensorLinkSubscribe{
+			SensorLinkSubscribe: &sensorlinkpb.Subscribe{ChannelId: channelIDs},
+		},
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return fmt.Errorf("device returned error: %w", err)
+	}
+	return nil
+}
+
+// SensorLinkUnsubscribe asks the device to stop streaming SensorFrames for
+// the given channel IDs.
+func (c *WendyLiteClient) SensorLinkUnsubscribe(channelIDs []uint32, timeout time.Duration) error {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_SensorLinkUnsubscribe{
+			SensorLinkUnsubscribe: &sensorlinkpb.Unsubscribe{ChannelId: channelIDs},
+		},
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return fmt.Errorf("device returned error: %w", err)
+	}
+	return nil
+}
+
 // ConsoleAttach asks the device to stream its console output and returns the
 // chunk channel plus an idempotent detach function. The channel is closed on
 // detach and on connection loss. detach stops local delivery, then tells the
@@ -742,6 +817,43 @@ func (c *WendyLiteClient) unsubscribe(s *subscription) {
 	}
 }
 
+// AddSensorFrameListener registers fn for every SensorFrame the device sends
+// and returns a function that unregisters it, idempotently and safely after
+// the connection has died.
+//
+// fn is called on the client's read loop — one frame at a time, in arrival
+// order, with no goroutine hop and no lock held. It therefore sits on the
+// critical path of the whole connection: it must not block, and it must not
+// call anything that waits for a device reply, since the read loop is busy
+// running fn instead of reading that reply. The frame and its payload belong
+// to fn and stay valid after it returns.
+func (c *WendyLiteClient) AddSensorFrameListener(fn func(*sensorlinkpb.SensorFrame)) func() {
+	l := &sensorFrameListener{fn: fn}
+
+	c.listenerMu.Lock()
+	defer c.listenerMu.Unlock()
+	next := append(c.loadSensorFrameListeners(), l)
+	c.sensorFrameListeners.Store(&next)
+
+	return func() {
+		c.listenerMu.Lock()
+		defer c.listenerMu.Unlock()
+		next := slices.DeleteFunc(c.loadSensorFrameListeners(),
+			func(x *sensorFrameListener) bool { return x == l })
+		c.sensorFrameListeners.Store(&next)
+	}
+}
+
+// loadSensorFrameListeners returns a copy the caller may append to or prune:
+// the published slice is shared with a dispatch that holds no lock, so it can
+// never be modified in place. Callers hold listenerMu.
+func (c *WendyLiteClient) loadSensorFrameListeners() []*sensorFrameListener {
+	if listeners := c.sensorFrameListeners.Load(); listeners != nil {
+		return slices.Clone(*listeners)
+	}
+	return nil
+}
+
 // startReadLoop hands c.link to the read loop goroutine and registers it with
 // readDone so Close can wait for it to exit.
 func (c *WendyLiteClient) startReadLoop() {
@@ -766,6 +878,20 @@ func (c *WendyLiteClient) readLoop(link wcomLink) {
 }
 
 func (c *WendyLiteClient) dispatch(msg *wendypb.WendyComMessage) {
+	// Frames arrive at video rates and go to their listeners right here, on
+	// this goroutine: the subscription path below would put a mutex and a
+	// blocking channel send in front of every one. Handling them before the
+	// lock also keeps them away from the log line at the bottom, which would
+	// print a whole payload per frame.
+	if frame := msg.GetSensorFrame(); frame != nil {
+		if listeners := c.sensorFrameListeners.Load(); listeners != nil {
+			for _, l := range *listeners {
+				l.fn(frame)
+			}
+		}
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i := len(c.subs) - 1; i >= 0; i-- {
