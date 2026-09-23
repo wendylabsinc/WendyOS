@@ -19,6 +19,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
+	"golang.org/x/sys/unix"
 )
 
 const DefaultRoot = "/var/lib/wendy-agent/data/episodes"
@@ -1026,10 +1027,12 @@ func appendRoughtimeEvidence(dir string, c timesync.Consensus) (retErr error) {
 // enforceQuotaLocked evicts against an already-taken store scan. Callers hold
 // m.mu; the scan itself was taken without it.
 func (m *Manager) enforceQuotaLocked(scan storeScan) error {
-	total, free, err := filesystemSpace(m.root)
-	if err != nil {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(m.root, &stat); err != nil {
 		return fmt.Errorf("data filesystem quota: %w", err)
 	}
+	total := int64(stat.Blocks) * int64(stat.Bsize)
+	free := int64(stat.Bavail) * int64(stat.Bsize)
 	quota := total / 5
 	if quota > m.maxQuota {
 		quota = m.maxQuota

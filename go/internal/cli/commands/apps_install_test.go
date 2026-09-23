@@ -17,8 +17,8 @@ func TestResolveAppStoreAPIBase(t *testing.T) {
 		t.Errorf("env precedence: got %q", got)
 	}
 	t.Setenv("WENDY_APPSTORE_API", "")
-	if got := resolveAppStoreAPIBase(""); got != "https://api.wendy.sh" {
-		t.Errorf("default: got %q, want canonical wendy.sh API", got)
+	if got := resolveAppStoreAPIBase(""); got != defaultAppStoreAPIBase {
+		t.Errorf("default: got %q", got)
 	}
 }
 

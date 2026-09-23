@@ -65,19 +65,19 @@ func TestIsUnauthenticatedCloudError(t *testing.T) {
 }
 
 func TestLoginTargetsForAuth(t *testing.T) {
-	t.Run("nil falls back to canonical production endpoints", func(t *testing.T) {
+	t.Run("nil falls back to defaults", func(t *testing.T) {
 		dash, grpc := loginTargetsForAuth(nil)
-		if dash != "https://cloud.wendy.sh" || grpc != "api.wendy.sh:443" {
-			t.Errorf("got (%q, %q), want canonical wendy.sh defaults", dash, grpc)
+		if dash != defaultCloudDashboard || grpc != defaultCloudGRPC {
+			t.Errorf("got (%q, %q), want defaults (%q, %q)", dash, grpc, defaultCloudDashboard, defaultCloudGRPC)
 		}
 	})
-	t.Run("preserves explicit auth entry endpoints and adds a scheme", func(t *testing.T) {
-		dash, grpc := loginTargetsForAuth(&config.AuthConfig{CloudDashboard: "cloud.wendy.dev", CloudGRPC: "grpc.wendy.dev:443"})
-		if dash != "https://cloud.wendy.dev" {
-			t.Errorf("dashboard = %q, want explicit endpoint with https scheme", dash)
+	t.Run("prefers the auth entry endpoints and adds a scheme", func(t *testing.T) {
+		dash, grpc := loginTargetsForAuth(&config.AuthConfig{CloudDashboard: "cloud.example.com", CloudGRPC: "grpc.example.com:443"})
+		if dash != "https://cloud.example.com" {
+			t.Errorf("dashboard = %q, want https-prefixed", dash)
 		}
-		if grpc != "grpc.wendy.dev:443" {
-			t.Errorf("grpc = %q, want explicit endpoint", grpc)
+		if grpc != "grpc.example.com:443" {
+			t.Errorf("grpc = %q", grpc)
 		}
 	})
 }

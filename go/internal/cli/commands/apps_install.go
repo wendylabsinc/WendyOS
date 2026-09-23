@@ -17,9 +17,12 @@ import (
 )
 
 // defaultAppStoreAPIBase is the Wendy Cloud API that resolves AppStore app ids
-// to OCI image references. Override with --api or the WENDY_APPSTORE_API env
-// var.
-const defaultAppStoreAPIBase = "https://api.wendy.sh"
+// to OCI image references. This is the deployed wendy-cloud-services Cloud Run
+// service (the same host as defaultCloudGRPC in auth.go); cloud.wendy.dev is the
+// web dashboard, not the API. The api.wendy.dev domain mapping will alias this
+// service once its DNS is live. Override with --api or the WENDY_APPSTORE_API
+// env var.
+const defaultAppStoreAPIBase = "https://wendy-cloud-services-114319063177.us-central1.run.app"
 
 // appImageResolution is the JSON returned by GET /v1/apps/{app_id}/image.
 type appImageResolution struct {

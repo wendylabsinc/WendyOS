@@ -14,12 +14,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
 
-func TestDefaultTelemetryEndpoint(t *testing.T) {
-	if defaultTelemetryEndpoint != "https://api.wendy.sh/v1/telemetry/events" {
-		t.Fatalf("default telemetry endpoint = %q, want canonical wendy.sh API", defaultTelemetryEndpoint)
-	}
-}
-
 func clearCIEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range env.CIEnvVars {

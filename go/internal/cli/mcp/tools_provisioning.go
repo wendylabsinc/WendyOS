@@ -25,7 +25,7 @@ func (s *mcpServer) registerProvisioningTools(srv *server.MCPServer) {
 		),
 		mcpgo.WithString("cloud_host",
 			mcpgo.Required(),
-			mcpgo.Description("Wendy Cloud hostname, e.g. api.wendy.sh"),
+			mcpgo.Description("Wendy Cloud hostname, e.g. cloud.wendy.dev"),
 		),
 		mcpgo.WithNumber("organization_id",
 			mcpgo.Required(),

@@ -100,7 +100,7 @@ wendy cloud discover --all
 Point at a specific cloud gRPC endpoint:
 
 ```sh
-wendy cloud discover --cloud-grpc api.wendy.sh:443
+wendy cloud discover --cloud-grpc grpc.cloud.wendy.dev:443
 ```
 
 Output JSON (non-interactive / scripting):
