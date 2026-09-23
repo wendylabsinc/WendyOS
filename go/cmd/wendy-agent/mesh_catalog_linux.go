@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 type catalogApp struct {
 	name, appID, ip, bridge string
 	ports                   map[uint16]uint16
+	udpPorts                map[uint16]uint16
 }
 
 type catalogBridgeRun struct {
@@ -80,8 +82,12 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 	if err != nil {
 		return err
 	}
-	authorize := func(appID, _ string, hostPort uint16) error {
-		if !m.ingress.AllowedApp(appID, hostPort) {
+	authorize := func(appID, serviceType string, hostPort uint16) error {
+		allowed := m.ingress.AllowedApp(appID, hostPort)
+		if strings.HasSuffix(serviceType, "._udp") {
+			allowed = m.ingress.AllowedUDPApp(appID, hostPort)
+		}
+		if !allowed {
 			return meshingress.ErrPortDenied
 		}
 		return nil
@@ -279,13 +285,18 @@ func (m *meshCatalogManager) StartMeshApp(containerName, appID, ip, bridge strin
 		return errors.New("invalid mesh app network for mDNS")
 	}
 	mapped := make(map[uint16]uint16, len(ports))
+	udpMapped := make(map[uint16]uint16, len(ports))
 	for _, port := range ports {
-		if port.Container == 0 || port.Host == 0 || mapped[port.Container] != 0 {
+		target := mapped
+		if port.Protocol == "udp" {
+			target = udpMapped
+		}
+		if port.Container == 0 || port.Host == 0 || target[port.Container] != 0 {
 			return errors.New("invalid or duplicate mesh app mDNS port")
 		}
-		mapped[port.Container] = port.Host
+		target[port.Container] = port.Host
 	}
-	app := catalogApp{containerName, appID, ip, bridge, mapped}
+	app := catalogApp{name: containerName, appID: appID, ip: ip, bridge: bridge, ports: mapped, udpPorts: udpMapped}
 	m.StopMeshApp(containerName)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -318,7 +329,7 @@ func (m *meshCatalogManager) startBridge(a *catalogActivation, app catalogApp) e
 	if err != nil {
 		return err
 	}
-	scope := meshcatalog.AppScope{AppID: app.appID, AppIP: net.ParseIP(app.ip), BridgeIndex: iface.Index, Ports: app.ports}
+	scope := meshcatalog.AppScope{AppID: app.appID, AppIP: net.ParseIP(app.ip), BridgeIndex: iface.Index, Ports: app.ports, UDPPorts: app.udpPorts}
 	policy := func(_ string, record meshcatalog.Record) bool {
 		return record.Key.Org == a.org && record.Key.Mesh == "default" &&
 			(record.Key.Asset != a.asset || record.Key.AppID != app.appID)

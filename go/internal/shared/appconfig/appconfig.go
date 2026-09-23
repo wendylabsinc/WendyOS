@@ -416,6 +416,8 @@ type PythonConfig struct {
 type PortMapping struct {
 	Host      uint16 `json:"host"`
 	Container uint16 `json:"container"`
+	// Empty is TCP for compatibility with existing app manifests.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // Entitlement represents a single entitlement entry in wendy.json.
@@ -554,6 +556,14 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 				}
 			} else if e.ServiceCIDR != "" {
 				return fmt.Errorf("%s[%d]: network serviceCIDR is only valid with mode \"mesh\", got mode %q", prefix, i, e.Mode)
+			}
+			for _, pm := range e.Ports {
+				if pm.Host == 0 || pm.Container == 0 || (pm.Protocol != "" && pm.Protocol != "tcp" && pm.Protocol != "udp") {
+					return fmt.Errorf("%s[%d]: invalid network port mapping", prefix, i)
+				}
+				if pm.Protocol == "udp" && e.Mode != "mesh" {
+					return fmt.Errorf("%s[%d]: UDP port mappings require mesh mode", prefix, i)
+				}
 			}
 		case EntitlementPersist:
 			if e.Name == "" {

@@ -23,6 +23,7 @@ type AppScope struct {
 	BridgeIndex  int
 	AllowedTypes []string
 	Ports        map[uint16]uint16
+	UDPPorts     map[uint16]uint16
 }
 
 type observedRR struct {
@@ -61,6 +62,11 @@ func NewCollector(scope AppScope, catalog *Catalog) (*Collector, error) {
 			return nil, errors.New("invalid app service port mapping")
 		}
 	}
+	for containerPort, hostPort := range scope.UDPPorts {
+		if containerPort == 0 || hostPort == 0 {
+			return nil, errors.New("invalid app UDP service port mapping")
+		}
+	}
 	scope.AppIP = append(net.IP(nil), scope.AppIP.To4()...)
 	scope.AllowedTypes = append([]string(nil), scope.AllowedTypes...)
 	for i := range scope.AllowedTypes {
@@ -71,6 +77,11 @@ func NewCollector(scope AppScope, catalog *Catalog) (*Collector, error) {
 		ports[p] = h
 	}
 	scope.Ports = ports
+	udpPorts := make(map[uint16]uint16, len(scope.UDPPorts))
+	for p, h := range scope.UDPPorts {
+		udpPorts[p] = h
+	}
+	scope.UDPPorts = udpPorts
 	return &Collector{scope: scope, catalog: catalog, records: map[string]observedRR{},
 		published: map[string]publication{}}, nil
 }
@@ -167,7 +178,11 @@ func (c *Collector) Sweep(now time.Time) ([]SignedRecord, error) {
 		if !ok || !a.A.Equal(c.scope.AppIP) {
 			continue
 		}
-		hostPort := c.scope.Ports[srv.Port]
+		portMap := c.scope.Ports
+		if strings.HasSuffix(typeName, "._udp") {
+			portMap = c.scope.UDPPorts
+		}
+		hostPort := portMap[srv.Port]
 		if hostPort == 0 {
 			continue
 		}
