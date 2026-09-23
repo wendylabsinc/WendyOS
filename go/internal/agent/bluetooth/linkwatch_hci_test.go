@@ -56,6 +56,11 @@ func TestDecodeHCIEvent(t *testing.T) {
 			want: hciEvent{Kind: hciConnUpdateComplete, Status: 0x3b, Handle: 0x0010, Params: connParams{Interval: 6, Latency: 0, Timeout: 300}},
 		},
 		{
+			name: "Classic connection complete",
+			pkt:  "04 03 0b 00 0b 00 66 55 44 33 22 11 01 00",
+			want: hciEvent{Kind: hciClassicConnComplete, Handle: 0x000b, Address: "11:22:33:44:55:66", LinkType: hciLinkACL},
+		},
+		{
 			name: "disconnection complete",
 			pkt:  "04 05 04 00 10 00 08",
 			want: hciEvent{Kind: hciDisconnComplete, Handle: 0x0010, Reason: 0x08},
@@ -103,6 +108,7 @@ func TestDecodeHCIEvent_RejectsTruncatedPackets(t *testing.T) {
 		"update complete too short":         "04 3e 05 03 00 10 00 06",
 		"disconnection complete too short":  "04 05 02 00 10",
 		"command status too short":          "04 0f 02 00 01",
+		"Classic complete too short":        "04 03 09 00 0b 00 66 55 44 33 22 11",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := decodeHCIEvent(hexBytes(t, pkt)); !errors.Is(err, errShortHCIPacket) {
@@ -123,16 +129,19 @@ func TestEncodeLEConnUpdate_PrototypeValues(t *testing.T) {
 }
 
 func TestEncodeHCIFilter(t *testing.T) {
-	want := hexBytes(t, "10 00 00 00 20 80 00 00 00 00 00 40 13 20 00 00")
+	want := hexBytes(t, "10 00 00 00 28 80 00 00 00 00 00 40 13 20 00 00")
 	if got := encodeHCIFilter(); !bytes.Equal(got, want) {
 		t.Errorf("encodeHCIFilter = % x; want % x", got, want)
 	}
 }
 
 func TestParseConnList(t *testing.T) {
-	buf := hexBytes(t, "00 00 02 00"+
-		" 10 00 ff ee dd cc bb aa 80 01 01 00 01 00 00 00"+ // LE, central
-		" 0b 00 66 55 44 33 22 11 01 00 01 00 00 00 00 00"+ // Classic, peripheral
+	buf := hexBytes(t, "00 00 05 00"+
+		" 10 00 ff ee dd cc bb aa 80 01 01 00 01 00 00 00"+ // LE, central, BT_CONNECTED
+		" 0b 00 66 55 44 33 22 11 01 00 01 00 00 00 00 00"+ // Classic, peripheral, BT_CONNECTED
+		" ff ff 00 ee dd cc bb aa 80 01 05 00 01 00 00 00"+ // LE attempt, BT_CONNECT, no handle yet (6.x)
+		" 00 00 00 ee dd cc bb 4a 80 01 05 00 01 00 00 00"+ // LE attempt, BT_CONNECT, handle 0 (5.15)
+		" 12 00 11 11 11 11 11 11 01 00 06 00 00 00 00 00"+ // Classic, BT_CONNECT2
 		" 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00") // unused slot
 	got, err := parseConnList(buf)
 	if err != nil {

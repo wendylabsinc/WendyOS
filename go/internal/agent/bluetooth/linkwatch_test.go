@@ -248,8 +248,23 @@ func (h *linkHarness) stop() {
 }
 
 func (h *linkHarness) emit(ev hciEvent) {
+	if ev.Kind == hciDisconnComplete {
+		// The kernel finishes handling a disconnect, deleting the
+		// connection, before the watcher reads the event and could look it
+		// up, so the fake kernel forgets it first.
+		h.tr.mu.Lock()
+		h.tr.conns = slices.DeleteFunc(h.tr.conns, func(c connInfo) bool { return c.Handle == ev.Handle })
+		h.tr.mu.Unlock()
+	}
 	h.tr.events <- ev
 	synctest.Wait()
+}
+
+// list makes the fake kernel list a connection, as it does for a new one.
+func (h *linkHarness) list(ci connInfo) {
+	h.tr.mu.Lock()
+	defer h.tr.mu.Unlock()
+	h.tr.conns = append(h.tr.conns, ci)
 }
 
 func (h *linkHarness) wait(d time.Duration) {
@@ -710,6 +725,7 @@ func TestLinkWatch_ReconnectStartsFresh(t *testing.T) {
 		h.wantSent(ourUpdate, ourUpdate) // the third raise tripped the guard
 
 		h.emit(hciEvent{Kind: hciDisconnComplete, Handle: padConn.Handle, Reason: 0x13})
+		h.list(padConn)
 		h.connect(xboxParams) // same handle, new connection
 		h.wait(linkSettleDelay)
 		h.wantSent(ourUpdate, ourUpdate, ourUpdate)
@@ -724,6 +740,32 @@ func TestLinkWatch_AdoptKeepsTheStoredIntervalRange(t *testing.T) {
 		defer h.stop()
 
 		h.wantSent(sentUpdate{Handle: 0x0010, Update: connUpdate{IntervalMin: 6, IntervalMax: 9, Latency: 0, Timeout: 50}})
+	})
+}
+
+func TestLinkWatch_LogsClassicLinkThatConnectsAfterStart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const dualSense = "11:22:33:44:55:66"
+		h := newLinkHarness(t, 50)
+		h.cls.set(dualSense, fakeClass{hid: true, known: true})
+		h.start()
+		defer h.stop()
+
+		h.list(connInfo{Handle: 0x000B, Address: dualSense, LinkType: hciLinkACL, Central: true})
+		h.emit(hciEvent{Kind: hciClassicConnComplete, Handle: 0x000B, Address: dualSense, LinkType: hciLinkACL})
+		h.wait(linkSettleDelay)
+		h.wantSent() // Classic links are only logged
+		h.wait(4 * time.Second)
+		h.emit(hciEvent{Kind: hciDisconnComplete, Handle: 0x000B, Reason: 0x08})
+
+		lost := h.logged("Bluetooth HID link lost")
+		if len(lost) != 1 {
+			t.Fatalf("HID link lost entries = %d; want 1", len(lost))
+		}
+		f := lost[0].ContextMap()
+		if f["address"] != dualSense || f["link_type"] != "classic" || f["duration"] != 5*time.Second {
+			t.Errorf("Classic disconnect fields = %v", f)
+		}
 	})
 }
 

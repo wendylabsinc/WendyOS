@@ -180,7 +180,7 @@ type linkTransport interface {
 	Events() <-chan hciEvent
 	// UpdateConnection sends an LE Connection Update for handle.
 	UpdateConnection(handle uint16, u connUpdate) error
-	// Connections lists the adapter's current connections.
+	// Connections lists the adapter's established connections.
 	Connections() ([]connInfo, error)
 	// StoredParams returns the connection parameters bluetoothd stored for
 	// a peer.
@@ -442,6 +442,8 @@ func (a *adapterWatch) handle(ctx context.Context, ev hciEvent) {
 	switch ev.Kind {
 	case hciConnComplete:
 		a.onConnect(ev)
+	case hciClassicConnComplete:
+		a.onClassicConnect(ev)
 	case hciConnUpdateComplete:
 		a.onUpdate(ctx, ev)
 	case hciCmdStatus:
@@ -466,6 +468,17 @@ func (a *adapterWatch) onConnect(ev hciEvent) {
 		// Give the device a moment to send its own parameter request first,
 		// so one update usually covers both.
 		a.after(linkSettleDelay, linkWake{kind: wakeCheck, handle: ev.Handle})
+	}
+}
+
+// onClassicConnect tracks a Classic link so its disconnect can be logged
+// with its address. The watcher never changes a Classic link.
+func (a *adapterWatch) onClassicConnect(ev hciEvent) {
+	if ev.Status != 0 {
+		return
+	}
+	a.conns[ev.Handle] = &linkConn{
+		handle: ev.Handle, address: ev.Address, linkType: ev.LinkType, connectedAt: time.Now(),
 	}
 }
 
@@ -627,12 +640,12 @@ func (a *adapterWatch) adoptExisting(ctx context.Context) {
 		return
 	}
 	for _, ci := range conns {
-		if ci.LinkType != hciLinkLE {
-			continue
-		}
-		c := &linkConn{handle: ci.Handle, address: ci.Address, linkType: hciLinkLE, central: ci.Central}
+		// Every link is tracked, so its disconnect can be logged with its
+		// address: by the time the watcher sees a Disconnection Complete the
+		// kernel has already deleted the connection.
+		c := &linkConn{handle: ci.Handle, address: ci.Address, linkType: ci.LinkType, central: ci.Central}
 		a.conns[ci.Handle] = c
-		if a.w.target == 0 || !c.central || !a.isHID(ctx, c) {
+		if c.linkType != hciLinkLE || a.w.target == 0 || !c.central || !a.isHID(ctx, c) {
 			continue
 		}
 		if _, ok := a.tr.StoredParams(c.address); !ok {

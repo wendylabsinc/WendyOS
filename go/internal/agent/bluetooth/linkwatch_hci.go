@@ -12,6 +12,7 @@ const (
 	hciCommandPkt = 0x01
 	hciEventPkt   = 0x04
 
+	hciEvtConnComplete    = 0x03
 	hciEvtDisconnComplete = 0x05
 	hciEvtCmdStatus       = 0x0F
 	hciEvtLEMeta          = 0x3E
@@ -38,6 +39,13 @@ const (
 
 	// hciLinkModeCentral is HCI_LM_MASTER in hci_conn_info.link_mode.
 	hciLinkModeCentral = 0x0001
+
+	// Connection states in hci_conn_info.state (enum in
+	// include/net/bluetooth/bluetooth.h) for a connection still being set
+	// up, and the handle such a connection has on newer kernels.
+	hciStateConnect  = 5 // BT_CONNECT
+	hciStateConnect2 = 6 // BT_CONNECT2
+	hciHandleUnset   = 0xFFFF
 )
 
 // Sizes of the kernel's HCI socket ioctl structures
@@ -51,10 +59,11 @@ const (
 type hciEventKind uint8
 
 const (
-	hciConnComplete hciEventKind = iota + 1
+	hciConnComplete hciEventKind = iota + 1 // LE
 	hciConnUpdateComplete
 	hciDisconnComplete
 	hciCmdStatus
+	hciClassicConnComplete
 )
 
 // connParams are LE connection parameters in controller units: Interval in
@@ -75,13 +84,15 @@ type connUpdate struct {
 
 // hciEvent is one decoded controller event the link watcher acts on.
 type hciEvent struct {
-	Kind    hciEventKind
-	Status  uint8
-	Handle  uint16     // every kind except hciCmdStatus
-	Central bool       // hciConnComplete: the local controller is central
-	Params  connParams // hciConnComplete, hciConnUpdateComplete
-	Reason  uint8      // hciDisconnComplete
-	Opcode  uint16     // hciCmdStatus
+	Kind     hciEventKind
+	Status   uint8
+	Handle   uint16     // every kind except hciCmdStatus
+	Central  bool       // hciConnComplete: the local controller is central
+	Params   connParams // hciConnComplete, hciConnUpdateComplete
+	Reason   uint8      // hciDisconnComplete
+	Opcode   uint16     // hciCmdStatus
+	Address  string     // hciClassicConnComplete
+	LinkType uint8      // hciClassicConnComplete: hciLinkACL or hciLinkSCO
 }
 
 // connInfo is one entry of the kernel's connection list for an adapter.
@@ -107,6 +118,16 @@ func decodeHCIEvent(pkt []byte) (ev hciEvent, ok bool, err error) {
 	}
 	p := pkt[3 : 3+int(pkt[2])]
 	switch pkt[1] {
+	case hciEvtConnComplete:
+		// status(1) handle(2) bdaddr(6) link type(1) encryption(1). A
+		// Classic address is the peer's real one, so no lookup is needed.
+		if len(p) < 10 {
+			return hciEvent{}, false, errShortHCIPacket
+		}
+		return hciEvent{
+			Kind: hciClassicConnComplete, Status: p[0], Handle: le16(p[1:]) & 0x0FFF,
+			Address: bdaddrString(p[3:9]), LinkType: p[9],
+		}, true, nil
 	case hciEvtDisconnComplete:
 		if len(p) < 4 {
 			return hciEvent{}, false, errShortHCIPacket
@@ -178,15 +199,15 @@ func encodeLEConnUpdate(handle uint16, u connUpdate) []byte {
 }
 
 // encodeHCIFilter is the HCI_FILTER value for the watcher's raw socket: event
-// packets only; Disconnection Complete, Command Status and LE Meta events
-// only; Command Status only for LE Connection Update. The layout is the
+// packets only; Classic Connection Complete, Disconnection Complete, Command
+// Status and LE Meta events only; Command Status only for LE Connection Update. The layout is the
 // kernel's struct hci_ufilter (u32 type mask, two u32 event masks, le16
 // opcode, padded to 16 bytes) in the little-endian byte order of every board
 // WendyOS ships on.
 func encodeHCIFilter() []byte {
 	f := make([]byte, 16)
 	binary.LittleEndian.PutUint32(f[0:], 1<<hciEventPkt)
-	var events uint64 = 1<<hciEvtDisconnComplete | 1<<hciEvtCmdStatus | 1<<hciEvtLEMeta
+	var events uint64 = 1<<hciEvtConnComplete | 1<<hciEvtDisconnComplete | 1<<hciEvtCmdStatus | 1<<hciEvtLEMeta
 	binary.LittleEndian.PutUint32(f[4:], uint32(events))
 	binary.LittleEndian.PutUint32(f[8:], uint32(events>>32))
 	binary.LittleEndian.PutUint16(f[12:], hciOpLEConnUpdate)
@@ -195,7 +216,10 @@ func encodeHCIFilter() []byte {
 
 // parseConnList decodes an HCIGETCONNLIST result: u16 device id, u16 entry
 // count, then that many struct hci_conn_info (u16 handle, bdaddr_t, u8 type,
-// u8 out, u16 state, u32 link_mode), in host byte order.
+// u8 out, u16 state, u32 link_mode), in host byte order. It drops
+// connections still being set up, such as BlueZ reconnecting to a trusted
+// device that is switched off: they have no handle yet (0xFFFF, or 0 before
+// Linux 5.18), and an LE one can carry a resolvable private address.
 func parseConnList(buf []byte) ([]connInfo, error) {
 	if len(buf) < hciConnListHdrSize {
 		return nil, errShortHCIPacket
@@ -207,8 +231,12 @@ func parseConnList(buf []byte) ([]connInfo, error) {
 	conns := make([]connInfo, 0, n)
 	for i := range n {
 		e := buf[hciConnListHdrSize+i*hciConnInfoSize:]
+		handle := binary.LittleEndian.Uint16(e[0:])
+		if state := binary.LittleEndian.Uint16(e[10:]); state == hciStateConnect || state == hciStateConnect2 || handle == hciHandleUnset {
+			continue
+		}
 		conns = append(conns, connInfo{
-			Handle:   binary.LittleEndian.Uint16(e[0:]),
+			Handle:   handle,
 			Address:  bdaddrString(e[2:8]),
 			LinkType: e[8],
 			Central:  binary.LittleEndian.Uint32(e[12:])&hciLinkModeCentral != 0,
