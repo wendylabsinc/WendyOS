@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,8 +119,27 @@ func TestImageModules(t *testing.T) {
 	}
 }
 
+// Keep the real mksquashfs fixture in text form for repository diff tooling.
+// Its source files and regeneration command are documented beside it.
+func privateDriverFixture(t *testing.T) []byte {
+	t.Helper()
+	encoded, err := os.ReadFile("testdata/install-private.raw.b64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := base64.StdEncoding.DecodeString(string(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestImageModulesPrivatePayload(t *testing.T) {
-	got := imageModules(filepath.Join("testdata", "install-private.raw"), "wendyos-hello")
+	path := filepath.Join(t.TempDir(), "install-private.raw")
+	if err := os.WriteFile(path, privateDriverFixture(t), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := imageModules(path, "wendyos-hello")
 	if len(got) != 1 || got[0] != "wendyos_hello" {
 		t.Fatalf("private modules = %v", got)
 	}

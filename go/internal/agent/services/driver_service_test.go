@@ -1200,10 +1200,7 @@ func TestPrivatePayloadStatusAndOverrides(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	raw, err := os.ReadFile("testdata/install-private.raw")
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := privateDriverFixture(t)
 	write(svc.rawPath(testKernel, name), string(raw))
 	write(filepath.Join(svc.privatePayloadDir, name, "modules-load.conf"), "wendyos_hello\n")
 	check := func(wantLoaded bool, wantModule string) {
@@ -1232,10 +1229,7 @@ func TestPrivatePayloadStatusAndOverrides(t *testing.T) {
 func TestFinalizeReplacementReceipt(t *testing.T) {
 	for _, fresh := range []bool{false, true} {
 		t.Run(fmt.Sprint("fresh=", fresh), func(t *testing.T) {
-			payload, err := os.ReadFile("testdata/install-private.raw")
-			if err != nil {
-				t.Fatal(err)
-			}
+			payload := privateDriverFixture(t)
 			svc := newTestDriverService(t, payload)
 			svc.loadedModules = func() []string { return []string{"wendyos_hello"} }
 			state := filepath.Join(svc.activeStateDir, "wendyos-hello")
