@@ -20,7 +20,7 @@ import (
 
 // runConfiguredMeshCarriers runs one Babel node for every enabled carrier.
 // Its observer is cleared only after the radio provider has drained its links.
-func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, observe func(func() localmesh.NodeSnapshot)) error {
+func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot)) error {
 	path := filepath.Join(configDir, "local-mesh.json")
 	initial, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -54,6 +54,7 @@ func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localme
 	var providersDone sync.WaitGroup
 	return localmesh.RunConfiguredWithNode(runCtx, configDir, id, func(node *localmesh.Node, cfg *localmesh.TCPConfig) {
 		if node == nil {
+			sharing.Deactivate()
 			catalog.Deactivate()
 			if stopProviders != nil {
 				stopProviders()
@@ -63,9 +64,21 @@ func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localme
 			return
 		}
 		observe(node.Snapshot)
-		if err := catalog.Activate(runCtx, node.Credentials, node.Snapshot); err != nil {
+		if err := node.SetGatewayOffers(runCtx, func() []int32 {
+			offers := catalog.GatewayOffers()
+			assets := make([]int32, 0, len(offers))
+			for _, offer := range offers {
+				assets = append(assets, offer.Key.Asset)
+			}
+			return assets
+		}); err != nil {
+			logger.Error("mesh route authorizer unavailable", zap.Error(err))
+			return
+		}
+		if err := catalog.Activate(runCtx, node.Credentials, node.Snapshot, node.ReauthorizeRoutes); err != nil {
 			logger.Error("mesh service catalog unavailable", zap.Error(err))
 		}
+		sharing.Activate(runCtx, node)
 		if !cfg.NAN && !cfg.BLE {
 			return
 		}

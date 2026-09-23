@@ -30,32 +30,36 @@ type catalogBridgeRun struct {
 }
 
 type catalogActivation struct {
-	org       int32
-	asset     int32
-	ctx       context.Context
-	cancel    context.CancelFunc
-	catalog   *meshcatalog.Catalog
-	runtime   *meshcatalog.Runtime
-	cache     *localmesh.IdentityCache
-	done      chan struct{}
-	retryDone chan struct{}
-	bridges   map[string]catalogBridgeRun
+	org            int32
+	asset          int32
+	ctx            context.Context
+	cancel         context.CancelFunc
+	catalog        *meshcatalog.Catalog
+	runtime        *meshcatalog.Runtime
+	cache          *localmesh.IdentityCache
+	done           chan struct{}
+	retryDone      chan struct{}
+	gatewayDone    chan struct{}
+	gatewayApplied bool
+	notifyRoutes   func()
+	bridges        map[string]catalogBridgeRun
 }
 
 type meshCatalogManager struct {
-	mu      sync.Mutex
-	dir     string
-	ingress *meshingress.Registry
-	logger  *zap.Logger
-	apps    map[string]catalogApp
-	active  *catalogActivation
+	mu             sync.Mutex
+	dir            string
+	ingress        *meshingress.Registry
+	logger         *zap.Logger
+	apps           map[string]catalogApp
+	active         *catalogActivation
+	gatewayDesired bool
 }
 
 func newMeshCatalogManager(dir string, ingress *meshingress.Registry, logger *zap.Logger) *meshCatalogManager {
 	return &meshCatalogManager{dir: dir, ingress: ingress, logger: logger, apps: map[string]catalogApp{}}
 }
 
-func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmesh.Credentials, snapshot func() localmesh.NodeSnapshot) error {
+func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmesh.Credentials, snapshot func() localmesh.NodeSnapshot, notifyRoutes func()) error {
 	if credentials == nil || snapshot == nil {
 		return errors.New("mesh catalog requires a running node")
 	}
@@ -90,15 +94,24 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 	if err != nil {
 		return err
 	}
+	runtime.SetGatewayChangeNotifier(notifyRoutes)
 	activeCtx, cancel := context.WithCancel(ctx)
-	a := &catalogActivation{org: credentials.Org, asset: credentials.Asset, ctx: activeCtx, cancel: cancel, catalog: catalog, runtime: runtime, cache: cache, done: make(chan struct{}), retryDone: make(chan struct{}), bridges: map[string]catalogBridgeRun{}}
+	a := &catalogActivation{org: credentials.Org, asset: credentials.Asset, ctx: activeCtx, cancel: cancel, catalog: catalog, runtime: runtime, cache: cache, done: make(chan struct{}), retryDone: make(chan struct{}), gatewayDone: make(chan struct{}), bridges: map[string]catalogBridgeRun{}, notifyRoutes: notifyRoutes}
 	m.mu.Lock()
 	if m.active != nil {
 		m.mu.Unlock()
 		cancel()
 		return errors.New("mesh catalog already active")
 	}
+	if err := m.applyGatewayLocked(a, now); err != nil {
+		m.mu.Unlock()
+		cancel()
+		return fmt.Errorf("restore mesh gateway offer: %w", err)
+	}
 	m.active = a
+	if notifyRoutes != nil {
+		notifyRoutes()
+	}
 	for _, app := range m.apps {
 		if err := m.startBridge(a, app); err != nil {
 			m.logger.Warn("mesh app mDNS bridge unavailable", zap.String("app_id", app.appID), zap.Error(err))
@@ -112,6 +125,7 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 		}
 	}()
 	go m.retryBridges(a)
+	go m.renewGateway(a)
 	return nil
 }
 
@@ -155,6 +169,9 @@ func (m *meshCatalogManager) Deactivate() {
 	m.mu.Lock()
 	a := m.active
 	m.active = nil
+	if a != nil && a.notifyRoutes != nil {
+		a.notifyRoutes()
+	}
 	if a == nil {
 		m.mu.Unlock()
 		return
@@ -171,8 +188,88 @@ func (m *meshCatalogManager) Deactivate() {
 	a.cancel()
 	<-a.retryDone
 	<-a.done
+	<-a.gatewayDone
 	if err := a.cache.Flush(time.Now()); err != nil {
 		m.logger.Warn("mesh catalog identity cache flush failed", zap.Error(err))
+	}
+}
+
+// SetGatewayOffer publishes or withdraws the agent's signed, endpoint-free
+// gateway capability. The desired state survives catalog reactivation.
+func (m *meshCatalogManager) SetGatewayOffer(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active == nil {
+		if enabled {
+			return errors.New("mesh catalog is inactive; gateway offer cannot be signed")
+		}
+		m.gatewayDesired = false
+		return nil
+	}
+	changed := m.gatewayDesired != enabled
+	m.gatewayDesired = enabled
+	if !changed && m.active.gatewayApplied {
+		return nil
+	}
+	return m.applyGatewayLocked(m.active, time.Now())
+}
+
+// GatewayOffers returns only verified, live gateway capabilities. Callers
+// must separately check that the origin is reachable and policy permits use.
+func (m *meshCatalogManager) GatewayOffers() []meshcatalog.Record {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active == nil {
+		return nil
+	}
+	return m.active.catalog.GatewayOffers(time.Now())
+}
+
+// applyGatewayLocked serializes local generations with activation and
+// shutdown. It may persist a receipt and must be called while holding m.mu.
+func (m *meshCatalogManager) applyGatewayLocked(a *catalogActivation, now time.Time) error {
+	var w meshcatalog.SignedRecord
+	var err error
+	if m.gatewayDesired {
+		w, err = a.catalog.PublishGatewayOffer(now)
+	} else {
+		w, err = a.catalog.WithdrawGatewayOffer(now)
+	}
+	if err != nil {
+		a.gatewayApplied = false
+		return err
+	}
+	a.gatewayApplied = true
+	if len(w.Body) != 0 {
+		a.runtime.Broadcast(w)
+		if a.notifyRoutes != nil {
+			a.notifyRoutes()
+		}
+	}
+	return nil
+}
+
+func (m *meshCatalogManager) renewGateway(a *catalogActivation) {
+	defer close(a.gatewayDone)
+	ticker := time.NewTicker(meshcatalog.GatewayOfferLease / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		m.mu.Lock()
+		if m.active != a || a.ctx.Err() != nil {
+			m.mu.Unlock()
+			return
+		}
+		if m.gatewayDesired || !a.gatewayApplied {
+			if err := m.applyGatewayLocked(a, time.Now()); err != nil {
+				m.logger.Warn("mesh gateway offer refresh failed", zap.Error(err))
+			}
+		}
+		m.mu.Unlock()
 	}
 }
 
