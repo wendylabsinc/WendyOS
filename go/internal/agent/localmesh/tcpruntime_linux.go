@@ -30,6 +30,22 @@ func RunConfiguredTCP(parent context.Context, configDir string, id TCPIdentity) 
 // observer receives nil when the runtime exits; consumers also check the
 // current route snapshot before using it.
 func RunConfiguredTCPObserved(parent context.Context, configDir string, id TCPIdentity, observe func(func() NodeSnapshot)) error {
+	return RunConfiguredWithNode(parent, configDir, id, func(node *Node, _ *TCPConfig) {
+		if observe == nil {
+			return
+		}
+		if node == nil {
+			observe(nil)
+		} else {
+			observe(node.Snapshot)
+		}
+	})
+}
+
+// RunConfiguredWithNode owns one Babel node shared by configured TCP and
+// optional radio providers. The observer may start providers and must stop
+// them when it receives nil before the node is closed.
+func RunConfiguredWithNode(parent context.Context, configDir string, id TCPIdentity, observe func(*Node, *TCPConfig)) error {
 	cfg, err := LoadTCPConfig(filepath.Join(configDir, tcpConfigName), id.Asset)
 	if err != nil || cfg == nil {
 		return err
@@ -42,24 +58,30 @@ func RunConfiguredTCPObserved(parent context.Context, configDir string, id TCPId
 	if err = os.MkdirAll(stateDir, 0700); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(parent)
+	// Keep the node alive while radio providers drain their links on parent
+	// shutdown. The runtime cancels it only after the observer has stopped them.
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
 	defer cancel()
-	listener, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		return err
+	var listener net.Listener
+	if cfg.Listen != "" {
+		listener, err = net.Listen("tcp", cfg.Listen)
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
 	}
-	defer listener.Close()
 	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort)
 	if err != nil {
 		return err
 	}
-	if observe != nil {
-		observe(node.Snapshot)
-		defer observe(nil)
+	if listener != nil {
+		go func() { <-ctx.Done(); listener.Close() }()
 	}
-	go func() { <-ctx.Done(); listener.Close() }()
 	nodeDone := make(chan error, 1)
 	go func() { nodeDone <- node.Run(); cancel() }()
+	if observe != nil {
+		observe(node, cfg)
+	}
 	allowed := make(map[int32]TCPPeer, len(cfg.Peers))
 	for _, peer := range cfg.Peers {
 		allowed[peer.Asset] = peer
@@ -114,43 +136,52 @@ func RunConfiguredTCPObserved(parent context.Context, configDir string, id TCPId
 	}
 	sem := make(chan struct{}, 64)
 	acceptDone := make(chan struct{})
-	go func() {
-		defer close(acceptDone)
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
+	if listener == nil {
+		close(acceptDone)
+	} else {
+		go func() {
+			defer close(acceptDone)
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				select {
+				case sem <- struct{}{}:
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						defer func() { <-sem }()
+						defer conn.Close()
+						asset, err := readTCPPreface(conn, id.Org)
+						if err != nil || asset >= id.Asset {
+							return
+						}
+						if _, ok := allowed[asset]; !ok || !claim(asset) {
+							return
+						}
+						defer release(asset)
+						_ = attachTCP(ctx, node, credentials, asset, conn, true)
+					}()
+				default:
+					conn.Close()
+				}
 			}
-			select {
-			case sem <- struct{}{}:
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					defer func() { <-sem }()
-					defer conn.Close()
-					asset, err := readTCPPreface(conn, id.Org)
-					if err != nil || asset >= id.Asset {
-						return
-					}
-					if _, ok := allowed[asset]; !ok || !claim(asset) {
-						return
-					}
-					defer release(asset)
-					_ = attachTCP(ctx, node, credentials, asset, conn, true)
-				}()
-			default:
-				conn.Close()
-			}
-		}
-	}()
+		}()
+	}
 	nodeStopped := false
 	select {
-	case <-ctx.Done():
+	case <-parent.Done():
 	case err = <-nodeDone:
 		nodeStopped = true
 	}
+	if observe != nil {
+		observe(nil, nil)
+	}
 	cancel()
-	listener.Close()
+	if listener != nil {
+		listener.Close()
+	}
 	<-acceptDone
 	wg.Wait()
 	if !nodeStopped {
