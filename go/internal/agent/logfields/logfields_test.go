@@ -9,6 +9,12 @@ func TestKeysAreSnakeCaseAndStable(t *testing.T) {
 		"ContainerID":   ContainerID,
 		"ContainerName": ContainerName,
 		"ServiceName":   ServiceName,
+
+		"Adapter":                       Adapter,
+		"LinkType":                      LinkType,
+		"ReasonCode":                    ReasonCode,
+		"SupervisionTimeoutMS":          SupervisionTimeoutMS,
+		"RequestedSupervisionTimeoutMS": RequestedSupervisionTimeoutMS,
 	}
 	want := map[string]string{
 		"AppID":         "app_id",
@@ -16,6 +22,12 @@ func TestKeysAreSnakeCaseAndStable(t *testing.T) {
 		"ContainerID":   "container_id",
 		"ContainerName": "container_name",
 		"ServiceName":   "service_name",
+
+		"Adapter":                       "adapter",
+		"LinkType":                      "link_type",
+		"ReasonCode":                    "reason_code",
+		"SupervisionTimeoutMS":          "supervision_timeout_ms",
+		"RequestedSupervisionTimeoutMS": "requested_supervision_timeout_ms",
 	}
 	for name, got := range cases {
 		if got != want[name] {
