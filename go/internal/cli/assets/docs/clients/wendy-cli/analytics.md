@@ -9,7 +9,7 @@ When analytics are enabled, each tracked event is serialised to JSON and sent vi
 Events are posted to:
 
 ```
-https://wendy-cli-telemetry-114319063177.us-central1.run.app/v1/telemetry/events
+https://api.wendy.sh/v1/telemetry/events
 ```
 
 ## Event payload

@@ -1,4 +1,4 @@
-// Package analytics provides anonymous usage tracking via cloud.wendy.dev.
+// Package analytics provides anonymous usage tracking via api.wendy.sh.
 package analytics
 
 import (
@@ -21,7 +21,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
 
-const defaultTelemetryEndpoint = "https://wendy-cli-telemetry-114319063177.us-central1.run.app/v1/telemetry/events"
+const defaultTelemetryEndpoint = "https://api.wendy.sh/v1/telemetry/events"
 
 type eventPayload struct {
 	AnonymousID string `json:"anonymous_id"`

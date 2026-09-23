@@ -32,7 +32,7 @@ import (
 )
 
 const defaultCloudDashboard = "https://cloud.wendy.sh"
-const defaultCloudGRPC = "wendy-cloud-services-114319063177.us-central1.run.app:443"
+const defaultCloudGRPC = "api.wendy.sh:443"
 const defaultDevAuthBase = "https://auth.dev.wendy.sh"
 const defaultDevCloudDashboard = "https://cloud.dev.wendy.sh"
 const defaultDevCloudGRPC = "api.dev.wendy.sh:443"
