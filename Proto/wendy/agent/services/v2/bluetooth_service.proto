@@ -17,6 +17,12 @@ message DiscoveredBluetoothPeripheral {
     bool paired = 5;
     bool connected = 6;
     bool trusted = 7;
+    // Effective BLE link supervision timeout, for a connected LE peripheral
+    // the agent tracks. Absent when not connected, Classic, or an older agent.
+    optional uint32 supervision_timeout_ms = 8;
+    // What the peripheral asked for when that was above the agent's target.
+    // Equal to supervision_timeout_ms once the agent stopped overriding it.
+    optional uint32 requested_supervision_timeout_ms = 9;
 }
 
 message ScanBluetoothPeripheralsRequest {}

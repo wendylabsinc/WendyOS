@@ -92,5 +92,8 @@ func mapBluetoothPeripheralToV2(p *agentpb.DiscoveredBluetoothPeripheral) *agent
 		Paired:     p.Paired,
 		Connected:  p.Connected,
 		Trusted:    p.Trusted,
+
+		SupervisionTimeoutMs:          p.SupervisionTimeoutMs,
+		RequestedSupervisionTimeoutMs: p.RequestedSupervisionTimeoutMs,
 	}
 }
