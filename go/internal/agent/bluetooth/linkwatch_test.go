@@ -758,3 +758,18 @@ func TestWatcherRun_ForgetsLinksOfAnAdapterThatGoesAway(t *testing.T) {
 		h.wantLink(LinkInfo{}, false)
 	})
 }
+
+func TestNewWatcher_ReadsTheTargetFromTheEnvironment(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	t.Setenv(hidSupervisionTimeoutEnv, "750")
+	if w := NewWatcher(zap.New(core)); w.target != 75 {
+		t.Errorf("target = %d; want 75", w.target)
+	}
+	t.Setenv(hidSupervisionTimeoutEnv, "fast")
+	if w := NewWatcher(zap.New(core)); w.target != defaultHIDSupervisionTimeout {
+		t.Errorf("target = %d; want the default", w.target)
+	}
+	if n := logs.FilterMessage("Invalid Bluetooth HID supervision timeout; using the default").Len(); n != 1 {
+		t.Errorf("logged %d invalid-value warnings; want 1", n)
+	}
+}

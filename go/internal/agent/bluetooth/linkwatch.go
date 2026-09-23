@@ -3,6 +3,7 @@ package bluetooth
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -210,6 +211,17 @@ type Watcher struct {
 
 	mu    sync.Mutex
 	links map[string]LinkInfo // by upper-case address
+}
+
+// NewWatcher builds the watcher, reading the target timeout from
+// WENDY_BT_HID_SUPERVISION_TIMEOUT_MS. Start it with Run.
+func NewWatcher(logger *zap.Logger) *Watcher {
+	target, err := parseHIDSupervisionTimeout(os.Getenv(hidSupervisionTimeoutEnv))
+	if err != nil {
+		logger.Warn("Invalid Bluetooth HID supervision timeout; using the default",
+			zap.Error(err), zap.Uint32(logfields.SupervisionTimeoutMS, uint32(defaultHIDSupervisionTimeout)*10))
+	}
+	return newWatcher(logger, target, newLinkPlatform(logger))
 }
 
 func newWatcher(logger *zap.Logger, target uint16, p linkPlatform) *Watcher {
