@@ -18,6 +18,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"google.golang.org/grpc"
 )
 
@@ -321,7 +322,11 @@ func newCameraWatchCmd() *cobra.Command {
 	return newCameraStreamCmd("watch", true)
 }
 
-var connectCameraStreamFn = connectToAgent
+// resolveCameraTargetFn is the stream command's device seam. It resolves a
+// target rather than an agent connection because a Wendy Lite board has no
+// agent to connect to: its camera is reached over WendyCom sensor-link, and
+// only resolveTarget hands back the provider needed to get there.
+var resolveCameraTargetFn = resolveTarget
 
 // newCameraStreamCmd builds the camera streaming command under the given name.
 // "view" is the canonical, listed command; "watch" reuses the same logic as a
@@ -354,11 +359,31 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 			if nonInteractive {
 				opts = append(opts, NonInteractive(), SuppressUpdateCheck(), SuppressProvisioningHint())
 			}
-			conn, err := connectCameraStreamFn(ctx, opts...)
+			target, err := resolveCameraTargetFn(ctx, opts...)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer target.Close()
+
+			// A Wendy Lite board runs no agent: its camera comes off the
+			// sensor-link channels its provider can subscribe to.
+			if target.External != nil && target.Provider != nil {
+				return streamLiteCamera(ctx, cmd, target, liteCameraOptions{
+					toStdout:       toStdout,
+					nonInteractive: nonInteractive,
+					agentOnlyFlags: agentOnlyCameraFlags(cmd),
+				})
+			}
+			if target.Agent == nil {
+				return cameraTargetUnsupportedError(target)
+			}
+			conn := target.Agent
+			// resolveTarget does not print the hint connectToAgent did, and a
+			// camera on an unprovisioned device is exactly when the operator
+			// wants to hear about `wendy device setup`.
+			if !nonInteractive {
+				suggestProvisioning(conn)
+			}
 
 			// --stable-id addresses the camera by its stable udev identity and
 			// is resolved by the AGENT at request time. --id is the boot-order
@@ -436,7 +461,7 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 	cmd.Flags().Uint32Var(&width, "width", 0, "Frame width (0 = device default)")
 	cmd.Flags().Uint32Var(&height, "height", 0, "Frame height (0 = device default)")
 	cmd.Flags().Uint32Var(&fps, "fps", 0, "Framerate (0 = device default)")
-	cmd.Flags().BoolVar(&toStdout, "stdout", false, "Pipe encoded video to stdout instead of opening a window (codec: H.264 or VP8/WebM depending on device capabilities)")
+	cmd.Flags().BoolVar(&toStdout, "stdout", false, "Pipe encoded video to stdout instead of opening a window (codec: H.264 or VP8/WebM from a WendyOS device, MJPEG or H.264 from a Wendy Lite one)")
 	cmd.Flags().BoolVar(&raw, "raw", false, "With --stdout: write the camera's uncompressed capture frames (one whole frame per message, layout printed to stderr) instead of encoded video. Only cameras captured in a raw pixel format offer this; viewers of the same camera keep receiving H.264.")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Disable terminal prompts and automatic installs; select a camera with --id or --stable-id when several are available")
 
@@ -570,7 +595,22 @@ func playVideoWithGStreamer(ctx context.Context, stream videoStream, allowInstal
 	}
 	codec := first.GetCodec()
 
+	return runGStreamer(ctx, playbackCodecFromAgent(codec), allowInstallPrompt, func(stdin io.Writer) error {
+		return feedGStreamer(ctx, stream, first, codec, stdin)
+	})
+}
+
+// runGStreamer resolves gst-launch-1.0, starts the decoder pipeline for codec,
+// and runs feed against its stdin until feed returns or ctx is done.
+//
+// It is the CLI's single decoder spawn: an agent video stream and a Wendy Lite
+// sensor-link channel reach a window through the same teardown. That teardown
+// is the reason to share it — closing stdin to signal EOF before killing, and
+// killing before waiting, is a sequence that would rot quietly if it existed
+// twice.
+func runGStreamer(ctx context.Context, codec playbackCodec, allowInstallPrompt bool, feed func(stdin io.Writer) error) error {
 	var gstPath string
+	var err error
 	if allowInstallPrompt {
 		gstPath, err = ensureGSTLaunch(ctx)
 	} else {
@@ -598,7 +638,7 @@ func playVideoWithGStreamer(ctx context.Context, stream videoStream, allowInstal
 	}()
 
 	done := make(chan error, 1)
-	go func() { done <- feedGStreamer(ctx, stream, first, codec, stdin) }()
+	go func() { done <- feed(stdin) }()
 
 	select {
 	case err := <-done:
@@ -793,9 +833,71 @@ func lastKeyframeOffset(data []byte) (offset int, found bool) {
 	return offset, found
 }
 
-func playbackPipelineArgs(codec agentpb.VideoCodec) []string {
+// playbackCodec names a local GStreamer playback pipeline.
+//
+// It is deliberately not agentpb.VideoCodec: that enum belongs to the agent's
+// video service and carries only H264/VP8/RAW, while a Wendy Lite camera
+// channel is usually MJPEG. What picks a pipeline is what the bytes ARE, not
+// which service produced them — and reusing the agent enum for lite video
+// would mean labelling JPEG as H.264 (its zero value), whose symptom is a
+// black window and no error at all.
+type playbackCodec int
+
+const (
+	playbackH264 playbackCodec = iota
+	playbackVP8
+	playbackMJPEG
+)
+
+// playbackCodecFromAgent maps the agent's delivery codec onto a pipeline. RAW
+// never arrives here — --raw requires --stdout — so it falls to H.264 exactly
+// as playbackPipelineArgs' default arm always did.
+func playbackCodecFromAgent(c agentpb.VideoCodec) playbackCodec {
+	if c == agentpb.VideoCodec_VIDEO_CODEC_VP8 {
+		return playbackVP8
+	}
+	return playbackH264
+}
+
+// playbackCodecFromLite maps a sensor-link channel's declared codec onto a
+// pipeline. Unlike the agent path there is no safe default: a manifest that
+// does not say what it encodes gives us nothing to decode it with, and
+// guessing produces a black window rather than an error.
+func playbackCodecFromLite(c sensorlinkpb.VideoFormat_Codec) (playbackCodec, error) {
+	switch c {
+	case sensorlinkpb.VideoFormat_MJPEG:
+		return playbackMJPEG, nil
+	case sensorlinkpb.VideoFormat_H264:
+		return playbackH264, nil
+	default:
+		return 0, fmt.Errorf("device did not say how its camera channel is encoded; "+
+			"its manifest reports codec %s. Use --stdout to capture the bytes anyway", c)
+	}
+}
+
+func playbackPipelineArgs(codec playbackCodec) []string {
 	switch codec {
-	case agentpb.VideoCodec_VIDEO_CODEC_VP8:
+	case playbackMJPEG:
+		// Wendy Lite cameras send one whole JPEG per sensor-link frame, but
+		// fdsrc re-chops the stream into buffers of its own size, so the
+		// picture boundaries the device drew do not survive the pipe.
+		// jpegparse restores them from the SOI/EOI markers; without it jpegdec
+		// is handed partial pictures and decodes nothing.
+		//
+		// typefind is needed for the same reason the H264 arm gives below:
+		// fdsrc emits untyped buffers and jpegparse's sink pad wants
+		// image/jpeg.
+		return []string{
+			"fdsrc", "fd=0",
+			"!", "typefind",
+			"!", "jpegparse",
+			"!", "queue", "max-size-buffers=2", "leaky=downstream",
+			"!", "jpegdec",
+			"!", "videoconvert",
+			"!", "queue", "max-size-buffers=1", "leaky=downstream",
+			"!", "autovideosink", "sync=false",
+		}
+	case playbackVP8:
 		// Server sends VP8 in a WebM container (webmmux streamable=true).
 		// The leaky queue after matroskademux drops whole frames when decode
 		// falls behind, draining an encoded-side backlog instead of playing
@@ -809,7 +911,7 @@ func playbackPipelineArgs(codec agentpb.VideoCodec) []string {
 			"!", "queue", "max-size-buffers=1", "leaky=downstream",
 			"!", "autovideosink", "sync=false",
 		}
-	default: // H264
+	default: // playbackH264
 		// fdsrc emits untyped buffers (no caps); h264parse needs video/x-h264.
 		// A bare "video/x-h264" capsfilter here cannot bridge that gap: the
 		// capsfilter must fixate caps onto the untyped buffers, but video/x-h264

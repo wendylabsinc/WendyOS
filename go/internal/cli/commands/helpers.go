@@ -1271,42 +1271,15 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 	provisionedMTLS := deferProvisionedMTLSCheck(ctx, addr)
 	conn, connErr := connectResolvedAgentWithProvisionedHint(ctx, hostname, addr, isDefault, provisionedMTLS)
 	if connErr != nil {
-		if errors.Is(connErr, ErrUserCancelled) {
-			return nil, false, connErr
-		}
-		// A cross-org mismatch is a credentials problem, not a reachability
-		// one: surface it directly rather than routing it into clock-skew
-		// retry, cert-refresh, or the default-device picker (none of which can
-		// resolve "you have no credentials for this device's org").
-		var orgMismatch orgMismatchDeviceError
-		if errors.As(connErr, &orgMismatch) {
-			return nil, false, connErr
-		}
-		retriedConn, connErr, retried := retryOnHandshakeTimeout(ctx, connErr, func() (*grpcclient.AgentConnection, error) {
+		redial := func() (*grpcclient.AgentConnection, error) {
 			return connectResolvedAgentWithProvisionedHint(ctx, hostname, addr, isDefault, provisionedMTLS)
-		})
-		// retryOnHandshakeTimeout hands back the freshest error it saw, so a
-		// retry that revealed a more specific failure (e.g. a cert rejection)
-		// now drives the branches below instead of the original timeout.
-		if retried {
-			conn = retriedConn
-		} else if syncedConn, ok := autoSyncTimeAndRetry(ctx, connErr, func() (*grpcclient.AgentConnection, error) {
-			return connectResolvedAgentWithProvisionedHint(ctx, hostname, addr, isDefault, provisionedMTLS)
-		}); ok {
-			conn = syncedConn
-		} else if errors.Is(connErr, errProvisionedAgentUnauthorized) {
-			refreshedConn, ok := offerCertRefreshAndRetry(ctx, cfg.nonInteractive, connErr, func() (*grpcclient.AgentConnection, error) {
-				return connectResolvedAgentWithProvisionedHint(ctx, hostname, addr, isDefault, provisionedMTLS)
-			})
-			if !ok {
-				return nil, false, connErr
-			}
-			conn = refreshedConn
-		} else if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
-			// The stored address is unreachable but the same device (verified
-			// by hostname) is on USB — use it directly.
-			conn = usbConn
-		} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
+		}
+		recovered, connErr, final := recoverNamedAgentDial(ctx, cfg, hostname, connErr, redial)
+		if final {
+			return recovered, false, connErr
+		}
+		// Every rung is spent. What is left is this caller's own tail.
+		if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 			// Default device is unreachable — offer interactive recovery.
 			hostname, _, _ := net.SplitHostPort(addr)
 			target, recErr := handleDefaultDeviceRecovery(ctx, hostname, time.Since(startedAt), connErr, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll)
@@ -1317,11 +1290,68 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 			return picked, true, pickErr
 		} else if isDefault {
 			return nil, false, defaultDeviceUnreachableError(hostname, connErr)
-		} else {
-			return nil, false, connErr
 		}
+		return nil, false, connErr
 	}
 	return conn, false, nil
+}
+
+// recoverNamedAgentDial applies the recovery ladder for a failed dial of a
+// device named by hostname: handshake-timeout retry, clock re-sync,
+// certificate refresh, and the USB direct fallback. redial repeats the dial the
+// caller just made.
+//
+// final reports that the result is the caller's answer: either a connection a
+// rung recovered, or an error no rung could address. When it is false the
+// ladder is exhausted without a verdict and the caller runs its own tail
+// (default-device recovery, and the shape of the error it reports) — which is
+// the only part of this that differs between callers, one handing back an
+// *AgentConnection and the other a *SelectedDevice.
+//
+// The error handed back may be FRESHER than dialErr: a retry can reveal a more
+// specific failure (a certificate rejection behind what first looked like a
+// timeout), and that is the one the caller's tail should report.
+//
+// It is shared rather than duplicated because connectToAgent and resolveTarget
+// are parallel front doors to the same devices (see connectPinnedSession): a
+// rung present on only one of them is a device reachable through one command
+// and not another, for no reason a user could predict.
+func recoverNamedAgentDial(ctx context.Context, cfg resolveConfig, hostname string, dialErr error,
+	redial func() (*grpcclient.AgentConnection, error)) (_ *grpcclient.AgentConnection, _ error, final bool) {
+	if errors.Is(dialErr, ErrUserCancelled) {
+		return nil, dialErr, true
+	}
+	// A cross-org mismatch is a credentials problem, not a reachability
+	// one: surface it directly rather than routing it into clock-skew
+	// retry, cert-refresh, or the default-device picker (none of which can
+	// resolve "you have no credentials for this device's org").
+	var orgMismatch orgMismatchDeviceError
+	if errors.As(dialErr, &orgMismatch) {
+		return nil, dialErr, true
+	}
+	retriedConn, dialErr, retried := retryOnHandshakeTimeout(ctx, dialErr, redial)
+	// retryOnHandshakeTimeout hands back the freshest error it saw, so a
+	// retry that revealed a more specific failure (e.g. a cert rejection)
+	// now drives the branches below instead of the original timeout.
+	if retried {
+		return retriedConn, nil, true
+	}
+	if syncedConn, ok := autoSyncTimeAndRetry(ctx, dialErr, redial); ok {
+		return syncedConn, nil, true
+	}
+	if errors.Is(dialErr, errProvisionedAgentUnauthorized) {
+		refreshedConn, ok := offerCertRefreshAndRetry(ctx, cfg.nonInteractive, dialErr, redial)
+		if !ok {
+			return nil, dialErr, true
+		}
+		return refreshedConn, nil, true
+	}
+	if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
+		// The stored address is unreachable but the same device (verified
+		// by hostname) is on USB — use it directly.
+		return usbConn, nil, true
+	}
+	return nil, dialErr, false
 }
 
 // connectFromSelectedDevice converts a SelectedDevice from the picker into a
@@ -3298,21 +3328,15 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 			conn, err = connectResolvedAgentWithProvisionedHint(ctx, device, addr, isDefault, provisionedMTLS)
 			rt("  ↳ connectResolvedAgent (dial+probe)")
 			if err != nil {
-				if errors.Is(err, ErrUserCancelled) {
-					return nil, err
-				}
-				if syncedConn, ok := autoSyncTimeAndRetry(ctx, err, func() (*grpcclient.AgentConnection, error) {
+				redial := func() (*grpcclient.AgentConnection, error) {
 					return connectResolvedAgentWithProvisionedHint(ctx, device, addr, isDefault, provisionedMTLS)
-				}); ok {
-					conn = syncedConn
-				} else if errors.Is(err, errProvisionedAgentUnauthorized) {
-					refreshedConn, ok := offerCertRefreshAndRetry(ctx, cfg.nonInteractive, err, func() (*grpcclient.AgentConnection, error) {
-						return connectResolvedAgentWithProvisionedHint(ctx, device, addr, isDefault, provisionedMTLS)
-					})
-					if !ok {
+				}
+				ladderConn, err, final := recoverNamedAgentDial(ctx, cfg, device, err, redial)
+				if final {
+					if err != nil {
 						return nil, err
 					}
-					conn = refreshedConn
+					conn = ladderConn
 				} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 					// Default device is unreachable — offer interactive recovery.
 					recovered, recErr := handleDefaultDeviceRecovery(ctx, device, time.Since(startedAt), err, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll)

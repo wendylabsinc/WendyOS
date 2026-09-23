@@ -30,6 +30,17 @@ func (c *cameraViewCommandClient) StreamVideo(_ context.Context, req *agentpb.St
 	return nil, c.err
 }
 
+// stubCameraTarget swaps the stream command's device seam for the duration of
+// a test. resolve drops the context, which no caller asserts on.
+func stubCameraTarget(t *testing.T, resolve func(opts ...resolveOption) (*SelectedDevice, error)) {
+	t.Helper()
+	previous := resolveCameraTargetFn
+	resolveCameraTargetFn = func(_ context.Context, opts ...resolveOption) (*SelectedDevice, error) {
+		return resolve(opts...)
+	}
+	t.Cleanup(func() { resolveCameraTargetFn = previous })
+}
+
 func TestCameraViewNonInteractiveSelection(t *testing.T) {
 	streamErr := errors.New("test stream unavailable")
 	for _, tc := range []struct {
@@ -50,8 +61,7 @@ func TestCameraViewNonInteractiveSelection(t *testing.T) {
 			// Even when launched from a TTY, the flag must prohibit the picker.
 			stubInteractive(t)
 			client := &cameraViewCommandClient{devices: tc.devices, err: streamErr}
-			previous := connectCameraStreamFn
-			connectCameraStreamFn = func(_ context.Context, opts ...resolveOption) (*grpcclient.AgentConnection, error) {
+			stubCameraTarget(t, func(opts ...resolveOption) (*SelectedDevice, error) {
 				var cfg resolveConfig
 				for _, opt := range opts {
 					opt(&cfg)
@@ -59,9 +69,8 @@ func TestCameraViewNonInteractiveSelection(t *testing.T) {
 				if !cfg.nonInteractive || !cfg.suppressUpdateCheck || !cfg.disableSessionBroker {
 					t.Fatalf("background connection options = %+v", cfg)
 				}
-				return &grpcclient.AgentConnection{VideoService: client}, nil
-			}
-			t.Cleanup(func() { connectCameraStreamFn = previous })
+				return &SelectedDevice{Agent: &grpcclient.AgentConnection{VideoService: client}}, nil
+			})
 
 			cmd := newCameraViewCmd()
 			cmd.SetOut(io.Discard)
@@ -92,13 +101,11 @@ func TestCameraViewNonInteractiveSelection(t *testing.T) {
 
 func TestCameraViewClosedTerminalDoesNotOpenPicker(t *testing.T) {
 	stubNonInteractive(t)
-	previous := connectCameraStreamFn
-	connectCameraStreamFn = func(context.Context, ...resolveOption) (*grpcclient.AgentConnection, error) {
-		return &grpcclient.AgentConnection{VideoService: &cameraViewCommandClient{
+	stubCameraTarget(t, func(...resolveOption) (*SelectedDevice, error) {
+		return &SelectedDevice{Agent: &grpcclient.AgentConnection{VideoService: &cameraViewCommandClient{
 			devices: []*agentpb.VideoDevice{usbCam(0, "front"), usbCam(1, "rear")},
-		}}, nil
-	}
-	t.Cleanup(func() { connectCameraStreamFn = previous })
+		}}}, nil
+	})
 	cmd := newCameraViewCmd()
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)

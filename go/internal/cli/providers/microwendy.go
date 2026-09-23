@@ -876,6 +876,16 @@ func (p *MicroWendyProvider) pushWifiConf(device models.ExternalDevice, wifi *li
 	return nil
 }
 
+var _ WendyComConnector = (*MicroWendyProvider)(nil)
+
+// ConnectWendyCom implements WendyComConnector. It is connectClient behind the
+// capability interface: the transport switch belongs to this provider, and a
+// caller outside this package needs a connected client without knowing which
+// of USB, LAN or BLE it got.
+func (p *MicroWendyProvider) ConnectWendyCom(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	return p.connectClient(device)
+}
+
 // connectClient opens a WendyLiteClient connection to the device over serial,
 // LAN or BLE (with mTLS when the device advertises it). The caller must Close
 // the client.

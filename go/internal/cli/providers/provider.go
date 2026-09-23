@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
@@ -188,6 +189,24 @@ type ContainerManager interface {
 type WifiManager interface {
 	WifiConnect(ctx context.Context, device models.ExternalDevice, ssid, password string) error
 	WifiDisconnect(ctx context.Context, device models.ExternalDevice) error
+}
+
+// WendyComConnector is optionally implemented by providers whose devices are
+// reached over WendyCom rather than by running a WendyOS agent.
+//
+// What it hands back is a connection, not one errand: the client covers device
+// identity and info, app and configuration push, the console, and sensor-link
+// subscriptions. A caller takes it to talk to such a device at all, and then
+// asks the client for whatever it came for.
+//
+// It is a capability rather than an exported per-provider function because a
+// caller wants "a device I can speak WendyCom to", not "a wendy-lite device":
+// which transport the connection ended up using — USB, LAN, with mTLS or
+// without — is the provider's business, and no caller should have to know.
+//
+// The returned client is the caller's to Close.
+type WendyComConnector interface {
+	ConnectWendyCom(device models.ExternalDevice) (*liteclient.WendyLiteClient, error)
 }
 
 // ContainerInfo describes a container managed by a provider.

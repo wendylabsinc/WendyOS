@@ -92,7 +92,7 @@ func TestPipeVideoToStdout_EmptyStream(t *testing.T) {
 }
 
 func TestPlaybackPipelineArgs_H264UsesTypefindNotBareCaps(t *testing.T) {
-	args := playbackPipelineArgs(agentpb.VideoCodec_VIDEO_CODEC_H264)
+	args := playbackPipelineArgs(playbackH264)
 	joined := strings.Join(args, " ")
 
 	// Regression: a bare "video/x-h264" capsfilter directly after fdsrc cannot
@@ -106,8 +106,26 @@ func TestPlaybackPipelineArgs_H264UsesTypefindNotBareCaps(t *testing.T) {
 	}
 }
 
+func TestPlaybackPipelineArgs_MJPEGReframesWithJpegparse(t *testing.T) {
+	args := playbackPipelineArgs(playbackMJPEG)
+	joined := strings.Join(args, " ")
+
+	// A Wendy Lite camera sends one whole JPEG per sensor-link frame, but fdsrc
+	// re-chops the stream into buffers of its own size, so those picture
+	// boundaries do not survive the pipe. jpegparse rebuilds them from the
+	// SOI/EOI markers; drop it and jpegdec is handed partial pictures and
+	// decodes nothing. typefind is needed for the same reason the H264
+	// pipeline needs it — fdsrc emits untyped buffers.
+	if !strings.Contains(joined, "fdsrc fd=0 ! typefind ! jpegparse") {
+		t.Errorf("MJPEG pipeline must route fdsrc through typefind into jpegparse, got: %v", args)
+	}
+	if !strings.Contains(joined, "queue max-size-buffers=2 leaky=downstream ! jpegdec") {
+		t.Errorf("MJPEG pipeline must have a leaky queue before the decoder, got: %v", args)
+	}
+}
+
 func TestPlaybackPipelineArgs_VP8UsesMatroskademux(t *testing.T) {
-	args := playbackPipelineArgs(agentpb.VideoCodec_VIDEO_CODEC_VP8)
+	args := playbackPipelineArgs(playbackVP8)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "fdsrc fd=0 ! matroskademux") {
 		t.Errorf("VP8 pipeline must demux the WebM container via matroskademux, got: %v", args)
@@ -118,7 +136,7 @@ func TestPlaybackPipelineArgs_VP8UsesMatroskademux(t *testing.T) {
 }
 
 func TestPlaybackPipelineArgs_H264DecodesSingleThreaded(t *testing.T) {
-	args := playbackPipelineArgs(agentpb.VideoCodec_VIDEO_CODEC_H264)
+	args := playbackPipelineArgs(playbackH264)
 	joined := strings.Join(args, " ")
 	// Frame-based multithreading in avdec_h264 delays output by ~thread-count
 	// frames; max-threads=1 removes that constant latency.
@@ -128,7 +146,7 @@ func TestPlaybackPipelineArgs_H264DecodesSingleThreaded(t *testing.T) {
 }
 
 func TestPlaybackPipelineArgs_H264LeakyQueueBeforeDecoder(t *testing.T) {
-	args := playbackPipelineArgs(agentpb.VideoCodec_VIDEO_CODEC_H264)
+	args := playbackPipelineArgs(playbackH264)
 	joined := strings.Join(args, " ")
 	// A leaky queue between h264parse and the decoder drops whole access units
 	// when decode falls behind, so an encoded-side backlog drains by dropping
@@ -139,7 +157,7 @@ func TestPlaybackPipelineArgs_H264LeakyQueueBeforeDecoder(t *testing.T) {
 }
 
 func TestPlaybackPipelineArgs_VP8LeakyQueueBeforeDecoder(t *testing.T) {
-	args := playbackPipelineArgs(agentpb.VideoCodec_VIDEO_CODEC_VP8)
+	args := playbackPipelineArgs(playbackVP8)
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "matroskademux ! queue max-size-buffers=2 leaky=downstream ! vp8dec") {
 		t.Errorf("VP8 pipeline must have a leaky queue before the decoder, got: %v", args)
