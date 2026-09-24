@@ -37,6 +37,9 @@ type LinkManager struct {
 	stop          map[string]context.CancelFunc // cancels a claimed link's server
 	downFor       map[string]int                // consecutive scans with no carrier
 	watchingSince map[string]time.Time          // when this process began watching a link
+	allowedDHCP   map[string]bool               // explicit, root-owned camera DHCP opt-ins
+	allowlistPath string
+	readAllowlist func(string) (map[string]bool, error)
 }
 
 // NewLinkManager returns a manager writing discovered cameras into reg.
@@ -52,6 +55,8 @@ func NewLinkManager(reg *Registry, logger *zap.Logger) *LinkManager {
 		stop:          make(map[string]context.CancelFunc),
 		downFor:       make(map[string]int),
 		watchingSince: make(map[string]time.Time),
+		allowedDHCP:   make(map[string]bool),
+		readAllowlist: readDHCPAllowlist,
 	}
 	m.carrier = sysfsCarrier
 	m.listInterfaces = func() ([]Interface, error) {
@@ -103,6 +108,9 @@ func (m *LinkManager) Run(ctx context.Context) {
 // scanOnce examines every link once: start watching newly eligible ones, claim
 // those whose DISCOVER went unanswered, and forget those that lost carrier.
 func (m *LinkManager) scanOnce(ctx context.Context) {
+	if err := m.refreshDHCPAllowlist(); err != nil {
+		m.logger.Warn("camera DHCP disabled: invalid allowlist", zap.Error(err))
+	}
 	ifaces, err := m.listInterfaces()
 	if err != nil {
 		m.logger.Debug("listing interfaces failed", zap.Error(err))
@@ -116,8 +124,21 @@ func (m *LinkManager) scanOnce(ctx context.Context) {
 		// on the very next scan and then re-claim it on the next DISCOVER,
 		// spawning a second server each time round.
 		if seg, claimed := m.claimedSegment(iface.Name); claimed {
+			if !m.dhcpAllowed(iface.Name) {
+				m.logger.Warn("camera DHCP interface is no longer allowed; stopping DHCP",
+					zap.String("link", iface.Name))
+				m.withdrawRevokedClaim(iface.Name)
+				continue
+			}
 			if m.carrierLost(iface) {
 				m.release(iface.Name)
+				continue
+			}
+			if iface.HasOtherIPv4(seg.ServerIP) {
+				m.logger.Warn("camera link became an uplink; stopping DHCP",
+					zap.String("link", iface.Name))
+				m.guard.Disqualify(iface.Name)
+				m.withdrawDisqualifiedClaim(iface.Name)
 				continue
 			}
 			// Carrier alone is not proof the segment still works. Whatever else
@@ -138,6 +159,12 @@ func (m *LinkManager) scanOnce(ctx context.Context) {
 		}
 		m.noteCarrierUp(iface.Name)
 		m.ensureWatching(ctx, iface.Name)
+		// DHCP traffic alone cannot distinguish a camera from an uplink client.
+		// Keep passive observation, but never claim an interface without an
+		// explicit root-owned opt-in.
+		if !m.dhcpAllowed(iface.Name) {
+			continue
+		}
 		if seg, ok := m.restorableSegment(iface.Name); ok {
 			if m.guard.RestoreClaim(iface.Name) {
 				m.logger.Info("restoring camera link claim from a previous run",
@@ -150,6 +177,12 @@ func (m *LinkManager) scanOnce(ctx context.Context) {
 			m.claim(ctx, iface.Name, nil)
 		}
 	}
+}
+
+func (m *LinkManager) dhcpAllowed(link string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.allowedDHCP[link]
 }
 
 // reassertAddress puts our segment address back on a claimed link that has lost
@@ -448,6 +481,23 @@ func (m *LinkManager) withdrawDisqualifiedClaim(link string) {
 			zap.String("link", link), zap.String("cidr", seg.CIDR()), zap.Error(err))
 	}
 	m.logger.Warn("stopped serving disqualified camera link", zap.String("link", link))
+}
+
+// withdrawRevokedClaim stops a server when its administrator removes the
+// explicit opt-in. ResetServing lets a later opt-in go through the normal
+// unanswered-request guard again, while preserving any competing-server
+// disqualification that raced with removal.
+func (m *LinkManager) withdrawRevokedClaim(link string) {
+	seg, wasClaimed := m.dropClaim(link)
+	m.guard.ResetServing(link)
+	if !wasClaimed {
+		return
+	}
+	if err := m.delAddress(link, seg.CIDR()); err != nil {
+		m.logger.Warn("removing revoked camera link address failed",
+			zap.String("link", link), zap.String("cidr", seg.CIDR()), zap.Error(err))
+	}
+	m.logger.Info("stopped serving camera link after opt-in removal", zap.String("link", link))
 }
 
 // recoverFailedServer removes a failed claim and resets the guard so the next
