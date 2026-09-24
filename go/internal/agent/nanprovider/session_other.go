@@ -21,6 +21,9 @@ type Provider struct {
 	Credentials *localmesh.Credentials
 	Node        LinkNode
 	Logger      *zap.Logger
+	// Status receives local setup readiness/failure, not peer reachability.
+	// The optional callback must return promptly.
+	Status func(localmesh.CarrierStatus)
 }
 
 func (Provider) Run(context.Context) error {
