@@ -31,6 +31,8 @@ type runtime struct {
 	dialSlot             chan struct{}
 	serverTLS            *tls.Config
 	advertisementRefresh chan struct{}
+	discovery   discoveryRecovery
+	restartScan func(context.Context, *dbus.Conn, dbus.ObjectPath) error
 }
 
 type cheaperLinkChecker interface {
@@ -324,7 +326,8 @@ func (r *runtime) scanOnce(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 	if err != nil {
 		return err
 	}
-	peers := r.discoveredCandidates(objects, time.Now())
+	now := time.Now()
+	peers := r.discoveredCandidates(objects, now)
 	for _, peer := range peers {
 		if r.hasCheaperLink(peer.asset) {
 			continue
@@ -338,6 +341,7 @@ func (r *runtime) scanOnce(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 		r.links.Add(1)
 		go func(peer candidate) { defer r.links.Done(); defer r.release(peer.asset); r.dialLink(ctx, peer) }(peer)
 	}
+	r.maybeRestartDiscovery(ctx, bus, adapter, now)
 	return nil
 }
 
@@ -346,12 +350,51 @@ func (r *runtime) discoveredCandidates(objects managedObjects, at time.Time) []c
 	// Only live ServiceData discovery signals may refresh radio selection or
 	// initiate a new CoC dial.
 	peers, newlySeen := r.freshness.candidates(objects, at)
+	if len(newlySeen) > 0 {
+		r.discovery.observed(at)
+	}
 	if r.cfg.Selection != nil {
 		for _, asset := range newlySeen {
 			r.cfg.Selection.Seen(asset, localmesh.RadioBLE)
 		}
 	}
 	return peers
+}
+
+func (r *runtime) missingPeerSlots() bool {
+	if r.cfg.TargetPeers <= 0 {
+		return false
+	}
+	assets := make(map[int32]struct{}, r.cfg.TargetPeers)
+	r.mu.Lock()
+	for asset := range r.active {
+		assets[asset] = struct{}{}
+	}
+	r.mu.Unlock()
+	if node, ok := r.cfg.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
+		for _, link := range node.Snapshot().Links {
+			assets[link.Asset] = struct{}{}
+		}
+	}
+	return len(assets) < r.cfg.TargetPeers
+}
+
+func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath, now time.Time) {
+	if !r.discovery.restartDue(now, r.missingPeerSlots()) {
+		return
+	}
+	restart := r.restartScan
+	if restart == nil {
+		restart = restartBlueZDiscovery
+	}
+	restartCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	err := restart(restartCtx, bus, adapter)
+	cancel()
+	if err != nil {
+		r.cfg.Logger.Warn("BLE discovery restart failed", zap.Duration("mesh_advert_silence", now.Sub(r.discovery.lastMeshSignal)), zap.Error(err))
+		return
+	}
+	r.cfg.Logger.Info("BLE discovery restarted after mesh advertisement silence", zap.Duration("mesh_advert_silence", now.Sub(r.discovery.lastMeshSignal)))
 }
 
 func (r *runtime) dialLink(ctx context.Context, peer candidate) {

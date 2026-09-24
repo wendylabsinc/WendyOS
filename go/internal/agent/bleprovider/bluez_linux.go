@@ -233,8 +233,7 @@ func setupBlueZ(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath, uu
 	}); err != nil {
 		return err
 	}
-	filter := map[string]dbus.Variant{"Transport": dbus.MakeVariant("le"), "DuplicateData": dbus.MakeVariant(true)}
-	if err := obj.CallWithContext(ctx, adapterInterface+".SetDiscoveryFilter", 0, filter).Err; err != nil {
+	if err := obj.CallWithContext(ctx, adapterInterface+".SetDiscoveryFilter", 0, meshDiscoveryFilter()).Err; err != nil {
 		_ = obj.CallWithContext(ctx, advertManagerInterface+".UnregisterAdvertisement", 0, advertPath).Err
 		return fmt.Errorf("setting BLE discovery filter: %w", err)
 	}
