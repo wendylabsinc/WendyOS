@@ -1,3 +1,5 @@
+import { writeCLIReference } from './cli-reference.mjs';
+import { publishMarkdown } from './publish-markdown.mjs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,6 +55,7 @@ async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
 
   for (const entry of entries) {
+    if (entry.name === 'AGENTS.md' || entry.name === 'CLAUDE.md') continue;
     if (entry.name.startsWith('.') && entry.name !== '.gitignore') continue;
     if (entry.isDirectory() && skipDirs.has(entry.name)) continue;
 
@@ -93,6 +96,10 @@ for (const file of metaFiles) {
 
 await writeAdvancedIndexPage();
 await writeAdvancedMeta();
+await writeCLIReference(docsRoot, contentRoot, publicRoot, normalizeMarkdown);
+await writePublicAsset(path.join(publicRoot, 'reference/wendy.schema.json'),
+  await readFile(path.resolve(docsRoot, '../../../shared/appconfig/wendy.schema.json')));
+await publishMarkdown(contentRoot, publicRoot, basePath);
 
 for (const file of assetFiles) {
   const raw = await readFile(file.absolutePath);
@@ -165,10 +172,10 @@ function withFrontmatter(raw, relativePath) {
 function normalizeMarkdown(raw, targetRelativePath) {
   return raw
     .replace(/^```bitbake\b/gm, '```ini')
-    .replace(/\]\(\/docs\/([^)#\s]+)(#[^)]+)?\)/g, (_match, targetPath, hash = '') => {
+    .replace(/\]\(\/docs\/([^)#\s]*)(#[^)]+)?\)/g, (_match, targetPath, hash = '') => {
       return `](${relativeFromPage(targetRelativePath, targetPath, hash)})`;
     })
-    .replace(/href="\/docs\/([^"#]+)(#[^"]+)?"/g, (_match, targetPath, hash = '') => {
+    .replace(/href="\/docs\/([^"#]*)(#[^"]+)?"/g, (_match, targetPath, hash = '') => {
       return `href="${relativeFromPage(targetRelativePath, targetPath, hash)}"`;
     })
     .replace(/\]\(\/((?:icons|images|videos)\/[^)#\s]+)(#[^)]+)?\)/g, (_match, assetPath, hash = '') => {
@@ -259,7 +266,7 @@ function toTitle(value) {
 
 async function writeAdvancedIndexPage() {
   const targetPath = path.join(contentRoot, 'advanced', 'index.md');
-  const body = `---\ntitle: "Advanced"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Advanced\n\nGenerated command references and lower-level WendyOS documentation live here.\n\n## Reference Areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](./apps/wendy.json.md)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n- [Development](./development/)\n`;
+  const body = `---\ntitle: "Detailed reference"\ndescription: "Generated and low-level WendyOS reference documentation."\n---\n\n# Detailed reference\n\nBehavioral explanations and lower-level WendyOS documentation live here.\n\n## Reference areas\n\n- [Wendy CLI](./clients/wendy-cli/global-flags.md)\n- [App configuration](./apps/wendy.json.md)\n- [Wendy Cloud](./cloud/requirements.md)\n- [WendyOS internals](./wendyos/requirements.md)\n- [Development](./development/)\n`;
 
   await writeFile(targetPath, body, 'utf8');
 }
@@ -268,7 +275,7 @@ async function writeAdvancedMeta() {
   const targetPath = path.join(contentRoot, 'advanced', 'meta.json');
   const body = JSON.stringify(
     {
-      title: 'Advanced',
+      title: 'Detailed reference',
       pages: [
         'index',
         'clients',

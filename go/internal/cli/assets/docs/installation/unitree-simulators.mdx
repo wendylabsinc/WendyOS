@@ -1,0 +1,170 @@
+---
+title: Unitree robot simulators
+description: Start a Go2 or G1 template with MuJoCo and ROS 2 running inside a WendyOS VM.
+---
+
+Choose a Unitree simulator template to develop against a robot before you have hardware. Each template is a Wendy VM profile that runs MuJoCo, a pinned locomotion policy, ROS 2 Humble with CycloneDDS, and a browser sandbox inside WendyOS. Your application runs beside the robot runtime in the same VM.
+
+## Start a robot
+
+You need the [Wendy CLI](/docs/installation/developer-machine-setup), [QEMU and ARM64 firmware](/docs/installation/wendyos-virtual-machine#what-youll-need), and Docker running on your development machine. Use a CLI and VM agent with support for the selected robot profile. The profiles default to four virtual CPUs and 4 GiB of memory each. Apple Silicon can run the ARM64 guest with hardware acceleration; x86 hosts use slower emulation.
+
+The first start downloads the WendyOS image and robot assets and builds the runtime. Allow extra time for those downloads and the container build.
+
+<Tabs items={['Unitree Go2', 'Unitree G1']}>
+<Tab value="Unitree Go2">
+
+```bash
+wendy vm create go2-sim --profile go2
+wendy vm robot start go2-sim
+wendy vm robot status go2-sim
+wendy vm robot open go2-sim
+```
+
+This profile simulates a quadruped with the Go2 native sport and motor interfaces, lidar, camera, odometry, and IMU data.
+
+</Tab>
+<Tab value="Unitree G1">
+
+```bash
+wendy vm create g1-sim --profile g1
+wendy vm robot start g1-sim
+wendy vm robot status g1-sim
+wendy vm robot open g1-sim
+```
+
+This profile simulates a free-floating, 29-joint humanoid with a pinned velocity policy. It supports a subset of G1 locomotion commands and native HG motor messages. It does not emulate factory arm, audio, trajectory, or posture services.
+
+</Tab>
+</Tabs>
+
+The start command waits for robot readiness. Check that status reports `healthy=true` and `ready=true`, then open the sandbox. Use the sandbox URL returned by the CLI; different VMs can have different host ports. The browser shows the robot scene and sensor camera.
+
+<Accordions>
+<Accordion title="My CLI or VM agent does not support the robot profile">
+
+The agent must advertise `go2-virtual-robot` or `g1-virtual-robot`, matching the profile. An older image produces an update instruction before the robot runtime builds. When a published agent supports the profile, update the VM agent:
+
+```bash
+wendy --device vm:go2-sim device update
+wendy vm robot start go2-sim
+```
+
+Replace `go2-sim` with `g1-sim` for G1. Agent maintenance commands remain available even if robot startup fails.
+
+If your installed release predates this support, use a CLI and Linux ARM64 agent built from the same WendyOS checkout. Follow the repository's [build prerequisites](https://github.com/wendylabsinc/WendyOS), then run from its root:
+
+```bash
+make -C go build-cli build-agent-linux-arm64
+./go/bin/wendy vm create go2-sim --profile go2 --nightly
+./go/bin/wendy vm start go2-sim --detach
+./go/bin/wendy --device vm:go2-sim device update --binary go/bin/wendy-agent-linux-arm64
+./go/bin/wendy vm robot start go2-sim
+```
+
+For G1, change the VM name to `g1-sim` and the profile to `g1`. Skip creation if the VM already exists. Use this checkout's `go/bin/wendy` for subsequent commands so its pinned runtime matches the agent and examples.
+
+</Accordion>
+</Accordions>
+
+## Verify ROS 2 in the VM
+
+For Go2:
+
+```bash
+wendy device ros2 topics --device vm:go2-sim --domain 0
+wendy device ros2 topic info /utlidar/robot_odom --device vm:go2-sim --domain 0
+wendy device ros2 echo /utlidar/robot_odom --count 1 --device vm:go2-sim --domain 0
+```
+
+For G1:
+
+```bash
+wendy device ros2 topics --device vm:g1-sim --domain 0
+wendy device ros2 topic info /odom --device vm:g1-sim --domain 0
+wendy device ros2 echo /odom --count 1 --device vm:g1-sim --domain 0
+```
+
+The topic list should contain the selected odometry topic. The echo command should return an odometry message while the simulation is running. These commands execute through the VM's agent; ROS 2 does not need to be installed on your laptop.
+
+You now have a ROS 2 robot target. Follow [Sim to real with Unitree](/docs/integrations/sim-to-real) to deploy a separate application into it, then move that application to hardware.
+
+## How the VM's ROS network works
+
+```text
+Development machine
+  Wendy CLI                     Browser sandbox
+      |                               |
+      v                               v
+WendyOS VM
+  Wendy Agent             MuJoCo + robot runtime
+      |                               |
+      +-- Your ROS 2 app -- DDS ------+
+                         guest loopback, domain 0
+```
+
+Managed robot applications use ROS 2 Humble, CycloneDDS, and domain 0. Their ROS bus stays on guest loopback, isolated from your physical robot and other VMs. Select the named target, such as `--device vm:go2-sim`, so Wendy can apply the managed profile's settings.
+
+Your app can declare host discovery for hardware. Managed VM deployment normalizes that declaration to guest loopback without rewriting the source `wendy.json`. Do not bridge the VM's DDS network onto the robot network to transfer an app; deploy to the physical target instead.
+
+Both profiles use wall-clock capture timestamps and do not publish `/clock`. Keep `use_sim_time=false`. Pausing physics stops fresh observations.
+
+## Configure your own ROS app
+
+Use a `wendy.json` like this beside your application's Dockerfile:
+
+```json
+{
+  "appId": "my-robot-app",
+  "platform": "linux",
+  "frameworks": {
+    "ros2": {
+      "distro": "humble",
+      "rmw": "rmw_cyclonedds_cpp",
+      "domainId": 0,
+      "discoveryScope": "host"
+    }
+  },
+  "entitlements": [
+    { "type": "network", "mode": "host" }
+  ]
+}
+```
+
+The image must contain your ROS application and its message dependencies. Declaring the framework configures deployment; it does not install `rclpy` or Unitree message packages into an arbitrary image. The [Go2 examples](https://github.com/wendylabsinc/WendyOS/tree/main/go/simulator/go2/examples) include complete Dockerfiles and manifests.
+
+Run `wendy run --device vm:go2-sim` or `wendy run --device vm:g1-sim` from that project directory. Wendy rejects a conflicting domain, ROS distribution, middleware, or explicit discovery override instead of silently placing the app on a different robot bus.
+
+## Control and reset behavior
+
+| Behavior | Go2 | G1 |
+| --- | --- | --- |
+| Application control | A new eligible velocity publisher can receive control automatically, replacing the previous owner. Native sport publishers begin with a bounded Move request; the examples start at zero velocity. | Start the command publisher, select it in the sandbox, then click **Give app control**. |
+| Supported high-level inputs | `/cmd_vel` and the documented native sport subset on `/api/sport/request`. | `/cmd_vel` and the documented `LocoClient` velocity/FSM subset on `/api/sport/request`. |
+| After pause, reset, or release | Resume the world, then restart the driving app to create a new publisher. | Resume the world, restart the publisher, then grant it control again. |
+| Native motor messages | `unitree_go`, with twelve active motors in the twenty-slot SDK layout. | `unitree_hg`, with 29 physical joints in the 35-slot HG layout and its own CRC. |
+
+Only one browser or DDS publisher owns actuation at a time. Stopping your app leaves the simulated robot runtime running.
+
+```bash
+# Inspect the runtime or reset its world
+wendy vm robot status go2-sim --json
+wendy vm robot reset go2-sim
+
+# Recover a failed runtime
+wendy vm robot restart go2-sim
+
+# Apply the robot runtime bundled with a newer CLI
+wendy vm robot update go2-sim
+
+# Shut down the VM
+wendy vm stop go2-sim
+```
+
+Use your G1 VM name for the corresponding operations. Reset revokes control; update applies the CLI's pinned runtime and resets the robot world. A source-pin mismatch requires an update before non-interactive deployment.
+
+## Compatibility and fidelity
+
+Simulation exercises ROS messages, deployment, application behavior, and failure handling. Its locomotion policies, camera and lidar mounts, and contact model do not reproduce the robot's factory firmware or calibration. Passing a simulated run does not establish physical balance, stopping distance, or collision clearance.
+
+For exact topics, command IDs, message layouts, and limitations, see the source-owned [Go2 compatibility manifest](https://github.com/wendylabsinc/WendyOS/blob/main/go/simulator/go2/compatibility.json) and [G1 compatibility manifest](https://github.com/wendylabsinc/WendyOS/blob/main/go/simulator/g1/compatibility.json).

@@ -1,0 +1,183 @@
+---
+title: Understand the generated web server
+description: Explore the TypeScript source, Dockerfile, and Wendy app configuration.
+language: typescript
+---
+
+First [build and run the server](/docs/guides/tutorials/typescript/simple-web-server). The template owns the exact generated file contents; the examples below explain their roles.
+
+## Code Breakdown
+
+<Steps>
+  <Step>
+    ### Generated package.json
+
+    Review the generated `package.json`:
+
+    ```json
+    {
+      "name": "simple-server",
+      "version": "0.1.0",
+      "type": "module",
+      "scripts": {
+        "build": "tsc",
+        "start": "node dist/index.js",
+        "dev": "tsx watch src/index.ts"
+      },
+      "dependencies": {
+        "express": "^4"
+      },
+      "devDependencies": {
+        "@types/express": "^5",
+        "@types/node": "^22",
+        "typescript": "^5.7",
+        "tsx": "^4"
+      },
+      "engines": {
+        "node": ">=22"
+      }
+    }
+    ```
+  </Step>
+
+  <Step>
+    ### Generated tsconfig.json
+
+    Review the generated `tsconfig.json`:
+
+    ```json
+    {
+      "compilerOptions": {
+        "target": "ES2022",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "outDir": "./dist",
+        "rootDir": "./src",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "declaration": true
+      },
+      "include": ["src/**/*"],
+      "exclude": ["node_modules", "dist"]
+    }
+    ```
+  </Step>
+
+  <Step>
+    ### Generated Web Server
+
+    The generated `src/index.ts` contains the server logic:
+
+    ```typescript
+    import express, { Request, Response } from "express";
+
+    const app = express();
+    const port = 3000;
+    const hostname = process.env.WENDY_HOSTNAME || "0.0.0.0";
+
+    app.use(express.json());
+
+    app.get("/", (_req: Request, res: Response) => {
+      console.log("Received request: GET /");
+      res.json({ message: "hello-world" });
+    });
+
+    app.get("/health", (_req: Request, res: Response) => {
+      res.json({ status: "ok" });
+    });
+
+    interface CreateItemBody {
+      name: string;
+      price: number;
+    }
+
+    interface ItemResponse {
+      id: number;
+      name: string;
+      price: number;
+    }
+
+    app.post(
+      "/items",
+      (req: Request<{}, ItemResponse, CreateItemBody>, res: Response) => {
+        console.log(`Received request: POST /items - ${req.body.name}`);
+        const item: ItemResponse = {
+          id: 1,
+          name: req.body.name,
+          price: req.body.price,
+        };
+        res.status(201).json(item);
+      }
+    );
+
+    app.listen(port, () => {
+      console.log(`Server running on http://${hostname}:${port}`);
+    });
+    ```
+
+    <Callout type="info">
+      **Multiple Routes**: This example includes three routes:
+      - `GET /` - Returns `{"message":"hello-world"}`
+      - `GET /health` - Returns `{"status":"ok"}` for health checks
+      - `POST /items` - Creates an item from a JSON body and echoes it back
+    </Callout>
+  </Step>
+
+  <Step>
+    ### Generated Dockerfile
+
+    The generated project includes a multi-stage Dockerfile:
+
+    ```dockerfile
+    FROM node:22-slim AS builder
+
+    WORKDIR /app
+    COPY package*.json ./
+    RUN npm install
+
+    COPY tsconfig.json ./
+    COPY src ./src
+    RUN npm run build
+
+    FROM node:22-slim
+
+    WORKDIR /app
+    COPY --from=builder /app/dist ./dist
+    COPY --from=builder /app/node_modules ./node_modules
+
+    EXPOSE 3000
+
+    CMD ["node", "dist/index.js"]
+    ```
+  </Step>
+
+  <Step>
+    ### Generated wendy.json
+
+    The generated `wendy.json` requests the `network` entitlement and already includes a readiness probe plus a `postStart` hook that opens your browser to the device when the server is ready:
+
+    ```json
+    {
+        "appId": "simple-server",
+        "platform": "linux",
+        "version": "0.1.0",
+        "entitlements": [
+            {
+                "type": "network"
+            }
+        ],
+        "readiness": {
+            "tcpSocket": { "port": 3000 },
+            "timeoutSeconds": 30
+        },
+        "hooks": {
+            "postStart": {
+                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:3000"
+            }
+        }
+    }
+    ```
+  </Step>
+</Steps>

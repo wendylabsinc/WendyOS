@@ -1,0 +1,130 @@
+---
+title: Sim to real with Unitree
+description: Run a ROS 2 app on a Unitree VM, verify it in simulation, and deploy the same project to a physical robot.
+---
+
+Start with a [Unitree Go2 or G1 simulator template](/docs/installation/unitree-simulators). ROS 2 and the simulated robot run inside the WendyOS VM. You deploy your app with `wendy run`, then select a physical target when you are ready to test on hardware.
+
+This walkthrough uses the Go2 sensor dashboard and browser teleoperation examples. They use the native interfaces shared by the simulated and physical Go2. The [G1 path](#using-the-g1-template) uses the same deployment workflow with G1-specific messages and control behavior.
+
+## 1. Read the simulated robot's sensors
+
+Create and start `go2-sim` using [Unitree simulator setup](/docs/installation/unitree-simulators). Get the examples from WendyOS, using a CLI built from the same checkout when following unreleased simulator changes:
+
+```bash
+git clone https://github.com/wendylabsinc/WendyOS.git
+cd WendyOS/go/simulator/go2/examples/sensors
+wendy run --device vm:go2-sim --build-type docker --no-restart
+```
+
+Open the URL Wendy prints. With default VM networking, the dashboard is at `http://127.0.0.1:8904`. It should show fresh lidar, odometry, IMU, camera, and joint data while the simulation runs. The dashboard publishes no motion commands and needs no control grant.
+
+Open the sandbox in another terminal:
+
+```bash
+wendy vm robot open go2-sim
+```
+
+Move the sandbox obstacle and check that lidar returns change. Pause the world or a sensor and check that the dashboard marks the affected observations stale. Resume it and verify that observations recover.
+
+Your app is now receiving ROS 2 messages from the robot inside the VM.
+
+## 2. Run the Go2 teleoperation example
+
+Leave the sensor dashboard running if you want to observe it alongside teleoperation. In another terminal, change to the `go/simulator/go2/examples/teleop` directory in the same checkout:
+
+```bash
+wendy run --device vm:go2-sim --build-type docker --no-restart
+```
+
+Open the printed URL, normally `http://127.0.0.1:8903`. Choose **Enable controls** and hold a direction to move. Release it to request zero velocity; **Space**, **Escape**, or **Stop / disable** ends the control session. Keep the control panel focused while observing the sandbox in a second window.
+
+The app publishes native `unitree_api/msg/Request` Move messages on `/api/sport/request` at 20 Hz. It starts with zero velocity. The managed Go2 runtime grants its new publisher control automatically when the robot is in a compatible sport state. No simulator-specific drive backend is needed.
+
+Edit the app and repeat `wendy run`. After pausing or resetting the simulated world, resume it and restart the app to create a new publisher. An existing publisher cannot regain control just by continuing to send commands.
+
+## 3. Check the physical robot's interfaces
+
+Install Wendy Agent on the robot's development computer, or use a WendyOS computer connected to its robot network. For an existing Linux computer, follow [Linux agent setup](/docs/installation/linux). For G1 PC2, follow [Unitree G1 setup](/docs/installation/wendy-agent-unitree-g1).
+
+Find the physical target and verify its ROS graph. Replace the value below with its discovered name or address:
+
+```bash
+ROBOT_DEVICE=my-go2
+wendy discover
+wendy device info --device "$ROBOT_DEVICE"
+wendy device ros2 topics --device "$ROBOT_DEVICE" --domain 0
+wendy device ros2 topic info /utlidar/cloud_base --device "$ROBOT_DEVICE" --domain 0
+wendy device ros2 topic info /utlidar/robot_odom --device "$ROBOT_DEVICE" --domain 0
+```
+
+Check the actual message types, frames, QoS, and timestamps before relying on a stream. The Go2 examples consume `/utlidar/cloud_base` and `/utlidar/robot_odom`; a physical robot does not necessarily publish the simulator's `/scan` and `/odom` aliases. The physical target must reach the controller's DDS network.
+
+Deploy the sensor dashboard first, from its project directory:
+
+```bash
+wendy run --device "$ROBOT_DEVICE" --build-type docker --no-restart
+```
+
+Open the printed target URL. Native lidar, odometry, and IMU panels should receive data when those streams are available. The raw ROS camera and joint-state panels can remain waiting if the robot has no publishers for those optional streams. A Go2 WebRTC camera stream is not the same interface as `/camera/color/image_raw`.
+
+## 4. Deploy the same driving project
+
+Before deploying a motion app, put the robot in its supported operating mode, clear its movement area, and keep the physical remote and hardware stop available. The teleop example does not select posture or change the robot's motion mode. Use the G1's support gantry or hoist for its initial hardware tests.
+
+From the Go2 `teleop` project directory, use the physical target instead of the VM:
+
+```bash
+wendy run --device "$ROBOT_DEVICE" --build-type docker --no-restart
+```
+
+The source project and manifest stay the same. Open the printed URL, verify the controls are initially disabled, and test enable, release, and stop behavior under supervision. The simulator's control grant does not exist on hardware; the robot firmware arbitrates physical control.
+
+The example's deadman timer requests zero velocity after browser heartbeats stop. It does not provide obstacle avoidance or replace the hardware stop. Its forward walking pace is 0.55 m/s because the physical Go2 ignores smaller forward requests below 0.5 m/s; do not assume that reducing this value produces a slower physical test.
+
+## What transfers, and what needs checking
+
+| Keep in the application | Check on the physical target |
+| --- | --- |
+| Native ROS message types and application logic. | The robot firmware's supported commands, message versions, joint layout, and control mode. |
+| `wendy run` and the app's build configuration. | Target CPU architecture, build dependencies, and available hardware. |
+| Host discovery in the source manifest. Wendy converts it to loopback for a managed VM. | The physical DDS interface, domain, middleware, and network access. |
+| Sensor timeout and fault-handling logic. | Capture clocks, calibration, frames, coverage, QoS, and actual delivery rates. |
+| UI and stop requests. | Physical stopping distance, command arbitration, and hardware stop behavior. |
+
+The examples' [shared interface notes](https://github.com/wendylabsinc/WendyOS/blob/main/go/simulator/go2/examples/README.md) document current sensor compromises. The sensor dashboard uses arrival time for timeouts by default. Patrol and Roam also currently enable capture-age and scan-gap relaxations. Review those settings before adapting either autonomous example; arriving packets do not prove fresh captures, and an unobserved sector does not establish clearance.
+
+## Using the G1 template
+
+Create `g1-sim` with `--profile g1`, then inspect `/odom`, `/imu/data`, and `/lowstate` through `wendy device ros2`. Deploy a G1-compatible ROS app from its project directory:
+
+```bash
+wendy run --device vm:g1-sim
+```
+
+Use ROS 2 Humble, CycloneDDS, domain 0, and `use_sim_time=false`. Start the app's command publisher, select it in the sandbox, then choose **Give app control**. After pause or reset, resume the world, restart the publisher, and grant it control again.
+
+G1 native motor messages use `unitree_hg`, not Go2's `unitree_go`. The simulator supports the documented `LocoClient` velocity/FSM subset, `/cmd_vel`, and PR-mode native low-level commands. Arm, audio, trajectory, and factory posture services are not emulated. Use the [G1 compatibility manifest](https://github.com/wendylabsinc/WendyOS/blob/main/go/simulator/g1/compatibility.json) to choose a supported interface. Low-level motor control requires your application to stabilize the humanoid.
+
+The separate [G1 Fruit Ninja example](/docs/guides/tutorials/python/g1-mujoco-simulation) is a simulation-only demo with a supported base. It is not the free-floating G1 VM profile or a deployable physical controller.
+
+## Unitree application templates
+
+The [`go2-rc`](https://github.com/wendylabsinc/templates/tree/main/python/go2-rc) and [`g1-rc`](https://github.com/wendylabsinc/templates/tree/main/python/g1-rc) catalog templates provide browser control, a motion service, and a camera service for physical robots:
+
+```bash
+wendy init go2-control --target wendyos --language python --template go2-rc --assistant skip --git-init no
+```
+
+For G1, use `g1-control` and `--template g1-rc`. Read the generated README and configure the robot interface and camera before deploying.
+
+These are hardware application templates, distinct from the `go2` and `g1` VM profiles. Their WebRTC or V4L2 camera paths and full posture/arm controls are not all emulated by the VM. Use the ROS examples above for the shared Go2 simulation/hardware path, or adapt a template to the selected profile's documented interfaces instead of assuming the entire hardware UI works in simulation.
+
+## Troubleshooting
+
+- **No robot topics:** confirm `wendy vm robot status` reports a healthy, ready robot; check domain 0, CycloneDDS, and the named `vm:` target. The generic VM profile does not start a robot runtime.
+- **Topics arrive but the robot does not move:** check publisher ownership in the sandbox. Resume before restarting the publisher after a pause or reset. On hardware, inspect the robot's control mode and DDS connection.
+- **An unsupported command fails:** compare it with the profile's compatibility manifest. The simulators return errors for unsupported native APIs.
+- **The browser does not connect:** use the URL printed by Wendy. Default user-mode VMs forward declared HTTP/readiness ports to loopback; physical targets use their reachable address.
+
+See [Unitree simulator setup](/docs/installation/unitree-simulators) for agent upgrades, runtime source-pin updates, and lifecycle commands, or [Wendy for ROS 2](/docs/integrations/ros2) for graph inspection and recording.

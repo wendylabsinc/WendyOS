@@ -1,5 +1,11 @@
 {
   "title": "Robotics",
   "description": "Build, deploy, and operate ROS 2 robots with WendyOS",
-  "pages": ["index", "ros2", "robot-diagnostics", "foxglove"]
+  "pages": [
+    "index",
+    "sim-to-real",
+    "ros2",
+    "robot-diagnostics",
+    "foxglove"
+  ]
 }

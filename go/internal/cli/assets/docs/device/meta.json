@@ -1,5 +1,5 @@
 {
-  "title": "Device Management",
+  "title": "Device management",
   "description": "Connect to, configure, and manage your WendyOS devices",
   "pages": [
     "cli-agent-relationship",

@@ -1,366 +1,40 @@
 ---
-title: Simple Web Server
-description: Build a long-running HTTP server on WendyOS using TypeScript
+title: Build a web server
+description: Deploy a TypeScript HTTP server to a Wendy target and verify its response.
 language: typescript
 ---
 
-## Building a Web Server with Express
+You need the [Wendy CLI](/docs/installation/developer-machine-setup), a running container builder, and a Linux/WendyOS target or [simulator](/docs/installation/wendyos-virtual-machine). The [quickstart](/docs/) covers those prerequisites. Node.js is only needed locally if you also want to run the app outside Wendy.
 
-<Callout type="info">
-  **Source Code**: The complete source code for this example is available at [github.com/wendylabsinc/samples/node-typescript/simple-server](https://github.com/wendylabsinc/samples/tree/main/node-typescript/simple-server)
-</Callout>
+## 1. Create it
 
-Often times you'll want a long-running server where you can make HTTP or WebSocket calls to your WendyOS device. This allows your device to accept incoming requests and respond to them, making it easy to build interactive applications or APIs that can be accessed from other devices on your network.
+```bash
+wendy init simple-server --target wendyos --language node --template simple-api --var APP_ID=simple-server --var PORT=3000 --assistant skip --git-init no
+cd simple-server
+```
 
-This guide shows you how to build a web server using Node.js with Express, the most popular and battle-tested framework for Node.js.
-
-### Prerequisites
-
-- Wendy CLI installed on your development machine
-- Node.js 22 or later installed
-- A WendyOS device plugged in over USB or connectable over Wi-Fi
-
-## Setting Up Your Project
-
-<Steps>
-  <Step>
-    ### Initialize the Project
-
-    Start from the Wendy Express template:
-
-    ```bash
-    wendy init simple-server --target wendyos --language node --template simple-api --var APP_ID=simple-server --var PORT=3000 --assistant skip --git-init no
-    cd simple-server
-    ```
-
-    <CliShot flow="init" step="wizard" alt="wendy init scaffolding the simple-server Express project from the simple-api template" />
-
-    The template creates `package.json`, `tsconfig.json`, `src/index.ts`, `Dockerfile`, and `wendy.json`. The sections below explain the generated server and the pieces you can customize.
-  </Step>
-
-  <Step>
-    ### Run on WendyOS
-
-    ```bash
-    wendy run
-    ```
-
-    <CliShot flow="run" step="deploy" alt="wendy run building and deploying the simple-server Express app to a WendyOS device" />
-
-    Wendy will build the app, ask you to select a device if one is not already configured, deploy the app, and print the URL or run output.
-  </Step>
-</Steps>
-
-## Code Breakdown
-
-<Steps>
-  <Step>
-    ### Generated package.json
-
-    Review the generated `package.json`:
-
-    ```json
-    {
-      "name": "simple-server",
-      "version": "0.1.0",
-      "type": "module",
-      "scripts": {
-        "build": "tsc",
-        "start": "node dist/index.js",
-        "dev": "tsx watch src/index.ts"
-      },
-      "dependencies": {
-        "express": "^4"
-      },
-      "devDependencies": {
-        "@types/express": "^5",
-        "@types/node": "^22",
-        "typescript": "^5.7",
-        "tsx": "^4"
-      },
-      "engines": {
-        "node": ">=22"
-      }
-    }
-    ```
-  </Step>
-
-  <Step>
-    ### Generated tsconfig.json
-
-    Review the generated `tsconfig.json`:
-
-    ```json
-    {
-      "compilerOptions": {
-        "target": "ES2022",
-        "module": "NodeNext",
-        "moduleResolution": "NodeNext",
-        "outDir": "./dist",
-        "rootDir": "./src",
-        "strict": true,
-        "esModuleInterop": true,
-        "skipLibCheck": true,
-        "forceConsistentCasingInFileNames": true,
-        "declaration": true
-      },
-      "include": ["src/**/*"],
-      "exclude": ["node_modules", "dist"]
-    }
-    ```
-  </Step>
-
-  <Step>
-    ### Generated Web Server
-
-    The generated `src/index.ts` contains the server logic:
-
-    ```typescript
-    import express, { Request, Response } from "express";
-
-    const app = express();
-    const port = 3000;
-    const hostname = process.env.WENDY_HOSTNAME || "0.0.0.0";
-
-    app.use(express.json());
-
-    app.get("/", (_req: Request, res: Response) => {
-      console.log("Received request: GET /");
-      res.json({ message: "hello-world" });
-    });
-
-    app.get("/health", (_req: Request, res: Response) => {
-      res.json({ status: "ok" });
-    });
-
-    interface CreateItemBody {
-      name: string;
-      price: number;
-    }
-
-    interface ItemResponse {
-      id: number;
-      name: string;
-      price: number;
-    }
-
-    app.post(
-      "/items",
-      (req: Request<{}, ItemResponse, CreateItemBody>, res: Response) => {
-        console.log(`Received request: POST /items - ${req.body.name}`);
-        const item: ItemResponse = {
-          id: 1,
-          name: req.body.name,
-          price: req.body.price,
-        };
-        res.status(201).json(item);
-      }
-    );
-
-    app.listen(port, () => {
-      console.log(`Server running on http://${hostname}:${port}`);
-    });
-    ```
-
-    <Callout type="info">
-      **Multiple Routes**: This example includes three routes:
-      - `GET /` - Returns `{"message":"hello-world"}`
-      - `GET /health` - Returns `{"status":"ok"}` for health checks
-      - `POST /items` - Creates an item from a JSON body and echoes it back
-    </Callout>
-  </Step>
-
-  <Step>
-    ### Generated Dockerfile
-
-    The generated project includes a multi-stage Dockerfile:
-
-    ```dockerfile
-    FROM node:22-slim AS builder
-
-    WORKDIR /app
-    COPY package*.json ./
-    RUN npm install
-
-    COPY tsconfig.json ./
-    COPY src ./src
-    RUN npm run build
-
-    FROM node:22-slim
-
-    WORKDIR /app
-    COPY --from=builder /app/dist ./dist
-    COPY --from=builder /app/node_modules ./node_modules
-
-    EXPOSE 3000
-
-    CMD ["node", "dist/index.js"]
-    ```
-  </Step>
-
-  <Step>
-    ### Generated wendy.json
-
-    The generated `wendy.json` requests the `network` entitlement and already includes a readiness probe plus a `postStart` hook that opens your browser to the device when the server is ready:
-
-    ```json
-    {
-        "appId": "simple-server",
-        "platform": "linux",
-        "version": "0.1.0",
-        "entitlements": [
-            {
-                "type": "network"
-            }
-        ],
-        "readiness": {
-            "tcpSocket": { "port": 3000 },
-            "timeoutSeconds": 30
-        },
-        "hooks": {
-            "postStart": {
-                "cli": "wendy utils open-browser http://${WENDY_HOSTNAME}:3000"
-            }
-        }
-    }
-    ```
-  </Step>
-</Steps>
-
-## Run Again on WendyOS
-
-Deploy your containerized web server to your WendyOS device:
+## 2. Run it
 
 ```bash
 wendy run
 ```
 
-## Test Your Server on WendyOS
+Select your target. Wendy builds the image, deploys it, and streams logs. After readiness succeeds, expect a line like this, with your target's address:
 
-After deploying your server to your WendyOS device, you can test it from your development machine.
-
-The generated `wendy.json` already includes a readiness probe and a `postStart` hook, so Wendy automatically opens your browser to the device once the server is ready. You can also open it manually and navigate to:
-
-```
-http://wendyos-true-probe.local:3000
+```text
+App reachable at http://192.168.123.222:3000
 ```
 
-<Callout type="warning">
-  **Replace the hostname**: Each WendyOS device has a unique hostname. Replace `wendyos-true-probe` with your device's actual hostname shown in the CLI output. In addition, don't forget to add the port to the hostname.
-</Callout>
+A simulator using default networking prints `http://127.0.0.1:3000` instead.
 
-You should see the following JSON response:
+## 3. Open it
+
+Open the printed URL in your browser. You should see:
 
 ```json
 {"message":"hello-world"}
 ```
 
-This confirms your web server is successfully running on your WendyOS device and accepting requests from your network.
+Your web service is running on the target. Edit `src/index.ts` to change the response, then use `wendy run --watch` to redeploy as you edit.
 
-## Verifying Deployment
-
-You can verify the server container is running by listing the applications on your device:
-
-```bash
-wendy device apps list
-```
-
-<CliShot flow="apps-list" step="apps" alt="wendy device apps list showing the simple-server app running on the device" />
-
-You should see your containerized web server listed among the running applications.
-
-## Learn More
-
-Express is the most popular Node.js web framework. Learn more at [https://expressjs.com/](https://expressjs.com/)
-
-## Alternative Frameworks
-
-While this guide covers Express, many other excellent TypeScript web frameworks will work similarly on WendyOS:
-
-- **[Fastify](https://fastify.dev/)**: Fast and low overhead web framework
-- **[Koa](https://koajs.com/)**: Expressive middleware framework by the Express team
-- **[Hono](https://hono.dev/)**: Works on Node.js, Bun, Deno, and edge runtimes
-- **[NestJS](https://nestjs.com/)**: Progressive framework for building scalable server-side applications
-
-All of these frameworks can be containerized and deployed to WendyOS following the same Docker-based approach outlined in this guide.
-
-## Next Steps
-
-Now that you have a basic web server running:
-
-- Add more routes to handle different endpoints
-- Implement PUT and DELETE routes for a full REST API
-- Add middleware for logging, authentication, and error handling
-- Parse query parameters
-- Implement WebSocket support for real-time communication
-- Connect to databases and external APIs
-
-<Accordions>
-  <Accordion title="Testing the app on your own machine">
-    There are times when you might not have a WendyOS device around. You can still test your application locally using Node.js or Docker.
-
-    ### Using Node.js Directly
-
-    Run your server locally with hot-reload:
-
-    ```bash
-    npm run dev
-    ```
-
-    You should see:
-
-    ```
-    Server running on http://0.0.0.0:3000
-    ```
-
-    ### Using Docker Locally
-
-    Build and run the container:
-
-    ```bash
-    docker build -t simple-server .
-    docker run -p 3000:3000 simple-server
-    ```
-
-    ### Test Your Server
-
-    Open another terminal and test with curl:
-
-    ```bash
-    # Test the root endpoint
-    curl http://localhost:3000
-    ```
-
-    You should see:
-
-    ```json
-    {"message":"hello-world"}
-    ```
-
-    Test the health endpoint:
-
-    ```bash
-    curl http://localhost:3000/health
-    ```
-
-    You should see:
-
-    ```json
-    {"status":"ok"}
-    ```
-
-    Test the POST endpoint:
-
-    ```bash
-    curl -X POST http://localhost:3000/items \
-      -H "Content-Type: application/json" \
-      -d '{"name": "widget", "price": 9.99}'
-    ```
-
-    You should see:
-
-    ```json
-    {"id":1,"name":"widget","price":9.99}
-    ```
-  </Accordion>
-</Accordions>
+[Understand what Wendy generated](/docs/guides/tutorials/typescript/generated-server), including the Dockerfile and `wendy.json`, or use [troubleshooting](/docs/errors) if you did not get a response.

@@ -20,10 +20,10 @@ export function InstallScripts() {
       <button
         type="button"
         onClick={() => dialogRef.current?.showModal()}
-        className="inline-flex items-center gap-1.5 border px-2.5 py-1.5 text-sm font-medium text-fd-foreground transition-colors hover:bg-fd-accent hover:text-fd-accent-foreground"
+        className="inline-flex items-center gap-1.5 px-2 py-1 text-sm text-fd-muted-foreground transition-colors hover:bg-fd-accent hover:text-fd-accent-foreground"
       >
         <Terminal className="size-4" />
-        Install Scripts
+        Install
       </button>
 
       <dialog

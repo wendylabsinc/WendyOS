@@ -1,0 +1,29 @@
+---
+title: How Wendy works
+description: Understand targets, app configuration, and the build and deploy loop.
+---
+
+Start with the [quickstart](/docs/) if you have not run an app yet.
+
+## Your development machine and your target
+
+The CLI runs on your development machine. A target is the machine that runs your app. WendyOS includes Wendy Agent; existing Linux and supported Mac machines can run the agent without replacing their OS. A simulator is a local VM running WendyOS.
+
+`wendy run` selects a target, detects the project, builds for that target, uploads the result, starts the app, and attaches logs. Use `wendy run --watch` to repeat that loop when source files change.
+
+Linux targets run containers. Mac targets run native macOS apps. ESP32 uses Wendy Lite and has a separate native firmware workflow.
+
+## App configuration
+
+[`wendy.json`](/docs/advanced/apps/wendy.json) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path but does not provide physical hardware access.
+
+## Optional cloud management
+
+You can develop locally without enrolling in Wendy Cloud. [Cloud](/docs/cloud) adds remote access and fleet management when you need to deploy beyond your local network.
+
+## Deeper explanations
+
+- [Device selection](/docs/advanced/clients/wendy-cli/device-selection)
+- [Build detection and toolchains](/docs/advanced/clients/wendy-cli/commands/build)
+- [Multi-service apps](/docs/advanced/apps/wendy-services)
+- [WendyOS internals](/docs/advanced/wendyos/requirements)

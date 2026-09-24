@@ -16,10 +16,14 @@ natively, with none of the emulation an x86 machine pays when it cross-builds
 for a device.
 
 <Callout type="info">
-The VM has no camera, microphone, speaker, Bluetooth adapter, GPU, GPIO or USB
-devices. Anything under **Hardware Access**
+The VM exposes no physical camera, microphone, speaker, Bluetooth adapter, GPU, GPIO or USB
+devices. Unitree profiles publish simulated sensors over ROS 2. Physical peripheral access under **Hardware Access**
 needs a real device. The VM is for the software half of your project.
 </Callout>
+
+## Simulate a Unitree robot
+
+The `go2` and `g1` profiles add a virtual robot with MuJoCo, ROS 2, and a browser sandbox. Follow [Unitree simulator setup](/docs/installation/unitree-simulators), then [deploy a ROS 2 app from simulation to hardware](/docs/integrations/sim-to-real). Their virtual sensors do not provide access to physical peripherals.
 
 ## What you'll need
 
