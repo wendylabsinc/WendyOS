@@ -116,6 +116,7 @@ type WendyLiteClient struct {
 	closeOnce sync.Once
 	closeErr  error
 	readDone  sync.WaitGroup // tracks the readLoop goroutine
+	done      chan struct{}  // closed once the read loop exits; see Done
 
 	mu      sync.Mutex // guards subs and readErr
 	subs    []*subscription
@@ -130,7 +131,15 @@ type WendyLiteClient struct {
 }
 
 func NewWendyLiteClient() *WendyLiteClient {
-	return &WendyLiteClient{}
+	return &WendyLiteClient{done: make(chan struct{})}
+}
+
+// Done returns a channel that is closed once the connection is gone: lost, or
+// torn down by Close. It lets a caller that only listens — sensor frames reach
+// their listeners with no end-of-stream marker — notice the device dropping
+// off. It never closes on a client that never connected.
+func (c *WendyLiteClient) Done() <-chan struct{} {
+	return c.done
 }
 
 func (c *WendyLiteClient) ConnectInsecure(address string) error {
@@ -871,6 +880,7 @@ func (c *WendyLiteClient) readLoop(link wcomLink) {
 		msg, err := link.recv(0)
 		if err != nil {
 			c.failAll(err)
+			close(c.done) // after failAll, so readErr is set when Done fires
 			return
 		}
 		c.dispatch(msg)
