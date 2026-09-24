@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -122,6 +123,40 @@ func (c *fakeWendycomClient) Close() error {
 	c.mu.Unlock()
 	c.dropOff()
 	return nil
+}
+
+func TestNewWendyComTransportRejectsMissingIdentity(t *testing.T) {
+	for _, tc := range []struct{ name, cert, key string }{
+		{"no certificate", "", "key"},
+		{"no key", "cert", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewWendyComTransport(zap.NewNop(), tc.cert, "chain", tc.key, SensorPairing{SourceAssetID: 7}, "board:5054"); err == nil {
+				t.Fatal("expected an error when the agent has no mTLS identity")
+			}
+		})
+	}
+}
+
+func TestNewWendyComTransportRejectsMissingChain(t *testing.T) {
+	if _, err := NewWendyComTransport(zap.NewNop(), "cert", "", "key", SensorPairing{SourceAssetID: 7}, "board:5054"); err == nil {
+		t.Fatal("expected an error when the agent has no CA chain to verify the board against")
+	}
+}
+
+// Credentials are parsed at connect time, as mtlsDialer does, so a broken
+// identity surfaces from FetchManifest before anything is dialed.
+func TestWendyComTransportReportsBadClientCertificate(t *testing.T) {
+	tr, err := NewWendyComTransport(zap.NewNop(), "cert", "chain", "key", SensorPairing{SourceAssetID: 7}, "board.invalid:5054")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := tr.FetchManifest(ctx); err == nil || !strings.Contains(err.Error(), "wendycom client certificate") {
+		t.Fatalf("FetchManifest: got %v, want a client certificate error", err)
+	}
 }
 
 func newTestWendycomTransport(logger *zap.Logger, c *fakeWendycomClient) (*wendycomTransport, *atomic.Int32) {

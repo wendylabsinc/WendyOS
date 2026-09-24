@@ -2,12 +2,15 @@ package mcusource
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
 )
@@ -50,30 +53,49 @@ type wendycomTransport struct {
 	closeErr  error
 }
 
-// NewWendyComTransport reaches a Wendy Lite board over LAN at addr.
+// NewWendyComTransport reaches a Wendy Lite board over LAN at addr, over
+// mutual TLS with the agent's own identity: the same credentials the CLI
+// presents to a board (providers.connectWithCLIIdentities), its certificate
+// as the client certificate and its issuer chain as the roots the board's
+// certificate must chain to.
 //
-// TODO: this connects with ConnectInsecure — no client certificate, and no
-// check of the board's certificate — so the manifest's device_asset_id is the
-// only identity check. Move to mTLS pinned to p.SourceAssetID, as mtlsDialer
-// does for the other transports.
-func NewWendyComTransport(logger *zap.Logger, p SensorPairing, addr string) SensorTransport {
+// TODO: ConnectWithMutualAuthentication only checks that the board's
+// certificate chains to the agent's CA, not that it belongs to
+// p.SourceAssetID, so the manifest's device_asset_id is the only asset check.
+// Pin the asset in the handshake, as mtlsDialer does for the other transports.
+func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
+	if certPEM == "" || keyPEM == "" {
+		return nil, errors.New("mcusource: agent has no mTLS identity (not provisioned)")
+	}
+	if chainPEM == "" {
+		return nil, errors.New("mcusource: agent has no CA chain to verify a Wendy Lite board against")
+	}
 	return &wendycomTransport{
 		logger: logger.With(zap.Int32("source", p.SourceAssetID), zap.String("addr", addr)),
 		connect: func() (wendycomClient, error) {
+			cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+			if err != nil {
+				return nil, fmt.Errorf("mcusource: wendycom client certificate: %w", err)
+			}
+			rootCAs := x509.NewCertPool()
+			if certs.AppendChainToPool(rootCAs, chainPEM) == 0 {
+				return nil, errors.New("mcusource: wendycom: no parseable certificate in the agent's CA chain")
+			}
 			c := liteclient.NewWendyLiteClient()
-			if err := c.ConnectInsecure(addr); err != nil {
+			err = c.ConnectWithMutualAuthentication(addr, cert, *rootCAs)
+			if err != nil {
 				return nil, fmt.Errorf("mcusource: wendycom connect %s: %w", addr, err)
 			}
 			return c, nil
 		},
-	}
+	}, nil
 }
 
 // clientFor returns the transport's connection, opening it on first use.
-// ConnectInsecure takes no context and its TCP dial has no timeout, so ctx
-// bounds the wait here instead: a dead address would otherwise hold up
-// Runner.Stop for minutes. A connect that finishes after ctx gave up is closed
-// rather than leaked.
+// The client's connect methods take no context and their TCP dial has no
+// timeout, so ctx bounds the wait here instead: a dead address would
+// otherwise hold up Runner.Stop for minutes. A connect that finishes after
+// ctx gave up is closed rather than leaked.
 func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -2,10 +2,11 @@ package mcusource
 
 import (
 	"context"
-	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"net"
 	"strconv"
 	"sync"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
@@ -76,9 +77,7 @@ var resolveLANAddrs = func(ctx context.Context, sourceAssetID int32, transport s
 		if d.AssetID != sourceAssetID {
 			continue
 		}
-		// The WendyCom transport connects without a client certificate for
-		// now, so a board that does not ask for one (mtls=false) is reachable.
-		if !d.IsMTLS && transport != "wendycom" {
+		if !d.IsMTLS {
 			continue
 		}
 		port := sensorlink.Port
