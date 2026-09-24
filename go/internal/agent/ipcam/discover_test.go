@@ -338,3 +338,82 @@ func TestOnceMarksUnreachableCameraOffline(t *testing.T) {
 		t.Fatal("an unreachable camera is still reported online")
 	}
 }
+
+// A newly discovered camera is asked, over ONVIF, what its streams are called,
+// and the answer lands in the registry so StreamURL stops guessing Reolink
+// paths. Once the paths are known the camera is not asked again.
+func TestOnceLearnsStreamPathsOnceAndKeepsThem(t *testing.T) {
+	d, reg := newTestDiscoverer(t, [][]byte{[]byte(reolinkProbeMatch)}, procNetARP)
+	var asked int
+	d.resolveStreams = func(ctx context.Context, cam Camera, cred Credential) (StreamPaths, error) {
+		asked++
+		if cam.ONVIFAddr != "http://10.98.0.50/onvif/device_service" {
+			t.Fatalf("resolver got ONVIFAddr %q", cam.ONVIFAddr)
+		}
+		return StreamPaths{Sub: "/media/live/1/2", Main: "/media/live/1/1"}, nil
+	}
+
+	for round := 0; round < 2; round++ {
+		if _, err := d.Once(context.Background()); err != nil {
+			t.Fatalf("Once round %d: %v", round, err)
+		}
+	}
+	if asked != 1 {
+		t.Fatalf("resolver asked %d times, want exactly once", asked)
+	}
+	cams := reg.List()
+	if len(cams) != 1 || cams[0].StreamSub != "/media/live/1/2" || cams[0].StreamMain != "/media/live/1/1" {
+		t.Fatalf("registry = %+v", cams)
+	}
+	if got := streamPath(cams[0], StreamAuto); got != "/media/live/1/2" {
+		t.Fatalf("streamPath(auto) = %q, want the learned sub path, not the Reolink default", got)
+	}
+}
+
+// A camera that will not say what its streams are is still registered, with
+// the default paths as before, and is asked again next round.
+func TestOnceKeepsCameraWhenStreamPathsAreUnknown(t *testing.T) {
+	d, reg := newTestDiscoverer(t, [][]byte{[]byte(reolinkProbeMatch)}, procNetARP)
+	var asked int
+	d.resolveStreams = func(context.Context, Camera, Credential) (StreamPaths, error) {
+		asked++
+		return StreamPaths{}, ErrNoStreamPaths
+	}
+	for round := 0; round < 2; round++ {
+		if _, err := d.Once(context.Background()); err != nil {
+			t.Fatalf("Once: %v", err)
+		}
+	}
+	if asked != 2 {
+		t.Fatalf("resolver asked %d times, want once per round while unknown", asked)
+	}
+	cams := reg.List()
+	if len(cams) != 1 || cams[0].StreamSub != "" {
+		t.Fatalf("registry = %+v", cams)
+	}
+	if got := streamPath(cams[0], StreamAuto); got != defaultSubPath {
+		t.Fatalf("streamPath(auto) = %q, want the default while unknown", got)
+	}
+}
+
+// The stored login reaches the resolver, keyed by the camera's MAC.
+func TestOnceHandsTheCamerasLoginToTheResolver(t *testing.T) {
+	d, _ := newTestDiscoverer(t, [][]byte{[]byte(reolinkProbeMatch)}, procNetARP)
+	d.Credentials = func(mac string) (Credential, bool) {
+		if mac != "ec:71:db:2a:ae:7e" {
+			return Credential{}, false
+		}
+		return Credential{Username: "admin", Password: "hunter2"}, true
+	}
+	var seen Credential
+	d.resolveStreams = func(_ context.Context, _ Camera, cred Credential) (StreamPaths, error) {
+		seen = cred
+		return StreamPaths{Sub: "/s", Main: "/m"}, nil
+	}
+	if _, err := d.Once(context.Background()); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if seen.Username != "admin" || seen.Password != "hunter2" {
+		t.Fatalf("resolver saw credential %+v", seen)
+	}
+}

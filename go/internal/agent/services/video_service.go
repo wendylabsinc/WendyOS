@@ -1027,6 +1027,9 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 		logger.Warn("loading camera controls failed", zap.Error(err))
 	}
 	svc.discoverer = ipcam.NewDiscoverer(svc.registry, logger)
+	// ONVIF stream-path lookups use the same login `camera login` stored, so a
+	// camera that protects ONVIF still tells us its paths once it has one.
+	svc.discoverer.Credentials = svc.credentials.Get
 	svc.links = ipcam.NewLinkManager(svc.registry, logger)
 	svc.runGStreamer = svc.gstreamerFrames
 	svc.cameraReachable = ipcam.Reachable
