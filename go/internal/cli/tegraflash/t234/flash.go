@@ -37,8 +37,12 @@ var (
 	ejectRetryDelay = time.Second
 )
 
-// gadgetCheckInterval paces the periodic checks made while waiting for a LUN.
-var gadgetCheckInterval = 10 * time.Second
+// gadgetMissingGrace is how long the session's gadget may be off USB before a
+// LUN wait suggests a replug; the gadget is checked every gadgetCheckInterval.
+var (
+	gadgetMissingGrace  = 2 * time.Minute
+	gadgetCheckInterval = 10 * time.Second
+)
 
 // identityReattachWait bounds how long the identity read waits for a detached
 // flashpkg LUN to re-attach before giving up. A DiskArbitration eject (macOS's
@@ -71,6 +75,7 @@ type Stage2 struct {
 	ExpectedIdentity IdentityExpectation
 	HandoffStarted   bool
 	pollFailed       bool
+	recoveryPort     string       // where the bootROM enumerated, before adoptGadget
 	Out              io.Writer    // verbose log
 	Detail           func(string) // live one-line progress; may be nil
 
@@ -105,6 +110,20 @@ func (s *Stage2) pollMedia(ctx context.Context) error {
 		return nil
 	}
 	return s.RunHelper(ctx, HelperRequest{PollMedia: true, Session: s.Session}, nil)
+}
+
+// laterLUN selects a LUN the device exports after the handoff: this session's,
+// on the gadget's port or (after a replug) another one.
+func (s *Stage2) laterLUN(ctx context.Context, vendor string) LUNSelector {
+	return LUNSelector{Vendor: vendor, PortPath: s.PortPath, PortHint: true, Session: s.Session,
+		Refresh: s.mediaRefresh(ctx), OnMissing: s.replugHint, RecoveryPort: s.recoveryPort}
+}
+
+// replugHint tells the user how to recover a gadget that dropped off USB.
+func (s *Stage2) replugHint(gone time.Duration) {
+	fmt.Fprintf(s.Out, "  The Jetson has been off USB for %v. Unplug and replug its USB cable in the same port.\n", gone.Round(time.Second))
+	fmt.Fprintln(s.Out, "  The flash keeps waiting; do not reset the Jetson.")
+	s.detail("off USB for %v; replug the USB cable", gone.Round(time.Second))
 }
 
 // mediaRefresh re-applies media polling while waiting, for LUNs that
@@ -187,8 +206,11 @@ func (s *Stage2) SendFlashPackage(ctx context.Context) error {
 // every later LUN (rootfs export, final status) appears on the gadget's own
 // port with its session id, not on the port the bootROM enumerated at.
 func (s *Stage2) adoptGadget(disk UMSDisk) {
+	if s.recoveryPort == "" {
+		s.recoveryPort = s.PortPath
+	}
 	if disk.PortPath != "" && disk.PortPath != s.PortPath {
-		fmt.Fprintf(s.Out, "  gadget re-enumerated at usb %s (recovery was at usb %s)\n", disk.PortPath, s.PortPath)
+		fmt.Fprintf(s.Out, "  gadget re-enumerated at usb %s (was at usb %s)\n", disk.PortPath, s.PortPath)
 		s.PortPath = disk.PortPath
 	}
 	s.Session = disk.Serial
@@ -348,7 +370,7 @@ func (s *Stage2) verifyFlashPackage(ctx context.Context, disk UMSDisk) error {
 func (s *Stage2) WriteRootfsDevice(ctx context.Context) error {
 	s.detail("waiting for the %s disk", s.Plan.RootfsDevice)
 	fmt.Fprintf(s.Out, "Waiting for the device to export %s over USB...\n", s.Plan.RootfsDevice)
-	disk, err := waitForUMSDiskConfirmed(ctx, LUNSelector{Vendor: RootfsLUNVendor, PortPath: s.PortPath, PortHint: true, Session: s.Session, Refresh: s.mediaRefresh(ctx)}, rootfsWait)
+	disk, err := waitForUMSDiskConfirmed(ctx, s.laterLUN(ctx, RootfsLUNVendor), rootfsWait)
 	if err != nil {
 		if errors.Is(err, errGotFlashpkg) {
 			return ErrDeviceSideFailed
@@ -393,7 +415,7 @@ type FinalStatus struct {
 func (s *Stage2) AwaitFinalStatus(ctx context.Context) (*FinalStatus, error) {
 	s.detail("waiting for the device's final status")
 	fmt.Fprintln(s.Out, "Waiting for the device to report its final status (QSPI programming can take several minutes)...")
-	disk, err := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: FlashpkgVendor, PortPath: s.PortPath, PortHint: true, Session: s.Session, Refresh: s.mediaRefresh(ctx)}, finalStatusWait)
+	disk, err := WaitForUMSDiskAt(ctx, s.laterLUN(ctx, FlashpkgVendor), finalStatusWait)
 	if err != nil {
 		return nil, err
 	}
@@ -559,6 +581,6 @@ func waitForUMSDiskConfirmed(ctx context.Context, selector LUNSelector, timeout 
 		}
 		return UMSDisk{}, false, nil
 	}, func(error) error {
-		return fmt.Errorf("timed out waiting for USB storage %q from the selected device\n%s", selector.Vendor, observedUMSHint())
+		return fmt.Errorf("timed out waiting for USB storage %q from the selected device\n%s", selector.Vendor, observedUMSHint(selector.Session))
 	})
 }

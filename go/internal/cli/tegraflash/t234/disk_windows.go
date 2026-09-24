@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/rcm"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/winusb"
 )
 
@@ -354,21 +355,24 @@ func rawUMSInquiry() string {
 	return b.String()
 }
 
-// tegraUSBHint reports which Tegra-relevant USB devices are present, so a
-// timed-out stage-2 wait can distinguish a board that rebooted into recovery
-// from one still exposing the flashing gadget or gone from USB.
-func tegraUSBHint() string {
-	nodes, _ := listUSBDeviceNodes(func(vid, pid uint16) bool {
-		return tegraUSBLabel(vid, pid) != ""
+// listUSBDevices lists the Tegra-relevant USB device roots (composite function
+// devnodes are skipped); bystanders are filtered before their properties are
+// read.
+func listUSBDevices() ([]usbDevice, error) {
+	nodes, err := listUSBDeviceNodes(func(vid, pid uint16) bool {
+		return vid == rcm.VendorNVIDIA || (vid == GadgetVendorID && pid == GadgetProductID)
 	})
-	var found []string
+	if err != nil {
+		return nil, err
+	}
+	var devs []usbDevice
 	for _, n := range nodes {
-		found = append(found, tegraUSBLabel(n.VID, n.PID))
+		if isCompositeFunction(n.InstanceID) {
+			continue
+		}
+		devs = append(devs, usbDevice{VID: n.VID, PID: n.PID, Serial: winusb.InstanceSerial(n.InstanceID), PortPath: n.LocationPath})
 	}
-	if len(found) == 0 {
-		return "No NVIDIA recovery (0955:*) or flashing-gadget (1d6b:0104) USB device is present — the board has left USB."
-	}
-	return "Tegra USB devices present: " + strings.Join(found, ", ")
+	return devs, nil
 }
 
 // lockedVolumes holds the open lock handles of dismounted volumes, keyed by

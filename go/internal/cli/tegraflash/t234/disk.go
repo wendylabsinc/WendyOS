@@ -4,6 +4,7 @@ package t234
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -60,6 +61,11 @@ type LUNSelector struct {
 	PortHint bool
 	// Refresh (may be nil) runs every gadgetCheckInterval while waiting.
 	Refresh func()
+	// OnMissing (may be nil) fires once when the session's gadget has been off
+	// USB for gadgetMissingGrace. The wait fails with ErrJetsonInRecovery if the
+	// Jetson shows up in recovery mode at RecoveryPort instead.
+	OnMissing    func(gone time.Duration)
+	RecoveryPort string
 }
 
 var scanUMSDisks = listUMSDisks
@@ -70,7 +76,7 @@ var umsPollInterval = time.Second
 // reports the vendor/product fields verbatim (before splitInquiry rejoins them)
 // plus the BSD/block name, so a device advertising an unexpected export name —
 // or a LUN the host never assigned a whole-disk node to — is obvious.
-func observedUMSHint() string {
+func observedUMSHint(session string) string {
 	var parts []string
 	if raw := strings.TrimRight(rawUMSInquiry(), "\n"); raw != "" {
 		parts = append(parts, "USB mass-storage LUNs currently visible (raw SCSI INQUIRY):\n"+raw)
@@ -80,29 +86,93 @@ func observedUMSHint() string {
 	// The board's USB identity tells the failure apart: back in recovery
 	// (0955:70xx) means it rebooted mid-sequence; still the gadget (1d6b:0104)
 	// means the initrd stalled between commands; absent means it left USB.
-	parts = append(parts, tegraUSBHint())
+	if devs, err := scanUSBDevices(); err != nil {
+		parts = append(parts, "Could not list USB devices: "+err.Error())
+	} else {
+		parts = append(parts, describeTegraUSB(devs, session))
+	}
 	return strings.Join(parts, "\n")
 }
 
-// tegraUSBLabel names a Tegra-relevant USB device, or "" for anything else.
-func tegraUSBLabel(vendor, product uint16) string {
-	switch {
-	case vendor == 0x0955:
-		if name, ok := rcm.T234ModuleName(product); ok {
-			return fmt.Sprintf("0955:%04x (%s APX recovery)", product, name)
-		}
-		return fmt.Sprintf("0955:%04x (NVIDIA recovery)", product)
-	case vendor == GadgetVendorID && product == GadgetProductID:
-		return "1d6b:0104 (flashing gadget)"
-	}
-	return ""
+// usbDevice is one device on the host's USB bus: just what the Tegra
+// diagnostics need to tell this Jetson apart from bystanders.
+type usbDevice struct {
+	VID, PID uint16
+	Serial   string
+	PortPath string
 }
 
+var scanUSBDevices = listUSBDevices
+
+// describeTegraUSB reports which Tegra-relevant USB devices are present.
+// Any Linux board in device mode can use 1d6b:0104, so a gadget only counts
+// as this Jetson when its USB serial is the flash session id.
+func describeTegraUSB(devs []usbDevice, session string) string {
+	var ours, others []string
+	for _, d := range devs {
+		label, mine := tegraUSBLabel(d, session)
+		switch {
+		case label == "":
+		case mine:
+			ours = append(ours, label)
+		default:
+			others = append(others, label)
+		}
+	}
+	var b strings.Builder
+	if len(ours) == 0 {
+		b.WriteString("This Jetson is not on USB: no NVIDIA recovery device (0955:*)")
+		if session != "" {
+			fmt.Fprintf(&b, " and no flashing gadget with session %s", session)
+		} else {
+			b.WriteString(" or flashing gadget (1d6b:0104)")
+		}
+		b.WriteString(" is present.")
+	} else {
+		b.WriteString("Tegra USB devices present: " + strings.Join(ours, ", "))
+	}
+	if len(others) > 0 {
+		b.WriteString("\nOther USB gadgets present (not this Jetson): " + strings.Join(others, ", "))
+	}
+	return b.String()
+}
+
+// tegraUSBLabel names a Tegra-relevant USB device ("" for anything else) and
+// reports whether it can be this flash's Jetson. Before the session is known,
+// any gadget may be it.
+func tegraUSBLabel(d usbDevice, session string) (label string, mine bool) {
+	at := ""
+	if d.PortPath != "" {
+		at = ", usb " + d.PortPath
+	}
+	switch {
+	case d.VID == rcm.VendorNVIDIA:
+		if name, ok := rcm.T234ModuleName(d.PID); ok {
+			return fmt.Sprintf("0955:%04x (%s APX recovery%s)", d.PID, name, at), true
+		}
+		return fmt.Sprintf("0955:%04x (NVIDIA recovery%s)", d.PID, at), true
+	case d.VID == GadgetVendorID && d.PID == GadgetProductID:
+		serial := d.Serial
+		if serial == "" {
+			serial = "none"
+		}
+		if session == "" || isSessionGadget(d, session) {
+			return fmt.Sprintf("1d6b:0104 (flashing gadget, serial %s%s)", serial, at), true
+		}
+		return fmt.Sprintf("1d6b:0104 (serial %s%s)", serial, at), false
+	}
+	return "", false
+}
+
+// ErrJetsonInRecovery reports that the Jetson rebooted into USB recovery mode
+// mid-flash, so the flash cannot finish.
+var ErrJetsonInRecovery = errors.New("the Jetson rebooted into USB recovery mode, so the flash did not complete; start the install again")
+
 // lunWatch runs a LUN wait's periodic work every gadgetCheckInterval: the
-// selector's Refresh.
+// selector's Refresh, then tracking whether the session's gadget is on USB.
 type lunWatch struct {
-	sel  LUNSelector
-	next time.Time
+	sel                LUNSelector
+	missingSince, next time.Time
 }
 
 func (w *lunWatch) tick() error {
@@ -113,7 +183,37 @@ func (w *lunWatch) tick() error {
 	if w.sel.Refresh != nil {
 		w.sel.Refresh()
 	}
+	if w.sel.Session == "" || (w.sel.OnMissing == nil && w.sel.RecoveryPort == "") {
+		return nil
+	}
+	devs, err := scanUSBDevices()
+	if err != nil {
+		return nil
+	}
+	onUSB := false
+	for _, d := range devs {
+		switch {
+		case isSessionGadget(d, w.sel.Session):
+			onUSB = true
+		case d.VID == rcm.VendorNVIDIA && rcm.IsT234RecoveryPID(d.PID) && w.sel.RecoveryPort != "" && d.PortPath == w.sel.RecoveryPort:
+			return ErrJetsonInRecovery
+		}
+	}
+	switch {
+	case onUSB:
+		w.missingSince = time.Time{}
+	case w.missingSince.IsZero():
+		w.missingSince = time.Now()
+	case w.sel.OnMissing != nil && time.Since(w.missingSince) >= gadgetMissingGrace:
+		w.sel.OnMissing(time.Since(w.missingSince))
+		w.sel.OnMissing = nil
+	}
 	return nil
+}
+
+// isSessionGadget reports whether d is the flashing gadget of this session.
+func isSessionGadget(d usbDevice, session string) bool {
+	return d.VID == GadgetVendorID && d.PID == GadgetProductID && strings.EqualFold(d.Serial, session)
 }
 
 // pollLUNs scans the LUNs every umsPollInterval until match settles the wait
@@ -203,8 +303,8 @@ func WaitForUMSDiskAt(ctx context.Context, selector LUNSelector, timeout time.Du
 		return UMSDisk{}, false, nil
 	}, func(scanErr error) error {
 		if scanErr != nil {
-			return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q (last scan error: %v)\n%s", selector.Vendor, selector.PortPath, selector.Session, scanErr, observedUMSHint())
+			return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q (last scan error: %v)\n%s", selector.Vendor, selector.PortPath, selector.Session, scanErr, observedUMSHint(selector.Session))
 		}
-		return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q\n%s", selector.Vendor, selector.PortPath, selector.Session, observedUMSHint())
+		return fmt.Errorf("timed out waiting for USB storage %q at port %q/session %q\n%s", selector.Vendor, selector.PortPath, selector.Session, observedUMSHint(selector.Session))
 	})
 }

@@ -86,12 +86,14 @@ func rawUMSInquiry() string {
 	return b.String()
 }
 
-// tegraUSBHint reports which Tegra-relevant USB devices are present (from
-// sysfs), so a timed-out stage-2 wait can distinguish a board that rebooted
-// into recovery from one still exposing the flashing gadget or gone from USB.
-func tegraUSBHint() string {
-	entries, _ := filepath.Glob("/sys/bus/usb/devices/*/idVendor")
-	var found []string
+// listUSBDevices reads every USB device from sysfs; the directory name is the
+// same bus-port chain linuxUSBPortPath reports.
+func listUSBDevices() ([]usbDevice, error) {
+	entries, err := filepath.Glob("/sys/bus/usb/devices/*/idVendor")
+	if err != nil {
+		return nil, err
+	}
+	var devs []usbDevice
 	for _, ve := range entries {
 		dir := filepath.Dir(ve)
 		v, verr := strconv.ParseUint(sysfsString(ve), 16, 16)
@@ -99,14 +101,14 @@ func tegraUSBHint() string {
 		if verr != nil || perr != nil {
 			continue
 		}
-		if label := tegraUSBLabel(uint16(v), uint16(p)); label != "" {
-			found = append(found, label)
-		}
+		devs = append(devs, usbDevice{
+			VID:      uint16(v),
+			PID:      uint16(p),
+			Serial:   sysfsString(filepath.Join(dir, "serial")),
+			PortPath: filepath.Base(dir),
+		})
 	}
-	if len(found) == 0 {
-		return "No NVIDIA recovery (0955:*) or flashing-gadget (1d6b:0104) USB device is present — the board has left USB."
-	}
-	return "Tegra USB devices present: " + strings.Join(found, ", ")
+	return devs, nil
 }
 
 func sysfsString(path string) string {

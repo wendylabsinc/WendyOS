@@ -8,32 +8,33 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/google/gousb"
 )
 
-// tegraUSBHint reports which Tegra-relevant USB devices are present, so a
-// timed-out stage-2 wait can distinguish a board that rebooted into recovery
-// from one still exposing the flashing gadget or gone from USB entirely.
-func tegraUSBHint() string {
-	ctx := gousb.NewContext()
-	ctx.Debug(0)
-	defer ctx.Close()
-
-	var found []string
-	// The filter is called for every device; returning false opens none of
-	// them (reading the descriptor needs no claim, so this can't fail on a
-	// busy/permission-guarded device).
-	_, _ = ctx.OpenDevices(func(d *gousb.DeviceDesc) bool {
-		if label := tegraUSBLabel(uint16(d.Vendor), uint16(d.Product)); label != "" {
-			found = append(found, label)
-		}
-		return false
-	})
-	if len(found) == 0 {
-		return "No NVIDIA recovery (0955:*) or flashing-gadget (1d6b:0104) USB device is present — the board has left USB."
+// listUSBDevices lists USB devices from ioreg: unlike a gousb descriptor walk,
+// IOUSBHostDevice carries the serial string without opening the device.
+func listUSBDevices() ([]usbDevice, error) {
+	out, err := exec.Command("ioreg", "-rc", "IOUSBHostDevice", "-l", "-w0").Output()
+	if err != nil {
+		return nil, fmt.Errorf("ioreg: %w", err)
 	}
-	return "Tegra USB devices present: " + strings.Join(found, ", ")
+	return parseUSBDevices(string(out)), nil
+}
+
+func parseUSBDevices(out string) []usbDevice {
+	var devs []usbDevice
+	for _, chunk := range splitIoregSubtrees(out) {
+		vid, pid := ioregInt(chunk, "idVendor"), ioregInt(chunk, "idProduct")
+		if vid == 0 && pid == 0 {
+			continue
+		}
+		devs = append(devs, usbDevice{
+			VID:      uint16(vid),
+			PID:      uint16(pid),
+			Serial:   ioregString(chunk, "USB Serial Number"),
+			PortPath: macUSBPortPath(ioregInt(chunk, "locationID")),
+		})
+	}
+	return devs
 }
 
 // listUMSDisks finds USB mass-storage whole disks and their SCSI inquiry
@@ -193,7 +194,7 @@ var (
 )
 
 func init() {
-	for _, key := range []string{"Vendor Identification", "Product Identification", "BSD Name"} {
+	for _, key := range []string{"Vendor Identification", "Product Identification", "BSD Name", "USB Serial Number"} {
 		ioregStrRe[key] = compileIoregStrRe(key)
 	}
 	for _, key := range []string{"idVendor", "idProduct", "locationID", "Size"} {
