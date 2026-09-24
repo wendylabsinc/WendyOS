@@ -19,9 +19,13 @@ import (
 )
 
 // transportForDevice returns the sensor pairing transport to use for a
-// discovered source: "grpc" for an mTLS agent advertising the "sensors"
-// capability, "tcp" for a legacy/MCU sensorlink device.
+// discovered source: "wendycom" for a Wendy Lite board (WendyCom, never
+// gRPC or raw sensorlink), "grpc" for a WendyOS mTLS agent advertising the
+// "sensors" capability, "tcp" for a legacy/MCU sensorlink device.
 func transportForDevice(d models.DiscoveredDevice) string {
+	if d.WendyLite {
+		return "wendycom"
+	}
 	if d.IsMTLS {
 		for _, c := range d.Caps {
 			if c == "sensors" {
@@ -60,13 +64,22 @@ func orgAllowed(cliOrgs map[int32]bool, sourceOrg int32) error {
 }
 
 // discoverSensorSources runs LAN discovery and returns the merged device list
-// for the caller to filter down to sensor sources.
+// for the caller to filter down to sensor sources. WendyOS agents
+// (_wendyos._udp) and Wendy Lite boards (_wendy-lite._tcp) are two separate
+// mDNS services, so Wendy Lite is browsed and merged in alongside the main
+// LAN scan; a failure to browse it is non-fatal (the picker just shows
+// whatever it found among WendyOS agents).
 func discoverSensorSources(ctx context.Context) ([]models.DiscoveredDevice, error) {
 	collection, err := discovery.Discover(ctx, discovery.DiscoveryOptions{
 		Types: []models.InterfaceType{models.InterfaceLAN},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("discovering devices: %w", err)
+	}
+	if liteSvcs, err := discovery.BrowseMDNSServices(ctx, discovery.WendyLiteServiceType, 0); err == nil {
+		for _, svc := range liteSvcs {
+			collection.LANDevices = append(collection.LANDevices, discovery.LANDeviceFromWendyLiteService(svc))
+		}
 	}
 	return collection.MergedDevices(), nil
 }
