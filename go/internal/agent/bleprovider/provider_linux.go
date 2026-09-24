@@ -209,8 +209,13 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 func (r *runtime) makeServerTLS() *tls.Config {
 	config := &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-		Certificates: []tls.Certificate{r.cfg.Credentials.Certificate},
-		ClientAuth:   tls.RequireAnyClientCert, NextProtos: []string{ALPN},
+		// A hybrid ML-KEM key share expands the first ClientHello beyond six
+		// 240-byte CoC SDUs on tested controllers. A single lost fragment stalls
+		// the whole TLS flight. BLE uses classical X25519 key exchange while the
+		// enrolled mTLS certificate and signature verification remain unchanged.
+		CurvePreferences: []tls.CurveID{tls.X25519},
+		Certificates:     []tls.Certificate{r.cfg.Credentials.Certificate},
+		ClientAuth:       tls.RequireAnyClientCert, NextProtos: []string{ALPN},
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
 			for _, cert := range state.PeerCertificates {
@@ -488,6 +493,9 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if err != nil {
 		return
 	}
+	// PeerTLSWithTickets returns a clone, so this BLE-only choice cannot alter
+	// the QUIC curve preferences used over NAN, LAN, or TCP links.
+	cfg.CurvePreferences = []tls.CurveID{tls.X25519}
 	measured, meter := meterHandshake(raw, r.cfg.Logger)
 	secure = tls.Client(measured, cfg)
 	meter.start()
