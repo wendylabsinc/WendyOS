@@ -89,3 +89,71 @@ func TestRouteChurnKeepsIndependentSignedServiceLeases(t *testing.T) {
 		t.Fatalf("expired service resurrected after route recovery: added %d, gone %d", len(added), len(gone))
 	}
 }
+
+func TestRouteHealWaitsForOriginCatalogSnapshot(t *testing.T) {
+	f := newFixture(t)
+	viewer, cache := f.newCatalog(t, 533, "default", nil, nil)
+	origin, _ := f.newCatalog(t, 535, "default", nil, nil)
+	if _, err := cache.Put(f.creds[535].Certificate.Certificate, f.now); err != nil {
+		t.Fatal(err)
+	}
+	wire, err := origin.Publish(testSpec(), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := viewer.Accept(wire, f.now); err != nil {
+		t.Fatal(err)
+	}
+	stillLive := testSpec()
+	stillLive.ServiceID = "still-live"
+	stillLive.Instance = "Still Live"
+	wire, err = origin.Publish(stillLive, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := viewer.Accept(wire, f.now); err != nil {
+		t.Fatal(err)
+	}
+	view := bridgeRouteView(t, f.now, 535)
+	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.browse", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7},
+		viewer, func(string, Record) bool { return true }, func(SignedRecord) {},
+		func() localmesh.NodeSnapshot { return view })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := false
+	invalidations := 0
+	bridge.SetRemoteSync(func(int32) bool { return ready }, func(int32) {
+		invalidations++
+		ready = false
+	})
+	project := func(at time.Time, want int) {
+		t.Helper()
+		got, err := bridge.projection(at)
+		if err != nil || len(got) != want {
+			t.Fatalf("projection at %s: got %d, error %v; want %d", at, len(got), err, want)
+		}
+	}
+	project(f.now.Add(time.Second), 0) // initial route needs a fresh snapshot
+	ready = true
+	project(f.now.Add(time.Second), 7)
+	view.Routes[0].Unreachable = true
+	project(f.now.Add(2*time.Second), 0)
+	if invalidations != 1 || ready {
+		t.Fatalf("route loss did not invalidate origin snapshot: calls=%d ready=%t", invalidations, ready)
+	}
+	// The origin withdraws during the outage, but this viewer has not yet
+	// received the signed tombstone. A restored Babel route must not reassert
+	// the stale service while catalog anti-entropy is still in flight.
+	removed, err := origin.Remove(testSpec().AppID, testSpec().ServiceID, f.now.Add(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view.Routes[0].Unreachable = false
+	project(f.now.Add(4*time.Second), 0)
+	if _, err := viewer.Accept(removed, f.now.Add(4*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	ready = true
+	project(f.now.Add(4*time.Second), 4) // unchanged live service reasserts
+}

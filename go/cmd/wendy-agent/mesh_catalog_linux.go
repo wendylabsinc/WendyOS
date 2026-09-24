@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshcatalog"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
@@ -21,9 +22,9 @@ import (
 )
 
 type catalogApp struct {
-	name, appID, ip, bridge string
-	ports                   map[uint16]uint16
-	udpPorts                map[uint16]uint16
+	name, appID, ip, bridge, netnsPath, gateway string
+	ports                                       map[uint16]uint16
+	udpPorts                                    map[uint16]uint16
 }
 
 type catalogBridgeRun struct {
@@ -38,6 +39,8 @@ type catalogActivation struct {
 	cancel         context.CancelFunc
 	catalog        *meshcatalog.Catalog
 	runtime        *meshcatalog.Runtime
+	lanBrowser     *meshcatalog.LANBrowser
+	lanDone        chan struct{}
 	cache          *localmesh.IdentityCache
 	snapshot       func() localmesh.NodeSnapshot
 	done           chan struct{}
@@ -56,13 +59,20 @@ type meshCatalogManager struct {
 	apps           map[string]catalogApp
 	active         *catalogActivation
 	gatewayDesired bool
+	lanReady       bool
 }
 
 func newMeshCatalogManager(dir string, ingress *meshingress.Registry, logger *zap.Logger) *meshCatalogManager {
-	return &meshCatalogManager{dir: dir, ingress: ingress, logger: logger, apps: map[string]catalogApp{}}
+	return &meshCatalogManager{dir: dir, ingress: ingress, logger: logger, apps: map[string]catalogApp{}, lanReady: true}
 }
 
-func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmesh.Credentials, snapshot func() localmesh.NodeSnapshot, notifyRoutes func()) error {
+func (m *meshCatalogManager) DisablePhysicalLANProjection() {
+	m.mu.Lock()
+	m.lanReady = false
+	m.mu.Unlock()
+}
+
+func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmesh.Credentials, snapshot func() localmesh.NodeSnapshot, notifyRoutes func(), ethernet, wifi bool) error {
 	if credentials == nil || snapshot == nil {
 		return errors.New("mesh catalog requires a running node")
 	}
@@ -105,6 +115,13 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 	activeCtx, cancel := context.WithCancel(ctx)
 	a := &catalogActivation{org: credentials.Org, asset: credentials.Asset, ctx: activeCtx, cancel: cancel, catalog: catalog, runtime: runtime, cache: cache, snapshot: snapshot, done: make(chan struct{}), retryDone: make(chan struct{}), gatewayDone: make(chan struct{}), bridges: map[string]catalogBridgeRun{}, notifyRoutes: notifyRoutes}
 	m.mu.Lock()
+	lanReady := m.lanReady
+	m.mu.Unlock()
+	if (ethernet || wifi) && lanReady {
+		a.lanBrowser = meshcatalog.NewLANBrowser(ethernet, wifi)
+		a.lanDone = make(chan struct{})
+	}
+	m.mu.Lock()
 	if m.active != nil {
 		m.mu.Unlock()
 		cancel()
@@ -116,6 +133,21 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 		return fmt.Errorf("restore mesh gateway offer: %w", err)
 	}
 	m.active = a
+	if a.lanBrowser != nil {
+		go func() {
+			defer close(a.lanDone)
+			for activeCtx.Err() == nil {
+				if err := a.lanBrowser.Run(activeCtx); err != nil && activeCtx.Err() == nil {
+					m.logger.Warn("physical LAN DNS-SD browser stopped", zap.Error(err))
+				}
+				select {
+				case <-activeCtx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}()
+	}
 	if notifyRoutes != nil {
 		notifyRoutes()
 	}
@@ -193,6 +225,9 @@ func (m *meshCatalogManager) Deactivate() {
 		<-bridge.done
 	}
 	a.cancel()
+	if a.lanDone != nil {
+		<-a.lanDone
+	}
 	<-a.retryDone
 	<-a.done
 	<-a.gatewayDone
@@ -280,9 +315,9 @@ func (m *meshCatalogManager) renewGateway(a *catalogActivation) {
 	}
 }
 
-func (m *meshCatalogManager) StartMeshApp(containerName, appID, ip, bridge string, ports []appconfig.PortMapping) error {
+func (m *meshCatalogManager) StartMeshApp(containerName, appID, ip, bridge, netnsPath, gateway string, ports []appconfig.PortMapping) error {
 	address := net.ParseIP(ip)
-	if containerName == "" || appID == "" || address == nil || address.To4() == nil || bridge == "" {
+	if containerName == "" || appID == "" || address == nil || address.To4() == nil || bridge == "" || netnsPath == "" || net.ParseIP(gateway) == nil {
 		return errors.New("invalid mesh app network for mDNS")
 	}
 	mapped := make(map[uint16]uint16, len(ports))
@@ -297,7 +332,7 @@ func (m *meshCatalogManager) StartMeshApp(containerName, appID, ip, bridge strin
 		}
 		target[port.Container] = port.Host
 	}
-	app := catalogApp{name: containerName, appID: appID, ip: ip, bridge: bridge, ports: mapped, udpPorts: udpMapped}
+	app := catalogApp{name: containerName, appID: appID, ip: ip, bridge: bridge, netnsPath: netnsPath, gateway: gateway, ports: mapped, udpPorts: udpMapped}
 	m.StopMeshApp(containerName)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -326,6 +361,11 @@ func (m *meshCatalogManager) StopMeshApp(containerName string) {
 // startBridge is called under m.mu. A bridge binds only its app's CNI bridge
 // and accepts announcements only from that app's container IP.
 func (m *meshCatalogManager) startBridge(a *catalogActivation, app catalogApp) error {
+	if a.lanBrowser != nil {
+		if err := hostnetwork.RevokeOrphanLANAppRoutes(app.netnsPath, app.ip, app.gateway); err != nil {
+			return fmt.Errorf("revoke inherited LAN service routes: %w", err)
+		}
+	}
 	iface, err := net.InterfaceByName(app.bridge)
 	if err != nil {
 		return err
@@ -339,11 +379,21 @@ func (m *meshCatalogManager) startBridge(a *catalogActivation, app catalogApp) e
 	if err != nil {
 		return err
 	}
+	bridge.SetRemoteSync(a.runtime.ProjectionReady, a.runtime.InvalidateProjection)
+	var lanAccess *meshcatalog.LANProjector
+	if a.lanBrowser != nil {
+		lanAccess = meshcatalog.NewLANProjector(app.netnsPath, app.ip, app.gateway, app.bridge)
+		lanAccess.SetErrorHandler(func(err error) {
+			m.logger.Warn("mesh app physical-LAN projection denied", zap.String("app_id", app.appID), zap.Error(err))
+		})
+		bridge.SetLANProjection(a.lanBrowser.Snapshot, lanAccess)
+	}
 	ctx, cancel := context.WithCancel(a.ctx)
 	done := make(chan struct{})
 	a.bridges[app.name] = catalogBridgeRun{cancel, done}
 	go func() {
 		defer close(done)
+		defer lanAccess.Close()
 		if err := bridge.Run(ctx); err != nil && ctx.Err() == nil {
 			m.logger.Warn("mesh app mDNS bridge stopped", zap.String("app_id", app.appID), zap.Error(err))
 		}
