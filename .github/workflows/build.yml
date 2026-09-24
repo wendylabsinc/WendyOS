@@ -1756,7 +1756,7 @@ jobs:
 
           **Linux/macOS**
           ```
-          curl -fsSL https://install.wendy.dev/agent.sh | bash
+          curl -fsSL https://install.wendy.sh/agent.sh | bash
           ```
           INSTALL_EOF
 

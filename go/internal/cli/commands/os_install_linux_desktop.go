@@ -23,7 +23,7 @@ import (
 const (
 	linuxDesktopValue    = "linux-desktop"
 	headlessMacValue     = "headless-mac"
-	linuxDesktopAgentURL = "https://install.wendy.dev/agent.sh"
+	linuxDesktopAgentURL = "https://install.wendy.sh/agent.sh"
 
 	// Machine labels woven into the install instructions. The agent.sh command
 	// is identical for both — it auto-detects the platform (uname -s) and does

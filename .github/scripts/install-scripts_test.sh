@@ -39,7 +39,7 @@ while [ \$# -gt 0 ]; do
 done
 echo "\$url" >> "$REQ_LOG"
 case "\$url" in
-  *install.wendy.dev/manifest.json) src="$SERVE_DIR/manifest.json";;
+  *install.wendy.sh/manifest.json) src="$SERVE_DIR/manifest.json";;
   *api.github.com/*) src="$SERVE_DIR/github.json";;
   *) src="";;
 esac
@@ -74,7 +74,7 @@ printf '{"latest":"2026.07.19-143000","latest_nightly":"2026.07.20-010101"}\n' >
 printf '{"tag_name":"2000.00.00-000000"}\n' > "$D/github.json"
 out="$(run_resolver)"
 check "resolve.gcs" "2026.07.19-143000" "$out"
-contains "resolve.gcs.hit_manifest" "$(cat "$REQ_LOG")" "install.wendy.dev/manifest.json"
+contains "resolve.gcs.hit_manifest" "$(cat "$REQ_LOG")" "install.wendy.sh/manifest.json"
 
 # --- Test D: falls back to GitHub when manifest is missing ---
 D="$(mktemp -d)"; setup_net "$D"    # no manifest.json in dir
@@ -107,6 +107,6 @@ chmod +x "$STUB/uname" "$STUB/brew"
 : > "$REQ_LOG"
 PATH="$STUB:$BIN:$PATH" bash "$CLI" -y >/dev/null 2>&1 || true
 absent "defer.no_github"   "$(cat "$REQ_LOG")" "api.github.com"
-absent "defer.no_manifest" "$(cat "$REQ_LOG")" "install.wendy.dev/manifest.json"
+absent "defer.no_manifest" "$(cat "$REQ_LOG")" "install.wendy.sh/manifest.json"
 
 exit $fail

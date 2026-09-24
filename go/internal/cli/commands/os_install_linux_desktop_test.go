@@ -14,7 +14,7 @@ import (
 
 func TestRenderLinuxDesktopInstructions_Plain(t *testing.T) {
 	out := renderLinuxDesktopInstructions("", "", "", linuxDesktopMachineLabel, time.Time{})
-	if !strings.Contains(out, "curl -fsSL https://install.wendy.dev/agent.sh | bash") {
+	if !strings.Contains(out, "curl -fsSL https://install.wendy.sh/agent.sh | bash") {
 		t.Fatalf("plain output missing curl command:\n%s", out)
 	}
 	if strings.Contains(out, "WENDY_ENROLLMENT_TOKEN") {
@@ -33,7 +33,7 @@ func TestRenderLinuxDesktopInstructions_Plain(t *testing.T) {
 // surrounding prose names the Mac.
 func TestRenderLinuxDesktopInstructions_HeadlessMac(t *testing.T) {
 	out := renderLinuxDesktopInstructions("", "", "", headlessMacMachineLabel, time.Time{})
-	if !strings.Contains(out, "curl -fsSL https://install.wendy.dev/agent.sh | bash") {
+	if !strings.Contains(out, "curl -fsSL https://install.wendy.sh/agent.sh | bash") {
 		t.Fatalf("mac output missing curl command:\n%s", out)
 	}
 	if !strings.Contains(out, "your Mac") {
@@ -50,7 +50,7 @@ func TestRenderLinuxDesktopInstructions_Enrolled(t *testing.T) {
 	for _, want := range []string{
 		"WENDY_ENROLLMENT_TOKEN=tok-abc",
 		"WENDY_CLOUD_HOST=cloud.wendy.dev:443",
-		"install.wendy.dev/agent.sh",
+		"install.wendy.sh/agent.sh",
 		"Acme",
 	} {
 		if !strings.Contains(out, want) {
@@ -77,7 +77,7 @@ func TestInstallLinuxDesktop_SkipMode_PrintsPlain(t *testing.T) {
 	if called {
 		t.Fatal("token fn must not be called in skip mode")
 	}
-	if !strings.Contains(out, "curl -fsSL https://install.wendy.dev/agent.sh | bash") {
+	if !strings.Contains(out, "curl -fsSL https://install.wendy.sh/agent.sh | bash") {
 		t.Fatalf("expected plain instructions:\n%s", out)
 	}
 }
@@ -174,11 +174,11 @@ func TestInstallLinuxDesktop_EnrolledValidatesDeviceName(t *testing.T) {
 }
 
 func TestLinuxDesktopCommand(t *testing.T) {
-	if got := linuxDesktopCommand("", ""); got != "curl -fsSL https://install.wendy.dev/agent.sh | bash" {
+	if got := linuxDesktopCommand("", ""); got != "curl -fsSL https://install.wendy.sh/agent.sh | bash" {
 		t.Fatalf("plain command = %q", got)
 	}
 	got := linuxDesktopCommand("tok-abc", "cloud.wendy.dev:443")
-	want := "curl -fsSL https://install.wendy.dev/agent.sh | WENDY_ENROLLMENT_TOKEN=tok-abc WENDY_CLOUD_HOST=cloud.wendy.dev:443 bash"
+	want := "curl -fsSL https://install.wendy.sh/agent.sh | WENDY_ENROLLMENT_TOKEN=tok-abc WENDY_CLOUD_HOST=cloud.wendy.dev:443 bash"
 	if got != want {
 		t.Fatalf("enrolled command\n got: %q\nwant: %q", got, want)
 	}

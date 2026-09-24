@@ -76,7 +76,7 @@ detect_arch() {
 # agent.sh (enforced by .github/scripts/install-scripts_test.sh). It resolves
 # the latest version from the GCS-hosted manifest first, so the mainstream
 # install paths never call the rate-limited GitHub API.
-MANIFEST_URL="https://install.wendy.dev/manifest.json"
+MANIFEST_URL="https://install.wendy.sh/manifest.json"
 
 # Fetch a raw URL to stdout using curl or wget.
 fetch_stdout() {
