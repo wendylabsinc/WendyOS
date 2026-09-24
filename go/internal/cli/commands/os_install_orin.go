@@ -146,6 +146,9 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			return cached, err
 		}},
 		{id: orinStepProvision, label: "Prepare per-run config", run: func(out io.Writer, detail func(string)) (bool, error) {
+			if err := t234.CheckHostTools(); err != nil {
+				return false, err
+			}
 			workspace, layoutPath, err = prepareT234Workspace(fp)
 			if err != nil {
 				return false, err

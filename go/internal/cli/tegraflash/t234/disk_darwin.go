@@ -64,26 +64,30 @@ func parseUMSDisks(out string) []UMSDisk {
 		if ioregInt(chunk, "idVendor") != GadgetVendorID || ioregInt(chunk, "idProduct") != GadgetProductID {
 			continue
 		}
-		vendor := ioregString(chunk, "Vendor Identification")
-		if vendor == "" {
-			continue
+		port := macUSBPortPath(ioregInt(chunk, "locationID"))
+		// Each LUN has its own nub; the first piece is the device itself.
+		for _, lun := range splitIoreg(chunk, ioregLUNLine)[1:] {
+			vendor := ioregString(lun, "Vendor Identification")
+			if vendor == "" {
+				continue
+			}
+			bsd := ioregString(lun, "BSD Name")
+			if !wholeDiskRe.MatchString(bsd) {
+				continue // no media yet, or a partition slice matched first
+			}
+			name, serial := splitInquiry(vendor, ioregString(lun, "Product Identification"))
+			d := UMSDisk{
+				DevPath:  "/dev/" + bsd,
+				RawPath:  "/dev/r" + bsd,
+				Vendor:   name,
+				Serial:   serial,
+				PortPath: port,
+			}
+			if size := ioregInt(lun, "Size"); size > 0 {
+				d.SizeBytes = size
+			}
+			disks = append(disks, d)
 		}
-		bsd := ioregString(chunk, "BSD Name")
-		if !wholeDiskRe.MatchString(bsd) {
-			continue // no media yet, or a partition slice matched first
-		}
-		name, serial := splitInquiry(vendor, ioregString(chunk, "Product Identification"))
-		d := UMSDisk{
-			DevPath:  "/dev/" + bsd,
-			RawPath:  "/dev/r" + bsd,
-			Vendor:   name,
-			Serial:   serial,
-			PortPath: macUSBPortPath(ioregInt(chunk, "locationID")),
-		}
-		if size := ioregInt(chunk, "Size"); size > 0 {
-			d.SizeBytes = size
-		}
-		disks = append(disks, d)
 	}
 	return disks
 }
@@ -120,7 +124,7 @@ func rawUMSInquiry() string {
 		return ""
 	}
 	var b strings.Builder
-	for _, chunk := range splitIoregSubtrees(string(out)) {
+	for _, chunk := range splitIoreg(string(out), ioregLUNLine) {
 		vendor := ioregString(chunk, "Vendor Identification")
 		if vendor == "" {
 			continue
@@ -141,6 +145,9 @@ func rawUMSInquiry() string {
 // whether it sits at column 0 or nested under a parent (e.g. "  | | +-o …").
 var ioregDeviceLine = regexp.MustCompile(`\+-o .*<class IOUSBHostDevice[,>]`)
 
+// ioregLUNLine matches the line that introduces one SCSI logical unit.
+var ioregLUNLine = regexp.MustCompile(`\+-o .*<class IOSCSILogicalUnitNub[,>]`)
+
 // splitIoregSubtrees breaks `ioreg -rc IOUSBHostDevice` output into one chunk per
 // USB device. It splits on every IOUSBHostDevice line at any depth, not only
 // column-0 roots: `ioreg -r` nests a device inside its parent hub when the target
@@ -152,10 +159,16 @@ var ioregDeviceLine = regexp.MustCompile(`\+-o .*<class IOUSBHostDevice[,>]`)
 // IOMedia) carry no IOUSBHostDevice line, so they stay in the device's chunk,
 // which is where Vendor Identification and BSD Name live.
 func splitIoregSubtrees(out string) []string {
+	return splitIoreg(out, ioregDeviceLine)
+}
+
+// splitIoreg breaks ioreg output into chunks, starting a new one at every line
+// that matches boundary.
+func splitIoreg(out string, boundary *regexp.Regexp) []string {
 	var chunks []string
 	var cur strings.Builder
 	for _, line := range strings.Split(out, "\n") {
-		if ioregDeviceLine.MatchString(line) && cur.Len() > 0 {
+		if boundary.MatchString(line) && cur.Len() > 0 {
 			chunks = append(chunks, cur.String())
 			cur.Reset()
 		}
@@ -232,11 +245,11 @@ func unmountUMSDisk(d UMSDisk) error {
 	return nil
 }
 
-// ejectUMSDisk sends a SCSI eject (START STOP UNIT / power-off) to the LUN — the
-// clean per-LUN "host is done" signal the device's flashing initrd waits for
-// before finalizing a LUN and moving to its next command (e.g. exporting the
-// rootfs device). This is what the reference initrd-flash does via `udisksctl
-// power-off`; `diskutil eject` is the macOS equivalent. Best-effort.
-func ejectUMSDisk(d UMSDisk) {
-	exec.Command("diskutil", "eject", d.DevPath).Run() //nolint:errcheck
+// ejectUMSDisk ejects the LUN's medium — the "host is done" signal the
+// flashing initrd waits for. diskutil eject never disconnects the USB device.
+func ejectUMSDisk(d UMSDisk) error {
+	if out, err := exec.Command("diskutil", "eject", d.DevPath).CombinedOutput(); err != nil {
+		return fmt.Errorf("diskutil eject %s: %v: %s", d.DevPath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

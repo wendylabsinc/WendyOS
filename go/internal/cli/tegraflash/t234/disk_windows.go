@@ -282,7 +282,8 @@ func listUMSDisks() ([]UMSDisk, error) {
 	var disks []UMSDisk
 	for _, s := range stor {
 		port, isGadget := gadgetPorts[strings.ToUpper(s.ParentInstanceID)]
-		if !isGadget {
+		// The geometry query fails, leaving size 0, on a LUN without a medium.
+		if !isGadget || s.SizeBytes == 0 {
 			continue
 		}
 		exportName, serial := splitInquiry(s.Vendor, s.Product)
@@ -305,9 +306,9 @@ func listUMSDisks() ([]UMSDisk, error) {
 // splits it into MI_xx function devnodes: the USBSTOR disk then parents to
 // the MI child, whose own instance trailer is a synthesized ID and whose
 // location path carries a #USBMI(n) suffix — but the recovery-port
-// correlation and ReleaseUSB both work on the composite root, where the
-// physical location and the USB serial (the flash session id) live. A
-// function devnode therefore resolves to its root's location path.
+// correlation works on the composite root, where the physical location and
+// the USB serial (the flash session id) live. A function devnode therefore
+// resolves to its root's location path.
 func gadgetPortMap(nodes []usbDeviceNode) map[string]string {
 	byID := make(map[string]usbDeviceNode, len(nodes))
 	for _, n := range nodes {
@@ -460,22 +461,17 @@ func lockVolumeOnDisk(volPath string, diskNum uint32) (windows.Handle, bool, err
 	return h, true, nil
 }
 
-// ejectUMSDisk sends a SCSI eject (START STOP UNIT) to the LUN — the clean
-// per-LUN "host is done" signal the device's flashing initrd waits for before
-// finalizing a LUN and moving to its next command. Mirrors `diskutil eject` /
-// `udisksctl power-off` on the other platforms. Best-effort.
-func ejectUMSDisk(d UMSDisk) {
-	wpath, err := windows.UTF16PtrFromString(d.DevPath)
-	if err == nil {
-		if h, err := windows.CreateFile(wpath, windows.GENERIC_READ|windows.GENERIC_WRITE,
-			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0); err == nil {
-			var bytesReturned uint32
-			allow := [1]byte{0} // PREVENT_MEDIA_REMOVAL.PreventMediaRemoval = FALSE
-			_ = windows.DeviceIoControl(h, ioctlStorageMediaRemoval, &allow[0], 1, nil, 0, &bytesReturned, nil)
-			_ = windows.DeviceIoControl(h, ioctlStorageEjectMedia, nil, 0, nil, 0, &bytesReturned, nil)
-			windows.CloseHandle(h)
-		}
-	}
+// ejectUMSDisk ejects the LUN's medium — the "host is done" signal the
+// flashing initrd waits for — and releases the volume locks unmountUMSDisk
+// took. IOCTL_STORAGE_EJECT_MEDIA keeps the USB device attached.
+func ejectUMSDisk(d UMSDisk) error {
+	err := ejectMedia(d.DevPath)
+	releaseVolumeLocks(d)
+	return err
+}
+
+// releaseVolumeLocks closes the volume locks unmountUMSDisk took on the disk.
+func releaseVolumeLocks(d UMSDisk) {
 	lockedVolumes.Lock()
 	for _, h := range lockedVolumes.byDisk[d.DevPath] {
 		windows.CloseHandle(h)
@@ -502,4 +498,25 @@ func physicalDriveNumber(devPath string) (uint32, bool) {
 		n = n*10 + uint32(c-'0')
 	}
 	return n, true
+}
+
+// ejectMedia allows medium removal and ejects it (SCSI START STOP UNIT).
+func ejectMedia(devPath string) error {
+	wpath, err := windows.UTF16PtrFromString(devPath)
+	if err != nil {
+		return err
+	}
+	h, err := windows.CreateFile(wpath, windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", devPath, err)
+	}
+	defer windows.CloseHandle(h)
+	var bytesReturned uint32
+	allow := [1]byte{0} // PREVENT_MEDIA_REMOVAL.PreventMediaRemoval = FALSE
+	_ = windows.DeviceIoControl(h, ioctlStorageMediaRemoval, &allow[0], 1, nil, 0, &bytesReturned, nil)
+	if err := windows.DeviceIoControl(h, ioctlStorageEjectMedia, nil, 0, nil, 0, &bytesReturned, nil); err != nil {
+		return fmt.Errorf("IOCTL_STORAGE_EJECT_MEDIA(%s): %w", devPath, err)
+	}
+	return nil
 }

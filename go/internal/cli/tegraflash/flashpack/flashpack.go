@@ -41,9 +41,13 @@ const SupportedSchema = 2
 const (
 	FamilyT234              = "t234"
 	T234Schema              = 2
-	T234ProtocolMassStorage = "usb-mass-storage-v1"
+	T234ProtocolMassStorage = "usb-mass-storage-v2"
 	t234FlashPackageSize    = 128 << 20
 )
+
+// t234ProtocolLegacy images re-enumerated the flashing gadget for every disk;
+// this wendy only speaks the single-enumeration protocol.
+const t234ProtocolLegacy = "usb-mass-storage-v1"
 
 // ErrNotInCache is returned by Resolve when no extracted tree or .tar.zst for the
 // requested version is present in the cache. The caller may download the artifact
@@ -346,6 +350,9 @@ func validateManifest(m *Manifest) error {
 	if m.Family == FamilyT234 {
 		if m.Schema != T234Schema {
 			return fmt.Errorf("T234 flashpack schema %d is unsafe/unsupported (want %d); obtain a schema-v2 recovery artifact", m.Schema, T234Schema)
+		}
+		if m.Protocol == t234ProtocolLegacy {
+			return fmt.Errorf("WendyOS %s predates this wendy's Jetson flash protocol; install a newer WendyOS version, or use an older wendy for this one", m.WendyOSVersion)
 		}
 		if m.Protocol != T234ProtocolMassStorage {
 			return fmt.Errorf("T234 flashpack protocol %q is unsupported", m.Protocol)

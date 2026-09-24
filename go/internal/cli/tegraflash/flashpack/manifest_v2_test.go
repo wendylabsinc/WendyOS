@@ -211,3 +211,19 @@ func TestT234ManifestUSBProductIDAcceptsFamily(t *testing.T) {
 		}
 	}
 }
+
+func TestT234LegacyProtocolRejectedWithGuidance(t *testing.T) {
+	root := writeT234ManifestFixture(t, 2)
+	path := filepath.Join(root, "manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), T234ProtocolMassStorage, t234ProtocolLegacy, 1))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := open(root); err == nil || !strings.Contains(err.Error(), "install a newer WendyOS version") {
+		t.Fatalf("legacy protocol error = %v", err)
+	}
+}

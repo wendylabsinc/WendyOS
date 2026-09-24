@@ -223,13 +223,13 @@ func TestFirstLUNWaitRejectsMultipleOffPortCandidates(t *testing.T) {
 		}, nil
 	})
 	_, err := WaitForUMSDiskAt(context.Background(), LUNSelector{Vendor: FlashpkgVendor, PortPath: "1-1", PortHint: true}, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "none is at the recovery port") {
+	if err == nil || !strings.Contains(err.Error(), "none is at the expected port") {
 		t.Fatalf("multi-candidate error = %v", err)
 	}
 }
 
-// Waits after the first LUN pin the gadget's own port + session; an off-port
-// LUN must never satisfy them, hint or not.
+// Without PortHint a wait pins the gadget's own port + session; an off-port LUN
+// must never satisfy it.
 func TestSubsequentLUNWaitRequiresExactPort(t *testing.T) {
 	withFastUMSPoll(t)
 	withUMSScan(t, func() ([]UMSDisk, error) {
@@ -357,6 +357,7 @@ func TestVerifyDeviceIdentityRejectsUndersizedReattachedLUN(t *testing.T) {
 // identity before touching the disk, and only unmount ahead of the write.
 func TestSendFlashPackageVerifiesIdentityBeforeUnmount(t *testing.T) {
 	withFastUMSPoll(t)
+	withPollingMissing(t, true)
 	fixture, err := io.ReadAll(openFixture(t, "flashpkg-identity-1k.ext4.gz"))
 	if err != nil {
 		t.Fatal(err)
@@ -377,6 +378,8 @@ func TestSendFlashPackageVerifiesIdentityBeforeUnmount(t *testing.T) {
 		FlashPackagePath: pkg, PortPath: "1-3", ExpectedIdentity: identityExpectation, Out: io.Discard, TempDir: t.TempDir(),
 		RunHelper: func(_ context.Context, req HelperRequest, _ func(int64, int64)) error {
 			switch {
+			case req.PollMedia:
+				ops = append(ops, "poll "+req.Session)
 			case req.Unmount:
 				ops = append(ops, "unmount")
 			case req.Eject:
@@ -394,7 +397,8 @@ func TestSendFlashPackageVerifiesIdentityBeforeUnmount(t *testing.T) {
 	if err := stage.SendFlashPackage(context.Background()); err != nil {
 		t.Fatalf("SendFlashPackage = %v", err)
 	}
-	if want := []string{"dump", "unmount", "write", "dump", "eject"}; !slices.Equal(ops, want) {
+	// Polling is enabled before the first eject, so later media changes are seen.
+	if want := []string{"dump", "poll 12345678", "unmount", "write", "dump", "eject"}; !slices.Equal(ops, want) {
 		t.Fatalf("helper ops = %v, want %v", ops, want)
 	}
 }
