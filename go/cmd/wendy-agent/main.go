@@ -418,11 +418,7 @@ func main() {
 	}
 	sensorTransportFor := func(p mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
 		if p.Transport == "wendycom" {
-			// Discovery and pairing already work for Wendy Lite sources (see
-			// device_pair.go's transportForDevice); the WendyCom sensor-data
-			// transport itself isn't implemented yet, so refuse rather than
-			// attempt a grpc/raw-TCP dial a Wendy Lite board doesn't speak.
-			return nil, fmt.Errorf("mcusource: wendycom transport not yet implemented")
+			return mcusource.NewWendyComTransport(logger, p, addr), nil
 		}
 		if p.Transport == "grpc" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()

@@ -63,6 +63,21 @@ func orgAllowed(cliOrgs map[int32]bool, sourceOrg int32) error {
 	return fmt.Errorf("device is in organization %d, but you are logged in to %s; pairing is only allowed within an organization you belong to", sourceOrg, yours)
 }
 
+// discoverWendyLiteSensorSources browses _wendy-lite._tcp and returns every
+// sighting as a models.LANDevice. discovery.Discover never finds these
+// boards, since it only browses _wendyos._udp.
+func discoverWendyLiteSensorSources(ctx context.Context) ([]models.LANDevice, error) {
+	svcs, err := discovery.BrowseMDNSServices(ctx, discovery.WendyLiteServiceType, 0)
+	if err != nil {
+		return nil, err
+	}
+	devices := make([]models.LANDevice, 0, len(svcs))
+	for _, svc := range svcs {
+		devices = append(devices, discovery.LANDeviceFromWendyLiteService(svc))
+	}
+	return devices, nil
+}
+
 // discoverSensorSources runs LAN discovery and returns the merged device list
 // for the caller to filter down to sensor sources. WendyOS agents
 // (_wendyos._udp) and Wendy Lite boards (_wendy-lite._tcp) are two separate
@@ -76,10 +91,8 @@ func discoverSensorSources(ctx context.Context) ([]models.DiscoveredDevice, erro
 	if err != nil {
 		return nil, fmt.Errorf("discovering devices: %w", err)
 	}
-	if liteSvcs, err := discovery.BrowseMDNSServices(ctx, discovery.WendyLiteServiceType, 0); err == nil {
-		for _, svc := range liteSvcs {
-			collection.LANDevices = append(collection.LANDevices, discovery.LANDeviceFromWendyLiteService(svc))
-		}
+	if liteDevices, err := discoverWendyLiteSensorSources(ctx); err == nil {
+		collection.LANDevices = append(collection.LANDevices, liteDevices...)
 	}
 	return collection.MergedDevices(), nil
 }

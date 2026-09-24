@@ -1196,12 +1196,17 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 		if err != nil {
 			continue
 		}
-		// A v4l2loopback node lives at /dev/video<cameraID>, numbered from the
-		// same reserved band resolveSource treats as a network camera. Once
-		// EnsureNodes has created one, it would otherwise glob-enumerate here
-		// too and double-list the camera: once (correctly) from listIPCameras
-		// below and once (bogusly) as an indistinguishable local device.
-		if id >= uint64(ipcam.LoopbackBandStart) && id <= uint64(ipcam.IDBandEnd) {
+		// ROS 2 and network cameras have v4l2loopback nodes at
+		// /dev/video<cameraID>, numbered from the bands resolveSource routes to
+		// their registries. Those nodes would otherwise glob-enumerate here too
+		// and double-list the camera: once (correctly) from listROS2Cameras or
+		// listIPCameras below, once (bogusly) as an indistinguishable local
+		// device. MCU-band nodes (sensor pairing) have no registry to list
+		// them, so they stay: they are the local V4L2 devices resolveSource
+		// treats them as.
+		inROS2Band := id >= ros2camera.IDBandStart && id <= ros2camera.IDBandEnd
+		inIPBand := id >= ipcam.IDBandStart && id <= ipcam.IDBandEnd
+		if inROS2Band || inIPBand {
 			continue
 		}
 		if !s.hasVideoCapture(path) {

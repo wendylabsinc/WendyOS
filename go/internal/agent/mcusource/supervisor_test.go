@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink/sim"
@@ -120,7 +121,7 @@ func TestSupervisorMountsCameraAndWritesFrames(t *testing.T) {
 	defer rcancel()
 	_ = sup.RunPairing(rctx, mcusource.SensorPairing{SourceAssetID: 8, OrgID: 1}, ln.Addr().String())
 
-	if len(lb.ensured) == 0 || lb.ensured[0] < 256 {
+	if len(lb.ensured) == 0 || lb.ensured[0] < ipcam.MCUBandStart || lb.ensured[0] > ipcam.MCUBandEnd {
 		t.Fatalf("expected an MCU-band node to be ensured, got %v", lb.ensured)
 	}
 	if w.count() == 0 {

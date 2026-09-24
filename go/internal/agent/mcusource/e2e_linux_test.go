@@ -10,6 +10,7 @@ package mcusource_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -27,7 +28,7 @@ import (
 // TestEndToEndCameraMount wires the real ipcam.Loopback (real v4l2loopback
 // ioctls) and the real mcusource.Supervisor together, dials a sensorlink
 // simulator over TCP, and asserts a frame lands on the created MCU-band
-// /dev/video256 node.
+// node, the band's first: /dev/video<ipcam.MCUBandStart>.
 func TestEndToEndCameraMount(t *testing.T) {
 	dir := t.TempDir()
 
@@ -79,7 +80,7 @@ func TestEndToEndCameraMount(t *testing.T) {
 	go func() { done <- sup.RunPairing(rctx, pairing, ln.Addr().String()) }()
 
 	// Wait for the MCU-band node to actually appear on disk.
-	const nodePath = "/dev/video256"
+	nodePath := fmt.Sprintf("/dev/video%d", ipcam.MCUBandStart)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, err := os.Stat(nodePath); err == nil {
