@@ -4,7 +4,7 @@ The public install one-liners are served from Google Cloud, not GitHub Pages:
 
 ```bash
 curl -fsSL https://install.wendy.dev/cli.sh   | bash
-curl -fsSL https://install.wendy.dev/agent.sh | bash
+curl -fsSL https://install.wendy.sh/agent.sh | bash
 ```
 
 ## Why
@@ -20,9 +20,9 @@ now served from GCS.
 
 | Object | Served at | Content-Type |
 |---|---|---|
-| `agent.sh` | `https://install.wendy.dev/agent.sh` | `text/x-shellscript` |
+| `agent.sh` | `https://install.wendy.sh/agent.sh` | `text/x-shellscript` |
 | `cli.sh` | `https://install.wendy.dev/cli.sh` | `text/x-shellscript` |
-| `manifest.json` | `https://install.wendy.dev/manifest.json` | `application/json` |
+| `manifest.json` | `https://install.wendy.sh/manifest.json` | `application/json` |
 
 `manifest.json` carries `{ "latest": "<version>", "latest_nightly": "<version>" }`.
 The scripts read `latest` to resolve the install version and fall back to the
@@ -44,7 +44,7 @@ effect within about five minutes.
 Static files live in the public bucket `wendy-install-public` and are served
 through the **same** global external HTTP(S) load balancer that fronts
 `docs.wendy.dev` (see `docs-site.md`). The load balancer terminates HTTPS; a host
-rule routes `install.wendy.dev` to a backend bucket for `wendy-install-public`.
+rule routes `install.wendy.sh` to a backend bucket for `wendy-install-public`.
 
 ### One-time maintainer runbook (LB + cert + DNS)
 
@@ -84,14 +84,14 @@ gcloud compute backend-buckets create wendy-install-backend \
 gcloud compute url-maps add-path-matcher <URL_MAP> \
   --path-matcher-name=install \
   --default-backend-bucket=wendy-install-backend \
-  --new-hosts=install.wendy.dev \
+  --new-hosts=install.wendy.sh \
   --global \
   --project=<PROJECT>
 
-# 4. Add install.wendy.dev to a Google-managed certificate and attach it.
+# 4. Add install.wendy.sh to a Google-managed certificate and attach it.
 #    Managed certs take minutes-to-tens-of-minutes to become ACTIVE.
 gcloud compute ssl-certificates create wendy-install-cert \
-  --domains=install.wendy.dev --global --project=<PROJECT>
+  --domains=install.wendy.sh --global --project=<PROJECT>
 gcloud compute target-https-proxies update <TARGET_PROXY> \
   --ssl-certificates=<CERT>,wendy-install-cert --global --project=<PROJECT>
 
@@ -99,25 +99,25 @@ gcloud compute target-https-proxies update <TARGET_PROXY> \
 gcloud compute forwarding-rules list --global --project=<PROJECT>
 ```
 
-Then, in the DNS zone for `wendy.dev`:
+Then, in the DNS zone for `wendy.sh`:
 
-- **Remove** the existing `install.wendy.dev` record pointing at GitHub Pages
+- **Remove** the existing `install.wendy.sh` record pointing at GitHub Pages
   (`CNAME -> wendylabsinc.github.io`) and the GitHub Pages custom-domain binding
   in the repository's Pages settings.
-- **Add** `install.wendy.dev` `A` (and `AAAA` if the LB has IPv6) records → the
+- **Add** `install.wendy.sh` `A` (and `AAAA` if the LB has IPv6) records → the
   load balancer's global IP from step 5.
 
 Verify before announcing:
 
 ```bash
-curl -fsSL https://install.wendy.dev/manifest.json
-curl -fsSL https://install.wendy.dev/agent.sh | head -1   # -> #!/usr/bin/env bash
+curl -fsSL https://install.wendy.sh/manifest.json
+curl -fsSL https://install.wendy.sh/agent.sh | head -1   # -> #!/usr/bin/env bash
 ```
 
 ### After cutover
 
-Once `install.wendy.dev` resolves to the load balancer, flip the
+Once `install.wendy.sh` resolves to the load balancer, flip the
 `publish-install-scripts` job's "Verify scripts are reachable" step in
 `.github/workflows/build.yml` from
 `https://storage.googleapis.com/wendy-install-public/<name>` back to
-`https://install.wendy.dev/<name>` (a comment in that step already flags this).
+`https://install.wendy.sh/<name>` (a comment in that step already flags this).
