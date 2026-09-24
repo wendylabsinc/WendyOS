@@ -31,8 +31,9 @@ type runtime struct {
 	dialSlot             chan struct{}
 	serverTLS            *tls.Config
 	advertisementRefresh chan struct{}
-	discovery   discoveryRecovery
-	restartScan func(context.Context, *dbus.Conn, dbus.ObjectPath) error
+	tlsGate              tlsHandshakeAdmission
+	discovery            discoveryRecovery
+	restartScan          func(context.Context, *dbus.Conn, dbus.ObjectPath) error
 }
 
 type cheaperLinkChecker interface {
@@ -152,7 +153,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if parseErr != nil {
 		cfg.Logger.Debug("BLE connection interval tuning unavailable", zap.Error(parseErr))
 	}
-	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, ownerLookup: bluezOwner, bus: bus, freshness: freshness, active: make(map[int32]struct{}), nextAttempt: make(map[int32]time.Time), dialSlot: make(chan struct{}, 1)}
+	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, ownerLookup: bluezOwner, bus: bus, freshness: freshness, active: make(map[int32]struct{}), nextAttempt: make(map[int32]time.Time), dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
 	r.serverTLS = r.makeServerTLS()
 	r.advertisementRefresh = make(chan struct{}, 1)
 	var loops sync.WaitGroup
@@ -235,11 +236,9 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	defer stopWatch()
 	measured, meter := meterHandshake(raw, r.cfg.Logger)
 	secure := tls.Server(measured, r.serverTLS)
-	handshake, cancel := context.WithTimeout(ctx, 10*time.Second)
 	meter.start()
-	err := secure.HandshakeContext(handshake)
+	wait, elapsed, err := r.tlsGate.run(ctx, meshTLSAdmissionWait, meshTLSHandshakeTimeout, secure.HandshakeContext)
 	measurement := meter.finish()
-	cancel()
 	state := secure.ConnectionState()
 	var peer int32
 	if err == nil && state.NegotiatedProtocol == ALPN {
@@ -253,10 +252,11 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	}
 	measurement.log(r.cfg.Logger, "inbound", peer, state, err == nil && state.NegotiatedProtocol == ALPN && peer != 0)
 	if err != nil || state.NegotiatedProtocol != ALPN || peer == 0 {
-		r.cfg.Logger.Debug("BLE inbound TLS rejected", zap.Error(err))
+		r.cfg.Logger.Warn("BLE inbound TLS rejected", zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Error(err))
 		_ = secure.Close()
 		return
 	}
+	r.cfg.Logger.Info("BLE inbound TLS established", zap.Int32("peer", peer), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume))
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
@@ -477,19 +477,18 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	}
 	measured, meter := meterHandshake(raw, r.cfg.Logger)
 	secure = tls.Client(measured, cfg)
-	handshake, cancel := context.WithTimeout(ctx, 10*time.Second)
 	meter.start()
-	err = secure.HandshakeContext(handshake)
+	wait, elapsed, err := r.tlsGate.run(ctx, meshTLSAdmissionWait, meshTLSHandshakeTimeout, secure.HandshakeContext)
 	measurement := meter.finish()
-	cancel()
 	measurement.log(r.cfg.Logger, "outbound", peer.asset, secure.ConnectionState(), err == nil && secure.ConnectionState().NegotiatedProtocol == ALPN)
 	if err != nil || secure.ConnectionState().NegotiatedProtocol != ALPN {
-		r.cfg.Logger.Debug("BLE outbound TLS rejected", zap.Int32("peer", peer.asset), zap.Error(err))
+		r.cfg.Logger.Warn("BLE outbound TLS rejected", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Error(err))
 		if r.cfg.Selection != nil {
 			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
 		}
 		return
 	}
+	r.cfg.Logger.Info("BLE outbound TLS established", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume))
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
 	}
