@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -63,6 +65,19 @@ func receive(t *testing.T, sent <-chan *agentpbv2.ModelWatchMessage, match func(
 			}
 		case <-deadline:
 			t.Fatal("the expected message never arrived")
+		}
+	}
+}
+
+// drainSent returns every message currently buffered on sent, without blocking.
+func drainSent(sent <-chan *agentpbv2.ModelWatchMessage) []*agentpbv2.ModelWatchMessage {
+	var out []*agentpbv2.ModelWatchMessage
+	for {
+		select {
+		case msg := <-sent:
+			out = append(out, msg)
+		default:
+			return out
 		}
 	}
 }
@@ -159,6 +174,153 @@ func TestWatchModelEndsWithFinalStatus(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("WatchModel = %v, want a clean end", err)
+	}
+}
+
+// TestModelStatusErrorCodes checks modelStatusError directly against every
+// sentinel the supervisor can return, wrapped the way the supervisor wraps
+// it (design §5), plus the context errors, nil, and an unrelated error.
+func TestModelStatusErrorCodes(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"unknown model", fmt.Errorf("%w %q", models.ErrUnknownModel, "nope"), codes.NotFound},
+		{"unknown camera", fmt.Errorf("%w %q", models.ErrUnknownCamera, "v4l2:/dev/video9"), codes.NotFound},
+		{"unknown instance", fmt.Errorf("%w %q", models.ErrUnknownInstance, "m-missing"), codes.NotFound},
+		{"unknown watch", fmt.Errorf("%w %q", models.ErrUnknownWatch, "w-1"), codes.NotFound},
+		{"no variant", fmt.Errorf("%w: needs arch arm64", models.ErrNoVariant), codes.FailedPrecondition},
+		{"camera not streamable", fmt.Errorf("%w: %v", models.ErrCameraNotStreamable, errors.New("no frame identity")), codes.FailedPrecondition},
+		{"capacity", fmt.Errorf("%w (2): m-aaa, m-bbb", models.ErrCapacity), codes.ResourceExhausted},
+		{"invalid filter", fmt.Errorf("%w: unknown event type %q", models.ErrInvalidFilter, "bogus"), codes.InvalidArgument},
+		{"context canceled", context.Canceled, codes.Canceled},
+		{"context deadline exceeded", context.DeadlineExceeded, codes.DeadlineExceeded},
+		{"unrelated error", errors.New("boom"), codes.Internal},
+	}
+	for _, tc := range cases {
+		if got := status.Code(modelStatusError(tc.err)); got != tc.want {
+			t.Errorf("%s: code %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if err := modelStatusError(nil); err != nil {
+		t.Errorf("modelStatusError(nil) = %v, want nil", err)
+	}
+}
+
+// TestWatchModelInvalidClassReturnsInvalidArgument covers the routing from
+// WatchModel's own filter-validation error through to the gRPC code, not just
+// modelStatusError in isolation.
+func TestWatchModelInvalidClassReturnsInvalidArgument(t *testing.T) {
+	svc, rt := newTestModelService(t)
+	id := startTestModel(t, svc, rt)
+	stream := &fakeServerStream[agentpbv2.ModelWatchMessage]{ctx: context.Background()}
+	err := svc.WatchModel(&agentpbv2.WatchModelRequest{InstanceId: id, Classes: []string{"unicorn"}}, stream)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("WatchModel with an unreported class = %v, want InvalidArgument", err)
+	}
+	if len(stream.sent) != 0 {
+		t.Fatalf("stream.sent = %v, want nothing sent", stream.sent)
+	}
+}
+
+// TestWatchModelSendFailureDetaches checks that a stream.Send failure --
+// whether on the initial WatchStarted message or on a later one -- ends
+// WatchModel with that error and detaches the watch (lease grace, not a
+// stop), rather than leaving it attached.
+func TestWatchModelSendFailureDetaches(t *testing.T) {
+	sendErr := errors.New("send boom")
+
+	t.Run("first send", func(t *testing.T) {
+		svc, rt := newTestModelService(t)
+		id := startTestModel(t, svc, rt)
+		stream := &fakeServerStream[agentpbv2.ModelWatchMessage]{ctx: context.Background()}
+		stream.onSend = func(int) error { return sendErr }
+
+		err := svc.WatchModel(&agentpbv2.WatchModelRequest{InstanceId: id}, stream)
+		if !errors.Is(err, sendErr) {
+			t.Fatalf("WatchModel = %v, want %v", err, sendErr)
+		}
+		list, _ := svc.ListModels(context.Background(), &agentpbv2.ListModelsRequest{})
+		if len(list.GetInstances()) != 1 || list.GetInstances()[0].GetInstanceId() != id {
+			t.Fatalf("list after send failure = %v, want the instance still listed", list)
+		}
+		if got := list.GetInstances()[0].GetWatchers(); got != 0 {
+			t.Fatalf("watchers after send failure = %d, want 0", got)
+		}
+	})
+
+	t.Run("later send", func(t *testing.T) {
+		svc, rt := newTestModelService(t)
+		id := startTestModel(t, svc, rt)
+		sent := make(chan *agentpbv2.ModelWatchMessage, 64)
+		stream := &fakeServerStream[agentpbv2.ModelWatchMessage]{ctx: context.Background()}
+		stream.onSend = func(n int) error {
+			sent <- stream.sent[n-1]
+			if n > 1 {
+				return sendErr
+			}
+			return nil
+		}
+		done := make(chan error, 1)
+		go func() { done <- svc.WatchModel(&agentpbv2.WatchModelRequest{InstanceId: id}, stream) }()
+		receive(t, sent, func(m *agentpbv2.ModelWatchMessage) bool { return m.GetStarted() != nil })
+
+		svc.supervisor.PublishApplicationRecord(models.AppIDPrefix+id, modelstest.Entered("person", 0.9, 1))
+
+		if err := <-done; !errors.Is(err, sendErr) {
+			t.Fatalf("WatchModel = %v, want %v", err, sendErr)
+		}
+		list, _ := svc.ListModels(context.Background(), &agentpbv2.ListModelsRequest{})
+		if len(list.GetInstances()) != 1 || list.GetInstances()[0].GetInstanceId() != id {
+			t.Fatalf("list after send failure = %v, want the instance still listed", list)
+		}
+		if got := list.GetInstances()[0].GetWatchers(); got != 0 {
+			t.Fatalf("watchers after send failure = %d, want 0", got)
+		}
+	})
+}
+
+// TestStopModelByWatchEndsOnlyThatWatch checks that StopModel with a watch_id
+// ends only that watch: its WatchModel call returns cleanly with no final
+// status message, while the instance and its other watch carry on.
+func TestStopModelByWatchEndsOnlyThatWatch(t *testing.T) {
+	svc, rt := newTestModelService(t)
+	id := startTestModel(t, svc, rt)
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	sent1, done1 := watchInBackground(ctx1, svc, &agentpbv2.WatchModelRequest{InstanceId: id})
+	watch1 := receive(t, sent1, func(m *agentpbv2.ModelWatchMessage) bool { return m.GetStarted() != nil }).GetStarted().GetWatchId()
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	sent2, done2 := watchInBackground(ctx2, svc, &agentpbv2.WatchModelRequest{InstanceId: id})
+	receive(t, sent2, func(m *agentpbv2.ModelWatchMessage) bool { return m.GetStarted() != nil })
+
+	if _, err := svc.StopModel(context.Background(), &agentpbv2.StopModelRequest{InstanceId: id, WatchId: watch1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done1; err != nil {
+		t.Fatalf("WatchModel (stopped watch) = %v, want a clean end", err)
+	}
+	for _, msg := range drainSent(sent1) {
+		if msg.GetStatus().GetState() == agentpbv2.ModelState_MODEL_STATE_STOPPED {
+			t.Fatalf("the ended watch's stream received a STOPPED status: %v", msg)
+		}
+	}
+
+	list, _ := svc.ListModels(context.Background(), &agentpbv2.ListModelsRequest{})
+	if len(list.GetInstances()) != 1 || list.GetInstances()[0].GetInstanceId() != id {
+		t.Fatalf("list after stopping one watch = %v, want the instance still listed", list)
+	}
+	if got := list.GetInstances()[0].GetWatchers(); got != 1 {
+		t.Fatalf("watchers after stopping one watch = %d, want 1", got)
+	}
+
+	cancel2()
+	if err := <-done2; status.Code(err) != codes.Canceled {
+		t.Fatalf("second WatchModel after cancel = %v, want Canceled", err)
 	}
 }
 
