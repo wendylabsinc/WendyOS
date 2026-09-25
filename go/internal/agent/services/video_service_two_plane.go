@@ -78,7 +78,8 @@ type twoPlaneNode struct {
 func (s *VideoService) SetTwoPlaneContainerConsumers(ctx context.Context, containerIDs []string) {
 	fingerprint := consumerFingerprint(containerIDs)
 	s.twoPlaneMu.Lock()
-	s.twoPlaneDemand = len(containerIDs) > 0
+	s.twoPlaneContainerDemand = len(containerIDs) > 0
+	s.twoPlaneDemand = s.twoPlaneContainerDemand || len(s.twoPlanePinned) > 0
 	demand := s.twoPlaneDemand
 	if s.twoPlaneConsumers != fingerprint {
 		// A different set of entitled containers is a different question, so
@@ -365,6 +366,13 @@ type twoPlaneState struct {
 	twoPlaneMu     sync.Mutex
 	twoPlane       map[string]*twoPlaneNode
 	twoPlaneDemand bool
+	// twoPlaneContainerDemand is the container sync's view: some running app
+	// container is entitled to the two-plane path.
+	twoPlaneContainerDemand bool
+	// twoPlanePinned holds agent-managed owners (model hosts) that need the
+	// path whatever the container sync says. twoPlaneDemand is
+	// twoPlaneContainerDemand || len(twoPlanePinned) > 0.
+	twoPlanePinned map[string]bool
 	// twoPlaneRefused names sources whose pump refused their frames as
 	// unbindable. Guarded by twoPlaneMu. Cleared when the entitled consumer set
 	// changes or when a source leaves the device list, the two events that can
