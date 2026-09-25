@@ -38,6 +38,9 @@ type instance struct {
 	grace    Timer  // pending lease expiry; nil while watched
 	graceGen uint64 // invalidates a grace callback that fires after being replaced
 	ring     *ring  // the latest detections, numbered
+
+	building   time.Time // first building_engine report from the current host; zero otherwise
+	holdsBuild bool      // this instance holds the device's engine build slot
 }
 
 func (inst *instance) poke() {

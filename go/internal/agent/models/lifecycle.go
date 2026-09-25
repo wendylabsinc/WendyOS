@@ -8,11 +8,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 )
 
-// run takes an instance from preparation to removal.
+type hostOutcome int
+
+const (
+	hostStopped     hostOutcome = iota // the instance was asked to stop
+	hostFailedFinal                    // reported failure or expired engine build
+	hostCrashed                        // exited or went silent; worth a restart
+)
+
+const engineBuildTimeoutReason = "engine build took longer than 15 min"
+
+// run takes an instance from preparation to removal, restarting a crashed or
+// silent host up to maxRestarts times.
 func (s *Supervisor) run(inst *instance) {
 	final, detail := StateStopped, ""
 	defer func() { s.finish(inst, final, detail) }()
@@ -22,8 +34,24 @@ func (s *Supervisor) run(inst *instance) {
 		}
 		return
 	}
-	if failed, reason := s.runHost(inst); failed {
-		final, detail = StateFailed, reason
+	for attempt := 0; ; attempt++ {
+		outcome, reason := s.runHost(inst)
+		switch outcome {
+		case hostStopped:
+			return
+		case hostFailedFinal:
+			final, detail = StateFailed, reason
+			return
+		}
+		if attempt == maxRestarts {
+			final, detail = StateFailed, fmt.Sprintf("host failed %d times; last: %s", attempt+1, reason)
+			return
+		}
+		s.setState(inst, StateRestarting, reason)
+		s.removeHost(inst)
+		if !s.sleep(inst, restartBackoff[attempt]) {
+			return
+		}
 	}
 }
 
@@ -55,6 +83,21 @@ func (s *Supervisor) prepare(inst *instance) error {
 			return err
 		}
 	}
+	if s.needsEngineBuild(inst.variant) {
+		select {
+		case s.build <- struct{}{}:
+		default:
+			s.setState(inst, StatePreparing, "waiting for another engine build")
+			select {
+			case s.build <- struct{}{}:
+			case <-inst.ctx.Done():
+				return inst.ctx.Err()
+			}
+		}
+		inst.mu.Lock()
+		inst.holdsBuild = true
+		inst.mu.Unlock()
+	}
 	inst.mu.Lock()
 	inst.modelFile = file
 	inst.mu.Unlock()
@@ -67,14 +110,15 @@ func (s *Supervisor) setState(inst *instance, st State, detail string) {
 	inst.setStateLocked(st, detail)
 }
 
-// runHost starts the host and waits until the instance must stop or the host
-// ends. It reports whether the instance failed, and why.
-func (s *Supervisor) runHost(inst *instance) (bool, string) {
+// runHost starts one host and waits until the instance must stop, the host
+// reports a failure, or it crashes or goes silent.
+func (s *Supervisor) runHost(inst *instance) (hostOutcome, string) {
 	// Mark the host live before it starts, so an immediate "ready" counts.
 	inst.mu.Lock()
-	inst.hostRunning, inst.hostFailure = true, ""
+	inst.hostRunning, inst.hostFailure, inst.building = true, "", time.Time{}
 	inst.lastStatus = s.clock.Now()
 	inst.setStateLocked(StateStarting, "")
+	s.armStallLocked(inst)
 	inst.mu.Unlock()
 	defer func() {
 		inst.mu.Lock()
@@ -85,24 +129,75 @@ func (s *Supervisor) runHost(inst *instance) (bool, string) {
 	exits, err := s.cfg.Runtime.StartHost(inst.ctx, s.hostSpec(inst))
 	if err != nil {
 		if inst.ctx.Err() != nil {
-			return false, ""
+			return hostStopped, ""
 		}
-		return true, "starting host: " + err.Error()
+		return hostCrashed, "starting host: " + err.Error()
 	}
 	for {
 		select {
 		case <-inst.ctx.Done():
-			return false, ""
+			return hostStopped, ""
 		case exit := <-exits:
 			if failure := inst.failure(); failure != "" {
-				return true, failure
+				return hostFailedFinal, failure
 			}
-			return true, fmt.Sprintf("host exited with status %d", exit.Code) + s.logTail(inst)
+			return hostCrashed, fmt.Sprintf("host exited with status %d", exit.Code) + s.logTail(inst)
 		case <-inst.wake:
-			if failure := inst.failure(); failure != "" {
-				return true, failure
+			outcome, reason, done := s.checkHost(inst)
+			if !done {
+				continue
 			}
+			if reason == engineBuildTimeoutReason {
+				reason += s.logTail(inst)
+			}
+			return outcome, reason
 		}
+	}
+}
+
+// checkHost looks for a reported failure, an expired engine build, or a
+// silent host.
+func (s *Supervisor) checkHost(inst *instance) (hostOutcome, string, bool) {
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	now := s.clock.Now()
+	switch {
+	case inst.hostFailure != "":
+		return hostFailedFinal, inst.hostFailure, true
+	case !inst.building.IsZero() && inst.state != StateReady && now.Sub(inst.building) >= engineBuildTimeout:
+		return hostFailedFinal, engineBuildTimeoutReason, true
+	case now.Sub(inst.lastStatus) >= stallTimeout:
+		return hostCrashed, "host sent no status for 15 s", true
+	}
+	return 0, "", false
+}
+
+// sleep waits d on the supervisor's clock; false means the instance was
+// stopped first.
+func (s *Supervisor) sleep(inst *instance, d time.Duration) bool {
+	fired := make(chan struct{})
+	t := s.clock.AfterFunc(d, func() { close(fired) })
+	defer t.Stop()
+	select {
+	case <-fired:
+		return true
+	case <-inst.ctx.Done():
+		return false
+	}
+}
+
+// armStallLocked wakes the run loop once the host has been silent for
+// stallTimeout; every status re-arms it. Caller holds inst.mu.
+func (s *Supervisor) armStallLocked(inst *instance) {
+	s.clock.AfterFunc(stallTimeout, inst.poke)
+}
+
+// releaseBuildLocked frees the engine build slot if this instance holds it.
+// Caller holds inst.mu.
+func (s *Supervisor) releaseBuildLocked(inst *instance) {
+	if inst.holdsBuild {
+		inst.holdsBuild = false
+		<-s.build
 	}
 }
 
@@ -129,8 +224,10 @@ func (s *Supervisor) handleStatus(inst *instance, st HostStatus) {
 	if !inst.hostRunning {
 		return // a host being replaced or removed no longer speaks for the instance
 	}
-	inst.lastStatus = s.clock.Now()
+	now := s.clock.Now()
+	inst.lastStatus = now
 	inst.stats = st.Stats
+	s.armStallLocked(inst)
 	changed := false
 	switch st.State {
 	case HostFailed:
@@ -141,8 +238,13 @@ func (s *Supervisor) handleStatus(inst *instance, st HostStatus) {
 		inst.poke()
 		return
 	case HostBuildingEngine:
+		if inst.building.IsZero() {
+			inst.building = now
+			s.clock.AfterFunc(engineBuildTimeout, inst.poke)
+		}
 		changed = inst.setStateLocked(StatePreparing, "building TensorRT engine")
 	case HostReady:
+		s.releaseBuildLocked(inst)
 		changed = inst.setStateLocked(StateReady, "")
 	}
 	if !changed {
@@ -184,6 +286,7 @@ func (s *Supervisor) finish(inst *instance, final State, detail string) {
 	s.forget(inst)
 	inst.mu.Lock()
 	s.cancelGraceLocked(inst)
+	s.releaseBuildLocked(inst)
 	if final == StateStopped && detail == "" {
 		detail = inst.stopReason
 	}
@@ -207,4 +310,24 @@ func (s *Supervisor) removeHost(inst *instance) {
 	if err := s.cfg.Runtime.RemoveHost(ctx, inst.id); err != nil {
 		s.log.Warn("removing a model host failed", zap.String("instance", inst.id), zap.Error(err))
 	}
+}
+
+// CleanupOrphans removes model hosts and run directories that a previous
+// agent process left behind; leases do not survive a restart. Call it before
+// serving.
+func (s *Supervisor) CleanupOrphans(ctx context.Context) error {
+	ids, err := s.cfg.Runtime.ListHosts(ctx)
+	if err != nil {
+		return fmt.Errorf("listing model hosts: %w", err)
+	}
+	var errs []error
+	for _, id := range ids {
+		if err := s.cfg.Runtime.RemoveHost(ctx, id); err != nil {
+			errs = append(errs, fmt.Errorf("removing model host %s: %w", id, err))
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(s.cfg.Root, "run")); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }

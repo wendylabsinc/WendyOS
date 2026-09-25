@@ -18,12 +18,18 @@ import (
 
 // Limits and lifetimes from the design (§5, §7).
 const (
-	defaultMaxRunning = 2
-	cameraTimeout     = 10 * time.Second
-	removeTimeout     = 30 * time.Second
-	leaseGrace        = 60 * time.Second
-	ringSize          = 100
+	defaultMaxRunning  = 2
+	cameraTimeout      = 10 * time.Second
+	removeTimeout      = 30 * time.Second
+	leaseGrace         = 60 * time.Second
+	ringSize           = 100
+	stallTimeout       = 15 * time.Second
+	engineBuildTimeout = 15 * time.Minute
+	maxRestarts        = 3
 )
+
+// restartBackoff is how long to wait before the first, second and third restart.
+var restartBackoff = [maxRestarts]time.Duration{2 * time.Second, 8 * time.Second, 30 * time.Second}
 
 // Config holds a Supervisor's dependencies.
 type Config struct {
@@ -44,6 +50,8 @@ type Supervisor struct {
 	clock Clock
 	log   *zap.Logger
 
+	build chan struct{} // the device's single engine build slot
+
 	mu        sync.Mutex
 	instances map[string]*instance
 	byKey     map[string]*instance // model id + NUL + camera source id
@@ -60,7 +68,7 @@ func NewSupervisor(cfg Config) *Supervisor {
 	if cfg.MaxRunning == 0 {
 		cfg.MaxRunning = defaultMaxRunning
 	}
-	return &Supervisor{cfg: cfg, clock: cfg.Clock, log: cfg.Logger,
+	return &Supervisor{cfg: cfg, clock: cfg.Clock, log: cfg.Logger, build: make(chan struct{}, 1),
 		instances: map[string]*instance{}, byKey: map[string]*instance{}}
 }
 
