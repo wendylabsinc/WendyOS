@@ -22,6 +22,7 @@ const (
 	cameraTimeout     = 10 * time.Second
 	removeTimeout     = 30 * time.Second
 	leaseGrace        = 60 * time.Second
+	ringSize          = 100
 )
 
 // Config holds a Supervisor's dependencies.
@@ -236,6 +237,7 @@ func (s *Supervisor) newInstance(m Model, v Variant, camera string) *instance {
 		ctx:    ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}),
 		admitted: make(chan struct{}),
 		watches:  map[string]*Watch{},
+		ring:     newRing(ringSize),
 		state:    StatePreparing, detail: "starting",
 	}
 }
@@ -353,13 +355,38 @@ func (s *Supervisor) PublishApplicationRecord(appID string, rec data.Application
 	if inst == nil {
 		return
 	}
-	if rec.Name == RecordStatus {
+	switch rec.Name {
+	case RecordStatus:
 		st, err := parseStatus(rec)
 		if err != nil {
 			s.log.Debug("ignoring a malformed model status", zap.String("instance", id), zap.Error(err))
 			return
 		}
 		s.handleStatus(inst, st)
+	case RecordEntered, RecordLeft:
+		s.handleDetection(inst, rec)
+	}
+}
+
+// handleDetection numbers a detection and offers it to every watch whose
+// filter it passes.
+func (s *Supervisor) handleDetection(inst *instance, rec data.ApplicationRecord) {
+	e, err := parseDetection(rec, s.clock.Now())
+	if err != nil {
+		s.log.Debug("ignoring a malformed model detection", zap.String("instance", inst.id), zap.Error(err))
+		return
+	}
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	if inst.ctx.Err() != nil {
+		return
+	}
+	e = inst.ring.append(e)
+	for _, w := range inst.watches {
+		if w.filter.Match(e) {
+			event := e
+			w.offer(WatchMessage{Event: &event})
+		}
 	}
 }
 
@@ -390,7 +417,19 @@ func (s *Supervisor) Watch(req WatchRequest) (*Watch, InstanceInfo, uint64, erro
 	}
 	inst.watches[w.ID] = w
 	s.cancelGraceLocked(inst)
-	return w, inst.infoLocked(), 0, nil
+	if req.AfterSequence > 0 {
+		events, gap := inst.ring.since(req.AfterSequence)
+		if gap != nil {
+			w.offer(WatchMessage{Gap: gap})
+		}
+		for _, e := range events {
+			if w.filter.Match(e) {
+				event := e
+				w.offer(WatchMessage{Event: &event})
+			}
+		}
+	}
+	return w, inst.infoLocked(), inst.ring.last, nil
 }
 
 // Detach ends a watch whose client went away. The instance stays for

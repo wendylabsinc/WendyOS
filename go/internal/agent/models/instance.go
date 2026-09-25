@@ -37,6 +37,7 @@ type instance struct {
 	watches  map[string]*Watch
 	grace    Timer  // pending lease expiry; nil while watched
 	graceGen uint64 // invalidates a grace callback that fires after being replaced
+	ring     *ring  // the latest detections, numbered
 }
 
 func (inst *instance) poke() {
