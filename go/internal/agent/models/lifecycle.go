@@ -131,6 +131,7 @@ func (s *Supervisor) handleStatus(inst *instance, st HostStatus) {
 	}
 	inst.lastStatus = s.clock.Now()
 	inst.stats = st.Stats
+	changed := false
 	switch st.State {
 	case HostFailed:
 		inst.hostFailure = st.Reason
@@ -138,10 +139,14 @@ func (s *Supervisor) handleStatus(inst *instance, st HostStatus) {
 			inst.hostFailure = "the model host reported a failure"
 		}
 		inst.poke()
+		return
 	case HostBuildingEngine:
-		inst.setStateLocked(StatePreparing, "building TensorRT engine")
+		changed = inst.setStateLocked(StatePreparing, "building TensorRT engine")
 	case HostReady:
-		inst.setStateLocked(StateReady, "")
+		changed = inst.setStateLocked(StateReady, "")
+	}
+	if !changed {
+		inst.broadcastLocked() // a heartbeat carries fresh stats
 	}
 }
 
@@ -165,7 +170,8 @@ func (s *Supervisor) logTail(inst *instance) string {
 	return "\n" + strings.TrimSpace(string(tail))
 }
 
-// finish removes the host and everything the instance held.
+// finish removes the host and everything the instance held, then ends every
+// watch with the final state.
 func (s *Supervisor) finish(inst *instance, final State, detail string) {
 	// A finishing instance, including a failed one, must not be reused or
 	// watched while its host is removed.
@@ -177,10 +183,19 @@ func (s *Supervisor) finish(inst *instance, final State, detail string) {
 	}
 	s.forget(inst)
 	inst.mu.Lock()
+	s.cancelGraceLocked(inst)
 	if final == StateStopped && detail == "" {
 		detail = inst.stopReason
 	}
-	inst.setStateLocked(final, detail)
+	// Set directly instead of broadcasting: each watch gets the final state
+	// exactly once, through Final after its channel closes.
+	inst.state, inst.detail = final, detail
+	end := inst.infoLocked()
+	for id, w := range inst.watches {
+		snapshot := end
+		w.end(&snapshot)
+		delete(inst.watches, id)
+	}
 	inst.mu.Unlock()
 	close(inst.done)
 	s.log.Info("model instance ended", zap.String("instance", inst.id), zap.Stringer("state", final), zap.String("detail", detail))

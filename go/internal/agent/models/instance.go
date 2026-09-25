@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -32,6 +33,10 @@ type instance struct {
 	hostRunning bool      // a host from the current start speaks for the instance
 	hostFailure string    // reason from a host-reported failure
 	lastStatus  time.Time // latest model.status from the live host
+
+	watches  map[string]*Watch
+	grace    Timer  // pending lease expiry; nil while watched
+	graceGen uint64 // invalidates a grace callback that fires after being replaced
 }
 
 func (inst *instance) poke() {
@@ -43,9 +48,17 @@ func (inst *instance) poke() {
 
 // infoLocked snapshots the instance. Caller holds mu.
 func (inst *instance) infoLocked() InstanceInfo {
+	labels := make([]string, 0, len(inst.watches))
+	for _, w := range inst.watches {
+		if w.Label != "" {
+			labels = append(labels, w.Label)
+		}
+	}
+	sort.Strings(labels)
 	return InstanceInfo{
 		ID: inst.id, ModelID: inst.model.ID, VariantID: inst.variant.ID, Engine: inst.variant.Engine,
 		CameraSourceID: inst.camera, State: inst.state, StateDetail: inst.detail,
+		Watchers: len(inst.watches), WatchLabels: labels,
 		StartedAt: inst.started, Stats: inst.stats, FileSHA256: inst.variant.File.SHA256,
 	}
 }
@@ -62,14 +75,24 @@ func (inst *instance) failure() string {
 	return inst.hostFailure
 }
 
-// setStateLocked records a state change and reports whether anything
-// changed. Caller holds mu.
+// setStateLocked records a state change, tells every watch, and reports
+// whether anything changed. Caller holds mu.
 func (inst *instance) setStateLocked(s State, detail string) bool {
 	if inst.state == s && inst.detail == detail {
 		return false
 	}
 	inst.state, inst.detail = s, detail
+	inst.broadcastLocked()
 	return true
+}
+
+// broadcastLocked sends the current snapshot to every watch. Caller holds mu.
+func (inst *instance) broadcastLocked() {
+	info := inst.infoLocked()
+	for _, w := range inst.watches {
+		snapshot := info
+		w.offer(WatchMessage{Status: &snapshot})
+	}
 }
 
 // requestStopLocked asks the run loop to stop the instance; the first reason

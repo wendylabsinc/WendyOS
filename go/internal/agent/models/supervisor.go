@@ -21,6 +21,7 @@ const (
 	defaultMaxRunning = 2
 	cameraTimeout     = 10 * time.Second
 	removeTimeout     = 30 * time.Second
+	leaseGrace        = 60 * time.Second
 )
 
 // Config holds a Supervisor's dependencies.
@@ -172,6 +173,7 @@ func (s *Supervisor) Start(ctx context.Context, modelID, cameraSourceID string) 
 
 	inst.mu.Lock()
 	inst.node = node
+	s.startGraceLocked(inst) // no watch yet: stop unless one attaches
 	info := inst.infoLocked()
 	inst.mu.Unlock()
 	close(inst.admitted)
@@ -226,6 +228,7 @@ func (s *Supervisor) newInstance(m Model, v Variant, camera string) *instance {
 		runDir: filepath.Join(s.cfg.Root, "run", id),
 		ctx:    ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}),
 		admitted: make(chan struct{}),
+		watches:  map[string]*Watch{},
 		state:    StatePreparing, detail: "starting",
 	}
 }
@@ -278,12 +281,19 @@ func (s *Supervisor) List() []InstanceInfo {
 // ends that watch, and stops the instance if it was the last. When the
 // instance stops, Stop waits for its removal and returns the final state.
 func (s *Supervisor) Stop(ctx context.Context, instanceID, watchID string) (InstanceInfo, error) {
+	if watchID != "" {
+		inst, stopping, err := s.detach(instanceID, watchID, true)
+		if err != nil {
+			return InstanceInfo{}, err
+		}
+		if !stopping {
+			return inst.info(), nil
+		}
+		return s.awaitRemoval(ctx, inst)
+	}
 	inst, err := s.lookup(instanceID)
 	if err != nil {
 		return InstanceInfo{}, err
-	}
-	if watchID != "" {
-		return inst.info(), fmt.Errorf("%w %q", ErrUnknownWatch, watchID)
 	}
 	inst.mu.Lock()
 	inst.requestStopLocked("stopped")
@@ -343,5 +353,91 @@ func (s *Supervisor) PublishApplicationRecord(appID string, rec data.Application
 			return
 		}
 		s.handleStatus(inst, st)
+	}
+}
+
+// Watch attaches a watch to a live instance. It returns the watch, the
+// instance snapshot, and the sequence of the instance's newest event, which a
+// client passes back as AfterSequence when it re-attaches.
+func (s *Supervisor) Watch(req WatchRequest) (*Watch, InstanceInfo, uint64, error) {
+	inst, err := s.lookup(req.InstanceID)
+	if err != nil {
+		return nil, InstanceInfo{}, 0, err
+	}
+	select {
+	case <-inst.admitted:
+	default:
+		// Start has not settled the camera yet, so the instance may never run.
+		return nil, InstanceInfo{}, 0, fmt.Errorf("%w %q", ErrUnknownInstance, req.InstanceID)
+	}
+	if err := inst.model.checkFilter(req.Filter); err != nil {
+		return nil, InstanceInfo{}, 0, err
+	}
+	ch := make(chan WatchMessage, watchBuffer)
+	w := &Watch{ID: newID("w-"), InstanceID: inst.id, Label: req.Label, C: ch, c: ch, filter: req.Filter}
+
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	if inst.ctx.Err() != nil {
+		return nil, InstanceInfo{}, 0, fmt.Errorf("%w %q", ErrUnknownInstance, req.InstanceID)
+	}
+	inst.watches[w.ID] = w
+	s.cancelGraceLocked(inst)
+	return w, inst.infoLocked(), 0, nil
+}
+
+// Detach ends a watch whose client went away. The instance stays for
+// leaseGrace so the client can re-attach. Unknown ids are ignored.
+func (s *Supervisor) Detach(instanceID, watchID string) {
+	_, _, _ = s.detach(instanceID, watchID, false)
+}
+
+// detach ends one watch. When it was the last, an explicit detach stops the
+// instance at once and a lost client starts the grace period. It reports
+// whether the instance is now stopping.
+func (s *Supervisor) detach(instanceID, watchID string, explicit bool) (*instance, bool, error) {
+	inst, err := s.lookup(instanceID)
+	if err != nil {
+		return nil, false, err
+	}
+	inst.mu.Lock()
+	defer inst.mu.Unlock()
+	w := inst.watches[watchID]
+	if w == nil {
+		return inst, false, fmt.Errorf("%w %q", ErrUnknownWatch, watchID)
+	}
+	delete(inst.watches, watchID)
+	w.end(nil)
+	if len(inst.watches) > 0 {
+		return inst, false, nil
+	}
+	if explicit {
+		inst.requestStopLocked("stopped by its last watcher")
+		return inst, true, nil
+	}
+	s.startGraceLocked(inst)
+	return inst, false, nil
+}
+
+// startGraceLocked stops the instance unless a watch attaches within
+// leaseGrace. Caller holds inst.mu.
+func (s *Supervisor) startGraceLocked(inst *instance) {
+	s.cancelGraceLocked(inst)
+	gen := inst.graceGen
+	inst.grace = s.clock.AfterFunc(leaseGrace, func() {
+		inst.mu.Lock()
+		defer inst.mu.Unlock()
+		if inst.graceGen == gen && len(inst.watches) == 0 {
+			inst.requestStopLocked("no watchers for 60 s")
+		}
+	})
+}
+
+// cancelGraceLocked drops a pending lease expiry. Caller holds inst.mu.
+func (s *Supervisor) cancelGraceLocked(inst *instance) {
+	inst.graceGen++
+	if inst.grace != nil {
+		inst.grace.Stop()
+		inst.grace = nil
 	}
 }
