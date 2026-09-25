@@ -1438,3 +1438,74 @@ func TestSupportedInstallMode(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckImageFitsDrive(t *testing.T) {
+	const gb = int64(1_000_000_000)
+	sd8 := drive{Name: "SD Card", DevicePath: "/dev/sdb", SizeBytes: 7_948_206_080}
+	tests := []struct {
+		name      string
+		imageSize int64
+		d         drive
+		wantErr   bool
+	}{
+		{"image larger than drive", 18_165_548_032, sd8, true},
+		{"image one byte too large", sd8.SizeBytes + 1, sd8, true},
+		{"image exactly drive size", sd8.SizeBytes, sd8, false},
+		{"image smaller than drive", 4 * gb, sd8, false},
+		{"unknown image size", 0, sd8, false},
+		{"unknown drive size", 18 * gb, drive{DevicePath: "/dev/sdb"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkImageFitsDrive(tt.imageSize, tt.d)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("checkImageFitsDrive(%d, %d) = %v, wantErr %v", tt.imageSize, tt.d.SizeBytes, err, tt.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "/dev/sdb") {
+				t.Errorf("error %q does not name the drive", err)
+			}
+		})
+	}
+}
+
+func TestPreflightImageFits(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	const imageSize = 18_165_548_032
+	bmapXML := fmt.Sprintf(`<bmap version="2.0"><ImageSize>%d</ImageSize><BlockSize>4096</BlockSize>`+
+		`<ChecksumType>sha256</ChecksumType><BlockMap><Range chksum="ab">0</Range></BlockMap></bmap>`, imageSize)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/image.bmap" {
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, bmapXML)
+	}))
+	defer srv.Close()
+
+	small := drive{Name: "SD Card", DevicePath: "/dev/sdb", SizeBytes: 7_948_206_080}
+	large := drive{Name: "SD Card", DevicePath: "/dev/sdb", SizeBytes: 31_914_983_424}
+	tests := []struct {
+		name    string
+		bmapURL string
+		d       drive
+		noBmap  bool
+		wantErr bool
+	}{
+		{"drive too small", srv.URL + "/image.bmap", small, false, true},
+		{"drive large enough", srv.URL + "/image.bmap", large, false, false},
+		{"no-bmap skips the check", srv.URL + "/image.bmap", small, true, false},
+		{"no bmap published", "", small, false, false},
+		{"bmap fetch fails", srv.URL + "/missing.bmap", small, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			img := &imageInfo{BmapURL: tt.bmapURL}
+			err := preflightImageFits("test-device", "9.9.9", "sd", img, tt.d, tt.noBmap)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("preflightImageFits() = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
