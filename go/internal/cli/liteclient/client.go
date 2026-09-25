@@ -112,6 +112,7 @@ type WendyLiteClient struct {
 	requestIdGen        atomic.Uint32
 	eventIdGen          atomic.Uint32
 	peerProtocolVersion protocolVersion
+	peerCert            *x509.Certificate // set by a verified connect; see PeerCertificate
 
 	closeOnce sync.Once
 	closeErr  error
@@ -142,6 +143,14 @@ func (c *WendyLiteClient) Done() <-chan struct{} {
 	return c.done
 }
 
+// PeerCertificate returns the device's leaf certificate, or nil when the
+// connection did not verify it. Only ConnectWithMutualAuthentication and
+// ConnectViaBLEWithMutualAuthentication verify it; insecure, serial and
+// cloud-tunnel connections return nil.
+func (c *WendyLiteClient) PeerCertificate() *x509.Certificate {
+	return c.peerCert
+}
+
 func (c *WendyLiteClient) ConnectInsecure(address string) error {
 	conn, err := tls.Dial("tcp", address, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec — device uses self-signed certs
 	if err != nil {
@@ -161,6 +170,7 @@ func (c *WendyLiteClient) ConnectInsecure(address string) error {
 func (c *WendyLiteClient) ConnectWithMutualAuthentication(address string, cert tls.Certificate, rootCAs x509.CertPool) error {
 	// Verify the certificate chain against our root CAs but skip hostname
 	// checking — devices on a local network don't have SANs.
+	var verifiedLeaf *x509.Certificate
 	tlsCfg := &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		MinVersion:         tls.VersionTLS12,
@@ -184,6 +194,7 @@ func (c *WendyLiteClient) ConnectWithMutualAuthentication(address string, cert t
 			if _, err := certs[0].Verify(opts); err != nil {
 				return fmt.Errorf("server certificate verification failed: %w", err)
 			}
+			verifiedLeaf = certs[0]
 			return nil
 		},
 	}
@@ -198,6 +209,7 @@ func (c *WendyLiteClient) ConnectWithMutualAuthentication(address string, cert t
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}
+	c.peerCert = verifiedLeaf
 	c.startReadLoop()
 	return nil
 }

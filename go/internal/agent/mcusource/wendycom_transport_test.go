@@ -2,7 +2,10 @@ package mcusource
 
 import (
 	"context"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -27,6 +31,7 @@ func wholeFrame(channelID, seq uint32) *sensorlinkpb.SensorData {
 // synchronously, so a listener that blocks would hang the test.
 type fakeWendycomClient struct {
 	manifest *sensorlinkpb.SensorManifest
+	peerCert *x509.Certificate
 
 	mu           sync.Mutex
 	listeners    map[int]func(*sensorlinkpb.SensorData)
@@ -47,6 +52,7 @@ type fakeWendycomClient struct {
 func newFakeWendycomClient() *fakeWendycomClient {
 	return &fakeWendycomClient{
 		manifest:  &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
+		peerCert:  assetCert(7),
 		listeners: make(map[int]func(*sensorlinkpb.SensorData)),
 		done:      make(chan struct{}),
 	}
@@ -123,6 +129,8 @@ func (c *fakeWendycomClient) dropOff() { c.dropOnce.Do(func() { close(c.done) })
 
 func (c *fakeWendycomClient) Done() <-chan struct{} { return c.done }
 
+func (c *fakeWendycomClient) PeerCertificate() *x509.Certificate { return c.peerCert }
+
 func (c *fakeWendycomClient) Close() error {
 	c.mu.Lock()
 	c.closes++
@@ -167,7 +175,7 @@ func TestWendyComTransportReportsBadClientCertificate(t *testing.T) {
 
 func newTestWendycomTransport(logger *zap.Logger, c *fakeWendycomClient) (*wendycomTransport, *atomic.Int32) {
 	var connects atomic.Int32
-	return &wendycomTransport{logger: logger, connect: func() (wendycomClient, error) {
+	return &wendycomTransport{logger: logger, sourceAssetID: 7, connect: func() (wendycomClient, error) {
 		connects.Add(1)
 		return c, nil
 	}}, &connects
@@ -406,7 +414,7 @@ func TestWendycomTransportConnectBoundedByContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		c := newFakeWendycomClient()
 		release := make(chan struct{})
-		tr := &wendycomTransport{logger: zap.NewNop(), connect: func() (wendycomClient, error) {
+		tr := &wendycomTransport{logger: zap.NewNop(), sourceAssetID: 7, connect: func() (wendycomClient, error) {
 			<-release // a TCP dial to an address that never answers
 			return c, nil
 		}}
@@ -425,4 +433,76 @@ func TestWendycomTransportConnectBoundedByContext(t *testing.T) {
 			t.Fatalf("late connection closed %d times, want 1", n)
 		}
 	})
+}
+
+// certWithURI is a board certificate carrying one SAN URI. certAssetID only
+// reads the identity fields, so the certificate needs no key or signature.
+func certWithURI(raw string) *x509.Certificate {
+	u, err := url.Parse(raw)
+	if err != nil {
+		panic(err)
+	}
+	return &x509.Certificate{URIs: []*url.URL{u}}
+}
+
+// assetCert is the certificate os_provision mints for a board.
+func assetCert(assetID int32) *x509.Certificate {
+	return certWithURI(certs.AssetURN(1, assetID))
+}
+
+func TestCertAssetID(t *testing.T) {
+	const tenant = "123e4567-e89b-12d3-a456-426614174000"
+	for _, tc := range []struct {
+		name   string
+		leaf   *x509.Certificate
+		want   int32
+		wantOK bool
+	}{
+		{"no certificate", nil, 0, false},
+		{"legacy URN", assetCert(7), 7, true},
+		{"legacy CommonName", &x509.Certificate{Subject: pkix.Name{CommonName: "sh/wendy/1/7"}}, 7, true},
+		{"SPIFFE asset", certWithURI(certs.AssetSPIFFEURI(tenant, 7)), 7, true},
+		{"user", certWithURI("urn:wendy:org:1:user:7"), 0, false},
+		{"device principal", certWithURI("spiffe://wendy.sh/tenant/" + tenant + "/device/board-a"), 0, false},
+		{"no identity", &x509.Certificate{}, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, ok := certAssetID(tc.leaf); got != tc.want || ok != tc.wantOK {
+				t.Fatalf("certAssetID: got %d, %v, want %d, %v", got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestWendycomTransportRefusesWrongBoard(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cert *x509.Certificate
+		want string
+	}{
+		{"another asset", assetCert(8), "is asset 8, want 7"},
+		{"no identity", nil, "no asset identity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFakeWendycomClient()
+			c.peerCert = tc.cert
+			tr, connects := newTestWendycomTransport(zap.NewNop(), c)
+			defer tr.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			for i := 1; i <= 2; i++ {
+				if _, err := tr.FetchManifest(ctx); err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("FetchManifest %d: got %v, want an error containing %q", i, err, tc.want)
+				}
+			}
+			// A refused connection is closed and not kept, so each call dials again.
+			if n := connects.Load(); n != 2 {
+				t.Fatalf("connected %d times, want 2", n)
+			}
+			if n := c.closeCount(); n != 2 {
+				t.Fatalf("refused connection closed %d times, want 2", n)
+			}
+		})
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -34,6 +35,7 @@ type wendycomClient interface {
 	SensorLinkSubscribe(channelIDs []uint32, timeout time.Duration) error
 	SensorLinkUnsubscribe(channelIDs []uint32, timeout time.Duration) error
 	AddSensorDataListener(fn func(*sensorlinkpb.SensorData)) func()
+	PeerCertificate() *x509.Certificate
 	Done() <-chan struct{}
 	Close() error
 }
@@ -43,8 +45,9 @@ type wendycomClient interface {
 // both the manifest and the stream: a WendyCom handshake is costly on an
 // ESP32.
 type wendycomTransport struct {
-	logger  *zap.Logger
-	connect func() (wendycomClient, error)
+	logger        *zap.Logger
+	connect       func() (wendycomClient, error)
+	sourceAssetID int32 // the asset the board's certificate must name
 
 	mu     sync.Mutex
 	client wendycomClient // nil until the first successful connect
@@ -60,11 +63,10 @@ type wendycomTransport struct {
 // as the client certificate and its issuer chain as the roots the board's
 // certificate must chain to.
 //
-// TODO: ConnectWithMutualAuthentication only checks that the board's
-// certificate chains to the agent's CA, not that it belongs to
-// p.SourceAssetID, and the manifest carries no asset ID, so nothing ties the
-// board to the pairing. Pin the asset in the handshake, as mtlsDialer does
-// for the other transports.
+// ConnectWithMutualAuthentication only checks that the board's certificate
+// chains to the agent's CA, so the transport also refuses a board whose
+// certificate does not name p.SourceAssetID, as mtlsDialer does for the other
+// transports.
 func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
 	if certPEM == "" || keyPEM == "" {
 		return nil, errors.New("mcusource: agent has no mTLS identity (not provisioned)")
@@ -73,7 +75,8 @@ func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, 
 		return nil, errors.New("mcusource: agent has no CA chain to verify a Wendy Lite board against")
 	}
 	return &wendycomTransport{
-		logger: logger.With(zap.Int32("source", p.SourceAssetID), zap.String("addr", addr)),
+		logger:        logger.With(zap.Int32("source", p.SourceAssetID), zap.String("addr", addr)),
+		sourceAssetID: p.SourceAssetID,
 		connect: func() (wendycomClient, error) {
 			cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
 			if err != nil {
@@ -93,11 +96,41 @@ func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, 
 	}, nil
 }
 
+// certAssetID returns the asset ID a board's certificate names, read the same
+// way mtls.NewClientTLSConfigExpectingPeer reads a peer agent's.
+func certAssetID(leaf *x509.Certificate) (int32, bool) {
+	if leaf == nil {
+		return 0, false
+	}
+	ident, found, err := certs.IdentityFromCert(leaf)
+	if err != nil || !found || ident.EntityType != certs.EntityAsset {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(ident.EntityID, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int32(id), true
+}
+
+// checkPeer refuses a connection to any board but the paired one.
+func (t *wendycomTransport) checkPeer(c wendycomClient) error {
+	id, ok := certAssetID(c.PeerCertificate())
+	if !ok {
+		return errors.New("mcusource: wendycom board presented no asset identity")
+	}
+	if id != t.sourceAssetID {
+		return fmt.Errorf("mcusource: wendycom board is asset %d, want %d", id, t.sourceAssetID)
+	}
+	return nil
+}
+
 // clientFor returns the transport's connection, opening it on first use.
 // The client's connect methods take no context and their TCP dial has no
 // timeout, so ctx bounds the wait here instead: a dead address would
 // otherwise hold up Runner.Stop for minutes. A connect that finishes after
-// ctx gave up is closed rather than leaked.
+// ctx gave up is closed rather than leaked. A connection to the wrong board is
+// closed and not kept, so the next call dials again.
 func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -123,6 +156,10 @@ func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, erro
 	case r := <-done:
 		if r.err != nil {
 			return nil, r.err
+		}
+		if err := t.checkPeer(r.c); err != nil {
+			r.c.Close()
+			return nil, err
 		}
 		t.client = r.c
 		return r.c, nil
