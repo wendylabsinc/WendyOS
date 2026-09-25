@@ -178,11 +178,17 @@ func (c *Client) ListHosts(ctx context.Context) ([]string, error) {
 	}
 	var ids []string
 	for _, ctr := range ctrs {
-		labels, err := ctr.Labels(ctx)
+		// Containers already returned this container's metadata; re-read it
+		// from that cached record instead of an extra per-container RPC. A
+		// transient error here must fail the whole list, not silently drop a
+		// host: CleanupOrphans trusts ListHosts to name every model host
+		// container so it can delete them all at boot, and a skipped host
+		// would keep running, invisible to app listings by design.
+		info, err := ctr.Info(ctx, containerd.WithoutRefreshedMetadata)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("reading labels for model host %s: %w", ctr.ID(), err)
 		}
-		if id := labels[labelKeyModelInstance]; id != "" {
+		if id := info.Labels[labelKeyModelInstance]; id != "" {
 			ids = append(ids, id)
 		}
 	}
