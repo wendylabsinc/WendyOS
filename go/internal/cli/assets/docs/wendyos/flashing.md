@@ -39,6 +39,16 @@ If a bmap-accelerated write fails — for example due to a checksum mismatch or 
 
 A failure that occurs *during* the fallback write (short write, decode error, or a non-zero helper exit) is fatal: the helper's stderr is surfaced as the error.
 
+### Drive-size check
+
+`wendy install` refuses a target drive that is smaller than the uncompressed image, since a truncated image never boots:
+
+```
+sdb (/dev/sdb) is too small for this image: it holds 7.9 GB but the image needs 18.2 GB; use a larger SD card or drive
+```
+
+When a block map is published, its image size is checked before the Wi-Fi, device-name and pre-enrollment prompts and before the download, so an undersized drive is rejected up front. The check runs again before writing, using the image actually written. It is skipped when the drive or image size cannot be determined.
+
 ### Image formats
 
 Both raw (`.img`) and gzip-compressed (`.img.gz`) images are supported, in addition to zip archives. Gzip content is detected by inspecting the file's magic bytes rather than its extension, so a cached or renamed image without a `.gz` suffix is still handled correctly. Gzip images are decompressed on the fly and streamed straight to the drive — the full decompressed image is never written to a temporary file.
