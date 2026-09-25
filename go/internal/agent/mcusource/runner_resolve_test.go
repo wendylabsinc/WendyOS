@@ -69,9 +69,7 @@ func TestResolveAllInterfacesOnLANOnly(t *testing.T) {
 
 // TestResolveWendyLiteOnItsOwnService asserts "wendycom" pairings resolve
 // through the _wendy-lite._tcp browse — a Wendy Lite board never appears on
-// _wendyos._udp — dialing the port the board advertises. The insecure
-// WendyCom connect presents no client certificate, so a board advertising
-// mtls=false is still a match.
+// _wendyos._udp — dialing the port the board advertises.
 func TestResolveWendyLiteOnItsOwnService(t *testing.T) {
 	origDiscover := discoverFn
 	t.Cleanup(func() { discoverFn = origDiscover })
@@ -79,11 +77,22 @@ func TestResolveWendyLiteOnItsOwnService(t *testing.T) {
 		t.Fatal("wendycom resolve browsed _wendyos._udp")
 		return nil, nil
 	}
-	stubContinuousBrowse(t, wendyLiteSighting(41, "10.0.0.4", true), wendyLiteSighting(42, "10.0.0.5", false))
+	stubContinuousBrowse(t, wendyLiteSighting(41, "10.0.0.4", true), wendyLiteSighting(42, "10.0.0.5", true))
 
 	got, ok := resolveLANAddrs(context.Background(), 42, "wendycom")
 	if want := []string{"10.0.0.5:5054"}; !ok || !slices.Equal(got, want) {
 		t.Fatalf("got %v, ok=%v, want %v", got, ok, want)
+	}
+}
+
+// TestResolveWendyLiteRequiresMTLS asserts a board advertising mtls=false is
+// not dialed: the WendyCom transport connects with mutual TLS, which such a
+// board does not offer.
+func TestResolveWendyLiteRequiresMTLS(t *testing.T) {
+	stubContinuousBrowse(t, wendyLiteSighting(42, "10.0.0.5", false))
+
+	if got, ok := resolveLANAddrs(context.Background(), 42, "wendycom"); ok {
+		t.Fatalf("got %v, ok=true, want no address for a board without mTLS", got)
 	}
 }
 
