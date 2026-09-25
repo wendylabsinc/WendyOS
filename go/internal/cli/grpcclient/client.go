@@ -91,6 +91,7 @@ type AgentConnection struct {
 	SensorPairingService agentpbv2.WendySensorPairingServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
 	DataService          agentpbv2.DataServiceClient
+	ModelService         agentpbv2.WendyModelServiceClient
 	// cachedAgentVersion retains a successful liveness probe performed while
 	// establishing this connection. Direct-agent connects already call
 	// GetAgentVersion to force gRPC's lazy dial and authenticate the peer; run
@@ -578,6 +579,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		SensorPairingService: agentpbv2.NewWendySensorPairingServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
 		DataService:          agentpbv2.NewDataServiceClient(conn),
+		ModelService:         agentpbv2.NewWendyModelServiceClient(conn),
 	}
 }
 

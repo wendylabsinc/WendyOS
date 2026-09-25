@@ -100,15 +100,26 @@ wendy chat (TUI) ── MCP (stdio) ──▶ wendy mcp serve ── gRPC / mTLS
 The service lives in a new file, `Proto/wendy/agent/services/v2/model_service.proto`, in package `wendy.agent.services.v2` with `go_package …/agentpb/v2;agentpbv2`. It is added to `V2_AGENT_PROTOS` in `go/scripts/generate-proto.sh`. It is not added to the Swift proto list in this slice.
 
 ```proto
+// WendyModelService runs catalog models on the device's cameras for clients
+// such as wendy chat (specs/2026-09-25-model-watch-design.md). An instance
+// lives while a WatchModel stream holds it, plus 60 s for reconnects.
 service WendyModelService {
+  // ListCatalog lists the models this device can run and the cameras they can watch.
   rpc ListCatalog(ListModelCatalogRequest) returns (ListModelCatalogResponse);
+  // StartModel starts a model on a camera, or returns the instance already
+  // doing so. It returns at once; watch the instance for progress.
   rpc StartModel(StartModelRequest) returns (StartModelResponse);
+  // WatchModel streams an instance's state and filtered events, and holds the
+  // instance alive while the stream is open.
   rpc WatchModel(WatchModelRequest) returns (stream ModelWatchMessage);
   rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  // StopModel detaches one watch, stopping the instance if it was the last,
+  // or with no watch_id stops the instance outright.
   rpc StopModel(StopModelRequest) returns (StopModelResponse);
 }
 
 message ListModelCatalogRequest {}
+
 message ListModelCatalogResponse {
   string catalog_version = 1;
   repeated CatalogModel models = 2;
@@ -116,20 +127,24 @@ message ListModelCatalogResponse {
   uint32 max_running = 4;
   uint32 running = 5;
 }
+
 message CatalogModel {
   string id = 1;                      // "coco-detector"
   string description = 2;
   string kind = 3;                    // "detector"
-  repeated string labels = 4;         // class names
-  CatalogVariant variant = 5;         // chosen for this device; unset if none fits
+  repeated string labels = 4;         // the classes it reports
+  CatalogVariant variant = 5;         // chosen for this device; unset when none fits
   string unavailable_reason = 6;      // set when variant is unset
 }
+
 message CatalogVariant {
-  string id = 1;                      // e.g. "yolox-s-tensorrt"
+  string id = 1;
   string engine = 2;                  // "tensorrt" | "onnxruntime" | "qnn"
-  uint64 download_bytes = 3;          // 0 when the image and file are cached
-  bool needs_engine_build = 4;        // no cached engine for this device yet
+  uint64 download_bytes = 3;          // model file bytes a first start downloads; 0 when cached
+  bool needs_engine_build = 4;        // no engine built for this device yet
+  bool image_cached = 5;              // the host image is already on the device
 }
+
 message ModelCamera {
   string source_id = 1;               // "v4l2:/dev/video0"
   string name = 2;
@@ -139,9 +154,26 @@ message StartModelRequest {
   string model_id = 1;
   string camera_source_id = 2;
 }
+
 message StartModelResponse {
   ModelInstance instance = 1;
-  bool reused = 2;                    // an identical instance was already running
+  bool reused = 2;                    // an instance already ran this model on this camera
+}
+
+enum ModelState {
+  MODEL_STATE_UNSPECIFIED = 0;
+  MODEL_STATE_PREPARING = 1;          // pulling, downloading, or waiting for or building an engine
+  MODEL_STATE_STARTING = 2;
+  MODEL_STATE_READY = 3;
+  MODEL_STATE_RESTARTING = 4;
+  MODEL_STATE_FAILED = 5;
+  MODEL_STATE_STOPPED = 6;
+}
+
+message ModelStats {
+  float processed_fps = 1;
+  float latency_p50_ms = 2;
+  uint64 frames_skipped = 3;
 }
 
 message ModelInstance {
@@ -151,48 +183,38 @@ message ModelInstance {
   string engine = 4;
   string camera_source_id = 5;
   ModelState state = 6;
-  string state_detail = 7;            // "building TensorRT engine", a failure reason, …
+  string state_detail = 7;            // what it is doing, or why it failed
   uint32 watchers = 8;
   repeated string watch_labels = 9;
-  google.protobuf.Timestamp started_at = 10;
-  ModelStats stats = 11;              // from the latest heartbeat
-  string file_sha256 = 12;            // what is running (WDY-3131 identity)
-}
-enum ModelState {
-  MODEL_STATE_UNSPECIFIED = 0;
-  MODEL_STATE_PREPARING = 1;          // pulling, downloading, waiting for or building an engine
-  MODEL_STATE_STARTING = 2;
-  MODEL_STATE_READY = 3;
-  MODEL_STATE_RESTARTING = 4;
-  MODEL_STATE_FAILED = 5;
-  MODEL_STATE_STOPPED = 6;
-}
-message ModelStats {
-  float processed_fps = 1;
-  float latency_p50_ms = 2;
-  uint64 frames_skipped = 3;
+  int64 started_unix_nanos = 10;
+  ModelStats stats = 11;              // from the host's latest heartbeat
+  string file_sha256 = 12;            // the model file this instance runs
 }
 
 message WatchModelRequest {
   string instance_id = 1;
-  string label = 2;                   // "front door"
-  repeated string classes = 3;        // empty = all
-  float min_confidence = 4;           // 0 = the host's floor
-  repeated string event_types = 5;    // "entered", "left"; empty = both
-  uint64 after_sequence = 6;          // replay ring entries after this sequence
+  string label = 2;                   // what the watcher calls this watch, e.g. "front door"
+  repeated string classes = 3;        // empty: every class
+  float min_confidence = 4;           // 0: everything the host reports
+  repeated string event_types = 5;    // "entered", "left"; empty: both
+  uint64 after_sequence = 6;          // replay retained events after this; 0 replays nothing
 }
+
 message ModelWatchMessage {
   oneof message {
     WatchStarted started = 1;         // always first
-    ModelInstance status = 2;         // state changes and heartbeats
+    ModelInstance status = 2;         // state changes and heartbeats; the last is final
     ModelEvent event = 3;
-    ModelGap gap = 4;                 // requested events already left the ring
+    ModelGap gap = 4;                 // events this watch did not receive
   }
 }
+
 message WatchStarted {
   string watch_id = 1;
   ModelInstance instance = 2;
+  uint64 last_sequence = 3;           // newest event number; pass it as after_sequence to resume
 }
+
 message ModelEvent {
   uint64 sequence = 1;                // per instance, assigned by the agent
   string type = 2;                    // "entered" | "left"
@@ -201,21 +223,39 @@ message ModelEvent {
   uint64 track_id = 5;
   BoundingBox box = 6;                // normalized to the frame, 0..1
   string source_id = 7;
-  uint64 sample_id = 8;               // two-plane identity of the triggering frame
-  google.protobuf.Timestamp time = 9;
+  uint64 sample_id = 8;               // two-plane identity of the frame that triggered it
+  int64 time_unix_nanos = 9;          // when the agent received it
 }
-message BoundingBox { float x = 1; float y = 2; float width = 3; float height = 4; }
-message ModelGap { uint64 first_missing = 1; uint64 last_missing = 2; }
+
+message BoundingBox {
+  float x = 1;
+  float y = 2;
+  float width = 3;
+  float height = 4;
+}
+
+message ModelGap {
+  uint64 first_missing = 1;
+  uint64 last_missing = 2;
+}
 
 message ListModelsRequest {}
-message ListModelsResponse { repeated ModelInstance instances = 1; }
+
+message ListModelsResponse {
+  repeated ModelInstance instances = 1;
+}
 
 message StopModelRequest {
   string instance_id = 1;
-  string watch_id = 2;                // detach this watch; empty = stop the instance outright
+  string watch_id = 2;                // detach this watch; empty stops the instance outright
 }
-message StopModelResponse { ModelInstance instance = 1; }
+
+message StopModelResponse {
+  ModelInstance instance = 1;
+}
 ```
+
+Times are `int64` Unix nanoseconds, as in every v2 agent proto.
 
 **Semantics**
 
