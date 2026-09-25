@@ -38,7 +38,7 @@ func writeT234ManifestFixture(t *testing.T, schema int) string {
 		files[rel] = map[string]any{"sha256": sum, "size": info.Size()}
 	}
 	m := map[string]any{
-		"schema": schema, "family": "t234", "protocol": T234ProtocolMassStorage,
+		"schema": schema, "family": FamilyT234, "protocol": T234ProtocolMassStorage,
 		"usb_product_id": "0x7023", "wendyos_version": "0.18.0", "rootfs_device": "nvme0n1",
 		"target":     map[string]any{"device": "jetson-orin-nano", "storage": "nvme", "module_id": "3767", "module_sku": "0005", "carrier_id": "3768", "carrier_sku": "0000"},
 		"rcm_phases": []any{[]any{map[string]any{"type": "bct_br", "file": "stage1/br.bct"}}, []any{map[string]any{"type": "bct_mem", "file": "stage1/mem.bct"}, map[string]any{"type": "blob", "file": "stage1/blob.bin"}}},
@@ -54,13 +54,20 @@ func writeT234ManifestFixture(t *testing.T, schema int) string {
 
 func TestT234SchemaV1Rejected(t *testing.T) {
 	_, err := open(writeT234ManifestFixture(t, 1))
-	if err == nil || !strings.Contains(err.Error(), "unsafe/unsupported") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("schema-v1 error = %v", err)
 	}
 }
 
+func TestT234NewerSchemaAsksForUpdate(t *testing.T) {
+	_, err := open(writeT234ManifestFixture(t, T234Schema+1))
+	if err == nil || !strings.Contains(err.Error(), "update wendy") {
+		t.Fatalf("newer schema error = %v", err)
+	}
+}
+
 func TestT234SchemaV2VerifiesEveryFile(t *testing.T) {
-	root := writeT234ManifestFixture(t, 2)
+	root := writeT234ManifestFixture(t, T234Schema)
 	fp, err := open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +101,7 @@ func TestT234SchemaV2HashesControlFilesSizeChecksImages(t *testing.T) {
 	}
 
 	// A same-size edit to a stage-1 control file is caught by its checksum.
-	root := writeT234ManifestFixture(t, 2)
+	root := writeT234ManifestFixture(t, T234Schema)
 	fp, err := open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +112,7 @@ func TestT234SchemaV2HashesControlFilesSizeChecksImages(t *testing.T) {
 	}
 
 	// A same-size edit to a staged partition image is deliberately not hashed.
-	root = writeT234ManifestFixture(t, 2)
+	root = writeT234ManifestFixture(t, T234Schema)
 	fp, err = open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +124,7 @@ func TestT234SchemaV2HashesControlFilesSizeChecksImages(t *testing.T) {
 }
 
 func TestT234SchemaV2RejectsUnsupportedTargetMapping(t *testing.T) {
-	root := writeT234ManifestFixture(t, 2)
+	root := writeT234ManifestFixture(t, T234Schema)
 	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +144,7 @@ func TestT234SchemaV2RejectsUnsupportedTargetMapping(t *testing.T) {
 }
 
 func TestT234SchemaV2RejectsUnhashedStagedImage(t *testing.T) {
-	root := writeT234ManifestFixture(t, 2)
+	root := writeT234ManifestFixture(t, T234Schema)
 	if err := os.WriteFile(filepath.Join(root, "stage2/flash/unhashed.img"), []byte("untrusted"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +161,7 @@ func TestResolveRecoveryRejectsVersionMismatch(t *testing.T) {
 	cache := t.TempDir()
 	ref := RecoveryRef{Device: "jetson-orin-nano", Storage: "nvme", Version: "0.19.0"}
 	dest := RecoveryExtractedCachePath(cache, ref)
-	if err := os.Rename(writeT234ManifestFixture(t, 2), dest); err != nil {
+	if err := os.Rename(writeT234ManifestFixture(t, T234Schema), dest); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ResolveRecovery(cache, ref); err == nil || !strings.Contains(err.Error(), "version") {
@@ -177,7 +184,7 @@ func TestUntaggedThorSchemaV1StillAccepted(t *testing.T) {
 // module SKU enumerates its own recovery PID (an Orin Nano pack is 0x7523, not
 // AGX's 0x7023) — while junk and non-T234 PIDs stay rejected.
 func TestT234ManifestUSBProductIDAcceptsFamily(t *testing.T) {
-	root := writeT234ManifestFixture(t, 2)
+	root := writeT234ManifestFixture(t, T234Schema)
 	manifestPath := filepath.Join(root, "manifest.json")
 	setPID := func(pid string) {
 		t.Helper()
@@ -212,18 +219,18 @@ func TestT234ManifestUSBProductIDAcceptsFamily(t *testing.T) {
 	}
 }
 
-func TestT234LegacyProtocolRejectedWithGuidance(t *testing.T) {
+func TestT234LegacyFamilyRejectedWithGuidance(t *testing.T) {
 	root := writeT234ManifestFixture(t, 2)
 	path := filepath.Join(root, "manifest.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data = []byte(strings.Replace(string(data), T234ProtocolMassStorage, t234ProtocolLegacy, 1))
+	data = []byte(strings.Replace(string(data), `"family":"`+FamilyT234+`"`, `"family":"`+familyT234Legacy+`"`, 1))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := open(root); err == nil || !strings.Contains(err.Error(), "install a newer WendyOS version") {
-		t.Fatalf("legacy protocol error = %v", err)
+		t.Fatalf("legacy family error = %v", err)
 	}
 }

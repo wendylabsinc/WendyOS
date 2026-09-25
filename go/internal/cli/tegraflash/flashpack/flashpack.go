@@ -35,19 +35,19 @@ import (
 
 // SupportedSchema is the newest tagged flashpack schema this wendy understands.
 // The existing untagged Thor schema remains version 1; T234 is accepted only as
-// tagged schema 2 because v1 has no target-identity contract.
-const SupportedSchema = 2
+// tagged schema 3, the single-enumeration flash.
+const SupportedSchema = 3
 
 const (
-	FamilyT234              = "t234"
-	T234Schema              = 2
+	FamilyT234              = "t234-ums"
+	T234Schema              = 3
 	T234ProtocolMassStorage = "usb-mass-storage-v2"
 	t234FlashPackageSize    = 128 << 20
 )
 
-// t234ProtocolLegacy images re-enumerated the flashing gadget for every disk;
-// this wendy only speaks the single-enumeration protocol.
-const t234ProtocolLegacy = "usb-mass-storage-v1"
+// familyT234Legacy images re-enumerated the flashing gadget for every disk.
+// The family moved so that older wendy versions report the new one as too new.
+const familyT234Legacy = "t234"
 
 // ErrNotInCache is returned by Resolve when no extracted tree or .tar.zst for the
 // requested version is present in the cache. The caller may download the artifact
@@ -347,15 +347,18 @@ func isT234RecoveryPIDString(s string) bool {
 }
 
 func validateManifest(m *Manifest) error {
+	if m.Family == familyT234Legacy {
+		return fmt.Errorf("WendyOS %s predates this wendy's Jetson flash protocol; install a newer WendyOS version, or use an older wendy for this one", m.WendyOSVersion)
+	}
 	if m.Family == FamilyT234 {
-		if m.Schema != T234Schema {
-			return fmt.Errorf("T234 flashpack schema %d is unsafe/unsupported (want %d); obtain a schema-v2 recovery artifact", m.Schema, T234Schema)
+		if m.Schema > T234Schema {
+			return fmt.Errorf("flashpack schema %d is newer than this wendy supports (%d); update wendy", m.Schema, T234Schema)
 		}
-		if m.Protocol == t234ProtocolLegacy {
-			return fmt.Errorf("WendyOS %s predates this wendy's Jetson flash protocol; install a newer WendyOS version, or use an older wendy for this one", m.WendyOSVersion)
+		if m.Schema != T234Schema {
+			return fmt.Errorf("T234 flashpack schema %d is unsupported (want %d)", m.Schema, T234Schema)
 		}
 		if m.Protocol != T234ProtocolMassStorage {
-			return fmt.Errorf("T234 flashpack protocol %q is unsupported", m.Protocol)
+			return fmt.Errorf("T234 flashpack protocol %q is unsupported; update wendy", m.Protocol)
 		}
 		if !isT234RecoveryPIDString(m.USBProductID) {
 			return fmt.Errorf("T234 flashpack has unexpected USB product %q", m.USBProductID)
