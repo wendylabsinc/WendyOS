@@ -92,7 +92,7 @@ func (s *VideoService) SetTwoPlaneContainerConsumers(ctx context.Context, contai
 	s.twoPlaneMu.Unlock()
 
 	if !demand {
-		s.stopAllTwoPlane()
+		s.stopTwoPlaneIfUnneeded()
 		return
 	}
 	s.ensureTwoPlaneForLocalCameras(ctx)
@@ -274,6 +274,22 @@ func (s *VideoService) ensureTwoPlaneNode(ctx context.Context, sourceID string, 
 		s.loopback.RemoveAuxNode(nodeNr)
 	}()
 	return nil
+}
+
+// stopTwoPlaneIfUnneeded stops every pump when nothing demands the data
+// path. Callers decide to stop outside twoPlaneMu, so a pin or an entitled
+// container can arrive in between: the decision is re-checked here, and
+// holding twoPlaneStartMu keeps a concurrent acquire from reusing a node
+// this is tearing down (it creates a fresh one once this returns).
+func (s *VideoService) stopTwoPlaneIfUnneeded() {
+	s.twoPlaneStartMu.Lock()
+	defer s.twoPlaneStartMu.Unlock()
+	s.twoPlaneMu.Lock()
+	demand := s.twoPlaneDemand
+	s.twoPlaneMu.Unlock()
+	if !demand {
+		s.stopAllTwoPlane()
+	}
 }
 
 // stopAllTwoPlane cancels every running pump and waits for each to release its

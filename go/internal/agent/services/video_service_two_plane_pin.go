@@ -37,6 +37,6 @@ func (s *VideoService) ReleaseTwoPlaneNode(_ context.Context, owner string) {
 	demand := s.twoPlaneDemand
 	s.twoPlaneMu.Unlock()
 	if !demand {
-		s.stopAllTwoPlane()
+		s.stopTwoPlaneIfUnneeded()
 	}
 }
