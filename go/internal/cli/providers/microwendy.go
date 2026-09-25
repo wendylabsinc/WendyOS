@@ -577,6 +577,13 @@ func (e *AppRequirementsUnsupportedError) Error() string {
 	return fmt.Sprintf("device %s does not support %s", e.Device.DisplayName, e.Missing)
 }
 
+// MissingWendyCoreError lets the CLI offer to configure an ESP-IDF project.
+type MissingWendyCoreError struct{}
+
+func (*MissingWendyCoreError) Error() string {
+	return "this project does not include the wendy_core component; run 'wendy run' interactively to add it, or add it to main/idf_component.yml and call ESP_ERROR_CHECK(wendy_core_init()) first in app_main()"
+}
+
 // buildEspIdf builds an ESP-IDF project with idf.py (via eim) and picks up
 // the firmware binary from the project's build folder. The binary is named
 // after the CMake project() name, which may differ from the app ID.
@@ -626,7 +633,15 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 		return nil, errors.New("Wendy Lite owns the USB Serial/JTAG controller, so the console must not be routed to it — set CONFIG_ESP_CONSOLE_UART_DEFAULT=y and CONFIG_ESP_CONSOLE_SECONDARY_NONE=y in sdkconfig")
 	}
 	if sdkconfig["CONFIG_WENDY_CORE"] != true {
-		return nil, errors.New("this project does not include the wendy_core component — add it to the project's dependencies, then call wendy_core_init() as the very first statement of app_main()")
+		// Some wendy_core versions do not declare CONFIG_WENDY_CORE. The
+		// configured component list still records whether they are linked.
+		hasCore, err := espidftoolchain.HasBuildComponent(projectPath, "wendy_core")
+		if err != nil {
+			return nil, err
+		}
+		if !hasCore {
+			return nil, &MissingWendyCoreError{}
+		}
 	}
 
 	// build the project
