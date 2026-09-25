@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ A model runs while something watches it. 'wendy device model run' watches in
 the foreground; after it exits, the device stops the model a minute later
 unless another client is watching.`,
 	}
-	cmd.AddCommand(newDeviceModelCatalogCmd(), newDeviceModelListCmd(), newDeviceModelStopCmd())
+	cmd.AddCommand(newDeviceModelCatalogCmd(), newDeviceModelRunCmd(), newDeviceModelListCmd(), newDeviceModelStopCmd())
 	return cmd
 }
 
@@ -201,4 +202,119 @@ func shortModelDigest(sha string) string {
 		return sha[:12] + "…"
 	}
 	return sha
+}
+
+func newDeviceModelRunCmd() *cobra.Command {
+	var opts modelRunOptions
+	cmd := &cobra.Command{
+		Use:   "run <model>",
+		Short: "Start a model on a camera and print what it sees until Ctrl+C",
+		Example: `  wendy device model run coco-detector --camera v4l2:/dev/video0 --watch person
+  wendy device model run coco-detector --camera v4l2:/dev/video0 --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if opts.Camera == "" {
+				return errors.New("choose a camera with --camera; `wendy device model catalog` lists them")
+			}
+			opts.Model = args[0]
+			return withModelClient(cmd.Context(), func(client agentpbv2.WendyModelServiceClient) error {
+				return runModelWatch(cmd.Context(), client, cmd.OutOrStdout(), opts)
+			})
+		},
+	}
+	cmd.Flags().StringVar(&opts.Camera, "camera", "", "Camera source to watch, e.g. v4l2:/dev/video0")
+	cmd.Flags().StringSliceVar(&opts.Classes, "watch", nil, "Only report these classes (default: all)")
+	cmd.Flags().Float32Var(&opts.MinConfidence, "min-confidence", 0, "Only report detections at least this confident (0-1)")
+	cmd.Flags().StringVar(&opts.Label, "label", "", "A name for this watch, shown to other clients")
+	return cmd
+}
+
+type modelRunOptions struct {
+	Model, Camera, Label string
+	Classes              []string
+	MinConfidence        float32
+}
+
+// runModelWatch starts the model, watches it until ctx ends or the model
+// stops, then detaches, so the device stops the model unless someone else is
+// watching.
+func runModelWatch(ctx context.Context, client agentpbv2.WendyModelServiceClient, out io.Writer, opts modelRunOptions) error {
+	started, err := client.StartModel(ctx, &agentpbv2.StartModelRequest{ModelId: opts.Model, CameraSourceId: opts.Camera})
+	if err != nil {
+		return modelServiceErr(err)
+	}
+	id := started.GetInstance().GetInstanceId()
+	stream, err := client.WatchModel(ctx, &agentpbv2.WatchModelRequest{
+		InstanceId: id, Label: opts.Label, Classes: opts.Classes, MinConfidence: opts.MinConfidence})
+	if err != nil {
+		return modelServiceErr(err)
+	}
+	var watchID, lastStatusLine string
+	var last *agentpbv2.ModelInstance
+	defer func() {
+		if watchID == "" {
+			return
+		}
+		// Detach on the way out, even after Ctrl+C has cancelled ctx.
+		detachCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_, _ = client.StopModel(detachCtx, &agentpbv2.StopModelRequest{InstanceId: id, WatchId: watchID})
+	}()
+	if !jsonOutput {
+		cliLogln("Watching %s on %s (instance %s). Press Ctrl+C to stop.", opts.Model, opts.Camera, id)
+	}
+	for {
+		msg, err := stream.Recv()
+		if ctx.Err() != nil {
+			return nil
+		}
+		if err == io.EOF {
+			if last.GetState() == agentpbv2.ModelState_MODEL_STATE_FAILED {
+				return fmt.Errorf("the model failed: %s", last.GetStateDetail())
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("watching %s: %w", id, modelServiceErr(err))
+		}
+		switch {
+		case msg.GetStarted() != nil:
+			watchID, last = msg.GetStarted().GetWatchId(), msg.GetStarted().GetInstance()
+		case msg.GetStatus() != nil:
+			last = msg.GetStatus()
+		}
+		if jsonOutput {
+			if err := encodeProtoJSON(out, msg); err != nil {
+				return err
+			}
+			continue
+		}
+		line := modelWatchLine(msg)
+		if msg.GetStarted() != nil || msg.GetStatus() != nil {
+			if line == lastStatusLine {
+				continue // heartbeats repeat the state
+			}
+			lastStatusLine = line
+		}
+		if line != "" {
+			fmt.Fprintln(out, line)
+		}
+	}
+}
+
+// modelWatchLine renders one watch message for a person.
+func modelWatchLine(msg *agentpbv2.ModelWatchMessage) string {
+	switch {
+	case msg.GetStarted() != nil:
+		return "state: " + modelStateLabel(msg.GetStarted().GetInstance())
+	case msg.GetStatus() != nil:
+		return "state: " + modelStateLabel(msg.GetStatus())
+	case msg.GetEvent() != nil:
+		e := msg.GetEvent()
+		at := time.Unix(0, e.GetTimeUnixNanos()).Format("15:04:05")
+		return fmt.Sprintf("%s  %-12s %.2f %s (track %d)", at, e.GetClassName(), e.GetConfidence(), e.GetType(), e.GetTrackId())
+	case msg.GetGap() != nil:
+		return fmt.Sprintf("missed events %d-%d", msg.GetGap().GetFirstMissing(), msg.GetGap().GetLastMissing())
+	}
+	return ""
 }
