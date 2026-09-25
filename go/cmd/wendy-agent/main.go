@@ -391,6 +391,25 @@ func main() {
 		go ctrdClient.RunCameraLoopbackSync(ctx, time.Minute)
 	}
 
+	// Models the agent runs for clients such as wendy chat
+	// (specs/2026-09-25-model-watch-design.md). Model hosts are containers,
+	// so the service needs containerd.
+	var modelSvc *services.ModelService
+	if ctrdClient != nil {
+		modelSupervisor, err := newModelSupervisor(ctx, logger, ctrdClient, videoSvc, dataManager)
+		if err != nil {
+			logger.Error("Model service disabled", zap.Error(err))
+		} else {
+			appDataSocketManager.SetRecordSink(modelSupervisor.PublishApplicationRecord)
+			modelSvc = services.NewModelService(logger, modelSupervisor)
+			defer func() {
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				modelSupervisor.Shutdown(shutdownCtx)
+			}()
+		}
+	}
+
 	// Sensor pairing (Task 8): mounts a remote source device's cameras as
 	// local loopback nodes, reusing videoSvc's v4l2loopback manager (MCU band,
 	// ipcam.MCUBandStart..MCUBandEnd) so module detection and node paths have
@@ -781,6 +800,13 @@ func main() {
 		// never on the plaintext provisioning listener or local admin socket.
 		agentpbv2.RegisterWendyTunnelServiceServer(srv, services.NewTunnelService(logger))
 
+		// WendyModelService runs containers with camera and accelerator access
+		// for a client. Like the tunnel, it stays off the plaintext
+		// provisioning listener; the admin socket registers it separately.
+		if modelSvc != nil {
+			agentpbv2.RegisterWendyModelServiceServer(srv, modelSvc)
+		}
+
 		// WendyDriverService installs kernel driver add-ons — loading a module is
 		// ring-0 code execution, as privileged as the root shell above. So it is
 		// registered ONLY here on the mTLS server (authenticated, org-checked),
@@ -957,6 +983,10 @@ func main() {
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 		)
 		registerAllServices(localSocketServer)
+
+		if modelSvc != nil {
+			agentpbv2.RegisterWendyModelServiceServer(localSocketServer, modelSvc)
+		}
 
 		// oci.AdminAgentSocketHostPath is the single source of truth for this
 		// path: the admin entitlement bind-mounts its parent directory into
