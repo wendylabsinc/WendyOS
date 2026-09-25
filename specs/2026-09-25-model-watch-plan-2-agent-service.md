@@ -48,7 +48,7 @@
   - 2-space indent;
   - enum values prefixed with the enum name, with `_UNSPECIFIED = 0`.
 - **Generated code:** commit only the new generated files. `make proto` rewrites every header, so restore the others.
-- **Commit identity:** every commit uses `git -c user.name=Ethan -c user.email=ebrogames@gmail.com commit`, and its message ends with:
+- **Commit identity:** every commit uses `git -c user.name=Ethan -c user.email=ebrogames@gmail.com commit`. Its message ends with the attribution lines your own session specifies. The commit steps below show the planning session's lines; replace them with yours, especially the `Claude-Session` link:
   ```
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_019FBeZXTxFQqYE4f8GkNnND
@@ -6835,14 +6835,15 @@ func (h *host) send(r record) error {
 }
 ```
 
-`go/modelhost/fakehost/Dockerfile`, built from the repo root:
+`go/modelhost/fakehost/Dockerfile`, built from the repo root with BuildKit (`docker buildx`). The build stage runs on the build machine and cross-compiles, so an arm64 image builds on an x86 host without QEMU:
 
 ```dockerfile
-FROM golang:1.27-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS build
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY go/modelhost/fakehost ./go/modelhost/fakehost
-RUN go test ./go/modelhost/fakehost/... && CGO_ENABLED=0 go build -trimpath -o /out/fakehost ./go/modelhost/fakehost
+RUN go test ./go/modelhost/fakehost/... && CGO_ENABLED=0 GOARCH=$TARGETARCH go build -trimpath -o /out/fakehost ./go/modelhost/fakehost
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/fakehost /usr/local/bin/fakehost
@@ -6916,7 +6917,8 @@ the agent at that catalog with `WENDY_MODEL_CATALOG_FILE`. The smoke test in
 
 Run: `go test ./go/modelhost/fakehost/`
 Expected: PASS.
-Run: `docker build -f go/modelhost/fakehost/Dockerfile -t fakehost:test .`
+Prerequisite: Docker with the buildx plugin, which the Dockerfile's `$BUILDPLATFORM` needs. The development machine this plan was written on lacked it; on Arch or CachyOS, install it with `sudo pacman -S docker-buildx`.
+Run: `docker buildx build --load -f go/modelhost/fakehost/Dockerfile -t fakehost:test .`
 Expected: the build succeeds, and the `go test` line inside it passes.
 
 - [ ] **Step 5: Commit**
