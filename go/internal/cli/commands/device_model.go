@@ -265,18 +265,19 @@ func runModelWatch(ctx context.Context, client agentpbv2.WendyModelServiceClient
 	}
 	for {
 		msg, err := stream.Recv()
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err == io.EOF {
-			if last.GetState() == agentpbv2.ModelState_MODEL_STATE_FAILED {
-				return fmt.Errorf("the model failed: %s", last.GetStateDetail())
-			}
-			return nil
-		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil // Ctrl+C: the deferred StopModel detaches the watch
+			}
+			if err == io.EOF {
+				if last.GetState() == agentpbv2.ModelState_MODEL_STATE_FAILED {
+					return fmt.Errorf("the model failed: %s", last.GetStateDetail())
+				}
+				return nil
+			}
 			return fmt.Errorf("watching %s: %w", id, modelServiceErr(err))
 		}
+		// Process the message first, even if Ctrl+C is pending
 		switch {
 		case msg.GetStarted() != nil:
 			watchID, last = msg.GetStarted().GetWatchId(), msg.GetStarted().GetInstance()
