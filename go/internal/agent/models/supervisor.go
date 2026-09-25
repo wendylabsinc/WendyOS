@@ -191,9 +191,16 @@ func (s *Supervisor) awaitExisting(ctx context.Context, existing *instance) (Ins
 	case <-ctx.Done():
 		return InstanceInfo{}, false, ctx.Err()
 	}
+	existing.mu.Lock()
 	if existing.ctx.Err() == nil {
-		return existing.info(), true, nil
+		if len(existing.watches) == 0 {
+			s.startGraceLocked(existing) // a reuse restarts the window for its caller to attach
+		}
+		info := existing.infoLocked()
+		existing.mu.Unlock()
+		return info, true, nil
 	}
+	existing.mu.Unlock()
 	select {
 	case <-existing.done:
 	case <-ctx.Done():

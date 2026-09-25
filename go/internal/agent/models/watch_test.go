@@ -190,3 +190,30 @@ func TestWatchRefusesAnInstanceStillBeingAdmitted(t *testing.T) {
 		t.Fatalf("watch after admission: %v", err)
 	}
 }
+
+// TestReuseRestartsTheUnwatchedLease covers the review fix: a Start that
+// reuses an instance which has no watch yet must restart the instance's
+// lease, not leave the timer from its first Start (or an earlier reuse)
+// running toward its own, now-stale, expiry.
+func TestReuseRestartsTheUnwatchedLease(t *testing.T) {
+	h := newHarness(t, models.EngineONNXRuntime)
+	info := h.startReady(t, frontDoor) // T0
+	h.advanceAlive(info.ID, 50*time.Second)
+
+	again, reused, err := h.sup.Start(context.Background(), "coco-detector", frontDoor)
+	if err != nil || !reused || again.ID != info.ID {
+		t.Fatalf("reuse at 50s = %+v, reused=%v, %v", again, reused, err)
+	}
+
+	// 80s since T0: past the original, un-restarted T0+60 expiry. Without the
+	// fix this Watch fails because the instance already stopped.
+	h.advanceAlive(info.ID, 30*time.Second)
+	w, _, _, err := h.sup.Watch(models.WatchRequest{InstanceID: info.ID})
+	if err != nil {
+		t.Fatalf("watch after a reuse should have restarted the lease: %v", err)
+	}
+
+	h.sup.Detach(info.ID, w.ID) // unwatched again: starts a fresh, ordinary grace
+	h.advanceAlive(info.ID, 65*time.Second)
+	modelstest.Eventually(t, "the instance to expire once its restarted lease runs out", func() bool { return h.info(info.ID).State == 0 })
+}
