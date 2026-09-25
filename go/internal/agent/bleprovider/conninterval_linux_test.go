@@ -47,8 +47,9 @@ func TestLEConnectionUpdateEncoding(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatalf("command=%x, want %x", got, want)
 	}
-	// Pi 5's successful 15 ms / 10 ms event-length trial used handle 64.
-	wantHandle64 := []byte{0x01, 0x13, 0x20, 14, 64, 0, 12, 0, 12, 0, 0, 0, 0x20, 0x03, 0, 0, 16, 0}
+	// Pi 5's mesh ACL handle 64 must encode the same 30 ms / 5 ms request.
+	wantHandle64 := append([]byte(nil), want...)
+	wantHandle64[4], wantHandle64[5] = 64, 0
 	if got := leConnectionUpdateCommand(64); string(got) != string(wantHandle64) {
 		t.Fatalf("handle-64 command=%x, want %x", got, wantHandle64)
 	}

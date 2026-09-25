@@ -425,8 +425,21 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	cancel()
 	if err != nil {
 		// A timed-out socket connect can leave a controller attempt pending.
-		// Clear only this Wendy peer before another outgoing dial starts.
-		r.disconnectOwnedPeer(peer)
+		// The management command resolves the LE address on this adapter and
+		// aborts that peer's pending kernel hci_conn. Device1.Disconnect does
+		// not reliably cancel raw L2CAP socket connects in BT_CONNECT state.
+		if shouldCancelPendingACL(err, ctx.Err(), r.hciIndex) {
+			abortCtx, stopAbort := context.WithTimeout(ctx, 3*time.Second)
+			abortErr := disconnectLEPeer(abortCtx, r.hciIndex, peer.address, peer.addressType)
+			stopAbort()
+			if abortErr != nil {
+				r.cfg.Logger.Warn("BLE timed-out peer ACL cancel failed", zap.Int32("peer", peer.asset), zap.Error(abortErr))
+			} else {
+				r.cfg.Logger.Info("BLE timed-out peer ACL cancel completed", zap.Int32("peer", peer.asset))
+			}
+		} else {
+			r.disconnectOwnedPeer(peer)
+		}
 		r.cfg.Logger.Debug("BLE CoC dial failed", zap.Int32("peer", peer.asset), zap.Error(err))
 		if r.cfg.Selection != nil {
 			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
@@ -501,6 +514,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if err != nil && ctx.Err() == nil {
 		r.cfg.Logger.Debug("BLE link ended", zap.Int32("peer", peer.asset), zap.Error(err))
 	}
+}
+
+func shouldCancelPendingACL(dialErr, providerErr error, hciIndex int) bool {
+	return errors.Is(dialErr, context.DeadlineExceeded) && providerErr == nil && hciIndex >= 0
 }
 
 func (r *runtime) disconnectOwnedPeer(peer candidate) {
