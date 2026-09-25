@@ -23,7 +23,7 @@ func TestRunnerStartStreamsThenStopCancels(t *testing.T) {
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
 		Manifest: &sensorlinkpb.SensorManifest{DeviceAssetId: 5, Sensors: []*sensorlinkpb.SensorDescriptor{{
-			ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0",
+			ChannelId: 1, Name: "cam0",
 			Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}},
 		}}},
 		Frames:        [][]byte{[]byte("jpg")},

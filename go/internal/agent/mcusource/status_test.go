@@ -3,6 +3,7 @@ package mcusource
 import (
 	"context"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
 	"testing"
@@ -10,14 +11,14 @@ import (
 )
 
 type statusTransport struct {
-	frames chan *sensorlinkpb.SensorFrame
+	frames chan *sensorlink.SensorFrame
 }
 
 func (*statusTransport) Close() error { return nil }
 func (*statusTransport) FetchManifest(context.Context) (*sensorlinkpb.SensorManifest, error) {
-	return &sensorlinkpb.SensorManifest{DeviceAssetId: 1, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA}}}, nil
+	return &sensorlinkpb.SensorManifest{DeviceAssetId: 1, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{}}}}}, nil
 }
-func (t *statusTransport) Stream(context.Context, []uint32) (<-chan *sensorlinkpb.SensorFrame, func() error, error) {
+func (t *statusTransport) Stream(context.Context, []uint32) (<-chan *sensorlink.SensorFrame, func() error, error) {
 	return t.frames, func() error { return nil }, nil
 }
 
@@ -34,7 +35,7 @@ func (statusWriter) WriteFrame(ros2camera.Frame) error { return nil }
 func (statusWriter) Close() error                      { return nil }
 
 func TestConnectedOnlyWhileFramesAreDelivered(t *testing.T) {
-	tr := &statusTransport{frames: make(chan *sensorlinkpb.SensorFrame)}
+	tr := &statusTransport{frames: make(chan *sensorlink.SensorFrame)}
 	s := NewSupervisor(zap.NewNop(), statusLoopback{}, func(SensorPairing, string) (SensorTransport, error) { return tr, nil }, func(string) ros2camera.CameraWriter { return statusWriter{} }, nil)
 	done := make(chan struct{})
 	go func() {
@@ -46,7 +47,7 @@ func TestConnectedOnlyWhileFramesAreDelivered(t *testing.T) {
 	}
 	for i := 0; i < 2; i++ {
 		select {
-		case tr.frames <- &sensorlinkpb.SensorFrame{ChannelId: 1}:
+		case tr.frames <- &sensorlink.SensorFrame{ChannelID: 1}:
 		case <-time.After(time.Second):
 			t.Fatal("stream not consuming frames")
 		}

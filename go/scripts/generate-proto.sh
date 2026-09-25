@@ -70,7 +70,7 @@ done
 
 # sensor_service.proto (v2) imports wendy/lite/sensorlink.proto; map that
 # import to the existing sensorlinkpb package so the v2 service reuses the
-# shared SensorManifest/SensorFrame types instead of duplicating them.
+# shared SensorManifest/SensorData types instead of duplicating them.
 SENSORLINK_PKG="$MODULE/go/proto/gen/sensorlinkpb"
 V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"
 V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"

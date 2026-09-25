@@ -237,6 +237,6 @@ message WendyComMessage {
         WendyComCommand   command   = 3;
         WendyComResponse  response  = 4;
         WendyComEvent     event     = 5;
-        wendy.lite.sensorlink.SensorFrame sensor_frame = 6;
+        wendy.lite.sensorlink.SensorData  sensor_data  = 6;
     }
 }

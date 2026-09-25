@@ -11,21 +11,27 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
 
+// wholeFrame is a frame sent as a single chunk.
+func wholeFrame(channelID, seq uint32) *sensorlinkpb.SensorData {
+	return &sensorlinkpb.SensorData{ChannelId: channelID, FrameSeq: seq, Flags: sensorlink.FlagLastChunk}
+}
+
 // fakeWendycomClient stands in for a Wendy Lite board's WendyCom connection.
-// send plays the client's read loop: it hands a frame to every listener
+// send plays the client's read loop: it hands a chunk to every listener
 // synchronously, so a listener that blocks would hang the test.
 type fakeWendycomClient struct {
 	manifest *sensorlinkpb.SensorManifest
 
 	mu           sync.Mutex
-	listeners    map[int]func(*sensorlinkpb.SensorFrame)
+	listeners    map[int]func(*sensorlinkpb.SensorData)
 	nextID       int
-	lastListener func(*sensorlinkpb.SensorFrame) // kept after removal
+	lastListener func(*sensorlinkpb.SensorData) // kept after removal
 	subscribed   [][]uint32
 	unsubscribed [][]uint32
 	subscribeErr error
@@ -41,7 +47,7 @@ type fakeWendycomClient struct {
 func newFakeWendycomClient() *fakeWendycomClient {
 	return &fakeWendycomClient{
 		manifest:  &sensorlinkpb.SensorManifest{DeviceAssetId: 7},
-		listeners: make(map[int]func(*sensorlinkpb.SensorFrame)),
+		listeners: make(map[int]func(*sensorlinkpb.SensorData)),
 		done:      make(chan struct{}),
 	}
 }
@@ -68,7 +74,7 @@ func (c *fakeWendycomClient) SensorLinkUnsubscribe(ids []uint32, _ time.Duration
 	return nil
 }
 
-func (c *fakeWendycomClient) AddSensorFrameListener(fn func(*sensorlinkpb.SensorFrame)) func() {
+func (c *fakeWendycomClient) AddSensorDataListener(fn func(*sensorlinkpb.SensorData)) func() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := c.nextID
@@ -82,15 +88,15 @@ func (c *fakeWendycomClient) AddSensorFrameListener(fn func(*sensorlinkpb.Sensor
 	}
 }
 
-func (c *fakeWendycomClient) send(f *sensorlinkpb.SensorFrame) {
+func (c *fakeWendycomClient) send(d *sensorlinkpb.SensorData) {
 	c.mu.Lock()
-	fns := make([]func(*sensorlinkpb.SensorFrame), 0, len(c.listeners))
+	fns := make([]func(*sensorlinkpb.SensorData), 0, len(c.listeners))
 	for _, fn := range c.listeners {
 		fns = append(fns, fn)
 	}
 	c.mu.Unlock()
 	for _, fn := range fns {
-		fn(f)
+		fn(d)
 	}
 }
 
@@ -168,7 +174,7 @@ func newTestWendycomTransport(logger *zap.Logger, c *fakeWendycomClient) (*wendy
 }
 
 // requireClosed fails unless frames is closed without yielding a frame.
-func requireClosed(t *testing.T, frames <-chan *sensorlinkpb.SensorFrame) {
+func requireClosed(t *testing.T, frames <-chan *sensorlink.SensorFrame) {
 	t.Helper()
 	select {
 	case f, ok := <-frames:
@@ -203,11 +209,11 @@ func TestWendycomTransportSharesOneConnection(t *testing.T) {
 		t.Fatalf("subscribed %v, want [[1 2]]", c.subscribed)
 	}
 
-	c.send(&sensorlinkpb.SensorFrame{ChannelId: 2, Seq: 5})
+	c.send(wholeFrame(2, 5))
 	select {
 	case f := <-frames:
-		if f.ChannelId != 2 || f.Seq != 5 {
-			t.Fatalf("got frame channel=%d seq=%d, want channel=2 seq=5", f.ChannelId, f.Seq)
+		if f.ChannelID != 2 || f.Seq != 5 {
+			t.Fatalf("got frame channel=%d seq=%d, want channel=2 seq=5", f.ChannelID, f.Seq)
 		}
 	default:
 		t.Fatal("frame not delivered")
@@ -216,7 +222,7 @@ func TestWendycomTransportSharesOneConnection(t *testing.T) {
 
 func TestWendycomTransportListensBeforeSubscribing(t *testing.T) {
 	c := newFakeWendycomClient()
-	c.onSubscribe = func() { c.send(&sensorlinkpb.SensorFrame{ChannelId: 1, Seq: 1}) }
+	c.onSubscribe = func() { c.send(wholeFrame(1, 1)) }
 	tr, _ := newTestWendycomTransport(zap.NewNop(), c)
 	defer tr.Close()
 
@@ -232,6 +238,35 @@ func TestWendycomTransportListensBeforeSubscribing(t *testing.T) {
 		}
 	default:
 		t.Fatal("a frame sent while Subscribe was in flight was lost")
+	}
+}
+
+// A Wendy Lite board splits a frame into chunks; the stream yields it whole.
+func TestWendycomTransportAssemblesChunks(t *testing.T) {
+	c := newFakeWendycomClient()
+	tr, _ := newTestWendycomTransport(zap.NewNop(), c)
+	defer tr.Close()
+
+	frames, closeStream, err := tr.Stream(context.Background(), []uint32{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStream()
+	c.send(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: 4, ChunkSeq: 0, TsUs: 99, Flags: sensorlink.FlagKeyframe, Payload: []byte("ab")})
+	c.send(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: 4, ChunkSeq: 1, TsUs: 99, Payload: []byte("cd")})
+	select {
+	case f := <-frames:
+		t.Fatalf("got frame %+v before its last chunk", f)
+	default:
+	}
+	c.send(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: 4, ChunkSeq: 2, TsUs: 99, Flags: sensorlink.FlagLastChunk, Payload: []byte("ef")})
+	select {
+	case f := <-frames:
+		if f.ChannelID != 1 || f.Seq != 4 || f.TsUs != 99 || f.Flags != sensorlink.FlagKeyframe || string(f.Payload) != "abcdef" {
+			t.Fatalf("got frame %+v, want channel 1 seq 4 keyframe payload abcdef", f)
+		}
+	default:
+		t.Fatal("frame not delivered after its last chunk")
 	}
 }
 
@@ -304,7 +339,7 @@ func TestWendycomTransportCloseStream(t *testing.T) {
 
 	// The client may still be running a listener from a snapshot taken
 	// before it was removed; that late frame must be dropped, not panic.
-	c.lastListener(&sensorlinkpb.SensorFrame{ChannelId: 1})
+	c.lastListener(wholeFrame(1, 0))
 }
 
 func TestWendycomTransportBackpressure(t *testing.T) {
@@ -323,14 +358,14 @@ func TestWendycomTransportBackpressure(t *testing.T) {
 		// A stalled consumer must not block the client's read loop. The first
 		// eight frames are queued; three more are dropped with one warning.
 		for seq := range uint32(11) {
-			c.send(&sensorlinkpb.SensorFrame{ChannelId: 1, Seq: seq})
+			c.send(wholeFrame(1, seq))
 		}
 		assertDropLogs(t, logs, [][2]uint64{{1, 1}})
 
 		// Continued congestion produces an aggregate warning after five
 		// seconds, including the drops suppressed since the first warning.
 		time.Sleep(5 * time.Second)
-		c.send(&sensorlinkpb.SensorFrame{ChannelId: 1, Seq: 11})
+		c.send(wholeFrame(1, 11))
 		assertDropLogs(t, logs, [][2]uint64{{1, 1}, {3, 4}})
 
 		for seq := range uint32(8) {
@@ -338,7 +373,7 @@ func TestWendycomTransportBackpressure(t *testing.T) {
 				t.Fatalf("queued frame seq = %d, want %d", f.Seq, seq)
 			}
 		}
-		c.send(&sensorlinkpb.SensorFrame{ChannelId: 1, Seq: 12})
+		c.send(wholeFrame(1, 12))
 		if f := <-frames; f.Seq != 12 {
 			t.Fatalf("stream did not recover: got seq %d", f.Seq)
 		}

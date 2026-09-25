@@ -16,7 +16,7 @@ func TestTCPTransportManifestAndStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 5, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0"}}},
+		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 5, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
 		Frames:        [][]byte{[]byte("jpg")},
 		FrameInterval: time.Millisecond,
 	})
@@ -32,7 +32,7 @@ func TestTCPTransportManifestAndStream(t *testing.T) {
 	defer closeFn()
 	select {
 	case f := <-frames:
-		if f.ChannelId != 1 {
+		if f.ChannelID != 1 {
 			t.Fatalf("bad frame: %+v", f)
 		}
 	case <-time.After(time.Second):

@@ -27,7 +27,7 @@ import (
 // would panic every binary linking both — the names would be registered twice.
 func TestSensorlinkMessagesRegisterOnce(t *testing.T) {
 	for _, name := range []protoreflect.FullName{
-		"wendy.lite.sensorlink.SensorFrame",
+		"wendy.lite.sensorlink.SensorData",
 		"wendy.lite.sensorlink.SensorManifest",
 		"wendy.agent.services.v2.WendySensorService",
 	} {
@@ -47,7 +47,7 @@ func TestWendyComFieldsResolveSensorlinkMessages(t *testing.T) {
 		field protoreflect.Name
 		want  protoreflect.FullName
 	}{
-		{&litepb.WendyComMessage{}, "sensor_frame", "wendy.lite.sensorlink.SensorFrame"},
+		{&litepb.WendyComMessage{}, "sensor_data", "wendy.lite.sensorlink.SensorData"},
 		{&litepb.WendyComResponse{}, "sensor_link_manifest", "wendy.lite.sensorlink.SensorManifest"},
 		{&litepb.WendyComCommand{}, "sensor_link_subscribe", "wendy.lite.sensorlink.Subscribe"},
 	} {
@@ -62,12 +62,13 @@ func TestWendyComFieldsResolveSensorlinkMessages(t *testing.T) {
 	}
 }
 
-// TestWendyComSensorFrameRoundTrips is the end-to-end check: a frame the device
-// sends over WendyCom has to survive encode and decode across the package split.
-func TestWendyComSensorFrameRoundTrips(t *testing.T) {
+// TestWendyComSensorDataRoundTrips is the end-to-end check: a frame chunk the
+// device sends over WendyCom has to survive encode and decode across the
+// package split.
+func TestWendyComSensorDataRoundTrips(t *testing.T) {
 	in := &litepb.WendyComMessage{
-		Msg: &litepb.WendyComMessage_SensorFrame{
-			SensorFrame: &sensorlinkpb.SensorFrame{ChannelId: 3, Seq: 42, TsUs: 1234, Flags: 1, Payload: []byte("jpeg")},
+		Msg: &litepb.WendyComMessage_SensorData{
+			SensorData: &sensorlinkpb.SensorData{ChannelId: 3, FrameSeq: 42, ChunkSeq: 2, TsUs: 1234, Flags: 3, Payload: []byte("jpeg")},
 		},
 	}
 	wire, err := protobuf.Marshal(in)
@@ -78,11 +79,11 @@ func TestWendyComSensorFrameRoundTrips(t *testing.T) {
 	if err := protobuf.Unmarshal(wire, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	got := out.GetSensorFrame()
+	got := out.GetSensorData()
 	if got == nil {
-		t.Fatal("sensor frame lost in round trip")
+		t.Fatal("sensor data lost in round trip")
 	}
-	if got.ChannelId != 3 || got.Seq != 42 || string(got.Payload) != "jpeg" {
-		t.Errorf("round trip changed frame: %+v", got)
+	if got.ChannelId != 3 || got.FrameSeq != 42 || got.ChunkSeq != 2 || got.Flags != 3 || string(got.Payload) != "jpeg" {
+		t.Errorf("round trip changed sensor data: %+v", got)
 	}
 }

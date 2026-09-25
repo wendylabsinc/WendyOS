@@ -20,9 +20,8 @@ message SensorFormat {
   uint32 sample_bytes = 3;
 }
 message SensorDescriptor {
-  enum Kind { KIND_UNSPECIFIED = 0; CAMERA = 1; MICROPHONE = 2; SENSOR = 3; }
   uint32 channel_id = 1;
-  Kind kind = 2;
+  uint32 input_id = 2; // only one channel of a given input_id can be used at a time
   string name = 3;
   oneof format {
     VideoFormat video = 4;
@@ -37,12 +36,13 @@ message SensorManifest {
 message GetSensorManifest {}
 message Subscribe { repeated uint32 channel_id = 1; }
 message Unsubscribe { repeated uint32 channel_id = 1; }
-message SensorFrame {
+message SensorData {
   uint32 channel_id = 1;
-  uint32 seq = 2;
-  uint64 ts_us = 3;
-  uint32 flags = 4;   // bit0 = keyframe
-  bytes payload = 5;
+  uint32 frame_seq = 2; // wraps at 32 bits
+  uint32 chunk_seq = 3;
+  uint64 ts_us = 4;
+  uint32 flags = 5;   // bit0 = keyframe, bit1 = last chunk in frame
+  bytes payload = 6;
 }
 message Ping { uint64 ts_us = 1; }
 
@@ -51,7 +51,7 @@ message Envelope {
   oneof msg {
     SensorManifest manifest = 1;
     Subscribe subscribe = 2;
-    SensorFrame frame = 3;
+    SensorData data = 3;
     Ping ping = 4;
   }
 }

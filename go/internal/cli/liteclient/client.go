@@ -98,10 +98,10 @@ type subscription struct {
 	ch     chan *wendypb.WendyComMessage
 }
 
-// sensorFrameListener boxes a listener so registrations have an identity:
+// sensorDataListener boxes a listener so registrations have an identity:
 // func values are not comparable, so the slice could not be pruned otherwise.
-type sensorFrameListener struct {
-	fn func(*sensorlinkpb.SensorFrame)
+type sensorDataListener struct {
+	fn func(*sensorlinkpb.SensorData)
 }
 
 // WendyLiteClient drives one connection to one device: connect once, then
@@ -122,12 +122,12 @@ type WendyLiteClient struct {
 	subs    []*subscription
 	readErr error // set once the read loop dies; refuses new subscriptions
 
-	// Frames are delivered straight from the read loop, so their listeners
+	// Sensor data is delivered straight from the read loop, so its listeners
 	// must not wait on mu. The stored slice is never mutated once published:
 	// dispatch loads and ranges over it lock-free, and registration swaps in
 	// a fresh copy under listenerMu.
-	listenerMu           sync.Mutex
-	sensorFrameListeners atomic.Pointer[[]*sensorFrameListener]
+	listenerMu          sync.Mutex
+	sensorDataListeners atomic.Pointer[[]*sensorDataListener]
 }
 
 func NewWendyLiteClient() *WendyLiteClient {
@@ -135,7 +135,7 @@ func NewWendyLiteClient() *WendyLiteClient {
 }
 
 // Done returns a channel that is closed once the connection is gone: lost, or
-// torn down by Close. It lets a caller that only listens — sensor frames reach
+// torn down by Close. It lets a caller that only listens — sensor data reaches
 // their listeners with no end-of-stream marker — notice the device dropping
 // off. It never closes on a client that never connected.
 func (c *WendyLiteClient) Done() <-chan struct{} {
@@ -567,7 +567,7 @@ func (c *WendyLiteClient) GetSensorManifest(timeout time.Duration) (*sensorlinkp
 	return m, nil
 }
 
-// SensorLinkSubscribe asks the device to start streaming SensorFrames for
+// SensorLinkSubscribe asks the device to start streaming SensorData for
 // the given channel IDs.
 func (c *WendyLiteClient) SensorLinkSubscribe(channelIDs []uint32, timeout time.Duration) error {
 	resp, err := c.sendCommand(&wendypb.WendyComCommand{
@@ -585,7 +585,7 @@ func (c *WendyLiteClient) SensorLinkSubscribe(channelIDs []uint32, timeout time.
 	return nil
 }
 
-// SensorLinkUnsubscribe asks the device to stop streaming SensorFrames for
+// SensorLinkUnsubscribe asks the device to stop streaming SensorData for
 // the given channel IDs.
 func (c *WendyLiteClient) SensorLinkUnsubscribe(channelIDs []uint32, timeout time.Duration) error {
 	resp, err := c.sendCommand(&wendypb.WendyComCommand{
@@ -826,38 +826,38 @@ func (c *WendyLiteClient) unsubscribe(s *subscription) {
 	}
 }
 
-// AddSensorFrameListener registers fn for every SensorFrame the device sends
-// and returns a function that unregisters it, idempotently and safely after
-// the connection has died.
+// AddSensorDataListener registers fn for every SensorData the device sends —
+// one chunk of a frame, which the caller reassembles — and returns a function
+// that unregisters it, idempotently and safely after the connection has died.
 //
-// fn is called on the client's read loop — one frame at a time, in arrival
+// fn is called on the client's read loop — one chunk at a time, in arrival
 // order, with no goroutine hop and no lock held. It therefore sits on the
 // critical path of the whole connection: it must not block, and it must not
 // call anything that waits for a device reply, since the read loop is busy
-// running fn instead of reading that reply. The frame and its payload belong
+// running fn instead of reading that reply. The chunk and its payload belong
 // to fn and stay valid after it returns.
-func (c *WendyLiteClient) AddSensorFrameListener(fn func(*sensorlinkpb.SensorFrame)) func() {
-	l := &sensorFrameListener{fn: fn}
+func (c *WendyLiteClient) AddSensorDataListener(fn func(*sensorlinkpb.SensorData)) func() {
+	l := &sensorDataListener{fn: fn}
 
 	c.listenerMu.Lock()
 	defer c.listenerMu.Unlock()
-	next := append(c.loadSensorFrameListeners(), l)
-	c.sensorFrameListeners.Store(&next)
+	next := append(c.loadSensorDataListeners(), l)
+	c.sensorDataListeners.Store(&next)
 
 	return func() {
 		c.listenerMu.Lock()
 		defer c.listenerMu.Unlock()
-		next := slices.DeleteFunc(c.loadSensorFrameListeners(),
-			func(x *sensorFrameListener) bool { return x == l })
-		c.sensorFrameListeners.Store(&next)
+		next := slices.DeleteFunc(c.loadSensorDataListeners(),
+			func(x *sensorDataListener) bool { return x == l })
+		c.sensorDataListeners.Store(&next)
 	}
 }
 
-// loadSensorFrameListeners returns a copy the caller may append to or prune:
+// loadSensorDataListeners returns a copy the caller may append to or prune:
 // the published slice is shared with a dispatch that holds no lock, so it can
 // never be modified in place. Callers hold listenerMu.
-func (c *WendyLiteClient) loadSensorFrameListeners() []*sensorFrameListener {
-	if listeners := c.sensorFrameListeners.Load(); listeners != nil {
+func (c *WendyLiteClient) loadSensorDataListeners() []*sensorDataListener {
+	if listeners := c.sensorDataListeners.Load(); listeners != nil {
 		return slices.Clone(*listeners)
 	}
 	return nil
@@ -888,15 +888,15 @@ func (c *WendyLiteClient) readLoop(link wcomLink) {
 }
 
 func (c *WendyLiteClient) dispatch(msg *wendypb.WendyComMessage) {
-	// Frames arrive at video rates and go to their listeners right here, on
-	// this goroutine: the subscription path below would put a mutex and a
-	// blocking channel send in front of every one. Handling them before the
-	// lock also keeps them away from the log line at the bottom, which would
-	// print a whole payload per frame.
-	if frame := msg.GetSensorFrame(); frame != nil {
-		if listeners := c.sensorFrameListeners.Load(); listeners != nil {
+	// Sensor data arrives at video rates and goes to its listeners right
+	// here, on this goroutine: the subscription path below would put a mutex
+	// and a blocking channel send in front of every chunk. Handling it before
+	// the lock also keeps it away from the log line at the bottom, which
+	// would print a whole payload per chunk.
+	if data := msg.GetSensorData(); data != nil {
+		if listeners := c.sensorDataListeners.Load(); listeners != nil {
 			for _, l := range *listeners {
-				l.fn(frame)
+				l.fn(data)
 			}
 		}
 		return

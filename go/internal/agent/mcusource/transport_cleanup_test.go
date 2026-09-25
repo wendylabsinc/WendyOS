@@ -3,6 +3,7 @@ package mcusource
 import (
 	"context"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
 	"net"
@@ -20,7 +21,7 @@ func (t *cleanupTransport) Close() error { t.closes++; return nil }
 func (t *cleanupTransport) FetchManifest(context.Context) (*sensorlinkpb.SensorManifest, error) {
 	return t.manifest, t.err
 }
-func (*cleanupTransport) Stream(context.Context, []uint32) (<-chan *sensorlinkpb.SensorFrame, func() error, error) {
+func (*cleanupTransport) Stream(context.Context, []uint32) (<-chan *sensorlink.SensorFrame, func() error, error) {
 	panic("unexpected stream")
 }
 

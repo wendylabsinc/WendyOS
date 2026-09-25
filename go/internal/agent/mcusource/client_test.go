@@ -23,7 +23,7 @@ func TestConnectReceivesManifestAndFrames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 5, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0"}}},
+		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 5, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
 		Frames:        [][]byte{[]byte("jpg")},
 		FrameInterval: time.Millisecond,
 	})
@@ -38,8 +38,8 @@ func TestConnectReceivesManifestAndFrames(t *testing.T) {
 	}
 	select {
 	case f := <-stream.Frames:
-		if f.ChannelId != 1 {
-			t.Fatalf("bad frame channel: %d", f.ChannelId)
+		if f.ChannelID != 1 {
+			t.Fatalf("bad frame channel: %d", f.ChannelID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("no frame received")

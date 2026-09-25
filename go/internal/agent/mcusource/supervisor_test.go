@@ -106,7 +106,7 @@ func TestSupervisorMountsCameraAndWritesFrames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 8, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0", Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}}}}},
+		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 8, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0", Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}}}}},
 		Frames:        [][]byte{[]byte("jpg")},
 		FrameInterval: time.Millisecond,
 	})
@@ -134,7 +134,6 @@ func camManifest(deviceAssetID int32, channelID uint32, name string) *sensorlink
 		DeviceAssetId: deviceAssetID,
 		Sensors: []*sensorlinkpb.SensorDescriptor{{
 			ChannelId: channelID,
-			Kind:      sensorlinkpb.SensorDescriptor_CAMERA,
 			Name:      name,
 			Format:    &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}},
 		}},
@@ -266,11 +265,11 @@ func TestSupervisorMountsCameraAndMicrophone(t *testing.T) {
 	go sim.Serve(ctx, ln, sim.Options{
 		Manifest: &sensorlinkpb.SensorManifest{DeviceAssetId: 42, Sensors: []*sensorlinkpb.SensorDescriptor{
 			{
-				ChannelId: 2, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0",
+				ChannelId: 2, Name: "cam0",
 				Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}},
 			},
 			{
-				ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_MICROPHONE, Name: "mic0",
+				ChannelId: 1, Name: "mic0",
 				Format: &sensorlinkpb.SensorDescriptor_Audio{Audio: &sensorlinkpb.AudioFormat{Codec: sensorlinkpb.AudioFormat_PCM_S16LE, SampleRate: 48000, Channels: 1}},
 			},
 		}},

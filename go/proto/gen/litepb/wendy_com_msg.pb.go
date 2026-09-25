@@ -2265,7 +2265,7 @@ type WendyComMessage struct {
 	//	*WendyComMessage_Command
 	//	*WendyComMessage_Response
 	//	*WendyComMessage_Event
-	//	*WendyComMessage_SensorFrame
+	//	*WendyComMessage_SensorData
 	Msg           isWendyComMessage_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2353,10 +2353,10 @@ func (x *WendyComMessage) GetEvent() *WendyComEvent {
 	return nil
 }
 
-func (x *WendyComMessage) GetSensorFrame() *sensorlinkpb.SensorFrame {
+func (x *WendyComMessage) GetSensorData() *sensorlinkpb.SensorData {
 	if x != nil {
-		if x, ok := x.Msg.(*WendyComMessage_SensorFrame); ok {
-			return x.SensorFrame
+		if x, ok := x.Msg.(*WendyComMessage_SensorData); ok {
+			return x.SensorData
 		}
 	}
 	return nil
@@ -2386,8 +2386,8 @@ type WendyComMessage_Event struct {
 	Event *WendyComEvent `protobuf:"bytes,5,opt,name=event,proto3,oneof"`
 }
 
-type WendyComMessage_SensorFrame struct {
-	SensorFrame *sensorlinkpb.SensorFrame `protobuf:"bytes,6,opt,name=sensor_frame,json=sensorFrame,proto3,oneof"`
+type WendyComMessage_SensorData struct {
+	SensorData *sensorlinkpb.SensorData `protobuf:"bytes,6,opt,name=sensor_data,json=sensorData,proto3,oneof"`
 }
 
 func (*WendyComMessage_Handshake) isWendyComMessage_Msg() {}
@@ -2400,7 +2400,7 @@ func (*WendyComMessage_Response) isWendyComMessage_Msg() {}
 
 func (*WendyComMessage_Event) isWendyComMessage_Msg() {}
 
-func (*WendyComMessage_SensorFrame) isWendyComMessage_Msg() {}
+func (*WendyComMessage_SensorData) isWendyComMessage_Msg() {}
 
 var File_wendy_com_msg_proto protoreflect.FileDescriptor
 
@@ -2515,14 +2515,15 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\fopen_channel\x18\x01 \x01(\v2\x14.WendyComOpenChannelH\x00R\vopenChannel\x12<\n" +
 	"\rclose_channel\x18\x02 \x01(\v2\x15.WendyComCloseChannelH\x00R\fcloseChannel\x12<\n" +
 	"\rchannel_state\x18\x03 \x01(\v2\x15.WendyComChannelStateH\x00R\fchannelStateB\x05\n" +
-	"\x03cmd\"\xca\x02\n" +
+	"\x03cmd\"\xc7\x02\n" +
 	"\x0fWendyComMessage\x122\n" +
 	"\thandshake\x18\x01 \x01(\v2\x12.WendyComHandshakeH\x00R\thandshake\x12,\n" +
 	"\aservice\x18\x02 \x01(\v2\x10.WendyComServiceH\x00R\aservice\x12,\n" +
 	"\acommand\x18\x03 \x01(\v2\x10.WendyComCommandH\x00R\acommand\x12/\n" +
 	"\bresponse\x18\x04 \x01(\v2\x11.WendyComResponseH\x00R\bresponse\x12&\n" +
-	"\x05event\x18\x05 \x01(\v2\x0e.WendyComEventH\x00R\x05event\x12G\n" +
-	"\fsensor_frame\x18\x06 \x01(\v2\".wendy.lite.sensorlink.SensorFrameH\x00R\vsensorFrameB\x05\n" +
+	"\x05event\x18\x05 \x01(\v2\x0e.WendyComEventH\x00R\x05event\x12D\n" +
+	"\vsensor_data\x18\x06 \x01(\v2!.wendy.lite.sensorlink.SensorDataH\x00R\n" +
+	"sensorDataB\x05\n" +
 	"\x03msg*M\n" +
 	"\x0fWendyComAppType\x12\x1b\n" +
 	"\x17WENDY_COM_APP_TYPE_WASM\x10\x00\x12\x1d\n" +
@@ -2603,7 +2604,7 @@ var file_wendy_com_msg_proto_goTypes = []any{
 	(*sensorlinkpb.Subscribe)(nil),          // 38: wendy.lite.sensorlink.Subscribe
 	(*sensorlinkpb.Unsubscribe)(nil),        // 39: wendy.lite.sensorlink.Unsubscribe
 	(*sensorlinkpb.SensorManifest)(nil),     // 40: wendy.lite.sensorlink.SensorManifest
-	(*sensorlinkpb.SensorFrame)(nil),        // 41: wendy.lite.sensorlink.SensorFrame
+	(*sensorlinkpb.SensorData)(nil),         // 41: wendy.lite.sensorlink.SensorData
 }
 var file_wendy_com_msg_proto_depIdxs = []int32{
 	5,  // 0: WendyComHandshake.version:type_name -> WendyComProtocolVersion
@@ -2646,7 +2647,7 @@ var file_wendy_com_msg_proto_depIdxs = []int32{
 	26, // 37: WendyComMessage.command:type_name -> WendyComCommand
 	27, // 38: WendyComMessage.response:type_name -> WendyComResponse
 	28, // 39: WendyComMessage.event:type_name -> WendyComEvent
-	41, // 40: WendyComMessage.sensor_frame:type_name -> wendy.lite.sensorlink.SensorFrame
+	41, // 40: WendyComMessage.sensor_data:type_name -> wendy.lite.sensorlink.SensorData
 	41, // [41:41] is the sub-list for method output_type
 	41, // [41:41] is the sub-list for method input_type
 	41, // [41:41] is the sub-list for extension type_name
@@ -2705,7 +2706,7 @@ func file_wendy_com_msg_proto_init() {
 		(*WendyComMessage_Command)(nil),
 		(*WendyComMessage_Response)(nil),
 		(*WendyComMessage_Event)(nil),
-		(*WendyComMessage_SensorFrame)(nil),
+		(*WendyComMessage_SensorData)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

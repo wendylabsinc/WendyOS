@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
@@ -32,7 +33,7 @@ type wendycomClient interface {
 	GetSensorManifest(timeout time.Duration) (*sensorlinkpb.SensorManifest, error)
 	SensorLinkSubscribe(channelIDs []uint32, timeout time.Duration) error
 	SensorLinkUnsubscribe(channelIDs []uint32, timeout time.Duration) error
-	AddSensorFrameListener(fn func(*sensorlinkpb.SensorFrame)) func()
+	AddSensorDataListener(fn func(*sensorlinkpb.SensorData)) func()
 	Done() <-chan struct{}
 	Close() error
 }
@@ -154,17 +155,17 @@ func (t *wendycomTransport) FetchManifest(ctx context.Context) (*sensorlinkpb.Se
 	return m, nil
 }
 
-func (t *wendycomTransport) Stream(ctx context.Context, channels []uint32) (<-chan *sensorlinkpb.SensorFrame, func() error, error) {
+func (t *wendycomTransport) Stream(ctx context.Context, channels []uint32) (<-chan *sensorlink.SensorFrame, func() error, error) {
 	c, err := t.clientFor(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 	s := &wendycomStream{
 		logger: t.logger.With(zap.Uint32s("channels", append([]uint32(nil), channels...))),
-		frames: make(chan *sensorlinkpb.SensorFrame, 8),
+		frames: make(chan *sensorlink.SensorFrame, 8),
 	}
 	// Listen before subscribing so the first frames are not lost.
-	removeListener := c.AddSensorFrameListener(s.deliver)
+	removeListener := c.AddSensorDataListener(s.deliver)
 	if err := c.SensorLinkSubscribe(channels, wendycomSubscribeTimeout); err != nil {
 		removeListener()
 		return nil, nil, fmt.Errorf("mcusource: wendycom subscribe: %w", err)
@@ -215,27 +216,33 @@ func (t *wendycomTransport) Close() error {
 }
 
 // wendycomStream feeds one Stream's frames channel from the client's read
-// loop.
+// loop, reassembling the SensorData chunks a board splits its frames into.
 type wendycomStream struct {
 	logger *zap.Logger
-	frames chan *sensorlinkpb.SensorFrame
+	frames chan *sensorlink.SensorFrame
 
 	// mu orders deliver against finish. A deliver can still be running after
 	// its listener is removed — the client dispatches to a snapshot of its
 	// listeners without a lock — and it must never send on a closed channel.
 	mu                    sync.Mutex
 	closed                bool
+	asm                   sensorlink.Assembler
 	dropped, droppedTotal uint64
 	lastDropLog           time.Time
 }
 
 // deliver runs on the client's read loop, so it must never block: a full
 // queue drops the frame rather than stalling the whole connection, as the
-// other transports do.
-func (s *wendycomStream) deliver(f *sensorlinkpb.SensorFrame) {
+// other transports do. Frames are reassembled before the queue, so a drop
+// loses a whole frame, never a single chunk.
+func (s *wendycomStream) deliver(d *sensorlinkpb.SensorData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		return
+	}
+	f := s.asm.Add(d)
+	if f == nil {
 		return
 	}
 	select {

@@ -10,6 +10,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
 )
@@ -303,7 +304,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 		}
 	}()
 	for f := range frames {
-		if w := writers[f.ChannelId]; w != nil {
+		if w := writers[f.ChannelID]; w != nil {
 			if err := w.WriteFrame(frameToCamera(f, cams)); err != nil {
 				return delivered, err
 			}
@@ -311,7 +312,7 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 				s.setConnected(p.SourceAssetID, true)
 			}
 			delivered = true
-		} else if aw := audioWriters[f.ChannelId]; aw != nil {
+		} else if aw := audioWriters[f.ChannelID]; aw != nil {
 			if err := aw.WritePCM(f.Payload); err != nil {
 				return delivered, err
 			}
@@ -324,10 +325,12 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	return delivered, nil
 }
 
+// cameraChannels returns the manifest's video channels. The descriptor's
+// format says what kind of sensor it is.
 func cameraChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlinkpb.SensorDescriptor {
 	var out []*sensorlinkpb.SensorDescriptor
 	for _, d := range m.GetSensors() {
-		if d.Kind != sensorlinkpb.SensorDescriptor_CAMERA {
+		if d.GetVideo() == nil {
 			continue
 		}
 		if len(allow) > 0 && !contains(allow, d.Name) {
@@ -338,10 +341,11 @@ func cameraChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlin
 	return out
 }
 
+// microphoneChannels returns the manifest's audio channels.
 func microphoneChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlinkpb.SensorDescriptor {
 	var out []*sensorlinkpb.SensorDescriptor
 	for _, d := range m.GetSensors() {
-		if d.Kind != sensorlinkpb.SensorDescriptor_MICROPHONE {
+		if d.GetAudio() == nil {
 			continue
 		}
 		if len(allow) > 0 && !contains(allow, d.Name) {
@@ -352,11 +356,11 @@ func microphoneChannels(m *sensorlinkpb.SensorManifest, allow []string) []*senso
 	return out
 }
 
-func frameToCamera(f *sensorlinkpb.SensorFrame, cams []*sensorlinkpb.SensorDescriptor) ros2camera.Frame {
+func frameToCamera(f *sensorlink.SensorFrame, cams []*sensorlinkpb.SensorDescriptor) ros2camera.Frame {
 	codec := ros2camera.CodecMJPEG
 	w, h := 0, 0
 	for _, c := range cams {
-		if c.ChannelId == f.ChannelId {
+		if c.ChannelId == f.ChannelID {
 			if v := c.GetVideo(); v != nil {
 				if v.Codec == sensorlinkpb.VideoFormat_H264 {
 					codec = ros2camera.CodecH264
