@@ -92,6 +92,8 @@ type AppDataSocketManager struct {
 	capture *data.Manager
 	mu      sync.Mutex
 	sockets map[string]*appDataSocket
+	// recordSink also receives every record that passes validation; guarded by mu.
+	recordSink func(appID string, rec data.ApplicationRecord)
 	// newLimiter builds the per-app record rate limiter. It is a field so
 	// tests can install a deterministic bucket; production uses a 200 rec/s
 	// token bucket.
@@ -118,6 +120,22 @@ func NewAppDataSocketManager(ctx context.Context, logger *zap.Logger, capture *d
 	}
 	go func() { <-ctx.Done(); m.stopAll() }()
 	return m
+}
+
+// SetRecordSink sends every record the socket accepts to sink as well, after
+// capture has seen it. The agent's model supervisor uses it to turn model
+// host records into events (internal/agent/models). sink must not block: it
+// runs on the connection's read path.
+func (m *AppDataSocketManager) SetRecordSink(sink func(appID string, rec data.ApplicationRecord)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recordSink = sink
+}
+
+func (m *AppDataSocketManager) sink() func(string, data.ApplicationRecord) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.recordSink
 }
 
 func (m *AppDataSocketManager) Ensure(appID, service string) (string, error) {
@@ -500,6 +518,11 @@ func (m *AppDataSocketManager) serveConn(s *appDataSocket, c net.Conn) {
 			continue
 		}
 		state, err := m.capture.RecordApplication(appID, rec)
+		// A capture failure is about episode storage; live consumers still
+		// get the record.
+		if sink := m.sink(); sink != nil {
+			sink(appID, rec)
+		}
 		ack := dataAck{Version: 1, State: state}
 		if err != nil {
 			ack.State = "rejected"
