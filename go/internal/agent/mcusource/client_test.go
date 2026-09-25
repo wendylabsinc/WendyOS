@@ -23,7 +23,7 @@ func TestConnectReceivesManifestAndFrames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 5, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
+		Manifest:      &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
 		Frames:        [][]byte{[]byte("jpg")},
 		FrameInterval: time.Millisecond,
 	})
@@ -33,7 +33,7 @@ func TestConnectReceivesManifestAndFrames(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer stream.Close()
-	if stream.Manifest.GetDeviceAssetId() != 5 {
+	if len(stream.Manifest.GetSensors()) != 1 {
 		t.Fatalf("bad manifest: %+v", stream.Manifest)
 	}
 	select {

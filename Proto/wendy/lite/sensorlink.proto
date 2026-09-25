@@ -30,8 +30,7 @@ message SensorDescriptor {
   }
 }
 message SensorManifest {
-  int32 device_asset_id = 1;
-  repeated SensorDescriptor sensors = 2;
+  repeated SensorDescriptor sensors = 1;
 }
 message GetSensorManifest {}
 message Subscribe { repeated uint32 channel_id = 1; }

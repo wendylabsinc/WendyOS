@@ -32,8 +32,7 @@ func TestSupervisorClosesTransportBeforeStream(t *testing.T) {
 		err      error
 	}{
 		{"manifest failure", nil, errors.New("unavailable")},
-		{"wrong identity", &sensorlinkpb.SensorManifest{DeviceAssetId: 2}, nil},
-		{"no authorized sensors", &sensorlinkpb.SensorManifest{DeviceAssetId: 1}, nil},
+		{"no authorized sensors", &sensorlinkpb.SensorManifest{}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := &cleanupTransport{manifest: tc.manifest, err: tc.err}

@@ -16,13 +16,13 @@ func TestTCPTransportManifestAndStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 5, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
+		Manifest:      &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
 		Frames:        [][]byte{[]byte("jpg")},
 		FrameInterval: time.Millisecond,
 	})
 	tr := mcusource.NewTCPTransport(tcpDialer{}, ln.Addr().String())
 	m, err := tr.FetchManifest(ctx)
-	if err != nil || m.GetDeviceAssetId() != 5 {
+	if err != nil || len(m.GetSensors()) != 1 {
 		t.Fatalf("manifest: %v %+v", err, m)
 	}
 	frames, closeFn, err := tr.Stream(ctx, []uint32{1})

@@ -218,14 +218,6 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	if err != nil {
 		return false, err
 	}
-	// Defense-in-depth: the mTLS handshake already pins the source's asset
-	// identity, but a compromised/misconfigured relay could still present a
-	// manifest for a different device than the one we dialed. Refuse rather
-	// than mount a stranger's cameras under this pairing's node ids.
-	if manifest.GetDeviceAssetId() != p.SourceAssetID {
-		return false, fmt.Errorf("mcusource: manifest device asset id %d does not match pairing source %d",
-			manifest.GetDeviceAssetId(), p.SourceAssetID)
-	}
 	cams := cameraChannels(manifest, p.SensorAllowlist)
 	mics := microphoneChannels(manifest, p.SensorAllowlist)
 	if len(cams) == 0 && len(mics) == 0 {

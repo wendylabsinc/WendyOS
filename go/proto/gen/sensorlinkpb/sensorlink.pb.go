@@ -431,8 +431,7 @@ func (*SensorDescriptor_Sensor) isSensorDescriptor_Format() {}
 
 type SensorManifest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeviceAssetId int32                  `protobuf:"varint,1,opt,name=device_asset_id,json=deviceAssetId,proto3" json:"device_asset_id,omitempty"`
-	Sensors       []*SensorDescriptor    `protobuf:"bytes,2,rep,name=sensors,proto3" json:"sensors,omitempty"`
+	Sensors       []*SensorDescriptor    `protobuf:"bytes,1,rep,name=sensors,proto3" json:"sensors,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -465,13 +464,6 @@ func (x *SensorManifest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SensorManifest.ProtoReflect.Descriptor instead.
 func (*SensorManifest) Descriptor() ([]byte, []int) {
 	return file_wendy_lite_sensorlink_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *SensorManifest) GetDeviceAssetId() int32 {
-	if x != nil {
-		return x.DeviceAssetId
-	}
-	return 0
 }
 
 func (x *SensorManifest) GetSensors() []*SensorDescriptor {
@@ -883,10 +875,9 @@ const file_wendy_lite_sensorlink_proto_rawDesc = "" +
 	"\x05video\x18\x04 \x01(\v2\".wendy.lite.sensorlink.VideoFormatH\x00R\x05video\x12:\n" +
 	"\x05audio\x18\x05 \x01(\v2\".wendy.lite.sensorlink.AudioFormatH\x00R\x05audio\x12=\n" +
 	"\x06sensor\x18\x06 \x01(\v2#.wendy.lite.sensorlink.SensorFormatH\x00R\x06sensorB\b\n" +
-	"\x06format\"{\n" +
-	"\x0eSensorManifest\x12&\n" +
-	"\x0fdevice_asset_id\x18\x01 \x01(\x05R\rdeviceAssetId\x12A\n" +
-	"\asensors\x18\x02 \x03(\v2'.wendy.lite.sensorlink.SensorDescriptorR\asensors\"\x13\n" +
+	"\x06format\"S\n" +
+	"\x0eSensorManifest\x12A\n" +
+	"\asensors\x18\x01 \x03(\v2'.wendy.lite.sensorlink.SensorDescriptorR\asensors\"\x13\n" +
 	"\x11GetSensorManifest\"*\n" +
 	"\tSubscribe\x12\x1d\n" +
 	"\n" +

@@ -16,7 +16,7 @@ type statusTransport struct {
 
 func (*statusTransport) Close() error { return nil }
 func (*statusTransport) FetchManifest(context.Context) (*sensorlinkpb.SensorManifest, error) {
-	return &sensorlinkpb.SensorManifest{DeviceAssetId: 1, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{}}}}}, nil
+	return &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{}}}}}, nil
 }
 func (t *statusTransport) Stream(context.Context, []uint32) (<-chan *sensorlink.SensorFrame, func() error, error) {
 	return t.frames, func() error { return nil }, nil

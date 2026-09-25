@@ -20,17 +20,12 @@ struct SensorService: Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol
 
     var audio: any AudioManaging = AudioController()
     var camera: any CameraCapturing = CameraCapture()
-    /// This device's asset ID, echoed in the manifest so the Plan-1 consumer's
-    /// `deviceAssetID != SourceAssetID` guard doesn't reject every stream. `nil`
-    /// (unprovisioned) reports 0, matching the unset proto default.
-    var assetID: Int32? = nil
 
     func getSensorManifest(
         request: ServerRequest<Wendy_Agent_Services_V2_GetSensorManifestRequest>,
         context: ServerContext
     ) async throws -> ServerResponse<Wendy_Lite_Sensorlink_SensorManifest> {
         var manifest = Wendy_Lite_Sensorlink_SensorManifest()
-        manifest.deviceAssetID = assetID ?? 0
         if micAuthorized() {
             var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
             descriptor.channelID = Self.micChannel

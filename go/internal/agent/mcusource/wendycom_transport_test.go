@@ -46,7 +46,7 @@ type fakeWendycomClient struct {
 
 func newFakeWendycomClient() *fakeWendycomClient {
 	return &fakeWendycomClient{
-		manifest:  &sensorlinkpb.SensorManifest{DeviceAssetId: 7},
+		manifest:  &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0"}}},
 		listeners: make(map[int]func(*sensorlinkpb.SensorData)),
 		done:      make(chan struct{}),
 	}
@@ -194,7 +194,7 @@ func TestWendycomTransportSharesOneConnection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	m, err := tr.FetchManifest(ctx)
-	if err != nil || m.GetDeviceAssetId() != 7 {
+	if err != nil || len(m.GetSensors()) != 1 {
 		t.Fatalf("FetchManifest: got %v, %v", m, err)
 	}
 	frames, closeStream, err := tr.Stream(context.Background(), []uint32{1, 2})

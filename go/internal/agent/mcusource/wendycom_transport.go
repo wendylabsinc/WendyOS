@@ -62,8 +62,9 @@ type wendycomTransport struct {
 //
 // TODO: ConnectWithMutualAuthentication only checks that the board's
 // certificate chains to the agent's CA, not that it belongs to
-// p.SourceAssetID, so the manifest's device_asset_id is the only asset check.
-// Pin the asset in the handshake, as mtlsDialer does for the other transports.
+// p.SourceAssetID, and the manifest carries no asset ID, so nothing ties the
+// board to the pairing. Pin the asset in the handshake, as mtlsDialer does
+// for the other transports.
 func NewWendyComTransport(logger *zap.Logger, certPEM, chainPEM, keyPEM string, p SensorPairing, addr string) (SensorTransport, error) {
 	if certPEM == "" || keyPEM == "" {
 		return nil, errors.New("mcusource: agent has no mTLS identity (not provisioned)")

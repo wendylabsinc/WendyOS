@@ -173,10 +173,10 @@ private func makeServerContext(method: String) -> ServerContext {
     #expect(frames.allSatisfy { $0.chunkSeq == 0 })
 }
 
-@Test func manifestCarriesAssetIDAndBothChannelsFanInThroughOneWriter() async throws {
+@Test func manifestListsBothChannelsAndBothFanInThroughOneWriter() async throws {
     let keyframe = CameraFrame(annexB: Data([0, 0, 0, 1, 0x67]), isKeyframe: true)
     let camera = FakeCamera(descriptorValue: cameraDescriptor(), frameList: [keyframe])
-    let svc = SensorService(audio: FakeAudio(), camera: camera, assetID: 42)
+    let svc = SensorService(audio: FakeAudio(), camera: camera)
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(
@@ -186,7 +186,6 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "GetSensorManifest")
     )
     let manifest = try manifestResponse.message
-    #expect(manifest.deviceAssetID == 42)
     #expect(manifest.sensors.contains(where: isMicrophone))
     #expect(manifest.sensors.contains(where: isCamera))
 
