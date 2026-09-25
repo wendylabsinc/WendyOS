@@ -266,3 +266,85 @@ func TestCatalogReportsFitAndFirstStartCost(t *testing.T) {
 		t.Fatalf("after a start = %+v", entry)
 	}
 }
+
+// TestStartsHeldForARefusedCameraAllFail holds several concurrent Starts of
+// the same model and camera behind one in-flight, ultimately refused,
+// Acquire. None of them may be handed the doomed instance as "reused".
+func TestStartsHeldForARefusedCameraAllFail(t *testing.T) {
+	h := newHarness(t, models.EngineONNXRuntime)
+	h.cameras.Refuse(frontDoor)
+	h.cameras.BlockAcquire = make(chan struct{})
+
+	const n = 5
+	reused := make([]bool, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, r, err := h.sup.Start(context.Background(), "coco-detector", frontDoor)
+			reused[i], errs[i] = r, err
+		}()
+	}
+	modelstest.Eventually(t, "the first start to be held", func() bool { return len(h.sup.List()) == 1 })
+	time.Sleep(20 * time.Millisecond) // give the rest a moment to queue behind it
+	close(h.cameras.BlockAcquire)
+	wg.Wait()
+
+	for i := range n {
+		if reused[i] {
+			t.Errorf("start %d: reused=true for a camera that was refused", i)
+		}
+		if !errors.Is(errs[i], models.ErrCameraNotStreamable) {
+			t.Errorf("start %d: err = %v, want ErrCameraNotStreamable", i, errs[i])
+		}
+	}
+	if got := len(h.sup.List()); got != 0 {
+		t.Fatalf("%d instances left after every start was refused", got)
+	}
+	if owners := h.cameras.Owners(); len(owners) != 0 {
+		t.Fatalf("camera pins left: %v", owners)
+	}
+}
+
+// TestStartDuringTeardownStartsAfresh starts a fresh instance while a failed
+// one for the same model and camera is still tearing down: the caller must
+// wait, not be handed the dying instance.
+func TestStartDuringTeardownStartsAfresh(t *testing.T) {
+	h := newHarness(t, models.EngineONNXRuntime)
+	info := h.startReady(t, frontDoor)
+	h.runtime.BlockRemove = make(chan struct{})
+	h.sup.PublishApplicationRecord(models.AppIDPrefix+info.ID, modelstest.Failed("no frames from camera"))
+	modelstest.Eventually(t, "teardown to begin", func() bool { return h.runtime.Removing(info.ID) })
+
+	done := make(chan struct{})
+	var fresh models.InstanceInfo
+	var reused bool
+	var err error
+	go func() {
+		fresh, reused, err = h.sup.Start(context.Background(), "coco-detector", frontDoor)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("start returned before the failing instance finished tearing down")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(h.runtime.BlockRemove)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("start did not return after teardown finished")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused {
+		t.Fatal("start reused the failing instance")
+	}
+	if fresh.ID == info.ID {
+		t.Fatal("start returned the same instance id as the failing one")
+	}
+}

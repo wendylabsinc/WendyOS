@@ -87,6 +87,9 @@ type Runtime struct {
 	// BlockEnsure, when set before the supervisor uses the runtime, makes
 	// EnsureImage wait for it to close or for the context to end.
 	BlockEnsure chan struct{}
+	// BlockRemove, when set before use, makes RemoveHost wait for it to
+	// close or for the context to end before it removes the host.
+	BlockRemove chan struct{}
 
 	mu        sync.Mutex
 	images    map[string]bool
@@ -95,10 +98,11 @@ type Runtime struct {
 	specs     []models.HostSpec
 	removed   []string
 	leftovers []string
+	removing  map[string]bool
 }
 
 func NewRuntime() *Runtime {
-	return &Runtime{images: map[string]bool{}, hosts: map[string]chan models.HostExit{}, starts: map[string]int{}}
+	return &Runtime{images: map[string]bool{}, hosts: map[string]chan models.HostExit{}, starts: map[string]int{}, removing: map[string]bool{}}
 }
 
 func (r *Runtime) HasImage(_ context.Context, ref string) bool {
@@ -135,7 +139,17 @@ func (r *Runtime) StartHost(_ context.Context, spec models.HostSpec) (<-chan mod
 }
 
 // RemoveHost ends a running host the way killing its task does.
-func (r *Runtime) RemoveHost(_ context.Context, id string) error {
+func (r *Runtime) RemoveHost(ctx context.Context, id string) error {
+	r.mu.Lock()
+	r.removing[id] = true
+	r.mu.Unlock()
+	if r.BlockRemove != nil {
+		select {
+		case <-r.BlockRemove:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if ch, ok := r.hosts[id]; ok {
@@ -145,6 +159,14 @@ func (r *Runtime) RemoveHost(_ context.Context, id string) error {
 	r.leftovers = slices.DeleteFunc(r.leftovers, func(s string) bool { return s == id })
 	r.removed = append(r.removed, id)
 	return nil
+}
+
+// Removing reports whether RemoveHost has been entered for id, so a test can
+// tell a removal is underway even while it is blocked in BlockRemove.
+func (r *Runtime) Removing(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.removing[id]
 }
 
 func (r *Runtime) ListHosts(context.Context) ([]string, error) {
@@ -205,6 +227,10 @@ func (r *Runtime) Removed() []string {
 
 // Cameras is a fixed camera list whose nodes can be pinned.
 type Cameras struct {
+	// BlockAcquire, when set before use, makes Acquire wait for it to close
+	// or for the context to end before it decides.
+	BlockAcquire chan struct{}
+
 	mu     sync.Mutex
 	cams   []models.Camera
 	refuse map[string]bool
@@ -229,7 +255,14 @@ func (c *Cameras) List(context.Context) []models.Camera {
 	return slices.Clone(c.cams)
 }
 
-func (c *Cameras) Acquire(_ context.Context, owner, sourceID string) (string, error) {
+func (c *Cameras) Acquire(ctx context.Context, owner, sourceID string) (string, error) {
+	if c.BlockAcquire != nil {
+		select {
+		case <-c.BlockAcquire:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.refuse[sourceID] {

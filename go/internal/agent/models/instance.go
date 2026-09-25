@@ -16,10 +16,11 @@ type instance struct {
 	started time.Time
 	runDir  string
 
-	ctx    context.Context // cancelled when the instance must stop
-	cancel context.CancelFunc
-	wake   chan struct{} // pokes the run loop; capacity 1
-	done   chan struct{} // closed once the instance is fully removed
+	ctx      context.Context // cancelled when the instance must stop
+	cancel   context.CancelFunc
+	wake     chan struct{} // pokes the run loop; capacity 1
+	done     chan struct{} // closed once the instance is fully removed
+	admitted chan struct{} // closed once Start has settled the camera, granted or refused
 
 	mu          sync.Mutex
 	state       State

@@ -167,6 +167,9 @@ func (s *Supervisor) logTail(inst *instance) string {
 
 // finish removes the host and everything the instance held.
 func (s *Supervisor) finish(inst *instance, final State, detail string) {
+	// A finishing instance, including a failed one, must not be reused or
+	// watched while its host is removed.
+	inst.cancel()
 	s.removeHost(inst)
 	s.cfg.Cameras.Release(context.Background(), inst.id)
 	if err := os.RemoveAll(inst.runDir); err != nil {
@@ -179,7 +182,6 @@ func (s *Supervisor) finish(inst *instance, final State, detail string) {
 	}
 	inst.setStateLocked(final, detail)
 	inst.mu.Unlock()
-	inst.cancel()
 	close(inst.done)
 	s.log.Info("model instance ended", zap.String("instance", inst.id), zap.Stringer("state", final), zap.String("detail", detail))
 }

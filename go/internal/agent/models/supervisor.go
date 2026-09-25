@@ -128,20 +128,31 @@ func (s *Supervisor) Start(ctx context.Context, modelID, cameraSourceID string) 
 	}
 
 	key := modelID + "\x00" + cameraSourceID
-	s.mu.Lock()
-	if existing := s.byKey[key]; existing != nil {
+	var inst *instance
+	for {
+		s.mu.Lock()
+		if existing := s.byKey[key]; existing != nil {
+			s.mu.Unlock()
+			info, reused, err := s.awaitExisting(ctx, existing)
+			if err != nil {
+				return InstanceInfo{}, false, err
+			}
+			if reused {
+				return info, true, nil
+			}
+			continue // existing has fully gone; look again and admit afresh if the key is free
+		}
+		if len(s.instances) >= s.cfg.MaxRunning {
+			running := s.idsLocked()
+			s.mu.Unlock()
+			return InstanceInfo{}, false, fmt.Errorf("%w (%d): %s", ErrCapacity, s.cfg.MaxRunning, strings.Join(running, ", "))
+		}
+		inst = s.newInstance(model, variant, cameraSourceID)
+		s.instances[inst.id] = inst
+		s.byKey[key] = inst
 		s.mu.Unlock()
-		return existing.info(), true, nil
+		break
 	}
-	if len(s.instances) >= s.cfg.MaxRunning {
-		running := s.idsLocked()
-		s.mu.Unlock()
-		return InstanceInfo{}, false, fmt.Errorf("%w (%d): %s", ErrCapacity, s.cfg.MaxRunning, strings.Join(running, ", "))
-	}
-	inst := s.newInstance(model, variant, cameraSourceID)
-	s.instances[inst.id] = inst
-	s.byKey[key] = inst
-	s.mu.Unlock()
 
 	// A camera that cannot stream is the caller's error, not a failed
 	// instance, so it is checked before the start counts.
@@ -152,6 +163,7 @@ func (s *Supervisor) Start(ctx context.Context, modelID, cameraSourceID string) 
 		s.forget(inst)
 		inst.cancel()
 		close(inst.done)
+		close(inst.admitted)
 		if !errors.Is(err, ErrCameraNotStreamable) {
 			err = fmt.Errorf("%w: %v", ErrCameraNotStreamable, err)
 		}
@@ -162,8 +174,30 @@ func (s *Supervisor) Start(ctx context.Context, modelID, cameraSourceID string) 
 	inst.node = node
 	info := inst.infoLocked()
 	inst.mu.Unlock()
+	close(inst.admitted)
 	go s.run(inst)
 	return info, false, nil
+}
+
+// awaitExisting waits out another Start already admitting existing for the
+// same key. When existing turns out live, it is the instance to reuse. When
+// it was refused or is stopping, this waits for it to fully go so the caller
+// can look again and admit a fresh instance in its place.
+func (s *Supervisor) awaitExisting(ctx context.Context, existing *instance) (InstanceInfo, bool, error) {
+	select {
+	case <-existing.admitted:
+	case <-ctx.Done():
+		return InstanceInfo{}, false, ctx.Err()
+	}
+	if existing.ctx.Err() == nil {
+		return existing.info(), true, nil
+	}
+	select {
+	case <-existing.done:
+	case <-ctx.Done():
+		return InstanceInfo{}, false, ctx.Err()
+	}
+	return InstanceInfo{}, false, nil
 }
 
 func (s *Supervisor) hasCamera(ctx context.Context, sourceID string) bool {
@@ -191,7 +225,8 @@ func (s *Supervisor) newInstance(m Model, v Variant, camera string) *instance {
 		id: id, model: m, variant: v, camera: camera, started: s.clock.Now(),
 		runDir: filepath.Join(s.cfg.Root, "run", id),
 		ctx:    ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}),
-		state: StatePreparing, detail: "starting",
+		admitted: make(chan struct{}),
+		state:    StatePreparing, detail: "starting",
 	}
 }
 
