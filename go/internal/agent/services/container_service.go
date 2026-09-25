@@ -1572,7 +1572,7 @@ func parseAppConfig(data []byte) (*appconfig.AppConfig, error) {
 	// compose configs can't push comma/'='/newline characters into the env vars
 	// and labels derived from appId. Empty appId is left to existing behaviour.
 	if cfg.AppID != "" {
-		if err := appconfig.ValidateAppID(cfg.AppID); err != nil {
+		if err := appconfig.ValidateUserAppID(cfg.AppID); err != nil {
 			return nil, err
 		}
 	}
