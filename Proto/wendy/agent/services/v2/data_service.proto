@@ -19,6 +19,10 @@ option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agent
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 service DataService {
+  // Streams accepted application data as it arrives. This first API deliberately
+  // has no selectors, history, resume cursor, or gap protocol.
+  rpc StreamData(StreamDataRequest) returns (stream DataRecord);
+
   // Operator-only snapshot of retained durable records, including those
   // received while no episode was active. Does not delete or acknowledge upload.
   rpc ExportRecording(DataRecordingExportRequest) returns (stream wendy.agent.apps.v1.StoredRecord);
@@ -35,6 +39,21 @@ service DataService {
   rpc Campaigns(DataCampaignsRequest) returns (DataCampaignsResponse);
   rpc CampaignInspect(DataCampaignInspectRequest) returns (DataCampaign);
   rpc CampaignTrigger(DataCampaignTriggerRequest) returns (DataEpisode);
+}
+
+// StreamDataRequest is intentionally empty in the first API. A future additive
+// revision can introduce server-side selection if clients need it.
+message StreamDataRequest {}
+
+// One self-describing item on the generic live data stream. timestamp_unix_nanos
+// uses the same wall-clock domain as the existing public VideoFrame and
+// AudioChunk timestamps. The schema identifies the versioned payload type;
+// clients render only schemas they recognize.
+message DataRecord {
+  string stream_id = 1;
+  int64 timestamp_unix_nanos = 2;
+  string schema = 3;
+  bytes payload = 4;
 }
 
 message DataSource {
