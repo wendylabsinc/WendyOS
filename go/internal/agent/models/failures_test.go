@@ -150,6 +150,34 @@ func TestEngineBuildTimesOut(t *testing.T) {
 	}
 }
 
+func TestReportedBuildFailureCarriesHostOutput(t *testing.T) {
+	h := newHarness(t, models.EngineTensorRT)
+	info, _, err := h.sup.Start(context.Background(), "coco-detector", frontDoor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, _, _, err := h.sup.Watch(models.WatchRequest{InstanceID: info.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelstest.Eventually(t, "the host", func() bool { return h.runtime.Running(info.ID) })
+	logPath := h.runtime.LastSpec().LogPath
+	if err := os.WriteFile(logPath, []byte("nvinfer1: out of device memory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := models.AppIDPrefix + info.ID
+	h.sup.PublishApplicationRecord(app, modelstest.Status(models.HostBuildingEngine))
+	modelstest.Eventually(t, "building", func() bool { return h.info(info.ID).StateDetail == "building TensorRT engine" })
+	h.sup.PublishApplicationRecord(app, modelstest.Failed("engine build failed"))
+	final := drainToEnd(t, w)
+	if final == nil || final.State != models.StateFailed {
+		t.Fatalf("final = %+v", final)
+	}
+	if !strings.Contains(final.StateDetail, "engine build failed") || !strings.Contains(final.StateDetail, "nvinfer1: out of device memory") {
+		t.Fatalf("detail = %q, want both the reported reason and the host's log output", final.StateDetail)
+	}
+}
+
 func TestCleanupOrphansRemovesLeftovers(t *testing.T) {
 	h := newHarness(t, models.EngineONNXRuntime)
 	h.runtime.AddLeftover("m-0ld00001")

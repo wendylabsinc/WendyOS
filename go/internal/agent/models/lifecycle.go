@@ -138,16 +138,19 @@ func (s *Supervisor) runHost(inst *instance) (hostOutcome, string) {
 		case <-inst.ctx.Done():
 			return hostStopped, ""
 		case exit := <-exits:
-			if failure := inst.failure(); failure != "" {
+			if failure, duringBuild := inst.failure(); failure != "" {
+				if duringBuild {
+					failure += s.logTail(inst)
+				}
 				return hostFailedFinal, failure
 			}
 			return hostCrashed, fmt.Sprintf("host exited with status %d", exit.Code) + s.logTail(inst)
 		case <-inst.wake:
-			outcome, reason, done := s.checkHost(inst)
+			outcome, reason, done, attachLog := s.checkHost(inst)
 			if !done {
 				continue
 			}
-			if reason == engineBuildTimeoutReason {
+			if attachLog || reason == engineBuildTimeoutReason {
 				reason += s.logTail(inst)
 			}
 			return outcome, reason
@@ -156,20 +159,23 @@ func (s *Supervisor) runHost(inst *instance) (hostOutcome, string) {
 }
 
 // checkHost looks for a reported failure, an expired engine build, or a
-// silent host.
-func (s *Supervisor) checkHost(inst *instance) (hostOutcome, string, bool) {
+// silent host. The fourth result reports whether a reported failure happened
+// while this host's engine was still building, so runHost should attach the
+// host's log tail (design §9) once it has released inst.mu.
+func (s *Supervisor) checkHost(inst *instance) (hostOutcome, string, bool, bool) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
 	now := s.clock.Now()
+	duringBuild := !inst.building.IsZero() && inst.state != StateReady
 	switch {
 	case inst.hostFailure != "":
-		return hostFailedFinal, inst.hostFailure, true
-	case !inst.building.IsZero() && inst.state != StateReady && now.Sub(inst.building) >= engineBuildTimeout:
-		return hostFailedFinal, engineBuildTimeoutReason, true
+		return hostFailedFinal, inst.hostFailure, true, duringBuild
+	case duringBuild && now.Sub(inst.building) >= engineBuildTimeout:
+		return hostFailedFinal, engineBuildTimeoutReason, true, false
 	case now.Sub(inst.lastStatus) >= stallTimeout:
-		return hostCrashed, "host sent no status for 15 s", true
+		return hostCrashed, "host sent no status for 15 s", true, false
 	}
-	return 0, "", false
+	return 0, "", false, false
 }
 
 // sleep waits d on the supervisor's clock; false means the instance was

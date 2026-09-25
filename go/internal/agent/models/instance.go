@@ -73,10 +73,14 @@ func (inst *instance) info() InstanceInfo {
 	return inst.infoLocked()
 }
 
-func (inst *instance) failure() string {
+// failure returns the host-reported failure, if any, and whether it happened
+// while this host's engine was still building — so the caller should attach
+// the host's log tail to the reason (design §9). Caller does not hold
+// inst.mu; the caller reads the log file itself, outside the lock.
+func (inst *instance) failure() (reason string, duringBuild bool) {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
-	return inst.hostFailure
+	return inst.hostFailure, !inst.building.IsZero() && inst.state != StateReady
 }
 
 // setStateLocked records a state change, tells every watch, and reports
