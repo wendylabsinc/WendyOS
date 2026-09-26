@@ -3471,10 +3471,11 @@ type ociReuseHint struct {
 // comment) so a caller that has to fall back to a registry push after a
 // failure here can reuse the image already built rather than rebuilding it.
 //
-// stats, when non-nil, is filled with the built image's size/layer count as
-// soon as a layer read succeeds — including on failure paths below that point
-// — so a caller whose overall deploy still fails can decide how to handle a
-// registry-push fallback without re-reading the layers itself.
+// stats must be non-nil. It is filled with the built image's size as soon as
+// a layer read succeeds — including on failure paths below that point — so a
+// caller whose overall deploy still fails can decide how to handle a
+// registry-push fallback without re-reading the layers itself, and with the
+// phase timings and push snapshot the deploy_completed event reports.
 func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, platform, dockerfile string, buildArgs map[string]string, deployEnv []string, opts runOptions, stats *chunkDeployStats, onStarted func([]string)) ([]string, *ociReuseHint, error) {
 	mark := phaseTimer()
 	var hint *ociReuseHint
@@ -3519,9 +3520,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	// succeeded, so stats reflects the most recent successful read even if a
 	// later step (another rebuild, the chunk push, RunContainer) fails.
 	fillStats := func() {
-		if stats != nil {
-			stats.imageBytes = totalCompressedLayerBytes(layers)
-		}
+		stats.imageBytes = totalCompressedLayerBytes(layers)
 	}
 	if exportMode == "dir" {
 		releaseLayout, err := lockOCILayoutDir(ctx, layoutDir)
@@ -3549,7 +3548,12 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		nativeDone := false
 		if nativeEligible {
 			if st, ok := loadNativeState(layoutDir); ok && st.DepsHash == depsHash {
-				if done, rebuildErr := tryNativeRebuild(layoutDir, platform, cwd, sf, st); rebuildErr == nil && done {
+				// The native rebuild is build time too, whether or not it succeeds;
+				// it bypasses runBuild's timer.
+				began := time.Now()
+				done, rebuildErr := tryNativeRebuild(layoutDir, platform, cwd, sf, st)
+				stats.buildTime += time.Since(began)
+				if rebuildErr == nil && done {
 					nativeDone = true
 					cliLogln("App layer(s) rebuilt natively (deps unchanged; container builder skipped)")
 				}
@@ -3587,7 +3591,10 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 			// After a buildx build, take ownership of the app layers: replace them
 			// with deterministic native rebuilds (verified against the buildx
 			// layers' file sets) so every following iteration can skip buildx.
-			if adopted, adoptErr := adoptNativeLayers(layoutDir, platform, cwd, sf, depsHash); adoptErr == nil && adopted {
+			began := time.Now()
+			adopted, adoptErr := adoptNativeLayers(layoutDir, platform, cwd, sf, depsHash)
+			stats.buildTime += time.Since(began)
+			if adoptErr == nil && adopted {
 				if layers, imageConfig, err = readOCILayoutDirLayers(layoutDir, platform); err != nil {
 					return nil, hint, err
 				}

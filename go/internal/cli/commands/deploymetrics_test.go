@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -370,5 +372,103 @@ func TestDeployStartSitesReportTheStartedAcknowledgement(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// chunkDeployClient serves a chunk-diff deploy up to RunContainer: the chunk
+// push succeeds, PrepareImage reports Unimplemented (as an older agent does)
+// and RunContainer fails with runErr.
+type chunkDeployClient struct {
+	*fakeContainerClient
+	runErr error
+}
+
+func (c *chunkDeployClient) PrepareImage(context.Context, *agentpb.RunContainerLayersRequest, ...grpc.CallOption) (*agentpb.PrepareImageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "PrepareImage not implemented")
+}
+
+func (c *chunkDeployClient) RunContainer(context.Context, *agentpb.RunContainerLayersRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
+	return nil, c.runErr
+}
+
+// TestDeployByChunkDiffTimesTheNativeRebuild covers the Stagefile inner loop:
+// the native app-layer rebuild bypasses the timed buildx closure, and its time
+// must still reach stats.buildTime. The push then completes and RunContainer
+// fails, which also pins that pushCompleted marks a finished push and that no
+// start time is recorded without a start.
+func TestDeployByChunkDiffTimesTheNativeRebuild(t *testing.T) {
+	// Hermetic: a temp user cache, no Docker on PATH (a regression that reaches
+	// buildx fails fast instead of building), and a zero cache cap so the
+	// deferred cache maintenance never runs `docker buildx prune`.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("LocalAppData", filepath.Join(home, "AppData", "Local"))
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("WENDY_BUILD_CACHE_MAX_BYTES", "0")
+	t.Setenv(chunkExportModeEnv, "")
+	t.Setenv(nativeLayersEnv, "")
+	t.Setenv(imageSignaturePathEnv, "")
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+
+	const appID, platform, dockerfile = "native-timing", "linux/arm64", "Dockerfile.generated"
+	proj := t.TempDir()
+	writeFile(t, proj, "build.stagefile.yaml", `version: 1
+stages:
+  - name: app
+    from: python:3.11-slim
+    copy:
+      - from: local
+        paths: [main.py]
+        dest: app/
+`)
+	writeFile(t, proj, dockerfile, "FROM python:3.11-slim AS app\nCOPY main.py app/\n")
+	writeFile(t, proj, "main.py", "print('v1')\n")
+
+	// The layout a first deploy leaves behind: a buildx image whose app layer
+	// was adopted for native rebuilds.
+	userCache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := chunkLayoutDir(userCache, appID, platform)
+	writeTwoLayerLayoutDir(t, layout,
+		tarBytes(t, map[string]string{"usr/lib/python/dep.py": "dep"}),
+		tarBytes(t, map[string]string{"app/": "", "app/main.py": "print('v1')\n"}), "")
+	sf, ok := nativeBuildEligibility(proj, dockerfile)
+	if !ok {
+		t.Fatal("the Stagefile project should be eligible for native layers")
+	}
+	ctx := context.Background()
+	depsHash, err := nativeDepsHash(proj, dockerfile, platform, resolvedStagefileBackend(ctx), nil, sf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted, err := adoptNativeLayers(layout, platform, proj, sf, depsHash); err != nil || !adopted {
+		t.Fatalf("adoptNativeLayers = %v, %v", adopted, err)
+	}
+	writeFile(t, proj, "main.py", "print('v2')\n") // an app-only edit, rebuilt natively
+
+	runErr := errors.New("RunContainer failed")
+	client := &chunkDeployClient{fakeContainerClient: &fakeContainerClient{
+		queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
+			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
+		},
+	}, runErr: runErr}
+	var stats chunkDeployStats
+	_, _, err = deployByChunkDiff(ctx, &grpcclient.AgentConnection{ContainerService: client}, proj, &appconfig.AppConfig{AppID: appID},
+		platform, dockerfile, nil, nil, runOptions{builder: "docker", quietBuild: true, detach: true}, &stats, nil)
+	if !errors.Is(err, runErr) {
+		t.Fatalf("deployByChunkDiff err = %v, want the RunContainer failure", err)
+	}
+	if stats.buildTime <= 0 {
+		t.Errorf("buildTime = %v, want the native rebuild's time", stats.buildTime)
+	}
+	if !stats.pushCompleted || stats.push.SentChunks == 0 {
+		t.Errorf("pushCompleted = %v, SentChunks = %d; want a completed push", stats.pushCompleted, stats.push.SentChunks)
+	}
+	if stats.startTime != 0 {
+		t.Errorf("startTime = %v, want zero without a start", stats.startTime)
 	}
 }
