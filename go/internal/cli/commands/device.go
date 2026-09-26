@@ -76,6 +76,7 @@ func newDeviceCmd() *cobra.Command {
 		newFoxgloveCmd(),
 		newDeviceCacheCmd(),
 		newVolumesCmd(),
+		newDeviceModelCmd(),
 	)
 	addToGroup("manage",
 		newDeviceInfoCmd(),

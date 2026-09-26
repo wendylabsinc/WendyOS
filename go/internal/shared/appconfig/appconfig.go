@@ -642,6 +642,23 @@ func ValidateAppID(id string) error {
 	return nil
 }
 
+// ReservedModelAppIDPrefix names the data-socket identity of the model hosts
+// the agent runs itself (internal/agent/models). A user app with such an id
+// would share a model host's data socket and could forge its detections.
+const ReservedModelAppIDPrefix = "sh.wendy.model."
+
+// ValidateUserAppID is ValidateAppID plus the reservations that apply only to
+// apps a user deploys.
+func ValidateUserAppID(id string) error {
+	if err := ValidateAppID(id); err != nil {
+		return err
+	}
+	if strings.HasPrefix(id, ReservedModelAppIDPrefix) {
+		return fmt.Errorf("appId %q is invalid: the prefix %q is reserved for models the agent runs", id, ReservedModelAppIDPrefix)
+	}
+	return nil
+}
+
 // ValidateServiceName reports whether name is a well-formed serviceName.
 // serviceName is used to build container IDs, snapshot keys, cgroup paths,
 // container labels, and env vars (e.g. WENDY_HOSTNAME={serviceName}.local), so
@@ -721,7 +738,7 @@ func (c *AppConfig) Validate() error {
 			return err
 		}
 	}
-	if err := ValidateAppID(c.AppID); err != nil {
+	if err := ValidateUserAppID(c.AppID); err != nil {
 		return err
 	}
 

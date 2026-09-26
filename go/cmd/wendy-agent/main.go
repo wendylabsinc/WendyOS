@@ -42,6 +42,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
+	agentmodels "github.com/wendylabsinc/wendy/go/internal/agent/models"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	agentnet "github.com/wendylabsinc/wendy/go/internal/agent/network"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
@@ -389,6 +390,23 @@ func main() {
 		ctrdClient.SetCameraLoopbackProvider(videoSvc)
 		ctrdClient.SyncCameraLoopbacks(ctx)
 		go ctrdClient.RunCameraLoopbackSync(ctx, time.Minute)
+	}
+
+	// Models the agent runs for clients such as wendy chat
+	// (specs/2026-09-25-model-watch-design.md). Model hosts are containers,
+	// so the service needs containerd. Shutdown stops them first
+	// (stopModels, below).
+	var modelSupervisor *agentmodels.Supervisor
+	var modelSvc *services.ModelService
+	if ctrdClient != nil {
+		sup, err := newModelSupervisor(ctx, logger, ctrdClient, videoSvc, dataManager)
+		if err != nil {
+			logger.Error("Model service disabled", zap.Error(err))
+		} else {
+			modelSupervisor = sup
+			appDataSocketManager.SetRecordSink(sup.PublishApplicationRecord)
+			modelSvc = services.NewModelService(logger, sup)
+		}
 	}
 
 	// Sensor pairing (Task 8): mounts a remote source device's cameras as
@@ -781,6 +799,13 @@ func main() {
 		// never on the plaintext provisioning listener or local admin socket.
 		agentpbv2.RegisterWendyTunnelServiceServer(srv, services.NewTunnelService(logger))
 
+		// WendyModelService runs containers with camera and accelerator access
+		// for a client. Like the tunnel, it stays off the plaintext
+		// provisioning listener; the admin socket registers it separately.
+		if modelSvc != nil {
+			agentpbv2.RegisterWendyModelServiceServer(srv, modelSvc)
+		}
+
 		// WendyDriverService installs kernel driver add-ons — loading a module is
 		// ring-0 code execution, as privileged as the root shell above. So it is
 		// registered ONLY here on the mTLS server (authenticated, org-checked),
@@ -957,6 +982,10 @@ func main() {
 			grpc.StreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 		)
 		registerAllServices(localSocketServer)
+
+		if modelSvc != nil {
+			agentpbv2.RegisterWendyModelServiceServer(localSocketServer, modelSvc)
+		}
 
 		// oci.AdminAgentSocketHostPath is the single source of truth for this
 		// path: the admin entitlement bind-mounts its parent directory into
@@ -1150,6 +1179,10 @@ func main() {
 	sig := <-sigCh
 	logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 
+	// Models first: cancel() below stops the video pumps and data sockets
+	// their hosts depend on, and GracefulStop waits for every open
+	// WatchModel stream, which only a model's end closes.
+	stopModels(modelSupervisor)
 	cancel()
 	_ = meshProxy.Close()
 	if agentServer != nil {

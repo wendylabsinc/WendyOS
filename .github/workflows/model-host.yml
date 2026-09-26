@@ -1,0 +1,38 @@
+name: Model hosts
+
+on:
+  pull_request:
+    paths:
+      - 'go/modelhost/**'
+      - '.github/workflows/model-host.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the fake model host for development catalogs
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  fakehost:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test and build
+        run: docker build -f go/modelhost/fakehost/Dockerfile -t fakehost:test .
+      - name: Publish
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ghcr.io/wendylabsinc/wendy-model-host-fake:dev
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag fakehost:test "$IMAGE"
+          docker push "$IMAGE"
+          docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest.Digest}}'
