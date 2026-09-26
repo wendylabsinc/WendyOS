@@ -319,6 +319,35 @@ func TestChunkFallbackReason(t *testing.T) {
 	}
 }
 
+// TestPlatformLabel: wendy.json's platform is free text, so only known
+// platforms are reported and everything else reads as "other".
+func TestPlatformLabel(t *testing.T) {
+	cases := map[string]string{
+		"linux/arm64":          "linux/arm64",
+		"linux/amd64":          "linux/amd64",
+		"linux/arm/v7":         "linux/arm/v7",
+		"darwin/arm64":         "darwin/arm64",
+		"wendy-lite/arm":       "wendy-lite/arm",
+		"linux":                "other",
+		"Linux/arm64":          "other",
+		"linux/s390x":          "other",
+		"linux/arm/v9":         "other",
+		"linux/arm64/v8/extra": "other",
+		"/Users/alice/secret":  "other",
+		"acme-robot/arm64":     "other",
+	}
+	for in, want := range cases {
+		if got := platformLabel(in); got != want {
+			t.Errorf("platformLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	m := &deployMetrics{began: time.Now(), command: "wendy run", transport: "registry", targetPlatform: "acme-robot/arm64"}
+	if got := m.properties(nil)["deploy_target_platform"]; got != "other" {
+		t.Errorf("deploy_target_platform = %q for a free-text wendy.json platform, want \"other\"", got)
+	}
+}
+
 // startAckClient serves CreateContainer and answers StartContainer with the
 // embedded client's stream; AttachContainer reports Unimplemented, like an
 // agent without stdin support, so attached runs use StartContainer too.

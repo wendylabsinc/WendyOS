@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
 // deployMetrics records one deploy for the deploy_completed analytics event
@@ -117,7 +118,7 @@ func (m *deployMetrics) properties(err error) map[string]string {
 		p["deploy_fallback"] = m.fallback
 	}
 	if m.targetPlatform != "" {
-		p["deploy_target_platform"] = m.targetPlatform
+		p["deploy_target_platform"] = platformLabel(m.targetPlatform)
 	}
 	if m.deviceType != "" {
 		p["deploy_device_type"] = m.deviceType
@@ -195,6 +196,34 @@ func chunkSkipReason(isDarwinAgent bool, opts runOptions) string {
 	default:
 		return "not_attempted"
 	}
+}
+
+// platformLabel bounds deploy_target_platform to known platforms. The platform
+// can come from wendy.json, which accepts any text, and telemetry carries only
+// enums; anything unrecognized reports as "other".
+func platformLabel(platform string) string {
+	parts := strings.Split(platform, "/")
+	if len(parts) < 2 || len(parts) > 3 {
+		return "other"
+	}
+	switch parts[0] {
+	case appconfig.PlatformLinux, appconfig.PlatformDarwin, appconfig.PlatformWendyLite:
+	default:
+		return "other"
+	}
+	switch parts[1] {
+	case "arm64", "amd64", "arm", "riscv64":
+	default:
+		return "other"
+	}
+	if len(parts) == 3 {
+		switch parts[2] {
+		case "v6", "v7", "v8":
+		default:
+			return "other"
+		}
+	}
+	return platform
 }
 
 func durationMS(d time.Duration) string { return strconv.FormatInt(d.Milliseconds(), 10) }
