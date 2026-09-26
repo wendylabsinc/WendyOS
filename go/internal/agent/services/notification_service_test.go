@@ -37,17 +37,20 @@ import (
 )
 
 type recordingNotificationSender struct {
-	mu       sync.Mutex
-	requests []*cloudpb.CreateNotificationV2Request
+	mu        sync.Mutex
+	requests  []*cloudpb.CreateNotificationV2Request
+	teamUUIDs [][]string
 }
 
 func (s *recordingNotificationSender) CreateNotificationV2(
 	_ context.Context,
 	request *cloudpb.CreateNotificationV2Request,
+	teamUUIDs []string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requests = append(s.requests, request)
+	s.teamUUIDs = append(s.teamUUIDs, slices.Clone(teamUUIDs))
 	return &cloudpb.CreateNotificationV2Response{
 		NotificationId: request.GetNotificationId(),
 	}, nil
@@ -61,6 +64,7 @@ type strictDuplicateNotificationSender struct {
 func (s *strictDuplicateNotificationSender) CreateNotificationV2(
 	_ context.Context,
 	request *cloudpb.CreateNotificationV2Request,
+	_ []string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	s.requests = append(s.requests, proto.Clone(request).(*cloudpb.CreateNotificationV2Request))
 	if s.seen == nil {
@@ -85,6 +89,7 @@ type mismatchedNotificationSender struct{}
 func (mismatchedNotificationSender) CreateNotificationV2(
 	context.Context,
 	*cloudpb.CreateNotificationV2Request,
+	[]string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	return &cloudpb.CreateNotificationV2Response{
 		NotificationId: "c8a78877-4048-4829-8986-43528248a86e",
@@ -94,6 +99,7 @@ func (mismatchedNotificationSender) CreateNotificationV2(
 func (s *deadlineNotificationSender) CreateNotificationV2(
 	ctx context.Context,
 	request *cloudpb.CreateNotificationV2Request,
+	_ []string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	s.deadline, s.has = ctx.Deadline()
 	return &cloudpb.CreateNotificationV2Response{NotificationId: request.GetNotificationId()}, nil
@@ -236,6 +242,26 @@ func TestSystemNotificationServiceBindsTrustedAppIdentityAndMapsTransport(t *tes
 	}
 }
 
+func TestSystemNotificationServiceMapsCloudV2TeamUUIDs(t *testing.T) {
+	sender := &recordingNotificationSender{}
+	request := validSystemNotificationRequest()
+	request.Audience = &systempb.NotificationAudience{TeamUuids: []string{
+		"123e4567-e89b-12d3-a456-426614174000",
+		"123e4567-e89b-12d3-a456-426614174000",
+		"223e4567-e89b-12d3-a456-426614174000",
+	}}
+
+	if _, err := NewSystemNotificationService("com.example.firewatch", sender).Send(context.Background(), request); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if got := sender.teamUUIDs[0]; !slices.Equal(got, []string{
+		"123e4567-e89b-12d3-a456-426614174000",
+		"223e4567-e89b-12d3-a456-426614174000",
+	}) {
+		t.Fatalf("team UUIDs = %v", got)
+	}
+}
+
 func TestSystemNotificationServiceCanonicalizesUppercaseNotificationID(t *testing.T) {
 	sender := &recordingNotificationSender{}
 	request := validSystemNotificationRequest()
@@ -351,6 +377,41 @@ const deviceProofTestCertificateSerial = "01a2b3c4d5e6f708"
 // here rather than in the package because this agent does not invoke it: the
 // generated client calls wendycloud.v1, so v1 is what a device signs. It exists
 // so the fixture can pin the bytes Cloud will verify once wendyos migrates.
+func TestCloudNotificationRequestV2MapsTrustedAppAndAudience(t *testing.T) {
+	request := proofCloudNotificationRequest()
+	request.Audience.UserIds = []string{"user-1"}
+	request.Audience.Roles = []cloudpb.OrganizationRole{cloudpb.OrganizationRole_ORGANIZATION_ROLE_OWNER}
+	appID := "dev.wendy.firewatch"
+	request.AppId = &appID
+
+	mapped, err := cloudNotificationRequestV2(request, []string{"123e4567-e89b-12d3-a456-426614174000"})
+	if err != nil {
+		t.Fatalf("cloudNotificationRequestV2: %v", err)
+	}
+	if mapped.GetAppId() != appID || mapped.GetNotificationId() != request.GetNotificationId() {
+		t.Fatalf("mapped identity = (%q, %q)", mapped.GetAppId(), mapped.GetNotificationId())
+	}
+	if !slices.Equal(mapped.GetAudience().GetUserIds(), []string{"user-1"}) {
+		t.Fatalf("mapped users = %v", mapped.GetAudience().GetUserIds())
+	}
+	if got := mapped.GetAudience().GetRoles(); len(got) != 1 || int32(got[0]) != int32(request.GetAudience().GetRoles()[0]) {
+		t.Fatalf("mapped roles = %v", got)
+	}
+	if !slices.Equal(mapped.GetAudience().GetTeamIds(), []string{"123e4567-e89b-12d3-a456-426614174000"}) {
+		t.Fatalf("mapped team UUIDs = %v", mapped.GetAudience().GetTeamIds())
+	}
+}
+
+func TestCloudNotificationRequestV2RejectsLegacyTeamIDs(t *testing.T) {
+	request := proofCloudNotificationRequest()
+	request.Audience.TeamIds = []int32{7}
+
+	_, err := cloudNotificationRequestV2(request, nil)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("status = %v, want FailedPrecondition", status.Code(err))
+	}
+}
+
 const deviceProofV2FullMethod = "wendycloud.v2.NotificationService/CreateNotificationV2"
 
 const (
@@ -660,6 +721,12 @@ func TestSystemNotificationServiceValidation(t *testing.T) {
 		}},
 		{name: "invalid team", mutate: func(r *systempb.SendRequest) {
 			r.Audience = &systempb.NotificationAudience{TeamIds: []int32{0}}
+		}},
+		{name: "invalid team UUID", mutate: func(r *systempb.SendRequest) {
+			r.Audience = &systempb.NotificationAudience{TeamUuids: []string{"not-a-uuid"}}
+		}},
+		{name: "mixed team identity versions", mutate: func(r *systempb.SendRequest) {
+			r.Audience = &systempb.NotificationAudience{TeamIds: []int32{7}, TeamUuids: []string{"123e4567-e89b-12d3-a456-426614174000"}}
 		}},
 		{name: "invalid role", mutate: func(r *systempb.SendRequest) {
 			r.Audience = &systempb.NotificationAudience{Roles: []systempb.OrganizationRole{systempb.OrganizationRole_ORGANIZATION_ROLE_UNSPECIFIED}}

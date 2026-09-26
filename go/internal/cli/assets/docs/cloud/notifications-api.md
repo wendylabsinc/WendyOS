@@ -54,19 +54,20 @@ the caller may retry with the same `notification_id`.
 
 #### `NotificationAudience`
 
-The app-facing and Cloud messages use the same plural selector shape. All three
-fields have union semantics. At most 100 selector entries may be supplied across
-the three lists. Cloud normalizes and deduplicates them, remains authoritative
+The selector fields have union semantics. At most 100 selector entries may be
+supplied across the lists. Cloud normalizes and deduplicates them, remains authoritative
 for recipient resolution, and resolves at most 100 recipients for a device-app
 send.
 
 | Field | Type | Description |
 |---|---|---|
 | `user_ids` | `repeated string` | User IDs to include. |
-| `team_ids` | `repeated int32` | Organization team IDs to include. |
+| `team_ids` | `repeated int32` | Legacy Cloud v1 organization team IDs. |
 | `roles` | `repeated OrganizationRole` | Organization roles to include. |
+| `team_uuids` | `repeated string` | Canonical Cloud v2 organization team UUIDs. |
 
-At least one selector is required. A user selected through more than one field
+Do not set both `team_ids` and `team_uuids`. At least one selector is required.
+A user selected through more than one field
 receives one Notification.
 
 #### `SendResponse`

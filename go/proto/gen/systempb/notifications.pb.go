@@ -139,9 +139,12 @@ type NotificationAudience struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Selectors have union semantics. The agent normalizes and deduplicates them
 	// and accepts at most 100 selectors total before forwarding to Cloud.
-	UserIds       []string           `protobuf:"bytes,1,rep,name=user_ids,json=userIds,proto3" json:"user_ids,omitempty"`
-	TeamIds       []int32            `protobuf:"varint,2,rep,packed,name=team_ids,json=teamIds,proto3" json:"team_ids,omitempty"`
-	Roles         []OrganizationRole `protobuf:"varint,3,rep,packed,name=roles,proto3,enum=wendy.system.v1.OrganizationRole" json:"roles,omitempty"`
+	UserIds []string `protobuf:"bytes,1,rep,name=user_ids,json=userIds,proto3" json:"user_ids,omitempty"`
+	// Legacy Cloud v1 numeric team IDs.
+	TeamIds []int32            `protobuf:"varint,2,rep,packed,name=team_ids,json=teamIds,proto3" json:"team_ids,omitempty"`
+	Roles   []OrganizationRole `protobuf:"varint,3,rep,packed,name=roles,proto3,enum=wendy.system.v1.OrganizationRole" json:"roles,omitempty"`
+	// Canonical Cloud v2 team UUIDs. Do not set both team_ids and team_uuids.
+	TeamUuids     []string `protobuf:"bytes,4,rep,name=team_uuids,json=teamUuids,proto3" json:"team_uuids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -193,6 +196,13 @@ func (x *NotificationAudience) GetTeamIds() []int32 {
 func (x *NotificationAudience) GetRoles() []OrganizationRole {
 	if x != nil {
 		return x.Roles
+	}
+	return nil
+}
+
+func (x *NotificationAudience) GetTeamUuids() []string {
+	if x != nil {
+		return x.TeamUuids
 	}
 	return nil
 }
@@ -341,11 +351,13 @@ var File_wendy_system_v1_notifications_proto protoreflect.FileDescriptor
 
 const file_wendy_system_v1_notifications_proto_rawDesc = "" +
 	"\n" +
-	"#wendy/system/v1/notifications.proto\x12\x0fwendy.system.v1\x1a\x1cgoogle/protobuf/struct.proto\"\x85\x01\n" +
+	"#wendy/system/v1/notifications.proto\x12\x0fwendy.system.v1\x1a\x1cgoogle/protobuf/struct.proto\"\xa4\x01\n" +
 	"\x14NotificationAudience\x12\x19\n" +
 	"\buser_ids\x18\x01 \x03(\tR\auserIds\x12\x19\n" +
 	"\bteam_ids\x18\x02 \x03(\x05R\ateamIds\x127\n" +
-	"\x05roles\x18\x03 \x03(\x0e2!.wendy.system.v1.OrganizationRoleR\x05roles\"\xca\x02\n" +
+	"\x05roles\x18\x03 \x03(\x0e2!.wendy.system.v1.OrganizationRoleR\x05roles\x12\x1d\n" +
+	"\n" +
+	"team_uuids\x18\x04 \x03(\tR\tteamUuids\"\xca\x02\n" +
 	"\vSendRequest\x12A\n" +
 	"\baudience\x18\x01 \x01(\v2%.wendy.system.v1.NotificationAudienceR\baudience\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
