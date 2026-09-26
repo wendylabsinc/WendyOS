@@ -199,6 +199,20 @@ func saveDeployFingerprint(appID, deviceKey string, fp deployFingerprint) {
 	_ = os.WriteFile(p, data, 0o644)
 }
 
+// removeDeployFingerprint forgets a previously verified deployment. Paths that
+// cannot report the content they delivered use this after a successful push so
+// a later run cannot authorize a skip from layer identities that describe the
+// image which preceded it.
+func removeDeployFingerprint(appID, deviceKey string) {
+	p, err := deployFingerprintPath(appID, deviceKey)
+	if err != nil {
+		return
+	}
+	// Best-effort: failure to remove an optimization hint must not turn a
+	// successful deployment into a failed one.
+	_ = os.Remove(p)
+}
+
 // computeBuildInputHash hashes everything that can change the built image:
 // the resolved Dockerfile contents, the build context files (honoring
 // .dockerignore conservatively), and the sorted build args + platform. deployEnv

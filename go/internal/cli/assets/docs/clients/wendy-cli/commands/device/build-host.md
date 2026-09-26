@@ -37,14 +37,17 @@ agent's mTLS organisation check.
 
 ## Source contexts and concurrent builds
 
-The host stores source files under `/var/lib/wendy/buildctx/<app>` between
-builds so BuildKit can reuse its local-source cache. The files are cleared and
-rewritten at the start of each build of that app, but are not deleted after
-the build finishes.
+The host stores source files under `/var/lib/wendy/buildctx/<id>` between
+builds so BuildKit can reuse its local-source cache. `<id>` is the app ID for a
+single-image app, and `<app>-<service>` for each service of a
+[multi-service app](../../../../apps/wendy-services.md#remote-build-host). The
+files are cleared and rewritten at the start of each build with that id, but
+are not deleted after the build finishes.
 
-Builds of the same app are serialised on a host. Builds of different apps can
-run concurrently. This prevents one build from replacing source files that
-another build of the same app is still compiling.
+Builds with the same id are serialised on a host. Builds with different ids can
+run concurrently, so the services of one app build side by side and each keeps
+its own cache between runs. This prevents one build from replacing source files
+that another build with the same id is still compiling.
 
 ## Delivery
 
