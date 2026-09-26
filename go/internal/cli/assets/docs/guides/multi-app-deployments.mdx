@@ -26,6 +26,14 @@ wendy run
 Wendy auto-detects the project shape, so you do not need a build-type flag. A `wendy.json` with a `services` map takes the multi-service path; a `docker-compose.yml` is detected as a Compose project (and a companion `wendy.json` is merged in when present).
 </Callout>
 
+<Callout type="info">
+Before deploying, Wendy registers each app ID in the organization's Cloud Apps
+catalog using an operator credential for the target organization and Cloud host.
+For an intentionally offline or air-gapped deployment, pass
+`--skip-cloud-registration`; an unregistered app cannot receive a Cloud
+Notification grant until it is registered later.
+</Callout>
+
 ### Prerequisites
 
 - Wendy CLI installed on your development machine

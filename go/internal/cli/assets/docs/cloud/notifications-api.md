@@ -150,7 +150,7 @@ the Wendy agent stamps `app_id` from trusted container state.
 | Field | Type | Description |
 |---|---|---|
 | `organization_id` | `optional int32` | Required for user-authenticated callers; omitted by provisioned devices. |
-| `audience` | `NotificationAudience` | Union of repeated `user_ids`, `team_ids`, and `roles`; see above. |
+| `audience` | `NotificationAudience` | Union of repeated `user_ids`, UUID `team_ids`, and `roles`; see below. |
 | `title` | `string` | Notification title. |
 | `body` | `string` | Notification body. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
@@ -158,6 +158,12 @@ the Wendy agent stamps `app_id` from trusted container state.
 | `notification_id` | `string` | Caller-chosen Notification resource UUID v4; Cloud stores and returns canonical lowercase form and rejects every canonical reuse with `ALREADY_EXISTS`. |
 | `metadata` | `optional Struct` | Structured JSON-compatible metadata. |
 | `app_id` | `optional string` | Required for provisioned-device calls and stamped from trusted app identity by the Wendy agent. |
+
+For ACME-enrolled device callers, Cloud v2 `audience.team_ids` is a
+`repeated string` containing the canonical UUIDs supplied to the app-facing
+`team_uuids` field. Legacy numeric `team_ids` are forwarded only through the
+Cloud v1 path. The app-facing Agent API rejects requests that combine numeric
+`team_ids` and UUID `team_uuids`.
 
 #### `CreateNotificationV2Response`
 
