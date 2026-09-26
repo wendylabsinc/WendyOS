@@ -5,7 +5,8 @@ operator-facing Wendy Notifications in a Wendy Cloud organization.
 
 ## Proto package
 
-`wendycloud.v1` — defined in `Proto/cloud/notifications.proto`.
+`wendycloud.v1` is defined in `Proto/cloud/notifications.proto`; the UUID-native
+Cloud v2 service is defined in `Proto/wendycloud/v2/notifications.proto`.
 
 ## App-facing API (`wendy.system.v1`)
 
@@ -20,6 +21,11 @@ Swift-only. Apps written in other languages call this gRPC service directly.
 See [Send notifications from a device app](/docs/guides/device-notifications)
 for entitlement and Cloud grant setup, Swift and direct gRPC examples, and
 delivery behavior.
+
+On Cloud v2, `wendy run`, Compose, and remote build-host deployments register
+each app ID in the organization's Cloud Apps catalog before deployment. Pass
+`--skip-cloud-registration` only when Cloud is intentionally unavailable. An
+unregistered app cannot receive the Cloud Notification grant.
 
 The private socket binds every call to trusted app identity. The request cannot
 supply an app ID, device ID, or organization ID; the agent adds app identity and
@@ -38,13 +44,15 @@ spelling—returns `ALREADY_EXISTS`; the prior success is never replayed.
 
 Local validation and rate-limit failures happen before forwarding and do not
 claim the UUID. After correcting the request or waiting for the local rate limit,
-the caller may retry with the same `notification_id`.
+the caller may retry with the same `notification_id`. These rate-limit and
+idempotency semantics are the same on the ACME Cloud v2 and legacy Cloud v1
+forwarding paths.
 
 #### `SendRequest`
 
 | Field | Type | Description |
 |---|---|---|
-| `audience` | `NotificationAudience` | Union of the user, organization team, and organization role selectors below. |
+| `audience` | `NotificationAudience` | Union of `user_ids`, numeric `team_ids` (Cloud v1 only), UUID `team_uuids` (Cloud v2 / ACME only), and `roles`. Do not combine the two team-ID namespaces. |
 | `title` | `string` | Notification title. |
 | `body` | `string` | Notification body. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
@@ -68,7 +76,9 @@ send.
 
 Do not set both `team_ids` and `team_uuids`. At least one selector is required.
 A user selected through more than one field
-receives one Notification.
+receives one Notification. `team_uuids` requires an ACME-enrolled Cloud v2
+device; a legacy-enrolled device returns `FAILED_PRECONDITION` and must use
+numeric `team_ids` instead.
 
 #### `SendResponse`
 
