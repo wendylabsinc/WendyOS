@@ -560,6 +560,11 @@ type runOptions struct {
 	// push on failure, chunkingForce uses chunk-diff with no fallback, and
 	// chunkingOff skips chunk-diff entirely (registry push only).
 	chunking string
+	// onDeployStarted, when non-nil, is called when the agent acknowledges
+	// that the deployed container started. runWithAgent sets it so its
+	// deploy_completed event describes the deploy rather than the log session
+	// that follows it (WDY-3215). Call it through reportDeployStarted.
+	onDeployStarted func()
 }
 
 // runResolveOptions builds the resolveTarget options shared by every `wendy run`
@@ -1314,8 +1319,12 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		if err != nil {
 			return fmt.Errorf("starting container: %w", err)
 		}
-		if _, err := stream.Recv(); err != nil && err != io.EOF {
+		resp, err := stream.Recv()
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("waiting for container start: %w", err)
+		}
+		if resp.GetStarted() != nil {
+			opts.reportDeployStarted()
 		}
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
 		return nil
@@ -1335,6 +1344,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
 		}
+		opts.reportDeployStarted()
 		startCancel()
 		cliLogln("Application %s started.", containerDisplayName(appCfg))
 		cmd := runPostStartIfReady(ctx, opts.watchState.hookContext(ctx), conn, appCfg, opts)
@@ -1388,6 +1398,7 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		}
 		if resp.GetStarted() != nil && !hookFired {
 			hookFired = true
+			opts.reportDeployStarted()
 			runner.startAsync(runCtx, appCfg)
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
@@ -2049,6 +2060,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 }
 
 func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions, metrics *deployMetrics) error {
+	// The start sites that receive the agent's Started acknowledgement report
+	// it here, so the event ends with the deploy, not with the log session.
+	opts.onDeployStarted = metrics.markStarted
 	mark := phaseTimer()
 	if !opts.managedRobot {
 		var err error
@@ -2099,6 +2113,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	}
 
 	platform := resolveAgentPlatform(appCfg.Platform, agentOS, architecture)
+	metrics.targetPlatform = platform
 	if strings.EqualFold(agentOS, appconfig.PlatformDarwin) {
 		if err := rejectUnsupportedMacRunProject(projectType, platform); err != nil {
 			return err
@@ -2216,9 +2231,14 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// finished image straight into this device's registry over the mesh. Placed
 	// ahead of every local path because those exist to optimise a local build
 	// that is not going to happen.
-	metrics.targetPlatform = platform
 	if opts.buildHost != "" {
 		metrics.transport = "buildhost"
+		if len(opts.fleetDevices) > 0 {
+			// A fleet build starts one container per device: the first device's
+			// Started acknowledgement does not end the deploy, and a later
+			// device's failure must still count as one.
+			opts.onDeployStarted = nil
+		}
 		return runRemoteBuild(ctx, conn, opts.buildHost, cwd, appCfg, platform, opts.dockerfile, buildArgs, deployEnv, opts)
 	}
 
@@ -2292,13 +2312,16 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		deployed := false
 		onStarted := func(diffIDs []string) {
 			deployed = true
+			metrics.markStarted()
 			if hashErr == nil {
 				// Persist at the agent's Started acknowledgement. Log streaming can
 				// last indefinitely or be canceled after a successful deployment.
 				saveDeployFingerprint(appCfg.AppID, deviceKey, deployFingerprint{InputHash: desiredHash, AppVersion: appCfg.Version, LayerDiffIDs: diffIDs})
 			}
 		}
+		attemptBegan := time.Now()
 		_, hint, err := deployByChunkDiff(ctx, conn, cwd, appCfg, platform, opts.dockerfile, buildArgs, deployEnv, opts, &stats, onStarted)
+		attempt := time.Since(attemptBegan)
 		ociHint = hint
 		if err == nil || deployed {
 			// Once started, a log-stream failure must not trigger another build
@@ -2332,13 +2355,10 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// PATH" failure from the fallback.
 			return fmt.Errorf("on-device deploy failed and no Docker fallback is possible inside the container; the chunk-diff error was: %w", err)
 		} else {
+			metrics.fellBack(err, attempt)
 			// Surface the chunk-diff error instead of dropping it — it used to be
 			// silently discarded here, leaving no trail for why a deploy suddenly
 			// fell back to the slower path.
-			metrics.transport, metrics.fallback = "registry", chunkFallbackReason(err)
-			// The abandoned chunk attempt's timings do not describe the registry
-			// push that is about to actually produce this deploy's result.
-			metrics.chunk = nil
 			cliNotice("%s", formatRegistryFallbackNotice(err, stats.imageBytes))
 			if registryFallbackPlan(stats.imageBytes, isInteractiveTerminal(), opts.yes) == fallbackConfirm {
 				if !confirmFn("Continue with the full registry push?") {
@@ -2349,7 +2369,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	}
 
 	if metrics.transport == "" {
-		metrics.transport, metrics.fallback = "registry", "not_attempted"
+		metrics.transport, metrics.fallback = "registry", chunkSkipReason(isDarwinAgent, opts)
 	}
 
 	// Verify auth certs are available if the device's registry requires mTLS.
@@ -2380,7 +2400,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		return directLLBErr
 	}
 	if ociHint != nil && (directLLBFallback || registryPushWouldUseDocker(opts.builder)) {
+		reuseBegan := time.Now()
 		if err := tryPushExistingOCILayout(ctx, conn, regPort, ociHint, repo); err == nil {
+			metrics.buildPushTime = time.Since(reuseBegan)
 			cliSuccess("Reused already-built image for the registry push (skipped a redundant rebuild)")
 			pushed = true
 		} else if opts.debug {
@@ -2392,6 +2414,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		// Single-service build: no concurrency, so keep the shared local cache dir
 		// (empty cache key) for cross-run cache reuse.
 		buildTitle := fmt.Sprintf("Building and pushing image for %s...", tui.Value(platform))
+		buildBegan := time.Now()
 		if err := runBuildWithProgress(ctx, buildTitle, dumpRawUnlessRegistryUnavailable, func(buildCtx context.Context, stream, logw io.Writer) error {
 			return buildAndPushImageForAgent(buildCtx, conn, regPort, agentOS, opts.builder, cwd, repo, platform, opts.dockerfile, buildArgs, "", stream, logw)
 		}); err != nil {
@@ -2402,6 +2425,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			}
 			return fmt.Errorf("building and pushing image: %w", err)
 		}
+		metrics.buildPushTime = time.Since(buildBegan)
 	}
 
 	// The agent pulls from localhost:<regPort>.
@@ -2613,8 +2637,12 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		if err != nil {
 			return fmt.Errorf("starting container: %w", err)
 		}
-		if _, err := stream.Recv(); err != nil && err != io.EOF {
+		resp, err := stream.Recv()
+		if err != nil && err != io.EOF {
 			return fmt.Errorf("waiting for container start: %w", err)
+		}
+		if resp.GetStarted() != nil {
+			opts.reportDeployStarted()
 		}
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
 		// Detached returns as soon as the container is started — see
@@ -2638,6 +2666,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
 		}
+		opts.reportDeployStarted()
 		startCancel()
 		cliLogln("Application %s started.", containerDisplayName(appCfg))
 		cmd := runPostStartIfReady(ctx, opts.watchState.hookContext(ctx), conn, appCfg, opts)
@@ -2724,6 +2753,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		gotFirstResponse = true
 		if resp.GetStarted() != nil && !hookFired {
 			hookFired = true
+			opts.reportDeployStarted()
 			runner.startAsync(runCtx, appCfg)
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
@@ -3191,6 +3221,14 @@ func wendyPlatform(deviceType string) string {
 // session.
 func (o runOptions) isWatch() bool { return o.watchState != nil }
 
+// reportDeployStarted passes the agent's Started acknowledgement to the
+// deploy recorder, when one is listening.
+func (o runOptions) reportDeployStarted() {
+	if o.onDeployStarted != nil {
+		o.onDeployStarted()
+	}
+}
+
 func (o runOptions) beginHostLifecycle(containerName string) bool {
 	return o.watchState.beginHostLifecycle(containerName)
 }
@@ -3345,9 +3383,11 @@ type chunkDeployStats struct {
 	imageBytes int64
 
 	// Phase timings and the final push snapshot, for the deploy_completed
-	// analytics event (WDY-3215).
+	// analytics event (WDY-3215). pushCompleted is set once the chunk push
+	// succeeded; until then the push fields describe an unfinished attempt.
 	buildTime, pushTime, startTime time.Duration
 	push                           chunkPushSnapshot
+	pushCompleted                  bool
 }
 
 // isChunkDeployCancellation reports whether a deployByChunkDiff failure was a
@@ -3638,6 +3678,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	if err != nil {
 		return nil, hint, err
 	}
+	stats.pushCompleted = true
 	mark("chunk+query+write+prepare")
 	// Carry the post-start agent-hook metadata so the agent runs the device-host
 	// hook on start, matching the registry path's StartContainer call.
