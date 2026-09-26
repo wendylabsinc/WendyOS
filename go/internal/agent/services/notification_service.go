@@ -601,7 +601,10 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 		}
 	}()
 
-	if s.provisioningSvc.ProvisioningPrincipal() != "" {
+	if principal := s.provisioningSvc.ProvisioningPrincipal(); principal != "" {
+		if err := validateNotificationDevicePrincipal(principal); err != nil {
+			return nil, err
+		}
 		return s.createNotificationV2WithACME(ctx, cloudHost, certPEM, chainPEM, keyData, request, teamUUIDs)
 	}
 	if len(teamUUIDs) != 0 {
@@ -638,6 +641,17 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 	return response, nil
 }
 
+func validateNotificationDevicePrincipal(principal string) error {
+	identity, err := certs.ParsePrincipal(principal)
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, "device has an invalid ACME provisioning identity")
+	}
+	if identity.EntityType != certs.EntityAsset {
+		return status.Error(codes.FailedPrecondition, "ACME provisioning identity is not a device")
+	}
+	return nil
+}
+
 func (s *CloudNotificationSender) createNotificationV2WithACME(
 	ctx context.Context,
 	cloudHost, certPEM, chainPEM string,
@@ -649,6 +663,10 @@ func (s *CloudNotificationSender) createNotificationV2WithACME(
 	if err != nil {
 		return nil, err
 	}
+	// SECURITY: This override belongs to the Agent service environment, which app
+	// containers cannot modify. It is needed for local/dev device ingress;
+	// DeviceEndpoint restricts it to a TLS endpoint and DialCloud verifies the
+	// server certificate before presenting the device's mTLS certificate.
 	endpoint, err := cloudrelay.DeviceEndpoint(cloudHost, os.Getenv("WENDY_DEVICE_CLOUD_URL"))
 	if err != nil {
 		return nil, fmt.Errorf("resolve Wendy Cloud device endpoint: %w", err)
@@ -700,7 +718,11 @@ func (s *CloudNotificationSender) connectionForACME(
 	endpoint, certPEM, chainPEM string,
 	keyData []byte,
 ) (*grpc.ClientConn, error) {
-	key := sha256.Sum256([]byte("v2\x00" + endpoint + "\x00" + certPEM))
+	hasher := sha256.New()
+	_, _ = io.WriteString(hasher, "v2\x00"+endpoint+"\x00"+certPEM+"\x00"+chainPEM+"\x00")
+	_, _ = hasher.Write(keyData)
+	var key [sha256.Size]byte
+	copy(key[:], hasher.Sum(nil))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.connection != nil && s.connectionKey == key {

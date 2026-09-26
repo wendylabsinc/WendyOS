@@ -412,6 +412,27 @@ func TestCloudNotificationRequestV2RejectsLegacyTeamIDs(t *testing.T) {
 	}
 }
 
+func TestValidateNotificationDevicePrincipal(t *testing.T) {
+	const tenant = "13a72725-dfe3-4425-bd04-b253d2036089"
+	tests := []struct {
+		name      string
+		principal string
+		wantCode  codes.Code
+	}{
+		{name: "device", principal: "spiffe://wendy.sh/tenant/" + tenant + "/device/box-01", wantCode: codes.OK},
+		{name: "operator", principal: "spiffe://wendy.sh/tenant/" + tenant + "/operator/alice", wantCode: codes.FailedPrecondition},
+		{name: "signer", principal: "spiffe://wendy.sh/tenant/" + tenant + "/signer/release", wantCode: codes.FailedPrecondition},
+		{name: "malformed", principal: "spiffe://wendy.sh/tenant/not-a-uuid/device/box-01", wantCode: codes.FailedPrecondition},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := status.Code(validateNotificationDevicePrincipal(test.principal)); got != test.wantCode {
+				t.Fatalf("status = %v, want %v", got, test.wantCode)
+			}
+		})
+	}
+}
+
 const deviceProofV2FullMethod = "wendycloud.v2.NotificationService/CreateNotificationV2"
 
 const (
