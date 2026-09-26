@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,7 +31,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	systempb "github.com/wendylabsinc/wendy/go/proto/gen/systempb"
 )
 
@@ -52,7 +55,7 @@ const (
 
 // NotificationSender forwards a trusted, app-attributed Notification to Wendy Cloud.
 type NotificationSender interface {
-	CreateNotificationV2(context.Context, *cloudpb.CreateNotificationV2Request) (*cloudpb.CreateNotificationV2Response, error)
+	CreateNotificationV2(context.Context, *cloudpb.CreateNotificationV2Request, []string) (*cloudpb.CreateNotificationV2Response, error)
 }
 
 // SystemNotificationService serves one app-specific app-facing socket. The
@@ -80,7 +83,7 @@ func (s *SystemNotificationService) Send(
 	if s.sender == nil {
 		return nil, status.Error(codes.Unavailable, "notification delivery is unavailable")
 	}
-	cloudAudience, notificationID, err := validateNotificationSendRequest(req)
+	cloudAudience, teamUUIDs, notificationID, err := validateNotificationSendRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +106,7 @@ func (s *SystemNotificationService) Send(
 	defer cancel()
 	// One app-facing Send makes exactly one Cloud creation attempt. In particular,
 	// ALREADY_EXISTS is terminal: retrying it here could duplicate downstream push work.
-	response, err := s.sender.CreateNotificationV2(forwardCtx, cloudRequest)
+	response, err := s.sender.CreateNotificationV2(forwardCtx, cloudRequest, teamUUIDs)
 	if err != nil {
 		if cloudStatus, ok := status.FromError(err); ok {
 			return nil, cloudStatus.Err()
@@ -155,19 +158,19 @@ func (l *notificationRateLimiter) allow(now time.Time) bool {
 	return true
 }
 
-func validateNotificationSendRequest(request *systempb.SendRequest) (*cloudpb.NotificationAudience, string, error) {
+func validateNotificationSendRequest(request *systempb.SendRequest) (*cloudpb.NotificationAudience, []string, string, error) {
 	if request == nil {
-		return nil, "", status.Error(codes.InvalidArgument, "request is required")
+		return nil, nil, "", status.Error(codes.InvalidArgument, "request is required")
 	}
 	notificationID, valid := canonicalNotificationUUIDv4(request.GetNotificationId())
 	if !valid {
-		return nil, "", status.Error(codes.InvalidArgument, "notification_id must be a UUID v4")
+		return nil, nil, "", status.Error(codes.InvalidArgument, "notification_id must be a UUID v4")
 	}
 	if !validNotificationText(request.GetTitle(), 120) {
-		return nil, "", status.Error(codes.InvalidArgument, "title must contain 1...120 printable UTF-8 bytes")
+		return nil, nil, "", status.Error(codes.InvalidArgument, "title must contain 1...120 printable UTF-8 bytes")
 	}
 	if !validNotificationText(request.GetBody(), 2000) {
-		return nil, "", status.Error(codes.InvalidArgument, "body must contain 1...2000 printable UTF-8 bytes")
+		return nil, nil, "", status.Error(codes.InvalidArgument, "body must contain 1...2000 printable UTF-8 bytes")
 	}
 	switch request.GetSeverity() {
 	case systempb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
@@ -175,31 +178,34 @@ func validateNotificationSendRequest(request *systempb.SendRequest) (*cloudpb.No
 		systempb.NotificationSeverity_NOTIFICATION_SEVERITY_ERROR,
 		systempb.NotificationSeverity_NOTIFICATION_SEVERITY_CRITICAL:
 	default:
-		return nil, "", status.Error(codes.InvalidArgument, "severity is required")
+		return nil, nil, "", status.Error(codes.InvalidArgument, "severity is required")
 	}
-	cloudAudience, err := normalizeNotificationAudience(request.GetAudience())
+	cloudAudience, teamUUIDs, err := normalizeNotificationAudience(request.GetAudience())
 	if err != nil {
-		return nil, "", err
+		return nil, nil, "", err
 	}
 	if !validNotificationDeepLink(request.GetDeepLink()) {
-		return nil, "", status.Error(codes.InvalidArgument, "deep_link must be an absolute wendy:// URI with a host, no userinfo, and at most 2048 bytes")
+		return nil, nil, "", status.Error(codes.InvalidArgument, "deep_link must be an absolute wendy:// URI with a host, no userinfo, and at most 2048 bytes")
 	}
 	if metadata := request.GetMetadata(); metadata != nil && proto.Size(metadata) > maxNotificationMetadataBytes {
-		return nil, "", status.Errorf(codes.InvalidArgument, "metadata must be at most %d encoded bytes", maxNotificationMetadataBytes)
+		return nil, nil, "", status.Errorf(codes.InvalidArgument, "metadata must be at most %d encoded bytes", maxNotificationMetadataBytes)
 	}
-	return cloudAudience, notificationID, nil
+	return cloudAudience, teamUUIDs, notificationID, nil
 }
 
-func normalizeNotificationAudience(audience *systempb.NotificationAudience) (*cloudpb.NotificationAudience, error) {
+func normalizeNotificationAudience(audience *systempb.NotificationAudience) (*cloudpb.NotificationAudience, []string, error) {
 	if audience == nil {
-		return nil, status.Error(codes.InvalidArgument, "audience is required")
+		return nil, nil, status.Error(codes.InvalidArgument, "audience is required")
 	}
-	rawSelectorCount := len(audience.GetUserIds()) + len(audience.GetTeamIds()) + len(audience.GetRoles())
+	if len(audience.GetTeamIds()) != 0 && len(audience.GetTeamUuids()) != 0 {
+		return nil, nil, status.Error(codes.InvalidArgument, "audience cannot contain both team_ids and team_uuids")
+	}
+	rawSelectorCount := len(audience.GetUserIds()) + len(audience.GetTeamIds()) + len(audience.GetTeamUuids()) + len(audience.GetRoles())
 	if rawSelectorCount == 0 {
-		return nil, status.Error(codes.InvalidArgument, "audience must contain at least one selector")
+		return nil, nil, status.Error(codes.InvalidArgument, "audience must contain at least one selector")
 	}
 	if rawSelectorCount > maxNotificationAudienceSelectors {
-		return nil, status.Errorf(codes.InvalidArgument, "audience must contain at most %d selectors", maxNotificationAudienceSelectors)
+		return nil, nil, status.Errorf(codes.InvalidArgument, "audience must contain at most %d selectors", maxNotificationAudienceSelectors)
 	}
 
 	mapped := &cloudpb.NotificationAudience{}
@@ -207,7 +213,7 @@ func normalizeNotificationAudience(audience *systempb.NotificationAudience) (*cl
 	for _, rawUserID := range audience.GetUserIds() {
 		userID := strings.TrimSpace(rawUserID)
 		if !validNotificationIdentifier(userID, 128) {
-			return nil, status.Error(codes.InvalidArgument, "audience user_ids must contain 1...128 safe ASCII bytes")
+			return nil, nil, status.Error(codes.InvalidArgument, "audience user_ids must contain 1...128 safe ASCII bytes")
 		}
 		if _, exists := seenUsers[userID]; exists {
 			continue
@@ -219,13 +225,28 @@ func normalizeNotificationAudience(audience *systempb.NotificationAudience) (*cl
 	seenTeams := make(map[int32]struct{}, len(audience.GetTeamIds()))
 	for _, teamID := range audience.GetTeamIds() {
 		if teamID <= 0 {
-			return nil, status.Error(codes.InvalidArgument, "audience team_ids must be positive")
+			return nil, nil, status.Error(codes.InvalidArgument, "audience team_ids must be positive")
 		}
 		if _, exists := seenTeams[teamID]; exists {
 			continue
 		}
 		seenTeams[teamID] = struct{}{}
 		mapped.TeamIds = append(mapped.TeamIds, teamID)
+	}
+
+	teamUUIDs := make([]string, 0, len(audience.GetTeamUuids()))
+	seenTeamUUIDs := make(map[string]struct{}, len(audience.GetTeamUuids()))
+	for _, rawTeamUUID := range audience.GetTeamUuids() {
+		teamUUID := strings.TrimSpace(rawTeamUUID)
+		parsed, err := uuid.Parse(teamUUID)
+		if err != nil || parsed.String() != teamUUID {
+			return nil, nil, status.Error(codes.InvalidArgument, "audience team_uuids must contain canonical UUIDs")
+		}
+		if _, exists := seenTeamUUIDs[teamUUID]; exists {
+			continue
+		}
+		seenTeamUUIDs[teamUUID] = struct{}{}
+		teamUUIDs = append(teamUUIDs, teamUUID)
 	}
 
 	seenRoles := make(map[systempb.OrganizationRole]struct{}, len(audience.GetRoles()))
@@ -237,7 +258,7 @@ func normalizeNotificationAudience(audience *systempb.NotificationAudience) (*cl
 			systempb.OrganizationRole_ORGANIZATION_ROLE_MEMBER,
 			systempb.OrganizationRole_ORGANIZATION_ROLE_VIEWER:
 		default:
-			return nil, status.Error(codes.InvalidArgument, "audience roles must be specified")
+			return nil, nil, status.Error(codes.InvalidArgument, "audience roles must be specified")
 		}
 		if _, exists := seenRoles[role]; exists {
 			continue
@@ -246,7 +267,7 @@ func normalizeNotificationAudience(audience *systempb.NotificationAudience) (*cl
 		mapped.Roles = append(mapped.Roles, cloudOrganizationRole(role))
 	}
 
-	return mapped, nil
+	return mapped, teamUUIDs, nil
 }
 
 func cloudOrganizationRole(role systempb.OrganizationRole) cloudpb.OrganizationRole {
@@ -567,13 +588,11 @@ func NewCloudNotificationSender(logger *zap.Logger, provisioningSvc *Provisionin
 func (s *CloudNotificationSender) CreateNotificationV2(
 	ctx context.Context,
 	request *cloudpb.CreateNotificationV2Request,
+	teamUUIDs []string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	cloudHost, orgID, assetID, enrolled := s.provisioningSvc.ProvisioningInfo()
 	if !enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "device must be enrolled before sending notifications")
-	}
-	if orgID <= 0 || assetID <= 0 {
-		return nil, status.Error(codes.FailedPrecondition, "device proof requires positive organization and asset IDs")
 	}
 	certPEM, chainPEM, keyData := s.provisioningSvc.ProvisioningCerts()
 	defer func() {
@@ -582,6 +601,18 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 		}
 	}()
 
+	if principal := s.provisioningSvc.ProvisioningPrincipal(); principal != "" {
+		if err := validateNotificationDevicePrincipal(principal); err != nil {
+			return nil, err
+		}
+		return s.createNotificationV2WithACME(ctx, cloudHost, certPEM, chainPEM, keyData, request, teamUUIDs)
+	}
+	if len(teamUUIDs) != 0 {
+		return nil, status.Error(codes.FailedPrecondition, "Cloud v2 team audiences require ACME enrollment")
+	}
+	if orgID <= 0 || assetID <= 0 {
+		return nil, status.Error(codes.FailedPrecondition, "device proof requires positive organization and asset IDs")
+	}
 	proofCtx, err := notificationDeviceProofContext(
 		ctx,
 		request,
@@ -610,11 +641,110 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 	return response, nil
 }
 
+func validateNotificationDevicePrincipal(principal string) error {
+	identity, err := certs.ParsePrincipal(principal)
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, "device has an invalid ACME provisioning identity")
+	}
+	if identity.EntityType != certs.EntityAsset {
+		return status.Error(codes.FailedPrecondition, "ACME provisioning identity is not a device")
+	}
+	return nil
+}
+
+func (s *CloudNotificationSender) createNotificationV2WithACME(
+	ctx context.Context,
+	cloudHost, certPEM, chainPEM string,
+	keyData []byte,
+	request *cloudpb.CreateNotificationV2Request,
+	teamUUIDs []string,
+) (*cloudpb.CreateNotificationV2Response, error) {
+	v2Request, err := cloudNotificationRequestV2(request, teamUUIDs)
+	if err != nil {
+		return nil, err
+	}
+	// SECURITY: This override belongs to the Agent service environment, which app
+	// containers cannot modify. It is needed for local/dev device ingress;
+	// DeviceEndpoint restricts it to a TLS endpoint and DialCloud verifies the
+	// server certificate before presenting the device's mTLS certificate.
+	endpoint, err := cloudrelay.DeviceEndpoint(cloudHost, os.Getenv("WENDY_DEVICE_CLOUD_URL"))
+	if err != nil {
+		return nil, fmt.Errorf("resolve Wendy Cloud device endpoint: %w", err)
+	}
+	connection, err := s.connectionForACME(endpoint, certPEM, chainPEM, keyData)
+	if err != nil {
+		return nil, err
+	}
+	response, err := cloudpbv2.NewNotificationServiceClient(connection).CreateNotificationV2(ctx, v2Request)
+	if err != nil {
+		s.logger.Warn("app-originated Cloud v2 notification delivery failed",
+			zap.String("app_id", request.GetAppId()),
+			zap.String("notification_id", request.GetNotificationId()),
+			zap.Error(err))
+		return nil, err
+	}
+	return &cloudpb.CreateNotificationV2Response{NotificationId: response.GetNotificationId()}, nil
+}
+
+func cloudNotificationRequestV2(request *cloudpb.CreateNotificationV2Request, teamUUIDs []string) (*cloudpbv2.CreateNotificationV2Request, error) {
+	if len(request.GetAudience().GetTeamIds()) != 0 {
+		return nil, status.Error(codes.FailedPrecondition, "Cloud v2 team audiences require UUID team IDs")
+	}
+	return &cloudpbv2.CreateNotificationV2Request{
+		Audience: &cloudpbv2.NotificationAudience{
+			UserIds: request.GetAudience().GetUserIds(),
+			TeamIds: teamUUIDs,
+			Roles:   notificationRolesV2(request.GetAudience().GetRoles()),
+		},
+		Title:          request.GetTitle(),
+		Body:           request.GetBody(),
+		Severity:       cloudpbv2.NotificationSeverity(request.GetSeverity()),
+		DeepLink:       request.GetDeepLink(),
+		NotificationId: request.GetNotificationId(),
+		Metadata:       request.GetMetadata(),
+		AppId:          request.AppId,
+	}, nil
+}
+
+func notificationRolesV2(roles []cloudpb.OrganizationRole) []cloudpbv2.OrganizationRole {
+	mapped := make([]cloudpbv2.OrganizationRole, len(roles))
+	for index, role := range roles {
+		mapped[index] = cloudpbv2.OrganizationRole(role)
+	}
+	return mapped
+}
+
+func (s *CloudNotificationSender) connectionForACME(
+	endpoint, certPEM, chainPEM string,
+	keyData []byte,
+) (*grpc.ClientConn, error) {
+	hasher := sha256.New()
+	_, _ = io.WriteString(hasher, "v2\x00"+endpoint+"\x00"+certPEM+"\x00"+chainPEM+"\x00")
+	_, _ = hasher.Write(keyData)
+	var key [sha256.Size]byte
+	copy(key[:], hasher.Sum(nil))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.connection != nil && s.connectionKey == key {
+		return s.connection, nil
+	}
+	connection, err := cloudrelay.DialCloud(endpoint, certPEM, chainPEM, keyData)
+	if err != nil {
+		return nil, fmt.Errorf("connect to Wendy Cloud device endpoint: %w", err)
+	}
+	if s.connection != nil {
+		_ = s.connection.Close()
+	}
+	s.connectionKey = key
+	s.connection = connection
+	return connection, nil
+}
+
 func (s *CloudNotificationSender) connectionFor(
 	cloudHost, certPEM, chainPEM string,
 	keyData []byte,
 ) (*grpc.ClientConn, error) {
-	key := sha256.Sum256([]byte(cloudHost + "\x00" + certPEM))
+	key := sha256.Sum256([]byte("v1\x00" + cloudHost + "\x00" + certPEM))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.connection != nil && s.connectionKey == key {
