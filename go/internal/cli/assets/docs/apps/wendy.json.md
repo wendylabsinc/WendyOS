@@ -268,7 +268,7 @@ Optional URI pointing to the JSON Schema for editor autocompletion and validatio
 
 Entitlements grant the app access to hardware and system capabilities. Any capability not listed is unavailable to the app. They are code signed, preventing privilege escalation.
 
-Use `wendy project entitlements add` / `remove` to manage them, or edit `wendy.json` directly.
+Run `wendy project` for a guided editor, or use `wendy project add`, `edit`, and `remove` with explicit flags. `wendy project validate` checks the result. Direct editing of `wendy.json` is also supported. See the [project editor](../clients/wendy-cli/commands/project/index.md).
 
 ### `network`
 
