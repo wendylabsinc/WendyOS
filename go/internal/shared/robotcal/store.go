@@ -80,6 +80,24 @@ type Store interface {
 // wrong.
 var unitNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$`)
 
+// NoSuchCalibrationError is what ClearRecord returns when there is nothing to
+// clear.
+//
+// A type rather than a bare message because a second implementation of Store
+// has to classify it across a process boundary — the agent turns it into a gRPC
+// NOT_FOUND — and matching on message text would make a reworded sentence a
+// silent behaviour change. Clearing a calibration that is not there must never
+// read as success: `clear` is what an operator runs after a repair, and a typo
+// reporting "done" would leave the old calibration in place and trusted.
+type NoSuchCalibrationError struct {
+	Unit string
+	ID   string
+}
+
+func (e *NoSuchCalibrationError) Error() string {
+	return fmt.Sprintf("unit %q has no calibration %q to clear", e.Unit, e.ID)
+}
+
 // ValidUnit refuses a unit name that could not be a directory.
 func ValidUnit(unit string) error {
 	if !unitNamePattern.MatchString(unit) {
@@ -201,7 +219,7 @@ func (s *FileStore) PutRecord(_ context.Context, unit string, rec Record) error 
 func (s *FileStore) ClearRecord(_ context.Context, unit, id string) error {
 	return s.update(unit, func(u *UnitRecord) error {
 		if _, ok := u.Calibrations[id]; !ok {
-			return fmt.Errorf("unit %q has no calibration %q to clear", unit, id)
+			return &NoSuchCalibrationError{Unit: unit, ID: id}
 		}
 		delete(u.Calibrations, id)
 		// A cleared calibration invalidates any half-finished attempt at it too.
