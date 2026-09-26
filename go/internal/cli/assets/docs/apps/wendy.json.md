@@ -377,6 +377,37 @@ Bluetooth access.
 { "type": "bluetooth" }
 ```
 
+### `nan`
+
+Direct, unsupervised Wi-Fi Aware control through the host's `nan0`
+`wpa_supplicant` socket. Declare it only for an app trusted to manage NAN
+publish/subscribe handles and NDP sessions:
+
+```json
+{ "type": "nan" }
+{ "type": "network", "mode": "host" }
+```
+
+At container creation the agent calls `wendyos-nan start`, creates and raises
+an app-specific NAN data interface, and grants the app access to **only** the
+`nan0` control socket. The app receives `WENDY_NAN_SOCKET`, `WENDY_NAN_NDI`,
+and `WENDY_NAN_CLIENT_DIR`. A Unix datagram control client must bind its local
+socket inside `WENDY_NAN_CLIENT_DIR`: that directory has the same absolute
+path on the host and in the container, allowing wpa_supplicant to send command
+replies and events back. Binding a private container `/tmp` socket cannot work.
+The app must manage its own NAN service
+handles and NDPs. This entitlement does not grant host networking: use the
+separate `network: host` grant to bind and connect over the NDP interface.
+It does not expose the global or station Wi-Fi control sockets.
+
+NAN has one radio-wide cluster, so an app shares cluster settings and airtime
+with other NAN users on the host even though its publish/NDP handles and data
+interface are separate. Do not issue `NAN_STOP`, `NAN_START`, or other
+radio-wide resets from the app while others use the radio. The socket is a
+single-file bind mount for isolation; a `wpa_supplicant` restart replaces its
+inode, so redeploy the app to refresh the mount. The app NDI is removed on
+app stop/delete; the shared `nan0` remains available to other users.
+
 ### `persist`
 
 Persistent storage that survives container restarts.

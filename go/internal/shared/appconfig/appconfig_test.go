@@ -2319,6 +2319,23 @@ func TestAdminEntitlementJSONUnknownKeyWarns(t *testing.T) {
 	}
 }
 
+func TestNANEntitlementValidation(t *testing.T) {
+	cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementNAN}}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("nan entitlement rejected: %v", err)
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"nan"}]}`)); len(warnings) != 0 {
+		t.Fatalf("nan entitlement warnings: %v", warnings)
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"nan","mode":"host"}]}`)); len(warnings) == 0 {
+		t.Fatal("nan entitlement must not accept network options")
+	}
+	cfg.Entitlements = append(cfg.Entitlements, Entitlement{Type: EntitlementNAN})
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("duplicate nan entitlement accepted")
+	}
+}
+
 func TestValidateJSON_BuildEntitlement(t *testing.T) {
 	warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"build"}]}`))
 	if len(warnings) != 0 {
