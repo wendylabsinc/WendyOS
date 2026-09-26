@@ -25,18 +25,21 @@ import (
 const defaultTelemetryEndpoint = "https://wendy-cli-telemetry-114319063177.us-central1.run.app/v1/telemetry/events"
 
 type eventPayload struct {
-	AnonymousID string            `json:"anonymous_id"`
-	Event       string            `json:"event"`
-	CommandName string            `json:"command_name"`
-	CommandRoot string            `json:"command_root,omitempty"`
-	DurationMS  int64             `json:"duration_ms,omitempty"`
-	Success     bool              `json:"success"`
-	ErrorClass  string            `json:"error_class,omitempty"`
-	CLIVersion  string            `json:"cli_version"`
-	OS          string            `json:"os"`
-	Arch        string            `json:"arch"`
-	IsDevBuild  bool              `json:"is_dev_build"`
-	Properties  map[string]string `json:"properties,omitempty"`
+	AnonymousID string `json:"anonymous_id"`
+	Event       string `json:"event"`
+	CommandName string `json:"command_name"`
+	CommandRoot string `json:"command_root,omitempty"`
+	DurationMS  int64  `json:"duration_ms,omitempty"`
+	Success     bool   `json:"success"`
+	ErrorClass  string `json:"error_class,omitempty"`
+	CLIVersion  string `json:"cli_version"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	IsDevBuild  bool   `json:"is_dev_build"`
+	// Properties carries an event's own dimensions beyond the core fields,
+	// such as a deploy's phase timings. Callers pass only bounded numbers and
+	// enums — never paths, hosts, names or error text.
+	Properties map[string]string `json:"properties,omitempty"`
 }
 
 // coreProperties travel as top-level payload fields, not in Properties.
@@ -139,6 +142,12 @@ func Init(cfg *config.Config) (firstRun bool) {
 // Track sends an analytics event. The HTTP send is a no-op when analytics is
 // disabled or uninitialized; the test hook (if any) always fires so test
 // assertions can observe the intended payload regardless of initialization state.
+//
+// The core properties (command_name, command_root, duration_ms, success,
+// error_class, is_dev_build) become top-level payload fields. Every other
+// property is sent in the payload's `properties` object, bounded in count and
+// length, so callers must pass only bounded numbers and enums: never paths,
+// hosts, names or error text.
 func Track(event string, properties map[string]string) {
 	track(event, properties, nil)
 }
