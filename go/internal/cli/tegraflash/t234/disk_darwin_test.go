@@ -2,7 +2,11 @@
 
 package t234
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestMacUSBPortPathMatchesLibusbTopology(t *testing.T) {
 	// macOS locationID: bus 20, downstream ports 1 then 2.
@@ -105,6 +109,29 @@ func TestParseUMSDisksNestedHub(t *testing.T) {
 // parses correctly.
 func TestParseUMSDisksDirect(t *testing.T) {
 	assertOneFlashpkg(t, parseUMSDisks(ioregDirect), "0-1")
+}
+
+func TestParseUMSDisksLinkSpeed(t *testing.T) {
+	for _, speed := range []int64{480_000_000, 5_000_000_000} {
+		out := strings.Replace(ioregDirect, `"locationID" = 1048576`, fmt.Sprintf(`"locationID" = 1048576
+  |   "UsbLinkSpeed" = %d`, speed), 1)
+		disks := parseUMSDisks(out)
+		assertOneFlashpkg(t, disks, "0-1")
+		if got := disks[0].USBSpeedMbps; got != speed/1_000_000 {
+			t.Fatalf("USB speed = %d Mb/s, want %d", got, speed/1_000_000)
+		}
+	}
+	if got := parseUMSDisks(ioregDirect)[0].USBSpeedMbps; got != 0 {
+		t.Fatalf("missing USB speed = %d, want 0", got)
+	}
+	// A hub's faster upstream link must not become the gadget's speed.
+	out := strings.Replace(ioregNestedHub, `"idVendor" = 1452`, `"idVendor" = 1452
+  |   "UsbLinkSpeed" = 5000000000`, 1)
+	out = strings.Replace(out, `"idVendor" = 7531`, `"idVendor" = 7531
+  | |   "UsbLinkSpeed" = 480000000`, 1)
+	if got := parseUMSDisks(out)[0].USBSpeedMbps; got != 480 {
+		t.Fatalf("nested gadget USB speed = %d Mb/s, want 480", got)
+	}
 }
 
 // TestSplitIoregSubtreesSplitsNestedDevice guards the specific defect: the

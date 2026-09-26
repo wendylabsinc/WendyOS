@@ -3,6 +3,7 @@
 package t234
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	backendfile "github.com/diskfs/go-diskfs/backend/file"
 	"github.com/diskfs/go-diskfs/filesystem/ext4"
 	"github.com/diskfs/go-diskfs/filesystem/fat32"
+	"golang.org/x/sync/errgroup"
 )
 
 // This file is the body of the hidden `wendy __t234-write` helper: it runs as
@@ -312,30 +314,75 @@ func copyFileAt(dev *os.File, path string, offset int64, onProgress func(int64))
 	}
 	defer f.Close()
 
-	buf := make([]byte, writeChunk)
-	var done int64
-	for {
-		n, readErr := io.ReadFull(f, buf)
-		if n > 0 {
-			padded := (n + sectorSize - 1) / sectorSize * sectorSize
-			for i := n; i < padded; i++ {
-				buf[i] = 0
+	return copyImageAt(dev, f, offset, onProgress)
+}
+
+// copyImageAt overlaps source reads with device writes using two reusable
+// buffers, bounded to 8 MiB. Keep one writer: the recovery LUN uses USB
+// Bulk-Only Transport, which serializes commands even when its backing disk
+// is NVMe. Concurrent writes would not provide an NVMe command queue here.
+// Wait for both goroutines before returning so no write can outlive the copy
+// or race the subsequent partition, GPT write, sync, or device close.
+func copyImageAt(dev io.WriterAt, src io.Reader, offset int64, onProgress func(int64)) error {
+	type chunk struct {
+		buf []byte
+		n   int // source bytes, excluding sector padding
+	}
+	free := make(chan []byte, 2)
+	for i := 0; i < cap(free); i++ {
+		free <- make([]byte, writeChunk)
+	}
+	ready := make(chan chunk, 1)
+	g, ctx := errgroup.WithContext(context.Background())
+	g.Go(func() error {
+		defer close(ready)
+		for {
+			var buf []byte
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case buf = <-free:
 			}
-			if _, err := dev.WriteAt(buf[:padded], offset+done); err != nil {
+			n, readErr := io.ReadFull(src, buf)
+			if n > 0 {
+				padded := (n + sectorSize - 1) / sectorSize * sectorSize
+				clear(buf[n:padded])
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case ready <- chunk{buf: buf[:padded], n: n}:
+				}
+			}
+			if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+				return nil
+			}
+			if readErr != nil {
+				return readErr
+			}
+		}
+	})
+	g.Go(func() error {
+		var done int64
+		for c := range ready {
+			if err := ctx.Err(); err != nil {
 				return err
 			}
-			done += int64(n)
+			n, err := dev.WriteAt(c.buf, offset+done)
+			if err != nil {
+				return err
+			}
+			if n != len(c.buf) {
+				return io.ErrShortWrite
+			}
+			done += int64(c.n)
 			if onProgress != nil {
 				onProgress(done)
 			}
+			free <- c.buf[:cap(c.buf)]
 		}
-		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
-			return nil
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
+		return nil
+	})
+	return g.Wait()
 }
 
 func progress(w io.Writer, done, total int64) {
