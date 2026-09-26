@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -219,4 +220,79 @@ func TestChunkPushProgressNilSafe(t *testing.T) {
 	}
 	_ = snap.Line()
 	_ = snap.Summary()
+}
+
+// steppedClock is a chunkPushProgress clock the test advances by hand.
+type steppedClock struct{ t time.Time }
+
+func (c *steppedClock) now() time.Time { return c.t }
+
+func (c *steppedClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+func newSteppedProgress(c *steppedClock) *chunkPushProgress {
+	return &chunkPushProgress{now: c.now, start: c.t}
+}
+
+// TestChunkPushSummarySeparatesWireAndDeviceTime is the WDY-3215 example: a
+// 1.8s upload followed by 40.5s of device-side preparation must not read as
+// a 42.3s transfer.
+func TestChunkPushSummarySeparatesWireAndDeviceTime(t *testing.T) {
+	clock := &steppedClock{t: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	p := newSteppedProgress(clock)
+	p.SetLayerCounts(3, 2)
+	p.LayerPlanned(5216, 999, 62_900_000)
+	clock.advance(500 * time.Millisecond) // host-side manifest resolution, not wire time
+	for i := 0; i < 999; i++ {
+		p.ChunkSent(62_962) // 999 * 62_962 ≈ 62.9 MB
+	}
+	clock.advance(1800 * time.Millisecond)
+	p.UploadFinished()
+	clock.advance(40500 * time.Millisecond)
+	p.PrepareFinished()
+
+	got := p.Snapshot().Summary()
+	want := "Sent 999 chunk(s) (62.9MB) in 1.8s (34.9MB/s); device already had 4217 chunk(s) and 2 full layer(s). " +
+		"The device then took 40.5s to prepare the image (device-side work, not the network)."
+	if got != want {
+		t.Fatalf("Summary() =\n  %q\nwant\n  %q", got, want)
+	}
+}
+
+func TestChunkPushSummaryOmitsNegligibleDeviceTime(t *testing.T) {
+	clock := &steppedClock{t: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	p := newSteppedProgress(clock)
+	p.SetLayerCounts(1, 0)
+	p.LayerPlanned(10, 10, 10_000_000)
+	for i := 0; i < 10; i++ {
+		p.ChunkSent(1_000_000)
+	}
+	clock.advance(2 * time.Second)
+	p.UploadFinished()
+	clock.advance(50 * time.Millisecond)
+	p.PrepareFinished()
+
+	if got := p.Snapshot().Summary(); strings.Contains(got, "device then took") {
+		t.Fatalf("Summary() = %q; a 50ms device phase is noise", got)
+	}
+}
+
+func TestChunkPushLineReportsTheDevicePhase(t *testing.T) {
+	clock := &steppedClock{t: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	p := newSteppedProgress(clock)
+	p.SetLayerCounts(1, 0)
+	p.LayerPlanned(10, 10, 10_000_000)
+	for i := 0; i < 10; i++ {
+		p.ChunkSent(1_000_000)
+	}
+	clock.advance(time.Second)
+	p.UploadFinished()
+	clock.advance(12 * time.Second)
+
+	snap := p.Snapshot()
+	if !snap.Preparing || snap.Activity() != "device preparing image" {
+		t.Fatalf("snapshot = %+v, want the device phase", snap)
+	}
+	if got, want := snap.Line(), "uploaded 10.0MB in 1.0s; device preparing image for 12.0s (device already has 0/10 chunks, 0 layers)"; got != want {
+		t.Fatalf("Line() = %q, want %q", got, want)
+	}
 }

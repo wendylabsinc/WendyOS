@@ -496,7 +496,11 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 		return nil, uploadErr
 	}
 
-	if prepareDone != nil {
+	prog.UploadFinished()
+
+	if prepareDone == nil {
+		prog.PrepareFinished()
+	} else {
 		var prepareErr error
 		select {
 		case prepareErr = <-prepareDone:
@@ -507,6 +511,7 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 			}
 			prepareErr = <-prepareDone
 		}
+		prog.PrepareFinished()
 		if err := prepareErr; err != nil {
 			if strictPrepare {
 				return nil, err

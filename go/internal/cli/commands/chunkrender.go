@@ -131,7 +131,7 @@ func startChunkPushHeartbeat(prog *chunkPushProgress, w io.Writer, interval time
 				return
 			case <-ticker.C:
 				snap := prog.Snapshot()
-				fmt.Fprintf(w, "  ...     sending chunks  %s  (%s)\n", snap.Line(), formatChunkPushElapsed(snap.Elapsed))
+				fmt.Fprintf(w, "  ...     %s  %s  (%s)\n", snap.Activity(), snap.Line(), formatChunkPushElapsed(snap.Elapsed))
 			}
 		}
 	}()

@@ -152,6 +152,53 @@ type fakeContainerClient struct {
 	compressors   []string
 }
 
+// chunksWrittenLocked reads chunksWritten while uploads may still be running.
+func (f *fakeContainerClient) chunksWrittenLocked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chunksWritten
+}
+
+// TestPushLayersByChunksTimesUploadAndDevicePhases checks the push marks the
+// end of the upload and of device preparation, so the summary can split them.
+func TestPushLayersByChunksTimesUploadAndDevicePhases(t *testing.T) {
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+
+	layerTar := variedChunkTestData(300_000)
+	fake := &fakeContainerClient{
+		queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
+			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
+		},
+	}
+	prog := newChunkPushProgress()
+	_, err := pushLayersByChunksWithPrepareMode(context.Background(), fake, []localLayer{{
+		Digest:    "sha256:" + sha256Hex(layerTar),
+		MediaType: "application/vnd.oci.image.layer.v1.tar",
+		Blob:      layerTar,
+	}}, func(ctx context.Context, _ []*agentpb.RunContainerLayerHeader) error {
+		// Device-side preparation outlasts the upload by a clear margin.
+		for fake.chunksWrittenLocked() == 0 {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(150 * time.Millisecond)
+		return nil
+	}, nil, false, prog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := prog.Snapshot()
+	if snap.Preparing {
+		t.Fatal("push returned while still marked as preparing")
+	}
+	if snap.DeviceTime < 50*time.Millisecond {
+		t.Fatalf("DeviceTime = %v, want the preparation that outlasted the upload", snap.DeviceTime)
+	}
+	if !strings.Contains(snap.Summary(), "The device then took") {
+		t.Fatalf("Summary() = %q, want the device phase reported", snap.Summary())
+	}
+}
+
 // TestPushLayersByChunksPreparesDuringUpload proves the preparation RPC is
 // started after manifests are known but before WriteChunks finishes. This is
 // the wall-clock overlap the optimization exists to create.

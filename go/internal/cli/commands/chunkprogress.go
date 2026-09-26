@@ -26,6 +26,11 @@ type chunkPushProgress struct {
 	layersTotal, layersReused, layersPlanned int
 	totalChunks, missingChunks, sentChunks   int
 	sentBytes, plannedBytes                  int64
+
+	// firstSent, uploadDone and prepareDone split the push into wire time and
+	// device time, so a slow device is not reported as a slow network
+	// (WDY-3215). Zero until the corresponding event happens.
+	firstSent, uploadDone, prepareDone time.Time
 }
 
 // newChunkPushProgress returns a ready-to-use aggregator with its clock
@@ -75,8 +80,37 @@ func (p *chunkPushProgress) ChunkSent(n int) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.firstSent.IsZero() {
+		p.firstSent = p.now()
+	}
 	p.sentChunks++
 	p.sentBytes += int64(n)
+}
+
+// UploadFinished records that the device acknowledged every missing chunk.
+// From here until PrepareFinished, the push is waiting on the device.
+func (p *chunkPushProgress) UploadFinished() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.uploadDone.IsZero() {
+		p.uploadDone = p.now()
+	}
+}
+
+// PrepareFinished records that the device finished preparing the image (or
+// that there was no device-side preparation to wait for).
+func (p *chunkPushProgress) PrepareFinished() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prepareDone.IsZero() {
+		p.prepareDone = p.now()
+	}
 }
 
 // Snapshot copies the current counters under lock and stamps Elapsed, giving
@@ -89,7 +123,8 @@ func (p *chunkPushProgress) Snapshot() chunkPushSnapshot {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return chunkPushSnapshot{
+	now := p.now()
+	s := chunkPushSnapshot{
 		LayersTotal:   p.layersTotal,
 		LayersReused:  p.layersReused,
 		LayersPlanned: p.layersPlanned,
@@ -98,8 +133,22 @@ func (p *chunkPushProgress) Snapshot() chunkPushSnapshot {
 		SentChunks:    p.sentChunks,
 		SentBytes:     p.sentBytes,
 		PlannedBytes:  p.plannedBytes,
-		Elapsed:       p.now().Sub(p.start),
+		Elapsed:       now.Sub(p.start),
 	}
+	if !p.uploadDone.IsZero() {
+		if !p.firstSent.IsZero() && p.uploadDone.After(p.firstSent) {
+			s.UploadTime = p.uploadDone.Sub(p.firstSent)
+		}
+		end := p.prepareDone
+		if end.IsZero() {
+			end = now
+			s.Preparing = true
+		}
+		if end.After(p.uploadDone) {
+			s.DeviceTime = end.Sub(p.uploadDone)
+		}
+	}
+	return s
 }
 
 // chunkPushSnapshot is an immutable mirror of chunkPushProgress's counters
@@ -111,6 +160,14 @@ type chunkPushSnapshot struct {
 	TotalChunks, MissingChunks, SentChunks   int
 	SentBytes, PlannedBytes                  int64
 	Elapsed                                  time.Duration
+	// UploadTime is wire time, from the first chunk sent to the device's last
+	// acknowledgement; zero until the upload finishes or when nothing was sent.
+	UploadTime time.Duration
+	// DeviceTime is how long the device took, after the upload, to finish
+	// preparing the image (so far, while Preparing).
+	DeviceTime time.Duration
+	// Preparing is true while the upload is done but the device is not.
+	Preparing bool
 }
 
 // alreadyHasChunks is the chunk count the device reported already having,
@@ -142,6 +199,10 @@ func (s chunkPushSnapshot) Bytes() tui.ByteProgress {
 // byte-progress clause is omitted and only the parenthetical is shown.
 func (s chunkPushSnapshot) Line() string {
 	detail := fmt.Sprintf("device already has %d/%d chunks, %d layers", s.alreadyHasChunks(), s.TotalChunks, s.LayersReused)
+	if s.Preparing {
+		return fmt.Sprintf("uploaded %s in %s; device preparing image for %s (%s)",
+			tui.ByteProgress{Current: s.SentBytes}.String(), formatChunkPushElapsed(s.UploadTime), formatChunkPushElapsed(s.DeviceTime), detail)
+	}
 	if bp := s.Bytes().String(); bp != "" {
 		return bp + " (" + detail + ")"
 	}
@@ -162,14 +223,45 @@ func (s chunkPushSnapshot) Line() string {
 // purely in terms of reused layers instead.
 func (s chunkPushSnapshot) Summary() string {
 	already := s.alreadyHasChunks()
-	if s.SentChunks == 0 {
-		if s.TotalChunks == 0 {
-			return fmt.Sprintf("All %d layer(s) already on device; nothing to send.", s.LayersReused)
+	var line string
+	switch {
+	case s.SentChunks > 0:
+		// Once the upload has finished, report wire time and rate, not the
+		// whole push: device-side preparation gets its own sentence below.
+		wire, rate := s.Elapsed, ""
+		if s.UploadTime > 0 {
+			wire = s.UploadTime
+			rate = fmt.Sprintf(" (%s/s)", tui.ByteProgress{Current: int64(float64(s.SentBytes) / s.UploadTime.Seconds())}.String())
 		}
-		return fmt.Sprintf("All %d chunk(s) already on device (%d full layer(s) reused).", already, s.LayersReused)
+		line = fmt.Sprintf("Sent %d chunk(s) (%s) in %s%s; device already had %d chunk(s) and %d full layer(s).",
+			s.SentChunks, tui.ByteProgress{Current: s.SentBytes}.String(), formatChunkPushElapsed(wire), rate, already, s.LayersReused)
+	case s.TotalChunks == 0:
+		line = fmt.Sprintf("All %d layer(s) already on device; nothing to send.", s.LayersReused)
+	default:
+		line = fmt.Sprintf("All %d chunk(s) already on device (%d full layer(s) reused).", already, s.LayersReused)
 	}
-	return fmt.Sprintf("Sent %d chunk(s) (%s) in %s; device already had %d chunk(s) and %d full layer(s).",
-		s.SentChunks, tui.ByteProgress{Current: s.SentBytes}.String(), formatChunkPushElapsed(s.Elapsed), already, s.LayersReused)
+	return line + s.deviceClause()
+}
+
+// deviceClause reports the device's share of the push, so a deploy slowed by
+// device-side assembly and unpacking is not blamed on the network (WDY-3215).
+func (s chunkPushSnapshot) deviceClause() string {
+	if s.DeviceTime < 100*time.Millisecond {
+		return ""
+	}
+	clause := fmt.Sprintf(" The device then took %s to prepare the image", formatChunkPushElapsed(s.DeviceTime))
+	if s.DeviceTime >= 5*time.Second && s.DeviceTime >= 2*s.UploadTime {
+		return clause + " (device-side work, not the network)."
+	}
+	return clause + "."
+}
+
+// Activity names what the push is waiting on, for the plain heartbeat line.
+func (s chunkPushSnapshot) Activity() string {
+	if s.Preparing {
+		return "device preparing image"
+	}
+	return "sending chunks"
 }
 
 // formatChunkPushElapsed renders an elapsed duration to one decimal place
