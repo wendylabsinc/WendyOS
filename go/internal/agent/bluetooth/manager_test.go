@@ -79,3 +79,9 @@ func TestStubManager_ImplementsManagerInterface(t *testing.T) {
 	// Verify the returned value satisfies the Manager interface at compile time.
 	var _ Manager = m
 }
+
+func TestNewManager_AcceptsLinkReporter(t *testing.T) {
+	if NewManager(zap.NewNop(), WithLinkReporter(fakeLinkReporter{})) == nil {
+		t.Fatal("NewManager returned nil")
+	}
+}

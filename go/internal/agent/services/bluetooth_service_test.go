@@ -171,3 +171,21 @@ func TestBluetoothService_ConnectDisconnectForget(t *testing.T) {
 		t.Fatalf("ForgetBluetoothPeripheral: %v", err)
 	}
 }
+
+func TestMapBluetoothPeripheralToV2_CopiesLinkTimeouts(t *testing.T) {
+	eff, req := uint32(500), uint32(3000)
+	got := mapBluetoothPeripheralToV2(&agentpb.DiscoveredBluetoothPeripheral{
+		Address:                       "AA:BB:CC:DD:EE:FF",
+		Connected:                     true,
+		SupervisionTimeoutMs:          &eff,
+		RequestedSupervisionTimeoutMs: &req,
+	})
+	if got.GetSupervisionTimeoutMs() != 500 || got.GetRequestedSupervisionTimeoutMs() != 3000 {
+		t.Errorf("v2 link timeouts = %v/%v; want 500/3000", got.SupervisionTimeoutMs, got.RequestedSupervisionTimeoutMs)
+	}
+
+	bare := mapBluetoothPeripheralToV2(&agentpb.DiscoveredBluetoothPeripheral{Address: "AA:BB:CC:DD:EE:FF"})
+	if bare.SupervisionTimeoutMs != nil || bare.RequestedSupervisionTimeoutMs != nil {
+		t.Error("absent link timeouts must stay absent in v2")
+	}
+}

@@ -180,7 +180,8 @@ func main() {
 		networkMgr = nm
 	}
 	hwDiscoverer := hardware.NewSystemHardwareDiscoverer(logger)
-	btManager := bluetooth.NewManager(logger)
+	linkWatcher := bluetooth.NewWatcher(logger)
+	btManager := bluetooth.NewManager(logger, bluetooth.WithLinkReporter(linkWatcher))
 
 	var proxyMgr *dbusproxy.Manager
 	if dbusproxy.IsAvailable() {
@@ -1048,6 +1049,11 @@ func main() {
 	// away never pages us. Runs once per boot and waits on the user audio
 	// session, so it neither delays startup nor repeats on agent restarts.
 	go btManager.ReconnectTrusted(ctx)
+
+	// Keep BLE HID links (gamepads) at a short supervision timeout, so a dead
+	// link is torn down in about 0.5 s instead of the ~3 s such devices ask
+	// for, and log every Bluetooth disconnect with its reason (WDY-3189).
+	go linkWatcher.Run(ctx)
 
 	otelPort := defaultOTELPort
 	if p := os.Getenv("WENDY_OTEL_PORT"); p != "" {

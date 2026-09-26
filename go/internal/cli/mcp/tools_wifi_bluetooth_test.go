@@ -310,6 +310,36 @@ func TestBluetoothScan_ReturnsPeripherals(t *testing.T) {
 	}
 }
 
+func TestBluetoothScan_ReportsLinkTimeouts(t *testing.T) {
+	eff, req := uint32(500), uint32(3000)
+	fake := &fakeWiFiBluetoothServer{
+		btPeripherals: []*agentpb.DiscoveredBluetoothPeripheral{
+			{Name: "Xbox Wireless Controller", Address: "AA:BB:CC:DD:EE:FF", Connected: true,
+				SupervisionTimeoutMs: &eff, RequestedSupervisionTimeoutMs: &req},
+			{Name: "HeadPhones", Address: "11:22:33:44:55:66"},
+		},
+	}
+	conn := startFakeAgentWiFiServer(t, fake)
+	srv := New(&config.Config{}, nil)
+	srv.SetConn(conn)
+
+	result, err := srv.callTool(context.Background(), "bluetooth_scan", map[string]any{"timeout_seconds": 2})
+	if err != nil || result.IsError {
+		t.Fatalf("bluetooth_scan = %v, %v", result, err)
+	}
+	byAddr := map[string]map[string]any{}
+	for _, d := range listPayload(t, result, "devices") {
+		byAddr[d["address"].(string)] = d
+	}
+	pad := byAddr["AA:BB:CC:DD:EE:FF"]
+	if pad["supervision_timeout_ms"] != float64(500) || pad["requested_supervision_timeout_ms"] != float64(3000) {
+		t.Errorf("pad link timeouts = %v/%v; want 500/3000", pad["supervision_timeout_ms"], pad["requested_supervision_timeout_ms"])
+	}
+	if _, ok := byAddr["11:22:33:44:55:66"]["supervision_timeout_ms"]; ok {
+		t.Error("a peripheral with no reported timeout must not carry the key")
+	}
+}
+
 func TestBluetoothScan_HasStructuredContent(t *testing.T) {
 	fake := &fakeWiFiBluetoothServer{
 		btPeripherals: []*agentpb.DiscoveredBluetoothPeripheral{
