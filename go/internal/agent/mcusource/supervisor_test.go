@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/audioloop"
+	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink/sim"
@@ -105,7 +106,7 @@ func TestSupervisorMountsCameraAndWritesFrames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest:      &sensorlinkpb.SensorManifest{DeviceAssetId: 8, Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0", Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}}}}},
+		Manifest:      &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{ChannelId: 1, Name: "cam0", Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}}}}},
 		Frames:        [][]byte{[]byte("jpg")},
 		FrameInterval: time.Millisecond,
 	})
@@ -120,7 +121,7 @@ func TestSupervisorMountsCameraAndWritesFrames(t *testing.T) {
 	defer rcancel()
 	_ = sup.RunPairing(rctx, mcusource.SensorPairing{SourceAssetID: 8, OrgID: 1}, ln.Addr().String())
 
-	if len(lb.ensured) == 0 || lb.ensured[0] < 256 {
+	if len(lb.ensured) == 0 || lb.ensured[0] < ipcam.MCUBandStart || lb.ensured[0] > ipcam.MCUBandEnd {
 		t.Fatalf("expected an MCU-band node to be ensured, got %v", lb.ensured)
 	}
 	if w.count() == 0 {
@@ -128,12 +129,10 @@ func TestSupervisorMountsCameraAndWritesFrames(t *testing.T) {
 	}
 }
 
-func camManifest(deviceAssetID int32, channelID uint32, name string) *sensorlinkpb.SensorManifest {
+func camManifest(channelID uint32, name string) *sensorlinkpb.SensorManifest {
 	return &sensorlinkpb.SensorManifest{
-		DeviceAssetId: deviceAssetID,
 		Sensors: []*sensorlinkpb.SensorDescriptor{{
 			ChannelId: channelID,
-			Kind:      sensorlinkpb.SensorDescriptor_CAMERA,
 			Name:      name,
 			Format:    &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}},
 		}},
@@ -148,7 +147,7 @@ func TestSupervisorRunPairingReturnsPromptlyOnIdleStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest: camManifest(11, 1, "cam0"),
+		Manifest: camManifest(1, "cam0"),
 		Frames:   [][]byte{[]byte("jpg")},
 		// Long enough that no frame is sent during this test's lifetime, so
 		// the source has read Subscribe and then gone silent.
@@ -185,8 +184,8 @@ func TestSupervisorNodeIDsUniqueAcrossSources(t *testing.T) {
 	ln2, _ := net.Listen("tcp", "127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go sim.Serve(ctx, ln1, sim.Options{Manifest: camManifest(21, 1, "cam0"), Frames: [][]byte{[]byte("jpg")}, FrameInterval: time.Millisecond})
-	go sim.Serve(ctx, ln2, sim.Options{Manifest: camManifest(22, 1, "cam0"), Frames: [][]byte{[]byte("jpg")}, FrameInterval: time.Millisecond})
+	go sim.Serve(ctx, ln1, sim.Options{Manifest: camManifest(1, "cam0"), Frames: [][]byte{[]byte("jpg")}, FrameInterval: time.Millisecond})
+	go sim.Serve(ctx, ln2, sim.Options{Manifest: camManifest(1, "cam0"), Frames: [][]byte{[]byte("jpg")}, FrameInterval: time.Millisecond})
 
 	lb := &fakeLoopback{}
 	sup := mcusource.NewSupervisor(zap.NewNop(), lb, func(_ mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
@@ -235,7 +234,7 @@ func TestSupervisorNodeIDStableAcrossReconnect(t *testing.T) {
 	connectOnce := func() {
 		ln, _ := net.Listen("tcp", "127.0.0.1:0")
 		defer ln.Close()
-		go sim.Serve(ctx, ln, sim.Options{Manifest: camManifest(31, 1, "cam0"), Frames: [][]byte{[]byte("jpg")}, FrameInterval: time.Millisecond})
+		go sim.Serve(ctx, ln, sim.Options{Manifest: camManifest(1, "cam0"), Frames: [][]byte{[]byte("jpg")}, FrameInterval: time.Millisecond})
 		rctx, rcancel := context.WithTimeout(ctx, 300*time.Millisecond)
 		defer rcancel()
 		_ = sup.RunPairing(rctx, pairing, ln.Addr().String())
@@ -263,13 +262,13 @@ func TestSupervisorMountsCameraAndMicrophone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go sim.Serve(ctx, ln, sim.Options{
-		Manifest: &sensorlinkpb.SensorManifest{DeviceAssetId: 42, Sensors: []*sensorlinkpb.SensorDescriptor{
+		Manifest: &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{
 			{
-				ChannelId: 2, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0",
+				ChannelId: 2, Name: "cam0",
 				Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4}},
 			},
 			{
-				ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_MICROPHONE, Name: "mic0",
+				ChannelId: 1, Name: "mic0",
 				Format: &sensorlinkpb.SensorDescriptor_Audio{Audio: &sensorlinkpb.AudioFormat{Codec: sensorlinkpb.AudioFormat_PCM_S16LE, SampleRate: 48000, Channels: 1}},
 			},
 		}},

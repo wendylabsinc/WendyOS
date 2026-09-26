@@ -197,7 +197,6 @@ struct CameraCapture: CameraCapturing {
 
         var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
         descriptor.channelID = Self.channel
-        descriptor.kind = .camera
         descriptor.name = device.localizedName
         var video = Wendy_Lite_Sensorlink_VideoFormat()
         video.codec = .h264

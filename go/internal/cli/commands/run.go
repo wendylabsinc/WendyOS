@@ -1796,6 +1796,14 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 	if tb, ok := p.(providers.TypedBuilder); ok {
 		return tb.BuildWithType(ctx, device, projectPath, product, projectType, opts.debug)
 	}
+	app, err := p.Build(ctx, device, projectPath, projectType, product, opts.debug)
+	var missingCore *providers.MissingWendyCoreError
+	if !errors.As(err, &missingCore) || opts.isWatch() || (!opts.yes && !isInteractiveTerminal()) {
+		return app, err
+	}
+	if err := setupLiteProject(ctx, projectPath, opts.yes); err != nil {
+		return nil, err
+	}
 	return p.Build(ctx, device, projectPath, projectType, product, opts.debug)
 }
 

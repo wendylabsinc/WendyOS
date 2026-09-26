@@ -38,7 +38,7 @@ public enum Wendy_Agent_Services_V2_WendySensorService: Sendable {
             /// Request type for "StreamSensors".
             public typealias Input = Wendy_Agent_Services_V2_StreamSensorsRequest
             /// Response type for "StreamSensors".
-            public typealias Output = Wendy_Lite_Sensorlink_SensorFrame
+            public typealias Output = Wendy_Lite_Sensorlink_SensorData
             /// Descriptor for "StreamSensors".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendy.agent.services.v2.WendySensorService"),
@@ -97,11 +97,11 @@ extension Wendy_Agent_Services_V2_WendySensorService {
         /// - Throws: Any error which occurred during the processing of the request. Thrown errors
         ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
         ///     to an internal error.
-        /// - Returns: A streaming response of `Wendy_Lite_Sensorlink_SensorFrame` messages.
+        /// - Returns: A streaming response of `Wendy_Lite_Sensorlink_SensorData` messages.
         func streamSensors(
             request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
             context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorFrame>
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorData>
     }
 
     /// Service protocol for the "wendy.agent.services.v2.WendySensorService" service.
@@ -134,11 +134,11 @@ extension Wendy_Agent_Services_V2_WendySensorService {
         /// - Throws: Any error which occurred during the processing of the request. Thrown errors
         ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
         ///     to an internal error.
-        /// - Returns: A streaming response of `Wendy_Lite_Sensorlink_SensorFrame` messages.
+        /// - Returns: A streaming response of `Wendy_Lite_Sensorlink_SensorData` messages.
         func streamSensors(
             request: GRPCCore.ServerRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
             context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorFrame>
+        ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorData>
     }
 
     /// Simple service protocol for the "wendy.agent.services.v2.WendySensorService" service.
@@ -165,14 +165,14 @@ extension Wendy_Agent_Services_V2_WendySensorService {
         ///
         /// - Parameters:
         ///   - request: A `Wendy_Agent_Services_V2_StreamSensorsRequest` message.
-        ///   - response: A response stream of `Wendy_Lite_Sensorlink_SensorFrame` messages.
+        ///   - response: A response stream of `Wendy_Lite_Sensorlink_SensorData` messages.
         ///   - context: Context providing information about the RPC.
         /// - Throws: Any error which occurred during the processing of the request. Thrown errors
         ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
         ///     to an internal error.
         func streamSensors(
             request: Wendy_Agent_Services_V2_StreamSensorsRequest,
-            response: GRPCCore.RPCWriter<Wendy_Lite_Sensorlink_SensorFrame>,
+            response: GRPCCore.RPCWriter<Wendy_Lite_Sensorlink_SensorData>,
             context: GRPCCore.ServerContext
         ) async throws
     }
@@ -196,7 +196,7 @@ extension Wendy_Agent_Services_V2_WendySensorService.StreamingServiceProtocol {
         router.registerHandler(
             forMethod: Wendy_Agent_Services_V2_WendySensorService.Method.StreamSensors.descriptor,
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Agent_Services_V2_StreamSensorsRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Lite_Sensorlink_SensorFrame>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Lite_Sensorlink_SensorData>(),
             handler: { request, context in
                 try await self.streamSensors(
                     request: request,
@@ -224,7 +224,7 @@ extension Wendy_Agent_Services_V2_WendySensorService.ServiceProtocol {
     public func streamSensors(
         request: GRPCCore.StreamingServerRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
         context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorFrame> {
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorData> {
         let response = try await self.streamSensors(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
@@ -252,8 +252,8 @@ extension Wendy_Agent_Services_V2_WendySensorService.SimpleServiceProtocol {
     public func streamSensors(
         request: GRPCCore.ServerRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
         context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorFrame> {
-        return GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorFrame>(
+    ) async throws -> GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorData> {
+        return GRPCCore.StreamingServerResponse<Wendy_Lite_Sensorlink_SensorData>(
             metadata: [:],
             producer: { writer in
                 try await self.streamSensors(
@@ -300,7 +300,7 @@ extension Wendy_Agent_Services_V2_WendySensorService {
         /// - Parameters:
         ///   - request: A request containing a single `Wendy_Agent_Services_V2_StreamSensorsRequest` message.
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_StreamSensorsRequest` messages.
-        ///   - deserializer: A deserializer for `Wendy_Lite_Sensorlink_SensorFrame` messages.
+        ///   - deserializer: A deserializer for `Wendy_Lite_Sensorlink_SensorData` messages.
         ///   - options: Options to apply to this RPC.
         ///   - handleResponse: A closure which handles the response, the result of which is
         ///       returned to the caller. Returning from the closure will cancel the RPC if it
@@ -309,9 +309,9 @@ extension Wendy_Agent_Services_V2_WendySensorService {
         func streamSensors<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
             serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V2_StreamSensorsRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendy_Lite_Sensorlink_SensorFrame>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Lite_Sensorlink_SensorData>,
             options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorFrame>) async throws -> Result
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorData>) async throws -> Result
         ) async throws -> Result where Result: Sendable
     }
 
@@ -366,7 +366,7 @@ extension Wendy_Agent_Services_V2_WendySensorService {
         /// - Parameters:
         ///   - request: A request containing a single `Wendy_Agent_Services_V2_StreamSensorsRequest` message.
         ///   - serializer: A serializer for `Wendy_Agent_Services_V2_StreamSensorsRequest` messages.
-        ///   - deserializer: A deserializer for `Wendy_Lite_Sensorlink_SensorFrame` messages.
+        ///   - deserializer: A deserializer for `Wendy_Lite_Sensorlink_SensorData` messages.
         ///   - options: Options to apply to this RPC.
         ///   - handleResponse: A closure which handles the response, the result of which is
         ///       returned to the caller. Returning from the closure will cancel the RPC if it
@@ -375,9 +375,9 @@ extension Wendy_Agent_Services_V2_WendySensorService {
         public func streamSensors<Result>(
             request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
             serializer: some GRPCCore.MessageSerializer<Wendy_Agent_Services_V2_StreamSensorsRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendy_Lite_Sensorlink_SensorFrame>,
+            deserializer: some GRPCCore.MessageDeserializer<Wendy_Lite_Sensorlink_SensorData>,
             options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorFrame>) async throws -> Result
+            onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorData>) async throws -> Result
         ) async throws -> Result where Result: Sendable {
             try await self.client.serverStreaming(
                 request: request,
@@ -431,12 +431,12 @@ extension Wendy_Agent_Services_V2_WendySensorService.ClientProtocol {
     public func streamSensors<Result>(
         request: GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>,
         options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorFrame>) async throws -> Result
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorData>) async throws -> Result
     ) async throws -> Result where Result: Sendable {
         try await self.streamSensors(
             request: request,
             serializer: GRPCProtobuf.ProtobufSerializer<Wendy_Agent_Services_V2_StreamSensorsRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Lite_Sensorlink_SensorFrame>(),
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendy_Lite_Sensorlink_SensorData>(),
             options: options,
             onResponse: handleResponse
         )
@@ -489,7 +489,7 @@ extension Wendy_Agent_Services_V2_WendySensorService.ClientProtocol {
         _ message: Wendy_Agent_Services_V2_StreamSensorsRequest,
         metadata: GRPCCore.Metadata = [:],
         options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorFrame>) async throws -> Result
+        onResponse handleResponse: @Sendable @escaping (GRPCCore.StreamingClientResponse<Wendy_Lite_Sensorlink_SensorData>) async throws -> Result
     ) async throws -> Result where Result: Sendable {
         let request = GRPCCore.ClientRequest<Wendy_Agent_Services_V2_StreamSensorsRequest>(
             message: message,

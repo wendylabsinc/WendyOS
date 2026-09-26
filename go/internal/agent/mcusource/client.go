@@ -19,7 +19,7 @@ type Dialer interface {
 // Stream is an active sensorlink session. Frames is closed when the session ends.
 type Stream struct {
 	Manifest  *sensorlinkpb.SensorManifest
-	Frames    <-chan *sensorlinkpb.SensorFrame
+	Frames    <-chan *sensorlink.SensorFrame
 	conn      net.Conn
 	cancel    context.CancelFunc
 	closeOnce sync.Once
@@ -59,17 +59,22 @@ func Connect(ctx context.Context, d Dialer, addr string, channels []uint32) (*St
 		s.Close()
 		return nil, fmt.Errorf("mcusource: subscribe: %w", err)
 	}
-	frames := make(chan *sensorlinkpb.SensorFrame, 8)
+	frames := make(chan *sensorlink.SensorFrame, 8)
 	s.Manifest, s.Frames = manifest, frames
 	go func() {
 		defer close(frames)
 		defer s.Close()
+		var asm sensorlink.Assembler
 		for {
 			env, err := sensorlink.ReadMessage(conn)
 			if err != nil {
 				return
 			}
-			if f := env.GetFrame(); f != nil {
+			d := env.GetData()
+			if d == nil {
+				continue
+			}
+			if f := asm.Add(d); f != nil {
 				select {
 				case frames <- f:
 				case <-sctx.Done():

@@ -104,7 +104,9 @@ Add a Wendy manifest using the `wendy-lite` device platform:
 }
 ```
 
-Your project also needs the **`wendy_core`** component. Declare it as a dependency in `main/idf_component.yml`:
+Your project also needs the **`wendy_core`** component. When it is missing, `wendy run` offers to add the dependency and initialize it in `app_main()`, then retries the build. This supports C and C++ projects with a single `app_main()` definition under `main/`. Use `wendy run --yes` to accept setup without a prompt.
+
+To configure it manually, declare the dependency in `main/idf_component.yml`:
 
 ```yaml
 dependencies:

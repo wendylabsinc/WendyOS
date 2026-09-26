@@ -71,8 +71,8 @@ func handleConn(ctx context.Context, conn net.Conn, opts Options) {
 		case <-ticker.C:
 			payload := opts.Frames[int(seq)%len(opts.Frames)]
 			for _, ch := range sub.ChannelId {
-				frame := &sensorlinkpb.SensorFrame{ChannelId: ch, Seq: seq, TsUs: uint64(time.Now().UnixMicro()), Flags: 1, Payload: payload}
-				if err := sensorlink.WriteMessage(conn, &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Frame{Frame: frame}}); err != nil {
+				data := &sensorlinkpb.SensorData{ChannelId: ch, FrameSeq: seq, TsUs: uint64(time.Now().UnixMicro()), Flags: sensorlink.FlagKeyframe | sensorlink.FlagLastChunk, Payload: payload}
+				if err := sensorlink.WriteMessage(conn, &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Data{Data: data}}); err != nil {
 					return
 				}
 			}

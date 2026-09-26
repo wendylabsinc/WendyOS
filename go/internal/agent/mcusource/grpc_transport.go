@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.uber.org/zap"
@@ -65,14 +66,14 @@ func (t *grpcTransport) FetchManifest(ctx context.Context) (*sensorlinkpb.Sensor
 	return t.client.GetSensorManifest(ctx, &agentpbv2.GetSensorManifestRequest{})
 }
 
-func (t *grpcTransport) Stream(ctx context.Context, channels []uint32) (<-chan *sensorlinkpb.SensorFrame, func() error, error) {
+func (t *grpcTransport) Stream(ctx context.Context, channels []uint32) (<-chan *sensorlink.SensorFrame, func() error, error) {
 	sctx, cancel := context.WithCancel(ctx)
 	stream, err := t.client.StreamSensors(sctx, &agentpbv2.StreamSensorsRequest{ChannelId: channels})
 	if err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("mcusource: StreamSensors: %w", err)
 	}
-	frames := make(chan *sensorlinkpb.SensorFrame, 8)
+	frames := make(chan *sensorlink.SensorFrame, 8)
 	logger := t.logger.With(zap.Uint32s("channels", append([]uint32(nil), channels...)))
 	go func() {
 		defer close(frames)
@@ -91,10 +92,15 @@ func (t *grpcTransport) Stream(ctx context.Context, channels []uint32) (<-chan *
 		}
 		// Flush even a short burst when the stream ends or is canceled.
 		defer logDrops()
+		var asm sensorlink.Assembler
 		for {
-			f, err := stream.Recv()
+			d, err := stream.Recv()
 			if err != nil {
 				return
+			}
+			f := asm.Add(d)
+			if f == nil {
+				continue
 			}
 			select {
 			case frames <- f:

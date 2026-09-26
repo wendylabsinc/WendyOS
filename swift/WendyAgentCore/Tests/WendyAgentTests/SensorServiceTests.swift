@@ -45,7 +45,6 @@ private struct FakeCamera: CameraCapturing {
 private func cameraDescriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor {
     var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
     descriptor.channelID = CameraCapture.channel
-    descriptor.kind = .camera
     descriptor.name = "cam0"
     var video = Wendy_Lite_Sensorlink_VideoFormat()
     video.codec = .h264
@@ -54,6 +53,16 @@ private func cameraDescriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor {
     video.fps = 30
     descriptor.video = video
     return descriptor
+}
+
+private func isMicrophone(_ descriptor: Wendy_Lite_Sensorlink_SensorDescriptor) -> Bool {
+    if case .audio = descriptor.format { return true }
+    return false
+}
+
+private func isCamera(_ descriptor: Wendy_Lite_Sensorlink_SensorDescriptor) -> Bool {
+    if case .video = descriptor.format { return true }
+    return false
 }
 
 private final class CollectingWriter<Element: Sendable>: RPCWriterProtocol, @unchecked Sendable {
@@ -97,8 +106,8 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "GetSensorManifest")
     )
     let manifest = try manifestResponse.message
-    #expect(manifest.sensors.contains { $0.kind == .microphone })
-    let mic = try #require(manifest.sensors.first { $0.kind == .microphone })
+    #expect(manifest.sensors.contains(where: isMicrophone))
+    let mic = try #require(manifest.sensors.first(where: isMicrophone))
     #expect(mic.channelID == SensorService.micChannel)
     #expect(mic.audio.codec == .pcmS16Le)
     #expect(mic.audio.sampleRate == 48000)
@@ -111,7 +120,7 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "StreamSensors")
     )
     let contents = try streamResponse.accepted.get()
-    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorFrame>()
+    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorData>()
     _ = try await contents.producer(RPCWriter(wrapping: writer))
 
     let frames = writer.snapshot()
@@ -119,7 +128,8 @@ private func makeServerContext(method: String) -> ServerContext {
     #expect(frames.allSatisfy { $0.channelID == SensorService.micChannel })
     #expect(frames.first?.payload == Data([1, 2, 3, 4]))
     #expect(frames.last?.payload == Data([5, 6, 7, 8]))
-    #expect(frames.map(\.seq) == [0, 1])
+    #expect(frames.map(\.frameSeq) == [0, 1])
+    #expect(frames.allSatisfy { $0.chunkSeq == 0 && $0.flags == SensorService.lastChunkFlag })
 }
 
 @Test func manifestReportsCameraAndStreamYieldsAnnexBFrames() async throws {
@@ -136,7 +146,7 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "GetSensorManifest")
     )
     let manifest = try manifestResponse.message
-    let cam = try #require(manifest.sensors.first { $0.kind == .camera })
+    let cam = try #require(manifest.sensors.first(where: isCamera))
     #expect(cam.channelID == CameraCapture.channel)
     #expect(cam.video.codec == .h264)
     #expect(cam.video.width == 1920)
@@ -149,23 +159,24 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "StreamSensors")
     )
     let contents = try streamResponse.accepted.get()
-    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorFrame>()
+    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorData>()
     _ = try await contents.producer(RPCWriter(wrapping: writer))
 
     let frames = writer.snapshot()
     #expect(frames.count == 2)
     #expect(frames.allSatisfy { $0.channelID == CameraCapture.channel })
     #expect(frames.first?.payload == Data([0, 0, 0, 1, 0x67]))
-    #expect(frames.first?.flags == SensorService.keyframeFlag)
+    #expect(frames.first?.flags == SensorService.keyframeFlag | SensorService.lastChunkFlag)
     #expect(frames.last?.payload == Data([0, 0, 0, 1, 0x41]))
-    #expect(frames.last?.flags == 0)
-    #expect(frames.map(\.seq) == [0, 1])
+    #expect(frames.last?.flags == SensorService.lastChunkFlag)
+    #expect(frames.map(\.frameSeq) == [0, 1])
+    #expect(frames.allSatisfy { $0.chunkSeq == 0 })
 }
 
-@Test func manifestCarriesAssetIDAndBothChannelsFanInThroughOneWriter() async throws {
+@Test func manifestListsBothChannelsAndBothFanInThroughOneWriter() async throws {
     let keyframe = CameraFrame(annexB: Data([0, 0, 0, 1, 0x67]), isKeyframe: true)
     let camera = FakeCamera(descriptorValue: cameraDescriptor(), frameList: [keyframe])
-    let svc = SensorService(audio: FakeAudio(), camera: camera, assetID: 42)
+    let svc = SensorService(audio: FakeAudio(), camera: camera)
 
     let manifestResponse = try await svc.getSensorManifest(
         request: ServerRequest(
@@ -175,9 +186,8 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "GetSensorManifest")
     )
     let manifest = try manifestResponse.message
-    #expect(manifest.deviceAssetID == 42)
-    #expect(manifest.sensors.contains { $0.kind == .microphone })
-    #expect(manifest.sensors.contains { $0.kind == .camera })
+    #expect(manifest.sensors.contains(where: isMicrophone))
+    #expect(manifest.sensors.contains(where: isCamera))
 
     var request = Wendy_Agent_Services_V2_StreamSensorsRequest()
     request.channelID = [SensorService.micChannel, CameraCapture.channel]
@@ -186,7 +196,7 @@ private func makeServerContext(method: String) -> ServerContext {
         context: makeServerContext(method: "StreamSensors")
     )
     let contents = try streamResponse.accepted.get()
-    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorFrame>()
+    let writer = CollectingWriter<Wendy_Lite_Sensorlink_SensorData>()
     _ = try await contents.producer(RPCWriter(wrapping: writer))
 
     // Both producers funnel through the one SerializedFrameWriter actor: assert
