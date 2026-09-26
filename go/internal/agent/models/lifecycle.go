@@ -113,6 +113,15 @@ func (s *Supervisor) setState(inst *instance, st State, detail string) {
 // runHost starts one host and waits until the instance must stop, the host
 // reports a failure, or it crashes or goes silent.
 func (s *Supervisor) runHost(inst *instance) (hostOutcome, string) {
+	// The camera's node can change or go while the instance lives, so every
+	// start binds the node the camera has now. A camera that can no longer
+	// stream is final, like a lost camera: a restart cannot bring it back.
+	if err := s.reacquireCamera(inst); err != nil {
+		if inst.ctx.Err() != nil {
+			return hostStopped, ""
+		}
+		return hostFailedFinal, err.Error()
+	}
 	// Mark the host live before it starts, so an immediate "ready" counts.
 	inst.mu.Lock()
 	inst.hostRunning, inst.hostFailure, inst.building = true, "", time.Time{}
@@ -156,6 +165,22 @@ func (s *Supervisor) runHost(inst *instance) (hostOutcome, string) {
 			return outcome, reason
 		}
 	}
+}
+
+// reacquireCamera pins the instance's camera again and keeps the node it is
+// on now for the next host. Acquire is idempotent per owner, and a failure
+// leaves no pin behind.
+func (s *Supervisor) reacquireCamera(inst *instance) error {
+	ctx, cancel := context.WithTimeout(inst.ctx, cameraTimeout)
+	defer cancel()
+	node, err := s.cfg.Cameras.Acquire(ctx, inst.id, inst.camera)
+	if err != nil {
+		return cameraNotStreamable(err)
+	}
+	inst.mu.Lock()
+	inst.node = node
+	inst.mu.Unlock()
+	return nil
 }
 
 // checkHost looks for a reported failure, an expired engine build, or a

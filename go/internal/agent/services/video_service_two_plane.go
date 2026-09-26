@@ -63,8 +63,34 @@ type twoPlaneNode struct {
 	pump   *hubLoopbackPump
 	cancel context.CancelFunc
 	done   chan struct{}
+	err    error // why the pump stopped; read only after done has closed
 	nodeNr int
 	path   string
+}
+
+// awaitFirstFrame waits, holding no lock, for the pump's verdict on its
+// source: nil once a frame has reached the node, or an error once the pump
+// has stopped (for a refusal, errSourceNotBindable says why) or ctx ends.
+func (n *twoPlaneNode) awaitFirstFrame(ctx context.Context, sourceID string) error {
+	select {
+	case <-n.pump.firstFrameWritten():
+	case <-n.done:
+	case <-ctx.Done():
+		return fmt.Errorf("no frame from %s reached its two-plane node: %w", sourceID, ctx.Err())
+	}
+	select {
+	case <-n.done: // stopped before its first frame, or just after it
+	default:
+		return nil
+	}
+	switch {
+	case errors.Is(n.err, errSourceNotBindable):
+		return n.err
+	case n.err != nil:
+		return fmt.Errorf("the two-plane path for %s stopped: %w", sourceID, n.err)
+	default:
+		return fmt.Errorf("the two-plane path for %s stopped: the camera stopped producing frames", sourceID)
+	}
 }
 
 // SetTwoPlaneContainerConsumers replaces, wholesale, the set of running
@@ -253,6 +279,7 @@ func (s *VideoService) ensureTwoPlaneNode(ctx context.Context, sourceID string, 
 	go func() {
 		defer close(node.done)
 		err := pump.Run(pumpCtx, s, src, devID)
+		node.err = err
 		if err != nil && !errors.Is(err, context.Canceled) {
 			// A pump that stops on its own is not retried here. The usual reason
 			// is frameBindableToLoopback refusing the source, which will refuse

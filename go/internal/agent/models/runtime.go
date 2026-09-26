@@ -92,10 +92,15 @@ type Camera struct {
 
 // Cameras lists local cameras and pins the nodes models read them from.
 type Cameras interface {
+	// List returns the cameras a model can watch now.
 	List(ctx context.Context) []Camera
 	// Acquire keeps the two-plane path running for owner and returns the node
-	// carrying sourceID. Failures wrap ErrCameraNotStreamable.
+	// carrying sourceID, once frames are flowing on it. It is idempotent per
+	// owner: acquiring again returns the source's current node. A failed
+	// Acquire leaves owner holding no pin, not even one an earlier Acquire
+	// took, and its error wraps ErrCameraNotStreamable.
 	Acquire(ctx context.Context, owner, sourceID string) (string, error)
+	// Release drops owner's pin; an owner holding none is not an error.
 	Release(ctx context.Context, owner string)
 }
 

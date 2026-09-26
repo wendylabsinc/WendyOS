@@ -337,7 +337,29 @@ func TestModelCamerasListsHealthyLocalCameras(t *testing.T) {
 			{ID: "v4l2:/dev/video4", Kind: "camera", Healthy: false},
 		}
 	})
-	got := ModelCameras{Data: m}.List(context.Background())
+	video := NewVideoService(context.Background(), zap.NewNop(), nil)
+	got := ModelCameras{Video: video, Data: m}.List(context.Background())
+	if want := []models.Camera{{SourceID: "v4l2:/dev/video0", Name: "C920 USB"}}; !slices.Equal(got, want) {
+		t.Fatalf("cameras = %+v, want %+v", got, want)
+	}
+}
+
+// TestModelCamerasHideRefusedCameras: a camera whose stream the two-plane
+// path has refused cannot stream to a model, so the catalog must not offer it.
+func TestModelCamerasHideRefusedCameras(t *testing.T) {
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetSourceProvider(func(context.Context) []data.Source {
+		return []data.Source{
+			{ID: "v4l2:/dev/video0", Kind: "camera", Healthy: true, Detail: "C920 USB"},
+			{ID: "v4l2:/dev/video2", Kind: "camera", Healthy: true, Detail: "webcam"},
+		}
+	})
+	video := NewVideoService(context.Background(), zap.NewNop(), nil)
+	video.noteTwoPlaneRefusal("v4l2:/dev/video2")
+	got := ModelCameras{Video: video, Data: m}.List(context.Background())
 	if want := []models.Camera{{SourceID: "v4l2:/dev/video0", Name: "C920 USB"}}; !slices.Equal(got, want) {
 		t.Fatalf("cameras = %+v, want %+v", got, want)
 	}

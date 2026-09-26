@@ -225,7 +225,13 @@ func (r *Runtime) Removed() []string {
 	return slices.Clone(r.removed)
 }
 
-// Cameras is a fixed camera list whose nodes can be pinned.
+// defaultNode is the two-plane node Cameras hands out unless MoveNode says
+// otherwise.
+const defaultNode = "/dev/video255"
+
+// Cameras is a fixed camera list whose nodes can be pinned. It keeps the
+// models.Cameras contract: a failed Acquire leaves its owner holding no pin,
+// and acquiring again returns the source's current node.
 type Cameras struct {
 	// BlockAcquire, when set before use, makes Acquire wait for it to close
 	// or for the context to end before it decides.
@@ -234,11 +240,12 @@ type Cameras struct {
 	mu     sync.Mutex
 	cams   []models.Camera
 	refuse map[string]bool
+	nodes  map[string]string // source -> node, where it is not defaultNode
 	owners map[string]string // owner -> source
 }
 
 func NewCameras(cams ...models.Camera) *Cameras {
-	return &Cameras{cams: cams, refuse: map[string]bool{}, owners: map[string]string{}}
+	return &Cameras{cams: cams, refuse: map[string]bool{}, nodes: map[string]string{}, owners: map[string]string{}}
 }
 
 // Refuse makes Acquire fail for sourceID, like a stream that cannot carry
@@ -247,6 +254,14 @@ func (c *Cameras) Refuse(sourceID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.refuse[sourceID] = true
+}
+
+// MoveNode makes Acquire return node for sourceID from now on, as when the
+// camera's two-plane node is recreated.
+func (c *Cameras) MoveNode(sourceID, node string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nodes[sourceID] = node
 }
 
 func (c *Cameras) List(context.Context) []models.Camera {
@@ -260,16 +275,21 @@ func (c *Cameras) Acquire(ctx context.Context, owner, sourceID string) (string, 
 		select {
 		case <-c.BlockAcquire:
 		case <-ctx.Done():
+			c.Release(ctx, owner)
 			return "", ctx.Err()
 		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.refuse[sourceID] {
+		delete(c.owners, owner) // not even a pin an earlier Acquire took
 		return "", fmt.Errorf("%w: %s carries no frame identity", models.ErrCameraNotStreamable, sourceID)
 	}
 	c.owners[owner] = sourceID
-	return "/dev/video255", nil
+	if node, ok := c.nodes[sourceID]; ok {
+		return node, nil
+	}
+	return defaultNode, nil
 }
 
 func (c *Cameras) Release(_ context.Context, owner string) {

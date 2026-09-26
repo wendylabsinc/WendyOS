@@ -79,6 +79,12 @@ type hubLoopbackPump struct {
 	// now is the clock the drop-log rate limiter reads. A field only so a test
 	// can drive the limiter without sleeping.
 	now func() time.Time
+
+	// written closes once the first frame reaches the node: the pump's
+	// verdict that the source's stream carries frame identity. A refusal
+	// instead ends Run before it closes.
+	written     chan struct{}
+	writtenOnce sync.Once
 }
 
 // identitySubscriber is one control-plane subscriber's queue plus the state
@@ -112,8 +118,13 @@ func newHubLoopbackPump(logger *zap.Logger, sourceID, nodePath string) *hubLoopb
 		bindings: newLoopbackBindingTable(loopbackBindingRetention),
 		subs:     map[int]*identitySubscriber{},
 		now:      time.Now,
+		written:  make(chan struct{}),
 	}
 }
+
+// firstFrameWritten closes once the pump has written its first frame to the
+// node.
+func (p *hubLoopbackPump) firstFrameWritten() <-chan struct{} { return p.written }
 
 // subscribeIdentities registers a control-plane subscriber and returns its
 // channel plus a cancel function that unregisters and closes it.
@@ -374,6 +385,7 @@ func (p *hubLoopbackPump) pumpFrom(ctx context.Context, hub *deviceHub, subID in
 			// identity can always resolve it in the table too.
 			p.bindings.Record(binding)
 			p.publishIdentity(binding)
+			p.writtenOnce.Do(func() { close(p.written) })
 		}
 	}
 }

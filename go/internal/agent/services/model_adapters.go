@@ -30,10 +30,12 @@ type ModelCameras struct {
 
 var _ models.Cameras = ModelCameras{}
 
+// List returns the healthy local cameras, less those whose stream the
+// two-plane path has refused: they cannot stream to a model.
 func (c ModelCameras) List(ctx context.Context) []models.Camera {
 	var out []models.Camera
 	for _, src := range c.Data.Sources(ctx) {
-		if src.Kind == "camera" && src.Healthy && strings.HasPrefix(src.ID, "v4l2:") {
+		if src.Kind == "camera" && src.Healthy && strings.HasPrefix(src.ID, "v4l2:") && !c.Video.twoPlaneSourceRefused(src.ID) {
 			out = append(out, models.Camera{SourceID: src.ID, Name: src.Detail})
 		}
 	}

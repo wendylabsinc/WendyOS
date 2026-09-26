@@ -69,6 +69,50 @@ func TestReportedFailureIsFinal(t *testing.T) {
 	}
 }
 
+// TestRestartOfACameraThatCannotStreamIsFinal: a crashed host's camera no
+// longer streams to a model (here, refused). A restart cannot bring it back,
+// so the instance fails with the camera's reason instead (design §7.3, §9).
+func TestRestartOfACameraThatCannotStreamIsFinal(t *testing.T) {
+	h := newHarness(t, models.EngineONNXRuntime)
+	info := h.startReady(t, frontDoor)
+	w, _, _, err := h.sup.Watch(models.WatchRequest{InstanceID: info.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.cameras.Refuse(frontDoor)
+	h.runtime.Exit(info.ID, 1)
+	modelstest.AdvanceUntil(t, h.clock, 500*time.Millisecond, "the restart to be decided", func() bool {
+		return h.info(info.ID).State == 0 || h.runtime.Starts(info.ID) > 1
+	})
+	if n := h.runtime.Starts(info.ID); n != 1 {
+		t.Fatalf("%d host starts; a camera that cannot stream must end the instance, not restart it", n)
+	}
+	final := drainToEnd(t, w)
+	if final == nil || final.State != models.StateFailed || !strings.HasPrefix(final.StateDetail, "camera cannot stream to a model: ") {
+		t.Fatalf("final = %+v", final)
+	}
+	if owners := h.cameras.Owners(); len(owners) != 0 {
+		t.Fatalf("camera pins left: %v", owners)
+	}
+}
+
+// TestRestartBindsTheCamerasCurrentNode: the camera's two-plane node can be
+// recreated while an instance runs; a restarted host must bind the node the
+// camera has now, not the one it had when the instance started.
+func TestRestartBindsTheCamerasCurrentNode(t *testing.T) {
+	h := newHarness(t, models.EngineONNXRuntime)
+	info := h.startReady(t, frontDoor)
+	if _, _, _, err := h.sup.Watch(models.WatchRequest{InstanceID: info.ID}); err != nil {
+		t.Fatal(err)
+	}
+	h.cameras.MoveNode(frontDoor, "/dev/video254")
+	h.runtime.Exit(info.ID, 1)
+	modelstest.AdvanceUntil(t, h.clock, 500*time.Millisecond, "the restart", func() bool { return h.runtime.Starts(info.ID) == 2 })
+	if node := h.runtime.LastSpec().CameraNode; node != "/dev/video254" {
+		t.Fatalf("the restarted host binds %s, want the camera's current node /dev/video254", node)
+	}
+}
+
 func TestSilentHostIsRestarted(t *testing.T) {
 	h := newHarness(t, models.EngineONNXRuntime)
 	info, _, err := h.sup.Start(context.Background(), "coco-detector", frontDoor)

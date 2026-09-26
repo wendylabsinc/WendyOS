@@ -170,23 +170,20 @@ func (s *Supervisor) Start(ctx context.Context, modelID, cameraSourceID string) 
 	}
 
 	// A camera that cannot stream is the caller's error, not a failed
-	// instance, so it is checked before the start counts.
+	// instance, so it is checked before the start counts. Acquire returns
+	// once frames flow; each host start pins the camera again for its node.
 	acquireCtx, cancel := context.WithTimeout(ctx, cameraTimeout)
-	node, err := s.cfg.Cameras.Acquire(acquireCtx, inst.id, cameraSourceID)
+	_, err := s.cfg.Cameras.Acquire(acquireCtx, inst.id, cameraSourceID)
 	cancel()
 	if err != nil {
 		s.forget(inst)
 		inst.cancel()
 		close(inst.done)
 		close(inst.admitted)
-		if !errors.Is(err, ErrCameraNotStreamable) {
-			err = fmt.Errorf("%w: %v", ErrCameraNotStreamable, err)
-		}
-		return InstanceInfo{}, false, err
+		return InstanceInfo{}, false, cameraNotStreamable(err)
 	}
 
 	inst.mu.Lock()
-	inst.node = node
 	s.startGraceLocked(inst) // no watch yet: stop unless one attaches
 	info := inst.infoLocked()
 	inst.mu.Unlock()
@@ -221,6 +218,15 @@ func (s *Supervisor) awaitExisting(ctx context.Context, existing *instance) (Ins
 		return InstanceInfo{}, false, ctx.Err()
 	}
 	return InstanceInfo{}, false, nil
+}
+
+// cameraNotStreamable makes a failed Acquire an ErrCameraNotStreamable, so
+// it reads "camera cannot stream to a model: <reason>" (design §9).
+func cameraNotStreamable(err error) error {
+	if errors.Is(err, ErrCameraNotStreamable) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrCameraNotStreamable, err)
 }
 
 func (s *Supervisor) hasCamera(ctx context.Context, sourceID string) bool {
