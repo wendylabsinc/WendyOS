@@ -18,6 +18,7 @@ const (
 	SyncPort              = 43022
 	syncALPN              = "wendy-mesh-catalog/1"
 	syncALPNv2            = "wendy-mesh-catalog/2"
+	syncALPNv3            = "wendy-mesh-catalog/3"
 	bundleHintLifetime    = 30 * time.Minute
 	maxBundleHintsPerPeer = 64
 	maxBundleHintPeers    = 128
@@ -27,15 +28,19 @@ const (
 // only dependency on the mesh node is a read-only snapshot callback, avoiding
 // a localmesh -> meshcatalog import cycle. Run until the context is cancelled.
 type Runtime struct {
-	catalog         *Catalog
-	snapshot        func() localmesh.NodeSnapshot
-	mu              sync.Mutex
-	peers           map[int32]*catalogPeer
-	bundleHints     map[int32]map[string]time.Time
-	tickets         *localmesh.TicketStore
-	dialing         map[int32]bool
-	closed          bool
-	onGatewayChange func()
+	catalog                *Catalog
+	snapshot               func() localmesh.NodeSnapshot
+	mu                     sync.Mutex
+	peers                  map[int32]*catalogPeer
+	bundleHints            map[int32]map[string]time.Time
+	tickets                *localmesh.TicketStore
+	dialing                map[int32]bool
+	closed                 bool
+	onGatewayChange        func()
+	inventoryRetries       map[int32]inventoryRetry
+	inventoryOverflowUntil time.Time
+	// Tests can route the production outbound path through a real loopback listener.
+	dialPeer func(context.Context, netip.Addr, netip.Addr) (net.Conn, error)
 }
 
 type catalogPeer struct {
@@ -186,7 +191,7 @@ func (r *Runtime) serverTLS() *tls.Config {
 		Certificates: []tls.Certificate{r.catalog.creds.Certificate},
 		MinVersion:   tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		ClientAuth: tls.RequireAnyClientCert,
-		NextProtos: []string{syncALPNv2, syncALPN},
+		NextProtos: []string{syncALPNv3, syncALPNv2, syncALPN},
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
 			for _, cert := range state.PeerCertificates {
@@ -234,7 +239,7 @@ func (r *Runtime) inbound(ctx context.Context, raw net.Conn) {
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	r.sessionWithProtocol(ctx, id.Asset, conn, state.NegotiatedProtocol == syncALPNv2)
+	r.sessionNegotiated(ctx, id.Asset, conn, state.NegotiatedProtocol)
 }
 
 func (r *Runtime) discover(ctx context.Context, now time.Time) {
@@ -242,6 +247,9 @@ func (r *Runtime) discover(ctx context.Context, now time.Time) {
 	for _, manifest := range view.Devices {
 		asset := manifest.Asset
 		if asset <= r.catalog.asset || !eligibleSnapshot(view, r.catalog.org, asset, now) {
+			continue
+		}
+		if _, allowed := r.inventoryAttempt(asset, now); !allowed {
 			continue
 		}
 		r.mu.Lock()
@@ -295,7 +303,9 @@ func (r *Runtime) eligible(asset int32, now time.Time) bool {
 	return eligibleSnapshot(r.snapshot(), r.catalog.org, asset, now)
 }
 
-func catalogALPN(protocol string) bool { return protocol == syncALPNv2 || protocol == syncALPN }
+func catalogALPN(protocol string) bool {
+	return protocol == syncALPNv3 || protocol == syncALPNv2 || protocol == syncALPN
+}
 
 // ProjectionReady is true only after a current route and a fresh, complete
 // anti-entropy snapshot from the service origin. Cached records alone can be
@@ -328,6 +338,16 @@ func (r *Runtime) InvalidateProjection(asset int32) {
 
 func (r *Runtime) outbound(ctx context.Context, asset int32) {
 	defer func() { r.mu.Lock(); delete(r.dialing, asset); r.mu.Unlock() }()
+	cold, allowed := r.reserveInventoryAttempt(asset, time.Now())
+	if !allowed {
+		return
+	}
+	handedOff := false
+	defer func() {
+		if cold && !handedOff {
+			r.inventoryFailed(asset, true, time.Now())
+		}
+	}()
 	self, _, err := localmesh.Addresses(r.catalog.org, r.catalog.asset)
 	if err != nil {
 		return
@@ -336,17 +356,23 @@ func (r *Runtime) outbound(ctx context.Context, asset int32) {
 	if err != nil {
 		return
 	}
-	conf, err := r.catalog.creds.PeerTLSWithTickets(asset, syncALPNv2, "catalog-tls")
+	conf, err := r.catalog.creds.PeerTLSWithTickets(asset, syncALPNv3, "catalog-tls")
 	if err != nil {
 		return
 	}
-	// Prefer the snapshot-completion protocol, but keep the original ALPN
+	// Prefer the current-inventory protocol, retaining both earlier ALPNs
 	// during rolling image updates. Old agents must never see a new frame kind.
-	conf.NextProtos = []string{syncALPNv2, syncALPN}
+	conf.NextProtos = []string{syncALPNv3, syncALPNv2, syncALPN}
 	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	dialer := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IP(self.AsSlice())}}
-	raw, err := dialer.DialContext(dialCtx, "tcp4", net.JoinHostPort(peer.String(), fmt.Sprint(SyncPort)))
+	dial := r.dialPeer
+	if dial == nil {
+		dial = func(ctx context.Context, self, peer netip.Addr) (net.Conn, error) {
+			dialer := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IP(self.AsSlice())}}
+			return dialer.DialContext(ctx, "tcp4", net.JoinHostPort(peer.String(), fmt.Sprint(SyncPort)))
+		}
+	}
+	raw, err := dial(dialCtx, self, peer)
 	if err != nil {
 		return
 	}
@@ -359,7 +385,15 @@ func (r *Runtime) outbound(ctx context.Context, asset int32) {
 	if !catalogALPN(protocol) || !r.eligible(asset, time.Now()) {
 		return
 	}
-	r.sessionWithProtocol(ctx, asset, conn, protocol == syncALPNv2)
+	handedOff = true
+	if protocol == syncALPNv3 {
+		r.sessionInventoryReserved(ctx, asset, conn, cold)
+	} else {
+		// An authenticated legacy fallback has no inventory-repair episode.
+		// Keep its original /2 or /1 behavior and ticket resumption intact.
+		r.inventoryReady(asset)
+		r.sessionWithProtocol(ctx, asset, conn, protocol == syncALPNv2)
+	}
 }
 
 func (r *Runtime) session(ctx context.Context, asset int32, conn net.Conn) {
