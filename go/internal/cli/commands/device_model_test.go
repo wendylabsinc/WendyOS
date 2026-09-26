@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,8 @@ type fakeModelService struct {
 	catalog *agentpbv2.ListModelCatalogResponse
 	list    *agentpbv2.ListModelsResponse
 	events  []*agentpbv2.ModelWatchMessage
-	hold    bool // keep WatchModel open until the client leaves
+	// confirm, when set, holds WatchModel's WatchStarted until it closes.
+	confirm chan struct{}
 
 	mu      sync.Mutex
 	stopped []string // "instance/watch"
@@ -141,6 +143,13 @@ func (f *fakeModelService) WatchModel(req *agentpbv2.WatchModelRequest, stream g
 	f.mu.Lock()
 	f.watch = req
 	f.mu.Unlock()
+	if f.confirm != nil {
+		select {
+		case <-f.confirm:
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
 	started := &agentpbv2.ModelWatchMessage{Message: &agentpbv2.ModelWatchMessage_Started{Started: &agentpbv2.WatchStarted{
 		WatchId: "w-1", Instance: &agentpbv2.ModelInstance{InstanceId: "m-1", State: agentpbv2.ModelState_MODEL_STATE_READY}}}}
 	if err := stream.Send(started); err != nil {
@@ -150,9 +159,6 @@ func (f *fakeModelService) WatchModel(req *agentpbv2.WatchModelRequest, stream g
 		if err := stream.Send(m); err != nil {
 			return err
 		}
-	}
-	if f.hold {
-		<-stream.Context().Done()
 	}
 	return nil
 }
@@ -195,29 +201,37 @@ func TestModelRunPrintsEventsAndDetaches(t *testing.T) {
 	}
 }
 
-func TestModelRunDetachesOnInterrupt(t *testing.T) {
-	fake := &fakeModelService{events: []*agentpbv2.ModelWatchMessage{personEntered()}, hold: true}
+// TestModelRunDetachesAWatchConfirmedAfterCtrlC presses Ctrl+C while the
+// device has not yet confirmed the watch. The run must still learn the
+// watch's id and detach it, exactly once, rather than leave it to the
+// device's lost-client grace.
+func TestModelRunDetachesAWatchConfirmedAfterCtrlC(t *testing.T) {
+	fake := &fakeModelService{confirm: make(chan struct{})}
 	serveModels(t, fake)
 	jsonOutput = true
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	var out strings.Builder
 	go func() {
 		done <- withModelClient(ctx, func(c agentpbv2.WendyModelServiceClient) error {
-			return runModelWatch(ctx, c, &out, modelRunOptions{Model: "coco-detector", Camera: "v4l2:/dev/video0"})
+			return runModelWatch(ctx, c, io.Discard, modelRunOptions{Model: "coco-detector", Camera: "v4l2:/dev/video0"})
 		})
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for fake.watched() == nil && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
-	time.Sleep(50 * time.Millisecond) // let the started message arrive
-	cancel()                          // Ctrl+C
-	if err := <-done; err != nil {
-		t.Fatalf("an interrupted run returned %v", err)
+	cancel()            // Ctrl+C
+	close(fake.confirm) // the device confirms the watch only now
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("an interrupted run returned %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run did not return after Ctrl+C")
 	}
 	if got := fake.stops(); len(got) != 1 || got[0] != "m-1/w-1" {
-		t.Fatalf("stops = %v, want the watch detached after Ctrl+C", got)
+		t.Fatalf("stops = %v, want the watch detached once after Ctrl+C", got)
 	}
 }
 

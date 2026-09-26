@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -23,8 +24,9 @@ func newDeviceModelCmd() *cobra.Command {
 		Long: `Run detectors and other catalog models on a device's cameras.
 
 A model runs while something watches it. 'wendy device model run' watches in
-the foreground; after it exits, the device stops the model a minute later
-unless another client is watching.`,
+the foreground, and Ctrl+C stops the model unless another client is watching
+it. A client that disappears without detaching keeps the model running for a
+minute, so it can reconnect.`,
 	}
 	cmd.AddCommand(newDeviceModelCatalogCmd(), newDeviceModelRunCmd(), newDeviceModelListCmd(), newDeviceModelStopCmd())
 	return cmd
@@ -235,49 +237,74 @@ type modelRunOptions struct {
 	MinConfidence        float32
 }
 
-// runModelWatch starts the model, watches it until ctx ends or the model
-// stops, then detaches, so the device stops the model unless someone else is
-// watching.
+const (
+	// modelDetachTimeout bounds the StopModel that detaches a run's watch.
+	modelDetachTimeout = 10 * time.Second
+	// modelWatchConfirmWait is how long Ctrl+C waits for the device to
+	// confirm a watch it has not confirmed yet, so the watch can be detached.
+	modelWatchConfirmWait = 2 * time.Second
+)
+
+// runModelWatch starts the model and prints what it sees until Ctrl+C or the
+// model stops. It detaches its watch on the way out, so the device stops the
+// model at once unless another client is watching it.
 func runModelWatch(ctx context.Context, client agentpbv2.WendyModelServiceClient, out io.Writer, opts modelRunOptions) error {
 	started, err := client.StartModel(ctx, &agentpbv2.StartModelRequest{ModelId: opts.Model, CameraSourceId: opts.Camera})
 	if err != nil {
 		return modelServiceErr(err)
 	}
 	id := started.GetInstance().GetInstanceId()
-	stream, err := client.WatchModel(ctx, &agentpbv2.WatchModelRequest{
+	// Ctrl+C must not break the stream: the device reads a broken stream as a
+	// client that went away, detaches the watch itself and keeps the model for
+	// a minute. The watch is detached first, and the stream closed after.
+	streamCtx, closeStream := context.WithCancel(context.WithoutCancel(ctx))
+	defer closeStream()
+	stream, err := client.WatchModel(streamCtx, &agentpbv2.WatchModelRequest{
 		InstanceId: id, Label: opts.Label, Classes: opts.Classes, MinConfidence: opts.MinConfidence})
 	if err != nil {
 		return modelServiceErr(err)
 	}
 	var watchID, lastStatusLine string
 	var last *agentpbv2.ModelInstance
-	defer func() {
-		if watchID == "" {
+	detached := false
+	detach := func() {
+		if watchID == "" || detached {
 			return
 		}
-		// Detach on the way out, even after Ctrl+C has cancelled ctx.
-		detachCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		detached = true
+		detachCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), modelDetachTimeout)
 		defer cancel()
 		_, _ = client.StopModel(detachCtx, &agentpbv2.StopModelRequest{InstanceId: id, WatchId: watchID})
-	}()
+	}
+	defer detach()
 	if !jsonOutput {
 		cliLogln("Watching %s on %s (instance %s). Press Ctrl+C to stop.", opts.Model, opts.Camera, id)
 	}
+	received := receiveModelWatch(streamCtx, stream)
 	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil // Ctrl+C: the deferred StopModel detaches the watch
+		var r modelWatchReceipt
+		select {
+		case r = <-received:
+		case <-ctx.Done():
+			// Ctrl+C. A watch the device has not confirmed yet may be
+			// confirmed in a moment; without its id it cannot be detached,
+			// and the device's lost-client grace stops the model instead.
+			if watchID == "" {
+				watchID = awaitWatchConfirmed(received, modelWatchConfirmWait)
 			}
-			if err == io.EOF {
+			detach()
+			return nil
+		}
+		if r.err != nil {
+			if r.err == io.EOF {
 				if last.GetState() == agentpbv2.ModelState_MODEL_STATE_FAILED {
 					return fmt.Errorf("the model failed: %s", last.GetStateDetail())
 				}
 				return nil
 			}
-			return fmt.Errorf("watching %s: %w", id, modelServiceErr(err))
+			return fmt.Errorf("watching %s: %w", id, modelServiceErr(r.err))
 		}
-		// Process the message first, even if Ctrl+C is pending
+		msg := r.msg
 		switch {
 		case msg.GetStarted() != nil:
 			watchID, last = msg.GetStarted().GetWatchId(), msg.GetStarted().GetInstance()
@@ -299,6 +326,53 @@ func runModelWatch(ctx context.Context, client agentpbv2.WendyModelServiceClient
 		}
 		if line != "" {
 			fmt.Fprintln(out, line)
+		}
+	}
+}
+
+// modelWatchReceipt is one result of reading a watch stream.
+type modelWatchReceipt struct {
+	msg *agentpbv2.ModelWatchMessage
+	err error
+}
+
+// receiveModelWatch reads stream on its own goroutine, so a run can act on
+// Ctrl+C while a read blocks. It stops after the stream's first error, or
+// once ctx, the stream's context, ends.
+func receiveModelWatch(ctx context.Context, stream grpc.ServerStreamingClient[agentpbv2.ModelWatchMessage]) <-chan modelWatchReceipt {
+	received := make(chan modelWatchReceipt)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			select {
+			case received <- modelWatchReceipt{msg: msg, err: err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return received
+}
+
+// awaitWatchConfirmed waits up to wait for the device's WatchStarted, which
+// always comes first, and returns the watch's id, or "" if none arrives.
+func awaitWatchConfirmed(received <-chan modelWatchReceipt, wait time.Duration) string {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		select {
+		case r := <-received:
+			if r.err != nil {
+				return ""
+			}
+			if s := r.msg.GetStarted(); s != nil {
+				return s.GetWatchId()
+			}
+		case <-timer.C:
+			return ""
 		}
 	}
 }
