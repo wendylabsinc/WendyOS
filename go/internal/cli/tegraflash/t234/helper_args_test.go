@@ -16,9 +16,9 @@ func TestHelperArgsRoundTrip(t *testing.T) {
 		{Writer: WriterOptions{Device: `\\.\PhysicalDrive3`, Blob: "/tmp/flashpkg.ext4"}},
 		{Writer: WriterOptions{Device: "/dev/rdisk4", DumpTo: "/tmp/out", DumpBytes: flashpkgSize}},
 		{Writer: WriterOptions{Device: "/dev/sdb", WritePlan: true, LayoutPath: "l.xml", ImagesDir: "/imgs", RootfsDevice: "mmcblk0"}},
-		{Release: true, ReleaseSerial: "12ab34cd", ReleasePort: "PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(2)"},
 		{Unmount: true, Writer: WriterOptions{Device: "/dev/sda"}},
 		{Eject: true, Writer: WriterOptions{Device: "/dev/sda"}},
+		{PollMedia: true, Session: "12345678"},
 	}
 	for _, want := range requests {
 		got, err := ParseWriterArgs(want.Args())

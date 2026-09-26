@@ -121,3 +121,51 @@ func TestSplitIoregSubtreesSplitsNestedDevice(t *testing.T) {
 		t.Errorf("chunk 1 idVendor = %d, want %d (gadget)", ioregInt(chunks[1], "idVendor"), GadgetVendorID)
 	}
 }
+
+func TestParseUSBDevicesReadsSerialBehindHub(t *testing.T) {
+	devs := parseUSBDevices(ioregNestedHub)
+	if len(devs) != 2 {
+		t.Fatalf("parseUSBDevices returned %d devices, want hub + gadget: %+v", len(devs), devs)
+	}
+	g := devs[1]
+	if g.VID != GadgetVendorID || g.PID != GadgetProductID || g.Serial != "ddb4ab3d" || g.PortPath != "0-1.2" {
+		t.Fatalf("gadget = %+v", g)
+	}
+}
+
+// A two-LUN gadget: LUN 0 without a medium, LUN 1 with one. Each LUN's
+// inquiry must pair with its own IOMedia.
+const ioregTwoLUNs = `+-o Linux for Tegra@00100000  <class IOUSBHostDevice, id 0x100034f5c, registered, matched, active, busy 0 (0 ms), retain 20>
+  | {
+  |   "idVendor" = 7531
+  |   "idProduct" = 260
+  |   "locationID" = 1048576
+  |   "USB Serial Number" = "ddb4ab3d"
+  | }
+  | +-o IOSCSILogicalUnitNub@0  <class IOSCSILogicalUnitNub, id 0x100034f80>
+  | | {
+  | |   "Vendor Identification" = "flashpkg"
+  | |   "Product Identification" = "ddb4ab3d"
+  | | }
+  | +-o IOSCSILogicalUnitNub@1  <class IOSCSILogicalUnitNub, id 0x100034f81>
+  | | {
+  | |   "Vendor Identification" = "rootfs"
+  | |   "Product Identification" = "ddb4ab3d"
+  | | }
+  | | +-o rootfs ddb4ab3d Media  <class IOMedia, id 0x100034fb1>
+  | | | {
+  | | |   "BSD Name" = "disk5"
+  | | |   "Whole" = Yes
+  | | |   "Size" = 63585648640
+  | | | }
+`
+
+func TestParseUMSDisksPairsEachLUNWithItsMedia(t *testing.T) {
+	disks := parseUMSDisks(ioregTwoLUNs)
+	if len(disks) != 1 {
+		t.Fatalf("parseUMSDisks returned %d disks, want only the LUN with media: %+v", len(disks), disks)
+	}
+	if d := disks[0]; d.Vendor != "rootfs" || d.DevPath != "/dev/disk5" || d.SizeBytes != 63585648640 || d.PortPath != "0-1" {
+		t.Fatalf("disk = %+v", d)
+	}
+}

@@ -250,9 +250,8 @@ func hexField(s, prefix string) (uint16, bool) {
 // InstanceSerial returns the trailing instance element (after the last backslash),
 // which is the device serial for devices that report one. A device with no USB
 // serial gets a Windows-generated id prefixed with "&" — we return it as-is; the
-// caller uses LocationPath for stable identity, not this. Exported for package
-// t234, whose ReleaseUSB must extract the serial exactly the way it was
-// reported here.
+// caller uses LocationPath for stable identity, not this. Exported so other
+// packages read the serial exactly the way it is reported here.
 func InstanceSerial(instanceID string) string {
 	i := strings.LastIndex(instanceID, `\`)
 	if i < 0 || i+1 >= len(instanceID) {

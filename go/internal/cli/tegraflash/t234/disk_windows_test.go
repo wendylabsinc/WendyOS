@@ -83,7 +83,7 @@ func TestPhysicalDriveNumber(t *testing.T) {
 // TestGadgetPortMap pins the composite-gadget normalization: when usbccgp
 // splits the gadget into MI_xx function devnodes, the USBSTOR disk parents to
 // the MI child — whose location path (#USBMI suffix) and synthesized trailer
-// would break both the recovery-port correlation and ReleaseUSB — so the map
+// would break the recovery-port correlation — so the map
 // must resolve function nodes to the composite root's location path.
 func TestGadgetPortMap(t *testing.T) {
 	const rootLoc = `PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(2)`

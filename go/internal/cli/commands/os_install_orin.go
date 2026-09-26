@@ -107,6 +107,13 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	elevationCtx, cancelElevation := context.WithCancel(ctx)
 	defer cancelElevation()
 	keepElevationAlive(elevationCtx)
+	// Otherwise macOS asks about each flashing disk it can't read, and choosing
+	// Eject there releases the disk before the flash is done with it.
+	if releaseClaims, err := t234.SuppressDiskPrompts(); err != nil {
+		fmt.Println(tui.WarningMessage(fmt.Sprintf("Could not stop macOS disk prompts (%v). If macOS says a disk is not readable, choose Ignore.", err)))
+	} else {
+		defer releaseClaims()
+	}
 	flashCtx, cancelFlash := context.WithCancel(ctx)
 	defer cancelFlash()
 
@@ -146,6 +153,9 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			return cached, err
 		}},
 		{id: orinStepProvision, label: "Prepare per-run config", run: func(out io.Writer, detail func(string)) (bool, error) {
+			if err := t234.CheckHostTools(); err != nil {
+				return false, err
+			}
 			workspace, layoutPath, err = prepareT234Workspace(fp)
 			if err != nil {
 				return false, err
@@ -508,10 +518,9 @@ func orinRecoveryBriefingBox(opts t234InstallOptions) string {
 	if runtime.GOOS == "darwin" {
 		lines = append(lines,
 			"",
-			briefMarker.Render("●")+" "+briefTitle.Render("macOS disk warnings"),
-			"  While flashing, macOS may complain \"The disk you attached was not readable\" —",
-			"  the Jetson's raw flashing disks are expected to look that way. Choose "+briefKey.Render("Ignore")+";",
-			"  "+briefKey.Render("Initialize…")+" or "+briefKey.Render("Eject")+" can corrupt or interrupt the flash.",
+			briefMarker.Render("●")+" "+briefTitle.Render("macOS disk prompts"),
+			"  wendy keeps macOS from asking about the Jetson's flashing disks. If it still says a",
+			"  disk is not readable, choose "+briefKey.Render("Ignore")+"; "+briefKey.Render("Eject")+" interrupts the flash.",
 		)
 	}
 	if runtime.GOOS == "windows" {

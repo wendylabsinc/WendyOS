@@ -3,6 +3,7 @@
 package t234
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,7 +13,8 @@ import (
 )
 
 // listUMSDisks finds USB mass-storage whole disks via sysfs: the SCSI
-// inquiry vendor/model land in /sys/block/sdX/device/{vendor,model}.
+// inquiry vendor/model land in /sys/block/sdX/device/{vendor,model}. A LUN
+// without a medium keeps its node at size 0 and is skipped.
 func listUMSDisks() ([]UMSDisk, error) {
 	entries, err := filepath.Glob("/sys/block/sd*")
 	if err != nil {
@@ -21,11 +23,10 @@ func listUMSDisks() ([]UMSDisk, error) {
 	var disks []UMSDisk
 	for _, e := range entries {
 		name := filepath.Base(e)
-		vendor := sysfsString(filepath.Join(e, "device", "vendor"))
-		if vendor == "" {
+		exportName, serial, ok := sysfsInquiry(e)
+		if !ok {
 			continue
 		}
-		exportName, serial := splitInquiry(vendor, sysfsString(filepath.Join(e, "device", "model")))
 		d := UMSDisk{
 			DevPath:  "/dev/" + name,
 			RawPath:  "/dev/" + name,
@@ -37,6 +38,9 @@ func listUMSDisks() ([]UMSDisk, error) {
 			if n, err := strconv.ParseInt(sectors, 10, 64); err == nil {
 				d.SizeBytes = n * 512
 			}
+		}
+		if d.SizeBytes == 0 {
+			continue
 		}
 		disks = append(disks, d)
 	}
@@ -82,12 +86,14 @@ func rawUMSInquiry() string {
 	return b.String()
 }
 
-// tegraUSBHint reports which Tegra-relevant USB devices are present (from
-// sysfs), so a timed-out stage-2 wait can distinguish a board that rebooted
-// into recovery from one still exposing the flashing gadget or gone from USB.
-func tegraUSBHint() string {
-	entries, _ := filepath.Glob("/sys/bus/usb/devices/*/idVendor")
-	var found []string
+// listUSBDevices reads every USB device from sysfs; the directory name is the
+// same bus-port chain linuxUSBPortPath reports.
+func listUSBDevices() ([]usbDevice, error) {
+	entries, err := filepath.Glob("/sys/bus/usb/devices/*/idVendor")
+	if err != nil {
+		return nil, err
+	}
+	var devs []usbDevice
 	for _, ve := range entries {
 		dir := filepath.Dir(ve)
 		v, verr := strconv.ParseUint(sysfsString(ve), 16, 16)
@@ -95,14 +101,14 @@ func tegraUSBHint() string {
 		if verr != nil || perr != nil {
 			continue
 		}
-		if label := tegraUSBLabel(uint16(v), uint16(p)); label != "" {
-			found = append(found, label)
-		}
+		devs = append(devs, usbDevice{
+			VID:      uint16(v),
+			PID:      uint16(p),
+			Serial:   sysfsString(filepath.Join(dir, "serial")),
+			PortPath: filepath.Base(dir),
+		})
 	}
-	if len(found) == 0 {
-		return "No NVIDIA recovery (0955:*) or flashing-gadget (1d6b:0104) USB device is present — the board has left USB."
-	}
-	return "Tegra USB devices present: " + strings.Join(found, ", ")
+	return devs, nil
 }
 
 func sysfsString(path string) string {
@@ -123,13 +129,86 @@ func unmountUMSDisk(d UMSDisk) error {
 	return nil
 }
 
-// ejectUMSDisk sends a SCSI eject (START STOP UNIT / power-off) to the LUN — the
-// clean per-LUN "host is done" signal the device's flashing initrd waits for
-// before finalizing a LUN and moving to its next command. This mirrors the
-// reference initrd-flash's `udisksctl power-off`, falling back to util-linux
-// `eject`. Best-effort.
-func ejectUMSDisk(d UMSDisk) {
-	if exec.Command("udisksctl", "power-off", "-b", d.DevPath).Run() != nil {
-		exec.Command("eject", d.DevPath).Run() //nolint:errcheck
+// ejectUMSDisk ejects the LUN's medium (SCSI START STOP UNIT) — the "host is
+// done" signal the flashing initrd waits for. The USB device stays attached;
+// udisksctl power-off would disconnect it.
+func ejectUMSDisk(d UMSDisk) error {
+	if out, err := exec.Command("eject", d.DevPath).CombinedOutput(); err != nil {
+		return fmt.Errorf("eject %s: %v: %s", d.DevPath, err, strings.TrimSpace(string(out)))
 	}
+	return nil
+}
+
+// sysfsInquiry returns the export name and session serial in a block device's
+// SCSI inquiry; ok is false when it has none.
+func sysfsInquiry(dir string) (name, serial string, ok bool) {
+	vendor := sysfsString(filepath.Join(dir, "device", "vendor"))
+	if vendor == "" {
+		return "", "", false
+	}
+	name, serial = splitInquiry(vendor, sysfsString(filepath.Join(dir, "device", "model")))
+	return name, serial, true
+}
+
+// sessionLUNs lists the sysfs dirs of every LUN this session's gadget exports,
+// empty ones included. It matches the session serial, not the port, which can
+// change after a replug.
+func sessionLUNs(session string) []string {
+	entries, _ := filepath.Glob("/sys/block/sd*")
+	var luns []string
+	for _, e := range entries {
+		if _, serial, ok := sysfsInquiry(e); ok && session != "" && strings.EqualFold(serial, session) {
+			luns = append(luns, e)
+		}
+	}
+	return luns
+}
+
+// pollingOff reports whether a LUN's media polling is off: set to 0, or left at
+// the kernel default (-1) while that is 0. Hosts running systemd usually poll
+// by default.
+func pollingOff(lun string) bool {
+	switch sysfsString(filepath.Join(lun, "events_poll_msecs")) {
+	case "0":
+		return true
+	case "-1":
+		return sysfsString("/sys/module/block/parameters/events_dfl_poll_msecs") == "0"
+	}
+	return false
+}
+
+// mediaPollingMissing reports whether a LUN of this session would not notice
+// the device loading a medium. The attributes are world-readable, so this
+// needs no privilege.
+func mediaPollingMissing(session string) bool {
+	for _, lun := range sessionLUNs(session) {
+		if pollingOff(lun) {
+			return true
+		}
+	}
+	return false
+}
+
+// enableMediaPolling turns on media polling for this session's LUNs that lack
+// it. It is re-run while waiting: a re-enumerated LUN starts afresh.
+func enableMediaPolling(session string) error {
+	var errs []error
+	for _, lun := range sessionLUNs(session) {
+		if !pollingOff(lun) {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(lun, "events_poll_msecs"), []byte("1000"), 0o644); err != nil {
+			errs = append(errs, fmt.Errorf("enabling media polling on %s: %w", filepath.Base(lun), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// CheckHostTools fails early, before anything is sent to the Jetson, when the
+// eject tool, which releases the flashing LUNs, is not installed.
+func CheckHostTools() error {
+	if _, err := exec.LookPath("eject"); err != nil {
+		return fmt.Errorf("the eject tool is required to flash this image (Debian/Ubuntu: apt install eject): %w", err)
+	}
+	return nil
 }
