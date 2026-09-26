@@ -111,27 +111,19 @@ func (c *Client) StartHost(ctx context.Context, h models.HostSpec) (<-chan model
 		release()
 		return nil, fmt.Errorf("creating the model host: %w", err)
 	}
-	cleanup := func() {
-		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = ctr.Delete(cleanupCtx, containerd.WithSnapshotCleanup)
-		release()
-	}
 	task, err := ctr.NewTask(ctx, cio.LogFile(h.LogPath))
 	if err != nil {
-		cleanup()
+		c.abandonModelHost(ctx, h.InstanceID, ctr, nil, release)
 		return nil, fmt.Errorf("creating the model host task: %w", err)
 	}
 	// Wait before Start so an immediate exit is not missed; it outlives ctx.
 	statusC, err := task.Wait(context.WithoutCancel(ctx))
 	if err != nil {
-		_, _ = task.Delete(context.WithoutCancel(ctx), containerd.WithProcessKill)
-		cleanup()
+		c.abandonModelHost(ctx, h.InstanceID, ctr, task, release)
 		return nil, fmt.Errorf("waiting on the model host: %w", err)
 	}
 	if err := task.Start(ctx); err != nil {
-		_, _ = task.Delete(context.WithoutCancel(ctx), containerd.WithProcessKill)
-		cleanup()
+		c.abandonModelHost(ctx, h.InstanceID, ctr, task, release)
 		return nil, fmt.Errorf("starting the model host: %w", err)
 	}
 	exits := make(chan models.HostExit, 1)
@@ -141,6 +133,39 @@ func (c *Client) StartHost(ctx context.Context, h models.HostSpec) (<-chan model
 		exits <- models.HostExit{Code: code, Err: err}
 	}()
 	return exits, nil
+}
+
+// modelHostCleanupTimeout bounds the whole cleanup after StartHost fails.
+// Deletes can wedge on real hardware (task_teardown.go), and StartHost runs
+// on the instance's run loop, which holds its slot and camera pin.
+var modelHostCleanupTimeout = 10 * time.Second
+
+// failedHostTask and failedHostContainer are the parts of a containerd task
+// and container that the cleanup after a failed StartHost uses.
+type failedHostTask interface {
+	Delete(ctx context.Context, opts ...containerd.ProcessDeleteOpts) (*containerd.ExitStatus, error)
+}
+
+type failedHostContainer interface {
+	Delete(ctx context.Context, opts ...containerd.DeleteOpts) error
+}
+
+// abandonModelHost removes a host whose start failed: its task, if it has
+// one, then its container, all within modelHostCleanupTimeout, and releases
+// its data socket. What it cannot remove is logged; the supervisor removes
+// the host again before any restart.
+func (c *Client) abandonModelHost(ctx context.Context, instanceID string, ctr failedHostContainer, task failedHostTask, release func()) {
+	defer release()
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), modelHostCleanupTimeout)
+	defer cancel()
+	if task != nil {
+		if _, err := task.Delete(cleanupCtx, containerd.WithProcessKill); err != nil && !errdefs.IsNotFound(err) {
+			c.logger.Warn("cleaning up a model host that failed to start: deleting its task failed", zap.String("instance", instanceID), zap.Error(err))
+		}
+	}
+	if err := ctr.Delete(cleanupCtx, containerd.WithSnapshotCleanup); err != nil && !errdefs.IsNotFound(err) {
+		c.logger.Warn("cleaning up a model host that failed to start: deleting its container failed", zap.String("instance", instanceID), zap.Error(err))
+	}
 }
 
 // RemoveHost stops and deletes a model host and releases its data socket.

@@ -1,16 +1,21 @@
 package containerd
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/wendylabsinc/wendy/go/internal/agent/models"
 	localoci "github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func testModelHost() models.HostSpec {
@@ -157,5 +162,53 @@ func TestFinishModelHostSpecGrantsSocketAndScope(t *testing.T) {
 	}
 	if want := "system.slice:" + sharedenv.SystemdServiceName() + ":" + h.AppID; spec.Linux.CgroupsPath != want {
 		t.Fatalf("cgroup = %q, want %q", spec.Linux.CgroupsPath, want)
+	}
+}
+
+// wedgedTask's Delete never finishes on its own, as a task Delete can wedge
+// on real hardware (task_teardown.go); it returns only once its context ends.
+type wedgedTask struct{}
+
+func (wedgedTask) Delete(ctx context.Context, _ ...containerd.ProcessDeleteOpts) (*containerd.ExitStatus, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// deletedContainer records a model host container's deletion, which fails
+// when its context has already ended.
+type deletedContainer struct{ deleted bool }
+
+func (d *deletedContainer) Delete(ctx context.Context, _ ...containerd.DeleteOpts) error {
+	d.deleted = true
+	return ctx.Err()
+}
+
+// TestFailedStartCleanupIsBounded: after StartHost fails, removing the
+// half-started host must finish within its bound even when the task Delete
+// wedges. Otherwise the instance's run loop, and with it its slot and camera
+// pin, would be held forever.
+func TestFailedStartCleanupIsBounded(t *testing.T) {
+	old := modelHostCleanupTimeout
+	modelHostCleanupTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { modelHostCleanupTimeout = old })
+	core, logs := observer.New(zap.WarnLevel)
+	c := &Client{logger: zap.New(core)}
+	ctr := &deletedContainer{}
+	released := false
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.abandonModelHost(context.Background(), "m-1", ctr, wedgedTask{}, func() { released = true })
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup after a failed start is still blocked on a wedged task Delete")
+	}
+	if !ctr.deleted || !released {
+		t.Fatalf("container deleted=%v, data socket released=%v; cleanup must still attempt both", ctr.deleted, released)
+	}
+	if logs.Len() == 0 {
+		t.Fatal("cleanup failures were not logged")
 	}
 }
