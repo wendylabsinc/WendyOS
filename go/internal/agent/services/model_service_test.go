@@ -194,6 +194,7 @@ func TestModelStatusErrorCodes(t *testing.T) {
 		{"camera not streamable", fmt.Errorf("%w: %v", models.ErrCameraNotStreamable, errors.New("no frame identity")), codes.FailedPrecondition},
 		{"capacity", fmt.Errorf("%w (2): m-aaa, m-bbb", models.ErrCapacity), codes.ResourceExhausted},
 		{"invalid filter", fmt.Errorf("%w: unknown event type %q", models.ErrInvalidFilter, "bogus"), codes.InvalidArgument},
+		{"shutting down", models.ErrShuttingDown, codes.Unavailable},
 		{"context canceled", context.Canceled, codes.Canceled},
 		{"context deadline exceeded", context.DeadlineExceeded, codes.DeadlineExceeded},
 		{"unrelated error", errors.New("boom"), codes.Internal},

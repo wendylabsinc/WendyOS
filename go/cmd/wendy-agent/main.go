@@ -42,6 +42,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
+	agentmodels "github.com/wendylabsinc/wendy/go/internal/agent/models"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	agentnet "github.com/wendylabsinc/wendy/go/internal/agent/network"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
@@ -393,20 +394,18 @@ func main() {
 
 	// Models the agent runs for clients such as wendy chat
 	// (specs/2026-09-25-model-watch-design.md). Model hosts are containers,
-	// so the service needs containerd.
+	// so the service needs containerd. Shutdown stops them first
+	// (stopModels, below).
+	var modelSupervisor *agentmodels.Supervisor
 	var modelSvc *services.ModelService
 	if ctrdClient != nil {
-		modelSupervisor, err := newModelSupervisor(ctx, logger, ctrdClient, videoSvc, dataManager)
+		sup, err := newModelSupervisor(ctx, logger, ctrdClient, videoSvc, dataManager)
 		if err != nil {
 			logger.Error("Model service disabled", zap.Error(err))
 		} else {
-			appDataSocketManager.SetRecordSink(modelSupervisor.PublishApplicationRecord)
-			modelSvc = services.NewModelService(logger, modelSupervisor)
-			defer func() {
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				modelSupervisor.Shutdown(shutdownCtx)
-			}()
+			modelSupervisor = sup
+			appDataSocketManager.SetRecordSink(sup.PublishApplicationRecord)
+			modelSvc = services.NewModelService(logger, sup)
 		}
 	}
 
@@ -1180,6 +1179,10 @@ func main() {
 	sig := <-sigCh
 	logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
 
+	// Models first: cancel() below stops the video pumps and data sockets
+	// their hosts depend on, and GracefulStop waits for every open
+	// WatchModel stream, which only a model's end closes.
+	stopModels(modelSupervisor)
 	cancel()
 	_ = meshProxy.Close()
 	if agentServer != nil {

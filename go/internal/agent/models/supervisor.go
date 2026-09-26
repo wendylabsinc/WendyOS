@@ -53,6 +53,7 @@ type Supervisor struct {
 	build chan struct{} // the device's single engine build slot
 
 	mu        sync.Mutex
+	closed    bool // set by Shutdown; Start admits nothing after it
 	instances map[string]*instance
 	byKey     map[string]*instance // model id + NUL + camera source id
 }
@@ -141,6 +142,10 @@ func (s *Supervisor) Start(ctx context.Context, modelID, cameraSourceID string) 
 	var inst *instance
 	for {
 		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return InstanceInfo{}, false, ErrShuttingDown
+		}
 		if existing := s.byKey[key]; existing != nil {
 			s.mu.Unlock()
 			info, reused, err := s.awaitExisting(ctx, existing)
@@ -328,8 +333,10 @@ func (s *Supervisor) awaitRemoval(ctx context.Context, inst *instance) (Instance
 }
 
 // Shutdown stops every instance and waits for their removal, or for ctx.
+// Start refuses new instances from then on (ErrShuttingDown).
 func (s *Supervisor) Shutdown(ctx context.Context) {
 	s.mu.Lock()
+	s.closed = true
 	insts := make([]*instance, 0, len(s.instances))
 	for _, inst := range s.instances {
 		insts = append(insts, inst)

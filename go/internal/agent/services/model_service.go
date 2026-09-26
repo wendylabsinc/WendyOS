@@ -36,6 +36,8 @@ func modelStatusError(err error) error {
 		return status.Error(codes.ResourceExhausted, err.Error())
 	case errors.Is(err, models.ErrInvalidFilter):
 		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, models.ErrShuttingDown):
+		return status.Error(codes.Unavailable, err.Error())
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return status.FromContextError(err).Err()
 	default:

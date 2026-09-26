@@ -188,6 +188,34 @@ func TestRefusedCameraDoesNotTakeASlot(t *testing.T) {
 	}
 }
 
+// TestShutdownStopsInstancesAndRefusesNewOnes: the agent stops its models
+// first on shutdown. Their watches end STOPPED with the reason, and a Start
+// that arrives afterwards must not run a host that outlives the agent.
+func TestShutdownStopsInstancesAndRefusesNewOnes(t *testing.T) {
+	h := newHarness(t, models.EngineONNXRuntime)
+	info := h.startReady(t, frontDoor)
+	w, _, _, err := h.sup.Watch(models.WatchRequest{InstanceID: info.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	h.sup.Shutdown(ctx)
+	if final := drainToEnd(t, w); final == nil || final.State != models.StateStopped || final.StateDetail != "the agent is shutting down" {
+		t.Fatalf("final = %+v", final)
+	}
+
+	if _, _, err := h.sup.Start(context.Background(), "coco-detector", garage); !errors.Is(err, models.ErrShuttingDown) {
+		t.Fatalf("start after shutdown = %v, want ErrShuttingDown", err)
+	}
+	if n := len(h.sup.List()); n != 0 {
+		t.Fatalf("%d instances after shutdown", n)
+	}
+	if owners := h.cameras.Owners(); len(owners) != 0 {
+		t.Fatalf("a start after shutdown pinned cameras: %v", owners)
+	}
+}
+
 func TestStopRemovesHostCameraAndRunDir(t *testing.T) {
 	h := newHarness(t, models.EngineONNXRuntime)
 	info := h.startReady(t, frontDoor)

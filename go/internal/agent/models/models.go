@@ -80,4 +80,5 @@ var (
 	ErrCameraNotStreamable = errors.New("camera cannot stream to a model")
 	ErrCapacity            = errors.New("this device is already running its maximum number of models")
 	ErrInvalidFilter       = errors.New("invalid watch filter")
+	ErrShuttingDown        = errors.New("the agent is shutting down")
 )

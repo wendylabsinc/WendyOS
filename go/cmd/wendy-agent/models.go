@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	agentcontainerd "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
 	agentdata "github.com/wendylabsinc/wendy/go/internal/agent/data"
@@ -36,6 +37,24 @@ func newModelSupervisor(ctx context.Context, logger *zap.Logger, ctrd *agentcont
 		logger.Warn("Removing model hosts left by a previous agent failed", zap.Error(err))
 	}
 	return sup, nil
+}
+
+// modelShutdownTimeout bounds how long agent shutdown waits for model
+// instances to be removed.
+const modelShutdownTimeout = 10 * time.Second
+
+// stopModels stops every model instance and waits, within
+// modelShutdownTimeout, for their removal; sup may be nil. Shutdown calls it
+// first, while camera pumps and data sockets still run, so every watch ends
+// with "the agent is shutting down" rather than a camera failure, and the
+// gRPC servers' GracefulStop is not left waiting on WatchModel streams.
+func stopModels(sup *agentmodels.Supervisor) {
+	if sup == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), modelShutdownTimeout)
+	defer cancel()
+	sup.Shutdown(ctx)
 }
 
 // loadModelCatalog returns the catalog built into the agent, or the file at
