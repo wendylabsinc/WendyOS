@@ -77,14 +77,14 @@ Useful `wendy init` flags:
 Validate the current directory:
 
 ```bash
-wendy json validate
+wendy project validate
 ```
 
 Validate a specific file or directory:
 
 ```bash
-wendy json validate ./wendy.json
-wendy json validate ./path/to/app
+wendy project validate ./wendy.json
+wendy project validate ./path/to/app
 ```
 
 Print the schema for editor setup:
@@ -93,7 +93,7 @@ Print the schema for editor setup:
 wendy json schema > wendy.schema.json
 ```
 
-`wendy json validate` reports deprecated or suspicious config as warnings after structural validation. Treat warnings as actionable, especially `video` entitlement warnings where new configs should use `camera`.
+`wendy project validate` reports deprecated or suspicious config as warnings after structural validation. Treat warnings as actionable, especially `video` entitlement warnings where new configs should use `camera`.
 
 ## Project entitlement commands
 
@@ -116,7 +116,18 @@ wendy project entitlements add camera
 wendy project entitlements remove camera
 ```
 
-Important: `project entitlements add` prompts for required fields for `persist`, `i2c`, and `gpio`. In an agent workflow, prefer editing `wendy.json` directly for those entitlements, then run `wendy json validate`.
+For scripts, use explicit field flags. These commands never prompt with `--json`:
+
+```sh
+wendy project add persist --name app-data --path /data --json
+wendy project add i2c --bus i2c-1 --json
+wendy project add http --port 8080 --json
+wendy project edit ros2 --domain-id 42 --json
+```
+
+Use `--dry-run --json` to preview a change, `--service <name>` to edit a service,
+and `--file <path>` to choose a manifest. Direct JSON editing remains supported
+for fields without dedicated flags; validate afterwards.
 
 For I2C, use the device name without `/dev/`, for example `i2c-1`. The runtime entitlement path prefixes `/dev/` when mounting the device.
 
@@ -127,4 +138,4 @@ For I2C, use the device name without `/dev/`, for example `i2c-1`. The runtime e
 - Use the `wendy-entitlements` skill when choosing capability details.
 - Keep `appId` stable once a device has deployed the app.
 - Keep JSON examples valid; `wendy.json` cannot contain comments.
-- Validate with `wendy json validate` before `wendy build` or `wendy run`.
+- Validate with `wendy project validate` before `wendy build` or `wendy run`.
