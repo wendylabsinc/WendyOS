@@ -2,10 +2,12 @@ package analytics
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -291,5 +293,58 @@ func TestCloseWaitsForInFlightDelivery(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		t.Fatal("Close did not return after the telemetry request completed")
+	}
+}
+
+func TestTrackSendsBoundedExtraProperties(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	enableTestDelivery(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies <- body
+	})
+	props := map[string]string{
+		"command_name":     "wendy run",
+		"duration_ms":      "1234",
+		"success":          "true",
+		"deploy_transport": "chunk",
+		"deploy_a_long":    strings.Repeat("x", 200), // sorts before the fillers, so the count cap keeps it
+	}
+	for i := 0; i < 40; i++ {
+		props[fmt.Sprintf("deploy_extra_%02d", i)] = "1"
+	}
+	Track("deploy_completed", props)
+	Close()
+
+	body := <-bodies
+	extra, ok := body["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload has no properties object: %v", body)
+	}
+	if len(extra) != maxEventProperties {
+		t.Fatalf("sent %d properties, want the cap of %d", len(extra), maxEventProperties)
+	}
+	if _, core := extra["duration_ms"]; core {
+		t.Fatal("core fields must stay top-level, not in properties")
+	}
+	if body["duration_ms"] != float64(1234) || body["command_name"] != "wendy run" {
+		t.Fatalf("core fields = %v / %v", body["duration_ms"], body["command_name"])
+	}
+	if v, _ := extra["deploy_a_long"].(string); len(v) != maxPropertyLen {
+		t.Fatalf("long value has %d chars, want truncation to %d", len(v), maxPropertyLen)
+	}
+}
+
+func TestTrackOmitsPropertiesForCoreOnlyEvents(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	enableTestDelivery(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies <- body
+	})
+	Track("command_executed", map[string]string{"command_name": "wendy run", "success": "true"})
+	Close()
+	if _, ok := (<-bodies)["properties"]; ok {
+		t.Fatal("a command event without extra properties must not send a properties object")
 	}
 }

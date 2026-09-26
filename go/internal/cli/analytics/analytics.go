@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,17 +25,54 @@ import (
 const defaultTelemetryEndpoint = "https://wendy-cli-telemetry-114319063177.us-central1.run.app/v1/telemetry/events"
 
 type eventPayload struct {
-	AnonymousID string `json:"anonymous_id"`
-	Event       string `json:"event"`
-	CommandName string `json:"command_name"`
-	CommandRoot string `json:"command_root,omitempty"`
-	DurationMS  int64  `json:"duration_ms,omitempty"`
-	Success     bool   `json:"success"`
-	ErrorClass  string `json:"error_class,omitempty"`
-	CLIVersion  string `json:"cli_version"`
-	OS          string `json:"os"`
-	Arch        string `json:"arch"`
-	IsDevBuild  bool   `json:"is_dev_build"`
+	AnonymousID string            `json:"anonymous_id"`
+	Event       string            `json:"event"`
+	CommandName string            `json:"command_name"`
+	CommandRoot string            `json:"command_root,omitempty"`
+	DurationMS  int64             `json:"duration_ms,omitempty"`
+	Success     bool              `json:"success"`
+	ErrorClass  string            `json:"error_class,omitempty"`
+	CLIVersion  string            `json:"cli_version"`
+	OS          string            `json:"os"`
+	Arch        string            `json:"arch"`
+	IsDevBuild  bool              `json:"is_dev_build"`
+	Properties  map[string]string `json:"properties,omitempty"`
+}
+
+// coreProperties travel as top-level payload fields, not in Properties.
+var coreProperties = map[string]bool{
+	"command_name": true, "command_root": true, "duration_ms": true,
+	"success": true, "error_class": true, "is_dev_build": true,
+}
+
+const (
+	// maxEventProperties and maxPropertyLen keep an event far below the
+	// receiver's 8 KB body limit.
+	maxEventProperties = 32
+	maxPropertyLen     = 64
+)
+
+// extraProperties returns the non-core properties, bounded in count and length.
+func extraProperties(properties map[string]string) map[string]string {
+	keys := make([]string, 0, len(properties))
+	for k := range properties {
+		if !coreProperties[k] {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+	out := make(map[string]string, min(len(keys), maxEventProperties))
+	for _, k := range keys[:min(len(keys), maxEventProperties)] {
+		v := properties[k]
+		if len(v) > maxPropertyLen {
+			v = v[:maxPropertyLen]
+		}
+		out[k] = v
+	}
+	return out
 }
 
 var (
@@ -126,6 +164,7 @@ func track(event string, properties map[string]string, onDelivered func()) {
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 		IsDevBuild:  version.IsDev(version.Version),
+		Properties:  extraProperties(properties),
 	}
 
 	body, err := json.Marshal(payload)
