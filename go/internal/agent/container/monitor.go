@@ -291,10 +291,11 @@ func (m *ContainerMonitor) restartBlocked(containerName string) bool {
 	if m.suppressed[containerName] > 0 {
 		return true
 	}
-	if state, ok := m.states[containerName]; ok && state.ExplicitStop {
-		return true
-	}
-	return false
+	state, ok := m.states[containerName]
+	// A queued restart may outlive Unregister (for example when an app alias
+	// is replaced by its resolved service ID, or restart policy becomes NO).
+	// Removing its registration must revoke that already scheduled work too.
+	return !ok || state.ExplicitStop
 }
 
 // RestartStatuses returns the monitor's per-container restart bookkeeping,
