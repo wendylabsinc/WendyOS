@@ -47,12 +47,14 @@ var coreProperties = map[string]bool{
 
 const (
 	// maxEventProperties and maxPropertyLen keep an event far below the
-	// receiver's 8 KB body limit.
+	// receiver's 8 KB body limit. maxPropertyLen is measured in bytes.
 	maxEventProperties = 32
 	maxPropertyLen     = 64
 )
 
 // extraProperties returns the non-core properties, bounded in count and length.
+// Property values are truncated at maxPropertyLen bytes, with partial UTF-8
+// sequences removed to ensure the result is valid UTF-8.
 func extraProperties(properties map[string]string) map[string]string {
 	keys := make([]string, 0, len(properties))
 	for k := range properties {
@@ -68,7 +70,8 @@ func extraProperties(properties map[string]string) map[string]string {
 	for _, k := range keys[:min(len(keys), maxEventProperties)] {
 		v := properties[k]
 		if len(v) > maxPropertyLen {
-			v = v[:maxPropertyLen]
+			// Truncate at maxPropertyLen bytes, then remove any partial UTF-8 sequence.
+			v = strings.ToValidUTF8(v[:maxPropertyLen], "")
 		}
 		out[k] = v
 	}

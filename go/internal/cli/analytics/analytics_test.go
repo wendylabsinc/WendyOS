@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
@@ -346,5 +347,50 @@ func TestTrackOmitsPropertiesForCoreOnlyEvents(t *testing.T) {
 	Close()
 	if _, ok := (<-bodies)["properties"]; ok {
 		t.Fatal("a command event without extra properties must not send a properties object")
+	}
+}
+
+func TestTrackTruncatesUTF8SafelyAtBoundaries(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	enableTestDelivery(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		bodies <- body
+	})
+	// "€" is a 3-byte UTF-8 sequence. Repeated 27 times = 81 bytes.
+	// Truncating at 64 bytes lands mid-rune (64 = 21*3 + 1, splitting the 22nd rune).
+	euro := "€"
+	longValue := strings.Repeat(euro, 27) // 81 bytes total
+	if len(longValue) != 81 {
+		t.Fatalf("test setup: expected 81 bytes, got %d", len(longValue))
+	}
+	Track("deploy_completed", map[string]string{
+		"command_name":  "wendy run",
+		"success":       "true",
+		"multi_byte_ok": longValue,
+	})
+	Close()
+
+	body := <-bodies
+	extra, ok := body["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("payload has no properties object: %v", body)
+	}
+	truncated, ok := extra["multi_byte_ok"].(string)
+	if !ok {
+		t.Fatalf("multi_byte_ok not found in properties: %v", extra)
+	}
+
+	// Verify the truncated value is valid UTF-8.
+	if !utf8.ValidString(truncated) {
+		t.Fatalf("truncated value is not valid UTF-8: %q", truncated)
+	}
+	// Verify the truncated value is within the byte limit.
+	if len(truncated) > maxPropertyLen {
+		t.Fatalf("truncated value has %d bytes, want <= %d", len(truncated), maxPropertyLen)
+	}
+	// Verify the truncated value is a prefix of the original.
+	if !strings.HasPrefix(longValue, truncated) {
+		t.Fatalf("truncated %q is not a prefix of original %q", truncated, longValue)
 	}
 }
