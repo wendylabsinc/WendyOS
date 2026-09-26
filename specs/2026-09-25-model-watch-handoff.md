@@ -1,7 +1,7 @@
 # Model watch (P-WDY-258): session handoff
 
 **Date:** 2026-09-25 (updated after milestone M2 was implemented)
-**Branch:** `ed/model-watch-design` in `/media/work/WendyAgent`, based on `main` at `f36f361af`; not pushed
+**Branch:** `ed/model-watch-design` in `/media/work/WendyAgent`, based on `main` at `f36f361af`; pushed, with a draft PR against `main`
 **Owner:** Ethan, lead of the Linear project P-WDY-258 "Wendy Chat: Let LLM spawn 'any model'"
 
 Read this first when you pick up the work. It tells you where things stand and what not to redo.
@@ -11,13 +11,13 @@ Read this first when you pick up the work. It tells you where things stand and w
 - **Design approved:** `specs/2026-09-25-model-watch-design.md`. Brainstorming split P-WDY-258 into six sub-projects, and this is the design for the first slice, "model watch".
 - **Plan approved and executed:** `specs/2026-09-25-model-watch-plan-2-agent-service.md` (milestone M2: the agent's `WendyModelService` and the `wendy device model` CLI) was executed task by task with `superpowers:subagent-driven-development`. Every task was reviewed, then the whole branch; review fixes are in the branch history.
 - **Done:** Tasks 1–17 through Task 17 Step 5 — proto, catalog, file cache, supervisor (leases, restarts, engine builds, events, replay), two-plane camera pins, the data-socket sink, the containerd model-host runtime, the gRPC service, agent wiring, the CLI, and the fake host with its workflow.
-- **Not done:** Task 17 Step 6, the device smoke test (needs Ethan; see below). No PR is open.
+- **Not done:** Task 17 Step 6, the device smoke test (needs Ethan; see below). The draft PR's description has an unchecked smoke-test list to fill in.
 - **Verified locally at the branch head:** `go build ./...` and `go vet` clean; `go test -race` passes for the models, services, containerd, data, cmd/wendy-agent, grpcclient and appconfig packages and the fake host, and `go test` for the CLI commands — except the pre-existing, machine-specific failures listed under Environment notes.
 
 ## What to do next
 
 1. **Run the Jetson smoke test** — plan Task 17 Step 6, with the notes below.
-2. **Open a PR against `main`** with the smoke test's outcome in the description (the plan asks for that). Use the canonical repo `wendylabsinc/WendyOS`.
+2. **Record the outcome in the draft PR's description** (the plan asks for that) and mark the PR ready for review. The PR lives on the canonical repo `wendylabsinc/WendyOS`.
 3. **Plan the next milestone** with `superpowers:writing-plans` (design §13: M3 is MCP and chat; M1 is the Mojo host). Carry the follow-ups below into those plans.
 
 ### Smoke test notes (Task 17 Step 6)
@@ -106,7 +106,7 @@ Settled while executing M2:
 
 ## Environment notes for this checkout
 
-- **Committing:** `git config user.name` is unset, so commit with `git -c user.name=Ethan -c user.email=ebrogames@gmail.com commit`. End messages with the single `Co-Authored-By` line above; no `Claude-Session` link.
+- **Committing:** `git config user.name` is unset, and GitHub refuses command-line pushes of commits authored with the private `ebrogames@gmail.com` (error GH007). Commit with `git -c user.name=Ethan -c user.email=24462281+EBro912@users.noreply.github.com commit`. End messages with the single `Co-Authored-By` line above; no `Claude-Session` link.
 - **Branch names:** Ethan's branches use the prefix `ed/`.
 - **Globs:** the shell the Bash tool runs expands globs, so quote patterns: `grep --include='*.go'`.
 - **Toolchain:**
