@@ -139,7 +139,7 @@ func TestPushLayersResumingTunnelDropsReconnectsAndRetries(t *testing.T) {
 		return nil, nil
 	}
 
-	gotConn, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, gzipChunkUploadConfig)
+	gotConn, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, gzipChunkUploadConfig, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestPushLayersResumingTunnelDropsDoesNotRetryUnimplemented(t *testing.T) {
 		return nil, nil
 	}
 
-	gotConn, headers, err := pushLayersResumingTunnelDrops(context.Background(), conn, nil, nil, gzipChunkUploadConfig)
+	gotConn, headers, err := pushLayersResumingTunnelDrops(context.Background(), conn, nil, nil, gzipChunkUploadConfig, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -230,7 +230,7 @@ func TestPushLayersResumingTunnelDropsGivesUpAfterAttempts(t *testing.T) {
 		return nil, nil
 	}
 
-	gotConn, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, nil, nil, gzipChunkUploadConfig)
+	gotConn, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, nil, nil, gzipChunkUploadConfig, nil)
 	if err == nil {
 		t.Fatal("expected an error after exhausting all attempts")
 	}
@@ -284,7 +284,7 @@ func TestPushLayersResumingTunnelDropsWrapsAFailedReconnectAfterAStall(t *testin
 	defer cancel()
 	cfg := chunkUploadConfig{stallTimeout: 30 * time.Millisecond, stallKey: "0123abcd@0.19.3"}
 
-	_, _, err := pushLayersResumingTunnelDrops(ctx, conn, layers, nil, cfg)
+	_, _, err := pushLayersResumingTunnelDrops(ctx, conn, layers, nil, cfg, nil)
 	if !errors.Is(err, chunkupload.ErrStalled) {
 		t.Fatalf("error = %v, want it to still satisfy errors.Is(err, chunkupload.ErrStalled)\n%s", err, out.String())
 	}
@@ -330,7 +330,7 @@ func TestPushLayersResumingTunnelDropsRemembersAStallOnTheFinalAttempt(t *testin
 		t.Fatalf("this test assumes chunkPushResumeAttempts == 3 (connA -> connB -> connC), got %d", chunkPushResumeAttempts)
 	}
 
-	_, _, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, cfg)
+	_, _, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, cfg, nil)
 	if !errors.Is(err, chunkupload.ErrStalled) {
 		t.Fatalf("error = %v, want ErrStalled\n%s", err, out.String())
 	}
@@ -507,7 +507,7 @@ func TestPushLayersResumingTunnelDropsResumesWithSeveralStreamsOpen(t *testing.T
 			MediaType: "application/vnd.oci.image.layer.v1.tar",
 			Blob:      layerTar,
 		}}
-		got, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, gzipChunkUploadConfig)
+		got, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, gzipChunkUploadConfig, nil)
 		if err != nil {
 			t.Fatalf("iter %d: push failed: %v\n%s", iter, err, out.String())
 		}
@@ -576,7 +576,7 @@ func TestPushLayersResumingTunnelDropsFallsBackToGzipAfterAStall(t *testing.T) {
 	}}
 	cfg := chunkUploadConfig{stallTimeout: 300 * time.Millisecond, stallKey: "0123abcd@0.19.3"}
 
-	got, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, cfg)
+	got, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, cfg, nil)
 	if err != nil {
 		t.Fatalf("push failed: %v\n%s", err, out.String())
 	}

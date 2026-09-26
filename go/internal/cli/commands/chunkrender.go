@@ -29,8 +29,14 @@ const chunkPushInteractiveTickInterval = 200 * time.Millisecond
 //
 // Detach needs no branch here: it only diverges after Started, downstream
 // of this call.
-func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, cfg chunkUploadConfig) ([]*agentpb.RunContainerLayerHeader, error) {
+//
+// observe, when non-nil, receives the push's final snapshot — on failure too
+// — so the caller can record upload and device timings (WDY-3215).
+func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, cfg chunkUploadConfig, observe func(chunkPushSnapshot)) ([]*agentpb.RunContainerLayerHeader, error) {
 	prog := newChunkPushProgress()
+	if observe != nil {
+		defer func() { observe(prog.Snapshot()) }()
+	}
 
 	if !buildProgressInteractive() {
 		stop := startChunkPushHeartbeat(prog, buildProgressOut, tui.PlainHeartbeatInterval)

@@ -2035,12 +2035,20 @@ func waitForDeviceReady(ctx context.Context, p providers.DeviceProvider, device 
 	}
 }
 
-// runWithAgent is the existing gRPC agent pipeline.
+// runWithAgent is the existing gRPC agent pipeline. It reports each deploy it
+// attempts as one deploy_completed analytics event (WDY-3215).
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
 	opts = opts.withConfiguredRestartPolicy(appCfg.RestartPolicy)
 	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
 	}
+	metrics := newDeployMetrics(opts)
+	err := runWithAgentRecorded(ctx, conn, cwd, appCfg, opts, metrics)
+	metrics.emit(err)
+	return err
+}
+
+func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions, metrics *deployMetrics) error {
 	mark := phaseTimer()
 	if !opts.managedRobot {
 		var err error
@@ -2060,6 +2068,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "multi-service projects"); err != nil {
 			return err
 		}
+		metrics.transport = "multiservice"
 		return runMultiServiceWithAgent(ctx, conn, cwd, appCfg, opts)
 	}
 
@@ -2082,6 +2091,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	}
 	printRunDiskUsageWarning(versionResp)
 	mark("agent version metadata (in runWithAgent)")
+	metrics.deviceType = versionResp.GetDeviceType()
 	agentOS := versionResp.GetOs()
 	architecture := versionResp.GetCpuArchitecture()
 	if architecture == "" {
@@ -2201,7 +2211,9 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// finished image straight into this device's registry over the mesh. Placed
 	// ahead of every local path because those exist to optimise a local build
 	// that is not going to happen.
+	metrics.targetPlatform = platform
 	if opts.buildHost != "" {
+		metrics.transport = "buildhost"
 		return runRemoteBuild(ctx, conn, opts.buildHost, cwd, appCfg, platform, opts.dockerfile, buildArgs, deployEnv, opts)
 	}
 
@@ -2232,6 +2244,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	if !isDarwinAgent && !opts.deploy && hashErr == nil {
 		if done, err := tryDeployFastPath(ctx, conn, appCfg, deviceKey, desiredHash, opts); done {
 			mark("fast-path (skipped build)")
+			metrics.transport = "fastpath"
 			return err
 		}
 	}
@@ -2270,6 +2283,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		// image's layers, even on a later failure, so the fallback branch below
 		// can size the registry push it's about to fall back to (WDY-2432).
 		var stats chunkDeployStats
+		metrics.transport, metrics.chunk = "chunk", &stats
 		deployed := false
 		onStarted := func(diffIDs []string) {
 			deployed = true
@@ -2316,6 +2330,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 			// Surface the chunk-diff error instead of dropping it — it used to be
 			// silently discarded here, leaving no trail for why a deploy suddenly
 			// fell back to the slower path.
+			metrics.transport, metrics.fallback = "registry", chunkFallbackReason(err)
 			cliNotice("%s", formatRegistryFallbackNotice(err, stats.imageBytes))
 			if registryFallbackPlan(stats.imageBytes, isInteractiveTerminal(), opts.yes) == fallbackConfirm {
 				if !confirmFn("Continue with the full registry push?") {
@@ -2323,6 +2338,10 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 				}
 			}
 		}
+	}
+
+	if metrics.transport == "" {
+		metrics.transport, metrics.fallback = "registry", "not_attempted"
 	}
 
 	// Verify auth certs are available if the device's registry requires mTLS.
@@ -3316,6 +3335,11 @@ const imageSignaturePathEnv = "WENDY_IMAGE_SIGNATURE_PATH"
 // zero when the failure preceded (or prevented) a successful layer read.
 type chunkDeployStats struct {
 	imageBytes int64
+
+	// Phase timings and the final push snapshot, for the deploy_completed
+	// analytics event (WDY-3215).
+	buildTime, pushTime, startTime time.Duration
+	push                           chunkPushSnapshot
 }
 
 // isChunkDeployCancellation reports whether a deployByChunkDiff failure was a
@@ -3409,6 +3433,8 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	buildTitle := fmt.Sprintf("Building image (OCI layout) for %s...", tui.Value(platform))
 	runBuild := func(build func(context.Context, io.Writer, io.Writer) error) error {
+		began := time.Now()
+		defer func() { stats.buildTime += time.Since(began) }()
 		if opts.quietBuild {
 			// wendy watch: keep the legacy quiet behavior (buffer, surface only on
 			// genuine failure) rather than rendering a live UI under the watcher.
@@ -3595,7 +3621,9 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	// connection rather than the one that just dropped.
 	// gzip or none per link and device; see chooseChunkUploadConfig.
 	uploadCfg := chunkUploadConfigFor(ctx, conn)
-	pushConn, headers, err := pushLayersResumingTunnelDrops(ctx, conn, layers, prepareFor, uploadCfg)
+	pushStarted := time.Now()
+	pushConn, headers, err := pushLayersResumingTunnelDrops(ctx, conn, layers, prepareFor, uploadCfg, func(snap chunkPushSnapshot) { stats.push = snap })
+	stats.pushTime = time.Since(pushStarted)
 	if pushConn != conn {
 		defer pushConn.Close()
 	}
@@ -3621,6 +3649,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		logSub = startRunLogSubscription(ctx, pushConn, appCfg.AppID, os.Stdout, runLogStreamWarning)
 		defer logSub.stop()
 	}
+	runStarted := time.Now()
 	stream, err := pushConn.ContainerService.RunContainer(runCtx, &agentpb.RunContainerLayersRequest{
 		ImageName:      imageName,
 		AppName:        appCfg.AppID,
@@ -3636,6 +3665,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return nil, hint, err
 	}
 	if err := streamRunContainerWithStarted(rpcCtx, pushConn, stream, appCfg, opts, func() {
+		stats.startTime = time.Since(runStarted)
 		if onStarted != nil {
 			onStarted(layerDiffIDs(headers))
 		}
