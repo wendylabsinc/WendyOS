@@ -225,3 +225,47 @@ MarkAsRead(MarkAsReadRequest) → MarkAsReadResponse
 ```
 
 Marks the requested Notification IDs as read and returns the number marked.
+
+## Campaign notifications and catalog registration
+
+A campaign with `notify.on: event` and `notify.event: <name>` sends an immediate
+notification for the matching event. `notify.on: detection` sends on an inference
+appearance. Omit `notify.webhook` for Wendy Cloud delivery, or supply an HTTP(S)
+endpoint for webhook delivery. `episode_committed` remains manifest intent for
+notification after upload; it is separate from immediate delivery.
+
+Cloud delivery currently requires a legacy enrollment with positive numeric
+organization and asset IDs. Experimental direct-PKI/OIDC enrollments with only
+a SPIFFE principal cannot use this sender: it rejects them before sending with
+`FailedPrecondition`, reported in `inference_status.notification_error`. Use an
+explicit `notify.webhook` for immediate notifications on those devices.
+
+The agent uses its enrolled device credentials and a bounded, nonpersistent
+queue. There are at most three attempts, with 10-second timeouts and the same
+event UUID. `InvalidArgument`, `Unauthenticated`, `PermissionDenied`,
+`FailedPrecondition`, `AlreadyExists`, `Unimplemented`, and `DataLoss` stop
+retries. A mismatched response notification ID is `DataLoss`. Other failures
+are retried with backoff. Errors appear in agent logs and campaign
+`inference_status.notification_error`.
+
+### App catalog API
+
+The v1 `AppService` exposes `UpsertApp`, `GetApp`, `UpdateApp`, `DeleteApp`, and
+`ListApps`. It replaces the former `CreateApp` RPC; clients must regenerate
+against `Proto/cloud/apps.proto`. Mutations and `GetApp` carry both `id` and
+`organization_id`. `UpsertApp` accepts optional `name` and `details`; `UpdateApp`
+also accepts the owner/admin-controlled `can_send_notifications` grant.
+`ListApps` uses `organization_id`, optional `offset`, `limit`, and `filter`,
+returning `apps` and `total`. Pagination is offset-based, not page-token-based.
+Deployment registration uses GetApp first and UpsertApp only when absent, so it
+preserves existing metadata and never automatically grants notifications.
+
+The vendored AppService contract matches Cloud's current v1 server. Earlier
+Companion schemas used different tags for update fields and page-token
+pagination, so those clients must be rebuilt with the current schema. The
+coordinated client ports are [Companion SDK #1](https://github.com/wendylabsinc/wendy-companion-sdk/pull/1)
+and [Companion iOS #223](https://github.com/wendylabsinc/wendy-companion-ios/pull/223).
+The shared wire fixtures cover organization scoping, metadata updates,
+notification grants and offset pagination. These source changes do not upgrade
+installed clients; release the updated clients against the matching Cloud v1
+contract. They do not change Cloud's separate v2 API.

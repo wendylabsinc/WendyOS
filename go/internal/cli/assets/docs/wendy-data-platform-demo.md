@@ -162,6 +162,19 @@ Verify the override took: the agent logs
 
 ## 6. Deploy the reference app and campaign
 
+On a Cloud-enrolled device, `wendy run` and `wendy data campaign deploy` register
+catalog entries before deploying. Log in with `wendy auth login` for that
+organization, or pass `--skip-cloud-registration` to deploy offline. Unenrolled
+devices deploy locally without registration.
+
+The alternative `Examples/WendyDataPeople/campaign.yaml` sends immediate Cloud
+notifications for `person_detected` (`notify.on: event`). Before expecting
+alerts, an owner or admin must enable the notification grant for
+`campaign:people-all-cameras` in Cloud Apps. Registration does not enable that
+grant. Cloud delivery requires legacy enrollment with numeric organization and
+asset IDs; experimental direct-PKI devices can use an explicit `notify.webhook`.
+The model-app commands below use their own campaign file.
+
 ```sh
 cd <wendyos-checkout>/Examples/WendyDataModelApp
 <wendyos-checkout>/go/bin/wendy-demo run --device <device-hostname> --detach --yes

@@ -5,21 +5,11 @@ package wendycloud.v1;
 import "google/protobuf/timestamp.proto";
 
 service AppService {
-  rpc CreateApp(CreateAppRequest) returns (App);
+  rpc UpsertApp(UpsertAppRequest) returns (App);
   rpc GetApp(GetAppRequest) returns (App);
   rpc UpdateApp(UpdateAppRequest) returns (App);
   rpc DeleteApp(DeleteAppRequest) returns (DeleteAppResponse);
   rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
-
-  rpc CreateAppVersion(CreateAppVersionRequest) returns (AppVersion);
-  rpc GetAppVersion(GetAppVersionRequest) returns (AppVersion);
-  rpc ListAppVersions(ListAppVersionsRequest) returns (ListAppVersionsResponse);
-
-  rpc CreateAssetContainer(CreateAssetContainerRequest) returns (AssetContainer);
-  rpc GetAssetContainer(GetAssetContainerRequest) returns (AssetContainer);
-  rpc UpdateAssetContainer(UpdateAssetContainerRequest) returns (AssetContainer);
-  rpc ListAssetContainers(ListAssetContainersRequest) returns (ListAssetContainersResponse);
-  rpc ListAssetContainersByApp(ListAssetContainersByAppRequest) returns (ListAssetContainersByAppResponse);
 }
 
 message App {
@@ -29,48 +19,36 @@ message App {
   string details = 4;
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 6;
+  // Interim owner/admin-controlled grant allowing this app to send notifications.
+  // WDY-2058 will replace this with capability-scoped app authorization.
+  bool can_send_notifications = 7;
 }
 
-message AppVersion {
+message UpsertAppRequest {
   string id = 1;
-  string app_id = 2;
-  string version = 3;
-  string container_image = 4;
-  string container_registry = 5;
-  string details = 6;
-  google.protobuf.Timestamp created_at = 7;
-  google.protobuf.Timestamp updated_at = 8;
-}
-
-message AssetContainer {
-  int32 id = 1;
-  int32 asset_id = 2;
-  string app_version_id = 3;
-  string container_name = 4;
-  string container_id = 5;
-  string status = 6;
-  google.protobuf.Timestamp created_at = 7;
-  google.protobuf.Timestamp updated_at = 8;
-}
-
-message CreateAppRequest {
-  int32 organization_id = 1;
-  string name = 2;
-  string details = 3;
+  int32 organization_id = 2;
+  optional string name = 3;
+  optional string details = 4;
 }
 
 message GetAppRequest {
   string id = 1;
+  int32 organization_id = 2;
 }
 
 message UpdateAppRequest {
   string id = 1;
-  optional string name = 2;
-  optional string details = 3;
+  int32 organization_id = 2;
+  optional string name = 3;
+  optional string details = 4;
+  // Interim owner/admin-controlled grant allowing this app to send notifications.
+  // WDY-2058 will replace this with capability-scoped app authorization.
+  optional bool can_send_notifications = 5;
 }
 
 message DeleteAppRequest {
   string id = 1;
+  int32 organization_id = 2;
 }
 
 message DeleteAppResponse {
@@ -79,75 +57,13 @@ message DeleteAppResponse {
 
 message ListAppsRequest {
   int32 organization_id = 1;
-  int32 page_size = 2;
-  string page_token = 3;
+  // Offset/limit based pagination (offset = starting row, limit = page size)
+  optional int32 offset = 2;
+  optional int32 limit = 3;
   optional string filter = 4;  // Filter by name or details
 }
 
 message ListAppsResponse {
   repeated App apps = 1;
-  string next_page_token = 2;
-}
-
-message CreateAppVersionRequest {
-  string app_id = 1;
-  string version = 2;
-  string container_image = 3;
-  string container_registry = 4;
-  string details = 5;
-}
-
-message GetAppVersionRequest {
-  string id = 1;
-}
-
-message ListAppVersionsRequest {
-  string app_id = 1;
-  int32 page_size = 2;
-  string page_token = 3;
-}
-
-message ListAppVersionsResponse {
-  repeated AppVersion app_versions = 1;
-  string next_page_token = 2;
-}
-
-message CreateAssetContainerRequest {
-  int32 asset_id = 1;
-  string app_version_id = 2;
-  string container_name = 3;
-  string container_id = 4;
-  string status = 5;
-}
-
-message GetAssetContainerRequest {
-  int32 id = 1;
-}
-
-message UpdateAssetContainerRequest {
-  int32 id = 1;
-  optional string container_id = 2;
-  optional string status = 3;
-}
-
-message ListAssetContainersRequest {
-  int32 asset_id = 1;
-  int32 page_size = 2;
-  string page_token = 3;
-}
-
-message ListAssetContainersResponse {
-  repeated AssetContainer containers = 1;
-  string next_page_token = 2;
-}
-
-message ListAssetContainersByAppRequest {
-  string app_id = 1;
-  int32 page_size = 2;
-  string page_token = 3;
-}
-
-message ListAssetContainersByAppResponse {
-  repeated AssetContainer containers = 1;
-  string next_page_token = 2;
+  int32 total = 2;
 }
