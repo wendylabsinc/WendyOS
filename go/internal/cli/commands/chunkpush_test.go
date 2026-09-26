@@ -164,6 +164,10 @@ func (f *fakeContainerClient) chunksWrittenLocked() int {
 func TestPushLayersByChunksTimesUploadAndDevicePhases(t *testing.T) {
 	manifestCacheTestDir = t.TempDir()
 	t.Cleanup(func() { manifestCacheTestDir = "" })
+	// A regression that never writes a chunk fails at this deadline instead of
+	// hanging the prepare callback's poll loop.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	layerTar := variedChunkTestData(300_000)
 	fake := &fakeContainerClient{
@@ -172,16 +176,21 @@ func TestPushLayersByChunksTimesUploadAndDevicePhases(t *testing.T) {
 		},
 	}
 	prog := newChunkPushProgress()
-	_, err := pushLayersByChunksWithPrepareMode(context.Background(), fake, []localLayer{{
+	_, err := pushLayersByChunksWithPrepareMode(ctx, fake, []localLayer{{
 		Digest:    "sha256:" + sha256Hex(layerTar),
 		MediaType: "application/vnd.oci.image.layer.v1.tar",
 		Blob:      layerTar,
 	}}, func(ctx context.Context, _ []*agentpb.RunContainerLayerHeader) error {
-		// Device-side preparation outlasts the upload by a clear margin.
+		// Device-side preparation outlasts the upload by a clear margin: the
+		// device phase must exceed the summary's 100ms threshold even under
+		// -race.
 		for fake.chunksWrittenLocked() == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			time.Sleep(time.Millisecond)
 		}
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 		return nil
 	}, nil, false, prog)
 	if err != nil {
