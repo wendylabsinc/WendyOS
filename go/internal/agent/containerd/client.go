@@ -1076,7 +1076,11 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 	rawServiceName := appCfg.ServiceName
 
-	if err := appconfig.ValidateAppID(rawAppID); err != nil {
+	// Every app created here is a user's app, whichever field named it:
+	// parseAppConfig refuses a reserved appId, and an app name falling back
+	// into the id must not slip past that reservation. A user app with a
+	// model host's id would share its data socket and cgroup identity.
+	if err := appconfig.ValidateUserAppID(rawAppID); err != nil {
 		c.logger.Warn("CreateContainer rejected: invalid app ID",
 			zap.String(logfields.AppID, sanitizeForLog(rawAppID, 253)), zap.Error(err))
 		return fmt.Errorf("invalid app ID: %w", err)
