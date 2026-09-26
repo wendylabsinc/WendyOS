@@ -16,7 +16,7 @@ import (
 type deployMetrics struct {
 	started        time.Time
 	command        string
-	transport      string // fastpath, chunk, registry, buildhost or multiservice; "" until chosen
+	transport      string // fastpath, chunk, registry, buildhost, multiservice, native, xcode, swiftpm, swift or compose; "" until chosen
 	fallback       string // why the deploy used the registry push instead of chunk-diff
 	targetPlatform string
 	deviceType     string

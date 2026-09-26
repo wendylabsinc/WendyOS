@@ -82,6 +82,34 @@ func TestDeployMetricsEmitsOnlyOnceADeployPathWasChosen(t *testing.T) {
 	}
 }
 
+// TestDeployMetricsPropertiesForARegistryFallbackOmitsChunkFields guards
+// against the abandoned chunk-diff attempt's phase timings leaking into a
+// deploy_completed event that is actually reporting the registry push a
+// fallback fell through to: once metrics.chunk is cleared (as runWithAgent's
+// fallback branch does), properties must carry none of the chunk-derived
+// keys, only the registry/fallback labels.
+func TestDeployMetricsPropertiesForARegistryFallbackOmitsChunkFields(t *testing.T) {
+	m := &deployMetrics{
+		command:   "wendy run",
+		transport: "registry",
+		fallback:  "transport",
+		chunk:     nil,
+	}
+	p := m.properties(errors.New("push failed"))
+	if p["deploy_transport"] != "registry" || p["deploy_fallback"] != "transport" {
+		t.Fatalf("p = %v, want deploy_transport=registry deploy_fallback=transport", p)
+	}
+	for _, k := range []string{
+		"deploy_build_ms", "deploy_push_ms", "deploy_upload_ms", "deploy_device_prepare_ms",
+		"deploy_start_ms", "deploy_image_bytes", "deploy_bytes_sent", "deploy_chunks_sent",
+		"deploy_chunks_total", "deploy_layers_total", "deploy_layers_reused", "deploy_compression",
+	} {
+		if v, ok := p[k]; ok {
+			t.Errorf("property %s = %q, want absent when chunk is nil after a fallback", k, v)
+		}
+	}
+}
+
 func TestChunkFallbackReason(t *testing.T) {
 	cases := map[string]error{
 		"unimplemented": status.Error(codes.Unimplemented, "old agent"),

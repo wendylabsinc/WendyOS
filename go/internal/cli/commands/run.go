@@ -2113,6 +2113,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		if !strings.EqualFold(agentOS, "darwin") || platformOS(platform) != "darwin" {
 			return commandErrorf(errProjectTargetMismatch, "run.command requires a native Darwin agent target")
 		}
+		metrics.transport = "native"
 		return runNativeCommandWithAgent(ctx, conn, cwd, appCfg, opts, versionResp)
 	}
 
@@ -2122,6 +2123,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			return err
 		}
 		if platformOS(platform) == "darwin" {
+			metrics.transport = "xcode"
 			return runMacOSXcodeWithAgent(ctx, conn, cwd, appCfg, opts)
 		}
 		return commandErrorf(errProjectTargetMismatch, "Xcode projects require a darwin target (got %s)", platform)
@@ -2159,8 +2161,10 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 				return commandErrorf(errProjectTargetMismatch, "`wendy run` for Swift packages is not supported on %s; provide a Dockerfile or Containerfile", runtime.GOOS)
 			}
 			if targetIsDarwin {
+				metrics.transport = "swiftpm"
 				return runMacOSSwiftPMWithAgent(ctx, conn, cwd, appCfg, opts)
 			}
+			metrics.transport = "swift"
 			return runSwiftWithAgent(ctx, conn, cwd, appCfg, opts)
 		}
 	}
@@ -2172,6 +2176,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "Compose projects"); err != nil {
 			return err
 		}
+		metrics.transport = "compose"
 		return runComposeWithAgent(ctx, conn, cwd, opts)
 	case "python":
 		if _, err := os.Stat(filepath.Join(cwd, "Dockerfile")); os.IsNotExist(err) {
@@ -2331,6 +2336,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// silently discarded here, leaving no trail for why a deploy suddenly
 			// fell back to the slower path.
 			metrics.transport, metrics.fallback = "registry", chunkFallbackReason(err)
+			// The abandoned chunk attempt's timings do not describe the registry
+			// push that is about to actually produce this deploy's result.
+			metrics.chunk = nil
 			cliNotice("%s", formatRegistryFallbackNotice(err, stats.imageBytes))
 			if registryFallbackPlan(stats.imageBytes, isInteractiveTerminal(), opts.yes) == fallbackConfirm {
 				if !confirmFn("Continue with the full registry push?") {

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -147,6 +148,19 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 		Run:      &appconfig.RunConfig{Args: []string{"--from-config", "hello world"}},
 	}
 
+	// The Xcode path is one of the dispatch-and-return branches in
+	// runWithAgentRecorded that has no phase timings of its own (WDY-3215);
+	// assert it still reports exactly one deploy_completed event, correctly
+	// labeled, rather than being silently swallowed by deployMetrics.emit's
+	// transport=="" guard.
+	var events []map[string]string
+	analytics.SetTrackHookForTesting(func(event string, props map[string]string) {
+		if event == "deploy_completed" {
+			events = append(events, props)
+		}
+	})
+	t.Cleanup(func() { analytics.SetTrackHookForTesting(nil) })
+
 	err := runWithAgent(context.Background(), conn, dir, appCfg, runOptions{
 		deploy:   true,
 		userArgs: []string{"--ignored-cli"},
@@ -167,6 +181,13 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 	}
 	if len(got.UserArgs) != 2 || got.UserArgs[0] != "--from-config" || got.UserArgs[1] != "hello world" {
 		t.Fatalf("UserArgs = %v, want %v", got.UserArgs, appCfg.Run.Args)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("deploy_completed events = %d, want 1: %v", len(events), events)
+	}
+	if got := events[0]["deploy_transport"]; got != "xcode" {
+		t.Fatalf("deploy_transport = %q, want %q", got, "xcode")
 	}
 }
 
