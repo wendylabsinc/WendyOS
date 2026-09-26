@@ -8,6 +8,56 @@ GEN_DIR="$GO_DIR/proto/gen"
 
 export PATH="$PATH:$(go env GOPATH)/bin"
 
+# ---- Pinned generator versions ----
+#
+# The generated tree is committed, and every generator stamps its own version into a
+# comment in each file. So a mismatch does not fail — it rewrites files that nobody
+# meant to touch, and the real change disappears into the noise. Before this check the
+# tree had drifted across four protoc versions (v5.28.3, v7.34.0, v7.35.1, v7.36.0),
+# each left behind by whoever last regenerated a subset.
+#
+# To upgrade deliberately: change these pins, regenerate everything, and commit the
+# result on its own. WENDY_PROTO_SKIP_VERSION_CHECK=1 bypasses this for a one-off.
+REQUIRED_PROTOC="34.0"
+REQUIRED_PROTOC_GEN_GO="v1.36.11"
+REQUIRED_PROTOC_GEN_GO_GRPC="1.6.2"
+
+check_version() {
+    local tool="$1" want="$2" got="$3" install="$4"
+    if [ -z "$got" ]; then
+        echo "error: $tool not found on PATH" >&2
+        echo "  install: $install" >&2
+        return 1
+    fi
+    if [ "$got" != "$want" ]; then
+        echo "error: $tool is $got, this tree is generated with $want" >&2
+        echo "  install: $install" >&2
+        echo "  (or set WENDY_PROTO_SKIP_VERSION_CHECK=1 to proceed anyway)" >&2
+        return 1
+    fi
+    printf '  %-20s %s\n' "$tool" "$got"
+}
+
+if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
+    echo "Checking generator versions..."
+    failed=0
+    check_version protoc "$REQUIRED_PROTOC" \
+        "$(protoc --version 2>/dev/null | awk '{print $2}')" \
+        "https://github.com/protocolbuffers/protobuf/releases/tag/v$REQUIRED_PROTOC (no brew formula for this version)" || failed=1
+    check_version protoc-gen-go "$REQUIRED_PROTOC_GEN_GO" \
+        "$(protoc-gen-go --version 2>/dev/null | awk '{print $2}')" \
+        "go install google.golang.org/protobuf/cmd/protoc-gen-go@$REQUIRED_PROTOC_GEN_GO" || failed=1
+    check_version protoc-gen-go-grpc "$REQUIRED_PROTOC_GEN_GO_GRPC" \
+        "$(protoc-gen-go-grpc --version 2>/dev/null | awk '{print $2}')" \
+        "go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v$REQUIRED_PROTOC_GEN_GO_GRPC" || failed=1
+    if [ "$failed" -ne 0 ]; then
+        echo "" >&2
+        echo "Refusing to generate: a mismatch rewrites every generated file with a new" >&2
+        echo "version stamp, burying the change you actually made." >&2
+        exit 1
+    fi
+fi
+
 # Clean previous generated code
 rm -rf "$GEN_DIR"
 
