@@ -511,7 +511,13 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 			}
 			prepareErr = <-prepareDone
 		}
-		prog.PrepareFinished()
+		if prepareErr == nil {
+			prog.PrepareFinished()
+		} else {
+			// A failed or cancelled preparation prepared nothing, so the push
+			// reports no device time for it.
+			prog.PrepareFailed()
+		}
 		if err := prepareErr; err != nil {
 			if strictPrepare {
 				return nil, err

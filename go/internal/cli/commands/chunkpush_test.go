@@ -199,6 +199,50 @@ func TestPushLayersByChunksTimesUploadAndDevicePhases(t *testing.T) {
 	}
 }
 
+// TestPushLayersByChunksDoesNotReportAFailedPreparation covers the "Image
+// prewarming unavailable" path: the push still succeeds (RunContainer finishes
+// the work during start), but the failed PrepareImage call prepared nothing,
+// so its duration must not be reported as device preparation.
+func TestPushLayersByChunksDoesNotReportAFailedPreparation(t *testing.T) {
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	layerTar := variedChunkTestData(300_000)
+	fake := &fakeContainerClient{
+		queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
+			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
+		},
+	}
+	prog := newChunkPushProgress()
+	_, err := pushLayersByChunksWithPrepareMode(ctx, fake, []localLayer{{
+		Digest:    "sha256:" + sha256Hex(layerTar),
+		MediaType: "application/vnd.oci.image.layer.v1.tar",
+		Blob:      layerTar,
+	}}, func(ctx context.Context, _ []*agentpb.RunContainerLayerHeader) error {
+		// The failing call outlasts the upload, as a real one would.
+		for fake.chunksWrittenLocked() == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(300 * time.Millisecond)
+		return status.Error(codes.Internal, "prewarm failed")
+	}, nil, false, prog)
+	if err != nil {
+		t.Fatalf("a failed preparation is non-fatal, got %v", err)
+	}
+	snap := prog.Snapshot()
+	if snap.Preparing || snap.Prepared || snap.DeviceTime != 0 {
+		t.Fatalf("snapshot = %+v, want no device phase after a failed preparation", snap)
+	}
+	if got := snap.Summary(); strings.Contains(got, "device then took") {
+		t.Fatalf("Summary() = %q, must not report a failed preparation as device time", got)
+	}
+}
+
 // TestPushLayersByChunksPreparesDuringUpload proves the preparation RPC is
 // started after manifests are known but before WriteChunks finishes. This is
 // the wall-clock overlap the optimization exists to create.

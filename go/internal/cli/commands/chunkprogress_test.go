@@ -296,3 +296,99 @@ func TestChunkPushLineReportsTheDevicePhase(t *testing.T) {
 		t.Fatalf("Line() = %q, want %q", got, want)
 	}
 }
+
+// TestChunkPushLineWhenNothingWasSent is the resume case: every chunk is
+// already staged on the device and it is still assembling the image, so there
+// is no upload to report.
+func TestChunkPushLineWhenNothingWasSent(t *testing.T) {
+	clock := &steppedClock{t: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	p := newSteppedProgress(clock)
+	p.SetLayerCounts(1, 0)
+	p.LayerPlanned(10, 0, 0)
+	p.UploadFinished()
+	clock.advance(12 * time.Second)
+
+	snap := p.Snapshot()
+	if !snap.Preparing {
+		t.Fatalf("snapshot = %+v, want the device phase", snap)
+	}
+	if got, want := snap.Line(), "nothing to upload; device preparing image for 12.0s (device already has 10/10 chunks, 0 layers)"; got != want {
+		t.Fatalf("Line() = %q, want %q", got, want)
+	}
+}
+
+func TestChunkPushSummaryWhenNothingWasSentReportsTheDevice(t *testing.T) {
+	clock := &steppedClock{t: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	p := newSteppedProgress(clock)
+	p.SetLayerCounts(3, 1)
+	p.LayerPlanned(1846, 0, 0)
+	p.LayerPlanned(412, 0, 0)
+	p.UploadFinished()
+	clock.advance(3 * time.Second)
+	p.PrepareFinished()
+
+	got := p.Snapshot().Summary()
+	want := "All 2258 chunk(s) already on device (1 full layer(s) reused). The device then took 3.0s to prepare the image."
+	if got != want {
+		t.Fatalf("Summary() =\n  %q\nwant\n  %q", got, want)
+	}
+}
+
+// TestChunkPushSummaryOmitsAFailedPreparation: a failed or cancelled
+// PrepareImage prepared nothing (RunContainer finishes the work during
+// start), so the time it took must not read as device preparation.
+func TestChunkPushSummaryOmitsAFailedPreparation(t *testing.T) {
+	clock := &steppedClock{t: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	p := newSteppedProgress(clock)
+	p.SetLayerCounts(1, 0)
+	p.LayerPlanned(10, 10, 10_000_000)
+	for i := 0; i < 10; i++ {
+		p.ChunkSent(1_000_000)
+	}
+	clock.advance(2 * time.Second)
+	p.UploadFinished()
+	clock.advance(8 * time.Second)
+	p.PrepareFailed()
+	clock.advance(time.Second)
+
+	snap := p.Snapshot()
+	if snap.Preparing || snap.Prepared || snap.DeviceTime != 0 {
+		t.Fatalf("snapshot = %+v, want no device phase after a failed preparation", snap)
+	}
+	if got, want := snap.Summary(), "Sent 10 chunk(s) (10.0MB) in 2.0s (5.0MB/s); device already had 0 chunk(s) and 0 full layer(s)."; got != want {
+		t.Fatalf("Summary() = %q, want %q", got, want)
+	}
+
+	// The first of PrepareFinished and PrepareFailed ends the device phase.
+	p.PrepareFinished()
+	if snap := p.Snapshot(); snap.Prepared || snap.DeviceTime != 0 {
+		t.Fatalf("a late PrepareFinished revived the device phase: %+v", snap)
+	}
+}
+
+// TestChunkPushSummaryReportsASubTickUpload: on a coarse clock an upload can
+// finish within one tick, so UploadTime is zero although the upload is done.
+// The summary must still report the upload, not the whole push, as the
+// transfer time.
+func TestChunkPushSummaryReportsASubTickUpload(t *testing.T) {
+	clock := &steppedClock{t: time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)}
+	p := newSteppedProgress(clock)
+	p.SetLayerCounts(1, 0)
+	p.LayerPlanned(10, 10, 10_000_000)
+	for i := 0; i < 10; i++ {
+		p.ChunkSent(1_000_000)
+	}
+	p.UploadFinished() // same clock tick as the first chunk
+	clock.advance(20 * time.Second)
+	p.PrepareFinished()
+
+	snap := p.Snapshot()
+	if !snap.Uploaded || snap.UploadTime != 0 || !snap.Prepared {
+		t.Fatalf("snapshot = %+v, want a finished zero-length upload and a finished preparation", snap)
+	}
+	want := "Sent 10 chunk(s) (10.0MB) in 0.0s; device already had 0 chunk(s) and 0 full layer(s). " +
+		"The device then took 20.0s to prepare the image (device-side work, not the network)."
+	if got := snap.Summary(); got != want {
+		t.Fatalf("Summary() =\n  %q\nwant\n  %q", got, want)
+	}
+}

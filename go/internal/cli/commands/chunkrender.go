@@ -154,7 +154,10 @@ func startChunkPushHeartbeat(prog *chunkPushProgress, w io.Writer, interval time
 // "goroutine notices totals settled" never overshoots the bar; it is 0 (not
 // NaN or a divide-by-zero panic) when nothing has been planned yet — the
 // state of a fresh push before any layer's chunk-diff plan is known. Detail
-// is the same live progress line the non-interactive heartbeat prints.
+// is the same live progress line the non-interactive heartbeat prints. Title
+// switches to the device phase while the device prepares the image, since the
+// bar is full by then; otherwise it stays empty, which keeps the program's
+// own title.
 func chunkPushUpdateMsg(s chunkPushSnapshot) tui.ProgressUpdateMsg {
 	var percent float64
 	if s.PlannedBytes > 0 {
@@ -163,8 +166,12 @@ func chunkPushUpdateMsg(s chunkPushSnapshot) tui.ProgressUpdateMsg {
 			percent = 1
 		}
 	}
-	return tui.ProgressUpdateMsg{
+	msg := tui.ProgressUpdateMsg{
 		Percent: percent,
 		Detail:  s.Line(),
 	}
+	if s.Preparing {
+		msg.Title = "Device preparing image..."
+	}
+	return msg
 }

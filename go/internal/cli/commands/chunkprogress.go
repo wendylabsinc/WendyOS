@@ -27,10 +27,13 @@ type chunkPushProgress struct {
 	totalChunks, missingChunks, sentChunks   int
 	sentBytes, plannedBytes                  int64
 
-	// firstSent, uploadDone and prepareDone split the push into wire time and
-	// device time, so a slow device is not reported as a slow network
-	// (WDY-3215). Zero until the corresponding event happens.
+	// firstSent, uploadDone and prepareDone split the push into upload time
+	// (first chunk sent to last acknowledgement) and device time, so a slow
+	// device is not reported as a slow network (WDY-3215). Zero until the
+	// corresponding event happens. prepareFailed ends the device phase without
+	// a device time: a failed preparation prepared nothing.
 	firstSent, uploadDone, prepareDone time.Time
+	prepareFailed                      bool
 }
 
 // newChunkPushProgress returns a ready-to-use aggregator with its clock
@@ -101,15 +104,31 @@ func (p *chunkPushProgress) UploadFinished() {
 }
 
 // PrepareFinished records that the device finished preparing the image (or
-// that there was no device-side preparation to wait for).
+// that there was no device-side preparation to wait for). The first of
+// PrepareFinished and PrepareFailed ends the device phase.
 func (p *chunkPushProgress) PrepareFinished() {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.prepareDone.IsZero() {
+	if p.prepareDone.IsZero() && !p.prepareFailed {
 		p.prepareDone = p.now()
+	}
+}
+
+// PrepareFailed records that device-side preparation failed or was
+// cancelled. It prepared nothing (RunContainer does that work during start),
+// so the push then reports no device time. The first of PrepareFinished and
+// PrepareFailed ends the device phase.
+func (p *chunkPushProgress) PrepareFailed() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prepareDone.IsZero() {
+		p.prepareFailed = true
 	}
 }
 
@@ -136,16 +155,21 @@ func (p *chunkPushProgress) Snapshot() chunkPushSnapshot {
 		Elapsed:       now.Sub(p.start),
 	}
 	if !p.uploadDone.IsZero() {
+		s.Uploaded = true
 		if !p.firstSent.IsZero() && p.uploadDone.After(p.firstSent) {
 			s.UploadTime = p.uploadDone.Sub(p.firstSent)
 		}
-		end := p.prepareDone
-		if end.IsZero() {
-			end = now
-			s.Preparing = true
-		}
-		if end.After(p.uploadDone) {
-			s.DeviceTime = end.Sub(p.uploadDone)
+		if !p.prepareFailed {
+			end := p.prepareDone
+			if end.IsZero() {
+				end = now
+				s.Preparing = true
+			} else {
+				s.Prepared = true
+			}
+			if end.After(p.uploadDone) {
+				s.DeviceTime = end.Sub(p.uploadDone)
+			}
 		}
 	}
 	return s
@@ -160,14 +184,27 @@ type chunkPushSnapshot struct {
 	TotalChunks, MissingChunks, SentChunks   int
 	SentBytes, PlannedBytes                  int64
 	Elapsed                                  time.Duration
-	// UploadTime is wire time, from the first chunk sent to the device's last
-	// acknowledgement; zero until the upload finishes or when nothing was sent.
+	// UploadTime is the upload time (first chunk sent to last
+	// acknowledgement); zero until the upload finishes or when nothing was
+	// sent. It also covers host-side work that overlaps the upload
+	// (QueryChunks round trips, decompressing and chunking cache-hit layers to
+	// read their missing chunks), so a rate derived from it is a lower bound
+	// on the wire rate.
 	UploadTime time.Duration
+	// Uploaded is true once the device acknowledged every missing chunk
+	// (UploadFinished), even when the upload was too short for the clock to
+	// measure.
+	Uploaded bool
 	// DeviceTime is how long the device took, after the upload, to finish
-	// preparing the image (so far, while Preparing).
+	// preparing the image (so far, while Preparing). Zero after PrepareFailed:
+	// a failed preparation is not device preparation.
 	DeviceTime time.Duration
 	// Preparing is true while the upload is done but the device is not.
 	Preparing bool
+	// Prepared is true once the device finished preparing the image after
+	// the upload (PrepareFinished); false while Preparing and after
+	// PrepareFailed.
+	Prepared bool
 }
 
 // alreadyHasChunks is the chunk count the device reported already having,
@@ -196,10 +233,16 @@ func (s chunkPushSnapshot) Bytes() tui.ByteProgress {
 //	"38%  98.4MB/259.1MB  8.0MB/s (device already has 1846/2258 chunks, 3 layers)"
 //
 // When there is no byte progress yet (nothing planned or sent), the leading
-// byte-progress clause is omitted and only the parenthetical is shown.
+// byte-progress clause is omitted and only the parenthetical is shown. While
+// the device prepares the image, the line reports the finished upload (or that
+// there was nothing to upload) and the device's time so far.
 func (s chunkPushSnapshot) Line() string {
 	detail := fmt.Sprintf("device already has %d/%d chunks, %d layers", s.alreadyHasChunks(), s.TotalChunks, s.LayersReused)
 	if s.Preparing {
+		if s.SentChunks == 0 {
+			// Resume: every chunk was already staged on the device.
+			return fmt.Sprintf("nothing to upload; device preparing image for %s (%s)", formatChunkPushElapsed(s.DeviceTime), detail)
+		}
 		return fmt.Sprintf("uploaded %s in %s; device preparing image for %s (%s)",
 			tui.ByteProgress{Current: s.SentBytes}.String(), formatChunkPushElapsed(s.UploadTime), formatChunkPushElapsed(s.DeviceTime), detail)
 	}
@@ -226,15 +269,19 @@ func (s chunkPushSnapshot) Summary() string {
 	var line string
 	switch {
 	case s.SentChunks > 0:
-		// Once the upload has finished, report wire time and rate, not the
+		// Once the upload has finished, report its time and rate, not the
 		// whole push: device-side preparation gets its own sentence below.
-		wire, rate := s.Elapsed, ""
-		if s.UploadTime > 0 {
-			wire = s.UploadTime
-			rate = fmt.Sprintf(" (%s/s)", tui.ByteProgress{Current: int64(float64(s.SentBytes) / s.UploadTime.Seconds())}.String())
+		// The rate is a lower bound on the wire rate, since UploadTime also
+		// covers host-side work that overlaps the upload.
+		took, rate := s.Elapsed, ""
+		if s.Uploaded {
+			took = s.UploadTime
+			if secs := s.UploadTime.Seconds(); secs > 0 {
+				rate = fmt.Sprintf(" (%s/s)", tui.ByteProgress{Current: int64(float64(s.SentBytes) / secs)}.String())
+			}
 		}
 		line = fmt.Sprintf("Sent %d chunk(s) (%s) in %s%s; device already had %d chunk(s) and %d full layer(s).",
-			s.SentChunks, tui.ByteProgress{Current: s.SentBytes}.String(), formatChunkPushElapsed(wire), rate, already, s.LayersReused)
+			s.SentChunks, tui.ByteProgress{Current: s.SentBytes}.String(), formatChunkPushElapsed(took), rate, already, s.LayersReused)
 	case s.TotalChunks == 0:
 		line = fmt.Sprintf("All %d layer(s) already on device; nothing to send.", s.LayersReused)
 	default:
