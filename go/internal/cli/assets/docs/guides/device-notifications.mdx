@@ -17,8 +17,8 @@ and there is currently no `wendy notification send` CLI command.
 You need:
 
 1. A Wendy device enrolled in the recipients' Wendy Cloud organization.
-2. An app that exists in the organization's Cloud Apps catalog and is assigned
-   and desired to run on that device.
+2. An app that exists in the organization's Cloud Apps catalog. On Cloud v2,
+   `wendy run` registers the app before deploying it.
 3. The `notifications` app entitlement.
 4. The app's Cloud Notification grant enabled.
 5. Recipients with [Wendy Companion installed from the App Store](https://apps.apple.com/app/wendy-companion/id6761771159)
@@ -66,9 +66,9 @@ https://cloud.wendy.sh/organizations/<org-id>/apps/<app-id>
 ```
 
 Wendy super-admins can also change the grant. The card controls the app's
-`can_send_notifications` Cloud grant. A local-only app that does not yet appear
-in the Apps catalog must be registered and assigned before the grant can be
-enabled.
+`can_send_notifications` Cloud grant. This is an organization-wide grant for
+that trusted app ID; a deployment assignment is not required. On Cloud v2,
+redeploy a local-only app with `wendy run` to register it in the Apps catalog.
 
 ## Send with Swift and WendyKit
 
@@ -81,7 +81,7 @@ import WendyKit
 let request = try WendyNotificationSendRequest(
     audience: WendyAudience(
         userIDs: ["<cloud-user-id>"],
-        teamIDs: [7],
+        teamUUIDs: ["<cloud-team-uuid>"],
         roles: [.owner, .admin]
     ),
     title: "Robot needs help",
@@ -118,6 +118,7 @@ The request shape is:
 SendRequest {
   audience {
     user_ids: "<cloud-user-id>"
+    team_uuids: "<cloud-team-uuid>"
   }
   title: "Robot needs help"
   body: "Please come to the G1 booth to answer a question."
