@@ -6,8 +6,55 @@ import (
 	"fmt"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
+
+func TestAuthSessionPickerPreselectsDefault(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, oidc := range []bool{false, true} {
+		for _, current := range []string{"default", "", "removed"} {
+			t.Run(fmt.Sprintf("oidc=%t/context=%s", oidc, current), func(t *testing.T) {
+				cfg := &config.Config{CurrentContext: current, Auth: []config.AuthConfig{
+					{Name: "first", CloudGRPC: "prod:443", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
+					{Name: "default", CloudGRPC: "prod:443", Certificates: []config.CertificateInfo{{OrganizationID: 9}}},
+				}}
+				if oidc {
+					for i, tenant := range []string{"11111111-1111-4111-8111-111111111111", testOperatorTenant} {
+						cfg.Auth[i].Certificates[0] = config.CertificateInfo{PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test"}
+					}
+				}
+				picker := newAuthSessionPicker(cfg)
+				want := authSessionKey(&cfg.Auth[0])
+				if current == "default" {
+					want = authSessionKey(&cfg.Auth[1])
+				}
+				// Refreshing organization names must keep the initial selection.
+				updated, _ := picker.Update(tui.PickerSetMsg{Items: authPickerItems(cfg, map[string]string{want: "My organization"})})
+				picker = updated.(tui.PickerModel)
+				updated, _ = picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				selected := updated.(tui.PickerModel).Selected()
+				if selected == nil || selected.Value != want {
+					t.Fatalf("Enter selected %+v, want %s", selected, want)
+				}
+				if current == "default" {
+					// Name lookup completion must also preserve a manual choice.
+					picker = newAuthSessionPicker(cfg)
+					updated, _ = picker.Update(tea.KeyMsg{Type: tea.KeyUp})
+					picker = updated.(tui.PickerModel)
+					updated, _ = picker.Update(tui.PickerSetMsg{Items: authPickerItems(cfg, nil)})
+					picker = updated.(tui.PickerModel)
+					updated, _ = picker.Update(tea.KeyMsg{Type: tea.KeyEnter})
+					selected = updated.(tui.PickerModel).Selected()
+					if selected == nil || selected.Value != authSessionKey(&cfg.Auth[0]) {
+						t.Fatalf("refresh moved cursor back to default: %+v", selected)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestAuthPickerSeparatesOIDCTenantsWithZeroLegacyOrgID(t *testing.T) {
 	cfg := &config.Config{}

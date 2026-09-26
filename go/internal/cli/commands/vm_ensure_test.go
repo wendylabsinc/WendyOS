@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 func TestResolveVMAliasIgnoresAnythingThatIsNotAVM(t *testing.T) {
@@ -120,5 +124,70 @@ func TestConsoleTailStripsGuestControlSequences(t *testing.T) {
 	}
 	if !strings.Contains(got, "boot") || !strings.Contains(got, "ok") {
 		t.Errorf("sanitizeConsoleLine() = %q, want the printable text kept", got)
+	}
+}
+
+func TestWaitForSimulatorAgentRetriesPinnedEndpointDuringBoot(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	cfg := &config.Config{}
+	cfg.SetDevicePin("vm:booting", 1, "cloud", "booting", "")
+	oldLoad, oldDial, oldRecord := loadConfigForPinFn, dialAgentLadderFn, vmRecordHostnameFn
+	t.Cleanup(func() { loadConfigForPinFn, dialAgentLadderFn, vmRecordHostnameFn = oldLoad, oldDial, oldRecord })
+	loadConfigForPinFn = func() (*config.Config, error) { return cfg, nil }
+	vmRecordHostnameFn = func(string, string) error { return nil }
+	calls := 0
+	dialAgentLadderFn = func(_ context.Context, target dialTarget) (*grpcclient.AgentConnection, error, error) {
+		calls++
+		if target.PinKey != "vm:booting" || target.Addr != "127.0.0.1:50103" || target.Expected == nil || target.Expected.EntityID != "booting" {
+			t.Fatalf("boot retry lost pinned target: %+v", target)
+		}
+		if calls == 1 {
+			return nil, nil, fmt.Errorf("booting: %w", errNoAuthenticatedEndpoint)
+		}
+		return &grpcclient.AgentConnection{AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{}}}, nil, nil
+	}
+	conn, err := waitForSimulatorAgent(context.Background(), "booting", "127.0.0.1:50103", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if calls != 2 || conn.SimulatorName != "booting" {
+		t.Fatalf("calls = %d, simulator = %q", calls, conn.SimulatorName)
+	}
+}
+
+func TestWaitForSimulatorAgentPinnedFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failure error
+		timeout bool
+	}{
+		{"unreachable", fmt.Errorf("booting: %w", errNoAuthenticatedEndpoint), true},
+		{"identity mismatch", fmt.Errorf("wrong device: %w", errDeviceIdentityRefused), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTempConfig(t, &config.Config{})
+			oldDial := dialAgentLadderFn
+			t.Cleanup(func() { dialAgentLadderFn = oldDial })
+			calls := 0
+			dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
+				calls++
+				return nil, nil, tc.failure
+			}
+			start := time.Now()
+			_, err := waitForSimulatorAgent(context.Background(), "booting", "127.0.0.1:50103", 50*time.Millisecond)
+			if !errors.Is(err, tc.failure) {
+				t.Fatalf("error = %v, want %v", err, tc.failure)
+			}
+			if got := strings.Contains(err.Error(), "did not answer"); got != tc.timeout {
+				t.Fatalf("error = %v, want timeout %v", err, tc.timeout)
+			}
+			if calls != 1 {
+				t.Fatalf("calls = %d, want 1", calls)
+			}
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("wait exceeded boot budget: %v", elapsed)
+			}
+		})
 	}
 }

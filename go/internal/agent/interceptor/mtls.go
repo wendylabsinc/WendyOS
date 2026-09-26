@@ -86,9 +86,9 @@ func peerAddr(ctx context.Context) string {
 // By the time this function runs the handshake has already applied that policy,
 // so no duplicate revocation check is needed here.
 //
-// Audit logging: the certificate serial number (not PII) is logged at Debug level.
-// Subject CN is intentionally omitted from per-call logs to satisfy data-minimisation
-// requirements — it may contain a username or device identifier.
+// Audit logging: successful checks are silent. Rejections and grace-mode
+// exceptions include the certificate serial number when available. Subject CN
+// is omitted because it may contain a username or device identifier.
 //
 // Tenant enforcement: after the certificate is structurally validated, the
 // caller's tenant scope (extracted from the leaf via certs.ScopeFromCert — the
@@ -143,14 +143,9 @@ func CheckMTLS(ctx context.Context, logger *zap.Logger, expected certs.Scope, mo
 			zap.String("serial", leaf.SerialNumber.String()))
 		return status.Errorf(codes.Unauthenticated, "certificate is not valid for client authentication")
 	}
-	// Log the serial number (not PII) at Debug level for per-call audit correlation.
-	// Subject CN is omitted: it may contain a username or device identifier, logging
-	// it on every call creates a high-volume PII stream that conflicts with
-	// data-minimisation requirements.
-	logger.Debug("mTLS peer authenticated",
-		zap.String("remote", peerAddr(ctx)),
-		zap.String("serial", leaf.SerialNumber.String()),
-	)
+	// These checks reuse the connection's authenticated TLS state. Do not log
+	// each successful check: polling and telemetry RPCs would fill the device's
+	// own log stream with authentication noise.
 
 	// Tenant-equality enforcement. OrgModeOff disables the check entirely,
 	// preserving pre-WDY-1535 behaviour. For grace/strict we extract the cert's

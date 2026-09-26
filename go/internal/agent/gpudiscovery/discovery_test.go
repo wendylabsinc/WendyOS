@@ -27,13 +27,18 @@ func TestDiscoverVendorsAndCompute(t *testing.T) {
 		{"broadcom", "", "vc4", "", []string{}},
 		{"arm", "", "panfrost", "", []string{}},
 		{"qualcomm", "", "msm", "", []string{}},
-		// Dragonwing: the Hexagon NPU is reachable once a non-secure FastRPC
-		// node exists; the root-only -secure node alone proves nothing.
-		{"qualcomm", "", "msm_dpu", "/dev/fastrpc-cdsp", []string{"qnn"}},
-		{"qualcomm", "", "kgsl", "/dev/fastrpc-cdsp-secure", []string{}},
+		// A reachable Hexagon NPU is not an Adreno compute backend: FastRPC is
+		// the DSP's transport, so the NPU reports it and the GPU stays bare.
+		{"qualcomm", "", "msm_dpu", "/dev/fastrpc-cdsp", []string{}},
 		{"vivante", "", "etnaviv", "", []string{}},
 		{"intel", "0x8086", "i915", "", []string{}},
+		// Each driver-node layout the gpu entitlement grants counts as CUDA
+		// evidence: discrete, the nvhost pair, and the Tegra iGPU tree.
 		{"nvidia", "0x10de", "nvidia", "/dev/nvidiactl", []string{"cuda"}},
+		{"nvidia", "0x10de", "nvgpu", "/dev/nvhost-ctrl-gpu", []string{"cuda"}},
+		{"nvidia", "", "tegra", "/dev/nvgpu/igpu0/ctrl", []string{"cuda"}},
+		// The PCI id names a nouveau card, so it is still an NVIDIA GPU — just
+		// one with no CUDA.
 		{"nvidia", "0x10de", "nouveau", "", []string{}},
 		{"amd", "0x1002", "amdgpu", "/dev/kfd", []string{"rocm"}},
 	} {
@@ -60,9 +65,13 @@ func TestDiscoverPCIWithoutDRMAndNoFalseCUDA(t *testing.T) {
 	writeFixture(t, root, "/sys/bus/pci/devices/0000:01:00.0/class", "0x030200")
 	writeFixture(t, root, "/sys/bus/pci/devices/0000:01:00.0/vendor", "0x10de")
 	writeFixture(t, root, "/usr/local/cuda/version.txt", "CUDA 13.0")
+	// The driver package leaves libcuda.so behind once its module is gone, so the
+	// library alone never proves anything can reach the GPU.
+	writeFixture(t, root, "/usr/lib/aarch64-linux-gnu/libcuda.so.1", "")
+	writeFixture(t, root, "/usr/lib64/libcuda.so", "")
 	devices := Discover(root)
 	if len(devices) != 1 || devices[0].Vendor != "nvidia" || len(devices[0].ComputeBackends) != 0 {
-		t.Fatalf("PCI hardware/toolkit should not imply a working CUDA driver: %+v", devices)
+		t.Fatalf("PCI hardware, toolkit and libcuda should not imply a working CUDA driver: %+v", devices)
 	}
 	if devices := Discover(t.TempDir()); len(devices) != 0 {
 		t.Fatalf("empty host: %+v", devices)

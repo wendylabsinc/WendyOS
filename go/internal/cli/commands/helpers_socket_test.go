@@ -22,7 +22,7 @@ func (versionOnlyAgent) GetAgentVersion(context.Context, *agentpb.GetAgentVersio
 
 // startUDSAgent serves a minimal agent on a unix socket and sets
 // WENDY_AGENT_SOCKET to its path for the duration of the test.
-func startUDSAgent(t *testing.T) {
+func startUDSAgent(t *testing.T, register ...func(*grpc.Server)) {
 	t.Helper()
 	// Short temp dir to stay under the unix-socket sun_path limit on macOS
 	// (see localsocket_test.go for the convention).
@@ -39,6 +39,9 @@ func startUDSAgent(t *testing.T) {
 	}
 	srv := grpc.NewServer()
 	agentpb.RegisterWendyAgentServiceServer(srv, versionOnlyAgent{})
+	for _, registerService := range register {
+		registerService(srv)
+	}
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 

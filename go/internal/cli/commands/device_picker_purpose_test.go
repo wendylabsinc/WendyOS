@@ -14,7 +14,7 @@ import (
 func TestDevicePickerPurposePersistsAcrossTabsAndResize(t *testing.T) {
 	for _, purpose := range []devicePickerPurpose{mainDevicePicker, buildHostPicker} {
 		ctx := withDevicePickerPurpose(context.Background(), purpose)
-		m := newDevicePickerModel(ctx, tui.NewPicker(), pickerAuth(7), 7, true)
+		m := newDevicePickerModel(ctx, tui.NewPicker(), pickerAuth(7), 7, true, devicePickerLocalTab)
 		for _, width := range []int{80, 40} {
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 			m = updated.(devicePickerModel)

@@ -244,14 +244,13 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 	}
 	cloudAuth := devicePickerInitialAuth(cfg)
 	var createReq *errCreateSimulator
-	// Which tab to open on. Only a create changes it, so the user lands back
-	// where they pressed the key rather than on Local.
+	// Resume the tab that opened the login, organization, or simulator prompt.
 	openOn := devicePickerLocalTab
 	for {
 		err := discoverContinuousWithCloudAuth(ctx, opts, includeLocal, cloudAuth, defaultOrgForCloudAuth(cfg, cloudAuth), openOn)
-		openOn = devicePickerLocalTab
 		switch {
 		case errors.Is(err, errDevicePickerLogin):
+			openOn = devicePickerCloudTab
 			if err := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); err != nil {
 				return err
 			}
@@ -275,6 +274,7 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 			}
 			openOn = devicePickerSimulatorTab
 		case errors.Is(err, errDevicePickerSwitchOrg):
+			openOn = devicePickerCloudTab
 			cfg, err = config.Load()
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)

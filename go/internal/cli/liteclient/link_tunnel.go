@@ -21,6 +21,7 @@ import (
 type tunnelLink struct {
 	cc     *grpc.ClientConn
 	stream tunnelpb.WendyComTunnelBrokerService_WendyComTunnelClient
+	ctx    context.Context // the stream's; done once close cancels it
 	cancel context.CancelFunc
 	sendMu sync.Mutex
 
@@ -60,6 +61,7 @@ func dialTunnelLinkInsecure(serverAddr string, assetID uint32) (*tunnelLink, err
 	l := &tunnelLink{
 		cc:     cc,
 		stream: stream,
+		ctx:    ctx,
 		cancel: cancel,
 		msgs:   make(chan *wendypb.WendyComMessage, 16),
 	}
@@ -70,6 +72,10 @@ func dialTunnelLinkInsecure(serverAddr string, assetID uint32) (*tunnelLink, err
 // recvLoop turns stream payloads into WendyComMessages. Buffering them in a
 // channel lets recv apply timeouts without losing the message: one that
 // arrives after a timeout stays queued for the next recv call.
+//
+// The hand-off also watches the stream context: once nothing reads msgs (a
+// failed handshake leaves no reader), a full channel would otherwise block
+// this goroutine forever, since cancelling only fails the next stream.Recv.
 func (l *tunnelLink) recvLoop() {
 	for {
 		msg, err := l.stream.Recv()
@@ -90,7 +96,13 @@ func (l *tunnelLink) recvLoop() {
 			close(l.msgs)
 			return
 		}
-		l.msgs <- m
+		select {
+		case l.msgs <- m:
+		case <-l.ctx.Done():
+			l.recvErr = l.ctx.Err()
+			close(l.msgs)
+			return
+		}
 	}
 }
 

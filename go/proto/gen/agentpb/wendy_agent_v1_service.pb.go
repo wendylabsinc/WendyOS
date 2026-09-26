@@ -752,8 +752,12 @@ type GetAgentVersionResponse struct {
 	// an agent that reports has_gpu=true always lists at least one entry, so
 	// has_gpu with an empty list identifies an older agent.
 	GpuCapabilities []*GpuCapabilities `protobuf:"bytes,26,rep,name=gpu_capabilities,json=gpuCapabilities,proto3" json:"gpu_capabilities,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Runtimes an app can use on the NPU (e.g. "qnn" for the Qualcomm Hexagon
+	// reached over FastRPC). Only populated when has_npu is true; empty when the
+	// vendor's runtime is unrecognized, or on agents predating this field.
+	NpuBackends   []string `protobuf:"bytes,27,rep,name=npu_backends,json=npuBackends,proto3" json:"npu_backends,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetAgentVersionResponse) Reset() {
@@ -964,6 +968,13 @@ func (x *GetAgentVersionResponse) GetContainerStorage() *DiskPartition {
 func (x *GetAgentVersionResponse) GetGpuCapabilities() []*GpuCapabilities {
 	if x != nil {
 		return x.GpuCapabilities
+	}
+	return nil
+}
+
+func (x *GetAgentVersionResponse) GetNpuBackends() []string {
+	if x != nil {
+		return x.NpuBackends
 	}
 	return nil
 }
@@ -3111,9 +3122,9 @@ func (x *SetHostnameResponse) GetHostname() string {
 // A detected GPU and the host compute backends an app can use on it.
 type GpuCapabilities struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Host compute backends usable on this GPU: cuda, rocm, metal, or qnn (the
-	// Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing). Empty when
-	// the GPU is present but no supported backend was detected.
+	// Host compute backends usable on this GPU: cuda, rocm, or metal. Empty when
+	// the GPU is present but no supported backend was detected. An on-SoC neural
+	// accelerator is not a GPU backend; see npu_backends.
 	ComputeBackends []string `protobuf:"bytes,1,rep,name=compute_backends,json=computeBackends,proto3" json:"compute_backends,omitempty"`
 	// GPU vendor (nvidia, amd, intel, apple, broadcom, arm, qualcomm, vivante,
 	// virtio). Empty when the driver is not recognized.
@@ -4441,8 +4452,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\xf7\n" +
-	"\n" +
+	"\x16GetAgentVersionRequest\"\x9a\v\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -4480,7 +4490,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"npu_vendor\x18\x18 \x01(\tH\rR\tnpuVendor\x88\x01\x01\x12X\n" +
 	"\x11container_storage\x18\x19 \x01(\v2&.wendy.agent.services.v1.DiskPartitionH\x0eR\x10containerStorage\x88\x01\x01\x12S\n" +
-	"\x10gpu_capabilities\x18\x1a \x03(\v2(.wendy.agent.services.v1.GpuCapabilitiesR\x0fgpuCapabilitiesB\r\n" +
+	"\x10gpu_capabilities\x18\x1a \x03(\v2(.wendy.agent.services.v1.GpuCapabilitiesR\x0fgpuCapabilities\x12!\n" +
+	"\fnpu_backends\x18\x1b \x03(\tR\vnpuBackendsB\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +

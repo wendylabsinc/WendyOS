@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -22,6 +23,10 @@ import (
 // that only carries a channel allocates no bus connection and starts no
 // goroutine.
 type Connection struct {
+	// ioMu is held shared by L2CAPSend and L2CAPRecv across their syscalls and
+	// exclusively by Close around releasing fd, so fd is never read while it
+	// is being cleared, nor closed (and its number reused) under an I/O call.
+	ioMu      sync.RWMutex
 	fd        int     // -1 once closed, so Close is idempotent
 	addr      [6]byte // MSB-first; x/sys reverses it into the kernel's bdaddr_t
 	addrType  uint8   // unix.BDADDR_LE_PUBLIC / BDADDR_LE_RANDOM
@@ -269,6 +274,8 @@ func (c *Connection) resetSocket() error {
 //
 // Framing (length prefix) is handled by the caller (agent_client.go).
 func (c *Connection) L2CAPSend(data []byte) error {
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
 	if c.fd < 0 {
 		return fmt.Errorf("connection is closed")
 	}
@@ -300,6 +307,8 @@ func (c *Connection) L2CAPSend(data []byte) error {
 // L2CAPRecv receives one L2CAP SDU with a timeout.
 // Returns the raw bytes (including any framing added by the caller).
 func (c *Connection) L2CAPRecv(timeoutSeconds int) ([]byte, error) {
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
 	if c.fd < 0 {
 		return nil, fmt.Errorf("connection is closed")
 	}
@@ -330,7 +339,19 @@ func (c *Connection) L2CAPRecv(timeoutSeconds int) ([]byte, error) {
 
 // Close releases both halves. It is idempotent: the fd is cleared, so a second
 // call cannot close an unrelated descriptor that has since taken the number.
+//
+// It shuts the socket down before taking ioMu: closing an fd does not wake a
+// write(2) blocked on it in another goroutine (a peer that stopped granting
+// credits), but shutdown does, so a stuck L2CAPSend fails instead of holding
+// ioMu, and Close cannot hang behind it. Only Close writes fd after the
+// channel is open, so reading it here unlocked is safe as long as Close is not
+// called concurrently with itself (l2capNetConn.Close guarantees that).
 func (c *Connection) Close() {
+	if c.fd >= 0 {
+		unix.Shutdown(c.fd, unix.SHUT_RDWR) //nolint:errcheck — best effort; close follows
+	}
+	c.ioMu.Lock()
+	defer c.ioMu.Unlock()
 	if c.g != nil {
 		// Whether the ACL link goes down with it depends on who brought it up
 		// and whether a channel is still riding on it — see gattSession.close.

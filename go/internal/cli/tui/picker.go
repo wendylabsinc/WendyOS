@@ -346,6 +346,20 @@ func (m *PickerModel) SetDefaultKey(key string) {
 	m.refreshTable()
 }
 
+// FocusItem moves the cursor to an existing visible item. A missing key leaves
+// the cursor unchanged. Call after adding the initial rows to preselect one.
+func (m *PickerModel) FocusItem(key string) {
+	if key == "" {
+		return
+	}
+	for i, item := range m.visibleItems() {
+		if strings.EqualFold(pickerItemKey(item), key) {
+			m.table.SetCursor(m.rowForItemIndex(i))
+			return
+		}
+	}
+}
+
 // anyProbePending reports whether any item still has a probe in flight, i.e.
 // whether the spinner has anything to animate.
 func (m PickerModel) anyProbePending() bool {

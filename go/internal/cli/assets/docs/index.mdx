@@ -1,59 +1,146 @@
 ---
-title: Overview
-description: The open source operating system and toolchain for Physical AI — robots, drones, and edge devices.
-full: true
+title: Build and run your first Wendy app
+description: Create an HTTP app, run it on a Wendy target, and open it in your browser.
 ---
 
-import { Database, Monitor, Box, Terminal, Microchip } from 'lucide-react';
-import { HardwareShowcase } from '@/components/docs/hardware-showcase';
-import { OverviewIntro } from '@/components/docs/overview-intro';
-import { GetStartedSection } from '@/components/docs/get-started-section';
+Choose where your app will run. The simulator runs a real WendyOS ARM64 image on your laptop, so you can start without hardware.
 
-<OverviewIntro />
+<Tabs items={['Simulator', 'Jetson / Raspberry Pi', 'Existing Linux', 'Mac']}>
+<Tab value="Simulator">
 
-<GetStartedSection />
+Use the quickstart below on macOS or Linux. Allow extra time for the first image download and build. Apple Silicon runs the ARM64 simulator natively; x86 hosts use slower emulation.
 
-## Supported Hardware
+</Tab>
+<Tab value="Jetson / Raspberry Pi">
 
-Wendy runs on edge devices with strong local compute. Plug one in over USB-C and start deploying.
+First install WendyOS on your [Jetson](/docs/installation/wendyos-nvidia-jetson-orin-nano) or [Raspberry Pi](/docs/installation/wendyos-raspberry-pi-5). Connect it over USB or your local network, then follow the quickstart below and select it in `wendy run`.
 
-<HardwareShowcase />
+</Tab>
+<Tab value="Existing Linux">
 
-## Core Components
+On the **target Linux machine**, install the agent:
 
-Wendy consists of several core components:
+```bash
+curl -fsSL https://install.wendy.dev/agent.sh | bash
+```
 
-<Cards className="grid-cols-2 lg:grid-cols-3">
-  <Card icon={<Database />} title="WendyOS" className="h-full">
-    The Apache 2.0 open source Linux distribution optimized for Physical AI. Includes a mobile-like USB-C development experience, remote debugging, and atomic updates.
-  </Card>
+Return to your development machine and follow the quickstart below. Select your Linux machine in `wendy run`. See [Linux setup](/docs/installation/linux) for requirements and connection help.
 
-  <div className="relative flex flex-col">
-    <span className="absolute -top-px right-0 z-10 bg-wendy-seafoam text-zinc-950 text-xs px-2 py-1 font-medium">Beta</span>
-    <Card icon={<Terminal />} title="Wendy for macOS" className="h-full">
-      Deploy native macOS apps to Apple Silicon Mac targets with [Wendy for macOS](/installation/wendy-agent-macos) beta. Supports SwiftPM and Xcode projects with the same CLI workflow.
-    </Card>
-  </div>
+</Tab>
+<Tab value="Mac">
 
-  <div className="relative flex flex-col">
-    <span className="absolute -top-px right-0 z-10 bg-wendy-seafoam text-zinc-950 text-xs px-2 py-1 font-medium">Beta</span>
-    <Card icon={<Monitor />} title="Wendy Cloud" className="h-full">
-      A fleet management solution for OTA updates, crash reporting, and remote telemetry. Built for teams scaling from prototypes to thousands of devices.
-    </Card>
-  </div>
+To run a Linux app on your Mac, use the Simulator path. To deploy a native macOS app, follow [your first native Mac app](/docs/get-started/mac). Native Mac targets require Apple Silicon and macOS 15 or later, plus a Mac development machine.
 
-  <Card icon={<Box />} title="Developer Tools" className="h-full">
-    CLI and VSCode extension for interactive breakpoints, hot reloading, and one-click deployment. Works with VSCode, Cursor, and Windsurf.
-  </Card>
+</Tab>
+</Tabs>
 
-  <Card icon={<Terminal />} title="Wendy Frameworks" className="h-full">
-    Performance-first Swift, Python, and Rust frameworks for running AI models, controlling I/O, and handling high-speed telemetry.
-  </Card>
+## 1. Install Wendy
 
-  <div className="relative flex flex-col">
-    <span className="absolute -top-px right-0 z-10 bg-purple-600 text-white text-xs px-2 py-1 font-medium">Preview</span>
-    <Card icon={<Microchip />} title="Wendy Lite" className="h-full">
-      ESP32 runtime and deployment layer. Build and deploy regular native ESP-IDF projects with `wendy run`; Swift and WASM apps remain available when portability matters.
-    </Card>
-  </div>
+On your development machine:
+
+```bash
+curl -fsSL https://install.wendy.dev/cli.sh | bash
+wendy --version
+```
+
+This example builds a container image. Have Docker running with Buildx available, or use the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). You do not need Node.js locally to build the generated Dockerfile.
+
+For the simulator, install QEMU:
+
+<Tabs items={['macOS', 'Debian / Ubuntu']}>
+<Tab value="macOS">
+
+```bash
+brew install qemu
+```
+
+</Tab>
+<Tab value="Debian / Ubuntu">
+
+```bash
+sudo apt install qemu-system-arm qemu-efi-aarch64
+```
+
+</Tab>
+</Tabs>
+
+Using Windows with a physical target? Follow [developer machine setup](/docs/installation/developer-machine-setup) to install the CLI, then continue at step 2.
+
+## 2. Create an app
+
+```bash
+wendy init hello-wendy --target wendyos --language node --template simple-api --var APP_ID=hello-wendy --var PORT=3000 --assistant skip --git-init no
+cd hello-wendy
+```
+
+## 3. Run it
+
+```bash
+wendy run
+```
+
+Select the **Simulator** tab, press **c** to create a simulator, then select it and press Enter. Wendy downloads and boots the image on first use. If you already have a target, select that instead.
+
+If you have a saved default device, Wendy uses it without showing the picker. To explicitly use a simulator:
+
+```bash
+wendy vm create hello-sim --profile generic
+wendy run --device vm:hello-sim
+```
+
+Wendy builds the app, uploads it, starts it, and attaches its logs. After the server is ready, look for this line. This example is for the simulator; physical targets show their own address:
+
+```text
+App reachable at http://127.0.0.1:3000
+```
+
+Open the printed URL. You should see:
+
+```json
+{"message":"hello-world"}
+```
+
+<Callout type="info" title="Your first Wendy app is running">
+That response came from the app on your target. Edit `src/index.ts`, then run `wendy run` again to deploy the change. Use `wendy run --watch` to rebuild and deploy as you edit.
+</Callout>
+
+If the target does not appear or the URL does not load, use [quickstart troubleshooting](/docs/errors). The simulator has no physical camera, GPU, GPIO, or USB devices; use hardware for those examples.
+
+## Wendy in 60 seconds
+
+```text
+YOUR DEVELOPMENT MACHINE
+  Wendy CLI / editor
+          |
+          | build, run, debug
+          v
+YOUR TARGET
+  WendyOS, or an existing machine with Wendy Agent
+    Your app
+    Camera / GPU / GPIO / ROS 2
+          |
+          | optional enrollment
+          v
+  Wendy Cloud: fleet management and remote deployment
+```
+
+| Name | What it does |
+| --- | --- |
+| Wendy CLI | The `wendy` tool on your development machine. |
+| WendyOS | Wendy's Linux OS for supported hardware and the simulator. It includes the agent. |
+| Wendy Agent | Runs on the target and manages your apps. Install it on an existing Linux or supported Mac machine. |
+| Wendy Cloud | Optional remote access and fleet management. |
+| `wendy.json` | Your app's configuration, including its target platform and hardware permissions. |
+
+[How Wendy works](/docs/concepts) explains the deployment model in more detail.
+
+## What will you build next?
+
+<Cards>
+  <Card title="Use a camera" href="/docs/hardware/camera">Capture images on a physical target.</Card>
+  <Card title="Use a GPU" href="/docs/hardware/gpu">Run accelerated workloads.</Card>
+  <Card title="Build with ROS 2" href="/docs/integrations/ros2">Connect your app to a robot.</Card>
+  <Card title="Debug your app" href="/docs/remote-debugging/vscode-extension">Attach a debugger and inspect logs.</Card>
+  <Card title="Deploy a fleet" href="/docs/guides/fleet-deployment">Deploy through Wendy Cloud.</Card>
+  <Card title="Choose your hardware" href="/docs/get-started/hardware">Start with the machine on your desk.</Card>
 </Cards>

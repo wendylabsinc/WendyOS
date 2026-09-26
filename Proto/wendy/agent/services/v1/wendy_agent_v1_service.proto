@@ -253,6 +253,10 @@ message GetAgentVersionResponse {
     // an agent that reports has_gpu=true always lists at least one entry, so
     // has_gpu with an empty list identifies an older agent.
     repeated GpuCapabilities gpu_capabilities = 26;
+    // Runtimes an app can use on the NPU (e.g. "qnn" for the Qualcomm Hexagon
+    // reached over FastRPC). Only populated when has_npu is true; empty when the
+    // vendor's runtime is unrecognized, or on agents predating this field.
+    repeated string npu_backends = 27;
 }
 
 // A network interface on the device and the IP addresses assigned to it.
@@ -704,9 +708,9 @@ message SetHostnameResponse {
 
 // A detected GPU and the host compute backends an app can use on it.
 message GpuCapabilities {
-    // Host compute backends usable on this GPU: cuda, rocm, metal, or qnn (the
-    // Qualcomm Hexagon NPU reached over FastRPC, e.g. Dragonwing). Empty when
-    // the GPU is present but no supported backend was detected.
+    // Host compute backends usable on this GPU: cuda, rocm, or metal. Empty when
+    // the GPU is present but no supported backend was detected. An on-SoC neural
+    // accelerator is not a GPU backend; see npu_backends.
     repeated string compute_backends = 1;
     // GPU vendor (nvidia, amd, intel, apple, broadcom, arm, qualcomm, vivante,
     // virtio). Empty when the driver is not recognized.

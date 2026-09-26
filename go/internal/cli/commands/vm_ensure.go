@@ -138,7 +138,9 @@ func waitForSimulatorAgent(ctx context.Context, name, addr string, budget time.D
 			_ = vmRecordHostnameFn(name, resp.GetHostname())
 			return conn, nil
 		}
-		if blocksUnauthenticatedFallback(err) {
+		// An unreachable pinned endpoint is expected during boot. Retry the
+		// same authenticated ladder, but stop if a different identity answered.
+		if errors.Is(err, errDeviceIdentityRefused) {
 			return nil, err
 		}
 		// Under emulation the budget is five minutes. Without this, a guest that
@@ -150,8 +152,11 @@ func waitForSimulatorAgent(ctx context.Context, name, addr string, budget time.D
 			return nil, fmt.Errorf("the simulator did not answer on %s within %s: %w", addr, budget, err)
 		}
 		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("the simulator did not answer on %s within %s: %w", addr, budget, err)
 		case <-time.After(2 * time.Second):
 		}
 	}

@@ -6,6 +6,8 @@ Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over 
 
 The two commands are the **same command** — they accept identical flags and arguments and behave identically. `wendy os install` remains available for backward compatibility and for discoverability under the `wendy os` group.
 
+The interactive picker has Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, use the arrow keys to choose a device, and press Enter to select it. Linux includes WendyOS devices and Linux Desktop; Mac offers Headless Mac; Microcontrollers lists ESP32 targets with published Wendy Lite firmware. Empty categories are hidden.
+
 ```sh
 # Interactive (recommended)
 wendy install

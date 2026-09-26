@@ -10,7 +10,9 @@ Dragonwing flash work in #1921 rewrote GPU vendor detection, now reconciled into
 `gpudiscovery`), the new `container_storage`/`gpu_capabilities` fields were
 renumbered clear of the NPU fields in #1936, and Qualcomm Dragonwing support
 (`qnn` compute backend, Adreno render-node grant in the `gpu` entitlement) was
-added per review. Go/Swift builds and the test suites listed below passed again.
+added per review — the `qnn` half was later moved off the GPU onto the new
+`npu_backends` field, so a Dragonwing no longer reports it under
+`gpuCapabilities`. Go/Swift builds and the test suites listed below passed again.
 
 On 2026-09-11 the stack was rebased onto WendyOS main `9a474f749`, past the NPU
 fields that #1936 merged; the field renumbering folded into the single protocol

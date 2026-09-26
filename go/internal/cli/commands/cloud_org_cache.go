@@ -33,13 +33,17 @@ func cachedCloudOrganizationName(auth *config.AuthConfig) string {
 	if auth == nil || len(auth.Certificates) == 0 {
 		return ""
 	}
+	return cachedOrganizationName(auth.CloudGRPC, auth.OrganizationKey())
+}
+
+func cachedOrganizationName(endpoint, organization string) string {
 	dir, err := config.ConfigDir()
 	if err != nil {
 		return ""
 	}
 	cloudOrgNameCacheMu.Lock()
 	defer cloudOrgNameCacheMu.Unlock()
-	return readCloudOrgNameCache(filepath.Join(dir, "organization-names.json")).Names[auth.CloudGRPC][auth.OrganizationKey()]
+	return readCloudOrgNameCache(filepath.Join(dir, "organization-names.json")).Names[endpoint][organization]
 }
 
 func cacheCloudOrganizationName(endpoint, organization, name string) {

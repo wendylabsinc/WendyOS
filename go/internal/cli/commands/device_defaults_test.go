@@ -61,7 +61,7 @@ func TestCloudPickerDefaultPersistsAndSynchronizesTabs(t *testing.T) {
 	setTempConfig(t, &config.Config{DefaultDevice: "vm:dev"})
 	auth := pickerAuth(7)
 	asset := &cloudpb.Asset{Id: 42, Name: "Go2"}
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), auth, 7, false)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), auth, 7, false, devicePickerLocalTab)
 	m.sim, _ = m.sim.Update(simulatorVMsMsg{vms: []vm.Status{stoppedVM("dev", "")}})
 	m.active = devicePickerCloudTab
 	updated, _ := m.Update(devicePickerCloudMsg{msg: cloudScanMsg{assets: []*cloudpb.Asset{asset}}})

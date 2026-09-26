@@ -72,6 +72,7 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 	if npuInfo.vendor != "" {
 		resp.NpuVendor = &npuInfo.vendor
 	}
+	resp.NpuBackends = npuInfo.backends
 
 	if usage, ok := rootDiskUsage(); ok {
 		resp.DiskUsedBytes = &usage.usedBytes

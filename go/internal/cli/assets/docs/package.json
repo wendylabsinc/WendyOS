@@ -10,7 +10,8 @@
     "build": "next build",
     "dev": "next dev",
     "start": "sirv out",
-    "types:check": "next typegen && fumadocs-mdx && tsc --noEmit"
+    "types:check": "next typegen && fumadocs-mdx && tsc --noEmit",
+    "test:docs": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
     "@next/third-parties": "16.3.5",

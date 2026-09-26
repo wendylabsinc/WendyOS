@@ -96,7 +96,7 @@ func TestCloudOrganizationNameCacheIdentityScopeAndImmediateLabels(t *testing.T)
 		}
 	}
 	ctx := context.Background()
-	device := newDevicePickerModel(ctx, tui.NewPicker(), a, 0, false)
+	device := newDevicePickerModel(ctx, tui.NewPicker(), a, 0, false, devicePickerLocalTab)
 	if device.cloudOrg != names[0] {
 		t.Fatal("device picker waits for network before showing cached name")
 	}

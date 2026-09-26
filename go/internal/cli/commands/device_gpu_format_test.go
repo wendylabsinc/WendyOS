@@ -14,7 +14,14 @@ func TestFormatGPUCompute(t *testing.T) {
 	}{
 		"older agent":      {nil, ""},
 		"single with cuda": {[]*agentpb.GpuCapabilities{{Vendor: "nvidia", Path: "/dev/nvidia0", ComputeBackends: []string{"cuda"}}}, "cuda"},
-		"single without":   {[]*agentpb.GpuCapabilities{{Vendor: "broadcom", Path: "/dev/dri/card0"}}, "none detected"},
+		// A GPU with no backend says nothing worth a line of its own.
+		"single without": {[]*agentpb.GpuCapabilities{{Vendor: "broadcom", Path: "/dev/dri/card0"}}, ""},
+		// The Dragonwing's Adreno: a reachable NPU beside it is not its backend.
+		"qualcomm without": {[]*agentpb.GpuCapabilities{{Vendor: "qualcomm", Path: "/dev/dri/card0"}}, ""},
+		"several without": {[]*agentpb.GpuCapabilities{
+			{Vendor: "broadcom", Path: "/dev/dri/card0"},
+			{Vendor: "broadcom", Path: "/dev/dri/renderD128"},
+		}, ""},
 		"two vendors": {[]*agentpb.GpuCapabilities{
 			{Vendor: "nvidia", Path: "/dev/dri/card0", ComputeBackends: []string{"cuda"}},
 			{Vendor: "amd", Path: "/dev/dri/card1", ComputeBackends: []string{"rocm"}},
@@ -28,6 +35,25 @@ func TestFormatGPUCompute(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if got := formatGPUCompute(tc.gpus); got != tc.want {
 				t.Fatalf("formatGPUCompute() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatNPU(t *testing.T) {
+	for name, tc := range map[string]struct {
+		vendor   string
+		backends []string
+		want     string
+	}{
+		"dragonwing":        {"qualcomm", []string{"qnn"}, "qualcomm (qnn)"},
+		"vendor only":       {"qualcomm", nil, "qualcomm"},
+		"unreported vendor": {"", nil, "unknown"},
+		"several runtimes":  {"qualcomm", []string{"qnn", "htp"}, "qualcomm (qnn, htp)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := formatNPU(tc.vendor, tc.backends); got != tc.want {
+				t.Fatalf("formatNPU(%q, %v) = %q, want %q", tc.vendor, tc.backends, got, tc.want)
 			}
 		})
 	}

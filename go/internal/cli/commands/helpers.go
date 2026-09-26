@@ -3816,16 +3816,19 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, includeBl
 		cfg = nil
 	}
 	cloudAuth := devicePickerInitialAuth(cfg)
+	openOn := devicePickerLocalTab
 
 	for {
-		selected, err := pickDeviceWithCloudAuth(ctx, excludeProviders, includeBluetooth, suppressUpdateCheck, cloudAuth, disableEnroll)
+		selected, err := pickDeviceWithCloudAuth(ctx, excludeProviders, includeBluetooth, suppressUpdateCheck, cloudAuth, disableEnroll, openOn)
 		var enroll *errDevicePickerEnroll
 		switch {
 		case errors.As(err, &enroll):
+			openOn = devicePickerLocalTab
 			if err := enrollLocalPickerDevice(ctx, enroll.item, cloudAuth, suppressUpdateCheck); err != nil && !errors.Is(err, ErrUserCancelled) {
 				return nil, err
 			}
 		case errors.Is(err, errDevicePickerLogin):
+			openOn = devicePickerCloudTab
 			if err := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); err != nil {
 				return nil, err
 			}
@@ -3835,6 +3838,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, includeBl
 			}
 			cloudAuth = devicePickerInitialAuth(cfg)
 		case errors.Is(err, errDevicePickerSwitchOrg):
+			openOn = devicePickerCloudTab
 			cfg, err = config.Load()
 			if err != nil {
 				return nil, fmt.Errorf("loading config: %w", err)
@@ -3867,7 +3871,7 @@ type errDevicePickerEnroll struct {
 
 func (e *errDevicePickerEnroll) Error() string { return "device picker requested enrollment" }
 
-func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bool, includeBluetooth bool, suppressUpdateCheck bool, cloudAuth *config.AuthConfig, disableEnroll bool) (*SelectedDevice, error) {
+func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bool, includeBluetooth bool, suppressUpdateCheck bool, cloudAuth *config.AuthConfig, disableEnroll bool, openOn devicePickerTab) (*SelectedDevice, error) {
 	excludeProviders = hideLocalProviders(excludeProviders)
 
 	picker := tui.NewPicker()
@@ -3888,7 +3892,7 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 
 	// Cancel continuous discovery when the picker exits.
 	discoverCtx, discoverCancel := context.WithCancel(ctx)
-	p := tea.NewProgram(newDevicePickerModel(discoverCtx, picker, cloudAuth, defaultOrgID, disableEnroll))
+	p := tea.NewProgram(newDevicePickerModel(discoverCtx, picker, cloudAuth, defaultOrgID, disableEnroll, openOn))
 
 	sendLANItem := func(dev models.LANDevice, insecure bool, probe tui.ProbeState) {
 		p.Send(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(dev, insecure, probe)}}})

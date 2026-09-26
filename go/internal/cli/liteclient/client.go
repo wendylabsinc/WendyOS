@@ -127,7 +127,7 @@ func (c *WendyLiteClient) ConnectInsecure(address string) error {
 	c.link = newDirectLink(conn)
 	err = c.handshake()
 	if err != nil {
-		conn.Close()
+		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}
@@ -171,7 +171,7 @@ func (c *WendyLiteClient) ConnectWithMutualAuthentication(address string, cert t
 	c.link = newDirectLink(conn)
 	err = c.handshake()
 	if err != nil {
-		conn.Close()
+		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}
@@ -198,7 +198,7 @@ func (c *WendyLiteClient) ConnectToSerial(device string) error {
 	c.link = newSerialLink(port)
 	c.serialLock = lock
 	if err := c.handshake(); err != nil {
-		port.Close()
+		c.link.close() // also stops the keep-alive loop linkHandshake may have started
 		lock.Release()
 		c.link = nil
 		c.serialLock = nil

@@ -211,7 +211,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:    use,
-		Short:  "Show agent version, OS, architecture, GPU, NPU, and hardware info for the target device",
+		Short:  "Show organization, agent version, OS, architecture, GPU, NPU, and hardware info for the target device",
 		Hidden: deprecated,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -236,6 +236,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			var partitions []*agentpb.DiskPartition
 			var containerStorage *agentpb.DiskPartition
 			var gpuCapabilities []*agentpb.GpuCapabilities
+			var npuBackends []string
 			var netInterfaces []*agentpb.NetworkInterface
 			var hasGPU, hasNPU bool
 			var providerInfo *providers.ProviderDeviceInfo
@@ -276,6 +277,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				gpuArch = resp.GetGpuArch()
 				hasNPU = resp.GetHasNpu()
 				npuVendor = resp.GetNpuVendor()
+				npuBackends = resp.GetNpuBackends()
 				diskUsedBytes = resp.DiskUsedBytes
 				diskTotalBytes = resp.DiskTotalBytes
 				memTotalBytes = resp.GetMemTotalBytes()
@@ -314,6 +316,8 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				}
 			}
 
+			organization := deviceOrganization(ctx, target.Agent)
+
 			var latestVersion string
 			if checkUpdates {
 				if providerInfo != nil {
@@ -335,6 +339,12 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 					"deviceType":      deviceType,
 					"cliVersion":      version.Version,
 					"hasGpu":          hasGPU,
+				}
+				if organization != nil {
+					out["organization"] = nil
+					if organization.ID != "" {
+						out["organization"] = organization
+					}
 				}
 				if storageMedium != "" {
 					out["storageMedium"] = storageMedium
@@ -391,6 +401,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				if npuVendor != "" {
 					out["npuVendor"] = npuVendor
 				}
+				if len(npuBackends) > 0 {
+					out["npuBackends"] = npuBackends
+				}
 				if len(netInterfaces) > 0 {
 					ifaces := make([]map[string]any, len(netInterfaces))
 					for i, iface := range netInterfaces {
@@ -424,6 +437,9 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 			}
 
 			fmt.Printf("%s %s\n", tui.Dim("Agent Version:"), tui.Value(agentVersion))
+			if organization != nil {
+				fmt.Printf("%s %s\n", tui.Dim("Organization:"), tui.Value(organization.label()))
+			}
 			fmt.Printf("%s %s\n", tui.Dim("OS:"), tui.Value(osName+" "+osVersion))
 			fmt.Printf("%s %s\n", tui.Dim("Architecture:"), tui.Value(cpuArch))
 			if cpuCount > 0 {
@@ -472,11 +488,7 @@ func newDeviceInfoLikeCmd(use string, deprecated bool) *cobra.Command {
 				}
 			}
 			if hasNPU {
-				vendor := npuVendor
-				if vendor == "" {
-					vendor = "unknown"
-				}
-				fmt.Printf("%s %s\n", tui.Dim("NPU:"), tui.Value(vendor))
+				fmt.Printf("%s %s\n", tui.Dim("NPU:"), tui.Value(formatNPU(npuVendor, npuBackends)))
 			}
 			if providerInfo != nil {
 				fmt.Printf("%s %s\n", tui.Dim("WASM Apps:"), tui.Value(yesNo(providerInfo.WasmAppSupport)))
@@ -808,7 +820,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			auth, err := resolveAuthEntry(cloudGRPC)
+			auth, err := resolveEnrollmentAuthEntry(cloudGRPC, orgID)
 			if err != nil {
 				return err
 			}
@@ -832,7 +844,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Device name")
 	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
 	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use (optional when a default session is set via 'wendy auth use')")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use; limits the organization picker to this endpoint")
 	return cmd
 }
 

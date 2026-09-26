@@ -1,24 +1,24 @@
 package commands
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 // formatGPUCompute renders the per-GPU compute backends for `device info`.
-// One GPU prints just its backends ("cuda", or "none detected"); more than one
-// prints each GPU with its vendor and path so a mixed AMD+NVIDIA host reads
-// unambiguously. Empty when the agent sent no entries (an older agent).
+// One GPU prints just its backends; more than one prints each GPU with its
+// vendor and path so a mixed AMD+NVIDIA host reads unambiguously. Empty when no
+// GPU reports one.
 func formatGPUCompute(gpus []*agentpb.GpuCapabilities) string {
-	switch len(gpus) {
-	case 0:
+	if !slices.ContainsFunc(gpus, func(gpu *agentpb.GpuCapabilities) bool {
+		return len(gpu.GetComputeBackends()) > 0
+	}) {
 		return ""
-	case 1:
-		if backends := strings.Join(gpus[0].GetComputeBackends(), ", "); backends != "" {
-			return backends
-		}
-		return "none detected"
+	}
+	if len(gpus) == 1 {
+		return strings.Join(gpus[0].GetComputeBackends(), ", ")
 	}
 	parts := make([]string, 0, len(gpus))
 	for _, gpu := range gpus {
@@ -36,6 +36,17 @@ func formatGPUCompute(gpus []*agentpb.GpuCapabilities) string {
 		parts = append(parts, backends+" ("+ident+")")
 	}
 	return strings.Join(parts, "; ")
+}
+
+// formatNPU renders the NPU vendor and the runtimes an app can use on it.
+func formatNPU(vendor string, backends []string) string {
+	if vendor == "" {
+		vendor = "unknown"
+	}
+	if len(backends) == 0 {
+		return vendor
+	}
+	return vendor + " (" + strings.Join(backends, ", ") + ")"
 }
 
 // gpuCapabilitiesJSON is the `device info --json` shape of the GPU list: one

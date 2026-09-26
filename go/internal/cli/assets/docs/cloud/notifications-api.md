@@ -9,10 +9,17 @@ operator-facing Wendy Notifications in a Wendy Cloud organization.
 
 ## App-facing API (`wendy.system.v1`)
 
-Apps with the `notifications` entitlement call
-`wendy.system.v1.NotificationService` over the Unix socket at
-`$WENDY_SYSTEM_SOCKET` (`/run/wendy/system/system.sock`). WendyKit exposes this
-as `WendyNotification.send(_:)`, so apps normally do not call gRPC directly.
+Apps with the [`notifications` entitlement](../device/entitlements.md#notifications)
+call `wendy.system.v1.NotificationService` over the Unix socket at
+`$WENDY_SYSTEM_SOCKET` (`/run/wendy/system/system.sock`). This creates a
+canonical Wendy Notification in the recipients' Companion inboxes. Cloud then
+attempts APNs delivery; apps do not send an arbitrary APNs payload directly.
+
+WendyKit is currently the only application SDK for this API, and it is
+Swift-only. Apps written in other languages call this gRPC service directly.
+See [Send notifications from a device app](/docs/guides/device-notifications)
+for entitlement and Cloud grant setup, Swift and direct gRPC examples, and
+delivery behavior.
 
 The private socket binds every call to trusted app identity. The request cannot
 supply an app ID, device ID, or organization ID; the agent adds app identity and
@@ -50,7 +57,8 @@ the caller may retry with the same `notification_id`.
 The app-facing and Cloud messages use the same plural selector shape. All three
 fields have union semantics. At most 100 selector entries may be supplied across
 the three lists. Cloud normalizes and deduplicates them, remains authoritative
-for recipient resolution, and resolves at most 10,000 recipients.
+for recipient resolution, and resolves at most 100 recipients for a device-app
+send.
 
 | Field | Type | Description |
 |---|---|---|
@@ -69,6 +77,14 @@ receives one Notification.
 
 Recipient totals are intentionally omitted because team and role counts can disclose
 organization membership.
+
+Device-app sources may create 10 accepted Notifications per minute, and the
+agent also smooths bursts locally. Repeated rate-limit violations can quarantine
+that app/device source for 15 minutes.
+Device-originated deep links are restricted to the source device;
+`wendy://devices/current/live` is the portable form. For device-originated APNs
+alerts, Cloud uses `Wendy · <Cloud app name>` as the banner title while retaining
+the supplied title on the stored Notification.
 
 ## `Notification` message
 

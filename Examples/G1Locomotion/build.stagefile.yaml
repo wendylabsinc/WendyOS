@@ -1,0 +1,48 @@
+version: 1
+stages:
+  - name: sdk
+    from: ubuntu:22.04
+    download:
+      - url: https://codeload.github.com/unitreerobotics/unitree_sdk2_python/tar.gz/65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5
+        sha256: b74e43fb6535929ec2a9efc1685e96111932ac6a9d7105b9cc7564ebaf6b7d58
+        dest: /opt/sdk
+        extract: tar.gz
+  - name: dependencies
+    from: ubuntu:22.04
+    workdir: /app
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: /opt/unitree
+      CYCLONEDDS_HOME: /usr/local
+      PIP_NO_BINARY: cyclonedds
+    install:
+      apt:
+        packages: [python3, python3-pip, python3-dev, git, cmake, build-essential, ca-certificates]
+      cmake:
+        - repository: https://github.com/eclipse-cyclonedds/cyclonedds.git
+          commit: 9995905bce6c4cf9f740d6438bbf7fcfd1c83dfd
+          prefix: /usr/local
+          defines:
+            BUILD_EXAMPLES: "OFF"
+            BUILD_TESTING: "OFF"
+          jobs: 2
+  - name: app
+    from: dependencies
+    workdir: /app
+    env:
+      CYCLONEDDS_URI: file:///app/cyclonedds.xml
+    install:
+      pip:
+        - requirements: requirements.txt
+    copy:
+      - from: sdk
+        paths: [/opt/sdk/unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/unitree_sdk2py]
+        dest: /opt/unitree/unitree_sdk2py
+      - from: sdk
+        paths: [/opt/sdk/unitree_sdk2_python-65691c8a8bc53b98d3976dba4dbf9d5d20b2e7f5/LICENSE]
+        dest: /opt/unitree/LICENSE
+      - from: local
+        paths: [app.py, cyclonedds.xml]
+        dest: /app
+    cmd: [python3, /app/app.py]

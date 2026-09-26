@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -36,37 +37,39 @@ func installFakeNPU(t *testing.T, nodes []string, device, compatible string) {
 
 func TestDetectNPUInfo(t *testing.T) {
 	for name, tc := range map[string]struct {
-		nodes      []string
-		device     string
-		compatible string
-		wantHas    bool
-		wantVendor string
+		nodes        []string
+		device       string
+		compatible   string
+		wantHas      bool
+		wantVendor   string
+		wantBackends []string
 	}{
 		"dragonwing": {
 			[]string{"fastrpc-cdsp", "fastrpc-gdsp0", "fastrpc-cdsp-secure"},
 			"26300000.remoteproc", "qcom,qcs8300-cdsp-pas\x00qcom,sa8775p-cdsp0-pas\x00",
-			true, "qualcomm",
+			true, "qualcomm", []string{"qnn"},
 		},
 		// The signed-PD nodes are root-only, so a board exposing nothing else has
 		// no NPU an app can reach.
 		"secure nodes only": {
 			[]string{"fastrpc-adsp-secure", "fastrpc-cdsp-secure"},
 			"26300000.remoteproc", "qcom,qcs8300-cdsp-pas\x00",
-			false, "",
+			false, "", nil,
 		},
-		"no fastrpc nodes": {nil, "", "", false, ""},
+		"no fastrpc nodes": {nil, "", "", false, "", nil},
 		// The qcom entry is not always the first in the compatible list.
 		"vendor entry not first": {
 			[]string{"fastrpc-cdsp"}, "26300000.remoteproc",
-			"generic,dsp\x00qcom,qcs8300-cdsp-pas\x00", true, "qualcomm",
+			"generic,dsp\x00qcom,qcs8300-cdsp-pas\x00", true, "qualcomm", []string{"qnn"},
 		},
 		// A DSP whose vendor we cannot name still counts as present; the vendor is
-		// reported honestly as unknown rather than guessed.
+		// reported honestly as unknown rather than guessed, and naming no runtime
+		// beats naming the wrong one.
 		"unrecognised vendor": {
-			[]string{"fastrpc-cdsp"}, "10000000.remoteproc", "acme,dsp\x00", true, "",
+			[]string{"fastrpc-cdsp"}, "10000000.remoteproc", "acme,dsp\x00", true, "", nil,
 		},
 		"nodes but no remoteproc": {
-			[]string{"fastrpc-cdsp"}, "", "", true, "",
+			[]string{"fastrpc-cdsp"}, "", "", true, "", nil,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -77,6 +80,9 @@ func TestDetectNPUInfo(t *testing.T) {
 			}
 			if got.vendor != tc.wantVendor {
 				t.Errorf("vendor = %q, want %q", got.vendor, tc.wantVendor)
+			}
+			if !slices.Equal(got.backends, tc.wantBackends) {
+				t.Errorf("backends = %v, want %v", got.backends, tc.wantBackends)
 			}
 		})
 	}

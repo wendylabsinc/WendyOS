@@ -27,8 +27,11 @@ type MemSample struct {
 }
 
 // ParseProcStat parses /proc/stat contents into a CPUSample. TotalJiffies is the
-// sum of all numeric fields on the aggregate "cpu " line; IdleJiffies is idle +
-// iowait (fields 4 and 5). CPUCount is the number of per-core "cpuN" lines.
+// sum of user through steal on the aggregate "cpu " line. Guest counters are
+// already included in user/nice and must not be counted twice. IdleJiffies is
+// non-executing time: idle + iowait + steal (fields 4, 5, and 8). This keeps time
+// waiting for the hypervisor out of CPU utilization. CPUCount is the number of
+// per-core "cpuN" lines.
 func ParseProcStat(data []byte) (CPUSample, error) {
 	var s CPUSample
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -46,8 +49,10 @@ func ParseProcStat(data []byte) (CPUSample, error) {
 				if err != nil {
 					return CPUSample{}, fmt.Errorf("parsing /proc/stat cpu field %d: %w", i, err)
 				}
-				s.TotalJiffies += v
-				if i == 4 || i == 5 { // idle, iowait
+				if i <= 8 { // guest and guest_nice overlap user and nice
+					s.TotalJiffies += v
+				}
+				if i == 4 || i == 5 || i == 8 { // idle, iowait, steal
 					s.IdleJiffies += v
 				}
 			}

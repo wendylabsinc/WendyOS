@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -213,6 +214,45 @@ func TestDeviceInfo_Battery(t *testing.T) {
 						t.Errorf("seconds_remaining = %v, want %v", seconds, wantSeconds)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestDeviceInfo_NPU(t *testing.T) {
+	hasNPU, vendor := true, "qualcomm"
+	fake := &fakeAgentServer{versionResp: &agentpb.GetAgentVersionResponse{
+		HasNpu: &hasNPU, NpuVendor: &vendor, NpuBackends: []string{"qnn"},
+	}}
+	conn, _ := startFakeAgentServer(t, fake)
+	srv := New(&config.Config{}, nil)
+	srv.SetConn(conn)
+	result, err := srv.callTool(context.Background(), "device_info", nil)
+	if err != nil {
+		t.Fatalf("device_info: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+	var textPayload map[string]any
+	if err := json.Unmarshal([]byte(toolResultText(t, result)), &textPayload); err != nil {
+		t.Fatalf("invalid JSON text fallback: %v", err)
+	}
+	for _, output := range []struct {
+		name    string
+		payload map[string]any
+	}{
+		{name: "structured", payload: structuredMap(t, result)},
+		{name: "text", payload: textPayload},
+	} {
+		t.Run(output.name, func(t *testing.T) {
+			if output.payload["has_npu"] != true || output.payload["npu_vendor"] != "qualcomm" {
+				t.Errorf("has_npu = %v, npu_vendor = %v", output.payload["has_npu"], output.payload["npu_vendor"])
+			}
+			// The structured payload keeps []string; the text one has been through
+			// JSON, so it holds []any.
+			if got := fmt.Sprint(output.payload["npu_backends"]); got != "[qnn]" {
+				t.Errorf("npu_backends = %s, want [qnn]", got)
 			}
 		})
 	}

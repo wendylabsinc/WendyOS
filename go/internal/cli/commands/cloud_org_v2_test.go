@@ -43,7 +43,7 @@ func TestDevicePickerCloudTabV2OrganizationAndDevices(t *testing.T) {
 	auth.CloudGRPC = lis.Addr().String()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	model := newDevicePickerModel(ctx, tui.NewPicker(), auth, 0, false)
+	model := newDevicePickerModel(ctx, tui.NewPicker(), auth, 0, false, devicePickerLocalTab)
 	model, _ = tabTo(t, model, devicePickerCloudTab)
 	updated, _ := model.Update(devicePickerCloudMsg{msg: model.cloud.scanCmd()()})
 	model = updated.(devicePickerModel)

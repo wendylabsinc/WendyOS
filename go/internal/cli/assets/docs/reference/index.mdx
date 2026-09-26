@@ -1,0 +1,33 @@
+---
+title: Reference overview
+description: Look up commands, app configuration, and machine-readable sources.
+---
+
+## CLI
+
+[Wendy CLI command reference](/docs/reference/cli) is generated from the same command definitions as `wendy --help`. Every public command uses the same section order, with inherited flags included. Detailed explanations stay linked from each command's Details section.
+
+- [`wendy run`](/docs/reference/cli/run)
+- [`wendy init`](/docs/reference/cli/init)
+- [`wendy device`](/docs/reference/cli/device)
+- [Global flags](/docs/advanced/clients/wendy-cli/global-flags)
+- [Environment variables](/docs/advanced/clients/wendy-cli/global-flags#environment-variables)
+
+Hidden commands, including simulator management, remain documented in their [workflow guides](/docs/installation/wendyos-virtual-machine).
+
+## Configuration and services
+
+- [`wendy.json` and entitlements](/docs/advanced/apps/wendy.json)
+- [Wendy Cloud](/docs/cloud)
+- [Wendy Agent installation](/docs/installation/linux)
+- [Detailed reference and internals](/docs/advanced)
+
+## For coding agents
+
+Retrieve the quickstart, your target's setup guide, app configuration, and the command reference for the operation you need. Check the target platform before choosing a template. Use explicit target and template flags in non-interactive sessions.
+
+The site publishes `/llms.txt`, `/llms-full.txt`, `/reference/cli.json`, and `/reference/wendy.schema.json` under the current documentation version. Every page has a raw Markdown link and a copy action. These files are generated during the docs build from this revision's pages, CLI definitions, and app schema.
+
+CLI JSON lists command paths, synopsis, aliases, and local and persistent options. To determine inherited flags, walk the command's parent paths. It describes command inputs, not a universal schema for command output.
+
+For API and protocol definitions, use the [repository source](https://github.com/wendylabsinc/WendyOS). The docs do not assign error codes that the CLI has not implemented; [troubleshooting](/docs/errors) is indexed by symptoms and error text.

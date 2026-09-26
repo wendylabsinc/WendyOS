@@ -52,13 +52,16 @@ type devicePickerModel struct {
 	windowWidth  int
 }
 
-func newDevicePickerModel(ctx context.Context, local tui.PickerModel, auth *config.AuthConfig, defaultOrg int32, disableEnroll bool) devicePickerModel {
+func newDevicePickerModel(ctx context.Context, local tui.PickerModel, auth *config.AuthConfig, defaultOrg int32, disableEnroll bool, active devicePickerTab) devicePickerModel {
 	m := devicePickerModel{
 		purpose: devicePickerPurposeFromContext(ctx), local: local,
-		sim:        newSimulatorPickerModel(ctx),
-		cloudAuth:  auth,
-		cloudOrg:   cachedCloudOrganizationName(auth),
-		defaultOrg: defaultOrg,
+		sim:          newSimulatorPickerModel(ctx),
+		cloudAuth:    auth,
+		cloudOrg:     cachedCloudOrganizationName(auth),
+		defaultOrg:   defaultOrg,
+		active:       active,
+		simStarted:   active == devicePickerSimulatorTab,
+		cloudStarted: active == devicePickerCloudTab && auth != nil,
 	}
 	if auth != nil {
 		m.cloud = newCloudDiscoverModel(ctx, auth, os.Getenv("WENDY_BROKER_URL"), false, true, nil)
@@ -109,10 +112,14 @@ func tagDevicePickerCmd(cmd tea.Cmd, tab devicePickerTab) tea.Cmd {
 }
 
 func (m devicePickerModel) Init() tea.Cmd {
-	// The simulator list is not started here: it polls the VM store, and doing
-	// that for a tab nobody opened is both wasted I/O and lock contention with
-	// any concurrent `vm start`.
-	return tagDevicePickerCmd(m.local.Init(), devicePickerLocalTab)
+	local := tagDevicePickerCmd(m.local.Init(), devicePickerLocalTab)
+	if m.cloudStarted {
+		return tea.Batch(local, m.startCloudCmd())
+	}
+	if m.simStarted {
+		return tea.Batch(local, m.startSimulatorCmd())
+	}
+	return local
 }
 
 func (m devicePickerModel) startSimulatorCmd() tea.Cmd {

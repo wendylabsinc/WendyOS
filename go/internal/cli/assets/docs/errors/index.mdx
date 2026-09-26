@@ -1,0 +1,34 @@
+---
+title: Troubleshoot your first deployment
+description: Find a target, fix a build, or reach your running app.
+---
+
+Search this page by the symptom or error text. These are troubleshooting entries, not numbered CLI error codes.
+
+## Target not found
+
+Run `wendy discover` on your development machine. Verify that the target is powered on and connected over USB or the same network. On macOS, allow Local Network access when prompted. For USB tethering on Linux, run `sudo wendy device usb-setup` once.
+
+If you know the address, try `wendy device info --device <address>`. If this works, use `wendy run --device <address>` to bypass discovery. See [device discovery](/docs/advanced/clients/wendy-cli/commands/discover).
+
+## Wrong target selected
+
+A saved default bypasses the picker. Use `wendy run --device <name-or-address>` to select a target explicitly, or `wendy device unset-default` to restore interactive selection.
+
+## No ARM64 UEFI firmware found
+
+Install both QEMU and its ARM64 firmware. On Debian or Ubuntu, run `sudo apt install qemu-system-arm qemu-efi-aarch64`. See [simulator setup](/docs/installation/wendyos-virtual-machine).
+
+## Image build fails
+
+Read the first build error above the deployment failure. For the HTTP quickstart, confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.
+
+## Host port already in use
+
+Another process may own port 3000. Stop that process or change the app's listening port and its readiness configuration together. The simulator forwards the declared TCP readiness port onto your development machine. See [simulator networking](/docs/installation/wendyos-virtual-machine#reaching-an-app-you-deployed).
+
+## Readiness probe timed out
+
+Check the attached app logs. Open the address printed by `wendy run`, including its port. For a simulator using default networking, this is a loopback address, not the guest's private IP. An older running VM may need a restart to enable application port forwarding.
+
+For a physical target, check that your development machine can reach the reported address. See [simulator troubleshooting](/docs/installation/wendyos-virtual-machine#troubleshooting) or the [FAQ](/docs/faq) for further checks.

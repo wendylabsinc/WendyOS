@@ -74,6 +74,13 @@ message Asset {
   optional double connection_latitude = 33;
   optional double connection_longitude = 34;
 
+  // Device binding: the name pki-core stamped into the device's
+  // /device/<name> SPIFFE identity at enrollment. Operator-set, never learned
+  // from a presented certificate — cloud resolves an mTLS device identity by
+  // looking this up, so a device that could set it could claim another's row
+  // (WDY-2902).
+  optional string pki_device_name = 35;
+
   google.protobuf.Timestamp created_at = 21;
   google.protobuf.Timestamp updated_at = 22;
 }
@@ -106,6 +113,9 @@ message CreateAssetRequest {
   optional double longitude = 22;
   optional double altitude = 23;
   optional double heading  = 24;
+
+  // See Asset.pki_device_name.
+  optional string pki_device_name = 25;
 }
 
 message GetAssetRequest {
@@ -136,6 +146,9 @@ message UpdateAssetRequest {
   optional double altitude = 20;
   optional string asset_type = 21;
   optional double heading = 22;
+
+  // See Asset.pki_device_name.
+  optional string pki_device_name = 23;
 }
 
 message DeleteAssetRequest {

@@ -346,7 +346,19 @@ func newAgentTLSConfig(
 		}
 	}
 	tlsCfg := &tls.Config{
-		Certificates:       []tls.Certificate{cert},
+		Certificates: []tls.Certificate{cert},
+		GetClientCertificate: func(request *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			// This connection has one explicitly selected operator identity.
+			// Older agents advertise incomplete issuer hints. Those hints are
+			// for certificate selection, not trust; both peers still verify
+			// the full chain and the device identity remains pinned.
+			supported := *request
+			supported.AcceptableCAs = nil
+			if err := supported.SupportsCertificate(&cert); err != nil {
+				return nil, fmt.Errorf("device cannot use the operator certificate: %w", err)
+			}
+			return &cert, nil
+		},
 		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
 		MinVersion:         tls.VersionTLS12,
 	}

@@ -4,9 +4,9 @@ package data
 
 import "golang.org/x/sys/unix"
 
-// filesystemSpace returns the filesystem's total bytes and bytes available to
-// the caller, excluding space reserved for privileged users.
-func filesystemSpace(path string) (total, available int64, err error) {
+// diskSpace returns the size of the filesystem holding path and the bytes still
+// available to unprivileged writers.
+func diskSpace(path string) (total, free int64, err error) {
 	var stat unix.Statfs_t
 	if err := unix.Statfs(path, &stat); err != nil {
 		return 0, 0, err

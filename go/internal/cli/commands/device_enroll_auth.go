@@ -13,6 +13,36 @@ import (
 
 var enrollmentOIDCLoginFn = performOIDCLogin
 
+// Interactive enrollment always asks which organization to use. The saved
+// default positions the picker cursor, but does not skip the choice.
+func resolveEnrollmentAuthEntry(cloudGRPC string, orgOverride int32) (*config.AuthConfig, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+	var pick config.SessionPicker
+	if !jsonOutput && isInteractiveTerminal() {
+		pick = pickAuthSessionFn
+	}
+	if pick == nil || orgOverride != 0 || len(cfg.Auth) == 0 {
+		return config.ResolveAuth(cfg, cloudGRPC, pick)
+	}
+	if cloudGRPC != "" {
+		filtered := *cfg
+		filtered.Auth = nil
+		for _, auth := range cfg.Auth {
+			if auth.CloudGRPC == cloudGRPC {
+				filtered.Auth = append(filtered.Auth, auth)
+			}
+		}
+		if len(filtered.Auth) == 0 {
+			return config.ResolveAuth(cfg, cloudGRPC, nil)
+		}
+		cfg = &filtered
+	}
+	return pick(cfg)
+}
+
 // Check again at the enrollment boundary: callers other than the command must
 // also stop before prompting for a name or minting a one-use enrollment token.
 func validateEnrollmentCertificate(auth *config.AuthConfig) error {

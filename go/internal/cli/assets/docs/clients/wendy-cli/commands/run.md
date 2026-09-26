@@ -7,6 +7,36 @@ Runs your app on a Wendy-enabled device:
 5. [Starts the app](./device/apps/start.md), then (attached runs only) waits for readiness and prints the reachable URL
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
 
+
+[Command syntax, examples, and generated flag reference](/docs/reference/cli/run)
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `--deploy` | Build and create the container but do not start it. |
+| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. |
+| `--restart-unless-stopped` | Restart the container unless manually stopped. |
+| `--restart-on-failure` | Restart the container on failure. |
+| `--no-restart` | Do not restart the container on exit. |
+| `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
+| `--yes` / `-y` | Accept all device-selection prompts automatically. |
+| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker` or `apple-container`. Cannot be combined with `--build-host`. |
+| `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
+| `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
+| `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
+| `--prefix <dir>` | Run from a project directory other than the current working directory. |
+| `--product <name>` | Swift Package Manager product to build and run (Swift projects only). |
+| `--service <name>` | Build and run only the named service and its transitive dependencies (multi-service `wendy.json` projects only). Returns an error if the name does not match any key in the `services` map. |
+| `--keep-going` | Deploy services that build successfully instead of aborting the whole group on the first build/push failure (multi-service projects only). |
+| `--max-concurrency <n>` | Max service images to build+push at once in multi-service projects. 0 = default limit of 4. |
+| `--user-args <args>` | Extra arguments to pass to the container at runtime. |
+| `--env <KEY=VALUE>` | Set an environment variable in the container. Repeatable. Overrides a `wendy.json` `env` entry of the same key. See [Environment variables](#environment-variables). |
+| `--chunking <mode>` | Controls the content-based chunking (CBC) chunk-diff deploy path: `auto` (default), `force`, or `off`. See [Deploy path: `--chunking`](#deploy-path---chunking). |
+| `--watch` | Watch the project directory and redeploy on every change, streaming the app's logs between deploys. Runs non-interactive. See [Watch mode](#watch-mode). |
+| `--debounce <ms>` | Watch mode only: quiet period in milliseconds after the last change before redeploying (default `400`). |
+| `--verbose` | Watch mode only: always show build output. By default build output is hidden unless a build fails. |
+
 ## Reachable app URLs
 
 After the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
@@ -152,32 +182,6 @@ Both the macOS-target and Linux-target Swift paths shell out to a host Swift too
 
 On a **Windows host**, `wendy run` returns an actionable error for Swift projects that would require the host toolchain. Providing a `Dockerfile` or `Containerfile` bypasses these restrictions — the build is routed through the image build path, which works on all platforms.
 
-## Flags
-
-| Flag | Description |
-|------|-------------|
-| `--deploy` | Build and create the container but do not start it. |
-| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. |
-| `--restart-unless-stopped` | Restart the container unless manually stopped. |
-| `--restart-on-failure` | Restart the container on failure. |
-| `--no-restart` | Do not restart the container on exit. |
-| `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
-| `--yes` / `-y` | Accept all device-selection prompts automatically. |
-| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker` or `apple-container`. Cannot be combined with `--build-host`. |
-| `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
-| `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
-| `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
-| `--prefix <dir>` | Run from a project directory other than the current working directory. |
-| `--product <name>` | Swift Package Manager product to build and run (Swift projects only). |
-| `--service <name>` | Build and run only the named service and its transitive dependencies (multi-service `wendy.json` projects only). Returns an error if the name does not match any key in the `services` map. |
-| `--keep-going` | Deploy services that build successfully instead of aborting the whole group on the first build/push failure (multi-service projects only). |
-| `--max-concurrency <n>` | Max service images to build+push at once in multi-service projects. 0 = default limit of 4. |
-| `--user-args <args>` | Extra arguments to pass to the container at runtime. |
-| `--env <KEY=VALUE>` | Set an environment variable in the container. Repeatable. Overrides a `wendy.json` `env` entry of the same key. See [Environment variables](#environment-variables). |
-| `--chunking <mode>` | Controls the content-based chunking (CBC) chunk-diff deploy path: `auto` (default), `force`, or `off`. See [Deploy path: `--chunking`](#deploy-path---chunking). |
-| `--watch` | Watch the project directory and redeploy on every change, streaming the app's logs between deploys. Runs non-interactive. See [Watch mode](#watch-mode). |
-| `--debounce <ms>` | Watch mode only: quiet period in milliseconds after the last change before redeploying (default `400`). |
-| `--verbose` | Watch mode only: always show build output. By default build output is hidden unless a build fails. |
 
 ## Remote build host
 
@@ -436,9 +440,10 @@ Set `WENDY_IMAGE_SIGNATURE_PATH` to the path of the detached signature file; whe
 CUDA-selecting Dockerfiles must use `WENDY_HAS_CUDA`. `WENDY_HAS_GPU`
 reports hardware presence, including Broadcom and other GPUs without CUDA.
 Device info exposes `gpuCapabilities`, one entry per detected GPU with its
-`vendor`, `path`, and `computeBackends` (`cuda`, `rocm`, `metal`, `qnn`). A GPU
-whose backend list is empty has no supported backend; no entries at all on a
-device that reports a GPU means an older agent. `containerStorage` identifies the filesystem used by
+`vendor`, `path`, and `computeBackends` (`cuda`, `rocm`, `metal`). A GPU whose
+backend list is empty has no supported backend; no entries at all on a device
+that reports a GPU means an older agent. An NPU runtime such as `qnn` is
+reported separately, in `npuBackends`. `containerStorage` identifies the filesystem used by
 containerd; the existing disk scalar fields continue to describe the root filesystem.
 
 Attached runs keep observing slow startup after the initial readiness budget.

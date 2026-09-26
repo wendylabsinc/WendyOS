@@ -8,8 +8,106 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
+
+func TestEnrollmentOrganizationPicker(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		endpoint    string
+		interactive bool
+		json        bool
+		override    int32
+		noDefault   bool
+		wantPicker  bool
+		wantCount   int
+		wantErr     bool
+	}{
+		{name: "default still prompts", interactive: true, wantPicker: true, wantCount: 3},
+		{name: "endpoint filters organizations", interactive: true, endpoint: "prod:443", wantPicker: true, wantCount: 2},
+		{name: "single organization still prompts", interactive: true, endpoint: "dev:443", wantPicker: true, wantCount: 1},
+		{name: "no default", interactive: true, noDefault: true, wantPicker: true, wantCount: 3},
+		{name: "non-interactive uses default"},
+		{name: "JSON uses default", interactive: true, json: true},
+		{name: "explicit legacy organization", interactive: true, override: 42},
+		{name: "non-interactive needs default", noDefault: true, wantErr: true},
+		{name: "JSON without default never prompts", interactive: true, json: true, noDefault: true, wantErr: true},
+		{name: "unknown endpoint", interactive: true, endpoint: "missing:443", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withStubbedReloginDeps(t, tc.interactive, tc.json, false, nil)
+			cfg := &config.Config{CurrentContext: "default", Auth: []config.AuthConfig{
+				{Name: "other", CloudGRPC: "prod:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}},
+				{Name: "default", CloudGRPC: "prod:443", Certificates: []config.CertificateInfo{{OrganizationID: 9}}},
+				{Name: "dev", CloudGRPC: "dev:443", Certificates: []config.CertificateInfo{{OrganizationID: 1}}},
+			}}
+			if tc.noDefault {
+				cfg.CurrentContext = ""
+			}
+			load := seedConfig(t, cfg)
+			orig := pickAuthSessionFn
+			t.Cleanup(func() { pickAuthSessionFn = orig })
+			called := false
+			var pickedKey string
+			pickAuthSessionFn = func(choices *config.Config) (*config.AuthConfig, error) {
+				called = true
+				if !tc.wantPicker {
+					t.Fatal("unexpected picker")
+				}
+				if len(choices.Auth) != tc.wantCount || choices.CurrentContext != cfg.CurrentContext {
+					t.Fatalf("picker lost organizations or saved default: %+v", choices)
+				}
+				for _, auth := range choices.Auth {
+					if tc.endpoint != "" && auth.CloudGRPC != tc.endpoint {
+						t.Fatalf("picker included endpoint %q", auth.CloudGRPC)
+					}
+				}
+				pickedKey = authSessionKey(&choices.Auth[0])
+				return &choices.Auth[0], nil
+			}
+			selected, err := resolveEnrollmentAuthEntry(tc.endpoint, tc.override)
+			if (err != nil) != tc.wantErr || called != tc.wantPicker {
+				t.Fatalf("picker called=%v, err=%v", called, err)
+			}
+			if err == nil {
+				wantKey := pickedKey
+				if !tc.wantPicker {
+					wantKey = authSessionKey(&cfg.Auth[1])
+				}
+				if authSessionKey(selected) != wantKey {
+					t.Fatalf("selected %q, want %q", authSessionKey(selected), wantKey)
+				}
+			}
+			if got := load().CurrentContext; got != cfg.CurrentContext {
+				t.Fatalf("one-time selection changed default to %q", got)
+			}
+		})
+	}
+}
+
+func TestEnrollmentOrganizationCancellationStopsBeforeDeviceAccess(t *testing.T) {
+	withStubbedReloginDeps(t, true, false, false, nil)
+	auth := oidcEnrollmentAuth(t)
+	auth.Name = "default"
+	seedConfig(t, &config.Config{CurrentContext: "default", Auth: []config.AuthConfig{*auth}})
+	orig := pickAuthSessionFn
+	t.Cleanup(func() { pickAuthSessionFn = orig })
+	calls := 0
+	pickAuthSessionFn = func(*config.Config) (*config.AuthConfig, error) {
+		calls++
+		return nil, ErrUserCancelled
+	}
+	for _, cmd := range []*cobra.Command{newDeviceEnrollCmd(), newCloudEnrollDeviceCmd()} {
+		cmd.SetContext(context.Background())
+		if err := cmd.RunE(cmd, nil); !errors.Is(err, ErrUserCancelled) {
+			t.Fatalf("%s did not stop after cancellation: %v", cmd.Name(), err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("picker called %d times, want once per command", calls)
+	}
+}
 
 func expiredEnrollmentAuth(t *testing.T) *config.AuthConfig {
 	t.Helper()

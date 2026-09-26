@@ -83,7 +83,7 @@ func (c *WendyLiteClient) ConnectViaBLE(address string, psm uint16, tlsCfg *tls.
 
 	c.link = newDirectLink(tlsConn)
 	if err := c.handshake(); err != nil {
-		tlsConn.Close()
+		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}

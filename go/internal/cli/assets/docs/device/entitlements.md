@@ -19,8 +19,11 @@ Declare them in the `entitlements` array of your `wendy.json`, or add one with `
 ## Notifications
 
 Use `{ "type": "notifications" }` when an app needs to alert operators through
-Wendy Cloud and Companion. WendyKit exposes this as
-`WendyNotification.send(_:)`.
+Wendy Cloud and Companion. WendyKit is currently the only application SDK for
+this API and is Swift-only. Apps in other languages must call the app-facing
+gRPC service directly. See [Send notifications from a device app](/docs/guides/device-notifications)
+for setup and examples, or the [Notifications API](../cloud/notifications-api.md#app-facing-api-wendysystemv1)
+for the exact RPC contract.
 
 | Boundary | Value |
 |---|---|
@@ -38,11 +41,11 @@ reuse returns `ALREADY_EXISTS` rather than replaying success. A local validation
 or rate-limit rejection does not claim the UUID, so that UUID remains valid for
 retry. All selector categories are unioned, normalized, and deduplicated. The
 app-facing API accepts at most 100 selector entries before deduplication; Cloud
-resolves at most 10,000 recipients. The agent/daemon stamps trusted `app_id`;
-Wendy Cloud stores it as `created_by_app_id` and derives device and organization
-identity from device mTLS. Apps without the entitlement receive no private app
-connection mount, environment variable, or socket group. The full administrative Agent socket
-remains separate and requires `admin`.
+resolves at most 100 recipients for a device-app send. The agent/daemon stamps
+trusted `app_id`; Wendy Cloud stores it as `created_by_app_id` and derives
+device and organization identity from device mTLS. Apps without the entitlement
+receive no private app connection mount, environment variable, or socket group.
+The full administrative Agent socket remains separate and requires `admin`.
 
 All entitled services in a multi-service app share the app's stable socket
 directory and app identity. Running containers reconnect on their next call

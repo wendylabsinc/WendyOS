@@ -1,0 +1,22 @@
+---
+title: Your first native Mac app
+description: Build a Swift app on your Mac and run it on an Apple Silicon target.
+---
+
+## Prepare your Macs
+
+Install the [Wendy CLI](/docs/installation/developer-machine-setup) and a Swift toolchain on your development Mac. Follow [Mac agent setup](/docs/installation/wendy-agent-macos) on your Apple Silicon target running macOS 15 or later. The same Mac can serve both roles.
+
+## Create and run
+
+```bash
+wendy init hello-mac --target darwin --language swift --no-extra-entitlements --assistant skip --git-init no
+cd hello-mac
+wendy run
+```
+
+Select your Mac agent in the device picker. Wendy builds the Swift project, syncs the executable, and streams its output. If you saved a different default, explicitly select the Mac with `wendy run --device <hostname-or-ip>:50051`.
+
+Expect `Hello from hello-mac!` in the attached logs. Edit its Swift source, then use `wendy run --watch` to deploy changes.
+
+Mac targets run native apps. For the containerized HTTP quickstart, return to the [simulator path](/docs/).

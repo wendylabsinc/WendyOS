@@ -234,6 +234,9 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	if resp.NpuVendor != nil {
 		info["npu_vendor"] = resp.GetNpuVendor()
 	}
+	if backends := resp.GetNpuBackends(); len(backends) > 0 {
+		info["npu_backends"] = append([]string{}, backends...)
+	}
 	if battery := resp.GetBattery(); battery != nil {
 		entry := map[string]any{
 			"percent": battery.GetPercent(),

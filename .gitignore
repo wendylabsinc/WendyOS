@@ -66,3 +66,6 @@ go/internal/cli/assets/docs/superpowers
 # paired .dockerignore) alongside the canonical Stagefile's bare name.
 Dockerfile.generated
 Dockerfile.generated.*
+web-client/public/wendy.wasm.gz
+web-client/.vite
+web-client/.openai

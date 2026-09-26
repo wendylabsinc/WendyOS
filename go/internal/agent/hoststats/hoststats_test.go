@@ -40,3 +40,40 @@ func TestParseMemInfo(t *testing.T) {
 		t.Errorf("AvailableBytes = %d, want %d", got.AvailableBytes, 8192000*1024)
 	}
 }
+
+// Exercise the same counter-delta calculation used by dashboard and CLI clients.
+func TestCPUUsageExcludesStealAndGuestDuplicates(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		before string
+		after  string
+		total  uint64
+		idle   uint64
+	}{
+		{"idle VM waiting for host", "cpu 0 0 0 600 0 0 0 400 0 0", "cpu 0 0 0 1200 0 0 0 800 0 0", 1000, 1000},
+		{"busy VM waiting for host", "cpu 100 0 100 400 0 0 0 400 0 0", "cpu 200 0 200 800 0 0 0 800 0 0", 1000, 800},
+		{"guest time already in user and nice", "cpu 200 100 100 600 0 0 0 0 150 50", "cpu 400 200 200 1200 0 0 0 0 300 100", 1000, 600},
+		{"legacy counters without steal", "cpu 100 0 100 800", "cpu 200 0 200 1600", 1000, 800},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before, err := ParseProcStat([]byte(tt.before + "\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := ParseProcStat([]byte(tt.after + "\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			total := after.TotalJiffies - before.TotalJiffies
+			idle := after.IdleJiffies - before.IdleJiffies
+			if total != tt.total || idle != tt.idle {
+				t.Fatalf("counter deltas = total %d, idle %d; want total %d, idle %d", total, idle, tt.total, tt.idle)
+			}
+			usage := 100 * float64(total-idle) / float64(total)
+			want := 100 * float64(tt.total-tt.idle) / float64(tt.total)
+			if usage != want {
+				t.Fatalf("CPU usage = %v, want %v", usage, want)
+			}
+		})
+	}
+}

@@ -139,6 +139,17 @@ wendy cloud tunnel 8080:80 --device shop-floor-01
 See [`wendy cloud tunnel`](/docs/advanced/clients/wendy-cli/commands/cloud/tunnel)
 for device selection and flag details.
 
+## Notify operators from a device app
+
+An app running on an enrolled device can create a Wendy Notification for users,
+teams, or roles in its organization. Wendy Agent authenticates the app locally,
+Cloud records the Notification, and Companion receives it through its inbox and
+best-effort APNs delivery.
+
+See [Send notifications from a device app](/docs/guides/device-notifications)
+for the required app entitlement, Cloud grant, WendyKit example, and direct gRPC
+interface for other languages.
+
 ## How It Works
 
 1. You authenticate once; the CLI stores an mTLS session for your organization.

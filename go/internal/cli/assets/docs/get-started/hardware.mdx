@@ -1,0 +1,26 @@
+---
+title: Start with your hardware
+description: Choose a target, connect it, and deploy your first app.
+---
+
+| What you have | Start here | After setup |
+| --- | --- | --- |
+| No hardware yet | [Simulator](/docs/installation/wendyos-virtual-machine) | [HTTP quickstart](/docs/) |
+| NVIDIA Jetson Orin | [Install WendyOS](/docs/installation/wendyos-nvidia-jetson-orin-nano) | [HTTP quickstart](/docs/), then [GPU access](/docs/hardware/gpu) |
+| NVIDIA Jetson AGX Thor | [Install WendyOS](/docs/installation/wendyos-nvidia-jetson-agx-thor) | [HTTP quickstart](/docs/), then [GPU access](/docs/hardware/gpu) |
+| Raspberry Pi | [Install WendyOS](/docs/installation/wendyos-raspberry-pi-5) | [HTTP quickstart](/docs/), then [camera access](/docs/hardware/camera) |
+| Unitree simulator | [Go2 / G1 VM profiles](/docs/installation/unitree-simulators) | [Sim to real](/docs/integrations/sim-to-real) |
+| Unitree G1 | [Connect the robot](/docs/installation/wendy-agent-unitree-g1) | [ROS 2](/docs/integrations/ros2) |
+| ESP32 | [Install Wendy Lite and run an ESP-IDF app](/docs/installation/wendy-lite-esp32) | Use the native firmware workflow on that page |
+| Apple Silicon Mac | [Install the Mac agent](/docs/installation/wendy-agent-macos) | [Native Mac quickstart](/docs/get-started/mac) |
+| Existing Linux machine | [Install the Linux agent](/docs/installation/linux) | [HTTP quickstart](/docs/) |
+| USB camera | Connect it to a Linux/WendyOS target | [Camera access](/docs/hardware/camera) |
+
+For Linux, WendyOS, and Mac targets, verify the connection from your development machine:
+
+```bash
+wendy discover
+wendy device info --device <name-or-address>
+```
+
+Then deploy with `wendy run`. If discovery fails, see [connection troubleshooting](/docs/errors#target-not-found). After your first deployment, use [debugging tools](/docs/remote-debugging/vscode-extension) to inspect the app.

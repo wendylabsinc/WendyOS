@@ -107,6 +107,8 @@ type jwk struct {
 // Verifier obtains keys only from the configured Cloud issuer, never from a
 // lease, a broker-supplied URL, or a JWS header. Unknown kids refresh the cache.
 type Verifier struct {
+	// RelayDial optionally carries broker gRPC over a TLS-verified browser transport.
+	RelayDial func(string) (*grpc.ClientConn, error)
 	relayDial func(string) (*grpc.ClientConn, error)
 	Issuer    string
 	HTTP      *http.Client
@@ -329,6 +331,9 @@ func publicDER(key *ecdsa.PrivateKey) []byte {
 }
 
 func (v *Verifier) dialRelay(endpoint string) (*grpc.ClientConn, error) {
+	if v.RelayDial != nil {
+		return v.RelayDial(endpoint)
+	}
 	if v.relayDial != nil {
 		return v.relayDial(endpoint)
 	}

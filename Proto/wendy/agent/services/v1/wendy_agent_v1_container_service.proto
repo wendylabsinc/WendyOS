@@ -333,8 +333,8 @@ message GetResourceStatsResponse {
 // HostStats carries cumulative host counters; the client computes percentages
 // from deltas between consecutive samples.
 message HostStats {
-    uint64 cpu_total_jiffies = 1;    // sum of all fields on the /proc/stat "cpu" line
-    uint64 cpu_idle_jiffies = 2;     // idle + iowait fields
+    uint64 cpu_total_jiffies = 1;    // sum of user through steal; excludes duplicate guest counters
+    uint64 cpu_idle_jiffies = 2;     // non-executing time: idle + iowait + steal
     uint32 cpu_count = 3;            // online logical CPUs
     int64 mem_total_bytes = 4;
     int64 mem_available_bytes = 5;

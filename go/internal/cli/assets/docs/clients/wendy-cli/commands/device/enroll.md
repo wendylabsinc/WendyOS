@@ -16,6 +16,8 @@ wendy device enroll [--name <name>] [--cloud-grpc <endpoint>] [flags]
 
 `wendy device enroll` uses your stored auth session to enroll the connected agent and obtain its certificate. Sign in first with `wendy auth login --email <your-email>` for OIDC enrollment.
 
+In an interactive terminal, enrollment first shows an organization picker for your stored sessions, with your default organization highlighted. Press Enter to use it or select another organization for this enrollment. This choice does not change your saved default; press `d` in the picker to change it. `--cloud-grpc` limits the picker to sessions on that endpoint. An explicit legacy `--org` override skips this enrollment picker. Non-interactive and `--json` runs use the usual saved-session selection without opening a picker.
+
 Before connecting to the device, enrollment checks your certificate and attempts renewal if it is nearing expiry. If it has already expired, an interactive OIDC session offers to sign in again and then continue enrollment using the same realm and Cloud endpoints. Legacy sessions, non-interactive runs, and `--json` runs stop with login instructions. You do not need to log out first.
 
 › **Certificate identity:** The CSR submitted during provisioning always
@@ -62,8 +64,8 @@ If Cloud refuses the name — because it breaks the rule above, or because anoth
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--name` | hostname (`.local` stripped) | Human-readable device name. Defaults to the device hostname when omitted; required when the device is reachable only by a bare IP address in a non-interactive environment. |
-| `--cloud-grpc` | `""` | Cloud / pki-core gRPC endpoint to use. Overrides session selection; when omitted, the persisted default (set with `wendy auth use`) is used if available, otherwise an interactive picker appears. |
-| `--org` | `0` | Organization ID override for **legacy** enrollment. OIDC enrollment ignores it and uses the session's tenant. |
+| `--cloud-grpc` | `""` | Cloud / pki-core gRPC endpoint to use. Limits the interactive organization picker to that endpoint. Non-interactive runs use the saved default on that endpoint when available. |
+| `--org` | `0` | Organization ID override for **legacy** enrollment. OIDC enrollment rejects this override and uses the selected session's tenant. |
 | `--acme-directory-url` | derived | ACME directory URL for a custom pki-core deployment. OIDC sessions only; when omitted it is derived from the session's own pki-core identity endpoint. |
 
 ## Examples

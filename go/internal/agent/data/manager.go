@@ -1026,7 +1026,7 @@ func appendRoughtimeEvidence(dir string, c timesync.Consensus) (retErr error) {
 // enforceQuotaLocked evicts against an already-taken store scan. Callers hold
 // m.mu; the scan itself was taken without it.
 func (m *Manager) enforceQuotaLocked(scan storeScan) error {
-	total, free, err := filesystemSpace(m.root)
+	total, free, err := diskSpace(m.root)
 	if err != nil {
 		return fmt.Errorf("data filesystem quota: %w", err)
 	}

@@ -20,7 +20,7 @@ func pickerAuth(orgID int) *config.AuthConfig {
 }
 
 func TestDevicePickerShowsLocalAndCloudTabs(t *testing.T) {
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false, devicePickerLocalTab)
 	updated, _ := m.Update(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{{Name: "local-pi"}}}})
 	m = updated.(devicePickerModel)
 
@@ -53,7 +53,7 @@ func tabTo(t *testing.T, m devicePickerModel, want devicePickerTab) (devicePicke
 }
 
 func TestDevicePickerLoggedOutCloudTabOffersLoginRow(t *testing.T) {
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), nil, 0, false, devicePickerLocalTab)
 	m, _ = tabTo(t, m, devicePickerCloudTab)
 
 	view := m.View()
@@ -74,7 +74,7 @@ func TestDevicePickerLoggedOutCloudTabOffersLoginRow(t *testing.T) {
 }
 
 func TestDevicePickerStartsCloudDiscoveryOnFirstCloudTabVisit(t *testing.T) {
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), pickerAuth(7), 7, false)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), pickerAuth(7), 7, false, devicePickerLocalTab)
 	if m.cloudStarted {
 		t.Fatal("cloud discovery started before the Cloud tab was visited")
 	}
@@ -99,7 +99,7 @@ func TestDevicePickerStartsCloudDiscoveryOnFirstCloudTabVisit(t *testing.T) {
 
 func TestDevicePickerCloudTabShowsDefaultOrgAndSwitchHotkey(t *testing.T) {
 	auth := pickerAuth(7)
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), auth, 7, false)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), auth, 7, false, devicePickerLocalTab)
 	m.active = devicePickerCloudTab
 	updated, _ := m.Update(devicePickerOrgMsg{name: "Robotics"})
 	m = updated.(devicePickerModel)
@@ -123,7 +123,7 @@ func TestDevicePickerCloudTabShowsDefaultOrgAndSwitchHotkey(t *testing.T) {
 
 func TestDevicePickerSelectsCloudAsset(t *testing.T) {
 	auth := pickerAuth(7)
-	m := newDevicePickerModel(context.Background(), tui.NewPicker(), auth, 7, false)
+	m := newDevicePickerModel(context.Background(), tui.NewPicker(), auth, 7, false, devicePickerLocalTab)
 	m.active = devicePickerCloudTab
 	asset := &cloudpb.Asset{Id: 42, Name: "cloud-pi"}
 
@@ -183,7 +183,7 @@ func TestDevicePickerEnrollsHighlightedLocalDevice(t *testing.T) {
 	ctx := context.Background()
 	first := lanPickerItem(models.LANDevice{DisplayName: "alpha", Hostname: "alpha.local", Port: defaultAgentPort}, true, tui.ProbeOK)
 	second := lanPickerItem(models.LANDevice{DisplayName: "beta", Hostname: "beta.local", Port: defaultAgentPort}, true, tui.ProbeOK)
-	m := newDevicePickerModel(ctx, tui.NewPicker(), pickerAuth(7), 7, false)
+	m := newDevicePickerModel(ctx, tui.NewPicker(), pickerAuth(7), 7, false, devicePickerLocalTab)
 	updated, _ := m.Update(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{first, second}}})
 	m = updated.(devicePickerModel)
 	if !strings.Contains(m.View(), "e enroll") {
@@ -217,7 +217,7 @@ func TestDevicePickerEnrollsHighlightedLocalDevice(t *testing.T) {
 func TestDevicePickerEnrollSuppressed(t *testing.T) {
 	ctx := context.Background()
 	lan := lanPickerItem(models.LANDevice{DisplayName: "alpha", Hostname: "alpha.local", Port: defaultAgentPort}, true, tui.ProbeOK)
-	m := newDevicePickerModel(ctx, tui.NewPicker(), pickerAuth(7), 7, true)
+	m := newDevicePickerModel(ctx, tui.NewPicker(), pickerAuth(7), 7, true, devicePickerLocalTab)
 	updated, _ := m.Update(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: []tui.PickerItem{lan}}})
 	m = updated.(devicePickerModel)
 	if strings.Contains(m.View(), "e enroll") {
@@ -252,7 +252,7 @@ func TestDevicePickerEnrollmentUnavailable(t *testing.T) {
 		}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newDevicePickerModel(context.Background(), tui.NewPicker(), tt.auth, 0, false)
+			m := newDevicePickerModel(context.Background(), tui.NewPicker(), tt.auth, 0, false, devicePickerLocalTab)
 			updated, _ := m.Update(devicePickerLocalMsg{msg: tui.PickerAddMsg{Items: tt.items}})
 			m = updated.(devicePickerModel)
 			m.active = tt.tab

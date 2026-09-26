@@ -163,13 +163,9 @@ func persistSessionDefault(key string) error {
 	return config.Save(c)
 }
 
-// pickAuthSession shows the interactive session picker. 'd' marks the
-// highlighted session as the persisted default (written immediately, mirroring
-// the device picker), 'x' clears it, and Enter selects a session for this
-// invocation only. Returns the selected session (cert-validated).
-func pickAuthSession(cfg *config.Config) (*config.AuthConfig, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// newAuthSessionPicker loads cached rows and focuses the saved default before
+// the picker opens. Name lookups can then refresh the rows without moving it.
+func newAuthSessionPicker(cfg *config.Config) tui.PickerModel {
 	picker := tui.NewPickerWithTitleAndColumns("Select an organisation", authPickerColumns)
 	// Highlight the current context's row.
 	if cur, ok := cfg.ContextByName(cfg.CurrentContext); ok {
@@ -198,6 +194,21 @@ func pickAuthSession(cfg *config.Config) (*config.AuthConfig, error) {
 		return "Current context cleared.", nil
 	}
 
+	model, _ := picker.Update(tui.PickerAddMsg{Items: authPickerItems(cfg, nil)})
+	picker = model.(tui.PickerModel)
+	picker.FocusItem(picker.DefaultKey)
+	return picker
+}
+
+// pickAuthSession shows the interactive session picker. 'd' marks the
+// highlighted session as the persisted default (written immediately, mirroring
+// the device picker), 'x' clears it, and Enter selects a session for this
+// invocation only. Returns the selected session (cert-validated).
+func pickAuthSession(cfg *config.Config) (*config.AuthConfig, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	picker := newAuthSessionPicker(cfg)
+
 	// Snapshot the rows before background lookups; the caller can use its
 	// selected session as soon as the picker exits.
 	lookupCfg := *cfg
@@ -207,7 +218,6 @@ func pickAuthSession(cfg *config.Config) (*config.AuthConfig, error) {
 	}
 	p := tea.NewProgram(picker)
 	go func() {
-		p.Send(tui.PickerAddMsg{Items: authPickerItems(&lookupCfg, nil)})
 		p.Send(tui.PickerSetMsg{Items: authPickerItems(&lookupCfg, resolveAuthOrgNames(ctx, &lookupCfg))})
 		p.Send(tui.PickerDoneMsg{})
 	}()

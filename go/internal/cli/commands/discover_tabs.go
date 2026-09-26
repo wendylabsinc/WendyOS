@@ -31,17 +31,16 @@ type discoverTabsModel struct {
 	windowWidth  int
 }
 
-// active selects the tab to open on. Creating a VM leaves and re-enters this
-// view, and coming back on Local would drop the user somewhere they did not ask
-// to be, with no sign the create happened.
+// active preserves the tab when returning from a prompt outside the TUI.
 func newDiscoverTabsModel(ctx context.Context, local discoverModel, auth *config.AuthConfig, defaultOrg int32, active devicePickerTab) discoverTabsModel {
 	m := discoverTabsModel{
-		local:      local,
-		sim:        newSimulatorListModel(ctx),
-		cloudAuth:  auth,
-		cloudOrg:   cachedCloudOrganizationName(auth),
-		defaultOrg: defaultOrg,
-		active:     active,
+		local:        local,
+		sim:          newSimulatorListModel(ctx),
+		cloudAuth:    auth,
+		cloudOrg:     cachedCloudOrganizationName(auth),
+		defaultOrg:   defaultOrg,
+		active:       active,
+		cloudStarted: active == devicePickerCloudTab && auth != nil,
 	}
 	// The simulator list polls only once its tab is first shown; opening
 	// straight onto it has to start that here instead.
@@ -82,6 +81,9 @@ func tagDiscoverTabsCmd(cmd tea.Cmd, tab devicePickerTab) tea.Cmd {
 }
 
 func (m discoverTabsModel) Init() tea.Cmd {
+	if m.cloudStarted {
+		return tea.Batch(tagDiscoverTabsCmd(m.local.Init(), devicePickerLocalTab), m.startCloudCmd())
+	}
 	if m.simStarted {
 		return tea.Batch(tagDiscoverTabsCmd(m.local.Init(), devicePickerLocalTab), m.startSimulatorCmd())
 	}

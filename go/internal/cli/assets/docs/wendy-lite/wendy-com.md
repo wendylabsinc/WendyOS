@@ -57,7 +57,7 @@ In `USJ_MODE_COM`, the `wendy_com_uart` layer intercepts escape sequences before
 
 ```text
 DLE _    →  pass a literal DLE byte through to the `wendy_com` stack
-DLE k    →  keep-alive (reserved, not yet implemented)
+DLE k    →  keep-alive, sent every 6 seconds
 DLE <x>  →  disconnect the `wendy_com` link, then switch to mode <x>
 ```
 

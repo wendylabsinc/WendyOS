@@ -58,7 +58,8 @@ jobs:
               print('Empty diff — skipping')
               raise SystemExit(0)
 
-          docs_root = pathlib.Path('docs').resolve()
+          docs_prefix = 'go/internal/cli/assets/docs/'
+          docs_root = pathlib.Path(docs_prefix).resolve()
           pr_title = os.environ['PR_TITLE']
           pr_body = os.environ['PR_BODY']
 
@@ -98,9 +99,8 @@ jobs:
           # occur after the model's bounded diff excerpt.
           changed_docs = set()
           for path in re.findall(r'^\+\+\+ b/(.+)$', diff, re.MULTILINE):
-              for prefix in ('docs/', 'go/internal/cli/assets/docs/'):
-                  if path.startswith(prefix):
-                      changed_docs.add(path.removeprefix(prefix))
+              if path.startswith(docs_prefix):
+                  changed_docs.add(path.removeprefix(docs_prefix))
 
           def _relevance(doc):
               path_hits = len(_keywords(doc['path']) & pr_keywords) * 3
@@ -109,7 +109,9 @@ jobs:
 
           DOCS_BUDGET = 120000
           candidate_docs = []
-          for md in sorted(docs_root.rglob('*.md')):
+          for md in sorted(docs_root.rglob('*')):
+              if md.suffix not in {'.md', '.mdx'} or not md.is_file():
+                  continue
               rel = md.relative_to(docs_root)
               if any(part.startswith('.') for part in rel.parts):
                   continue
@@ -166,7 +168,7 @@ jobs:
                               '    {\n'
                               '      "severity": "blocker|concern|info",\n'
                               '      "title": "short title",\n'
-                              '      "path": "docs/foo.md",\n'
+                              '      "path": "go/internal/cli/assets/docs/foo.md",\n'
                               '      "overview": "one concise sentence visible in the comment",\n'
                               '      "details": "longer rationale and suggested diff/content in Markdown"\n'
                               '    }\n'
@@ -249,7 +251,7 @@ jobs:
               return text[:limit].rstrip() + '…'
 
           _UNSAFE_URI_RE = re.compile(r'(?i)\b(?:javascript|data|vbscript)\s*(?::|%3a)')
-          _DOC_PATH_RE = re.compile(r'docs/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.md')
+          _DOC_PATH_RE = re.compile(r'(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+\.mdx?')
           _RESPONSE_ROLE_RE = re.compile(r'^\s*(?:human|assistant|system|developer|user)\s*:', re.IGNORECASE | re.MULTILINE)
 
           def _neutralize_uri_scheme(match):
@@ -274,18 +276,17 @@ jobs:
               path = _one_line(value).replace('\\', '/')
               if not path:
                   return ''
-              if not path.startswith('docs/'):
-                  path = f'docs/{path}'
+              path = path.removeprefix(docs_prefix).removeprefix('docs/')
               if not _DOC_PATH_RE.fullmatch(path):
                   return ''
-              candidate = (docs_root / path.removeprefix('docs/')).resolve()
+              candidate = (docs_root / path).resolve()
               try:
                   candidate.relative_to(docs_root)
               except ValueError:
                   return ''
               if not candidate.is_file():
                   return ''
-              return path
+              return f'{docs_prefix}{path}'
 
           severity_rank = {'blocker': 0, 'concern': 1, 'info': 2}
           severity_display = {

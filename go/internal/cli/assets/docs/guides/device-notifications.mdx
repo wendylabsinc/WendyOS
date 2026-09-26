@@ -1,0 +1,158 @@
+---
+title: Send notifications from a device app
+description: Create Wendy Notifications from an app running on WendyOS and deliver them to operators in Companion.
+---
+
+A WendyOS app can alert people in its organization through this path:
+
+```text
+WendyOS app → local Wendy Agent API → Wendy Cloud Notification → Companion inbox + APNs
+```
+
+This creates a canonical Wendy Notification. It is not a direct APNs request,
+and there is currently no `wendy notification send` CLI command.
+
+## Before you begin
+
+You need:
+
+1. A Wendy device enrolled in the recipients' Wendy Cloud organization.
+2. An app that exists in the organization's Cloud Apps catalog and is assigned
+   and desired to run on that device.
+3. The `notifications` app entitlement.
+4. The app's Cloud Notification grant enabled.
+5. Recipients with [Wendy Companion installed from the App Store](https://apps.apple.com/app/wendy-companion/id6761771159)
+   and signed in to the same organization.
+
+Wendy Companion must be installed to receive push notifications. Each recipient
+must also allow notifications and have an active APNs registration. If push
+delivery is unavailable, the stored Notification can still appear in the
+Companion inbox.
+
+## Add the app entitlement
+
+Add `notifications` to the app's `wendy.json`:
+
+```json
+{
+  "appId": "sh.wendy.voice-agent",
+  "entitlements": [
+    { "type": "notifications" }
+  ]
+}
+```
+
+WendyOS then exposes the app-private Agent socket at:
+
+```text
+WENDY_SYSTEM_SOCKET=/run/wendy/system/system.sock
+```
+
+The entitlement belongs to the app running on the device, not to Companion.
+Declaring it exposes the local API but does not grant Cloud authority.
+
+## Enable the Cloud grant
+
+An organization owner or admin enables Notification sending in the production
+Wendy Cloud portal:
+
+**Organization → Apps → select the app → Wendy Notifications → Enable
+Notification sending**
+
+The app page has this form:
+
+```text
+https://cloud.wendy.sh/organizations/<org-id>/apps/<app-id>
+```
+
+Wendy super-admins can also change the grant. The card controls the app's
+`can_send_notifications` Cloud grant. A local-only app that does not yet appear
+in the Apps catalog must be registered and assigned before the grant can be
+enabled.
+
+## Send with Swift and WendyKit
+
+WendyKit is currently the only application SDK for this API, and it is
+Swift-only:
+
+```swift
+import WendyKit
+
+let request = try WendyNotificationSendRequest(
+    audience: WendyAudience(
+        userIDs: ["<cloud-user-id>"],
+        teamIDs: [7],
+        roles: [.owner, .admin]
+    ),
+    title: "Robot needs help",
+    body: "Please come to the G1 booth to answer a question.",
+    severity: .warning,
+    deepLink: "wendy://devices/current/live"
+)
+
+let response = try await WendyNotification.send(request)
+print("Created Notification \(response.notificationID)")
+```
+
+Use Cloud user IDs, not names or email addresses. User, organization team, and
+organization role selectors have union semantics: a user matching more than one
+selector receives one Notification.
+
+See the
+[wendy-app-sdk README](https://github.com/wendylabsinc/wendy-app-sdk#send-a-notification)
+for WendyKit package details.
+
+## Use gRPC from other languages
+
+Apps written in Python, Go, Rust, or other languages must generate or provide a
+gRPC client from `Proto/wendy/system/v1/notifications.proto`, connect through
+the Unix socket in `$WENDY_SYSTEM_SOCKET`, and call:
+
+```text
+/wendy.system.v1.NotificationService/Send
+```
+
+The request shape is:
+
+```text
+SendRequest {
+  audience {
+    user_ids: "<cloud-user-id>"
+  }
+  title: "Robot needs help"
+  body: "Please come to the G1 booth to answer a question."
+  severity: NOTIFICATION_SEVERITY_WARNING
+  deep_link: "wendy://devices/current/live"
+  notification_id: "<new UUID v4>"
+}
+```
+
+Do not include an app, device, or organization ID. Wendy Agent supplies the
+trusted app identity, and Cloud derives the device and organization from its
+enrollment credentials.
+
+## Delivery and limits
+
+- The app can select only users, teams, or roles in the device's organization.
+- At most 100 selectors and 100 resolved recipients are accepted for a
+  device-app send.
+- Device-app sources may create 10 accepted Notifications per minute. The agent
+  also smooths bursts locally. Repeated Cloud rate-limit violations can
+  quarantine that app/device source for 15 minutes.
+- Generate a new UUID v4 for each Notification. Reusing an accepted ID returns
+  `ALREADY_EXISTS`; a request rejected locally does not claim the UUID.
+- Device-originated deep links are restricted to the source device. Use
+  `wendy://devices/current/live` as the portable form.
+- A successful call means Cloud accepted and stored the Notification, not that
+  APNs reached every phone. APNs delivery is best-effort.
+- For a device-originated push, the APNs banner title is
+  `Wendy · <Cloud app name>`; the custom title remains on the stored
+  Notification.
+
+Calling APNs directly from the device would require Apple provider credentials
+and device tokens and would bypass Wendy's organization authorization,
+attribution, durable inbox record, and deep-link handling. Use the Wendy Agent
+API instead.
+
+For field validation, error semantics, and the complete protobuf contract, see
+the [Notifications API reference](/docs/advanced/cloud/notifications-api#app-facing-api-wendysystemv1).

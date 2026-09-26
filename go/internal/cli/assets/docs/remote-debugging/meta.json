@@ -1,5 +1,5 @@
 {
-  "title": "Remote Debugging",
+  "title": "Debugging tools",
   "description": "Debug applications running on WendyOS devices from your editor",
   "pages": [
     "vscode-extension"

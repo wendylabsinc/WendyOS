@@ -138,6 +138,7 @@ func (s *AgentService) GetAgentVersion(_ context.Context, _ *agentpb.GetAgentVer
 	if npuInfo.vendor != "" {
 		resp.NpuVendor = &npuInfo.vendor
 	}
+	resp.NpuBackends = npuInfo.backends
 
 	if usage, ok := rootDiskUsage(); ok {
 		resp.DiskUsedBytes = &usage.usedBytes
@@ -294,8 +295,9 @@ var (
 var adrenoCompatibleRe = regexp.MustCompile(`qcom,adreno-(\d+)\.\d+`)
 
 type npuInfo struct {
-	hasNPU bool
-	vendor string
+	hasNPU   bool
+	vendor   string
+	backends []string
 }
 
 // detectNPUInfo probes on every call, for the same reason detectGPUInfo does: the
@@ -312,9 +314,19 @@ func detectNPUInfo() npuInfo {
 		if strings.HasSuffix(node, fastrpcSecureSuffix) {
 			continue
 		}
-		return npuInfo{hasNPU: true, vendor: dspVendor()}
+		vendor := dspVendor()
+		return npuInfo{hasNPU: true, vendor: vendor, backends: npuBackends(vendor)}
 	}
 	return npuInfo{}
+}
+
+// npuBackends names the runtime an app can use on a reachable NPU. The vendor
+// settles it: the FastRPC node the caller found is that runtime's only transport.
+func npuBackends(vendor string) []string {
+	if vendor == "qualcomm" {
+		return []string{"qnn"}
+	}
+	return nil
 }
 
 // dspVendor names the vendor from the DSP remoteproc's device-tree compatible. An

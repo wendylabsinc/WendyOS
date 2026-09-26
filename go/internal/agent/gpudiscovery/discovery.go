@@ -75,20 +75,11 @@ func Discover(root string) []Device {
 			}
 		}
 	}
-	// CUDA requires host driver evidence, not just a PCI vendor or toolkit.
-	cuda := exists("/dev/nvidiactl") || exists("/dev/nvhost-gpu") || exists("/dev/nvhost-ctrl-gpu")
-	for _, pattern := range []string{"/usr/lib*/libcuda.so*", "/usr/lib/*/libcuda.so*", "/usr/lib/*/tegra/libcuda.so*", "/usr/lib/*/nvidia*/libcuda.so*"} {
-		cuda = cuda || len(glob(pattern)) > 0
-	}
-	// The Qualcomm Hexagon NPU (Dragonwing) is reached over FastRPC, and its
-	// non-secure nodes are the app-usable transport: that is the driver-level
-	// evidence for the qnn backend, the same bar /dev/nvidiactl sets for CUDA.
-	// The root-only "-secure" nodes are the signed-PD path and prove nothing
-	// about what an app can reach. The npu entitlement supplies the runtime from
-	// the host, so a usable node is the whole requirement.
-	qnn := slices.ContainsFunc(glob("/dev/fastrpc-*"), func(node string) bool {
-		return !strings.HasSuffix(node, "-secure")
-	})
+	// Driver nodes only: libcuda.so outlives the module that created it. Kept in
+	// step with nvidiaDeviceGlobs, the node set the gpu entitlement grants.
+	cuda := slices.ContainsFunc([]string{"/dev/nvidia*", "/dev/nvhost-*gpu", "/dev/nvgpu/igpu*/*"},
+		func(pattern string) bool { return len(glob(pattern)) > 0 })
+	// No qualcomm case: FastRPC evidences the Hexagon NPU, not the Adreno.
 	for i := range devices {
 		switch devices[i].Vendor {
 		case "nvidia":
@@ -98,10 +89,6 @@ func Discover(root string) []Device {
 		case "amd":
 			if exists("/dev/kfd") {
 				devices[i].ComputeBackends = []string{"rocm"}
-			}
-		case "qualcomm":
-			if qnn {
-				devices[i].ComputeBackends = []string{"qnn"}
 			}
 		}
 	}
@@ -114,7 +101,9 @@ func vendorID(id string) string {
 
 func driverVendor(driver string) string {
 	switch strings.ToLower(driver) {
-	case "nvidia", "nouveau", "nvgpu", "tegra":
+	// nouveau is absent on purpose: it is PCI-only, so the vendor id always names
+	// the card, and listing it here would only imply the proprietary stack.
+	case "nvidia", "nvgpu", "tegra":
 		return "nvidia"
 	case "amdgpu", "radeon":
 		return "amd"

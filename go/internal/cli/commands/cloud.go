@@ -156,7 +156,7 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			auth, err := resolveAuthEntry(cloudGRPC)
+			auth, err := resolveEnrollmentAuthEntry(cloudGRPC, orgID)
 			if err != nil {
 				return err
 			}
@@ -179,7 +179,7 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Device name")
 	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use (optional when a default session is set via 'wendy auth use')")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use; limits the organization picker to this endpoint")
 	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
 	return cmd
 }

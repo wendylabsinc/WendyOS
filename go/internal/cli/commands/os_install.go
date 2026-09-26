@@ -506,7 +506,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 
 		fmt.Println()
-		selected, err = pickFromItems("Select a device", items)
+		selected, err = pickInstallDevice(items)
 		if err != nil {
 			return err
 		}
