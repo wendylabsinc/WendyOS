@@ -114,3 +114,32 @@ func TestValidateApplicationRecord(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// TestValidateApplicationRecordAllowsInputsOnEvents covers the design §6.1
+// contract: model hosts report each detection as an "event" record bound to
+// the frame that triggered it, so "event" must accept the same `inputs` list
+// "prediction" does, still checked by data.ValidateSampleRefs.
+func TestValidateApplicationRecordAllowsInputsOnEvents(t *testing.T) {
+	validInputs := []data.SampleRef{{SourceID: "v4l2:/dev/video0", SampleID: 1}}
+	invalidInputs := []data.SampleRef{{SampleID: 1}} // data.ValidateSampleRefs: missing source_id
+
+	event := data.ApplicationRecord{Version: 1, Type: "event", Name: "model.entered", Inputs: validInputs}
+	if err := validateApplicationRecord(event); err != nil {
+		t.Fatalf("event with valid inputs was rejected: %v", err)
+	}
+
+	event.Inputs = invalidInputs
+	if err := validateApplicationRecord(event); err == nil {
+		t.Fatal("event with an invalid input reference was accepted")
+	}
+
+	event.Inputs = nil
+	if err := validateApplicationRecord(event); err != nil {
+		t.Fatalf("event without inputs was rejected: %v", err)
+	}
+
+	prediction := data.ApplicationRecord{Version: 1, Type: "prediction", Model: "test", Inputs: validInputs}
+	if err := validateApplicationRecord(prediction); err != nil {
+		t.Fatalf("prediction with valid inputs was rejected: %v", err)
+	}
+}

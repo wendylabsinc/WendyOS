@@ -83,11 +83,11 @@ redeploy. Apps without `episode-write` receive neither this mount nor the
 environment
 variable.
 
-A `prediction` record may carry an optional `inputs` list of
+An `event` or `prediction` record may carry an optional `inputs` list of
 `{source_id, sample_id}` naming the harness samples it was computed from (see
-Wendy Sensors). The agent records the references in the Episode so
-`(input, outcome)` pairs can be reconstructed offline; a record without them is
-still accepted.
+Wendy Sensors). The agent records the references in the Episode either way;
+`(input, outcome)` pairs are reconstructed offline from `prediction` records
+only. A record without `inputs` is still accepted.
 
 ## Network
 

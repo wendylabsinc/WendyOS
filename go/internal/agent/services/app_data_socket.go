@@ -579,12 +579,21 @@ type recordKind struct {
 // new kind is a one-entry addition here; an unknown kind is rejected with a
 // clean ack rather than killing the connection.
 var applicationRecordKinds = map[string]recordKind{
-	"event": {validate: func(r data.ApplicationRecord) error {
-		if r.Name == "" {
-			return errors.New("event name is required")
-		}
-		return nil
-	}},
+	"event": {
+		validate: func(r data.ApplicationRecord) error {
+			if r.Name == "" {
+				return errors.New("event name is required")
+			}
+			return nil
+		},
+		// An event may name the harness samples it was triggered by: model
+		// hosts (internal/agent/models) report each detection as an event
+		// bound to the frame that triggered it (design §6.1), and episodes
+		// keep that binding as provenance. Model input/outcome accounting
+		// still pairs only `prediction` records (see
+		// internal/agent/data/model_io.go).
+		allowsInputs: true,
+	},
 	"prediction": {
 		validate: func(r data.ApplicationRecord) error {
 			if r.Model == "" {
