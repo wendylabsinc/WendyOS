@@ -209,57 +209,106 @@ func meshACLHandle(conn net.Conn) (uint16, error) {
 	return l2capACLHandle(packet.fd)
 }
 
+// Only errors proved to precede submission may use the existing connection
+// parameters. Even a rejected submitted command can mean another procedure
+// remains active, so all submitted failures abort this connection attempt.
+type leUpdateUnavailableError struct{ err error }
+
+func (e *leUpdateUnavailableError) Error() string {
+	return "LE update unavailable before submission: " + e.err.Error()
+}
+func (e *leUpdateUnavailableError) Unwrap() error { return e.err }
+
+type leUpdateIO struct {
+	send  func([]byte) (int, error)
+	read  func(context.Context) ([]byte, error)
+	close func()
+}
+
 func requestMeshConnectionInterval(ctx context.Context, hciIndex int, handle uint16) (time.Duration, error) {
 	if hciIndex < 0 || hciIndex > 0xffff || handle > 0x0eff {
-		return 0, errors.New("BLE link has no controller/ACL identity")
+		return 0, &leUpdateUnavailableError{err: errors.New("BLE link has no controller/ACL identity")}
 	}
+	return submitMeshIntervalUpdate(ctx, handle, func(ctx context.Context) (*leUpdateIO, error) {
+		return prepareMeshIntervalIO(ctx, hciIndex)
+	})
+}
+
+func submitMeshIntervalUpdate(ctx context.Context, handle uint16, prepare func(context.Context) (*leUpdateIO, error)) (time.Duration, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return 0, &leUpdateUnavailableError{err: err}
 	}
-	// hcitool can time out while a controller successfully applies this
-	// command. The monitor channel sees the actual HCI completion, including
-	// events consumed by the kernel/BlueZ, and identifies its adapter.
-	monitorFD, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
+	io, err := prepare(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("HCI monitor socket: %w", err)
+		return 0, &leUpdateUnavailableError{err: err}
 	}
-	defer unix.Close(monitorFD)
-	if err := unix.Bind(monitorFD, &unix.SockaddrHCI{Dev: 0xffff, Channel: unix.HCI_CHANNEL_MONITOR}); err != nil {
-		return 0, fmt.Errorf("binding HCI monitor: %w", err)
-	}
-	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
-	if err != nil {
-		return 0, fmt.Errorf("HCI raw socket: %w", err)
-	}
-	defer unix.Close(fd)
-	if err := unix.Bind(fd, &unix.SockaddrHCI{Dev: uint16(hciIndex), Channel: unix.HCI_CHANNEL_RAW}); err != nil {
-		return 0, fmt.Errorf("binding HCI adapter %d: %w", hciIndex, err)
+	defer io.close()
+	if err := ctx.Err(); err != nil {
+		return 0, &leUpdateUnavailableError{err: err}
 	}
 	command := leConnectionUpdateCommand(handle)
-	if err := pollFD(ctx, fd, unix.POLLOUT, 0); err != nil {
-		return 0, err
-	}
-	if n, err := unix.Write(fd, command); err != nil {
+	// Once send is attempted, even a write error is conservatively uncertain.
+	// Never convert this or a monitor error into an untuned TLS fallback.
+	if n, err := io.send(command); err != nil {
 		return 0, fmt.Errorf("sending LE connection update: %w", err)
 	} else if n != len(command) {
 		return 0, fmt.Errorf("short LE connection update command: %d/%d", n, len(command))
 	}
-	return waitForLEUpdate(ctx, handle, func(ctx context.Context) ([]byte, error) {
-		for {
-			if err := pollFD(ctx, monitorFD, unix.POLLIN, 0); err != nil {
-				return nil, err
-			}
-			var buffer [512]byte
-			n, err := unix.Read(monitorFD, buffer[:])
-			if err == unix.EAGAIN || err == unix.EINTR {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			if event := monitorPacket(buffer[:n], hciIndex); event != nil {
-				return event, nil
-			}
+	return waitForLEUpdate(ctx, handle, io.read)
+}
+
+func prepareMeshIntervalIO(ctx context.Context, hciIndex int) (*leUpdateIO, error) {
+	monitorFD, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
+	if err != nil {
+		return nil, fmt.Errorf("HCI monitor socket: %w", err)
+	}
+	fd := -1
+	ready := false
+	closeIO := func() {
+		if fd >= 0 {
+			_ = unix.Close(fd)
 		}
-	})
+		_ = unix.Close(monitorFD)
+	}
+	defer func() {
+		if !ready {
+			closeIO()
+		}
+	}()
+	if err := unix.Bind(monitorFD, &unix.SockaddrHCI{Dev: 0xffff, Channel: unix.HCI_CHANNEL_MONITOR}); err != nil {
+		return nil, fmt.Errorf("binding HCI monitor: %w", err)
+	}
+	fd, err = unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
+	if err != nil {
+		return nil, fmt.Errorf("HCI raw socket: %w", err)
+	}
+	if err := unix.Bind(fd, &unix.SockaddrHCI{Dev: uint16(hciIndex), Channel: unix.HCI_CHANNEL_RAW}); err != nil {
+		return nil, fmt.Errorf("binding HCI adapter %d: %w", hciIndex, err)
+	}
+	if err := pollFD(ctx, fd, unix.POLLOUT, 0); err != nil {
+		return nil, err
+	}
+	ready = true
+	return &leUpdateIO{
+		close: closeIO,
+		send:  func(command []byte) (int, error) { return unix.Write(fd, command) },
+		read: func(ctx context.Context) ([]byte, error) {
+			for {
+				if err := pollFD(ctx, monitorFD, unix.POLLIN, 0); err != nil {
+					return nil, err
+				}
+				var buffer [512]byte
+				n, err := unix.Read(monitorFD, buffer[:])
+				if err == unix.EAGAIN || err == unix.EINTR {
+					continue
+				}
+				if err != nil {
+					return nil, err
+				}
+				if event := monitorPacket(buffer[:n], hciIndex); event != nil {
+					return event, nil
+				}
+			}
+		},
+	}, nil
 }

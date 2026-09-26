@@ -406,35 +406,27 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	aclHandle, handleErr := meshACLHandle(raw)
 	stopWatch := watchLinkContext(ctx, raw)
 	defer stopWatch()
-	var authenticated func()
-	var finishTune func()
-	var stopTune func()
 	var secure *tls.Conn
 	defer func() {
-		if stopTune != nil {
-			stopTune()
-		}
 		if secure != nil {
 			_ = secure.Close()
 		}
 	}()
-	if r.hciIndex >= 0 && handleErr == nil {
-		// Update only this Wendy ACL as soon as the CoC exposes its handle.
-		// TLS proceeds concurrently, so a slow controller cannot delay peer
-		// authentication. A rejected early request gets one authenticated retry.
-		authenticated, finishTune, stopTune = startMeshIntervalTune(ctx, func(updateCtx context.Context) (time.Duration, error) {
-			return requestMeshConnectionInterval(updateCtx, r.hciIndex, aclHandle)
-		}, func(attempt int, interval time.Duration, updateErr error) {
-			if updateErr != nil {
-				r.cfg.Logger.Debug("BLE mesh connection interval unchanged", zap.Int32("peer", peer.asset), zap.Int("attempt", attempt), zap.Error(updateErr))
-			} else {
-				r.cfg.Logger.Info("BLE mesh connection interval updated", zap.Int32("peer", peer.asset), zap.Int("attempt", attempt), zap.Duration("interval", interval),
-					zap.Duration("supervision_timeout", time.Duration(meshTimeoutUnits)*10*time.Millisecond),
-					zap.Duration("requested_max_event_length", time.Duration(meshMaxEventLengthUnits)*625*time.Microsecond))
-			}
-		})
-	} else if handleErr != nil {
-		r.cfg.Logger.Debug("BLE mesh connection interval unavailable", zap.Int32("peer", peer.asset), zap.Error(handleErr))
+	// Complete the initial controller procedure before TLS firstflight. An
+	// accepted HCI update cannot be cancelled by cancelling its caller; any
+	// uncertain result closes this attempt without sending TLS bytes.
+	tuneStarted := time.Now()
+	interval, untuned, tuneErr := tuneMeshBeforeTLS(ctx, func(updateCtx context.Context) (time.Duration, error) {
+		if handleErr != nil {
+			return 0, &leUpdateUnavailableError{err: handleErr}
+		}
+		return requestMeshConnectionInterval(updateCtx, r.hciIndex, aclHandle)
+	})
+	r.cfg.Logger.Info("BLE initial tune barrier completed", zap.Int32("peer", peer.asset),
+		zap.Duration("wait", time.Since(tuneStarted)), zap.Duration("interval", interval),
+		zap.Bool("untuned_fallback", untuned), zap.Error(tuneErr))
+	if tuneErr != nil && !untuned {
+		return
 	}
 	cfg, err := r.cfg.Credentials.PeerTLSWithTickets(peer.asset, ALPN, "ble-tls")
 	if err != nil {
@@ -461,12 +453,6 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if r.hasCheaperLink(peer.asset) {
 		return
 	}
-	if authenticated != nil {
-		authenticated()
-		// AttachStream may close the CoC itself on a read/write failure. Join
-		// both controller attempts before it can release and reuse this ACL.
-		finishTune()
-	}
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer.asset, secure)
 	defer stopCheaperWatch()
 	err = r.cfg.Node.AttachStream(ctx, peer.asset, secure, LinkCost)
@@ -486,49 +472,20 @@ func (r *runtime) disconnectOwnedPeer(peer candidate) {
 	}
 }
 
-// Start tuning before TLS, then retry only if the early controller request
-// failed and the peer authenticated. The caller joins before closing its CoC
-// socket so the ACL handle cannot be reused by another Wendy connection.
-// The inbound peer starts its five-second stream hello deadline as soon as TLS
-// completes, so controller work must yield well before that deadline.
-const meshTunePostTLSBudget = 2 * time.Second
+// The inbound peer's TLS deadline remains ten seconds from acceptance.
+// Initial tuning consumes at most four seconds of that existing budget;
+// no post-authentication update can race its stream-hello deadline.
+const meshInitialTuneBudget = 4 * time.Second
 
-func startMeshIntervalTune(ctx context.Context, tune func(context.Context) (time.Duration, error), report func(int, time.Duration, error)) (func(), func(), func()) {
-	ctx, cancel := context.WithCancel(ctx)
-	authenticated := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for attempt := 1; attempt <= 2; attempt++ {
-			if attempt == 2 {
-				select {
-				case <-authenticated:
-				case <-ctx.Done():
-					return
-				}
-			}
-			updateCtx, stopUpdate := context.WithTimeout(ctx, 4*time.Second)
-			interval, err := tune(updateCtx)
-			stopUpdate()
-			if ctx.Err() != nil {
-				return
-			}
-			report(attempt, interval, err)
-			if err == nil {
-				return
-			}
-		}
-	}()
-	return func() { close(authenticated) }, func() {
-		timer := time.NewTimer(meshTunePostTLSBudget)
-		defer timer.Stop()
-		select {
-		case <-done:
-		case <-timer.C:
-			cancel()
-			<-done
-		}
-	}, func() { cancel(); <-done }
+func tuneMeshBeforeTLS(ctx context.Context, tune func(context.Context) (time.Duration, error)) (time.Duration, bool, error) {
+	updateCtx, cancel := context.WithTimeout(ctx, meshInitialTuneBudget)
+	defer cancel()
+	interval, err := tune(updateCtx)
+	if ctx.Err() != nil {
+		return 0, false, ctx.Err()
+	}
+	var unavailable *leUpdateUnavailableError
+	return interval, errors.As(err, &unavailable), err
 }
 
 func watchLinkContext(ctx context.Context, conn net.Conn) func() {
