@@ -7,12 +7,17 @@ Wendy development PKI:
 cd go
 go build -o ./wendy ./cmd/wendy
 ./wendy cloud login --email YOU@YOUR_ORGANIZATION
-./wendy cloud enroll-lite \
-  --serial /dev/cu.usbmodemXXXX \
+./wendy cloud enroll-device \
+  --device wendy-lite:/dev/cu.usbmodemXXXX \
   --name lite-desk \
   --broker-host YOUR_WENDYCOM_BROKER_HOST \
   --broker-port 5055
 ```
+
+This is the same `cloud enroll-device` command used for WendyOS. The selected
+device determines the protocol: agent gRPC for WendyOS, or WendyCom over USB for
+Lite. Omit `--device` to use the normal picker, or use the USB device ID shown by
+`wendy discover`. The hidden `wendy device enroll` alias uses the same dispatch.
 
 The board needs Wi-Fi and the PKI-enabled firmware from
 [wendy-lite#49](https://github.com/wendylabsinc/wendy-lite/pull/49), built with
