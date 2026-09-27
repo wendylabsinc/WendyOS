@@ -43,6 +43,9 @@ Wendy-Agent and [Wendy Lite](../../wendy-lite/) devices.
 A device picker is shown only when the terminal is interactive, so a user can
 select their target device for the current command invocation.
 
+Cached LAN devices stay hidden until their agent answers a probe or mDNS
+resolves their service during the current scan.
+
 When logged into Wendy Cloud, press `e` on a highlighted Local device to run
 the `wendy device enroll` flow using the active cloud account. Enrollment
 requires a LAN or USB network connection. After enrollment, the picker reopens;

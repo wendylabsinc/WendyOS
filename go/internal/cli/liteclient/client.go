@@ -18,6 +18,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
+	"github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.bug.st/serial"
 	"google.golang.org/protobuf/proto"
 )
@@ -97,6 +98,12 @@ type subscription struct {
 	ch     chan *wendypb.WendyComMessage
 }
 
+// sensorDataListener boxes a listener so registrations have an identity:
+// func values are not comparable, so the slice could not be pruned otherwise.
+type sensorDataListener struct {
+	fn func(*sensorlinkpb.SensorData)
+}
+
 // WendyLiteClient drives one connection to one device: connect once, then
 // Close is terminal — create a new client to reconnect.
 type WendyLiteClient struct {
@@ -105,18 +112,43 @@ type WendyLiteClient struct {
 	requestIdGen        atomic.Uint32
 	eventIdGen          atomic.Uint32
 	peerProtocolVersion protocolVersion
+	peerCert            *x509.Certificate // set by a verified connect; see PeerCertificate
 
 	closeOnce sync.Once
 	closeErr  error
 	readDone  sync.WaitGroup // tracks the readLoop goroutine
+	done      chan struct{}  // closed once the read loop exits; see Done
 
 	mu      sync.Mutex // guards subs and readErr
 	subs    []*subscription
 	readErr error // set once the read loop dies; refuses new subscriptions
+
+	// Sensor data is delivered straight from the read loop, so its listeners
+	// must not wait on mu. The stored slice is never mutated once published:
+	// dispatch loads and ranges over it lock-free, and registration swaps in
+	// a fresh copy under listenerMu.
+	listenerMu          sync.Mutex
+	sensorDataListeners atomic.Pointer[[]*sensorDataListener]
 }
 
 func NewWendyLiteClient() *WendyLiteClient {
-	return &WendyLiteClient{}
+	return &WendyLiteClient{done: make(chan struct{})}
+}
+
+// Done returns a channel that is closed once the connection is gone: lost, or
+// torn down by Close. It lets a caller that only listens — sensor data reaches
+// their listeners with no end-of-stream marker — notice the device dropping
+// off. It never closes on a client that never connected.
+func (c *WendyLiteClient) Done() <-chan struct{} {
+	return c.done
+}
+
+// PeerCertificate returns the device's leaf certificate, or nil when the
+// connection did not verify it. Only ConnectWithMutualAuthentication and
+// ConnectViaBLEWithMutualAuthentication verify it; insecure, serial and
+// cloud-tunnel connections return nil.
+func (c *WendyLiteClient) PeerCertificate() *x509.Certificate {
+	return c.peerCert
 }
 
 func (c *WendyLiteClient) ConnectInsecure(address string) error {
@@ -138,6 +170,7 @@ func (c *WendyLiteClient) ConnectInsecure(address string) error {
 func (c *WendyLiteClient) ConnectWithMutualAuthentication(address string, cert tls.Certificate, rootCAs x509.CertPool) error {
 	// Verify the certificate chain against our root CAs but skip hostname
 	// checking — devices on a local network don't have SANs.
+	var verifiedLeaf *x509.Certificate
 	tlsCfg := &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		MinVersion:         tls.VersionTLS12,
@@ -161,6 +194,7 @@ func (c *WendyLiteClient) ConnectWithMutualAuthentication(address string, cert t
 			if _, err := certs[0].Verify(opts); err != nil {
 				return fmt.Errorf("server certificate verification failed: %w", err)
 			}
+			verifiedLeaf = certs[0]
 			return nil
 		},
 	}
@@ -175,6 +209,7 @@ func (c *WendyLiteClient) ConnectWithMutualAuthentication(address string, cert t
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}
+	c.peerCert = verifiedLeaf
 	c.startReadLoop()
 	return nil
 }
@@ -519,6 +554,67 @@ func (c *WendyLiteClient) GetDeviceInfo(timeout time.Duration) (*DeviceInfo, err
 	}, nil
 }
 
+// GetSensorManifest asks the device for its sensor-link manifest. The
+// returned type is the generated wendypb type directly, not a mirrored
+// client-package struct: sensor-link is a wire contract shared across
+// modules beyond this console, so there's no reason to hide it behind a
+// second type.
+func (c *WendyLiteClient) GetSensorManifest(timeout time.Duration) (*sensorlinkpb.SensorManifest, error) {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_SensorLinkGetManifest{
+			SensorLinkGetManifest: &sensorlinkpb.GetSensorManifest{},
+		},
+	}, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return nil, fmt.Errorf("device returned error: %w", err)
+	}
+	m := resp.GetSensorLinkManifest()
+	if m == nil {
+		return nil, fmt.Errorf("device returned no manifest")
+	}
+	return m, nil
+}
+
+// SensorLinkSubscribe asks the device to start streaming SensorData for
+// the given channel IDs.
+func (c *WendyLiteClient) SensorLinkSubscribe(channelIDs []uint32, timeout time.Duration) error {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_SensorLinkSubscribe{
+			SensorLinkSubscribe: &sensorlinkpb.Subscribe{ChannelId: channelIDs},
+		},
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return fmt.Errorf("device returned error: %w", err)
+	}
+	return nil
+}
+
+// SensorLinkUnsubscribe asks the device to stop streaming SensorData for
+// the given channel IDs.
+func (c *WendyLiteClient) SensorLinkUnsubscribe(channelIDs []uint32, timeout time.Duration) error {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_SensorLinkUnsubscribe{
+			SensorLinkUnsubscribe: &sensorlinkpb.Unsubscribe{ChannelId: channelIDs},
+		},
+	}, timeout)
+	if err != nil {
+		return err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return fmt.Errorf("device returned error: %w", err)
+	}
+	return nil
+}
+
 // ConsoleAttach asks the device to stream its console output and returns the
 // chunk channel plus an idempotent detach function. The channel is closed on
 // detach and on connection loss. detach stops local delivery, then tells the
@@ -742,6 +838,43 @@ func (c *WendyLiteClient) unsubscribe(s *subscription) {
 	}
 }
 
+// AddSensorDataListener registers fn for every SensorData the device sends —
+// one chunk of a frame, which the caller reassembles — and returns a function
+// that unregisters it, idempotently and safely after the connection has died.
+//
+// fn is called on the client's read loop — one chunk at a time, in arrival
+// order, with no goroutine hop and no lock held. It therefore sits on the
+// critical path of the whole connection: it must not block, and it must not
+// call anything that waits for a device reply, since the read loop is busy
+// running fn instead of reading that reply. The chunk and its payload belong
+// to fn and stay valid after it returns.
+func (c *WendyLiteClient) AddSensorDataListener(fn func(*sensorlinkpb.SensorData)) func() {
+	l := &sensorDataListener{fn: fn}
+
+	c.listenerMu.Lock()
+	defer c.listenerMu.Unlock()
+	next := append(c.loadSensorDataListeners(), l)
+	c.sensorDataListeners.Store(&next)
+
+	return func() {
+		c.listenerMu.Lock()
+		defer c.listenerMu.Unlock()
+		next := slices.DeleteFunc(c.loadSensorDataListeners(),
+			func(x *sensorDataListener) bool { return x == l })
+		c.sensorDataListeners.Store(&next)
+	}
+}
+
+// loadSensorDataListeners returns a copy the caller may append to or prune:
+// the published slice is shared with a dispatch that holds no lock, so it can
+// never be modified in place. Callers hold listenerMu.
+func (c *WendyLiteClient) loadSensorDataListeners() []*sensorDataListener {
+	if listeners := c.sensorDataListeners.Load(); listeners != nil {
+		return slices.Clone(*listeners)
+	}
+	return nil
+}
+
 // startReadLoop hands c.link to the read loop goroutine and registers it with
 // readDone so Close can wait for it to exit.
 func (c *WendyLiteClient) startReadLoop() {
@@ -759,6 +892,7 @@ func (c *WendyLiteClient) readLoop(link wcomLink) {
 		msg, err := link.recv(0)
 		if err != nil {
 			c.failAll(err)
+			close(c.done) // after failAll, so readErr is set when Done fires
 			return
 		}
 		c.dispatch(msg)
@@ -766,6 +900,20 @@ func (c *WendyLiteClient) readLoop(link wcomLink) {
 }
 
 func (c *WendyLiteClient) dispatch(msg *wendypb.WendyComMessage) {
+	// Sensor data arrives at video rates and goes to its listeners right
+	// here, on this goroutine: the subscription path below would put a mutex
+	// and a blocking channel send in front of every chunk. Handling it before
+	// the lock also keeps it away from the log line at the bottom, which
+	// would print a whole payload per chunk.
+	if data := msg.GetSensorData(); data != nil {
+		if listeners := c.sensorDataListeners.Load(); listeners != nil {
+			for _, l := range *listeners {
+				l.fn(data)
+			}
+		}
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i := len(c.subs) - 1; i >= 0; i-- {

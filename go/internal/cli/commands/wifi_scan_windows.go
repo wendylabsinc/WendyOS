@@ -3,6 +3,7 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 )
@@ -21,8 +22,8 @@ import (
 // via syscall — that work is intentionally deferred while this implementation
 // is the near-term fallback. Callers should treat empty results as "possibly
 // stale cache" and surface the retry hint defined by wifiScanCacheHint.
-func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
-	cmd := exec.Command("netsh", "wlan", "show", "networks", "mode=bssid")
+func scanLocalWifiNetworks(ctx context.Context) ([]localWifiNetwork, error) {
+	cmd := exec.CommandContext(ctx, "netsh", "wlan", "show", "networks", "mode=bssid")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("scanning WiFi networks: %w", exitErrWithStderr(err))
@@ -34,7 +35,7 @@ func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 // the WLAN service's cached scan list (see scanLocalWifiNetworks), so the
 // single scan is effectively instant and a separate cached pre-paint would
 // just run netsh twice. streamLocalWifiScan falls through to the fresh scan.
-func cachedLocalWifiNetworks() []localWifiNetwork {
+func cachedLocalWifiNetworks(_ context.Context) []localWifiNetwork {
 	return nil
 }
 

@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -20,6 +22,40 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 )
+
+func TestCameraPipelineNoticesPlayerExitWhileWaitingForFrames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake player uses a shell script")
+	}
+	for _, exitCode := range []string{"0", "2"} {
+		t.Run(exitCode, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "gst-launch-1.0"), []byte("#!/bin/sh\nexit "+exitCode+"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			release, finished := make(chan struct{}), make(chan struct{})
+			err := playCameraPipeline(ctx, nil, false, func(io.Writer) error {
+				defer close(finished)
+				<-release
+				return nil
+			})
+			close(release)
+			<-finished
+			if ctx.Err() != nil {
+				t.Fatal("player exit did not stop playback")
+			}
+			if exitCode == "0" && err != nil {
+				t.Fatal(err)
+			}
+			if exitCode == "2" && (err == nil || !strings.Contains(err.Error(), "GStreamer exited")) {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
 
 // Annex-B NAL header bytes (forbidden_zero | nal_ref_idc | nal_unit_type).
 const (

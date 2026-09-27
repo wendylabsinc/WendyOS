@@ -48,11 +48,18 @@ func newCameraListCmd() *cobra.Command {
 		Short: "List cameras",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			conn, err := connectToAgent(ctx)
+			target, err := resolveCameraTargetFn(ctx, IncludeBluetooth())
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer target.Close()
+			if isLiteCameraTarget(target) {
+				return listLiteCameras(cmd, target)
+			}
+			conn, err := connectFromSelectedDevice(target, resolveConfig{})
+			if err != nil {
+				return err
+			}
 
 			var devices []*agentpb.VideoDevice
 			if refresh {
@@ -321,7 +328,7 @@ func newCameraWatchCmd() *cobra.Command {
 	return newCameraStreamCmd("watch", true)
 }
 
-var connectCameraStreamFn = connectToAgent
+var resolveCameraTargetFn = resolveTarget
 
 // newCameraStreamCmd builds the camera streaming command under the given name.
 // "view" is the canonical, listed command; "watch" reuses the same logic as a
@@ -334,7 +341,7 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    use,
 		Hidden: hidden,
-		Short:  "Stream H.264 video from a device camera",
+		Short:  "Stream video from a device camera",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if raw && !toStdout {
@@ -350,15 +357,26 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 			// #762–#764 latency work). Like watch, the stream also holds one
 			// connection for its whole lifetime, so reuse saves nothing after
 			// the first frame.
-			opts := []resolveOption{DisableSessionBroker()}
+			opts := []resolveOption{DisableSessionBroker(), IncludeBluetooth()}
 			if nonInteractive {
 				opts = append(opts, NonInteractive(), SuppressUpdateCheck(), SuppressProvisioningHint())
 			}
-			conn, err := connectCameraStreamFn(ctx, opts...)
+			target, err := resolveCameraTargetFn(ctx, opts...)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer target.Close()
+			if isLiteCameraTarget(target) {
+				return viewLiteCamera(cmd, target, liteCameraOptions{
+					id: deviceID, idSet: cmd.Flags().Changed("id"), stableID: stableID,
+					width: width, height: height, fps: fps,
+					stdout: toStdout, raw: raw, nonInteractive: nonInteractive,
+				})
+			}
+			conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: nonInteractive})
+			if err != nil {
+				return err
+			}
 
 			// --stable-id addresses the camera by its stable udev identity and
 			// is resolved by the AGENT at request time. --id is the boot-order
@@ -430,13 +448,13 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Camera device ID (boot order; see --stable-id)")
+	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Camera device ID, or SensorLink channel ID on Wendy Lite")
 	cmd.Flags().StringVar(&stableID, "stable-id", "",
 		"Camera stable ID from `camera list --json` — survives reboots and re-plugging")
 	cmd.Flags().Uint32Var(&width, "width", 0, "Frame width (0 = device default)")
 	cmd.Flags().Uint32Var(&height, "height", 0, "Frame height (0 = device default)")
 	cmd.Flags().Uint32Var(&fps, "fps", 0, "Framerate (0 = device default)")
-	cmd.Flags().BoolVar(&toStdout, "stdout", false, "Pipe encoded video to stdout instead of opening a window (codec: H.264 or VP8/WebM depending on device capabilities)")
+	cmd.Flags().BoolVar(&toStdout, "stdout", false, "Pipe encoded video to stdout instead of opening a window (codec: H.264, VP8/WebM, or Wendy Lite MJPEG)")
 	cmd.Flags().BoolVar(&raw, "raw", false, "With --stdout: write the camera's uncompressed capture frames (one whole frame per message, layout printed to stderr) instead of encoded video. Only cameras captured in a raw pixel format offer this; viewers of the same camera keep receiving H.264.")
 	cmd.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Disable terminal prompts and automatic installs; select a camera with --id or --stable-id when several are available")
 
@@ -569,7 +587,14 @@ func playVideoWithGStreamer(ctx context.Context, stream videoStream, allowInstal
 		return fmt.Errorf("receiving video: %w", err)
 	}
 	codec := first.GetCodec()
+	return playCameraPipeline(ctx, playbackPipelineArgs(codec), allowInstallPrompt, func(w io.Writer) error {
+		return feedGStreamer(ctx, stream, first, codec, w)
+	})
+}
 
+// playCameraPipeline owns the player process for both agent and SensorLink streams.
+func playCameraPipeline(ctx context.Context, pipeline []string, allowInstallPrompt bool, feed func(io.Writer) error) error {
+	var err error
 	var gstPath string
 	if allowInstallPrompt {
 		gstPath, err = ensureGSTLaunch(ctx)
@@ -580,7 +605,7 @@ func playVideoWithGStreamer(ctx context.Context, stream videoStream, allowInstal
 		return err
 	}
 
-	gst := exec.CommandContext(ctx, gstPath, playbackPipelineArgs(codec)...)
+	gst := exec.CommandContext(ctx, gstPath, pipeline...)
 	gst.Stderr = os.Stderr
 
 	stdin, err := gst.StdinPipe()
@@ -591,19 +616,33 @@ func playVideoWithGStreamer(ctx context.Context, stream videoStream, allowInstal
 	if err := gst.Start(); err != nil {
 		return fmt.Errorf("starting GStreamer: %w", err)
 	}
+	playerExited := make(chan struct{})
+	var playerErr error
+	go func() {
+		playerErr = gst.Wait()
+		close(playerExited)
+	}()
 	defer func() {
 		stdin.Close()      //nolint:errcheck — signal EOF to GStreamer before killing
 		gst.Process.Kill() //nolint:errcheck
-		gst.Wait()         //nolint:errcheck
+		<-playerExited
 	}()
 
 	done := make(chan error, 1)
-	go func() { done <- feedGStreamer(ctx, stream, first, codec, stdin) }()
+	go func() { done <- feed(stdin) }()
 
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
+		return nil
+	case <-playerExited:
+		if ctx.Err() != nil {
+			return nil
+		}
+		if playerErr != nil {
+			return fmt.Errorf("GStreamer exited: %w", playerErr)
+		}
 		return nil
 	}
 }

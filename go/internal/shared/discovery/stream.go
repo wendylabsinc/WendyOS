@@ -747,8 +747,7 @@ func (s *lanStream) handleGrace() {
 	}
 }
 
-// markOffline emits the offline marker for a cached row and arms its single
-// re-probe. The row stays listed and selectable.
+// markOffline reports a failed cache verification and arms its single re-probe.
 func (s *lanStream) markOffline(key string, st *lanDeviceState) {
 	if st.offline {
 		return

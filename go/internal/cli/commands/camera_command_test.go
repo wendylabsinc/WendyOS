@@ -50,8 +50,8 @@ func TestCameraViewNonInteractiveSelection(t *testing.T) {
 			// Even when launched from a TTY, the flag must prohibit the picker.
 			stubInteractive(t)
 			client := &cameraViewCommandClient{devices: tc.devices, err: streamErr}
-			previous := connectCameraStreamFn
-			connectCameraStreamFn = func(_ context.Context, opts ...resolveOption) (*grpcclient.AgentConnection, error) {
+			previous := resolveCameraTargetFn
+			resolveCameraTargetFn = func(_ context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 				var cfg resolveConfig
 				for _, opt := range opts {
 					opt(&cfg)
@@ -59,9 +59,9 @@ func TestCameraViewNonInteractiveSelection(t *testing.T) {
 				if !cfg.nonInteractive || !cfg.suppressUpdateCheck || !cfg.disableSessionBroker {
 					t.Fatalf("background connection options = %+v", cfg)
 				}
-				return &grpcclient.AgentConnection{VideoService: client}, nil
+				return &SelectedDevice{Agent: &grpcclient.AgentConnection{VideoService: client}}, nil
 			}
-			t.Cleanup(func() { connectCameraStreamFn = previous })
+			t.Cleanup(func() { resolveCameraTargetFn = previous })
 
 			cmd := newCameraViewCmd()
 			cmd.SetOut(io.Discard)
@@ -92,13 +92,13 @@ func TestCameraViewNonInteractiveSelection(t *testing.T) {
 
 func TestCameraViewClosedTerminalDoesNotOpenPicker(t *testing.T) {
 	stubNonInteractive(t)
-	previous := connectCameraStreamFn
-	connectCameraStreamFn = func(context.Context, ...resolveOption) (*grpcclient.AgentConnection, error) {
-		return &grpcclient.AgentConnection{VideoService: &cameraViewCommandClient{
+	previous := resolveCameraTargetFn
+	resolveCameraTargetFn = func(context.Context, ...resolveOption) (*SelectedDevice, error) {
+		return &SelectedDevice{Agent: &grpcclient.AgentConnection{VideoService: &cameraViewCommandClient{
 			devices: []*agentpb.VideoDevice{usbCam(0, "front"), usbCam(1, "rear")},
-		}}, nil
+		}}}, nil
 	}
-	t.Cleanup(func() { connectCameraStreamFn = previous })
+	t.Cleanup(func() { resolveCameraTargetFn = previous })
 	cmd := newCameraViewCmd()
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"io"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -13,9 +15,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/memguard"
+	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -197,43 +202,107 @@ func milestoneFor(commandPath string, success bool) string {
 // It must never embed the error message, which can contain hostnames, paths,
 // or other user input.
 //
-// User-cancellation sentinels are checked first so an outer wrap never
-// reclassifies them. gRPC errors are extracted via status.FromError, which
-// walks the wrapped chain — substring matching on err.Error() would miss
-// errors wrapped via fmt.Errorf with a custom prefix or any future change to
-// grpc-go's stringification.
+// Cancellation and deadlines take precedence over operation categories.
+// Command categories identify known failures; the remaining errors use typed
+// gRPC, network, filesystem, or subprocess causes. No message matching is used.
 func errorClass(err error) string {
 	if err == nil {
 		return ""
 	}
-	if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) {
+	if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) ||
+		errors.Is(err, swifttoolchain.ErrUserCancelled) || errors.Is(err, tui.ErrCancelled) {
 		return "user_cancelled"
-	}
-	// status.FromError returns ok=true only for real gRPC errors (those
-	// produced by the grpc package or implementing GRPCStatus()). For
-	// non-gRPC errors it returns ok=false with a synthesized Unknown code,
-	// which we don't want to claim as a gRPC failure. An explicit
-	// Unknown code from a real gRPC error, however, should still bucket
-	// under grpc_other.
-	if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
-		switch st.Code() {
-		case codes.Canceled:
-			return "context_canceled"
-		case codes.DeadlineExceeded:
-			return "grpc_deadline"
-		case codes.Unavailable:
-			return "grpc_unavailable"
-		case codes.Unimplemented:
-			return "grpc_unimplemented"
-		default:
-			return "grpc_other"
-		}
 	}
 	if errors.Is(err, context.Canceled) {
 		return "context_canceled"
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "context_deadline"
+	}
+	st, isGRPC := status.FromError(err)
+	if isGRPC {
+		switch st.Code() {
+		case codes.Canceled:
+			return "context_canceled"
+		case codes.DeadlineExceeded:
+			return "grpc_deadline"
+		}
+	}
+	if class := commands.ErrorClass(err); class != "" {
+		return class
+	}
+	var unknownFlag *pflag.NotExistError
+	var missingValue *pflag.ValueRequiredError
+	var invalidValue *pflag.InvalidValueError
+	var invalidSyntax *pflag.InvalidSyntaxError
+	if errors.As(err, &unknownFlag) || errors.As(err, &missingValue) ||
+		errors.As(err, &invalidValue) || errors.As(err, &invalidSyntax) {
+		return "cli_usage"
+	}
+	// status.FromError returns ok=true only for real gRPC errors (those
+	// produced by the grpc package or implementing GRPCStatus()). For
+	// non-gRPC errors it returns ok=false with a synthesized Unknown code,
+	// which we don't want to claim as a gRPC failure. An explicit
+	// Unknown code from a real gRPC error, however, should still bucket
+	// under grpc_unknown.
+	if isGRPC && st.Code() != codes.OK {
+		switch st.Code() {
+		case codes.Unavailable:
+			return "grpc_unavailable"
+		case codes.Unimplemented:
+			return "grpc_unimplemented"
+		case codes.InvalidArgument:
+			return "grpc_invalid_argument"
+		case codes.NotFound:
+			return "grpc_not_found"
+		case codes.AlreadyExists:
+			return "grpc_already_exists"
+		case codes.PermissionDenied:
+			return "grpc_permission_denied"
+		case codes.ResourceExhausted:
+			return "grpc_resource_exhausted"
+		case codes.FailedPrecondition:
+			return "grpc_failed_precondition"
+		case codes.Aborted:
+			return "grpc_aborted"
+		case codes.OutOfRange:
+			return "grpc_out_of_range"
+		case codes.Internal:
+			return "grpc_internal"
+		case codes.DataLoss:
+			return "grpc_data_loss"
+		case codes.Unauthenticated:
+			return "grpc_unauthenticated"
+		case codes.Unknown:
+			return "grpc_unknown"
+		default:
+			return "grpc_other"
+		}
+	}
+	var dnsErr *net.DNSError
+	var netErr net.Error
+	var exitErr *exec.ExitError
+	switch {
+	case errors.As(err, &dnsErr):
+		return "network_dns"
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "network_timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "network_refused"
+	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
+		return "network_unreachable"
+	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE):
+		return "connection_closed"
+	case errors.Is(err, os.ErrPermission):
+		return "permission_denied"
+	case errors.Is(err, os.ErrNotExist):
+		return "file_not_found"
+	case errors.Is(err, syscall.ENOSPC):
+		return "disk_full"
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return "unexpected_eof"
+	case errors.As(err, &exitErr):
+		return "process_failed"
 	}
 	return "other"
 }

@@ -601,7 +601,7 @@ func TestDiscoverModelViewShowsNoAccessHintForHighlightedDevice(t *testing.T) {
 		IPAddress:   "192.168.1.30",
 		IsMTLS:      true,
 	}
-	updated, _ := m.Update(lanCachedEvent(dev))
+	updated, _ := m.Update(lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANFound, Device: dev}})
 	dm := updated.(discoverModel)
 
 	// While the probe is still in flight the row is "connecting" (spinner), so
@@ -610,10 +610,8 @@ func TestDiscoverModelViewShowsNoAccessHintForHighlightedDevice(t *testing.T) {
 		t.Fatalf("no-access hint should be suppressed while connecting, got %q", view)
 	}
 
-	// Once the device is confirmed offline without ever resolving a version,
-	// the provisioned device shows the no-access hint — offline is a
-	// concluded probe outcome, not a pending one.
-	updated, _ = dm.Update(lanOfflineEvent(dev))
+	// A resolved mDNS service remains visible when the agent rejects access.
+	updated, _ = dm.Update(lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: dev, ProbeFailed: true}})
 	dm = updated.(discoverModel)
 
 	view := ansi.Strip(dm.View())

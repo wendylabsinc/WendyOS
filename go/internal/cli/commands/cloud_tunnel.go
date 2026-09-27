@@ -480,7 +480,7 @@ func resolveCloudAsset(assets []*cloudpb.Asset, deviceName string) (*cloudpb.Ass
 		for _, a := range assets {
 			if strings.ToLower(a.GetName()) == lower {
 				if matched != nil {
-					return nil, fmt.Errorf("multiple devices match %q; use a more specific name", deviceName)
+					return nil, commandErrorf(errDeviceAmbiguous, "multiple devices match %q; use a more specific name", deviceName)
 				}
 				matched = a
 			}
@@ -512,7 +512,7 @@ func resolveCloudAsset(assets []*cloudpb.Asset, deviceName string) (*cloudpb.Ass
 		}
 		fmt.Fprintf(&b, "%d=%s", a.GetId(), name)
 	}
-	return nil, fmt.Errorf("multiple cloud devices found; rerun with --device <id|name> (%s)", b.String())
+	return nil, commandErrorf(errDeviceAmbiguous, "multiple cloud devices found; rerun with --device <id|name> (%s)", b.String())
 }
 
 // upgradeOfflineResolveErr re-checks a resolveCloudAsset miss against the
@@ -533,7 +533,7 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if clouddefaults.FindAssetByNameOrID(allAssets, deviceName) == nil {
 			return resolveErr
 		}
-		return fmt.Errorf("device %q is enrolled but currently reported offline; check the device's power and network connection, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", deviceName)
+		return commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check the device's power and network connection, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", deviceName)
 	case errors.Is(resolveErr, errNoCloudDevicesEnrolled):
 		allAssets, err := fetchAll()
 		if err != nil {
@@ -542,7 +542,7 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if len(allAssets) == 0 {
 			return resolveErr
 		}
-		return fmt.Errorf("all %d enrolled devices are currently reported offline; check their power and network connections, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", len(allAssets))
+		return commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check their power and network connections, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", len(allAssets))
 	default:
 		return resolveErr
 	}
@@ -653,7 +653,7 @@ func pickCloudDeviceFromRoster(ctx context.Context, auth *config.AuthConfig, dev
 		return nil, ErrUserCancelled
 	}
 	if cm.selected == nil {
-		return nil, fmt.Errorf("no device selected")
+		return nil, commandErrorf(errNoDevice, "no device selected")
 	}
 	return cm.selected, nil
 }

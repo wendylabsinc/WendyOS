@@ -183,7 +183,7 @@ func normalizeImageBuilder(builder string) (string, error) {
 	case imageBuilderBuildkit:
 		return imageBuilderBuildkit, nil
 	default:
-		return "", fmt.Errorf("invalid value %q for --builder: must be one of docker, apple-container, or buildkit", builder)
+		return "", commandErrorf(errConfigInvalid, "invalid value %q for --builder: must be one of docker, apple-container, or buildkit", builder)
 	}
 }
 
@@ -279,7 +279,7 @@ func registryAddrUsesLoopback(registry string) bool {
 func appleContainerPushScheme(registryImage string) (string, error) {
 	if !registryImageUsesLoopbackRegistry(registryImage) {
 		registry, _, _ := strings.Cut(registryImage, "/")
-		return "", fmt.Errorf("Apple Container builder refuses plaintext push to non-loopback registry %q; use --builder docker", registry)
+		return "", commandErrorf(errRegistryAuth, "Apple Container builder refuses plaintext push to non-loopback registry %q; use --builder docker", registry)
 	}
 	return "http", nil
 }
@@ -294,7 +294,7 @@ func requireRegistryAuth(ctx context.Context, conn *grpcclient.AgentConnection) 
 	}
 	if _, ok := resp.GetResponse().(*agentpb.IsProvisionedResponse_Provisioned); ok {
 		if loadCLICert() == nil {
-			return fmt.Errorf("device is provisioned and its registry requires mTLS authentication.\nRun 'wendy auth login' to obtain client certificates before deploying")
+			return commandErrorf(errRegistryAuth, "device is provisioned and its registry requires mTLS authentication.\nRun 'wendy auth login' to obtain client certificates before deploying")
 		}
 	}
 	return nil
@@ -400,10 +400,10 @@ func preferredContainerBuildFileOption(options []BuildOption) *BuildOption {
 func validateDockerfileName(name string) error {
 	cleaned := filepath.Clean(name)
 	if cleaned != filepath.Base(cleaned) {
-		return fmt.Errorf("invalid container build file name %q: path separators are not allowed", name)
+		return commandErrorf(errConfigInvalid, "invalid container build file name %q: path separators are not allowed", name)
 	}
 	if strings.HasSuffix(cleaned, ".dockerignore") {
-		return fmt.Errorf("invalid container build file name %q: .dockerignore files are not build files", cleaned)
+		return commandErrorf(errConfigInvalid, "invalid container build file name %q: .dockerignore files are not build files", cleaned)
 	}
 	// A Stagefile is a container build file too: --dockerfile is how a project
 	// with several of them names one non-interactively (CI has no picker).
@@ -411,7 +411,7 @@ func validateDockerfileName(name string) error {
 		return nil
 	}
 	if !validDockerfileNameRe.MatchString(cleaned) {
-		return fmt.Errorf("invalid container build file name %q: must be Dockerfile, Containerfile, a %s variant, or a dot/hyphen variant of either", cleaned, stagefileSourceName)
+		return commandErrorf(errConfigInvalid, "invalid container build file name %q: must be Dockerfile, Containerfile, a %s variant, or a dot/hyphen variant of either", cleaned, stagefileSourceName)
 	}
 	return nil
 }
@@ -510,7 +510,7 @@ var validComposeDockerfileNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-
 func validateComposeDockerfileName(name string) error {
 	base := filepath.Base(name)
 	if !validComposeDockerfileNameRe.MatchString(base) {
-		return fmt.Errorf("invalid compose dockerfile name %q: must start with a letter or digit and contain only letters, digits, dots, underscores, or hyphens", base)
+		return commandErrorf(errConfigInvalid, "invalid compose dockerfile name %q: must start with a letter or digit and contain only letters, digits, dots, underscores, or hyphens", base)
 	}
 	return nil
 }
@@ -543,20 +543,20 @@ func confinedDockerfilePath(base, dockerfile string) (string, error) {
 	// gets a clear "outside project" error rather than a confusing stat error.
 	rel, err := filepath.Rel(absBase, joined)
 	if err != nil || escapesBase(rel) {
-		return "", fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+		return "", commandErrorf(errConfigInvalid, "dockerfile %q must be within the project directory", dockerfile)
 	}
 
 	// Resolve symlinks and re-check to block symlink-based escapes.
 	resolved, err := filepath.EvalSymlinks(joined)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("dockerfile %q does not exist", dockerfile)
+			return "", commandErrorf(errConfigInvalid, "dockerfile %q does not exist", dockerfile)
 		}
 		return "", fmt.Errorf("resolving dockerfile: %w", err)
 	}
 	rel, err = filepath.Rel(absBase, resolved)
 	if err != nil || escapesBase(rel) {
-		return "", fmt.Errorf("dockerfile %q must be within the project directory", dockerfile)
+		return "", commandErrorf(errConfigInvalid, "dockerfile %q must be within the project directory", dockerfile)
 	}
 
 	info, err := os.Lstat(resolved)
@@ -564,7 +564,7 @@ func confinedDockerfilePath(base, dockerfile string) (string, error) {
 		return "", fmt.Errorf("stating dockerfile: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("dockerfile %q is not a regular file", dockerfile)
+		return "", commandErrorf(errConfigInvalid, "dockerfile %q is not a regular file", dockerfile)
 	}
 
 	return resolved, nil
@@ -1057,7 +1057,7 @@ func buildSwiftContainerImage(ctx context.Context, dir, product, registryAddr, a
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("swift build-container-image failed: %w", err)
+		return commandErrorf(errBuildFailed, "swift build-container-image failed: %w", err)
 	}
 	return nil
 }
@@ -1188,15 +1188,15 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 			if !hasRuntime {
 				if isInteractiveTerminalFn() {
 					if !confirmFn("Docker runtime app and docker CLI were not found. Install Docker Desktop now with 'brew install --cask docker'?") {
-						return fmt.Errorf("Docker runtime app is not installed — install Docker Desktop, OrbStack, or Rancher Desktop")
+						return commandErrorf(errBuilderUnavailable, "Docker runtime app is not installed — install Docker Desktop, OrbStack, or Rancher Desktop")
 					}
 					fmt.Fprintf(os.Stderr, "[docker] Installing Docker Desktop via Homebrew...\n")
 					if err := dockerInstallRuntimeFn(ctx); err != nil {
-						return fmt.Errorf("failed to install Docker Desktop: %w", err)
+						return commandErrorf(errBuilderUnavailable, "failed to install Docker Desktop: %w", err)
 					}
 					rt, hasRuntime = detectDockerRuntimeInfoForHostOS(hostOS)
 				} else {
-					return fmt.Errorf("Docker runtime app is not installed and docker CLI is not on PATH — install Docker Desktop, OrbStack, or Rancher Desktop")
+					return commandErrorf(errBuilderUnavailable, "Docker runtime app is not installed and docker CLI is not on PATH — install Docker Desktop, OrbStack, or Rancher Desktop")
 				}
 			}
 
@@ -1215,7 +1215,7 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 		}
 
 		if !hasRuntime {
-			return fmt.Errorf("no supported Docker runtime app found — install Docker Desktop, OrbStack, or Rancher Desktop and try again")
+			return commandErrorf(errBuilderUnavailable, "no supported Docker runtime app found — install Docker Desktop, OrbStack, or Rancher Desktop and try again")
 		}
 		if !cliOnPath {
 			return dockerCLIMissingError(rt)
@@ -1223,13 +1223,13 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 
 		if isInteractiveTerminalFn() {
 			if !confirmFn(fmt.Sprintf("Docker daemon is not running or is still starting for %s. Open it now?", rt.name)) {
-				return fmt.Errorf("docker daemon is not running — please start %s and try again", rt.name)
+				return commandErrorf(errBuilderUnavailable, "docker daemon is not running — please start %s and try again", rt.name)
 			}
 		}
 
 		fmt.Fprintf(os.Stderr, "[docker] Opening %s...\n", rt.name)
 		if err := dockerOpenRuntimeFn(ctx, rt.app); err != nil {
-			return fmt.Errorf("docker daemon is not running: could not open %s: %w", rt.name, err)
+			return commandErrorf(errBuilderUnavailable, "docker daemon is not running: could not open %s: %w", rt.name, err)
 		}
 		deadline := time.Now().Add(60 * time.Second)
 		for time.Now().Before(deadline) {
@@ -1243,7 +1243,7 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 				return nil
 			}
 		}
-		return fmt.Errorf("docker daemon did not become ready within 60 seconds — %s may still be starting; please wait or start it manually", rt.name)
+		return commandErrorf(errBuilderUnavailable, "docker daemon did not become ready within 60 seconds — %s may still be starting; please wait or start it manually", rt.name)
 	}
 
 	if hostOS == dockerHostOSWindows {
@@ -1261,22 +1261,22 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 					return dockerCLIMissingError(rt)
 				}
 			} else {
-				return fmt.Errorf("docker CLI is not on PATH — install Docker Desktop or add docker to PATH")
+				return commandErrorf(errBuilderUnavailable, "docker CLI is not on PATH — install Docker Desktop or add docker to PATH")
 			}
 		}
 		if hasRuntime {
-			return fmt.Errorf("docker daemon is not running — please start %s before using wendy", rt.name)
+			return commandErrorf(errBuilderUnavailable, "docker daemon is not running — please start %s before using wendy", rt.name)
 		}
 	}
 
 	if !cliOnPath {
-		return fmt.Errorf("docker CLI is not on PATH — install Docker or add docker to PATH")
+		return commandErrorf(errBuilderUnavailable, "docker CLI is not on PATH — install Docker or add docker to PATH")
 	}
-	return fmt.Errorf("docker daemon is not running — please start Docker before using wendy")
+	return commandErrorf(errBuilderUnavailable, "docker daemon is not running — please start Docker before using wendy")
 }
 
 func dockerCLIMissingError(rt dockerRuntime) error {
-	return fmt.Errorf("%s is installed at %s, but docker CLI is not on PATH and Wendy could not find a bundled docker CLI. To fix: %s", rt.name, rt.app, rt.cliLinkHint)
+	return commandErrorf(errBuilderUnavailable, "%s is installed at %s, but docker CLI is not on PATH and Wendy could not find a bundled docker CLI. To fix: %s", rt.name, rt.app, rt.cliLinkHint)
 }
 
 func addBundledDockerCLIForInstalledRuntime(hostOS dockerHostOS) (dockerRuntime, string, bool) {
@@ -1619,7 +1619,7 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 
 	certInfo := loadCLICert()
 	if certInfo == nil || certInfo.PemCertificate == "" || !certInfo.HasPrivateKey() {
-		return "", fmt.Errorf("mTLS connection but no CLI certificates available")
+		return "", commandErrorf(errRegistryAuth, "mTLS connection but no CLI certificates available")
 	}
 
 	// Write cert files to host; they'll be docker-cp'd into the builder container.
@@ -1934,7 +1934,7 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 
 	builder, effectiveAddr, err := ensureBuildxBuilder(ctx, registryAddr, useMTLS, logOutput)
 	if err != nil {
-		return err
+		return classifyCommandError(errBuilderUnavailable, err)
 	}
 
 	// When an IPv6 alias is in use, rewrite the image reference to match.
@@ -2043,11 +2043,11 @@ func buildAndPushImage(ctx context.Context, dir, registryAddr, registryImage, pl
 		fmt.Fprintf(logOutput, "[buildx] transient registry/push error; retrying in %s (attempt %d/%d)\n", backoff, attempt+1, maxBuildPushAttempts)
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("docker buildx build failed: %w", lastErr)
+			return commandErrorf(errBuildFailed, "docker buildx build failed: %w", lastErr)
 		case <-time.After(backoff):
 		}
 	}
-	return fmt.Errorf("docker buildx build failed: %w", lastErr)
+	return commandErrorf(errBuildFailed, "docker buildx build failed: %w", lastErr)
 }
 
 // maxBuildPushAttempts bounds how many times a fused buildx build+push is retried
@@ -2351,7 +2351,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 
 func buildAndPushImageWithAppleContainer(ctx context.Context, dir, registryImage, platform, dockerfile string, buildArgs map[string]string, streamOutput, logOutput io.Writer, useMTLS bool) error {
 	if useMTLS {
-		return fmt.Errorf("Apple Container builder cannot push directly to an mTLS registry; use --builder docker or connect through a local registry proxy")
+		return commandErrorf(errRegistryAuth, "Apple Container builder cannot push directly to an mTLS registry; use --builder docker or connect through a local registry proxy")
 	}
 	if err := checkAppleContainerBuilder(ctx); err != nil {
 		return err
@@ -2370,7 +2370,7 @@ func buildAndPushImageWithAppleContainer(ctx context.Context, dir, registryImage
 	cmd.Stdout = streamOutput
 	cmd.Stderr = streamOutput
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("container image push failed: %w", err)
+		return commandErrorf(errTransferFailed, "container image push failed: %w", err)
 	}
 	return nil
 }
@@ -2409,7 +2409,7 @@ func buildImageWithAppleContainer(ctx context.Context, dir, imageName, platform,
 	cmd.Stdout = streamOutput
 	cmd.Stderr = streamOutput
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("container build failed: %w", contextMonitor.wrapBuildError(err))
+		return commandErrorf(errBuildFailed, "container build failed: %w", contextMonitor.wrapBuildError(err))
 	}
 	return nil
 }
@@ -2425,13 +2425,13 @@ func checkAppleContainerBuilder(ctx context.Context) error {
 // Apple silicon, the `container` binary on PATH, and a usable `--version`.
 func checkAppleContainerCLI(ctx context.Context) error {
 	if imageBuilderHostGOOS() != "darwin" || imageBuilderHostGOARCH() != "arm64" {
-		return fmt.Errorf("Apple Container builder requires an Apple silicon Mac")
+		return commandErrorf(errBuilderUnavailable, "Apple Container builder requires an Apple silicon Mac")
 	}
 	if _, err := imageBuilderLookPath("container"); err != nil {
-		return fmt.Errorf("container CLI is not installed or not in PATH")
+		return commandErrorf(errBuilderUnavailable, "container CLI is not installed or not in PATH")
 	}
 	if err := imageBuilderCommandContext(ctx, "container", "--version").Run(); err != nil {
-		return fmt.Errorf("container CLI is not usable: %w", err)
+		return commandErrorf(errBuilderUnavailable, "container CLI is not usable: %w", err)
 	}
 	return nil
 }
@@ -2445,7 +2445,7 @@ func appleContainerSystemStatus(ctx context.Context) error {
 		if msg != "" {
 			msg = ": " + msg
 		}
-		return fmt.Errorf("Apple Container system is not running%s. Run 'container system start' and try again: %w", msg, err)
+		return commandErrorf(errBuilderUnavailable, "Apple Container system is not running%s. Run 'container system start' and try again: %w", msg, err)
 	}
 	return nil
 }
@@ -2510,9 +2510,9 @@ func ensureAppleContainerSystem(ctx context.Context, assumeYes bool) error {
 		msg = ": " + msg
 	}
 	if startErr != nil {
-		return fmt.Errorf("could not start Apple Container system%s: %w", msg, startErr)
+		return commandErrorf(errBuilderUnavailable, "could not start Apple Container system%s: %w", msg, startErr)
 	}
-	return fmt.Errorf("Apple Container system did not become ready within %s%s; run 'container system start' manually and check 'container system status'", appleContainerStartTimeout, msg)
+	return commandErrorf(errBuilderUnavailable, "Apple Container system did not become ready within %s%s; run 'container system start' manually and check 'container system status'", appleContainerStartTimeout, msg)
 }
 
 // ensureAppleContainerSystemForBuilder runs ensureAppleContainerSystem only when
@@ -2786,7 +2786,7 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 			// the Swift container plugin can push via plain HTTP on 127.0.0.1.
 			certInfo := loadCLICert()
 			if certInfo == nil {
-				return "", false, nil, nil, fmt.Errorf("mTLS connection but no CLI certificates available")
+				return "", false, nil, nil, commandErrorf(errRegistryAuth, "mTLS connection but no CLI certificates available")
 			}
 			target := net.JoinHostPort(conn.Host, strconv.Itoa(port))
 			keyPEM, keyErr := certInfo.PrivateKeyPEM()
@@ -2819,7 +2819,7 @@ func resolveRegistryForSwiftAgent(ctx context.Context, conn *grpcclient.AgentCon
 	if conn.IsMTLS {
 		certInfo := loadCLICert()
 		if certInfo == nil {
-			return "", false, nil, nil, fmt.Errorf("mTLS connection but no CLI certificates available")
+			return "", false, nil, nil, commandErrorf(errRegistryAuth, "mTLS connection but no CLI certificates available")
 		}
 		keyPEM, keyErr := certInfo.PrivateKeyPEM()
 		if keyErr != nil {
@@ -2927,7 +2927,7 @@ func resolveRegistryForAppleContainer(ctx context.Context, conn *grpcclient.Agen
 		}
 		if appleUseMTLS {
 			cleanup()
-			return "", nil, false, nil, fmt.Errorf("Apple Container builder cannot push directly to an mTLS registry over this connection; use --builder docker")
+			return "", nil, false, nil, commandErrorf(errRegistryAuth, "Apple Container builder cannot push directly to an mTLS registry over this connection; use --builder docker")
 		}
 		if !registryAddrUsesLoopback(registryAddr) {
 			cleanup()
@@ -3611,7 +3611,7 @@ func buildSwiftDockerImage(ctx context.Context, dir, product, arch, buildConfig 
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
-		return "", fmt.Errorf("swift build: %w", err)
+		return "", commandErrorf(errBuildFailed, "swift build: %w", err)
 	}
 
 	// Determine the binary output path.
@@ -3653,7 +3653,7 @@ func buildSwiftDockerImage(ctx context.Context, dir, product, arch, buildConfig 
 	dockerCmd.Stdout = os.Stdout
 	dockerCmd.Stderr = os.Stderr
 	if err := dockerCmd.Run(); err != nil {
-		return "", fmt.Errorf("docker build: %w", err)
+		return "", commandErrorf(errBuildFailed, "docker build: %w", err)
 	}
 
 	return imageName, nil

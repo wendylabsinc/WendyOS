@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f3f2ec" />
+    <title>Change detection · Wendy</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <a class="brand" href="/" aria-label="Wendy home"
+          ><span class="mark" aria-hidden="true">W</span>WENDY</a
+        ><span class="edition">EXAMPLES / VISION</span
+        ><span id="connection" class="pill">Connecting</span>
+      </header>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">Observe the difference</p>
+          <h1>What changed?</h1>
+          <p class="lede">
+            Find a region. Compare it with before. Watch what it does.
+          </p>
+        </div>
+        <div class="source">
+          <span class="caption">INPUT</span
+          ><strong id="source">Waiting for frames</strong
+          ><span id="classifier">Loading classifier</span>
+        </div>
+      </section>
+      <section class="toolbar" aria-label="Playback controls">
+        <label id="scenario-control"
+          >Scene
+          <select id="scenario">
+            <option value="liquid">Growing liquid</option>
+            <option value="shadow">Moving shadow</option>
+            <option value="lighting">Global lighting</option>
+            <option value="object">New object</option>
+            <option value="camera_shift">Camera movement</option>
+            <option value="empty">No change</option>
+          </select></label
+        >
+        <button id="pause">Pause</button
+        ><button id="reset" class="secondary">Reset reference</button
+        ><span id="clock" class="mono">00:00</span>
+      </section>
+      <div id="error" role="alert" hidden></div>
+      <section class="status-row" aria-live="polite">
+        <span class="status-dot"></span><strong id="status">Starting</strong
+        ><span id="count">0 regions</span>
+      </section>
+      <section class="frames" aria-label="Frame comparison">
+        <figure>
+          <figcaption>
+            <span>01 / Reference</span><small>Frozen until reset</small>
+          </figcaption>
+          <div class="frame">
+            <img id="before" alt="Reference frame before the change" />
+          </div>
+        </figure>
+        <figure>
+          <figcaption>
+            <span>02 / Current</span><small>Tracked regions</small>
+          </figcaption>
+          <div class="frame">
+            <img id="current" alt="Current frame" /><svg
+              id="boxes"
+              aria-label="Detected region boundaries"
+            ></svg>
+          </div>
+        </figure>
+        <figure>
+          <figcaption>
+            <span>03 / Residual</span><small>Lighting compensated</small>
+          </figcaption>
+          <div class="frame">
+            <img
+              id="residual"
+              alt="Difference from the reference after global brightness compensation"
+            />
+          </div>
+        </figure>
+      </section>
+      <section class="metrics" aria-label="Frame measurements">
+        <div>
+          <span class="caption">CHANGED AREA</span
+          ><strong id="coverage">0.0<span>%</span></strong>
+        </div>
+        <div>
+          <span class="caption">GLOBAL BRIGHTNESS</span
+          ><strong id="brightness">0.0<span>%</span></strong>
+        </div>
+        <div>
+          <span class="caption">CAMERA SHIFT</span
+          ><strong id="shift">0.0<span>px</span></strong>
+        </div>
+        <div class="trend">
+          <span class="caption">LIQUID SCORE / LAST 120 SAMPLES</span
+          ><svg
+            id="history"
+            viewBox="0 0 280 45"
+            role="img"
+            aria-label="Liquid score history"
+          ></svg>
+        </div>
+      </section>
+      <section class="detail-grid">
+        <article class="inspector">
+          <div class="section-title">
+            <h2>Inspect a change</h2>
+            <span id="region-id" class="mono">No selection</span>
+          </div>
+          <div id="region-tabs" aria-label="Select a region"></div>
+          <p id="empty">
+            Waiting for a local change. The first frame is the reference.
+          </p>
+          <div id="region-detail" hidden>
+            <div class="crops">
+              <figure>
+                <figcaption>Before crop</figcaption>
+                <img id="crop-before" alt="Selected region before the change" />
+              </figure>
+              <figure>
+                <figcaption>Current crop</figcaption>
+                <img id="crop-after" alt="Selected region now" />
+              </figure>
+              <figure>
+                <figcaption>Change mask</figcaption>
+                <img id="crop-mask" alt="Binary mask for the selected change" />
+              </figure>
+            </div>
+            <div class="region-metrics">
+              <div><span>Age</span><strong id="age"></strong></div>
+              <div><span>Area growth</span><strong id="growth"></strong></div>
+              <div><span>Motion</span><strong id="speed"></strong></div>
+            </div>
+            <div class="export">
+              <label
+                >Human label
+                <select id="label"></select></label
+              ><button id="export" class="secondary">Export crop</button
+              ><small id="export-hint">Pause to save a labeled example.</small>
+            </div>
+          </div>
+        </article>
+        <article class="classification">
+          <div class="section-title">
+            <h2>Change type</h2>
+            <span id="score-kind">Heuristic score</span>
+          </div>
+          <div id="scores">
+            <p class="muted">Scores appear when a region is detected.</p>
+          </div>
+          <p class="note" id="model-note">
+            The rule baseline is untrained. Its scores are not probabilities.
+          </p>
+          <div id="decision" class="decision">No liquid candidate</div>
+        </article>
+      </section>
+      <section class="events">
+        <div class="section-title">
+          <h2>Observation log</h2>
+          <span>Persistence + low motion + repeated evidence</span>
+        </div>
+        <div id="events">
+          <p class="muted">No persistent liquid candidates in this session.</p>
+        </div>
+      </section>
+      <footer>
+        <span>Wendy / Change detection</span
+        ><span>Fixed camera · Local processing · Human review</span>
+      </footer>
+    </main>
+  </body>
+</html>

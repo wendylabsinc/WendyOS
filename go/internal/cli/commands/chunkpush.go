@@ -294,7 +294,8 @@ func pushLayersByChunksWithStrictPrepareOutput(ctx context.Context, cs agentpb.W
 // pass nil prog and get their progress through output's optional
 // chunk*ProgressWriter interfaces instead; both sinks are nil-safe.
 func pushLayersByChunksWithPrepareMode(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, output io.Writer, strictPrepare bool, prog *chunkPushProgress) ([]*agentpb.RunContainerLayerHeader, error) {
-	return pushLayersByChunksWithPrepareModeAndCache(ctx, cs, layers, prepare, output, strictPrepare, prog, loadManifestCache)
+	headers, err := pushLayersByChunksWithPrepareModeAndCache(ctx, cs, layers, prepare, output, strictPrepare, prog, loadManifestCache)
+	return headers, classifyCommandError(errTransferFailed, err)
 }
 
 type cachedManifestResult struct {

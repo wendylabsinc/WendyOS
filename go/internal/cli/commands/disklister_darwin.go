@@ -154,9 +154,13 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 			// Parse byte count from e.g. "31.9 GB (31,914,983,424 Bytes)..."
 			if start := strings.Index(info.size, "("); start != -1 {
 				if end := strings.Index(info.size[start:], " Bytes"); end != -1 {
-					rawBytes := info.size[start+1 : start+end]
-					// diskutil may include thousands separators (commas); remove them before parsing.
-					rawBytes = strings.ReplaceAll(rawBytes, ",", "")
+					// Keep digits only: the thousands separator follows the locale.
+					rawBytes := strings.Map(func(r rune) rune {
+						if r >= '0' && r <= '9' {
+							return r
+						}
+						return -1
+					}, info.size[start+1:start+end])
 					fmt.Sscanf(rawBytes, "%d", &info.sizeBytes)
 				}
 			}

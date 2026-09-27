@@ -1124,7 +1124,7 @@ func buildImageWithBuildxOCIExport(ctx context.Context, cwd, dockerfile, platfor
 	buildxBuilder, err := ensureOCIExportBuilderForBuild(ctx, stderr)
 	releaseLock()
 	if err != nil {
-		return err
+		return classifyCommandError(errBuilderUnavailable, err)
 	}
 	submark("  build: ensure builder (inspects)")
 

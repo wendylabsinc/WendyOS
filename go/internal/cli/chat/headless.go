@@ -35,12 +35,13 @@ type headlessEvent struct {
 	Tool      string          `json:"tool,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	Approved  *bool           `json:"approved,omitempty"`
+	Usage     *TokenUsage     `json:"usage,omitempty"`
 }
 
 // RunHeadless sends Prompt to the engine and reports what happened.
 //
 // With JSON, events are written in order as newline-delimited objects:
-// status, text (streamed chunks), tool_start, approval, tool_result, then a
+// status, text (streamed chunks), usage, tool_start, approval, tool_result, then a
 // final done or error. Without JSON the assistant's complete text is written
 // once the turn ends. Denied approvals are reported, not hidden: a consumer
 // that sees approved:false knows to rerun with --yes or to ask a person.
@@ -69,7 +70,7 @@ func RunHeadless(ctx context.Context, opts HeadlessOptions) error {
 		_, _ = opts.Output.Write(append(line, '\n'))
 	}
 	emit := func(event Event) {
-		ev := headlessEvent{Type: event.Type, Text: event.Text, AgentID: event.AgentID, Profile: event.Profile}
+		ev := headlessEvent{Type: event.Type, Text: event.Text, AgentID: event.AgentID, Profile: event.Profile, Usage: event.Usage}
 		if event.Call != nil {
 			ev.ID, ev.Tool = event.Call.ID, event.Call.Name
 			if event.Type == "tool_start" {

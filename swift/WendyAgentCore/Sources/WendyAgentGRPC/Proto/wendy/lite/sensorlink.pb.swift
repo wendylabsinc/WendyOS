@@ -159,7 +159,8 @@ public nonisolated struct Wendy_Lite_Sensorlink_SensorDescriptor: Sendable {
 
   public var channelID: UInt32 = 0
 
-  public var kind: Wendy_Lite_Sensorlink_SensorDescriptor.Kind = .unspecified
+  /// only one channel of a given input_id can be used at a time
+  public var inputID: UInt32 = 0
 
   public var name: String = String()
 
@@ -198,48 +199,6 @@ public nonisolated struct Wendy_Lite_Sensorlink_SensorDescriptor: Sendable {
 
   }
 
-  public nonisolated enum Kind: SwiftProtobuf.Enum, Swift.CaseIterable {
-    public typealias RawValue = Int
-    case unspecified // = 0
-    case camera // = 1
-    case microphone // = 2
-    case sensor // = 3
-    case UNRECOGNIZED(Int)
-
-    public init() {
-      self = .unspecified
-    }
-
-    public init?(rawValue: Int) {
-      switch rawValue {
-      case 0: self = .unspecified
-      case 1: self = .camera
-      case 2: self = .microphone
-      case 3: self = .sensor
-      default: self = .UNRECOGNIZED(rawValue)
-      }
-    }
-
-    public var rawValue: Int {
-      switch self {
-      case .unspecified: return 0
-      case .camera: return 1
-      case .microphone: return 2
-      case .sensor: return 3
-      case .UNRECOGNIZED(let i): return i
-      }
-    }
-
-    // The compiler won't synthesize support with the UNRECOGNIZED case.
-    public static let allCases: [Wendy_Lite_Sensorlink_SensorDescriptor.Kind] = [
-      .unspecified,
-      .camera,
-      .microphone,
-      .sensor,
-    ]
-
-  }
-
   public init() {}
 }
 
@@ -248,9 +207,17 @@ public nonisolated struct Wendy_Lite_Sensorlink_SensorManifest: Sendable {
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  public var deviceAssetID: Int32 = 0
-
   public var sensors: [Wendy_Lite_Sensorlink_SensorDescriptor] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Lite_Sensorlink_GetSensorManifest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -269,18 +236,33 @@ public nonisolated struct Wendy_Lite_Sensorlink_Subscribe: Sendable {
   public init() {}
 }
 
-public nonisolated struct Wendy_Lite_Sensorlink_SensorFrame: Sendable {
+public nonisolated struct Wendy_Lite_Sensorlink_Unsubscribe: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var channelID: [UInt32] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendy_Lite_Sensorlink_SensorData: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   public var channelID: UInt32 = 0
 
-  public var seq: UInt32 = 0
+  /// wraps at 32 bits
+  public var frameSeq: UInt32 = 0
+
+  public var chunkSeq: UInt32 = 0
 
   public var tsUs: UInt64 = 0
 
-  /// bit0 = keyframe
+  /// bit0 = keyframe, bit1 = last chunk in frame
   public var flags: UInt32 = 0
 
   public var payload: Data = Data()
@@ -326,12 +308,12 @@ public nonisolated struct Wendy_Lite_Sensorlink_Envelope: Sendable {
     set {msg = .subscribe(newValue)}
   }
 
-  public var frame: Wendy_Lite_Sensorlink_SensorFrame {
+  public var data: Wendy_Lite_Sensorlink_SensorData {
     get {
-      if case .frame(let v)? = msg {return v}
-      return Wendy_Lite_Sensorlink_SensorFrame()
+      if case .data(let v)? = msg {return v}
+      return Wendy_Lite_Sensorlink_SensorData()
     }
-    set {msg = .frame(newValue)}
+    set {msg = .data(newValue)}
   }
 
   public var ping: Wendy_Lite_Sensorlink_Ping {
@@ -347,7 +329,7 @@ public nonisolated struct Wendy_Lite_Sensorlink_Envelope: Sendable {
   public nonisolated enum OneOf_Msg: Equatable, Sendable {
     case manifest(Wendy_Lite_Sensorlink_SensorManifest)
     case subscribe(Wendy_Lite_Sensorlink_Subscribe)
-    case frame(Wendy_Lite_Sensorlink_SensorFrame)
+    case data(Wendy_Lite_Sensorlink_SensorData)
     case ping(Wendy_Lite_Sensorlink_Ping)
 
   }
@@ -494,7 +476,7 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorFormat: SwiftProtobuf.Message,
 
 nonisolated extension Wendy_Lite_Sensorlink_SensorDescriptor: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SensorDescriptor"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{1}kind\0\u{1}name\0\u{1}video\0\u{1}audio\0\u{1}sensor\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{3}input_id\0\u{1}name\0\u{1}video\0\u{1}audio\0\u{1}sensor\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -503,7 +485,7 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorDescriptor: SwiftProtobuf.Mess
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularUInt32Field(value: &self.channelID) }()
-      case 2: try { try decoder.decodeSingularEnumField(value: &self.kind) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.inputID) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self.name) }()
       case 4: try {
         var v: Wendy_Lite_Sensorlink_VideoFormat?
@@ -557,8 +539,8 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorDescriptor: SwiftProtobuf.Mess
     if self.channelID != 0 {
       try visitor.visitSingularUInt32Field(value: self.channelID, fieldNumber: 1)
     }
-    if self.kind != .unspecified {
-      try visitor.visitSingularEnumField(value: self.kind, fieldNumber: 2)
+    if self.inputID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.inputID, fieldNumber: 2)
     }
     if !self.name.isEmpty {
       try visitor.visitSingularStringField(value: self.name, fieldNumber: 3)
@@ -583,7 +565,7 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorDescriptor: SwiftProtobuf.Mess
 
   public static func ==(lhs: Wendy_Lite_Sensorlink_SensorDescriptor, rhs: Wendy_Lite_Sensorlink_SensorDescriptor) -> Bool {
     if lhs.channelID != rhs.channelID {return false}
-    if lhs.kind != rhs.kind {return false}
+    if lhs.inputID != rhs.inputID {return false}
     if lhs.name != rhs.name {return false}
     if lhs.format != rhs.format {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -591,13 +573,9 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorDescriptor: SwiftProtobuf.Mess
   }
 }
 
-nonisolated extension Wendy_Lite_Sensorlink_SensorDescriptor.Kind: SwiftProtobuf._ProtoNameProviding {
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0KIND_UNSPECIFIED\0\u{1}CAMERA\0\u{1}MICROPHONE\0\u{1}SENSOR\0")
-}
-
 nonisolated extension Wendy_Lite_Sensorlink_SensorManifest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SensorManifest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}device_asset_id\0\u{1}sensors\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}sensors\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -605,26 +583,40 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorManifest: SwiftProtobuf.Messag
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self.deviceAssetID) }()
-      case 2: try { try decoder.decodeRepeatedMessageField(value: &self.sensors) }()
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.sensors) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if self.deviceAssetID != 0 {
-      try visitor.visitSingularInt32Field(value: self.deviceAssetID, fieldNumber: 1)
-    }
     if !self.sensors.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.sensors, fieldNumber: 2)
+      try visitor.visitRepeatedMessageField(value: self.sensors, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Lite_Sensorlink_SensorManifest, rhs: Wendy_Lite_Sensorlink_SensorManifest) -> Bool {
-    if lhs.deviceAssetID != rhs.deviceAssetID {return false}
     if lhs.sensors != rhs.sensors {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Lite_Sensorlink_GetSensorManifest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetSensorManifest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Lite_Sensorlink_GetSensorManifest, rhs: Wendy_Lite_Sensorlink_GetSensorManifest) -> Bool {
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -660,9 +652,39 @@ nonisolated extension Wendy_Lite_Sensorlink_Subscribe: SwiftProtobuf.Message, Sw
   }
 }
 
-nonisolated extension Wendy_Lite_Sensorlink_SensorFrame: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".SensorFrame"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{1}seq\0\u{3}ts_us\0\u{1}flags\0\u{1}payload\0")
+nonisolated extension Wendy_Lite_Sensorlink_Unsubscribe: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".Unsubscribe"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedUInt32Field(value: &self.channelID) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.channelID.isEmpty {
+      try visitor.visitPackedUInt32Field(value: self.channelID, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Lite_Sensorlink_Unsubscribe, rhs: Wendy_Lite_Sensorlink_Unsubscribe) -> Bool {
+    if lhs.channelID != rhs.channelID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Lite_Sensorlink_SensorData: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SensorData"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}channel_id\0\u{3}frame_seq\0\u{3}chunk_seq\0\u{3}ts_us\0\u{1}flags\0\u{1}payload\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -671,10 +693,11 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorFrame: SwiftProtobuf.Message, 
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularUInt32Field(value: &self.channelID) }()
-      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.seq) }()
-      case 3: try { try decoder.decodeSingularUInt64Field(value: &self.tsUs) }()
-      case 4: try { try decoder.decodeSingularUInt32Field(value: &self.flags) }()
-      case 5: try { try decoder.decodeSingularBytesField(value: &self.payload) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.frameSeq) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.chunkSeq) }()
+      case 4: try { try decoder.decodeSingularUInt64Field(value: &self.tsUs) }()
+      case 5: try { try decoder.decodeSingularUInt32Field(value: &self.flags) }()
+      case 6: try { try decoder.decodeSingularBytesField(value: &self.payload) }()
       default: break
       }
     }
@@ -684,24 +707,28 @@ nonisolated extension Wendy_Lite_Sensorlink_SensorFrame: SwiftProtobuf.Message, 
     if self.channelID != 0 {
       try visitor.visitSingularUInt32Field(value: self.channelID, fieldNumber: 1)
     }
-    if self.seq != 0 {
-      try visitor.visitSingularUInt32Field(value: self.seq, fieldNumber: 2)
+    if self.frameSeq != 0 {
+      try visitor.visitSingularUInt32Field(value: self.frameSeq, fieldNumber: 2)
+    }
+    if self.chunkSeq != 0 {
+      try visitor.visitSingularUInt32Field(value: self.chunkSeq, fieldNumber: 3)
     }
     if self.tsUs != 0 {
-      try visitor.visitSingularUInt64Field(value: self.tsUs, fieldNumber: 3)
+      try visitor.visitSingularUInt64Field(value: self.tsUs, fieldNumber: 4)
     }
     if self.flags != 0 {
-      try visitor.visitSingularUInt32Field(value: self.flags, fieldNumber: 4)
+      try visitor.visitSingularUInt32Field(value: self.flags, fieldNumber: 5)
     }
     if !self.payload.isEmpty {
-      try visitor.visitSingularBytesField(value: self.payload, fieldNumber: 5)
+      try visitor.visitSingularBytesField(value: self.payload, fieldNumber: 6)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: Wendy_Lite_Sensorlink_SensorFrame, rhs: Wendy_Lite_Sensorlink_SensorFrame) -> Bool {
+  public static func ==(lhs: Wendy_Lite_Sensorlink_SensorData, rhs: Wendy_Lite_Sensorlink_SensorData) -> Bool {
     if lhs.channelID != rhs.channelID {return false}
-    if lhs.seq != rhs.seq {return false}
+    if lhs.frameSeq != rhs.frameSeq {return false}
+    if lhs.chunkSeq != rhs.chunkSeq {return false}
     if lhs.tsUs != rhs.tsUs {return false}
     if lhs.flags != rhs.flags {return false}
     if lhs.payload != rhs.payload {return false}
@@ -742,7 +769,7 @@ nonisolated extension Wendy_Lite_Sensorlink_Ping: SwiftProtobuf.Message, SwiftPr
 
 nonisolated extension Wendy_Lite_Sensorlink_Envelope: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".Envelope"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}manifest\0\u{1}subscribe\0\u{1}frame\0\u{1}ping\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}manifest\0\u{1}subscribe\0\u{1}data\0\u{1}ping\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -777,16 +804,16 @@ nonisolated extension Wendy_Lite_Sensorlink_Envelope: SwiftProtobuf.Message, Swi
         }
       }()
       case 3: try {
-        var v: Wendy_Lite_Sensorlink_SensorFrame?
+        var v: Wendy_Lite_Sensorlink_SensorData?
         var hadOneofValue = false
         if let current = self.msg {
           hadOneofValue = true
-          if case .frame(let m) = current {v = m}
+          if case .data(let m) = current {v = m}
         }
         try decoder.decodeSingularMessageField(value: &v)
         if let v = v {
           if hadOneofValue {try decoder.handleConflictingOneOf()}
-          self.msg = .frame(v)
+          self.msg = .data(v)
         }
       }()
       case 4: try {
@@ -821,8 +848,8 @@ nonisolated extension Wendy_Lite_Sensorlink_Envelope: SwiftProtobuf.Message, Swi
       guard case .subscribe(let v)? = self.msg else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
     }()
-    case .frame?: try {
-      guard case .frame(let v)? = self.msg else { preconditionFailure() }
+    case .data?: try {
+      guard case .data(let v)? = self.msg else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
     }()
     case .ping?: try {

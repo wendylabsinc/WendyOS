@@ -9,6 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // DetectionNotification contains metadata only, never camera images or secrets.
@@ -26,10 +31,55 @@ type CampaignNotificationSender interface {
 	Send(context.Context, string, DetectionNotification) error
 }
 
-// CampaignWebhookSender delivers directly from the agent. It deliberately does
-// not impersonate an app through CreateNotificationV2: that Cloud API requires
-// an app registered to the device. Cloud-only campaigns retain the existing
-// notify.on: episode_committed ingestion path.
+// CampaignCloudSender uses the campaign name as its Cloud app identity. Cloud
+// must authorize that identity for this device before accepting a notification.
+// An explicit webhook continues to select direct HTTP delivery.
+type CampaignCloudSender struct {
+	Cloud NotificationSender
+}
+
+func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notification DetectionNotification) error {
+	if endpoint != "" {
+		return (&CampaignWebhookSender{}).Send(ctx, endpoint, notification)
+	}
+	if s.Cloud == nil {
+		return status.Error(codes.Unavailable, "Cloud campaign notification delivery is unavailable")
+	}
+	metadata, err := structpb.NewStruct(map[string]any{
+		"event":          notification.Event,
+		"campaign":       notification.Campaign,
+		"source_id":      notification.SourceID,
+		"model":          notification.Model,
+		"model_revision": notification.Revision,
+		"count":          notification.Count,
+	})
+	if err != nil {
+		return err
+	}
+	appID := "campaign:" + notification.Campaign
+	response, err := s.Cloud.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{
+		AppId: &appID,
+		Audience: &cloudpb.NotificationAudience{Roles: []cloudpb.OrganizationRole{
+			cloudpb.OrganizationRole_ORGANIZATION_ROLE_OWNER,
+			cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN,
+		}},
+		Title:          "Campaign event",
+		Body:           fmt.Sprintf("Campaign %s emitted %s.", notification.Campaign, notification.Event),
+		Severity:       cloudpb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+		DeepLink:       "wendy://live",
+		NotificationId: notification.ID,
+		Metadata:       metadata,
+	})
+	if err != nil {
+		return err
+	}
+	if response.GetNotificationId() != notification.ID {
+		return status.Error(codes.DataLoss, "Cloud returned a mismatched campaign notification_id")
+	}
+	return nil
+}
+
+// CampaignWebhookSender delivers directly from the agent to an explicit URL.
 type CampaignWebhookSender struct{}
 
 func (*CampaignWebhookSender) Send(ctx context.Context, endpoint string, notification DetectionNotification) error {

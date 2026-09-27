@@ -6,7 +6,7 @@ import "wendy/lite/sensorlink.proto";
 
 service WendySensorService {
   rpc GetSensorManifest(GetSensorManifestRequest) returns (wendy.lite.sensorlink.SensorManifest);
-  rpc StreamSensors(StreamSensorsRequest) returns (stream wendy.lite.sensorlink.SensorFrame);
+  rpc StreamSensors(StreamSensorsRequest) returns (stream wendy.lite.sensorlink.SensorData);
 }
 message GetSensorManifestRequest {}
 message StreamSensorsRequest { repeated uint32 channel_id = 1; }

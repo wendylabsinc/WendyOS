@@ -74,11 +74,12 @@ func parseUMSDisks(out string) []UMSDisk {
 		}
 		name, serial := splitInquiry(vendor, ioregString(chunk, "Product Identification"))
 		d := UMSDisk{
-			DevPath:  "/dev/" + bsd,
-			RawPath:  "/dev/r" + bsd,
-			Vendor:   name,
-			Serial:   serial,
-			PortPath: macUSBPortPath(ioregInt(chunk, "locationID")),
+			DevPath:      "/dev/" + bsd,
+			RawPath:      "/dev/r" + bsd,
+			Vendor:       name,
+			Serial:       serial,
+			PortPath:     macUSBPortPath(ioregInt(chunk, "locationID")),
+			USBSpeedMbps: ioregInt(chunk, "UsbLinkSpeed") / 1_000_000,
 		}
 		if size := ioregInt(chunk, "Size"); size > 0 {
 			d.SizeBytes = size

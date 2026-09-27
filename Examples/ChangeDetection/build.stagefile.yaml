@@ -1,0 +1,31 @@
+version: 1
+stages:
+  - name: app
+    from: python:3.11-slim
+    workdir: /app
+    env:
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      PYTHONUNBUFFERED: "1"
+    install:
+      pip:
+        - requirements: requirements.txt
+    copy:
+      - from: local
+        paths: [app.py]
+        dest: /app/
+      - from: local
+        paths: [change_detection]
+        dest: /app/change_detection/
+      - from: local
+        paths: [static]
+        dest: /app/static/
+    # Match the camera examples' access to host V4L2 devices.
+    user: root
+    healthcheck:
+      exec: [python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 3s
+      startPeriod: 10s
+      retries: 3
+    cmd: [python, app.py]

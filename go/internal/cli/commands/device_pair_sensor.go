@@ -310,11 +310,34 @@ func (m sensorPairModel) View() string {
 	if m.scanning {
 		title += "  Scanning..."
 	}
+	var unenrolled []string
+	for _, source := range m.devices {
+		if !source.Sensorlink || source.AssetID > 0 {
+			continue
+		}
+		label := source.DisplayName
+		if address := source.Address(); address != "" {
+			if label == "" {
+				label = address
+			} else {
+				label += " (" + address + ")"
+			}
+		}
+		unenrolled = append(unenrolled, tui.StripControl(label))
+	}
+	sort.Strings(unenrolled)
 	body := title + "\n\n"
-	if len(m.rows) == 0 && !m.scanning {
+	if len(m.rows) == 0 && len(unenrolled) == 0 && !m.scanning {
 		body += "No SensorLink devices found. Press r to rescan.\n"
-	} else {
+	} else if len(m.rows) > 0 || m.scanning {
 		body += m.table.View() + "\n"
+	}
+	if len(unenrolled) > 0 {
+		body += "Found sensors that need enrollment:\n"
+		for _, label := range unenrolled {
+			body += "  " + label + "\n"
+		}
+		body += "Enroll these sources in the same organization as the target device, then press r to rescan.\n"
 	}
 	if m.message != "" {
 		body += tui.StripControl(m.message) + "\n"

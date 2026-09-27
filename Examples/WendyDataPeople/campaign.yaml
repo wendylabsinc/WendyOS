@@ -35,9 +35,8 @@ export:
   annotation: cvat
 
 notify:
-  # Notify through Wendy Cloud when the detection episode is committed.
-  on: episode_committed
-  # For an immediate alert to your notification service, replace the above with:
-  # on: event
-  # event: person_detected
-  # webhook: https://your-notification-service.example/hooks/people
+  # Send through Wendy Cloud when a person_detected event is emitted.
+  # CLI deployment registers campaign:people-all-cameras with sending disabled.
+  # Enable its notification grant in Cloud before events should deliver.
+  on: event
+  event: person_detected

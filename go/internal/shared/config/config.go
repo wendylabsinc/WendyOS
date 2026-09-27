@@ -125,8 +125,19 @@ type FixNotice struct {
 	FixedInRelease string `json:"fixedInRelease,omitempty"`
 }
 
-// ConfigDir returns the path to the ~/.wendy directory, creating it if necessary.
+// ConfigDir returns the device/cloud state directory, creating it if necessary.
+// WENDY_CONFIG_DIR gives automation an isolated config, trust store and VM store
+// without changing the user's home or their coding agent/model settings.
 func ConfigDir() (string, error) {
+	if dir := os.Getenv("WENDY_CONFIG_DIR"); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", fmt.Errorf("WENDY_CONFIG_DIR must be an absolute directory")
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", fmt.Errorf("creating configured device state directory: %w", err)
+		}
+		return filepath.Clean(dir), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("determining home directory: %w", err)

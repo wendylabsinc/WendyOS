@@ -51,6 +51,10 @@ public nonisolated struct Wendycloud_V1_App: Sendable {
   /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
   public mutating func clearUpdatedAt() {self._updatedAt = nil}
 
+  /// Interim owner/admin-controlled grant allowing this app to send notifications.
+  /// WDY-2058 will replace this with capability-scoped app authorization.
+  public var canSendNotifications: Bool = false
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -59,126 +63,14 @@ public nonisolated struct Wendycloud_V1_App: Sendable {
   fileprivate var _updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
 }
 
-public nonisolated struct Wendycloud_V1_AppVersion: Sendable {
+public nonisolated struct Wendycloud_V1_UpsertAppRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   public var id: String = String()
-
-  public var appID: String = String()
-
-  public var version: String = String()
-
-  public var containerImage: String = String()
-
-  public var containerRegistry: String = String()
-
-  public var details: String = String()
-
-  public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
-    set {_createdAt = newValue}
-  }
-  /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {self._createdAt != nil}
-  /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
-  public mutating func clearCreatedAt() {self._createdAt = nil}
-
-  public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {_updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
-    set {_updatedAt = newValue}
-  }
-  /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {self._updatedAt != nil}
-  /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
-  public mutating func clearUpdatedAt() {self._updatedAt = nil}
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-
-  fileprivate var _createdAt: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
-  fileprivate var _updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
-}
-
-public nonisolated struct Wendycloud_V1_AssetContainer: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var id: Int32 = 0
-
-  public var assetID: Int32 = 0
-
-  public var appVersionID: String = String()
-
-  public var containerName: String = String()
-
-  public var containerID: String = String()
-
-  public var status: String = String()
-
-  public var createdAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {_createdAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
-    set {_createdAt = newValue}
-  }
-  /// Returns true if `createdAt` has been explicitly set.
-  public var hasCreatedAt: Bool {self._createdAt != nil}
-  /// Clears the value of `createdAt`. Subsequent reads from it will return its default value.
-  public mutating func clearCreatedAt() {self._createdAt = nil}
-
-  public var updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp {
-    get {_updatedAt ?? SwiftProtobuf.Google_Protobuf_Timestamp()}
-    set {_updatedAt = newValue}
-  }
-  /// Returns true if `updatedAt` has been explicitly set.
-  public var hasUpdatedAt: Bool {self._updatedAt != nil}
-  /// Clears the value of `updatedAt`. Subsequent reads from it will return its default value.
-  public mutating func clearUpdatedAt() {self._updatedAt = nil}
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-
-  fileprivate var _createdAt: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
-  fileprivate var _updatedAt: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
-}
-
-public nonisolated struct Wendycloud_V1_CreateAppRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
 
   public var organizationID: Int32 = 0
-
-  public var name: String = String()
-
-  public var details: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_GetAppRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var id: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_UpdateAppRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var id: String = String()
 
   public var name: String {
     get {_name ?? String()}
@@ -206,12 +98,75 @@ public nonisolated struct Wendycloud_V1_UpdateAppRequest: Sendable {
   fileprivate var _details: String? = nil
 }
 
+public nonisolated struct Wendycloud_V1_GetAppRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var id: String = String()
+
+  public var organizationID: Int32 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendycloud_V1_UpdateAppRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var id: String = String()
+
+  public var organizationID: Int32 = 0
+
+  public var name: String {
+    get {_name ?? String()}
+    set {_name = newValue}
+  }
+  /// Returns true if `name` has been explicitly set.
+  public var hasName: Bool {self._name != nil}
+  /// Clears the value of `name`. Subsequent reads from it will return its default value.
+  public mutating func clearName() {self._name = nil}
+
+  public var details: String {
+    get {_details ?? String()}
+    set {_details = newValue}
+  }
+  /// Returns true if `details` has been explicitly set.
+  public var hasDetails: Bool {self._details != nil}
+  /// Clears the value of `details`. Subsequent reads from it will return its default value.
+  public mutating func clearDetails() {self._details = nil}
+
+  /// Interim owner/admin-controlled grant allowing this app to send notifications.
+  /// WDY-2058 will replace this with capability-scoped app authorization.
+  public var canSendNotifications: Bool {
+    get {_canSendNotifications ?? false}
+    set {_canSendNotifications = newValue}
+  }
+  /// Returns true if `canSendNotifications` has been explicitly set.
+  public var hasCanSendNotifications: Bool {self._canSendNotifications != nil}
+  /// Clears the value of `canSendNotifications`. Subsequent reads from it will return its default value.
+  public mutating func clearCanSendNotifications() {self._canSendNotifications = nil}
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _name: String? = nil
+  fileprivate var _details: String? = nil
+  fileprivate var _canSendNotifications: Bool? = nil
+}
+
 public nonisolated struct Wendycloud_V1_DeleteAppRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
   public var id: String = String()
+
+  public var organizationID: Int32 = 0
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -237,9 +192,24 @@ public nonisolated struct Wendycloud_V1_ListAppsRequest: Sendable {
 
   public var organizationID: Int32 = 0
 
-  public var pageSize: Int32 = 0
+  /// Offset/limit based pagination (offset = starting row, limit = page size)
+  public var offset: Int32 {
+    get {_offset ?? 0}
+    set {_offset = newValue}
+  }
+  /// Returns true if `offset` has been explicitly set.
+  public var hasOffset: Bool {self._offset != nil}
+  /// Clears the value of `offset`. Subsequent reads from it will return its default value.
+  public mutating func clearOffset() {self._offset = nil}
 
-  public var pageToken: String = String()
+  public var limit: Int32 {
+    get {_limit ?? 0}
+    set {_limit = newValue}
+  }
+  /// Returns true if `limit` has been explicitly set.
+  public var hasLimit: Bool {self._limit != nil}
+  /// Clears the value of `limit`. Subsequent reads from it will return its default value.
+  public mutating func clearLimit() {self._limit = nil}
 
   /// Filter by name or details
   public var filter: String {
@@ -255,6 +225,8 @@ public nonisolated struct Wendycloud_V1_ListAppsRequest: Sendable {
 
   public init() {}
 
+  fileprivate var _offset: Int32? = nil
+  fileprivate var _limit: Int32? = nil
   fileprivate var _filter: String? = nil
 }
 
@@ -265,194 +237,7 @@ public nonisolated struct Wendycloud_V1_ListAppsResponse: Sendable {
 
   public var apps: [Wendycloud_V1_App] = []
 
-  public var nextPageToken: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_CreateAppVersionRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var appID: String = String()
-
-  public var version: String = String()
-
-  public var containerImage: String = String()
-
-  public var containerRegistry: String = String()
-
-  public var details: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_GetAppVersionRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var id: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_ListAppVersionsRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var appID: String = String()
-
-  public var pageSize: Int32 = 0
-
-  public var pageToken: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_ListAppVersionsResponse: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var appVersions: [Wendycloud_V1_AppVersion] = []
-
-  public var nextPageToken: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_CreateAssetContainerRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var assetID: Int32 = 0
-
-  public var appVersionID: String = String()
-
-  public var containerName: String = String()
-
-  public var containerID: String = String()
-
-  public var status: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_GetAssetContainerRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var id: Int32 = 0
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_UpdateAssetContainerRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var id: Int32 = 0
-
-  public var containerID: String {
-    get {_containerID ?? String()}
-    set {_containerID = newValue}
-  }
-  /// Returns true if `containerID` has been explicitly set.
-  public var hasContainerID: Bool {self._containerID != nil}
-  /// Clears the value of `containerID`. Subsequent reads from it will return its default value.
-  public mutating func clearContainerID() {self._containerID = nil}
-
-  public var status: String {
-    get {_status ?? String()}
-    set {_status = newValue}
-  }
-  /// Returns true if `status` has been explicitly set.
-  public var hasStatus: Bool {self._status != nil}
-  /// Clears the value of `status`. Subsequent reads from it will return its default value.
-  public mutating func clearStatus() {self._status = nil}
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-
-  fileprivate var _containerID: String? = nil
-  fileprivate var _status: String? = nil
-}
-
-public nonisolated struct Wendycloud_V1_ListAssetContainersRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var assetID: Int32 = 0
-
-  public var pageSize: Int32 = 0
-
-  public var pageToken: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_ListAssetContainersResponse: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var containers: [Wendycloud_V1_AssetContainer] = []
-
-  public var nextPageToken: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_ListAssetContainersByAppRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var appID: String = String()
-
-  public var pageSize: Int32 = 0
-
-  public var pageToken: String = String()
-
-  public var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  public init() {}
-}
-
-public nonisolated struct Wendycloud_V1_ListAssetContainersByAppResponse: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  public var containers: [Wendycloud_V1_AssetContainer] = []
-
-  public var nextPageToken: String = String()
+  public var total: Int32 = 0
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -465,7 +250,7 @@ fileprivate nonisolated let _protobuf_package = "wendycloud.v1"
 
 nonisolated extension Wendycloud_V1_App: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".App"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}organization_id\0\u{1}name\0\u{1}details\0\u{3}created_at\0\u{3}updated_at\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}organization_id\0\u{1}name\0\u{1}details\0\u{3}created_at\0\u{3}updated_at\0\u{3}can_send_notifications\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -479,6 +264,7 @@ nonisolated extension Wendycloud_V1_App: SwiftProtobuf.Message, SwiftProtobuf._M
       case 4: try { try decoder.decodeSingularStringField(value: &self.details) }()
       case 5: try { try decoder.decodeSingularMessageField(value: &self._createdAt) }()
       case 6: try { try decoder.decodeSingularMessageField(value: &self._updatedAt) }()
+      case 7: try { try decoder.decodeSingularBoolField(value: &self.canSendNotifications) }()
       default: break
       }
     }
@@ -507,6 +293,9 @@ nonisolated extension Wendycloud_V1_App: SwiftProtobuf.Message, SwiftProtobuf._M
     try { if let v = self._updatedAt {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     } }()
+    if self.canSendNotifications != false {
+      try visitor.visitSingularBoolField(value: self.canSendNotifications, fieldNumber: 7)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -517,14 +306,15 @@ nonisolated extension Wendycloud_V1_App: SwiftProtobuf.Message, SwiftProtobuf._M
     if lhs.details != rhs.details {return false}
     if lhs._createdAt != rhs._createdAt {return false}
     if lhs._updatedAt != rhs._updatedAt {return false}
+    if lhs.canSendNotifications != rhs.canSendNotifications {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-nonisolated extension Wendycloud_V1_AppVersion: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".AppVersion"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}app_id\0\u{1}version\0\u{3}container_image\0\u{3}container_registry\0\u{1}details\0\u{3}created_at\0\u{3}updated_at\0")
+nonisolated extension Wendycloud_V1_UpsertAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".UpsertAppRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}organization_id\0\u{1}name\0\u{1}details\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -533,13 +323,9 @@ nonisolated extension Wendycloud_V1_AppVersion: SwiftProtobuf.Message, SwiftProt
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.appID) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.version) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self.containerImage) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self.containerRegistry) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self.details) }()
-      case 7: try { try decoder.decodeSingularMessageField(value: &self._createdAt) }()
-      case 8: try { try decoder.decodeSingularMessageField(value: &self._updatedAt) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.organizationID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._name) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._details) }()
       default: break
       }
     }
@@ -553,220 +339,21 @@ nonisolated extension Wendycloud_V1_AppVersion: SwiftProtobuf.Message, SwiftProt
     if !self.id.isEmpty {
       try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
     }
-    if !self.appID.isEmpty {
-      try visitor.visitSingularStringField(value: self.appID, fieldNumber: 2)
-    }
-    if !self.version.isEmpty {
-      try visitor.visitSingularStringField(value: self.version, fieldNumber: 3)
-    }
-    if !self.containerImage.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerImage, fieldNumber: 4)
-    }
-    if !self.containerRegistry.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerRegistry, fieldNumber: 5)
-    }
-    if !self.details.isEmpty {
-      try visitor.visitSingularStringField(value: self.details, fieldNumber: 6)
-    }
-    try { if let v = self._createdAt {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
-    } }()
-    try { if let v = self._updatedAt {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_AppVersion, rhs: Wendycloud_V1_AppVersion) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.appID != rhs.appID {return false}
-    if lhs.version != rhs.version {return false}
-    if lhs.containerImage != rhs.containerImage {return false}
-    if lhs.containerRegistry != rhs.containerRegistry {return false}
-    if lhs.details != rhs.details {return false}
-    if lhs._createdAt != rhs._createdAt {return false}
-    if lhs._updatedAt != rhs._updatedAt {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_AssetContainer: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".AssetContainer"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}asset_id\0\u{3}app_version_id\0\u{3}container_name\0\u{3}container_id\0\u{1}status\0\u{3}created_at\0\u{3}updated_at\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularInt32Field(value: &self.assetID) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.appVersionID) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self.containerName) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self.containerID) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self.status) }()
-      case 7: try { try decoder.decodeSingularMessageField(value: &self._createdAt) }()
-      case 8: try { try decoder.decodeSingularMessageField(value: &self._updatedAt) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if self.id != 0 {
-      try visitor.visitSingularInt32Field(value: self.id, fieldNumber: 1)
-    }
-    if self.assetID != 0 {
-      try visitor.visitSingularInt32Field(value: self.assetID, fieldNumber: 2)
-    }
-    if !self.appVersionID.isEmpty {
-      try visitor.visitSingularStringField(value: self.appVersionID, fieldNumber: 3)
-    }
-    if !self.containerName.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerName, fieldNumber: 4)
-    }
-    if !self.containerID.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerID, fieldNumber: 5)
-    }
-    if !self.status.isEmpty {
-      try visitor.visitSingularStringField(value: self.status, fieldNumber: 6)
-    }
-    try { if let v = self._createdAt {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
-    } }()
-    try { if let v = self._updatedAt {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_AssetContainer, rhs: Wendycloud_V1_AssetContainer) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.assetID != rhs.assetID {return false}
-    if lhs.appVersionID != rhs.appVersionID {return false}
-    if lhs.containerName != rhs.containerName {return false}
-    if lhs.containerID != rhs.containerID {return false}
-    if lhs.status != rhs.status {return false}
-    if lhs._createdAt != rhs._createdAt {return false}
-    if lhs._updatedAt != rhs._updatedAt {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_CreateAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".CreateAppRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}organization_id\0\u{1}name\0\u{1}details\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self.organizationID) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.details) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if self.organizationID != 0 {
-      try visitor.visitSingularInt32Field(value: self.organizationID, fieldNumber: 1)
-    }
-    if !self.name.isEmpty {
-      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
-    }
-    if !self.details.isEmpty {
-      try visitor.visitSingularStringField(value: self.details, fieldNumber: 3)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_CreateAppRequest, rhs: Wendycloud_V1_CreateAppRequest) -> Bool {
-    if lhs.organizationID != rhs.organizationID {return false}
-    if lhs.name != rhs.name {return false}
-    if lhs.details != rhs.details {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_GetAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".GetAppRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_GetAppRequest, rhs: Wendycloud_V1_GetAppRequest) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_UpdateAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".UpdateAppRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}name\0\u{1}details\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self._name) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._details) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+      try visitor.visitSingularInt32Field(value: self.organizationID, fieldNumber: 2)
     }
     try { if let v = self._name {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
     } }()
     try { if let v = self._details {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
     } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: Wendycloud_V1_UpdateAppRequest, rhs: Wendycloud_V1_UpdateAppRequest) -> Bool {
+  public static func ==(lhs: Wendycloud_V1_UpsertAppRequest, rhs: Wendycloud_V1_UpsertAppRequest) -> Bool {
     if lhs.id != rhs.id {return false}
+    if lhs.organizationID != rhs.organizationID {return false}
     if lhs._name != rhs._name {return false}
     if lhs._details != rhs._details {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -774,9 +361,9 @@ nonisolated extension Wendycloud_V1_UpdateAppRequest: SwiftProtobuf.Message, Swi
   }
 }
 
-nonisolated extension Wendycloud_V1_DeleteAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".DeleteAppRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0")
+nonisolated extension Wendycloud_V1_GetAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetAppRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}organization_id\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -785,6 +372,7 @@ nonisolated extension Wendycloud_V1_DeleteAppRequest: SwiftProtobuf.Message, Swi
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.organizationID) }()
       default: break
       }
     }
@@ -794,11 +382,104 @@ nonisolated extension Wendycloud_V1_DeleteAppRequest: SwiftProtobuf.Message, Swi
     if !self.id.isEmpty {
       try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
     }
+    if self.organizationID != 0 {
+      try visitor.visitSingularInt32Field(value: self.organizationID, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendycloud_V1_GetAppRequest, rhs: Wendycloud_V1_GetAppRequest) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.organizationID != rhs.organizationID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendycloud_V1_UpdateAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".UpdateAppRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}organization_id\0\u{1}name\0\u{1}details\0\u{3}can_send_notifications\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.organizationID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._name) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._details) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self._canSendNotifications) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    }
+    if self.organizationID != 0 {
+      try visitor.visitSingularInt32Field(value: self.organizationID, fieldNumber: 2)
+    }
+    try { if let v = self._name {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._details {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._canSendNotifications {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 5)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendycloud_V1_UpdateAppRequest, rhs: Wendycloud_V1_UpdateAppRequest) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.organizationID != rhs.organizationID {return false}
+    if lhs._name != rhs._name {return false}
+    if lhs._details != rhs._details {return false}
+    if lhs._canSendNotifications != rhs._canSendNotifications {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendycloud_V1_DeleteAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".DeleteAppRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}organization_id\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.organizationID) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    }
+    if self.organizationID != 0 {
+      try visitor.visitSingularInt32Field(value: self.organizationID, fieldNumber: 2)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendycloud_V1_DeleteAppRequest, rhs: Wendycloud_V1_DeleteAppRequest) -> Bool {
     if lhs.id != rhs.id {return false}
+    if lhs.organizationID != rhs.organizationID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -836,7 +517,7 @@ nonisolated extension Wendycloud_V1_DeleteAppResponse: SwiftProtobuf.Message, Sw
 
 nonisolated extension Wendycloud_V1_ListAppsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ListAppsRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}organization_id\0\u{3}page_size\0\u{3}page_token\0\u{1}filter\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}organization_id\0\u{1}offset\0\u{1}limit\0\u{1}filter\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -845,8 +526,8 @@ nonisolated extension Wendycloud_V1_ListAppsRequest: SwiftProtobuf.Message, Swif
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularInt32Field(value: &self.organizationID) }()
-      case 2: try { try decoder.decodeSingularInt32Field(value: &self.pageSize) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.pageToken) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self._offset) }()
+      case 3: try { try decoder.decodeSingularInt32Field(value: &self._limit) }()
       case 4: try { try decoder.decodeSingularStringField(value: &self._filter) }()
       default: break
       }
@@ -861,12 +542,12 @@ nonisolated extension Wendycloud_V1_ListAppsRequest: SwiftProtobuf.Message, Swif
     if self.organizationID != 0 {
       try visitor.visitSingularInt32Field(value: self.organizationID, fieldNumber: 1)
     }
-    if self.pageSize != 0 {
-      try visitor.visitSingularInt32Field(value: self.pageSize, fieldNumber: 2)
-    }
-    if !self.pageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.pageToken, fieldNumber: 3)
-    }
+    try { if let v = self._offset {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._limit {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 3)
+    } }()
     try { if let v = self._filter {
       try visitor.visitSingularStringField(value: v, fieldNumber: 4)
     } }()
@@ -875,8 +556,8 @@ nonisolated extension Wendycloud_V1_ListAppsRequest: SwiftProtobuf.Message, Swif
 
   public static func ==(lhs: Wendycloud_V1_ListAppsRequest, rhs: Wendycloud_V1_ListAppsRequest) -> Bool {
     if lhs.organizationID != rhs.organizationID {return false}
-    if lhs.pageSize != rhs.pageSize {return false}
-    if lhs.pageToken != rhs.pageToken {return false}
+    if lhs._offset != rhs._offset {return false}
+    if lhs._limit != rhs._limit {return false}
     if lhs._filter != rhs._filter {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -885,7 +566,7 @@ nonisolated extension Wendycloud_V1_ListAppsRequest: SwiftProtobuf.Message, Swif
 
 nonisolated extension Wendycloud_V1_ListAppsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ListAppsResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}apps\0\u{3}next_page_token\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}apps\0\u{1}total\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -894,7 +575,7 @@ nonisolated extension Wendycloud_V1_ListAppsResponse: SwiftProtobuf.Message, Swi
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeRepeatedMessageField(value: &self.apps) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.nextPageToken) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.total) }()
       default: break
       }
     }
@@ -904,444 +585,15 @@ nonisolated extension Wendycloud_V1_ListAppsResponse: SwiftProtobuf.Message, Swi
     if !self.apps.isEmpty {
       try visitor.visitRepeatedMessageField(value: self.apps, fieldNumber: 1)
     }
-    if !self.nextPageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.nextPageToken, fieldNumber: 2)
+    if self.total != 0 {
+      try visitor.visitSingularInt32Field(value: self.total, fieldNumber: 2)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendycloud_V1_ListAppsResponse, rhs: Wendycloud_V1_ListAppsResponse) -> Bool {
     if lhs.apps != rhs.apps {return false}
-    if lhs.nextPageToken != rhs.nextPageToken {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_CreateAppVersionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".CreateAppVersionRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_id\0\u{1}version\0\u{3}container_image\0\u{3}container_registry\0\u{1}details\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.appID) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.version) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.containerImage) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self.containerRegistry) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self.details) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.appID.isEmpty {
-      try visitor.visitSingularStringField(value: self.appID, fieldNumber: 1)
-    }
-    if !self.version.isEmpty {
-      try visitor.visitSingularStringField(value: self.version, fieldNumber: 2)
-    }
-    if !self.containerImage.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerImage, fieldNumber: 3)
-    }
-    if !self.containerRegistry.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerRegistry, fieldNumber: 4)
-    }
-    if !self.details.isEmpty {
-      try visitor.visitSingularStringField(value: self.details, fieldNumber: 5)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_CreateAppVersionRequest, rhs: Wendycloud_V1_CreateAppVersionRequest) -> Bool {
-    if lhs.appID != rhs.appID {return false}
-    if lhs.version != rhs.version {return false}
-    if lhs.containerImage != rhs.containerImage {return false}
-    if lhs.containerRegistry != rhs.containerRegistry {return false}
-    if lhs.details != rhs.details {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_GetAppVersionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".GetAppVersionRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_GetAppVersionRequest, rhs: Wendycloud_V1_GetAppVersionRequest) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_ListAppVersionsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".ListAppVersionsRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_id\0\u{3}page_size\0\u{3}page_token\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.appID) }()
-      case 2: try { try decoder.decodeSingularInt32Field(value: &self.pageSize) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.pageToken) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.appID.isEmpty {
-      try visitor.visitSingularStringField(value: self.appID, fieldNumber: 1)
-    }
-    if self.pageSize != 0 {
-      try visitor.visitSingularInt32Field(value: self.pageSize, fieldNumber: 2)
-    }
-    if !self.pageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.pageToken, fieldNumber: 3)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_ListAppVersionsRequest, rhs: Wendycloud_V1_ListAppVersionsRequest) -> Bool {
-    if lhs.appID != rhs.appID {return false}
-    if lhs.pageSize != rhs.pageSize {return false}
-    if lhs.pageToken != rhs.pageToken {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_ListAppVersionsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".ListAppVersionsResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_versions\0\u{3}next_page_token\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.appVersions) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.nextPageToken) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.appVersions.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.appVersions, fieldNumber: 1)
-    }
-    if !self.nextPageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.nextPageToken, fieldNumber: 2)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_ListAppVersionsResponse, rhs: Wendycloud_V1_ListAppVersionsResponse) -> Bool {
-    if lhs.appVersions != rhs.appVersions {return false}
-    if lhs.nextPageToken != rhs.nextPageToken {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_CreateAssetContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".CreateAssetContainerRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}asset_id\0\u{3}app_version_id\0\u{3}container_name\0\u{3}container_id\0\u{1}status\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self.assetID) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.appVersionID) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.containerName) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self.containerID) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self.status) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if self.assetID != 0 {
-      try visitor.visitSingularInt32Field(value: self.assetID, fieldNumber: 1)
-    }
-    if !self.appVersionID.isEmpty {
-      try visitor.visitSingularStringField(value: self.appVersionID, fieldNumber: 2)
-    }
-    if !self.containerName.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerName, fieldNumber: 3)
-    }
-    if !self.containerID.isEmpty {
-      try visitor.visitSingularStringField(value: self.containerID, fieldNumber: 4)
-    }
-    if !self.status.isEmpty {
-      try visitor.visitSingularStringField(value: self.status, fieldNumber: 5)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_CreateAssetContainerRequest, rhs: Wendycloud_V1_CreateAssetContainerRequest) -> Bool {
-    if lhs.assetID != rhs.assetID {return false}
-    if lhs.appVersionID != rhs.appVersionID {return false}
-    if lhs.containerName != rhs.containerName {return false}
-    if lhs.containerID != rhs.containerID {return false}
-    if lhs.status != rhs.status {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_GetAssetContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".GetAssetContainerRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self.id) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if self.id != 0 {
-      try visitor.visitSingularInt32Field(value: self.id, fieldNumber: 1)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_GetAssetContainerRequest, rhs: Wendycloud_V1_GetAssetContainerRequest) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_UpdateAssetContainerRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".UpdateAssetContainerRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}container_id\0\u{1}status\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self._containerID) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._status) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if self.id != 0 {
-      try visitor.visitSingularInt32Field(value: self.id, fieldNumber: 1)
-    }
-    try { if let v = self._containerID {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._status {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_UpdateAssetContainerRequest, rhs: Wendycloud_V1_UpdateAssetContainerRequest) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs._containerID != rhs._containerID {return false}
-    if lhs._status != rhs._status {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_ListAssetContainersRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".ListAssetContainersRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}asset_id\0\u{3}page_size\0\u{3}page_token\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularInt32Field(value: &self.assetID) }()
-      case 2: try { try decoder.decodeSingularInt32Field(value: &self.pageSize) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.pageToken) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if self.assetID != 0 {
-      try visitor.visitSingularInt32Field(value: self.assetID, fieldNumber: 1)
-    }
-    if self.pageSize != 0 {
-      try visitor.visitSingularInt32Field(value: self.pageSize, fieldNumber: 2)
-    }
-    if !self.pageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.pageToken, fieldNumber: 3)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_ListAssetContainersRequest, rhs: Wendycloud_V1_ListAssetContainersRequest) -> Bool {
-    if lhs.assetID != rhs.assetID {return false}
-    if lhs.pageSize != rhs.pageSize {return false}
-    if lhs.pageToken != rhs.pageToken {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_ListAssetContainersResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".ListAssetContainersResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}containers\0\u{3}next_page_token\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.containers) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.nextPageToken) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.containers.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.containers, fieldNumber: 1)
-    }
-    if !self.nextPageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.nextPageToken, fieldNumber: 2)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_ListAssetContainersResponse, rhs: Wendycloud_V1_ListAssetContainersResponse) -> Bool {
-    if lhs.containers != rhs.containers {return false}
-    if lhs.nextPageToken != rhs.nextPageToken {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_ListAssetContainersByAppRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".ListAssetContainersByAppRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}app_id\0\u{3}page_size\0\u{3}page_token\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.appID) }()
-      case 2: try { try decoder.decodeSingularInt32Field(value: &self.pageSize) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self.pageToken) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.appID.isEmpty {
-      try visitor.visitSingularStringField(value: self.appID, fieldNumber: 1)
-    }
-    if self.pageSize != 0 {
-      try visitor.visitSingularInt32Field(value: self.pageSize, fieldNumber: 2)
-    }
-    if !self.pageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.pageToken, fieldNumber: 3)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_ListAssetContainersByAppRequest, rhs: Wendycloud_V1_ListAssetContainersByAppRequest) -> Bool {
-    if lhs.appID != rhs.appID {return false}
-    if lhs.pageSize != rhs.pageSize {return false}
-    if lhs.pageToken != rhs.pageToken {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension Wendycloud_V1_ListAssetContainersByAppResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  public static let protoMessageName: String = _protobuf_package + ".ListAssetContainersByAppResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}containers\0\u{3}next_page_token\0")
-
-  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.containers) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.nextPageToken) }()
-      default: break
-      }
-    }
-  }
-
-  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    if !self.containers.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.containers, fieldNumber: 1)
-    }
-    if !self.nextPageToken.isEmpty {
-      try visitor.visitSingularStringField(value: self.nextPageToken, fieldNumber: 2)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  public static func ==(lhs: Wendycloud_V1_ListAssetContainersByAppResponse, rhs: Wendycloud_V1_ListAssetContainersByAppResponse) -> Bool {
-    if lhs.containers != rhs.containers {return false}
-    if lhs.nextPageToken != rhs.nextPageToken {return false}
+    if lhs.total != rhs.total {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

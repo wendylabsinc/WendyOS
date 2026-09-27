@@ -61,6 +61,35 @@ For broad hardware inspection, filter the device capability list:
 wendy device hardware list --category camera
 ```
 
+## Wendy Lite cameras
+
+Select a Wendy Lite board in the device picker, or use one saved as your default,
+to list and view its SensorLink video channels directly:
+
+```sh
+wendy device camera list
+wendy device camera view
+wendy device camera view --id 4 --stdout > camera.mjpeg
+```
+
+Use a channel ID from `camera list`. A single video channel is selected automatically;
+multiple channels open a picker. With `--non-interactive`, pass `--id` when several
+channels match. Audio and other sensor channels are excluded.
+
+The connection uses the board's existing USB, LAN, or BLE provider and its normal
+credentials. The firmware must support SensorLink over WendyCom, including the
+manifest and chunked `SensorData` messages.
+
+The viewer supports MJPEG and H.264. `--stdout` writes the channel's encoded bytes
+without transcoding, so use the codec shown by `camera list` when saving or piping
+video. `--width`, `--height`, and `--fps` select an advertised channel with that
+format; they cannot reconfigure or resize a stream. `--stable-id` and `--raw` are
+unavailable for Lite cameras.
+
+`camera list --refresh` fetches a fresh manifest. Its `--json` output is an array
+of video descriptors with `channel_id`, `input_id`, `name`, and `video` format fields.
+Channels sharing an `input_id` are alternative modes of the same input.
+
 ## ROS 2 Camera Topics
 
 The WendyOS agent automatically presents ROS 2 video publishers as ordinary

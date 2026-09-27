@@ -122,6 +122,10 @@ yet have credentials.
 
 ### Nearby table columns
 
+LAN devices appear after their mDNS service resolves or their agent answers a
+probe. Cached devices are checked in the background and stay hidden until
+confirmed during the current scan.
+
 | Column | Description |
 |--------|-------------|
 | Name | Device display name |

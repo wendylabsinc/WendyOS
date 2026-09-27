@@ -179,68 +179,44 @@ func TestMDNSStreamBackend(t *testing.T) {
 	}
 }
 
-// TestMDNSStreamResolveAndEmitFallback pins mdnsStreamResolveAndEmit's
-// isValidHostnameLabel gate on a failed resolve, in both directions: a name
-// that can stand in as a hostname label still surfaces a bare identity, so a
-// device with no TXT records or a transient resolve failure is not silently
-// dropped from the stream — but a name that cannot (e.g. one containing a
-// space) is skipped rather than emitting a misleading dialable-looking
-// identity. Deterministic and network-free: resolveServiceFn is swapped for
-// a resolver that always fails, so no mDNSResponder round trip is involved.
-func TestMDNSStreamResolveAndEmitFallback(t *testing.T) {
+// A stale Bonjour browse record must not become a fabricated live device.
+func TestMDNSStreamResolveAndEmitSkipsFailedResolve(t *testing.T) {
 	orig := resolveServiceFn
 	t.Cleanup(func() { resolveServiceFn = orig })
 	resolveServiceFn = func(context.Context, browseResult, string) (MDNSService, error) {
 		return MDNSService{}, errors.New("forced resolve failure")
 	}
 
-	t.Run("valid hostname label emits a synthesized dialable identity", func(t *testing.T) {
-		var got []MDNSService
-		mdnsStreamResolveAndEmit(context.Background(), browseResult{
-			instanceName:  "valid-label",
-			interfaceName: "en0",
-		}, wendyServiceType, func(svc MDNSService) { got = append(got, svc) })
-
-		if len(got) != 1 {
-			t.Fatalf("got %d emissions, want 1: %+v", len(got), got)
+	for _, serviceType := range []string{wendyServiceType, "_wendy-lite._tcp"} {
+		for _, name := range []string{"wendyos-clever-capsule", "My Device"} {
+			t.Run(serviceType+"/"+name, func(t *testing.T) {
+				mdnsStreamResolveAndEmit(context.Background(), browseResult{
+					instanceName: name, interfaceName: "en0",
+				}, serviceType, func(svc MDNSService) {
+					t.Errorf("failed resolve emitted a ghost service: %+v", svc)
+				})
+			})
 		}
-		svc := got[0]
-		// Hostname/Port are what the pre-stream deviceFromBrowse fallback
-		// synthesized. Without them the row has no identity at all: the mapper
-		// derives ID/DisplayName from the hostname, so the device would reach
-		// the engine nameless, un-dialable, and keyed by "" in the cache.
-		if svc.InstanceName != "valid-label" || svc.InterfaceName != "en0" ||
-			svc.Hostname != "valid-label.local" || svc.Port != defaultAgentPort || len(svc.TXTRecords) != 0 {
-			t.Errorf("emitted %+v, want {InstanceName+Hostname valid-label(.local), Port %d, InterfaceName en0}", svc, defaultAgentPort)
-		}
-		if dev := lanDeviceFromService(svc); dev.ID == "" || dev.DisplayName == "" || dev.Port == 0 {
-			t.Errorf("fallback sighting maps to an unusable device: %+v", dev)
-		}
-	})
+	}
+}
 
-	t.Run("instance name unusable as a hostname label is skipped", func(t *testing.T) {
-		var got []MDNSService
-		mdnsStreamResolveAndEmit(context.Background(), browseResult{
-			instanceName:  "My Device", // space: not a valid RFC1123 label
-			interfaceName: "en0",
-		}, wendyServiceType, func(svc MDNSService) { got = append(got, svc) })
+func TestMDNSStreamResolveAndEmitAllowsResolvedServiceWithoutTXT(t *testing.T) {
+	orig := resolveServiceFn
+	t.Cleanup(func() { resolveServiceFn = orig })
+	resolveServiceFn = func(context.Context, browseResult, string) (MDNSService, error) {
+		return MDNSService{InstanceName: "board", Hostname: "board.local", IPAddress: "10.0.0.5", Port: 50052}, nil
+	}
 
-		if len(got) != 0 {
-			t.Errorf("got %d emissions, want 0 (invalid label must not emit): %+v", len(got), got)
-		}
-	})
-
-	t.Run("failed Wendy Lite resolve does not synthesize a ghost agent row", func(t *testing.T) {
-		var got []MDNSService
-		mdnsStreamResolveAndEmit(context.Background(), browseResult{
-			instanceName:  "offline-esp32",
-			interfaceName: "en0",
-		}, "_wendy-lite._tcp", func(svc MDNSService) { got = append(got, svc) })
-
-		if len(got) != 0 {
-			t.Errorf("got %d emissions, want 0 for an unresolved non-WendyOS service: %+v", len(got), got)
-		}
-	})
+	var got []MDNSService
+	mdnsStreamResolveAndEmit(context.Background(), browseResult{
+		instanceName: "board", interfaceName: "en0",
+	}, wendyServiceType, func(svc MDNSService) { got = append(got, svc) })
+	if len(got) != 1 {
+		t.Fatalf("got %d emissions, want one resolved service", len(got))
+	}
+	if svc := got[0]; svc.Hostname != "board.local" || svc.IPAddress != "10.0.0.5" || svc.Port != 50052 || svc.InterfaceName != "en0" {
+		t.Fatalf("resolved service changed: %+v", svc)
+	}
 }
 
 func TestPreferInterfaceRoutedAddrAvoidsIPv4OnWrongInterface(t *testing.T) {

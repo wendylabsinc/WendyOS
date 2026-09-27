@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.35.1
-// source: wendy/lite/wendy_conf.proto
+// source: wendy_conf.proto
 
 package litepb
 
@@ -57,11 +57,11 @@ func (x WendyConfWifiSecurity) String() string {
 }
 
 func (WendyConfWifiSecurity) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_lite_wendy_conf_proto_enumTypes[0].Descriptor()
+	return file_wendy_conf_proto_enumTypes[0].Descriptor()
 }
 
 func (WendyConfWifiSecurity) Type() protoreflect.EnumType {
-	return &file_wendy_lite_wendy_conf_proto_enumTypes[0]
+	return &file_wendy_conf_proto_enumTypes[0]
 }
 
 func (x WendyConfWifiSecurity) Number() protoreflect.EnumNumber {
@@ -70,7 +70,7 @@ func (x WendyConfWifiSecurity) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WendyConfWifiSecurity.Descriptor instead.
 func (WendyConfWifiSecurity) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_lite_wendy_conf_proto_rawDescGZIP(), []int{0}
+	return file_wendy_conf_proto_rawDescGZIP(), []int{0}
 }
 
 type WendyConfWifiNetwork struct {
@@ -86,7 +86,7 @@ type WendyConfWifiNetwork struct {
 
 func (x *WendyConfWifiNetwork) Reset() {
 	*x = WendyConfWifiNetwork{}
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[0]
+	mi := &file_wendy_conf_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -98,7 +98,7 @@ func (x *WendyConfWifiNetwork) String() string {
 func (*WendyConfWifiNetwork) ProtoMessage() {}
 
 func (x *WendyConfWifiNetwork) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[0]
+	mi := &file_wendy_conf_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -111,7 +111,7 @@ func (x *WendyConfWifiNetwork) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WendyConfWifiNetwork.ProtoReflect.Descriptor instead.
 func (*WendyConfWifiNetwork) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_wendy_conf_proto_rawDescGZIP(), []int{0}
+	return file_wendy_conf_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *WendyConfWifiNetwork) GetSsid() string {
@@ -159,7 +159,7 @@ type WendyConfWifi struct {
 
 func (x *WendyConfWifi) Reset() {
 	*x = WendyConfWifi{}
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[1]
+	mi := &file_wendy_conf_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -171,7 +171,7 @@ func (x *WendyConfWifi) String() string {
 func (*WendyConfWifi) ProtoMessage() {}
 
 func (x *WendyConfWifi) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[1]
+	mi := &file_wendy_conf_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -184,7 +184,7 @@ func (x *WendyConfWifi) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WendyConfWifi.ProtoReflect.Descriptor instead.
 func (*WendyConfWifi) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_wendy_conf_proto_rawDescGZIP(), []int{1}
+	return file_wendy_conf_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *WendyConfWifi) GetNetworks() []*WendyConfWifiNetwork {
@@ -210,7 +210,7 @@ type WendyConfCloudProvisioning struct {
 
 func (x *WendyConfCloudProvisioning) Reset() {
 	*x = WendyConfCloudProvisioning{}
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[2]
+	mi := &file_wendy_conf_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -222,7 +222,7 @@ func (x *WendyConfCloudProvisioning) String() string {
 func (*WendyConfCloudProvisioning) ProtoMessage() {}
 
 func (x *WendyConfCloudProvisioning) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[2]
+	mi := &file_wendy_conf_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -235,7 +235,7 @@ func (x *WendyConfCloudProvisioning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WendyConfCloudProvisioning.ProtoReflect.Descriptor instead.
 func (*WendyConfCloudProvisioning) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_wendy_conf_proto_rawDescGZIP(), []int{2}
+	return file_wendy_conf_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *WendyConfCloudProvisioning) GetEnrolled() bool {
@@ -304,7 +304,7 @@ type WendyConfEnrollment struct {
 
 func (x *WendyConfEnrollment) Reset() {
 	*x = WendyConfEnrollment{}
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[3]
+	mi := &file_wendy_conf_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +316,7 @@ func (x *WendyConfEnrollment) String() string {
 func (*WendyConfEnrollment) ProtoMessage() {}
 
 func (x *WendyConfEnrollment) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[3]
+	mi := &file_wendy_conf_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,7 +329,7 @@ func (x *WendyConfEnrollment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WendyConfEnrollment.ProtoReflect.Descriptor instead.
 func (*WendyConfEnrollment) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_wendy_conf_proto_rawDescGZIP(), []int{3}
+	return file_wendy_conf_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *WendyConfEnrollment) GetTenantId() string {
@@ -400,7 +400,7 @@ type WendyConf struct {
 
 func (x *WendyConf) Reset() {
 	*x = WendyConf{}
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[4]
+	mi := &file_wendy_conf_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -412,7 +412,7 @@ func (x *WendyConf) String() string {
 func (*WendyConf) ProtoMessage() {}
 
 func (x *WendyConf) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_lite_wendy_conf_proto_msgTypes[4]
+	mi := &file_wendy_conf_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -425,7 +425,7 @@ func (x *WendyConf) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WendyConf.ProtoReflect.Descriptor instead.
 func (*WendyConf) Descriptor() ([]byte, []int) {
-	return file_wendy_lite_wendy_conf_proto_rawDescGZIP(), []int{4}
+	return file_wendy_conf_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *WendyConf) GetDeviceName() string {
@@ -456,11 +456,11 @@ func (x *WendyConf) GetEnrollment() *WendyConfEnrollment {
 	return nil
 }
 
-var File_wendy_lite_wendy_conf_proto protoreflect.FileDescriptor
+var File_wendy_conf_proto protoreflect.FileDescriptor
 
-const file_wendy_lite_wendy_conf_proto_rawDesc = "" +
+const file_wendy_conf_proto_rawDesc = "" +
 	"\n" +
-	"\x1bwendy/lite/wendy_conf.proto\"\xae\x01\n" +
+	"\x10wendy_conf.proto\"\xae\x01\n" +
 	"\x14WendyConfWifiNetwork\x12\x12\n" +
 	"\x04ssid\x18\x01 \x01(\tR\x04ssid\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x1a\n" +
@@ -506,20 +506,20 @@ const file_wendy_lite_wendy_conf_proto_rawDesc = "" +
 	"\x1dWENDY_CONF_WIFI_SECURITY_WPA3\x10\x03b\x06proto3"
 
 var (
-	file_wendy_lite_wendy_conf_proto_rawDescOnce sync.Once
-	file_wendy_lite_wendy_conf_proto_rawDescData []byte
+	file_wendy_conf_proto_rawDescOnce sync.Once
+	file_wendy_conf_proto_rawDescData []byte
 )
 
-func file_wendy_lite_wendy_conf_proto_rawDescGZIP() []byte {
-	file_wendy_lite_wendy_conf_proto_rawDescOnce.Do(func() {
-		file_wendy_lite_wendy_conf_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_wendy_lite_wendy_conf_proto_rawDesc), len(file_wendy_lite_wendy_conf_proto_rawDesc)))
+func file_wendy_conf_proto_rawDescGZIP() []byte {
+	file_wendy_conf_proto_rawDescOnce.Do(func() {
+		file_wendy_conf_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_wendy_conf_proto_rawDesc), len(file_wendy_conf_proto_rawDesc)))
 	})
-	return file_wendy_lite_wendy_conf_proto_rawDescData
+	return file_wendy_conf_proto_rawDescData
 }
 
-var file_wendy_lite_wendy_conf_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wendy_lite_wendy_conf_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_wendy_lite_wendy_conf_proto_goTypes = []any{
+var file_wendy_conf_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_wendy_conf_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_wendy_conf_proto_goTypes = []any{
 	(WendyConfWifiSecurity)(0),         // 0: WendyConfWifiSecurity
 	(*WendyConfWifiNetwork)(nil),       // 1: WendyConfWifiNetwork
 	(*WendyConfWifi)(nil),              // 2: WendyConfWifi
@@ -527,7 +527,7 @@ var file_wendy_lite_wendy_conf_proto_goTypes = []any{
 	(*WendyConfEnrollment)(nil),        // 4: WendyConfEnrollment
 	(*WendyConf)(nil),                  // 5: WendyConf
 }
-var file_wendy_lite_wendy_conf_proto_depIdxs = []int32{
+var file_wendy_conf_proto_depIdxs = []int32{
 	0, // 0: WendyConfWifiNetwork.security:type_name -> WendyConfWifiSecurity
 	1, // 1: WendyConfWifi.networks:type_name -> WendyConfWifiNetwork
 	2, // 2: WendyConf.wifi:type_name -> WendyConfWifi
@@ -540,28 +540,28 @@ var file_wendy_lite_wendy_conf_proto_depIdxs = []int32{
 	0, // [0:5] is the sub-list for field type_name
 }
 
-func init() { file_wendy_lite_wendy_conf_proto_init() }
-func file_wendy_lite_wendy_conf_proto_init() {
-	if File_wendy_lite_wendy_conf_proto != nil {
+func init() { file_wendy_conf_proto_init() }
+func file_wendy_conf_proto_init() {
+	if File_wendy_conf_proto != nil {
 		return
 	}
-	file_wendy_lite_wendy_conf_proto_msgTypes[4].OneofWrappers = []any{}
+	file_wendy_conf_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_lite_wendy_conf_proto_rawDesc), len(file_wendy_lite_wendy_conf_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_conf_proto_rawDesc), len(file_wendy_conf_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_wendy_lite_wendy_conf_proto_goTypes,
-		DependencyIndexes: file_wendy_lite_wendy_conf_proto_depIdxs,
-		EnumInfos:         file_wendy_lite_wendy_conf_proto_enumTypes,
-		MessageInfos:      file_wendy_lite_wendy_conf_proto_msgTypes,
+		GoTypes:           file_wendy_conf_proto_goTypes,
+		DependencyIndexes: file_wendy_conf_proto_depIdxs,
+		EnumInfos:         file_wendy_conf_proto_enumTypes,
+		MessageInfos:      file_wendy_conf_proto_msgTypes,
 	}.Build()
-	File_wendy_lite_wendy_conf_proto = out.File
-	file_wendy_lite_wendy_conf_proto_goTypes = nil
-	file_wendy_lite_wendy_conf_proto_depIdxs = nil
+	File_wendy_conf_proto = out.File
+	file_wendy_conf_proto_goTypes = nil
+	file_wendy_conf_proto_depIdxs = nil
 }

@@ -8,7 +8,7 @@ import (
 )
 
 func TestSensorServiceTypesReuseSensorlinkPayloads(t *testing.T) {
-	// StreamSensorsRequest carries channel ids; the stream yields sensorlinkpb.SensorFrame.
+	// StreamSensorsRequest carries channel ids; the stream yields sensorlinkpb.SensorData.
 	req := &agentpbv2.StreamSensorsRequest{ChannelId: []uint32{1}}
 	if len(req.ChannelId) != 1 {
 		t.Fatal("channel id not set")

@@ -231,6 +231,7 @@ func (s *mcpServer) Start(ctx context.Context) error {
 	s.registerProvisioningTools(srv)
 	s.registerOSTools(srv)
 	s.registerCloudTools(srv)
+	registerToolAnalytics(srv)
 
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	defer cancelStartup()

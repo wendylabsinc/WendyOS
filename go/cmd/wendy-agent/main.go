@@ -358,7 +358,7 @@ func main() {
 	defer videoSvc.Shutdown()
 
 	notificationSender := services.NewCloudNotificationSender(logger, provisioningSvc)
-	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory()}, &services.CampaignWebhookSender{})
+	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory()}, &services.CampaignCloudSender{Cloud: notificationSender})
 	defer stopInference()
 	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
 	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)
@@ -417,6 +417,10 @@ func main() {
 		logger.Warn("loading sensor pairing store failed", zap.Error(err))
 	}
 	sensorTransportFor := func(p mcusource.SensorPairing, addr string) (mcusource.SensorTransport, error) {
+		if p.Transport == "wendycom" {
+			certPEM, chainPEM, keyPEM := mcuIdentity()
+			return mcusource.NewWendyComTransport(logger, certPEM, chainPEM, keyPEM, p, addr)
+		}
 		if p.Transport == "grpc" {
 			certPEM, chainPEM, keyPEM := mcuIdentity()
 			return mcusource.NewGRPCTransport(logger, certPEM, chainPEM, keyPEM, p, addr)

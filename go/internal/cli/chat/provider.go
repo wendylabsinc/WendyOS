@@ -37,7 +37,13 @@ func NewProvider(config Config) (Provider, error) {
 	}}, nil
 }
 
-func (p *httpProvider) Stream(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (Message, error) {
+func (p *httpProvider) Stream(ctx context.Context, messages []Message, tools []Tool, emit func(string)) (reply Message, err error) {
+	usage := &TokenUsage{Provider: p.config.Provider, Model: p.config.Model}
+	ctx = context.WithValue(ctx, usageKey{}, usage)
+	defer func() {
+		usage.Complete = usage.Complete && err == nil
+		reply.Usage = usage
+	}()
 	if emit == nil {
 		emit = func(string) {}
 	}
