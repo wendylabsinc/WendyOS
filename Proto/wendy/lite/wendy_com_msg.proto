@@ -82,6 +82,13 @@ message WendyComDeviceIdentity {
 
 message WendyComGetDeviceInfoParams {}
 
+// USB-only bootstrap challenge. The nonce is generated and retained on-device.
+message WendyComEnrollmentChallengeParams {
+    bool status_only = 1;
+}
+message WendyComEnrollmentChallenge { string nonce_hex = 1; bool enrolled = 2; }
+
+
 // Params for WENDY_COM_CMD_CONSOLE_ATTACH — start streaming console output as
 // WendyComConsoleData events carrying the given event_id. A repeated attach
 // with the same event_id refreshes the auto-detach deadline.
@@ -149,6 +156,8 @@ message WendyComCommand {
         WendyComConfPushBeginParams        conf_push_begin       = 13;
         WendyComConfPushDataParams         conf_push_data        = 14;
         WendyComConfPushEndParams          conf_push_end         = 15;
+        // 16–18 are used by the SensorLink extension.
+        WendyComEnrollmentChallengeParams enrollment_challenge = 19;
     }
 }
 
@@ -170,6 +179,7 @@ message WendyComResponse {
     oneof data {
         WendyComDeviceIdentity   device_identity   = 3;
         WendyComDeviceInfo       device_info       = 4;
+        WendyComEnrollmentChallenge enrollment_challenge = 6;
     }
 }
 

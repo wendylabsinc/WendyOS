@@ -408,3 +408,30 @@ func TestSignerNormalizesCertificateChain(t *testing.T) {
 		}
 	}
 }
+
+func TestEnrollmentRequestBindsClassC(t *testing.T) {
+	auth, key, _ := testAuth(t)
+	jws, err := EnrollmentRequestForClass(auth, "lite-test", "C")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(string(jws), ".")
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err = json.Unmarshal(payload, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if claims["device_class"] != "C" || claims["device_id"] != "lite-test" || claims["tenant"] != testTenant {
+		t.Fatalf("wrong claims: %v", claims)
+	}
+	sig, _ := base64.RawURLEncoding.DecodeString(parts[2])
+	if err = mldsa.Verify(key.PublicKey(), []byte(parts[0]+"."+parts[1]), sig, &mldsa.Options{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = EnrollmentRequestForClass(auth, "lite-test", "unknown"); err == nil {
+		t.Fatal("unknown class accepted")
+	}
+}

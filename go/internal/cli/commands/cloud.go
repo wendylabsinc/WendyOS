@@ -48,6 +48,7 @@ func newCloudCmd() *cobra.Command {
 	// menu; it is hidden via its own constructor.
 	addToGroup("devices",
 		newCloudEnrollDeviceCmd(),
+		newCloudEnrollLiteCmd(),
 		newCloudDiscoverCmd(),
 		newCloudDeviceCmd(),
 		newCloudRunCmd(),
