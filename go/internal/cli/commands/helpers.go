@@ -1298,10 +1298,15 @@ func connectToAgentDirect(ctx context.Context, cfg resolveConfig, hostname, addr
 				return nil, false, connErr
 			}
 			conn = refreshedConn
-		} else if usbConn, ok := usbDirectFallback(ctx, hostname); ok {
+		} else if usbConn, ok, usbErr := usbDirectFallback(ctx, hostname); ok {
 			// The stored address is unreachable but the same device (verified
 			// by hostname) is on USB — use it directly.
 			conn = usbConn
+		} else if usbErr != nil && isNameResolutionFailure(connErr) {
+			// The name never resolved, so connErr says nothing about the
+			// device. An agent that answered on USB but refused the
+			// connection (e.g. a TLS rejection) is the actionable failure.
+			return nil, false, usbErr
 		} else if isDefault && !jsonOutput && !cfg.nonInteractive && isInteractiveTerminal() {
 			// Default device is unreachable — offer interactive recovery.
 			hostname, _, _ := net.SplitHostPort(addr)
@@ -1931,6 +1936,20 @@ var dialAgentLKGFn = dialAgentLKG
 // actively wrong rather than merely useless. "localhost" is excluded
 // separately since it's never a real device; without this a dev pointed at a
 // local agent by that name would get a nonsense "localhost.local" entry.
+// isNameResolutionFailure reports whether err means the target name produced
+// no addresses at all, from either Go's resolver or gRPC's dns resolver
+// (which surfaces an empty lookup only as a status message).
+func isNameResolutionFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	return strings.Contains(err.Error(), "produced zero addresses")
+}
+
 func isMDNSShapedHost(host string) bool {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "localhost" {

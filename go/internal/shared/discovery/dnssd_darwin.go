@@ -326,7 +326,7 @@ func dnssdResolveAddresses(ctx context.Context, hostname string, inst browseResu
 					}
 				}
 				if zone != "" {
-					address += "%" + zone
+					address += "%" + LinkLocalDialZone(zone)
 				}
 			}
 			addresses = append(addresses, address)

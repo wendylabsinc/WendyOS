@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -141,7 +143,7 @@ func TestUSBDirectFallbackSkipsCandidateFailingPreDial(t *testing.T) {
 	}
 	t.Cleanup(func() { usbDirectConnectFn = origConnect })
 
-	if _, ok := usbDirectFallback(context.Background(), "wendy-orin.local"); ok {
+	if _, ok, _ := usbDirectFallback(context.Background(), "wendy-orin.local"); ok {
 		t.Fatal("a candidate with nothing listening must not yield a fallback connection")
 	}
 }
@@ -294,7 +296,7 @@ func TestUSBDirectFallbackMatchesHostname(t *testing.T) {
 	}
 	t.Cleanup(func() { usbDirectConnectFn = origConnect })
 
-	conn, ok := usbDirectFallback(context.Background(), "wendy-orin.local")
+	conn, ok, _ := usbDirectFallback(context.Background(), "wendy-orin.local")
 	if !ok || conn == nil {
 		t.Fatal("expected a matched connection")
 	}
@@ -322,7 +324,7 @@ func TestUSBDirectFallbackRejectsWrongOrUnknownHostname(t *testing.T) {
 			}
 			t.Cleanup(func() { usbDirectConnectFn = origConnect })
 
-			if _, ok := usbDirectFallback(context.Background(), "wendy-orin.local"); ok {
+			if _, ok, _ := usbDirectFallback(context.Background(), "wendy-orin.local"); ok {
 				t.Fatal("must not connect to a device with a different or unknown hostname")
 			}
 			if !rec.closed {
@@ -334,7 +336,56 @@ func TestUSBDirectFallbackRejectsWrongOrUnknownHostname(t *testing.T) {
 
 func TestUSBDirectFallbackNoCandidates(t *testing.T) {
 	withUSBDirectStubs(t, nil, getAgentVersionAtAddress)
-	if _, ok := usbDirectFallback(context.Background(), "wendy-orin.local"); ok {
+	if _, ok, _ := usbDirectFallback(context.Background(), "wendy-orin.local"); ok {
 		t.Fatal("no candidates must mean no fallback")
+	}
+}
+
+// An agent that answers on USB but refuses the connection is the error worth
+// showing: the primary dial often failed only because the name never resolved.
+func TestUSBDirectFallbackReturnsErrorFromAnsweringLink(t *testing.T) {
+	withUSBDirectStubs(t,
+		[]discovery.USBDirectCandidate{{Interface: "en10", Zone: "bridge100"}},
+		getAgentVersionAtAddress)
+	origConnect := usbDirectConnectFn
+	usbDirectConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		return nil, errors.New("remote error: tls: bad certificate")
+	}
+	t.Cleanup(func() { usbDirectConnectFn = origConnect })
+
+	_, ok, err := usbDirectFallback(context.Background(), "wendyos-enmax01.local")
+	if ok {
+		t.Fatal("a refused connection must not yield a fallback connection")
+	}
+	if err == nil || !strings.Contains(err.Error(), "bad certificate") || !strings.Contains(err.Error(), "en10") {
+		t.Fatalf("err = %v, want the USB link's TLS error naming en10", err)
+	}
+}
+
+// Nothing listening on USB is not an error worth surfacing.
+func TestUSBDirectFallbackNoErrorWhenNothingAnswers(t *testing.T) {
+	withUSBDirectStubs(t,
+		[]discovery.USBDirectCandidate{{Interface: "enxdongle", Zone: "enxdongle"}},
+		getAgentVersionAtAddress)
+	stubUSBDirectPreDial(t, func(context.Context, discovery.USBDirectCandidate) bool { return false })
+
+	if _, ok, err := usbDirectFallback(context.Background(), "wendy-orin.local"); ok || err != nil {
+		t.Fatalf("got (ok=%v, err=%v), want (false, nil)", ok, err)
+	}
+}
+
+func TestIsNameResolutionFailure(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("rpc error: code = Unavailable desc = name resolver error: produced zero addresses"), true},
+		{fmt.Errorf("dial: %w", &net.DNSError{Err: "no such host", Name: "enmax01"}), true},
+		{errors.New("remote error: tls: bad certificate"), false},
+	} {
+		if got := isNameResolutionFailure(tc.err); got != tc.want {
+			t.Errorf("isNameResolutionFailure(%v) = %v, want %v", tc.err, got, tc.want)
+		}
 	}
 }

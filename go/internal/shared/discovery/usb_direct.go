@@ -21,8 +21,9 @@ type USBDirectCandidate struct {
 	// LANDevice USB annotation.
 	Interface string
 	// Zone is the IPv6 zone identifier for dialing: the interface name on
-	// unix-likes, the numeric interface index on Windows (Windows zone IDs
-	// are indexes, and Go's dialer passes them through verbatim).
+	// unix-likes (or its bridge, when the port is bridged — see
+	// LinkLocalDialZone), the numeric interface index on Windows (Windows
+	// zone IDs are indexes, and Go's dialer passes them through verbatim).
 	Zone string
 }
 
@@ -76,6 +77,8 @@ func usbDirectCandidatesFrom(ifaces []net.Interface, goos string, displayName fu
 		zone := ifaces[i].Name
 		if goos == "windows" {
 			zone = strconv.Itoa(ifaces[i].Index)
+		} else {
+			zone = LinkLocalDialZone(zone)
 		}
 		out = append(out, USBDirectCandidate{Interface: ifaces[i].Name, Zone: zone})
 	}

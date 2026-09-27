@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -254,11 +255,18 @@ var usbDirectConnectFn = connectWithAutoTLS
 // empty hostname (agent predating the field) never matches — connecting to
 // whichever device happens to be plugged in would silently target the wrong
 // machine.
-func usbDirectFallback(ctx context.Context, wantHost string) (*grpcclient.AgentConnection, bool) {
+//
+// When no candidate matches, the returned error is the first failure from a
+// USB link where an agent was listening (TCP connect succeeded but the gRPC
+// or TLS connection did not). Callers use it to replace a less informative
+// primary error — a name that never resolved hides a TLS rejection on the
+// device that is physically plugged in.
+func usbDirectFallback(ctx context.Context, wantHost string) (*grpcclient.AgentConnection, bool, error) {
 	want := normalizeMDNSHost(wantHost)
 	if want == "" {
-		return nil, false
+		return nil, false, nil
 	}
+	var answeredErr error
 	for _, cand := range usbDirectCandidatesFn() {
 		pctx, cancel := context.WithTimeout(ctx, usbDirectProbeBudget)
 		if !usbDirectPreDialFn(pctx, cand) {
@@ -268,6 +276,9 @@ func usbDirectFallback(ctx context.Context, wantHost string) (*grpcclient.AgentC
 		conn, err := usbDirectConnectFn(pctx, cand.HostPort(defaultAgentPort))
 		if err != nil {
 			cancel()
+			if answeredErr == nil {
+				answeredErr = fmt.Errorf("agent on USB link %s: %w", cand.Interface, err)
+			}
 			continue
 		}
 		resp, verr := conn.AgentService.GetAgentVersion(pctx, &agentpb.GetAgentVersionRequest{})
@@ -277,7 +288,7 @@ func usbDirectFallback(ctx context.Context, wantHost string) (*grpcclient.AgentC
 			continue
 		}
 		conn.CacheAgentVersion(resp)
-		return conn, true
+		return conn, true, nil
 	}
-	return nil, false
+	return nil, false, answeredErr
 }

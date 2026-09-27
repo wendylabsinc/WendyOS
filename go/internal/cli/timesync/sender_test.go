@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/roughtime"
 	"golang.org/x/net/ipv4"
 )
@@ -171,5 +172,64 @@ func TestSendMulticastContinuesAfterInterfaceFailure(t *testing.T) {
 	}
 	if conns[1].interfaceName != "en60" || conns[1].writes != 1 {
 		t.Errorf("en60 connection = {interface: %q, writes: %d}, want {interface: en60, writes: 1}", conns[1].interfaceName, conns[1].writes)
+	}
+}
+
+type recordingUDP6Conn struct {
+	dsts []string
+	fail map[string]bool
+}
+
+func (r *recordingUDP6Conn) WriteTo(_ []byte, addr net.Addr) (int, error) {
+	if r.fail[addr.String()] {
+		return 0, errors.New("no route to host")
+	}
+	r.dsts = append(r.dsts, addr.String())
+	return 1, nil
+}
+func (r *recordingUDP6Conn) Close() error { return nil }
+
+// Over USB the proof must reach the device's well-known address through the
+// bridge-aware zone, alongside the link-local group on every interface.
+func TestSendUDP6TargetsGroupAndUSBLinks(t *testing.T) {
+	origInterfaces, origConn, origUSB := listMulticastInterfaces, newUDP6Conn, usbDirectCandidatesFn
+	t.Cleanup(func() {
+		listMulticastInterfaces, newUDP6Conn, usbDirectCandidatesFn = origInterfaces, origConn, origUSB
+	})
+
+	listMulticastInterfaces = func() ([]net.Interface, error) {
+		return []net.Interface{
+			{Name: "lo0", Flags: net.FlagUp | net.FlagLoopback | net.FlagMulticast},
+			{Name: "en0", Flags: net.FlagUp | net.FlagMulticast},
+			{Name: "bridge100", Flags: net.FlagUp | net.FlagMulticast},
+		}, nil
+	}
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate {
+		return []discovery.USBDirectCandidate{{Interface: "en10", Zone: "bridge100"}}
+	}
+	rec := &recordingUDP6Conn{fail: map[string]bool{"[ff02::5741:5887%en0]:5887": true}}
+	newUDP6Conn = func() (udp6Writer, error) { return rec, nil }
+
+	if err := sendUDP6([]byte("proof")); err != nil {
+		t.Fatalf("sendUDP6: %v", err)
+	}
+	want := []string{"[ff02::5741:5887%bridge100]:5887", "[fe80::5741:1%bridge100]:5887"}
+	if len(rec.dsts) != len(want) || rec.dsts[0] != want[0] || rec.dsts[1] != want[1] {
+		t.Fatalf("sent to %v, want %v (en0 failure skipped)", rec.dsts, want)
+	}
+}
+
+func TestSendUDP6ErrorsWhenNothingSent(t *testing.T) {
+	origInterfaces, origConn, origUSB := listMulticastInterfaces, newUDP6Conn, usbDirectCandidatesFn
+	t.Cleanup(func() {
+		listMulticastInterfaces, newUDP6Conn, usbDirectCandidatesFn = origInterfaces, origConn, origUSB
+	})
+
+	listMulticastInterfaces = func() ([]net.Interface, error) { return nil, nil }
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	newUDP6Conn = func() (udp6Writer, error) { t.Fatal("no socket needed with no destinations"); return nil, nil }
+
+	if err := sendUDP6([]byte("proof")); err == nil {
+		t.Fatal("want an error when there is nowhere to send")
 	}
 }

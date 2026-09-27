@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/roughtime"
 	"golang.org/x/net/ipv4"
 )
@@ -138,17 +139,21 @@ func encodeProofPacket(result roughtime.Result) ([]byte, error) {
 	}), nil
 }
 
-// BroadcastTime fetches a Roughtime proof and multicasts it as a WendyDatagram
-// on all active multicast-capable network interfaces. Individual interface
-// errors are skipped, but an error is returned when no interface accepts the
-// packet so callers never report a broadcast that did not happen.
+// BroadcastTime fetches a Roughtime proof and sends it as a WendyDatagram on
+// every path an agent may be listening on: IPv4 multicast and IPv6 link-local
+// multicast on all active multicast-capable interfaces, plus unicast to the
+// well-known USB device address on each USB link. Individual send errors are
+// skipped, but an error is returned when nothing was sent so callers never
+// report a broadcast that did not happen.
 func BroadcastTime(ctx context.Context) (roughtime.Result, error) {
 	pkt, result, err := FetchProofPacket(ctx)
 	if err != nil {
 		return roughtime.Result{}, err
 	}
-	if err := sendMulticast(pkt); err != nil {
-		return roughtime.Result{}, err
+	v4Err := sendMulticast(pkt)
+	v6Err := sendUDP6(pkt)
+	if v4Err != nil && v6Err != nil {
+		return roughtime.Result{}, errors.Join(v4Err, v6Err)
 	}
 	return result, nil
 }
@@ -226,4 +231,67 @@ func sendMulticast(pkt []byte) error {
 		return fmt.Errorf("broadcasting time proof: %w", errors.Join(failures...))
 	}
 	return errors.New("broadcasting time proof: no active multicast-capable network interfaces")
+}
+
+// udp6Writer is the subset of a UDP6 socket sendUDP6 needs; an interface so
+// tests can record sends without real sockets.
+type udp6Writer interface {
+	WriteTo([]byte, net.Addr) (int, error)
+	Close() error
+}
+
+var (
+	newUDP6Conn = func() (udp6Writer, error) {
+		return net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified})
+	}
+	usbDirectCandidatesFn = discovery.USBDirectCandidates
+)
+
+// sendUDP6 sends pkt to the IPv6 link-local time group on every active
+// multicast interface and unicast to the well-known device address on every
+// USB link. IPv4 multicast alone is unreliable over USB: an agent that joined
+// the group only on its default uplink never sees it, and a host source
+// address that is off the device's subnet can be dropped by reverse-path
+// filtering. Every USB gadget link has IPv6 link-local addressing, so these
+// sends reach the device regardless. Link-local destinations carry an
+// explicit zone, which also selects the outgoing interface.
+func sendUDP6(pkt []byte) error {
+	var dsts []*net.UDPAddr
+	group := net.ParseIP(timesync.LinkLocalGroupV6)
+	if ifaces, err := listMulticastInterfaces(); err == nil {
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagUp == 0 ||
+				iface.Flags&net.FlagLoopback != 0 ||
+				iface.Flags&net.FlagMulticast == 0 {
+				continue
+			}
+			dsts = append(dsts, &net.UDPAddr{IP: group, Port: timesync.DatagramPort, Zone: iface.Name})
+		}
+	}
+	for _, cand := range usbDirectCandidatesFn() {
+		dsts = append(dsts, &net.UDPAddr{IP: net.ParseIP(discovery.WellKnownUSBAddr), Port: timesync.DatagramPort, Zone: cand.Zone})
+	}
+	if len(dsts) == 0 {
+		return errors.New("sending time proof over IPv6: no active interfaces")
+	}
+
+	conn, err := newUDP6Conn()
+	if err != nil {
+		return fmt.Errorf("sending time proof over IPv6: opening UDP socket: %w", err)
+	}
+	defer conn.Close()
+
+	sent := 0
+	var failures []error
+	for _, dst := range dsts {
+		if _, err := conn.WriteTo(pkt, dst); err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", dst, err))
+			continue
+		}
+		sent++
+	}
+	if sent > 0 {
+		return nil
+	}
+	return fmt.Errorf("sending time proof over IPv6: %w", errors.Join(failures...))
 }
