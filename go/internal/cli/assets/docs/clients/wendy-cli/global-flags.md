@@ -20,6 +20,8 @@ wendy device list | cat
 wendy device list --json=false | cat
 ```
 
+In JSON mode stdout carries only JSON. Notices are written to stderr as single plain lines instead of being dropped: the device a command picked for you (`Using default device wendyos-abc.local.`), certificate warnings, and next-step hints (hints are still suppressed in CI).
+
 > **Note:** For live, full-screen TUI commands such as [`wendy device top`](./commands/device/top.md), `--json` does not stream the interface — it switches the command to a one-shot **snapshot** mode that prints a single JSON object and exits, instead of rendering the interactive dashboard.
 
 ### Errors in JSON mode

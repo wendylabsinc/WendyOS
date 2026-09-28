@@ -42,13 +42,15 @@ func noteImplicitDevice(name string, reason implicitDeviceReason) {
 	if name == "" || noticedImplicitDevice {
 		return
 	}
-	// Machine-readable output must stay parseable, and the existing
-	// default-device spinner is gated the same way. Note the CLI turns this on by
-	// itself when stdout is not a terminal, so piped and CI runs stay quiet.
+	noticedImplicitDevice = true
+	// JSON mode (on by itself whenever stdout is not a terminal) keeps stdout
+	// parseable, so the device line goes to stderr as one plain line. The
+	// throttled how-to-change hint is left out: it is advice for a person at a
+	// terminal, and printing it here would also mark it shown for the day.
 	if jsonOutput {
+		plainNotice("%s", implicitDeviceLines(name, reason, false)[0])
 		return
 	}
-	noticedImplicitDevice = true
 
 	withHint := !implicitDeviceHintShownToday()
 	for _, line := range implicitDeviceLines(tui.Device(name), reason, withHint) {
