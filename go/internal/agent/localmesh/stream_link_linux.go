@@ -471,9 +471,14 @@ func (l *streamNodeLink) rxLastMSAgo() int64 {
 }
 
 // sockQueueDepths returns kernel socket queue depths (unread RX, unsent TX)
-// for instrumented connections, or -1, -1 when unavailable.
+// for instrumented connections, or -1, -1 when unavailable. TLS-wrapped CoCs
+// are unwrapped to the underlying packet connection first.
 func (l *streamNodeLink) sockQueueDepths() (int, int) {
-	prober, ok := l.conn.(sockQueueProber)
+	conn := l.conn
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		conn = tlsConn.NetConn()
+	}
+	prober, ok := conn.(sockQueueProber)
 	if !ok {
 		return -1, -1
 	}

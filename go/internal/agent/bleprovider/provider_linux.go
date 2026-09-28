@@ -17,16 +17,21 @@ import (
 )
 
 type runtime struct {
-	cfg                  Config
-	uuid                 string
-	owner                string
-	hciIndex             int
-	ownerLookup          func(context.Context, *dbus.Conn) (string, error)
-	bus                  *dbus.Conn
-	freshness            *advertisementFreshness
-	mu                   sync.Mutex
-	active               map[int32]struct{}
-	nextAttempt          map[int32]time.Time
+	cfg         Config
+	uuid        string
+	owner       string
+	hciIndex    int
+	ownerLookup func(context.Context, *dbus.Conn) (string, error)
+	bus         *dbus.Conn
+	freshness   *advertisementFreshness
+	mu          sync.Mutex
+	active      map[int32]struct{}
+	nextAttempt map[int32]time.Time
+	// dialTimeouts counts consecutive dial-context timeouts per asset. Three
+	// in a row with no HCI progress means initiation itself is wedged (stale
+	// kernel hci_conn or a deaf peer), not merely a busy peer: only an
+	// explicit disconnect clears that state, redialing never does.
+	dialTimeouts         map[int32]int
 	links                sync.WaitGroup
 	dialSlot             chan struct{}
 	serverTLS            *tls.Config
@@ -46,6 +51,32 @@ func (r *runtime) hasCheaperLink(asset int32) bool {
 	}
 	checker, ok := r.cfg.Node.(cheaperLinkChecker)
 	return ok && checker.HasCheaperLink(asset, LinkCost)
+}
+
+// noteDialTimeout tracks consecutive dial-context timeouts per peer. Three in
+// a row escalates to a warning: initiation is wedged below the agent (stale
+// kernel hci_conn or a peer that never answers), and only an explicit
+// disconnect clears it — further redials just re-attach to the stuck state.
+func (r *runtime) noteDialTimeout(asset int32, timedOut bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dialTimeouts == nil {
+		r.dialTimeouts = make(map[int32]int)
+	}
+	if !timedOut {
+		delete(r.dialTimeouts, asset)
+		return
+	}
+	r.dialTimeouts[asset]++
+	if r.dialTimeouts[asset] == 3 {
+		r.cfg.Logger.Warn("BLE initiation wedged: three consecutive dial timeouts; explicit disconnect required, redial will not clear it", zap.Int32("peer", asset))
+	}
+}
+
+func (r *runtime) clearDialTimeouts(asset int32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.dialTimeouts, asset)
 }
 
 // cheaperLinkReason reports the veto branch behind a cheaper-link decision so
@@ -193,7 +224,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if parseErr != nil {
 		cfg.Logger.Debug("BLE connection interval tuning unavailable", zap.Error(parseErr))
 	}
-	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, ownerLookup: bluezOwner, bus: bus, freshness: freshness, active: make(map[int32]struct{}), nextAttempt: make(map[int32]time.Time), dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
+	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, ownerLookup: bluezOwner, bus: bus, freshness: freshness, active: make(map[int32]struct{}), nextAttempt: make(map[int32]time.Time), dialTimeouts: make(map[int32]int), dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
 	r.serverTLS = r.makeServerTLS()
 	r.advertisementRefresh = make(chan struct{}, 1)
 	var loops sync.WaitGroup
@@ -494,8 +525,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		if r.cfg.Selection != nil {
 			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
 		}
+		r.noteDialTimeout(peer.asset, errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil)
 		return
 	}
+	r.clearDialTimeouts(peer.asset)
 	<-r.dialSlot
 	slotHeld = false
 	// Closing the CoC socket alone can leave its LE ACL held by BlueZ. The
