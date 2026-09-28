@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -387,10 +388,12 @@ func TestRunPostStartIfReady_IPv6FallbackIsBracketed(t *testing.T) {
 
 // TestResolveHookHost is a pure table test of the host-resolution logic:
 // LAN connections pass conn.Host through unchanged regardless of what the
-// agent reports; an IPv6-literal Host and a cloud connection (conn.Reconnect
-// != nil) both swap in the agent-reported IP when one is available; and a
-// cloud connection with no reported IP reports ok=false so the caller can
-// skip host-side probes/hooks instead of dialing a dead asset name.
+// agent reports; an IPv6-literal Host swaps in the agent-reported IP; a cloud
+// connection (conn.Reconnect != nil) swaps in the agent-reported IP only when
+// that LAN address answers the one quick reachability check; and a cloud
+// connection with no reported IP, or whose LAN address does not answer,
+// reports ok=false so the caller can skip host-side probes/hooks instead of
+// dialing an address this machine cannot reach.
 func TestResolveHookHost(t *testing.T) {
 	appCfgWithHook := func() *appconfig.AppConfig {
 		return &appconfig.AppConfig{
@@ -402,10 +405,15 @@ func TestResolveHookHost(t *testing.T) {
 	}
 
 	cases := []struct {
-		name     string
-		conn     *grpcclient.AgentConnection
-		wantHost string
-		wantOK   bool
+		name string
+		conn *grpcclient.AgentConnection
+		// lanReachable is what the stubbed lanAddressReachable answers;
+		// wantChecked is the address it must have been asked about ("" =
+		// never asked: only cloud connections with a reported IP check).
+		lanReachable bool
+		wantChecked  string
+		wantHost     string
+		wantOK       bool
 	}{
 		{
 			name: "LAN passthrough regardless of reported IP",
@@ -430,7 +438,9 @@ func TestResolveHookHost(t *testing.T) {
 			wantOK:   true,
 		},
 		{
-			name: "cloud connection swapped for reported IP",
+			// WDY-2440: the developer is on the device's LAN, so the reported
+			// IP answers and replaces the unresolvable asset name.
+			name: "cloud connection uses the reported IP when its LAN address answers",
 			conn: &grpcclient.AgentConnection{
 				Host:      "cctv",
 				Reconnect: neverReconnect,
@@ -438,8 +448,26 @@ func TestResolveHookHost(t *testing.T) {
 					NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"10.10.10.10"}}},
 				}},
 			},
-			wantHost: "10.10.10.10",
-			wantOK:   true,
+			lanReachable: true,
+			wantChecked:  "10.10.10.10:80",
+			wantHost:     "10.10.10.10",
+			wantOK:       true,
+		},
+		{
+			// The reported IP is the device's LAN address, which a machine
+			// using the cloud tunnel from elsewhere cannot reach.
+			name: "cloud connection skips an unreachable LAN address",
+			conn: &grpcclient.AgentConnection{
+				Host:      "cctv",
+				Reconnect: neverReconnect,
+				AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+					NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"10.10.10.10"}}},
+				}},
+			},
+			lanReachable: false,
+			wantChecked:  "10.10.10.10:80",
+			wantHost:     "",
+			wantOK:       false,
 		},
 		{
 			name: "cloud connection with no reported IP is not ok",
@@ -455,19 +483,79 @@ func TestResolveHookHost(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			checked := stubLANAddressReachable(t, tc.lanReachable)
 			host, ok := resolveHookHost(context.Background(), tc.conn, appCfgWithHook())
 			if host != tc.wantHost || ok != tc.wantOK {
 				t.Errorf("resolveHookHost() = (%q, %v), want (%q, %v)", host, ok, tc.wantHost, tc.wantOK)
+			}
+			if tc.wantChecked == "" && len(*checked) != 0 {
+				t.Errorf("lanAddressReachable asked about %v, want never", *checked)
+			}
+			if tc.wantChecked != "" && (len(*checked) != 1 || (*checked)[0] != tc.wantChecked) {
+				t.Errorf("lanAddressReachable asked about %v, want exactly [%s]", *checked, tc.wantChecked)
 			}
 		})
 	}
 }
 
+// stubLANAddressReachable makes the cloud LAN reachability check answer
+// reachable without dialing, and records every address it was asked about.
+func stubLANAddressReachable(t *testing.T, reachable bool) *[]string {
+	t.Helper()
+	original := lanAddressReachable
+	t.Cleanup(func() { lanAddressReachable = original })
+	var mu sync.Mutex
+	var checked []string
+	lanAddressReachable = func(_ context.Context, addr string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		checked = append(checked, addr)
+		return reachable
+	}
+	return &checked
+}
+
+// TestTCPAddressAnswers pins what the cloud LAN reachability check counts as
+// reachable: an accepted connection, or a refused one (the host answered; the
+// app is just not listening yet). A dial that times out is not reachable.
+func TestTCPAddressAnswers(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if !tcpAddressAnswers(context.Background(), ln.Addr().String(), time.Second) {
+		t.Error("a listening port did not count as reachable")
+	}
+
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddr := closed.Addr().String()
+	closed.Close()
+	if !tcpAddressAnswers(context.Background(), closedAddr, time.Second) {
+		t.Error("a refused connection did not count as reachable")
+	}
+
+	// TEST-NET-1 (RFC 5737) is never routed: the dial times out or fails
+	// with no route, and neither is a host that answered.
+	start := time.Now()
+	if tcpAddressAnswers(context.Background(), "192.0.2.1:9", 300*time.Millisecond) {
+		t.Error("an unroutable address counted as reachable")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("took %v, want about the 300ms timeout", elapsed)
+	}
+}
+
 // TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP verifies the
-// core WDY-2440 fix: when the CLI connected via the cloud tunnel, conn.Host
-// is the cloud ASSET NAME (cloud_tunnel.go: agentConn.Host =
-// asset.GetName()), which does not resolve from this machine. The postStart
-// hook must target the agent-reported IP instead of dialing the dead name.
+// core WDY-2440 fix, kept when the device's LAN address answers from this
+// machine: when the CLI connected via the cloud tunnel, conn.Host is the cloud
+// ASSET NAME (cloud_tunnel.go: agentConn.Host = asset.GetName()), which does
+// not resolve from this machine. The postStart hook must target the
+// agent-reported IP instead of dialing the dead name — after one quick check
+// that the reported IP answers on the app's port.
 func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 	original := browserOpen
 	t.Cleanup(func() { browserOpen = original })
@@ -476,6 +564,7 @@ func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 		opened = url
 		return nil
 	}
+	checked := stubLANAddressReachable(t, true)
 
 	appCfg := &appconfig.AppConfig{
 		AppID: "cloud-app",
@@ -496,6 +585,51 @@ func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 	}
 	if opened != "http://10.20.30.40:9999" {
 		t.Errorf("openURL = %q, want the cloud-reported IP URL, not the unresolvable asset name %q", opened, conn.Host)
+	}
+	if len(*checked) != 1 || (*checked)[0] != "10.20.30.40:9999" {
+		t.Errorf("lanAddressReachable asked about %v, want exactly [10.20.30.40:9999]", *checked)
+	}
+}
+
+// TestRunPostStartIfReady_CloudUnreachableLANSkipsHostSideLifecycle: through
+// the cloud tunnel, conn.Host is the asset name and the agent-reported IP is
+// the device's LAN address. When that address does not answer from this
+// machine, the run must not print it as "App reachable at" or open it; it says
+// why the host-side hook is skipped instead.
+func TestRunPostStartIfReady_CloudUnreachableLANSkipsHostSideLifecycle(t *testing.T) {
+	original := browserOpen
+	t.Cleanup(func() { browserOpen = original })
+	opened := ""
+	browserOpen = func(url string) error {
+		opened = url
+		return nil
+	}
+	stubLANAddressReachable(t, false)
+
+	appCfg := &appconfig.AppConfig{
+		AppID: "cloud-app",
+		Hooks: &appconfig.HooksConfig{
+			PostStart: &appconfig.HookCommand{OpenURL: "http://${WENDY_HOSTNAME}:9999"},
+		},
+	}
+	agentClient := &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+		NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"10.20.30.40"}}},
+	}}
+	conn := &grpcclient.AgentConnection{Host: "cctv", Reconnect: neverReconnect, AgentService: agentClient}
+
+	out := captureStderr(t, func() {
+		if cmd := runPostStartIfReady(context.Background(), context.Background(), conn, appCfg, runOptions{}); cmd != nil {
+			t.Errorf("expected nil cmd, got %v", cmd)
+		}
+	})
+	if opened != "" {
+		t.Errorf("opened %q from a cloud-tunnel run", opened)
+	}
+	if strings.Contains(out, "App reachable at") || strings.Contains(out, "10.20.30.40") {
+		t.Errorf("announced the LAN address for a cloud-tunnel run:\n%s", out)
+	}
+	if !strings.Contains(out, "Wendy Cloud") {
+		t.Errorf("missing the cloud skip notice:\n%s", out)
 	}
 }
 
@@ -589,6 +723,49 @@ func TestRunPostStartIfReady_CloudReadinessDialsReportedIP(t *testing.T) {
 	}
 	if opened != "http://127.0.0.1:3001" {
 		t.Errorf("openURL = %q, want the reported-IP URL", opened)
+	}
+}
+
+// TestRunPostStartIfReady_CloudUnreachableLANIsNeverProbed: when a cloud
+// device's LAN address does not answer the quick reachability check, the
+// readiness probe must not dial it either — from outside that LAN it only
+// burns the whole probe timeout.
+func TestRunPostStartIfReady_CloudUnreachableLANIsNeverProbed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start listener: %v", err)
+	}
+	defer ln.Close()
+	dialed := make(chan struct{}, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			dialed <- struct{}{}
+			c.Close()
+		}
+	}()
+	stubLANAddressReachable(t, false)
+
+	appCfg := &appconfig.AppConfig{
+		AppID:     "cloud-readiness-app",
+		Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: testPort(t, ln)}, TimeoutSeconds: 5},
+	}
+	conn := &grpcclient.AgentConnection{
+		Host:      "cloud-asset-does-not-resolve.invalid",
+		Reconnect: neverReconnect,
+		AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+			NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"127.0.0.1"}}},
+		}},
+	}
+
+	start := time.Now()
+	runPostStartIfReady(context.Background(), context.Background(), conn, appCfg, runOptions{})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v; a cloud run must skip the host-side probe, not wait on it", elapsed)
+	}
+	select {
+	case <-dialed:
+		t.Error("probed the agent-reported LAN address after it failed the reachability check")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

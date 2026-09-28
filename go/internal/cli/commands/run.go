@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -2755,13 +2757,25 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 // cancelled. Returns nil on success, the parent context error on cancellation,
 // or a timeout error if the probe deadline expires.
 func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string) error {
+	return waitForReadinessWithin(ctx, cfg, hostname, readinessProbeTimeout(cfg, 0))
+}
+
+// readinessProbeTimeout is a readiness probe's deadline: --readiness-timeout
+// when set, else wendy.json's timeoutSeconds, else 30 s.
+func readinessProbeTimeout(cfg *appconfig.ReadinessConfig, override time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	if cfg != nil && cfg.TimeoutSeconds > 0 {
+		return time.Duration(cfg.TimeoutSeconds) * time.Second
+	}
+	return 30 * time.Second
+}
+
+// waitForReadinessWithin is waitForReadiness with an explicit deadline.
+func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, timeout time.Duration) error {
 	if cfg == nil || cfg.TCPSocket == nil {
 		return nil
-	}
-
-	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 30 * time.Second
 	}
 
 	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", cfg.TCPSocket.Port))
@@ -2852,6 +2866,18 @@ func defaultPostStartBrowserAllowed() bool {
 // silent on any error or when no reachable address can be determined.
 // Returns the device IP the printed URL uses, or "" when nothing was announced.
 func announceReachableURL(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) string {
+	ip, url := reachableAppAddress(ctx, conn, appCfg)
+	if url == "" {
+		return ""
+	}
+	cliLogln("App reachable at %s", tui.Value(url))
+	return ip
+}
+
+// reachableAppAddress is announceReachableURL without the printing: the
+// device IP and the app URL built from it, or two empty strings when there is
+// nothing to show or the agent cannot be queried.
+func reachableAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (ip, url string) {
 	var hookURL string
 	if appCfg.Hooks != nil && appCfg.Hooks.PostStart != nil {
 		hookURL = appCfg.Hooks.PostStart.OpenURL
@@ -2860,52 +2886,132 @@ func announceReachableURL(ctx context.Context, conn *grpcclient.AgentConnection,
 	httpPort, hasHTTPPort := httpEntitlementPort(appCfg.Entitlements)
 	hasPort := hasHTTPPort || (readiness != nil && readiness.TCPSocket != nil && readiness.TCPSocket.Port != 0)
 	if hookURL == "" && !hasPort {
-		return ""
+		return "", ""
 	}
 
 	resp, err := agentVersionForRun(ctx, conn)
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	ip := bestReachableIP(resp.GetNetworkInterfaces())
+	ip = bestReachableIP(resp.GetNetworkInterfaces())
 	if name, err := userVMForConnection(conn); err == nil && name != "" {
 		ip = "127.0.0.1"
 	}
-	url := reachableAppURL(hookURL, appCfg.AppID, appCfg.ServiceName, ip, httpPort, readiness)
+	url = reachableAppURL(hookURL, appCfg.AppID, appCfg.ServiceName, ip, httpPort, readiness)
 	if url == "" {
-		return ""
+		return "", ""
 	}
-	cliLogln("App reachable at %s", tui.Value(url))
-	return ip
+	return ip, url
+}
+
+// isCloudConnection reports whether conn reaches the device through the Wendy
+// Cloud tunnel. conn.Reconnect != nil is the cloud marker: it is the sole
+// assignment (cloud_tunnel.go, on the connection cloud_tunnel.go builds) for a
+// transport where the connection identity can't be re-derived from Host alone.
+// conn.Addr can't be used instead — it is empty for NewFromConn conns, cloud
+// tunnels included.
+func isCloudConnection(conn *grpcclient.AgentConnection) bool {
+	return conn != nil && conn.Reconnect != nil
+}
+
+// cloudLANProbeTimeout bounds the one reachability check a cloud-tunnel run
+// makes against the device's LAN address before using it from this machine:
+// long enough for a LAN (or VPN) round trip, short enough that a developer
+// who is not on the device's network barely notices it.
+const cloudLANProbeTimeout = 1500 * time.Millisecond
+
+// lanAddressReachable reports whether this machine can reach addr, a cloud
+// device's LAN address and app port. Indirected so tests can stub it.
+var lanAddressReachable = func(ctx context.Context, addr string) bool {
+	return tcpAddressAnswers(ctx, addr, cloudLANProbeTimeout)
+}
+
+// tcpAddressAnswers makes one TCP dial to addr within timeout. A refused
+// connection counts as an answer: the host is reachable and the app just is
+// not listening yet (the check runs right after the container starts).
+// Anything else — a timeout, no route, a DNS failure — does not. Windows
+// reports a refusal as WSAECONNREFUSED ("actively refused"), which is not
+// syscall.ECONNREFUSED, hence the message match.
+func tcpAddressAnswers(ctx context.Context, addr string, timeout time.Duration) bool {
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "refused")
+}
+
+// hostProbePort is the app port a cloud run checks the LAN address on: the
+// readiness TCP port when there is one, else appURL's port (80/443 by default
+// for http/https), else 0 (nothing to check).
+func hostProbePort(appCfg *appconfig.AppConfig, appURL string) int {
+	if readiness := effectiveReadiness(appCfg); readiness != nil && readiness.TCPSocket != nil && readiness.TCPSocket.Port != 0 {
+		return readiness.TCPSocket.Port
+	}
+	u, err := url.Parse(appURL)
+	if err != nil || appURL == "" {
+		return 0
+	}
+	if port, err := strconv.Atoi(u.Port()); err == nil && port > 0 {
+		return port
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return 80
+	case "https":
+		return 443
+	}
+	return 0
+}
+
+// hostSideAppAddress resolves where this machine reaches the app: the host
+// for the readiness probe and postStart hook, and the URL to show ("" when
+// there is nothing to show). conn.Host is right for LAN connections; an IPv6
+// literal is swapped for the IP the agent reports, since it is often an
+// RFC 4941 temporary (privacy) address that rotates away.
+//
+// A cloud-tunnel connection's Host is the asset name, which does not resolve
+// from here, and the IP the agent reports is the device's LAN address, which
+// this machine can reach only when it is on (or routed into) that network.
+// So a cloud run checks once, within cloudLANProbeTimeout, whether that
+// address answers on the app port: if it does, it is used as on a LAN
+// connection (WDY-2440). Otherwise — or when the agent reports no IP, or
+// there is no port to check — ok=false: probing that address, printing it as
+// "App reachable at", or opening it would mislead, so callers skip host-side
+// probes and hooks with cloudHostSkipNotice (readiness is not checked from
+// this machine).
+func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host, url string, ok bool) {
+	ip, url := reachableAppAddress(ctx, conn, appCfg)
+	if isCloudConnection(conn) {
+		port := hostProbePort(appCfg, url)
+		if ip == "" || port == 0 || !lanAddressReachable(ctx, net.JoinHostPort(ip, strconv.Itoa(port))) {
+			return "", "", false
+		}
+		return ip, url, true
+	}
+	if ip != "" && isIPv6Literal(conn.Host) {
+		return ip, url, true
+	}
+	return conn.Host, url, true
 }
 
 // resolveHookHost returns the host the developer-side readiness probe and
-// postStart hook should target. conn.Host is perfect for LAN connections, but
-// a cloud tunnel sets it to the ASSET NAME (cloud_tunnel.go: agentConn.Host =
-// asset.GetName()), which does not resolve from this machine — and an IPv6
-// literal needs the agent-reported IP too, since it is often an RFC 4941
-// temporary (privacy) address that rotates away. In both cases prefer the
-// routable IP the agent reports via GetAgentVersion (announceReachableURL).
-//
-// conn.Reconnect != nil is the cloud marker: it is the sole assignment
-// (cloud_tunnel.go, on the connection cloud_tunnel.go builds) for a
-// transport where the connection identity can't be re-derived from Host
-// alone. conn.Addr can't be used instead — it is empty for NewFromConn
-// conns, cloud tunnels included.
-//
-// ok=false means no usable host exists (a cloud conn with no reported IP):
-// the caller must skip host-side probes/hooks with guidance instead of
-// dialing a dead asset name.
+// postStart hook should target, announcing the app URL on the way (see
+// hostSideAppAddress). ok=false means host-side lifecycle work must be skipped
+// with cloudHostSkipNotice.
 func resolveHookHost(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host string, ok bool) {
-	ip := announceReachableURL(ctx, conn, appCfg)
-	isCloud := conn.Reconnect != nil
-	if ip != "" && (isCloud || isIPv6Literal(conn.Host)) {
-		return ip, true
+	host, url, ok := hostSideAppAddress(ctx, conn, appCfg)
+	if url != "" {
+		cliLogln("App reachable at %s", tui.Value(url))
 	}
-	if isCloud && ip == "" {
-		return "", false
-	}
-	return conn.Host, true
+	return host, ok
+}
+
+// cloudHostSkipNotice explains why a cloud-tunnel run skips its host-side
+// readiness check and postStart hook.
+func cloudHostSkipNotice(appCfg *appconfig.AppConfig) string {
+	return fmt.Sprintf("Skipping postStart hook and the readiness check from this machine for %s: the device is connected through Wendy Cloud and its LAN address is not reachable from here.", containerDisplayName(appCfg))
 }
 
 // synthesizedOpenURLHook returns appCfg.Hooks unchanged when the app already
@@ -2968,31 +3074,28 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 	// http-entitlement-synthesized) and no postStart hook (explicit or
 	// http-entitlement-synthesized) has nothing for this function to do.
 	// Returning before resolveHookHost matters specifically for cloud
-	// connections: resolveHookHost's isCloud branch would otherwise still run
-	// and, since announceReachableURL short-circuits to "" without ever
-	// querying the agent when there's no hookURL/port to build a URL from,
-	// report "no reported IP" and print a "Skipping postStart hook" notice
-	// for a hook that was never configured. Mirrors
-	// service_lifecycle.go's serviceHookRunner.runOne guard.
+	// connections: resolveHookHost would otherwise report that the host is
+	// unusable and print cloudHostSkipNotice for a hook that was never
+	// configured. Mirrors service_lifecycle.go's serviceHookRunner.runOne guard.
 	if readiness == nil && hooks == nil {
 		return nil
 	}
 
-	// Resolve the host BEFORE probing readiness: for a cloud connection,
-	// conn.Host is the tunnel's asset name, which does not resolve from this
-	// machine — dialing it always fails, so the postStart hook logic below
-	// would never even be reached unless the probe target is swapped too.
-	// This also means the "App reachable at ..." line (printed inside
-	// resolveHookHost/announceReachableURL) now prints before readiness is
-	// confirmed rather than after — acceptable since it is the same URL the
-	// user watches for regardless of when the probe finishes.
+	// Resolve the host BEFORE probing readiness: the probe and the hook must
+	// target the same address, and a cloud connection may have none this
+	// machine can reach. The "App reachable at ..." line (printed inside
+	// resolveHookHost) therefore prints before readiness is confirmed rather
+	// than after — acceptable since it is the same URL the user watches for
+	// regardless of when the probe finishes.
 	hookHost, hostOK := resolveHookHost(ctx, conn, appCfg)
 	if !hostOK {
-		cliNotice("Skipping postStart hook: no routable device address reported; open the app manually once the device IP is known.")
+		if ctx.Err() == nil {
+			cliNotice("%s", cloudHostSkipNotice(appCfg))
+		}
 		return nil
 	}
 
-	err := waitForAttachedReadiness(ctx, conn, appCfg, hookHost)
+	err := waitForAttachedReadiness(ctx, conn, appCfg, hookHost, opts.readinessTimeout)
 	rp("  ↳ runcontainer: readiness wait")
 	if err != nil {
 		if ctx.Err() == nil {
