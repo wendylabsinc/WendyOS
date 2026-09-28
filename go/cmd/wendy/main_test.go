@@ -793,6 +793,7 @@ func TestErrorClass_DeviceDialFailures(t *testing.T) {
 		{fmt.Errorf("default device: %w", dialedError{"x.local:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")}), "device_unreachable"},
 		{dialedError{"127.0.0.1:1", refusedDial}, "device_unreachable"},
 		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_not_resolved"},
+		{dialedError{"wendyos-zzz:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_unreachable"},
 		// Without a dialled address a deadline is still just a deadline.
 		{status.Error(codes.DeadlineExceeded, "context deadline exceeded"), "grpc_deadline"},
 		{fmt.Errorf("waiting: %w", context.DeadlineExceeded), "context_deadline"},
@@ -819,6 +820,8 @@ func TestFormatError_UnresolvedDeviceNamesTheHost(t *testing.T) {
 			"Could not resolve device host nosuchhost.invalid.\n  Check the name, or connect by IP address."},
 		{dialedError{"wendyos-x.local:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
 			"Could not resolve device host wendyos-x.local.\n  The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out."},
+		{dialedError{"wendyos-zzz:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host wendyos-zzz.\n  The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out."},
 	} {
 		if got := formatError(tc.err).Error(); got != tc.want {
 			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)

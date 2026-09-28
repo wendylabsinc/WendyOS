@@ -60,6 +60,8 @@ Earlier stderr lines can hold progress output and notices, so read the last line
 | 10 | A trust decision only a person can make: the device's identity or organization changed | `device_identity_mismatch`, `device_org_mismatch` |
 | 70 | An internal error: a bug in `wendy` itself. Outside JSON mode the stack trace follows the message; include it when you report the bug | `internal_error` |
 
+`device_not_resolved` means DNS reported that the host name does not exist. That can also happen while this machine is offline, so check the network before the name. A device name resolved over mDNS (a `.local` name, or a bare name such as `wendyos-abc`) that does not resolve is `device_unreachable` instead, since it resolves only while the device is on the network.
+
 `retryable` is `true` for `device_unreachable`, `device_offline`, `transfer_failed`, `registry_unavailable`, `readiness_timeout`, and the timeouts `grpc_deadline` and `network_timeout`.
 
 ## `--device`

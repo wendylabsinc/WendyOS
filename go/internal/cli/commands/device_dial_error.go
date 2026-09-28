@@ -40,8 +40,9 @@ func (e *deviceDialError) Unwrap() error { return e.cause }
 func (e *deviceDialError) DeviceAddress() string { return e.addr }
 
 // Is classifies the failure by what it says about the device. A host name
-// that resolves to nothing is errDeviceNotResolved, except an mDNS (.local)
-// name, which only resolves while its device is on the network. Any other
+// that resolves to nothing is errDeviceNotResolved, except a device name
+// resolved over mDNS (a ".local" or bare name, see isMDNSShapedHost), which
+// only resolves while its device is on the network. Any other
 // transport failure (gRPC Unavailable: refused, reset, no route) and a dial
 // that timed out are errDeviceUnreachable. ErrorClass checks the more
 // specific verdicts that also arrive this way (TLS rejection, missing
@@ -74,13 +75,14 @@ func isResolverMiss(err error) bool {
 	return strings.Contains(msg, "produced zero addresses") || strings.Contains(msg, "no such host")
 }
 
-// isMDNSAddress reports whether addr's host is an mDNS (.local) name.
+// isMDNSAddress reports whether addr's host is a device name resolved over
+// mDNS: a ".local" name or a bare name, as the device cache treats them.
 func isMDNSAddress(addr string) bool {
 	host := addr
 	if h, _, err := net.SplitHostPort(addr); err == nil {
 		host = h
 	}
-	return strings.HasSuffix(strings.TrimSuffix(strings.ToLower(host), "."), ".local")
+	return isMDNSShapedHost(host)
 }
 
 // DeviceDialErrorClass classifies an error from a failed device connection,

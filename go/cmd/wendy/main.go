@@ -414,7 +414,9 @@ func formatErrorParts(err error) formattedError {
 		if h, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
 			host = h
 		}
-		if strings.HasSuffix(strings.TrimSuffix(strings.ToLower(host), "."), ".local") {
+		// A device name resolved over mDNS (.local or bare) is classified as
+		// unreachable: it only resolves while the device is on the network.
+		if commands.DeviceDialErrorClass(err) == "device_unreachable" {
 			return rewrite("Could not resolve device host "+host+".",
 				"The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out.")
 		}

@@ -84,6 +84,10 @@ func TestDeviceDialErrorClassifiesTimeoutsAndResolverMisses(t *testing.T) {
 		// An mDNS name only resolves while its device is on the network.
 		{"mDNS name that does not resolve", "wendyos-x.local:50051",
 			status.Error(codes.Unavailable, "name resolver error: produced zero addresses"), "device_unreachable"},
+		// A bare device name is resolved the same way (see isMDNSShapedHost),
+		// so it too only resolves while the device is on the network.
+		{"bare device name that does not resolve", "wendyos-zzz:50051",
+			status.Error(codes.Unavailable, `connection error: desc = "transport: Error while dialing: dial tcp: lookup wendyos-zzz: no such host"`), "device_unreachable"},
 		{"refused", "127.0.0.1:1", status.Error(codes.Unavailable, "connection refused"), "device_unreachable"},
 		{"not a transport failure", "h:1", status.Error(codes.PermissionDenied, "no"), ""},
 	} {
