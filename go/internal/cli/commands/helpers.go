@@ -1960,10 +1960,16 @@ func mdnsLocalHint(host string) string {
 // device so the message makes clear the default IS persisted but could not be
 // reached — rather than letting the failure read as if set-default never took
 // effect (issue #1155).
+//
+// The recovery advice is attached as next steps, not formatted into the
+// message: the CLI's rewrite of the gRPC error in the middle of the message
+// used to drop everything after it, and JSON mode lists steps separately.
 func defaultDeviceUnreachableError(hostname string, err error) error {
-	return fmt.Errorf("default device %q is set but could not be reached: %w\n"+
-		"  Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'.%s",
-		hostname, err, mdnsLocalHint(hostname))
+	steps := []string{"Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'."}
+	if hint := strings.TrimPrefix(mdnsLocalHint(hostname), "\n  "); hint != "" {
+		steps = append(steps, hint)
+	}
+	return withNextSteps(fmt.Errorf("default device %q is set but could not be reached: %w", hostname, err), steps...)
 }
 
 // connectWithAutoTLSDiagnostics resolves plaintextAddr and runs the mTLS/

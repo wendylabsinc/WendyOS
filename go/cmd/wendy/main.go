@@ -315,16 +315,40 @@ func renderError(err error) string {
 	return tui.ErrorMessage(formatError(err).Error())
 }
 
+// formattedError is formatError's result: the text shown to a person, and
+// the recovery steps formatError itself put at the end of that text, so JSON
+// mode can report them as next_steps instead of burying them in the message.
+type formattedError struct {
+	text  string
+	steps []string
+}
+
 func formatError(err error) error {
-	msg := err.Error()
-	if !strings.Contains(msg, "rpc error: code = ") {
+	f := formatErrorParts(err)
+	if f.text == err.Error() {
 		return err
 	}
+	return errors.New(f.text)
+}
 
-	// Extract the context prefix (e.g. "starting agent update: ") before the rpc error.
-	prefix := ""
-	if idx := strings.Index(msg, "rpc error: code = "); idx > 0 {
-		prefix = msg[:idx]
+func formatErrorParts(err error) formattedError {
+	msg := err.Error()
+	if !strings.Contains(msg, "rpc error: code = ") {
+		return formattedError{text: msg}
+	}
+
+	// prefix is the context callers wrapped around the gRPC error (e.g.
+	// "starting agent update: "), grpcText the status error's own text, and
+	// suffix whatever a caller appended after it, typically a recovery hint
+	// added with fmt.Errorf("...: %w\n  hint"). Only grpcText is rewritten
+	// below, so the hint survives.
+	prefix, grpcText, suffix := splitGRPCMessage(err, msg)
+	rewrite := func(headline string, steps ...string) formattedError {
+		text := prefix + headline
+		for _, step := range steps {
+			text += "\n  " + step
+		}
+		return formattedError{text: text + suffix, steps: steps}
 	}
 
 	// A cloud tunnel the broker closed carries the broker's verdict inside the
@@ -332,7 +356,8 @@ func formatError(err error) error {
 	// actionable part: it is neither a cert problem nor a dead device, so show
 	// it before the handshake heuristics below can misread it as either.
 	if verdict, ok := clouddefaults.ExplainTunnelClose(msg); ok {
-		return fmt.Errorf("%sWendy Cloud closed the tunnel to the device: %s\n  For full tunnel details rerun with WENDY_TLS_DEBUG=1", prefix, verdict)
+		return rewrite("Wendy Cloud closed the tunnel to the device: "+verdict,
+			"For full tunnel details rerun with WENDY_TLS_DEBUG=1")
 	}
 
 	isPKICoreCall := strings.Contains(prefix, "pki-core")
@@ -366,58 +391,80 @@ func formatError(err error) error {
 
 	switch {
 	case strings.Contains(msg, "code = Unavailable") && isCertRejection && !isPKICoreCall && !isCloudCall:
-		return fmt.Errorf("%sTLS handshake rejected by device (possible clock skew or cert mismatch).\n  Check the device clock: ssh wendy@<host> 'timedatectl status'\n  For full TLS details rerun with WENDY_TLS_DEBUG=1", prefix)
+		return rewrite("TLS handshake rejected by device (possible clock skew or cert mismatch).",
+			"Check the device clock: ssh wendy@<host> 'timedatectl status'",
+			"For full TLS details rerun with WENDY_TLS_DEBUG=1")
 	case strings.Contains(msg, "code = Unavailable") && isTransportHandshakeDrop && !isPKICoreCall && !isCloudCall:
-		return fmt.Errorf("%sSecure connection dropped during the TLS handshake.\n  The device may be offline or unreachable. If you are connecting through Wendy Cloud, the tunnel broker or the device's link to it may be down.\n  For full TLS details rerun with WENDY_TLS_DEBUG=1", prefix)
+		return rewrite("Secure connection dropped during the TLS handshake.\n  The device may be offline or unreachable. If you are connecting through Wendy Cloud, the tunnel broker or the device's link to it may be down.",
+			"For full TLS details rerun with WENDY_TLS_DEBUG=1")
 	case strings.Contains(msg, "code = Unavailable") && strings.Contains(msg, "connection refused"):
 		if isPKICoreCall {
-			return fmt.Errorf("%sCould not connect to local pki-core. Check that the gRPC endpoint is reachable from this machine.", prefix)
+			return rewrite("Could not connect to local pki-core. Check that the gRPC endpoint is reachable from this machine.")
 		}
 		if isCloudCall {
-			return fmt.Errorf("%sCould not connect to Wendy Cloud. Please try again later.", prefix)
+			return rewrite("Could not connect to Wendy Cloud. Please try again later.")
 		}
-		return fmt.Errorf("%sCould not connect to device. Is it powered on and connected to the network?", prefix)
+		return rewrite("Could not connect to device. Is it powered on and connected to the network?")
 	case strings.Contains(msg, "code = Unavailable"):
 		// Cloud and PKI services can return actionable dependency failures.
 		// Keep that explanation instead of replacing it with a generic outage.
 		if isPKICoreCall || isCloudCall {
-			if desc, ok := grpcDesc(msg); ok {
-				return fmt.Errorf("%s%s", prefix, desc)
+			if desc, ok := grpcDesc(grpcText); ok {
+				return rewrite(desc)
 			}
 		}
 		if isPKICoreCall {
-			return fmt.Errorf("%sLocal pki-core is unavailable.", prefix)
+			return rewrite("Local pki-core is unavailable.")
 		}
 		if isCloudCall {
-			return fmt.Errorf("%sWendy Cloud is unavailable. Please try again later.", prefix)
+			return rewrite("Wendy Cloud is unavailable. Please try again later.")
 		}
 		// Preserve the server's description when it provides actionable
 		// detail (e.g. "WiFi management is not available (nmcli not found)").
 		// Only fall back to the generic message for transport-level errors
 		// that lack a useful desc.
-		if idx := strings.Index(msg, "desc = "); idx >= 0 {
-			desc := msg[idx+len("desc = "):]
-			return fmt.Errorf("%s%s", prefix, desc)
+		if idx := strings.Index(grpcText, "desc = "); idx >= 0 {
+			return rewrite(grpcText[idx+len("desc = "):])
 		}
-		return fmt.Errorf("%sDevice is unavailable.", prefix)
+		return rewrite("Device is unavailable.")
 	case strings.Contains(msg, "code = DeadlineExceeded"):
-		return fmt.Errorf("%sConnection timed out.", prefix)
+		return rewrite("Connection timed out.")
 	case strings.Contains(msg, "code = Unimplemented"):
 		// Preserve intentional, contextual Unimplemented descriptions from the
 		// agent (for example Wendy Agent for Mac feature gaps). Keep the legacy
 		// update hint only for generic protocol-mismatch responses where gRPC or
 		// an old agent did not recognize the service/method.
-		if desc, ok := grpcDesc(msg); ok && !isGenericUnimplementedDesc(desc) {
-			return fmt.Errorf("%s%s", prefix, desc)
+		if desc, ok := grpcDesc(grpcText); ok && !isGenericUnimplementedDesc(desc) {
+			return rewrite(desc)
 		}
-		return fmt.Errorf("%sNot supported by this agent version. Try updating the agent.", prefix)
+		return rewrite("Not supported by this agent version. Try updating the agent.")
 	default:
 		// Strip transport noise, keep the desc message.
-		if desc, ok := grpcDesc(msg); ok {
-			return fmt.Errorf("%s%s", prefix, desc)
+		if desc, ok := grpcDesc(grpcText); ok {
+			return rewrite(desc)
 		}
-		return err
+		return formattedError{text: msg}
 	}
+}
+
+// splitGRPCMessage cuts msg around the text of the gRPC status error inside
+// err. When the chain holds no real status error (the caller flattened it
+// with %v), the gRPC text runs to the end of msg and nothing after it can be
+// told apart from it, which is how formatError always treated messages.
+func splitGRPCMessage(err error, msg string) (prefix, grpcText, suffix string) {
+	var statusErr interface {
+		error
+		GRPCStatus() *status.Status
+	}
+	if errors.As(err, &statusErr) {
+		if own := statusErr.Error(); own != "" {
+			if i := strings.Index(msg, own); i >= 0 {
+				return msg[:i], own, msg[i+len(own):]
+			}
+		}
+	}
+	i := strings.Index(msg, "rpc error: code = ")
+	return msg[:i], msg[i:], ""
 }
 
 func grpcDesc(msg string) (string, bool) {

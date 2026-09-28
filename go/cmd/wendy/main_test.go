@@ -694,3 +694,54 @@ func TestFormatError_CloudTunnelVerdictIsShown(t *testing.T) {
 		}
 	}
 }
+
+var refusedDial = status.Error(codes.Unavailable,
+	`connection error: desc = "transport: Error while dialing: dial tcp 127.0.0.1:1: connect: connection refused"`)
+
+// A hint appended after the gRPC error (fmt.Errorf("...: %w\n  hint")) used to
+// vanish when formatError replaced the transport text with fixed prose.
+func TestFormatError_KeepsHintAppendedAfterGRPCError(t *testing.T) {
+	err := fmt.Errorf("default device %q is set but could not be reached: %w\n  Confirm it with 'wendy device get-default'.",
+		"127.0.0.1:1", refusedDial)
+	want := `default device "127.0.0.1:1" is set but could not be reached: ` +
+		"Could not connect to device. Is it powered on and connected to the network?\n" +
+		"  Confirm it with 'wendy device get-default'."
+	if got := formatError(err).Error(); got != want {
+		t.Errorf("formatError() = %q, want %q", got, want)
+	}
+
+	// The Unavailable-with-description branch keeps the suffix too, once.
+	err = fmt.Errorf("registering deployment with Cloud: %w; use --skip-cloud-registration for an offline deployment",
+		status.Error(codes.Unavailable, "deployment registry is restarting"))
+	want = "registering deployment with Cloud: deployment registry is restarting; use --skip-cloud-registration for an offline deployment"
+	if got := formatError(err).Error(); got != want {
+		t.Errorf("formatError() = %q, want %q", got, want)
+	}
+}
+
+// formatErrorParts must render exactly the text formatError always printed,
+// and report the advice lines it added as separate steps.
+func TestFormatErrorParts_ReportsItsOwnSteps(t *testing.T) {
+	err := fmt.Errorf("querying device version: %w", status.Error(codes.Unavailable,
+		`connection error: desc = "transport: authentication handshake failed: remote error: tls: bad certificate"`))
+	f := formatErrorParts(err)
+	wantText := "querying device version: TLS handshake rejected by device (possible clock skew or cert mismatch).\n" +
+		"  Check the device clock: ssh wendy@<host> 'timedatectl status'\n" +
+		"  For full TLS details rerun with WENDY_TLS_DEBUG=1"
+	if f.text != wantText {
+		t.Errorf("text = %q, want %q", f.text, wantText)
+	}
+	wantSteps := []string{"Check the device clock: ssh wendy@<host> 'timedatectl status'", "For full TLS details rerun with WENDY_TLS_DEBUG=1"}
+	if strings.Join(f.steps, "|") != strings.Join(wantSteps, "|") {
+		t.Errorf("steps = %q, want %q", f.steps, wantSteps)
+	}
+}
+
+// With the status error flattened by %v, nothing after the gRPC text can be
+// told apart from it; formatError keeps its long-standing behaviour.
+func TestFormatError_FlattenedGRPCErrorStillRewrites(t *testing.T) {
+	err := fmt.Errorf("listing volumes: %v", status.Error(codes.Unimplemented, "unknown method ListVolumes for service x"))
+	if got, want := formatError(err).Error(), "listing volumes: Not supported by this agent version. Try updating the agent."; got != want {
+		t.Errorf("formatError() = %q, want %q", got, want)
+	}
+}
