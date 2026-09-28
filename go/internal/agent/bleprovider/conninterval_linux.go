@@ -24,6 +24,13 @@ const (
 	// controller shorten an event under contention; the 10 ms maximum lets
 	// a healthy Wendy mesh CoC use more than one data packet per event.
 	meshIntervalUnits = 12 // 15 ms
+	// Steady-state bulk interval: the 15 ms handshake tune triples anchor
+	// demand versus the negotiated ~45 ms. Under two-link bulk plus active
+	// scan, controllers stop servicing most anchors for seconds (measured
+	// gap histograms), collapsing drain to ~1% on all nodes at once. Once
+	// TLS is established, relax to 45 ms: fewer anchors, longer events for
+	// the same bulk, supervision unchanged.
+	meshSteadyIntervalUnits = 36 // 45 ms
 	// A multi-peer adapter can miss several connection events while it scans,
 	// advertises, and services another CoC. The former 2 s timeout caused
 	// authenticated Wendy links to drop with HCI reason 0x08 under contention.
@@ -82,11 +89,11 @@ func decodeACLHandle(info []byte) (uint16, error) {
 	return handle, nil
 }
 
-func leConnectionUpdateCommand(handle uint16) []byte {
+func leConnectionUpdateCommand(handle uint16, intervalUnits uint16) []byte {
 	command := []byte{hciCommandPacket, 0x13, 0x20, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	binary.LittleEndian.PutUint16(command[4:6], handle)
-	binary.LittleEndian.PutUint16(command[6:8], meshIntervalUnits)
-	binary.LittleEndian.PutUint16(command[8:10], meshIntervalUnits)
+	binary.LittleEndian.PutUint16(command[6:8], intervalUnits)
+	binary.LittleEndian.PutUint16(command[8:10], intervalUnits)
 	binary.LittleEndian.PutUint16(command[10:12], 0) // peripheral latency
 	binary.LittleEndian.PutUint16(command[12:14], meshTimeoutUnits)
 	binary.LittleEndian.PutUint16(command[14:16], meshMinEventLengthUnits)
@@ -129,7 +136,7 @@ func parseLEUpdateEvent(packet []byte, handle uint16) updateEvent {
 	return updateEvent{}
 }
 
-func waitForLEUpdate(ctx context.Context, handle uint16, read func(context.Context) ([]byte, error)) (time.Duration, error) {
+func waitForLEUpdate(ctx context.Context, handle uint16, expectedUnits uint16, read func(context.Context) ([]byte, error)) (time.Duration, error) {
 	accepted := false
 	// Command Status carries an opcode but no ACL handle. HCI commands and
 	// statuses are ordered on one controller, so pair each observed monitor
@@ -149,7 +156,7 @@ func waitForLEUpdate(ctx context.Context, handle uint16, read func(context.Conte
 			if len(pending) >= 32 {
 				return 0, errors.New("too many concurrent LE connection updates")
 			}
-			pending = append(pending, pendingCommand{commandHandle, bytes.Equal(packet, leConnectionUpdateCommand(handle))})
+			pending = append(pending, pendingCommand{commandHandle, bytes.Equal(packet, leConnectionUpdateCommand(handle, expectedUnits))})
 			continue
 		}
 		event := parseLEUpdateEvent(packet, handle)
@@ -173,7 +180,7 @@ func waitForLEUpdate(ctx context.Context, handle uint16, read func(context.Conte
 		if event.status != 0 {
 			return 0, fmt.Errorf("LE connection update completed with status %#x", event.status)
 		}
-		if event.interval != meshIntervalUnits || event.latency != 0 || event.timeout != meshTimeoutUnits {
+		if event.interval != expectedUnits || event.latency != 0 || event.timeout != meshTimeoutUnits {
 			return 0, fmt.Errorf("LE connection update differs from request: interval=%d latency=%d timeout=%d", event.interval, event.latency, event.timeout)
 		}
 		return time.Duration(event.interval) * 1250 * time.Microsecond, nil
@@ -229,12 +236,25 @@ func requestMeshConnectionInterval(ctx context.Context, hciIndex int, handle uin
 	if hciIndex < 0 || hciIndex > 0xffff || handle > 0x0eff {
 		return 0, &leUpdateUnavailableError{err: errors.New("BLE link has no controller/ACL identity")}
 	}
-	return submitMeshIntervalUpdate(ctx, handle, func(ctx context.Context) (*leUpdateIO, error) {
+	return submitMeshIntervalUpdate(ctx, handle, meshIntervalUnits, func(ctx context.Context) (*leUpdateIO, error) {
 		return prepareMeshIntervalIO(ctx, hciIndex)
 	})
 }
 
-func submitMeshIntervalUpdate(ctx context.Context, handle uint16, prepare func(context.Context) (*leUpdateIO, error)) (time.Duration, error) {
+// requestSteadyConnectionInterval relaxes an established link to the
+// steady-state bulk interval. Failures are best-effort (the link works at
+// the handshake interval); only submission-boundary errors are distinguished
+// so callers can log accurately.
+func requestSteadyConnectionInterval(ctx context.Context, hciIndex int, handle uint16) (time.Duration, error) {
+	if hciIndex < 0 || hciIndex > 0xffff || handle > 0x0eff {
+		return 0, &leUpdateUnavailableError{err: errors.New("BLE link has no controller/ACL identity")}
+	}
+	return submitMeshIntervalUpdate(ctx, handle, meshSteadyIntervalUnits, func(ctx context.Context) (*leUpdateIO, error) {
+		return prepareMeshIntervalIO(ctx, hciIndex)
+	})
+}
+
+func submitMeshIntervalUpdate(ctx context.Context, handle uint16, intervalUnits uint16, prepare func(context.Context) (*leUpdateIO, error)) (time.Duration, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, &leUpdateUnavailableError{err: err}
 	}
@@ -246,7 +266,7 @@ func submitMeshIntervalUpdate(ctx context.Context, handle uint16, prepare func(c
 	if err := ctx.Err(); err != nil {
 		return 0, &leUpdateUnavailableError{err: err}
 	}
-	command := leConnectionUpdateCommand(handle)
+	command := leConnectionUpdateCommand(handle, intervalUnits)
 	// Once send is attempted, even a write error is conservatively uncertain.
 	// Never convert this or a monitor error into an untuned TLS fallback.
 	if n, err := io.send(command); err != nil {
@@ -254,7 +274,7 @@ func submitMeshIntervalUpdate(ctx context.Context, handle uint16, prepare func(c
 	} else if n != len(command) {
 		return 0, fmt.Errorf("short LE connection update command: %d/%d", n, len(command))
 	}
-	return waitForLEUpdate(ctx, handle, io.read)
+	return waitForLEUpdate(ctx, handle, intervalUnits, io.read)
 }
 
 func prepareMeshIntervalIO(ctx context.Context, hciIndex int) (*leUpdateIO, error) {

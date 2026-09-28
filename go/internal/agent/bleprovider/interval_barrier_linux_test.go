@@ -30,16 +30,16 @@ func TestInitialTuneClassifiesSubmissionBoundary(t *testing.T) {
 		{name: "attempted write failed", sendErr: unix.EIO},
 		{name: "short submitted write", short: true},
 		{name: "monitor lost", packets: nil},
-		{name: "command disallowed", packets: [][]byte{leConnectionUpdateCommand(0), statusPacket(0x0c)}},
-		{name: "submitted unsupported", packets: [][]byte{leConnectionUpdateCommand(0), statusPacket(0x01)}},
-		{name: "accepted timeout", packets: [][]byte{leConnectionUpdateCommand(0), statusPacket(0)}},
-		{name: "completion rejected", packets: [][]byte{leConnectionUpdateCommand(0), statusPacket(0), completePacket(0, 12, 0, 800, 0x1f)}},
-		{name: "success", packets: [][]byte{leConnectionUpdateCommand(0), statusPacket(0), completePacket(0, 12, 0, 800, 0)}, success: true},
+		{name: "command disallowed", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x0c)}},
+		{name: "submitted unsupported", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x01)}},
+		{name: "accepted timeout", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0)}},
+		{name: "completion rejected", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 12, 0, 800, 0x1f)}},
+		{name: "success", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 12, 0, 800, 0)}, success: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sent, closed := 0, 0
 			interval, fallback, err := tuneMeshBeforeTLS(context.Background(), func(ctx context.Context) (time.Duration, error) {
-				return submitMeshIntervalUpdate(ctx, 0, func(context.Context) (*leUpdateIO, error) {
+				return submitMeshIntervalUpdate(ctx, 0, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) {
 					if tc.prepareErr != nil {
 						return nil, tc.prepareErr
 					}
@@ -85,8 +85,8 @@ func TestInitialTuneDoesNotReturnBeforeCompletionAndClosesIO(t *testing.T) {
 			if !ok || time.Until(deadline) > 4*time.Second {
 				t.Error("missing initial4s bound")
 			}
-			packets := eventReader(leConnectionUpdateCommand(0x0eff), statusPacket(0), completePacket(0x0eff, 12, 0, 800, 0))
-			return submitMeshIntervalUpdate(ctx, 0x0eff, func(context.Context) (*leUpdateIO, error) {
+			packets := eventReader(leConnectionUpdateCommand(0x0eff, meshIntervalUnits), statusPacket(0), completePacket(0x0eff, 12, 0, 800, 0))
+			return submitMeshIntervalUpdate(ctx, 0x0eff, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) {
 				return &leUpdateIO{send: func(b []byte) (int, error) {
 					if binary.LittleEndian.Uint16(b[4:6]) != 0x0eff {
 						t.Error("maxhandle changed")
@@ -130,7 +130,7 @@ func TestInitialTuneParentCancellationOverridesFallback(t *testing.T) {
 	cancel()
 	var prepared bool
 	_, fallback, err := tuneMeshBeforeTLS(ctx, func(ctx context.Context) (time.Duration, error) {
-		return submitMeshIntervalUpdate(ctx, 0, func(context.Context) (*leUpdateIO, error) { prepared = true; return nil, io.ErrClosedPipe })
+		return submitMeshIntervalUpdate(ctx, 0, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) { prepared = true; return nil, io.ErrClosedPipe })
 	})
 	if prepared || fallback || !errors.Is(err, context.Canceled) {
 		t.Fatalf("prepared=%v fallback=%v error=%v", prepared, fallback, err)
@@ -145,7 +145,7 @@ func TestInitialTuneCancellationAfterSubmissionClosesBeforeReturn(t *testing.T) 
 	done := make(chan error, 1)
 	go func() {
 		_, fallback, err := tuneMeshBeforeTLS(ctx, func(ctx context.Context) (time.Duration, error) {
-			return submitMeshIntervalUpdate(ctx, 0, func(context.Context) (*leUpdateIO, error) {
+			return submitMeshIntervalUpdate(ctx, 0, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) {
 				return &leUpdateIO{send: func(b []byte) (int, error) { close(entered); return len(b), nil }, read: func(ctx context.Context) ([]byte, error) { <-ctx.Done(); return nil, ctx.Err() }, close: func() { closed.Store(true) }}, nil
 			})
 		})
@@ -209,7 +209,7 @@ func TestInitialTuneCancellationAfterPreparationNeverSubmits(t *testing.T) {
 	defer cancel()
 	sent, closed := false, false
 	_, fallback, err := tuneMeshBeforeTLS(ctx, func(ctx context.Context) (time.Duration, error) {
-		return submitMeshIntervalUpdate(ctx, 0, func(context.Context) (*leUpdateIO, error) {
+		return submitMeshIntervalUpdate(ctx, 0, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) {
 			cancel()
 			return &leUpdateIO{send: func(b []byte) (int, error) { sent = true; return len(b), nil }, read: eventReader(), close: func() { closed = true }}, nil
 		})
@@ -223,7 +223,7 @@ func TestInitialTuneSubmittedUpdateHasBoundedDeadline(t *testing.T) {
 	var closed bool
 	started := time.Now()
 	_, fallback, err := tuneMeshBeforeTLS(context.Background(), func(ctx context.Context) (time.Duration, error) {
-		return submitMeshIntervalUpdate(ctx, 0, func(context.Context) (*leUpdateIO, error) {
+		return submitMeshIntervalUpdate(ctx, 0, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) {
 			return &leUpdateIO{send: func(b []byte) (int, error) { return len(b), nil }, read: func(ctx context.Context) ([]byte, error) { <-ctx.Done(); return nil, ctx.Err() }, close: func() { closed = true }}, nil
 		})
 	})

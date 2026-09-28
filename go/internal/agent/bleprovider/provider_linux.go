@@ -600,6 +600,21 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	}
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer.asset, secure)
 	defer stopCheaperWatch()
+	// Handshake ran at the 15 ms tune; bulk must not. Relax to the
+	// steady-state interval now that TLS is established: one update per
+	// link from its dialer, best-effort, never fatal to the link.
+	if handleErr == nil {
+		relaxCtx, relaxCancel := context.WithTimeout(ctx, meshInitialTuneBudget)
+		relaxed, _, relaxErr := tuneMeshBeforeTLS(relaxCtx, func(updateCtx context.Context) (time.Duration, error) {
+			return requestSteadyConnectionInterval(updateCtx, r.hciIndex, aclHandle)
+		})
+		relaxCancel()
+		if relaxErr != nil {
+			r.cfg.Logger.Debug("BLE steady-state interval relax unavailable", zap.Int32("peer", peer.asset), zap.Error(relaxErr))
+		} else {
+			r.cfg.Logger.Info("BLE steady-state interval relaxed", zap.Int32("peer", peer.asset), zap.Duration("interval", relaxed))
+		}
+	}
 	err = r.cfg.Node.AttachStream(ctx, peer.asset, secure, LinkCost)
 	if err != nil && ctx.Err() == nil {
 		r.cfg.Logger.Debug("BLE link ended", zap.Int32("peer", peer.asset), zap.Error(err))
