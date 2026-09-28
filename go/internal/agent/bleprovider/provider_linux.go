@@ -61,6 +61,7 @@ func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Co
 				return
 			case <-ticker.C:
 				if r.hasCheaperLink(asset) {
+					r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset))
 					_ = conn.Close()
 					return
 				}
@@ -266,10 +267,12 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer) {
+		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Int32("peer", peer))
 		_ = secure.Close()
 		return
 	}
 	if !r.claim(peer) {
+		r.cfg.Logger.Debug("BLE closing inbound CoC on claim conflict", zap.Int32("peer", peer))
 		_ = secure.Close()
 		return
 	}
@@ -404,6 +407,7 @@ func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, ada
 
 func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if r.hasCheaperLink(peer.asset) {
+		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.Int32("peer", peer.asset))
 		return
 	}
 	// Serializing outgoing LE creation avoids accumulating simultaneous pending
@@ -514,6 +518,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer.asset) {
+		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.Int32("peer", peer.asset))
 		return
 	}
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer.asset, secure)
