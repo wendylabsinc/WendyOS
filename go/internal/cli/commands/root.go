@@ -354,18 +354,15 @@ func nextStepHint(commandPath string) string {
 
 // maybeShowNextStep prints a next-step hint after a successful command. cobra
 // only runs PersistentPostRunE when RunE succeeded, so this is success-only.
-// In JSON mode the hint goes to stderr as one plain line, keeping stdout pure
-// JSON. It is suppressed in CI, and for a text-mode run without a terminal.
+// The hint is onboarding advice for a person at a terminal, so it is
+// suppressed in JSON mode (stderr there carries only the error envelope,
+// progress, and notices that change what the result means), for runs without
+// a terminal, and in CI.
 func maybeShowNextStep(cmd *cobra.Command) {
-	if env.IsCI() {
+	if jsonOutput || !isInteractiveTerminal() || env.IsCI() {
 		return
 	}
-	hint := nextStepHint(cmd.CommandPath())
-	switch {
-	case hint == "":
-	case jsonOutput:
-		plainNotice("%s", hint)
-	case isInteractiveTerminal():
+	if hint := nextStepHint(cmd.CommandPath()); hint != "" {
 		cmd.PrintErrln(hint)
 	}
 }

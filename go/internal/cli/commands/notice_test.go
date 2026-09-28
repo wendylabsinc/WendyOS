@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -65,18 +66,27 @@ func TestMaybeShowNextStep(t *testing.T) {
 	prev := jsonOutput
 	t.Cleanup(func() { jsonOutput = prev })
 
-	t.Run("JSON mode writes the hint to stderr as a plain line", func(t *testing.T) {
-		clearCI(t)
-		stubNonInteractive(t)
-		jsonOutput = true
-		var out strings.Builder
-		swapNoticeOut(t, &out)
-		cmd, human := newInfo()
-		maybeShowNextStep(cmd)
-		if out.String() != hint || human.Len() != 0 {
-			t.Errorf("notice = %q, human = %q; want the hint once, on the notice stream", out.String(), human.String())
-		}
-	})
+	// Next-step hints are onboarding advice for a person. In JSON mode stderr
+	// carries only the error envelope, progress, and notices that change what
+	// the result means, and scripts in this repo merge stderr into jq input.
+	for _, interactive := range []bool{false, true} {
+		t.Run(fmt.Sprintf("JSON mode prints no hint (terminal=%v)", interactive), func(t *testing.T) {
+			clearCI(t)
+			if interactive {
+				stubInteractive(t)
+			} else {
+				stubNonInteractive(t)
+			}
+			jsonOutput = true
+			var out strings.Builder
+			swapNoticeOut(t, &out)
+			cmd, human := newInfo()
+			maybeShowNextStep(cmd)
+			if out.Len() != 0 || human.Len() != 0 {
+				t.Errorf("JSON mode printed a hint: notice = %q, human = %q", out.String(), human.String())
+			}
+		})
+	}
 	t.Run("CI stays quiet", func(t *testing.T) {
 		clearCI(t)
 		t.Setenv("CI", "true")
