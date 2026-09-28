@@ -50,7 +50,7 @@ Earlier stderr lines can hold progress output and notices, so read the last line
 |---|---|---|
 | 0 | Success | |
 | 1 | Any failure not listed below | every other code, including `error` |
-| 2 | The command line is wrong: unknown command or flag, wrong number of arguments, a missing required flag, or a confirmation that needs `--force` because there is no terminal | `cli_usage` |
+| 2 | The command line is wrong: unknown command or flag, wrong number of arguments, a missing required flag, an invalid or conflicting flag value, or a confirmation that needs `--force` because there is no terminal | `cli_usage` |
 | 3 | Credentials are missing, expired or ambiguous | `auth_required`, `auth_session_ambiguous`, `auth_certificate_failed`, `device_auth_required`, `registry_auth`, `grpc_unauthenticated` |
 | 4 | No usable target device: none given, several match, or the device cannot run this project | `no_device`, `device_ambiguous`, `project_target_mismatch` |
 | 5 | The device could not be reached: it refused or did not answer the connection, its host name did not resolve, or it rejected the TLS handshake | `device_unreachable`, `device_offline`, `device_not_resolved`, `device_tls_rejected`, `simulator_unavailable` |

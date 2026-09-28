@@ -217,6 +217,11 @@ func errorClass(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "context_canceled"
 	}
+	// A usage error outranks any category it also carries (an invalid flag
+	// value in wendy run is also config_invalid): the command line is wrong.
+	if commands.IsUsageError(err) {
+		return "cli_usage"
+	}
 	// A failed device dial is classified by what it says about the device
 	// before the generic deadline classes: a dial that timed out means the
 	// device did not answer (device_unreachable), not a slow operation.
@@ -237,9 +242,6 @@ func errorClass(err error) string {
 	}
 	if class := commands.ErrorClass(err); class != "" {
 		return class
-	}
-	if commands.IsUsageError(err) {
-		return "cli_usage"
 	}
 	// status.FromError returns ok=true only for real gRPC errors (those
 	// produced by the grpc package or implementing GRPCStatus()). For

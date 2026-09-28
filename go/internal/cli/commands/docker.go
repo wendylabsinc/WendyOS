@@ -183,7 +183,8 @@ func normalizeImageBuilder(builder string) (string, error) {
 	case imageBuilderBuildkit:
 		return imageBuilderBuildkit, nil
 	default:
-		return "", commandErrorf(errConfigInvalid, "invalid value %q for --builder: must be one of docker, apple-container, or buildkit", builder)
+		// The value comes from the --builder flag: the command line is wrong.
+		return "", markUsage(commandErrorf(errConfigInvalid, "invalid value %q for --builder: must be one of docker, apple-container, or buildkit", builder))
 	}
 }
 

@@ -3,7 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
-	"strings"
+	"regexp"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -50,17 +50,21 @@ func markUsageErrors(root *cobra.Command) {
 	walk(root)
 }
 
-// cobraUsagePrefixes open the usage errors cobra builds with fmt.Errorf
-// outside any hook markUsageErrors can wrap: an unknown subcommand of the
-// root (Command.Find), a missing required flag, and flag-group violations
-// (both checked in Command.execute after PreRunE).
+// cobraUsageErrors match, exactly, the usage errors cobra builds with
+// fmt.Errorf outside any hook markUsageErrors can wrap: an unknown
+// subcommand of the root (legacyArgs, from Command.Find, with cobra's
+// optional suggestions), a missing required flag, and the three flag-group
+// violations (checked in Command.execute after PreRunE). They are anchored
+// at both ends so that a message a device or agent sent back, which commands
+// such as ros2 return unwrapped, cannot pass for one.
 // TestIsUsageErrorRecognisesEveryCobraSource pins them against the vendored
 // cobra, so an upgrade that rewords one fails loudly.
-var cobraUsagePrefixes = []string{
-	"unknown command ",
-	"required flag(s) ",
-	"if any flags in the group ",
-	"at least one of the flags in the group ",
+var cobraUsageErrors = []*regexp.Regexp{
+	regexp.MustCompile(`^unknown command "(?:[^"\\]|\\.)*" for "wendy[^"]*"(?:\n\nDid you mean this\?\n(?:\t[^\n]*\n)+)?$`),
+	regexp.MustCompile(`^required flag\(s\) "[^\n]*" not set$`),
+	regexp.MustCompile(`^if any flags in the group \[[^\]\n]*\] are set they must all be set; missing \[[^\]\n]*\]$`),
+	regexp.MustCompile(`^at least one of the flags in the group \[[^\]\n]*\] is required$`),
+	regexp.MustCompile(`^if any flags in the group \[[^\]\n]*\] are set none of the others can be; \[[^\]\n]*\] were all set$`),
 }
 
 // IsUsageError reports whether err is a command-line syntax error.
@@ -83,8 +87,8 @@ func IsUsageError(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	for _, prefix := range cobraUsagePrefixes {
-		if strings.HasPrefix(msg, prefix) {
+	for _, shape := range cobraUsageErrors {
+		if shape.MatchString(msg) {
 			return true
 		}
 	}
