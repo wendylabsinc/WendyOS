@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,32 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// childEnv is the environment for a wendy child process: the test's own,
+// minus anything that changes what wendy prints (its own WENDY_* settings
+// and colour forcing), plus an empty config and no colour.
+func childEnv(dir, coverDir string) []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		key, _, _ := strings.Cut(kv, "=")
+		switch {
+		case strings.HasPrefix(key, "WENDY_"), strings.HasPrefix(key, "CLICOLOR"),
+			key == "NO_COLOR", key == "FORCE_COLOR", key == "HOME", key == "GOCOVERDIR":
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env,
+		runMainEnv+"=1",
+		"HOME="+dir,
+		"WENDY_CONFIG_DIR="+dir,
+		"WENDY_ANALYTICS=false",
+		"NO_COLOR=1",
+		"CLICOLOR_FORCE=0",
+		// Coverage builds write here instead of warning on stderr.
+		"GOCOVERDIR="+coverDir,
+	)
+}
+
 // runWendy runs this binary as wendy with args, without a terminal, in an
 // empty config, and returns its exit status, stdout and stderr.
 func runWendy(t *testing.T, args ...string) (int, string, string) {
@@ -28,14 +55,7 @@ func runWendy(t *testing.T, args ...string) (int, string, string) {
 	dir := t.TempDir()
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		runMainEnv+"=1",
-		"HOME="+dir,
-		"WENDY_CONFIG_DIR="+dir,
-		"WENDY_ANALYTICS=false",
-		// Coverage builds write here instead of warning on stderr.
-		"GOCOVERDIR="+t.TempDir(),
-	)
+	cmd.Env = childEnv(dir, t.TempDir())
 	var stdout, stderr bytes.Buffer
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, &stdout, &stderr
 	err := cmd.Run()
@@ -53,6 +73,12 @@ func runWendy(t *testing.T, args ...string) (int, string, string) {
 // leaves stdout empty, writes exactly one stderr line, and exits with the
 // class's status. Without a terminal JSON mode is automatic.
 func TestFailuresFromTheRealProcess(t *testing.T) {
+	// A refused connection to 127.0.0.1:1 is retried slowly on Windows.
+	dialsRefusedPort := func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("refused local connections are slow and retried on Windows")
+		}
+	}
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -67,6 +93,9 @@ func TestFailuresFromTheRealProcess(t *testing.T) {
 		{"nothing listening", []string{"--device", "127.0.0.1:1", "device", "info"}, 5, "device_unreachable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.code == "device_unreachable" {
+				dialsRefusedPort(t)
+			}
 			code, stdout, stderr := runWendy(t, tc.args...)
 			if code != tc.exit {
 				t.Errorf("exit = %d, want %d; stderr = %q", code, tc.exit, stderr)
@@ -88,6 +117,7 @@ func TestFailuresFromTheRealProcess(t *testing.T) {
 	}
 
 	t.Run("--json=false keeps text", func(t *testing.T) {
+		dialsRefusedPort(t)
 		code, stdout, stderr := runWendy(t, "--json=false", "--device", "127.0.0.1:1", "device", "info")
 		if code != 5 || stdout != "" || !strings.HasPrefix(stderr, "✗ Could not connect to device at 127.0.0.1:1.") {
 			t.Errorf("exit = %d, stdout = %q, stderr = %q", code, stdout, stderr)
