@@ -21,8 +21,9 @@ import (
 const (
 	// HCI LE Connection Update uses 1.25 ms interval, 10 ms timeout, and
 	// 0.625 ms connection-event length units. A zero minimum lets the
-	// controller shorten an event under contention; the 10 ms maximum lets
-	// a healthy Wendy mesh CoC use more than one data packet per event.
+	// controller shorten an event under contention; the 5 ms maximum keeps
+	// two bulk links plus scanning inside a 45 ms interval while still
+	// fitting several data packets per event.
 	meshIntervalUnits = 12 // 15 ms
 	// Steady-state bulk interval: the 15 ms handshake tune triples anchor
 	// demand versus the negotiated ~45 ms. Under two-link bulk plus active
@@ -36,7 +37,11 @@ const (
 	// authenticated Wendy links to drop with HCI reason 0x08 under contention.
 	meshTimeoutUnits        = 800 // 8 s supervision timeout
 	meshMinEventLengthUnits = 0
-	meshMaxEventLengthUnits = 16 // 10 ms
+	// Cap steady connection events well under the interval: two bulk links
+	// at 10 ms events plus ~50%-duty scanning exceed a 45 ms interval and
+	// the controller sheds whole ACLs for seconds (measured). 5 ms events
+	// leave headroom (5+5+scan fits 45 ms) while keeping bulk throughput.
+	meshMaxEventLengthUnits = 8 // 5 ms
 	leUpdateOpcode          = 0x2013
 	leUpdateSubevent        = 0x03
 	hciEventPacket          = 0x04

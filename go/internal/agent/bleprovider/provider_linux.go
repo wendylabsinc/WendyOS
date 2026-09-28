@@ -553,7 +553,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		if r.cfg.Selection != nil {
 			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
 		}
-		r.noteDialTimeout(peer.asset, errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil)
+		// A dial-context timeout means the 30s socket budget expired. A
+		// parent cancellation surfaces as context.Canceled instead and must
+		// not count toward the wedge signal.
+		r.noteDialTimeout(peer.asset, errors.Is(err, context.DeadlineExceeded))
 		return
 	}
 	r.clearDialTimeouts(peer.asset)

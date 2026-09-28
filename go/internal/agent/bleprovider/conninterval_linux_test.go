@@ -43,7 +43,7 @@ func TestAdapterAndACLIdentity(t *testing.T) {
 
 func TestLEConnectionUpdateEncoding(t *testing.T) {
 	got := leConnectionUpdateCommand(0x0800, meshIntervalUnits)
-	want := []byte{0x01, 0x13, 0x20, 14, 0x00, 0x08, 12, 0, 12, 0, 0, 0, 0x20, 0x03, 0, 0, 16, 0}
+	want := []byte{0x01, 0x13, 0x20, 14, 0x00, 0x08, 12, 0, 12, 0, 0, 0, 0x20, 0x03, 0, 0, 8, 0}
 	if string(got) != string(want) {
 		t.Fatalf("command=%x, want %x", got, want)
 	}
@@ -165,7 +165,7 @@ func TestLEUpdateDoesNotAcceptOldEventLengthCommand(t *testing.T) {
 		completePacket(0x0800, 12, 0, 800, 0),
 	))
 	if err != nil || interval != 15*time.Millisecond {
-		t.Fatalf("10 ms event-length command not matched: interval=%s err=%v", interval, err)
+		t.Fatalf("5 ms event-length command not matched: interval=%s err=%v", interval, err)
 	}
 }
 
