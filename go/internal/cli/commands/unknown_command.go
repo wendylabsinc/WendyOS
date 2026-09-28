@@ -61,7 +61,7 @@ func UnknownSubcommandError(args []string) error {
 		}
 	}
 	msg += fmt.Sprintf("\nRun '%s --help' to see the available commands.", target.CommandPath())
-	return errors.New(msg)
+	return markUsage(errors.New(msg))
 }
 
 // Inspect only the known global-option prefix. After a command or --, values
@@ -76,11 +76,11 @@ func bundledDeviceArgumentError(args []string) error {
 			i++ // A separate device value can itself contain spaces.
 			continue
 		case strings.HasPrefix(arg, "--device "), strings.HasPrefix(arg, "--device\t"), strings.HasPrefix(arg, "--device\n"):
-			return errors.New("invalid --device argument: the option and its value arrived as one argument\n" +
+			return markUsage(errors.New("invalid --device argument: the option and its value arrived as one argument\n" +
 				"Store only the device selector in DEVICE and pass it separately, for example:\n" +
 				"  wendy --device \"$DEVICE\" device ros2 topics\n" +
 				"In zsh, use an argument array if you need to store both the option and value. " +
-				"This is a command syntax error; retrying the unchanged command will not help.")
+				"This is a command syntax error; retrying the unchanged command will not help."))
 		default:
 			return nil
 		}

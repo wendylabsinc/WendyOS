@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
@@ -231,12 +230,7 @@ func errorClass(err error) string {
 	if class := commands.ErrorClass(err); class != "" {
 		return class
 	}
-	var unknownFlag *pflag.NotExistError
-	var missingValue *pflag.ValueRequiredError
-	var invalidValue *pflag.InvalidValueError
-	var invalidSyntax *pflag.InvalidSyntaxError
-	if errors.As(err, &unknownFlag) || errors.As(err, &missingValue) ||
-		errors.As(err, &invalidValue) || errors.As(err, &invalidSyntax) {
+	if commands.IsUsageError(err) {
 		return "cli_usage"
 	}
 	// status.FromError returns ok=true only for real gRPC errors (those

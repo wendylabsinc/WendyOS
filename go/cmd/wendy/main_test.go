@@ -375,6 +375,9 @@ func TestErrorClass_Mapping(t *testing.T) {
 		{"eof", io.EOF, "unexpected_eof"},
 		{"truncated_stream", fmt.Errorf("upload: %w", io.ErrUnexpectedEOF), "unexpected_eof"},
 		{"subprocess", &exec.ExitError{}, "process_failed"},
+		{"unknown_subcommand", commands.UnknownSubcommandError([]string{"device", "banana"}), "cli_usage"},
+		{"bundled_device_argument", commands.UnknownSubcommandError([]string{"--device foo", "device", "info"}), "cli_usage"},
+		{"cobra_root_unknown_command", errors.New(`unknown command "banana" for "wendy"`), "cli_usage"},
 		{"message_is_not_a_category", errors.New("rpc error: code = Unavailable: secret.local build failed"), "other"},
 		{"non_grpc", errors.New("some plain failure"), "other"},
 	} {

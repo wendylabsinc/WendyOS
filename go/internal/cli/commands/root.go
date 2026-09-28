@@ -296,6 +296,7 @@ func NewRootCmd() *cobra.Command {
 
 	addUSBDriverCommand(root)
 	rejectStrayArguments(root)
+	markUsageErrors(root)
 
 	root.Version = version.Version
 	return root
