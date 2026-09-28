@@ -31,6 +31,60 @@ var (
 	stateIconCrashLoop = lipgloss.NewStyle().Foreground(tui.Red500).Render("↻")
 )
 
+// resolveAppsTargetFn is resolveTarget; tests swap it for a fake device.
+var resolveAppsTargetFn = resolveTarget
+
+// appActionResult is the --json result of apps start, stop and remove: one
+// object on stdout per invocation.
+//
+// Status is "started" once the agent confirmed a start and the app's state was
+// not read back (a detached start, or an attached one whose app has gone from
+// the list); "running", "stopped" or "crash_looping" for an attached start,
+// read back after its output stream ended; "stopped" for stop; "removed" for
+// remove; and "cancelled" when a remove was declined at the prompt.
+type appActionResult struct {
+	App               string `json:"app"`
+	Action            string `json:"action"`
+	Status            string `json:"status"`
+	RestartPolicy     string `json:"restartPolicy,omitempty"`
+	ExitCode          *int32 `json:"exitCode,omitempty"`
+	TerminationReason string `json:"terminationReason,omitempty"`
+	DeleteImage       bool   `json:"deleteImage,omitempty"`
+	DeleteVolumes     bool   `json:"deleteVolumes,omitempty"`
+}
+
+// reportAppAction prints result as JSON in JSON mode, and otherwise runs
+// human, the command's usual styled status lines.
+func reportAppAction(result appActionResult, human func()) error {
+	if jsonOutput {
+		return printJSON(result)
+	}
+	human()
+	return nil
+}
+
+// appStdout is where a streamed app's own stdout goes: the terminal
+// normally, stderr in JSON mode, where stdout carries only the JSON result.
+func appStdout() io.Writer {
+	if jsonOutput {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+// appsRemoveNeedsForceError refuses an unconfirmed remove when there is no
+// terminal to confirm on. It is a usage error: the same command line can
+// never succeed without --force, so retrying it unchanged is pointless.
+func appsRemoveNeedsForceError(commandPath string, args []string) error {
+	app := "<app-name>"
+	if len(args) > 0 {
+		app = shellQuoteArg(args[0])
+	}
+	return withNextSteps(
+		usageErrorf("refusing to remove without confirmation: no interactive terminal to confirm on"),
+		fmt.Sprintf("Pass --force to remove without confirmation: %s %s --force", commandPath, app))
+}
+
 func newAppsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:    "apps",
@@ -369,10 +423,17 @@ func newAppsStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start [app-name]",
 		Short: "Start an application",
-		Args:  cobra.MaximumNArgs(1),
+		Long: "Start an application that is already on the device.\n\n" +
+			"By default the CLI streams the app's output until the app exits or you press Ctrl-C, " +
+			"and the app keeps the restart policy it was deployed with.\n\n" +
+			"With --detach the CLI returns once the agent confirms the start, and the app's restart " +
+			"policy is set to unless-stopped and saved on the device, replacing the policy it was " +
+			"deployed with: the agent restarts the app whenever it exits and after a reboot, until " +
+			"you run 'wendy device apps stop'.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx)
+			target, err := resolveAppsTargetFn(ctx)
 			if err != nil {
 				return err
 			}
@@ -404,8 +465,9 @@ func newAppsStartCmd() *cobra.Command {
 					if err := awaitStarted(stream); err != nil {
 						return fmt.Errorf("starting container: %w", err)
 					}
-					cliSuccess("Application %s started.", appName)
-					return nil
+					return reportAppAction(
+						appActionResult{App: appName, Action: "start", Status: "started", RestartPolicy: "unless-stopped"},
+						func() { cliSuccess("Application %s started.", appName) })
 				}
 				outStream, stdinAttempted, err := openContainerStream(ctx, target.Agent.ContainerService, appName, nil)
 				if err != nil {
@@ -438,7 +500,7 @@ func newAppsStartCmd() *cobra.Command {
 						gotStarted = true
 					}
 					if out := resp.GetStdoutOutput(); out != nil {
-						os.Stdout.Write(out.GetData())
+						appStdout().Write(out.GetData())
 					}
 					if out := resp.GetStderrOutput(); out != nil {
 						os.Stderr.Write(out.GetData())
@@ -452,8 +514,7 @@ func newAppsStartCmd() *cobra.Command {
 				// exits; a group start's stream ends immediately while the
 				// services keep running. Report the actual state instead of
 				// guessing from whether any output was seen.
-				reportStartOutcome(ctx, target.Agent.ContainerService, appName)
-				return nil
+				return reportStartOutcome(ctx, target.Agent.ContainerService, appName)
 			}
 
 			if target.Provider != nil {
@@ -464,15 +525,15 @@ func newAppsStartCmd() *cobra.Command {
 				if err := cm.StartContainer(ctx, appName); err != nil {
 					return err
 				}
-				cliSuccess("Application %s started.", appName)
-				return nil
+				return reportAppAction(appActionResult{App: appName, Action: "start", Status: "started"},
+					func() { cliSuccess("Application %s started.", appName) })
 			}
 
 			return fmt.Errorf("selected device does not support this command")
 		},
 	}
 
-	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start without streaming output")
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Start without streaming output; also sets the app's restart policy to unless-stopped, saved on the device, so it restarts after exits and reboots until stopped")
 	return cmd
 }
 
@@ -501,12 +562,16 @@ func awaitStarted(stream containerOutputStream) error {
 // guessing from streamed output. RUNNING (a group start, or a container still
 // up) reads as started; a terminated single container reports how it ended.
 // A failure state (crash, crash-loop) is a neutral notice, not success styling;
-// the exit status stays 0 because the start itself was confirmed.
-func reportStartOutcome(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) {
+// the exit status stays 0 because the start itself was confirmed. In JSON mode
+// the same state is printed as an appActionResult instead.
+func reportStartOutcome(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) error {
 	c := fetchAppContainer(ctx, svc, appName)
+	if jsonOutput {
+		return printJSON(startOutcomeResult(appName, c))
+	}
 	if c == nil {
 		cliSuccess("Application %s started.", appName)
-		return
+		return nil
 	}
 	switch c.GetRunningState() {
 	case agentpb.AppRunningState_RUNNING:
@@ -527,6 +592,31 @@ func reportStartOutcome(ctx context.Context, svc agentpb.WendyContainerServiceCl
 				terminationSummary(c.GetTerminationReason(), c.GetExitCode()))
 		}
 	}
+	return nil
+}
+
+// startOutcomeResult is reportStartOutcome's JSON form: the app's state once
+// an attached start's output stream ended, or "started" when the app could
+// not be read back.
+func startOutcomeResult(appName string, c *agentpb.AppContainer) appActionResult {
+	result := appActionResult{App: appName, Action: "start", Status: "started"}
+	if c == nil {
+		return result
+	}
+	switch c.GetRunningState() {
+	case agentpb.AppRunningState_RUNNING:
+		result.Status = "running"
+	case agentpb.AppRunningState_CRASH_LOOPING:
+		result.Status = "crash_looping"
+	default:
+		result.Status = "stopped"
+	}
+	if reason := c.GetTerminationReason(); reason != "" {
+		exitCode := c.GetExitCode()
+		result.ExitCode = &exitCode
+		result.TerminationReason = reason
+	}
+	return result
 }
 
 // fetchAppContainer returns the AppContainer for appName from the agent's
@@ -556,7 +646,7 @@ func newAppsStopCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, IncludeBluetooth())
+			target, err := resolveAppsTargetFn(ctx, IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -571,6 +661,8 @@ func newAppsStopCmd() *cobra.Command {
 					return err
 				}
 			}
+			stopped := appActionResult{App: appName, Action: "stop", Status: "stopped"}
+			announce := func() { cliSuccess("Application %s stopped.", appName) }
 
 			if target.Bluetooth != nil && target.Bluetooth.IsWendyAgent() {
 				cliLogln("Connecting to %s via Bluetooth...", target.Bluetooth.DisplayName)
@@ -582,8 +674,7 @@ func newAppsStopCmd() *cobra.Command {
 				if bleErr = bleClient.AppsStop(appName); bleErr != nil {
 					return fmt.Errorf("stopping app: %w", bleErr)
 				}
-				cliSuccess("Application %s stopped.", appName)
-				return nil
+				return reportAppAction(stopped, announce)
 			}
 
 			if target.Agent != nil {
@@ -593,8 +684,7 @@ func newAppsStopCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("stopping container: %w", err)
 				}
-				cliSuccess("Application %s stopped.", appName)
-				return nil
+				return reportAppAction(stopped, announce)
 			}
 
 			if target.Provider != nil {
@@ -605,8 +695,7 @@ func newAppsStopCmd() *cobra.Command {
 				if err := cm.StopContainer(ctx, appName); err != nil {
 					return err
 				}
-				cliSuccess("Application %s stopped.", appName)
-				return nil
+				return reportAppAction(stopped, announce)
 			}
 
 			return fmt.Errorf("selected device does not support this command")
@@ -624,8 +713,14 @@ func newAppsRemoveCmd() *cobra.Command {
 		Short: "Remove an application",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Refuse before connecting. Without a terminal nobody can answer
+			// the confirmation: the prompt used to fail obscurely, or block
+			// on /dev/tty when one existed but stdin/stdout were redirected.
+			if !force && !isInteractiveTerminal() {
+				return appsRemoveNeedsForceError(cmd.CommandPath(), args)
+			}
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, IncludeBluetooth())
+			target, err := resolveAppsTargetFn(ctx, IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -651,8 +746,8 @@ func newAppsRemoveCmd() *cobra.Command {
 					return err
 				}
 				if !confirmed {
-					cliNotice("Cancelled.")
-					return nil
+					return reportAppAction(appActionResult{App: appName, Action: "remove", Status: "cancelled"},
+						func() { cliNotice("Cancelled.") })
 				}
 			}
 
@@ -692,11 +787,12 @@ func newAppsRemoveCmd() *cobra.Command {
 				if bleErr = bleClient.AppsRemove(appName, cleanup); bleErr != nil {
 					return fmt.Errorf("removing app: %w", bleErr)
 				}
-				cliSuccess("Application %s removed.", appName)
-				if cleanup {
-					cliLogln("  Container image cleanup requested.")
-				}
-				return nil
+				return reportAppAction(appActionResult{App: appName, Action: "remove", Status: "removed", DeleteImage: cleanup}, func() {
+					cliSuccess("Application %s removed.", appName)
+					if cleanup {
+						cliLogln("  Container image cleanup requested.")
+					}
+				})
 			}
 
 			if target.Agent != nil {
@@ -708,14 +804,16 @@ func newAppsRemoveCmd() *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("removing container: %w", err)
 				}
-				cliSuccess("Application %s removed.", appName)
-				if cleanup {
-					cliLogln("  Container image cleanup requested.")
-				}
-				if deleteVolumes {
-					cliLogln("  Persistent volume deletion requested.")
-				}
-				return nil
+				removed := appActionResult{App: appName, Action: "remove", Status: "removed", DeleteImage: cleanup, DeleteVolumes: deleteVolumes}
+				return reportAppAction(removed, func() {
+					cliSuccess("Application %s removed.", appName)
+					if cleanup {
+						cliLogln("  Container image cleanup requested.")
+					}
+					if deleteVolumes {
+						cliLogln("  Persistent volume deletion requested.")
+					}
+				})
 			}
 
 			if target.Provider != nil {
@@ -726,15 +824,15 @@ func newAppsRemoveCmd() *cobra.Command {
 				if err := cm.RemoveContainer(ctx, appName); err != nil {
 					return err
 				}
-				cliSuccess("Application %s removed.", appName)
-				return nil
+				return reportAppAction(appActionResult{App: appName, Action: "remove", Status: "removed"},
+					func() { cliSuccess("Application %s removed.", appName) })
 			}
 
 			return fmt.Errorf("selected device does not support this command")
 		},
 	}
 
-	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompts (required without an interactive terminal)")
 	cmd.Flags().BoolVar(&cleanup, "cleanup", false, "Also delete the container image (frees disk space; agent-connected devices only)")
 	cmd.Flags().BoolVar(&deleteVolumes, "delete-volumes", false, "Also delete persistent volumes (/var/lib/wendy/volumes; agent-connected devices only)")
 	return cmd

@@ -2,7 +2,7 @@ Starts an app by name. If the app-name argument is not provided, and the termina
 
 By default, after starting the app the CLI attaches to the container's output stream and prints logs to the terminal. Press **Ctrl-C** to detach.
 
-Starting an app always applies the **`UNLESS_STOPPED`** restart policy, so the agent automatically restarts the container if it exits unexpectedly. The container only stays stopped when it is explicitly stopped (e.g. via `wendy device apps stop`).
+An attached start (the default) keeps the restart policy the app was deployed with. A detached start (`--detach`) sets the app's restart policy to **`unless-stopped`** and saves it on the device, replacing the deployed policy: the agent restarts the app whenever it exits, and after a reboot, until it is explicitly stopped with `wendy device apps stop`.
 
 If the container keeps exiting and the agent has already performed at least one automatic restart, `wendy device apps list` shows the app as **crash-looping** (a red `↻` icon) rather than stopped, so a restart loop is not mistaken for a clean exit. Use `wendy device logs --app <name>` to view the crash output.
 
@@ -10,7 +10,7 @@ If the container keeps exiting and the agent has already performed at least one 
 
 | Flag | Description |
 |------|-------------|
-| `-d`, `--detach` | Start the app and return once the agent confirms it has started, without streaming output. |
+| `-d`, `--detach` | Start the app and return once the agent confirms it has started, without streaming output. Also sets the app's restart policy to `unless-stopped` (see above). |
 
 ## Examples
 
@@ -32,3 +32,13 @@ When `--detach` is used, the CLI waits for the agent to confirm the container ha
 ## Reported outcome
 
 When an attached start returns, the CLI reports the app's state at that point: `started` if it is still running (for example a multi-service app), `stopped` — or a short reason such as `crashed (exit 1)` — if it has exited, or `crash-looping` if it keeps restarting.
+
+## JSON output
+
+With `--json` (automatic when stdout is not a terminal) the command prints one JSON object to stdout. An attached start sends the app's own output to stderr, so stdout holds only the result.
+
+```json
+{"app": "my-app", "action": "start", "status": "started", "restartPolicy": "unless-stopped"}
+```
+
+`status` is `started` for a detached start. For an attached start it is the app's state when its output stream ended (`running`, `stopped` or `crash_looping`), with `exitCode` and `terminationReason` when the agent recorded why the app last exited.
