@@ -38,7 +38,14 @@ func reportFailure(stderr io.Writer, err error, executed *cobra.Command, args []
 	}
 	class := errorClass(err)
 	outcome := outcomeForClass(class)
+	// A panic's stack is what a bug report needs. JSON mode prints it before
+	// the envelope, which stays the last line; text mode after the message.
+	var internal *internalError
+	isInternal := errors.As(err, &internal)
 	if commands.JSONErrorsRequested(executed, args) {
+		if isInternal {
+			fmt.Fprintf(stderr, "%s\n", bytes.TrimRight(internal.stack, "\n"))
+		}
 		if writeErrorEnvelope(stderr, newErrorEnvelope(err, class, outcome, executed)) == nil {
 			return outcome.exit
 		}
@@ -46,9 +53,7 @@ func reportFailure(stderr io.Writer, err error, executed *cobra.Command, args []
 		// through so the failure is still reported, as text.
 	}
 	fmt.Fprintln(stderr, renderError(err))
-	var internal *internalError
-	if errors.As(err, &internal) {
-		// What Go would have printed for the panic, for the bug report.
+	if isInternal {
 		fmt.Fprintf(stderr, "\n%s", internal.stack)
 	}
 	return outcome.exit

@@ -8,7 +8,7 @@ import (
 )
 
 // internalErrorStep is the recovery step for a bug in wendy itself.
-const internalErrorStep = "This is a bug in wendy. Please report it with the command you ran and, from a run without --json, the stack trace."
+const internalErrorStep = "This is a bug in wendy. Please report it with the command you ran and the stack trace printed with this error."
 
 // internalError is a panic recovered from a command. It is reported like any
 // other failure, with its own class and exit status, instead of Go's crash

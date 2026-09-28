@@ -43,7 +43,13 @@ func TestReportFailure_InternalError(t *testing.T) {
 	if code := reportFailure(&out, err, nil, []string{"--json"}); code != 70 {
 		t.Errorf("exit = %d, want 70", code)
 	}
-	got := decodeEnvelope(t, out.String())
+	// JSON mode is what a non-terminal run gets, so the stack must not be
+	// lost there: it comes first, and the envelope stays the last line.
+	stack, envelope, ok := cutLastLine(out.String())
+	if !ok || !strings.Contains(stack, "goroutine ") || !strings.Contains(stack, "panic_test.go") {
+		t.Errorf("JSON mode must print the stack before the envelope:\n%s", out.String())
+	}
+	got := decodeEnvelope(t, envelope)
 	if got.Code != "internal_error" || got.Exit != 70 || got.Retryable ||
 		got.Message != "internal error: nil map write" || len(got.NextSteps) != 1 {
 		t.Errorf("envelope = %+v", got)
@@ -57,4 +63,15 @@ func TestReportFailure_InternalError(t *testing.T) {
 	if !strings.Contains(text, "internal error: nil map write") || !strings.Contains(text, "goroutine ") {
 		t.Errorf("text mode must show the error and the stack for a bug report:\n%s", text)
 	}
+}
+
+// cutLastLine splits out into everything before its last line and that last
+// line (with its newline); ok is false when out has fewer than two lines.
+func cutLastLine(out string) (before, last string, ok bool) {
+	trimmed := strings.TrimSuffix(out, "\n")
+	i := strings.LastIndex(trimmed, "\n")
+	if i < 0 {
+		return "", out, false
+	}
+	return out[:i+1], out[i+1:], true
 }
