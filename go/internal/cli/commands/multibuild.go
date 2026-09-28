@@ -900,6 +900,12 @@ func buildServicesParallelWithContent(
 	quietBuild bool,
 	sfOpts ...stagefile.Option,
 ) (map[string]error, map[string][]string, error) {
+	// Tag the context so ociLayoutBuildWaitNotice knows quietBuild routes every
+	// worker's logOutput into a failure-only buffer below, regardless of
+	// terminal interactivity (see quietBuildLogKey). Set once here rather than
+	// per worker: buildServicesParallelCore derives buildCtx from this ctx via
+	// context.WithCancel, which preserves values.
+	ctx = contextWithQuietBuildLog(ctx, quietBuild)
 	// Resolved once for the group: every service deploys to this one device,
 	// so they share its GPU architecture.
 	gpuArch := serviceGPUArch(ctx, cwd, services, conn)

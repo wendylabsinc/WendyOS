@@ -2407,6 +2407,19 @@ func registryPushWouldUseDocker(builder string) bool {
 // rebuild — this function never leaves the deploy worse off than skipping it
 // entirely would have.
 func tryPushExistingOCILayout(ctx context.Context, conn *grpcclient.AgentConnection, regPort int, hint *ociReuseHint, repo string) error {
+	// deployByChunkDiff released the layout lock after its chunk push, so hold
+	// it again for this push and refuse content another run has rebuilt since.
+	lease, err := acquireOCILayoutLease(ctx, hint.layoutDir, func() {
+		cliNotice("Waiting for another wendy run of %s to release the build cache…", repo)
+	})
+	if err != nil {
+		return err
+	}
+	defer lease.release()
+	if err := hint.verify(); err != nil {
+		return err
+	}
+
 	// The OCI pusher runs on the host, not inside BuildKit's VM. Resolve a
 	// host-reachable address (and terminate device mTLS on a loopback proxy when
 	// required) instead of using host.docker.internal, which is only meaningful
@@ -3262,9 +3275,28 @@ func formatRegistryFallbackNotice(chunkErr error, imageBytes int64) string {
 // chunkExportPlan) and the build succeeded and was read back successfully:
 // nil for the "tar" export plan (whose temp directory is removed before the
 // caller could reuse it) and whenever the build/read itself failed.
+//
+// configDigest (ociConfigDigest of the image config read back after the build)
+// pins the hint to THIS run's build: the layout lock is released after the
+// chunk push, so another `wendy run` of the app may rebuild the directory
+// before a fallback reuses it.
 type ociReuseHint struct {
-	layoutDir string
-	platform  string
+	layoutDir    string
+	platform     string
+	configDigest string
+}
+
+// verify re-reads the layout and fails when it no longer holds the image this
+// run built. The caller must hold the layout lock.
+func (h *ociReuseHint) verify() error {
+	_, config, err := readOCILayoutDirLayers(h.layoutDir, h.platform)
+	if err != nil {
+		return fmt.Errorf("re-reading the built image: %w", err)
+	}
+	if ociConfigDigest(config) != h.configDigest {
+		return fmt.Errorf("the build cache was rebuilt by another wendy run since this run built it")
+	}
+	return nil
 }
 
 // deployByChunkDiff builds the image to a local OCI layout tar, diffs the
@@ -3327,12 +3359,16 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 			stats.imageBytes = totalCompressedLayerBytes(layers)
 		}
 	}
+	var lease *ociLayoutLease
 	if exportMode == "dir" {
-		releaseLayout, err := lockOCILayoutDir(ctx, layoutDir)
+		acquired, err := acquireOCILayoutLease(ctx, layoutDir, func() {
+			cliNotice("Waiting for another wendy run of %s to release the build cache…", appCfg.AppID)
+		})
 		if err != nil {
 			return nil, hint, err
 		}
-		defer releaseLayout()
+		lease = acquired
+		defer lease.release()
 		build := func(buildCtx context.Context, stream, logw io.Writer) error {
 			return buildImageToOCILayoutDirWithDocker(buildCtx, cwd, dockerfile, platform, buildArgs, layoutDir, stream, logw)
 		}
@@ -3401,21 +3437,31 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		// The layout directory now holds a known-good, freshly built image —
 		// record it so a chunk-diff failure below can fall back to reusing it
 		// (see ociReuseHint) instead of a redundant second buildx build.
-		hint = &ociReuseHint{layoutDir: layoutDir, platform: platform}
-		// Once the deploy is done with the layout: GC blobs superseded by this
-		// build, THEN dedup identical blobs across app layout dirs, evict
-		// least-recently-used caches over the size cap, and bound the daemon
-		// store. Defers run LIFO, so maintenance is registered first and GC
-		// last — otherwise the size cap would measure this build's soon-to-be-
-		// pruned orphans as live usage and evict other apps for nothing. Both
-		// are best-effort; this build's own layout is protected (keep) so
-		// maintenance never yanks it, and a failed GC only leaves garbage for
-		// the next run to collect.
+		hint = &ociReuseHint{layoutDir: layoutDir, platform: platform, configDigest: ociConfigDigest(imageConfig)}
+		lease.markBuilt()
+		// Cross-app cache maintenance (dedup identical blobs across app layout
+		// dirs, evict least-recently-used caches over the size cap, bound the
+		// daemon store) is unrelated to THIS directory's lock, so it stays on
+		// its original schedule — deployByChunkDiff's exit (after Started for a
+		// detached/watch run, after the app exits for an attached one) — rather
+		// than moving up to right after the chunk push, which would add its
+		// cost (two cache-root walks plus a `docker buildx prune`, up to 60s)
+		// to every deploy's latency. Call lease.release() first, not last, so
+		// GC always precedes maintenance even though this defer — registered
+		// after the earlier `defer lease.release()` — actually runs before it
+		// (LIFO): release() is idempotent, so the push's own early release (or
+		// the outer defer, on a failure path before the push) just makes this
+		// call a no-op. Maintenance running after the unlock is fine: this
+		// build's own layout stays protected in-process via keep, the size cap
+		// takes its own per-dir tryLockCacheUnit, and dedup swaps identical
+		// content atomically.
 		if userCache, cacheErr := os.UserCacheDir(); cacheErr == nil {
 			keep := map[string]bool{layoutDir: true}
-			defer func() { _, _ = maintainBuildCaches(ctx, userCache, buildCacheMaxBytes(), keep) }()
+			defer func() {
+				lease.release()
+				_, _ = maintainBuildCaches(ctx, userCache, buildCacheMaxBytes(), keep)
+			}()
 		}
-		defer func() { _ = gcOCILayoutDir(layoutDir) }()
 	} else {
 		tmp, err := os.MkdirTemp("", "wendy-oci-*")
 		if err != nil {
@@ -3479,6 +3525,14 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return nil, hint, err
 	}
 	mark("chunk+query+write+prepare")
+	// Every layer blob has been read and pushed; RunContainer sends only the
+	// headers. Release the layout now (GCing blobs this build superseded) so
+	// another `wendy run` of this app can build while this one streams logs.
+	// Cache maintenance stays deferred to this function's exit — see the
+	// defer registered where the build succeeded above.
+	if lease != nil {
+		lease.release()
+	}
 	// Carry the post-start agent-hook metadata so the agent runs the device-host
 	// hook on start, matching the registry path's StartContainer call.
 	rpcCtx := ctx

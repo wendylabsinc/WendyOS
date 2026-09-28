@@ -263,6 +263,10 @@ func buildComposeServicesParallel(ctx context.Context, conn *grpcclient.AgentCon
 	buildCtx, cancelBuild := context.WithCancel(ctx)
 	defer cancelBuild()
 	buildCtx = withComposePrepareLimiter(buildCtx)
+	// Tag the context so ociLayoutBuildWaitNotice knows quietBuild routes every
+	// worker's logOutput into a failure-only buffer below, regardless of
+	// terminal interactivity (see quietBuildLogKey).
+	buildCtx = contextWithQuietBuildLog(buildCtx, quietBuild)
 
 	names := make([]string, 0, len(jobs))
 	for name := range jobs {

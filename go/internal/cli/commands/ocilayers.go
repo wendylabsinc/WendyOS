@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
@@ -671,8 +672,15 @@ func pruneOCILayoutDirIndex(dir, platform string) error {
 // lockOCILayoutDir serializes use of a persistent layout directory across
 // wendy processes (build → read → push → GC). The lock file sits NEXT TO the
 // directory (dir+".lock") so a self-heal RemoveAll(dir) never deletes a held
-// lock. Returns a release func that must be called exactly once.
+// lock. Returns a release func; calling it more than once is harmless.
 func lockOCILayoutDir(ctx context.Context, dir string) (func(), error) {
+	return lockOCILayoutDirNotify(ctx, dir, nil)
+}
+
+// lockOCILayoutDirNotify is lockOCILayoutDir with onWait, which runs once —
+// before blocking — when another process already holds the lock, so the
+// caller can say why it stalled instead of waiting silently. nil is allowed.
+func lockOCILayoutDirNotify(ctx context.Context, dir string, onWait func()) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return nil, fmt.Errorf("creating OCI layout parent: %w", err)
 	}
@@ -686,15 +694,71 @@ func lockOCILayoutDir(ctx context.Context, dir string) (func(), error) {
 		return nil, fmt.Errorf("acquiring OCI layout lock: %w", err)
 	}
 	if !locked {
+		if onWait != nil {
+			onWait()
+		}
 		if err := blockLockFile(ctx, f); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("acquiring OCI layout lock: %w", err)
 		}
 	}
-	return func() {
+	return sync.OnceFunc(func() {
 		_ = flock.Unlock(f)
 		_ = f.Close()
-	}, nil
+	}), nil
+}
+
+// ociLayoutLease is one deploy's claim on a persistent OCI layout directory.
+// The layout lock covers everything that reads or rewrites the directory: the
+// buildx export, the layer read-back and native rebuild/adoption, the chunk
+// push (which streams layer blobs straight from the blob files —
+// localLayer.compressedReader opens them lazily), the GC run on release, and
+// the registry-fallback reuse push (tryPushExistingOCILayout, which re-takes
+// it). Nothing after the chunk push reads the directory — RunContainer sends
+// only the pushed layer headers — so deployByChunkDiff releases the lease as
+// soon as the push returns instead of holding it for as long as an attached
+// run streams logs, which blocked a second `wendy run` of the same app.
+// Cross-app cache maintenance is NOT part of the lease: it is unrelated to
+// this directory's own lock and deliberately stays on deployByChunkDiff's
+// original schedule (see the call site).
+type ociLayoutLease struct {
+	dir    string
+	unlock func()
+	built  bool
+	once   sync.Once
+}
+
+func acquireOCILayoutLease(ctx context.Context, dir string, onWait func()) (*ociLayoutLease, error) {
+	unlock, err := lockOCILayoutDirNotify(ctx, dir, onWait)
+	if err != nil {
+		return nil, err
+	}
+	return &ociLayoutLease{dir: dir, unlock: unlock}, nil
+}
+
+// markBuilt records that the directory now holds this deploy's freshly built
+// image, which makes release's GC safe.
+func (l *ociLayoutLease) markBuilt() {
+	l.built = true
+}
+
+// release GCs blobs superseded by this build (only once one succeeded), then
+// unlocks. Idempotent: deployByChunkDiff calls it right after the push and
+// defers it for every earlier return.
+func (l *ociLayoutLease) release() {
+	l.once.Do(func() {
+		if l.built {
+			_ = gcOCILayoutDir(l.dir)
+		}
+		l.unlock()
+	})
+}
+
+// ociConfigDigest identifies a built image by its config blob, which records
+// every layer's diff ID: a rebuild with different content changes it.
+func ociConfigDigest(config []byte) string {
+	sum := sha256.Sum256(config)
+	return hex.EncodeToString(sum[:])
 }
 
 // blobLoc is a blob's byte range within an OCI-layout tar.
