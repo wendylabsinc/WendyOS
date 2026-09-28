@@ -559,6 +559,13 @@ type runOptions struct {
 	// push on failure, chunkingForce uses chunk-diff with no fallback, and
 	// chunkingOff skips chunk-diff entirely (registry push only).
 	chunking string
+	// waitReady (--wait-ready) makes the run succeed only once the started app
+	// passes its readiness probe or, without a host-reachable probe, stays
+	// running for waitReadyStabilityWindow. readinessTimeout
+	// (--readiness-timeout) overrides the probe deadline for every readiness
+	// wait the run performs. Both mirror PR #1882's flags; see run_wait_ready.go.
+	waitReady        bool
+	readinessTimeout time.Duration
 }
 
 // runResolveOptions builds the resolveTarget options shared by every `wendy run`
@@ -613,6 +620,10 @@ func newRunCmd() *cobra.Command {
 				if err := validateEnvFlag(opts.env); err != nil {
 					return err
 				}
+				if err := validateWaitReadyFlags(opts, watch, cmd.Flags().Changed("hil")); err != nil {
+					return err
+				}
+				defer waitReadyJSONStdoutGuard(opts)()
 				if cmd.Flags().Changed("hil") && watch {
 					return commandErrorf(errConfigInvalid, "HIL cannot be combined with --watch")
 				}
@@ -652,7 +663,8 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering apps in Cloud (offline use)")
-	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container and return without streaming logs, waiting for readiness, or opening the app URL")
+	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container and return without streaming logs or opening the app URL; waits for readiness only with --wait-ready")
+	addReadinessFlags(cmd, &opts)
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Automatically accept all interactive prompts")
 	cmd.Flags().BoolVar(&opts.restartUnlessStopped, "restart-unless-stopped", false, "Restart unless manually stopped")
 	cmd.Flags().BoolVar(&opts.restartOnFailure, "restart-on-failure", false, "Restart on failure")
@@ -923,6 +935,9 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		return classifyCommandError(errConfigInvalid, err)
 	}
 	opts.buildHost = buildHost
+	if err := rejectWaitReadyBuildHost(opts); err != nil {
+		return err
+	}
 	if useLLB && opts.buildHost != "" {
 		return commandErrorf(errConfigInvalid, "--stagefile-backend=llb cannot yet be combined with --build-host: remote build agents currently accept Dockerfile definitions")
 	}
@@ -978,7 +993,23 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		if err := rejectUnsupportedBuildHostProject(opts.buildHost, "Compose projects"); err != nil {
 			return err
 		}
+		if opts.waitReady {
+			return errWaitReadyUnsupported("Compose projects")
+		}
 		return runComposeCommand(ctx, cwd, opts)
+	}
+
+	// Refuse --wait-ready for Xcode and host-only-Swift projects here, before
+	// any device is resolved: both are knowable from the filesystem alone (no
+	// wendy.json needed), but a missing wendy.json otherwise sends this
+	// function through the cfgMissing preflight below — which resolves/connects
+	// to a device (interactive picker or cloud tunnel) before wendy.json is
+	// ever loaded. Called with a nil appCfg since none is loaded yet; the
+	// appCfg-dependent checks (multi-service, native run.command) run again
+	// below once appCfg is loaded, and runWithAgent keeps its own call as a
+	// backstop for callers that reach it some other way.
+	if err := rejectUnsupportedWaitReady(cwd, nil, opts); err != nil {
+		return err
 	}
 
 	// The CLI owns the selected connection lifetime for both the preflight and
@@ -1046,6 +1077,15 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 	if err := warnAppConfigFile(cfgPath); err != nil {
 		return fmt.Errorf("reading wendy.json warnings: %w", err)
+	}
+
+	// Second pass, now that appCfg is loaded: catches the appCfg-dependent
+	// checks (multi-service, native run.command) that the project-type-only
+	// call above (nil appCfg, before cfgMissing) can't see. Still runs before
+	// the target device is resolved. runWithAgent keeps its own call to this as
+	// a backstop for callers that reach it some other way.
+	if err := rejectUnsupportedWaitReady(cwd, appCfg, opts); err != nil {
+		return err
 	}
 
 	// Debug mode requires host networking for remote debugger access.
@@ -1701,6 +1741,9 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 
 // runWithProvider builds and runs via an external device provider.
 func runWithProvider(ctx context.Context, p providers.DeviceProvider, device models.ExternalDevice, projectPath, product string, entitlements []appconfig.Entitlement, opts runOptions) error {
+	if opts.waitReady || opts.readinessTimeout != 0 {
+		return commandErrorf(errConfigInvalid, "--wait-ready and --readiness-timeout require a WendyOS device target")
+	}
 	if opts.builder != "" {
 		return commandErrorf(errConfigInvalid, "--builder is only used when --device selects a WendyOS device; use --device docker or --device apple-container for local provider runs")
 	}
@@ -2020,6 +2063,9 @@ func waitForDeviceReady(ctx context.Context, p providers.DeviceProvider, device 
 
 // runWithAgent is the existing gRPC agent pipeline.
 func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd string, appCfg *appconfig.AppConfig, opts runOptions) error {
+	if err := rejectUnsupportedWaitReady(cwd, appCfg, opts); err != nil {
+		return err
+	}
 	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
 	}
