@@ -4,7 +4,7 @@ Runs your app on a Wendy-enabled device:
 2. [Queries the platform and architecture](./device/version.md) of this device
 3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](../../../debugging/) if needed
 4. Uploads the artifact(s) for Linux (via the container registry) or macOS
-5. [Starts the app](./device/apps/start.md), then (attached runs only) waits for readiness and prints the reachable URL
+5. [Starts the app](./device/apps/start.md), then waits for readiness and prints the reachable URL (attached runs, or any run with `--wait-ready`)
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
 
 
@@ -15,7 +15,9 @@ Runs your app on a Wendy-enabled device:
 | Flag | Description |
 |------|-------------|
 | `--deploy` | Build and create the container but do not start it. |
-| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. |
+| `--detach` | Start the container and return without streaming logs or opening the app URL. Waits for readiness only with `--wait-ready`. |
+| `--wait-ready` | Succeed only once the app is ready: its readiness probe passes or, without a probe this machine can reach, it stays running for 10 seconds. Fails if the app crashes or the probe times out. See [Waiting for readiness](#waiting-for-readiness---wait-ready). |
+| `--readiness-timeout <duration>` | Override the readiness deadline, from `1s` to `1h` in whole seconds. With `--detach` it requires `--wait-ready`. |
 | `--restart-unless-stopped` | Restart the container unless manually stopped. |
 | `--restart-on-failure` | Restart the container on failure. |
 | `--no-restart` | Do not restart the container on exit. |
@@ -53,6 +55,44 @@ The table describes single-container runs. Multi-service, Compose and native Mac
 When nothing changed since the last deploy and the app is already running, `wendy run` only follows its logs. An interrupted run then leaves the app running, and the SIGTERM error says so.
 
 The crash check reads the exit that the device agent records when the app stops. If the restart policy has already restarted the app by then, the exit status is gone: `wendy run` prints a notice and exits 0. Agents that predate exit reporting always read as a clean stop.
+
+## Waiting for readiness: `--wait-ready`
+
+`--wait-ready` makes `wendy run` report whether the app actually came up:
+
+```sh
+wendy run --detach --wait-ready
+wendy --json run --detach --wait-ready --readiness-timeout 90s
+```
+
+After the device confirms the container started, `wendy run` does one of two checks:
+
+- It probes the app's readiness port from your machine (`readiness.tcpSocket.port`, or the `http` entitlement's port) until the port accepts a connection. The deadline is `--readiness-timeout`, else `readiness.timeoutSeconds`, else 30 seconds.
+- When the app declares no probe, the device is reached through Wendy Cloud and its LAN address does not answer from your machine, or `wendy run` runs on the device itself over the agent socket (`WENDY_AGENT_SOCKET`), it checks that the app stays running for 10 seconds.
+
+The run fails with a non-zero exit when the app exits (even with exit code 0) or is restarted by its restart policy while being checked, or when the probe deadline passes.
+
+With `--detach` in JSON mode (`--json`, on by default when stdout is not a terminal), stdout carries exactly one JSON object once the device has confirmed the container started, for every outcome of the check, failures included:
+
+```json
+{"status":"ready","app":"my-app","device":"wendyos-hopeful-glider.local","readiness":"passed","url":"http://192.168.1.207:8080"}
+{"status":"crashed","app":"my-app","device":"wendyos-hopeful-glider.local","readiness":"not_checked","exit_code":3,"termination_reason":"crashed","message":"app my-app stopped unexpectedly (exit code 3, termination reason \"crashed\"); see its logs with `wendy device logs --app my-app`"}
+```
+
+| `status` | Meaning | Exit status |
+|----------|---------|-------------|
+| `ready` | The readiness probe passed (`readiness: "passed"`). | 0 |
+| `running` | No probe could run from this machine; the app stayed up for 10 s (`readiness: "not_checked"`). | 0 |
+| `crashed` | The app exited (even with exit code 0), crash-looped, or was restarted while being checked. `exit_code` and `termination_reason` are included when the device recorded them. | Non-zero |
+| `not_ready` | The probe did not pass in time (`readiness: "failed"`). | Non-zero |
+
+`url` appears only for `ready`. `device` is omitted on the device itself (`WENDY_AGENT_SOCKET`).
+
+A failure before the device confirms the start (build, push, or container start) prints nothing on stdout: the run exits non-zero and reports the error on stderr. Pressing Ctrl-C during the wait leaves the app running and prints no object.
+
+Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check stops the app and fails the run; host-side postStart actions run only after the check passes.
+
+`--wait-ready` currently supports single-container image projects (Dockerfile, Containerfile, Stagefile, or Python) on WendyOS devices. It is rejected for multi-service and Compose projects, native Mac apps, Swift packages built without a Dockerfile, `--build-host`, `--watch`, `--hil`, and `--deploy`.
 
 ## Reachable app URLs
 
@@ -399,8 +439,8 @@ the app reports readiness. This applies to both registry-push and chunk-diff
 deploys. If readiness fails, Wendy skips these actions and prints a warning.
 
 `--detach` returns after the selected containers start and does not run
-readiness checks, `openURL`, or `cli`; `postStart.agent` still runs on the
-device. See [Readiness and lifecycle hooks](../../../apps/wendy-services.md#readiness-and-lifecycle-hooks)
+readiness checks (unless `--wait-ready` is set), `openURL`, or `cli`;
+`postStart.agent` still runs on the device. See [Readiness and lifecycle hooks](../../../apps/wendy-services.md#readiness-and-lifecycle-hooks)
 for multi-service details.
 `--deploy` creates the app without starting it, so no postStart action runs.
 

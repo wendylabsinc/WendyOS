@@ -2633,6 +2633,9 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 			return fmt.Errorf("waiting for container start: %w", err)
 		}
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
+		if opts.waitReady {
+			return waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
+		}
 		// Detached returns as soon as the container is started — see
 		// runPostStartIfReady's doc comment.
 		return nil
@@ -3041,7 +3044,8 @@ func synthesizedOpenURLHook(appCfg *appconfig.AppConfig) *appconfig.HooksConfig 
 
 // runPostStartIfReady waits for readiness, announces the reachable URL, and
 // launches host-side postStart actions. It is used by attached runs; detached
-// paths return after Started without waiting for readiness. In watch mode the
+// paths return after Started without waiting for readiness (unless
+// --wait-ready: see waitReadyAfterDetachedStart). In watch mode the
 // actions run once per container after the first successful readiness check.
 // A canceled or failed attempt releases that claim for a later deploy.
 //
@@ -3292,9 +3296,13 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 			if opts.detach {
 				// Mirror startAndStreamContainer's detach branch: the container
 				// is started, so return without tailing logs or waiting on
-				// readiness (see runPostStartIfReady's doc comment). The container keeps
-				// running independently of this (now-abandoned) output stream.
+				// readiness (see runPostStartIfReady's doc comment) unless
+				// --wait-ready asks for it. The container keeps running
+				// independently of this (now-abandoned) output stream.
 				cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
+				if opts.waitReady {
+					return waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
+				}
 				return nil
 			}
 			// Attached runs wait for readiness, announce the URL, and fire the
