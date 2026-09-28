@@ -1,6 +1,8 @@
 package commands
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,6 +40,8 @@ var (
 
 type buildFailureSummary struct {
 	step       string
+	stage      string // the step the build failed in, "stage n/m", when the log names it
+	command    string // and that step's command, compacted
 	cause      string
 	output     []string // the failing step's last output lines, when they are the cause
 	source     string
@@ -100,6 +104,11 @@ func summarizeBuildFailure(raw string, buildErr error) buildFailureSummary {
 		withoutTime := buildElapsedPrefixRe.ReplaceAllString(withoutVertex, "")
 		if m := buildStepRe.FindStringSubmatch(withoutVertex); m != nil && isBuildCommand(m[2]) {
 			summary.step = m[1] + " — " + compactBuildCommand(strings.TrimSuffix(m[2], ":"))
+			if strings.HasPrefix(withoutVertex, ">") {
+				// BuildKit's failure summary (" > [stage n/m] CMD:") names
+				// the step that failed.
+				summary.setFailingStep(m[1], m[2])
+			}
 		}
 
 		if strings.HasPrefix(withoutTime, "ERROR:") {
@@ -135,6 +144,15 @@ func summarizeBuildFailure(raw string, buildErr error) buildFailureSummary {
 			summary.step = m[1] + " — " + compactBuildCommand(strings.TrimSuffix(m[2], ":"))
 		}
 	}
+	// Without BuildKit's failure summary, the failing step is the vertex that
+	// logged the failure, when that is a build step. The last step the scan
+	// saw (summary.step) may not be: a failed push, for one, comes after
+	// every step succeeded.
+	if v := vertices[failedVertex]; v != nil && summary.stage == "" {
+		if m := buildStepRe.FindStringSubmatch(v.header); m != nil && isBuildCommand(m[2]) {
+			summary.setFailingStep(m[1], m[2])
+		}
+	}
 
 	if buildErr != nil {
 		summary.fallback = compactBuildFailureText(buildErr.Error())
@@ -142,7 +160,58 @@ func summarizeBuildFailure(raw string, buildErr error) buildFailureSummary {
 	return summary
 }
 
-func renderBuildFailure(w io.Writer, label, raw string, buildErr error) {
+// setFailingStep records the step the build failed in, for the error that
+// names it: its "stage n/m" and its command, compacted.
+func (s *buildFailureSummary) setFailingStep(stage, command string) {
+	s.stage, s.command = stage, compactBuildCommand(strings.TrimSuffix(command, ":"))
+}
+
+// buildFailureCauseError is a build failure whose message names the failing
+// step and its cause instead of the builder's exit status. It unwraps to that
+// failure, so errors.Is and errors.As (isImageBuildFailure, the build_failed
+// error class, the registry-fallback decisions) see the same chain.
+type buildFailureCauseError struct {
+	message string
+	err     error
+}
+
+func (e *buildFailureCauseError) Error() string { return e.message }
+func (e *buildFailureCauseError) Unwrap() error { return e.err }
+
+// buildFailureError returns buildErr with the failing step and the cause as
+// its message — "build failed at [<stage n/m>] <command>: <cause>", or "build
+// failed: <cause>" when the log does not name the step that failed — so the
+// run's final error line, a --wait-ready "failed" object and the JSON error
+// envelope say what failed. The cause is the last line of the failing step's
+// output when that output is the cause, else the summarized cause. Without a
+// cause, and for a cancellation, buildErr is returned unchanged.
+func buildFailureError(summary buildFailureSummary, buildErr error) error {
+	if buildErr == nil || errors.Is(buildErr, ErrUserCancelled) || errors.Is(buildErr, context.Canceled) {
+		return buildErr
+	}
+	cause := summary.cause
+	for i := len(summary.output) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(summary.output[i]); line != "" {
+			cause = line
+			break
+		}
+	}
+	if cause == "" {
+		return buildErr
+	}
+	cause = compactBuildFailureText(cause)
+	message := "build failed: " + cause
+	if summary.stage != "" {
+		message = fmt.Sprintf("build failed at [%s] %s: %s", summary.stage, summary.command, cause)
+	}
+	return &buildFailureCauseError{message: message, err: buildErr}
+}
+
+// renderBuildFailure prints the build failure's details (the failing step,
+// its cause, where it is, and the path of the full log, which it saves) and
+// returns the error to report in buildErr's place: buildErr with the step
+// and cause in its message (buildFailureError).
+func renderBuildFailure(w io.Writer, label, raw string, buildErr error) error {
 	summary := summarizeBuildFailure(raw, buildErr)
 	heading := "Build failure details"
 	if label != "" {
@@ -180,6 +249,7 @@ func renderBuildFailure(w io.Writer, label, raw string, buildErr error) {
 			fmt.Fprintln(w)
 		}
 	}
+	return buildFailureError(summary, buildErr)
 }
 
 func writeBuildFailureLog(label, raw string) (string, error) {

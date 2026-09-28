@@ -3535,7 +3535,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 			var buildLog bytes.Buffer
 			if err := build(ctx, &buildLog, &buildLog); err != nil {
 				if ctx.Err() == nil {
-					renderBuildFailure(os.Stderr, "", buildLog.String(), err)
+					return renderBuildFailure(os.Stderr, "", buildLog.String(), err)
 				}
 				return err
 			}

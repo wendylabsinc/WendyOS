@@ -831,7 +831,8 @@ func buildServicesParallelCore(
 
 	// Collect per-service failures. For failed services, summarize their buffered
 	// output now that the spinner has exited and the terminal is clean, retaining
-	// the full raw log in a temporary file for deeper inspection. The caller
+	// the full raw log in a temporary file for deeper inspection, and name the
+	// failing step and its cause in the service's error. The caller
 	// decides whether any failure aborts the group (default) or only its own
 	// service is dropped (--keep-going, WDY-1691).
 	failed := map[string]error{}
@@ -842,7 +843,7 @@ func buildServicesParallelCore(
 			// "no registry on the Mac agent" error, where retried-push spam would
 			// bury the actionable message.
 			if progressErr == nil && buildCtx.Err() == nil && r.log != "" && !isRegistryUnavailable(r.err) {
-				renderBuildFailure(os.Stderr, r.name, r.log, r.err)
+				failed[r.name] = renderBuildFailure(os.Stderr, r.name, r.log, r.err)
 			}
 		}
 	}

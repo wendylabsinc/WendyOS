@@ -243,6 +243,40 @@ func TestBuildServicesParallelWithContentDropsFailedBuildIdentity(t *testing.T) 
 	}
 }
 
+// A service's build failure carries its failing step and cause, so the
+// joined "service <name>: …" error says what failed.
+func TestBuildServicesParallelFailureNamesTheStepAndCause(t *testing.T) {
+	root, services := newServiceTree(t, 1)
+	originalBuild, originalInteractive, originalPersist := buildServiceImage, isInteractiveTerminalFn, persistBuildFailureLog
+	t.Cleanup(func() {
+		buildServiceImage, isInteractiveTerminalFn, persistBuildFailureLog = originalBuild, originalInteractive, originalPersist
+	})
+	isInteractiveTerminalFn = func() bool { return false }
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-svc00-1.log", nil }
+	log := readBuildFailureFixture(t, "go-compile.log")
+	buildErr := &imageBuildFailedError{errors.New("docker buildx build failed: exit status 1")}
+	buildServiceImage = func(_ context.Context, _ *grpcclient.AgentConnection, _ int, _, _, _, _ string, _ string, _ string, _ map[string]string, _ string, stream, _ io.Writer) error {
+		_, _ = io.WriteString(stream, log)
+		return buildErr
+	}
+
+	// quietBuild (watch mode) buffers the build output and replays it on failure.
+	failed, _, err := buildServicesParallelWithContent(
+		context.Background(), nil, 5000, "linux", root, "app", services,
+		"linux/arm64", nil, "docker", chunkingAuto, nil,
+		map[string]string{"svc00": "Dockerfile"}, 1, true)
+	if err != nil {
+		t.Fatalf("buildServicesParallelWithContent infrastructure error: %v", err)
+	}
+	got := joinServiceErrors(failed)
+	if want := "service svc00: build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo"; fmt.Sprint(got) != want {
+		t.Fatalf("error = %q, want %q", got, want)
+	}
+	if !errors.Is(got, buildErr) || !isImageBuildFailure(got) {
+		t.Fatalf("error %q lost its build failure", got)
+	}
+}
+
 func TestBuildServicesParallelCancellationStopsActiveAndQueuedBuilds(t *testing.T) {
 	root, services := newServiceTree(t, 4)
 	planned := make(map[string]string, len(services))

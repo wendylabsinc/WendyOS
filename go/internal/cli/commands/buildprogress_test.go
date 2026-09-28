@@ -313,6 +313,36 @@ func TestRunBuildWithProgressPrintsRawOnFailure(t *testing.T) {
 	}
 }
 
+// The error a failed build returns — the run's final ✗ line — names the
+// failing step and its cause; the details block above it keeps the rest.
+func TestRunBuildWithProgressReturnsTheStepAndCause(t *testing.T) {
+	restore := forceBuildProgressInteractive(false)
+	defer restore()
+	var out strings.Builder
+	restoreOut := setBuildProgressOut(&out)
+	defer restoreOut()
+	originalPersist := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = originalPersist }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-test.log", nil }
+
+	buildErr := &imageBuildFailedError{errors.New("docker buildx build (OCI export) failed: exit status 1")}
+	err := runBuildWithProgress(context.Background(), "Building image (OCI layout)...", shouldDumpChunkDiffBuildLog(chunkingAuto), func(_ context.Context, stream, _ io.Writer) error {
+		io.WriteString(stream, readBuildFailureFixture(t, "go-compile.log"))
+		return buildErr
+	})
+	if got, want := fmt.Sprint(err), "build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo"; got != want {
+		t.Fatalf("err = %q, want %q", got, want)
+	}
+	if !errors.Is(err, buildErr) || !isImageBuildFailure(err) || ErrorClass(err) != "build_failed" {
+		t.Fatalf("err %q lost its build failure (class %q)", err, ErrorClass(err))
+	}
+	for _, want := range []string{"Build failure details", "  Step: build 4/4 — RUN go build -o /out/app .", "  Build log: /tmp/wendy-build-image-test.log"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("details block missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
 func TestRunBuildWithProgressSuppressesRawOnFailureWhenDumpDisabled(t *testing.T) {
 	restore := forceBuildProgressInteractive(false)
 	defer restore()

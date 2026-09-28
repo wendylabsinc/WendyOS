@@ -59,6 +59,8 @@ The crash check reads the exit that the device agent records when the app stops.
 
 A run whose app is replaced by another deployment (for example `wendy run --detach` from another terminal) prints `Application <app> was replaced by another deployment.` and exits 0: the device records the replaced app like a SIGKILL crash (exit code 137), so `wendy run` re-checks that exit for up to 3 seconds before reporting a crash.
 
+When the image build fails, `wendy run` prints the build failure details, including the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last line of the step's output, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
+
 ## Waiting for readiness: `--wait-ready`
 
 `--wait-ready` makes `wendy run` report whether the app actually came up:

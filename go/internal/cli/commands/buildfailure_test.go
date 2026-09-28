@@ -1,8 +1,11 @@
 package commands
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -190,5 +193,124 @@ func TestRenderBuildFailureShowsTheFailingStepOutput(t *testing.T) {
 	}
 	if strings.Contains(got, "OCI export) failed") {
 		t.Errorf("summary fell back to the builder's exit status:\n%s", got)
+	}
+}
+
+// The run's final error line (and a --wait-ready "failed" object's message,
+// and the JSON error envelope) is the returned error's message: it names the
+// failing step and its cause, not the builder's exit status.
+func TestBuildFailureErrorNamesTheStepAndCause(t *testing.T) {
+	const builderErr = "docker buildx build (OCI export) failed: exit status 1"
+	for _, tc := range []struct {
+		name string
+		log  string
+		want string
+	}{
+		{
+			name: "go compile error: the step's last output line",
+			log:  readBuildFailureFixture(t, "go-compile.log"),
+			want: "build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo",
+		},
+		{
+			name: "python exit: the step's last output line",
+			log:  readBuildFailureFixture(t, "python-exit.log"),
+			want: `build failed at [py 2/2] RUN python -c "import sys; [print(f'line {i}', flush=True) for i in range(1,31)]; sys.exit(3)": line 30`,
+		},
+		{
+			name: "interleaved stages: the failing step's own last line",
+			log:  readBuildFailureFixture(t, "interleaved.log"),
+			want: "build failed at [api 3/3] RUN go build -o /out/api ./cmd/api: internal/store/db.go:57:2: declared and not used: tx",
+		},
+		{
+			name: "pip conflict: the summarized cause",
+			log:  pipBuildFailureFixture,
+			want: "build failed at [stagefile-pip-deps-0 5/7] RUN pip install …: pip dependency conflict: ultralytics/CLIP and ultralytics/mobileclip both report package metadata as unknown 0.0.0",
+		},
+		{
+			name: "an ERROR: line: its message",
+			log:  "#5 [3/5] COPY Package.swift .\n#5 ERROR: failed to compute cache key: \"/Package.swift\": not found\n",
+			want: `build failed at [3/5] COPY Package.swift .: failed to compute cache key: "/Package.swift": not found`,
+		},
+		{
+			name: "a cause without a step",
+			log:  "#2 [internal] load metadata for docker.io/library/nope:latest\n#2 ERROR: docker.io/library/nope:latest: not found\n",
+			want: "build failed: docker.io/library/nope:latest: not found",
+		},
+		{
+			// The last step in the log succeeded; the push after it failed.
+			name: "a failure outside any build step names no step",
+			log:  "#8 [build 4/4] RUN go build -o /out/app .\n#8 DONE 3.1s\n\n#12 exporting to image\n#12 ERROR: failed to push localhost:5000/app:latest: connection reset by peer\n",
+			want: "build failed: failed to push localhost:5000/app:latest: connection reset by peer",
+		},
+		{
+			name: "nothing to go on: the original error",
+			log:  "#1 [internal] load build definition from Dockerfile\n#1 DONE 0.0s\nERROR: failed to build: failed to solve: exit status 1\n",
+			want: builderErr,
+		},
+		{
+			name: "no log at all: the original error",
+			want: builderErr,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buildErr := &imageBuildFailedError{errors.New(builderErr)}
+			err := buildFailureError(summarizeBuildFailure(tc.log, buildErr), buildErr)
+			if err.Error() != tc.want {
+				t.Fatalf("error = %q\nwant    %q", err, tc.want)
+			}
+			var imageErr *imageBuildFailedError
+			if !errors.As(err, &imageErr) || imageErr != buildErr || !errors.Is(err, buildErr) || !isImageBuildFailure(err) {
+				t.Fatalf("error %q lost the build failure it wraps", err)
+			}
+			if ErrorClass(err) != "build_failed" {
+				t.Fatalf("class = %q, want build_failed", ErrorClass(err))
+			}
+			if isChunkDeployCancellation(context.Background(), err) {
+				t.Fatal("a build failure reads as a cancellation")
+			}
+		})
+	}
+}
+
+// The rewrite keeps every classification the original error had, and never
+// touches a cancellation.
+func TestBuildFailureErrorKeepsTheChain(t *testing.T) {
+	log := readBuildFailureFixture(t, "go-compile.log")
+	const want = "build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo"
+
+	classified := commandErrorf(errBuildFailed, "build failed: exit status 1")
+	if err := buildFailureError(summarizeBuildFailure(log, classified), classified); err.Error() != want || !errors.Is(err, errBuildFailed) || ErrorClass(err) != "build_failed" {
+		t.Fatalf("classified: err = %q (class %q)", err, ErrorClass(err))
+	}
+	missingTool := &imageBuildFailedError{fmt.Errorf("docker buildx build (OCI export) failed: %w", exec.ErrNotFound)}
+	if err := buildFailureError(summarizeBuildFailure(log, missingTool), missingTool); err.Error() != want || ErrorClass(err) != "tool_not_found" {
+		t.Fatalf("missing tool: err = %q (class %q), want tool_not_found kept", err, ErrorClass(err))
+	}
+	for _, cancelled := range []error{ErrUserCancelled, fmt.Errorf("docker buildx build: %w", context.Canceled)} {
+		if err := buildFailureError(summarizeBuildFailure(log, cancelled), cancelled); err != cancelled {
+			t.Fatalf("cancellation %v was rewritten to %q", cancelled, err)
+		}
+	}
+	if err := buildFailureError(summarizeBuildFailure(log, nil), nil); err != nil {
+		t.Fatalf("no error became %v", err)
+	}
+}
+
+// renderBuildFailure prints the details block and returns the rewritten error.
+func TestRenderBuildFailureReturnsTheStepAndCause(t *testing.T) {
+	original := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = original }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-1.log", nil }
+
+	var out strings.Builder
+	buildErr := &imageBuildFailedError{errors.New("docker buildx build (OCI export) failed: exit status 1")}
+	err := renderBuildFailure(&out, "", readBuildFailureFixture(t, "go-compile.log"), buildErr)
+	if err.Error() != "build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo" || !errors.Is(err, buildErr) {
+		t.Fatalf("err = %q", err)
+	}
+	for _, want := range []string{"  Step: build 4/4 — RUN go build -o /out/app .\n", "  Build log: /tmp/wendy-build-image-1.log\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("details block missing %q:\n%s", want, out.String())
+		}
 	}
 }

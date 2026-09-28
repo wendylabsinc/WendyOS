@@ -250,8 +250,17 @@ func classifyRemoteBuildError(host string, err error) error {
 		return nil
 	}
 	const deliveryFailurePrefix = "pushing the built image to the target device failed:"
-	if status.Code(err) == codes.Unavailable && strings.HasPrefix(status.Convert(err).Message(), deliveryFailurePrefix) {
-		return fmt.Errorf("image built on %s but could not be delivered to the device: %w", host, err)
+	// Judge, and report, the error the build host returned: runBuildWithProgress
+	// may have put a build-failure summary in its message (buildFailureError),
+	// which status.Convert would read instead, and a delivery failure is no
+	// build step's.
+	hostErr := err
+	var summarized *buildFailureCauseError
+	if errors.As(err, &summarized) {
+		hostErr = summarized.err
+	}
+	if status.Code(hostErr) == codes.Unavailable && strings.HasPrefix(status.Convert(hostErr).Message(), deliveryFailurePrefix) {
+		return fmt.Errorf("image built on %s but could not be delivered to the device: %w", host, hostErr)
 	}
 	// Generic Unavailable and DeadlineExceeded errors can happen before or
 	// during the build. Claiming the image was built sends the developer to
