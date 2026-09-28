@@ -37,12 +37,13 @@ type scriptedContainerClient struct {
 	stopCtxErrs []error
 	stopErr     error
 	onStop      func()
+	onList      func(call int) // after the call-th ListContainers (1-based) is served
 }
 
 func (c *scriptedContainerClient) ListContainers(context.Context, *agentpb.ListContainersRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.listErr != nil {
+		c.mu.Unlock()
 		return nil, c.listErr
 	}
 	var snap *agentpb.AppContainer
@@ -50,7 +51,18 @@ func (c *scriptedContainerClient) ListContainers(context.Context, *agentpb.ListC
 		snap = c.snapshots[min(c.listCalls, n-1)]
 	}
 	c.listCalls++
+	call, onList := c.listCalls, c.onList
+	c.mu.Unlock()
+	if onList != nil {
+		onList(call)
+	}
 	return &fakeListContainersStream{resp: &agentpb.ListContainersResponse{Container: snap}}, nil
+}
+
+func (c *scriptedContainerClient) lists() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.listCalls
 }
 
 func (c *scriptedContainerClient) AttachContainer(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse], error) {
@@ -195,5 +207,214 @@ func TestFollowExistingContainer_CrashLoopExitsNonZero(t *testing.T) {
 	err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{})
 	if got := ErrorClass(err); got != "app_crashed" {
 		t.Fatalf("class = %q (err %v), want app_crashed", got, err)
+	}
+}
+
+// shortenReplaceConfirm shrinks the window a run spends confirming a SIGKILL
+// exit, so the tests that wait it out stay fast.
+func shortenReplaceConfirm(t *testing.T, window time.Duration) {
+	t.Helper()
+	origWindow, origPoll := appReplaceConfirmWindow, appReplaceConfirmPoll
+	appReplaceConfirmWindow, appReplaceConfirmPoll = window, 5*time.Millisecond
+	t.Cleanup(func() { appReplaceConfirmWindow, appReplaceConfirmPoll = origWindow, origPoll })
+}
+
+const sigkillTestWindow = 200 * time.Millisecond
+
+// sigkillExitCases script what the agent reports after an attached or
+// followed app stopped. The agent's replace path SIGKILLs the old task, which
+// it records as exit code 137 / "crashed" — the same record a genuine SIGKILL
+// leaves — so a 137 record is re-checked for a short window: a fresh app
+// (running with failure_count 0, created but not started, or gone) means
+// another deployment replaced it; a restart by the restart policy or the same
+// record for the whole window means it crashed. Any other exit is decided at
+// once, with no further ListContainers call.
+var sigkillExitCases = []struct {
+	name      string
+	snapshots []*agentpb.AppContainer
+	crash     string        // the error's expected exit detail; "" means the run succeeds
+	lists     int           // exact ListContainers calls, 0 = more than two
+	minTime   time.Duration // the least the decision may take
+}{
+	{name: "replaced by a running app", lists: 2, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
+		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
+	}},
+	{name: "replaced and no longer reported", lists: 2, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
+		nil,
+	}},
+	{name: "replaced by an app not started yet", lists: 3, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "", 0),
+	}},
+	{name: "SIGKILL record stays for the window", crash: "exit code 137", minTime: sigkillTestWindow, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
+	}},
+	{name: "restarted by the restart policy", crash: "exit code 137", lists: 2, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
+		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 1),
+	}},
+	{name: "other exit code is not re-checked", crash: "exit code 3", lists: 1, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0),
+		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
+	}},
+	{name: "OOM kill is not re-checked", crash: `"oom_killed"`, lists: 1, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "oom_killed", 0),
+		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
+	}},
+}
+
+func checkSIGKILLExit(t *testing.T, fake *scriptedContainerClient, crash string, lists int, minTime, took time.Duration, out string, err error) {
+	t.Helper()
+	if crash == "" {
+		if err != nil {
+			t.Fatalf("returned %v, want nil", err)
+		}
+		if !strings.Contains(out, "Application app was replaced by another deployment.") {
+			t.Errorf("missing the replaced notice: %q", out)
+		}
+		if strings.Contains(out, "stopped.") {
+			t.Errorf("a replaced app also reported as stopped: %q", out)
+		}
+	} else {
+		if got := ErrorClass(err); got != "app_crashed" {
+			t.Fatalf("class = %q (err %v), want app_crashed", got, err)
+		}
+		if !strings.Contains(err.Error(), crash) {
+			t.Errorf("error %q does not name %s", err, crash)
+		}
+		if strings.Contains(out, "replaced") {
+			t.Errorf("a crash reported as a replacement: %q", out)
+		}
+	}
+	switch got := fake.lists(); {
+	case lists == 0 && got <= 2:
+		t.Errorf("ListContainers calls = %d, want the window's repeated polls", got)
+	case lists != 0 && got != lists:
+		t.Errorf("ListContainers calls = %d, want %d", got, lists)
+	}
+	if took < minTime {
+		t.Errorf("decided after %s, before the %s window ended", took, minTime)
+	}
+	if stops := fake.stops(); len(stops) != 0 {
+		t.Errorf("stopped %v; the run's app had already exited", stops)
+	}
+}
+
+func TestAttachedExitOutcome_ConfirmsSIGKILLBeforeReportingACrash(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	for _, tc := range sigkillExitCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &scriptedContainerClient{snapshots: tc.snapshots}
+			conn := &grpcclient.AgentConnection{ContainerService: fake}
+			var err error
+			start := time.Now()
+			out := captureStderr(t, func() {
+				err = attachedExitOutcome(context.Background(), conn, &appconfig.AppConfig{AppID: "app"})
+			})
+			checkSIGKILLExit(t, fake, tc.crash, tc.lists, tc.minTime, time.Since(start), out, err)
+		})
+	}
+}
+
+// The attached chunk-diff path reaches attachedExitOutcome when the agent
+// closes the output stream — which it does when another deployment kills the
+// task to replace it.
+func TestStreamRunContainer_AppReplacedByAnotherDeployIsNotACrash(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	fake := &scriptedContainerClient{snapshots: sigkillExitCases[0].snapshots}
+	conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake}
+	out := captureStderr(t, func() {
+		if err := streamRunContainerWithStarted(context.Background(), conn, &deploymentAckStream{remaining: 1, err: io.EOF}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, nil); err != nil {
+			t.Fatalf("replaced app returned %v, want nil", err)
+		}
+	})
+	if !strings.Contains(out, "replaced by another deployment") {
+		t.Fatalf("missing the replaced notice: %q", out)
+	}
+}
+
+func TestFollowExistingContainer_ConfirmsSIGKILLBeforeReportingACrash(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	for _, tc := range sigkillExitCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// The follow loop's first state poll comes a second in, so time
+			// the decision from that poll rather than from the call.
+			var firstPoll time.Time
+			fake := &scriptedContainerClient{snapshots: tc.snapshots, onList: func(call int) {
+				if call == 1 {
+					firstPoll = time.Now()
+				}
+			}}
+			telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
+			conn := &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			var took time.Duration
+			out := captureStderr(t, func() {
+				err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+				took = time.Since(firstPoll)
+			})
+			checkSIGKILLExit(t, fake, tc.crash, tc.lists, tc.minTime, took, out, err)
+		})
+	}
+}
+
+// Ctrl-C (or SIGTERM) while the run is confirming a SIGKILL record ends it as
+// a cancellation, never a success, and stops nothing: the app on the device
+// may already be the other deployment's.
+func TestAttachedExitOutcome_InterruptWhileConfirmingSIGKILL(t *testing.T) {
+	shortenReplaceConfirm(t, 10*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := &scriptedContainerClient{
+		snapshots: []*agentpb.AppContainer{appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0)},
+		onList: func(call int) {
+			if call == 2 {
+				cancel()
+			}
+		},
+	}
+	conn := &grpcclient.AgentConnection{ContainerService: fake}
+	start := time.Now()
+	err := attachedExitOutcome(ctx, conn, &appconfig.AppConfig{AppID: "app"})
+	if !errors.Is(err, ErrUserCancelled) {
+		t.Fatalf("attachedExitOutcome = %v, want ErrUserCancelled", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("took %s to notice the interrupt", took)
+	}
+	if stops := fake.stops(); len(stops) != 0 {
+		t.Fatalf("stopped %v while the app may belong to another deployment", stops)
+	}
+}
+
+func TestFollowExistingContainer_InterruptWhileConfirmingSIGKILL(t *testing.T) {
+	shortenReplaceConfirm(t, 10*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := &scriptedContainerClient{
+		snapshots: []*agentpb.AppContainer{appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0)},
+		onList: func(call int) {
+			if call == 2 {
+				cancel()
+			}
+		},
+	}
+	telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
+	conn := &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}
+	start := time.Now()
+	err := followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	if !errors.Is(err, ErrUserCancelled) {
+		t.Fatalf("followExistingContainer = %v, want ErrUserCancelled", err)
+	}
+	if took := time.Since(start); took > 6*time.Second {
+		t.Fatalf("took %s to notice the interrupt", took)
+	}
+	if stops := fake.stops(); len(stops) != 0 {
+		t.Fatalf("stopped %v; following never stops the app", stops)
 	}
 }

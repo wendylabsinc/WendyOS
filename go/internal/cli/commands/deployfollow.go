@@ -129,6 +129,13 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if err := gate.Err(); err != nil {
 				return err
 			}
+			replaced, err := appReplacedAfterKill(ctx, conn, appCfg, container)
+			if err != nil {
+				return interrupted() // Ctrl-C or SIGTERM while confirming a SIGKILL
+			}
+			if replaced {
+				return nil
+			}
 			if failure := appExitFailure(appCfg.AppID, container); failure != nil {
 				return failure
 			}

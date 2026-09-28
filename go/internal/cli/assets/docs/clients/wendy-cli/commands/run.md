@@ -56,6 +56,8 @@ When nothing changed since the last deploy and the app is already running, `wend
 
 The crash check reads the exit that the device agent records when the app stops. If the restart policy has already restarted the app by then, the exit status is gone: `wendy run` prints a notice and exits 0. Agents that predate exit reporting always read as a clean stop.
 
+A run whose app is replaced by another deployment (for example `wendy run --detach` from another terminal) prints `Application <app> was replaced by another deployment.` and exits 0: the device records the replaced app like a SIGKILL crash (exit code 137), so `wendy run` re-checks that exit for up to 3 seconds before reporting a crash.
+
 ## Waiting for readiness: `--wait-ready`
 
 `--wait-ready` makes `wendy run` report whether the app actually came up:
