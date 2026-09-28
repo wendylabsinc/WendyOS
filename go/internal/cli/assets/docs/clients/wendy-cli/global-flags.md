@@ -22,6 +22,43 @@ wendy device list --json=false | cat
 
 > **Note:** For live, full-screen TUI commands such as [`wendy device top`](./commands/device/top.md), `--json` does not stream the interface — it switches the command to a one-shot **snapshot** mode that prints a single JSON object and exits, instead of rendering the interactive dashboard.
 
+### Errors in JSON mode
+
+When a command fails in JSON mode, it writes nothing more to stdout, and the last line on stderr is one JSON object:
+
+```json
+{"error":{"code":"device_unreachable","exit":5,"message":"Could not connect to device at 192.168.1.42:50051. Is it powered on and connected to the network?","retryable":true,"next_steps":[]}}
+```
+
+| Field | Meaning |
+|---|---|
+| `code` | The failure category, for example `cli_usage`, `auth_required` or `device_unreachable`; `error` when the failure has no category. |
+| `exit` | The process exit status (see [Exit status](#exit-status)). |
+| `message` | The error as plain text, without colour or the `✗` marker. It can span several lines. |
+| `retryable` | `true` when running the same command again, unchanged, can succeed, for example once the device is back online. |
+| `next_steps` | Recovery steps, in order. Always an array, often empty. |
+
+Earlier stderr lines can hold progress output and notices, so read the last line. Outside JSON mode the same failure prints as styled text.
+
+## Exit status
+
+`wendy` exits with the same status whether or not JSON mode is on.
+
+| Status | Meaning | `code` values |
+|---|---|---|
+| 0 | Success | |
+| 1 | Any failure not listed below | every other code, including `error` |
+| 2 | The command line is wrong: unknown command or flag, wrong number of arguments, a missing required flag, or a confirmation that needs `--force` because there is no terminal | `cli_usage` |
+| 3 | Credentials are missing, expired or ambiguous | `auth_required`, `auth_session_ambiguous`, `auth_certificate_failed`, `device_auth_required`, `registry_auth`, `grpc_unauthenticated` |
+| 4 | No usable target device: none given, several match, or the device cannot run this project | `no_device`, `device_ambiguous`, `project_target_mismatch` |
+| 5 | The device could not be reached | `device_unreachable`, `device_offline`, `device_tls_rejected`, `simulator_unavailable` |
+| 6 | The build failed, or a build tool is missing | `build_failed`, `builder_unavailable`, `tool_not_found` |
+| 7 | The app was deployed but did not start or stay up | `container_start_failed` |
+| 8 | The app started but did not become ready in time | `readiness_timeout` |
+| 10 | A trust decision only a person can make: the device's identity or organization changed | `device_identity_mismatch`, `device_org_mismatch` |
+
+`retryable` is `true` for `device_unreachable`, `device_offline`, `transfer_failed`, `registry_unavailable`, `readiness_timeout`, and the timeouts `grpc_deadline` and `network_timeout`.
+
 ## `--device`
 
 Specifies a target device by IP address, hostname, provider key, or explicit `host:port`, bypassing [device selection](./device-selection.md).
