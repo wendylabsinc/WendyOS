@@ -75,26 +75,31 @@ After the device confirms the container started, `wendy run` does one of two che
 - It probes the app's readiness port from your machine (`readiness.tcpSocket.port`, or the `http` entitlement's port) until the port accepts a connection. The deadline is `--readiness-timeout`, else `readiness.timeoutSeconds`, else 30 seconds.
 - When the app declares no probe, the device is reached through Wendy Cloud and your machine cannot connect to the device's agent on its LAN address (`wendy run` checks once, for up to 1.5 seconds), or `wendy run` runs on the device itself over the agent socket (`WENDY_AGENT_SOCKET`), it checks that the app stays running for 10 seconds, or for `--readiness-timeout` when that is shorter.
 
-The run fails with a non-zero exit when the app exits (even with exit code 0) or is restarted by its restart policy while being checked, or when the probe deadline passes.
+The run fails with a non-zero exit when, during the check, the app exits (even with exit code 0), is restarted by its restart policy, or is no longer reported by the device; when the probe deadline passes; or when, without a probe, the app's state cannot be read at the end of the window.
 
-With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is not a terminal), stdout carries exactly one JSON object for every outcome, failures included:
+With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is not a terminal), stdout carries exactly one JSON object, failures included, unless the run is interrupted or its command line does not parse (see below). Its `status` is one of five values:
 
 ```json
-{"status":"ready","app":"my-app","device":"wendyos-hopeful-glider.local","readiness":"passed","url":"http://192.168.1.207:8080"}
-{"status":"crashed","app":"my-app","device":"wendyos-hopeful-glider.local","readiness":"not_checked","exit_code":3,"termination_reason":"crashed","message":"app my-app stopped unexpectedly (exit code 3, termination reason \"crashed\"); see its logs with `wendy device logs --app my-app`"}
+{"status":"ready","app":"my-app","device":"192.168.1.207","readiness":"passed","url":"http://192.168.1.207:8080"}
+{"status":"running","app":"my-app","device":"192.168.1.207","readiness":"not_checked"}
+{"status":"crashed","app":"my-app","device":"192.168.1.207","readiness":"not_checked","exit_code":3,"termination_reason":"crashed","message":"app my-app stopped unexpectedly (exit code 3, termination reason \"crashed\"); see its logs with `wendy device logs --app my-app`"}
+{"status":"not_ready","app":"my-app","device":"192.168.1.207","readiness":"failed","message":"app my-app did not pass its readiness probe within 30s"}
+{"status":"failed","app":"my-app","device":"192.168.1.207","readiness":"not_checked","message":"build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo"}
 ```
 
-| `status` | Meaning | Exit status |
-|----------|---------|-------------|
-| `ready` | The readiness probe passed (`readiness: "passed"`). | 0 |
-| `running` | No probe could run from this machine; the app stayed up for 10 s, or a shorter `--readiness-timeout` (`readiness: "not_checked"`). | 0 |
-| `crashed` | The app exited (even with exit code 0), crash-looped, or was restarted while being checked. `exit_code` and `termination_reason` are included when the device recorded them. | Non-zero |
-| `not_ready` | The probe did not pass in time (`readiness: "failed"`), or, without a probe, the app's state could not be confirmed at the end of the window (`readiness: "not_checked"`). | Non-zero |
-| `failed` | The run failed before the check started: an invalid flag or `wendy.json`, device selection, build, push, or container start (`readiness: "not_checked"`). `message` carries the error. | Non-zero |
+| `status` | When | `readiness` | Fields besides `status`, `readiness`, `app` and `device` | Exit status |
+|----------|------|-------------|------------------|-------------|
+| `ready` | The readiness probe passed: the app's port accepted a connection from this machine. | `passed` | `url`, when the device reports an address for the app | 0 |
+| `running` | No probe could run from this machine (see the second check above), and the app stayed running without a restart for 10 seconds, or for a shorter `--readiness-timeout`. | `not_checked` | None | 0 |
+| `crashed` | During the check the app exited (even with exit code 0), stopped, crash-looped, was restarted by its restart policy, or was no longer reported by the device. | `failed` when a probe was running, else `not_checked` | `message`; `exit_code` and `termination_reason` when the device recorded the exit | Non-zero |
+| `not_ready` | The probe did not pass before its deadline, or, without a probe, the app's state could not be read at the end of the window. | `failed` with a probe, `not_checked` without | `message` | Non-zero |
+| `failed` | The run failed before the check started (see below). | `not_checked` | `message`: the run's error | Non-zero |
 
-`url` appears only for `ready`. `device` is omitted on the device itself (`WENDY_AGENT_SOCKET`). A `failed` object omits `app` and `device` when the run failed before it knew them.
+`app` is the app ID from `wendy.json`. `device` is the address `wendy run` connected to: for a direct connection that is often an IP address rather than the `.local` name, and through Wendy Cloud it is the device's cloud name. On the device itself (`WENDY_AGENT_SOCKET`), `device` is omitted and readiness is never probed, so the outcome is `running`, `crashed`, `not_ready` or `failed`. A `failed` object also omits `app` and `device` until the run knows them, and it never carries `exit_code`, `termination_reason` or `url`.
 
-A run that fails before the check prints its `failed` object and also reports the error on stderr. Ctrl-C or SIGTERM prints no object at any point; during the wait, both leave the app running.
+`failed` covers every error `wendy run` itself reports before the check: a flag value or combination it rejects (for example `--readiness-timeout 1500ms`, `--env FOO`, or `--wait-ready` with `--watch`, `--hil` or `--deploy`), a project or target `--wait-ready` does not support (listed at the end of this section), an invalid `wendy.json`, device selection, the build, the push, and the container start. The run also prints the error on stderr. Errors that stop the command before `wendy run` starts, such as an unknown flag, a malformed value like `--readiness-timeout abc`, or a CLI configuration that cannot be loaded, print only the error on stderr and no object. A run without `--wait-ready` never prints an object, even when it is rejected (for example `--detach --readiness-timeout 30s`). Ctrl-C (exit 0) or SIGTERM (non-zero exit) prints no object at any point; during the wait, both leave the app running.
+
+A detached check does not look for another deployment. If one replaces the app during the check, the outcome is whatever the polls see: `crashed` when a poll finds the old app stopped (the device records it like a SIGKILL crash, exit code 137) or the app missing or not yet started, or `ready` or `running` when the polls see only the new app running.
 
 Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check fails the run and stops the app, except when nothing changed since the last deploy and `wendy run` only follows the app that was already running: that run did not start the app, so it fails without stopping it. If another deployment replaces the app during the check, the run reports the replacement and leaves the new app running. Host-side postStart actions run only after the check passes.
 
