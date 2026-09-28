@@ -61,6 +61,24 @@ func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Co
 				return
 			case <-ticker.C:
 				if r.hasCheaperLink(asset) {
+					// A single transient false evaluation (duplicate sighting,
+					// fresh-hint churn during formation) must not kill an
+					// established link: re-verify after a short delay. A
+					// genuinely superseded link is still shed ~3s later.
+					r.cfg.Logger.Debug("BLE cheaper-link decision pending re-verify", zap.Int32("peer", asset))
+					timer := time.NewTimer(3 * time.Second)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					case <-stop:
+						timer.Stop()
+						return
+					case <-timer.C:
+					}
+					if !r.hasCheaperLink(asset) {
+						continue
+					}
 					r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset))
 					_ = conn.Close()
 					return
