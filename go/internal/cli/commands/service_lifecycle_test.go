@@ -289,6 +289,7 @@ func TestServiceHookRunner_CloudSwapsHostForReadinessAndHook(t *testing.T) {
 	}
 	defer ln.Close()
 	port := testPort(t, ln)
+	stubLANAddressReachable(t, true) // no agent listens on 127.0.0.1 here
 
 	calls := swapBrowserOpen(t)
 	containerFake := &lifecycleFakeContainerClient{}

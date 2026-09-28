@@ -71,7 +71,7 @@ wendy --json run --detach --wait-ready --readiness-timeout 90s
 After the device confirms the container started, `wendy run` does one of two checks:
 
 - It probes the app's readiness port from your machine (`readiness.tcpSocket.port`, or the `http` entitlement's port) until the port accepts a connection. The deadline is `--readiness-timeout`, else `readiness.timeoutSeconds`, else 30 seconds.
-- When the app declares no probe, the device is reached through Wendy Cloud and its LAN address does not answer from your machine, or `wendy run` runs on the device itself over the agent socket (`WENDY_AGENT_SOCKET`), it checks that the app stays running for 10 seconds, or for `--readiness-timeout` when that is shorter.
+- When the app declares no probe, the device is reached through Wendy Cloud and your machine cannot connect to the device's agent on its LAN address (`wendy run` checks once, for up to 1.5 seconds), or `wendy run` runs on the device itself over the agent socket (`WENDY_AGENT_SOCKET`), it checks that the app stays running for 10 seconds, or for `--readiness-timeout` when that is shorter.
 
 The run fails with a non-zero exit when the app exits (even with exit code 0) or is restarted by its restart policy while being checked, or when the probe deadline passes.
 
@@ -114,7 +114,7 @@ The CLI derives this URL from either:
 
 The printed URL uses a routable IP address reported by the device instead of the `.local` hostname, which makes it easier to open from browsers that do not resolve mDNS names reliably. If neither an `openURL` hook nor a TCP readiness port is configured, or if the device cannot report an IP address, `wendy run` skips this line.
 
-When the device is reached through Wendy Cloud, `wendy run` first checks once, for up to 1.5 seconds, whether your machine can reach the device's LAN address. If it can (you are on the device's network), the readiness check, the printed URL, and the `openURL` and `cli` postStart actions work as on a LAN connection. If it cannot, `wendy run` does not print, probe, or open that address: the host-side readiness check and the `openURL` and `cli` postStart actions are skipped with a notice.
+When the device is reached through Wendy Cloud, `wendy run` first checks once, for up to 1.5 seconds, whether your machine can connect to the device's agent on its LAN address. If it can (you are on the device's network), the readiness check, the printed URL, and the `openURL` and `cli` postStart actions work as on a LAN connection. If it cannot, `wendy run` does not print, probe, or open that address: the host-side readiness check and the `openURL` and `cli` postStart actions are skipped with a notice.
 
 When an attached run's readiness probe times out but the app is still running, `wendy run` keeps checking every 5 seconds for up to ten probe timeouts in total (5 minutes with the default 30-second timeout), then warns. `--readiness-timeout` replaces the probe timeout and ends the wait at that deadline.
 

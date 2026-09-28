@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -2950,49 +2949,25 @@ func isCloudConnection(conn *grpcclient.AgentConnection) bool {
 // who is not on the device's network barely notices it.
 const cloudLANProbeTimeout = 1500 * time.Millisecond
 
-// lanAddressReachable reports whether this machine can reach addr, a cloud
-// device's LAN address and app port. Indirected so tests can stub it.
-var lanAddressReachable = func(ctx context.Context, addr string) bool {
-	return tcpAddressAnswers(ctx, addr, cloudLANProbeTimeout)
-}
+// cloudLANAgentPorts are the ports lanAddressReachable dials: the device
+// agent's, which the CLI would dial on a direct LAN connection. A cloud asset
+// is a provisioned agent, which serves mTLS on
+// defaultAgentPort+agentMTLSPortOffset and shuts the plaintext port down (see
+// cloud_tunnel.go); the plaintext port covers an agent that still serves it.
+// A variable so tests can point it at a local listener.
+var cloudLANAgentPorts = []int{defaultAgentPort + agentMTLSPortOffset, defaultAgentPort}
 
-// tcpAddressAnswers makes one TCP dial to addr within timeout. A refused
-// connection counts as an answer: the host is reachable and the app just is
-// not listening yet (the check runs right after the container starts).
-// Anything else — a timeout, no route, a DNS failure — does not. Windows
-// reports a refusal as WSAECONNREFUSED ("actively refused"), which is not
-// syscall.ECONNREFUSED, hence the message match.
-func tcpAddressAnswers(ctx context.Context, addr string, timeout time.Duration) bool {
-	dialer := net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-	if err == nil {
-		_ = conn.Close()
-		return true
-	}
-	return errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "refused")
-}
-
-// hostProbePort is the app port a cloud run checks the LAN address on: the
-// readiness TCP port when there is one, else appURL's port (80/443 by default
-// for http/https), else 0 (nothing to check).
-func hostProbePort(appCfg *appconfig.AppConfig, appURL string) int {
-	if readiness := effectiveReadiness(appCfg); readiness != nil && readiness.TCPSocket != nil && readiness.TCPSocket.Port != 0 {
-		return readiness.TCPSocket.Port
-	}
-	u, err := url.Parse(appURL)
-	if err != nil || appURL == "" {
-		return 0
-	}
-	if port, err := strconv.Atoi(u.Port()); err == nil && port > 0 {
-		return port
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http":
-		return 80
-	case "https":
-		return 443
-	}
-	return 0
+// lanAddressReachable reports whether this machine can reach ip, a cloud
+// device's LAN address: whether a TCP connect to one of the device agent's
+// ports there completes within cloudLANProbeTimeout. The agent listens
+// whenever the device is up (the app may not be listening yet when the check
+// runs), so a refused connection is not this device: typically another host
+// that has the same private address on the developer's own network. Only a
+// completed connect counts. Indirected so tests can stub it.
+var lanAddressReachable = func(ctx context.Context, ip string) bool {
+	return anyPortAnswers(ctx, func(port int) string {
+		return net.JoinHostPort(ip, strconv.Itoa(port))
+	}, cloudLANAgentPorts, cloudLANProbeTimeout)
 }
 
 // hostSideAppAddress resolves where this machine reaches the app: the host
@@ -3004,18 +2979,17 @@ func hostProbePort(appCfg *appconfig.AppConfig, appURL string) int {
 // A cloud-tunnel connection's Host is the asset name, which does not resolve
 // from here, and the IP the agent reports is the device's LAN address, which
 // this machine can reach only when it is on (or routed into) that network.
-// So a cloud run checks once, within cloudLANProbeTimeout, whether that
-// address answers on the app port: if it does, it is used as on a LAN
-// connection (WDY-2440). Otherwise — or when the agent reports no IP, or
-// there is no port to check — ok=false: probing that address, printing it as
-// "App reachable at", or opening it would mislead, so callers skip host-side
-// probes and hooks with cloudHostSkipNotice (readiness is not checked from
-// this machine).
+// So a cloud run checks once, within cloudLANProbeTimeout, whether it can
+// connect to the device's agent at that address (lanAddressReachable): if it
+// can, the address is used as on a LAN connection (WDY-2440). Otherwise — or
+// when the agent reports no IP — ok=false: probing that address, printing it
+// as "App reachable at", or opening it would mislead, so callers skip
+// host-side probes and hooks with cloudHostSkipNotice (readiness is not
+// checked from this machine).
 func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host, url string, ok bool) {
 	ip, url := reachableAppAddress(ctx, conn, appCfg)
 	if isCloudConnection(conn) {
-		port := hostProbePort(appCfg, url)
-		if ip == "" || port == 0 || !lanAddressReachable(ctx, net.JoinHostPort(ip, strconv.Itoa(port))) {
+		if ip == "" || !lanAddressReachable(ctx, ip) {
 			return "", "", false
 		}
 		return ip, url, true

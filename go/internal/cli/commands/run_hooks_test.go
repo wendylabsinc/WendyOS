@@ -390,10 +390,11 @@ func TestRunPostStartIfReady_IPv6FallbackIsBracketed(t *testing.T) {
 // LAN connections pass conn.Host through unchanged regardless of what the
 // agent reports; an IPv6-literal Host swaps in the agent-reported IP; a cloud
 // connection (conn.Reconnect != nil) swaps in the agent-reported IP only when
-// that LAN address answers the one quick reachability check; and a cloud
-// connection with no reported IP, or whose LAN address does not answer,
-// reports ok=false so the caller can skip host-side probes/hooks instead of
-// dialing an address this machine cannot reach.
+// the device's agent answers on that LAN address in the one quick
+// reachability check; and a cloud connection with no reported IP, or whose
+// LAN address does not answer, reports ok=false so the caller can skip
+// host-side probes/hooks instead of dialing an address this machine cannot
+// reach.
 func TestResolveHookHost(t *testing.T) {
 	appCfgWithHook := func() *appconfig.AppConfig {
 		return &appconfig.AppConfig{
@@ -408,7 +409,7 @@ func TestResolveHookHost(t *testing.T) {
 		name string
 		conn *grpcclient.AgentConnection
 		// lanReachable is what the stubbed lanAddressReachable answers;
-		// wantChecked is the address it must have been asked about ("" =
+		// wantChecked is the LAN IP it must have been asked about ("" =
 		// never asked: only cloud connections with a reported IP check).
 		lanReachable bool
 		wantChecked  string
@@ -449,7 +450,7 @@ func TestResolveHookHost(t *testing.T) {
 				}},
 			},
 			lanReachable: true,
-			wantChecked:  "10.10.10.10:80",
+			wantChecked:  "10.10.10.10",
 			wantHost:     "10.10.10.10",
 			wantOK:       true,
 		},
@@ -465,7 +466,7 @@ func TestResolveHookHost(t *testing.T) {
 				}},
 			},
 			lanReachable: false,
-			wantChecked:  "10.10.10.10:80",
+			wantChecked:  "10.10.10.10",
 			wantHost:     "",
 			wantOK:       false,
 		},
@@ -499,53 +500,68 @@ func TestResolveHookHost(t *testing.T) {
 }
 
 // stubLANAddressReachable makes the cloud LAN reachability check answer
-// reachable without dialing, and records every address it was asked about.
+// reachable (or not) without dialing, and records every LAN IP it was asked
+// about.
 func stubLANAddressReachable(t *testing.T, reachable bool) *[]string {
 	t.Helper()
 	original := lanAddressReachable
 	t.Cleanup(func() { lanAddressReachable = original })
 	var mu sync.Mutex
 	var checked []string
-	lanAddressReachable = func(_ context.Context, addr string) bool {
+	lanAddressReachable = func(_ context.Context, ip string) bool {
 		mu.Lock()
 		defer mu.Unlock()
-		checked = append(checked, addr)
+		checked = append(checked, ip)
 		return reachable
 	}
 	return &checked
 }
 
-// TestTCPAddressAnswers pins what the cloud LAN reachability check counts as
-// reachable: an accepted connection, or a refused one (the host answered; the
-// app is just not listening yet). A dial that times out is not reachable.
-func TestTCPAddressAnswers(t *testing.T) {
+// TestLANAddressReachable pins the cloud LAN reachability check: it dials the
+// device agent's ports on the LAN address — the mTLS port a provisioned
+// (cloud) agent serves and the plaintext one — and only a completed connect
+// counts. A refused connection (nothing listens there) is not reachable, and
+// neither is a dial that times out.
+func TestLANAddressReachable(t *testing.T) {
+	if want := []int{defaultAgentPort + agentMTLSPortOffset, defaultAgentPort}; fmt.Sprint(cloudLANAgentPorts) != fmt.Sprint(want) {
+		t.Fatalf("cloudLANAgentPorts = %v, want the agent's mTLS and plaintext ports %v", cloudLANAgentPorts, want)
+	}
+	original := cloudLANAgentPorts
+	t.Cleanup(func() { cloudLANAgentPorts = original })
+
+	// Listeners on ephemeral ports stand in for the agent's ports.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
-	if !tcpAddressAnswers(context.Background(), ln.Addr().String(), time.Second) {
-		t.Error("a listening port did not count as reachable")
-	}
-
 	closed, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	closedAddr := closed.Addr().String()
+	closedPort := testPort(t, closed)
 	closed.Close()
-	if !tcpAddressAnswers(context.Background(), closedAddr, time.Second) {
-		t.Error("a refused connection did not count as reachable")
+
+	cloudLANAgentPorts = []int{closedPort, testPort(t, ln)}
+	if !lanAddressReachable(context.Background(), "127.0.0.1") {
+		t.Error("an agent port that accepts connections did not count as reachable")
+	}
+	cloudLANAgentPorts = []int{closedPort}
+	if lanAddressReachable(context.Background(), "127.0.0.1") {
+		t.Error("a refused connection counted as reachable")
 	}
 
 	// TEST-NET-1 (RFC 5737) is never routed: the dial times out or fails
-	// with no route, and neither is a host that answered.
+	// with no route. The context's deadline bounds the wait.
+	cloudLANAgentPorts = original
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
 	start := time.Now()
-	if tcpAddressAnswers(context.Background(), "192.0.2.1:9", 300*time.Millisecond) {
+	if lanAddressReachable(ctx, "192.0.2.1") {
 		t.Error("an unroutable address counted as reachable")
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("took %v, want about the 300ms timeout", elapsed)
+		t.Errorf("took %v, want about the 300ms deadline", elapsed)
 	}
 }
 
@@ -555,7 +571,7 @@ func TestTCPAddressAnswers(t *testing.T) {
 // ASSET NAME (cloud_tunnel.go: agentConn.Host = asset.GetName()), which does
 // not resolve from this machine. The postStart hook must target the
 // agent-reported IP instead of dialing the dead name — after one quick check
-// that the reported IP answers on the app's port.
+// that the device's agent answers on the reported IP.
 func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 	original := browserOpen
 	t.Cleanup(func() { browserOpen = original })
@@ -586,8 +602,8 @@ func TestRunPostStartIfReady_CloudAssetNameSwappedForReportedIP(t *testing.T) {
 	if opened != "http://10.20.30.40:9999" {
 		t.Errorf("openURL = %q, want the cloud-reported IP URL, not the unresolvable asset name %q", opened, conn.Host)
 	}
-	if len(*checked) != 1 || (*checked)[0] != "10.20.30.40:9999" {
-		t.Errorf("lanAddressReachable asked about %v, want exactly [10.20.30.40:9999]", *checked)
+	if len(*checked) != 1 || (*checked)[0] != "10.20.30.40" {
+		t.Errorf("lanAddressReachable asked about %v, want exactly [10.20.30.40]", *checked)
 	}
 }
 
@@ -683,6 +699,7 @@ func TestRunPostStartIfReady_CloudReadinessDialsReportedIP(t *testing.T) {
 	}
 	defer ln.Close()
 	port := testPort(t, ln)
+	stubLANAddressReachable(t, true) // no agent listens on 127.0.0.1 here
 
 	original := browserOpen
 	t.Cleanup(func() { browserOpen = original })

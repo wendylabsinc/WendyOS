@@ -226,14 +226,14 @@ func TestWaitForAppReadyCloudUnreachableLANUsesTheStabilityWindow(t *testing.T) 
 		t.Fatal("dialed the LAN address through the cloud tunnel")
 	default:
 	}
-	if want := net.JoinHostPort("127.0.0.1", strconv.Itoa(port)); len(*checked) != 1 || (*checked)[0] != want {
-		t.Fatalf("lanAddressReachable asked about %v, want exactly [%s]", *checked, want)
+	if len(*checked) != 1 || (*checked)[0] != "127.0.0.1" {
+		t.Fatalf("lanAddressReachable asked about %v, want exactly [127.0.0.1]", *checked)
 	}
 }
 
-// When the cloud device's LAN address answers from this machine (the
-// developer is on its network), --wait-ready probes it as on a LAN connection
-// and reports its URL (WDY-2440).
+// When the cloud device's agent answers on its LAN address from this machine
+// (the developer is on its network), --wait-ready probes that address as on a
+// LAN connection and reports its URL (WDY-2440).
 func TestWaitForAppReadyCloudReachableLANProbes(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -241,6 +241,7 @@ func TestWaitForAppReadyCloudReachableLANProbes(t *testing.T) {
 	}
 	defer ln.Close()
 	port := testPort(t, ln)
+	checked := stubLANAddressReachable(t, true) // no agent listens on 127.0.0.1 here
 	conn := &grpcclient.AgentConnection{
 		Host:             "cctv",
 		Reconnect:        neverReconnect,
@@ -256,6 +257,9 @@ func TestWaitForAppReadyCloudReachableLANProbes(t *testing.T) {
 	}
 	if want := "http://127.0.0.1:" + strconv.Itoa(port); out.URL != want {
 		t.Fatalf("url = %q, want %q", out.URL, want)
+	}
+	if len(*checked) != 1 || (*checked)[0] != "127.0.0.1" {
+		t.Fatalf("lanAddressReachable asked about %v, want exactly [127.0.0.1]", *checked)
 	}
 }
 
