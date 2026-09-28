@@ -2660,8 +2660,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 	if runErr != nil {
 		return runErr
 	}
-	cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
-	return nil
+	return attachedExitOutcome(ctx, conn, appCfg)
 }
 
 // waitForReadiness polls the readiness probe until it passes or the context is
@@ -3110,8 +3109,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 	if !started {
 		return commandErrorf(errContainerStartFailed, "agent closed the stream before confirming the container started")
 	}
-	cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
-	return nil
+	return attachedExitOutcome(ctx, conn, appCfg)
 }
 
 // phaseTimer returns a closure that logs the elapsed time since the previous

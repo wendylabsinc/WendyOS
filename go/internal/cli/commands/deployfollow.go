@@ -72,7 +72,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		case <-ticker.C:
 		}
 		probeCtx, probeCancel := context.WithTimeout(runCtx, 5*time.Second)
-		state, found, err := lookupAppState(probeCtx, conn, appCfg.AppID)
+		container, err := lookupAppContainer(probeCtx, conn, appCfg.AppID)
 		probeCancel()
 		if ctx.Err() != nil {
 			return nil
@@ -80,7 +80,10 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		if err != nil {
 			return fmt.Errorf("checking existing app state: %w", err)
 		}
-		if !found || state != agentpb.AppRunningState_RUNNING {
+		if container == nil || container.GetRunningState() != agentpb.AppRunningState_RUNNING {
+			if failure := appExitFailure(appCfg.AppID, container); failure != nil {
+				return failure
+			}
 			cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
 			return nil
 		}
