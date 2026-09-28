@@ -266,6 +266,28 @@ func newPacketConn(fd int, local, remote l2addr) *packetConn {
 	return &packetConn{fd: fd, local: local, remote: remote, readBuf: make([]byte, maxReadSDU), writeIdleTimeout: defaultWriteIdleTimeout}
 }
 
+// SockQueue reports the kernel socket queue depths: unread received bytes
+// (SIOCINQ) and unsent bytes (SIOCOUTQ). During a stall, high SIOCINQ means
+// this host stopped reading (app wedge); zero SIOCINQ with no arrivals means
+// the peer stopped granting/sending (peer wedge or radio). Best effort:
+// returns an error instead of depths when the descriptor is gone.
+func (c *packetConn) SockQueue() (inQ, outQ int, err error) {
+	c.fdMu.RLock()
+	defer c.fdMu.RUnlock()
+	if c.closed.Load() {
+		return 0, 0, net.ErrClosed
+	}
+	inQ, err = unix.IoctlGetInt(c.fd, unix.SIOCINQ)
+	if err != nil {
+		return 0, 0, err
+	}
+	outQ, err = unix.IoctlGetInt(c.fd, unix.SIOCOUTQ)
+	if err != nil {
+		return 0, 0, err
+	}
+	return inQ, outQ, nil
+}
+
 func (c *packetConn) Read(dst []byte) (int, error) {
 	if len(dst) == 0 {
 		return 0, nil

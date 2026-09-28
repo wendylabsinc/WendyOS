@@ -129,7 +129,16 @@ type streamNodeLink struct {
 	activeIPStart atomic.Int64
 	activeIPBytes atomic.Int64
 	lastIPWriteMS atomic.Int64
+	rxBytes       atomic.Int64
+	lastRxUnixNS  atomic.Int64
 	diagIP        bool
+}
+
+// sockQueueProber is implemented by CoC connections that can report kernel
+// socket queue depths (see bleprovider packetConn.SockQueue). Absent on
+// non-BLE links; the diagnostic reports -1s there.
+type sockQueueProber interface {
+	SockQueue() (inQ, outQ int, err error)
 }
 
 func newStreamNodeLink(conn net.Conn) *streamNodeLink {
@@ -164,7 +173,8 @@ func (l *streamNodeLink) queueDiagnosticLoop() {
 			if started := l.activeIPStart.Load(); started > 0 {
 				activeMS = time.Since(time.Unix(0, started)).Milliseconds()
 			}
-			log.Printf("localmesh BLE queue peer=%s queued_bytes=%d byte_limit=%d queued_packets=%d enqueued=%d dequeued=%d dropped_capacity=%d dropped_expired=%d last_wait_ms=%d max_wait_ms=%d age_limit_ms=%d write_rate_bytes_s=%d active_bytes=%d active_ms=%d last_write_ms=%d", l.conn.RemoteAddr(), stats.Bytes, stats.ByteLimit, stats.Packets, stats.Enqueued, stats.Dequeued, stats.DroppedCapacity, stats.DroppedExpired, stats.LastDequeuedWaitMS, stats.MaxDequeuedWaitMS, stats.AgeLimitMS, stats.WriteRateBytesPerSec, activeBytes, activeMS, l.lastIPWriteMS.Load())
+			inQ, outQ := l.sockQueueDepths()
+			log.Printf("localmesh BLE queue peer=%s queued_bytes=%d byte_limit=%d queued_packets=%d enqueued=%d dequeued=%d dropped_capacity=%d dropped_expired=%d last_wait_ms=%d max_wait_ms=%d age_limit_ms=%d write_rate_bytes_s=%d active_bytes=%d active_ms=%d last_write_ms=%d rx_bytes=%d rx_last_ms_ago=%d sock_inq=%d sock_outq=%d", l.conn.RemoteAddr(), stats.Bytes, stats.ByteLimit, stats.Packets, stats.Enqueued, stats.Dequeued, stats.DroppedCapacity, stats.DroppedExpired, stats.LastDequeuedWaitMS, stats.MaxDequeuedWaitMS, stats.AgeLimitMS, stats.WriteRateBytesPerSec, activeBytes, activeMS, l.lastIPWriteMS.Load(), l.rxBytes.Load(), l.rxLastMSAgo(), inQ, outQ)
 			last = stats
 		}
 	}
@@ -403,6 +413,8 @@ func (l *streamNodeLink) readLoop() {
 			l.recordTerminalError(err)
 			return
 		}
+		l.rxBytes.Add(int64(len(header) + len(buf)))
+		l.lastRxUnixNS.Store(time.Now().UnixNano())
 		switch header[0] {
 		case streamControl:
 			m, err := ReadControl(bytes.NewReader(buf))
@@ -446,6 +458,30 @@ func (l *streamNodeLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// rxLastMSAgo reports milliseconds since the last received stream byte,
+// or -1 when nothing has been received yet.
+func (l *streamNodeLink) rxLastMSAgo() int64 {
+	last := l.lastRxUnixNS.Load()
+	if last == 0 {
+		return -1
+	}
+	return time.Since(time.Unix(0, last)).Milliseconds()
+}
+
+// sockQueueDepths returns kernel socket queue depths (unread RX, unsent TX)
+// for instrumented connections, or -1, -1 when unavailable.
+func (l *streamNodeLink) sockQueueDepths() (int, int) {
+	prober, ok := l.conn.(sockQueueProber)
+	if !ok {
+		return -1, -1
+	}
+	inQ, outQ, err := prober.SockQueue()
+	if err != nil {
+		return -1, -1
+	}
+	return inQ, outQ
 }
 
 // Keep the first locally observed terminal cause. In particular, a writer

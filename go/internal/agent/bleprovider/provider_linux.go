@@ -58,6 +58,36 @@ func (r *runtime) cheaperLinkReason(asset int32) string {
 	return "legacy-checker"
 }
 
+// cheaperLinkReverify is the delay between a veto sample and its
+// confirmation. A single transient false evaluation (duplicate sighting,
+// fresh-hint churn, mid-formation snapshot skew) must not kill a new or
+// established link; a genuinely superseded link is still shed ~4s after the
+// tick that first noticed it.
+const cheaperLinkReverify = 3 * time.Second
+
+// confirmCheaperLink re-verifies a veto after a short delay and reports
+// whether it persisted for the full delay. Any abort (context done, stop
+// channel) reports false, and the caller must tear down without attaching:
+// an aborted wait is not a cleared veto. stop may be nil (dial/accept paths
+// have no stop channel); a nil channel simply never fires in the select.
+func (r *runtime) confirmCheaperLink(ctx context.Context, stop <-chan struct{}, asset int32) bool {
+	r.cfg.Logger.Debug("BLE cheaper-link decision pending re-verify", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
+	timer := time.NewTimer(cheaperLinkReverify)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-stop:
+		return false
+	case <-timer.C:
+	}
+	if !r.hasCheaperLink(asset) {
+		return false
+	}
+	r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
+	return true
+}
+
 func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Conn) func() {
 	stop := make(chan struct{})
 	go func() {
@@ -70,26 +100,7 @@ func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Co
 			case <-stop:
 				return
 			case <-ticker.C:
-				if r.hasCheaperLink(asset) {
-					// A single transient false evaluation (duplicate sighting,
-					// fresh-hint churn during formation) must not kill an
-					// established link: re-verify after a short delay. A
-					// genuinely superseded link is still shed ~3s later.
-					r.cfg.Logger.Debug("BLE cheaper-link decision pending re-verify", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
-					timer := time.NewTimer(3 * time.Second)
-					select {
-					case <-ctx.Done():
-						timer.Stop()
-						return
-					case <-stop:
-						timer.Stop()
-						return
-					case <-timer.C:
-					}
-					if !r.hasCheaperLink(asset) {
-						continue
-					}
-					r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
+				if r.hasCheaperLink(asset) && r.confirmCheaperLink(ctx, stop, asset) {
 					_ = conn.Close()
 					return
 				}
@@ -295,7 +306,9 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer) {
-		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Int32("peer", peer), zap.String("reason", r.cheaperLinkReason(peer)))
+		if r.confirmCheaperLink(ctx, nil, peer) {
+			r.cfg.Logger.Debug("BLE closing inbound CoC on confirmed cheaper-link decision", zap.Int32("peer", peer))
+		}
 		_ = secure.Close()
 		return
 	}
@@ -435,7 +448,7 @@ func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, ada
 
 func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if r.hasCheaperLink(peer.asset) {
-		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.Int32("peer", peer.asset))
+		r.cfg.Logger.Debug("BLE skipping dial on cheaper-link decision", zap.Int32("peer", peer.asset), zap.String("reason", r.cheaperLinkReason(peer.asset)))
 		return
 	}
 	// Serializing outgoing LE creation avoids accumulating simultaneous pending
@@ -546,7 +559,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer.asset) {
-		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.Int32("peer", peer.asset))
+		if r.confirmCheaperLink(ctx, nil, peer.asset) {
+			r.cfg.Logger.Debug("BLE closing outbound CoC on confirmed cheaper-link decision", zap.Int32("peer", peer.asset))
+		}
+		_ = secure.Close()
 		return
 	}
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer.asset, secure)
