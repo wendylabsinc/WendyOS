@@ -73,7 +73,9 @@ func (n *runInterruptNotes) terminatedError() error {
 }
 
 // stopInterruptedApp stops appCfg's container after Ctrl-C or SIGTERM ended an
-// attached run, so an interrupted attached run never leaves its app running.
+// attached run, so an interrupted attached run does not leave its app running.
+// The stop can fail: that prints a notice, and the SIGTERM error says whether
+// the app was stopped.
 // ctx is already cancelled, so the RPC runs on a fresh context; ctx only
 // carries the outcome back to runWithInterruptChannel.
 func stopInterruptedApp(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) {

@@ -16,7 +16,7 @@ Runs your app on a Wendy-enabled device:
 |------|-------------|
 | `--deploy` | Build and create the container but do not start it. |
 | `--detach` | Start the container and return without streaming logs or opening the app URL. Waits for readiness only with `--wait-ready`. |
-| `--wait-ready` | Succeed only once the app is ready: its readiness probe passes or, without a probe this machine can reach, it stays running for 10 seconds. Fails if the app crashes or the probe times out. See [Waiting for readiness](#waiting-for-readiness---wait-ready). |
+| `--wait-ready` | Succeed only once the app is ready: its readiness probe passes or, without a probe this machine can reach, it stays running for 10 seconds (or a shorter `--readiness-timeout`). Fails if the app crashes or the probe times out. See [Waiting for readiness](#waiting-for-readiness---wait-ready). |
 | `--readiness-timeout <duration>` | Override the readiness deadline, from `1s` to `1h` in whole seconds. With `--detach` it requires `--wait-ready`. |
 | `--restart-unless-stopped` | Restart the container unless manually stopped. |
 | `--restart-on-failure` | Restart the container on failure. |
@@ -46,11 +46,12 @@ An attached `wendy run` streams the app's logs until the app exits or you stop t
 | How the run ends | Exit status | The app afterwards |
 |------------------|-------------|--------------------|
 | The app exits with code 0 | 0 | Stopped |
-| The app crashes: non-zero exit, OOM kill, failed start, or crash loop | Non-zero. The error names the exit code and termination reason and points to `wendy device logs --app <app>`. | As its restart policy leaves it |
+| The app crashes: non-zero exit, OOM kill, or crash loop | Non-zero. The error names the exit code and termination reason and points to `wendy device logs --app <app>`. | As its restart policy leaves it |
+| The container fails to start | Non-zero, with the start error the device reported | Not started |
 | Ctrl-C (SIGINT) | 0 | Stopped |
 | SIGTERM (a CI timeout, `kill`, a process supervisor) | Non-zero: `wendy run was terminated; app <app> was stopped` | Stopped |
 
-The table describes single-container runs. Multi-service, Compose and native Mac runs stop their apps on Ctrl-C; on SIGTERM they exit non-zero but may leave their apps running.
+The table describes single-container runs on WendyOS devices. Multi-service, Compose and native Mac runs, and runs on local provider targets such as `--device docker` or `--device apple-container`, handle Ctrl-C themselves and stop their apps; on SIGTERM they exit non-zero but may leave their apps running.
 
 When nothing changed since the last deploy and the app is already running, `wendy run` only follows its logs. An interrupted run then leaves the app running, and the SIGTERM error says so.
 
@@ -70,11 +71,11 @@ wendy --json run --detach --wait-ready --readiness-timeout 90s
 After the device confirms the container started, `wendy run` does one of two checks:
 
 - It probes the app's readiness port from your machine (`readiness.tcpSocket.port`, or the `http` entitlement's port) until the port accepts a connection. The deadline is `--readiness-timeout`, else `readiness.timeoutSeconds`, else 30 seconds.
-- When the app declares no probe, the device is reached through Wendy Cloud and its LAN address does not answer from your machine, or `wendy run` runs on the device itself over the agent socket (`WENDY_AGENT_SOCKET`), it checks that the app stays running for 10 seconds.
+- When the app declares no probe, the device is reached through Wendy Cloud and its LAN address does not answer from your machine, or `wendy run` runs on the device itself over the agent socket (`WENDY_AGENT_SOCKET`), it checks that the app stays running for 10 seconds, or for `--readiness-timeout` when that is shorter.
 
 The run fails with a non-zero exit when the app exits (even with exit code 0) or is restarted by its restart policy while being checked, or when the probe deadline passes.
 
-With `--detach` in JSON mode (`--json`, on by default when stdout is not a terminal), stdout carries exactly one JSON object for every outcome, failures included:
+With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is not a terminal), stdout carries exactly one JSON object for every outcome, failures included:
 
 ```json
 {"status":"ready","app":"my-app","device":"wendyos-hopeful-glider.local","readiness":"passed","url":"http://192.168.1.207:8080"}
@@ -84,22 +85,22 @@ With `--detach` in JSON mode (`--json`, on by default when stdout is not a termi
 | `status` | Meaning | Exit status |
 |----------|---------|-------------|
 | `ready` | The readiness probe passed (`readiness: "passed"`). | 0 |
-| `running` | No probe could run from this machine; the app stayed up for 10 s (`readiness: "not_checked"`). | 0 |
+| `running` | No probe could run from this machine; the app stayed up for 10 s, or a shorter `--readiness-timeout` (`readiness: "not_checked"`). | 0 |
 | `crashed` | The app exited (even with exit code 0), crash-looped, or was restarted while being checked. `exit_code` and `termination_reason` are included when the device recorded them. | Non-zero |
-| `not_ready` | The probe did not pass in time (`readiness: "failed"`). | Non-zero |
+| `not_ready` | The probe did not pass in time (`readiness: "failed"`), or, without a probe, the app's state could not be confirmed at the end of the window (`readiness: "not_checked"`). | Non-zero |
 | `failed` | The run failed before the check started: an invalid flag or `wendy.json`, device selection, build, push, or container start (`readiness: "not_checked"`). `message` carries the error. | Non-zero |
 
 `url` appears only for `ready`. `device` is omitted on the device itself (`WENDY_AGENT_SOCKET`). A `failed` object omits `app` and `device` when the run failed before it knew them.
 
 A run that fails before the check prints its `failed` object and also reports the error on stderr. Ctrl-C or SIGTERM prints no object at any point; during the wait, both leave the app running.
 
-Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check stops the app and fails the run; host-side postStart actions run only after the check passes.
+Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check fails the run and stops the app, except when nothing changed since the last deploy and `wendy run` only follows the app that was already running: that run did not start the app, so it fails without stopping it. Host-side postStart actions run only after the check passes.
 
-`--wait-ready` currently supports single-container image projects (Dockerfile, Containerfile, Stagefile, or Python) on WendyOS devices. It is rejected for multi-service and Compose projects, native Mac apps, Swift packages built without a Dockerfile, `--build-host`, `--watch`, `--hil`, and `--deploy`.
+`--wait-ready` currently supports single-container image projects (Dockerfile, Containerfile, Stagefile, or Python) on WendyOS devices. It is rejected for multi-service, Compose and Xcode projects, native Mac apps, Swift packages built without a Dockerfile, local provider targets such as `--device docker`, `--build-host`, `--watch`, `--hil`, and `--deploy`.
 
 ## Reachable app URLs
 
-After the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
+After the app starts, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
 
 ```text
 App reachable at http://192.168.123.222:3000
@@ -117,7 +118,7 @@ When the device is reached through Wendy Cloud, `wendy run` first checks once, f
 
 When an attached run's readiness probe times out but the app is still running, `wendy run` keeps checking every 5 seconds for up to ten probe timeouts in total (5 minutes with the default 30-second timeout), then warns. `--readiness-timeout` replaces the probe timeout and ends the wait at that deadline.
 
-> **Note:** If the readiness probe fails (timeout or connection error), `wendy run` skips the `App reachable at` line and the `postStart` hook and prints a warning instead. This prevents opening a browser tab pointed at a container that has already exited.
+> **Note:** An attached run prints the `App reachable at` line before its readiness probe finishes (with `--wait-ready`, only once the check passes). If the probe then fails (timeout or connection error), `wendy run` skips the `postStart` hook, including opening the browser, and prints a warning instead. This prevents opening a browser tab pointed at a container that has already exited.
 
 > **Note:** When `wendy.json` is absent, `wendy run` resolves the target device before prompting to create one. If the target is Headless Mac and the detected project type is unsupported, the project/target mismatch error is returned immediately without opening the config creation prompt.
 
@@ -513,11 +514,15 @@ reported separately, in `npuBackends`. `containerStorage` identifies the filesys
 containerd; the existing disk scalar fields continue to describe the root filesystem.
 
 Attached runs keep observing slow startup after the initial readiness budget.
-If the relevant service is still running, the CLI reports “still starting” and
-checks every five seconds while streaming logs. Browser opening and host
-`postStart` commands run once readiness succeeds. Stopping the service,
-canceling the session, or replacing a watch deployment cancels its probes.
-Detached and create-only runs continue to skip host readiness and hooks.
+If the relevant service is still running when its probe timeout passes, the CLI
+reports “still starting” and checks every five seconds while streaming logs,
+for up to ten probe timeouts in total, then warns. `--readiness-timeout` is the
+whole deadline instead: no extended observation follows it. Browser opening and
+host `postStart` commands run once readiness succeeds. Stopping the service,
+canceling the session, or replacing a watch deployment cancels its probes. With
+`--wait-ready`, its own check replaces this observation. Detached and
+create-only runs skip host `postStart` commands; a detached run checks
+readiness only with `--wait-ready`.
 
 
 ## Native commands on Mac

@@ -181,7 +181,7 @@ func TestAttachedWaitReadyRunsHooksOnceReady(t *testing.T) {
 
 // An app whose output ends on its own before it became ready exited: the gate,
 // not the stream's end, decides the outcome, and a clean exit (code 0) inside
-// the wait fails --wait-ready (A3). The ended stream must not cancel the
+// the wait fails --wait-ready. The ended stream must not cancel the
 // gate's last poll. Attached runs never add the JSON object to stdout.
 func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
 	previous := jsonOutput
@@ -307,8 +307,8 @@ func TestAttachedWaitReadyInterruptStopsTheAppOnce(t *testing.T) {
 }
 
 // Ctrl-C while the run waits for the gate's verdict after the app's output
-// ended is still a cancellation (A1): never a nil "stopped" success. A run that
-// started the app stops it; a follow leaves it running.
+// ended is still a cancellation (ErrUserCancelled): never a nil "stopped"
+// success. A run that started the app stops it; a follow leaves it running.
 func TestAttachedWaitReadyInterruptWhileAwaitingTheGate(t *testing.T) {
 	cfg := &appconfig.AppConfig{AppID: "app"}
 	opts := runOptions{waitReady: true, readinessTimeout: 30 * time.Second}

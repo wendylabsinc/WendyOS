@@ -149,8 +149,9 @@ func TestTryDeployFastPath_AttachedRunningPreservesTaskAndFollowsLogs(t *testing
 	}()
 	done, err := tryDeployFastPath(ctx, conn, cfg, "device", "inputs", runOptions{})
 	// Cancelling ctx here stands in for Ctrl-C/SIGTERM interrupting the follow:
-	// followExistingContainer now reports that as ErrUserCancelled rather than
-	// a silent nil (see AMENDMENTS A1), never leaving the app it never started.
+	// followExistingContainer reports that as ErrUserCancelled rather than a
+	// silent nil, and leaves the app it did not start running (this fake has no
+	// StopContainer).
 	if !done || !errors.Is(err, ErrUserCancelled) || fake.startCalls != 0 {
 		t.Fatalf("done=%v err=%v starts=%d", done, err, fake.startCalls)
 	}

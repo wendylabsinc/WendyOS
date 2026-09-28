@@ -46,8 +46,8 @@ func TestRunWithInterruptChannelClassifiesInterruptWhenParentCancelsFirst(t *tes
 }
 
 // The attached single-container paths return ErrUserCancelled themselves
-// after an interrupt (human decision A1, implemented in Task 4), so this only
-// covers runs that report success on their own.
+// after an interrupt, never nil, so this only covers runs that report success
+// on their own.
 func TestRunWithInterruptChannelInterruptAfterSuccessStaysSuccessful(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 	err := runWithInterruptChannel(context.Background(), interrupts, func(ctx context.Context) error {

@@ -751,8 +751,11 @@ func runWithInterruptChannel(parent context.Context, sigCh <-chan os.Signal, run
 	close(done)
 	<-handlerDone
 	// Consume signals the handler had not read yet — including one that raced
-	// run's own return — so the classification below never depends on
-	// goroutine scheduling.
+	// run's own return — so the classification below does not depend on which
+	// goroutine read the signal first. A microsecond window remains: main's
+	// signal.NotifyContext can take delivery and cancel the parent, and run
+	// return, before the signal reaches sigCh; the run is then classified by
+	// its own error alone.
 	for drained := false; !drained; {
 		select {
 		case sig := <-sigCh:
