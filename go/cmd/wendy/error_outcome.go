@@ -43,6 +43,7 @@ var errorOutcomes = map[string]errorOutcome{
 
 	"device_unreachable":    {exit: exitUnreachable, retryable: true},
 	"device_offline":        {exit: exitUnreachable, retryable: true},
+	"device_not_resolved":   {exit: exitUnreachable}, // the name, not the device, must change
 	"device_tls_rejected":   {exit: exitUnreachable},
 	"simulator_unavailable": {exit: exitUnreachable},
 

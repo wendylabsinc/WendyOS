@@ -63,3 +63,41 @@ func TestConnectResolvedAgentNamesTheDialedAddress(t *testing.T) {
 		t.Errorf("ErrorClass = %q, want device_unreachable", got)
 	}
 }
+
+// A dial that timed out, or a host name that does not resolve, is still a
+// verdict about the device, and must be classified as one before the generic
+// deadline classes get to it.
+func TestDeviceDialErrorClassifiesTimeoutsAndResolverMisses(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		addr  string
+		cause error
+		want  string
+	}{
+		{"gRPC deadline", "10.255.255.1:50051",
+			status.Error(codes.DeadlineExceeded, "context deadline exceeded while waiting for connections to become ready"), "device_unreachable"},
+		{"context deadline", "10.255.255.1:50051", fmt.Errorf("probing: %w", context.DeadlineExceeded), "device_unreachable"},
+		{"resolver produced nothing", "nosuchhost.invalid:50051",
+			status.Error(codes.Unavailable, "name resolver error: produced zero addresses"), "device_not_resolved"},
+		{"DNS says no such host", "nosuchhost.invalid:50051",
+			status.Error(codes.Unavailable, `connection error: desc = "transport: Error while dialing: dial tcp: lookup nosuchhost.invalid: no such host"`), "device_not_resolved"},
+		// An mDNS name only resolves while its device is on the network.
+		{"mDNS name that does not resolve", "wendyos-x.local:50051",
+			status.Error(codes.Unavailable, "name resolver error: produced zero addresses"), "device_unreachable"},
+		{"refused", "127.0.0.1:1", status.Error(codes.Unavailable, "connection refused"), "device_unreachable"},
+		{"not a transport failure", "h:1", status.Error(codes.PermissionDenied, "no"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := fmt.Errorf("connecting: %w", newDeviceDialError(tc.addr, tc.cause))
+			if got := DeviceDialErrorClass(err); got != tc.want {
+				t.Errorf("DeviceDialErrorClass = %q, want %q", got, tc.want)
+			}
+			if got := ErrorClass(err); got != tc.want {
+				t.Errorf("ErrorClass = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := DeviceDialErrorClass(status.Error(codes.DeadlineExceeded, "x")); got != "" {
+		t.Errorf("a deadline outside a device dial classified as %q, want unclassified", got)
+	}
+}

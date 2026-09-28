@@ -53,7 +53,7 @@ Earlier stderr lines can hold progress output and notices, so read the last line
 | 2 | The command line is wrong: unknown command or flag, wrong number of arguments, a missing required flag, or a confirmation that needs `--force` because there is no terminal | `cli_usage` |
 | 3 | Credentials are missing, expired or ambiguous | `auth_required`, `auth_session_ambiguous`, `auth_certificate_failed`, `device_auth_required`, `registry_auth`, `grpc_unauthenticated` |
 | 4 | No usable target device: none given, several match, or the device cannot run this project | `no_device`, `device_ambiguous`, `project_target_mismatch` |
-| 5 | The device could not be reached | `device_unreachable`, `device_offline`, `device_tls_rejected`, `simulator_unavailable` |
+| 5 | The device could not be reached: it refused or did not answer the connection, its host name did not resolve, or it rejected the TLS handshake | `device_unreachable`, `device_offline`, `device_not_resolved`, `device_tls_rejected`, `simulator_unavailable` |
 | 6 | The build failed, or a build tool is missing | `build_failed`, `builder_unavailable`, `tool_not_found` |
 | 7 | The app was deployed but did not start or stay up | `container_start_failed` |
 | 8 | The app started but did not become ready in time | `readiness_timeout` |

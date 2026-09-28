@@ -210,6 +210,12 @@ func errorClass(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "context_canceled"
 	}
+	// A failed device dial is classified by what it says about the device
+	// before the generic deadline classes: a dial that timed out means the
+	// device did not answer (device_unreachable), not a slow operation.
+	if class := commands.DeviceDialErrorClass(err); class != "" {
+		return class
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "context_deadline"
 	}
@@ -386,11 +392,24 @@ func formatErrorParts(err error) formattedError {
 
 	// Name the device when the error records which address was dialled.
 	device := "device"
-	if addr := deviceAddress(err); addr != "" {
+	addr := deviceAddress(err)
+	if addr != "" {
 		device = "device at " + addr
 	}
 
 	switch {
+	case addr != "" && strings.Contains(msg, "code = Unavailable") && isResolverMissText(grpcText):
+		// The resolver's own text ("produced zero addresses") never names
+		// the host it could not find.
+		host := addr
+		if h, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+			host = h
+		}
+		if strings.HasSuffix(strings.TrimSuffix(strings.ToLower(host), "."), ".local") {
+			return rewrite("Could not resolve device host "+host+".",
+				"The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out.")
+		}
+		return rewrite("Could not resolve device host "+host+".", "Check the name, or connect by IP address.")
 	case strings.Contains(msg, "code = Unavailable") && isCertRejection && !isPKICoreCall && !isCloudCall:
 		return rewrite("TLS handshake rejected by device (possible clock skew or cert mismatch).",
 			"Check the device clock: ssh wendy@<host> 'timedatectl status'",
@@ -469,6 +488,12 @@ func splitGRPCMessage(err error, msg string) (prefix, grpcText, suffix string) {
 	}
 	i := strings.Index(msg, "rpc error: code = ")
 	return msg[:i], msg[i:], ""
+}
+
+// isResolverMissText reports whether a gRPC error's text says a host name
+// resolved to no address.
+func isResolverMissText(grpcText string) bool {
+	return strings.Contains(grpcText, "produced zero addresses") || strings.Contains(grpcText, "no such host")
 }
 
 // deviceAddress returns the address a failed device connection was aimed at

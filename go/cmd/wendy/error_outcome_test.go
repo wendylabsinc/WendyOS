@@ -25,6 +25,7 @@ var outcomeCases = []struct {
 
 	{"device_unreachable", 5, true},
 	{"device_offline", 5, true},
+	{"device_not_resolved", 5, false},
 	{"device_tls_rejected", 5, false},
 	{"simulator_unavailable", 5, false},
 

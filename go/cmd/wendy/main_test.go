@@ -781,3 +781,47 @@ func TestFormatError_ConnectErrorsNameTheDevice(t *testing.T) {
 		}
 	}
 }
+
+// A device that is off, or a host name that does not resolve, is exit 5
+// whether the dial was refused, timed out, or never found an address.
+func TestErrorClass_DeviceDialFailures(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{dialedError{"10.255.255.1:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded while waiting for connections to become ready")}, "device_unreachable"},
+		{fmt.Errorf("default device: %w", dialedError{"x.local:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")}), "device_unreachable"},
+		{dialedError{"127.0.0.1:1", refusedDial}, "device_unreachable"},
+		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_not_resolved"},
+		// Without a dialled address a deadline is still just a deadline.
+		{status.Error(codes.DeadlineExceeded, "context deadline exceeded"), "grpc_deadline"},
+		{fmt.Errorf("waiting: %w", context.DeadlineExceeded), "context_deadline"},
+		// Ctrl-C during a dial is a cancellation, not a verdict on the device.
+		{dialedError{"127.0.0.1:1", fmt.Errorf("dialing: %w", context.Canceled)}, "context_canceled"},
+	} {
+		if got := errorClass(tc.err); got != tc.want {
+			t.Errorf("errorClass(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+// A host name that resolves to nothing is named in the message, which the
+// resolver's own text ("produced zero addresses") never does.
+func TestFormatError_UnresolvedDeviceNamesTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host nosuchhost.invalid.\n  Check the name, or connect by IP address."},
+		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable,
+			`connection error: desc = "transport: Error while dialing: dial tcp: lookup nosuchhost.invalid: no such host"`)},
+			"Could not resolve device host nosuchhost.invalid.\n  Check the name, or connect by IP address."},
+		{dialedError{"wendyos-x.local:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host wendyos-x.local.\n  The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out."},
+	} {
+		if got := formatError(tc.err).Error(); got != tc.want {
+			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
