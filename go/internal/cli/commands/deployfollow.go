@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -47,15 +48,23 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			}
 		}
 	}()
-	runner := &serviceHookRunner{conn: conn, opts: opts}
+	runner := &serviceHookRunner{conn: conn, opts: hookRunnerOptions(opts)}
+	var gate *readinessGate
 	defer func() {
 		cancel()
+		gate.wait()
 		runner.reap()
 		if logDone != nil {
 			<-logDone
 		}
 	}()
-	runner.startAsync(runCtx, appCfg)
+	if opts.waitReady {
+		// Following never started the app, so a failed --wait-ready fails the
+		// run without stopping it.
+		gate = startReadinessGate(runCtx, conn, appCfg, opts, false, func() { runner.startAsync(runCtx, appCfg) })
+	} else {
+		runner.startAsync(runCtx, appCfg)
+	}
 
 	// Following never started the app, so an interrupt leaves it running —
 	// unchanged Ctrl-C behavior; SIGTERM's error says so. Report
@@ -65,6 +74,17 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
 		return ErrUserCancelled
 	}
+	// notReady ends the run on a --wait-ready failure the gate saw first. The
+	// app was not stopped; a readiness timeout last saw it running (a crash
+	// already says what happened to it).
+	notReady := func(err error) error {
+		if errors.Is(err, errReadinessTimeout) {
+			cliLogln("Not stopping %s: this run did not start it.", containerDisplayName(appCfg))
+			noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
+		}
+		return err
+	}
+	gateDone := gate.finished()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -72,6 +92,17 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		select {
 		case <-ctx.Done():
 			return interrupted()
+		case <-gateDone:
+			// --wait-ready decided: a failure ends the run now, since nothing
+			// stops the app; a pass keeps following.
+			gateDone = nil
+			if ctx.Err() != nil {
+				return interrupted()
+			}
+			if err := gate.Err(); err != nil {
+				return notReady(err)
+			}
+			continue
 		case logErr = <-logDone:
 			logDone = nil
 			if ctx.Err() != nil {
@@ -89,6 +120,15 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			return fmt.Errorf("checking existing app state: %w", err)
 		}
 		if container == nil || container.GetRunningState() != agentpb.AppRunningState_RUNNING {
+			// The app stopped on its own. Let the gate finish first, so its
+			// next poll records whether the app became ready before exiting.
+			gate.wait()
+			if ctx.Err() != nil {
+				return interrupted() // Ctrl-C or SIGTERM during that wait
+			}
+			if err := gate.Err(); err != nil {
+				return err
+			}
 			if failure := appExitFailure(appCfg.AppID, container); failure != nil {
 				return failure
 			}

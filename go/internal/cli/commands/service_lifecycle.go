@@ -93,11 +93,13 @@ func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.
 		return
 	}
 
-	if err := waitForAttachedReadiness(ctx, r.conn, cfg, hookHost, r.opts.readinessTimeout); err != nil {
-		if ctx.Err() == nil {
-			warnReadiness(ctx, r.conn, cfg.AppID, err)
+	if !r.opts.hostReadinessConfirmed {
+		if err := waitForAttachedReadiness(ctx, r.conn, cfg, hookHost, r.opts.readinessTimeout); err != nil {
+			if ctx.Err() == nil {
+				warnReadiness(ctx, r.conn, cfg.AppID, err)
+			}
+			return
 		}
-		return
 	}
 	if ctx.Err() != nil {
 		return

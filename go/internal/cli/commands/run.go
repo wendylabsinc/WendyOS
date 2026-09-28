@@ -568,6 +568,9 @@ type runOptions struct {
 	// wait the run performs. Both mirror PR #1882's flags; see run_wait_ready.go.
 	waitReady        bool
 	readinessTimeout time.Duration
+	// hostReadinessConfirmed tells a hook runner that --wait-ready's gate has
+	// already confirmed readiness, so it must not probe again (hookRunnerOptions).
+	hostReadinessConfirmed bool
 }
 
 // runResolveOptions builds the resolveTarget options shared by every `wendy run`
@@ -2678,9 +2681,11 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 	cliLogln("Application %s started.", containerDisplayName(appCfg))
 
 	// Announce + post-start hook, gated on readiness; the hook is tied to runCtx
-	// so Ctrl+C kills it.
-	runner := &serviceHookRunner{conn: conn, opts: opts}
-	defer func() { runCancel(); runner.reap() }()
+	// so Ctrl+C kills it. With --wait-ready the gate runs the readiness check
+	// and only a pass starts the runner.
+	runner := &serviceHookRunner{conn: conn, opts: hookRunnerOptions(opts)}
+	var gate *readinessGate
+	defer func() { runCancel(); gate.wait(); runner.reap() }()
 	hookFired := false
 
 	gotFirstResponse := false
@@ -2726,7 +2731,11 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		gotFirstResponse = true
 		if resp.GetStarted() != nil && !hookFired {
 			hookFired = true
-			runner.startAsync(runCtx, appCfg)
+			if opts.waitReady {
+				gate = startReadinessGate(runCtx, conn, appCfg, opts, true, func() { runner.startAsync(runCtx, appCfg) })
+			} else {
+				runner.startAsync(runCtx, appCfg)
+			}
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
 			_, _ = os.Stdout.Write(out.GetData())
@@ -2736,9 +2745,17 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		}
 	}
 
+	if runErr == nil && ctx.Err() == nil {
+		// The output ended on its own: the app exited, or the gate stopped
+		// it. Let the gate finish before cancelling its context (runCtx), so
+		// its next poll records whether the app became ready before exiting.
+		gate.wait()
+	}
 	// Cancel runCtx to terminate the postStart hook if it's still running,
-	// then wait for it to exit so we don't leave orphan processes.
+	// then wait for it to exit so we don't leave orphan processes. The gate
+	// goes first: its onReady may start the runner.
 	runCancel()
+	gate.wait()
 	runner.reap()
 	if ctx.Err() != nil {
 		// Ctrl-C or SIGTERM: main's signal context cancelled ctx, which ended
@@ -2749,6 +2766,9 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		// errTerminated on SIGTERM.
 		stopInterruptedApp(ctx, conn, appCfg)
 		return ErrUserCancelled
+	}
+	if err := gate.Err(); err != nil {
+		return err
 	}
 	if runErr != nil {
 		return runErr
@@ -3261,8 +3281,9 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 	// hooks. They have completely different causes when one is slow.
 	rc := phaseTimer()
 	hookCtx, hookCancel := context.WithCancel(ctx)
-	runner := &serviceHookRunner{conn: conn, opts: opts}
-	defer func() { hookCancel(); runner.reap() }()
+	runner := &serviceHookRunner{conn: conn, opts: hookRunnerOptions(opts)}
+	var gate *readinessGate
+	defer func() { hookCancel(); gate.wait(); runner.reap() }()
 	hookFired := false
 	started := false
 	for {
@@ -3315,7 +3336,11 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 					opts.watchState.reapCommand(cmd)
 					return nil
 				}
-				runner.startAsync(hookCtx, appCfg)
+				if opts.waitReady {
+					gate = startReadinessGate(hookCtx, conn, appCfg, opts, true, func() { runner.startAsync(hookCtx, appCfg) })
+				} else {
+					runner.startAsync(hookCtx, appCfg)
+				}
 			}
 			continue
 		}
@@ -3328,6 +3353,19 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 	}
 	if !started {
 		return commandErrorf(errContainerStartFailed, "agent closed the stream before confirming the container started")
+	}
+	// The output ended on its own: the app exited, or the gate stopped it.
+	// Let the gate finish (hookCtx stays live until the deferred cancel) so
+	// its next poll records whether the app became ready before exiting.
+	gate.wait()
+	if ctx.Err() != nil {
+		// Ctrl-C or SIGTERM during that wait (the gate stood down): handled
+		// like the interrupt branch above.
+		stopInterruptedApp(ctx, conn, appCfg)
+		return ErrUserCancelled
+	}
+	if err := gate.Err(); err != nil {
+		return err
 	}
 	return attachedExitOutcome(ctx, conn, appCfg)
 }

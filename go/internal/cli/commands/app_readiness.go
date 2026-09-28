@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -268,4 +269,97 @@ func waitReadyAfterDetachedStart(ctx context.Context, conn *grpcclient.AgentConn
 	}
 	reportWaitReadyOutcome(appCfg, out, true)
 	return out.err
+}
+
+// readinessGate is --wait-ready for an attached run: the check runs beside the
+// session while logs stream. A failure is recorded and, with stopOnFailure
+// (the run started the app), the app stopped, which ends the agent's output
+// stream so the attached loop returns Err(). A run that only follows an app it
+// did not start leaves the app alone and watches finished() instead: a
+// host-side failure can be the network's (a firewall or VPN), and a stop
+// would keep the app down across reboots. A pass launches the host-side
+// postStart work via onReady, whose hook runner skips its own probe
+// (hostReadinessConfirmed). The nil gate (no --wait-ready) is valid: Err
+// returns nil, wait returns at once, and finished never fires.
+//
+// When the app's output ends on its own (it exited), callers wait for the gate
+// before reading Err and before cancelling its context: the gate's next poll
+// records whether the app became ready before it exited — a clean exit inside
+// the wait is a failure too. Interrupts and broken streams cancel it first; it
+// then stands down without an outcome or a stop.
+type readinessGate struct {
+	mu   sync.Mutex
+	err  error
+	done chan struct{}
+}
+
+func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, stopOnFailure bool, onReady func()) *readinessGate {
+	g := &readinessGate{done: make(chan struct{})}
+	go func() {
+		defer close(g.done)
+		out := waitForAppReady(ctx, conn, appCfg, opts)
+		if ctx.Err() != nil {
+			return // the session ended first; its own teardown decides the outcome
+		}
+		reportWaitReadyOutcome(appCfg, out, false)
+		if out.err != nil {
+			g.mu.Lock()
+			g.err = out.err
+			g.mu.Unlock()
+			if stopOnFailure {
+				stopUnreadyApp(conn, appCfg)
+			}
+			return
+		}
+		onReady()
+	}()
+	return g
+}
+
+// Err returns the gate's failure, or nil.
+func (g *readinessGate) Err() error {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.err
+}
+
+// wait blocks until the gate's goroutine has finished, so a caller can reap
+// the hook runner it may have started.
+func (g *readinessGate) wait() {
+	if g != nil {
+		<-g.done
+	}
+}
+
+// finished is closed once the gate's goroutine has finished; for the nil gate
+// it is nil, which never fires in a select.
+func (g *readinessGate) finished() <-chan struct{} {
+	if g == nil {
+		return nil
+	}
+	return g.done
+}
+
+// stopUnreadyApp stops an attached run's app that failed --wait-ready, which
+// also ends the run's output stream.
+func stopUnreadyApp(conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) {
+	cliLogln("Stopping %s: it did not become ready.", containerDisplayName(appCfg))
+	stopCtx, cancel := context.WithTimeout(context.Background(), attachedStopTimeout)
+	defer cancel()
+	if _, err := conn.ContainerService.StopContainer(stopCtx, &agentpb.StopContainerRequest{AppName: appCfg.ContainerName()}); err != nil {
+		cliNotice("Could not stop %s: %v", containerDisplayName(appCfg), err)
+	}
+}
+
+// hookRunnerOptions returns the options an attached run's serviceHookRunner
+// gets: with --wait-ready the gate has already probed readiness by the time
+// the runner starts, so the runner must not probe a second time.
+func hookRunnerOptions(opts runOptions) runOptions {
+	if opts.waitReady {
+		opts.hostReadinessConfirmed = true
+	}
+	return opts
 }
