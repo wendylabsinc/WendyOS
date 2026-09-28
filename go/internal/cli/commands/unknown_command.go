@@ -53,15 +53,22 @@ func UnknownSubcommandError(args []string) error {
 		return nil
 	}
 
-	msg := fmt.Sprintf("unknown command %q for %q", positional[0], target.CommandPath())
+	// The message keeps cobra's own layout for its root-level error; JSON mode
+	// reports the suggestions and the help pointer as next steps.
+	headline := fmt.Sprintf("unknown command %q for %q", positional[0], target.CommandPath())
+	msg := headline
+	var steps []string
 	if suggestions := target.SuggestionsFor(positional[0]); len(suggestions) > 0 {
 		msg += "\n\nDid you mean this?\n"
 		for _, s := range suggestions {
 			msg += fmt.Sprintf("\t%s\n", s)
+			steps = append(steps, fmt.Sprintf("Did you mean '%s %s'?", target.CommandPath(), s))
 		}
 	}
-	msg += fmt.Sprintf("\nRun '%s --help' to see the available commands.", target.CommandPath())
-	return markUsage(errors.New(msg))
+	help := fmt.Sprintf("Run '%s --help' to see the available commands.", target.CommandPath())
+	msg += "\n" + help
+	steps = append(steps, help)
+	return markUsage(withNextStepsText(errors.New(headline), msg, steps...))
 }
 
 // Inspect only the known global-option prefix. After a command or --, values

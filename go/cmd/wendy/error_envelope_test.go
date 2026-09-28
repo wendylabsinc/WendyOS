@@ -150,3 +150,35 @@ func TestReportFailure_MultiLineErrorsStayOneLine(t *testing.T) {
 		t.Errorf("envelope = %+v", got)
 	}
 }
+
+// inlineAdviceError stands in for errors whose advice is part of the
+// message rather than an indented line, such as the provisioned-agent
+// "Unauthorized. Run 'wendy auth login' ..." error.
+type inlineAdviceError struct{ steps []string }
+
+func (e inlineAdviceError) Error() string {
+	return "Unauthorized. " + e.steps[0] + "\nLast mTLS error: tls: expired certificate\n" + e.steps[1]
+}
+func (e inlineAdviceError) NextSteps() []string { return e.steps }
+
+// Advice that sits in the message must reach next_steps, and leave the
+// message, whatever its layout.
+func TestReportFailure_AdviceInTheMessageBecomesNextSteps(t *testing.T) {
+	var out strings.Builder
+	reportFailure(&out, commands.UnknownSubcommandError([]string{"device", "inf"}), nil, []string{"--json", "device", "inf"})
+	got := decodeEnvelope(t, out.String())
+	if got.Message != `unknown command "inf" for "wendy device"` ||
+		!reflect.DeepEqual(got.NextSteps, []string{"Did you mean 'wendy device info'?", "Run 'wendy device --help' to see the available commands."}) {
+		t.Errorf("unknown subcommand envelope = %+v", got)
+	}
+
+	out.Reset()
+	login := "Run 'wendy auth login' with an account that can access this provisioned wendy-agent."
+	refresh := "Your stored certificates may be outdated. Run 'wendy auth refresh-certs' to re-issue them."
+	reportFailure(&out, fmt.Errorf("connecting: %w", inlineAdviceError{[]string{login, refresh}}), nil, []string{"--json"})
+	got = decodeEnvelope(t, out.String())
+	if got.Message != "connecting: Unauthorized.\nLast mTLS error: tls: expired certificate" ||
+		!reflect.DeepEqual(got.NextSteps, []string{login, refresh}) {
+		t.Errorf("unauthorized envelope = %+v", got)
+	}
+}

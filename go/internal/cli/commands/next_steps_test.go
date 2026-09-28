@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +47,45 @@ func TestNextStepsFollowsJoinedErrors(t *testing.T) {
 	)
 	if got, want := NextSteps(joined), []string{"one", "two"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("NextSteps = %q, want %q", got, want)
+	}
+}
+
+// Errors whose advice sits in their message must also expose it as steps,
+// without changing the text a person sees, and StripNextSteps must recover
+// the message without the steps for JSON mode.
+func TestErrorsWithAdviceExposeTheirSteps(t *testing.T) {
+	unknown := UnknownSubcommandError([]string{"device", "inf"})
+	wantText := "unknown command \"inf\" for \"wendy device\"\n\nDid you mean this?\n\tinfo\n\nRun 'wendy device --help' to see the available commands."
+	if unknown.Error() != wantText {
+		t.Errorf("unknown subcommand text = %q, want the long-standing %q", unknown.Error(), wantText)
+	}
+	if got, want := NextSteps(unknown), []string{"Did you mean 'wendy device info'?", "Run 'wendy device --help' to see the available commands."}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unknown subcommand steps = %q, want %q", got, want)
+	}
+	if got, want := StripNextSteps(unknown.Error(), unknown), `unknown command "inf" for "wendy device"`; got != want {
+		t.Errorf("StripNextSteps = %q, want %q", got, want)
+	}
+
+	tlsErr := newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate"))
+	if got, want := NextSteps(fmt.Errorf("connecting: %w", tlsErr)), []string{
+		"Check the device clock: ssh wendy@<host> 'timedatectl status'",
+		"For full TLS details rerun with WENDY_TLS_DEBUG=1",
+	}; !reflect.DeepEqual(got, want) {
+		t.Errorf("TLS rejection steps = %q, want %q", got, want)
+	}
+	if !strings.HasPrefix(tlsErr.Error(), "TLS handshake rejected by device (possible clock skew or cert mismatch).\n  Check the device clock") {
+		t.Errorf("TLS rejection text changed: %q", tlsErr.Error())
+	}
+
+	unauthorized := newProvisionedAgentUnauthorizedError(nil)
+	if unauthorized.Error() != provisionedAgentUnauthorizedMessage || !errors.Is(unauthorized, errProvisionedAgentUnauthorized) {
+		t.Errorf("unauthorized = %q, want the sentinel's text and identity", unauthorized.Error())
+	}
+	if got, want := NextSteps(unauthorized), []string{"Run 'wendy auth login' with an account that can access this provisioned wendy-agent."}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unauthorized steps = %q, want %q", got, want)
+	}
+	stale := newProvisionedAgentUnauthorizedError(errors.New("tls: expired certificate"))
+	if got := NextSteps(stale); len(got) != 2 || !strings.Contains(got[1], "wendy auth refresh-certs") {
+		t.Errorf("stale-certificate unauthorized steps = %q, want login then refresh-certs", got)
 	}
 }

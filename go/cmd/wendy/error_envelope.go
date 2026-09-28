@@ -90,10 +90,24 @@ func plainErrorReport(err error) (string, []string) {
 		text, steps = f.text, f.steps
 	}
 	steps = append(steps, commands.NextSteps(err)...)
+	text = commands.StripNextSteps(text, err)
 	for _, step := range steps {
-		text = strings.Replace(text, "\n  "+step, "", 1)
+		text = withoutStep(text, step)
 	}
 	return strings.TrimSpace(ansi.Strip(text)), cleanSteps(steps)
+}
+
+// withoutStep removes the first occurrence of step from text, together with
+// what separates it from the text before it: the standard indented line
+// ("\n  step"), a plain line ("\nstep"), or a sentence in the same line
+// (" step"), tried in that order.
+func withoutStep(text, step string) string {
+	for _, sep := range []string{"\n  ", "\n", " "} {
+		if strings.Contains(text, sep+step) {
+			return strings.Replace(text, sep+step, "", 1)
+		}
+	}
+	return text
 }
 
 // cleanSteps strips styling, drops blank and repeated steps, and never

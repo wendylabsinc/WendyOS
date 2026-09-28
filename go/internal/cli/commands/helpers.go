@@ -89,7 +89,9 @@ func lanAddressProbeBudget(numCerts int) time.Duration {
 
 const provisionedAgentMetadataDiscoveryTimeout = 500 * time.Millisecond
 
-const provisionedAgentUnauthorizedMessage = "Unauthorized. Run 'wendy auth login' with an account that can access this provisioned wendy-agent."
+const provisionedAgentUnauthorizedStep = "Run 'wendy auth login' with an account that can access this provisioned wendy-agent."
+
+const provisionedAgentUnauthorizedMessage = "Unauthorized. " + provisionedAgentUnauthorizedStep
 
 var errProvisionedAgentUnauthorized = errors.New(provisionedAgentUnauthorizedMessage)
 
@@ -117,7 +119,15 @@ func (e tlsHandshakeRejectedError) Unwrap() error {
 }
 
 func (e tlsHandshakeRejectedError) Error() string {
-	return "TLS handshake rejected by device (possible clock skew or cert mismatch).\n  Check the device clock: ssh wendy@<host> 'timedatectl status'\n  For full TLS details rerun with WENDY_TLS_DEBUG=1"
+	return "TLS handshake rejected by device (possible clock skew or cert mismatch).\n  " + strings.Join(e.NextSteps(), "\n  ")
+}
+
+// NextSteps exposes the recovery steps the message ends with to JSON mode.
+func (e tlsHandshakeRejectedError) NextSteps() []string {
+	return []string{
+		"Check the device clock: ssh wendy@<host> 'timedatectl status'",
+		"For full TLS details rerun with WENDY_TLS_DEBUG=1",
+	}
 }
 
 // orgMismatchDeviceError reports that the device's server certificate belongs
@@ -276,21 +286,45 @@ type provisionedAgentUnauthorizedError struct {
 	cause error
 }
 
+// newProvisionedAgentUnauthorizedError reports a provisioned agent that did
+// not accept the CLI's credentials. It matches errProvisionedAgentUnauthorized
+// with errors.Is; without a cause its message is exactly that sentinel's.
 func newProvisionedAgentUnauthorizedError(cause error) error {
-	if cause == nil {
-		return errProvisionedAgentUnauthorized
-	}
 	return provisionedAgentUnauthorizedError{cause: cause}
 }
 
 func (e provisionedAgentUnauthorizedError) Error() string {
+	if e.cause == nil {
+		return provisionedAgentUnauthorizedMessage
+	}
 	msg := fmt.Sprintf("%s\nLast mTLS error: %v", provisionedAgentUnauthorizedMessage, e.cause)
-	if isCertRefreshableError(e.cause) {
-		msg += "\nYour stored certificates may be outdated. Run 'wendy auth refresh-certs' to re-issue them."
-	} else if isReachabilityTimeoutError(e.cause) {
-		msg += "\nThe device is enrolled and only serves mTLS on the secure port. Your wendy CLI may be too old or its certificates stale — upgrade the CLI and run 'wendy auth refresh-certs'."
+	if advice := e.causeAdvice(); advice != "" {
+		msg += "\n" + advice
 	}
 	return msg
+}
+
+// NextSteps exposes the advice in the message to JSON mode: sign in, and
+// for a stale or too-old credential what to do about it.
+func (e provisionedAgentUnauthorizedError) NextSteps() []string {
+	steps := []string{provisionedAgentUnauthorizedStep}
+	if advice := e.causeAdvice(); advice != "" {
+		steps = append(steps, advice)
+	}
+	return steps
+}
+
+// causeAdvice is the extra advice the mTLS failure behind e calls for.
+func (e provisionedAgentUnauthorizedError) causeAdvice() string {
+	switch {
+	case e.cause == nil:
+		return ""
+	case isCertRefreshableError(e.cause):
+		return "Your stored certificates may be outdated. Run 'wendy auth refresh-certs' to re-issue them."
+	case isReachabilityTimeoutError(e.cause):
+		return "The device is enrolled and only serves mTLS on the secure port. Your wendy CLI may be too old or its certificates stale — upgrade the CLI and run 'wendy auth refresh-certs'."
+	}
+	return ""
 }
 
 // agentNotListeningError reports that the mTLS port refused the TCP connection:
