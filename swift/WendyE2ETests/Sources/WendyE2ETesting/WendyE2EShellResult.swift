@@ -52,7 +52,9 @@ public struct WendyE2EShellResult: Sendable {
     }
 
     /// The transformation behind `readableStderr`, for any captured stderr.
-    /// Mirrors `unwrap_error_envelopes` in evals/agent-experience/retry_guard.py.
+    /// Like `unwrap_error_envelopes` in evals/agent-experience/retry_guard.py,
+    /// which keeps only the message, except that the next steps are kept too,
+    /// laid out as the CLI's text mode shows them.
     public static func readableErrorText(_ stderr: String) -> String {
         Self.normalizeLineEndings(stderr)
             .split(separator: "\n", omittingEmptySubsequences: false)
