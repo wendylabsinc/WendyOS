@@ -46,6 +46,11 @@ func reportFailure(stderr io.Writer, err error, executed *cobra.Command, args []
 		// through so the failure is still reported, as text.
 	}
 	fmt.Fprintln(stderr, renderError(err))
+	var internal *internalError
+	if errors.As(err, &internal) {
+		// What Go would have printed for the panic, for the bug report.
+		fmt.Fprintf(stderr, "\n%s", internal.stack)
+	}
 	return outcome.exit
 }
 

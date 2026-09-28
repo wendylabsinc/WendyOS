@@ -58,6 +58,7 @@ Earlier stderr lines can hold progress output and notices, so read the last line
 | 7 | The app was deployed but did not start or stay up | `container_start_failed` |
 | 8 | The app started but did not become ready in time | `readiness_timeout` |
 | 10 | A trust decision only a person can make: the device's identity or organization changed | `device_identity_mismatch`, `device_org_mismatch` |
+| 70 | An internal error: a bug in `wendy` itself. Outside JSON mode the stack trace follows the message; include it when you report the bug | `internal_error` |
 
 `retryable` is `true` for `device_unreachable`, `device_offline`, `transfer_failed`, `registry_unavailable`, `readiness_timeout`, and the timeouts `grpc_deadline` and `network_timeout`.
 

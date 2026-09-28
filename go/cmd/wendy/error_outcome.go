@@ -19,6 +19,7 @@ const (
 	exitAppFailed   = 7   // the app was deployed but did not start or stay up
 	exitNotReady    = 8   // the app started but never became ready
 	exitNeedsHuman  = 10  // a trust decision only a person can make
+	exitInternal    = 70  // a bug in wendy: a recovered panic (EX_SOFTWARE)
 	exitTerminated  = 143 // stopped by SIGTERM (128 + 15)
 )
 
@@ -60,6 +61,8 @@ var errorOutcomes = map[string]errorOutcome{
 	"device_org_mismatch":      {exit: exitNeedsHuman},
 
 	"terminated": {exit: exitTerminated},
+
+	"internal_error": {exit: exitInternal},
 
 	// Transient failures without a status of their own.
 	"transfer_failed":      {exit: exitFailure, retryable: true},

@@ -43,6 +43,8 @@ var outcomeCases = []struct {
 
 	{"terminated", 143, false},
 
+	{"internal_error", 70, false},
+
 	{"transfer_failed", 1, true},
 	{"registry_unavailable", 1, true},
 	// A timed-out call or connection can succeed when run again.

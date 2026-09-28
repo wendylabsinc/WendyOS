@@ -77,19 +77,19 @@ func newOptimizeCmd() *cobra.Command {
 		Short:  "Analyze the project's build config for missed optimizations",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Failures are returned, not os.Exit'd, so the CLI reports them
+			// like any other: text or a JSON envelope, with the class's exit
+			// status (2 is reserved for usage errors such as these flags).
 			if agenticFlag && fixFlag {
-				fmt.Fprintln(os.Stderr, "error: --agentic and --fix cannot be combined; --agentic only emits an analysis bundle")
-				os.Exit(2)
-			}
-			cwd, err := os.Getwd()
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
-				os.Exit(2)
+				return usageErrorf("--agentic and --fix cannot be combined; --agentic only emits an analysis bundle")
 			}
 			threshold, err := optimize.ParseSeverity(severityFlag)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, err.Error())
-				os.Exit(2)
+				return markUsage(err)
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("finding the project directory: %w", err)
 			}
 			opts := optimizeOptions{Dir: cwd, Arch: archFlag, Fix: fixFlag, Agentic: agenticFlag}
 
@@ -101,8 +101,7 @@ func newOptimizeCmd() *cobra.Command {
 				cfg, raw := loadOptConfig(cwd)
 				targets, derr := optimize.DiscoverTargets(cwd, cfg, arch)
 				if derr != nil {
-					fmt.Fprintln(os.Stderr, derr.Error())
-					os.Exit(2)
+					return fmt.Errorf("analyzing the project: %w", derr)
 				}
 				findings := optimize.Analyze(targets, optimize.DefaultAnalyzers())
 				bundle := optimize.BuildBundle(cwd, raw, targets, findings)
@@ -125,8 +124,7 @@ func newOptimizeCmd() *cobra.Command {
 
 			rep, applied, rerr := runOptimize(opts)
 			if rerr != nil {
-				fmt.Fprintln(os.Stderr, rerr.Error())
-				os.Exit(2)
+				return fmt.Errorf("analyzing the project: %w", rerr)
 			}
 
 			if fixFlag {

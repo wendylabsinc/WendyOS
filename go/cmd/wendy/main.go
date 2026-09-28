@@ -50,11 +50,14 @@ func main() {
 
 	// Reject an unknown subcommand before cobra can quietly answer it with the
 	// parent group's help page and a zero exit code. See UnknownSubcommandError.
-	var executed *cobra.Command
-	err := commands.UnknownSubcommandError(os.Args[1:])
-	if err == nil {
-		executed, err = cmd.ExecuteContextC(ctx)
-	}
+	// A panic becomes an internal_error (exit 70) with an envelope in JSON
+	// mode, rather than Go's crash output and exit 2, the usage-error status.
+	executed, err := executeRecovering(func() (*cobra.Command, error) {
+		if err := commands.UnknownSubcommandError(os.Args[1:]); err != nil {
+			return nil, err
+		}
+		return cmd.ExecuteContextC(ctx)
+	})
 	trackCommand(executed, err, time.Since(start))
 	analytics.Close()
 
@@ -202,6 +205,10 @@ func milestoneFor(commandPath string, success bool) string {
 func errorClass(err error) string {
 	if err == nil {
 		return ""
+	}
+	var internal *internalError
+	if errors.As(err, &internal) {
+		return "internal_error"
 	}
 	if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) ||
 		errors.Is(err, swifttoolchain.ErrUserCancelled) || errors.Is(err, tui.ErrCancelled) {
