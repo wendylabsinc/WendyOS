@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	// An accepted CoC still has the controller's eight-second supervision
+	// An accepted CoC still has the controller's four-second supervision
 	// timeout while it waits. Close and retry rather than queueing a handshake
 	// behind a second slow peer for most of that interval.
 	meshTLSAdmissionWait = 4 * time.Second

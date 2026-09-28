@@ -35,7 +35,7 @@ const (
 	// A multi-peer adapter can miss several connection events while it scans,
 	// advertises, and services another CoC. The former 2 s timeout caused
 	// authenticated Wendy links to drop with HCI reason 0x08 under contention.
-	meshTimeoutUnits        = 800 // 8 s supervision timeout
+	meshTimeoutUnits        = 400 // 4 s supervision timeout
 	meshMinEventLengthUnits = 0
 	// Cap steady connection events well under the interval: two bulk links
 	// at 10 ms events plus ~50%-duty scanning exceed a 45 ms interval and

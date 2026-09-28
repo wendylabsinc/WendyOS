@@ -43,7 +43,7 @@ func TestAdapterAndACLIdentity(t *testing.T) {
 
 func TestLEConnectionUpdateEncoding(t *testing.T) {
 	got := leConnectionUpdateCommand(0x0800, meshIntervalUnits)
-	want := []byte{0x01, 0x13, 0x20, 14, 0x00, 0x08, 12, 0, 12, 0, 0, 0, 0x20, 0x03, 0, 0, 8, 0}
+	want := []byte{0x01, 0x13, 0x20, 14, 0x00, 0x08, 12, 0, 12, 0, 0, 0, 0x90, 0x01, 0, 0, 8, 0}
 	if string(got) != string(want) {
 		t.Fatalf("command=%x, want %x", got, want)
 	}
@@ -113,7 +113,7 @@ func TestLEUpdateRequiresMatchingHandleAndCompletion(t *testing.T) {
 		statusPacket(0), // status for other ACL's command
 		statusPacket(0),
 		completePacket(0x0801, 12, 0, 800, 0), // unrelated ACL
-		completePacket(0x0800, 12, 0, 800, 0),
+		completePacket(0x0800, 12, 0, 400, 0),
 	))
 	if err != nil || interval != 15*time.Millisecond {
 		t.Fatalf("interval=%s err=%v, want 15ms", interval, err)
@@ -143,7 +143,7 @@ func TestLEUpdateRequiresMatchingHandleAndCompletion(t *testing.T) {
 	interval, err = waitForLEUpdate(context.Background(), 0x0800, meshIntervalUnits, eventReader(
 		leConnectionUpdateCommand(0x0801, meshIntervalUnits), leConnectionUpdateCommand(0x0800, meshIntervalUnits),
 		statusPacket(0x0c), // another connection's rejected request
-		statusPacket(0), completePacket(0x0800, 12, 0, 800, 0),
+		statusPacket(0), completePacket(0x0800, 12, 0, 400, 0),
 	))
 	if err != nil || interval != 15*time.Millisecond {
 		t.Fatalf("other ACL's failed status affected this link: interval=%s err=%v", interval, err)
@@ -155,14 +155,14 @@ func TestLEUpdateDoesNotAcceptOldEventLengthCommand(t *testing.T) {
 	binary.LittleEndian.PutUint16(old[14:16], 1)
 	binary.LittleEndian.PutUint16(old[16:18], 1)
 	_, err := waitForLEUpdate(context.Background(), 0x0800, meshIntervalUnits, eventReader(
-		old, statusPacket(0), completePacket(0x0800, 12, 0, 800, 0),
+		old, statusPacket(0), completePacket(0x0800, 12, 0, 400, 0),
 	))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("old 0.625 ms event-length command accepted: %v", err)
 	}
 	interval, err := waitForLEUpdate(context.Background(), 0x0800, meshIntervalUnits, eventReader(
 		old, statusPacket(0), leConnectionUpdateCommand(0x0800, meshIntervalUnits), statusPacket(0),
-		completePacket(0x0800, 12, 0, 800, 0),
+		completePacket(0x0800, 12, 0, 400, 0),
 	))
 	if err != nil || interval != 15*time.Millisecond {
 		t.Fatalf("5 ms event-length command not matched: interval=%s err=%v", interval, err)
@@ -181,7 +181,7 @@ func TestSteadyIntervalRelaxUses45ms(t *testing.T) {
 	interval, err := waitForLEUpdate(context.Background(), 0x0800, meshSteadyIntervalUnits, eventReader(
 		leConnectionUpdateCommand(0x0800, meshSteadyIntervalUnits),
 		statusPacket(0),
-		completePacket(0x0800, 36, 0, 800, 0),
+		completePacket(0x0800, 36, 0, 400, 0),
 	))
 	if err != nil || interval != 45*time.Millisecond {
 		t.Fatalf("steady update interval=%s err=%v, want 45ms", interval, err)
@@ -191,7 +191,7 @@ func TestSteadyIntervalRelaxUses45ms(t *testing.T) {
 	if _, err := waitForLEUpdate(context.Background(), 0x0800, meshSteadyIntervalUnits, eventReader(
 		leConnectionUpdateCommand(0x0800, meshSteadyIntervalUnits),
 		statusPacket(0),
-		completePacket(0x0800, 12, 0, 800, 0),
+		completePacket(0x0800, 12, 0, 400, 0),
 	)); err == nil {
 		t.Fatal("15 ms completion accepted for steady request")
 	}

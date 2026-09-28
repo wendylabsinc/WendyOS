@@ -33,8 +33,8 @@ func TestInitialTuneClassifiesSubmissionBoundary(t *testing.T) {
 		{name: "command disallowed", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x0c)}},
 		{name: "submitted unsupported", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x01)}},
 		{name: "accepted timeout", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0)}},
-		{name: "completion rejected", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 12, 0, 800, 0x1f)}},
-		{name: "success", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 12, 0, 800, 0)}, success: true},
+		{name: "completion rejected", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 12, 0, meshTimeoutUnits, 0x1f)}},
+		{name: "success", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 12, 0, meshTimeoutUnits, 0)}, success: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sent, closed := 0, 0
@@ -85,7 +85,7 @@ func TestInitialTuneDoesNotReturnBeforeCompletionAndClosesIO(t *testing.T) {
 			if !ok || time.Until(deadline) > 4*time.Second {
 				t.Error("missing initial4s bound")
 			}
-			packets := eventReader(leConnectionUpdateCommand(0x0eff, meshIntervalUnits), statusPacket(0), completePacket(0x0eff, 12, 0, 800, 0))
+			packets := eventReader(leConnectionUpdateCommand(0x0eff, meshIntervalUnits), statusPacket(0), completePacket(0x0eff, 12, 0, meshTimeoutUnits, 0))
 			return submitMeshIntervalUpdate(ctx, 0x0eff, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) {
 				return &leUpdateIO{send: func(b []byte) (int, error) {
 					if binary.LittleEndian.Uint16(b[4:6]) != 0x0eff {
