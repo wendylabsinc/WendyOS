@@ -423,6 +423,8 @@ When `${WENDY_HOSTNAME}` is substituted and the device address is an IPv6 litera
 
 If the browser cannot be opened, a warning is printed and `wendy run` continues normally. `openURL` is fire-and-forget and does not affect the process tracked by `wendy run`.
 
+`openURL` opens a browser only when `wendy run` runs in an interactive terminal without `--json`. In CI, from a coding agent, or with piped output, it prints the URL instead.
+
 ### `cli`
 
 `cli` runs a free-form shell command on the developer's machine. It is dispatched through the platform shell (`sh -c` on Unix, `cmd.exe /S /C` on Windows). `wendy run` tracks this child process for waiting and cancellation; the returned handle is used to clean up when `wendy run` exits.

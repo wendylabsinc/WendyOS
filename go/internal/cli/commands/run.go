@@ -2786,6 +2786,17 @@ func expandHookEnv(s, hostname, appID, serviceName string) string {
 // Indirected through a var so tests can swap it out.
 var browserOpen = browseropen.Open
 
+// postStartBrowserAllowed reports whether a postStart openURL may launch a
+// browser. Only a person at an interactive terminal gets one: in JSON mode and
+// non-interactive runs (CI, coding agents, piped output) nobody is looking at
+// the tab and the host may have no browser, so the URL is printed instead.
+// Indirected so tests that swap browserOpen can opt in (see TestMain).
+var postStartBrowserAllowed = defaultPostStartBrowserAllowed
+
+func defaultPostStartBrowserAllowed() bool {
+	return !jsonOutput && isInteractiveTerminal()
+}
+
 // announceReachableURL prints an IP-based URL the developer can open to reach a
 // freshly started app. `wendy run` otherwise only surfaces the device's .local
 // hostname, which frequently fails to resolve in a browser (see issue #1301);
@@ -2991,7 +3002,9 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 		// openURL is a URL by definition, so an IPv6 hostname must be
 		// bracketed; the CLI hook below stays raw for shell contexts.
 		url := expandHookEnv(hook.OpenURL, urlSafeHost(hostname), appCfg.AppID, serviceName)
-		if err := browserOpen(url); err != nil {
+		if !postStartBrowserAllowed() {
+			cliLogln("Hook postStart: not opening a browser without an interactive terminal; open %s", tui.Path(url))
+		} else if err := browserOpen(url); err != nil {
 			cliLogln("Warning: postStart openURL failed: %v", err)
 		} else {
 			cliLogln("Hook postStart: opened %s", tui.Path(url))

@@ -902,3 +902,38 @@ func TestRunPostStartIfReady_ExplicitHookNotOverriddenByHTTPEntitlement(t *testi
 		t.Errorf("opened = %q, want the explicit hook URL unchanged", opened)
 	}
 }
+
+func TestDefaultPostStartBrowserAllowed(t *testing.T) {
+	previousInteractive, previousJSON := isInteractiveTerminalFn, jsonOutput
+	t.Cleanup(func() { isInteractiveTerminalFn, jsonOutput = previousInteractive, previousJSON })
+	for _, tc := range []struct {
+		interactive, json, want bool
+	}{
+		{interactive: true, json: false, want: true},
+		{interactive: true, json: true, want: false},
+		{interactive: false, json: false, want: false},
+		{interactive: false, json: true, want: false},
+	} {
+		isInteractiveTerminalFn = func() bool { return tc.interactive }
+		jsonOutput = tc.json
+		if got := defaultPostStartBrowserAllowed(); got != tc.want {
+			t.Errorf("interactive=%v json=%v: allowed = %v, want %v", tc.interactive, tc.json, got, tc.want)
+		}
+	}
+}
+
+func TestStartPostStartHook_NoBrowserWithoutInteractiveTerminal(t *testing.T) {
+	previousAllowed, previousOpen := postStartBrowserAllowed, browserOpen
+	t.Cleanup(func() { postStartBrowserAllowed, browserOpen = previousAllowed, previousOpen })
+	postStartBrowserAllowed = func() bool { return false }
+	opened := false
+	browserOpen = func(string) error { opened = true; return nil }
+	cfg := &appconfig.AppConfig{AppID: "app", Hooks: &appconfig.HooksConfig{PostStart: &appconfig.HookCommand{OpenURL: "http://${WENDY_HOSTNAME}:8080"}}}
+	out := captureStderr(t, func() { startPostStartHook(context.Background(), cfg, "192.168.1.20", "") })
+	if opened {
+		t.Fatal("opened a browser without an interactive terminal")
+	}
+	if !strings.Contains(out, "http://192.168.1.20:8080") {
+		t.Fatalf("the URL was not printed instead: %q", out)
+	}
+}
