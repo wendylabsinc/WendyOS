@@ -37,6 +37,23 @@ Runs your app on a Wendy-enabled device:
 | `--debounce <ms>` | Watch mode only: quiet period in milliseconds after the last change before redeploying (default `400`). |
 | `--verbose` | Watch mode only: always show build output. By default build output is hidden unless a build fails. |
 
+## Exit status
+
+An attached `wendy run` streams the app's logs until the app exits or you stop the run:
+
+| How the run ends | Exit status | The app afterwards |
+|------------------|-------------|--------------------|
+| The app exits with code 0 | 0 | Stopped |
+| The app crashes: non-zero exit, OOM kill, failed start, or crash loop | Non-zero. The error names the exit code and termination reason and points to `wendy device logs --app <app>`. | As its restart policy leaves it |
+| Ctrl-C (SIGINT) | 0 | Stopped |
+| SIGTERM (a CI timeout, `kill`, a process supervisor) | Non-zero: `wendy run was terminated; app <app> was stopped` | Stopped |
+
+The table describes single-container runs. Multi-service, Compose and native Mac runs stop their apps on Ctrl-C; on SIGTERM they exit non-zero but may leave their apps running.
+
+When nothing changed since the last deploy and the app is already running, `wendy run` only follows its logs. An interrupted run then leaves the app running, and the SIGTERM error says so.
+
+The crash check reads the exit that the device agent records when the app stops. If the restart policy has already restarted the app by then, the exit status is gone: `wendy run` prints a notice and exits 0. Agents that predate exit reporting always read as a clean stop.
+
 ## Reachable app URLs
 
 After the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:

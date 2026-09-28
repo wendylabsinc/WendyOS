@@ -57,17 +57,25 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	}()
 	runner.startAsync(runCtx, appCfg)
 
+	// Following never started the app, so an interrupt leaves it running —
+	// unchanged Ctrl-C behavior; SIGTERM's error says so. Report
+	// ErrUserCancelled so a SIGINT still exits 0; runWithInterruptChannel
+	// turns it into errTerminated on SIGTERM.
+	interrupted := func() error {
+		noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
+		return ErrUserCancelled
+	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		var logErr error
 		select {
 		case <-ctx.Done():
-			return nil
+			return interrupted()
 		case logErr = <-logDone:
 			logDone = nil
 			if ctx.Err() != nil {
-				return nil
+				return interrupted()
 			}
 		case <-ticker.C:
 		}
@@ -75,7 +83,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		container, err := lookupAppContainer(probeCtx, conn, appCfg.AppID)
 		probeCancel()
 		if ctx.Err() != nil {
-			return nil
+			return interrupted()
 		}
 		if err != nil {
 			return fmt.Errorf("checking existing app state: %w", err)

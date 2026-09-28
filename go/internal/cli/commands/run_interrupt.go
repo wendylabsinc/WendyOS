@@ -3,7 +3,18 @@ package commands
 import (
 	"context"
 	"sync"
+	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
+
+// attachedStopTimeout bounds the StopContainer call an interrupted attached run
+// makes. The agent gives the app 10 s to exit on SIGTERM before killing it, so
+// 30 s leaves room for that and a slow link — the same bound multi-service runs
+// use for their Ctrl-C stop (startAndStreamServices).
+const attachedStopTimeout = 30 * time.Second
 
 // interruptedAppOutcome is what an attached or waiting run did with its app
 // when a signal ended the run.
@@ -59,4 +70,26 @@ func (n *runInterruptNotes) terminatedError() error {
 	default:
 		return commandErrorf(errTerminated, "wendy run was terminated")
 	}
+}
+
+// stopInterruptedApp stops appCfg's container after Ctrl-C or SIGTERM ended an
+// attached run, so an interrupted attached run never leaves its app running.
+// ctx is already cancelled, so the RPC runs on a fresh context; ctx only
+// carries the outcome back to runWithInterruptChannel.
+func stopInterruptedApp(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) {
+	name := appCfg.ContainerName()
+	if conn == nil || conn.ContainerService == nil {
+		noteInterruptedApp(ctx, name, interruptedAppLeftRunning, nil)
+		return
+	}
+	cliLogln("\nStopping container...")
+	stopCtx, cancel := context.WithTimeout(context.Background(), attachedStopTimeout)
+	defer cancel()
+	if _, err := conn.ContainerService.StopContainer(stopCtx, &agentpb.StopContainerRequest{AppName: name}); err != nil {
+		cliNotice("Could not stop %s: %v", containerDisplayName(appCfg), err)
+		noteInterruptedApp(ctx, name, interruptedAppStopFailed, err)
+		return
+	}
+	noteInterruptedApp(ctx, name, interruptedAppStopped, nil)
+	cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
 }

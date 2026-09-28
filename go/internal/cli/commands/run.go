@@ -2613,23 +2613,6 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 
 	cliLogln("Application %s started.", containerDisplayName(appCfg))
 
-	// Set up Ctrl+C handler first so readiness polling is cancellable.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	defer signal.Stop(sigCh)
-	go func() {
-		select {
-		case <-sigCh:
-		case <-runCtx.Done():
-			return
-		}
-		cliLogln("\nStopping container...")
-		_, _ = conn.ContainerService.StopContainer(context.Background(), &agentpb.StopContainerRequest{
-			AppName: appCfg.ContainerName(),
-		})
-		runCancel()
-	}()
-
 	// Announce + post-start hook, gated on readiness; the hook is tied to runCtx
 	// so Ctrl+C kills it.
 	runner := &serviceHookRunner{conn: conn, opts: opts}
@@ -2693,6 +2676,16 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 	// then wait for it to exit so we don't leave orphan processes.
 	runCancel()
 	runner.reap()
+	if ctx.Err() != nil {
+		// Ctrl-C or SIGTERM: main's signal context cancelled ctx, which ended
+		// the stream. Stop the app here rather than from a signal goroutine:
+		// that goroutine raced runCtx.Done() (so Ctrl-C sometimes left the app
+		// running) and never saw SIGTERM at all. Report ErrUserCancelled so a
+		// SIGINT still exits 0; runWithInterruptChannel turns it into
+		// errTerminated on SIGTERM.
+		stopInterruptedApp(ctx, conn, appCfg)
+		return ErrUserCancelled
+	}
 	if runErr != nil {
 		return runErr
 	}
@@ -3099,6 +3092,14 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 			break
 		}
 		if err != nil {
+			if started && !opts.isWatch() && ctx.Err() != nil {
+				// Ctrl-C or SIGTERM during an attached run: stop the app like
+				// the registry path does. It used to keep running on the device.
+				// Report ErrUserCancelled so a SIGINT still exits 0;
+				// runWithInterruptChannel turns it into errTerminated on SIGTERM.
+				stopInterruptedApp(ctx, conn, appCfg)
+				return ErrUserCancelled
+			}
 			return fmt.Errorf("receiving container output: %w", err)
 		}
 		if resp.GetStarted() != nil {
