@@ -745,3 +745,39 @@ func TestFormatError_FlattenedGRPCErrorStillRewrites(t *testing.T) {
 		t.Errorf("formatError() = %q, want %q", got, want)
 	}
 }
+
+// dialedError stands in for commands' device dial error: the cause's message,
+// plus the address the dial was aimed at.
+type dialedError struct {
+	addr  string
+	cause error
+}
+
+func (e dialedError) Error() string         { return e.cause.Error() }
+func (e dialedError) Unwrap() error         { return e.cause }
+func (e dialedError) DeviceAddress() string { return e.addr }
+
+func TestFormatError_ConnectErrorsNameTheDevice(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{dialedError{"127.0.0.1:1", refusedDial},
+			"Could not connect to device at 127.0.0.1:1. Is it powered on and connected to the network?"},
+		{refusedDial,
+			"Could not connect to device. Is it powered on and connected to the network?"},
+		{dialedError{"10.0.0.9:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")},
+			"Connection to device at 10.0.0.9:50051 timed out."},
+		{status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			"Connection timed out."},
+		// An empty description used to render as an empty message.
+		{dialedError{"10.0.0.9:50051", status.Error(codes.Unavailable, "")},
+			"Device at 10.0.0.9:50051 is unavailable."},
+		{status.Error(codes.Unavailable, ""),
+			"Device is unavailable."},
+	} {
+		if got := formatError(tc.err).Error(); got != tc.want {
+			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}

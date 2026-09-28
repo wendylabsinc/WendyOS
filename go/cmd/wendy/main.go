@@ -389,6 +389,12 @@ func formatErrorParts(err error) formattedError {
 			strings.Contains(msg, "connection reset") ||
 			strings.Contains(msg, "broken pipe"))
 
+	// Name the device when the error records which address was dialled.
+	device := "device"
+	if addr := deviceAddress(err); addr != "" {
+		device = "device at " + addr
+	}
+
 	switch {
 	case strings.Contains(msg, "code = Unavailable") && isCertRejection && !isPKICoreCall && !isCloudCall:
 		return rewrite("TLS handshake rejected by device (possible clock skew or cert mismatch).",
@@ -404,7 +410,7 @@ func formatErrorParts(err error) formattedError {
 		if isCloudCall {
 			return rewrite("Could not connect to Wendy Cloud. Please try again later.")
 		}
-		return rewrite("Could not connect to device. Is it powered on and connected to the network?")
+		return rewrite("Could not connect to " + device + ". Is it powered on and connected to the network?")
 	case strings.Contains(msg, "code = Unavailable"):
 		// Cloud and PKI services can return actionable dependency failures.
 		// Keep that explanation instead of replacing it with a generic outage.
@@ -423,11 +429,14 @@ func formatErrorParts(err error) formattedError {
 		// detail (e.g. "WiFi management is not available (nmcli not found)").
 		// Only fall back to the generic message for transport-level errors
 		// that lack a useful desc.
-		if idx := strings.Index(grpcText, "desc = "); idx >= 0 {
+		if idx := strings.Index(grpcText, "desc = "); idx >= 0 && strings.TrimSpace(grpcText[idx+len("desc = "):]) != "" {
 			return rewrite(grpcText[idx+len("desc = "):])
 		}
-		return rewrite("Device is unavailable.")
+		return rewrite(capitalize(device) + " is unavailable.")
 	case strings.Contains(msg, "code = DeadlineExceeded"):
+		if device != "device" {
+			return rewrite("Connection to " + device + " timed out.")
+		}
 		return rewrite("Connection timed out.")
 	case strings.Contains(msg, "code = Unimplemented"):
 		// Preserve intentional, contextual Unimplemented descriptions from the
@@ -465,6 +474,24 @@ func splitGRPCMessage(err error, msg string) (prefix, grpcText, suffix string) {
 	}
 	i := strings.Index(msg, "rpc error: code = ")
 	return msg[:i], msg[i:], ""
+}
+
+// deviceAddress returns the address a failed device connection was aimed at
+// when the error records one (commands wraps device dials so it does).
+func deviceAddress(err error) string {
+	var dial interface{ DeviceAddress() string }
+	if errors.As(err, &dial) {
+		return dial.DeviceAddress()
+	}
+	return ""
+}
+
+// capitalize upper-cases the first byte of an ASCII phrase.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func grpcDesc(msg string) (string, bool) {

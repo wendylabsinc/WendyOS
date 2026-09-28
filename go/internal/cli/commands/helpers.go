@@ -1119,7 +1119,7 @@ func connectResolvedAgentWithProvisionedHint(ctx context.Context, hostname, addr
 		})
 		if err != nil {
 			// The unreachable-default paths report the hostname themselves.
-			return nil, err
+			return nil, newDeviceDialError(addr, err)
 		}
 		// The spinner above clears once it succeeds, so without this the choice
 		// of device leaves no trace.
@@ -1127,10 +1127,13 @@ func connectResolvedAgentWithProvisionedHint(ctx context.Context, hostname, addr
 		return conn, nil
 	}
 	conn, err := connectAgentAtAddressWithProvisionedHint(ctx, addr, provisionedMTLS)
-	if err == nil && isDefault {
+	if err != nil {
+		return nil, newDeviceDialError(addr, err)
+	}
+	if isDefault {
 		noteImplicitDevice(hostname, implicitDefaultDevice)
 	}
-	return conn, err
+	return conn, nil
 }
 
 // connectToAgent establishes a gRPC connection to the target device.
