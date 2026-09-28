@@ -40,6 +40,7 @@ const (
 	waitReadyStatusRunning  = "running"   // stayed up for the window (readiness "not_checked")
 	waitReadyStatusCrashed  = "crashed"   // exited (even with code 0) or restarted while waiting
 	waitReadyStatusNotReady = "not_ready" // probe deadline passed, or state unreadable
+	waitReadyStatusFailed   = "failed"    // the run failed before the wait (readiness "not_checked")
 
 	readinessPassed     = "passed"
 	readinessNotChecked = "not_checked"
@@ -49,10 +50,12 @@ const (
 // waitReadyOutcome is --wait-ready's result. Detached runs print it as their
 // single JSON object in JSON mode; err is what the run returns (nil for ready
 // and running, errAppCrashed or errReadinessTimeout otherwise, the context's
-// error when interrupted — Status is then empty).
+// error when interrupted — Status is then empty). A run that fails before the
+// wait prints a "failed" one instead (runReportingWaitReadyFailure), which
+// omits the app and device when the run had not learned them yet.
 type waitReadyOutcome struct {
 	Status            string `json:"status"`
-	App               string `json:"app"`
+	App               string `json:"app,omitempty"`
 	Device            string `json:"device,omitempty"`
 	Readiness         string `json:"readiness"`
 	ExitCode          *int32 `json:"exit_code,omitempty"`
@@ -228,20 +231,28 @@ func waitForAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appC
 
 	out := awaitAppReady(ctx, checks)
 	out.App = appCfg.AppID
-	if !agentSocket {
-		out.Device = conn.Host
-	}
+	out.Device = waitReadyDevice(conn)
 	if out.Status == waitReadyStatusReady {
 		out.URL = url
 	}
 	return out
 }
 
+// waitReadyDevice is the device a --wait-ready outcome names: the agent
+// connection's host, or "" on the device itself, where the agent socket
+// (Host "unix:<socket path>", see waitForAppReady) names no device.
+func waitReadyDevice(conn *grpcclient.AgentConnection) string {
+	if strings.HasPrefix(conn.Host, "unix:") {
+		return ""
+	}
+	return conn.Host
+}
+
 // reportWaitReadyOutcome prints a successful outcome's status line on stderr
 // (failures are the run's returned error). A detached run also prints the app
 // URL and, in JSON mode, the outcome as exactly one JSON object on stdout —
-// failures included.
-func reportWaitReadyOutcome(appCfg *appconfig.AppConfig, out waitReadyOutcome, detached bool) {
+// failures included — and records that in ctx (markWaitReadyOutcomePrinted).
+func reportWaitReadyOutcome(ctx context.Context, appCfg *appconfig.AppConfig, out waitReadyOutcome, detached bool) {
 	switch out.Status {
 	case waitReadyStatusReady:
 		cliSuccess("Application %s is ready.", containerDisplayName(appCfg))
@@ -253,6 +264,7 @@ func reportWaitReadyOutcome(appCfg *appconfig.AppConfig, out waitReadyOutcome, d
 	}
 	if detached && jsonOutput {
 		_ = json.NewEncoder(os.Stdout).Encode(out)
+		markWaitReadyOutcomePrinted(ctx)
 	}
 }
 
@@ -267,7 +279,7 @@ func waitReadyAfterDetachedStart(ctx context.Context, conn *grpcclient.AgentConn
 		noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
 		return out.err
 	}
-	reportWaitReadyOutcome(appCfg, out, true)
+	reportWaitReadyOutcome(ctx, appCfg, out, true)
 	return out.err
 }
 
@@ -301,7 +313,7 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 		if ctx.Err() != nil {
 			return // the session ended first; its own teardown decides the outcome
 		}
-		reportWaitReadyOutcome(appCfg, out, false)
+		reportWaitReadyOutcome(ctx, appCfg, out, false)
 		if out.err != nil {
 			g.mu.Lock()
 			g.err = out.err

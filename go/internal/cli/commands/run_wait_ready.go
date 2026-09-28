@@ -1,12 +1,17 @@
 package commands
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
@@ -119,4 +124,82 @@ func waitReadyJSONStdoutGuard(opts runOptions) func() {
 		return func() {}
 	}
 	return setBuildProgressOut(os.Stderr)
+}
+
+// waitReadyJSONRun follows a `--json --detach --wait-ready` run so it can keep
+// that run's promise of exactly one JSON object on stdout when it fails before
+// the wait prints an outcome: runCommand records the app and device as it
+// learns them, and reportWaitReadyOutcome records that it printed the object.
+// It travels in the run context, like runInterruptNotes.
+type waitReadyJSONRun struct {
+	mu      sync.Mutex
+	app     string
+	device  string
+	printed bool
+}
+
+type waitReadyJSONRunKey struct{}
+
+// waitReadyJSONRunFrom returns ctx's waitReadyJSONRun, or nil outside such a
+// run; every method is a no-op on nil.
+func waitReadyJSONRunFrom(ctx context.Context) *waitReadyJSONRun {
+	run, _ := ctx.Value(waitReadyJSONRunKey{}).(*waitReadyJSONRun)
+	return run
+}
+
+// noteWaitReadyApp records the app a --wait-ready JSON run deploys.
+func noteWaitReadyApp(ctx context.Context, app string) {
+	if run := waitReadyJSONRunFrom(ctx); run != nil {
+		run.mu.Lock()
+		defer run.mu.Unlock()
+		run.app = app
+	}
+}
+
+// noteWaitReadyDevice records the device a --wait-ready JSON run deploys to,
+// named as its outcome would name it (see waitReadyDevice).
+func noteWaitReadyDevice(ctx context.Context, conn *grpcclient.AgentConnection) {
+	if run := waitReadyJSONRunFrom(ctx); run != nil && conn != nil {
+		run.mu.Lock()
+		defer run.mu.Unlock()
+		run.device = waitReadyDevice(conn)
+	}
+}
+
+// markWaitReadyOutcomePrinted records that the run's JSON object is out.
+func markWaitReadyOutcomePrinted(ctx context.Context) {
+	if run := waitReadyJSONRunFrom(ctx); run != nil {
+		run.mu.Lock()
+		defer run.mu.Unlock()
+		run.printed = true
+	}
+}
+
+// runReportingWaitReadyFailure runs run and, for a `--json --detach
+// --wait-ready` run that failed without printing its outcome (config, device,
+// build, push, or start), prints a "failed" outcome as the run's one JSON
+// object on stdout. Ctrl-C (ErrUserCancelled, or ctx cancelled by main's
+// signal context) and SIGTERM (errTerminated) print nothing, like an
+// interrupted wait.
+func runReportingWaitReadyFailure(ctx context.Context, opts runOptions, run func(context.Context) error) error {
+	if !jsonOutput || !opts.detach || !opts.waitReady {
+		return run(ctx)
+	}
+	state := &waitReadyJSONRun{}
+	err := run(context.WithValue(ctx, waitReadyJSONRunKey{}, state))
+	if err == nil || ctx.Err() != nil || errors.Is(err, ErrUserCancelled) || errors.Is(err, errTerminated) {
+		return err
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.printed {
+		_ = json.NewEncoder(os.Stdout).Encode(waitReadyOutcome{
+			Status:    waitReadyStatusFailed,
+			App:       state.app,
+			Device:    state.device,
+			Readiness: readinessNotChecked,
+			Message:   err.Error(),
+		})
+	}
+	return err
 }

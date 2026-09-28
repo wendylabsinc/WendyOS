@@ -74,7 +74,7 @@ After the device confirms the container started, `wendy run` does one of two che
 
 The run fails with a non-zero exit when the app exits (even with exit code 0) or is restarted by its restart policy while being checked, or when the probe deadline passes.
 
-With `--detach` in JSON mode (`--json`, on by default when stdout is not a terminal), stdout carries exactly one JSON object once the device has confirmed the container started, for every outcome of the check, failures included:
+With `--detach` in JSON mode (`--json`, on by default when stdout is not a terminal), stdout carries exactly one JSON object for every outcome, failures included:
 
 ```json
 {"status":"ready","app":"my-app","device":"wendyos-hopeful-glider.local","readiness":"passed","url":"http://192.168.1.207:8080"}
@@ -87,10 +87,11 @@ With `--detach` in JSON mode (`--json`, on by default when stdout is not a termi
 | `running` | No probe could run from this machine; the app stayed up for 10 s (`readiness: "not_checked"`). | 0 |
 | `crashed` | The app exited (even with exit code 0), crash-looped, or was restarted while being checked. `exit_code` and `termination_reason` are included when the device recorded them. | Non-zero |
 | `not_ready` | The probe did not pass in time (`readiness: "failed"`). | Non-zero |
+| `failed` | The run failed before the check started: an invalid flag or `wendy.json`, device selection, build, push, or container start (`readiness: "not_checked"`). `message` carries the error. | Non-zero |
 
-`url` appears only for `ready`. `device` is omitted on the device itself (`WENDY_AGENT_SOCKET`).
+`url` appears only for `ready`. `device` is omitted on the device itself (`WENDY_AGENT_SOCKET`). A `failed` object omits `app` and `device` when the run failed before it knew them.
 
-A failure before the device confirms the start (build, push, or container start) prints nothing on stdout: the run exits non-zero and reports the error on stderr. Pressing Ctrl-C during the wait leaves the app running and prints no object.
+A run that fails before the check prints its `failed` object and also reports the error on stderr. Ctrl-C or SIGTERM prints no object at any point; during the wait, both leave the app running.
 
 Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check stops the app and fails the run; host-side postStart actions run only after the check passes.
 

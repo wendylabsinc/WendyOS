@@ -621,37 +621,39 @@ func newRunCmd() *cobra.Command {
 		Long:  "Reads wendy.json from the current directory or --prefix directory, builds a container image, and deploys it to the target device.",
 		Args:  optionalRunDeviceArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runWithInterruptContext(cmd.Context(), func(runCtx context.Context) error {
-				if err := validateEnvFlag(opts.env); err != nil {
-					return err
-				}
-				if err := validateWaitReadyFlags(opts, watch, cmd.Flags().Changed("hil")); err != nil {
-					return err
-				}
-				defer waitReadyJSONStdoutGuard(opts)()
-				if cmd.Flags().Changed("hil") && watch {
-					return commandErrorf(errConfigInvalid, "HIL cannot be combined with --watch")
-				}
-				if cmd.Flags().Changed("build-host") && strings.TrimSpace(opts.buildHost) == "" {
-					if strings.TrimSpace(opts.builder) != "" {
-						return errBuilderWithBuildHost
-					}
-					host, err := selectRunBuildHost(runCtx, opts.yes)
-					if err != nil {
+			return runReportingWaitReadyFailure(cmd.Context(), opts, func(ctx context.Context) error {
+				return runWithInterruptContext(ctx, func(runCtx context.Context) error {
+					if err := validateEnvFlag(opts.env); err != nil {
 						return err
 					}
-					opts.buildHost = host
-				}
-				if cmd.Flags().Changed("hil") {
-					return runHILCommand(runCtx, opts, strings.TrimSpace(hilDevice))
-				}
-				if watch {
-					// In watch mode, hide build output unless a build fails (unless
-					// --verbose); watchCommand enforces non-interactive behavior.
-					opts.quietBuild = !verbose
-					return watchCommand(runCtx, opts, time.Duration(debounceMS)*time.Millisecond)
-				}
-				return runCommand(runCtx, opts)
+					if err := validateWaitReadyFlags(opts, watch, cmd.Flags().Changed("hil")); err != nil {
+						return err
+					}
+					defer waitReadyJSONStdoutGuard(opts)()
+					if cmd.Flags().Changed("hil") && watch {
+						return commandErrorf(errConfigInvalid, "HIL cannot be combined with --watch")
+					}
+					if cmd.Flags().Changed("build-host") && strings.TrimSpace(opts.buildHost) == "" {
+						if strings.TrimSpace(opts.builder) != "" {
+							return errBuilderWithBuildHost
+						}
+						host, err := selectRunBuildHost(runCtx, opts.yes)
+						if err != nil {
+							return err
+						}
+						opts.buildHost = host
+					}
+					if cmd.Flags().Changed("hil") {
+						return runHILCommand(runCtx, opts, strings.TrimSpace(hilDevice))
+					}
+					if watch {
+						// In watch mode, hide build output unless a build fails (unless
+						// --verbose); watchCommand enforces non-interactive behavior.
+						opts.quietBuild = !verbose
+						return watchCommand(runCtx, opts, time.Duration(debounceMS)*time.Millisecond)
+					}
+					return runCommand(runCtx, opts)
+				})
 			})
 		},
 	}
@@ -1076,6 +1078,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	if err != nil {
 		return commandErrorf(errConfigInvalid, "loading wendy.json: %w", err)
 	}
+	noteWaitReadyApp(ctx, appCfg.AppID)
 
 	if err := appCfg.Validate(); err != nil {
 		return commandErrorf(errConfigInvalid, "invalid wendy.json: %w", err)
@@ -1127,6 +1130,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 			return err
 		}
 	}
+	noteWaitReadyDevice(ctx, target.Agent)
 	mark("resolve + connect device")
 
 	// Build-file selection happens before wendy.json is loaded so device

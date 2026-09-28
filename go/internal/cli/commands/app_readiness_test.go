@@ -338,7 +338,8 @@ func TestReportWaitReadyOutcomePrintsExactlyOneJSONObject(t *testing.T) {
 	jsonOutput = true
 	code := int32(3)
 	crash := waitReadyOutcome{Status: waitReadyStatusCrashed, App: "wr-crash", Device: "dev.local", Readiness: readinessNotChecked, ExitCode: &code, TerminationReason: "crashed", Message: "app wr-crash stopped unexpectedly", err: errors.New("x")}
-	stdout := captureStdout(t, func() { reportWaitReadyOutcome(&appconfig.AppConfig{AppID: "wr-crash"}, crash, true) })
+	cfg := &appconfig.AppConfig{AppID: "wr-crash"}
+	stdout := captureStdout(t, func() { reportWaitReadyOutcome(context.Background(), cfg, crash, true) })
 	got := decodeOneJSONObject(t, stdout)
 	for key, want := range map[string]any{"status": "crashed", "app": "wr-crash", "device": "dev.local", "readiness": "not_checked", "exit_code": float64(3), "termination_reason": "crashed"} {
 		if got[key] != want {
@@ -349,7 +350,7 @@ func TestReportWaitReadyOutcomePrintsExactlyOneJSONObject(t *testing.T) {
 		t.Error("a failed outcome carries a url")
 	}
 	// Attached runs stream app output on stdout, so they never add the object.
-	if out := captureStdout(t, func() { reportWaitReadyOutcome(&appconfig.AppConfig{AppID: "wr-crash"}, crash, false) }); out != "" {
+	if out := captureStdout(t, func() { reportWaitReadyOutcome(context.Background(), cfg, crash, false) }); out != "" {
 		t.Fatalf("attached report wrote %q to stdout", out)
 	}
 }
@@ -362,7 +363,7 @@ func TestReportWaitReadyOutcomeCleanExitCarriesExitCodeZero(t *testing.T) {
 	jsonOutput = true
 	out := awaitAppReady(context.Background(), waitReadyChecks{appID: "app", tick: bufferedTicks(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "exited", 0)})})
 	out.App = "app"
-	stdout := captureStdout(t, func() { reportWaitReadyOutcome(&appconfig.AppConfig{AppID: "app"}, out, true) })
+	stdout := captureStdout(t, func() { reportWaitReadyOutcome(context.Background(), &appconfig.AppConfig{AppID: "app"}, out, true) })
 	if !strings.Contains(stdout, `"exit_code":0`) {
 		t.Fatalf("stdout %q does not carry \"exit_code\":0", stdout)
 	}
