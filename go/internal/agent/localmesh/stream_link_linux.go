@@ -567,22 +567,25 @@ func (l *streamNodeLink) rxLastMSAgo() int64 {
 }
 
 // sockQueueDepths returns kernel socket queue depths (unread RX, unsent TX)
-// for instrumented connections, or -1, -1 when unavailable. TLS-wrapped CoCs
-// are unwrapped to the underlying packet connection first.
+// for instrumented connections, or -1, -1 when unavailable. Wrapper layers
+// (TLS, handshake metering) are unwrapped until the CoC socket is reached.
 func (l *streamNodeLink) sockQueueDepths() (int, int) {
 	conn := l.conn
-	if tlsConn, ok := conn.(*tls.Conn); ok {
-		conn = tlsConn.NetConn()
+	for i := 0; i < 4; i++ {
+		if prober, ok := conn.(sockQueueProber); ok {
+			inQ, outQ, err := prober.SockQueue()
+			if err != nil {
+				return -1, -1
+			}
+			return inQ, outQ
+		}
+		unwrapper, ok := conn.(interface{ NetConn() net.Conn })
+		if !ok || unwrapper.NetConn() == nil {
+			return -1, -1
+		}
+		conn = unwrapper.NetConn()
 	}
-	prober, ok := conn.(sockQueueProber)
-	if !ok {
-		return -1, -1
-	}
-	inQ, outQ, err := prober.SockQueue()
-	if err != nil {
-		return -1, -1
-	}
-	return inQ, outQ
+	return -1, -1
 }
 
 // Keep the first locally observed terminal cause. In particular, a writer
