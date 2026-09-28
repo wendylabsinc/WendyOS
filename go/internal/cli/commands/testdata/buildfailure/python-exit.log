@@ -1,0 +1,82 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 338B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/golang:1.27
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/python:3.12-slim
+#3 DONE 0.0s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [py 1/2] FROM docker.io/library/python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f
+#5 resolve docker.io/library/python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f done
+#5 CACHED
+
+#6 [gostage 1/2] FROM docker.io/library/golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244
+#6 resolve docker.io/library/golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 done
+#6 CACHED
+
+#7 [gostage 2/2] RUN for i in 1 2 3 4 5 6; do echo "go-side $i"; sleep 0.3; done
+#7 0.079 go-side 1
+#7 CANCELED
+
+#8 [py 2/2] RUN python -c "import sys; [print(f'line {i}', flush=True) for i in range(1,31)]; sys.exit(3)"
+#8 0.115 line 1
+#8 0.115 line 2
+#8 0.115 line 3
+#8 0.115 line 4
+#8 0.115 line 5
+#8 0.115 line 6
+#8 0.115 line 7
+#8 0.115 line 8
+#8 0.115 line 9
+#8 0.115 line 10
+#8 0.115 line 11
+#8 0.115 line 12
+#8 0.115 line 13
+#8 0.115 line 14
+#8 0.115 line 15
+#8 0.115 line 16
+#8 0.115 line 17
+#8 0.115 line 18
+#8 0.115 line 19
+#8 0.115 line 20
+#8 0.115 line 21
+#8 0.115 line 22
+#8 0.115 line 23
+#8 0.115 line 24
+#8 0.115 line 25
+#8 0.115 line 26
+#8 0.115 line 27
+#8 0.115 line 28
+#8 0.115 line 29
+#8 0.115 line 30
+#8 ERROR: process "/bin/sh -c python -c \"import sys; [print(f'line {i}', flush=True) for i in range(1,31)]; sys.exit(3)\"" did not complete successfully: exit code: 3
+------
+ > [py 2/2] RUN python -c "import sys; [print(f'line {i}', flush=True) for i in range(1,31)]; sys.exit(3)":
+0.115 line 21
+0.115 line 22
+0.115 line 23
+0.115 line 24
+0.115 line 25
+0.115 line 26
+0.115 line 27
+0.115 line 28
+0.115 line 29
+0.115 line 30
+------
+Dockerfile:5
+--------------------
+   3 |     
+   4 |     FROM python:3.12-slim AS py
+   5 | >>> RUN python -c "import sys; [print(f'line {i}', flush=True) for i in range(1,31)]; sys.exit(3)"
+   6 |     
+   7 |     FROM scratch
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c python -c \"import sys; [print(f'line {i}', flush=True) for i in range(1,31)]; sys.exit(3)\"" did not complete successfully: exit code: 3

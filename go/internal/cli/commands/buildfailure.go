@@ -10,6 +10,14 @@ import (
 
 const maxBuildFailureCauseLen = 220
 
+// The failing step's own output is the cause when BuildKit logged only its
+// wrapper error: enough lines for a compiler error with context, few enough
+// that the summary stays a summary (the full log is saved alongside).
+const (
+	maxBuildFailureOutputLines   = 20
+	maxBuildFailureOutputLineLen = 240
+)
+
 var (
 	buildFailureANSIRe   = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 	buildFailurePrefixRe = regexp.MustCompile(`^#\d+(?:\s+\d+(?:\.\d+)?)?\s+`)
@@ -17,6 +25,13 @@ var (
 	buildSourceRe        = regexp.MustCompile(`^([^\s:]*Dockerfile[^:]*):(\d+)$`)
 	buildStepRe          = regexp.MustCompile(`^>?\s*\[([^\]]+)]\s+(.+?)(?::)?$`)
 	githubPackageRe      = regexp.MustCompile(`github\.com/([^/\s]+)/([^/@\s]+?)(?:\.git)?@`)
+	// buildVertexLineRe splits a `--progress plain` line into its vertex number
+	// and the rest: "#9 [api 3/3] RUN …", "#9 0.908 <output>", "#9 ERROR: …".
+	buildVertexLineRe = regexp.MustCompile(`^#(\d+) (.*)$`)
+	// buildVertexOutputRe matches a step's own output, which plain progress
+	// prefixes with the seconds since the step started.
+	buildVertexOutputRe = regexp.MustCompile(`^\d+\.\d+(?: (.*))?$`)
+	buildExitCodeRe     = regexp.MustCompile(`exit code: (-?\d+)`)
 
 	persistBuildFailureLog = writeBuildFailureLog
 )
@@ -24,9 +39,17 @@ var (
 type buildFailureSummary struct {
 	step       string
 	cause      string
+	output     []string // the failing step's last output lines, when they are the cause
 	source     string
 	detailsURL string
 	fallback   string
+}
+
+// buildVertex accumulates one plain-progress step: its "[stage n/m] CMD"
+// header and the lines it printed.
+type buildVertex struct {
+	header string
+	output []string
 }
 
 // summarizeBuildFailure extracts the useful part of a BuildKit failure. The
@@ -37,8 +60,30 @@ func summarizeBuildFailure(raw string, buildErr error) buildFailureSummary {
 	lines := strings.Split(clean, "\n")
 	var summary buildFailureSummary
 	var errorsSeen []string
+	vertices := map[string]*buildVertex{}
+	failedVertex, failedMessage := "", ""
 
 	for _, rawLine := range lines {
+		// Track each step's output by vertex so interleaved parallel steps
+		// stay apart. Only trailing space is trimmed: indentation is output.
+		if m := buildVertexLineRe.FindStringSubmatch(strings.TrimRight(rawLine, " \t\r")); m != nil {
+			v := vertices[m[1]]
+			if v == nil {
+				v = &buildVertex{}
+				vertices[m[1]] = v
+			}
+			switch rest := m[2]; {
+			case strings.HasPrefix(rest, "ERROR: "):
+				failedVertex, failedMessage = m[1], strings.TrimPrefix(rest, "ERROR: ")
+			case strings.HasPrefix(rest, "["):
+				v.header = rest
+			default:
+				if om := buildVertexOutputRe.FindStringSubmatch(rest); om != nil {
+					v.output = append(v.output, om[1])
+				}
+			}
+		}
+
 		line := strings.TrimSpace(rawLine)
 		if line == "" {
 			continue
@@ -77,6 +122,18 @@ func summarizeBuildFailure(raw string, buildErr error) buildFailureSummary {
 		}
 	} else if len(errorsSeen) > 0 {
 		summary.cause = errorsSeen[0]
+	} else if v := vertices[failedVertex]; v != nil {
+		// BuildKit logged only its wrapper (`process "…" did not complete
+		// successfully: exit code: 1`), so the real cause — a compiler error,
+		// a traceback — is whatever the failing step itself printed (WDY-1832).
+		summary.cause = "step failed"
+		if m := buildExitCodeRe.FindStringSubmatch(failedMessage); m != nil {
+			summary.cause = "step failed with exit code " + m[1]
+		}
+		summary.output = lastBuildOutputLines(v.output, maxBuildFailureOutputLines)
+		if m := buildStepRe.FindStringSubmatch(v.header); m != nil && isBuildCommand(m[2]) {
+			summary.step = m[1] + " — " + compactBuildCommand(strings.TrimSuffix(m[2], ":"))
+		}
 	}
 
 	if buildErr != nil {
@@ -95,7 +152,12 @@ func renderBuildFailure(w io.Writer, label, raw string, buildErr error) {
 	if summary.step != "" {
 		fmt.Fprintf(w, "  Step: %s\n", summary.step)
 	}
-	if summary.cause != "" {
+	if summary.cause != "" && len(summary.output) > 0 {
+		fmt.Fprintf(w, "  Cause: %s; its output ended with:\n", summary.cause)
+		for _, line := range summary.output {
+			fmt.Fprintf(w, "    %s\n", line)
+		}
+	} else if summary.cause != "" {
 		fmt.Fprintf(w, "  Cause: %s\n", summary.cause)
 	} else if summary.fallback != "" {
 		fmt.Fprintf(w, "  Cause: %s\n", summary.fallback)
@@ -155,6 +217,26 @@ func sanitizeBuildLogLabel(label string) string {
 		return "image"
 	}
 	return b.String()
+}
+
+// lastBuildOutputLines returns up to max trailing lines of a step's output,
+// without the blank lines around it, each cut to a readable width.
+func lastBuildOutputLines(lines []string, max int) []string {
+	start, end := 0, len(lines)
+	for start < end && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	for end > start && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	if end-start > max {
+		start = end - max
+	}
+	out := make([]string, 0, end-start)
+	for _, line := range lines[start:end] {
+		out = append(out, truncateBuildFailureText(strings.TrimRight(line, " \t"), maxBuildFailureOutputLineLen))
+	}
+	return out
 }
 
 func githubPackages(text string) []string {

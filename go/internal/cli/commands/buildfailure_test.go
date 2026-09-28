@@ -2,6 +2,8 @@ package commands
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -93,5 +95,100 @@ func TestRenderBuildFailureFallsBackToRawWhenLogCannotBeSaved(t *testing.T) {
 func TestSanitizeBuildLogLabel(t *testing.T) {
 	if got := sanitizeBuildLogLabel("API / Prod"); got != "api---prod" {
 		t.Errorf("sanitizeBuildLogLabel = %q", got)
+	}
+}
+
+func readBuildFailureFixture(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "buildfailure", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// The logs below are real `docker buildx build --progress plain` output
+// (testdata/buildfailure/*.log), except interleaved.log, which reproduces two
+// parallel stages writing between each other the way a docker-container
+// builder does. BuildKit logs only its wrapper error for a failing RUN, so the
+// cause used to fall back to "docker buildx build (OCI export) failed: exit
+// status 1" (WDY-1832).
+func TestSummarizeBuildFailureUsesFailingStepOutput(t *testing.T) {
+	for _, tc := range []struct {
+		fixture   string
+		step      string
+		cause     string
+		output    []string
+		absentOut string
+	}{
+		{
+			fixture: "go-compile.log",
+			step:    "build 4/4 — RUN go build -o /out/app .",
+			cause:   "step failed with exit code 1",
+			output:  []string{"# example.com/gofail", "./main.go:6:14: undefined: foo"},
+		},
+		{
+			fixture: "interleaved.log",
+			step:    "api 3/3 — RUN go build -o /out/api ./cmd/api",
+			cause:   "step failed with exit code 1",
+			output: []string{
+				"# example.com/api/internal/store",
+				"internal/store/db.go:41:9: cannot use rows (variable of type *sql.Rows) as []Row value in return statement",
+				"internal/store/db.go:57:2: declared and not used: tx",
+			},
+			absentOut: "npm",
+		},
+	} {
+		t.Run(tc.fixture, func(t *testing.T) {
+			got := summarizeBuildFailure(readBuildFailureFixture(t, tc.fixture), errors.New("docker buildx build (OCI export) failed: exit status 1"))
+			if got.step != tc.step {
+				t.Errorf("step = %q, want %q", got.step, tc.step)
+			}
+			if got.cause != tc.cause {
+				t.Errorf("cause = %q, want %q", got.cause, tc.cause)
+			}
+			if strings.Join(got.output, "\n") != strings.Join(tc.output, "\n") {
+				t.Errorf("output = %q, want %q", got.output, tc.output)
+			}
+			if tc.absentOut != "" && strings.Contains(strings.Join(got.output, "\n"), tc.absentOut) {
+				t.Errorf("output %q mixes in another step's %q lines", got.output, tc.absentOut)
+			}
+		})
+	}
+}
+
+func TestSummarizeBuildFailureKeepsTheLastTwentyOutputLines(t *testing.T) {
+	got := summarizeBuildFailure(readBuildFailureFixture(t, "python-exit.log"), errors.New("exit status 1"))
+	if got.cause != "step failed with exit code 3" {
+		t.Errorf("cause = %q", got.cause)
+	}
+	if len(got.output) != maxBuildFailureOutputLines || got.output[0] != "line 11" || got.output[len(got.output)-1] != "line 30" {
+		t.Errorf("output = %q, want line 11 through line 30", got.output)
+	}
+	if !strings.HasPrefix(got.step, "py 2/2 — RUN python -c") {
+		t.Errorf("step = %q", got.step)
+	}
+}
+
+func TestRenderBuildFailureShowsTheFailingStepOutput(t *testing.T) {
+	original := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = original }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-1.log", nil }
+
+	var out strings.Builder
+	renderBuildFailure(&out, "", readBuildFailureFixture(t, "go-compile.log"), errors.New("docker buildx build (OCI export) failed: exit status 1"))
+	got := out.String()
+	for _, want := range []string{
+		"  Step: build 4/4 — RUN go build -o /out/app .\n",
+		"  Cause: step failed with exit code 1; its output ended with:\n",
+		"    ./main.go:6:14: undefined: foo\n",
+		"  At: Dockerfile:4\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "OCI export) failed") {
+		t.Errorf("summary fell back to the builder's exit status:\n%s", got)
 	}
 }
