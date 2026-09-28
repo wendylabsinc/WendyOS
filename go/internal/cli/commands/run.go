@@ -2638,11 +2638,15 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		if err != nil {
 			return fmt.Errorf("starting container: %w", err)
 		}
-		if _, err := stream.Recv(); err != nil && err != io.EOF {
-			return fmt.Errorf("waiting for container start: %w", err)
+		_, recvErr := stream.Recv()
+		if recvErr != nil && recvErr != io.EOF {
+			return fmt.Errorf("waiting for container start: %w", recvErr)
 		}
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
 		if opts.waitReady {
+			if recvErr == nil { // io.EOF: the stream has already ended
+				drainDetachedStartOutput(stream)
+			}
 			return waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
 		}
 		// Detached returns as soon as the container is started — see
@@ -3310,9 +3314,11 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 				// is started, so return without tailing logs or waiting on
 				// readiness (see runPostStartIfReady's doc comment) unless
 				// --wait-ready asks for it. The container keeps running
-				// independently of this (now-abandoned) output stream.
+				// independently of this output stream, which is abandoned
+				// here (drained while --wait-ready waits).
 				cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
 				if opts.waitReady {
+					drainDetachedStartOutput(stream)
 					return waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
 				}
 				return nil

@@ -572,6 +572,7 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		if err := awaitStarted(stream); err != nil {
 			return true, fmt.Errorf("waiting for container start: %w", err)
 		}
+		drainDetachedStartOutput(stream)
 		return true, waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
 	}
 	return true, nil

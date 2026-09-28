@@ -466,6 +466,173 @@ func TestDetachedPathsWaitForReadinessWhenAsked(t *testing.T) {
 	})
 }
 
+// outputThenHoldStream is a start stream for an app that keeps printing: it
+// acknowledges Started, serves n output messages, then stays open until
+// release is closed and ends with io.EOF. drained is closed once a reader
+// came back after the n-th message (all n consumed), ended once the stream
+// has ended.
+type outputThenHoldStream struct {
+	grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse]
+	n                       int
+	release, drained, ended chan struct{}
+
+	mu    sync.Mutex
+	recvs int
+}
+
+func newOutputThenHoldStream(n int) *outputThenHoldStream {
+	return &outputThenHoldStream{n: n, release: make(chan struct{}), drained: make(chan struct{}), ended: make(chan struct{})}
+}
+
+func (s *outputThenHoldStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
+	s.mu.Lock()
+	s.recvs++
+	call := s.recvs
+	s.mu.Unlock()
+	switch {
+	case call == 1:
+		return &agentpb.RunContainerLayersResponse{ResponseType: &agentpb.RunContainerLayersResponse_Started_{Started: &agentpb.RunContainerLayersResponse_Started{}}}, nil
+	case call <= s.n+1:
+		return &agentpb.RunContainerLayersResponse{ResponseType: &agentpb.RunContainerLayersResponse_StdoutOutput{StdoutOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{Data: []byte("still busy\n")}}}, nil
+	case call == s.n+2:
+		close(s.drained)
+		<-s.release
+		close(s.ended)
+	}
+	return nil, io.EOF
+}
+
+// calls is how many times Recv was called.
+func (s *outputThenHoldStream) calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recvs
+}
+
+// drainGatedClient holds every ListContainers call made after its stream
+// acknowledged Started until the stream is drained, so --wait-ready's polls,
+// and with them its outcome, can only come after all the output was
+// consumed. Once giveUp is closed it holds no call any more: a run that does
+// not drain then fails its test instead of hanging it.
+type drainGatedClient struct {
+	fastPathScriptedClient
+	stream   *outputThenHoldStream
+	giveUp   <-chan struct{}
+	startCtx context.Context // the StartContainer RPC's, if one was made
+}
+
+func (c *drainGatedClient) StartContainer(ctx context.Context, _ *agentpb.StartContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
+	c.startCtx = ctx
+	return c.stream, nil
+}
+
+func (c *drainGatedClient) ListContainers(ctx context.Context, req *agentpb.ListContainersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+	if c.stream.calls() > 0 {
+		select {
+		case <-c.stream.drained:
+		case <-c.giveUp:
+		}
+	}
+	return c.fastPathScriptedClient.ListContainers(ctx, req, opts...)
+}
+
+// detachedStartPaths runs a detached start of cfg's app with opts on each
+// single-container path whose start stream a --wait-ready wait outlives:
+// chunk-diff (RunContainer), registry (StartContainer), and the no-change
+// fast path starting a stopped app (StartContainer). lookups is what the
+// device reports once the app started.
+func detachedStartPaths(cfg *appconfig.AppConfig, opts runOptions, lookups ...*agentpb.AppContainer) []struct {
+	name     string
+	snapshot []*agentpb.AppContainer
+	run      func(t *testing.T, conn *grpcclient.AgentConnection, stream *outputThenHoldStream) error
+} {
+	stopped := appSnapshot(cfg.AppID, agentpb.AppRunningState_STOPPED, 0, "", 0)
+	return []struct {
+		name     string
+		snapshot []*agentpb.AppContainer
+		run      func(t *testing.T, conn *grpcclient.AgentConnection, stream *outputThenHoldStream) error
+	}{
+		{"chunk-diff", lookups, func(_ *testing.T, conn *grpcclient.AgentConnection, stream *outputThenHoldStream) error {
+			return streamRunContainerWithStarted(context.Background(), conn, stream, cfg, opts, nil)
+		}},
+		{"registry", lookups, func(_ *testing.T, conn *grpcclient.AgentConnection, _ *outputThenHoldStream) error {
+			return startExistingContainer(context.Background(), conn, cfg, opts)
+		}},
+		{"no-change fast path starting a stopped app", append([]*agentpb.AppContainer{stopped}, lookups...), func(t *testing.T, conn *grpcclient.AgentConnection, _ *outputThenHoldStream) error {
+			isolateFingerprintCache(t)
+			saveDeployFingerprint(cfg.AppID, "device", deployFingerprint{InputHash: "inputs", LayerDiffIDs: []string{"layer"}})
+			done, err := tryDeployFastPath(context.Background(), conn, cfg, "device", "inputs", opts)
+			if !done {
+				t.Fatalf("fast path fell back to a full deploy (err %v)", err)
+			}
+			return err
+		}},
+	}
+}
+
+// While `--detach --wait-ready` waits, the start stream stays open and the
+// app keeps printing into it. The run reads and discards that output, so an
+// agent that applies backpressure to an unread stream cannot stall a chatty
+// app into a false readiness_timeout. It does not cancel the stream, and the
+// drain stops once the stream ends.
+func TestDetachedWaitReadyDrainsTheStartStream(t *testing.T) {
+	const lines = 50
+	cfg := &appconfig.AppConfig{AppID: "app"}
+	opts := runOptions{detach: true, waitReady: true, readinessTimeout: time.Second}
+	for _, path := range detachedStartPaths(cfg, opts, runningSnapshot(0)) {
+		t.Run(path.name, func(t *testing.T) {
+			giveUp, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			stream := newOutputThenHoldStream(lines)
+			scripted := &scriptedContainerClient{snapshots: path.snapshot, stream: stream}
+			client := &drainGatedClient{fastPathScriptedClient: fastPathScriptedClient{scripted}, stream: stream, giveUp: giveUp.Done()}
+			conn := &grpcclient.AgentConnection{Host: "dev", ContainerService: client}
+
+			if err := path.run(t, conn, stream); err != nil {
+				t.Fatalf("err = %v, want the app reported running", err)
+			}
+			select {
+			case <-stream.drained:
+			default:
+				t.Fatalf("the wait finished after %d Recv calls, want %d: the start stream's %d output messages were not all read", stream.calls(), lines+2, lines)
+			}
+			if client.startCtx != nil && client.startCtx.Err() != nil {
+				t.Fatalf("the StartContainer RPC's context was cancelled (%v); the stream must stay the agent's to end", client.startCtx.Err())
+			}
+			close(stream.release)
+			select {
+			case <-stream.ended: // the drain saw the stream end and stopped
+			case <-time.After(5 * time.Second):
+				t.Fatal("nothing read the stream's end: the drain did not keep reading until it ended")
+			}
+		})
+	}
+}
+
+// Without --wait-ready a detached run still returns at Started and leaves
+// the start stream alone.
+func TestDetachedRunWithoutWaitReadyDoesNotDrain(t *testing.T) {
+	previous := drainDetachedStartOutput
+	t.Cleanup(func() { drainDetachedStartOutput = previous })
+	drains := 0
+	drainDetachedStartOutput = func(containerOutputStream) { drains++ }
+	cfg := &appconfig.AppConfig{AppID: "app"}
+	for _, path := range detachedStartPaths(cfg, runOptions{detach: true}, runningSnapshot(0)) {
+		t.Run(path.name, func(t *testing.T) {
+			drains = 0
+			stream := newOutputThenHoldStream(3)
+			scripted := &scriptedContainerClient{snapshots: path.snapshot, stream: stream}
+			conn := &grpcclient.AgentConnection{Host: "dev", ContainerService: fastPathScriptedClient{scripted}}
+			if err := path.run(t, conn, stream); err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if drains != 0 || stream.calls() > 1 {
+				t.Fatalf("drains = %d, Recv calls = %d: a detached run without --wait-ready must not read past Started", drains, stream.calls())
+			}
+		})
+	}
+}
+
 // A `--detach --wait-ready` run in JSON mode prints exactly one JSON object on
 // stdout on every detached single-container path, failures included, and the
 // stdout guard RunE applies keeps build progress off stdout.

@@ -274,9 +274,10 @@ func reportWaitReadyOutcome(ctx context.Context, appCfg *appconfig.AppConfig, ou
 
 // waitReadyAfterDetachedStart runs --wait-ready for a detached run whose
 // container the agent just confirmed started, reports the outcome, and returns
-// the run's error. An interrupted wait prints no outcome and leaves the app
-// running; runWithInterruptChannel turns Ctrl-C into exit 0 and SIGTERM into
-// errTerminated.
+// the run's error. A caller holding the start stream drains it meanwhile
+// (drainDetachedStartOutput). An interrupted wait prints no outcome and leaves
+// the app running; runWithInterruptChannel turns Ctrl-C into exit 0 and
+// SIGTERM into errTerminated.
 func waitReadyAfterDetachedStart(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) error {
 	out := waitForAppReady(ctx, conn, appCfg, opts)
 	if out.Status == "" {
@@ -285,6 +286,25 @@ func waitReadyAfterDetachedStart(ctx context.Context, conn *grpcclient.AgentConn
 	}
 	reportWaitReadyOutcome(ctx, appCfg, out, true)
 	return out.err
+}
+
+// drainDetachedStartOutput reads and discards a detached run's start stream
+// (RunContainer or StartContainer) in the background until it ends (io.EOF or
+// an error). A --wait-ready wait outlives the Started acknowledgement by up to
+// the probe deadline while the app keeps printing into that stream; an agent
+// that applies backpressure to an unread stream could otherwise block a
+// chatty app into a false readiness_timeout. It does not cancel the stream:
+// that is the run's context, so, as without the wait, the stream ends when
+// the app exits or the process does. A variable so tests can see whether a
+// run drains.
+var drainDetachedStartOutput = func(stream containerOutputStream) {
+	go func() {
+		for {
+			if _, err := stream.Recv(); err != nil {
+				return
+			}
+		}
+	}()
 }
 
 // readinessGate is --wait-ready for an attached run: the check runs beside the
