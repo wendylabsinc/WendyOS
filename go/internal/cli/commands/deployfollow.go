@@ -16,7 +16,9 @@ import (
 // or AttachContainer: both RPCs replace the agent's existing task. Telemetry
 // carries stdout/stderr as well as native logs; state polling ends the foreground
 // session when the app stops. Watch sessions already own their log subscription.
-func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) error {
+// base is the followed app's baseline (observedAppBaseline of the lookup that
+// chose to follow it), against which a stop is told from a replacement.
+func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, base appBaseline) error {
 	if conn.TelemetryService == nil {
 		return fmt.Errorf("cannot follow existing app: device telemetry is unavailable")
 	}
@@ -129,7 +131,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if err := gate.Err(); err != nil {
 				return err
 			}
-			replaced, err := appReplacedAfterKill(ctx, conn, appCfg, container)
+			replaced, err := appReplacedAfterKill(ctx, conn, appCfg, base, container)
 			if err != nil {
 				return interrupted() // Ctrl-C or SIGTERM while confirming a SIGKILL
 			}

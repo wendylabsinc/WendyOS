@@ -94,7 +94,7 @@ func TestFollowExistingContainer_InterruptLeavesAppRunning(t *testing.T) {
 	defer cancel()
 	time.AfterFunc(1500*time.Millisecond, cancel)
 	ctx, notes := withInterruptNotes(ctx)
-	err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 	if !errors.Is(err, ErrUserCancelled) {
 		t.Fatalf("followExistingContainer = %v, want ErrUserCancelled", err)
 	}

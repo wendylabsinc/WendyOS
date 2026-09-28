@@ -114,7 +114,7 @@ func TestAttachedWaitReadyStopsAnAppThatNeverBecomesReady(t *testing.T) {
 				defer cancel()
 				ctx, notes := withInterruptNotes(ctx)
 				conn.TelemetryService = followTelemetry()
-				err = followExistingContainer(ctx, conn, cfg, opts)
+				err = followExistingContainer(ctx, conn, cfg, opts, appBaseline{})
 				if got := fake.stops(); len(got) != 0 {
 					t.Fatalf("StopContainer calls = %v, want none: this run did not start the app", got)
 				}
@@ -216,7 +216,7 @@ func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
 						}
 					}}
 					conn.TelemetryService = &logsEndAfter{after: listed}
-					err = followExistingContainer(context.Background(), conn, cfg, opts)
+					err = followExistingContainer(context.Background(), conn, cfg, opts, appBaseline{})
 				}
 			})
 			if ErrorClass(err) != "app_crashed" {
@@ -290,7 +290,7 @@ func TestAttachedWaitReadyInterruptStopsTheAppOnce(t *testing.T) {
 					cancel()
 				}()
 				conn.TelemetryService = telemetry
-				err = followExistingContainer(ctx, conn, cfg, opts)
+				err = followExistingContainer(ctx, conn, cfg, opts, appBaseline{})
 				wantStops, wantOutcome = nil, interruptedAppLeftRunning
 			}
 			if !errors.Is(err, ErrUserCancelled) {
@@ -356,7 +356,7 @@ func TestAttachedWaitReadyInterruptWhileAwaitingTheGate(t *testing.T) {
 					}
 				}}
 				conn.TelemetryService = &logsEndAfter{after: listed}
-				err = followExistingContainer(ctx, conn, cfg, opts)
+				err = followExistingContainer(ctx, conn, cfg, opts, appBaseline{})
 				if got := fake.stops(); len(got) != 0 {
 					t.Fatalf("StopContainer calls = %v, want none", got)
 				}

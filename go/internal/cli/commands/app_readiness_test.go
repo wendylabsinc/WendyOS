@@ -414,8 +414,8 @@ func (c fastPathScriptedClient) QueryLayers(_ context.Context, in *agentpb.Query
 	return resp, nil
 }
 
-// stoppedThenStarted scripts the fast path's stopped branch: lookupAppState
-// sees the app stopped, then the wait sees states.
+// stoppedThenStarted scripts the fast path's stopped branch: its lookup sees
+// the app stopped, then the wait sees states.
 func stoppedThenStarted(states ...*agentpb.AppContainer) *scriptedContainerClient {
 	snapshots := append([]*agentpb.AppContainer{appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "", 0)}, states...)
 	return &scriptedContainerClient{snapshots: snapshots, stream: &deploymentAckStream{remaining: 1, err: io.EOF}}

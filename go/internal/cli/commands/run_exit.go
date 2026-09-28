@@ -26,7 +26,7 @@ var (
 // lookupAppContainer returns appID's entry from the agent's container list,
 // or nil with a nil error when the agent does not report the app. Unlike
 // fetchAppContainer it surfaces RPC errors and matches the app name
-// case-insensitively, like lookupAppState.
+// case-insensitively.
 func lookupAppContainer(ctx context.Context, conn *grpcclient.AgentConnection, appID string) (*agentpb.AppContainer, error) {
 	stream, err := conn.ContainerService.ListContainers(ctx, &agentpb.ListContainersRequest{})
 	if err != nil {
@@ -78,28 +78,74 @@ func appCrashedError(appID string, c *agentpb.AppContainer) error {
 	return commandErrorf(errAppCrashed, "app %s %s (%s); see its logs with `wendy device logs --app %s`", appID, what, detail, appID)
 }
 
-// killedBySIGKILL reports whether c is the agent's record of a task SIGKILL
-// ended: stopped, exit code 137, termination reason "crashed" (an OOM kill is
-// recorded as "oom_killed" instead). It is also what the agent records when
-// another deployment replaces the app, since its replace path SIGKILLs the old
-// task — which ends an attached run's output stream too.
-func killedBySIGKILL(c *agentpb.AppContainer) bool {
-	return c != nil && c.GetRunningState() == agentpb.AppRunningState_STOPPED &&
-		c.GetTerminationReason() == "crashed" && c.GetExitCode() == 137
+// appBaseline is what a run knows about the app instance it watches, so it
+// can tell a replacement by another deployment from a crash — ListContainers
+// reports no container ID. failures is the failure_count the instance started
+// from: the agent's restart monitor raises it before every restart it makes,
+// and only a start (the agent's Register) resets it, to 0. version is the
+// app_version the instance runs; "" means unknown and is never compared.
+type appBaseline struct {
+	failures uint32
+	version  string
 }
 
-// appReplacedAfterKill reports whether an app whose recorded stop c looks like
-// a crash was in fact replaced by another deployment, and announces it if so.
-// Only a SIGKILL record (killedBySIGKILL) is in doubt; for any other c it
-// returns false at once. For one, it polls the agent for up to
-// appReplaceConfirmWindow: an app no longer reported, stopped with no recorded
-// exit, or otherwise showing a fresh run (failure_count 0 — every deploy
-// resets it, and the restart policy counts each restart) was replaced. A
-// restart by the restart policy, or the same record for the whole window,
-// means the app really was killed: false, so the caller reports c as a crash.
-// Unreadable polls keep the SIGKILL record's verdict. It returns ctx's error
-// if ctx ends first.
-func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, c *agentpb.AppContainer) (bool, error) {
+// startedAppBaseline is the baseline of an app this run started: the start
+// reset its failure_count to 0, and it runs the version this run deployed
+// (unknown when wendy.json sets none; the agent then records "latest").
+func startedAppBaseline(appCfg *appconfig.AppConfig) appBaseline {
+	return appBaseline{version: appCfg.Version}
+}
+
+// observedAppBaseline is the baseline of an app a run follows without
+// starting it: c, the record the run saw when it decided to follow, whose
+// failure_count may already be above 0 (after a device reboot, say).
+func observedAppBaseline(c *agentpb.AppContainer) appBaseline {
+	return appBaseline{failures: c.GetFailureCount(), version: c.GetAppVersion()}
+}
+
+// killedBySIGKILL reports whether c is the agent's record of a task SIGKILL
+// ended: exit code 137, termination reason "crashed" (an OOM kill is recorded
+// as "oom_killed" instead), stopped or crash-looping. It is also what the
+// agent records when another deployment replaces the app, since its replace
+// path SIGKILLs the old task — which ends an attached run's output stream too
+// — and while it replaces the app it can list that record as crash-looping
+// (its restart decision ignores the replace in progress).
+func killedBySIGKILL(c *agentpb.AppContainer) bool {
+	if c == nil || c.GetTerminationReason() != "crashed" || c.GetExitCode() != 137 {
+		return false
+	}
+	state := c.GetRunningState()
+	return state == agentpb.AppRunningState_STOPPED || state == agentpb.AppRunningState_CRASH_LOOPING
+}
+
+// versionChanged reports whether c runs another app_version than base: a
+// different deployment's app. An unknown version on either side never counts.
+func (base appBaseline) versionChanged(c *agentpb.AppContainer) bool {
+	return base.version != "" && c.GetAppVersion() != "" && c.GetAppVersion() != base.version
+}
+
+// appReplacedAfterKill reports whether c, the record an app this run
+// deployed or followed left when it stopped, shows that another deployment
+// replaced it, and announces it if so. A record on another app_version than
+// base's is another deployment's outright. Otherwise only a SIGKILL record
+// (killedBySIGKILL) is in doubt; for any other c it returns false at once.
+// For one, it polls the agent for up to appReplaceConfirmWindow: an app no
+// longer reported, on another app_version, stopped with no recorded exit
+// (created, not started), or otherwise past the SIGKILL record with a
+// failure_count at or below base's was replaced — a start resets the count,
+// while the restart policy raises it above the baseline before every restart.
+// A restart by the restart policy, or the SIGKILL record for the whole
+// window, means the app really was killed: false, so the caller reports c as
+// a crash. Unreadable polls keep the SIGKILL record's verdict. It returns
+// ctx's error if ctx ends first.
+func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, base appBaseline, c *agentpb.AppContainer) (bool, error) {
+	replaced := func() (bool, error) {
+		cliNotice("Application %s was replaced by another deployment.", containerDisplayName(appCfg))
+		return true, nil
+	}
+	if base.versionChanged(c) {
+		return replaced()
+	}
 	if !killedBySIGKILL(c) {
 		return false, nil
 	}
@@ -120,13 +166,15 @@ func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection,
 			return false, ctx.Err()
 		}
 		switch {
-		case err != nil || killedBySIGKILL(now):
+		case err != nil:
 			continue // still the killed task's record, as far as we can tell
-		case now == nil,
-			now.GetRunningState() == agentpb.AppRunningState_STOPPED && now.GetTerminationReason() == "",
-			now.GetRunningState() != agentpb.AppRunningState_CRASH_LOOPING && now.GetFailureCount() == 0:
-			cliNotice("Application %s was replaced by another deployment.", containerDisplayName(appCfg))
-			return true, nil
+		case now == nil, base.versionChanged(now):
+			return replaced()
+		case killedBySIGKILL(now):
+			continue
+		case now.GetRunningState() == agentpb.AppRunningState_STOPPED && now.GetTerminationReason() == "",
+			now.GetFailureCount() <= base.failures:
+			return replaced()
 		default:
 			return false, nil // restarted (or about to be) by its restart policy
 		}
@@ -148,7 +196,7 @@ func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, 
 		c, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		cancel()
 		if err == nil {
-			replaced, err := appReplacedAfterKill(ctx, conn, appCfg, c)
+			replaced, err := appReplacedAfterKill(ctx, conn, appCfg, startedAppBaseline(appCfg), c)
 			if err != nil {
 				// Ctrl-C or SIGTERM while confirming. The app this run started
 				// has exited; what runs now may be another deployment's, so

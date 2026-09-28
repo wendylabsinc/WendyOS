@@ -195,7 +195,7 @@ func TestFollowExistingContainer_LogFailureDoesNotRestart(t *testing.T) {
 	want := errors.New("connection lost")
 	fake := &fastPathContainerClient{appName: "app", state: agentpb.AppRunningState_RUNNING}
 	telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{receiveErr: want}}
-	err := followExistingContainer(context.Background(), &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	err := followExistingContainer(context.Background(), &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 	if !errors.Is(err, want) || fake.startCalls != 0 {
 		t.Fatalf("err=%v starts=%d", err, fake.startCalls)
 	}
@@ -209,7 +209,7 @@ func TestFollowExistingContainer_ShowsContainerLogsAndExitsWhenStopped(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	output := captureStdout(t, func() {
-		err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+		err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 		if err != nil {
 			t.Fatal(err)
 		}

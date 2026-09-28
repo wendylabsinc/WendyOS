@@ -520,11 +520,12 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		return false, nil
 	}
 
-	state, found, err := lookupAppState(ctx, conn, appCfg.AppID)
-	if err != nil || !found {
+	container, err := lookupAppContainer(ctx, conn, appCfg.AppID)
+	if err != nil || container == nil {
 		// Device unreachable for the query or app no longer present — rebuild.
 		return false, nil
 	}
+	state := container.GetRunningState()
 
 	if !opts.detach {
 		cliLogln("No changes detected; reusing existing %s.", containerDisplayName(appCfg))
@@ -534,7 +535,9 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 				opts.watchState.reapCommand(cmd)
 				return true, nil
 			}
-			return true, followExistingContainer(ctx, conn, appCfg, opts)
+			// The follow's baseline is this lookup: taken before following
+			// starts, so a later replacement cannot be mistaken for it.
+			return true, followExistingContainer(ctx, conn, appCfg, opts, observedAppBaseline(container))
 		}
 		return true, startExistingContainer(ctx, conn, appCfg, opts)
 	}
@@ -662,29 +665,4 @@ func devicePresentLayers(ctx context.Context, conn *grpcclient.AgentConnection, 
 		present[p.GetDiffId()] = true
 	}
 	return present, true
-}
-
-// lookupAppState queries the device for the running state of a single app.
-func lookupAppState(ctx context.Context, conn *grpcclient.AgentConnection, appID string) (agentpb.AppRunningState, bool, error) {
-	stream, err := conn.ContainerService.ListContainers(ctx, &agentpb.ListContainersRequest{})
-	if err != nil {
-		return agentpb.AppRunningState_STOPPED, false, err
-	}
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return agentpb.AppRunningState_STOPPED, false, err
-		}
-		c := resp.GetContainer()
-		if c == nil {
-			continue
-		}
-		if strings.EqualFold(c.GetAppName(), appID) {
-			return c.GetRunningState(), true, nil
-		}
-	}
-	return agentpb.AppRunningState_STOPPED, false, nil
 }

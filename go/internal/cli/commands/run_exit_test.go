@@ -204,7 +204,7 @@ func TestFollowExistingContainer_CrashLoopExitsNonZero(t *testing.T) {
 	telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 	if got := ErrorClass(err); got != "app_crashed" {
 		t.Fatalf("class = %q (err %v), want app_crashed", got, err)
 	}
@@ -251,6 +251,15 @@ var sigkillExitCases = []struct {
 	}},
 	{name: "SIGKILL record stays for the window", crash: "exit code 137", minTime: sigkillTestWindow, snapshots: []*agentpb.AppContainer{
 		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
+	}},
+	// While the agent replaces the app it can list the killed task as
+	// crash-looping: its restart decision ignores the replace in progress.
+	{name: "replaced while the killed task is listed as crash-looping", lists: 2, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 1),
+		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
+	}},
+	{name: "crash-looping SIGKILL record stays for the window", crash: "exit code 137", minTime: sigkillTestWindow, snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 1),
 	}},
 	{name: "restarted by the restart policy", crash: "exit code 137", lists: 2, snapshots: []*agentpb.AppContainer{
 		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
@@ -355,11 +364,113 @@ func TestFollowExistingContainer_ConfirmsSIGKILLBeforeReportingACrash(t *testing
 			var err error
 			var took time.Duration
 			out := captureStderr(t, func() {
-				err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+				err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 				took = time.Since(firstPoll)
 			})
 			checkSIGKILLExit(t, fake, tc.crash, tc.lists, tc.minTime, took, out, err)
 		})
+	}
+}
+
+// A followed app may have been restarted before the follow began (after a
+// device reboot, say), so its failure_count starts above 0. Each restart by
+// the restart policy raises the count and a replacement's start resets it, so
+// a SIGKILL record is judged against the count the follow started from, and a
+// different app_version is another deployment's outright.
+func TestFollowExistingContainer_JudgesAgainstTheFollowedBaseline(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	base := appBaseline{failures: 2, version: "1.0"}
+	withVersion := func(c *agentpb.AppContainer, version string) *agentpb.AppContainer {
+		c.AppVersion = version
+		return c
+	}
+	for _, tc := range []struct {
+		name      string
+		snapshots []*agentpb.AppContainer
+		crash     string
+		lists     int
+		minTime   time.Duration
+	}{
+		{name: "replaced while the killed task is listed as crash-looping", lists: 2, snapshots: []*agentpb.AppContainer{
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3),
+			appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
+		}},
+		{name: "replaced after a SIGKILL stop", lists: 2, snapshots: []*agentpb.AppContainer{
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 2),
+			appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
+		}},
+		{name: "replaced by an app its restart policy already restarted", lists: 2, snapshots: []*agentpb.AppContainer{
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 2),
+			appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 1),
+		}},
+		{name: "replaced by another version", lists: 2, snapshots: []*agentpb.AppContainer{
+			withVersion(appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 2), "1.0"),
+			withVersion(appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 5), "2.0"),
+		}},
+		{name: "another version's crash is not this app's", lists: 1, snapshots: []*agentpb.AppContainer{
+			withVersion(appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0), "2.0"),
+		}},
+		{name: "restarted by the restart policy", crash: "exit code 137", lists: 2, snapshots: []*agentpb.AppContainer{
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 2),
+			appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 3),
+		}},
+		{name: "crash-looping SIGKILL record stays for the window", crash: "exit code 137", minTime: sigkillTestWindow, snapshots: []*agentpb.AppContainer{
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3),
+		}},
+		{name: "other exit code is not re-checked", crash: "exit code 2", lists: 1, snapshots: []*agentpb.AppContainer{
+			withVersion(appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 2, "crashed", 3), "1.0"),
+			appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var firstPoll time.Time
+			fake := &scriptedContainerClient{snapshots: tc.snapshots, onList: func(call int) {
+				if call == 1 {
+					firstPoll = time.Now()
+				}
+			}}
+			telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
+			conn := &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			var took time.Duration
+			out := captureStderr(t, func() {
+				err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}, base)
+				took = time.Since(firstPoll)
+			})
+			checkSIGKILLExit(t, fake, tc.crash, tc.lists, tc.minTime, took, out, err)
+		})
+	}
+}
+
+// The no-change fast path follows a running app it did not start, and its
+// own lookup is the follow's baseline: taken before the follow starts, so a
+// replacement cannot be mistaken for it.
+func TestTryDeployFastPath_FollowIsBaselinedOnTheFastPathLookup(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	isolateFingerprintCache(t)
+	cfg := &appconfig.AppConfig{AppID: "app"}
+	saveDeployFingerprint(cfg.AppID, "device", deployFingerprint{InputHash: "inputs", LayerDiffIDs: []string{"layer"}})
+	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{
+		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 2),          // the fast path's lookup
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 2), // the follow's first poll
+		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 1),          // a fresh app, restarted once
+	}}
+	telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
+	conn := &grpcclient.AgentConnection{ContainerService: fastPathScriptedClient{fake}, TelemetryService: telemetry}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var done bool
+	var err error
+	out := captureStderr(t, func() {
+		done, err = tryDeployFastPath(ctx, conn, cfg, "device", "inputs", runOptions{})
+	})
+	if !done || err != nil {
+		t.Fatalf("done=%v err=%v, want the follow to end on the replacement", done, err)
+	}
+	if !strings.Contains(out, "Application app was replaced by another deployment.") {
+		t.Fatalf("missing the replaced notice: %q", out)
 	}
 }
 
@@ -407,7 +518,7 @@ func TestFollowExistingContainer_InterruptWhileConfirmingSIGKILL(t *testing.T) {
 	telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
 	conn := &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}
 	start := time.Now()
-	err := followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	err := followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 	if !errors.Is(err, ErrUserCancelled) {
 		t.Fatalf("followExistingContainer = %v, want ErrUserCancelled", err)
 	}
