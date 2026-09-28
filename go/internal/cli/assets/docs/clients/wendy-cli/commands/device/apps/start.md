@@ -1,6 +1,6 @@
 Starts an app by name. If the app-name argument is not provided, and the terminal is interactive - a list of all uploaded apps is shown. You can then interactively start an app.
 
-By default, after starting the app the CLI attaches to the container's output stream and prints logs to the terminal. Press **Ctrl-C** to detach: once the agent has confirmed the start, detaching is a success (exit status 0).
+By default, after starting the app the CLI attaches to the container's output stream and prints logs to the terminal. Press **Ctrl-C** to detach: once the agent has confirmed the start, detaching is a success (exit status 0). Stopping the CLI any other way, such as with `SIGTERM`, is reported as a failure.
 
 An attached start (the default) keeps the restart policy the app was deployed with. A detached start (`--detach`) sets the app's restart policy to **`unless-stopped`** and saves it on the device, replacing the deployed policy: the agent restarts the app whenever it exits, and after a reboot, until it is explicitly stopped with `wendy device apps stop`.
 

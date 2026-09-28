@@ -499,8 +499,16 @@ func newAppsStartCmd() *cobra.Command {
 						}
 						// Ctrl-C once the agent confirmed the start is a detach,
 						// as the docs describe it, not a failure.
-						if gotStarted && ctx.Err() != nil {
+						if gotStarted && interruptedByUser(ctx) {
 							return reportDetach(ctx, target.Agent.ContainerService, appName)
+						}
+						// Any other cancellation, such as a supervisor's SIGTERM,
+						// ends the session with an error. The wendy run outcome
+						// work maps a terminated command to class "terminated"
+						// (errTerminated in error_class.go, exit 143); until
+						// then this reads as context_canceled (exit 1).
+						if cause := context.Cause(ctx); cause != nil {
+							return fmt.Errorf("attached to %s: %w", appName, cause)
 						}
 						return fmt.Errorf("receiving start response: %w", err)
 					}
@@ -574,7 +582,9 @@ func awaitStarted(stream containerOutputStream) error {
 // the exit status stays 0 because the start itself was confirmed. In JSON mode
 // the same state is printed as an appActionResult instead.
 func reportStartOutcome(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) error {
-	c := fetchAppContainer(ctx, svc, appName)
+	readCtx, cancel := readBackContext(ctx)
+	defer cancel()
+	c := fetchAppContainer(readCtx, svc, appName)
 	if jsonOutput {
 		return printJSON(startOutcomeResult(appName, c))
 	}
@@ -612,11 +622,27 @@ func reportDetach(ctx context.Context, svc agentpb.WendyContainerServiceClient, 
 		cliNotice("Detached from %s.", appName)
 		return nil
 	}
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	readCtx, cancel := readBackContext(ctx)
 	defer cancel()
 	result := startOutcomeResult(appName, fetchAppContainer(readCtx, svc, appName))
 	result.Detached = true
 	return printJSON(result)
+}
+
+// readBackContext is for reading an app's state back once its start stream
+// ended: the command's context may already be cancelled (Ctrl-C can race the
+// stream's end), so it is detached from that, with a short deadline instead.
+func readBackContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+}
+
+// interruptedByUser reports whether ctx was cancelled by SIGINT (Ctrl-C).
+// main's signal.NotifyContext cancels its context with a cause naming the
+// signal; a SIGTERM or any other cancellation is not a person detaching.
+// TestInterruptedByUserMatchesSignalNotifyContext pins the cause's text.
+func interruptedByUser(ctx context.Context) bool {
+	cause := context.Cause(ctx)
+	return cause != nil && cause.Error() == os.Interrupt.String()+" signal received"
 }
 
 // startOutcomeResult is reportStartOutcome's JSON form: the app's state once

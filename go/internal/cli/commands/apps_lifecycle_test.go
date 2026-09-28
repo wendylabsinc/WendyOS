@@ -3,9 +3,12 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -27,13 +30,15 @@ type appsFakeContainerClient struct {
 	container *agentpb.AppContainer
 	output    string
 	// interrupt, when set, is called once the start stream has sent its
-	// frames, as a person pressing Ctrl-C would; the stream then fails with
-	// the cancellation instead of ending.
-	interrupt       func()
-	cancelledBefore bool // cancel before the agent confirms the start
-	startReq        *agentpb.StartContainerRequest
-	stopReq         *agentpb.StopContainerRequest
-	deleteReq       *agentpb.DeleteContainerRequest
+	// frames, as a signal arriving would; the stream then fails with the
+	// cancellation instead of ending, unless endsAfterInterrupt, when it ends
+	// as if the app exited at the same moment.
+	interrupt          func()
+	endsAfterInterrupt bool
+	cancelledBefore    bool // cancel before the agent confirms the start
+	startReq           *agentpb.StartContainerRequest
+	stopReq            *agentpb.StopContainerRequest
+	deleteReq          *agentpb.DeleteContainerRequest
 }
 
 func (f *appsFakeContainerClient) StartContainer(ctx context.Context, in *agentpb.StartContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
@@ -52,7 +57,7 @@ func (f *appsFakeContainerClient) StartContainer(ctx context.Context, in *agentp
 			},
 		})
 	}
-	return &appsFakeStartStream{frames: frames, ctx: ctx, interrupt: f.interrupt}, nil
+	return &appsFakeStartStream{frames: frames, ctx: ctx, interrupt: f.interrupt, endsAfterInterrupt: f.endsAfterInterrupt}, nil
 }
 
 func (f *appsFakeContainerClient) AttachContainer(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse], error) {
@@ -69,7 +74,10 @@ func (f *appsFakeContainerClient) DeleteContainer(_ context.Context, in *agentpb
 	return &agentpb.DeleteContainerResponse{}, nil
 }
 
-func (f *appsFakeContainerClient) ListContainers(context.Context, *agentpb.ListContainersRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+func (f *appsFakeContainerClient) ListContainers(ctx context.Context, _ *agentpb.ListContainersRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
 	return &fakeListContainersStream{resp: &agentpb.ListContainersResponse{Container: f.container}}, nil
 }
 
@@ -78,6 +86,7 @@ type appsFakeStartStream struct {
 	frames                                                         []*agentpb.RunContainerLayersResponse
 	ctx                                                            context.Context
 	interrupt                                                      func()
+	endsAfterInterrupt                                             bool
 }
 
 func (s *appsFakeStartStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
@@ -87,6 +96,9 @@ func (s *appsFakeStartStream) Recv() (*agentpb.RunContainerLayersResponse, error
 		}
 		s.interrupt()
 		<-s.ctx.Done()
+		if s.endsAfterInterrupt {
+			return nil, io.EOF
+		}
 		return nil, status.FromContextError(s.ctx.Err()).Err()
 	}
 	next := s.frames[0]
@@ -250,15 +262,23 @@ func TestAppsRemoveForceJSON(t *testing.T) {
 	}
 }
 
+// signalCause is the cancel cause signal.NotifyContext (main's context)
+// gives for sig; TestInterruptedByUserMatchesSignalNotifyContext pins it.
+func signalCause(sig os.Signal) error { return errors.New(sig.String() + " signal received") }
+
 // The docs call Ctrl-C during an attached start a detach: once the agent has
 // confirmed the start, cancelling leaves the app running and succeeds.
 func TestAppsStartCtrlCAfterTheStartIsADetach(t *testing.T) {
 	running := &agentpb.AppContainer{AppName: "demo", RunningState: agentpb.AppRunningState_RUNNING}
+	interrupted := func() (context.Context, func()) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		return ctx, func() { cancel(signalCause(os.Interrupt)) }
+	}
 
 	t.Run("JSON", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		fake := &appsFakeContainerClient{output: "hello\n", container: running, interrupt: cancel}
+		ctx, interrupt := interrupted()
+		defer interrupt()
+		fake := &appsFakeContainerClient{output: "hello\n", container: running, interrupt: interrupt}
 		useAppsFake(t, fake, true)
 		stdout, stderr, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo")
 		if err != nil {
@@ -274,9 +294,9 @@ func TestAppsStartCtrlCAfterTheStartIsADetach(t *testing.T) {
 	})
 
 	t.Run("text", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		fake := &appsFakeContainerClient{container: running, interrupt: cancel}
+		ctx, interrupt := interrupted()
+		defer interrupt()
+		fake := &appsFakeContainerClient{container: running, interrupt: interrupt}
 		useAppsFake(t, fake, false)
 		_, stderr, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo")
 		if err != nil || !strings.Contains(stderr, "Detached from demo") {
@@ -285,12 +305,40 @@ func TestAppsStartCtrlCAfterTheStartIsADetach(t *testing.T) {
 	})
 
 	t.Run("before the start is confirmed it is still a failure", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		fake := &appsFakeContainerClient{cancelledBefore: true, interrupt: cancel}
+		ctx, interrupt := interrupted()
+		defer interrupt()
+		fake := &appsFakeContainerClient{cancelledBefore: true, interrupt: interrupt}
 		useAppsFake(t, fake, true)
 		if _, _, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo"); err == nil {
 			t.Error("a start cancelled before the agent confirmed it reported success")
+		}
+	})
+
+	// A supervisor stopping wendy is not a person detaching.
+	t.Run("SIGTERM is not a detach", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+		fake := &appsFakeContainerClient{container: running, interrupt: func() { cancel(signalCause(syscall.SIGTERM)) }}
+		useAppsFake(t, fake, true)
+		stdout, _, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo")
+		if err == nil || stdout != "" {
+			t.Errorf("err = %v, stdout = %q; want a failure and no result", err, stdout)
+		}
+	})
+
+	// If the stream ends just as Ctrl-C cancels the command's context, the
+	// state must still be read back, not reported as merely "started".
+	t.Run("stream end racing Ctrl-C still reads the state back", func(t *testing.T) {
+		ctx, interrupt := interrupted()
+		defer interrupt()
+		fake := &appsFakeContainerClient{container: running, interrupt: interrupt, endsAfterInterrupt: true}
+		useAppsFake(t, fake, true)
+		stdout, _, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := decodeAppResult(t, stdout); got.Status != "running" {
+			t.Errorf("status = %q, want the read-back state %q", got.Status, "running")
 		}
 	})
 }
