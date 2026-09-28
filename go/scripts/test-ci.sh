@@ -629,17 +629,21 @@ for test_name in "${TESTS[@]}"; do
                 echo "apps start --detach returned non-zero"
                 return 1
             fi
-            local out
+            local out err errf
+            errf=$(mktemp)
             for _ in 1 2 3 4 5; do
-                # stderr stays out of the jq input (notices, error envelope).
-                out=$("$WENDY" device apps list --device "$HOSTNAME" --json 2>/dev/null)
+                # stderr stays out of the jq input (notices, error envelope),
+                # but is kept for the failure message.
+                out=$("$WENDY" device apps list --device "$HOSTNAME" --json 2>"$errf")
                 if echo "$out" | jq -e --arg a "$app_id" \
                     '(.[] | select(.name==$a) | .runningState) == "RUNNING"' >/dev/null 2>&1; then
+                    rm -f "$errf"
                     return 0
                 fi
                 sleep 1
             done
-            echo "app '$app_id' never reached RUNNING after detached start: $out"
+            err=$(cat "$errf"); rm -f "$errf"
+            echo "app '$app_id' never reached RUNNING after detached start: $out $err"
             return 1
         }
         run_test "swift-start-detach (detached start reaches RUNNING)" detach_start_reaches_running
