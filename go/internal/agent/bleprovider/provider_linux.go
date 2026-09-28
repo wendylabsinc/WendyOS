@@ -48,6 +48,16 @@ func (r *runtime) hasCheaperLink(asset int32) bool {
 	return ok && checker.HasCheaperLink(asset, LinkCost)
 }
 
+// cheaperLinkReason reports the veto branch behind a cheaper-link decision so
+// a torn-down link names the exact clause that fired.
+func (r *runtime) cheaperLinkReason(asset int32) string {
+	if r.cfg.Selection != nil {
+		_, reason := r.cfg.Selection.AllowRadioReason(asset, localmesh.RadioBLE)
+		return reason
+	}
+	return "legacy-checker"
+}
+
 func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Conn) func() {
 	stop := make(chan struct{})
 	go func() {
@@ -65,7 +75,7 @@ func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Co
 					// fresh-hint churn during formation) must not kill an
 					// established link: re-verify after a short delay. A
 					// genuinely superseded link is still shed ~3s later.
-					r.cfg.Logger.Debug("BLE cheaper-link decision pending re-verify", zap.Int32("peer", asset))
+					r.cfg.Logger.Debug("BLE cheaper-link decision pending re-verify", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
 					timer := time.NewTimer(3 * time.Second)
 					select {
 					case <-ctx.Done():
@@ -79,7 +89,7 @@ func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Co
 					if !r.hasCheaperLink(asset) {
 						continue
 					}
-					r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset))
+					r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
 					_ = conn.Close()
 					return
 				}
@@ -285,7 +295,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer) {
-		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Int32("peer", peer))
+		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Int32("peer", peer), zap.String("reason", r.cheaperLinkReason(peer)))
 		_ = secure.Close()
 		return
 	}
