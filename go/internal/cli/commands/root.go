@@ -118,7 +118,10 @@ func NewRootCmd() *cobra.Command {
 	// Do not name the hidden --build-host flag here: this description shows in
 	// every command's --help (persistent flag), and the E2E help specs guard
 	// that the unreleased flag never leaks into help output.
-	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device hostname; `wendy run` accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach)")
+	//
+	// pflag shows the first `backticked` word of a usage string as the flag's
+	// placeholder ("--device host"), so quote commands here with '...'.
+	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device `host` (hostname, IP, or host:port); 'wendy run' accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach)")
 
 	// Render the top-level command groups in the deliberate order below rather
 	// than alphabetically, so e.g. "project" lists before "device".
