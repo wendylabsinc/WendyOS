@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -41,7 +42,9 @@ var resolveAppsTargetFn = resolveTarget
 // not read back (a detached start, or an attached one whose app has gone from
 // the list); "running", "stopped" or "crash_looping" for an attached start,
 // read back after its output stream ended; "stopped" for stop; "removed" for
-// remove; and "cancelled" when a remove was declined at the prompt.
+// remove; and "cancelled" when a remove was declined at the prompt. Detached
+// marks an attached start the user left with Ctrl-C after the agent
+// confirmed it; Status is then the app's state read back at that moment.
 type appActionResult struct {
 	App               string `json:"app"`
 	Action            string `json:"action"`
@@ -51,6 +54,7 @@ type appActionResult struct {
 	TerminationReason string `json:"terminationReason,omitempty"`
 	DeleteImage       bool   `json:"deleteImage,omitempty"`
 	DeleteVolumes     bool   `json:"deleteVolumes,omitempty"`
+	Detached          bool   `json:"detached,omitempty"`
 }
 
 // reportAppAction prints result as JSON in JSON mode, and otherwise runs
@@ -493,6 +497,11 @@ func newAppsStartCmd() *cobra.Command {
 							stdinAttempted = false
 							continue
 						}
+						// Ctrl-C once the agent confirmed the start is a detach,
+						// as the docs describe it, not a failure.
+						if gotStarted && ctx.Err() != nil {
+							return reportDetach(ctx, target.Agent.ContainerService, appName)
+						}
 						return fmt.Errorf("receiving start response: %w", err)
 					}
 					gotFirstResponse = true
@@ -593,6 +602,21 @@ func reportStartOutcome(ctx context.Context, svc agentpb.WendyContainerServiceCl
 		}
 	}
 	return nil
+}
+
+// reportDetach reports an attached start the user left with Ctrl-C after the
+// agent confirmed it. In JSON mode it reads the app's state back under a
+// short, fresh deadline, since the command's own context is cancelled.
+func reportDetach(ctx context.Context, svc agentpb.WendyContainerServiceClient, appName string) error {
+	if !jsonOutput {
+		cliNotice("Detached from %s.", appName)
+		return nil
+	}
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	result := startOutcomeResult(appName, fetchAppContainer(readCtx, svc, appName))
+	result.Detached = true
+	return printJSON(result)
 }
 
 // startOutcomeResult is reportStartOutcome's JSON form: the app's state once

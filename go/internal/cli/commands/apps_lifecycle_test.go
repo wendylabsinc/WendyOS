@@ -26,13 +26,22 @@ type appsFakeContainerClient struct {
 
 	container *agentpb.AppContainer
 	output    string
-	startReq  *agentpb.StartContainerRequest
-	stopReq   *agentpb.StopContainerRequest
-	deleteReq *agentpb.DeleteContainerRequest
+	// interrupt, when set, is called once the start stream has sent its
+	// frames, as a person pressing Ctrl-C would; the stream then fails with
+	// the cancellation instead of ending.
+	interrupt       func()
+	cancelledBefore bool // cancel before the agent confirms the start
+	startReq        *agentpb.StartContainerRequest
+	stopReq         *agentpb.StopContainerRequest
+	deleteReq       *agentpb.DeleteContainerRequest
 }
 
-func (f *appsFakeContainerClient) StartContainer(_ context.Context, in *agentpb.StartContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
+func (f *appsFakeContainerClient) StartContainer(ctx context.Context, in *agentpb.StartContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
 	f.startReq = in
+	if f.cancelledBefore {
+		f.interrupt()
+		return &appsFakeStartStream{ctx: ctx, interrupt: func() {}}, nil
+	}
 	frames := []*agentpb.RunContainerLayersResponse{{
 		ResponseType: &agentpb.RunContainerLayersResponse_Started_{Started: &agentpb.RunContainerLayersResponse_Started{}},
 	}}
@@ -43,7 +52,7 @@ func (f *appsFakeContainerClient) StartContainer(_ context.Context, in *agentpb.
 			},
 		})
 	}
-	return &appsFakeStartStream{frames: frames}, nil
+	return &appsFakeStartStream{frames: frames, ctx: ctx, interrupt: f.interrupt}, nil
 }
 
 func (f *appsFakeContainerClient) AttachContainer(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse], error) {
@@ -67,11 +76,18 @@ func (f *appsFakeContainerClient) ListContainers(context.Context, *agentpb.ListC
 type appsFakeStartStream struct {
 	grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse] // embedded nil
 	frames                                                         []*agentpb.RunContainerLayersResponse
+	ctx                                                            context.Context
+	interrupt                                                      func()
 }
 
 func (s *appsFakeStartStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
 	if len(s.frames) == 0 {
-		return nil, io.EOF
+		if s.interrupt == nil {
+			return nil, io.EOF
+		}
+		s.interrupt()
+		<-s.ctx.Done()
+		return nil, status.FromContextError(s.ctx.Err()).Err()
 	}
 	next := s.frames[0]
 	s.frames = s.frames[1:]
@@ -93,10 +109,15 @@ func useAppsFake(t *testing.T, fake *appsFakeContainerClient, json bool) {
 // and stderr (the apps commands write there directly, not to cmd.Out).
 func runAppsCmd(t *testing.T, cmd *cobra.Command, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
+	return runAppsCmdContext(t, context.Background(), cmd, args...)
+}
+
+func runAppsCmdContext(t *testing.T, ctx context.Context, cmd *cobra.Command, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
 	cmd.SetArgs(args)
 	stdout = captureStdout(t, func() {
 		stderr = captureStderr(t, func() {
-			err = cmd.ExecuteContext(context.Background())
+			err = cmd.ExecuteContext(ctx)
 		})
 	})
 	return stdout, stderr, err
@@ -227,4 +248,49 @@ func TestAppsRemoveForceJSON(t *testing.T) {
 	if !fake.deleteReq.GetDeleteImage() || fake.deleteReq.GetDeleteVolumes() {
 		t.Errorf("DeleteContainer request = %v, want image deleted and volumes kept", fake.deleteReq)
 	}
+}
+
+// The docs call Ctrl-C during an attached start a detach: once the agent has
+// confirmed the start, cancelling leaves the app running and succeeds.
+func TestAppsStartCtrlCAfterTheStartIsADetach(t *testing.T) {
+	running := &agentpb.AppContainer{AppName: "demo", RunningState: agentpb.AppRunningState_RUNNING}
+
+	t.Run("JSON", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fake := &appsFakeContainerClient{output: "hello\n", container: running, interrupt: cancel}
+		useAppsFake(t, fake, true)
+		stdout, stderr, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo")
+		if err != nil {
+			t.Fatalf("err = %v, want a successful detach", err)
+		}
+		want := appActionResult{App: "demo", Action: "start", Status: "running", Detached: true}
+		if got := decodeAppResult(t, stdout); !reflect.DeepEqual(got, want) {
+			t.Errorf("result = %+v, want %+v", got, want)
+		}
+		if !strings.Contains(stderr, "hello") {
+			t.Errorf("app output missing from stderr: %q", stderr)
+		}
+	})
+
+	t.Run("text", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fake := &appsFakeContainerClient{container: running, interrupt: cancel}
+		useAppsFake(t, fake, false)
+		_, stderr, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo")
+		if err != nil || !strings.Contains(stderr, "Detached from demo") {
+			t.Errorf("err = %v, stderr = %q; want success and a detach notice", err, stderr)
+		}
+	})
+
+	t.Run("before the start is confirmed it is still a failure", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fake := &appsFakeContainerClient{cancelledBefore: true, interrupt: cancel}
+		useAppsFake(t, fake, true)
+		if _, _, err := runAppsCmdContext(t, ctx, newAppsStartCmd(), "demo"); err == nil {
+			t.Error("a start cancelled before the agent confirmed it reported success")
+		}
+	})
 }

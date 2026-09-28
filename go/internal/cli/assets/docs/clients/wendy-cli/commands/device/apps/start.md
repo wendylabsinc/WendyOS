@@ -1,6 +1,6 @@
 Starts an app by name. If the app-name argument is not provided, and the terminal is interactive - a list of all uploaded apps is shown. You can then interactively start an app.
 
-By default, after starting the app the CLI attaches to the container's output stream and prints logs to the terminal. Press **Ctrl-C** to detach.
+By default, after starting the app the CLI attaches to the container's output stream and prints logs to the terminal. Press **Ctrl-C** to detach: once the agent has confirmed the start, detaching is a success (exit status 0).
 
 An attached start (the default) keeps the restart policy the app was deployed with. A detached start (`--detach`) sets the app's restart policy to **`unless-stopped`** and saves it on the device, replacing the deployed policy: the agent restarts the app whenever it exits, and after a reboot, until it is explicitly stopped with `wendy device apps stop`.
 
@@ -41,4 +41,4 @@ With `--json` (automatic when stdout is not a terminal) the command prints one J
 {"app": "my-app", "action": "start", "status": "started", "restartPolicy": "unless-stopped"}
 ```
 
-`status` is `started` for a detached start. For an attached start it is the app's state when its output stream ended (`running`, `stopped` or `crash_looping`), with `exitCode` and `terminationReason` when the agent recorded why the app last exited.
+`status` is `started` for a detached start. For an attached start it is the app's state when its output stream ended (`running`, `stopped` or `crash_looping`), with `exitCode` and `terminationReason` when the agent recorded why the app last exited. If you detach from an attached start with Ctrl-C, the result has `"detached": true` and `status` is the app's state at that moment.
