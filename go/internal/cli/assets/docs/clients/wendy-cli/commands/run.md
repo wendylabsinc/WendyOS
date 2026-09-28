@@ -51,13 +51,19 @@ An attached `wendy run` streams the app's logs until the app exits or you stop t
 | Ctrl-C (SIGINT) | 0 | Stopped |
 | SIGTERM (a CI timeout, `kill`, a process supervisor) | Non-zero: `wendy run was terminated; app <app> was stopped` | Stopped |
 
-The table describes single-container runs on WendyOS devices. Multi-service, Compose and native Mac runs, and runs on local provider targets such as `--device docker` or `--device apple-container`, handle Ctrl-C themselves and stop their apps; on SIGTERM they exit non-zero but may leave their apps running.
+The table describes single-container runs on WendyOS devices. Multi-service, Compose and native Mac runs, and runs on local provider targets such as `--device docker` or `--device apple-container`, exit 0 on Ctrl-C and try to stop their apps, but can leave them running: their stop races the cancellation of the run and is skipped when the cancellation wins. On SIGTERM they exit non-zero and may leave their apps running.
 
 When nothing changed since the last deploy and the app is already running, `wendy run` only follows its logs. An interrupted run then leaves the app running, and the SIGTERM error says so.
 
 The crash check reads the exit that the device agent records when the app stops. If the restart policy has already restarted the app by then, the exit status is gone: `wendy run` prints a notice and exits 0. Agents that predate exit reporting always read as a clean stop.
 
-A run whose app is replaced by another deployment (for example `wendy run --detach` from another terminal) prints `Application <app> was replaced by another deployment.` and exits 0: the device records the replaced app like a SIGKILL crash (exit code 137), so `wendy run` re-checks that exit for up to 3 seconds before reporting a crash.
+When another deployment replaces the app (for example `wendy run --detach` from another terminal), the run usually exits 0 and prints `Application <app> was replaced by another deployment.`:
+
+- The device records the replaced app like a SIGKILL crash (exit code 137). When the run finds that record, it re-checks the app for up to 3 seconds. It reports a crash only if the device shows the app restarted by its restart policy, or still shows that record (or cannot be read) for all 3 seconds.
+- A record from another app `version` (as set in `wendy.json`) counts as a replacement at once.
+- If a run that started the app finds, when its output ends, the new app already running from the same version, an app not started yet, or no app at all, it prints `Application <app> stopped.` instead.
+- A run that only follows an app it did not start (see above) checks the app every second: if a check finds the new app already running, the run keeps following it; otherwise it ends as above.
+- With `--wait-ready` and no `--detach`, a replacement found when the readiness check fails is reported the same way: the run exits 0 and leaves the new app running.
 
 When the image build fails, `wendy run` prints the build failure details, including the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last line of the step's output, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
 
