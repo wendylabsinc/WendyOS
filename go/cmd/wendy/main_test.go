@@ -822,6 +822,9 @@ func TestFormatError_UnresolvedDeviceNamesTheHost(t *testing.T) {
 			"Could not resolve device host wendyos-x.local.\n  The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out."},
 		{dialedError{"wendyos-zzz:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
 			"Could not resolve device host wendyos-zzz.\n  The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out."},
+		// A fully qualified name's trailing dot must not double the full stop.
+		{dialedError{"nosuchhost.invalid.:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host nosuchhost.invalid.\n  Check the name, or connect by IP address."},
 	} {
 		if got := formatError(tc.err).Error(); got != tc.want {
 			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)

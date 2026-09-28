@@ -415,6 +415,8 @@ func formatErrorParts(err error) formattedError {
 		if h, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
 			host = h
 		}
+		// "host." is a fully qualified name; its dot would double the stop.
+		host = strings.TrimSuffix(host, ".")
 		// A device name resolved over mDNS (.local or bare) is classified as
 		// unreachable: it only resolves while the device is on the network.
 		if commands.DeviceDialErrorClass(err) == "device_unreachable" {
