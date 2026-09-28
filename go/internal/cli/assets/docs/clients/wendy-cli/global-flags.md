@@ -40,7 +40,7 @@ When a command fails in JSON mode, it writes nothing more to stdout, and the las
 | `retryable` | `true` when running the same command again, unchanged, can succeed, for example once the device is back online. |
 | `next_steps` | Recovery steps, in order. Always an array, often empty. |
 
-Earlier stderr lines can hold progress output and notices, so read the last line. Outside JSON mode the same failure prints as styled text.
+Earlier stderr lines can hold progress output and notices, so read the last line. Outside JSON mode the same failure prints as styled text. So does a failure in automatic JSON mode when stderr is a terminal, as in `wendy device apps list | grep my-app`: stdout is piped, but the error is read by a person. Pass `--json` explicitly to get the JSON error there too.
 
 ## Exit status
 
