@@ -1,10 +1,16 @@
 package main
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
+	"testing"
+)
 
 // outcomeCases lists every class errorClass and commands.ErrorClass can
-// return, plus "app_crashed" and "terminated", which the wendy run outcome
-// work adds to commands.ErrorClass. A new class belongs here too.
+// return, plus the pendingClasses. TestErrorOutcomesMatchTheClassifiers
+// fails until a new class has a row here.
 var outcomeCases = []struct {
 	class     string
 	exit      int
@@ -93,15 +99,82 @@ func TestOutcomeForClass(t *testing.T) {
 	}
 }
 
-// A misspelt key in errorOutcomes would silently leave its class at exit 1.
-func TestErrorOutcomesOnlyNameKnownClasses(t *testing.T) {
-	known := make(map[string]bool, len(outcomeCases))
+// pendingClasses are returned by classifiers that have not landed yet:
+// "app_crashed" and "terminated" arrive with the wendy run outcome work.
+// Remove an entry once its classifier returns it.
+var pendingClasses = map[string]bool{"app_crashed": true, "terminated": true}
+
+// classifierClasses returns every class string the classifiers can return,
+// read from the string literals in their return statements: errorClass in
+// main.go and commands.ErrorClass.
+func classifierClasses(t *testing.T) map[string]bool {
+	t.Helper()
+	classes := map[string]bool{}
+	for _, src := range []struct{ file, fn string }{
+		{"main.go", "errorClass"},
+		{"../../internal/cli/commands/error_class.go", "ErrorClass"},
+	} {
+		parsed, err := parser.ParseFile(token.NewFileSet(), src.file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != src.fn {
+				continue
+			}
+			found = true
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				ret, ok := n.(*ast.ReturnStmt)
+				if !ok || len(ret.Results) != 1 {
+					return true
+				}
+				if lit, ok := ret.Results[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					class, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					classes[class] = true
+				}
+				return true
+			})
+		}
+		if !found {
+			t.Fatalf("%s: no func %s; update classifierClasses", src.file, src.fn)
+		}
+	}
+	if len(classes) < 20 {
+		t.Fatalf("found only %d classes; the classifiers changed shape, update classifierClasses", len(classes))
+	}
+	return classes
+}
+
+// Every class a classifier returns must have a deliberate row in
+// outcomeCases, and the table must not name a class no classifier returns
+// (a misspelt key would silently leave its class at exit 1).
+func TestErrorOutcomesMatchTheClassifiers(t *testing.T) {
+	known := classifierClasses(t)
+	rows := make(map[string]bool, len(outcomeCases))
 	for _, tc := range outcomeCases {
-		known[tc.class] = true
+		rows[tc.class] = true
+		if !known[tc.class] && !pendingClasses[tc.class] {
+			t.Errorf("outcomeCases has %q, which no classifier returns", tc.class)
+		}
+	}
+	for class := range known {
+		if !rows[class] {
+			t.Errorf("classifiers return %q, which has no outcomeCases row; decide its exit status", class)
+		}
 	}
 	for class := range errorOutcomes {
-		if !known[class] {
-			t.Errorf("errorOutcomes has %q, which no classifier returns; typo, or add it to outcomeCases", class)
+		if !known[class] && !pendingClasses[class] {
+			t.Errorf("errorOutcomes has %q, which no classifier returns; typo?", class)
+		}
+	}
+	for class := range pendingClasses {
+		if known[class] {
+			t.Errorf("%q is returned by a classifier now; remove it from pendingClasses", class)
 		}
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -72,15 +74,38 @@ func TestReportFailure_JSONEnvelope(t *testing.T) {
 	}
 }
 
+// Text mode must print exactly what main printed before JSON mode existed.
+// The goldens were captured from renderError on origin/main (2c61297b7)
+// with the ASCII color profile; only the exit status is new.
 func TestReportFailure_TextModeIsUnchanged(t *testing.T) {
-	var out strings.Builder
-	err := fmt.Errorf("listing cloud devices: %w", config.ErrNotLoggedIn)
-	code := reportFailure(&out, err, nil, []string{"--json=false", "cloud", "discover"})
-	if code != 3 {
-		t.Errorf("exit = %d, want 3 in text mode too", code)
-	}
-	if want := renderError(err) + "\n"; out.String() != want {
-		t.Errorf("text output = %q, want renderError's %q", out.String(), want)
+	prevProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.Ascii)
+	t.Cleanup(func() { lipgloss.SetColorProfile(prevProfile) })
+
+	for _, tc := range []struct {
+		err    error
+		exit   int
+		golden string
+	}{
+		{fmt.Errorf("listing cloud devices: %w", config.ErrNotLoggedIn), 3,
+			"✗ listing cloud devices: not logged in; run 'wendy auth login' first\n"},
+		{fmt.Errorf("querying device version: %w", status.Error(codes.Unavailable,
+			`connection error: desc = "transport: authentication handshake failed: remote error: tls: bad certificate"`)), 1,
+			"✗ querying device version: TLS handshake rejected by device (possible clock skew or cert mismatch).\n" +
+				"  Check the device clock: ssh wendy@<host> 'timedatectl status'                                    \n" +
+				"  For full TLS details rerun with WENDY_TLS_DEBUG=1                                                \n"},
+		{errors.Join(errors.New("api: build failed\nstep 3/7 exited 1"), errors.New("worker: build failed")), 1,
+			"✗ api: build failed \nstep 3/7 exited 1   \nworker: build failed\n"},
+		{fmt.Errorf("connecting: %w", diagnosticTestError{}), 1,
+			"connecting: ✗ Connection blocked\n\n  wendy device unpin device.local\n"},
+	} {
+		var out strings.Builder
+		if code := reportFailure(&out, tc.err, nil, []string{"--json=false"}); code != tc.exit {
+			t.Errorf("reportFailure(%v) exit = %d, want %d", tc.err, code, tc.exit)
+		}
+		if out.String() != tc.golden {
+			t.Errorf("text output = %q, want main's %q", out.String(), tc.golden)
+		}
 	}
 }
 
