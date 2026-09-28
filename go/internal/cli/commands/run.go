@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -678,39 +680,73 @@ func newRunCmd() *cobra.Command {
 // Ctrl-C during a build; its docker/OrbStack/Apple Container subprocess kept a
 // live parent context, so parallel services and fallback builders each surfaced
 // another cancellation of their own.
+//
+// SIGTERM is watched too, because it must never end a run with exit 0: a
+// supervisor (CI timeout, systemd, `docker stop`, an agent harness) that stops
+// `wendy run` has to be able to tell that from a run that finished.
 func runWithInterruptContext(parent context.Context, run func(context.Context) error) error {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 	return runWithInterruptChannel(parent, sigCh, run)
 }
 
+// runWithInterruptChannel runs run under a context cancelled by the first
+// signal on sigCh, then classifies the result by which signals arrived:
+// SIGTERM → an errTerminated error (never nil), SIGINT → ErrUserCancelled for
+// any failure it caused (exit 0, as before), otherwise run's own error.
+//
+// The signals are recorded here rather than read back from the context's
+// cause: main's signal.NotifyContext cancels the parent on the same signal, and
+// when that wins the race the child's cause is the parent's, so a
+// cause-based check misclassified some Ctrl-Cs as failures.
 func runWithInterruptChannel(parent context.Context, sigCh <-chan os.Signal, run func(context.Context) error) error {
 	ctx, cancel := context.WithCancelCause(parent)
+	notes := &runInterruptNotes{}
+	ctx = context.WithValue(ctx, runInterruptNotesKey{}, notes)
+	var interrupted, terminated atomic.Bool
+	record := func(sig os.Signal) {
+		if sig == syscall.SIGTERM {
+			terminated.Store(true)
+			cancel(errTerminated)
+			return
+		}
+		interrupted.Store(true)
+		cancel(ErrUserCancelled)
+	}
 	done := make(chan struct{})
 	handlerDone := make(chan struct{})
 	go func() {
 		defer close(handlerDone)
-		select {
-		case <-sigCh:
-			cancel(ErrUserCancelled)
-		case <-done:
+		for {
+			select {
+			case sig := <-sigCh:
+				record(sig)
+			case <-done:
+				return
+			}
 		}
 	}()
 
 	err := run(ctx)
-	// If the operation returned from the subprocess's copy of SIGINT before
-	// the goroutine above was scheduled, consume the already-buffered signal
-	// here so cancellation is still classified consistently.
-	select {
-	case <-sigCh:
-		cancel(ErrUserCancelled)
-	default:
-	}
 	close(done)
 	<-handlerDone
+	// Consume signals the handler had not read yet — including one that raced
+	// run's own return — so the classification below never depends on
+	// goroutine scheduling.
+	for drained := false; !drained; {
+		select {
+		case sig := <-sigCh:
+			record(sig)
+		default:
+			drained = true
+		}
+	}
 	cancel(nil)
-	if errors.Is(context.Cause(ctx), ErrUserCancelled) && err != nil {
+	if terminated.Load() {
+		return notes.terminatedError()
+	}
+	if interrupted.Load() && err != nil {
 		return ErrUserCancelled
 	}
 	return err
