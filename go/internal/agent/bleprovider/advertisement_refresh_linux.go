@@ -4,6 +4,7 @@ package bleprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,7 +54,16 @@ func runAdvertisementRefresh(ctx context.Context, requests <-chan struct{}, inte
 			if ctx.Err() != nil {
 				return nil
 			}
-			return fmt.Errorf("refreshing owned BLE advertisement: %w", err)
+			// A failed refresh must never take down the provider: BlueZ
+			// keeps serving the last-good advertisement parameters, so a
+			// transient failure (controller busy, D-Bus race) only delays
+			// the update. Only a changed BlueZ owner is fatal, matching
+			// the scan loop. (Proven relevant: Intel controllers report
+			// EBUSY on advertising reconfig under load; a fatal return
+			// here would drop every established link at once.)
+			if errors.Is(err, errBlueZOwnerChanged) {
+				return fmt.Errorf("refreshing owned BLE advertisement: %w", err)
+			}
 		}
 		next = time.Now().Add(interval)
 	}
