@@ -58,7 +58,7 @@ Earlier stderr lines can hold progress output and notices, so read the last line
 | 7 | The app was deployed but did not start or stay up | `container_start_failed` |
 | 8 | The app started but did not become ready in time | `readiness_timeout` |
 | 10 | A trust decision only a person can make: the device's identity or organization changed | `device_identity_mismatch`, `device_org_mismatch` |
-| 70 | An internal error: a bug in `wendy` itself. The stack trace is printed on stderr (in JSON mode before the envelope line, otherwise after the message); include it when you report the bug | `internal_error` |
+| 70 | An internal error: a bug in `wendy` itself. The stack trace is printed on stderr (in JSON mode before the envelope line, otherwise after the message); include it when you report the bug. Only a panic in the command's own goroutine is caught: one in a background goroutine still crashes with Go's own output and exit status | `internal_error` |
 
 `device_not_resolved` means DNS reported that the host name does not exist. That can also happen while this machine is offline, so check the network before the name. A device name resolved over mDNS (a `.local` name, or a bare name such as `wendyos-abc`) that does not resolve is `device_unreachable` instead, since it resolves only while the device is on the network.
 

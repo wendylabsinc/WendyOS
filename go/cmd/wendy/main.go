@@ -58,6 +58,7 @@ func main() {
 		}
 		return cmd.ExecuteContextC(ctx)
 	})
+	executed = commandFor(cmd, os.Args[1:], executed, err)
 	trackCommand(executed, err, time.Since(start))
 	analytics.Close()
 

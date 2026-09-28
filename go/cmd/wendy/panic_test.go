@@ -75,3 +75,38 @@ func cutLastLine(out string) (before, last string, ok bool) {
 	}
 	return out[:i+1], out[i+1:], true
 }
+
+// A panic leaves ExecuteC without a command, but the failure must still be
+// tracked, and a hidden helper that panics must still report as text to the
+// parent wendy that reads its stderr.
+func TestCommandForAPanicIsTheOneTheArgumentsName(t *testing.T) {
+	root := &cobra.Command{Use: "wendy", SilenceErrors: true, SilenceUsage: true}
+	helper := &cobra.Command{Use: "__bmap-write", RunE: func(*cobra.Command, []string) error { panic("boom") }}
+	helper.Flags().String("device", "", "")
+	root.AddCommand(helper)
+	args := []string{"__bmap-write", "--device", "/dev/disk4"}
+	root.SetArgs(args)
+
+	executed, err := executeRecovering(root.ExecuteC)
+	if executed != nil {
+		t.Fatalf("executed = %v, want nil straight after a panic", executed)
+	}
+	if got := commandFor(root, args, executed, err); got != helper {
+		t.Fatalf("commandFor = %v, want the helper the arguments name", got)
+	}
+
+	var out strings.Builder
+	reportFailure(&out, err, commandFor(root, args, executed, err), append([]string{"--json"}, args...))
+	if strings.HasPrefix(out.String(), "{") || strings.Contains(out.String(), `"error":`) {
+		t.Errorf("a panicking helper reported JSON to its parent:\n%s", out.String())
+	}
+
+	// Without a panic the executed command is kept, even when it is nil.
+	plain := errors.New("unknown command")
+	if got := commandFor(root, []string{"banana"}, nil, plain); got != nil {
+		t.Errorf("commandFor without a panic = %v, want nil", got)
+	}
+	if got := commandFor(root, args, root, plain); got != root {
+		t.Errorf("commandFor = %v, want the executed command", got)
+	}
+}

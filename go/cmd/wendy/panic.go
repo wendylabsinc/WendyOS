@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"runtime/debug"
 
@@ -42,4 +43,19 @@ func executeRecovering(execute func() (*cobra.Command, error)) (executed *cobra.
 		}
 	}()
 	return execute()
+}
+
+// commandFor returns the command a failed invocation ran. A recovered panic
+// leaves executed nil, so the command the arguments name is looked up
+// instead: the failure is still tracked, and a hidden "__" helper still
+// reports as text to the parent wendy reading its stderr.
+func commandFor(root *cobra.Command, args []string, executed *cobra.Command, err error) *cobra.Command {
+	var internal *internalError
+	if executed != nil || !errors.As(err, &internal) {
+		return executed
+	}
+	if found, _, findErr := root.Find(args); findErr == nil {
+		return found
+	}
+	return nil
 }
