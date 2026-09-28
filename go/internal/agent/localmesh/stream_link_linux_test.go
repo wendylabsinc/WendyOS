@@ -459,3 +459,41 @@ func TestTLSStreamHelloPinsPeerAndCarriesControl(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTalkerAttributionTopAndReset(t *testing.T) {
+	l := &streamNodeLink{}
+	mkTCP := func(dst net.IP, dport uint16, n int) []byte {
+		p := make([]byte, 40+n)
+		p[0] = 0x45
+		binary.BigEndian.PutUint16(p[2:4], uint16(len(p)))
+		p[9] = 6
+		copy(p[12:16], net.ParseIP("10.88.1.204").To4())
+		copy(p[16:20], dst.To4())
+		binary.BigEndian.PutUint16(p[22:24], dport)
+		return p
+	}
+	dst := net.ParseIP("10.88.2.24")
+	l.noteTalker(mkTCP(dst, 43185, 100))
+	l.noteTalker(mkTCP(dst, 43185, 100))
+	other := net.ParseIP("10.88.1.185")
+	l.noteTalker(mkTCP(other, 80, 10))
+	key, st := l.topTalker()
+	if key.dst != "10.88.2.24" || key.port != 43185 || st.packets != 2 {
+		t.Fatalf("top=%v %+v", key, st)
+	}
+	// Reset: second call sees only new traffic.
+	l.noteTalker(mkTCP(other, 80, 10))
+	key, st = l.topTalker()
+	if key.dst != "10.88.1.185" || st.packets != 1 {
+		t.Fatalf("after reset top=%v %+v", key, st)
+	}
+	// Non-first fragment attributes without port.
+	frag := mkTCP(dst, 43185, 100)
+	frag[6], frag[7] = 0x20, 0x01
+	l.noteTalker(frag)
+	key, _ = l.topTalker()
+	if key.dst != "10.88.2.24" || key.port != -1 {
+		t.Fatalf("fragment top=%v", key)
+	}
+	l.noteTalker([]byte{0x45})
+}

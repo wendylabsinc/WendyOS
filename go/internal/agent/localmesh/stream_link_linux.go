@@ -131,6 +131,8 @@ type streamNodeLink struct {
 	lastIPWriteMS atomic.Int64
 	rxBytes       atomic.Int64
 	lastRxUnixNS  atomic.Int64
+	talkMu        sync.Mutex
+	talkers       map[talkerKey]*talkerStat
 	diagIP        bool
 }
 
@@ -139,6 +141,74 @@ type streamNodeLink struct {
 // non-BLE links; the diagnostic reports -1s there.
 type sockQueueProber interface {
 	SockQueue() (inQ, outQ int, err error)
+}
+
+// talkerKey identifies one endpoint-payload destination for top-talker
+// attribution: who is actually filling a BLE link.
+type talkerKey struct {
+	dst  string
+	port int
+}
+
+type talkerStat struct {
+	bytes   uint64
+	packets uint64
+}
+
+// noteTalker records an outbound TUN-originated IPv4 packet toward its
+// destination. Only first fragments carry ports; later fragments attribute
+// to port -1 of the same destination. Cheap enough to run always; reported
+// by the opt-in queue diagnostic.
+func (l *streamNodeLink) noteTalker(packet []byte) {
+	if len(packet) < 20 || packet[0]>>4 != 4 {
+		return
+	}
+	ihl := int(packet[0]&0x0f) * 4
+	if len(packet) < ihl {
+		return
+	}
+	key := talkerKey{dst: net.IP(packet[16:20]).String(), port: -1}
+	if binary.BigEndian.Uint16(packet[6:8])&0x1fff == 0 {
+		switch packet[9] {
+		case 6, 17:
+			if len(packet) >= ihl+4 {
+				key.port = int(binary.BigEndian.Uint16(packet[ihl+2 : ihl+4]))
+			}
+		default:
+			key.port = int(packet[9])
+		}
+	}
+	l.talkMu.Lock()
+	if l.talkers == nil {
+		l.talkers = make(map[talkerKey]*talkerStat)
+	}
+	st, ok := l.talkers[key]
+	if !ok {
+		if len(l.talkers) >= 16 {
+			l.talkMu.Unlock()
+			return
+		}
+		st = &talkerStat{}
+		l.talkers[key] = st
+	}
+	st.bytes += uint64(len(packet))
+	st.packets++
+	l.talkMu.Unlock()
+}
+
+// topTalker returns the heaviest destination since the last call and resets.
+func (l *streamNodeLink) topTalker() (talkerKey, talkerStat) {
+	l.talkMu.Lock()
+	defer l.talkMu.Unlock()
+	var best talkerKey
+	var bestStat talkerStat
+	for k, st := range l.talkers {
+		if st.bytes > bestStat.bytes {
+			best, bestStat = k, *st
+		}
+	}
+	l.talkers = nil
+	return best, bestStat
 }
 
 func newStreamNodeLink(conn net.Conn) *streamNodeLink {
@@ -174,7 +244,8 @@ func (l *streamNodeLink) queueDiagnosticLoop() {
 				activeMS = time.Since(time.Unix(0, started)).Milliseconds()
 			}
 			inQ, outQ := l.sockQueueDepths()
-			log.Printf("localmesh BLE queue peer=%s queued_bytes=%d byte_limit=%d queued_packets=%d enqueued=%d dequeued=%d dropped_capacity=%d dropped_expired=%d last_wait_ms=%d max_wait_ms=%d age_limit_ms=%d write_rate_bytes_s=%d active_bytes=%d active_ms=%d last_write_ms=%d rx_bytes=%d rx_last_ms_ago=%d sock_inq=%d sock_outq=%d", l.conn.RemoteAddr(), stats.Bytes, stats.ByteLimit, stats.Packets, stats.Enqueued, stats.Dequeued, stats.DroppedCapacity, stats.DroppedExpired, stats.LastDequeuedWaitMS, stats.MaxDequeuedWaitMS, stats.AgeLimitMS, stats.WriteRateBytesPerSec, activeBytes, activeMS, l.lastIPWriteMS.Load(), l.rxBytes.Load(), l.rxLastMSAgo(), inQ, outQ)
+			topKey, topStat := l.topTalker()
+			log.Printf("localmesh BLE queue peer=%s queued_bytes=%d byte_limit=%d queued_packets=%d enqueued=%d dequeued=%d dropped_capacity=%d dropped_expired=%d last_wait_ms=%d max_wait_ms=%d age_limit_ms=%d write_rate_bytes_s=%d active_bytes=%d active_ms=%d last_write_ms=%d rx_bytes=%d rx_last_ms_ago=%d sock_inq=%d sock_outq=%d top_talker=%s:%d top_bytes=%d top_packets=%d", l.conn.RemoteAddr(), stats.Bytes, stats.ByteLimit, stats.Packets, stats.Enqueued, stats.Dequeued, stats.DroppedCapacity, stats.DroppedExpired, stats.LastDequeuedWaitMS, stats.MaxDequeuedWaitMS, stats.AgeLimitMS, stats.WriteRateBytesPerSec, activeBytes, activeMS, l.lastIPWriteMS.Load(), l.rxBytes.Load(), l.rxLastMSAgo(), inQ, outQ, topKey.dst, topKey.port, topStat.bytes, topStat.packets)
 			last = stats
 		}
 	}
