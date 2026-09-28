@@ -27,6 +27,11 @@ type runtime struct {
 	mu          sync.Mutex
 	active      map[int32]struct{}
 	nextAttempt map[int32]time.Time
+	// nextDial is the earliest time this device may attempt its next
+	// outbound BLE dial, across all peers. Formation and redial bursts
+	// otherwise collide on the controller at once; serializing attempts
+	// lets each new link's birth burst drain before the next begins.
+	nextDial time.Time
 	// dialTimeouts counts consecutive dial-context timeouts per asset. Three
 	// in a row with no HCI progress means initiation itself is wedged (stale
 	// kernel hci_conn or a deaf peer), not merely a busy peer: only an
@@ -87,6 +92,25 @@ func (r *runtime) cheaperLinkReason(asset int32) string {
 		return reason
 	}
 	return "legacy-checker"
+}
+
+// globalDialPace is the minimum spacing between outbound BLE dial attempts
+// on one device, across all peers. Per-peer backoff already exists; this
+// serializes formation and redial bursts that would otherwise start all of
+// a device's links (and their catalog sync bursts) in the same seconds.
+// Inbound accepts are never paced.
+const globalDialPace = 5 * time.Second
+
+// admitDial reports whether an outbound dial may start now, and if so moves
+// the device-wide pacing marker forward. Now is a parameter for tests.
+func (r *runtime) admitDial(now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if now.Before(r.nextDial) {
+		return false
+	}
+	r.nextDial = now.Add(globalDialPace)
+	return true
 }
 
 // cheaperLinkReverify is the delay between a veto sample and its
@@ -413,6 +437,10 @@ func (r *runtime) scanOnce(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 			continue
 		}
 		if !r.shouldDial(peer.asset) {
+			continue
+		}
+		if !r.admitDial(now) {
+			r.cfg.Logger.Debug("BLE deferring dial on device-wide pace", zap.Int32("peer", peer.asset))
 			continue
 		}
 		if !r.claim(peer.asset) {

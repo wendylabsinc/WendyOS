@@ -124,3 +124,22 @@ func TestCheaperLinkDebounceStillShedsPersistentVeto(t *testing.T) {
 	defer stop()
 	waitForClosed(t, conn, true, 10*time.Second)
 }
+
+func TestAdmitDialPacesDeviceWide(t *testing.T) {
+	r := &runtime{cfg: Config{Logger: zap.NewNop()}}
+	now := time.Now()
+	if !r.admitDial(now) {
+		t.Fatal("first dial denied")
+	}
+	if r.admitDial(now.Add(4 * time.Second)) {
+		t.Fatal("second dial admitted inside 5s window")
+	}
+	if !r.admitDial(now.Add(5 * time.Second)) {
+		t.Fatal("dial denied after window elapsed")
+	}
+	// A second runtime (another device) is unaffected.
+	other := &runtime{cfg: Config{Logger: zap.NewNop()}}
+	if !other.admitDial(now) {
+		t.Fatal("independent device paced by another")
+	}
+}

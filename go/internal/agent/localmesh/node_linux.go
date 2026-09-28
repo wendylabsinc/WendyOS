@@ -627,8 +627,8 @@ func (n *Node) readTUN(ctx context.Context, p *nodePeer) error {
 		n.gate.RUnlock()
 		if allowed {
 			sequence++
-			if talker, ok := p.link.(interface{ noteTalker([]byte) }); ok {
-				talker.noteTalker(packet)
+			if talker, ok := p.link.(interface{ noteTalker([]byte, bool) }); ok {
+				talker.noteTalker(packet, true)
 			}
 			if stream, ok := p.link.(interface{ SendIP(uint32, []byte) error }); ok {
 				if err := stream.SendIP(sequence, packet); err != nil {
@@ -687,6 +687,9 @@ func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 			}
 			n.gate.RLock()
 			if !n.stopped {
+				if talker, ok := p.link.(interface{ noteTalker([]byte, bool) }); ok {
+					talker.noteTalker(packet, false)
+				}
 				_, err = p.tun.Write(packet)
 			}
 			n.gate.RUnlock()

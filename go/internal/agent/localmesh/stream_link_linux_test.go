@@ -473,27 +473,34 @@ func TestTalkerAttributionTopAndReset(t *testing.T) {
 		return p
 	}
 	dst := net.ParseIP("10.88.2.24")
-	l.noteTalker(mkTCP(dst, 43185, 100))
-	l.noteTalker(mkTCP(dst, 43185, 100))
+	l.noteTalker(mkTCP(dst, 43185, 100), true)
+	l.noteTalker(mkTCP(dst, 43185, 100), true)
 	other := net.ParseIP("10.88.1.185")
-	l.noteTalker(mkTCP(other, 80, 10))
-	key, st := l.topTalker()
-	if key.dst != "10.88.2.24" || key.port != 43185 || st.packets != 2 {
-		t.Fatalf("top=%v %+v", key, st)
+	l.noteTalker(mkTCP(other, 80, 10), true)
+	outKey, outStat, _, _ := l.topTalker()
+	if outKey.dst != "10.88.2.24" || outKey.port != 43185 || outStat.packets != 2 {
+		t.Fatalf("top=%v %+v", outKey, outStat)
 	}
 	// Reset: second call sees only new traffic.
-	l.noteTalker(mkTCP(other, 80, 10))
-	key, st = l.topTalker()
-	if key.dst != "10.88.1.185" || st.packets != 1 {
-		t.Fatalf("after reset top=%v %+v", key, st)
+	l.noteTalker(mkTCP(other, 80, 10), true)
+	outKey, outStat, _, _ = l.topTalker()
+	if outKey.dst != "10.88.1.185" || outStat.packets != 1 {
+		t.Fatalf("after reset top=%v %+v", outKey, outStat)
 	}
 	// Non-first fragment attributes without port.
 	frag := mkTCP(dst, 43185, 100)
 	frag[6], frag[7] = 0x20, 0x01
-	l.noteTalker(frag)
-	key, _ = l.topTalker()
-	if key.dst != "10.88.2.24" || key.port != -1 {
-		t.Fatalf("fragment top=%v", key)
+	l.noteTalker(frag, true)
+	outKey, _, _, _ = l.topTalker()
+	if outKey.dst != "10.88.2.24" || outKey.port != -1 {
+		t.Fatalf("fragment top=%v", outKey)
 	}
-	l.noteTalker([]byte{0x45})
+	// Inbound attributes the source port.
+	inPkt := mkTCP(dst, 43185, 100)
+	l.noteTalker(inPkt, false)
+	_, _, inKey, inStat := l.topTalker()
+	if inKey.dst != "10.88.1.204" || inKey.port != 0 || inStat.packets != 1 {
+		t.Fatalf("inbound top=%v %+v", inKey, inStat)
+	}
+	l.noteTalker([]byte{0x45}, true)
 }
