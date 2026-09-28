@@ -2693,6 +2693,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 	var gate *readinessGate
 	defer func() { runCancel(); gate.wait(); runner.reap() }()
 	hookFired := false
+	taskEnded := make(chan struct{}) // closed when the output ends on its own
 
 	gotFirstResponse := false
 	// Set when the stream ends on a genuine failure (as opposed to a clean
@@ -2703,6 +2704,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 	for {
 		resp, recvErr := outStream.Recv()
 		if recvErr == io.EOF {
+			close(taskEnded)
 			break
 		}
 		if recvErr != nil {
@@ -2738,7 +2740,7 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		if resp.GetStarted() != nil && !hookFired {
 			hookFired = true
 			if opts.waitReady {
-				gate = startReadinessGate(runCtx, conn, appCfg, opts, true, func() { runner.startAsync(runCtx, appCfg) })
+				gate = startReadinessGate(runCtx, conn, appCfg, opts, gateTarget{stopOnFailure: true, base: startedAppBaseline(appCfg), taskEnded: taskEnded}, func() { runner.startAsync(runCtx, appCfg) })
 			} else {
 				runner.startAsync(runCtx, appCfg)
 			}
@@ -2772,6 +2774,12 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		// errTerminated on SIGTERM.
 		stopInterruptedApp(ctx, conn, appCfg)
 		return ErrUserCancelled
+	}
+	if gate.Replaced() {
+		// Another deployment replaced the app during the check; the gate left
+		// it running. A success, as in attachedExitOutcome.
+		noteAppReplaced(appCfg)
+		return nil
 	}
 	if err := gate.Err(); err != nil {
 		return err
@@ -3267,9 +3275,11 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 	defer func() { hookCancel(); gate.wait(); runner.reap() }()
 	hookFired := false
 	started := false
+	taskEnded := make(chan struct{}) // closed when the output ends on its own
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
+			close(taskEnded)
 			break
 		}
 		if err != nil {
@@ -3318,7 +3328,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 					return nil
 				}
 				if opts.waitReady {
-					gate = startReadinessGate(hookCtx, conn, appCfg, opts, true, func() { runner.startAsync(hookCtx, appCfg) })
+					gate = startReadinessGate(hookCtx, conn, appCfg, opts, gateTarget{stopOnFailure: true, base: startedAppBaseline(appCfg), taskEnded: taskEnded}, func() { runner.startAsync(hookCtx, appCfg) })
 				} else {
 					runner.startAsync(hookCtx, appCfg)
 				}
@@ -3344,6 +3354,12 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 		// like the interrupt branch above.
 		stopInterruptedApp(ctx, conn, appCfg)
 		return ErrUserCancelled
+	}
+	if gate.Replaced() {
+		// Another deployment replaced the app during the check; the gate left
+		// it running. A success, as in attachedExitOutcome.
+		noteAppReplaced(appCfg)
+		return nil
 	}
 	if err := gate.Err(); err != nil {
 		return err

@@ -63,7 +63,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 	if opts.waitReady {
 		// Following never started the app, so a failed --wait-ready fails the
 		// run without stopping it.
-		gate = startReadinessGate(runCtx, conn, appCfg, opts, false, func() { runner.startAsync(runCtx, appCfg) })
+		gate = startReadinessGate(runCtx, conn, appCfg, opts, gateTarget{base: base}, func() { runner.startAsync(runCtx, appCfg) })
 	} else {
 		runner.startAsync(runCtx, appCfg)
 	}
@@ -101,6 +101,10 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if ctx.Err() != nil {
 				return interrupted()
 			}
+			if gate.Replaced() {
+				noteAppReplaced(appCfg)
+				return nil
+			}
 			if err := gate.Err(); err != nil {
 				return notReady(err)
 			}
@@ -128,6 +132,10 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if ctx.Err() != nil {
 				return interrupted() // Ctrl-C or SIGTERM during that wait
 			}
+			if gate.Replaced() {
+				noteAppReplaced(appCfg)
+				return nil
+			}
 			if err := gate.Err(); err != nil {
 				return err
 			}
@@ -136,6 +144,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 				return interrupted() // Ctrl-C or SIGTERM while confirming a SIGKILL
 			}
 			if replaced {
+				noteAppReplaced(appCfg)
 				return nil
 			}
 			if failure := appExitFailure(appCfg.AppID, container); failure != nil {

@@ -94,7 +94,7 @@ With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is no
 
 A run that fails before the check prints its `failed` object and also reports the error on stderr. Ctrl-C or SIGTERM prints no object at any point; during the wait, both leave the app running.
 
-Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check fails the run and stops the app, except when nothing changed since the last deploy and `wendy run` only follows the app that was already running: that run did not start the app, so it fails without stopping it. Host-side postStart actions run only after the check passes.
+Without `--detach`, `--wait-ready` runs the same check while streaming logs. A failed check fails the run and stops the app, except when nothing changed since the last deploy and `wendy run` only follows the app that was already running: that run did not start the app, so it fails without stopping it. If another deployment replaces the app during the check, the run reports the replacement and leaves the new app running. Host-side postStart actions run only after the check passes.
 
 `--wait-ready` currently supports single-container image projects (Dockerfile, Containerfile, Stagefile, or Python) on WendyOS devices. It is rejected for multi-service, Compose and Xcode projects, native Mac apps, Swift packages built without a Dockerfile, local provider targets such as `--device docker`, `--build-host`, `--watch`, `--hil`, and `--deploy`.
 

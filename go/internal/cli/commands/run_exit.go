@@ -124,27 +124,29 @@ func (base appBaseline) versionChanged(c *agentpb.AppContainer) bool {
 	return base.version != "" && c.GetAppVersion() != "" && c.GetAppVersion() != base.version
 }
 
+// noteAppReplaced tells the developer that another deployment replaced the
+// run's app. Each run prints it at most once, where it ends on that outcome.
+func noteAppReplaced(appCfg *appconfig.AppConfig) {
+	cliNotice("Application %s was replaced by another deployment.", containerDisplayName(appCfg))
+}
+
 // appReplacedAfterKill reports whether c, the record an app this run
 // deployed or followed left when it stopped, shows that another deployment
-// replaced it, and announces it if so. A record on another app_version than
-// base's is another deployment's outright. Otherwise only a SIGKILL record
-// (killedBySIGKILL) is in doubt; for any other c it returns false at once.
-// For one, it polls the agent for up to appReplaceConfirmWindow: an app no
-// longer reported, on another app_version, stopped with no recorded exit
-// (created, not started), or otherwise past the SIGKILL record with a
-// failure_count at or below base's was replaced — a start resets the count,
-// while the restart policy raises it above the baseline before every restart.
-// A restart by the restart policy, or the SIGKILL record for the whole
-// window, means the app really was killed: false, so the caller reports c as
-// a crash. Unreadable polls keep the SIGKILL record's verdict. It returns
-// ctx's error if ctx ends first.
+// replaced it; the caller announces that (noteAppReplaced). A record on
+// another app_version than base's is another deployment's outright.
+// Otherwise only a SIGKILL record (killedBySIGKILL) is in doubt; for any
+// other c it returns false at once. For one, it polls the agent for up to
+// appReplaceConfirmWindow: an app no longer reported, on another app_version,
+// stopped with no recorded exit (created, not started), or otherwise past the
+// SIGKILL record with a failure_count at or below base's was replaced — a
+// start resets the count, while the restart policy raises it above the
+// baseline before every restart. A restart by the restart policy, or the
+// SIGKILL record for the whole window, means the app really was killed:
+// false, so the caller reports c as a crash. Unreadable polls keep the
+// SIGKILL record's verdict. It returns ctx's error if ctx ends first.
 func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, base appBaseline, c *agentpb.AppContainer) (bool, error) {
-	replaced := func() (bool, error) {
-		cliNotice("Application %s was replaced by another deployment.", containerDisplayName(appCfg))
-		return true, nil
-	}
 	if base.versionChanged(c) {
-		return replaced()
+		return true, nil
 	}
 	if !killedBySIGKILL(c) {
 		return false, nil
@@ -169,12 +171,12 @@ func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection,
 		case err != nil:
 			continue // still the killed task's record, as far as we can tell
 		case now == nil, base.versionChanged(now):
-			return replaced()
+			return true, nil
 		case killedBySIGKILL(now):
 			continue
 		case now.GetRunningState() == agentpb.AppRunningState_STOPPED && now.GetTerminationReason() == "",
 			now.GetFailureCount() <= base.failures:
-			return replaced()
+			return true, nil
 		default:
 			return false, nil // restarted (or about to be) by its restart policy
 		}
@@ -204,6 +206,7 @@ func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, 
 				return ErrUserCancelled
 			}
 			if replaced {
+				noteAppReplaced(appCfg)
 				return nil
 			}
 			if failure := appExitFailure(appCfg.AppID, c); failure != nil {
