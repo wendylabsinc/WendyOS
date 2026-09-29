@@ -2,10 +2,9 @@ version: 1
 name: objects-can-and-bottle
 
 sources:
-  # Exactly one colour camera. Depth pairs only with a campaign that resolves
-  # to a single camera, so this example does not use camera: "*". Replace the
-  # identifier with your colour camera's, as `wendy data sources --kind camera`
-  # lists it.
+  # Exactly one colour camera: depth pairs only with a campaign that resolves
+  # to one colour camera. Replace the identifier with your colour camera's, as
+  # `wendy data sources --kind camera` lists it.
   - camera: v4l2:/dev/video4
     capture:
       mode: continuous
@@ -67,9 +66,12 @@ objects:
       - {primitive: cylinder, w_m: [0.014, 0.018], h_m: [0.008, 0.012]}
 
 depth:
-  # The depth stream's source identifier, exactly as `wendy data sources`
-  # lists it; `wendy --device <device> device hardware list --category camera`
-  # marks a node that offers Z16 depth frames with depth=z16.
+  # The depth node. This is a camera selector, resolved as the camera: source
+  # above is, so a unique fragment of the node's name also works. The example
+  # uses an exact identifier because the nodes of one depth camera can share a
+  # name, which makes a fragment ambiguous.
+  # `wendy --device <device> device hardware list --category camera` marks a
+  # node that offers Z16 depth frames with depth=z16.
   source: v4l2:/dev/video0
   # Millimetre depth.
   scale_m: 0.001
@@ -88,7 +90,7 @@ capture:
   after_trigger: 10s
   triggers:
     - event: coke_can_seen
-    - object.bottle.confidence: "> 0.8"
+    - object.bottle.confidence: "> 0.7"
 
 upload:
   # Keep episodes on the device while you tune the descriptors.

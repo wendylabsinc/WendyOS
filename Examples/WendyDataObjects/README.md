@@ -16,14 +16,17 @@ are described in the
 
 Three values in the YAML are placeholders for your hardware:
 
-* `sources[0].camera` is the colour camera. Use its identifier exactly as
-  `wendy --device <device> data sources --kind camera` lists it. The example
-  names one camera rather than `camera: "*"` because depth pairs only with a
-  campaign that resolves to exactly one camera; with more, the depth source is
-  reported as unavailable.
-* `depth.source` is the depth stream, also as `wendy data sources` lists it.
-  The agent passes this value to the camera service unchanged, so a name
-  fragment or an alias such as `front` is not accepted here.
+* `sources[0].camera` is the colour camera. Use its identifier as
+  `wendy --device <device> data sources --kind camera` lists it. Depth pairs
+  only when the campaign resolves to exactly one colour camera; with more, the
+  depth source is reported as unavailable. Once `depth.source` resolves to a
+  node, that node is never counted or searched as a colour camera.
+* `depth.source` is the depth node. It is a camera selector, resolved the way a
+  `camera:` source is: an exact identifier, a `/dev/videoN` path, a unique
+  fragment of the camera's name, or `front` or `default` when exactly one
+  healthy camera exists. The example uses an exact identifier because the
+  nodes of one depth camera can share a name, which makes a fragment
+  ambiguous; an ambiguous or unknown selector is reported in `objects_status`.
   `wendy --device <device> device hardware list --category camera` marks a
   video node that offers Z16 depth frames with `depth=z16`.
 * `depth.intrinsics` holds placeholder values for an Intel RealSense D435-class
@@ -92,9 +95,9 @@ to top, with a `size` for the whole bottle of 5 to 6 centimetres wide and 24 to
 as the `shape` attribute and the `shape` attribute's own `expect` is not read;
 declaring `shape` is what gives the composition a weight. Without it, the
 composition score is reported under `unweighted` and does not move the
-confidence. The capture trigger `object.bottle.confidence: "> 0.8"` starts an
-episode from any bottle prediction record above 0.8 except `lost`; see the next
-section for why it does not fire in this release.
+confidence. The capture trigger `object.bottle.confidence: "> 0.7"` starts an
+episode from any bottle prediction record above 0.7 except `lost`. The next
+section explains why the threshold and the trigger sit at 0.7.
 
 Because the two objects use different cadence forms, the worker samples each
 camera at 7.5 frames per second, the larger of `coke_can`'s rate of 4 and 30
@@ -112,31 +115,47 @@ confidence. In the records, `size` is listed in `unavailable` and missing from
 `objects_status.sources` shows the depth source as
 `depth unavailable: <reason>`.
 
-Which cameras can serve as `depth.source`, in the words of the reference: "A
-depth source that cannot be opened, or that does not deliver `z16` raw frames,
-is reported there and the search runs without it." In this release the camera
-service delivers camera samples to the world view as encoded video (H.264 or
-VP8), never as `z16` raw frames, so no camera is paired as a depth source yet
-and `size` is always unavailable. The `depth` block is included so the example
-is complete once a raw depth producer exists; until then expect
-`depth unavailable: samples are "h264", not z16 raw frames with known dimensions`
-or a similar reason.
+Which cameras can serve as `depth.source`, in the words of the reference:
+"`depth.source` must be a `v4l2` camera whose Video for Linux 2 (V4L2) node
+advertises the `Z16 ` pixel format, such as the depth node of an Intel
+RealSense D400 camera. The agent reads that node natively, without GStreamer,
+and serves only its raw depth frames; cameras that deliver depth through a
+vendor software development kit (SDK), such as ZED and OAK-D, cannot be used.
+The colour frames the search scores still come from the campaign's camera
+sources as encoded video, so those are limited to the cameras the agent can
+already stream."
 
-That leaves `coke_can` scored on shape and colour, with weights 1 and 1.5, which
-can still reach 0.75. It leaves `bottle` scored on its composition alone, and
-the worker segments a bottle as a single region, which the agent matches
-against one part: the first part whose solid can cast the region's outline.
-Without depth that is the body for a rectangle or disc outline, and the score is
-the body's share of the expected height, about 0.74; a trapezoid matches the
-shoulder and scores about 0.22, and an `other` outline matches nothing and
-scores 0. So `bottle_seen` can fire at the 0.7 threshold, but the
-`object.bottle.confidence: "> 0.8"` trigger cannot be reached without depth.
-With depth, the single region measures as the whole bottle, which is taller
-than the body's range, so the composition scores below its ceiling of 0.74:
-about 0.07 for a 27 centimetre bottle, for a confidence of about 0.53, and no
-height in the bottle's `size` range brings the confidence to 0.74. The trigger
-is in the example to show the second trigger form; treat it as unreachable in
-this release.
+So depth pairs when `depth.source` names a node that advertises Z16 and the
+campaign resolves to exactly one colour camera. The agent then waits up to 10
+seconds for the node's first frame, forwards depth frames to the worker at up
+to 20 a second, and the worker pairs a colour frame with the latest depth frame
+when the two are at most one sampling interval apart, never less than 100
+milliseconds; at this campaign's 7.5 frames per second that is about 133
+milliseconds. A node that does not
+deliver `z16` frames is reported as `depth unavailable` with the reason, and
+the search runs without depth.
+
+With depth, `coke_can` is scored on shape, size and colour, with weights 1, 0.5
+and 1.5; without it, on shape and colour, which can still reach 0.75.
+
+`bottle` is where this version shows its limits. The worker segments a bottle
+as a single region, and the agent matches one proposal as one part: the first
+part, bottom to top, whose solid can cast the region's outline. The composition
+score is that part's fit weighted by its share of the expected height, so one
+region can never earn the shares of the other two parts. Without depth, a
+rectangle or disc outline matches the body and scores the body's share, about
+0.74, which is the ceiling; a trapezoid matches the shoulder and scores about
+0.22, and an `other` outline matches nothing and scores 0. That ceiling is why
+the fusion threshold and the confidence trigger are 0.7. It is a property of
+this version's one-proposal, one-part matching, not of bottles.
+
+With depth the same limit bites harder. The single region measures as the whole
+bottle, which is taller than the body's range, so the body's fit falls: for a
+27 centimetre bottle the composition scores about 0.07 and, with `size` fitting
+fully, the confidence is about 0.53, below the 0.7 threshold. The best any
+measured size reaches is about 0.74, for a bottle close to 24 centimetres tall.
+Expect the bottle to be matched without depth and rarely with it, until the
+worker can segment and measure a bottle's parts separately.
 
 ## The proposer
 

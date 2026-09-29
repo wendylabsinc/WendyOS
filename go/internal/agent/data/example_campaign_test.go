@@ -135,6 +135,11 @@ func TestShippedObjectsCampaignParses(t *testing.T) {
 	if bottle.Event != "bottle_seen" || bottle.EveryFrames != 4 || bottle.Rate != 0 {
 		t.Errorf("bottle event, every_frames, rate = %q, %d, %v; want bottle_seen, 4, 0", bottle.Event, bottle.EveryFrames, bottle.Rate)
 	}
+	// The composition alone cannot score above about 0.74 in this version, so
+	// a higher threshold would make the bottle unmatchable.
+	if bottle.Fusion.Threshold != 0.7 {
+		t.Errorf("bottle fusion threshold = %v, want 0.7", bottle.Fusion.Threshold)
+	}
 	// Without a declared shape the composition would score but be unweighted.
 	if bottle.Attributes["shape"] == nil || bottle.Attributes["size"] == nil {
 		t.Errorf("bottle attributes = %v, want shape and size", bottle.Attributes)
@@ -171,7 +176,7 @@ func TestShippedObjectsCampaignParses(t *testing.T) {
 	}
 	if _, expression, matched := campaign.Match(prediction("bottle", 0.9)); !matched {
 		t.Error("a bottle prediction at confidence 0.9 did not fire the campaign")
-	} else if expression != `object.bottle.confidence > 0.8` {
+	} else if expression != `object.bottle.confidence > 0.7` {
 		t.Errorf("bottle trigger expression = %q", expression)
 	}
 	if reason, _, matched := campaign.Match(prediction("bottle", 0.7)); matched {
