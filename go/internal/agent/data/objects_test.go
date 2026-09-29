@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -81,6 +82,7 @@ func parseWorldView(t *testing.T, contents string) Campaign {
 func TestParseCampaignObjectsRoundTrip(t *testing.T) {
 	campaign := parseWorldView(t, worldViewCampaignYAML)
 	falseValue := false
+	minFloor := 0.6
 	want := map[string]*ObjectDescriptor{
 		"coke_can": {
 			Event: "coke_can_seen", Rate: 2, ClearAfter: "5s", Cooldown: "30s",
@@ -94,7 +96,7 @@ func TestParseCampaignObjectsRoundTrip(t *testing.T) {
 						map[string]any{"lab": []any{95, 0, 0}, "share": 0.2},
 					},
 					"tolerance": 20,
-				}, Weight: 1.5, Min: 0.6},
+				}, Weight: 1.5, Min: &minFloor},
 			},
 		},
 		"bottle": {
@@ -161,6 +163,35 @@ func TestParseCampaignObjectsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestObjectAttributeMinZeroIsKept guards the difference between an absent
+// min, which takes the 0.5 default, and a declared min of 0, which must stay 0
+// rather than be silently replaced by the default.
+func TestObjectAttributeMinZeroIsKept(t *testing.T) {
+	zero := parseWorldView(t, strings.Replace(worldViewCampaignYAML, "min: 0.6", "min: 0", 1))
+	colour := zero.Objects["coke_can"].Attributes["colour"]
+	if colour.Min == nil || *colour.Min != 0 || colour.VetoFloor() != 0 {
+		t.Fatalf("min: 0 did not parse as 0: min=%v floor=%g", colour.Min, colour.VetoFloor())
+	}
+	stored, err := json.Marshal(zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored Campaign
+	if err := json.Unmarshal(stored, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.Objects["coke_can"].Attributes["colour"]; got.Min == nil || *got.Min != 0 || got.VetoFloor() != 0 {
+		t.Fatalf("min: 0 did not survive the stored plan: %s", stored)
+	}
+	absent := parseWorldView(t, strings.Replace(worldViewCampaignYAML, "        min: 0.6\n", "", 1))
+	if got := absent.Objects["coke_can"].Attributes["colour"]; got.Min != nil || got.VetoFloor() != 0.5 {
+		t.Fatalf("absent min: min=%v floor=%g, want nil and 0.5", got.Min, got.VetoFloor())
+	}
+	if zero.Revision == absent.Revision {
+		t.Fatal("min: 0 and an absent min hash to the same revision")
+	}
+}
+
 func TestParseCampaignObjectsRejections(t *testing.T) {
 	for _, tc := range []struct {
 		name, old, new, want string
@@ -186,6 +217,7 @@ func TestParseCampaignObjectsRejections(t *testing.T) {
 		{"zero weight", "weight: 0.5", "weight: 0", "objects.coke_can.attributes.size.weight must be a finite number greater than 0"},
 		{"infinite weight", "weight: 0.5", "weight: .inf", "objects.coke_can.attributes.size.weight must be a finite number greater than 0"},
 		{"min above 1", "min: 0.6", "min: 1.2", "objects.coke_can.attributes.colour.min must be in [0, 1]"},
+		{"negative min", "min: 0.6", "min: -0.1", "objects.coke_can.attributes.colour.min must be in [0, 1]"},
 		{"unknown attribute kind", "      shape:\n        expect: {primitive: cylinder", "      texture:\n        expect: {primitive: cylinder", "unknown attribute kind \"texture\"; supported kinds are class, colour, shape, size"},
 		{"unknown shape key", "{primitive: cylinder, aspect: [1.6, 2.1]}", "{primitive: cylinder, aspect: [1.6, 2.1], sides: 3}", "unknown keys sides"},
 		{"unknown shape primitive", "{primitive: cylinder, aspect", "{primitive: torus, aspect", "primitive must be one of cylinder, box, sphere, cone"},
@@ -430,5 +462,78 @@ func TestDeployWarnsObjectsDoNotRunYet(t *testing.T) {
 	stored, err := manager.Campaign(campaign.Name)
 	if err != nil || stored.Revision != campaign.Revision || len(stored.Objects) != 2 || stored.Depth == nil {
 		t.Fatalf("stored campaign lost world view fields: %+v, %v", stored, err)
+	}
+}
+
+// docsCokeCanExampleYAML is the world view example from the campaign YAML
+// reference, go/internal/cli/assets/docs/clients/wendy-cli/commands/data.md,
+// copied verbatim. The test below also checks that the reference still holds
+// this exact text, so the published example cannot drift from what parses.
+const docsCokeCanExampleYAML = `version: 1
+name: coke-can-watch
+sources:
+  - camera: front
+objects:
+  coke_can:
+    event: coke_can_seen
+    rate: 2
+    clear_after: 5s
+    cooldown: 30s
+    fusion:
+      threshold: 0.75
+      required: [shape, colour]
+    attributes:
+      shape:
+        expect: {primitive: cylinder}
+        weight: 1
+      size:
+        expect: {w_m: [0.06, 0.07], h_m: [0.11, 0.13]}
+        weight: 0.5
+      colour:
+        expect:
+          palette:
+            - {lab: [45, 65, 45], share: 0.6}
+          tolerance: 25
+        weight: 1.5
+depth:
+  source: front-depth
+  scale_m: 0.001
+  intrinsics: {fx: 615.2, fy: 615.9, cx: 320.5, cy: 240.25}
+capture:
+  buffer: 5s
+  after_trigger: 10s
+  triggers:
+    - object.coke_can.confidence: "> 0.8"
+upload:
+  when: wifi
+export:
+  annotation: cvat
+`
+
+func TestDocsWorldViewExampleParses(t *testing.T) {
+	campaign, err := ParseCampaign([]byte(docsCokeCanExampleYAML))
+	if err != nil {
+		t.Fatalf("the documented world view example does not parse: %v", err)
+	}
+	can := campaign.Objects["coke_can"]
+	if len(campaign.Objects) != 1 || can == nil || campaign.Depth == nil {
+		t.Fatalf("documented example lost its objects or depth: %+v", campaign)
+	}
+	if got := can.Attributes["shape"].Expect["primitive"]; got != "cylinder" {
+		t.Fatalf("shape primitive = %v, want cylinder", got)
+	}
+	size := can.Attributes["size"].Expect
+	if !reflect.DeepEqual(size["w_m"], []any{0.06, 0.07}) || !reflect.DeepEqual(size["h_m"], []any{0.11, 0.13}) {
+		t.Fatalf("size = %v, want w_m [0.06, 0.07] and h_m [0.11, 0.13]", size)
+	}
+	if got := campaign.Capture.Triggers[0].ObjectConfidence; !reflect.DeepEqual(got, map[string]string{"coke_can": "> 0.8"}) {
+		t.Fatalf("trigger = %v", got)
+	}
+	docs, err := os.ReadFile("../../cli/assets/docs/clients/wendy-cli/commands/data.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(docs), "```yaml\n"+docsCokeCanExampleYAML+"```") {
+		t.Fatal("data.md no longer contains this example verbatim; update the constant and this test together")
 	}
 }

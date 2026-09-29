@@ -303,10 +303,10 @@ disk space outside the episode quota. Remote model code is disabled.
 |---|---|---|
 | `model` | yes | `owner/repository` or `https://huggingface.co/owner/repository`; a Transformers object-detection checkpoint. |
 | `revision` | yes | Lowercase, 40-character Hugging Face commit SHA. Branch names are rejected. |
-| `labels` | yes | 1–32 unique, nonempty model labels, each at most 128 bytes. |
+| `labels` | yes | 1 to 32 unique, nonempty model labels, each at most 128 bytes. |
 | `threshold` | yes | Detection confidence in `(0, 1]`. |
 | `rate` | yes | Frames per second per camera in `(0, 30]`. |
-| `event` | yes | Event emitted on detection; 1–128 letters, numbers, `.`, `-`, or `_`. |
+| `event` | yes | Event emitted on detection; 1 to 128 letters, numbers, `.`, `-`, or `_`. |
 | `clear_after` | yes | Continuous absence needed to clear presence; positive duration, at most 24h. |
 | `cooldown` | yes | Minimum interval between detection events; positive duration, at most 24h. |
 | `enabled` | no | Defaults to `true`; `false` keeps the configuration but stops inference. |
@@ -340,15 +340,15 @@ objects and needs at least one camera source.
 
 | Field | Required | Description |
 |---|---|---|
-| `event` | yes | Event emitted when the object is found; 1–128 letters, numbers, `.`, `-`, or `_`. Unique across objects, and different from `inference.event`. |
+| `event` | yes | Event emitted when the object is found; 1 to 128 letters, numbers, `.`, `-`, or `_`. Unique across objects, and different from `inference.event`. |
 | `rate` | one of | Frames per second per camera in `(0, 30]`. |
 | `every_frames` | one of | Search every Nth frame, N in `[1, 300]`. Set exactly one of `rate` and `every_frames`. |
 | `clear_after` | yes | Continuous absence needed to clear presence; positive duration, at most 24h. |
 | `cooldown` | yes | Minimum interval between events; positive duration, at most 24h. |
 | `fusion.threshold` | yes | Fused confidence in `(0, 1]` a candidate must reach. |
 | `fusion.required` | no | Attributes that veto a candidate whose own score is below that attribute's `min`, whatever the fused score. Each must be one of the object's attributes, listed once. |
-| `attributes` | yes | At least one attribute, keyed by kind. Each has `expect`, a `weight` greater than 0, and an optional `min` in `[0, 1]` (the veto floor, default 0.5). |
-| `composition` | no | 1–8 parts, each `{primitive, w_m, h_m}`, for an object built from several solids. |
+| `attributes` | yes | At least one attribute, keyed by kind. Each has `expect`, a `weight` greater than 0, and an optional `min` in `[0, 1]`, the veto floor for a required attribute. An omitted `min` takes the default of 0.5; an explicit `min: 0` is kept as 0. |
+| `composition` | no | 1 to 8 parts, each `{primitive, w_m, h_m}`, for an object built from several solids. |
 | `enabled` | no | Defaults to `true`; `false` keeps the configuration but stops the search. |
 
 Attribute kinds and their `expect` keys. Unknown kinds and unknown `expect`
@@ -358,7 +358,7 @@ keys are rejected.
 |---|---|
 | `shape` | `primitive`: one of `cylinder`, `box`, `sphere` or `cone`. Optional `aspect`: a `[min, max]` aspect ratio range, `0 < min <= max`. |
 | `size` | `w_m` and `h_m`: `[min, max]` in metres, `0 < min <= max <= 10`. Optional `d_m` in the same form. |
-| `colour` | `palette`: 1–8 entries `{lab: [L, a, b], share: 0..1}` in the International Commission on Illumination (CIE) L\*a\*b\* colour space, L in `0..100`, a and b in `-128..127`, shares summing to at most 1. Optional `tolerance`: CIE76 delta E in `(0, 100]`, default 25. |
+| `colour` | `palette`: 1 to 8 entries `{lab: [L, a, b], share: 0..1}` in the International Commission on Illumination (CIE) L\*a\*b\* colour space, L in `0..100`, a and b in `-128..127`, shares summing to at most 1. Optional `tolerance`: CIE76 delta E in `(0, 100]`, default 25. |
 | `class` | `source: app` and `label`, the label an application's predictions carry, at most 128 bytes. Optional `model` names the application model. |
 
 `size` measures metric extent, which a camera frame alone cannot give. Without

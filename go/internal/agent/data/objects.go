@@ -44,9 +44,10 @@ type ObjectFusion struct {
 type ObjectAttribute struct {
 	Expect map[string]any `json:"expect" yaml:"expect"`
 	Weight float64        `json:"weight" yaml:"weight"`
-	// Min is the veto floor when the attribute is in fusion.required. Zero
-	// means unset and takes defaultObjectVetoFloor.
-	Min float64 `json:"min,omitempty" yaml:"min,omitempty"`
+	// Min is the veto floor when the attribute is in fusion.required. Nil
+	// means unset and takes defaultObjectVetoFloor; an explicit 0 is kept as
+	// 0, so a declared floor is never replaced by the default.
+	Min *float64 `json:"min,omitempty" yaml:"min,omitempty"`
 }
 
 // defaultObjectVetoFloor applies to a required attribute that declares no min.
@@ -54,10 +55,10 @@ const defaultObjectVetoFloor = 0.5
 
 // VetoFloor returns the declared min, or the default when none is declared.
 func (a *ObjectAttribute) VetoFloor() float64 {
-	if a == nil || a.Min == 0 {
+	if a == nil || a.Min == nil {
 		return defaultObjectVetoFloor
 	}
-	return a.Min
+	return *a.Min
 }
 
 // ObjectPrimitive is one part of an object built from several simple solids,
@@ -230,7 +231,7 @@ func (o *ObjectDescriptor) validate(path string) error {
 		if w := attribute.Weight; math.IsNaN(w) || math.IsInf(w, 0) || w <= 0 {
 			return fmt.Errorf("%s.weight must be a finite number greater than 0", at)
 		}
-		if m := attribute.Min; math.IsNaN(m) || m < 0 || m > 1 {
+		if m := attribute.Min; m != nil && (math.IsNaN(*m) || *m < 0 || *m > 1) {
 			return fmt.Errorf("%s.min must be in [0, 1]", at)
 		}
 		if err := validateExpect(attribute.Expect); err != nil {
@@ -475,6 +476,8 @@ func (c Campaign) objectsDigestInput() map[string]any {
 	for name, object := range c.Objects {
 		attributes := make(map[string]any, len(object.Attributes))
 		for kind, attribute := range object.Attributes {
+			// Min is hashed as the pointer, as enabled is, so an absent min and
+			// an explicit one are different plans.
 			attributes[kind] = map[string]any{"expect": attribute.Expect, "weight": attribute.Weight, "min": attribute.Min}
 		}
 		// Absent and empty required lists mean the same thing and hash alike.
