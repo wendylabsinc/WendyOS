@@ -191,7 +191,7 @@ func TestRenderBuildFailureShowsTheFailingStepOutput(t *testing.T) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "OCI export) failed") {
+	if strings.Contains(got, "Cause: docker buildx build (OCI export) failed") {
 		t.Errorf("summary fell back to the builder's exit status:\n%s", got)
 	}
 }
@@ -308,9 +308,37 @@ func TestRenderBuildFailureReturnsTheStepAndCause(t *testing.T) {
 	if err.Error() != "build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo" || !errors.Is(err, buildErr) {
 		t.Fatalf("err = %q", err)
 	}
-	for _, want := range []string{"  Step: build 4/4 — RUN go build -o /out/app .\n", "  Build log: /tmp/wendy-build-image-1.log\n"} {
+	for _, want := range []string{
+		"  Step: build 4/4 — RUN go build -o /out/app .\n",
+		// The builder's own error stays visible above the rewritten one.
+		"  Error: docker buildx build (OCI export) failed: exit status 1\n",
+		"  Build log: /tmp/wendy-build-image-1.log\n",
+	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("details block missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// Only an image build's failure is rewritten. Any other failure the details
+// block summarizes — the builder could not be set up, a remote build host
+// failed — keeps its own message, and the details block shows it once.
+func TestBuildFailureErrorRewritesOnlyImageBuildFailures(t *testing.T) {
+	original := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = original }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-1.log", nil }
+	log := readBuildFailureFixture(t, "go-compile.log")
+	for _, buildErr := range []error{
+		classifyCommandError(errBuilderUnavailable, errors.New(`bootstrapping buildx builder "wendy-oci": exit status 1`)),
+		errors.New("pushing the build context to spark-office: connection reset by peer"),
+	} {
+		var out strings.Builder
+		err := renderBuildFailure(&out, "", log, buildErr)
+		if err != buildErr {
+			t.Errorf("%q was rewritten to %q", buildErr, err)
+		}
+		if got := strings.Count(out.String(), buildErr.Error()); got != 1 {
+			t.Errorf("details block shows %q %d times, want once:\n%s", buildErr, got, out.String())
 		}
 	}
 }

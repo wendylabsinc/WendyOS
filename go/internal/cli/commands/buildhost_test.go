@@ -262,8 +262,10 @@ func TestClassifyRemoteBuildError_JudgesTheHostsErrorNotTheBuildSummary(t *testi
 		t.Fatalf("delivery failure = %q (image build failure: %v), want the host's delivery error", deliveryErr, isImageBuildFailure(deliveryErr))
 	}
 
+	// The host's error is not an image-build failure until classified here,
+	// so runBuildWithProgress leaves its message alone.
 	buildErr := remoteBuild(readBuildFailureFixture(t, "go-compile.log"), status.Error(codes.Internal, "build failed: exit status 1"))
-	if want := "build on spark-office failed or did not complete: build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo"; !isImageBuildFailure(buildErr) || buildErr.Error() != want {
+	if want := "build on spark-office failed or did not complete: rpc error: code = Internal desc = build failed: exit status 1"; !isImageBuildFailure(buildErr) || buildErr.Error() != want {
 		t.Fatalf("build failure = %q, want %q", buildErr, want)
 	}
 }

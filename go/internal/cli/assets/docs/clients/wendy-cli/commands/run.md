@@ -66,7 +66,7 @@ When another deployment replaces the app (for example `wendy run --detach` from 
 - A run that only follows an app it did not start (see above) checks the app every second: if a check finds the new app already running, the run keeps following it; otherwise it ends as above.
 - With `--wait-ready` and no `--detach`, the readiness check also ends as soon as the run's output does, and a replacement it finds is reported the same way: the run exits 0, leaves the new app running, and runs no postStart actions for it. It also counts as a replacement the app running with fewer restarts counted than when the run began following it, or, once the output of a run that started the app has ended, running with none counted. A failed check never stops an app the device does not list, or lists as stopped with no exit recorded.
 
-When the image build fails, `wendy run` prints the build failure details, including the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last line of the step's output, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
+When the image build fails, `wendy run` prints the build failure details, including the builder's own error and the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last line of the step's output, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
 
 ## Waiting for readiness: `--wait-ready`
 

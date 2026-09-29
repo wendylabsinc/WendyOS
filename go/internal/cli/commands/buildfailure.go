@@ -178,15 +178,21 @@ type buildFailureCauseError struct {
 func (e *buildFailureCauseError) Error() string { return e.message }
 func (e *buildFailureCauseError) Unwrap() error { return e.err }
 
-// buildFailureError returns buildErr with the failing step and the cause as
-// its message — "build failed at [<stage n/m>] <command>: <cause>", or "build
-// failed: <cause>" when the log does not name the step that failed — so the
-// run's final error line, a --wait-ready "failed" object and the JSON error
-// envelope say what failed. The cause is the last line of the failing step's
-// output when that output is the cause, else the summarized cause. Without a
-// cause, and for a cancellation, buildErr is returned unchanged.
+// buildFailureError returns an image build's failure with the failing step
+// and the cause as its message — "build failed at [<stage n/m>] <command>:
+// <cause>", or "build failed: <cause>" when the log does not name the step
+// that failed — so the run's final error line, a --wait-ready "failed" object
+// and the JSON error envelope say what failed. The cause is the last line of
+// the failing step's output when that output is the cause, else the
+// summarized cause. Any other failure (the builder could not be set up, a
+// remote build host failed), a failure with no cause found, and a
+// cancellation keep buildErr unchanged; the details block shows buildErr's
+// own message either way.
 func buildFailureError(summary buildFailureSummary, buildErr error) error {
 	if buildErr == nil || errors.Is(buildErr, ErrUserCancelled) || errors.Is(buildErr, context.Canceled) {
+		return buildErr
+	}
+	if !isImageBuildFailure(buildErr) && !errors.Is(buildErr, errBuildFailed) {
 		return buildErr
 	}
 	cause := summary.cause
@@ -208,9 +214,10 @@ func buildFailureError(summary buildFailureSummary, buildErr error) error {
 }
 
 // renderBuildFailure prints the build failure's details (the failing step,
-// its cause, where it is, and the path of the full log, which it saves) and
-// returns the error to report in buildErr's place: buildErr with the step
-// and cause in its message (buildFailureError).
+// its cause, the builder's own error, where it is, and the path of the full
+// log, which it saves) and returns the error to report in buildErr's place:
+// for an image build, buildErr with the step and cause in its message
+// (buildFailureError).
 func renderBuildFailure(w io.Writer, label, raw string, buildErr error) error {
 	summary := summarizeBuildFailure(raw, buildErr)
 	heading := "Build failure details"
@@ -230,6 +237,11 @@ func renderBuildFailure(w io.Writer, label, raw string, buildErr error) error {
 		fmt.Fprintf(w, "  Cause: %s\n", summary.cause)
 	} else if summary.fallback != "" {
 		fmt.Fprintf(w, "  Cause: %s\n", summary.fallback)
+	}
+	if summary.cause != "" && buildErr != nil {
+		// The error the returned one may replace (buildFailureError). CI's
+		// OCI-export retry (go/scripts/test-ci.sh) also greps for it.
+		fmt.Fprintf(w, "  Error: %s\n", strings.Join(strings.Fields(buildErr.Error()), " "))
 	}
 	if summary.source != "" {
 		fmt.Fprintf(w, "  At: %s\n", summary.source)
