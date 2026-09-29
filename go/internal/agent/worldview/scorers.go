@@ -237,11 +237,15 @@ func ScoreSize(p Proposal, expect SizeExpect) Evidence {
 	return ev
 }
 
-// ScoreColour grades the proposal's palette. For each expected entry it finds
-// the closest observed entry by CIE76 delta E; the entry's match is
-// max(0, 1 - dE / tolerance) times min(1, observedShare / expectedShare), and
-// the score is the share-weighted mean over expected entries. It is unavailable
-// when either palette is empty.
+// ScoreColour grades the proposal's palette. An expected entry's match against
+// one observed entry is max(0, 1 - dE / tolerance) times
+// min(1, observedShare / expectedShare), with dE the CIE76 delta E; each
+// expected entry takes its best match over the observed entries, and the score
+// is the share-weighted mean over expected entries. The best match, not the
+// closest colour, is taken because the worker's k-means can split one uniform
+// colour into near-identical clusters, and the closest of those can be a
+// sliver that scores a solid red object on a small fraction of its surface. It
+// is unavailable when either palette is empty.
 func ScoreColour(p Proposal, expect ColourExpect) Evidence {
 	ev := Evidence{Attribute: AttributeColour, Detail: map[string]any{}}
 	if len(p.Palette) == 0 {
@@ -265,18 +269,23 @@ func ScoreColour(p Proposal, expect ColourExpect) Evidence {
 	entries := make([]map[string]any, 0, len(expect.Palette))
 	sum, weights := 0.0, 0.0
 	for _, e := range expect.Palette {
-		best, bestDE := 0, math.Inf(1)
+		best, bestDE, match := -1, math.Inf(1), -1.0
 		for i, o := range p.Palette {
-			if d := DeltaE76(e.Lab, o.Lab); d < bestDE {
-				best, bestDE = i, d
+			d := DeltaE76(e.Lab, o.Lab)
+			shareFit := 1.0
+			if e.Share > 0 {
+				shareFit = math.Min(1, math.Max(0, o.Share)/e.Share)
+			}
+			m := math.Max(0, 1-d/tolerance) * shareFit
+			if math.IsNaN(m) {
+				m = 0
+			}
+			// Ties on match go to the closer colour, then the earlier entry.
+			if m > match || (m == match && d < bestDE) {
+				best, bestDE, match = i, d, m
 			}
 		}
 		observed := p.Palette[best].Share
-		shareFit := 1.0
-		if e.Share > 0 {
-			shareFit = math.Min(1, math.Max(0, observed)/e.Share)
-		}
-		match := math.Max(0, 1-bestDE/tolerance) * shareFit
 		weight := 1.0
 		if totalShare > 0 {
 			weight = math.Max(0, e.Share)

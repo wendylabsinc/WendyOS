@@ -197,6 +197,11 @@ func TestScoreColour(t *testing.T) {
 		{"far colour", []PaletteEntry{{[3]float64{0, 0, 0}, 1}}, expect, true, 0},
 		{"zero tolerance uses default of 25", []PaletteEntry{{grey, 0.6}, {[3]float64{50, 70, 0}, 0.4}},
 			ColourExpect{Palette: expect.Palette}, true, 0.6 + 0.4*(1-10.0/25)},
+		// k-means split one red into two clusters 1 delta E apart; the sliver
+		// is the closer colour, the bulk the better match.
+		{"a colour split into near-identical clusters scores on its best match",
+			[]PaletteEntry{{[3]float64{50, 59, 0}, 0.85}, {red, 0.12}, {grey, 0.03}},
+			ColourExpect{Palette: []PaletteEntry{{red, 0.6}}, Tolerance: 25}, true, 1 - 1.0/25},
 		{"zero expected shares weigh equally", []PaletteEntry{{grey, 0.5}, {[3]float64{50, 70, 0}, 0.5}},
 			ColourExpect{Palette: []PaletteEntry{{grey, 0}, {red, 0}}, Tolerance: 20}, true, (1 + 0.5) / 2},
 	}
