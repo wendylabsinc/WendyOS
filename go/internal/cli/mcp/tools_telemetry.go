@@ -14,14 +14,12 @@ import (
 )
 
 var telemetryProtoJSON = protojson.MarshalOptions{
-	Multiline:       true,
-	Indent:          "  ",
 	EmitUnpopulated: false,
 }
 
 func (s *mcpServer) registerTelemetryTools(srv *server.MCPServer) {
 	logsOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Stream a bounded snapshot of OTLP logs from the connected device"),
+		mcpgo.WithDescription("Collect compact log events from the connected device. format=otlp returns raw batches. Omitted counts cover collected records only."),
 		mcpgo.WithString("app_name",
 			mcpgo.Description("Filter by app/container name (optional)"),
 		),
@@ -31,19 +29,14 @@ func (s *mcpServer) registerTelemetryTools(srv *server.MCPServer) {
 		mcpgo.WithNumber("min_severity",
 			mcpgo.Description("Minimum severity (TRACE=1, DEBUG=5, INFO=9, WARN=13, ERROR=17, FATAL=21)"),
 		),
-		mcpgo.WithNumber("max_batches",
-			mcpgo.Description("Maximum OTLP batches to collect (default 10)"),
-		),
-		mcpgo.WithNumber("max_bytes",
-			mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)"),
-		),
 	}
+	logsOpts = append(logsOpts, telemetryOptions()...)
 	logsOpts = append(logsOpts, readOnly()...)
 	logsOpts = append(logsOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("telemetry_logs", logsOpts...), s.handleTelemetryLogs)
 
 	metricsOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Stream a bounded snapshot of OTLP metrics from the connected device. For the device's battery level and charge state, use device_info."),
+		mcpgo.WithDescription("Collect compact metric points; format=otlp returns raw batches. Use device_info for battery readings."),
 		mcpgo.WithString("app_name",
 			mcpgo.Description("Filter by app/container name (optional)"),
 		),
@@ -53,19 +46,14 @@ func (s *mcpServer) registerTelemetryTools(srv *server.MCPServer) {
 		mcpgo.WithString("metric_name_prefix",
 			mcpgo.Description("Filter by metric name prefix (optional)"),
 		),
-		mcpgo.WithNumber("max_batches",
-			mcpgo.Description("Maximum OTLP batches to collect (default 10)"),
-		),
-		mcpgo.WithNumber("max_bytes",
-			mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)"),
-		),
 	}
+	metricsOpts = append(metricsOpts, telemetryOptions()...)
 	metricsOpts = append(metricsOpts, readOnly()...)
 	metricsOpts = append(metricsOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("telemetry_metrics", metricsOpts...), s.handleTelemetryMetrics)
 
 	tracesOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Stream a bounded snapshot of OTLP traces from the connected device"),
+		mcpgo.WithDescription("Collect compact trace spans; format=otlp returns raw batches."),
 		mcpgo.WithString("app_name",
 			mcpgo.Description("Filter by app/container name (optional)"),
 		),
@@ -75,13 +63,8 @@ func (s *mcpServer) registerTelemetryTools(srv *server.MCPServer) {
 		mcpgo.WithString("span_name_prefix",
 			mcpgo.Description("Filter by span name prefix (optional)"),
 		),
-		mcpgo.WithNumber("max_batches",
-			mcpgo.Description("Maximum OTLP batches to collect (default 10)"),
-		),
-		mcpgo.WithNumber("max_bytes",
-			mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)"),
-		),
 	}
+	tracesOpts = append(tracesOpts, telemetryOptions()...)
 	tracesOpts = append(tracesOpts, readOnly()...)
 	tracesOpts = append(tracesOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("telemetry_traces", tracesOpts...), s.handleTelemetryTraces)
@@ -118,6 +101,10 @@ func collectProtoStream[T proto.Message](
 }
 
 func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	opts, err := parseTelemetryOptions(req)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
 	conn := s.GetConn()
 	if conn == nil {
 		return errNotConnected(), nil
@@ -134,7 +121,7 @@ func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolR
 		v32 := int32(v)
 		logsReq.MinSeverity = &v32
 	}
-	maxBatches := intParam(req, "max_batches", 10)
+	maxBatches := opts.maxBatches
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -154,10 +141,14 @@ func (s *mcpServer) handleTelemetryLogs(ctx context.Context, req mcpgo.CallToolR
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
-	return okListBounded("batches", result, intParam(req, "max_bytes", 100000)), nil
+	return telemetryResult("logs", result, opts), nil
 }
 
 func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	opts, err := parseTelemetryOptions(req)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
 	conn := s.GetConn()
 	if conn == nil {
 		return errNotConnected(), nil
@@ -173,7 +164,7 @@ func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallTo
 	if v := stringParam(req, "metric_name_prefix"); v != "" {
 		metricsReq.MetricNamePrefix = &v
 	}
-	maxBatches := intParam(req, "max_batches", 10)
+	maxBatches := opts.maxBatches
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -188,10 +179,14 @@ func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallTo
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
-	return okListBounded("batches", result, intParam(req, "max_bytes", 100000)), nil
+	return telemetryResult("metrics", result, opts), nil
 }
 
 func (s *mcpServer) handleTelemetryTraces(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	opts, err := parseTelemetryOptions(req)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
 	conn := s.GetConn()
 	if conn == nil {
 		return errNotConnected(), nil
@@ -207,7 +202,7 @@ func (s *mcpServer) handleTelemetryTraces(ctx context.Context, req mcpgo.CallToo
 	if v := stringParam(req, "span_name_prefix"); v != "" {
 		tracesReq.SpanNamePrefix = &v
 	}
-	maxBatches := intParam(req, "max_batches", 10)
+	maxBatches := opts.maxBatches
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -222,5 +217,5 @@ func (s *mcpServer) handleTelemetryTraces(ctx context.Context, req mcpgo.CallToo
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
-	return okListBounded("batches", result, intParam(req, "max_bytes", 100000)), nil
+	return telemetryResult("traces", result, opts), nil
 }

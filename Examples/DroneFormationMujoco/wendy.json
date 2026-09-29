@@ -1,0 +1,13 @@
+{
+  "appId": "drone-formation-mujoco",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8879 }
+  ],
+  "readiness": {
+    "tcpSocket": { "port": 8879 },
+    "timeoutSeconds": 90
+  }
+}

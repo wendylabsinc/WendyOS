@@ -4,6 +4,131 @@ A browser workspace backed by Wendy's Go client compiled to WASM. It starts with
 an empty workspace. Device metrics, applications, and OpenTelemetry data come
 from connected agents; there is no demo mode.
 
+## Electron desktop
+
+The desktop workspace uses the same components and theme as the browser client.
+It bundles a CLI built from this checkout, so local workflows do not depend on
+the version of `wendy` installed on your PATH. The browser app still runs with
+`npm run dev` as described below.
+
+From `web-client`:
+
+```sh
+npm ci
+npm run desktop
+```
+
+This builds the CLI, copies the Go2 runtime source, prepares `node-pty` for
+Electron, and opens the desktop app with Vite on `127.0.0.1:5174`. Node.js 22.13+
+and Go 1.27+ are required to build. Compiling the terminal dependency may also
+require Xcode Command Line Tools on macOS or a C++ toolchain on Linux/Windows.
+
+To run without a development server, or produce a native application:
+
+```sh
+npm run desktop:build
+npm run desktop:start
+npm run desktop:package
+```
+
+The package is written to `release/` for the current OS and architecture. On
+macOS it contains `Wendy Desktop.app`. This is a local development package;
+release signing and notarization are not configured. Packaging includes only
+the desktop renderer, native bridge, terminal module, CLI, and simulator source.
+The packaged application does not need Node, Go, Vite, or a separate web server.
+
+- Choose **Docker** or **Apple Container** in the sidebar. Docker uses your
+  current context and environment. Apple Container requires an Apple silicon
+  Mac; **Start Apple Container** opens its service and builder setup prompts.
+- **Open folder**, then **Chat** for persistent interactive Wendy chat. The
+  settings button configures the model/provider through Wendy's existing setup.
+  Chat credentials stay in Wendy's CLI configuration. Tool approval remains
+  interactive. Open an empty folder and ask chat to create an app, or open an
+  existing Wendy project.
+- **Build** and **Build & run** use an explicit target. Local container targets
+  select their own provider; remote devices use the selected builder.
+  A target can be `docker`, `apple-container`, `vm:name`, or a Wendy device
+  address. Output and any CLI prompts appear in persistent sessions below.
+- **New simulator** offers Unitree Go2, Unitree G1, and Raspberry Pi app simulation.
+  Robot simulation builds the checked-in image with the selected runtime
+  and starts an isolated container with a loopback-only viewer port. The first
+  build downloads pinned ROS, MuJoCo, model and policy dependencies. Each robot
+  uses 4 CPUs and 4 GiB. The live viewer appears after the endpoint's simulation
+  identity is verified. The 3D canvas and movement controls are part of the
+  desktop page, with no embedded page or nested viewer scrollbar. Scrolling
+  over the scene scrolls the workspace; zoom uses the + and − buttons.
+  Camera, lidar, pause, and reset controls stay beside the view. World, sensor,
+  and ROS app settings expand below. Pausing or a robot fault leaves the viewer
+  available to recover.
+- **Raspberry Pi apps** uses a generic ARM64 WendyOS VM through QEMU with 2 CPUs,
+  2 GiB of memory, and a 16 GiB virtual disk. It supports application development,
+  not Pi GPIO or peripheral emulation. QEMU installation and OS download progress
+  appear in the session. Readiness requires a response from the guest agent.
+  Open **Dashboard** to inspect the VM. Set the build and chat target in the sidebar
+  when you want to deploy to it. **Boot logs**
+  streams its serial console; **Device logs** streams app and agent logs.
+- **Devices & monitoring** lists existing local VMs and discovers network devices.
+  Open **Dashboard** directly from a device or VM row for live CPU, memory,
+  disk, GPU, temperature, and application usage. Metrics depend on the device.
+  **Logs** displays searchable records with application and severity filters,
+  pause/resume, and expandable details. **Containers** and simulator **Boot logs**
+  use the same log viewer. Monitoring runs in native app views and only connects
+  to already running VMs.
+- Simulator records persist across app restarts. Closing the app stops active
+  chat/build/installer sessions after confirmation; simulator containers and VMs keep
+  running. Use **Stop** to stop one. **Logs**, **Start**, and **Retry build**
+  operate only on that simulator's labeled container.
+  VM **Start**, **Stop**, and **Retry setup** operate on its dedicated VM record.
+- **Flash device** defaults to Raspberry Pi 5, with Pi 3/4 and Jetson developer
+  kits also available. Find the drive, review the exact release/target/checksum,
+  then open the installer. The desktop rechecks the plan and asks for native
+  confirmation before starting. Wendy retains its own disk, Wi-Fi, naming and
+  administrator prompts. No automatic `--yes` or internal-drive bypass is used.
+  Verify first boot at an explicit address after the write finishes.
+
+These container simulators have their own ROS loopback bus. An app run on the
+ordinary Docker or Apple Container target is a separate container and does not
+automatically join that bus. For the existing managed ROS app deployment flow,
+create a robot VM with `wendy vm create NAME --profile go2` or `--profile g1`
+and target `vm:NAME`.
+The managed VM flow currently builds its robot runtime with Docker. The desktop
+container viewer itself works with either runtime and requires no QEMU VM.
+
+Native access is confined to the desktop's main frame through a small preload
+API. The renderer is sandboxed with Node integration disabled. The desktop
+bundles the viewer code and requests only allowlisted simulator data and control
+endpoints through the native bridge. Container-hosted scripts never execute in
+the desktop renderer. Commands use argument arrays, never shell strings.
+Project paths require the native folder chooser; flash plans stay in the main
+process and cannot be replaced by a command array supplied by the renderer.
+The existing browser/cloud credential store is separate from CLI chat state.
+
+Validation:
+
+```sh
+npm run desktop:test
+npx tsc --noEmit
+npm run desktop:build
+# Hidden renderer fixture checks Dashboard and Logs interactions without devices.
+npx electron scripts/desktop-verify-monitoring.mjs
+WENDY_DESKTOP_SMOKE=1 npm run desktop:start
+# Optional integration check: builds a disposable simulator, verifies physical
+# movement and the viewer endpoint, then removes its own container.
+node scripts/desktop-verify-simulator.mjs docker
+node scripts/desktop-verify-simulator.mjs apple-container
+node scripts/desktop-verify-simulator.mjs docker g1
+node scripts/desktop-verify-simulator.mjs apple-container g1
+# Creates its own guest, deploys an app, checks Dashboard data and logs, and removes it.
+node scripts/desktop-verify-vm.mjs
+```
+
+The smoke launch checks the React renderer, preload, runtime probes and a real
+Electron terminal running the bundled CLI. Project actions can also be checked
+with `node scripts/desktop-verify-project.mjs docker` or `apple-container`.
+Flash tests use
+fixtures to verify changed-drive rejection and confirmation; they do not erase
+physical storage. Model responses require configured chat credentials.
+
 ## Run locally
 
 Install Node.js 22.13 or newer and Go 1.27 or newer, then run from `web-client`

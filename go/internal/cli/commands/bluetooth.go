@@ -240,7 +240,7 @@ func newBluetoothListCmd() *cobra.Command {
 				return nil
 			}
 
-			headers := []string{"Name", "Address", "RSSI", "Type", "Paired", "Connected"}
+			headers := []string{"Name", "Address", "RSSI", "Type", "Paired", "Connected", "Link timeout"}
 			var rows [][]string
 			for _, d := range allDevices {
 				paired := ""
@@ -258,6 +258,7 @@ func newBluetoothListCmd() *cobra.Command {
 					d.GetDeviceType(),
 					paired,
 					connected,
+					formatLinkTimeout(d),
 				})
 			}
 			fmt.Print(tui.RenderTable(headers, rows))

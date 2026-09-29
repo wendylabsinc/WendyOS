@@ -35,6 +35,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/buildargs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -2232,6 +2233,18 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 	return nil
 }
 
+// noteComposeChunkStall remembers a stalled uncompressed compose push, so the
+// device's next deploy uses gzip, and says so in the service's log. Compose
+// has no reconnect-and-retry loop; its existing registry fallback finishes
+// this deploy.
+func noteComposeChunkStall(logOutput io.Writer, chunkErr error, cfg chunkUploadConfig) {
+	if !errors.Is(chunkErr, chunkupload.ErrStalled) {
+		return
+	}
+	_ = rememberChunkUploadStall(cfg.stallKey, time.Now())
+	fmt.Fprintf(logOutput, "[chunks] no upload progress for %s; this device uses gzip for the next %d days\n", cfg.stallTimeout, chunkStallMemoryDays)
+}
+
 // buildAndPrepareComposeImageForAgent is the default Compose image path. It
 // builds into the same persistent OCI layout used by single-service chunk
 // deploys, updates Stagefile app layers natively when dependencies are stable,
@@ -2323,7 +2336,8 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 		})
 		return prepareErr
 	}
-	if _, chunkErr := pushLayersByChunksWithStrictPrepareOutput(ctx, conn.ContainerService, layers, prepare, streamOutput); chunkErr == nil {
+	uploadCfg := chunkUploadConfigFor(ctx, conn)
+	if _, chunkErr := pushLayersByChunksWithStrictPrepareOutput(ctx, conn.ContainerService, layers, prepare, streamOutput, uploadCfg); chunkErr == nil {
 		fmt.Fprintf(logOutput, "[chunks] prepared %s from missing content\n", imageName)
 		return nil
 	} else if ctx.Err() != nil {
@@ -2331,8 +2345,10 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	} else if blocksChunkPrepareFallback(chunkErr) {
 		return chunkErr
 	} else if !allowRegistryFallback {
+		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
 		return fmt.Errorf("chunk-diff image preparation failed and --chunking=force disables the registry fallback: %w", chunkErr)
 	} else {
+		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
 		fmt.Fprintf(logOutput, "[chunks] prepare unavailable (%v); falling back to registry push of the existing OCI layout\n", chunkErr)
 		if reporter, ok := streamOutput.(interface{ ReportRegistryFallback(error) }); ok {
 			reporter.ReportRegistryFallback(chunkErr)

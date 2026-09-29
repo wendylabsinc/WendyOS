@@ -64,6 +64,16 @@ func TestDeviceLogsHasNoKernelFlags(t *testing.T) {
 	}
 }
 
+func TestDeviceLogsNoFollowFlag(t *testing.T) {
+	f := newDeviceLogsCmd().Flags().Lookup("no-follow")
+	if f == nil {
+		t.Fatal("device logs needs --no-follow for a finite log sample")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("--no-follow default = %q, want false", f.DefValue)
+	}
+}
+
 func TestDeviceCmd_HasPs(t *testing.T) {
 	cmd := newDeviceCmd()
 	var found bool

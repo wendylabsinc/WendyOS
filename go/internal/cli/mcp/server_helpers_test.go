@@ -48,14 +48,18 @@ func structuredMap(t *testing.T, result *mcpgo.CallToolResult) map[string]any {
 func listPayload(t *testing.T, result *mcpgo.CallToolResult, key string) []map[string]any {
 	t.Helper()
 	structuredMap(t, result)
-	var env map[string][]map[string]any
+	var env map[string]json.RawMessage
 	text := toolResultText(t, result)
 	if err := json.Unmarshal([]byte(text), &env); err != nil {
 		t.Fatalf("text fallback is not a JSON object: %v (got %s)", err, text)
 	}
-	rows, ok := env[key]
+	raw, ok := env[key]
 	if !ok {
 		t.Fatalf("envelope is missing key %q (got %s)", key, text)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatalf("list %q: %v", key, err)
 	}
 	return rows
 }

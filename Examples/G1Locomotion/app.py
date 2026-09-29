@@ -41,7 +41,8 @@ def check(code, operation):
 def run(client, stop, grant_timeout=120.0, *, clock=time.monotonic):
     """Wait for ownership using zero velocity, then stream one finite sequence."""
     try:
-        print("Select this sport publisher in the simulator and click Give app control.", flush=True)
+        print("Waiting for simulator control. Managed G1 grants it automatically; "
+              "for a standalone simulator, select this sport publisher and click Give app control.", flush=True)
         deadline = clock() + grant_timeout
         while not stop.is_set():
             code = client.SetVelocity(0.0, 0.0, 0.0, LEASE)
@@ -50,7 +51,8 @@ def run(client, stop, grant_timeout=120.0, *, clock=time.monotonic):
             if code != DENIED:
                 check(code, "Waiting for simulator control")
             if clock() >= deadline:
-                raise RuntimeError("Timed out waiting for Give app control in the simulator.")
+                raise RuntimeError("Timed out waiting for simulator control. Resume or reset the world, "
+                                   "then restart the demo. Standalone simulators require Give app control.")
             stop.wait(PERIOD)
         if stop.is_set():
             return

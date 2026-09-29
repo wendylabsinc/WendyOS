@@ -29,6 +29,12 @@ class Server(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Keep the connection alive after large scene responses. Apple Container's
+    # published-port path can truncate buffered data when an HTTP/1.0 server
+    # closes immediately after writing. Every response includes Content-Length.
+    protocol_version = "HTTP/1.1"
+    timeout = 15
+
     def log_message(self, *_):
         pass
 
@@ -41,6 +47,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(payload)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         for key, value in (headers or {}).items():
             self.send_header(key, value)
@@ -98,10 +106,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             origin = self.headers.get("Origin")
             if origin and urlsplit(origin).netloc != self.headers.get("Host"):
+                self.close_connection = True
                 self.send(403, {"error": "cross-origin control is disabled"})
+                return
+            if self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
+                self.send(400, {"error": "use Content-Length for control requests"})
                 return
             size = int(self.headers.get("Content-Length", "0"))
             if size < 0 or size > 4096:
+                self.close_connection = True
                 self.send(413, {"error": "request too large"})
                 return
             body = json.loads(self.rfile.read(size) or b"{}")
@@ -160,6 +174,8 @@ class Handler(BaseHTTPRequestHandler):
         except PermissionError as exc:
             self.send(403, {"error": str(exc)})
         except (ValueError, TypeError) as exc:
+            # A malformed Content-Length can fail before its body is consumed.
+            self.close_connection = True
             self.send(400, {"error": str(exc)})
         except RuntimeError as exc:
             self.send(503, {"error": str(exc)})

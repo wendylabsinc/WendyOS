@@ -71,6 +71,23 @@ before running commands that need a target.
 > **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 > If the terminal is interactive, a prompt will be made to update the device right now.
 
+## Simulator startup and authentication failures
+
+While waiting for a simulator to boot, the CLI retries connection failures
+such as an agent that is not yet listening. It stops immediately if the
+connection fails because of a TLS authentication rejection, a device identity
+refusal, an organization mismatch, or a gRPC `Unauthenticated` or
+`PermissionDenied` response.
+
+For TLS authentication failures, run
+[`wendy auth refresh-certs`](./commands/auth/refresh-certs.md), then retry the
+original command. If it still fails, rerun with `WENDY_TLS_DEBUG=1` to see TLS
+diagnostics.
+
+Authentication failures omit the simulator's boot-console output. Ordinary
+startup timeouts still include the available boot-console tail to help
+diagnose guest startup problems.
+
 ## Local Targets
 
 The picker can also show local provider targets when the host supports them.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"strings"
 	"time"
 
@@ -93,7 +92,8 @@ func continueReadiness(ctx context.Context, tick <-chan time.Time, probe func(co
 func waitForAttachedReadiness(ctx context.Context, conn *grpcclient.AgentConnection, cfg *appconfig.AppConfig, hostname string) error {
 	started := time.Now()
 	readiness := effectiveReadiness(cfg)
-	err := waitForReadiness(ctx, readiness, hostname)
+	httpPort := cloudHTTPReadinessPort(conn, cfg, readiness)
+	err := waitForReadiness(ctx, readiness, hostname, httpPort)
 	if err == nil || ctx.Err() != nil {
 		return err
 	}
@@ -111,16 +111,13 @@ func waitForAttachedReadiness(ctx context.Context, conn *grpcclient.AgentConnect
 	cliLogln("Application %s is still starting after %s; continuing readiness checks every 5 seconds.", cfg.ContainerName(), time.Since(started).Round(time.Second))
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	addr := net.JoinHostPort(hostname, fmt.Sprint(readiness.TCPSocket.Port))
-	dialer := net.Dialer{Timeout: 2 * time.Second}
-	probe := func(ctx context.Context) bool {
-		connection, err := dialer.DialContext(ctx, "tcp", addr)
-		if err != nil {
-			return false
-		}
-		_ = connection.Close()
-		return true
-	}
+	_, probeOnce, closeProbe := makeReadinessProbe(
+		hostname,
+		readiness.TCPSocket.Port,
+		httpPort != 0 && httpPort == readiness.TCPSocket.Port,
+	)
+	defer closeProbe()
+	probe := func(ctx context.Context) bool { return probeOnce(ctx) == nil }
 	warned := false
 	err = continueReadiness(ctx, ticker.C, probe, running, func(err error) {
 		if !warned {

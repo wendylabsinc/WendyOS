@@ -21,22 +21,22 @@ import (
 
 func (s *mcpServer) registerLidarTool(srv *server.MCPServer) {
 	opts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Inspect LiDAR as compact spatial data with sensor-compatible QoS. Start with the default app scope: Wendy uses the running ROS app's DDS middleware, domain and discovery configuration, including host-network robot sensors. Discover topics with ros2_topics and keep the same scope/domain here; prefer a discovered point cloud or scan with a publisher. Explicit host scope uses a separate generic inspector and requires domain_id; it is not needed merely because LiDAR is built into a robot. Prefer this tool over raw YAML sampling. First sample without target_frame; add a verified body frame afterward for robot-relative axes. Read outcome and sensor_messages to distinguish an inspection timeout from confirmed no_messages; use suggested_next_step when present. Returns sector minima, XYZ samples, filters and timestamps. Empty sectors remain unknown."),
+		mcpgo.WithDescription("Summarize discovered LiDAR topics with sensor-compatible QoS. Keep discovery scope/domain; app inherits app DDS configuration. Prefer over raw YAML. First sample in its original frame; use only verified target frames. Check outcome, timestamps, filters, and coverage: empty sectors remain unknown and reception does not prove source freshness or motion readiness."),
 		mcpgo.WithString("topic", mcpgo.Required(), mcpgo.Description("Absolute topic discovered with ros2_topics, such as /utlidar/cloud_deskewed or /scan")),
 		mcpgo.WithString("message_type", mcpgo.Enum("sensor_msgs/msg/PointCloud2", "sensor_msgs/msg/LaserScan"), mcpgo.Description("Discovered topic type; default sensor_msgs/msg/PointCloud2")),
-		mcpgo.WithString("scope", mcpgo.Enum("app", "host"), mcpgo.Description("app (default) inherits the running ROS app's DDS configuration, including host discovery when configured. host uses a separate generic Humble/Fast DDS inspector and requires domain_id; use it when independently inspecting a host graph. Keep scope/domain consistent with discovery.")),
-		mcpgo.WithNumber("domain_id", mcpgo.Description("Integer ROS_DOMAIN_ID 0..232, required for host scope")),
+		mcpgo.WithString("scope", mcpgo.Enum("app", "host"), mcpgo.Description("app inherits app DDS configuration; host uses an independent inspector and requires domain_id. Match discovery scope.")),
+		mcpgo.WithInteger("domain_id", mcpgo.Min(0), mcpgo.Max(232), mcpgo.Description("ROS_DOMAIN_ID; required for host scope")),
 		mcpgo.WithString("target_frame", mcpgo.Description("Optional verified TF frame, e.g. base_link. Transform at the source timestamp; missing TF returns unknown. Default: original sensor/cloud frame.")),
 		mcpgo.WithBoolean("use_sim_time", mcpgo.Description("Use ROS /clock for timestamp diagnostics and TF; only enable for a graph using simulated time (default false)")),
-		mcpgo.WithNumber("duration_seconds", mcpgo.Description("Total RPC budget including discovery/setup, integer 1..60 (default 10)")),
-		mcpgo.WithNumber("count", mcpgo.Description("Maximum independently summarized messages, integer 1..5 (default 1)")),
-		mcpgo.WithNumber("min_z", mcpgo.Description("Minimum height in output frame, meters -100..100 (default -1); filters affect all reported distances")),
-		mcpgo.WithNumber("max_z", mcpgo.Description("Maximum height in output frame, meters -100..100 (default 2), greater than min_z")),
-		mcpgo.WithNumber("min_range", mcpgo.Description("Minimum horizontal XY distance from output-frame origin, meters 0..1000 (default 0.05)")),
-		mcpgo.WithNumber("max_range", mcpgo.Description("Maximum horizontal XY distance, meters 0..1000 (default 20), greater than min_range")),
-		mcpgo.WithNumber("max_points", mcpgo.Description("Decode budget per message, integer 100..1000000 (default 200000). Oversized clouds fail explicitly; points are never skipped when computing minima.")),
-		mcpgo.WithNumber("sample_points", mcpgo.Description("Bounded representative XYZ output, integer 0..128 (default 32); sector minima use all included points")),
-		mcpgo.WithNumber("max_bytes", mcpgo.Description("Maximum serialized tool result, integer 2048..100000 (default 32000); summaries omitted whole when over budget")),
+		mcpgo.WithInteger("duration_seconds", mcpgo.Min(1), mcpgo.Max(60), mcpgo.DefaultNumber(10), mcpgo.Description("Total time including discovery/setup")),
+		mcpgo.WithInteger("count", mcpgo.Min(1), mcpgo.Max(5), mcpgo.DefaultNumber(1), mcpgo.Description("Maximum independently summarized messages")),
+		mcpgo.WithNumber("min_z", mcpgo.Min(-100), mcpgo.Max(100), mcpgo.DefaultNumber(-1), mcpgo.Description("Minimum output-frame height in meters; affects all distances")),
+		mcpgo.WithNumber("max_z", mcpgo.Min(-100), mcpgo.Max(100), mcpgo.DefaultNumber(2), mcpgo.Description("Maximum output-frame height in meters; must exceed min_z")),
+		mcpgo.WithNumber("min_range", mcpgo.Min(0), mcpgo.Max(1000), mcpgo.DefaultNumber(0.05), mcpgo.Description("Minimum horizontal distance from output-frame origin in meters")),
+		mcpgo.WithNumber("max_range", mcpgo.Min(0), mcpgo.Max(1000), mcpgo.DefaultNumber(20), mcpgo.Description("Maximum horizontal distance in meters; must exceed min_range")),
+		mcpgo.WithInteger("max_points", mcpgo.Min(100), mcpgo.Max(1000000), mcpgo.DefaultNumber(200000), mcpgo.Description("Decode budget; oversized clouds fail rather than skip points")),
+		mcpgo.WithInteger("sample_points", mcpgo.Min(0), mcpgo.Max(128), mcpgo.DefaultNumber(32), mcpgo.Description("Representative XYZ points; sector minima use all included points")),
+		mcpgo.WithInteger("max_bytes", mcpgo.Min(2048), mcpgo.Max(100000), mcpgo.DefaultNumber(32000), mcpgo.Description("Result byte limit; oversized summaries omitted whole")),
 	}
 	opts = append(opts, readOnly()...)
 	opts = append(opts, localOnly()...)

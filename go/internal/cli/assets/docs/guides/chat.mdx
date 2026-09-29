@@ -226,7 +226,14 @@ For commands inside a running device container, Wendy uses `container_exec`
 through the active direct or cloud connection. Commands use an argument array;
 shell syntax requires an explicit shell command. Execution is noninteractive,
 bounded by a timeout and output limit, and asks for approval. Use `telemetry_logs`
-for passive log inspection. `container_attach` starts or restarts the app.
+for passive log inspection. `container_start` may restart and interrupt the app;
+the legacy `container_attach` tool is no longer advertised.
+
+Wendy starts with 15 core MCP tools. The assistant can enable specialist tools
+with `wendy_tools`, including setup, hardware, robotics, observability, and cloud
+groups. Telemetry returns compact records by default; `format="otlp"` returns
+raw batches. See [MCP tools](/docs/integrations/mcp) for configuration, compatibility,
+and workflows that still require the CLI.
 
 | Key or command | Action |
 | --- | --- |

@@ -413,9 +413,14 @@ func TestAgentUpdateTerminalError(t *testing.T) {
 			wantUnconfirmed: true,
 		},
 		{
-			name:       "update already in progress explains the stale-lock reboot",
+			name:       "update already in progress points at a running update",
 			recvErr:    status.Error(codes.FailedPrecondition, "an update is already in progress"),
-			wantSubstr: "reboot",
+			wantSubstr: "another OS or agent update may still be running",
+		},
+		{
+			name:       "update already in progress keeps the stale-lock reboot hint",
+			recvErr:    status.Error(codes.FailedPrecondition, "an update is already in progress"),
+			wantSubstr: "reboot the device",
 		},
 		{
 			name:       "sha mismatch is reported verbatim",

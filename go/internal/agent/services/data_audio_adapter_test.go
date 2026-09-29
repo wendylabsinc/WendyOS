@@ -915,6 +915,14 @@ func TestAudioRecorderExitBeforeStopIsACaptureError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adapter start: %v", err)
 	}
+	t.Cleanup(func() { _, _ = running.Stop(context.Background()) })
+	// Start returns after the first chunk, before the read loop necessarily
+	// observes EOF. Wait for the early exit before Stop marks it as intentional.
+	select {
+	case <-running.(*audioCaptureGroup).captures[0].done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture did not finish after the recorder exited")
+	}
 	results, stopErr := running.Stop(context.Background())
 	if stopErr == nil {
 		t.Fatal("a recorder that exited before Stop was reported as a clean end of capture")

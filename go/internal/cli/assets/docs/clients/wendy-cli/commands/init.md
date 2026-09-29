@@ -29,8 +29,8 @@ An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that
 
 ## What it produces
 
-1. Picks the **target**, so template and language choices can be filtered to what that target supports. A concrete `--template <name>` resolves first instead: when the template supports exactly one target, the question is skipped and the target is inferred with a notice; when it supports several, the picker is narrowed to those.
-2. Picks a **template** (`--template`), or continues with the plain wizard.
+1. Picks a **deployment group** within the Linux, Mac, or Microcontrollers tab. A concrete `--template <name>` resolves first instead: when the template supports exactly one target, the question is skipped and the target is inferred with a notice; when it supports several, the picker is narrowed to those.
+2. Shows the **projects** for that deployment group. Select a project template (`--template`), or choose **No template** to continue with manual setup.
 3. Picks the **language**. Skipped with a notice when the chosen template offers exactly one language.
 4. Collects **entitlements** — the capabilities the app needs. See [Entitlements](../../../apps/wendy.json.md#entitlements-1).
 5. Collects **framework** configuration — currently ROS 2. See [Frameworks](#frameworks).
@@ -38,6 +38,12 @@ An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that
 7. Optionally launches an AI assistant (`--assistant`).
 
 ## Targets
+
+The interactive picker has Linux, Mac, and Microcontrollers tabs, matching `wendy install`. Press Tab or Shift+Tab to switch tabs. Under Linux, choose Edge AI, Unitree G1, Unitree Go2, or ROSMaster to see that group's projects. Edge AI contains general Linux edge applications. Robot groups appear when the catalog has projects for them. Mac and Microcontrollers offer macOS and ESP32 projects.
+
+Press Enter to open a group, then select a project. **Back to deployment groups** returns to the group picker. **No template** starts manual setup. A bare `--template` also uses the groups, with projects limited to `--target` when supplied. A concrete `--template <name>` skips group browsing.
+
+Catalog authors can set a Linux template's optional `deployment` field in `meta.json` to `edge-ai`, `unitree-g1`, `unitree-go2`, or `rosmaster`. Existing catalogs work without this field: `g1-*` and `go2-*` projects go into their robot groups, `rc-car` and `rosmaster-*` projects go into ROSMaster, and other Linux projects go into Edge AI.
 
 | `--target` | `platform` written to `wendy.json` | Languages |
 |---|---|---|
@@ -169,7 +175,7 @@ $ wendy init
 Available targets:
   WendyOS - Full Linux-based edge device (Jetson, Raspberry Pi, ...)
   macOS - Native macOS app deployed to Wendy Agent for Mac
-  Wendy Lite - Microcontroller running WASM (ESP32)
+  ESP32 - Microcontroller running WASM (ESP32)
 Error: --target is required when running non-interactively (valid: wendyos, darwin, wendy-lite)
 
 $ wendy init --app-id my-app --target wendyos --template

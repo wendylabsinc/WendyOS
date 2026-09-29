@@ -10,9 +10,11 @@ package winusb
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 	"unsafe"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/rcm"
 	"golang.org/x/sys/windows"
 )
 
@@ -24,6 +26,32 @@ type USBDevice struct {
 	outPipe        uint8          // bulk OUT endpoint address (0 if none)
 	outMaxPacket   uint16         // OUT pipe wMaxPacketSize (for end-of-transfer ZLP framing)
 	curInTimeoutMs uint32         // last IN-pipe transfer timeout set, to avoid redundant policy calls
+}
+
+// ReadChipID reads the recovery serial descriptor on the open handle. Preserve
+// descriptor order to match the Windows PnP serial returned by ListDevices.
+func (d *USBDevice) ReadChipID() (string, error) {
+	buf := make([]byte, 96)
+	var n uint32
+	r, _, err := procWinUsbGetDescriptor.Call(d.winusb, 0x03, 3, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&n)))
+	if r == 0 {
+		return "", fmt.Errorf("WinUsb_GetDescriptor: %w", err)
+	}
+	if n < 4 || n > uint32(len(buf)) || buf[1] != 0x03 {
+		return "", fmt.Errorf("invalid recovery serial descriptor")
+	}
+	length := min(int(buf[0]), int(n))
+	var id strings.Builder
+	for i := 2; i+1 < length; i += 2 {
+		if buf[i+1] != 0 {
+			return "", fmt.Errorf("invalid recovery chip ID encoding")
+		}
+		id.WriteByte(buf[i])
+	}
+	if !rcm.ValidChipID(id.String()) {
+		return "", fmt.Errorf("recovery serial is not a chip ID")
+	}
+	return id.String(), nil
 }
 
 // Read implements adbproto.Transport: one bulk-IN transfer bounded by timeout.

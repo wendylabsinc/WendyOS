@@ -133,6 +133,16 @@ func (d *Device) ReadWithTimeout(buf []byte, timeout time.Duration) (int, error)
 	return d.in.ReadContext(ctx, buf)
 }
 
+// ReadChipID reads BR_CID over EP0 on this already-claimed device handle.
+func (d *Device) ReadChipID() (string, error) {
+	buf := make([]byte, 96)
+	n, err := d.dev.Control(0x80, 0x06, 0x0303, 0, buf)
+	if err != nil {
+		return "", err
+	}
+	return parseChipIDDescriptor(buf, n)
+}
+
 // Write sends buf to the bulk OUT endpoint the way the bootROM expects:
 //
 //   - split into chunks of at most 16 KiB (0x4000) — a single large bulk OUT fails

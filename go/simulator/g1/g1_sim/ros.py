@@ -71,6 +71,7 @@ class RobotObservations(Node):
             self.native_state = NativeState(self, runtime)
             self.native_commands = NativeCommands(self, runtime)
             runtime.ros_commands.native_handler = self.native_commands.receive
+            runtime.ros_commands.native_auto_grant = self.native_commands.can_auto_grant
         # Publishers serialize synchronously. Reuse owned message instances on
         # this worker instead of rebuilding fixed fields at every sensor tick.
         self.imu = Imu()

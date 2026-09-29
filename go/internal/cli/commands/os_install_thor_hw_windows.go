@@ -138,6 +138,7 @@ func thorStageOne(fp *flashpack.Flashpack, dev thorDevice, out io.Writer) error 
 		Location:        dev.PathKey,
 		Instance:        dev.Instance,
 		ExpectedProduct: winusb.ProductThor,
+		ExpectedECID:    dev.ExpectedECID,
 		Out:             out,
 	})
 }

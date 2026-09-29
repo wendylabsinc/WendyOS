@@ -1,0 +1,17 @@
+{
+  "name": "wendy-agentic-coding",
+  "audience": "end-users",
+  "skills": [
+    "wendy",
+    "wendy-app-lifecycle",
+    "wendy-device-debug",
+    "wendy-device-install",
+    "wendy-device-ops",
+    "wendy-entitlements",
+    "wendy-install",
+    "wendy-mcp-setup",
+    "wendy-project-setup",
+    "wendy-robot-deploy",
+    "wendy-template-app"
+  ]
+}

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,20 +19,38 @@ const cliUpdateCheckInterval = 24 * time.Hour
 // and persists the result to config. PersistentPostRunE reads the persisted
 // value on the next invocation, which avoids the race where the HTTP call
 // hasn't finished by the time a fast command completes.
-func scheduleCLIUpdateCheck(cfg *config.Config) {
+func scheduleCLIUpdateCheck() {
 	go func() {
-		latest, err := checkLatestRelease()
-		cfg.LastCLIUpdateCheck = time.Now().UTC().Format(time.RFC3339)
-		if err == nil {
-			if version.CompareVersions(latest, version.Version) > 0 {
-				cfg.AvailableCLIUpdate = latest
-			} else {
-				cfg.AvailableCLIUpdate = ""
-			}
-		}
+		latest, checkErr := checkLatestRelease()
 		// Best-effort: if we can't save, we'll retry on the next check.
-		_ = config.Save(cfg)
+		_ = persistCLIUpdateCheckResult(time.Now(), latest, checkErr)
 	}()
+}
+
+// persistCLIUpdateCheckResult reloads config under the refresh lock before
+// changing update metadata. The HTTP request can overlap an OAuth refresh; saving
+// the config snapshot from before that request would restore the consumed refresh
+// token and cause wendy-auth to revoke the rotated token family on its next use.
+func persistCLIUpdateCheckResult(checkedAt time.Time, latest string, checkErr error) error {
+	unlock, err := acquireAuthRefreshLock(context.Background())
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	cfg.LastCLIUpdateCheck = checkedAt.UTC().Format(time.RFC3339)
+	if checkErr == nil {
+		if version.CompareVersions(latest, version.Version) > 0 {
+			cfg.AvailableCLIUpdate = latest
+		} else {
+			cfg.AvailableCLIUpdate = ""
+		}
+	}
+	return config.Save(cfg)
 }
 
 // dueCLIUpdateCheck returns true when the CLI is a released build and enough

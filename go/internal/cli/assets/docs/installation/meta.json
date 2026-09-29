@@ -1,6 +1,7 @@
 {
   "title": "Set up a device",
   "pages": [
+    "agent-assisted-setup",
     "wendyos-virtual-machine",
     "wendyos-nvidia-jetson-orin-nano",
     "wendyos-nvidia-jetson-agx-thor",

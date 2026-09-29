@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +13,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -29,21 +32,30 @@ type commandTarget struct {
 	Transport string `json:"transport"`
 	CloudGRPC string `json:"cloud_grpc,omitempty"`
 	BrokerURL string `json:"broker_url,omitempty"`
+	Selector  string `json:"selector,omitempty"` // cloud identity, including tenant/org and asset
 }
 
 type mcpServer struct {
-	cfg              *config.Config
-	connectFn        ConnectFunc
-	startupConnectFn func(context.Context)
-	conn             *grpcclient.AgentConnection
-	connRevision     uint64
-	connType         string
-	commandTarget    commandTarget
-	cloudTunnels     map[string]*mcpCloudTunnel
-	discoverLANFn    func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
-	mu               sync.RWMutex
-	proxyDiag        []proxyDiagEntry
-	containerMCP     *containerMCPManager
+	cfg                  *config.Config
+	connectFn            ConnectFunc
+	startupConnectFn     func(context.Context)
+	conn                 *grpcclient.AgentConnection
+	connRevision         uint64
+	connType             string
+	commandTarget        commandTarget
+	cloudTunnels         map[string]*mcpCloudTunnel
+	tunnelsClosed        bool
+	toolGroups           []string
+	discoverLANFn        func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
+	mu                   sync.RWMutex
+	proxyDiag            []proxyDiagEntry
+	containerMCP         *containerMCPManager
+	runCommandFn         func(context.Context, []string, commandTarget, int) (string, bool, error)
+	updateAgentCommandFn func(context.Context, []string, commandTarget, int) (string, bool, error)
+	agentUpdateMu        sync.Mutex
+	installation         onboarding.Backend
+	simulators           SimulatorBackend
+	project              ProjectBackend
 }
 
 // SetStartupConnect configures the optional device connection attempted after
@@ -104,6 +116,15 @@ func (s *mcpServer) setConnectionLocked(conn *grpcclient.AgentConnection, connTy
 func directCommandTarget(conn *grpcclient.AgentConnection, address string) commandTarget {
 	if conn == nil || strings.HasPrefix(conn.Host, "unix:") {
 		return commandTarget{}
+	}
+	if strings.HasPrefix(strings.ToLower(address), "cloud:") {
+		// connectFn has resolved the identity. Preserve it instead of recording
+		// the transient tunnel address, including the broker used by the CLI.
+		u, err := url.Parse(address)
+		if err != nil {
+			return commandTarget{}
+		}
+		return commandTarget{Device: address, Selector: address, Transport: "cloud", CloudGRPC: u.Host, BrokerURL: os.Getenv("WENDY_BROKER_URL")}
 	}
 	if conn.SimulatorName != "" {
 		// The named alias retains the VM's identity when its forwarded port changes.
@@ -167,7 +188,12 @@ func (s *mcpServer) ConnectTo(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	s.setConnection(conn, "direct", directCommandTarget(conn, address))
+	target := directCommandTarget(conn, address)
+	transport := "direct"
+	if target.Transport != "" {
+		transport = target.Transport
+	}
+	s.setConnection(conn, transport, target)
 	return nil
 }
 
@@ -203,19 +229,24 @@ func (s *mcpServer) ConnectToOnStartup(ctx context.Context, address string) erro
 		_ = conn.Close()
 		return nil
 	}
-	s.setConnectionLocked(conn, "direct", directCommandTarget(conn, address))
+	target := directCommandTarget(conn, address)
+	transport := "direct"
+	if target.Transport != "" {
+		transport = target.Transport
+	}
+	s.setConnectionLocked(conn, transport, target)
 	s.mu.Unlock()
 	return nil
 }
 
-// Start registers all tools and begins serving MCP over stdio. Blocks until
-// the client closes the connection.
-func (s *mcpServer) Start(ctx context.Context) error {
+func (s *mcpServer) newProtocolServer() *server.MCPServer {
 	srv := server.NewMCPServer("wendy", version.Version,
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(true, false),
 		server.WithPromptCapabilities(false),
+		server.WithToolFilter(s.filterTools),
 	)
+	s.registerToolGroups(srv)
 	s.registerStatusTools(srv)
 	s.registerGuideResource(srv)
 	s.registerDiagnosticsResource(srv)
@@ -230,9 +261,20 @@ func (s *mcpServer) Start(ctx context.Context) error {
 	s.registerCameraTools(srv)
 	s.registerProvisioningTools(srv)
 	s.registerOSTools(srv)
+	s.registerInstallationTools(srv)
+	s.registerSimulatorTools(srv)
+	s.registerAppInspectTools(srv)
+	s.registerDeviceMaintenanceTools(srv)
+	s.registerProjectTools(srv)
 	s.registerCloudTools(srv)
 	registerToolAnalytics(srv)
+	return srv
+}
 
+// Start registers tools and serves MCP over stdio until the client disconnects.
+func (s *mcpServer) Start(ctx context.Context) error {
+	defer s.closeCloudTunnels()
+	srv := s.newProtocolServer()
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	defer cancelStartup()
 	stopContainerMCP := s.startContainerMCP(startupCtx, srv)

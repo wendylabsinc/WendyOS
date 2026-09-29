@@ -245,6 +245,22 @@ func TestCameraFirmwareDiagnosticOnFirstRecv(t *testing.T) {
 	}
 }
 
+func TestCameraViewPreservesRemotePipelineDiagnostic(t *testing.T) {
+	message := "GStreamer pipeline failed for camera /dev/video0 using nvv4l2h264enc: exit status 1: ERROR: Could not initialize encoder"
+	for _, stdout := range []bool{false, true} {
+		stream := &cameraDiagnosticStream{videoStream: &mockVideoStream{err: status.Error(codes.Internal, message)}}
+		var err error
+		if stdout {
+			err = pipeVideoToStdout(stream, io.Discard)
+		} else {
+			err = playVideoWithGStreamer(context.Background(), stream, false)
+		}
+		if err == nil || !strings.Contains(userFacingGRPCError(err), message) {
+			t.Fatalf("stdout=%v: remote diagnostic was lost: %v", stdout, err)
+		}
+	}
+}
+
 // fakeCameraTester is a stub cameraTester: tests set resp or err directly
 // rather than driving a real gRPC connection.
 type fakeCameraTester struct {

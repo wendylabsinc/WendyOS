@@ -25,29 +25,55 @@ Call wendy_status first — it tells you whether you are connected and what to d
 
 ## Connecting to a device
 
-Local/direct devices:
-1. device_list          — lists devices from config (add scan=true for live mDNS scan)
-2. device_connect       — connect by address (host:port), e.g. "mydevice.local:50051"
+1. device_list lists configured and online cloud devices; scan=true adds LAN discovery.
+2. device_connect(device="...") accepts the returned device selector, host:port, or vm:name.
+3. run(project_path="...") deploys to the connected target. An explicit device overrides it.
 
-Cloud-enrolled devices:
-1. cloud_discover       — finds devices enrolled in your Wendy Cloud account
-2. cloud_connect        — opens a secure tunnel to a cloud device by name
+## Tool groups
 
-## Tools available once connected
+The default core group contains connection, deployment, container, log, and
+hardware discovery tools. Call wendy_tools(groups=["robotics"]) to enable a
+specialist group; core stays available. Each call replaces the selected groups.
+Available groups: setup, simulator, hardware, robotics, observability, cloud, all.
+Run resources/list for documentation. Group selection only changes discovery;
+it is not an authorization boundary. Apps' own tools remain discoverable.
+Hosts that cache the tool list can start with wendy mcp serve --tool-groups all.
 
-- device_info — agent, OS, hardware, storage, and battery information
-- container_list / container_start / container_stop / container_delete / container_attach / container_exec / container_stats
-- wifi_list / wifi_connect / wifi_disconnect / wifi_status / wifi_known_networks
-- telemetry_logs / telemetry_metrics / telemetry_traces
-- hardware_capabilities
-- ros2_topics / ros2_topic_info / ros2_topic_sample / ros2_topic_hz / ros2_lidar_summary
-- os_update
-- provisioning_start / provisioning_status
+setup: installation jobs, project validation, agent/OS updates, WiFi, cloud enrollment, saved default.
+simulator: local simulator list, create, stop, delete; connect with vm:name to start.
+hardware: Bluetooth and cameras.
+robotics: ROS topics, topic info, samples, rates, and LiDAR summaries.
+observability: app_inspect, device_os_logs, metrics and traces. App logs are in core.
+cloud: discovery, connection, forwarding, tunnel list/close, and ping.
+
+Read wendy://docs/integrations/mcp.mdx for compatibility and CLI coverage gaps.
+
+## New hardware without an agent
+
+Enable the setup group with wendy_tools first. Initial installation does not require a device connection:
+1. os_install_plan — choose the board/carrier, published version and installation method.
+2. os_list_drives — inspect host media for raw-image writes, then plan with the exact drive.
+3. os_install_start creates a saved job for supported image installs. Show its physical instructions.
+4. os_install_resume probes the hardware and returns an exact target fingerprint. Obtain the user's
+   erase authorization for that target and scope before resuming with confirm_erase and target_id.
+5. os_install_status reports worker progress and physical waits, even after MCP restarts. If elevated
+   access is unavailable, run the returned resume command in a terminal to enter the password.
+6. Follow the boot instructions, then resume with the explicit device address. os_install_verify can
+   also check first boot independently. Pin a known public key when available.
+
+Jobs support raw-media writes and Jetson developer-kit recovery. They do not configure first-boot
+WiFi or enrollment; use Ethernet. Agent-only installs use the plan's terminal instructions.
+An interrupted write is never retried automatically. Inspect its outcome before creating a new job.
+
+An empty discovery scan does not prove a network failure. Confirm whether the board
+has an OS/Agent first. Unitree G1 PC2 keeps its vendor OS and receives the Agent.
+provisioning_start enrolls an existing agent with Cloud; it cannot flash a blank board.
+Verification reports boot/OS/enrollment separately; application behavior needs its own check.
 
 Use container_exec with app_name and an explicit command argument array to run
 a bounded command in an existing container through the active direct or cloud
-connection. Use telemetry_logs for passive logs. container_attach starts or
-restarts the app and can interrupt its running task; it is not a command shell.
+connection. Use telemetry_logs for passive logs. container_start may restart the app and interrupt its running task. The legacy
+container_attach handler remains callable but is no longer advertised.
 
 Host↔device file sync happens automatically as part of ` + "`wendy run`" + `'s
 fast redeploy path — there is no standalone file-sync CLI command or MCP tool.
@@ -107,7 +133,15 @@ and the boundary between remote observation and local robot control.
 
 ## Deploying a workload
 
-Use the run tool to build and deploy a local project to a cloud-enrolled device:
+Use the run tool to build and deploy to an explicit device or the connected target:
+  run(project_path="/path/to/project", device="vm:go2")
+  run(project_path="/path/to/project") // reuse current direct/cloud session target
+Use start=false to create the container without starting it.
+Enable setup and use project_validate before building. After deployment, enable observability and
+use app_inspect for service state, recorded exit, usage and recent warnings/errors. A local project's
+declared TCP probes can be checked on a direct device; cloud/simulator forwards alone do not prove
+application readiness. Unknown checks remain unknown. Application-level behavior still needs a test.
+Legacy cloud-only targeting is still accepted but omitted from the advertised schema:
   run(project_path="/path/to/project", device_name="mydevice")
 
 ## Disconnecting
@@ -129,7 +163,12 @@ Tools that return data include a machine-readable structuredContent object
 alongside human-readable text. List-shaped tools nest their rows under a
 single key — devices (device_list, cloud_discover, bluetooth_scan),
 containers, stats, capabilities, networks (wifi_list, wifi_known_networks),
-batches (telemetry_*) — never as a bare array. Errors include an error_code you can branch
+logs, metrics, traces (telemetry_* with format="compact"),
+batches (telemetry_* with format="otlp") — never as a bare array.
+Telemetry defaults to compact records, at most 100 records and 16384 JSON bytes.
+Truncation retains complete rows and reports omitted counts for collected data;
+these counts do not include unseen stream data. collection_limited marks reaching
+the batch limit; an observation window never proves the stream has no other data. Errors include an error_code you can branch
 on — e.g. NOT_CONNECTED, DEVICE_UNREACHABLE, ENTITLEMENT_DENIED,
 INVALID_ARGUMENT, NOT_FOUND, MULTIPLE_SESSIONS, UNSUPPORTED, TIMEOUT,
 INTERNAL. Tool annotations mark read-only vs destructive vs mutating

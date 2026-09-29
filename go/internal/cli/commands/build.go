@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -51,6 +52,11 @@ type buildOptions struct {
 	// maxConcurrency caps how many service images build at once in a
 	// multi-service project (0 = default limit of 4).
 	maxConcurrency int
+}
+
+func mustStopBuildAfterTargetError(err error) bool {
+	var recoveryStopped *defaultDeviceRecoveryStoppedError
+	return errors.As(err, &recoveryStopped) || errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled)
 }
 
 var appleContainerLocalProviderHintSupported = func() bool {
@@ -119,7 +125,14 @@ func newBuildCmd() *cobra.Command {
 				}
 			}
 
-			target, _ := resolveTarget(cmd.Context())
+			target, targetErr := resolveTarget(cmd.Context())
+			// A local build can proceed without a reachable device, but it must
+			// stop when the user declined to choose a replacement target or
+			// cancelled the picker. Otherwise the build silently targets a
+			// different architecture from the one the user expected.
+			if mustStopBuildAfterTargetError(targetErr) {
+				return targetErr
+			}
 
 			// If the target is an external provider device, use the provider build path.
 			if target != nil && target.External != nil && target.Provider != nil {
@@ -217,9 +230,6 @@ func newBuildCmd() *cobra.Command {
 				// the user actually typed.
 				if cmd.Flags().Changed("dockerfile") || cmd.Flags().Changed("build-type") {
 					return fmt.Errorf("--dockerfile and --build-type are not supported for multi-service projects; each service resolves its own build file from its context")
-				}
-				if normalized, _ := normalizeImageBuilder(opts.builder); normalized == imageBuilderBuildkit {
-					return fmt.Errorf("--builder buildkit is not supported for multi-service builds; use docker or apple-container")
 				}
 				return runMultiServiceBuild(cmd.Context(), cwd, appCfg, target, opts)
 			}
@@ -744,8 +754,13 @@ func buildDockerProjectWithBuilder(ctx context.Context, builder, dir, imageName,
 			logAppleContainerFallback(os.Stderr, err)
 		}
 	}
-	if normalized == imageBuilderDocker {
+	switch normalized {
+	case imageBuilderDocker:
 		return buildDockerProjectWithDocker(dir, imageName, platform, dockerfile)
+	case imageBuilderBuildkit:
+		return runBuildWithProgress(ctx, "Building image into Wendy runtime...", dumpRawAlways, func(buildCtx context.Context, stream, logw io.Writer) error {
+			return buildDockerProjectWithBuildkit(buildCtx, dir, imageName, platform, dockerfile, nil, stream, logw)
+		})
 	}
 
 	if err := ensureAppleContainerSystem(ctx, false); err != nil {
@@ -758,12 +773,12 @@ func buildDockerProjectWithBuilder(ctx context.Context, builder, dir, imageName,
 // `wendy build`. Package var so tests can substitute a fake builder.
 var buildLocalServiceImage = buildServiceImageLocally
 
-// buildServiceImageLocally builds one service's image into the local image
-// store (docker --load, or the Apple Container CLI's implicit local store) —
-// never a registry. It mirrors buildDockerProjectWithBuilder's builder
-// selection but is writer-driven and context-aware, as buildServicesParallelCore
-// requires: no os.Stdout, no owned spinner, no --builder buildkit (rejected at
-// the command level before this is ever called).
+// buildServiceImageLocally builds one service's image into the selected local
+// image store (Docker --load, Apple Container's implicit store, or the
+// containerd store owned by a BuildKit worker) — never a registry. It mirrors
+// buildDockerProjectWithBuilder's builder selection but is writer-driven and
+// context-aware, as buildServicesParallelCore requires: no os.Stdout and no
+// owned spinner.
 func buildServiceImageLocally(ctx context.Context, builder, contextDir, imageName, platform, dockerfile string, buildOut, logOut io.Writer) error {
 	if dockerfile == "" {
 		return fmt.Errorf("no container build file found in %s; add a Dockerfile, Containerfile, or Stagefile (e.g. build.stagefile.yaml)", contextDir)
@@ -772,7 +787,6 @@ func buildServiceImageLocally(ctx context.Context, builder, contextDir, imageNam
 	if err != nil {
 		return err
 	}
-
 	if !imageBuilderWasExplicit(builder) && shouldAutoAttemptAppleContainerBuilder() {
 		// Same auto-attempt semantics as the single-image path: never prompt or
 		// start services as a side effect, just try and fall back to Docker.
@@ -791,6 +805,9 @@ func buildServiceImageLocally(ctx context.Context, builder, contextDir, imageNam
 		// The Apple Container system itself is ensured once by the caller before
 		// the parallel builds start, not per service.
 		return buildImageWithAppleContainer(ctx, contextDir, imageName, platform, dockerfile, nil, buildOut, logOut)
+	}
+	if normalized == imageBuilderBuildkit {
+		return buildDockerProjectWithBuildkit(ctx, contextDir, imageName, platform, dockerfile, nil, buildOut, logOut)
 	}
 
 	// No OCI-layout export and no per-service cache-dir isolation: a plain

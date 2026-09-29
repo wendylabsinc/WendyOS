@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -513,6 +514,44 @@ func TestServeKeepsPreparedBrokerWhileParentInvocationLives(t *testing.T) {
 	}
 }
 
+func TestIsLocalCancellation(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		timeout   time.Duration
+		elapsed   time.Duration
+		cancel    bool
+		code      codes.Code
+		wantLocal bool
+	}{
+		{name: "explicit cancellation without deadline", cancel: true, code: codes.Canceled, wantLocal: true},
+		{name: "explicit cancellation before deadline", timeout: time.Minute, cancel: true, code: codes.Canceled, wantLocal: true},
+		// gRPC sends a relative timeout. The client's deadline can expire
+		// before the broker's reconstructed deadline, canceling its context.
+		{name: "client deadline before broker deadline", timeout: 100 * time.Millisecond, elapsed: 99 * time.Millisecond, cancel: true, code: codes.Canceled},
+		{name: "broker deadline expired", timeout: 100 * time.Millisecond, elapsed: 101 * time.Millisecond, code: codes.Canceled},
+		{name: "upstream cancellation with live caller", code: codes.Canceled},
+		{name: "deadline status with canceled caller", cancel: true, code: codes.DeadlineExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				if tt.timeout > 0 {
+					cancel()
+					ctx, cancel = context.WithTimeout(context.Background(), tt.timeout)
+				}
+				defer cancel()
+				time.Sleep(tt.elapsed)
+				if tt.cancel {
+					cancel()
+				}
+				if got := isLocalCancellation(ctx, status.Error(tt.code, "request ended")); got != tt.wantLocal {
+					t.Fatalf("isLocalCancellation() = %v, want %v", got, tt.wantLocal)
+				}
+			})
+		})
+	}
+}
+
 // canceledUploadServer leaves chunk requests pending until the CLI cancels
 // them, as happens when PrepareImage rejects a deployment on an older agent.
 // Version probes still answer, so the retained device connection is healthy.
@@ -657,7 +696,7 @@ func TestServeEvictsBrokerThatStopsAnswering(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer proxy.Close()
-	for i := 0; i < 3; i++ {
+	for i := 0; i < maxUnansweredRPCs; i++ {
 		probeCtx, probeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		_, err := proxy.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
 		probeCancel()

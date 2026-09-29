@@ -88,6 +88,34 @@ func TestCommandTargetDirectConnect(t *testing.T) {
 	}
 }
 
+func TestUnifiedConnectPreservesCloudIdentityAndBroker(t *testing.T) {
+	t.Setenv("WENDY_BROKER_URL", "selected-relay:443")
+	const selector = "cloud://shared.example:443/org/7/asset/42"
+	for _, startup := range []bool{false, true} {
+		s := New(&config.Config{}, func(_ context.Context, device string) (*grpcclient.AgentConnection, error) {
+			if device != selector {
+				t.Fatalf("lost selector %s", device)
+			}
+			return &grpcclient.AgentConnection{Host: "127.0.0.1", Addr: "127.0.0.1:61000"}, nil
+		})
+		if startup {
+			if err := s.ConnectToOnStartup(context.Background(), selector); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			r, err := s.handleDeviceConnect(context.Background(), callToolReq("device_connect", map[string]any{"device": selector}))
+			if err != nil || r.IsError {
+				t.Fatalf("connect: %v %v", r, err)
+			}
+		}
+		assertCommandTarget(t, s, commandTarget{Device: selector, Selector: selector, Transport: "cloud", CloudGRPC: "shared.example:443", BrokerURL: "selected-relay:443"})
+		target, err := s.runTarget(callToolReq("run", nil))
+		if err != nil || target.Selector != selector {
+			t.Fatalf("deployment lost target: %v %v", target, err)
+		}
+	}
+}
+
 func TestCommandTargetCloudResolvedEndpoint(t *testing.T) {
 	cfg := &config.Config{Auth: []config.AuthConfig{{
 		CloudGRPC: "private-cloud.example:5443",

@@ -68,7 +68,7 @@ func newVMCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Create from a pull request's build, so a change can be tried before it merges")
 	cmd.Flags().IntVar(&diskGiB, "disk", 16, "Disk size in GiB (the image is grown to this size)")
-	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2 or g1 (provisioned on first connection)")
+	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2, g1 or rosmaster-r2 (provisioned on first connection)")
 	return cmd
 }
 

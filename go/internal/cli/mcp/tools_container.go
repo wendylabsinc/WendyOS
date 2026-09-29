@@ -24,7 +24,7 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("container_list", listOpts...), s.handleContainerList)
 
 	startOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Start a container and stream its output (bounded snapshot). The app runs with the entitlements declared in its wendy.json (e.g. gpu, network, persistence); if the device denies a required entitlement, the start fails (or the container exits) with error_code ENTITLEMENT_DENIED, also visible later as termination_reason in container_list."),
+		mcpgo.WithDescription("Start or restart a container and collect bounded output. May interrupt a running task. Uses declared entitlements; inspect container_list for failures. For passive logs use telemetry_logs."),
 		mcpgo.WithString("app_name",
 			mcpgo.Required(),
 			mcpgo.Description("App name of the container to start"),
@@ -36,7 +36,7 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 			mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)"),
 		),
 	}
-	startOpts = append(startOpts, mutating()...)
+	startOpts = append(startOpts, destructive()...)
 	startOpts = append(startOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("container_start", startOpts...), s.handleContainerStart)
 
@@ -98,7 +98,7 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("container_attach", attachOpts...), s.handleContainerAttach)
 
 	execOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Run an explicit command inside a running container on the connected device, including a cloud-connected device. Uses the current connection; no separate CLI connection is needed. The command array is passed directly without shell expansion, with no TTY and closed stdin. To run a script, explicitly pass its interpreter and arguments. Returns bounded stdout/stderr and the exit code; nonzero exits and timeouts are errors. This can change files or device state and requires approval."),
+		mcpgo.WithDescription("Execute argv in a running container through the current connection. No shell expansion, TTY, or stdin. Returns bounded output and exit code; nonzero exits fail. Can modify device state."),
 		mcpgo.WithString("app_name", mcpgo.Required(), mcpgo.MinLength(1), mcpgo.MaxLength(256), mcpgo.Description("App/container name from container_list")),
 		mcpgo.WithArray("command", mcpgo.Required(), mcpgo.MinItems(1), mcpgo.MaxItems(128), mcpgo.WithStringItems(mcpgo.MaxLength(16384)), mcpgo.Description("Executable followed by its arguments, e.g. [\"python3\", \"-c\", \"print('hello')\"]. At most 65536 total argument bytes.")),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(300), mcpgo.Description("Maximum time to wait for completion, default 30 seconds")),

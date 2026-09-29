@@ -26,6 +26,7 @@ func newMCPCmd() *cobra.Command {
 
 func newMCPServeCmd() *cobra.Command {
 	var deviceFlag string
+	var toolGroups []string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the MCP server on stdio",
@@ -37,6 +38,12 @@ func newMCPServeCmd() *cobra.Command {
 				return fmt.Errorf("loading config: %w", err)
 			}
 			srv := wendymcp.New(cfg, connectMCPDevice)
+			if err := srv.SetToolGroups(toolGroups); err != nil {
+				return err
+			}
+			srv.SetInstallationBackend(installationJobBackend())
+			srv.SetSimulatorBackend(simulatorBackend())
+			srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject})
 			srv.SetLANDiscoverer(func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 				return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 			})
@@ -68,6 +75,7 @@ func newMCPServeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&deviceFlag, "device", "d", "", "Device name or IP:port to connect on startup")
+	cmd.Flags().StringSliceVar(&toolGroups, "tool-groups", []string{"core"}, "Advertised tools: core, setup, simulator, hardware, robotics, observability, cloud, all (comma-separated; groups can also be selected with wendy_tools)")
 	return cmd
 }
 
