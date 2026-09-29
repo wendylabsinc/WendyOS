@@ -1,0 +1,9 @@
+[project]
+name = "wendy-agent-worldview"
+version = "1.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "av==16.1.0",
+  "numpy==2.2.6",
+  "opencv-python-headless==4.14.0.94",
+]
