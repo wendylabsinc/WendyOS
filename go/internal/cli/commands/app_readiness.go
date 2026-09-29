@@ -427,10 +427,19 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 		if !replaced && (out.err != nil || target.ended()) {
 			// Fail and stop — or, once the run's task has ended, run the
 			// host-side hooks — only for an app that is still this run's.
+			var evidence *agentpb.AppContainer
 			var err error
-			replaced, stoppable, err = gateAppReplaced(ctx, conn, appCfg, target, out)
+			replaced, stoppable, evidence, err = gateAppReplaced(ctx, conn, appCfg, target, out)
 			if err != nil {
 				return // the session ended first, as above
+			}
+			if !replaced && out.err != nil && out.observed && evidence.GetTerminationReason() != "" &&
+				(evidence.GetExitCode() != out.record.GetExitCode() || evidence.GetTerminationReason() != out.record.GetTerminationReason()) {
+				// The wait's poll caught the app before the agent recorded
+				// its exit: report the exit recorded since.
+				if fresh, crashed := crashedOutcome(appCfg.AppID, evidence, 0, out.Readiness); crashed {
+					out.err = fresh.err
+				}
 			}
 		}
 		if replaced {
@@ -467,10 +476,10 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 // for the latter; the wait already applied it to the former), and confirms
 // it with appReplaced — a clean exit too, since --wait-ready fails on one.
 // stoppable says whether a failure may stop the app: not when the latest
-// record judged shows no task of it (appStoppable). An unreadable lookup
-// keeps the outcome and today's stop. It returns ctx's error if ctx ends
-// first.
-func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, target gateTarget, out waitReadyOutcome) (replaced, stoppable bool, err error) {
+// record judged shows no task of it (appStoppable); evidence is appReplaced's.
+// An unreadable lookup keeps the outcome and today's stop. It returns ctx's
+// error if ctx ends first.
+func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, target gateTarget, out waitReadyOutcome) (replaced, stoppable bool, evidence *agentpb.AppContainer, err error) {
 	c := out.record
 	if !out.observed {
 		taskEnded := target.ended() // sampled before the read, as in awaitAppReady
@@ -478,21 +487,21 @@ func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appC
 		now, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		cancel()
 		if ctx.Err() != nil {
-			return false, false, ctx.Err()
+			return false, false, nil, ctx.Err()
 		}
 		if err != nil {
-			return false, true, nil
+			return false, true, nil, nil
 		}
 		if target.foreign(now, taskEnded) {
-			return true, false, nil
+			return true, false, now, nil
 		}
 		c = now
 	}
-	replaced, evidence, err := appReplaced(ctx, conn, appCfg, target.base, c, target.ended)
+	replaced, evidence, err = appReplaced(ctx, conn, appCfg, target.base, c, target.ended)
 	if err != nil {
-		return false, false, err
+		return false, false, nil, err
 	}
-	return replaced, appStoppable(evidence), nil
+	return replaced, appStoppable(evidence), evidence, nil
 }
 
 // ended reports whether the run's own output stream has ended.

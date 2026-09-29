@@ -133,41 +133,50 @@ func noteAppReplaced(appCfg *appconfig.AppConfig) {
 
 // appReplaced reports whether another deployment replaced an app this run
 // deployed or followed, judging c — the agent's latest record of the app,
-// which the caller is about to report as a crash, or which shows no exit or
-// no app — against base. A caller confirms every crash this way, since no
-// record of a stopped app proves the exit was its own: to replace an app the
-// agent SIGKILLs its task, deletes its container, prepares the new image
-// (the app is not listed: the longest phase) and creates the new container,
-// which it starts afterwards, listing it as stopped — or crash-looping while
-// the old registration's failure_count is above 0 — with no exit recorded.
-// The kill's exit (137, "crashed") may never be recorded (that races the
-// delete), and the agent never clears an exit it recorded, so the killed
-// app can be listed with any exit it recorded before, even one its restart
-// policy recovered from. taskEnded reports whether the run knows the task it
-// started has exited (an attached run's output ended); nil means it cannot
-// know (a follow). The caller announces a replacement (noteAppReplaced);
-// otherwise it judges the app by evidence: the first record seen that
-// recorded an exit, else the latest record seen.
+// which the caller is about to report as a crash or as restarted by its
+// restart policy, or which shows no exit or no app — against base. A caller
+// confirms every such verdict this way, since no single record proves it: to
+// replace an app the agent SIGKILLs its task, deletes its container, prepares
+// the new image (the app is not listed: the longest phase) and creates the
+// new container, which it starts afterwards, listing it as stopped — or
+// crash-looping while the old registration's failure_count is above 0 — with
+// no exit recorded. Its restart monitor counts the kill as a failure, so the
+// new app can be listed running with that raised count until the start
+// resets it to 0, and the kill's exit (137, "crashed") may be recorded late,
+// on the new container, or never. The agent also never clears an exit it
+// recorded, so the killed app can be listed with any exit it recorded
+// before, even one its restart policy recovered from. On a device the whole
+// replace can take a fifth of a second. The agent lists a task stopped
+// before it records that task's exit, so a stopped record can show the
+// previous exit, or none, until a later poll shows the fresh one. taskEnded
+// reports whether the run knows the task it started has exited (an attached
+// run's output ended); nil means it cannot know (a follow). The caller
+// announces a replacement (noteAppReplaced); otherwise it judges the app by
+// evidence: the latest record seen that recorded an exit, else the latest
+// record seen.
 //
 // A record on another app_version than base's is another deployment's at
-// once, and a running app is the app's own at once (a restart by its restart
-// policy, as far as c goes). Any other record is polled again for up to
-// appReplaceConfirmWindow, and each poll decides:
-//   - replaced: the app no longer listed after a record of it (its container
-//     was deleted), listed after it was not (a new container), on another
-//     app_version, with no exit recorded after a record that had one (the
-//     recorded exit went with the old container), running with a
-//     failure_count at or below base's (a start resets the count; the
-//     restart policy raises it above the baseline before every restart), or
-//     a newly recorded exit whose failure_count fell, or is at or below
-//     base's with no restart counted (a task someone else started);
-//   - the app's own: running, or a newly recorded exit, with a failure_count
-//     above base's (restarted by its restart policy);
-//   - undecided (poll again): the same record, the SIGKILL record, no exit
-//     recorded again, or an unreadable list.
+// once, and an app running with no restart counted past base's
+// failure_count is the app's own at once. Any other record is polled again
+// for up to appReplaceConfirmWindow, and a poll decides at once only for a
+// replacement:
+//   - the app no longer listed after a record of it (its container was
+//     deleted), or listed after it was not (a new container);
+//   - a record on another app_version;
+//   - a failure_count below the previous record's (a start reset it; the
+//     restart policy only raises it before each restart), or an app running
+//     with a failure_count at or below base's;
+//   - no exit recorded after a record that was running or had one recorded
+//     (a new container, created but not started).
 //
-// When the window ends undecided, the last record decides:
-//   - a recorded exit (the SIGKILL record included): the app's own;
+// Anything else is polled again: a recorded exit — the same one, or a newly
+// recorded one, which becomes the evidence (the exit the agent had not
+// recorded yet) — the SIGKILL record, no exit recorded again, an unreadable
+// list, or an app running with a count raised past base's, which is the
+// app's own only if nothing later in the window says otherwise. When the
+// window ends undecided, the last record decides:
+//   - running with a raised count, or a recorded exit (the SIGKILL record
+//     included): the app's own;
 //   - crash-looping with no exit recorded: replaced (only a replacement's
 //     container that has not started is listed that way on agents with exit
 //     reporting, WDY-1819; an older agent's crash loop reads as replaced too);
@@ -183,7 +192,7 @@ func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *
 	if base.versionChanged(c) {
 		return true, c, nil
 	}
-	if c.GetRunningState() == agentpb.AppRunningState_RUNNING {
+	if c.GetRunningState() == agentpb.AppRunningState_RUNNING && c.GetFailureCount() <= base.failures {
 		return false, c, nil
 	}
 	evidence, latest := c, c
@@ -211,29 +220,29 @@ func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *
 		}
 		previous := latest
 		latest = now
-		if now != nil && evidence.GetTerminationReason() == "" {
+		if now != nil && (now.GetTerminationReason() != "" || evidence.GetTerminationReason() == "") {
 			evidence = now
 		}
 		switch {
 		case now == nil && c == nil:
 			continue
-		case now == nil, c == nil, base.versionChanged(now):
+		case now == nil, c == nil, base.versionChanged(now),
+			now.GetFailureCount() < previous.GetFailureCount():
 			return true, evidence, nil
 		case now.GetRunningState() == agentpb.AppRunningState_RUNNING:
-			return now.GetFailureCount() <= base.failures, evidence, nil
+			if now.GetFailureCount() <= base.failures {
+				return true, evidence, nil
+			}
+			continue // restarted by its restart policy, unless a later record says otherwise
 		case killedBySIGKILL(now):
 			continue
 		case now.GetTerminationReason() == "":
-			if previous.GetTerminationReason() != "" {
+			if previous.GetRunningState() == agentpb.AppRunningState_RUNNING || previous.GetTerminationReason() != "" {
 				return true, evidence, nil
 			}
 			continue
-		case now.GetFailureCount() < previous.GetFailureCount():
-			return true, evidence, nil
-		case now.GetExitCode() == previous.GetExitCode() && now.GetTerminationReason() == previous.GetTerminationReason():
-			continue
-		default: // a newly recorded exit
-			return now.GetFailureCount() <= base.failures, evidence, nil
+		default:
+			continue // a recorded exit: the app's own, unless a later record says otherwise
 		}
 	}
 }
@@ -244,7 +253,7 @@ func replacedWhenUndecided(latest *agentpb.AppContainer, taskEnded func() bool) 
 	switch {
 	case latest == nil:
 		return taskEnded != nil && taskEnded()
-	case latest.GetTerminationReason() != "":
+	case latest.GetRunningState() == agentpb.AppRunningState_RUNNING, latest.GetTerminationReason() != "":
 		return false
 	default: // no exit recorded
 		return latest.GetRunningState() == agentpb.AppRunningState_CRASH_LOOPING
@@ -284,7 +293,9 @@ func agentAppVersion(appCfg *appconfig.AppConfig) string {
 // exits non-zero. A clean exit keeps the historical "stopped" success, and so
 // does anything the CLI cannot prove was a crash: no container service, an
 // unreadable list, an app the restart policy already brought back, or one
-// another deployment replaced (see appReplaced).
+// another deployment replaced. appReplaced confirms every other verdict
+// first, the restart policy's included: a replace briefly lists the new app
+// running with the kill counted as a restart.
 func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) error {
 	if conn != nil && conn.ContainerService != nil {
 		lookupCtx, cancel := context.WithTimeout(ctx, appExitLookupTimeout)
@@ -309,8 +320,9 @@ func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, 
 				return failure
 			}
 			if c != nil && c.GetRunningState() == agentpb.AppRunningState_RUNNING && c.GetFailureCount() > 0 {
-				// The monitor restarted the app before this lookup, and a
-				// running app's exit labels are hidden. Unprovable either way.
+				// The monitor restarted the app before this lookup (the raised
+				// count lasted the confirmation window), and a running app's
+				// exit labels are hidden. Unprovable either way.
 				cliNotice("Application %s exited and was restarted by its restart policy; its exit status is no longer available.", containerDisplayName(appCfg))
 				return nil
 			}

@@ -290,8 +290,18 @@ func TestAttachedWaitReadyCrashBeforeReadyFailsViaTheGate(t *testing.T) {
 		minTime   time.Duration
 	}{
 		{name: "the crash stays", minTime: sigkillTestWindow, snapshots: replaceSequence(runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
-		{name: "restarted by the restart policy", snapshots: replaceSequence(runningSnapshot(0),
+		// The restart's raised count must last the window: during a replace
+		// the agent briefly lists the new app with the kill counted.
+		{name: "restarted by the restart policy", minTime: sigkillTestWindow, snapshots: replaceSequence(runningSnapshot(0),
 			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 3, "crashed", 0), runningSnapshot(1))},
+		{name: "found restarted by the restart policy", minTime: sigkillTestWindow, snapshots: replaceSequence(runningSnapshot(0), runningSnapshot(1))},
+		// The review's probe: the gate's poll lands between the task's stop
+		// and the recording of its exit, seeing the previous exit (143) or
+		// none; the fresh exit follows, and it is what the run reports.
+		{name: "probe: a stale exit, then the fresh one", minTime: sigkillTestWindow, snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 143, "crashed", 0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
+		{name: "no exit yet, then the fresh one", minTime: sigkillTestWindow, snapshots: replaceSequence(runningSnapshot(0),
+			createdStopped(), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
 	} {
 		for _, path := range []string{"chunk-diff", "registry"} {
 			t.Run(tc.name+"/"+path, func(t *testing.T) {
@@ -310,8 +320,8 @@ func TestAttachedWaitReadyCrashBeforeReadyFailsViaTheGate(t *testing.T) {
 				if ErrorClass(err) != "app_crashed" {
 					t.Fatalf("err = %v, want app_crashed", err)
 				}
-				if !strings.Contains(err.Error(), "exit code 3") {
-					t.Fatalf("error %q does not name the exit code", err)
+				if !strings.Contains(err.Error(), "exit code 3") && !strings.Contains(err.Error(), "restarted") {
+					t.Fatalf("error %q names neither the exit code nor the restart", err)
 				}
 				if got := fake.stops(); len(got) != 1 || got[0] != "app" {
 					t.Fatalf("StopContainer calls = %v, want [app] (the gate's stop)", got)
@@ -393,6 +403,17 @@ func TestAttachedWaitReadyLeavesAReplacementRunning(t *testing.T) {
 			appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 0), createdStopped(), runningSnapshot(0))},
 		{name: "a stale crash-loop record, then running", snapshots: replaceSequence(runningSnapshot(0),
 			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 1, "crashed", 0), runningSnapshot(0))},
+		// The sequences measured on a device: the restart monitor counts the
+		// kill, so the new app is briefly listed running with a raised count
+		// before its start resets it, and the kill's exit can land late, on
+		// the new container. The gate must not stop the new app on that
+		// count, including when its own poll finds it ("restarted").
+		{name: "measured 1: stale exit, then the raised count", snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 1, "crashed", 1), runningSnapshot(1), runningSnapshot(0))},
+		{name: "measured 2: not listed, then the raised count", snapshots: replaceSequence(runningSnapshot(0),
+			notListed, runningSnapshot(1), appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0), runningSnapshot(0))},
+		{name: "measured 2: the gate finds the raised count", snapshots: replaceSequence(runningSnapshot(0),
+			runningSnapshot(1), appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0), runningSnapshot(0))},
 		// Its task gone and nothing of it listed for the whole window: the
 		// new image is still being prepared.
 		{name: "not listed for the whole window", snapshots: replaceSequence(runningSnapshot(0), notListed)},
@@ -546,6 +567,10 @@ func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
 			notListed, withOldCount, runningSnapshot(0))},
 		// A start reset the count; the restart policy only raises it.
 		{name: "running with a count below the baseline", snapshots: replaceSequence(runningSnapshot(2), runningSnapshot(0))},
+		// Measured on a device: the new app listed with the kill counted
+		// before its start resets the count.
+		{name: "measured: the raised count, then reset", snapshots: replaceSequence(runningSnapshot(2),
+			runningSnapshot(3), runningSnapshot(3), appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0), runningSnapshot(0))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &scriptedContainerClient{snapshots: tc.snapshots}
