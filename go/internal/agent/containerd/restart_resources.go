@@ -48,6 +48,13 @@ func (c *Client) ensureDBusProxyForStart(ctx context.Context, containerName stri
 		if mount.Destination != "/var/run/dbus" {
 			continue
 		}
+		// An avahi-sourced bus mount belongs to ensureAvahiForStart, not
+		// the Bluetooth proxy: both share destination /var/run/dbus (one
+		// bus per container, enforced at create). Claiming it here wedges
+		// every avahi container at start (B2 device proof 2026-09-29).
+		if filepath.Clean(mount.Source) == avahibridge.ProxySocketDir(containerName) {
+			return false, nil
+		}
 		expected := dbusproxy.SocketDir(containerName)
 		if filepath.Clean(mount.Source) != expected {
 			return false, fmt.Errorf("Bluetooth D-Bus mount source %q does not match scoped proxy %q", mount.Source, expected)
