@@ -46,6 +46,7 @@ const (
 	v4l2PixFmtUYVY          = 0x59565955 // 'UYVY'
 	v4l2PixFmtY16           = 0x20363159 // 'Y16 ' -- note the trailing space
 	v4l2PixFmtGrey          = 0x59455247 // 'GREY'
+	v4l2PixFmtZ16           = 0x2036315A // 'Z16 ' 16-bit depth; read natively, see video_depth.go
 	v4l2FieldNone           = 1
 
 	v4l2CapVideoCapture = 0x00000001
@@ -53,6 +54,7 @@ const (
 	v4l2CapDeviceCaps   = 0x80000000
 
 	vidiocQueryCap  = 0x80685600
+	vidiocEnumFmt   = 0xC0405602 // _IOWR('V', 2, struct v4l2_fmtdesc), 64 bytes
 	vidiocSFmt      = 0xC0D05605
 	vidiocReqbufs   = 0xC0145608
 	vidiocQuerybuf  = 0xC0585609
@@ -203,9 +205,16 @@ func bestDefaultFrameSize(fd int, pixfmt uint32) (uint32, uint32) {
 	return fallbackW, fallbackH
 }
 
+// capturePixelFormats are the formats whose discrete sizes count as a camera's
+// modes when choosing a default size and validating an explicit one: YUYV and
+// MJPEG for the GStreamer path, and Z16 for a depth node, which the agent reads
+// natively (video_depth.go). Without Z16 a depth-only node advertises no size at
+// all and every request to it is refused before its producer runs.
+var capturePixelFormats = []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG, v4l2PixFmtZ16}
+
 // bestDefaultFrameSizeForDevice opens path just long enough to ask what the
-// camera can do, and returns the largest discrete size across the pixel formats
-// the GStreamer path can negotiate. (0,0) when the device cannot be opened or
+// camera can do, and returns the largest discrete size across
+// capturePixelFormats. (0,0) when the device cannot be opened or
 // advertises nothing discrete, in which case the caller leaves caps unset and
 // gets the old behaviour.
 //
@@ -223,7 +232,7 @@ var bestDefaultFrameSizeForDevice = func(path string) (uint32, uint32) {
 	defer unix.Close(fd) //nolint:errcheck
 
 	var bestW, bestH uint32
-	for _, pixfmt := range []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG} {
+	for _, pixfmt := range capturePixelFormats {
 		w, h := bestDefaultFrameSize(fd, pixfmt)
 		if uint64(w)*uint64(h) > uint64(bestW)*uint64(bestH) {
 			bestW, bestH = w, h
@@ -496,6 +505,10 @@ type deviceHub struct {
 	rawState  rawTapState
 	rawReason string
 	rawFormat *agentpb.RawFormat
+	// encodedReason, when non-empty, marks a raw-only hub: its producer has no
+	// encoded frames to give (a depth node, video_depth.go), and every encoded
+	// subscriber is turned away with this reason. Protected by h.mu.
+	encodedReason string
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -539,6 +552,14 @@ func (h *deviceHub) subscribeAsKind(explicitHolder string, raw bool) (int, chan 
 	if len(h.subs) >= maxSubscribersPerHub {
 		h.mu.Unlock()
 		return 0, nil, status.Errorf(codes.ResourceExhausted, "too many concurrent streams for this device (max %d)", maxSubscribersPerHub)
+	}
+	if !raw && h.encodedReason != "" {
+		// Checked here rather than in each caller so that every way of joining
+		// (a viewer, episode capture, a model subscriber, the loopback pump)
+		// gets the same answer from a raw-only hub.
+		reason := h.encodedReason
+		h.mu.Unlock()
+		return 0, nil, errEncodedUnavailable(reason)
 	}
 	id := h.nextID
 	h.nextID++
@@ -834,6 +855,23 @@ func (h *deviceHub) rawNotOffered(reason string) {
 	for _, sub := range h.subs {
 		if sub.raw && !sub.closed {
 			sub.err = errRawUnavailable(reason)
+			sub.closed = true
+			close(sub.ch)
+		}
+	}
+}
+
+// encodedNotOffered makes this a raw-only hub: its producer will deliver no
+// encoded frames. Encoded subscribers already waiting are closed with the
+// reason, the same way rawNotOffered turns away raw ones, and later encoded
+// joins are refused up front by subscribeAsKind.
+func (h *deviceHub) encodedNotOffered(reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.encodedReason = reason
+	for _, sub := range h.subs {
+		if !sub.raw && !sub.closed {
+			sub.err = errEncodedUnavailable(reason)
 			sub.closed = true
 			close(sub.ch)
 		}
@@ -2007,6 +2045,11 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 		// holding a decoded frame, so there is nothing raw to offer.
 		h.rawNotOffered("network cameras deliver encoded video only")
 		err = s.runIPProducer(ctx, broadcast, path, req)
+	} else if isDepthNode(path) {
+		// A depth node has no picture to encode and GStreamer cannot read its
+		// format, so it gets the native raw-only producer (video_depth.go).
+		s.logger.Info("depth camera detected, capturing Z16 natively", zap.String("device", path))
+		err = s.runDepthProducer(ctx, h, path, req)
 	} else {
 		transport, _ := s.classifyTransport(filepath.Base(path))
 		libcameraID := s.lookupLibcameraID(ctx, transport)
@@ -2188,7 +2231,7 @@ var commonFrameSizes = [][2]uint32{
 }
 
 // deviceAdvertisesFrameSize reports whether path enumerates w×h as a discrete
-// mode for any pixel format the GStreamer path can negotiate.
+// mode in any of capturePixelFormats.
 //
 // VIDIOC_ENUM_FRAMESIZES only needs a read-only open, so this still answers
 // while another process is streaming the camera — which is the common case,
@@ -2200,7 +2243,7 @@ func deviceAdvertisesFrameSize(path string, w, h uint32) (advertised, known bool
 	}
 	defer unix.Close(fd) //nolint:errcheck
 
-	for _, pixfmt := range []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG} {
+	for _, pixfmt := range capturePixelFormats {
 		for index := uint32(0); index < 64; index++ {
 			fse := v4l2FrmSizeEnum{Index: index, PixelFormat: pixfmt}
 			if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocEnumFramesizes,
