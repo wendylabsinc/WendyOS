@@ -64,7 +64,8 @@ export:
 const worldViewTestCamera = "v4l2:/dev/video0"
 
 // worldViewTestVideo serves one encoded frame per camera subscription and
-// refuses every other source, as today's video service refuses a depth source.
+// refuses any identifier that is not a camera. It serves no depth frames, so a
+// depth source that resolves to a camera is reported as not z16.
 type worldViewTestVideo struct{}
 
 func (worldViewTestVideo) SubscribeSensor(_ context.Context, id string) (sensorSubscription, error) {
@@ -126,13 +127,20 @@ type worldViewHarness struct {
 
 func newWorldViewHarness(t *testing.T, yaml string, factory worldview.Factory) *worldViewHarness {
 	t.Helper()
+	return newWorldViewHarnessWith(t, yaml, factory, []data.Source{{ID: worldViewTestCamera, Kind: "camera", Healthy: true}}, worldViewTestVideo{})
+}
+
+// newWorldViewHarnessWith is newWorldViewHarness with the device's sources and
+// video service chosen by the test.
+func newWorldViewHarnessWith(t *testing.T, yaml string, factory worldview.Factory, sources []data.Source, video inferenceVideo) *worldViewHarness {
+	t.Helper()
 	manager, err := data.NewManager(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	service := NewDataService(manager)
-	service.addAdapter(&inferenceTestAdapter{sources: []data.Source{{ID: worldViewTestCamera, Kind: "camera", Healthy: true}}})
-	service.video = worldViewTestVideo{}
+	service.addAdapter(&inferenceTestAdapter{sources: sources})
+	service.video = video
 	campaign, err := manager.DeployCampaign([]byte(yaml))
 	if err != nil {
 		t.Fatal(err)
@@ -541,5 +549,135 @@ func TestWorldViewCompositionWithoutMetricScoresPrimitivesOnly(t *testing.T) {
 	proposal.Metric = &worldview.Metric{WidthM: 0.5, HeightM: 0.5}
 	if evidence := attributes[0].score(proposal, nil); !evidence.Available || evidence.Score != 0 {
 		t.Fatalf("an oversized part matched: %+v", evidence)
+	}
+}
+
+// worldViewDepthVideo serves one encoded frame per colour camera subscription
+// and one z16 frame per subscription to a node in depth, as the video service
+// serves a Z16 depth node, and records every identifier subscribed.
+type worldViewDepthVideo struct {
+	depth      map[string]bool
+	mu         sync.Mutex
+	subscribed []string
+}
+
+func (v *worldViewDepthVideo) SubscribeSensor(_ context.Context, id string) (sensorSubscription, error) {
+	if _, ok := cameraDeviceID(id); !ok {
+		return nil, errors.New("no sensor named " + id)
+	}
+	v.mu.Lock()
+	v.subscribed = append(v.subscribed, id)
+	v.mu.Unlock()
+	if v.depth[id] {
+		return &worldViewDepthSubscription{}, nil
+	}
+	return &inferenceTestSubscription{}, nil
+}
+
+func (v *worldViewDepthVideo) subscriptions(id string) int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	n := 0
+	for _, subscribed := range v.subscribed {
+		if subscribed == id {
+			n++
+		}
+	}
+	return n
+}
+
+type worldViewDepthSubscription struct{ sent bool }
+
+func (s *worldViewDepthSubscription) Next(ctx context.Context) (SensorSample, error) {
+	if !s.sent {
+		s.sent = true
+		return SensorSample{SampleID: 1, Encoding: "z16", Width: 4, Height: 2, Payload: make([]byte, 16)}, nil
+	}
+	<-ctx.Done()
+	return SensorSample{}, ctx.Err()
+}
+func (*worldViewDepthSubscription) Close() {}
+
+const (
+	worldViewTestDepthNode  = "v4l2:/dev/video2"
+	worldViewTestDepthNode2 = "v4l2:/dev/video4"
+)
+
+// worldViewDepthYAML is the test campaign with its camera and depth selectors
+// replaced.
+func worldViewDepthYAML(t *testing.T, camera, depth string) string {
+	t.Helper()
+	yaml := strings.Replace(worldViewTestYAML, "  - camera: front\n", "  - camera: "+camera+"\n", 1)
+	yaml = strings.Replace(yaml, "  source: front-depth\n", "  source: "+depth+"\n", 1)
+	if !strings.Contains(yaml, "camera: "+camera+"\n") || !strings.Contains(yaml, "source: "+depth+"\n") {
+		t.Fatal("test campaign no longer has the camera and depth selectors this test replaces")
+	}
+	return yaml
+}
+
+// A depth.source selector resolves as a camera: selector does, here through a
+// fragment of the depth node's name, and the node it names is subscribed for
+// depth and never streamed as a colour camera, even under camera: "*".
+func TestWorldViewDepthSelectorResolvesToDepthNode(t *testing.T) {
+	video := &worldViewDepthVideo{depth: map[string]bool{worldViewTestDepthNode: true}}
+	sources := []data.Source{
+		{ID: worldViewTestCamera, Kind: "camera", Healthy: true, Detail: "HD Pro Webcam C920 USB"},
+		{ID: worldViewTestDepthNode, Kind: "camera", Healthy: true, Detail: "Intel RealSense D435 Depth USB"},
+	}
+	h := newWorldViewHarnessWith(t, worldViewDepthYAML(t, `"*"`, "realsense"), nil, sources, video)
+	session := receiveInference(t, h.factory.sessions)
+	if session.config.Depth == nil || len(session.config.Pairs) != 1 || session.config.Pairs[worldViewTestCamera] != "realsense" {
+		t.Fatalf("depth not paired with the one colour camera: depth %+v, pairs %v", session.config.Depth, session.config.Pairs)
+	}
+	status := h.waitStatus(t, func(s *data.ObjectsStatus) bool {
+		return s.State == "running" && s.Sources["realsense"] == "depth streaming" && s.Sources[worldViewTestCamera] != ""
+	})
+	if _, streamed := status.Sources[worldViewTestDepthNode]; streamed {
+		t.Fatalf("the depth node is also searched as a colour camera: %+v", status)
+	}
+	var depthInput, colourInput bool
+	for !depthInput || !colourInput {
+		input := receiveInference(t, session.inputs)
+		switch {
+		case input.Kind == worldview.KindDepth && input.SourceID == "realsense" && input.Encoding == "z16" && input.Width == 4 && input.Height == 2:
+			depthInput = true
+		case input.Kind == worldview.KindRGB && input.SourceID == worldViewTestCamera:
+			colourInput = true
+		default:
+			t.Fatalf("unexpected worker input: %+v", input)
+		}
+	}
+	if n := video.subscriptions(worldViewTestDepthNode); n != 1 {
+		t.Fatalf("depth node subscribed %d times, want once for depth", n)
+	}
+}
+
+// A depth.source selector that names no camera, or more than one, is reported
+// in objects_status and nothing is subscribed for depth.
+func TestWorldViewDepthSelectorUnresolvedIsReported(t *testing.T) {
+	sources := []data.Source{
+		{ID: worldViewTestCamera, Kind: "camera", Healthy: true, Detail: "HD Pro Webcam C920 USB"},
+		{ID: worldViewTestDepthNode, Kind: "camera", Healthy: true, Detail: "Intel RealSense D435 Depth USB"},
+		{ID: worldViewTestDepthNode2, Kind: "camera", Healthy: true, Detail: "Intel RealSense D435 Infrared USB"},
+	}
+	for _, tc := range []struct{ selector, reason string }{
+		{"realsense", `depth unavailable: camera selector "realsense" is ambiguous: ` + worldViewTestDepthNode + ", " + worldViewTestDepthNode2},
+		{"zed", `depth unavailable: no healthy camera matches "zed"`},
+	} {
+		t.Run(tc.selector, func(t *testing.T) {
+			video := &worldViewDepthVideo{depth: map[string]bool{worldViewTestDepthNode: true, worldViewTestDepthNode2: true}}
+			h := newWorldViewHarnessWith(t, worldViewDepthYAML(t, worldViewTestCamera, tc.selector), nil, sources, video)
+			session := receiveInference(t, h.factory.sessions)
+			if session.config.Depth != nil || len(session.config.Pairs) != 0 {
+				t.Fatalf("depth paired from an unresolved selector: depth %+v, pairs %v", session.config.Depth, session.config.Pairs)
+			}
+			status := h.waitStatus(t, func(s *data.ObjectsStatus) bool { return s.State == "running" && s.Sources[tc.selector] != "" })
+			if got := status.Sources[tc.selector]; got != tc.reason {
+				t.Fatalf("depth status = %q, want %q", got, tc.reason)
+			}
+			if video.subscriptions(worldViewTestDepthNode)+video.subscriptions(worldViewTestDepthNode2) != 0 {
+				t.Fatal("a depth node was subscribed from an unresolved selector")
+			}
+		})
 	}
 }

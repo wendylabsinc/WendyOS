@@ -1131,6 +1131,19 @@ func matchUnhealthySource(all []Source, kind, selector string) (Source, bool) {
 	return Source{}, false
 }
 
+// ResolveCameraSelector resolves one camera selector exactly as a campaign's
+// `camera:` source is resolved, to the source identifier `wendy data sources`
+// lists: an exact identifier, a /dev/videoN path, a unique case-insensitive
+// fragment of the camera's name, or front or default when exactly one healthy
+// camera exists. The wildcard is not a selector for one camera and is refused.
+// The world view resolves depth.source through it.
+func (m *Manager) ResolveCameraSelector(selector string) (string, error) {
+	if strings.TrimSpace(selector) == "*" {
+		return "", errors.New(`camera selector "*" names every camera, not one`)
+	}
+	return resolveCameraSelector(m.Sources(context.Background()), selector)
+}
+
 func resolveCameraSelector(all []Source, selector string) (string, error) {
 	selector = strings.TrimSpace(selector)
 	aliases := []string{selector}

@@ -59,14 +59,17 @@ type campaignWorldViewManager struct {
 }
 
 type campaignWorldViewJob struct {
-	owner          *campaignWorldViewManager
-	campaign       data.Campaign
-	cancel         context.CancelFunc
-	done           chan struct{}
-	queue          chan DetectionNotification
-	mu             sync.Mutex
-	status         data.ObjectsStatus
-	generations    map[string]uint64
+	owner       *campaignWorldViewManager
+	campaign    data.Campaign
+	cancel      context.CancelFunc
+	done        chan struct{}
+	queue       chan DetectionNotification
+	mu          sync.Mutex
+	status      data.ObjectsStatus
+	generations map[string]uint64
+	// depthID is the source identifier depth.source last resolved to, or
+	// empty. It is excluded from the colour cameras the search streams.
+	depthID        string
 	nextGeneration atomic.Uint64
 	// handled counts worker results the job has processed, for tests.
 	handled atomic.Uint64
@@ -408,10 +411,8 @@ func (j *campaignWorldViewJob) run(ctx context.Context) error {
 		ids, _, _, resolveErr := j.owner.service.manager.ResolveCampaignSources(j.campaign)
 		selected := map[string]bool{}
 		if resolveErr == nil {
-			for _, id := range ids {
-				if _, ok := cameraDeviceID(id); ok {
-					selected[id] = true
-				}
+			for _, id := range j.colourCameras(ids) {
+				selected[id] = true
 			}
 		}
 		cameras := 0
@@ -510,29 +511,60 @@ func (j *campaignWorldViewJob) run(ctx context.Context) error {
 	}
 }
 
+// resolveDepth resolves depth.source through the camera selector a campaign's
+// `camera:` sources use, so an exact identifier, a /dev/videoN path or a
+// unique name fragment all name the depth node. A successful resolution is
+// recorded; a failed one keeps the last node, so a depth camera that drops off
+// the bus is not taken for a colour camera in the meantime.
+func (j *campaignWorldViewJob) resolveDepth() (string, error) {
+	id, err := j.owner.service.manager.ResolveCameraSelector(j.campaign.Depth.Source)
+	if err != nil {
+		return "", err
+	}
+	j.mu.Lock()
+	j.depthID = id
+	j.mu.Unlock()
+	return id, nil
+}
+
+// colourCameras keeps the camera identifiers among resolved source ids, less
+// the resolved depth node, which serves depth frames rather than a picture.
+func (j *campaignWorldViewJob) colourCameras(ids []string) []string {
+	j.mu.Lock()
+	depthID := j.depthID
+	j.mu.Unlock()
+	var cameras []string
+	for _, id := range ids {
+		if _, ok := cameraDeviceID(id); ok && id != depthID {
+			cameras = append(cameras, id)
+		}
+	}
+	return cameras
+}
+
 // openDepthForConfig tries the campaign's depth source and, when it delivers
-// z16 raw frames and exactly one camera is resolved to pair it with, fills the
-// worker configuration's depth and pairs. Any failure is recorded in the
-// status and the job runs without depth, which leaves the size attribute
+// z16 raw frames and exactly one colour camera is resolved to pair it with,
+// fills the worker configuration's depth and pairs. Any failure is recorded in
+// the status and the job runs without depth, which leaves the size attribute
 // unavailable rather than zero.
 func (j *campaignWorldViewJob) openDepthForConfig(ctx context.Context, config *worldview.Config) (sensorSubscription, SensorSample) {
 	depth := j.campaign.Depth
 	if depth == nil {
 		return nil, SensorSample{}
 	}
+	if _, err := j.resolveDepth(); err != nil {
+		j.sourceState(depth.Source, "depth unavailable: "+err.Error())
+		return nil, SensorSample{}
+	}
 	ids, _, _, err := j.owner.service.manager.ResolveCampaignSources(j.campaign)
 	var cameras []string
 	if err == nil {
-		for _, id := range ids {
-			if _, ok := cameraDeviceID(id); ok {
-				cameras = append(cameras, id)
-			}
-		}
+		cameras = j.colourCameras(ids)
 	}
 	// One intrinsics block describes one camera, so depth pairs only with a
-	// campaign that resolves to a single camera.
+	// campaign that resolves to a single colour camera.
 	if len(cameras) != 1 {
-		j.sourceState(depth.Source, fmt.Sprintf("depth unavailable: depth pairs with exactly one camera, and %d resolved", len(cameras)))
+		j.sourceState(depth.Source, fmt.Sprintf("depth unavailable: depth pairs with exactly one colour camera, and %d resolved", len(cameras)))
 		return nil, SensorSample{}
 	}
 	subscription, first, err := j.openDepth(ctx)
@@ -547,10 +579,16 @@ func (j *campaignWorldViewJob) openDepthForConfig(ctx context.Context, config *w
 	return subscription, first
 }
 
-// openDepth subscribes to the depth source and waits for its first frame,
-// which must be a z16 raw frame with known dimensions.
+// openDepth resolves the depth source, subscribes to it and waits for its
+// first frame, which must be a z16 raw frame with known dimensions. It
+// resolves again on every call, so a reconnect follows the selector to the
+// node it names now.
 func (j *campaignWorldViewJob) openDepth(ctx context.Context) (sensorSubscription, SensorSample, error) {
-	subscription, err := j.owner.service.video.SubscribeSensor(ctx, j.campaign.Depth.Source)
+	id, err := j.resolveDepth()
+	if err != nil {
+		return nil, SensorSample{}, err
+	}
+	subscription, err := j.owner.service.video.SubscribeSensor(ctx, id)
 	if err != nil {
 		return nil, SensorSample{}, err
 	}

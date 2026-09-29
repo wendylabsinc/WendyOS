@@ -352,7 +352,7 @@ objects and needs at least one camera source.
 | `fusion.threshold` | yes | Fused confidence in `(0, 1]` a candidate must reach. |
 | `fusion.required` | no | Attributes that veto a candidate whose own score is below that attribute's `min`, whatever the fused score. Each must be one of the object's attributes, listed once. |
 | `attributes` | yes | At least one attribute, keyed by kind. Each has `expect`, a `weight` greater than 0, and an optional `min` in `[0, 1]`, the veto floor for a required attribute. An omitted `min` takes the default of 0.5; an explicit `min: 0` is kept as 0. |
-| `composition` | no | 1 to 8 parts, each `{primitive, w_m, h_m}`, for an object built from several solids. |
+| `composition` | no | 1 to 8 parts, each `{primitive, w_m, h_m}`, for an object built from several solids, listed bottom to top. A composition replaces the `shape` attribute's scoring and takes that attribute's weight; the `shape` attribute's `expect` is not read. Declare `shape` with a weight when you use `composition`, or the composition is scored but listed in `unweighted` and does not move the confidence. |
 | `enabled` | no | Defaults to `true`; `false` keeps the configuration but stops the search. |
 
 Attribute kinds and their `expect` keys. Unknown kinds and unknown `expect`
@@ -371,9 +371,9 @@ campaign that relies on it. `depth` requires `objects`:
 
 | Field | Required | Description |
 |---|---|---|
-| `depth.source` | yes | The depth stream to read. |
+| `depth.source` | yes | The depth node to read: a camera selector, resolved as a `camera:` source is (an exact source ID, a `/dev/videoN` path, a unique fragment of the camera's name, or `front` or `default` when exactly one healthy camera exists), but naming one camera; `*` is refused. |
 | `depth.scale_m` | yes | Metres per depth unit, greater than 0; `0.001` for millimetre depth. |
-| `depth.intrinsics` | yes | `fx`, `fy`, `cx` and `cy` in pixels, each greater than 0. |
+| `depth.intrinsics` | yes | `fx`, `fy`, `cx` and `cy` in pixels, each greater than 0. These are the colour camera's intrinsics at the resolution it streams: boxes are measured in colour-frame pixels, and the depth frame is resized to the colour frame to match, so depth must be aligned to colour. |
 
 `depth.source` must be a `v4l2` camera whose Video for Linux 2 (V4L2) node
 advertises the `Z16 ` pixel format, such as the depth node of an Intel
@@ -383,6 +383,13 @@ vendor software development kit (SDK), such as ZED and OAK-D, cannot be used.
 The colour frames the search scores still come from the campaign's camera
 sources as encoded video, so those are limited to the cameras the agent can
 already stream.
+
+Depth pairs only when the campaign resolves to exactly one colour camera, since
+one intrinsics block describes one camera. The depth node is never counted or
+searched as a colour camera, so `camera: "*"` pairs when the depth node is the
+only other camera. With more colour cameras, or when `depth.source` does not
+resolve, `objects_status` reports the depth source as `depth unavailable` with
+the reason and the search runs without depth.
 
 A red can, 6 to 7 centimetres wide and 11 to 13 tall, with a trigger that
 records an Episode when the can is found with confidence above 0.8:
@@ -454,6 +461,9 @@ detections from application prediction records in the application convention,
 corner boxes such as the Hugging Face `[x0, y0, x1, y1]` form are not accepted
 in this release, so the campaign's own `inference` predictions do not count as
 class evidence.
+
+See [the objects and depth example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataObjects)
+for a complete campaign.
 
 ### Notifications
 
