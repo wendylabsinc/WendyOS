@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -18,11 +16,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/memguard"
-	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -196,120 +192,15 @@ func milestoneFor(commandPath string, success bool) string {
 	return ""
 }
 
-// errorClass maps an execution error to a bounded enum suitable for analytics.
-// It must never embed the error message, which can contain hostnames, paths,
-// or other user input.
-//
-// Cancellation and deadlines take precedence over operation categories.
-// Command categories identify known failures; the remaining errors use typed
-// gRPC, network, filesystem, or subprocess causes. No message matching is used.
+// errorClass maps an execution error to a bounded enum suitable for analytics;
+// see commands.ExecutionErrorClass, which the deploy_completed event shares.
+// A recovered panic is classified here, where it is caught.
 func errorClass(err error) string {
-	if err == nil {
-		return ""
-	}
 	var internal *internalError
 	if errors.As(err, &internal) {
 		return "internal_error"
 	}
-	if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) ||
-		errors.Is(err, swifttoolchain.ErrUserCancelled) || errors.Is(err, tui.ErrCancelled) {
-		return "user_cancelled"
-	}
-	if errors.Is(err, context.Canceled) {
-		return "context_canceled"
-	}
-	// A usage error outranks any category it also carries (an invalid flag
-	// value in wendy run is also config_invalid): the command line is wrong.
-	if commands.IsUsageError(err) {
-		return "cli_usage"
-	}
-	// A failed device dial is classified by what it says about the device
-	// before the generic deadline classes: a dial that timed out means the
-	// device did not answer (device_unreachable), not a slow operation.
-	if class := commands.DeviceDialErrorClass(err); class != "" {
-		return class
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "context_deadline"
-	}
-	st, isGRPC := status.FromError(err)
-	if isGRPC {
-		switch st.Code() {
-		case codes.Canceled:
-			return "context_canceled"
-		case codes.DeadlineExceeded:
-			return "grpc_deadline"
-		}
-	}
-	if class := commands.ErrorClass(err); class != "" {
-		return class
-	}
-	// status.FromError returns ok=true only for real gRPC errors (those
-	// produced by the grpc package or implementing GRPCStatus()). For
-	// non-gRPC errors it returns ok=false with a synthesized Unknown code,
-	// which we don't want to claim as a gRPC failure. An explicit
-	// Unknown code from a real gRPC error, however, should still bucket
-	// under grpc_unknown.
-	if isGRPC && st.Code() != codes.OK {
-		switch st.Code() {
-		case codes.Unavailable:
-			return "grpc_unavailable"
-		case codes.Unimplemented:
-			return "grpc_unimplemented"
-		case codes.InvalidArgument:
-			return "grpc_invalid_argument"
-		case codes.NotFound:
-			return "grpc_not_found"
-		case codes.AlreadyExists:
-			return "grpc_already_exists"
-		case codes.PermissionDenied:
-			return "grpc_permission_denied"
-		case codes.ResourceExhausted:
-			return "grpc_resource_exhausted"
-		case codes.FailedPrecondition:
-			return "grpc_failed_precondition"
-		case codes.Aborted:
-			return "grpc_aborted"
-		case codes.OutOfRange:
-			return "grpc_out_of_range"
-		case codes.Internal:
-			return "grpc_internal"
-		case codes.DataLoss:
-			return "grpc_data_loss"
-		case codes.Unauthenticated:
-			return "grpc_unauthenticated"
-		case codes.Unknown:
-			return "grpc_unknown"
-		default:
-			return "grpc_other"
-		}
-	}
-	var dnsErr *net.DNSError
-	var netErr net.Error
-	var exitErr *exec.ExitError
-	switch {
-	case errors.As(err, &dnsErr):
-		return "network_dns"
-	case errors.As(err, &netErr) && netErr.Timeout():
-		return "network_timeout"
-	case errors.Is(err, syscall.ECONNREFUSED):
-		return "network_refused"
-	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
-		return "network_unreachable"
-	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, syscall.EPIPE):
-		return "connection_closed"
-	case errors.Is(err, os.ErrPermission):
-		return "permission_denied"
-	case errors.Is(err, os.ErrNotExist):
-		return "file_not_found"
-	case errors.Is(err, syscall.ENOSPC):
-		return "disk_full"
-	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
-		return "unexpected_eof"
-	case errors.As(err, &exitErr):
-		return "process_failed"
-	}
-	return "other"
+	return commands.ExecutionErrorClass(err)
 }
 
 // renderError lets actionable errors style their heading separately from the

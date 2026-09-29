@@ -177,13 +177,12 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 
 	runOpts := []mcpgo.ToolOption{
 		mcpgo.WithDescription("Build and deploy a local project to device or the connected target. Returns status and build-log tail. Check container_list and telemetry_logs for application readiness."),
-		mcpgo.WithString("project_path", mcpgo.Required(), mcpgo.Description("Directory containing wendy.json")),
-		mcpgo.WithString("device", mcpgo.Description("device from device_list, host:port, or vm:name; omit to reuse the connection")),
+		mcpgo.WithString("project_path", mcpgo.Required(), mcpgo.Description("Project directory to build and deploy")),
+		mcpgo.WithString("device", mcpgo.Description("device selector from device_list (host:port, vm:NAME, or a cloud:// selector); omit to reuse the connection")),
 		mcpgo.WithString("build_type", mcpgo.Enum("docker", "compose", "swift", "python"), mcpgo.Description("Build system; omit for automatic detection")),
 		mcpgo.WithString("product", mcpgo.Description("Swift package product")),
 		mcpgo.WithBoolean("debug", mcpgo.Description("Start under a debugger")),
 		mcpgo.WithBoolean("start", mcpgo.DefaultBool(true), mcpgo.Description("Start after deployment; false only creates the container")),
-		mcpgo.WithBoolean("detach", mcpgo.DefaultBool(true), mcpgo.Description("Return without streaming application logs")),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.DefaultNumber(300), mcpgo.Description("Command timeout")),
 		mcpgo.WithInteger("max_bytes", mcpgo.Min(1), mcpgo.Max(1000000), mcpgo.DefaultNumber(16384), mcpgo.Description("Build-log tail byte limit")),
 	}

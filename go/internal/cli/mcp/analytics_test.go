@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -179,5 +180,23 @@ func TestToolAnalyticsConcurrentCalls(t *testing.T) {
 	}
 	if total != count {
 		t.Fatalf("got %d events for %d calls", total, count)
+	}
+}
+
+// allErrorCodes lists every errorCode the built-in tools return.
+var allErrorCodes = []errorCode{
+	errCodeNotConnected, errCodeInvalidArgument, errCodeDeviceUnreachable, errCodeEntitlementDenied,
+	errCodeAuthRequired, errCodeMultipleSessions, errCodeNotFound, errCodeTimeout, errCodeCancelled,
+	errCodeUnsupported, errCodeInternal,
+}
+
+func TestToolErrorClassReportsEveryBuiltInCode(t *testing.T) {
+	for _, code := range allErrorCodes {
+		if got := toolErrorClass(errResult(code, "detail"), nil); got != strings.ToLower(string(code)) {
+			t.Errorf("toolErrorClass(%s) = %q", code, got)
+		}
+	}
+	if got := toolErrorClass(errResult("APP_DEFINED", "detail"), nil); got != "tool_error" {
+		t.Errorf("an app-defined code must not reach telemetry: %q", got)
 	}
 }

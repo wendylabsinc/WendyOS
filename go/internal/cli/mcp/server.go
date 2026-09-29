@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -133,6 +134,10 @@ func directCommandTarget(conn *grpcclient.AgentConnection, address string) comma
 		// Host alone loses custom ports; a prebuilt connection with no Addr
 		// cannot safely be replayed by guessing a default endpoint.
 		address = conn.Addr
+	} else if _, _, err := net.SplitHostPort(address); err != nil {
+		// `wendy run --device NAME` resolves a bare name differently (by device
+		// ID, or as a same-named cloud device); replay the dialed host:port.
+		address = withDefaultAgentPort(address)
 	}
 	if address == "" {
 		return commandTarget{}
@@ -244,6 +249,7 @@ func (s *mcpServer) newProtocolServer() *server.MCPServer {
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(true, false),
 		server.WithPromptCapabilities(false),
+		server.WithInstructions(serverInstructions),
 		server.WithToolFilter(s.filterTools),
 	)
 	s.registerToolGroups(srv)
@@ -287,7 +293,7 @@ func (s *mcpServer) Start(ctx context.Context) error {
 // serveStdio is replaceable in tests so startup ordering can be verified
 // without taking over the test process's stdin and stdout.
 var serveStdio = func(srv *server.MCPServer) error {
-	return server.ServeStdio(srv)
+	return serveStdioProcess(srv)
 }
 
 func (s *mcpServer) runStartupConnect(ctx context.Context) {

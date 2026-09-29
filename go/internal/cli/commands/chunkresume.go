@@ -99,14 +99,17 @@ func retryableTunnelError(err error) bool {
 // a given client. It is a factory rather than a bare imagePrepareFunc so each
 // retry's PrepareImage call rides the CURRENT (possibly reconnected)
 // connection instead of the one that just dropped.
-func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentConnection, layers []localLayer, prepareFor func(agentpb.WendyContainerServiceClient) imagePrepareFunc, cfg chunkUploadConfig) (*grpcclient.AgentConnection, []*agentpb.RunContainerLayerHeader, error) {
+//
+// observe, when non-nil, receives each attempt's final push snapshot; the last
+// call describes the attempt whose result is returned.
+func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentConnection, layers []localLayer, prepareFor func(agentpb.WendyContainerServiceClient) imagePrepareFunc, cfg chunkUploadConfig, observe func(chunkPushSnapshot)) (*grpcclient.AgentConnection, []*agentpb.RunContainerLayerHeader, error) {
 	cur := conn
 	for attempt := 1; attempt <= chunkPushResumeAttempts; attempt++ {
 		var prepare imagePrepareFunc
 		if prepareFor != nil {
 			prepare = prepareFor(cur.ContainerService)
 		}
-		headers, err := pushLayersWithProgress(ctx, cur.ContainerService, layers, prepare, cfg)
+		headers, err := pushLayersWithProgress(ctx, cur.ContainerService, layers, prepare, cfg, observe)
 		if err == nil {
 			return cur, headers, nil
 		}

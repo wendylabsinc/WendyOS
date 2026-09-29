@@ -57,8 +57,9 @@ not verify readiness. Check container state, logs and actual app/ROS output.
 
 ## Connection Model
 
-Most MCP tools require an active device connection. The `run` tool works
-without a prior connection (it manages the cloud tunnel internally).
+Most MCP tools require an active device connection. The `run` tool deploys to
+the connected target or an explicit `device`; with neither it returns
+`NOT_CONNECTED` rather than picking a device.
 
 ## Device troubleshooting
 

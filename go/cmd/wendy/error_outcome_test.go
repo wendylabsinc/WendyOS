@@ -112,6 +112,7 @@ func classifierClasses(t *testing.T) map[string]bool {
 	classes := map[string]bool{}
 	for _, src := range []struct{ file, fn string }{
 		{"main.go", "errorClass"},
+		{"../../internal/cli/commands/errorclass.go", "ExecutionErrorClass"},
 		{"../../internal/cli/commands/error_class.go", "ErrorClass"},
 	} {
 		parsed, err := parser.ParseFile(token.NewFileSet(), src.file, nil, 0)

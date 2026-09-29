@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +25,9 @@ func (s *mcpServer) runTarget(req mcpgo.CallToolRequest) (commandTarget, error) 
 		if value != "" && strings.TrimSpace(value) == "" {
 			return commandTarget{}, fmt.Errorf("device and cloud selectors cannot be whitespace")
 		}
+	}
+	if strings.Contains(device, ",") || strings.Contains(cloud, ",") {
+		return commandTarget{}, fmt.Errorf("device names one device; wendy run would deploy to every device in a comma-separated list")
 	}
 	if device != "" {
 		if cloud != "" || endpoint != "" || broker != "" {
@@ -55,12 +60,14 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	if err != nil {
 		return errResult(errCodeInvalidArgument, err.Error()), nil
 	}
-	if info, err := os.Stat(filepath.Join(projectPath, "wendy.json")); err != nil || info.IsDir() {
-		return errResult(errCodeInvalidArgument, "project_path must contain a wendy.json file"), nil
+	// The CLI validates the project itself: compose projects have no
+	// wendy.json, and `wendy run --yes` sets up a first deploy.
+	if info, err := os.Stat(projectPath); err != nil || !info.IsDir() {
+		return errResult(errCodeInvalidArgument, "project_path must be an existing project directory"), nil
 	}
 	target, err := s.runTarget(req)
 	if err != nil {
-		return errResult(errCodeInvalidArgument, err.Error()), nil
+		return s.runTargetErrResult(req, err), nil
 	}
 	timeout, err := ros2Int(req, "timeout_seconds", 300, 1, 3600)
 	if err != nil {
@@ -82,6 +89,12 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 		}
 	} else {
 		start = !req.GetBool("deploy", false)
+	}
+	// An attached run waits for readiness, opens a browser on this host, runs
+	// postStart hooks and streams logs until stopped, so it could only time
+	// out here. run always detaches; telemetry_logs reads the app's output.
+	if value, present := req.GetArguments()["detach"]; present && value != true {
+		return errResult(errCodeInvalidArgument, "run always detaches; read application logs with telemetry_logs"), nil
 	}
 	selector := target.Device
 	if target.Selector != "" {
@@ -105,11 +118,10 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	if !start {
 		args = append(args, "--deploy")
 	}
-	for _, name := range []string{"debug", "detach"} {
-		if req.GetBool(name, name == "detach") {
-			args = append(args, "--"+name)
-		}
+	if req.GetBool("debug", false) {
+		args = append(args, "--debug")
 	}
+	args = append(args, "--detach")
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	runner := s.runCommandFn
@@ -118,6 +130,9 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	}
 	tok := progressToken(req)
 	reportProgress(ctx, tok, 0, 0, "building and deploying to "+target.Device)
+	if tok != nil {
+		runCtx = withRunProgress(runCtx, newRunProgress(func(progress float64, message string) { reportProgress(ctx, tok, progress, 0, message) }))
+	}
 	output, truncated, runErr := runner(runCtx, args, target, maxBytes)
 	s.refreshContainerMCPTools()
 	result := map[string]any{
@@ -125,15 +140,20 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 		"readiness": "not_checked",
 	}
 	if runErr != nil || runCtx.Err() != nil {
-		code := errCodeInternal
-		if runCtx.Err() != nil {
+		code := runFailureCode(output)
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			code = errCodeTimeout
+		} else if runCtx.Err() != nil {
+			code = errCodeCancelled
 		}
 		result["error_code"] = string(code)
 		result["status"] = "failed"
-		result["message"] = "Deployment did not complete. Inspect the output and device state before retrying; a timed-out command may already have created or started the container."
+		result["message"] = "Deployment did not complete. Inspect the output and device state before retrying; a timed-out or cancelled command may already have created or started the container."
 		if output == "" && runErr != nil {
 			result["output"] = runErr.Error()
+		}
+		if next := runFailureNextStep(target, code); next != "" {
+			result["suggested_next_step"] = next
 		}
 		r := okResult(result)
 		r.IsError = true
@@ -144,6 +164,9 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 		result["status"] = "created"
 	}
 	result["suggested_next_step"] = "Connect to the returned target, check container_list and telemetry_logs, then test the app's health endpoint or ROS interface. Deployment alone does not verify behavior."
+	if next := s.runNextStep(target); next != "" {
+		result["suggested_next_step"] = next
+	}
 	reportProgress(ctx, tok, 1, 1, "deployment command completed")
 	return okResult(result), nil
 }
@@ -179,15 +202,35 @@ func executeRunCommand(ctx context.Context, args []string, target commandTarget,
 	if err != nil {
 		return "", false, err
 	}
-	cmd := exec.CommandContext(ctx, bin, args...)
-	if target.Selector != "" && target.Transport == "cloud" {
-		cmd.Env = runEnvironment(os.Environ(), target)
+	if err := ctx.Err(); err != nil {
+		return "", false, err
 	}
+	cmd := exec.Command(bin, args...)
+	configureRunProcess(cmd)
+	cmd.Env = runChildEnvironment(os.Environ(), target)
 	// Bound pipe cleanup if a descendant build process outlives the CLI.
 	cmd.WaitDelay = 2 * time.Second
 	tail := &runTail{limit: limit}
-	cmd.Stdout, cmd.Stderr = tail, tail
-	err = cmd.Run()
+	var out io.Writer = tail
+	if progress := runProgressFrom(ctx); progress != nil {
+		out = io.MultiWriter(tail, progress)
+	}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err = cmd.Start(); err != nil {
+		return "", false, err
+	}
+	unpin := pinRunProcess(cmd)
+	release := stopRunOnCancel(ctx, cmd)
+	err = cmd.Wait()
+	release()
+	unpin()
+	if ctx.Err() != nil {
+		// Reap build descendants (docker, buildx, swift) the CLI left behind.
+		reapRunGroup(cmd)
+	} else if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		// The CLI succeeded; a descendant merely kept the output pipe open.
+		err = nil
+	}
 	data := tail.data
 	for len(data) > 0 && !utf8.RuneStart(data[0]) {
 		data = data[1:]

@@ -29,8 +29,18 @@ const chunkPushInteractiveTickInterval = 200 * time.Millisecond
 //
 // Detach needs no branch here: it only diverges after Started, downstream
 // of this call.
-func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, cfg chunkUploadConfig) ([]*agentpb.RunContainerLayerHeader, error) {
+//
+// observe, when non-nil, receives the push's final snapshot — on failure too
+// — so the caller can record upload and device timings (WDY-3215).
+func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, cfg chunkUploadConfig, observe func(chunkPushSnapshot)) ([]*agentpb.RunContainerLayerHeader, error) {
 	prog := newChunkPushProgress()
+	if observe != nil {
+		defer func() {
+			snap := prog.Snapshot()
+			snap.Compressor = cfg.compressor
+			observe(snap)
+		}()
+	}
 
 	if !buildProgressInteractive() {
 		stop := startChunkPushHeartbeat(prog, buildProgressOut, tui.PlainHeartbeatInterval)
@@ -131,7 +141,7 @@ func startChunkPushHeartbeat(prog *chunkPushProgress, w io.Writer, interval time
 				return
 			case <-ticker.C:
 				snap := prog.Snapshot()
-				fmt.Fprintf(w, "  ...     sending chunks  %s  (%s)\n", snap.Line(), formatChunkPushElapsed(snap.Elapsed))
+				fmt.Fprintf(w, "  ...     %s  %s  (%s)\n", snap.Activity(), snap.Line(), formatChunkPushElapsed(snap.Elapsed))
 			}
 		}
 	}()
@@ -148,7 +158,10 @@ func startChunkPushHeartbeat(prog *chunkPushProgress, w io.Writer, interval time
 // "goroutine notices totals settled" never overshoots the bar; it is 0 (not
 // NaN or a divide-by-zero panic) when nothing has been planned yet — the
 // state of a fresh push before any layer's chunk-diff plan is known. Detail
-// is the same live progress line the non-interactive heartbeat prints.
+// is the same live progress line the non-interactive heartbeat prints. Title
+// switches to the device phase while the device prepares the image, since the
+// bar is full by then; otherwise it stays empty, which keeps the program's
+// own title.
 func chunkPushUpdateMsg(s chunkPushSnapshot) tui.ProgressUpdateMsg {
 	var percent float64
 	if s.PlannedBytes > 0 {
@@ -157,8 +170,12 @@ func chunkPushUpdateMsg(s chunkPushSnapshot) tui.ProgressUpdateMsg {
 			percent = 1
 		}
 	}
-	return tui.ProgressUpdateMsg{
+	msg := tui.ProgressUpdateMsg{
 		Percent: percent,
 		Detail:  s.Line(),
 	}
+	if s.Preparing {
+		msg.Title = "Device preparing image..."
+	}
+	return msg
 }

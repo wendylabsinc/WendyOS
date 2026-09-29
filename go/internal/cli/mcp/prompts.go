@@ -16,7 +16,7 @@ func (s *mcpServer) registerPrompts(srv *server.MCPServer) {
 		mcpgo.NewPrompt("deploy_app",
 			mcpgo.WithPromptDescription("Walks through connecting to a device and deploying a project with the run tool."),
 			mcpgo.WithArgument("project_path", mcpgo.ArgumentDescription("Path to the project to deploy (defaults to the current directory).")),
-			mcpgo.WithArgument("device", mcpgo.ArgumentDescription("Device selector from device_list; omit to reuse the connection.")),
+			mcpgo.WithArgument("device", mcpgo.ArgumentDescription("Device selector from device_list (host:port, vm:NAME or a cloud:// selector); omit to reuse the connection.")),
 			mcpgo.WithArgument("device_name", mcpgo.ArgumentDescription("Explicit cloud device name; omit to reuse the current direct, simulator or cloud session target.")),
 		),
 		s.handleDeployAppPrompt,
@@ -69,9 +69,9 @@ func (s *mcpServer) handleDeployAppPrompt(_ context.Context, req mcpgo.GetPrompt
 
 	text := fmt.Sprintf(`Deploy the project at %s to %s.
 
-1. Confirm the intended target with wendy_status: use device_connect with a device selector from device_list for LAN, simulator, or cloud. Reuse a connection only if it is the intended target. On blank hardware, enable setup with wendy_tools, use os_install_plan and verify first boot before connecting.
-2. Enable setup and call project_validate for this project. Address its errors, then deploy with the run tool: run(project_path=%q%s). This builds the project and starts it on the device.
-3. Check the returned target. Detached run does not wait for readiness: check container_list for the app's running_state, telemetry_logs for startup errors, and the app's actual health endpoint or ROS output. Do not infer physical motion from deployment success.
+1. Confirm the intended target with wendy_status. If it is not connected, use device_connect with a device selector from device_list: host:port for LAN, vm:NAME for a simulator, or a cloud:// selector. Reuse a connection only if it is the intended target. On blank hardware, enable setup with wendy_tools, use os_install_plan and verify first boot before connecting.
+2. Enable setup and call project_validate for this project. Address its errors, then deploy with the run tool: run(project_path=%q%s). This builds the project and starts it on that target. With no connection and no device, run returns NOT_CONNECTED.
+3. Check the returned target; if it is not the connected device, device_connect to it first. run always detaches and does not wait for readiness: check container_list for the app's running_state and termination_reason, telemetry_logs for startup errors, and the app's actual health endpoint or ROS output. Do not infer physical motion from deployment success.
 `, projectPath, deviceClause, projectPath, argument)
 
 	return mcpgo.NewGetPromptResult(

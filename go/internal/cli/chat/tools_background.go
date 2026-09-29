@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,18 @@ type backgroundTarget struct {
 	Transport string `json:"transport"`
 	CloudGRPC string `json:"cloud_grpc,omitempty"`
 	BrokerURL string `json:"broker_url,omitempty"`
+	Selector  string `json:"selector,omitempty"`
+}
+
+// cloudSelector returns the cloud:// identity to replay, if the target has one:
+// the pinned selector of a cloud session, or a device that is itself a selector.
+func (target backgroundTarget) cloudSelector() string {
+	for _, value := range []string{target.Selector, target.Device} {
+		if strings.HasPrefix(strings.ToLower(value), "cloud:") {
+			return value
+		}
+	}
+	return ""
 }
 
 func (t *Tools) backgroundTarget(ctx context.Context) (backgroundTarget, error) {
@@ -93,7 +106,7 @@ func (t *Tools) backgroundTarget(ctx context.Context) (backgroundTarget, error) 
 }
 
 func (target backgroundTarget) validate() error {
-	for _, value := range []string{target.Device, target.CloudGRPC, target.BrokerURL} {
+	for _, value := range []string{target.Device, target.CloudGRPC, target.BrokerURL, target.Selector} {
 		if len(value) > 512 || strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.TrimSpace(value) != value {
 			return errors.New("the current device has an invalid local playback target")
 		}
@@ -110,19 +123,41 @@ func (target backgroundTarget) validate() error {
 	if target.Transport == "cloud" && target.CloudGRPC == "" {
 		return errors.New("cloud playback requires the connected cloud endpoint")
 	}
+	if target.Selector != "" && (target.Transport != "cloud" || target.cloudSelector() != target.Selector) {
+		return errors.New("the current device has an invalid cloud selector")
+	}
 	return nil
+}
+
+// backgroundEnvironment is the child environment for a playback command. A
+// socket override takes precedence over --device and cloud flags in the CLI,
+// so it is cleared to replay the current MCP target even if Chat inherited a
+// local socket. A cloud selector is replayed without --broker-url, so the
+// session's broker (empty selects the default) is passed in the environment.
+func backgroundEnvironment(base []string, target backgroundTarget) []string {
+	env := append(slices.Clone(base), "NO_COLOR=1", "TERM=dumb", "WENDY_AGENT_SOCKET=")
+	if target.cloudSelector() != "" {
+		env = append(env, "WENDY_BROKER_URL="+target.BrokerURL)
+	}
+	return env
 }
 
 func backgroundArgs(kind string, target backgroundTarget, raw json.RawMessage) ([]string, error) {
 	if err := target.validate(); err != nil {
 		return nil, err
 	}
-	args := []string{"--device=" + target.Device}
-	if target.Transport == "cloud" {
+	// `cloud device` resolves only cloud names and asset IDs, so a cloud://
+	// selector is replayed through the device command, like device_connect.
+	device, named := target.Device, target.Transport == "cloud"
+	if selector := target.cloudSelector(); selector != "" {
+		device, named = selector, false
+	}
+	args := []string{"--device=" + device}
+	if named {
 		args = append(args, "cloud")
 	}
 	args = append(args, "device")
-	if target.Transport == "cloud" {
+	if named {
 		args = append(args, "--cloud-grpc="+target.CloudGRPC)
 		// An explicit empty value preserves MCP's endpoint-derived default
 		// instead of inheriting a different WENDY_BROKER_URL in the child CLI.
