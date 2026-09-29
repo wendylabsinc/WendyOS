@@ -22,12 +22,18 @@ func newCloudRunCmd() *cobra.Command {
 		Deprecated: "use 'wendy run' instead",
 		Hidden:     true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.WithValue(cmd.Context(), cloudDeviceContextKey{}, cloudDeviceConfig{
-				CloudGRPC:  cloudGRPC,
-				DeviceName: effectiveDeviceName(deviceName),
-				BrokerURL:  brokerURL,
+			// Same SIGINT/SIGTERM classification as `wendy run` (see
+			// runWithInterruptContext): without it, main's signal-cancelled
+			// ctx made an interrupted attached run's bare ErrUserCancelled
+			// look like success on SIGTERM too, not just SIGINT.
+			return runWithInterruptContext(cmd.Context(), func(runCtx context.Context) error {
+				ctx := context.WithValue(runCtx, cloudDeviceContextKey{}, cloudDeviceConfig{
+					CloudGRPC:  cloudGRPC,
+					DeviceName: effectiveDeviceName(deviceName),
+					BrokerURL:  brokerURL,
+				})
+				return runCommand(ctx, opts)
 			})
-			return runCommand(ctx, opts)
 		},
 	}
 

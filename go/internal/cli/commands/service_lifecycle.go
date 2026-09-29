@@ -12,8 +12,10 @@ import (
 // serviceHookRunner runs the per-service "wait for readiness → announce URL →
 // fire postStart" sequence for multi-service runs (compose + services map).
 // Readiness gates all explicit and synthesized host actions. A slow running
-// service remains under observation until ready, stopped, or canceled. Context cancellation suppresses every side effect, as does a watch
-// session that has already completed the sequence for this container.
+// service remains under observation until ready, stopped, canceled, or past
+// readinessObserveFactor probe timeouts. Context cancellation suppresses every
+// side effect, as does a watch session that has already completed the
+// sequence for this container.
 //
 // Zero-value-ready except conn: construct with
 // &serviceHookRunner{conn: conn, opts: opts}.
@@ -51,18 +53,16 @@ type serviceHookRunner struct {
 //
 // The dial target for both readiness and the hook is resolveHookHost's
 // result, not r.conn.Host directly — same reasoning as run.go's
-// single-container path (see resolveHookHost): a cloud connection's Host is
-// the tunnel's unresolvable asset name, while an IPv6-literal Host may be a
-// rotating temporary address. IPv6 can prefer an agent-reported IP; cloud
-// requires a verified mesh route because a reported LAN address is not
-// necessarily reachable. resolveHookHost's announceReachableURL call replaces
-// the old readiness-gated announce call below — it now runs before the
-// readiness wait (not after a successful one), which mirrors run.go's
-// documented tradeoff: the "App reachable at" line prints regardless of
-// whether this service's probe later fails, in exchange for a probe that can
-// actually reach a device at all. An active desktop VPN supplies the stable
-// mesh hostname for cloud; without it, readiness and the hook are skipped
-// instead of dialing a dead asset name or private device LAN address.
+// single-container path (see hostSideAppAddress): an active desktop VPN's
+// mesh hostname wins; an IPv6-literal Host may be a rotating temporary
+// address, so it prefers the agent-reported IP when one is available; and a
+// cloud-tunnel connection's Host is the unresolvable asset name, so without
+// the mesh it uses the agent-reported LAN address only when that answers from
+// this machine; otherwise readiness and the hook are skipped with
+// cloudHostSkipNotice. resolveHookHost's announcement runs before the
+// readiness wait (not after a successful one), mirroring run.go's documented
+// tradeoff: the "App reachable at" line prints regardless of whether this
+// service's probe later fails.
 func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.AppConfig) {
 	if cfg == nil {
 		return
@@ -88,15 +88,19 @@ func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.
 		// cfg.ServiceName is "" for the app-level fallback config (see
 		// appLevelLifecycleConfig); containerDisplayName falls back to the
 		// bare AppID in that case rather than printing a dangling "for :".
-		cliNotice("Skipping postStart hook for %s: Wendy Mesh is not active; connect the desktop VPN to reach this cloud device.", containerDisplayName(cfg))
+		if ctx.Err() == nil {
+			cliNotice("%s", cloudHostSkipNotice(cfg))
+		}
 		return
 	}
 
-	if err := waitForAttachedReadiness(ctx, r.conn, cfg, hookHost); err != nil {
-		if ctx.Err() == nil {
-			warnReadiness(ctx, r.conn, cfg.AppID, err)
+	if !r.opts.hostReadinessConfirmed {
+		if err := waitForAttachedReadiness(ctx, r.conn, cfg, hookHost, r.opts.readinessTimeout); err != nil {
+			if ctx.Err() == nil {
+				warnReadiness(ctx, r.conn, cfg.AppID, err)
+			}
+			return
 		}
-		return
 	}
 	if ctx.Err() != nil {
 		return

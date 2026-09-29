@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os/exec"
@@ -232,6 +233,40 @@ func TestClassifyRemoteBuildError_SeparatesDeliveryFromBuild(t *testing.T) {
 	}
 	if !strings.Contains(deliveryErr.Error(), "spark-office") {
 		t.Errorf("delivery error must name the build host, got: %v", deliveryErr)
+	}
+}
+
+// runRemoteBuild classifies the error runBuildWithProgress returns, which
+// names the failing step and cause when the build log shows them. A delivery
+// failure (here a --chunking=off registry push that fails after every step
+// succeeded) must still read as one, reported with the host's own message.
+func TestClassifyRemoteBuildError_JudgesTheHostsErrorNotTheBuildSummary(t *testing.T) {
+	restore := forceBuildProgressInteractive(false)
+	defer restore()
+	var out strings.Builder
+	defer setBuildProgressOut(&out)()
+	originalPersist := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = originalPersist }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/wendy-build-image-test.log", nil }
+	remoteBuild := func(log string, hostErr error) error {
+		return classifyRemoteBuildError("spark-office", runBuildWithProgress(context.Background(), "Building on spark-office...", dumpRawAlways, func(_ context.Context, stream, _ io.Writer) error {
+			_, _ = io.WriteString(stream, log)
+			return hostErr
+		}))
+	}
+
+	pushLog := "#8 [build 4/4] RUN go build -o /out/app .\n#8 DONE 3.1s\n\n#12 exporting to image\n#12 ERROR: failed to push localhost:5000/app:latest: connection reset by peer\n"
+	deliveryErr := remoteBuild(pushLog, status.Error(codes.Unavailable, "pushing the built image to the target device failed: connection reset by peer"))
+	if isImageBuildFailure(deliveryErr) || !strings.HasPrefix(deliveryErr.Error(), "image built on spark-office but could not be delivered to the device: ") ||
+		!strings.Contains(deliveryErr.Error(), "pushing the built image to the target device failed") || strings.Contains(deliveryErr.Error(), "build failed") {
+		t.Fatalf("delivery failure = %q (image build failure: %v), want the host's delivery error", deliveryErr, isImageBuildFailure(deliveryErr))
+	}
+
+	// The host's error is not an image-build failure until classified here,
+	// so runBuildWithProgress leaves its message alone.
+	buildErr := remoteBuild(readBuildFailureFixture(t, "go-compile.log"), status.Error(codes.Internal, "build failed: exit status 1"))
+	if want := "build on spark-office failed or did not complete: rpc error: code = Internal desc = build failed: exit status 1"; !isImageBuildFailure(buildErr) || buildErr.Error() != want {
+		t.Fatalf("build failure = %q, want %q", buildErr, want)
 	}
 }
 

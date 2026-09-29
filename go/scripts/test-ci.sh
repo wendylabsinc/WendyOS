@@ -140,7 +140,10 @@ prepare_ci_oci_retry() {
         return 0
     fi
 
-    grep -qF 'docker buildx build (OCI export) failed' <<<"$output" || return 1
+    # `wendy run` prints the builder's error in its build failure details
+    # ("Error: docker buildx build (OCI export) failed: ...") and, when it found
+    # the failing step, ends with "build failed at [<stage n/m>] ..." instead.
+    grep -qE 'docker buildx build \(OCI export\) failed|build failed at \[' <<<"$output" || return 1
     echo "    OCI export failed on the disposable CI builder; retrying once"
 }
 

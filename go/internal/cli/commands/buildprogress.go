@@ -286,8 +286,9 @@ func (f *firstWriteHookWriter) Write(p []byte) (int, error) {
 // runBuildWithProgress runs build, rendering its buildx output as a clean live
 // step list (interactive) or concise per-step lines (non-interactive). When a
 // build fails and dumpRawOnFailure(err) is true, the useful step/cause/location
-// are printed and the detailed raw output is retained in a temporary log file
-// (never on cancellation). Setup-log chatter written to logw is retained in
+// are printed, the detailed raw output is retained in a temporary log file, and
+// the returned error names the failing step and its cause (never on
+// cancellation). Setup-log chatter written to logw is retained in
 // the same file, AND (WDY-2432) rendered live as a synthetic "preparing
 // buildx builder" step via newBuildSetupStepWriter, so a cold builder
 // bootstrap is visible rather than a silent gap until either it fails or
@@ -311,7 +312,7 @@ func runBuildWithProgress(ctx context.Context, title string, dumpRawOnFailure fu
 		stopHeartbeat()
 		if err != nil {
 			if ctx.Err() == nil && dumpRawOnFailure(err) {
-				renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), err)
+				return renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), err)
 			}
 			return err
 		}
@@ -363,7 +364,7 @@ func runBuildWithProgress(ctx context.Context, title string, dumpRawOnFailure fu
 	buildErr := <-buildErrC
 	if buildErr != nil {
 		if ctx.Err() == nil && dumpRawOnFailure(buildErr) {
-			renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), buildErr)
+			return renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), buildErr)
 		}
 		return buildErr
 	}

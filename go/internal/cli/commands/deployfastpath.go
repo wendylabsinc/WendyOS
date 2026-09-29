@@ -612,9 +612,17 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		return false, nil
 	}
 
-	state, found, err := lookupAppState(ctx, conn, appCfg.AppID)
-	if err != nil || !found {
+	container, err := lookupAppContainer(ctx, conn, appCfg.AppID)
+	if err != nil || container == nil {
 		// Device unreachable for the query or app no longer present — rebuild.
+		return false, nil
+	}
+	state := container.GetRunningState()
+	if state != agentpb.AppRunningState_RUNNING && container.GetAppVersion() != "" && container.GetAppVersion() != agentAppVersion(appCfg) {
+		// A stopped container of another version is another deployment's,
+		// whatever this machine's fingerprint says. Starting it would make it
+		// this run's app, and its version would then read as a replacement
+		// (startedAppBaseline) — so deploy this project instead.
 		return false, nil
 	}
 
@@ -626,13 +634,18 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 				opts.watchState.reapCommand(cmd)
 				return true, nil
 			}
-			return true, followExistingContainer(ctx, conn, appCfg, opts)
+			// The follow's baseline is this lookup: taken before following
+			// starts, so a later replacement cannot be mistaken for it.
+			return true, followExistingContainer(ctx, conn, appCfg, opts, observedAppBaseline(container))
 		}
 		return true, startExistingContainer(ctx, conn, appCfg, opts)
 	}
 
 	if state == agentpb.AppRunningState_RUNNING {
 		cliLogln("No changes detected; %s is already up to date and running.", containerDisplayName(appCfg))
+		if opts.waitReady {
+			return true, waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
+		}
 		// Detached deploys don't run host-side postStart or block on readiness; see
 		// runPostStartIfReady's doc comment. The container is untouched, so the
 		// agent-side hook cannot re-run either.
@@ -643,14 +656,24 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	// detached deploy path so the fast path stays a transparent optimization:
 	// attach the agent-side postStart hook to the start RPC (via context
 	// metadata). Detached deploys do not fire the host-side postStart hook.
-	if _, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
+	stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 		AppName:       appCfg.AppID,
 		RestartPolicy: resolveRestartPolicy(opts),
-	}); err != nil {
+	})
+	if err != nil {
 		// Could not start the existing container; fall back to a full deploy.
 		return false, nil
 	}
 	cliLogln("No changes detected; started existing %s.", containerDisplayName(appCfg))
+	if opts.waitReady {
+		// Only --wait-ready needs the agent's Started acknowledgement before
+		// looking at the app; a plain detached start returns right away.
+		if err := awaitStarted(stream); err != nil {
+			return true, fmt.Errorf("waiting for container start: %w", err)
+		}
+		drainDetachedStartOutput(stream)
+		return true, waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
+	}
 	return true, nil
 }
 
@@ -742,29 +765,4 @@ func devicePresentLayers(ctx context.Context, conn *grpcclient.AgentConnection, 
 		present[p.GetDiffId()] = true
 	}
 	return present, true
-}
-
-// lookupAppState queries the device for the running state of a single app.
-func lookupAppState(ctx context.Context, conn *grpcclient.AgentConnection, appID string) (agentpb.AppRunningState, bool, error) {
-	stream, err := conn.ContainerService.ListContainers(ctx, &agentpb.ListContainersRequest{})
-	if err != nil {
-		return agentpb.AppRunningState_STOPPED, false, err
-	}
-	for {
-		resp, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return agentpb.AppRunningState_STOPPED, false, err
-		}
-		c := resp.GetContainer()
-		if c == nil {
-			continue
-		}
-		if strings.EqualFold(c.GetAppName(), appID) {
-			return c.GetRunningState(), true, nil
-		}
-	}
-	return agentpb.AppRunningState_STOPPED, false, nil
 }

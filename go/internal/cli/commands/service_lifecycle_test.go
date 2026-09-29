@@ -274,16 +274,22 @@ func TestServiceHookRunner_FiresAfterReadiness(t *testing.T) {
 	}
 }
 
-// TestServiceHookRunner_CloudRejectsReportedLANIP verifies that a cloud
-// control tunnel does not make an agent-reported address reachable. Without
-// an active mesh route, readiness and postStart are skipped.
-func TestServiceHookRunner_CloudRejectsReportedLANIP(t *testing.T) {
+// TestServiceHookRunner_CloudSwapsHostForReadinessAndHook verifies that a
+// cloud connection (conn.Reconnect != nil) — whose Host is the unresolvable
+// cloud asset name — gets both its readiness probe and its postStart hook
+// pointed at the agent-reported IP instead, mirroring the single-container
+// fix in run.go's resolveHookHost. Before this fix, service_lifecycle.go had
+// no swap at all: runOne dialed r.conn.Host directly for both readiness and
+// the hook, which is fine for LAN but always fails against a cloud asset
+// name.
+func TestServiceHookRunner_CloudSwapsHostForReadinessAndHook(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to start listener: %v", err)
 	}
 	defer ln.Close()
 	port := testPort(t, ln)
+	stubLANAddressReachable(t, true) // no agent listens on 127.0.0.1 here
 
 	calls := swapBrowserOpen(t)
 	containerFake := &lifecycleFakeContainerClient{}
@@ -313,16 +319,76 @@ func TestServiceHookRunner_CloudRejectsReportedLANIP(t *testing.T) {
 	r.runOne(context.Background(), context.Background(), cfg)
 	elapsed := time.Since(start)
 
-	// Neither the listener nor the asset name should be dialed; the cloud
-	// lifecycle work must be skipped immediately without an active mesh route.
+	// The real listener answers almost instantly; dialing the unresolvable
+	// asset name would instead burn the full 5s TimeoutSeconds.
 	if elapsed > 2*time.Second {
-		t.Errorf("took %v, expected cloud lifecycle work to skip immediately", elapsed)
+		t.Errorf("took %v, expected near-instant readiness against the reported IP (probe likely dialed %q instead)", elapsed, conn.Host)
 	}
-	if len(*calls) != 0 {
-		t.Errorf("browserOpen calls = %v, want none without an active mesh route", *calls)
+	if len(*calls) != 1 {
+		t.Fatalf("browserOpen calls = %v, want exactly 1", *calls)
+	}
+	want := "http://127.0.0.1:9/worker"
+	if (*calls)[0] != want {
+		t.Errorf("openURL = %q, want %q", (*calls)[0], want)
 	}
 	if containerFake.listContainersCalls != 0 {
 		t.Errorf("ListContainers called despite readiness succeeding (unexpected warning path)")
+	}
+}
+
+// TestServiceHookRunner_CloudUnreachableLANSkipsReadinessAndHook verifies that
+// a cloud connection (conn.Reconnect != nil) whose agent-reported LAN address
+// does not answer from this machine skips the per-service readiness probe and
+// postStart hook entirely, like run.go's single-container path: its Host is
+// the unresolvable asset name, and the reported IP is out of reach, so
+// probing, announcing, or opening it would mislead.
+func TestServiceHookRunner_CloudUnreachableLANSkipsReadinessAndHook(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start listener: %v", err)
+	}
+	defer ln.Close()
+	port := testPort(t, ln)
+
+	calls := swapBrowserOpen(t)
+	stubLANAddressReachable(t, false)
+	containerFake := &lifecycleFakeContainerClient{}
+	conn := &grpcclient.AgentConnection{
+		Host:             "cloud-asset-does-not-resolve.invalid",
+		Reconnect:        neverReconnect,
+		ContainerService: containerFake,
+		AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{
+			NetworkInterfaces: []*agentpb.NetworkInterface{{Name: "eth0", IpAddresses: []string{"127.0.0.1"}}},
+		}},
+	}
+	r := &serviceHookRunner{conn: conn}
+
+	cfg := &appconfig.AppConfig{
+		AppID:       "app",
+		ServiceName: "worker",
+		Readiness: &appconfig.ReadinessConfig{
+			TCPSocket:      &appconfig.TCPSocketProbe{Port: port},
+			TimeoutSeconds: 5,
+		},
+		Hooks: &appconfig.HooksConfig{
+			PostStart: &appconfig.HookCommand{OpenURL: "http://${WENDY_HOSTNAME}:9/${WENDY_SERVICE_NAME}"},
+		},
+	}
+
+	out := captureStderr(t, func() {
+		r.runOne(context.Background(), context.Background(), cfg)
+	})
+	if len(*calls) != 0 {
+		t.Errorf("browserOpen calls = %v, want none from a cloud-tunnel run", *calls)
+	}
+	if !strings.Contains(out, "Wendy Cloud") {
+		t.Errorf("missing the cloud skip notice:\n%s", out)
+	}
+	if strings.Contains(out, "App reachable at") {
+		t.Errorf("announced the unreachable LAN address:\n%s", out)
+	}
+	if containerFake.listContainersCalls != 0 {
+		t.Errorf("ListContainers called %d times; readiness must be skipped entirely", containerFake.listContainersCalls)
 	}
 }
 

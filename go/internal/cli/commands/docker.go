@@ -2271,6 +2271,57 @@ func buildAndPushImageForAgentWithBuilder(ctx context.Context, conn *grpcclient.
 	return nil
 }
 
+// quietBuildLogKey marks a context whose build routed logOutput into a
+// failure-only buffer instead of a live-rendered destination. Compose and
+// multi-service builds do this for two unrelated reasons — an explicit quiet
+// build (wendy watch's non-verbose mode), or an interactive per-service
+// spinner that doesn't render logOutput at all (see ociLayoutBuildWaitNotice)
+// — and buildProgressInteractive() alone can only see the second one. The
+// callers that know which applies (buildComposeServicesParallel,
+// buildServicesParallelWithContent) tag ctx with it; everything downstream —
+// buildAndPrepareComposeImage AND buildAndPushImageViaOCILayout, since
+// --chunking=off routes Compose/multi-service through the latter too — reads
+// it back via ctx rather than needing a new parameter threaded through every
+// function in between (and through every test fake of buildComposeServiceImage/
+// buildServiceImage, which share those functions' signature).
+type quietBuildLogKey struct{}
+
+func contextWithQuietBuildLog(ctx context.Context, quiet bool) context.Context {
+	return context.WithValue(ctx, quietBuildLogKey{}, quiet)
+}
+
+func quietBuildLogFromContext(ctx context.Context) bool {
+	quiet, _ := ctx.Value(quietBuildLogKey{}).(bool)
+	return quiet
+}
+
+// ociLayoutBuildWaitNotice returns the onWait callback for a layout lock taken
+// during a build. Interactive single-app builds render logOutput's lines live
+// as the synthetic "preparing buildx builder" step (newBuildSetupStepWriter),
+// so the notice belongs there, same as any other setup-log line. Everything
+// else goes straight to stderr instead: non-interactive builds only flush
+// logOutput through the 15s plain-progress heartbeat
+// (tui.PlainHeartbeatInterval), and a quiet build's logOutput (see
+// quietBuildLogKey) is a failure-only buffer regardless of interactivity —
+// unlike plain non-interactivity, buildProgressInteractive() can't see that
+// on its own, hence reading it from ctx.
+//
+// Interactive Compose/multi-service builds that are NOT quiet still route
+// logOutput into their own failure-only buffer (compose.go/multibuild.go's
+// per-service &logBuf), not the live per-service detail line — no existing
+// mechanism threads logOutput into that line, and adding one is out of scope
+// here, so that specific case is a known, accepted gap: the notice is
+// silently lost unless the build later fails.
+func ociLayoutBuildWaitNotice(ctx context.Context, repo string, logOutput io.Writer) func() {
+	return func() {
+		if !quietBuildLogFromContext(ctx) && buildProgressInteractive() {
+			fmt.Fprintf(logOutput, "Waiting for another wendy run of %s to release the build cache…\n", repo)
+			return
+		}
+		cliNotice("Waiting for another wendy run of %s to release the build cache…", repo)
+	}
+}
+
 // buildAndPushImageViaOCILayout is the concurrency-safe Docker deployment
 // path. A stable, registry-agnostic BuildKit builder writes a persistent OCI
 // layout; the host then pushes that image to the device. Per-app/service locks
@@ -2283,7 +2334,7 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 
 	repo = strings.ToLower(repo)
 	layoutDir := chunkLayoutDir(userCache, repo, platform)
-	releaseLayout, err := lockOCILayoutDir(ctx, layoutDir)
+	releaseLayout, err := lockOCILayoutDirNotify(ctx, layoutDir, ociLayoutBuildWaitNotice(ctx, repo, logOutput))
 	if err != nil {
 		return err
 	}
@@ -2352,7 +2403,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	}
 	repo = strings.ToLower(repo)
 	layoutDir := chunkLayoutDir(userCache, repo, platform)
-	releaseLayout, err := lockOCILayoutDir(ctx, layoutDir)
+	releaseLayout, err := lockOCILayoutDirNotify(ctx, layoutDir, ociLayoutBuildWaitNotice(ctx, repo, logOutput))
 	if err != nil {
 		return err
 	}
