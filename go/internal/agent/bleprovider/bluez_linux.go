@@ -184,6 +184,11 @@ func advertisementProperties(uuid string, payload []byte, manager map[string]dbu
 	properties := map[string]*prop.Prop{
 		"Type":        {Value: "peripheral", Writable: false, Emit: prop.EmitFalse},
 		"ServiceData": {Value: map[string]dbus.Variant{uuid: dbus.MakeVariant(payload)}, Writable: false, Emit: prop.EmitFalse},
+		// Relaxed advertising cadence: 100-200ms intervals (up to ~10
+		// advertisements/second) are plenty for discovery and keep
+		// advertising airtime negligible next to scanning and ACLs.
+		"MinInterval": {Value: uint16(160), Writable: false, Emit: prop.EmitFalse},
+		"MaxInterval": {Value: uint16(320), Writable: false, Emit: prop.EmitFalse},
 	}
 	if power, ok := advertisementTxPower(manager); ok {
 		properties["TxPower"] = &prop.Prop{Value: power, Writable: false, Emit: prop.EmitFalse}

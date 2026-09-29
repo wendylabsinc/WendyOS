@@ -143,3 +143,24 @@ func TestAdmitDialPacesDeviceWide(t *testing.T) {
 		t.Fatal("independent device paced by another")
 	}
 }
+
+type countSnapshotNode struct{ links []localmesh.PeerLink }
+
+func (n *countSnapshotNode) Snapshot() localmesh.NodeSnapshot {
+	return localmesh.NodeSnapshot{Links: n.links}
+}
+
+func (n *countSnapshotNode) AttachStream(context.Context, int32, net.Conn, uint16) error {
+	return nil
+}
+
+func TestBlePeerCountUnionsClaimsAndSnapshot(t *testing.T) {
+	r := &runtime{cfg: Config{Logger: zap.NewNop()}, active: map[int32]struct{}{10: {}, 11: {}}}
+	if got := r.blePeerCount(); got != 2 {
+		t.Fatalf("claims only: %d", got)
+	}
+	r.cfg.Node = &countSnapshotNode{links: []localmesh.PeerLink{{Asset: 11, Cost: LinkCost}, {Asset: 12, Cost: LinkCost}, {Asset: 13, Cost: 512}}}
+	if got := r.blePeerCount(); got != 3 {
+		t.Fatalf("union with dedupe + cost filter: %d", got)
+	}
+}

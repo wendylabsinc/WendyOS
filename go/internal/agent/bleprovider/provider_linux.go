@@ -32,6 +32,10 @@ type runtime struct {
 	// otherwise collide on the controller at once; serializing attempts
 	// lets each new link's birth burst drain before the next begins.
 	nextDial time.Time
+	// scanPaused tracks the discovery governor (scanLoop only). lastScanToggle
+	// enforces the toggle dwell.
+	scanPaused     bool
+	lastScanToggle time.Time
 	// dialTimeouts counts consecutive dial-context timeouts per asset. Three
 	// in a row with no HCI progress means initiation itself is wedged (stale
 	// kernel hci_conn or a deaf peer), not merely a busy peer: only an
@@ -394,20 +398,22 @@ func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 	defer ticker.Stop()
 	consecutiveErrors := 0
 	for {
-		if err := r.scanOnce(ctx, bus, adapter); err != nil {
-			if ctx.Err() != nil {
-				return nil
+		if r.governDiscovery(ctx, bus, adapter) {
+			if err := r.scanOnce(ctx, bus, adapter); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				if errors.Is(err, errBlueZOwnerChanged) {
+					return err
+				}
+				consecutiveErrors++
+				r.cfg.Logger.Warn("BLE discovery unavailable", zap.Error(err), zap.Int("consecutive_errors", consecutiveErrors))
+				if consecutiveErrors >= 3 {
+					return fmt.Errorf("BlueZ discovery failed three times: %w", err)
+				}
+			} else {
+				consecutiveErrors = 0
 			}
-			if errors.Is(err, errBlueZOwnerChanged) {
-				return err
-			}
-			consecutiveErrors++
-			r.cfg.Logger.Warn("BLE discovery unavailable", zap.Error(err), zap.Int("consecutive_errors", consecutiveErrors))
-			if consecutiveErrors >= 3 {
-				return fmt.Errorf("BlueZ discovery failed three times: %w", err)
-			}
-		} else {
-			consecutiveErrors = 0
 		}
 		select {
 		case <-ctx.Done():
@@ -415,6 +421,61 @@ func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 		case <-ticker.C:
 		}
 	}
+}
+
+// scanToggleDwell is the minimum time between discovery pause/resume
+// transitions. Toggling reconfigures the controller's scan state; without a
+// dwell, link flaps would churn it every few seconds.
+const scanToggleDwell = 10 * time.Second
+
+// governDiscovery pauses BlueZ discovery once this device holds its full
+// peer complement and resumes it when a slot opens. Paused devices keep
+// advertising (inbound joins still work) but stop spending ~half the radio
+// on active scanning. Returns whether scanning is currently enabled.
+func (r *runtime) governDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) bool {
+	target := r.cfg.TargetPeers
+	if target < 1 {
+		target = DefaultTargetPeers
+	}
+	paused := r.scanPaused
+	if now := time.Now(); now.Sub(r.lastScanToggle) >= scanToggleDwell {
+		if wantPaused := r.blePeerCount() >= target; wantPaused != paused {
+			if wantPaused {
+				if err := stopBlueZDiscovery(ctx, bus, adapter); err != nil {
+					r.cfg.Logger.Debug("BLE discovery pause unavailable", zap.Error(err))
+					return !paused
+				}
+			} else if err := startBlueZDiscovery(ctx, bus, adapter); err != nil {
+				r.cfg.Logger.Debug("BLE discovery resume unavailable", zap.Error(err))
+				return !paused
+			}
+			paused = wantPaused
+			r.scanPaused = paused
+			r.lastScanToggle = now
+			r.cfg.Logger.Info("BLE discovery pause toggled", zap.Bool("paused", paused), zap.Int("peers", r.blePeerCount()), zap.Int("target", target))
+		}
+	}
+	return !paused
+}
+
+// blePeerCount counts distinct BLE peers with an in-progress dial/accept or
+// an authenticated link, by asset. Snapshot links at the BLE cost plus live
+// claims cover both without double counting.
+func (r *runtime) blePeerCount() int {
+	seen := make(map[int32]struct{})
+	r.mu.Lock()
+	for asset := range r.active {
+		seen[asset] = struct{}{}
+	}
+	r.mu.Unlock()
+	if node, ok := r.cfg.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
+		for _, link := range node.Snapshot().Links {
+			if link.Cost == LinkCost {
+				seen[link.Asset] = struct{}{}
+			}
+		}
+	}
+	return len(seen)
 }
 
 func (r *runtime) scanOnce(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) error {
@@ -495,6 +556,11 @@ func (r *runtime) missingPeerSlots() bool {
 }
 
 func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath, now time.Time) {
+	// Never fight the governor: a paused device stays paused until a peer
+	// slot opens.
+	if r.scanPaused {
+		return
+	}
 	if !r.discovery.restartDue(now, r.missingPeerSlots()) {
 		return
 	}

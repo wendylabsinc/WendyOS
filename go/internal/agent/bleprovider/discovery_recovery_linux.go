@@ -67,3 +67,22 @@ func restartBlueZDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 		return object.CallWithContext(ctx, method, 0, args...).Err
 	})
 }
+
+// stopBlueZDiscovery releases our discovery session; advertising, ACLs, and
+// other clients are unaffected.
+func stopBlueZDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) error {
+	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	return bus.Object(bluezName, adapter).CallWithContext(callCtx, adapterInterface+".StopDiscovery", 0).Err
+}
+
+// startBlueZDiscovery (re)acquires our filtered discovery session.
+func startBlueZDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) error {
+	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	object := bus.Object(bluezName, adapter)
+	if err := object.CallWithContext(callCtx, adapterInterface+".SetDiscoveryFilter", 0, meshDiscoveryFilter()).Err; err != nil {
+		return fmt.Errorf("setting BLE discovery filter: %w", err)
+	}
+	return object.CallWithContext(callCtx, adapterInterface+".StartDiscovery", 0).Err
+}

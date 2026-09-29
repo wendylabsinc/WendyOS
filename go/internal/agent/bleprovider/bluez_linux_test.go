@@ -166,3 +166,21 @@ func TestAdvertisementRegistrationFallsBackToDefaultPower(t *testing.T) {
 		t.Fatalf("ordinary failure err=%v registrations=%d", err, registrations)
 	}
 }
+
+func TestAdvertisementRelaxedIntervalsPresent(t *testing.T) {
+	properties := advertisementProperties("uuid", []byte{1}, nil)
+	min, ok := properties["MinInterval"]
+	if !ok {
+		t.Fatal("MinInterval missing")
+	}
+	if v, ok := min.Value.(uint16); !ok || v != 160 {
+		t.Fatalf("MinInterval=%T(%v), want uint16(160)", min.Value, min.Value)
+	}
+	max, ok := properties["MaxInterval"]
+	if !ok {
+		t.Fatal("MaxInterval missing")
+	}
+	if v, ok := max.Value.(uint16); !ok || v != 320 {
+		t.Fatalf("MaxInterval=%T(%v), want uint16(320)", max.Value, max.Value)
+	}
+}
