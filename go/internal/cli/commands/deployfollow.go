@@ -102,7 +102,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 				return interrupted()
 			}
 			if gate.Replaced() {
-				noteAppReplaced(appCfg)
+				noteFollowedAppEnded(appCfg)
 				return nil
 			}
 			if err := gate.Err(); err != nil {
@@ -133,7 +133,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 				return interrupted() // Ctrl-C or SIGTERM during that wait
 			}
 			if gate.Replaced() {
-				noteAppReplaced(appCfg)
+				noteFollowedAppEnded(appCfg)
 				return nil
 			}
 			if err := gate.Err(); err != nil {
@@ -141,16 +141,18 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			}
 			if !cleanStop(container) {
 				// Following started no task, so it never knows one ended.
-				replaced, evidence, err := appReplaced(ctx, conn, appCfg, base, container, nil)
+				replaced, _, last, err := appReplaced(ctx, conn, appCfg, base, container, nil)
 				if err != nil {
 					return interrupted() // Ctrl-C or SIGTERM while confirming a replacement
 				}
-				if replaced {
-					noteAppReplaced(appCfg)
+				switch {
+				case followedExitStands(replaced, last):
+					if failure := appExitFailure(appCfg.AppID, last); failure != nil {
+						return failure
+					}
+				case replaced, last == nil, last.GetRunningState() == agentpb.AppRunningState_RUNNING:
+					noteFollowedAppEnded(appCfg)
 					return nil
-				}
-				if failure := appExitFailure(appCfg.AppID, evidence); failure != nil {
-					return failure
 				}
 			}
 			cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))

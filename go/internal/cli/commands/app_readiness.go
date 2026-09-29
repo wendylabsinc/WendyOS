@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"strconv"
@@ -382,12 +383,14 @@ var drainDetachedStartOutput = func(stream containerOutputStream) {
 // makes sure another deployment did not replace the app meanwhile
 // (gateAppReplaced): if it did, the gate records Replaced() instead — no
 // failure and no stop, since the app on the device is the other deployment's
-// — and the caller reports it (noteAppReplaced) and succeeds. A pass launches
-// the host-side postStart work via onReady, whose hook runner skips its own
-// probe (hostReadinessConfirmed); when the run's own task has ended by then,
-// the gate first makes sure the app that passed is not a replacement. The
-// nil gate (no --wait-ready) is valid: Err returns nil, Replaced false, wait
-// returns at once, and finished never fires.
+// — and the caller reports it (noteAppReplaced) and succeeds. For a follow,
+// Replaced() also covers a crash verdict whose recorded exit does not stand
+// (followedExitStands); the follow reports either with noteFollowedAppEnded.
+// A pass launches the host-side postStart work via onReady, whose hook
+// runner skips its own probe (hostReadinessConfirmed); when the run's own
+// task has ended by then, the gate first makes sure the app that passed is
+// not a replacement. The nil gate (no --wait-ready) is valid: Err returns
+// nil, Replaced false, wait returns at once, and finished never fires.
 //
 // When the app's output ends on its own (it exited), callers wait for the gate
 // before reading Err and before cancelling its context: the gate checks the
@@ -427,11 +430,16 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 		if !replaced && (out.err != nil || target.ended()) {
 			// Fail and stop — or, once the run's task has ended, run the
 			// host-side hooks — only for an app that is still this run's.
-			var evidence *agentpb.AppContainer
+			var evidence, last *agentpb.AppContainer
 			var err error
-			replaced, stoppable, evidence, err = gateAppReplaced(ctx, conn, appCfg, target, out)
+			replaced, stoppable, evidence, last, err = gateAppReplaced(ctx, conn, appCfg, target, out)
 			if err != nil {
 				return // the session ended first, as above
+			}
+			if !target.stopOnFailure && errors.Is(out.err, errAppCrashed) && !followedExitStands(replaced, last) {
+				// A follow reports the end of an app it did not start neutrally
+				// unless the recorded exit stands; Replaced() carries that.
+				replaced = true
 			}
 			if !replaced && out.err != nil && out.observed && evidence.GetTerminationReason() != "" &&
 				(evidence.GetExitCode() != out.record.GetExitCode() || evidence.GetTerminationReason() != out.record.GetTerminationReason()) {
@@ -476,10 +484,11 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 // for the latter; the wait already applied it to the former), and confirms
 // it with appReplaced — a clean exit too, since --wait-ready fails on one.
 // stoppable says whether a failure may stop the app: not when the latest
-// record judged shows no task of it (appStoppable); evidence is appReplaced's.
+// record judged shows no task of it (appStoppable); evidence and last are
+// appReplaced's.
 // An unreadable lookup keeps the outcome and today's stop. It returns ctx's
 // error if ctx ends first.
-func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, target gateTarget, out waitReadyOutcome) (replaced, stoppable bool, evidence *agentpb.AppContainer, err error) {
+func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, target gateTarget, out waitReadyOutcome) (replaced, stoppable bool, evidence, last *agentpb.AppContainer, err error) {
 	c := out.record
 	if !out.observed {
 		taskEnded := target.ended() // sampled before the read, as in awaitAppReady
@@ -487,21 +496,21 @@ func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appC
 		now, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		cancel()
 		if ctx.Err() != nil {
-			return false, false, nil, ctx.Err()
+			return false, false, nil, nil, ctx.Err()
 		}
 		if err != nil {
-			return false, true, nil, nil
+			return false, true, nil, nil, nil
 		}
 		if target.foreign(now, taskEnded) {
-			return true, false, now, nil
+			return true, false, now, now, nil
 		}
 		c = now
 	}
-	replaced, evidence, err = appReplaced(ctx, conn, appCfg, target.base, c, target.ended)
+	replaced, evidence, last, err = appReplaced(ctx, conn, appCfg, target.base, c, target.ended)
 	if err != nil {
-		return false, false, nil, err
+		return false, false, nil, nil, err
 	}
-	return replaced, appStoppable(evidence), evidence, nil
+	return replaced, appStoppable(evidence), evidence, last, nil
 }
 
 // ended reports whether the run's own output stream has ended.

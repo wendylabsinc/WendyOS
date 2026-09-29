@@ -131,6 +131,26 @@ func noteAppReplaced(appCfg *appconfig.AppConfig) {
 	cliNotice("Application %s was replaced by another deployment.", containerDisplayName(appCfg))
 }
 
+// noteFollowedAppEnded is how a run that only follows an app it did not start
+// reports the app's end when followedExitStands does not hold: such a run
+// cannot tell a crash the restart policy recovered from from a replacement
+// by another deployment (the agent keeps an app's earlier exits, and the
+// failure_count it started from may already include restarts), so it says
+// neither. Each run prints it at most once.
+func noteFollowedAppEnded(appCfg *appconfig.AppConfig) {
+	cliNotice("Application %s stopped; it may have been replaced by another deployment or restarted by its restart policy.", containerDisplayName(appCfg))
+}
+
+// followedExitStands reports whether a run that only follows an app may judge
+// the app's end by its recorded exit: no sign of a replacement was seen
+// (appReplaced), and the last record, at the end of the confirmation window,
+// still shows the app stopped with an exit recorded. Otherwise — the app
+// running again at any failure_count, not listed, or any replacement sign —
+// the run reports the end neutrally (noteFollowedAppEnded).
+func followedExitStands(replaced bool, last *agentpb.AppContainer) bool {
+	return !replaced && last != nil && last.GetRunningState() != agentpb.AppRunningState_RUNNING && last.GetTerminationReason() != ""
+}
+
 // appReplaced reports whether another deployment replaced an app this run
 // deployed or followed, judging c — the agent's latest record of the app,
 // which the caller is about to report as a crash or as restarted by its
@@ -153,7 +173,8 @@ func noteAppReplaced(appCfg *appconfig.AppConfig) {
 // run's output ended); nil means it cannot know (a follow). The caller
 // announces a replacement (noteAppReplaced); otherwise it judges the app by
 // evidence: the latest record seen that recorded an exit, else the latest
-// record seen.
+// record seen. last is the last record seen, which a follow judges instead
+// (followedExitStands).
 //
 // A record on another app_version than base's is another deployment's at
 // once, and an app running with no restart counted past base's
@@ -188,12 +209,12 @@ func noteAppReplaced(appCfg *appconfig.AppConfig) {
 //     an older agent, as much as a slow-starting replacement.
 //
 // It returns ctx's error if ctx ends first.
-func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, base appBaseline, c *agentpb.AppContainer, taskEnded func() bool) (replaced bool, evidence *agentpb.AppContainer, err error) {
+func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, base appBaseline, c *agentpb.AppContainer, taskEnded func() bool) (replaced bool, evidence, last *agentpb.AppContainer, err error) {
 	if base.versionChanged(c) {
-		return true, c, nil
+		return true, c, c, nil
 	}
 	if c.GetRunningState() == agentpb.AppRunningState_RUNNING && c.GetFailureCount() <= base.failures {
-		return false, c, nil
+		return false, c, c, nil
 	}
 	evidence, latest := c, c
 	windowCtx, cancel := context.WithTimeout(ctx, appReplaceConfirmWindow)
@@ -204,16 +225,16 @@ func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *
 		select {
 		case <-windowCtx.Done():
 			if ctx.Err() != nil {
-				return false, evidence, ctx.Err()
+				return false, evidence, latest, ctx.Err()
 			}
-			return replacedWhenUndecided(latest, taskEnded), evidence, nil
+			return replacedWhenUndecided(latest, taskEnded), evidence, latest, nil
 		case <-ticker.C:
 		}
 		lookupCtx, lookupCancel := context.WithTimeout(windowCtx, appExitLookupTimeout)
 		now, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		lookupCancel()
 		if ctx.Err() != nil {
-			return false, evidence, ctx.Err()
+			return false, evidence, latest, ctx.Err()
 		}
 		if err != nil {
 			continue // unreadable: the last record stands
@@ -228,17 +249,17 @@ func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *
 			continue
 		case now == nil, c == nil, base.versionChanged(now),
 			now.GetFailureCount() < previous.GetFailureCount():
-			return true, evidence, nil
+			return true, evidence, latest, nil
 		case now.GetRunningState() == agentpb.AppRunningState_RUNNING:
 			if now.GetFailureCount() <= base.failures {
-				return true, evidence, nil
+				return true, evidence, latest, nil
 			}
 			continue // restarted by its restart policy, unless a later record says otherwise
 		case killedBySIGKILL(now):
 			continue
 		case now.GetTerminationReason() == "":
 			if previous.GetRunningState() == agentpb.AppRunningState_RUNNING || previous.GetTerminationReason() != "" {
-				return true, evidence, nil
+				return true, evidence, latest, nil
 			}
 			continue
 		default:
@@ -304,7 +325,7 @@ func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, 
 		if err == nil && !cleanStop(c) {
 			// The output ended, so the task this run started has exited.
 			taskEnded := func() bool { return true }
-			replaced, evidence, err := appReplaced(ctx, conn, appCfg, startedAppBaseline(appCfg), c, taskEnded)
+			replaced, evidence, _, err := appReplaced(ctx, conn, appCfg, startedAppBaseline(appCfg), c, taskEnded)
 			if err != nil {
 				// Ctrl-C or SIGTERM while confirming. The app this run started
 				// has exited; what runs now may be another deployment's, so

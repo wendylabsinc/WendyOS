@@ -541,8 +541,9 @@ func TestReadinessGateRunsNoHooksForAReplacement(t *testing.T) {
 	}
 }
 
-// A follow's gate that sees the followed app replaced reports the
-// replacement, not a crash or not_ready: records are judged against the
+// A follow's gate that sees the followed app replaced — or crash and run
+// again, which a follow cannot tell apart — ends neutrally (the follow's
+// notice, nil), not as a crash or not_ready: records are judged against the
 // follow's baseline (failure_count 2), and the app on the device is left
 // alone.
 func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
@@ -571,6 +572,10 @@ func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
 		// before its start resets the count.
 		{name: "measured: the raised count, then reset", snapshots: replaceSequence(runningSnapshot(2),
 			runningSnapshot(3), runningSnapshot(3), appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0), runningSnapshot(0))},
+		// The device re-check: a stale exit, then the app running with the
+		// count raised for the whole window.
+		{name: "a stale exit, then running with the count raised", snapshots: replaceSequence(runningSnapshot(2),
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 1, "crashed", 2), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 1, "crashed", 2), runningSnapshot(3))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &scriptedContainerClient{snapshots: tc.snapshots}
@@ -587,10 +592,34 @@ func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
 			if got := fake.stops(); len(got) != 0 {
 				t.Fatalf("StopContainer calls = %v, want none", got)
 			}
-			if n := strings.Count(out, "Application app was replaced by another deployment."); n != 1 {
-				t.Fatalf("replaced notice printed %d times, want once:\n%s", n, out)
+			if n := strings.Count(out, followedNotice); n != 1 || strings.Contains(out, "was replaced by another deployment.") {
+				t.Fatalf("the follow's notice printed %d times, want once:\n%s", n, out)
 			}
 		})
+	}
+}
+
+// A followed app that crashes during --wait-ready and stays stopped with its
+// exit recorded for the whole window is still reported as crashed, and not
+// stopped: this run did not start it.
+func TestFollowWaitReadyReportsACrashThatStays(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	fake := &scriptedContainerClient{snapshots: replaceSequence(runningSnapshot(1), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 1))}
+	conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, TelemetryService: followTelemetry()}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var err error
+	out := captureStderr(t, func() {
+		err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{waitReady: true, readinessTimeout: 5 * time.Second}, appBaseline{failures: 1})
+	})
+	if ErrorClass(err) != "app_crashed" || !strings.Contains(err.Error(), "exit code 3") {
+		t.Fatalf("err = %v, want app_crashed naming exit code 3", err)
+	}
+	if got := fake.stops(); len(got) != 0 {
+		t.Fatalf("StopContainer calls = %v, want none", got)
+	}
+	if strings.Contains(out, "replaced") {
+		t.Fatalf("a crash reported as a possible replacement:\n%s", out)
 	}
 }
 
