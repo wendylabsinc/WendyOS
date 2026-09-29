@@ -64,7 +64,10 @@ func (n *runInterruptNotes) terminatedError() error {
 	case interruptedAppStopped:
 		return commandErrorf(errTerminated, "wendy run was terminated; app %s was stopped", n.app)
 	case interruptedAppLeftRunning:
-		return commandErrorf(errTerminated, "wendy run was terminated; app %s is still running on the device", n.app)
+		// Not "still running": the run also leaves the app alone after the
+		// task it started has exited (interruptedAttachedRun) or after a
+		// followed app stopped, so all it knows is that it did not stop it.
+		return commandErrorf(errTerminated, "wendy run was terminated; app %s was not stopped", n.app)
 	case interruptedAppStopFailed:
 		return commandErrorf(errTerminated, "wendy run was terminated; stopping app %s failed: %v", n.app, n.stopErr)
 	default:

@@ -73,7 +73,7 @@ func TestRunWithInterruptChannelSIGTERMIsNeverSuccess(t *testing.T) {
 		}, wantMsg: "wendy run was terminated; app demo was stopped"},
 		{name: "app left running", note: func(ctx context.Context) {
 			noteInterruptedApp(ctx, "demo", interruptedAppLeftRunning, nil)
-		}, wantMsg: "wendy run was terminated; app demo is still running on the device"},
+		}, wantMsg: "wendy run was terminated; app demo was not stopped"},
 		{name: "stop failed", note: func(ctx context.Context) {
 			noteInterruptedApp(ctx, "demo", interruptedAppStopFailed, errors.New("device unreachable"))
 		}, wantMsg: "wendy run was terminated; stopping app demo failed: device unreachable"},
