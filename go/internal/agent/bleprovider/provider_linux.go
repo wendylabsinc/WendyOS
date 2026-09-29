@@ -356,7 +356,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		_ = secure.Close()
 		return
 	}
-	r.cfg.Logger.Info("BLE inbound TLS established", zap.Int32("peer", peer), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume))
+	r.cfg.Logger.Info("BLE inbound TLS established", zap.Int32("peer", peer), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume), zap.Int("rx_mtu", CoCReceiveMTU(secure)))
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
@@ -618,7 +618,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		}
 		return
 	}
-	r.cfg.Logger.Info("BLE outbound TLS established", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume))
+	r.cfg.Logger.Info("BLE outbound TLS established", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume), zap.Int("rx_mtu", CoCReceiveMTU(secure)))
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
 	}

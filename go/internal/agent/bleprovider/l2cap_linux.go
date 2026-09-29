@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -38,6 +39,11 @@ const (
 	// seconds of older IP traffic. Linux clamps this 1024-byte request to an
 	// effective 4608 bytes on the tested Jetson/Pi kernels.
 	meshSendBuffer = 1024
+	// LE CoC initial credits derive from the socket receive MTU: the kernel
+	// default 672-byte IMTU grants 3 credits (672/247+1), locking every bulk
+	// channel to ~1 SDU per connection event (~4KB/s measured). Raising IMTU
+	// lets one anchor carry a full event of SDUs; per-SDU top-ups sustain it.
+	meshReceiveMTU = 65535
 	// A frame's total budget may be longer, but a blocked CoC writer must
 	// release the link if the peer stops granting credits or draining data.
 	defaultWriteIdleTimeout = 5 * time.Second
@@ -123,6 +129,60 @@ type l2Listener struct {
 	closeOnce sync.Once
 }
 
+// l2capReceiveMTULadder tries receive MTUs from large to small. The kernel
+// rejects L2CAP_OPTIONS before bind and caps imtu per version; the settled
+// value is reported once so fleets show what bulk channels actually grant.
+var l2capReceiveMTULadder = []int{65535, 32768, 16384, 8192, 4096, 2048}
+
+const l2capOptionsOpt = 1
+
+// settleL2CAPReceiveMTU raises the socket receive MTU post-bind so LE CoC
+// initial credits cover a full connection event of SDUs instead of 3. It is
+// best-effort: failure keeps the kernel default (slower bulk, same
+// correctness) and reports once via report, which callers wire to their
+// logger (nil keeps it silent for tests).
+func settleL2CAPReceiveMTU(fd int, report func(string)) int {
+	for _, mtu := range l2capReceiveMTULadder {
+		if setL2CAPReceiveMTU(fd, mtu) {
+			if report != nil {
+				report("BLE CoC receive MTU settled")
+			}
+			return mtu
+		}
+	}
+	if report != nil {
+		report("BLE CoC receive MTU unavailable; bulk stays single-SDU")
+	}
+	return 0
+}
+
+func setL2CAPReceiveMTU(fd, mtu int) bool {
+	var opts [11]byte
+	length := uint32(len(opts))
+	_, _, errno := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(fd), uintptr(unix.SOL_L2CAP), uintptr(l2capOptionsOpt),
+		uintptr(unsafe.Pointer(&opts[0])), uintptr(unsafe.Pointer(&length)), 0)
+	if errno != 0 || length < 4 {
+		return false
+	}
+	opts[2] = byte(mtu & 0xff)
+	opts[3] = byte(mtu >> 8)
+	_, _, errno = unix.Syscall6(unix.SYS_SETSOCKOPT, uintptr(fd), uintptr(unix.SOL_L2CAP), uintptr(l2capOptionsOpt),
+		uintptr(unsafe.Pointer(&opts[0])), uintptr(length), 0)
+	if errno != 0 {
+		return false
+	}
+	for i := range opts {
+		opts[i] = 0
+	}
+	length = uint32(len(opts))
+	_, _, errno = unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(fd), uintptr(unix.SOL_L2CAP), uintptr(l2capOptionsOpt),
+		uintptr(unsafe.Pointer(&opts[0])), uintptr(unsafe.Pointer(&length)), 0)
+	if errno != 0 {
+		return false
+	}
+	return int(opts[2])|int(opts[3])<<8 == mtu
+}
+
 func listenL2CAP(psm uint16) (*l2Listener, error) {
 	if !ValidPSM(psm) {
 		return nil, errors.New("invalid LE PSM")
@@ -140,6 +200,7 @@ func listenL2CAP(psm uint16) (*l2Listener, error) {
 	if err = unix.Bind(fd, &unix.SockaddrL2{PSM: psm, AddrType: btAddrLEPublic}); err != nil {
 		return nil, fmt.Errorf("L2CAP bind PSM %d: %w", psm, err)
 	}
+	settleL2CAPReceiveMTU(fd, nil)
 	if err = unix.Listen(fd, 8); err != nil {
 		return nil, fmt.Errorf("L2CAP listen: %w", err)
 	}
@@ -212,6 +273,7 @@ func dialL2CAP(ctx context.Context, address, addressType string, psm uint16) (ne
 	if err = unix.Bind(fd, &unix.SockaddrL2{AddrType: btAddrLEPublic}); err != nil {
 		return nil, fmt.Errorf("L2CAP bind outbound LE socket: %w", err)
 	}
+	settleL2CAPReceiveMTU(fd, nil)
 	err = unix.Connect(fd, &unix.SockaddrL2{PSM: psm, Addr: mac, AddrType: remote.Type})
 	if err != nil && err != unix.EINPROGRESS {
 		return nil, fmt.Errorf("L2CAP connect %s: %w", remote, err)
@@ -264,6 +326,41 @@ type packetConn struct {
 
 func newPacketConn(fd int, local, remote l2addr) *packetConn {
 	return &packetConn{fd: fd, local: local, remote: remote, readBuf: make([]byte, maxReadSDU), writeIdleTimeout: defaultWriteIdleTimeout}
+}
+
+// CoCReceiveMTU reports the socket receive MTU backing LE CoC credits,
+// or 0 when unavailable. Wrapper layers (TLS, metering) are unwrapped. It
+// verifies what initial-credit grants actually apply, since the kernel caps
+// imtu per version.
+func CoCReceiveMTU(conn net.Conn) int {
+	for i := 0; i < 4; i++ {
+		packet, ok := conn.(*packetConn)
+		if ok {
+			return packet.receiveMTU()
+		}
+		unwrapper, ok := conn.(interface{ NetConn() net.Conn })
+		if !ok || unwrapper.NetConn() == nil {
+			return 0
+		}
+		conn = unwrapper.NetConn()
+	}
+	return 0
+}
+
+func (c *packetConn) receiveMTU() int {
+	c.fdMu.RLock()
+	defer c.fdMu.RUnlock()
+	if c.closed.Load() {
+		return 0
+	}
+	var opts [11]byte
+	length := uint32(len(opts))
+	_, _, errno := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(c.fd), uintptr(unix.SOL_L2CAP), uintptr(l2capOptionsOpt),
+		uintptr(unsafe.Pointer(&opts[0])), uintptr(unsafe.Pointer(&length)), 0)
+	if errno != 0 || length < 4 {
+		return 0
+	}
+	return int(opts[2]) | int(opts[3])<<8
 }
 
 // SockQueue reports the kernel socket queue depths: unread received bytes
