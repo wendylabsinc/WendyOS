@@ -33,7 +33,10 @@ type Lifecycle struct {
 	Object   string
 	SourceID string
 	Match    *Match // nil for lost
-	At       time.Time
+	// Last is the track's most recent association, set only for lost, so a
+	// lost record can carry the box and scores the object was last seen with.
+	Last *Match
+	At   time.Time
 }
 
 type trackKey struct{ source, object string }
@@ -44,7 +47,8 @@ type track struct {
 	anchor   [4]float64 // box at the last emitted event, used for moved
 	peak     float64    // confidence at the last emitted appeared or peak
 	lastSeen time.Time
-	silent   bool // created inside the appeared cooldown and not yet announced
+	last     Match // the latest match associated with this track
+	silent   bool  // created inside the appeared cooldown and not yet announced
 }
 
 // Tracker turns per-frame matches into lifecycle events per (source, object).
@@ -144,7 +148,7 @@ func (t *Tracker) Observe(sourceID, object string, now time.Time, matches []Matc
 			continue
 		}
 		m := matches[mi]
-		tr.box, tr.lastSeen = m.Box, now
+		tr.box, tr.lastSeen, tr.last = m.Box, now, m
 		if tr.silent {
 			if t.inCooldown(key, now) {
 				continue
@@ -173,7 +177,7 @@ func (t *Tracker) Observe(sourceID, object string, now time.Time, matches []Matc
 		t.serial[key]++
 		tr := &track{
 			id:  sourceID + "/" + object + "/" + strconv.Itoa(t.serial[key]),
-			box: m.Box, anchor: m.Box, peak: m.Fused.Confidence, lastSeen: now,
+			box: m.Box, anchor: m.Box, peak: m.Fused.Confidence, lastSeen: now, last: m,
 		}
 		t.tracks[key] = append(t.tracks[key], tr)
 		if t.inCooldown(key, now) {
@@ -218,7 +222,10 @@ func (t *Tracker) expireKey(key trackKey, now time.Time) []Lifecycle {
 			continue
 		}
 		if !tr.silent {
-			events = append(events, t.event(KindLost, key, tr, nil, now))
+			lost := t.event(KindLost, key, tr, nil, now)
+			last := tr.last
+			lost.Last = &last
+			events = append(events, lost)
 		}
 	}
 	for i := len(kept); i < len(t.tracks[key]); i++ {

@@ -14,8 +14,7 @@ import (
 // for, as a format rather than a trained class: a shape, a metric size, a colour
 // palette, or a label an application's model already emits. Each attribute
 // scores a candidate region and fusion combines the scores into one confidence.
-// This release validates, stores and hashes the descriptor; the agent does not
-// run the search yet.
+// The agent's world view job (services/data_worldview.go) runs the search.
 type ObjectDescriptor struct {
 	Event string `json:"event" yaml:"event"`
 	// Rate is frames per second per camera; EveryFrames is the alternative

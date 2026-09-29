@@ -443,7 +443,7 @@ func TestExistingTriggersMatchAsBefore(t *testing.T) {
 	}
 }
 
-func TestDeployWarnsObjectsDoNotRunYet(t *testing.T) {
+func TestDeployStoresObjectsWithoutNotRunningWarning(t *testing.T) {
 	manager, err := NewManager(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -452,12 +452,12 @@ func TestDeployWarnsObjectsDoNotRunYet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	warned := false
+	// The agent runs the world view search now, so deploy no longer warns
+	// that it does not.
 	for _, warning := range campaign.Warnings {
-		warned = warned || strings.Contains(warning, "does not run the world view search yet")
-	}
-	if !warned {
-		t.Fatalf("deploy did not warn that objects do not run: %v", campaign.Warnings)
+		if strings.Contains(warning, "world view") {
+			t.Fatalf("deploy still warns about the world view: %v", campaign.Warnings)
+		}
 	}
 	stored, err := manager.Campaign(campaign.Name)
 	if err != nil || stored.Revision != campaign.Revision || len(stored.Objects) != 2 || stored.Depth == nil {

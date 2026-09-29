@@ -50,6 +50,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbgadget"
+	"github.com/wendylabsinc/wendy/go/internal/agent/worldview"
 	"github.com/wendylabsinc/wendy/go/internal/rtps"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -360,6 +361,10 @@ func main() {
 	notificationSender := services.NewCloudNotificationSender(logger, provisioningSvc)
 	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory()}, &services.CampaignCloudSender{Cloud: notificationSender})
 	defer stopInference()
+	// The world view worker shares the inference runtime root on purpose, so
+	// both install into and run from one managed uv.
+	stopWorldView := dataSvc.StartCampaignWorldView(ctx, &worldview.ManagedFactory{Root: dataManager.InferenceDirectory()}, &services.CampaignCloudSender{Cloud: notificationSender})
+	defer stopWorldView()
 	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
 	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)
 	if ctrdClient != nil {

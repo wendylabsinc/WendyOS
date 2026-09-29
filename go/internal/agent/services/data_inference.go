@@ -447,6 +447,13 @@ func (j *campaignInferenceJob) notificationError(err error) {
 }
 
 func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan DetectionNotification) {
+	deliverCampaignNotifications(ctx, j.owner.sender, j.campaign, queue, j.notificationError)
+}
+
+// deliverCampaignNotifications sends queued notifications for one campaign
+// until ctx ends, reporting each final outcome (nil on success) through report.
+// The inference and world view jobs share it.
+func deliverCampaignNotifications(ctx context.Context, sender CampaignNotificationSender, campaign data.Campaign, queue <-chan DetectionNotification, report func(error)) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -455,19 +462,19 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 			var err error
 		notificationAttempts:
 			for attempt := 0; attempt < 3 && ctx.Err() == nil; attempt++ {
-				if j.owner.sender == nil {
+				if sender == nil {
 					err = errors.New("campaign notification delivery is unavailable")
 					break
 				}
 				forward, cancel := context.WithTimeout(ctx, 10*time.Second)
-				err = j.owner.sender.Send(forward, j.campaign.Notify.Webhook, request)
+				err = sender.Send(forward, campaign.Notify.Webhook, request)
 				cancel()
 				if err == nil {
 					break
 				}
 				// Cloud rejects unauthorized identities and duplicate UUIDs permanently.
 				// Retrying those responses cannot deliver this notification.
-				if j.campaign.Notify.Webhook == "" {
+				if campaign.Notify.Webhook == "" {
 					switch status.Code(err) {
 					case codes.InvalidArgument, codes.Unauthenticated, codes.PermissionDenied,
 						codes.FailedPrecondition, codes.AlreadyExists, codes.Unimplemented, codes.DataLoss:
@@ -483,7 +490,7 @@ func (j *campaignInferenceJob) notifications(ctx context.Context, queue <-chan D
 					}
 				}
 			}
-			j.notificationError(err)
+			report(err)
 		}
 	}
 }
@@ -503,6 +510,7 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 			}
 		}
 	}
+	campaign.ObjectsStatus = s.objectsStatus(campaign)
 	return campaignMessage(campaign)
 }
 
