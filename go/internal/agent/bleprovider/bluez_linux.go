@@ -184,11 +184,10 @@ func advertisementProperties(uuid string, payload []byte, manager map[string]dbu
 	properties := map[string]*prop.Prop{
 		"Type":        {Value: "peripheral", Writable: false, Emit: prop.EmitFalse},
 		"ServiceData": {Value: map[string]dbus.Variant{uuid: dbus.MakeVariant(payload)}, Writable: false, Emit: prop.EmitFalse},
-		// Relaxed advertising cadence: 100-200ms intervals (up to ~10
-		// advertisements/second) are plenty for discovery and keep
-		// advertising airtime negligible next to scanning and ACLs.
-		"MinInterval": {Value: uint16(160), Writable: false, Emit: prop.EmitFalse},
-		"MaxInterval": {Value: uint16(320), Writable: false, Emit: prop.EmitFalse},
+		// NOTE (golden16): MinInterval/MaxInterval 160/320 reverted — BlueZ
+		// 5.87 on Jetson/BE202 rejects the advertisement outright
+		// ("Failed to parse advertisement", carrier down fleet-wide on
+		// golden15). Scan governor in provider_linux.go is retained.
 	}
 	if power, ok := advertisementTxPower(manager); ok {
 		properties["TxPower"] = &prop.Prop{Value: power, Writable: false, Emit: prop.EmitFalse}
@@ -201,12 +200,19 @@ func registerAdvertisementWithFallback(properties map[string]*prop.Prop, export 
 		return fmt.Errorf("exporting BLE advertisement: %w", err)
 	}
 	if err := register(); err != nil {
-		if _, requested := properties["TxPower"]; !requested {
+		_, hasPower := properties["TxPower"]
+		_, hasMin := properties["MinInterval"]
+		_, hasMax := properties["MaxInterval"]
+		if !hasPower && !hasMin && !hasMax {
 			return fmt.Errorf("registering BLE advertisement: %w", err)
 		}
-		// A controller or BlueZ version may report support yet reject this
-		// optional request. Retry at the controller's default power.
+		// A controller or BlueZ version may report support yet reject an
+		// optional request (TxPower and/or Min/MaxInterval — golden15
+		// proved intervals alone break BlueZ 5.87 registration). Retry
+		// at the controller's defaults.
 		delete(properties, "TxPower")
+		delete(properties, "MinInterval")
+		delete(properties, "MaxInterval")
 		if exportErr := export(properties); exportErr != nil {
 			return fmt.Errorf("registering BLE advertisement with TxPower: %w; fallback export: %v", err, exportErr)
 		}
