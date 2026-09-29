@@ -465,10 +465,11 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 // hooks. ListContainers reports no container ID, so it judges the record
 // behind a crash verdict or, otherwise, a fresh lookup (target.foreign first
 // for the latter; the wait already applied it to the former), and confirms
-// an uncertain record with appReplaced. stoppable says whether a failure may
-// stop the app: not when the latest record judged shows no task of it
-// (appStoppable). An unreadable lookup keeps the outcome and today's stop. It
-// returns ctx's error if ctx ends first.
+// it with appReplaced — a clean exit too, since --wait-ready fails on one.
+// stoppable says whether a failure may stop the app: not when the latest
+// record judged shows no task of it (appStoppable). An unreadable lookup
+// keeps the outcome and today's stop. It returns ctx's error if ctx ends
+// first.
 func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, target gateTarget, out waitReadyOutcome) (replaced, stoppable bool, err error) {
 	c := out.record
 	if !out.observed {

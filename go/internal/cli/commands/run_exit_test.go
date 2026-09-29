@@ -136,6 +136,7 @@ func TestAppExitFailure(t *testing.T) {
 }
 
 func TestStreamRunContainer_AttachedCrashExitsNonZero(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow) // a crash is confirmed before it is reported
 	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{appSnapshot("crash-app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)}}
 	conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake}
 	err := streamRunContainerWithStarted(context.Background(), conn, &deploymentAckStream{remaining: 1, err: io.EOF}, &appconfig.AppConfig{AppID: "crash-app"}, runOptions{}, nil)
@@ -185,6 +186,7 @@ func TestAttachedExitOutcome_UnreadableStatusKeepsSuccess(t *testing.T) {
 }
 
 func TestStartExistingContainer_AttachedCrashExitsNonZero(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow) // a crash is confirmed before it is reported
 	fake := &scriptedContainerClient{
 		snapshots: []*agentpb.AppContainer{appSnapshot("crash-app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)},
 		stream:    &deploymentAckStream{remaining: 1, err: io.EOF},
@@ -197,6 +199,7 @@ func TestStartExistingContainer_AttachedCrashExitsNonZero(t *testing.T) {
 }
 
 func TestFollowExistingContainer_CrashLoopExitsNonZero(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow) // a crash is confirmed before it is reported
 	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{
 		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
 		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 2, "crashed", 1),
@@ -281,14 +284,29 @@ var sigkillExitCases = []struct {
 		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
 		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 1),
 	}},
-	{name: "other exit code is not re-checked", crash: "exit code 3", lists: 1, snapshots: []*agentpb.AppContainer{
-		appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0),
-		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
-	}},
-	{name: "OOM kill is not re-checked", crash: `"oom_killed"`, lists: 1, snapshots: []*agentpb.AppContainer{
-		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "oom_killed", 0),
-		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
-	}},
+	// Every recorded exit is confirmed before it is reported: the agent
+	// never clears an exit it recorded, so the killed app of a replace can be
+	// listed with an exit it recorded earlier (a stale one, from a crash its
+	// restart policy recovered from) when the kill's own exit loses the race
+	// with the delete.
+	{name: "a recorded crash stays for the window", crash: "exit code 3", minTime: sigkillTestWindow, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
+	{name: "a recorded crash, then a fresh app running", lists: 2, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0), runningSnapshot(0))},
+	{name: "a crash, then restarted by the restart policy", crash: "exit code 3", lists: 2, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 3, "crashed", 0), runningSnapshot(1))},
+	{name: "an OOM kill stays for the window", crash: `"oom_killed"`, minTime: sigkillTestWindow, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "oom_killed", 0))},
+	{name: "an OOM kill, then a fresh app running", lists: 2, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "oom_killed", 0), runningSnapshot(0))},
+	{name: "a stale recorded crash, then the rest of the replace", lists: 2, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 0), notListed, createdStopped(), runningSnapshot(0))},
+	{name: "a stale recorded crash, then the new container created", lists: 2, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 0), createdStopped(), runningSnapshot(0))},
+	{name: "a stale crash-loop record, then the new app running", lists: 2, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 1, "crashed", 0), runningSnapshot(0))},
+	{name: "a stale recorded crash, then the new app's own crash", lists: 2, snapshots: replaceSequence(
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
 }
 
 func checkSIGKILLExit(t *testing.T, fake *scriptedContainerClient, crash string, lists int, minTime, took time.Duration, out string, err error) {
@@ -433,10 +451,23 @@ func TestFollowExistingContainer_JudgesAgainstTheFollowedBaseline(t *testing.T) 
 		{name: "crash-looping SIGKILL record stays for the window", crash: "exit code 137", minTime: sigkillTestWindow, snapshots: []*agentpb.AppContainer{
 			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3),
 		}},
-		{name: "other exit code is not re-checked", crash: "exit code 2", lists: 1, snapshots: []*agentpb.AppContainer{
+		{name: "a recorded crash loop, then a fresh app running", lists: 2, snapshots: []*agentpb.AppContainer{
 			withVersion(appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 2, "crashed", 3), "1.0"),
 			appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
 		}},
+		{name: "a recorded crash loop stays for the window", crash: "exit code 2", minTime: sigkillTestWindow, snapshots: []*agentpb.AppContainer{
+			withVersion(appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 2, "crashed", 3), "1.0"),
+		}},
+		{name: "a crash loop restarted again by the restart policy", crash: "exit code 2", lists: 2, snapshots: []*agentpb.AppContainer{
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 2, "crashed", 3), runningSnapshot(4),
+		}},
+		// A stale exit (from a crash before the follow began) on the killed
+		// app of a replace, the recorded count carried over.
+		{name: "a stale recorded crash, then the rest of the replace", lists: 2, snapshots: replaceSequence(
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 2), notListed,
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 2), runningSnapshot(0))},
+		{name: "a stale recorded crash, then the new app's own crash", lists: 2, snapshots: replaceSequence(
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 2), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
 		// The new container, created but not started, is listed with the old
 		// registration's count, as crash-looping, and no exit recorded.
 		{name: "created with the old count, then running", lists: 2, snapshots: replaceSequence(
@@ -542,6 +573,90 @@ func TestTryDeployFastPath_FollowIsBaselinedOnTheFastPathLookup(t *testing.T) {
 	}
 	if !strings.Contains(out, "Application app was replaced by another deployment.") {
 		t.Fatalf("missing the replaced notice: %q", out)
+	}
+}
+
+// The device repro: an app that crashed once and was restarted by its restart
+// policy (failure_count 1; the agent keeps its recorded exit, 1 / "crashed")
+// runs unchanged, so `wendy run` follows it; another deployment replaces it,
+// and the kill's own exit loses the race with the delete, so the follow finds
+// the killed app listed with the stale crash. That crash is confirmed before
+// it is reported, and the rest of the replace shows it was not this app's.
+// A genuine crash is still reported, once it stays for the window or the
+// restart policy restarts the app.
+func TestFollowExistingContainer_StaleExitOfAReplacedApp(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	staleCrash := func(state agentpb.AppRunningState) *agentpb.AppContainer {
+		return appSnapshot("app", state, 1, "crashed", 1)
+	}
+	for _, tc := range []struct {
+		name      string
+		base      appBaseline
+		snapshots []*agentpb.AppContainer
+		crash     string
+	}{
+		{name: "stale exit, stopped", base: appBaseline{failures: 1, version: "1.0"}, snapshots: replaceSequence(withAppVersion(runningSnapshot(1), "1.0"),
+			staleCrash(agentpb.AppRunningState_STOPPED), notListed, withAppVersion(createdStopped(), "1.0"), runningSnapshot(0))},
+		{name: "stale exit, crash-looping", base: appBaseline{failures: 1, version: "1.0"}, snapshots: replaceSequence(withAppVersion(runningSnapshot(1), "1.0"),
+			staleCrash(agentpb.AppRunningState_CRASH_LOOPING), notListed, appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 1), runningSnapshot(0))},
+		{name: "stale exit, new version label", base: appBaseline{failures: 1, version: "1.0"}, snapshots: replaceSequence(withAppVersion(runningSnapshot(1), "1.0"),
+			staleCrash(agentpb.AppRunningState_STOPPED), withAppVersion(createdStopped(), "2.0"), runningSnapshot(0))},
+		{name: "a genuine crash stays for the window", crash: "exit code 3", snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
+		{name: "a genuine crash restarted by the restart policy", crash: "exit code 3", snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 3, "crashed", 0), runningSnapshot(1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &scriptedContainerClient{snapshots: tc.snapshots}
+			telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			out := captureStderr(t, func() {
+				err = followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, tc.base)
+			})
+			if tc.crash == "" {
+				if err != nil || strings.Count(out, "Application app was replaced by another deployment.") != 1 {
+					t.Fatalf("err = %v, output %q; want nil and the replaced notice once", err, out)
+				}
+				return
+			}
+			if ErrorClass(err) != "app_crashed" || !strings.Contains(err.Error(), tc.crash) {
+				t.Fatalf("err = %v, want app_crashed naming %s", err, tc.crash)
+			}
+			if strings.Contains(out, "replaced") {
+				t.Fatalf("a crash reported as a replacement: %q", out)
+			}
+		})
+	}
+}
+
+// The same repro end to end: the fast path's lookup baselines the follow on
+// failure_count 1.
+func TestTryDeployFastPath_FollowSeesAReplacementPastAStaleExit(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	isolateFingerprintCache(t)
+	cfg := &appconfig.AppConfig{AppID: "app"}
+	saveDeployFingerprint(cfg.AppID, "device", deployFingerprint{InputHash: "inputs", LayerDiffIDs: []string{"layer"}})
+	fake := &scriptedContainerClient{snapshots: replaceSequence(
+		runningSnapshot(1), // the fast path's lookup
+		runningSnapshot(1), // the follow's first poll
+		appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 1), // the killed app, its stale exit
+		notListed, createdStopped(), runningSnapshot(0))}
+	telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}
+	conn := &grpcclient.AgentConnection{ContainerService: fastPathScriptedClient{fake}, TelemetryService: telemetry}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var done bool
+	var err error
+	out := captureStderr(t, func() {
+		done, err = tryDeployFastPath(ctx, conn, cfg, "device", "inputs", runOptions{})
+	})
+	if !done || err != nil {
+		t.Fatalf("done=%v err=%v, want the follow to end on the replacement", done, err)
+	}
+	if !strings.Contains(out, "Application app was replaced by another deployment.") || strings.Contains(out, "stopped unexpectedly") {
+		t.Fatalf("output %q, want the replaced notice and no crash", out)
 	}
 }
 

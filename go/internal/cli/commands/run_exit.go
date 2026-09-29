@@ -17,7 +17,8 @@ import (
 const appExitLookupTimeout = 5 * time.Second
 
 // appReplaceConfirmWindow and appReplaceConfirmPoll pace appReplaced's
-// re-check of an uncertain record. Variables so tests can shorten them.
+// re-check of a record before a crash is reported. Variables so tests can
+// shorten them.
 var (
 	appReplaceConfirmWindow = 3 * time.Second
 	appReplaceConfirmPoll   = 250 * time.Millisecond
@@ -130,64 +131,59 @@ func noteAppReplaced(appCfg *appconfig.AppConfig) {
 	cliNotice("Application %s was replaced by another deployment.", containerDisplayName(appCfg))
 }
 
-// appRecordUncertain reports whether c, the agent's record of an app that
-// stopped or failed a check, may show another deployment replacing the app
-// rather than the app's own exit. To replace an app the agent SIGKILLs its
-// task, deletes its container, prepares the new image and creates the new
-// container, which it starts afterwards; the SIGKILL record may not be listed
-// at all (its recording races the delete). So a record can be: the SIGKILL
-// record (killedBySIGKILL); nil, the app not listed (the longest phase); or
-// the new container created but not started — stopped, or crash-looping while
-// the old registration's failure_count is above 0, with no exit recorded. On
-// agents with exit reporting (WDY-1819) a crash always records its exit, so a
-// stopped app with none recorded is otherwise one stopped by the user (the
-// agent hides that exit on purpose); on older agents every exit is unrecorded.
-func appRecordUncertain(c *agentpb.AppContainer) bool {
-	return c == nil || killedBySIGKILL(c) ||
-		(c.GetRunningState() != agentpb.AppRunningState_RUNNING && c.GetTerminationReason() == "")
-}
-
 // appReplaced reports whether another deployment replaced an app this run
-// deployed or followed, judging c — the agent's latest record of the app
-// after it stopped or failed a check — against base. taskEnded reports
-// whether the run knows the task it started has exited (an attached run's
-// output ended); nil means it cannot know (a follow). The caller announces a
-// replacement (noteAppReplaced); otherwise it judges the app by evidence: the
-// latest record seen that recorded an exit, else the latest record seen.
+// deployed or followed, judging c — the agent's latest record of the app,
+// which the caller is about to report as a crash, or which shows no exit or
+// no app — against base. A caller confirms every crash this way, since no
+// record of a stopped app proves the exit was its own: to replace an app the
+// agent SIGKILLs its task, deletes its container, prepares the new image
+// (the app is not listed: the longest phase) and creates the new container,
+// which it starts afterwards, listing it as stopped — or crash-looping while
+// the old registration's failure_count is above 0 — with no exit recorded.
+// The kill's exit (137, "crashed") may never be recorded (that races the
+// delete), and the agent never clears an exit it recorded, so the killed
+// app can be listed with any exit it recorded before, even one its restart
+// policy recovered from. taskEnded reports whether the run knows the task it
+// started has exited (an attached run's output ended); nil means it cannot
+// know (a follow). The caller announces a replacement (noteAppReplaced);
+// otherwise it judges the app by evidence: the first record seen that
+// recorded an exit, else the latest record seen.
 //
 // A record on another app_version than base's is another deployment's at
-// once, and any other record but an uncertain one (appRecordUncertain) is the
-// app's own: false at once. An uncertain record is polled again for up to
+// once, and a running app is the app's own at once (a restart by its restart
+// policy, as far as c goes). Any other record is polled again for up to
 // appReplaceConfirmWindow, and each poll decides:
 //   - replaced: the app no longer listed after a record of it (its container
 //     was deleted), listed after it was not (a new container), on another
-//     app_version, stopped with no exit recorded after the SIGKILL record (the
-//     recorded exit went with the old container), or running or with a
-//     recorded exit at or below base's failure_count (a start resets the
-//     count; the restart policy raises it above the baseline before every
-//     restart);
-//   - the app's own: running or with a recorded exit above base's
-//     failure_count (restarted by its restart policy);
-//   - undecided (poll again): the same uncertain kind of record, or an
-//     unreadable list.
+//     app_version, with no exit recorded after a record that had one (the
+//     recorded exit went with the old container), running with a
+//     failure_count at or below base's (a start resets the count; the
+//     restart policy raises it above the baseline before every restart), or
+//     a newly recorded exit whose failure_count fell, or is at or below
+//     base's with no restart counted (a task someone else started);
+//   - the app's own: running, or a newly recorded exit, with a failure_count
+//     above base's (restarted by its restart policy);
+//   - undecided (poll again): the same record, the SIGKILL record, no exit
+//     recorded again, or an unreadable list.
 //
 // When the window ends undecided, the last record decides:
-//   - the SIGKILL record: the app's own (it really was killed);
+//   - a recorded exit (the SIGKILL record included): the app's own;
 //   - crash-looping with no exit recorded: replaced (only a replacement's
 //     container that has not started is listed that way on agents with exit
-//     reporting; an older agent's crash loop reads as replaced too);
+//     reporting, WDY-1819; an older agent's crash loop reads as replaced too);
 //   - not listed at all: replaced when taskEnded (nothing of the run's is
 //     listed and its task is gone: the new image is still being prepared),
 //     otherwise the app's own;
-//   - stopped with no exit recorded: the app's own (a stop by the user, or an
-//     older agent's exit, as much as a slow-starting replacement).
+//   - stopped with no exit recorded: the app's own — how the agent lists an
+//     app the user stopped (it hides that exit on purpose), and any exit on
+//     an older agent, as much as a slow-starting replacement.
 //
 // It returns ctx's error if ctx ends first.
 func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, base appBaseline, c *agentpb.AppContainer, taskEnded func() bool) (replaced bool, evidence *agentpb.AppContainer, err error) {
 	if base.versionChanged(c) {
 		return true, c, nil
 	}
-	if !appRecordUncertain(c) {
+	if c.GetRunningState() == agentpb.AppRunningState_RUNNING {
 		return false, c, nil
 	}
 	evidence, latest := c, c
@@ -215,7 +211,7 @@ func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *
 		}
 		previous := latest
 		latest = now
-		if now != nil && (now.GetTerminationReason() != "" || evidence.GetTerminationReason() == "") {
+		if now != nil && evidence.GetTerminationReason() == "" {
 			evidence = now
 		}
 		switch {
@@ -223,32 +219,43 @@ func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *
 			continue
 		case now == nil, c == nil, base.versionChanged(now):
 			return true, evidence, nil
+		case now.GetRunningState() == agentpb.AppRunningState_RUNNING:
+			return now.GetFailureCount() <= base.failures, evidence, nil
 		case killedBySIGKILL(now):
 			continue
-		case appRecordUncertain(now):
+		case now.GetTerminationReason() == "":
 			if previous.GetTerminationReason() != "" {
 				return true, evidence, nil
 			}
 			continue
-		case now.GetFailureCount() <= base.failures:
+		case now.GetFailureCount() < previous.GetFailureCount():
 			return true, evidence, nil
-		default:
-			return false, evidence, nil // restarted (or about to be) by its restart policy
+		case now.GetExitCode() == previous.GetExitCode() && now.GetTerminationReason() == previous.GetTerminationReason():
+			continue
+		default: // a newly recorded exit
+			return now.GetFailureCount() <= base.failures, evidence, nil
 		}
 	}
 }
 
 // replacedWhenUndecided is appReplaced's verdict when its window ends on
-// latest, a record still uncertain; see appReplaced.
+// latest, a record still undecided; see appReplaced.
 func replacedWhenUndecided(latest *agentpb.AppContainer, taskEnded func() bool) bool {
 	switch {
 	case latest == nil:
 		return taskEnded != nil && taskEnded()
-	case killedBySIGKILL(latest):
+	case latest.GetTerminationReason() != "":
 		return false
 	default: // no exit recorded
 		return latest.GetRunningState() == agentpb.AppRunningState_CRASH_LOOPING
 	}
+}
+
+// cleanStop reports whether c records a clean exit (code 0) of a stopped
+// app: a success for a run without --wait-ready, which reports it at once
+// rather than confirm it first (appReplaced).
+func cleanStop(c *agentpb.AppContainer) bool {
+	return c.GetRunningState() == agentpb.AppRunningState_STOPPED && c.GetTerminationReason() == "exited"
 }
 
 // appStoppable reports whether c, the latest record judged of an app that
@@ -283,7 +290,7 @@ func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, 
 		lookupCtx, cancel := context.WithTimeout(ctx, appExitLookupTimeout)
 		c, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		cancel()
-		if err == nil {
+		if err == nil && !cleanStop(c) {
 			// The output ended, so the task this run started has exited.
 			taskEnded := func() bool { return true }
 			replaced, evidence, err := appReplaced(ctx, conn, appCfg, startedAppBaseline(appCfg), c, taskEnded)

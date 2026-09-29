@@ -139,17 +139,19 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			if err := gate.Err(); err != nil {
 				return err
 			}
-			// Following started no task, so it never knows one ended.
-			replaced, evidence, err := appReplaced(ctx, conn, appCfg, base, container, nil)
-			if err != nil {
-				return interrupted() // Ctrl-C or SIGTERM while confirming a replacement
-			}
-			if replaced {
-				noteAppReplaced(appCfg)
-				return nil
-			}
-			if failure := appExitFailure(appCfg.AppID, evidence); failure != nil {
-				return failure
+			if !cleanStop(container) {
+				// Following started no task, so it never knows one ended.
+				replaced, evidence, err := appReplaced(ctx, conn, appCfg, base, container, nil)
+				if err != nil {
+					return interrupted() // Ctrl-C or SIGTERM while confirming a replacement
+				}
+				if replaced {
+					noteAppReplaced(appCfg)
+					return nil
+				}
+				if failure := appExitFailure(appCfg.AppID, evidence); failure != nil {
+					return failure
+				}
 			}
 			cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
 			return nil

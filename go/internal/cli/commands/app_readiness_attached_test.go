@@ -223,6 +223,7 @@ func TestAttachedWaitReadyRunsHooksOnceReady(t *testing.T) {
 // the wait fails --wait-ready. The ended stream must not cancel the
 // gate's last poll. Attached runs never add the JSON object to stdout.
 func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow) // a failure is confirmed before it is reported
 	previous := jsonOutput
 	t.Cleanup(func() { jsonOutput = previous })
 	jsonOutput = true
@@ -278,36 +279,51 @@ func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
 }
 
 // A crash before ready is reported by the gate, which stops the app (so its
-// restart policy cannot bring it back behind a failed run).
+// restart policy cannot bring it back behind a failed run) — once the crash
+// is confirmed: it stays for the window, or the restart policy restarts the
+// app.
 func TestAttachedWaitReadyCrashBeforeReadyFailsViaTheGate(t *testing.T) {
-	for _, path := range []string{"chunk-diff", "registry"} {
-		t.Run(path, func(t *testing.T) {
-			fake := &scriptedContainerClient{
-				snapshots: []*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)},
-			}
-			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, nil)}
-			cfg, opts := &appconfig.AppConfig{AppID: "app"}, runOptions{waitReady: true, readinessTimeout: 3 * time.Second}
-			var err error
-			out := captureStderr(t, func() {
-				if path == "chunk-diff" {
-					err = streamRunContainerWithStarted(context.Background(), conn, fake.stream, cfg, opts, nil)
-				} else {
-					err = startExistingContainer(context.Background(), conn, cfg, opts)
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	for _, tc := range []struct {
+		name      string
+		snapshots []*agentpb.AppContainer
+		minTime   time.Duration
+	}{
+		{name: "the crash stays", minTime: sigkillTestWindow, snapshots: replaceSequence(runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0))},
+		{name: "restarted by the restart policy", snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 3, "crashed", 0), runningSnapshot(1))},
+	} {
+		for _, path := range []string{"chunk-diff", "registry"} {
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				fake := &scriptedContainerClient{snapshots: tc.snapshots}
+				conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, nil)}
+				cfg, opts := &appconfig.AppConfig{AppID: "app"}, runOptions{waitReady: true, readinessTimeout: 3 * time.Second}
+				var err error
+				start := time.Now()
+				out := captureStderr(t, func() {
+					if path == "chunk-diff" {
+						err = streamRunContainerWithStarted(context.Background(), conn, fake.stream, cfg, opts, nil)
+					} else {
+						err = startExistingContainer(context.Background(), conn, cfg, opts)
+					}
+				})
+				if ErrorClass(err) != "app_crashed" {
+					t.Fatalf("err = %v, want app_crashed", err)
+				}
+				if !strings.Contains(err.Error(), "exit code 3") {
+					t.Fatalf("error %q does not name the exit code", err)
+				}
+				if got := fake.stops(); len(got) != 1 || got[0] != "app" {
+					t.Fatalf("StopContainer calls = %v, want [app] (the gate's stop)", got)
+				}
+				if strings.Contains(out, "replaced") {
+					t.Fatalf("a crash reported as a replacement:\n%s", out)
+				}
+				if took := time.Since(start); took < tc.minTime {
+					t.Fatalf("reported after %s, before the %s confirmation window ended", took, tc.minTime)
 				}
 			})
-			if ErrorClass(err) != "app_crashed" {
-				t.Fatalf("err = %v, want app_crashed", err)
-			}
-			if !strings.Contains(err.Error(), "exit code 3") {
-				t.Fatalf("error %q does not name the exit code", err)
-			}
-			if got := fake.stops(); len(got) != 1 || got[0] != "app" {
-				t.Fatalf("StopContainer calls = %v, want [app] (the gate's stop)", got)
-			}
-			if strings.Contains(out, "replaced") {
-				t.Fatalf("a crash reported as a replacement:\n%s", out)
-			}
-		})
+		}
 	}
 }
 
@@ -368,6 +384,15 @@ func TestAttachedWaitReadyLeavesAReplacementRunning(t *testing.T) {
 		{name: "created, not started", snapshots: replaceSequence(runningSnapshot(0), createdStopped(), runningSnapshot(0))},
 		{name: "created, not started, listed as crash-looping", snapshots: replaceSequence(runningSnapshot(0), createdLooping(), runningSnapshot(0))},
 		{name: "crash-looping SIGKILL record, then running", snapshots: replaceSequence(runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 1), runningSnapshot(0))},
+		// The kill's exit lost the race with the delete, so the killed app is
+		// listed with the exit it recorded before: a stale crash (the agent
+		// never clears one), from a start of an existing container.
+		{name: "a stale recorded crash, then the rest of the replace", snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 0), notListed, createdStopped(), runningSnapshot(0))},
+		{name: "a stale recorded crash, then the new container created", snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 0), createdStopped(), runningSnapshot(0))},
+		{name: "a stale crash-loop record, then running", snapshots: replaceSequence(runningSnapshot(0),
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 1, "crashed", 0), runningSnapshot(0))},
 		// Its task gone and nothing of it listed for the whole window: the
 		// new image is still being prepared.
 		{name: "not listed for the whole window", snapshots: replaceSequence(runningSnapshot(0), notListed)},
@@ -514,6 +539,11 @@ func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
 			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 2), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 2),
 			notListed, notListed, withOldCount, runningSnapshot(0))},
 		{name: "not listed, then created with the old count", snapshots: replaceSequence(runningSnapshot(2), notListed, notListed, withOldCount, runningSnapshot(0))},
+		// The killed app listed with a stale recorded exit (the kill's own
+		// lost the race with the delete).
+		{name: "a stale recorded crash, then the rest of the replace", snapshots: replaceSequence(runningSnapshot(2),
+			appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 2), appSnapshot("app", agentpb.AppRunningState_STOPPED, 1, "crashed", 2),
+			notListed, withOldCount, runningSnapshot(0))},
 		// A start reset the count; the restart policy only raises it.
 		{name: "running with a count below the baseline", snapshots: replaceSequence(runningSnapshot(2), runningSnapshot(0))},
 	} {
