@@ -231,7 +231,8 @@ func followedExitStands(replaced bool, last *agentpb.AppContainer) bool {
 // A record on another app_version than base's is another deployment's at
 // once, and an app running with no restart counted past base's
 // failure_count is the app's own at once. Any other record is polled again
-// for up to appReplaceConfirmWindow, and a poll decides at once only for a
+// for up to appReplaceConfirmWindow, which starts with a status line
+// ("Checking how <app> exited..."), and a poll decides at once only for a
 // replacement:
 //   - the app no longer listed after a record of it (its container was
 //     deleted), or listed after it was not (a new container);
@@ -279,6 +280,9 @@ func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *
 		return appOwn, c, c, nil
 	}
 	base = base.seeing(c)
+	// One line as the window starts, so a terminal is not left with a silent
+	// pause of up to appReplaceConfirmWindow; stderr, as every status line.
+	cliLogln("Checking how %s exited...", containerDisplayName(appCfg))
 	evidence, latest := c, c
 	windowCtx, cancel := context.WithTimeout(ctx, appReplaceConfirmWindow)
 	defer cancel()

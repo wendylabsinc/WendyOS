@@ -205,6 +205,68 @@ func TestCleanExitWhileCrashLoopingIsAStop(t *testing.T) {
 	}
 }
 
+// checkingLine is the status line a run prints as its confirmation window
+// starts (appReplaced).
+const checkingLine = "Checking how app exited..."
+
+// The up to 3 s confirmation starts with one status line, so a terminal is
+// not left with a silent pause (and a Ctrl-C there is no surprise); a verdict
+// made at once prints none. The line goes to stderr: stdout stays empty, in
+// JSON mode too.
+func TestConfirmationWindowAnnouncesItself(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	previous := jsonOutput
+	t.Cleanup(func() { jsonOutput = previous })
+	jsonOutput = true
+	crash := appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)
+	for _, tc := range []struct {
+		name      string
+		path      string
+		cfg       *appconfig.AppConfig
+		snapshots []*agentpb.AppContainer
+		lines     int
+	}{
+		{name: "a crash confirmed over the whole window", path: "attached", snapshots: replaceSequence(crash), lines: 1},
+		{name: "a replacement found during the window", path: "attached", snapshots: replaceSequence(killRecord(), runningSnapshot(0)), lines: 1},
+		{name: "a crash confirmed while following", path: "follow", snapshots: replaceSequence(runningSnapshot(0), crash), lines: 1},
+		{name: "a crash confirmed by the --wait-ready check", path: "wait-ready", snapshots: replaceSequence(runningSnapshot(0), crash), lines: 1},
+		{name: "a clean exit, at once", path: "attached", snapshots: replaceSequence(appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "exited", 0))},
+		{name: "running with no restart counted, at once", path: "attached", snapshots: replaceSequence(runningSnapshot(0))},
+		{name: "another version, at once", path: "attached", cfg: &appconfig.AppConfig{AppID: "app", Version: "1.0"}, snapshots: replaceSequence(withAppVersion(crash, "2.0"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			if cfg == nil {
+				cfg = &appconfig.AppConfig{AppID: "app"}
+			}
+			fake := &scriptedContainerClient{snapshots: tc.snapshots}
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, TelemetryService: followTelemetry()}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var stderr string
+			stdout := captureStdout(t, func() {
+				stderr = captureStderr(t, func() {
+					switch tc.path {
+					case "attached":
+						_ = attachedExitOutcome(ctx, conn, cfg)
+					case "follow":
+						_ = followExistingContainer(ctx, conn, cfg, runOptions{}, appBaseline{})
+					case "wait-ready":
+						conn.ContainerService = exitAfterBaselinePoll(fake, nil)
+						_ = streamRunContainerWithStarted(ctx, conn, fake.stream, cfg, runOptions{waitReady: true, readinessTimeout: 10 * time.Second}, nil)
+					}
+				})
+			})
+			if got := strings.Count(stderr, checkingLine); got != tc.lines {
+				t.Fatalf("%q printed %d times, want %d:\n%s", checkingLine, got, tc.lines, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("stdout = %q, want nothing", stdout)
+			}
+		})
+	}
+}
+
 // A crash-looping app the monitor restarted before the post-EOF lookup reads
 // as RUNNING with its exit labels hidden: the CLI cannot prove a crash, so it
 // says so and keeps the historical success rather than guessing.
