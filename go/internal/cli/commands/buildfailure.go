@@ -34,6 +34,22 @@ var (
 	// prefixes with the seconds since the step started.
 	buildVertexOutputRe = regexp.MustCompile(`^\d+\.\d+(?: (.*))?$`)
 	buildExitCodeRe     = regexp.MustCompile(`exit code: (-?\d+)`)
+	// buildOutputTrailerRes match the generic lines a failing tool prints
+	// after the cause, which buildOutputCause skips (after trimming).
+	buildOutputTrailerRes = []*regexp.Regexp{
+		// make's own summary of the failed recipe.
+		regexp.MustCompile(`^g?make(?:\[\d+\])?: \*\*\* (?:\[.*\] Error \d+|Waiting for unfinished jobs\.*)$`),
+		// BuildKit's wrapper, when a step's output repeats it.
+		regexp.MustCompile(`^ERROR: process ".*" did not complete successfully: exit code: -?\d+$`),
+		// pip's frame around a failed subprocess's output, and its closing notes.
+		regexp.MustCompile(`^(?:error: [a-z]+(?:-[a-z]+)+|× .*|│ exit code: -?\d+|╰─> .*|\[end of output\])$`),
+		regexp.MustCompile(`^(?:note: This error originates from a subprocess, and is likely not a problem with pip\.|note: This is an issue with the package mentioned above, not pip\.|hint: See above for details\.)$`),
+		// A C compiler's source excerpt and carets, its notes on the error
+		// above them, and its closing lines.
+		regexp.MustCompile(`^(?:\d+ *)?\|`),
+		regexp.MustCompile(`^\S+:\d+(?::\d+)?: note: `),
+		regexp.MustCompile(`^(?:compilation terminated\.|\d+ errors? generated\.)$`),
+	}
 
 	persistBuildFailureLog = writeBuildFailureLog
 )
@@ -182,12 +198,12 @@ func (e *buildFailureCauseError) Unwrap() error { return e.err }
 // and the cause as its message — "build failed at [<stage n/m>] <command>:
 // <cause>", or "build failed: <cause>" when the log does not name the step
 // that failed — so the run's final error line, a --wait-ready "failed" object
-// and the JSON error envelope say what failed. The cause is the last line of
-// the failing step's output when that output is the cause, else the
-// summarized cause. Any other failure (the builder could not be set up, a
-// remote build host failed), a failure with no cause found, and a
-// cancellation keep buildErr unchanged; the details block shows buildErr's
-// own message either way.
+// and the JSON error envelope say what failed. The cause is the failing
+// step's last informative output line (buildOutputCause) when that output is
+// the cause, else the summarized cause. Any other failure (the builder could
+// not be set up, a remote build host failed), a failure with no cause found,
+// and a cancellation keep buildErr unchanged; the details block shows
+// buildErr's own message either way.
 func buildFailureError(summary buildFailureSummary, buildErr error) error {
 	if buildErr == nil || errors.Is(buildErr, ErrUserCancelled) || errors.Is(buildErr, context.Canceled) {
 		return buildErr
@@ -196,11 +212,8 @@ func buildFailureError(summary buildFailureSummary, buildErr error) error {
 		return buildErr
 	}
 	cause := summary.cause
-	for i := len(summary.output) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(summary.output[i]); line != "" {
-			cause = line
-			break
-		}
+	if line := buildOutputCause(summary.output); line != "" {
+		cause = line
 	}
 	if cause == "" {
 		return buildErr
@@ -211,6 +224,35 @@ func buildFailureError(summary buildFailureSummary, buildErr error) error {
 		message = fmt.Sprintf("build failed at [%s] %s: %s", summary.stage, summary.command, cause)
 	}
 	return &buildFailureCauseError{message: message, err: buildErr}
+}
+
+// buildOutputCause is the one-line cause in a failing step's output: its last
+// line that is neither blank nor a generic trailer (buildOutputTrailerRes),
+// else its last non-blank line, trimmed; "" when every line is blank.
+func buildOutputCause(output []string) string {
+	last := ""
+	for i := len(output) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(output[i])
+		if line == "" {
+			continue
+		}
+		if last == "" {
+			last = line
+		}
+		if !isBuildOutputTrailer(line) {
+			return line
+		}
+	}
+	return last
+}
+
+func isBuildOutputTrailer(line string) bool {
+	for _, re := range buildOutputTrailerRes {
+		if re.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
 
 // renderBuildFailure prints the build failure's details (the failing step,

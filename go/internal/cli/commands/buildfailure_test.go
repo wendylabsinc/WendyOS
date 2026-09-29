@@ -342,3 +342,131 @@ func TestBuildFailureErrorRewritesOnlyImageBuildFailures(t *testing.T) {
 		}
 	}
 }
+
+// failedStepLog is BuildKit's plain-progress log of a RUN step that printed
+// output and then failed with exitCode.
+func failedStepLog(stage, command string, exitCode int, output ...string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "#8 [%s] RUN %s\n", stage, command)
+	for _, line := range output {
+		fmt.Fprintf(&b, "#8 0.512 %s\n", line)
+	}
+	fmt.Fprintf(&b, "#8 ERROR: process \"/bin/sh -c %s\" did not complete successfully: exit code: %d\n", command, exitCode)
+	fmt.Fprintf(&b, "------\n > [%s] RUN %s:\n------\n", stage, command)
+	fmt.Fprintf(&b, "ERROR: failed to build: failed to solve: process \"/bin/sh -c %s\" did not complete successfully: exit code: %d\n", command, exitCode)
+	return b.String()
+}
+
+// The error line's cause is the step's last informative output line: the
+// generic lines a failing tool prints after the cause — make's own "Error N"
+// line, pip's frame and closing notes, a compiler's notes and source excerpt
+// — are skipped. Output that ends on the cause keeps it, and output that is
+// all trailers falls back to its last line.
+func TestBuildFailureErrorSkipsGenericTrailers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		log  string
+		want string
+	}{
+		{
+			name: "make and a C compile error",
+			log: failedStepLog("build 3/3", "make", 2,
+				"cc -O2 -Wall -c -o main.o main.c",
+				"main.c: In function 'main':",
+				"main.c:4:5: error: 'count' undeclared (first use in this function)",
+				"    4 |     count = 1;",
+				"      |     ^~~~~",
+				"main.c:4:5: note: each undeclared identifier is reported only once for each function it appears in",
+				"make: *** [<builtin>: main.o] Error 1"),
+			want: "build failed at [build 3/3] RUN make: main.c:4:5: error: 'count' undeclared (first use in this function)",
+		},
+		{
+			name: "a missing header, with -j",
+			log: failedStepLog("build 3/3", "make -j4", 2,
+				"cc -O2 -c -o net.o net.c",
+				"net.c:1:10: fatal error: curl/curl.h: No such file or directory",
+				"    1 | #include <curl/curl.h>",
+				"      |          ^~~~~~~~~~~~~",
+				"compilation terminated.",
+				"make: *** [Makefile:7: net.o] Error 1",
+				"make: *** Waiting for unfinished jobs...."),
+			want: "build failed at [build 3/3] RUN make -j4: net.c:1:10: fatal error: curl/curl.h: No such file or directory",
+		},
+		{
+			name: "pip: a package's build failed in a subprocess",
+			log: failedStepLog("deps 2/3", "pip install badpkg==1.0", 1,
+				"Collecting badpkg==1.0",
+				"  Downloading badpkg-1.0.tar.gz (2.1 kB)",
+				"  Getting requirements to build wheel: finished with status 'error'",
+				"  error: subprocess-exited-with-error",
+				"  ",
+				"  × Getting requirements to build wheel did not run successfully.",
+				"  │ exit code: 1",
+				"  ╰─> [4 lines of output]",
+				"      Traceback (most recent call last):",
+				"        File \"<string>\", line 3, in <module>",
+				"      RuntimeError: badpkg needs libfoo-dev",
+				"      [end of output]",
+				"  ",
+				"  note: This error originates from a subprocess, and is likely not a problem with pip.",
+				"error: subprocess-exited-with-error",
+				"",
+				"× Getting requirements to build wheel did not run successfully.",
+				"│ exit code: 1",
+				"╰─> See above for output.",
+				"",
+				"note: This error originates from a subprocess, and is likely not a problem with pip."),
+			want: "build failed at [deps 2/3] RUN pip install badpkg==1.0: RuntimeError: badpkg needs libfoo-dev",
+		},
+		{
+			name: "pip: package metadata could not be generated",
+			log: failedStepLog("deps 2/3", "pip install pycairo", 1,
+				"  Preparing metadata (pyproject.toml): finished with status 'error'",
+				"  error: subprocess-exited-with-error",
+				"  ╰─> [3 lines of output]",
+				"      ../meson.build:31:12: ERROR: Dependency \"cairo\" not found, tried pkgconfig",
+				"      [end of output]",
+				"error: metadata-generation-failed",
+				"",
+				"× Encountered error while generating package metadata.",
+				"╰─> See above for output.",
+				"",
+				"note: This is an issue with the package mentioned above, not pip.",
+				"hint: See above for details."),
+			want: `build failed at [deps 2/3] RUN pip install pycairo: ../meson.build:31:12: ERROR: Dependency "cairo" not found, tried pkgconfig`,
+		},
+		{
+			name: "BuildKit's wrapper repeated in the output",
+			log: failedStepLog("build 2/2", "./build.sh", 1,
+				"build.sh: line 4: protoc: command not found",
+				`ERROR: process "/bin/sh -c protoc --go_out=. api.proto" did not complete successfully: exit code: 127`),
+			want: "build failed at [build 2/2] RUN ./build.sh: build.sh: line 4: protoc: command not found",
+		},
+		{
+			name: "a Python traceback: its last line, unchanged",
+			log: failedStepLog("py 2/2", "python build_assets.py", 1,
+				"Traceback (most recent call last):",
+				`  File "/app/build_assets.py", line 12, in <module>`,
+				`    raise ValueError("missing asset icon.png")`,
+				"ValueError: missing asset icon.png"),
+			want: "build failed at [py 2/2] RUN python build_assets.py: ValueError: missing asset icon.png",
+		},
+		{
+			name: "a go compile error: its last line, unchanged",
+			log:  readBuildFailureFixture(t, "go-compile.log"),
+			want: "build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo",
+		},
+		{
+			name: "nothing but trailers: the last line",
+			log:  failedStepLog("build 3/3", "make", 2, "make: *** [Makefile:2: all] Error 1", ""),
+			want: "build failed at [build 3/3] RUN make: make: *** [Makefile:2: all] Error 1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			buildErr := &imageBuildFailedError{errors.New("docker buildx build (OCI export) failed: exit status 1")}
+			if err := buildFailureError(summarizeBuildFailure(tc.log, buildErr), buildErr); err.Error() != tc.want {
+				t.Fatalf("error = %q\nwant    %q", err, tc.want)
+			}
+		})
+	}
+}
