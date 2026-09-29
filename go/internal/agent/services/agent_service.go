@@ -564,6 +564,8 @@ func detectFeatureset() []string {
 		features = append(features, "os-healthcheck")
 	}
 
+	features = appendWorldViewFeature(features, worldViewFeatureSupported())
+
 	return features
 }
 
