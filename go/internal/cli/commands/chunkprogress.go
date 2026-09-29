@@ -180,6 +180,9 @@ func (p *chunkPushProgress) Snapshot() chunkPushSnapshot {
 // Line, Summary) are pure functions of these fields — no locking, since the
 // snapshot cannot change after Snapshot() returns it.
 type chunkPushSnapshot struct {
+	// Compressor is set on the observed final snapshot for each push attempt.
+	// An empty compressor means the attempt sent uncompressed chunks.
+	Compressor                               string
 	LayersTotal, LayersReused, LayersPlanned int
 	TotalChunks, MissingChunks, SentChunks   int
 	SentBytes, PlannedBytes                  int64

@@ -35,7 +35,11 @@ const chunkPushInteractiveTickInterval = 200 * time.Millisecond
 func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, cfg chunkUploadConfig, observe func(chunkPushSnapshot)) ([]*agentpb.RunContainerLayerHeader, error) {
 	prog := newChunkPushProgress()
 	if observe != nil {
-		defer func() { observe(prog.Snapshot()) }()
+		defer func() {
+			snap := prog.Snapshot()
+			snap.Compressor = cfg.compressor
+			observe(snap)
+		}()
 	}
 
 	if !buildProgressInteractive() {

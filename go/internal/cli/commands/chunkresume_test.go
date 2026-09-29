@@ -576,12 +576,23 @@ func TestPushLayersResumingTunnelDropsFallsBackToGzipAfterAStall(t *testing.T) {
 	}}
 	cfg := chunkUploadConfig{stallTimeout: 300 * time.Millisecond, stallKey: "0123abcd@0.19.3"}
 
-	got, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, cfg, nil)
+	var snapshots []chunkPushSnapshot
+	got, headers, err := pushLayersResumingTunnelDrops(context.Background(), connA, layers, nil, cfg, func(snap chunkPushSnapshot) {
+		snapshots = append(snapshots, snap)
+	})
 	if err != nil {
 		t.Fatalf("push failed: %v\n%s", err, out.String())
 	}
 	if got != connB || reconnects != 1 || len(headers) != 1 {
 		t.Fatalf("conn=%v reconnects=%d headers=%d", got == connB, reconnects, len(headers))
+	}
+	if len(snapshots) != 2 || snapshots[0].Compressor != "" || snapshots[1].Compressor != "gzip" {
+		t.Fatalf("snapshots = %+v, want uncompressed attempt followed by gzip", snapshots)
+	}
+	metrics := newDeployMetrics(runOptions{})
+	metrics.chunk = &chunkDeployStats{pushCompleted: true, push: snapshots[1]}
+	if got := metrics.properties(nil)["deploy_compression"]; got != "gzip" {
+		t.Fatalf("deploy_compression = %q, want the successful retry's gzip", got)
 	}
 	for _, enc := range agentA.encodings() {
 		if enc != "" {

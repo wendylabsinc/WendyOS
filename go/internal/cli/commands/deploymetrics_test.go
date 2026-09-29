@@ -59,6 +59,7 @@ func TestDeployMetricsPropertiesForAChunkDeploy(t *testing.T) {
 			pushCompleted: true,
 			startTime:     700 * time.Millisecond,
 			push: chunkPushSnapshot{
+				Compressor: "gzip",
 				SentChunks: 999, SentBytes: 62_900_000, TotalChunks: 5216,
 				LayersTotal: 3, LayersReused: 2,
 				Uploaded: true, UploadTime: 1800 * time.Millisecond,
@@ -85,6 +86,7 @@ func TestDeployMetricsPropertiesForAChunkDeploy(t *testing.T) {
 		"deploy_bytes_sent":        "62900000",
 		"deploy_chunks_sent":       "999",
 		"deploy_layers_reused":     "2",
+		"deploy_compression":       "gzip",
 	}
 	for k, v := range want {
 		if p[k] != v {
@@ -95,6 +97,10 @@ func TestDeployMetricsPropertiesForAChunkDeploy(t *testing.T) {
 		if v, ok := p[k]; ok {
 			t.Errorf("%s = %q, want absent for a successful chunk deploy", k, v)
 		}
+	}
+	m.chunk.push.Compressor = ""
+	if got := m.properties(nil)["deploy_compression"]; got != "none" {
+		t.Errorf("uncompressed deploy_compression = %q, want none", got)
 	}
 }
 
@@ -485,8 +491,10 @@ stages:
 			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
 		},
 	}, runErr: runErr}
+	conn := &grpcclient.AgentConnection{ContainerService: client, Host: "127.0.0.1"}
+	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", CpuArchitecture: "arm64"})
 	var stats chunkDeployStats
-	_, _, err = deployByChunkDiff(ctx, &grpcclient.AgentConnection{ContainerService: client}, proj, &appconfig.AppConfig{AppID: appID},
+	_, _, err = deployByChunkDiff(ctx, conn, proj, &appconfig.AppConfig{AppID: appID},
 		platform, dockerfile, nil, nil, runOptions{builder: "docker", quietBuild: true, detach: true}, &stats, nil)
 	if !errors.Is(err, runErr) {
 		t.Fatalf("deployByChunkDiff err = %v, want the RunContainer failure", err)

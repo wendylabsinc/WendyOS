@@ -146,7 +146,11 @@ func (m *deployMetrics) properties(err error) map[string]string {
 			p["deploy_chunks_total"] = strconv.Itoa(s.push.TotalChunks)
 			p["deploy_layers_total"] = strconv.Itoa(s.push.LayersTotal)
 			p["deploy_layers_reused"] = strconv.Itoa(s.push.LayersReused)
-			p["deploy_compression"] = "gzip" // WDY-3211 part 2 reports the chosen compressor here
+			compression := s.push.Compressor
+			if compression == "" {
+				compression = "none"
+			}
+			p["deploy_compression"] = compression
 		}
 		if m.started {
 			p["deploy_start_ms"] = durationMS(s.startTime)

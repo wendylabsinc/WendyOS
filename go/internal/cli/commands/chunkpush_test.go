@@ -192,7 +192,7 @@ func TestPushLayersByChunksTimesUploadAndDevicePhases(t *testing.T) {
 		}
 		time.Sleep(300 * time.Millisecond)
 		return nil
-	}, nil, false, prog)
+	}, nil, false, prog, gzipChunkUploadConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestPushLayersByChunksDoesNotReportAFailedPreparation(t *testing.T) {
 		}
 		time.Sleep(300 * time.Millisecond)
 		return status.Error(codes.Internal, "prewarm failed")
-	}, nil, false, prog)
+	}, nil, false, prog, gzipChunkUploadConfig)
 	if err != nil {
 		t.Fatalf("a failed preparation is non-fatal, got %v", err)
 	}
