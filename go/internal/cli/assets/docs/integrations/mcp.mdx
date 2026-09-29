@@ -43,8 +43,9 @@ passive inspection and `container_exec` for a command in a running container.
 For compatibility, `device_connect(address=...)` still works. `run` still accepts
 legacy `device_name`, `cloud_grpc`, `broker_url`, and `deploy` arguments even though
 new schemas omit them. `deploy=true` is equivalent to `start=false`; contradictory
-arguments fail. `container_attach` remains callable by existing clients but is
-not advertised because its restart behavior is easy to mistake for observation.
+arguments fail. `run` always detaches, so `detach=false` fails. `container_attach`
+remains callable by existing clients but is not advertised because its restart
+behavior is easy to mistake for observation.
 
 ## Bounded results
 

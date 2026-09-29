@@ -227,3 +227,75 @@ func TestCommandTargetStatusSnapshotStaysConsistent(t *testing.T) {
 		}
 	}
 }
+
+// A cloud:// selector passed to device_connect (or used as the startup
+// default) is replayable: record the selector itself, not the transient local
+// tunnel address, so run can hand the same identity to a CLI child.
+func TestCommandTargetCloudSelectorConnect(t *testing.T) {
+	t.Setenv("WENDY_BROKER_URL", "selected-relay:443")
+	const selector = "cloud://shared.example:443/org/7/asset/42"
+	for _, startup := range []bool{false, true} {
+		s := New(&config.Config{}, func(_ context.Context, device string) (*grpcclient.AgentConnection, error) {
+			if device != selector {
+				t.Fatalf("connect got %q, want %q", device, selector)
+			}
+			return &grpcclient.AgentConnection{Host: "127.0.0.1", Addr: "127.0.0.1:61000"}, nil
+		})
+		if startup {
+			if err := s.ConnectToOnStartup(context.Background(), selector); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			r, err := s.handleDeviceConnect(context.Background(), callToolReq("device_connect", map[string]any{"address": selector}))
+			if err != nil || r.IsError {
+				t.Fatalf("device_connect: %v %v", r, err)
+			}
+		}
+		assertCommandTarget(t, s, commandTarget{Device: selector, Selector: selector, Transport: "cloud", CloudGRPC: "shared.example:443", BrokerURL: "selected-relay:443"})
+	}
+}
+
+func TestCloudCommandTargetPinsOrganizationOrTenantAndAsset(t *testing.T) {
+	auth := &config.AuthConfig{CloudGRPC: "shared.example:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}
+	want := commandTarget{Device: "robot", Transport: "cloud", CloudGRPC: "shared.example:443", BrokerURL: "relay:443", Selector: "cloud://shared.example:443/org/7/asset/42"}
+	if got := cloudCommandTarget(auth, mcpCloudDevice{name: "robot", legacyID: 42, key: "42"}, "relay:443"); got != want {
+		t.Fatalf("legacy target = %+v, want %+v", got, want)
+	}
+	auth.Certificates[0].PrincipalURI = "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/test"
+	got := cloudCommandTarget(auth, mcpCloudDevice{name: "robot", key: "22222222-2222-4222-8222-222222222222", isV2: true}, "")
+	if got.Selector != "cloud://shared.example:443/tenant/11111111-1111-4111-8111-111111111111/asset/22222222-2222-4222-8222-222222222222" {
+		t.Fatalf("v2 target = %+v", got)
+	}
+	// No certificate identity: keep the name-based target (run then uses the
+	// legacy cloud path) rather than inventing a selector.
+	got = cloudCommandTarget(&config.AuthConfig{CloudGRPC: "shared.example:443"}, mcpCloudDevice{name: "robot", legacyID: 42}, "")
+	if got.Selector != "" || got.Device != "robot" || got.Transport != "cloud" {
+		t.Fatalf("identity-less target = %+v", got)
+	}
+}
+
+// `wendy run --device NAME` resolves a bare name differently from
+// device_connect (by device ID, or a same-named cloud device after a LAN
+// failure), so a bare host is replayed as the host:port device_connect dialed.
+func TestCommandTargetReplaysBareHostsAsHostPort(t *testing.T) {
+	for _, startup := range []bool{false, true} {
+		for address, want := range map[string]string{
+			"robot":       "robot:50051",
+			"woof.local":  "woof.local:50051",
+			"192.0.2.7":   "192.0.2.7:50051",
+			"fe80::1%en0": "[fe80::1%en0]:50051",
+		} {
+			s := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+				return &grpcclient.AgentConnection{Host: "192.0.2.7", Addr: "192.0.2.7:50052"}, nil
+			})
+			connect := s.ConnectTo
+			if startup {
+				connect = s.ConnectToOnStartup
+			}
+			if err := connect(context.Background(), address); err != nil {
+				t.Fatal(err)
+			}
+			assertCommandTarget(t, s, commandTarget{Device: want, Transport: "direct"})
+		}
+	}
+}

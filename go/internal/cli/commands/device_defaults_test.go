@@ -187,6 +187,29 @@ func TestCloudDeviceSelectorValidationAndMCPAddress(t *testing.T) {
 	}
 }
 
+// MCP device_connect dials what the startup default dials. A bare mTLS host
+// failed ("no usable client certificate") while host:50051 connects, and
+// the run tool replays the target as host:50051.
+func TestMCPDeviceConnectDialsBareHostsAsHostPort(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	old := connectMCPDirectFn
+	t.Cleanup(func() { connectMCPDirectFn = old })
+	for device, want := range map[string]string{
+		"robot.local":       "robot.local:50051",
+		"fe80::1":           "[fe80::1]:50051",
+		"robot.local:50052": "robot.local:50052",
+	} {
+		var dialed string
+		connectMCPDirectFn = func(_ context.Context, address string) (*grpcclient.AgentConnection, error) {
+			dialed = address
+			return &grpcclient.AgentConnection{Addr: address}, nil
+		}
+		if _, err := connectMCPDevice(context.Background(), device); err != nil || dialed != want {
+			t.Errorf("connectMCPDevice(%q) dialed %q (err %v), want %q", device, dialed, err, want)
+		}
+	}
+}
+
 func TestCloudV2DefaultPreservesTenantAndAssetAcrossRename(t *testing.T) {
 	const tenant = "8a53be77-2a69-464f-8f73-83643fe0beaa"
 	const assetID = "7791d76e-a942-4a8e-b582-063d063b5623"

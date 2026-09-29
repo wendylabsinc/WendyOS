@@ -92,9 +92,7 @@ func (p *backgroundProcesses) start(ctx context.Context, kind string, target bac
 	// Never inherit Chat's terminal. Media playback uses its own window or
 	// native audio device; bounded logs are available through the status tool.
 	cmd.Stdin = nil
-	// A socket override takes precedence over --device and cloud flags in the
-	// CLI. Replay the current MCP target even if Chat inherited a local socket.
-	cmd.Env = append(os.Environ(), "NO_COLOR=1", "TERM=dumb", "WENDY_AGENT_SOCKET=")
+	cmd.Env = backgroundEnvironment(os.Environ(), target)
 	log := &backgroundLog{}
 	cmd.Stdout, cmd.Stderr = log, log
 	cmd.WaitDelay = time.Second
