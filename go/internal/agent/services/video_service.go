@@ -476,6 +476,19 @@ type deviceHub struct {
 	// has served the same device key. It outlives the hub so sample identities
 	// stay monotonic across producer restarts within one episode.
 	sampleSeq *atomic.Uint64
+	// rawSampleSeq is the same kind of per-device counter for the raw capture
+	// plane (video_raw_tap.go), kept separate from sampleSeq on purpose. The raw
+	// tap and the encoder are two branches of one GStreamer tee, read from two
+	// pipes, and the encoded pipe yields byte-stream chunks rather than whole
+	// frames, so there is no way to hand a raw frame the identifier of "its"
+	// encoded frame. Drawing both planes from one counter would instead punch a
+	// hole in the encoded identifiers for every raw frame delivered, which a
+	// loopback reader is documented to read as a producer-side drop
+	// (hub_loopback_binding.go). A raw sample is therefore identified by its
+	// source, its raw encoding and a sample id drawn from this counter, and is
+	// never joined to an encoded sample by number.
+	// Nil in tests that build a bare hub; raw frames then carry sample id 0.
+	rawSampleSeq *atomic.Uint64
 	// Whether this producer tees raw capture frames (video_raw_tap.go). Undecided
 	// until the producer has chosen its capture path; a raw subscriber that joins
 	// before then waits, one that joins after a refusal is turned away up front.
@@ -677,7 +690,8 @@ func frameTooLarge(frame *videoFrame) bool {
 // produce takes one physical frame from the camera producer, stamps it with its
 // harness-wide identity and agent receipt, and delivers it. Every producer path
 // funnels through here (see the closure in runProducer), and this is the ONLY
-// place a sample identity is minted.
+// place an encoded sample identity is minted. The raw capture plane mints its
+// own, from a separate counter, in publishRaw.
 //
 // Minting belongs to the arrival of a frame, not to a delivery of it. The hub
 // can deliver one physical frame on more than one plane — encoded video to
@@ -701,13 +715,22 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	// Stamp the identity and receipt before the frame becomes shared: it is
 	// immutable from the moment the first subscriber can see it, and every
 	// consumer must read the same values.
-	if h.sampleSeq != nil {
-		frame.sampleID = h.sampleSeq.Add(1)
+	stampArrival(frame, h.sampleSeq)
+	return h.broadcast(frame)
+}
+
+// stampArrival gives a frame arriving from the producer its sample identity from
+// seq (left zero when seq is nil) and the agent's bracketed CLOCK_BOOTTIME
+// receipt: the midpoint of the bracket, with half its width as the uncertainty.
+// It is the one stamping rule both planes share, so an encoded frame and a raw
+// frame taken at the same instant carry receipts on the same timeline.
+func stampArrival(frame *videoFrame, seq *atomic.Uint64) {
+	if seq != nil {
+		frame.sampleID = seq.Add(1)
 	}
 	if before, receipt, after, err := data.CaptureReceipt(); err == nil {
 		frame.receiptBootNanos, frame.receiptUncertaintyNanos = receipt, (after-before+1)/2
 	}
-	return h.broadcast(frame)
 }
 
 // broadcast delivers a frame to the subscribers that want its kind — encoded
@@ -773,9 +796,20 @@ func (h *deviceHub) wantRaw() bool {
 	return false
 }
 
-// publishRaw hands one raw capture frame to the hub's raw subscribers.
+// publishRaw hands one raw capture frame to the hub's raw subscribers. It is the
+// raw plane's counterpart of produce: the frame is stamped once on arrival, with
+// an identity from the device's raw counter and a boot-clock receipt, before it
+// becomes shared. tsNs stays the wall-clock read time pumpRawTap reports.
+//
+// An oversized frame is dropped before stamping, for the same reason produce
+// does: a gap in the raw identifiers must always mean a frame that was lost.
 func (h *deviceHub) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
-	return h.broadcast(&videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format})
+	frame := &videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format}
+	if frameTooLarge(frame) {
+		return true // oversized frame: drop silently, keep the hub alive
+	}
+	stampArrival(frame, h.rawSampleSeq)
+	return h.broadcast(frame)
 }
 
 // rawOffered records that this producer tees raw frames of the given layout.
@@ -963,6 +997,9 @@ type VideoService struct {
 	// a producer restart does not reissue sample identities the harness has
 	// already handed out for that source.
 	sampleSeqs map[string]*atomic.Uint64
+	// rawSampleSeqs is the raw capture plane's counterpart of sampleSeqs (see
+	// deviceHub.rawSampleSeq for why the planes do not share one counter).
+	rawSampleSeqs map[string]*atomic.Uint64
 }
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
@@ -970,11 +1007,12 @@ type VideoService struct {
 func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, rosRuntime ...ROS2Runtime) *VideoService {
 	svcCtx, cancel := context.WithCancel(ctx)
 	svc := &VideoService{
-		logger:     logger,
-		ctx:        svcCtx,
-		cancel:     cancel,
-		hubs:       make(map[string]*deviceHub),
-		sampleSeqs: make(map[string]*atomic.Uint64),
+		logger:        logger,
+		ctx:           svcCtx,
+		cancel:        cancel,
+		hubs:          make(map[string]*deviceHub),
+		sampleSeqs:    make(map[string]*atomic.Uint64),
+		rawSampleSeqs: make(map[string]*atomic.Uint64),
 		globDevices: func() ([]string, error) {
 			return filepath.Glob("/dev/video*")
 		},
@@ -1640,15 +1678,16 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 
 	hctx, cancel := context.WithCancel(s.ctx)
 	h = &deviceHub{
-		subs:      make(map[int]*hubSubscriber),
-		subDrops:  make(map[int]uint64),
-		ctx:       hctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		width:     req.GetWidth(),
-		height:    req.GetHeight(),
-		framerate: req.GetFramerate(),
-		sampleSeq: s.sampleSeqLocked(path),
+		subs:         make(map[int]*hubSubscriber),
+		subDrops:     make(map[int]uint64),
+		ctx:          hctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+		width:        req.GetWidth(),
+		height:       req.GetHeight(),
+		framerate:    req.GetFramerate(),
+		sampleSeq:    s.sampleSeqLocked(path),
+		rawSampleSeq: s.rawSampleSeqLocked(path),
 	}
 	// New hub: the first subscriber is always within the cap.
 	id, ch, _ = h.subscribeAsKind(explicitHolder, req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW)
@@ -1808,15 +1847,16 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 
 	hctx, cancel := context.WithCancel(s.ctx)
 	h = &deviceHub{
-		subs:      make(map[int]*hubSubscriber),
-		subDrops:  make(map[int]uint64),
-		ctx:       hctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		width:     req.GetWidth(),
-		height:    req.GetHeight(),
-		framerate: req.GetFramerate(),
-		sampleSeq: s.sampleSeqLocked(key),
+		subs:         make(map[int]*hubSubscriber),
+		subDrops:     make(map[int]uint64),
+		ctx:          hctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+		width:        req.GetWidth(),
+		height:       req.GetHeight(),
+		framerate:    req.GetFramerate(),
+		sampleSeq:    s.sampleSeqLocked(key),
+		rawSampleSeq: s.rawSampleSeqLocked(key),
 	}
 	id, ch, _ = h.subscribeAs(hubHolderEpisodeCapture)
 	s.hubs[key] = h
@@ -1906,6 +1946,21 @@ func (s *VideoService) sampleSeqLocked(path string) *atomic.Uint64 {
 	if seq == nil {
 		seq = new(atomic.Uint64)
 		s.sampleSeqs[path] = seq
+	}
+	return seq
+}
+
+// rawSampleSeqLocked is sampleSeqLocked for the raw capture plane: one counter
+// per device key, created on first use, never removed, so raw identities stay
+// monotonic across producer restarts. Callers must hold s.mu.
+func (s *VideoService) rawSampleSeqLocked(path string) *atomic.Uint64 {
+	if s.rawSampleSeqs == nil {
+		s.rawSampleSeqs = make(map[string]*atomic.Uint64)
+	}
+	seq := s.rawSampleSeqs[path]
+	if seq == nil {
+		seq = new(atomic.Uint64)
+		s.rawSampleSeqs[path] = seq
 	}
 	return seq
 }

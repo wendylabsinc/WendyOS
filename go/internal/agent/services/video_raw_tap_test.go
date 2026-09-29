@@ -1,12 +1,18 @@
 package services
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/wendylabsinc/wendy/go/internal/agent/camera"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc/codes"
@@ -507,5 +513,150 @@ func TestPlan_RefusalNamesTheFormatsRawSupports(t *testing.T) {
 		if !strings.Contains(plan.rawWhy, want) {
 			t.Errorf("refusal %q should name %s", plan.rawWhy, want)
 		}
+	}
+}
+
+// --- raw frame stamping ---
+
+// receiveFrame takes one frame off a subscriber channel or fails the test.
+func receiveFrame(t *testing.T, ch <-chan *videoFrame, what string) *videoFrame {
+	t.Helper()
+	select {
+	case f, ok := <-ch:
+		if !ok {
+			t.Fatalf("%s: channel closed", what)
+		}
+		return f
+	case <-time.After(2 * time.Second):
+		t.Fatalf("%s: nothing received", what)
+	}
+	return nil
+}
+
+// TestRawTapFramesCarryTheCanonicalReceiptAndTheirOwnDeviceCounter drives real
+// frames through pumpRawTap, the tap's pipe reader, into a hub. A raw frame must
+// arrive stamped on the canonical timeline (a bracketed boot-clock receipt taken
+// between the write into the pipe and the delivery) and named by the device's
+// raw counter, which continues across a producer restart. The encoded plane on
+// the same hub must keep its own dense identifiers while raw frames interleave:
+// a hole there is what a loopback reader is told to read as a drop.
+func TestRawTapFramesCarryTheCanonicalReceiptAndTheirOwnDeviceCounter(t *testing.T) {
+	const path = "/dev/video9"
+	svc := &VideoService{logger: zap.NewNop()}
+	format := &agentpb.RawFormat{Width: 2, Height: 2, Fourcc: "Y16 ", BytesPerLine: 4}
+	frameBytes := int(format.GetBytesPerLine() * format.GetHeight())
+
+	newHub := func() (*deviceHub, context.CancelFunc) {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		ctx, cancel := context.WithCancel(context.Background())
+		return &deviceHub{
+			subs: map[int]*hubSubscriber{}, subDrops: map[int]uint64{},
+			ctx: ctx, cancel: cancel, done: make(chan struct{}),
+			sampleSeq:    svc.sampleSeqLocked(path),
+			rawSampleSeq: svc.rawSampleSeqLocked(path),
+		}, cancel
+	}
+	// runTap starts the tap reader on a fresh pipe and returns the write end
+	// and a channel closed when the reader has returned.
+	runTap := func(h *deviceHub) (*os.File, chan struct{}) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			svc.pumpRawTap(context.Background(), r, format, h, path)
+		}()
+		return w, done
+	}
+	writeFrame := func(w *os.File, fill byte) {
+		t.Helper()
+		if _, err := w.Write(bytes.Repeat([]byte{fill}, frameBytes)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hub, cancel := newHub()
+	_, enc, _ := hub.subscribe()
+	_, raw, _ := hub.subscribeKind(true)
+	w, done := runTap(hub)
+
+	var lastRaw uint64
+	for i := 1; i <= 2; i++ {
+		before, _, _, err := data.CaptureReceipt()
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFrame(w, byte(i))
+		got := receiveFrame(t, raw, "raw subscriber")
+		_, _, after, _ := data.CaptureReceipt()
+		if !hub.produce(&videoFrame{data: []byte{byte(i)}, codec: agentpb.VideoCodec_VIDEO_CODEC_H264}) {
+			t.Fatal("encoded produce reported no subscribers")
+		}
+		encoded := receiveFrame(t, enc, "encoded subscriber")
+
+		if got.codec != agentpb.VideoCodec_VIDEO_CODEC_RAW || got.rawFmt != format {
+			t.Fatalf("raw frame %d: codec %v format %v", i, got.codec, got.rawFmt)
+		}
+		if !bytes.Equal(got.data, bytes.Repeat([]byte{byte(i)}, frameBytes)) {
+			t.Fatalf("raw frame %d: payload is not the bytes written to the tap", i)
+		}
+		if got.receiptBootNanos == 0 {
+			t.Fatalf("raw frame %d carries no boot-clock receipt", i)
+		}
+		if got.receiptBootNanos < before || got.receiptBootNanos > after {
+			t.Fatalf("raw frame %d receipt %d lies outside the bracket [%d, %d] of its write and delivery",
+				i, got.receiptBootNanos, before, after)
+		}
+		if got.receiptUncertaintyNanos < 0 {
+			t.Fatalf("raw frame %d uncertainty %d is negative", i, got.receiptUncertaintyNanos)
+		}
+		if got.tsNs == 0 {
+			t.Fatalf("raw frame %d lost its wall-clock read time", i)
+		}
+		if got.sampleID != uint64(i) {
+			t.Fatalf("raw frame %d has sample id %d, want %d", i, got.sampleID, i)
+		}
+		if encoded.sampleID != uint64(i) {
+			t.Fatalf("encoded frame %d has sample id %d, want %d: raw frames punched a hole in the encoded identifiers",
+				i, encoded.sampleID, i)
+		}
+		lastRaw = got.sampleID
+	}
+	w.Close() //nolint:errcheck
+	<-done
+	cancel()
+
+	// A producer restart builds a new hub for the same device key; the raw
+	// counter must pick up where it stopped, not reissue identifier 1.
+	restarted, restartedCancel := newHub()
+	defer restartedCancel()
+	_, raw2, _ := restarted.subscribeKind(true)
+	w2, done2 := runTap(restarted)
+	writeFrame(w2, 7)
+	if got := receiveFrame(t, raw2, "raw subscriber after restart"); got.sampleID != lastRaw+1 {
+		t.Fatalf("raw sample id after producer restart = %d, want %d", got.sampleID, lastRaw+1)
+	}
+	w2.Close() //nolint:errcheck
+	<-done2
+}
+
+// TestPublishRawDropsOversizedFramesWithoutAnIdentity keeps a gap in the raw
+// identifiers meaningful, exactly as produce does for encoded frames.
+func TestPublishRawDropsOversizedFramesWithoutAnIdentity(t *testing.T) {
+	hub, cancel := newSampleHub(new(atomic.Uint64))
+	defer cancel()
+	hub.rawSampleSeq = new(atomic.Uint64)
+	_, raw, _ := hub.subscribeKind(true)
+	format := &agentpb.RawFormat{Width: 1, Height: 1, Fourcc: fourccYUYV, BytesPerLine: 2}
+	hub.publishRaw(make([]byte, maxRawFrameBytes+1), 1, format)
+	hub.publishRaw([]byte{1, 2}, 2, format)
+	if got := receiveFrame(t, raw, "raw subscriber"); got.sampleID != 1 {
+		t.Fatalf("raw sample id = %d, want 1: the dropped oversized frame consumed an identifier", got.sampleID)
+	}
+	if hub.sampleSeq.Load() != 0 {
+		t.Fatalf("raw frames advanced the encoded counter to %d", hub.sampleSeq.Load())
 	}
 }
