@@ -455,6 +455,9 @@ corner boxes such as the Hugging Face `[x0, y0, x1, y1]` form are not accepted
 in this release, so the campaign's own `inference` predictions do not count as
 class evidence.
 
+See [the objects and depth example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataObjects)
+for a complete campaign.
+
 ### Notifications
 
 | Field | Required | Description |

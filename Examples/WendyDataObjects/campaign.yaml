@@ -1,0 +1,105 @@
+version: 1
+name: objects-can-and-bottle
+
+sources:
+  # Exactly one colour camera. Depth pairs only with a campaign that resolves
+  # to a single camera, so this example does not use camera: "*". Replace the
+  # identifier with your colour camera's, as `wendy data sources --kind camera`
+  # lists it.
+  - camera: v4l2:/dev/video4
+    capture:
+      mode: continuous
+
+objects:
+  coke_can:
+    event: coke_can_seen
+    rate: 4
+    clear_after: 3s
+    cooldown: 20s
+    fusion:
+      threshold: 0.75
+      # A cylinder casts a rectangle or a disc. Any other outline scores at
+      # most 0.25 on shape, below the default floor of 0.5, and is vetoed.
+      required: [shape]
+    attributes:
+      shape:
+        expect: {primitive: cylinder}
+        weight: 1
+      # Unavailable until depth is paired; see the README.
+      size:
+        expect: {w_m: [0.06, 0.07], h_m: [0.11, 0.13]}
+        weight: 0.5
+      colour:
+        expect:
+          palette:
+            # Dominant red, then the white or silver of the lettering and rims,
+            # in the International Commission on Illumination (CIE) L*a*b*
+            # colour space (CIELAB). No tolerance is declared, so the default
+            # CIE 1976 (CIE76) colour difference, delta E, of 25 applies.
+            - {lab: [53, 80, 67], share: 0.6}
+            - {lab: [80, 0, 0], share: 0.25}
+        weight: 1.5
+
+  bottle:
+    event: bottle_seen
+    every_frames: 4
+    clear_after: 3s
+    cooldown: 20s
+    fusion:
+      threshold: 0.7
+    attributes:
+      # With a composition, the composition is scored as the shape attribute
+      # and this expect is not read; it must still name a valid primitive.
+      # Declaring shape gives the composition a weight, so it moves the
+      # confidence instead of being reported as unweighted.
+      shape:
+        expect: {primitive: cylinder}
+        weight: 1
+      # The whole bottle: the three parts below stacked. Unavailable until
+      # depth is paired.
+      size:
+        expect: {w_m: [0.05, 0.06], h_m: [0.24, 0.30]}
+        weight: 1
+    # Bottom to top.
+    composition:
+      - {primitive: cylinder, w_m: [0.05, 0.06], h_m: [0.18, 0.22]}
+      - {primitive: cone, w_m: [0.05, 0.06], h_m: [0.05, 0.07]}
+      - {primitive: cylinder, w_m: [0.014, 0.018], h_m: [0.008, 0.012]}
+
+depth:
+  # The depth stream's source identifier, exactly as `wendy data sources`
+  # lists it; `wendy --device <device> device hardware list --category camera`
+  # marks a node that offers Z16 depth frames with depth=z16.
+  source: v4l2:/dev/video0
+  # Millimetre depth.
+  scale_m: 0.001
+  # Placeholder intrinsics for an Intel RealSense D435-class camera at 848x480.
+  # Replace them with your camera's values. On a RealSense,
+  # `rs-enumerate-devices -c` from librealsense prints each stream's fx, fy,
+  # ppx (cx) and ppy (cy); for any other camera, a checkerboard calibration
+  # such as OpenCV's calibrateCamera gives the same four numbers. The agent
+  # applies them to boxes in the colour frame's pixels and resizes the depth
+  # frame to the colour frame, so use the colour stream's intrinsics at the
+  # resolution each record reports as `frame`, with depth aligned to colour.
+  intrinsics: {fx: 615.0, fy: 615.0, cx: 424.0, cy: 240.0}
+
+capture:
+  buffer: 5s
+  after_trigger: 10s
+  triggers:
+    - event: coke_can_seen
+    - object.bottle.confidence: "> 0.8"
+
+upload:
+  # Keep episodes on the device while you tune the descriptors.
+  when: manual
+export:
+  annotation: cvat
+
+notify:
+  # Send through Wendy Cloud when a coke_can_seen event is emitted.
+  # Command line interface (CLI) deployment registers
+  # campaign:objects-can-and-bottle with sending disabled.
+  # Enable its notification grant in Cloud before events should deliver.
+  on: event
+  event: coke_can_seen
