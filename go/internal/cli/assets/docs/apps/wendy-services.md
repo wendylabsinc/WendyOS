@@ -160,6 +160,7 @@ All standard `wendy run` flags apply. The following are particularly relevant fo
 | Flag | Description |
 |------|-------------|
 | `--service <name>` | Build and run only the named service and its transitive `dependsOn` dependencies. |
+| `--build-host <device>` | Build the selected services on another device, which delivers each image to the target. See [Remote build host](#remote-build-host). |
 | `--deploy` | Build and create all containers but do not start them. |
 | `--detach` | Start all containers but do not stream logs. See [Attached vs. detached](#attached-vs-detached). |
 | `--keep-going` | Deploy services that build successfully instead of aborting the whole group on the first build/push failure. |
@@ -196,6 +197,15 @@ and the restart policy is still restarting at least one of them.
 `wendy device logs --app <appId>` surfaces crash output from all service
 members of the group, so a crash-looping service's logs are reachable without
 naming the individual service.
+
+## Remote build host
+
+`wendy run --build-host <device>` builds the selected services on another device instead of on your machine. Each service goes to the build host as its own build context, and the host delivers each image straight to the target as `<appid>-<service>:latest`, the same image a local build produces. `--service`, `--max-concurrency`, and `--keep-going` behave as they do for a local build. See [Remote build host](../clients/wendy-cli/commands/run.md#remote-build-host) for setup and requirements.
+
+Two things differ from a local build:
+
+- **One target per run.** `--device a,b,c` is refused for a multi-service project, because its services are created and started as a group against one device. Run `wendy run` once per device instead.
+- **No push-skip.** A local build skips a service whose inputs are unchanged and whose layers the device already holds. A remote build cannot prove that, so every selected service is sent to the build host on each run; the host's BuildKit cache and chunked delivery keep an unchanged service fast. Under `--watch`, a service already confirmed unchanged and running in the session is still left alone.
 
 ## Limitations
 
