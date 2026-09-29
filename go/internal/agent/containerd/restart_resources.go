@@ -17,6 +17,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
@@ -61,6 +62,31 @@ func (c *Client) ensureDBusProxyForStart(ctx context.Context, containerName stri
 		if filepath.Clean(dir) != expected {
 			_ = c.proxyManager.Stop(containerName)
 			return false, fmt.Errorf("D-Bus proxy for %q returned %q, want %q", containerName, dir, expected)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// ensureAvahiForStart recreates the avahi bus+proxy for a rebooted container
+// whose persisted spec already mounts the avahi proxy directory. The daemon
+// itself respawns through the normal post-network hook when the task starts.
+func (c *Client) ensureAvahiForStart(ctx context.Context, containerName string, mounts []specs.Mount) (bool, error) {
+	for _, mount := range mounts {
+		if mount.Destination != "/var/run/dbus" {
+			continue
+		}
+		expected := avahibridge.ProxySocketDir(containerName)
+		if filepath.Clean(mount.Source) != expected {
+			continue
+		}
+		dir, err := c.avahiManager.Prepare(ctx, containerName)
+		if err != nil {
+			return false, fmt.Errorf("recreating avahi bridge for %q: %w", containerName, err)
+		}
+		if filepath.Clean(dir) != expected {
+			_ = c.avahiManager.Stop(containerName)
+			return false, fmt.Errorf("avahi bridge for %q returned %q, want %q", containerName, dir, expected)
 		}
 		return true, nil
 	}

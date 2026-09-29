@@ -43,6 +43,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
@@ -115,6 +116,7 @@ type Client struct {
 	namespace               string
 	mu                      sync.Mutex
 	proxyManager            dbusProxyManager // nil if xdg-dbus-proxy is not available
+	avahiManager            *avahibridge.Manager
 	systemAPISocketProvider AppSystemAPISocketProvider
 	dataSocketProvider      AppDataSocketProvider
 
@@ -433,6 +435,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 		logger:            logger,
 		namespace:         "default",
 		proxyManager:      optionalDBusProxyManager(proxyMgr),
+		avahiManager:      avahibridge.NewManager(logger),
 		appServices:       make(map[string]map[string]*appconfig.ServiceConfig),
 		primaryPIDs:       make(map[string]uint32),
 		appIsolation:      make(map[string]string),
@@ -1340,6 +1343,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		if c.proxyManager != nil {
 			_ = c.proxyManager.Stop(containerName)
 		}
+		_ = c.avahiManager.Stop(containerName)
 		replaceDuration = time.Since(phaseStarted)
 	}
 
@@ -1382,8 +1386,13 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		return err
 	}
 
+	if err := requireAvahi(appCfg, containerName); err != nil {
+		return err
+	}
+
 	var dbusProxyStarted bool
 	var dbusProxySocketDir string
+	var avahiProxySocketDir string
 	if c.proxyManager != nil && hasBluetooth(appCfg) {
 		dir, err := c.proxyManager.Start(ctx, containerName)
 		if err != nil {
@@ -1394,6 +1403,20 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		defer func() {
 			if dbusProxyStarted {
 				_ = c.proxyManager.Stop(containerName)
+			}
+		}()
+	}
+	var avahiPrepared bool
+	if hasAvahi(appCfg) {
+		dir, err := c.avahiManager.Prepare(ctx, containerName)
+		if err != nil {
+			return fmt.Errorf("preparing avahi bridge for %q: %w", containerName, err)
+		}
+		avahiProxySocketDir = dir
+		avahiPrepared = true
+		defer func() {
+			if avahiPrepared {
+				_ = c.avahiManager.Stop(containerName)
 			}
 		}()
 	}
@@ -1566,10 +1589,11 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	opts := localoci.ApplyOptions{
-		DBusProxySocketDir: dbusProxySocketDir,
-		SystemAPISocketDir: systemAPISocketDir,
-		DataSocketDir:      dataSocketDir,
-		HostResolvConfPath: hostResolvConfPath,
+		DBusProxySocketDir:  dbusProxySocketDir,
+		AvahiProxySocketDir: avahiProxySocketDir,
+		SystemAPISocketDir:  systemAPISocketDir,
+		DataSocketDir:       dataSocketDir,
+		HostResolvConfPath:  hostResolvConfPath,
 	}
 	// Pass a shallow copy of appCfg with AppID and ServiceName set to the
 	// derived (validated) values. This ensures ApplyEntitlements always receives
@@ -1871,6 +1895,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 
 	// Container created successfully; keep its external socket resources running.
 	dbusProxyStarted = false
+	avahiPrepared = false
 	systemAPIRefOwned = false
 	dataRefOwned = false
 
@@ -2245,6 +2270,11 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			return nil, proxyErr
 		}
 		dbusProxyStartedForTask = started
+		avahiRestored, avahiErr := c.ensureAvahiForStart(ctx, dbusProxyContainerName, storedSpec.Mounts)
+		if avahiErr != nil {
+			return nil, avahiErr
+		}
+		_ = avahiRestored
 
 		identities, identityErr := decodeSerialIdentities(containerLabels[labelKeySerialIdentities])
 		if identityErr != nil {
@@ -2741,6 +2771,14 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// The fully configured Bluetooth task now owns the proxy until stop/delete.
 	// Do not let the failure-only defer above tear it down on the successful path.
 	dbusProxyStartedForTask = false
+	if hasAvahiEntitlement(entitlements) {
+		if isolation != "isolated" {
+			return nil, failStartedTask(fmt.Errorf("app %q declares the avahi entitlement without an isolated network namespace", appID))
+		}
+		if err := c.startAvahiForTask(ctx, appName, task.Pid()); err != nil {
+			return nil, failStartedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
+		}
+	}
 	c.logger.Info("Container started", zap.String("app_name", appName))
 	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
@@ -4199,6 +4237,7 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	if c.proxyManager != nil {
 		_ = c.proxyManager.Stop(containerID)
 	}
+	_ = c.avahiManager.Stop(containerID)
 
 	c.logger.Info("Container stopped", zap.String("container_id", containerID))
 
@@ -4521,6 +4560,11 @@ func (c *Client) deleteOne(ctx context.Context, ctr containerd.Container, wantIm
 				zap.String("container_id", ctr.ID()),
 				zap.Error(proxyErr))
 		}
+	}
+	if avahiErr := c.avahiManager.Stop(ctr.ID()); avahiErr != nil {
+		c.logger.Warn("Failed to stop avahi bridge",
+			zap.String("container_id", ctr.ID()),
+			zap.Error(avahiErr))
 	}
 	c.reconcileLANReplyGuards(ctx)
 	c.logger.Info("Container deleted", zap.String("container_id", ctr.ID()))
@@ -5398,6 +5442,34 @@ func streamReader(r io.Reader, ch chan<- services.ContainerOutput, buildOutput f
 }
 
 // hasBluetooth returns true if the app config includes a bluetooth entitlement.
+func hasAvahiEntitlement(entitlements []appconfig.Entitlement) bool {
+	for _, ent := range entitlements {
+		if ent.Type == appconfig.EntitlementAvahi {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAvahi(cfg *appconfig.AppConfig) bool {
+	for _, ent := range cfg.Entitlements {
+		if ent.Type == appconfig.EntitlementAvahi {
+			return true
+		}
+	}
+	return false
+}
+
+// requireAvahi enforces fail-closed startup for the avahi entitlement: a
+// container that declares it may only start when the avahi bridge binaries
+// are present, mirroring the bluetooth/proxy invariant (WDY-1093).
+func requireAvahi(cfg *appconfig.AppConfig, containerName string) error {
+	if hasAvahi(cfg) && !avahibridge.IsAvailable() {
+		return fmt.Errorf("cannot start container %q: the avahi entitlement requires avahi-daemon, dbus-daemon, xdg-dbus-proxy and nsenter, which are not all available on this device", containerName)
+	}
+	return nil
+}
+
 func hasBluetooth(cfg *appconfig.AppConfig) bool {
 	for _, ent := range cfg.Entitlements {
 		if ent.Type == appconfig.EntitlementBluetooth {
@@ -5405,6 +5477,31 @@ func hasBluetooth(cfg *appconfig.AppConfig) bool {
 		}
 	}
 	return false
+}
+
+// startAvahiForTask launches the per-container avahi-daemon inside the task
+// network namespace once networking is configured. addrOK polls for an IPv4
+// in that namespace via nsenter so the daemon never starts address-less.
+func (c *Client) startAvahiForTask(ctx context.Context, containerName string, pid uint32) error {
+	if pid == 0 {
+		return fmt.Errorf("no task PID for avahi netns")
+	}
+	nsPath := fmt.Sprintf("/proc/%d/ns/net", pid)
+	addrOK := func(ctx context.Context) (bool, error) {
+		out, err := exec.CommandContext(ctx, "nsenter", "--net="+nsPath,
+			"ip", "-o", "-4", "addr", "show", "up").CombinedOutput()
+		if err != nil {
+			return false, nil
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			f := strings.Fields(line)
+			if len(f) >= 4 && f[2] == "inet" && !strings.HasPrefix(f[3], "127.") {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return c.avahiManager.StartDaemon(ctx, containerName, nsPath, addrOK)
 }
 
 // requireDBusProxy enforces the D-Bus sandboxing invariant for WDY-1093: a
