@@ -140,11 +140,15 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 				return err
 			}
 			if !cleanStop(container) {
-				// Following started no task, so it never knows one ended.
-				replaced, _, last, err := appReplaced(ctx, conn, appCfg, base, container, nil)
+				// Following started no task, so it never knows one ended. A
+				// verdict that the device did not report how the app exited
+				// (appExitUnreported) ends the follow neutrally, like a
+				// replacement.
+				verdict, _, last, err := appReplaced(ctx, conn, appCfg, base, container, nil)
 				if err != nil {
 					return interrupted() // Ctrl-C or SIGTERM while confirming a replacement
 				}
+				replaced := verdict != appOwn
 				switch {
 				case followedExitStands(replaced, last):
 					if failure := appExitFailure(appCfg.AppID, last); failure != nil {

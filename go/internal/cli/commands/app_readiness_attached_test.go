@@ -391,7 +391,6 @@ func TestAttachedWaitReadyLeavesAReplacementRunning(t *testing.T) {
 		{name: "the whole replace sequence", snapshots: replaceSequence(runningSnapshot(0), killRecord(), notListed, notListed, createdStopped(), runningSnapshot(0))},
 		{name: "no SIGKILL record: not listed, then running", snapshots: replaceSequence(runningSnapshot(0), notListed, notListed, runningSnapshot(0))},
 		{name: "no SIGKILL record: not listed, then created", snapshots: replaceSequence(runningSnapshot(0), notListed, createdStopped(), runningSnapshot(0))},
-		{name: "created, not started", snapshots: replaceSequence(runningSnapshot(0), createdStopped(), runningSnapshot(0))},
 		{name: "created, not started, listed as crash-looping", snapshots: replaceSequence(runningSnapshot(0), createdLooping(), runningSnapshot(0))},
 		{name: "crash-looping SIGKILL record, then running", snapshots: replaceSequence(runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 1), runningSnapshot(0))},
 		// The kill's exit lost the race with the delete, so the killed app is
@@ -417,12 +416,19 @@ func TestAttachedWaitReadyLeavesAReplacementRunning(t *testing.T) {
 		// Its task gone and nothing of it listed for the whole window: the
 		// new image is still being prepared.
 		{name: "not listed for the whole window", snapshots: replaceSequence(runningSnapshot(0), notListed)},
+		// The gate's first poll showed a restart counted, so the device
+		// reports restarts: the count reset to 0 once the output ended is a
+		// replacement's start.
+		{name: "running with the count reset after one was counted", snapshots: replaceSequence(runningSnapshot(1), runningSnapshot(0))},
 		// The new app runs but does not accept connections yet: the check
-		// ends as soon as the output does, not at the probe deadline.
+		// ends as soon as the output does, not at the probe deadline. (A
+		// device that shows no sign of reporting exits — only the new app
+		// running, or the app stopped with no exit and then running — is
+		// TestAttachedWaitReadyWithoutExitReporting's.)
 		{
 			name:      "the new app running, not listening yet",
 			cfg:       &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: closedPort}}},
-			snapshots: replaceSequence(runningSnapshot(0)),
+			snapshots: replaceSequence(runningSnapshot(0), killRecord(), runningSnapshot(0)),
 		},
 		{name: "another version's container", cfg: &appconfig.AppConfig{AppID: "app", Version: "1.0"}, snapshots: replaceSequence(withAppVersion(runningSnapshot(0), "1.0"), withAppVersion(createdStopped(), "2.0"))},
 		{name: "another version's crash", cfg: &appconfig.AppConfig{AppID: "app", Version: "1.0"}, snapshots: replaceSequence(withAppVersion(runningSnapshot(0), "1.0"), withAppVersion(appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0), "2.0"))},
@@ -500,44 +506,161 @@ func TestAttachedWaitReadyDoesNotStopAnAppStoppedWithNoExitRecorded(t *testing.T
 	}
 }
 
+// On a device that shows no sign of reporting exits or restart counts (Go
+// agents before 2026-07-06, the Mac agent), an attached --wait-ready run
+// cannot tell an exit its restart policy recovered from from a replacement
+// by another deployment: the app stopped with no exit recorded and then
+// running with no restart counted, already running again when the check
+// looks after the output ended, or crash-looping with no count. Such an end
+// fails the check as not_ready — never exit 0 as a replacement, nor a crash
+// — and the run leaves the app alone: it may be another deployment's.
+func TestAttachedWaitReadyWithoutExitReporting(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedPort := testPort(t, closed)
+	closed.Close() // nothing listens: the probe can never pass
+	for _, tc := range []struct {
+		name      string
+		cfg       *appconfig.AppConfig
+		snapshots []*agentpb.AppContainer
+	}{
+		{name: "stopped, then running again", snapshots: replaceSequence(runningSnapshot(0), createdStopped(), runningSnapshot(0))},
+		{name: "running again when the output ended", snapshots: replaceSequence(runningSnapshot(0))},
+		{
+			name:      "running again when the output ended, a probe that cannot pass",
+			cfg:       &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: closedPort}}},
+			snapshots: replaceSequence(runningSnapshot(0)),
+		},
+		{name: "crash-looping with no count", snapshots: replaceSequence(runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 0))},
+	} {
+		for _, path := range []string{"chunk-diff", "registry"} {
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				cfg := tc.cfg
+				if cfg == nil {
+					cfg = &appconfig.AppConfig{AppID: "app"}
+				}
+				fake := &scriptedContainerClient{snapshots: tc.snapshots}
+				conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, nil), AgentService: &fakeAgentVersionClient{err: errors.New("no version")}}
+				opts := runOptions{waitReady: true, readinessTimeout: 10 * time.Second}
+				var runErr error
+				start := time.Now()
+				out := captureStderr(t, func() {
+					if path == "chunk-diff" {
+						runErr = streamRunContainerWithStarted(context.Background(), conn, fake.stream, cfg, opts, nil)
+					} else {
+						runErr = startExistingContainer(context.Background(), conn, cfg, opts)
+					}
+				})
+				if ErrorClass(runErr) != "readiness_timeout" || !strings.Contains(runErr.Error(), "did not report how it exited") {
+					t.Fatalf("err = %v, want not_ready: the device did not report how the app exited", runErr)
+				}
+				if got := fake.stops(); len(got) != 0 {
+					t.Fatalf("StopContainer calls = %v, want none: the app may be another deployment's", got)
+				}
+				if strings.Contains(out, "replaced by another deployment") || !strings.Contains(out, "Not stopping app") {
+					t.Fatalf("want the not-stopping line and no replacement:\n%s", out)
+				}
+				// Decided within the confirmation window, not at the deadline.
+				if took := time.Since(start); took >= waitReadyPollInterval {
+					t.Fatalf("took %s: the check must end as soon as the output does", took)
+				}
+			})
+		}
+	}
+}
+
+// The gate's replacement sign that needs exit reporting — the app running
+// with no restart counted past the baseline once the run's task ended — is a
+// replacement only after a record showed the agent reports exits; the other
+// signs need no such record.
+func TestGateTargetForeignNeedsExitReporting(t *testing.T) {
+	started := gateTarget{}
+	for _, tc := range []struct {
+		name      string
+		target    gateTarget
+		c         *agentpb.AppContainer
+		taskEnded bool
+		want      appVerdict
+	}{
+		{name: "running again after the task ended, no exit reporting seen", target: started, c: runningSnapshot(0), taskEnded: true, want: appExitUnreported},
+		{name: "running again after the task ended, a restart count seen", target: gateTarget{base: appBaseline{}.seeing(runningSnapshot(1))}, c: runningSnapshot(0), taskEnded: true, want: appWasReplaced},
+		{name: "running again after the task ended, an exit seen", target: gateTarget{base: appBaseline{}.seeing(killRecord())}, c: runningSnapshot(0), taskEnded: true, want: appWasReplaced},
+		{name: "running while the task runs", target: started, c: runningSnapshot(0), want: appOwn},
+		{name: "running with a restart counted after the task ended", target: started, c: runningSnapshot(1), taskEnded: true, want: appOwn},
+		{name: "a follow's count below its baseline", target: gateTarget{base: appBaseline{failures: 2}}, c: runningSnapshot(1), want: appWasReplaced},
+		{name: "another version", target: gateTarget{base: appBaseline{version: "1.0"}}, c: withAppVersion(runningSnapshot(0), "2.0"), want: appWasReplaced},
+		{name: "stopped with no exit recorded", target: started, c: createdStopped(), taskEnded: true, want: appOwn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.target.foreign(tc.c, tc.taskEnded); got != tc.want {
+				t.Fatalf("foreign = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // A check that passes as the run's own task ends may have probed another
 // deployment's app: the gate looks again before the host-side hooks run, and
-// never runs them for a replacement.
+// never runs them for a replacement — nor for an app it cannot tell from one
+// because the device shows no sign of reporting exits, which fails the check
+// instead (as not_ready: the app is left alone).
 func TestReadinessGateRunsNoHooksForAReplacement(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close() // the probe passes
-	ended := make(chan struct{})
-	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{runningSnapshot(0)}}
-	// Poll 1 is the baseline, poll 2 the first tick's, poll 3 the one that
-	// confirms the probe's pass: the run's task ends while it is answered.
-	hook := &listHook{scriptedContainerClient: fake, after: func(n int32) {
-		if n == 3 {
-			close(ended)
-		}
-	}}
-	conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: hook, AgentService: &fakeAgentVersionClient{err: errors.New("no version")}}
-	cfg := &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: testPort(t, ln)}}}
-	var hooks atomic.Int32
-	var gate *readinessGate
-	out := captureStderr(t, func() {
-		gate = startReadinessGate(context.Background(), conn, cfg, runOptions{waitReady: true, readinessTimeout: 10 * time.Second},
-			gateTarget{stopOnFailure: true, base: startedAppBaseline(cfg), taskEnded: ended}, func() { hooks.Add(1) })
-		gate.wait()
-	})
-	if !gate.Replaced() || gate.Err() != nil {
-		t.Fatalf("replaced = %v, err = %v; want a replacement", gate.Replaced(), gate.Err())
-	}
-	if got := hooks.Load(); got != 0 {
-		t.Fatalf("hooks ran %d times for another deployment's app", got)
-	}
-	if got := fake.stops(); len(got) != 0 {
-		t.Fatalf("StopContainer calls = %v, want none", got)
-	}
-	if strings.Contains(out, "is ready") {
-		t.Fatalf("reported the replacement as ready:\n%s", out)
+	for _, tc := range []struct {
+		name      string
+		snapshots []*agentpb.AppContainer
+		replaced  bool
+	}{
+		// Poll 4 is the gate's look after the pass: the replace's kill.
+		{name: "the kill recorded, then the new app", replaced: true, snapshots: []*agentpb.AppContainer{
+			runningSnapshot(0), runningSnapshot(0), runningSnapshot(0), killRecord(), runningSnapshot(0)}},
+		{name: "no sign the device reports exits", snapshots: []*agentpb.AppContainer{runningSnapshot(0)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shortenReplaceConfirm(t, sigkillTestWindow)
+			ended := make(chan struct{})
+			fake := &scriptedContainerClient{snapshots: tc.snapshots}
+			// Poll 1 is the baseline, poll 2 the first tick's, poll 3 the one
+			// that confirms the probe's pass: the run's task ends while it is
+			// answered.
+			hook := &listHook{scriptedContainerClient: fake, after: func(n int32) {
+				if n == 3 {
+					close(ended)
+				}
+			}}
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: hook, AgentService: &fakeAgentVersionClient{err: errors.New("no version")}}
+			cfg := &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: testPort(t, ln)}}}
+			var hooks atomic.Int32
+			var gate *readinessGate
+			out := captureStderr(t, func() {
+				gate = startReadinessGate(context.Background(), conn, cfg, runOptions{waitReady: true, readinessTimeout: 10 * time.Second},
+					gateTarget{stopOnFailure: true, base: startedAppBaseline(cfg), taskEnded: ended}, func() { hooks.Add(1) })
+				gate.wait()
+			})
+			if tc.replaced {
+				if !gate.Replaced() || gate.Err() != nil {
+					t.Fatalf("replaced = %v, err = %v; want a replacement", gate.Replaced(), gate.Err())
+				}
+			} else if gate.Replaced() || ErrorClass(gate.Err()) != "readiness_timeout" || !strings.Contains(out, "Not stopping app") {
+				t.Fatalf("replaced = %v, err = %v; want not_ready, and the app left alone:\n%s", gate.Replaced(), gate.Err(), out)
+			}
+			if got := hooks.Load(); got != 0 {
+				t.Fatalf("hooks ran %d times for an app that may be another deployment's", got)
+			}
+			if got := fake.stops(); len(got) != 0 {
+				t.Fatalf("StopContainer calls = %v, want none", got)
+			}
+			if strings.Contains(out, "is ready") {
+				t.Fatalf("reported the app as ready:\n%s", out)
+			}
+		})
 	}
 }
 

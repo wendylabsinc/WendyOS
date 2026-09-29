@@ -329,7 +329,6 @@ var sigkillExitCases = []struct {
 	{name: "the whole replace sequence", lists: 2, snapshots: replaceSequence(killRecord(), notListed, notListed, createdStopped(), runningSnapshot(0))},
 	{name: "no SIGKILL record: not listed, then running", lists: 3, snapshots: replaceSequence(notListed, notListed, runningSnapshot(0))},
 	{name: "no SIGKILL record: not listed, then created", lists: 2, snapshots: replaceSequence(notListed, createdStopped(), runningSnapshot(0))},
-	{name: "created, not started, then running", lists: 2, snapshots: replaceSequence(createdStopped(), runningSnapshot(0))},
 	{name: "created, not started, listed as crash-looping, then running", lists: 2, snapshots: replaceSequence(createdLooping(), runningSnapshot(0))},
 	// Agents with exit reporting record every crash's exit: only a
 	// replacement's container that has not started is listed like this.
@@ -631,6 +630,64 @@ func TestUncertainRecordForTheWholeWindow(t *testing.T) {
 				t.Fatalf("output %q, want exactly %q", out, tc.want)
 			}
 		})
+	}
+}
+
+// unreportedNotice is how a run that started the app reports its end when
+// the device did not report how it exited (noteExitUnreported).
+const unreportedNotice = "Application app stopped; the device did not report how it exited, so it may have crashed and been restarted by its restart policy, or another deployment may have replaced it."
+
+// Go agents before 2026-07-06 and the Mac agent report no exit
+// (termination_reason) and no restart count (failure_count): an exit the
+// restart policy recovered from looks like a replacement there — the app
+// stopped with no exit recorded, then running with no restart counted — and
+// the Mac agent lists a crash loop with no count, as a replacement's
+// container that has not started is listed. Until a record shows the device
+// reports these, a run that started the app says it cannot tell (exit 0),
+// never that another deployment replaced it; a follow ends with its own
+// neutral notice, as before. An exit that stays is still a stop.
+func TestNoExitReportingIsNotAReplacement(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	noCountLoop := appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 0)
+	for _, tc := range []struct {
+		name               string
+		snapshots          []*agentpb.AppContainer
+		attached, followed string
+	}{
+		{name: "stopped, then running again", snapshots: replaceSequence(createdStopped(), runningSnapshot(0)), attached: unreportedNotice, followed: followedNotice},
+		{name: "crash-looping with no count", snapshots: replaceSequence(noCountLoop), attached: unreportedNotice, followed: followedNotice},
+		{name: "stopped for the whole window", snapshots: replaceSequence(createdStopped()), attached: "Application app stopped.", followed: "Application app stopped."},
+	} {
+		for _, path := range []string{"attached", "follow"} {
+			t.Run(tc.name+"/"+path, func(t *testing.T) {
+				fake := &scriptedContainerClient{snapshots: tc.snapshots}
+				conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, TelemetryService: &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}}
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				var err error
+				want := tc.attached
+				out := captureStderr(t, func() {
+					if path == "attached" {
+						err = streamRunContainerWithStarted(ctx, conn, &deploymentAckStream{remaining: 1, err: io.EOF}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, nil)
+					} else {
+						want = tc.followed
+						err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
+					}
+				})
+				if err != nil {
+					t.Fatalf("err = %v, want nil", err)
+				}
+				if strings.Count(out, "Application app") != 1 || !strings.Contains(out, want) {
+					t.Fatalf("output %q, want exactly %q", out, want)
+				}
+				if strings.Contains(out, "was replaced by another deployment") {
+					t.Fatalf("reported a replacement the device gave no sign of: %q", out)
+				}
+				if got := fake.stops(); len(got) != 0 {
+					t.Fatalf("StopContainer calls = %v, want none", got)
+				}
+			})
+		}
 	}
 }
 
