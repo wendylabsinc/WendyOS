@@ -140,6 +140,124 @@ func TestRunDeviceCachePruneRPCZeroAgeWording(t *testing.T) {
 	}
 }
 
+func TestRunDeviceCachePruneRPCReportsRemovedStaging(t *testing.T) {
+	reclaimed := uint64(5_000)
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{
+		ContentBlobs: 1, ContentBytes: 1_000, MinimumAgeSeconds: 86400, ReclaimedBytes: &reclaimed,
+		StagedChunks: 12, StagedBytes: 786_432,
+	}}
+	var out bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	const want = "Released: 1.0 kB across 1 layer blobs and 0 snapshots.\n" +
+		"Containerd reclaimed 5.0 kB on the container storage filesystem.\n" +
+		"Removed 12 staged chunk(s) (786.4 kB) left over from earlier deploys and builds.\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+// TestRunDeviceCachePruneRPCDryRunReportsStagingWhenNoPinIsEligible: staged
+// chunks do not wait for the pin age, so they are reported even when no pin is
+// old enough.
+func TestRunDeviceCachePruneRPCDryRunReportsStagingWhenNoPinIsEligible(t *testing.T) {
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{
+		MinimumAgeSeconds: 86400, StagedChunks: 3, StagedBytes: 3_000,
+	}}
+	var out bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{dryRun: true}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	const want = "No cache entries older than 24h are eligible for pruning.\n" +
+		"Would remove 3 staged chunk(s) (3.0 kB) left over from earlier deploys and builds.\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestRunDeviceCachePruneRPCReportsStagingInUse(t *testing.T) {
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 86400, StagingInUse: true}}
+	var out bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	const want = "No cache entries older than 24h are eligible for pruning.\n" +
+		"Staged chunk uploads were left alone: a deploy or build is using the device's chunk store.\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestRunDeviceCachePruneRPCDryRunReportsStagingInUse(t *testing.T) {
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{MinimumAgeSeconds: 86400, StagingInUse: true}}
+	var out bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{dryRun: true}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	const want = "No cache entries older than 24h are eligible for pruning.\n" +
+		"Staged chunk uploads would be left alone: a deploy or build is using the device's chunk store.\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+// TestRunDeviceCachePruneRPCOldAgentPrintsNoStagingLine: an agent without
+// chunk-store pruning leaves the new fields zero, which reads as "nothing
+// staged", so the output is what it was before.
+func TestRunDeviceCachePruneRPCOldAgentPrintsNoStagingLine(t *testing.T) {
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{ContentBlobs: 1, ContentBytes: 10, MinimumAgeSeconds: 86400}}
+	var out bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	const want = "Released: 10 B across 1 layer blobs and 0 snapshots.\n" +
+		"Containerd will reclaim unreachable data in the background; current images and active apps are preserved.\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestRunDeviceCachePruneRPCJSONIncludesChunkStore(t *testing.T) {
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{
+		MinimumAgeSeconds: 86400, StagedChunks: 12, StagedBytes: 786_432, StagingInUse: false, ChunkIndexBlobsDropped: 3,
+	}}
+	var out bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{jsonOut: true}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	if got["stagedChunks"] != float64(12) || got["stagedBytes"] != float64(786_432) || got["stagingInUse"] != false || got["chunkIndexBlobsDropped"] != float64(3) {
+		t.Fatalf("JSON = %v", got)
+	}
+}
+
+// TestRunDeviceCachePruneRPCDryRunJSONNullsChunkIndexBlobsDropped: a dry run
+// never reconciles the index, so its 0 is not a prediction; like
+// reclaimedBytes, the field is null rather than a number.
+func TestRunDeviceCachePruneRPCDryRunJSONNullsChunkIndexBlobsDropped(t *testing.T) {
+	fake := &fakeDeviceCachePruneClient{response: &agentpbv2.PruneCacheResponse{
+		MinimumAgeSeconds: 86400, StagedChunks: 12, StagedBytes: 786_432,
+	}}
+	var out bytes.Buffer
+	if err := runDeviceCachePruneRPC(context.Background(), fake, &out, &bytes.Buffer{}, devicePruneOptions{dryRun: true, jsonOut: true}); err != nil {
+		t.Fatalf("runDeviceCachePruneRPC: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	if dropped, ok := got["chunkIndexBlobsDropped"]; !ok || dropped != nil {
+		t.Fatalf("chunkIndexBlobsDropped = %v (present %v), want null on a dry run", dropped, ok)
+	}
+	if got["stagedChunks"] != float64(12) || got["stagedBytes"] != float64(786_432) || got["reclaimedBytes"] != nil {
+		t.Fatalf("JSON = %v", got)
+	}
+}
+
 func TestParsePruneMinAgeRejectsNegative(t *testing.T) {
 	if _, err := parsePruneMinAge(false, "-1h"); err == nil {
 		t.Fatal("expected error for negative --min-age")

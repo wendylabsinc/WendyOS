@@ -496,7 +496,11 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 		return nil, uploadErr
 	}
 
-	if prepareDone != nil {
+	prog.UploadFinished()
+
+	if prepareDone == nil {
+		prog.PrepareFinished()
+	} else {
 		var prepareErr error
 		select {
 		case prepareErr = <-prepareDone:
@@ -506,6 +510,13 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 				reporter.ReportImagePreparation()
 			}
 			prepareErr = <-prepareDone
+		}
+		if prepareErr == nil {
+			prog.PrepareFinished()
+		} else {
+			// A failed or cancelled preparation prepared nothing, so the push
+			// reports no device time for it.
+			prog.PrepareFailed()
 		}
 		if err := prepareErr; err != nil {
 			if strictPrepare {

@@ -2,6 +2,9 @@ package containerd
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,10 +12,12 @@ import (
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/leases"
 	"github.com/containerd/containerd/v2/core/snapshots"
+	"github.com/containerd/errdefs"
 	digest "github.com/opencontainers/go-digest"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
 )
 
 type fakeCacheContentStore struct {
@@ -503,5 +508,225 @@ func TestClientPruneCacheWorksOnBareClient(t *testing.T) {
 	minAge := time.Hour
 	if _, err := c.PruneCache(context.Background(), services.CachePruneOptions{MinAge: &minAge}); err != nil {
 		t.Fatalf("PruneCache on a bare client: %v", err)
+	}
+}
+
+// collectingContentStore is a content store whose collect deletes every blob
+// no gc.root label pins, as containerd's garbage collector would: enough of
+// containerd to run PruneCache end to end over the chunk store.
+type collectingContentStore struct {
+	content.Store
+	mu    sync.Mutex
+	blobs map[digest.Digest]content.Info
+	// walkErr fails Walk, as containerd does when it cannot list content.
+	walkErr error
+}
+
+func (s *collectingContentStore) Info(_ context.Context, d digest.Digest) (content.Info, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, ok := s.blobs[d]
+	if !ok {
+		return content.Info{}, errdefs.ErrNotFound
+	}
+	return info, nil
+}
+
+func (s *collectingContentStore) Walk(_ context.Context, fn content.WalkFunc, _ ...string) error {
+	if s.walkErr != nil {
+		return s.walkErr
+	}
+	s.mu.Lock()
+	infos := make([]content.Info, 0, len(s.blobs))
+	for _, info := range s.blobs {
+		infos = append(infos, info)
+	}
+	s.mu.Unlock()
+	for _, info := range infos {
+		if err := fn(info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *collectingContentStore) Update(_ context.Context, info content.Info, _ ...string) (content.Info, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.blobs[info.Digest] = info
+	return info, nil
+}
+
+func (s *collectingContentStore) collect() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for d, info := range s.blobs {
+		if info.Labels[labelKeyGCRoot] == "" {
+			delete(s.blobs, d)
+		}
+	}
+}
+
+// wendyLayerPinned is a Wendy layer blob whose cache pin was set pinnedAgo.
+func wendyLayerPinned(name string, pinnedAgo time.Duration) content.Info {
+	return content.Info{
+		Digest: digest.FromString(name),
+		Size:   1 << 20,
+		Labels: map[string]string{
+			labelKeyWendyLayer: "true",
+			labelKeyGCRoot:     time.Now().Add(-pinnedAgo).Format(time.RFC3339),
+		},
+	}
+}
+
+// newChunkStorePruneClient builds a Client whose PruneCache runs for real
+// against blobs (collected by the forced GC once unpinned), an empty
+// snapshotter, a chunk index and a staging dir. freeBytes and forceGC are
+// left for PruneCache to default, so the GC goes through the lease service.
+func newChunkStorePruneClient(t *testing.T, blobs ...content.Info) (*Client, *recordingLeases) {
+	t.Helper()
+	cs := &collectingContentStore{blobs: map[digest.Digest]content.Info{}}
+	for _, info := range blobs {
+		cs.blobs[info.Digest] = info
+	}
+	ls := &recordingLeases{collect: cs.collect}
+	cd, err := containerdclient.New("",
+		containerdclient.WithDefaultNamespace("default"),
+		containerdclient.WithServices(
+			containerdclient.WithContentStore(cs),
+			containerdclient.WithSnapshotters(map[string]snapshots.Snapshotter{"native": &fullSnapshotterAdapter{fake: &fakeCacheSnapshotter{}}}),
+			containerdclient.WithLeasesService(ls),
+		),
+	)
+	if err != nil {
+		t.Fatalf("containerdclient.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cd.Close() })
+	return &Client{
+		client:      cd,
+		logger:      zap.NewNop(),
+		namespace:   "default",
+		snapshotter: "native",
+		chunkIndex:  newTestChunkIndex(t),
+		staging:     newStaging(filepath.Join(t.TempDir(), "staging")),
+	}, ls
+}
+
+// TestPruneCacheReconcilesTheIndexAfterTheGC: the prune releases a pin and
+// the GC it forces collects the blob. Only a reconcile after that GC finds
+// the blob gone; one before it would drop nothing and leave the index
+// pointing deploys at a blob that no longer exists.
+func TestPruneCacheReconcilesTheIndexAfterTheGC(t *testing.T) {
+	stale := wendyLayerPinned("layer pinned two days ago", 48*time.Hour)
+	fresh := wendyLayerPinned("layer pinned an hour ago", time.Hour)
+	c, ls := newChunkStorePruneClient(t, stale, fresh)
+	for i, blob := range []digest.Digest{stale.Digest, fresh.Digest} {
+		if err := c.chunkIndex.AddLayer(blob.String(), []chunk.Ref{{Hash: [32]byte{byte(i + 1)}, Len: 1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data := []byte("chunk of a cancelled deploy")
+	h := stageAged(t, c.staging, data, 5*time.Minute)
+
+	result, err := c.PruneCache(context.Background(), services.CachePruneOptions{})
+	if err != nil {
+		t.Fatalf("PruneCache: %v", err)
+	}
+	if result.ContentBlobs != 1 || ls.syncDeletes != 1 {
+		t.Fatalf("released %d pins with %d synchronous GCs; want 1 and 1", result.ContentBlobs, ls.syncDeletes)
+	}
+	if result.ChunkIndexBlobsDropped != 1 {
+		t.Fatalf("ChunkIndexBlobsDropped = %d, want 1 (the blob the GC collected)", result.ChunkIndexBlobsDropped)
+	}
+	if _, ok := c.chunkIndex.Has([32]byte{1}); ok {
+		t.Fatal("the entry of the collected blob survived the prune")
+	}
+	if _, ok := c.chunkIndex.Has([32]byte{2}); !ok {
+		t.Fatal("the prune dropped the entry of a blob still pinned")
+	}
+	if result.StagedChunks != 1 || result.StagedBytes != uint64(len(data)) || c.staging.has(h) {
+		t.Fatalf("staging not pruned: %+v", result)
+	}
+}
+
+// TestPruneCacheDryRunReportsStagingWithoutCollecting: a dry run counts the
+// pins and the staged chunks but forces no GC, removes no staged chunk and
+// drops no index entry.
+func TestPruneCacheDryRunReportsStagingWithoutCollecting(t *testing.T) {
+	stale := wendyLayerPinned("layer pinned two days ago", 48*time.Hour)
+	c, ls := newChunkStorePruneClient(t, stale)
+	if err := c.chunkIndex.AddLayer(stale.Digest.String(), []chunk.Ref{{Hash: [32]byte{1}, Len: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	h := stageAged(t, c.staging, []byte("chunk of a cancelled deploy"), 5*time.Minute)
+
+	result, err := c.PruneCache(context.Background(), services.CachePruneOptions{DryRun: true})
+	if err != nil {
+		t.Fatalf("PruneCache: %v", err)
+	}
+	if result.ContentBlobs != 1 || result.StagedChunks != 1 || result.StagedBytes == 0 {
+		t.Fatalf("dry run reported %+v; want the pin and the staged chunk counted", result)
+	}
+	if ls.created != 0 || ls.syncDeletes != 0 || !c.staging.has(h) || result.ChunkIndexBlobsDropped != 0 {
+		t.Fatalf("dry run changed something: leases %d/%d, staged chunk present %v, dropped %d",
+			ls.created, ls.syncDeletes, c.staging.has(h), result.ChunkIndexBlobsDropped)
+	}
+	if _, ok := c.chunkIndex.Has([32]byte{1}); !ok {
+		t.Fatal("dry run dropped an index entry")
+	}
+}
+
+// TestPruneCacheMeasuresReclaimBeforeSweepingStaging: ReclaimedBytes is what
+// containerd freed. Staging can share its filesystem, so a sweep before the
+// second measurement would count the staged bytes twice.
+func TestPruneCacheMeasuresReclaimBeforeSweepingStaging(t *testing.T) {
+	c, _ := newChunkStorePruneClient(t)
+	h := stageAged(t, c.staging, []byte("chunk of a cancelled deploy"), 5*time.Minute)
+	var stagedAtMeasurement []bool
+	c.freeBytes = func(string) (uint64, bool) {
+		stagedAtMeasurement = append(stagedAtMeasurement, c.staging.has(h))
+		return 1000, true
+	}
+
+	result, err := c.PruneCache(context.Background(), services.CachePruneOptions{})
+	if err != nil {
+		t.Fatalf("PruneCache: %v", err)
+	}
+	if len(stagedAtMeasurement) != 2 || !stagedAtMeasurement[0] || !stagedAtMeasurement[1] {
+		t.Fatalf("staged chunk present at the free-space measurements: %v; want [true true]", stagedAtMeasurement)
+	}
+	if result.StagedChunks != 1 || c.staging.has(h) {
+		t.Fatalf("staging not pruned after the measurement: %+v", result)
+	}
+}
+
+// TestPruneCacheSkipsTheChunkStoreWhenThePinWalkFails: a prune that cannot
+// list the pins returns that error before its chunk-store step, so staging
+// and the index stay as they were.
+func TestPruneCacheSkipsTheChunkStoreWhenThePinWalkFails(t *testing.T) {
+	c, ls := newChunkStorePruneClient(t)
+	cs, ok := c.client.ContentStore().(*collectingContentStore)
+	if !ok {
+		t.Fatalf("content store is %T, want *collectingContentStore", c.client.ContentStore())
+	}
+	cs.walkErr = errors.New("content store unavailable")
+	collected := digest.FromString("layer containerd no longer holds")
+	if err := c.chunkIndex.AddLayer(collected.String(), []chunk.Ref{{Hash: [32]byte{1}, Len: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	h := stageAged(t, c.staging, []byte("chunk of a cancelled deploy"), 5*time.Minute)
+
+	_, err := c.PruneCache(context.Background(), services.CachePruneOptions{})
+	if !errors.Is(err, cs.walkErr) {
+		t.Fatalf("PruneCache = %v, want the walk error", err)
+	}
+	if !c.staging.has(h) {
+		t.Fatal("the prune removed staging after its pin walk failed")
+	}
+	if _, ok := c.chunkIndex.Has([32]byte{1}); !ok {
+		t.Fatal("the prune reconciled the index after its pin walk failed")
+	}
+	if ls.syncDeletes != 0 {
+		t.Fatalf("the prune forced %d GCs after its pin walk failed", ls.syncDeletes)
 	}
 }

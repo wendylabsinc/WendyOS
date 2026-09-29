@@ -56,6 +56,14 @@ type snapshotCacheCandidate struct {
 // than waiting on containerd's background GC) and reports the free-space
 // delta on the container-storage filesystem as ReclaimedBytes.
 //
+// Every prune, dry or not, then extends to the chunk store (pruneChunkStore):
+// staged chunks left over from earlier deploys and builds are removed (or
+// counted) while no deploy or build is using the store, and a real prune of
+// an idle store drops the chunk-index entries of the blobs the GC collected
+// (while the store is in use, that waits for idle maintenance or the next
+// prune). The pin age does not apply to staged chunks; the chunk store's own
+// activity tracking protects a deploy in flight.
+//
 // c.mu is held only around the label walk/update (pruneCacheRoots) and, on a
 // real (non-dry) run, the "before" free-space measurement taken immediately
 // after acquiring the lock — not around the forced GC pass or the "after"
@@ -107,8 +115,12 @@ func (c *Client) PruneCache(ctx context.Context, opts services.CachePruneOptions
 	}()
 
 	result.MinimumAgeSeconds = uint64(effective / time.Second)
-	if err != nil || opts.DryRun {
+	if err != nil {
 		return result, err
+	}
+	if opts.DryRun {
+		c.pruneChunkStore(ctx, time.Now(), true, &result)
+		return result, nil
 	}
 
 	var gcErr error
@@ -118,6 +130,11 @@ func (c *Client) PruneCache(ctx context.Context, opts services.CachePruneOptions
 	after, okAfter := c.freeBytes(containerdRootDir)
 	result.ReclaimedBytes = reclaimedBetween(before, after, okBefore && okAfter && gcErr == nil)
 
+	// The chunk store goes last: after the GC, so the index reconcile sees the
+	// blobs it just collected, and after the second measurement, so
+	// ReclaimedBytes stays containerd's alone where staging shares its
+	// filesystem (StagedBytes reports the staging part).
+	c.pruneChunkStore(ctx, time.Now(), false, &result)
 	return result, nil
 }
 

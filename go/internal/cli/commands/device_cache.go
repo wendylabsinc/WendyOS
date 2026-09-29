@@ -46,7 +46,9 @@ func newDeviceCachePruneCmd() *cobra.Command {
 			"with --cleanup also lose their image, so their layers are re-uploaded on the next " +
 			"run. Do not run --all while a deploy to this device is in progress. --all cannot " +
 			"help when container storage is on the OS root slot (WDY-3127); power-cycle the " +
-			"device instead.",
+			"device instead. Every prune also removes staged chunk uploads left over from " +
+			"earlier deploys and builds, whatever their age, unless a deploy or build used the " +
+			"device's chunk store in the last minute; --dry-run counts them.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			minAge, err := parsePruneMinAge(all, minAgeFlag)
@@ -139,6 +141,13 @@ func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, 
 	}
 
 	if opts.jsonOut {
+		// A dry run never reconciles the chunk index, so its 0 is no
+		// prediction: null, like reclaimedBytes.
+		var chunkIndexBlobsDropped *uint64
+		if !opts.dryRun {
+			dropped := resp.GetChunkIndexBlobsDropped()
+			chunkIndexBlobsDropped = &dropped
+		}
 		data, err := json.MarshalIndent(map[string]any{
 			"dryRun":                 opts.dryRun,
 			"contentBlobs":           resp.GetContentBlobs(),
@@ -148,6 +157,10 @@ func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, 
 			"minimumAgeSeconds":      resp.GetMinimumAgeSeconds(),
 			"requestedMinAgeSeconds": requestedSeconds,
 			"reclaimedBytes":         resp.ReclaimedBytes,
+			"stagedChunks":           resp.GetStagedChunks(),
+			"stagedBytes":            resp.GetStagedBytes(),
+			"stagingInUse":           resp.GetStagingInUse(),
+			"chunkIndexBlobsDropped": chunkIndexBlobsDropped,
 		}, "", "  ")
 		if err != nil {
 			return err
@@ -156,6 +169,17 @@ func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, 
 		return err
 	}
 
+	if err := writeCachePinSummary(out, resp, opts.dryRun, effectiveAge); err != nil {
+		return err
+	}
+	return writeStagingSummary(out, resp, opts.dryRun)
+}
+
+// writeCachePinSummary reports the cache pins the prune released (or, on a
+// dry run, would release) and what containerd reclaimed. Its first line is
+// the one-line status 'wendy device top' shows.
+func writeCachePinSummary(out io.Writer, resp *agentpbv2.PruneCacheResponse, dryRun bool, effectiveAge uint64) error {
+	var err error
 	totalObjects := resp.GetContentBlobs() + resp.GetSnapshots()
 	totalBytes := saturatingAdd(resp.GetContentBytes(), resp.GetSnapshotBytes())
 	if totalObjects == 0 {
@@ -167,20 +191,46 @@ func runDeviceCachePruneRPC(ctx context.Context, client deviceCachePruneClient, 
 		return err
 	}
 	action := "Released"
-	if opts.dryRun {
+	if dryRun {
 		action = "Eligible"
 	}
 	if _, err = fmt.Fprintf(out, "%s: %s across %d layer blobs and %d snapshots.\n",
 		action, formatBytes(int64(min(totalBytes, uint64(math.MaxInt64)))), resp.GetContentBlobs(), resp.GetSnapshots()); err != nil {
 		return err
 	}
-	if !opts.dryRun {
+	if !dryRun {
 		if resp.ReclaimedBytes != nil {
 			_, err = fmt.Fprintf(out, "Containerd reclaimed %s on the container storage filesystem.\n",
 				formatBytes(int64(min(*resp.ReclaimedBytes, uint64(math.MaxInt64)))))
 		} else {
 			_, err = fmt.Fprintln(out, "Containerd will reclaim unreachable data in the background; current images and active apps are preserved.")
 		}
+	}
+	return err
+}
+
+// writeStagingSummary reports the chunk uploads left staged on the device by
+// earlier deploys and builds (WDY-3217): interrupted deploys, remote build
+// contexts, and every deploy while the chunk index is disabled. They do not
+// wait for the pin age: the agent removes them whenever no deploy or build is
+// using its chunk store. An agent that predates this reports zeros, which
+// print nothing.
+func writeStagingSummary(out io.Writer, resp *agentpbv2.PruneCacheResponse, dryRun bool) error {
+	var err error
+	switch {
+	case resp.GetStagingInUse():
+		verb := "were"
+		if dryRun {
+			verb = "would be"
+		}
+		_, err = fmt.Fprintf(out, "Staged chunk uploads %s left alone: a deploy or build is using the device's chunk store.\n", verb)
+	case resp.GetStagedChunks() > 0:
+		verb := "Removed"
+		if dryRun {
+			verb = "Would remove"
+		}
+		_, err = fmt.Fprintf(out, "%s %d staged chunk(s) (%s) left over from earlier deploys and builds.\n",
+			verb, resp.GetStagedChunks(), formatBytes(int64(min(resp.GetStagedBytes(), uint64(math.MaxInt64)))))
 	}
 	return err
 }

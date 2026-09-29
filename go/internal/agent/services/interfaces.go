@@ -133,6 +133,21 @@ type CachePruneResult struct {
 	// after releasing pins. Nil when not measured (dry run, or the agent could
 	// not force GC or stat the filesystem).
 	ReclaimedBytes *uint64
+	// StagedChunks and StagedBytes count chunk uploads left staged on the
+	// device by earlier deploys and builds (interrupted deploys, remote build
+	// contexts, and every deploy while the chunk index is disabled) that the
+	// prune removed (or, on a dry run, would remove). WDY-3217.
+	StagedChunks uint64
+	StagedBytes  uint64
+	// StagingInUse reports that a deploy or build was using the chunk store
+	// (a chunk RPC within the last minute, or an image preparation or layer
+	// assembly in flight), so the prune left the staged chunks alone.
+	StagingInUse bool
+	// ChunkIndexBlobsDropped counts layer blobs whose chunk-index entries the
+	// prune dropped because containerd no longer holds them. Zero while
+	// StagingInUse: the prune then leaves that reconcile to idle maintenance
+	// or the next prune. WDY-3212.
+	ChunkIndexBlobsDropped uint64
 }
 
 // ContainerdCachePruner is an optional capability implemented by the real

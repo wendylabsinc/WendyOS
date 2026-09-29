@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,49 @@ type eventPayload struct {
 	OS          string `json:"os"`
 	Arch        string `json:"arch"`
 	IsDevBuild  bool   `json:"is_dev_build"`
+	// Properties carries an event's own dimensions beyond the core fields,
+	// such as a deploy's phase timings. Callers pass only bounded numbers and
+	// enums — never paths, hosts, names or error text.
+	Properties map[string]string `json:"properties,omitempty"`
+}
+
+// coreProperties travel as top-level payload fields, not in Properties.
+var coreProperties = map[string]bool{
+	"command_name": true, "command_root": true, "duration_ms": true,
+	"success": true, "error_class": true, "is_dev_build": true,
+}
+
+const (
+	// maxEventProperties and maxPropertyLen keep an event far below the
+	// receiver's 8 KB body limit. maxPropertyLen is measured in bytes.
+	maxEventProperties = 32
+	maxPropertyLen     = 64
+)
+
+// extraProperties returns the non-core properties, bounded in count and length.
+// Property values are truncated at maxPropertyLen bytes, with partial UTF-8
+// sequences removed to ensure the result is valid UTF-8.
+func extraProperties(properties map[string]string) map[string]string {
+	keys := make([]string, 0, len(properties))
+	for k := range properties {
+		if !coreProperties[k] {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+	out := make(map[string]string, min(len(keys), maxEventProperties))
+	for _, k := range keys[:min(len(keys), maxEventProperties)] {
+		v := properties[k]
+		if len(v) > maxPropertyLen {
+			// Truncate at maxPropertyLen bytes, then remove any partial UTF-8 sequence.
+			v = strings.ToValidUTF8(v[:maxPropertyLen], "")
+		}
+		out[k] = v
+	}
+	return out
 }
 
 var (
@@ -98,6 +142,12 @@ func Init(cfg *config.Config) (firstRun bool) {
 // Track sends an analytics event. The HTTP send is a no-op when analytics is
 // disabled or uninitialized; the test hook (if any) always fires so test
 // assertions can observe the intended payload regardless of initialization state.
+//
+// The core properties (command_name, command_root, duration_ms, success,
+// error_class, is_dev_build) become top-level payload fields. Every other
+// property is sent in the payload's `properties` object, bounded in count and
+// length, so callers must pass only bounded numbers and enums: never paths,
+// hosts, names or error text.
 func Track(event string, properties map[string]string) {
 	track(event, properties, nil)
 }
@@ -126,6 +176,7 @@ func track(event string, properties map[string]string, onDelivered func()) {
 		OS:          runtime.GOOS,
 		Arch:        runtime.GOARCH,
 		IsDevBuild:  version.IsDev(version.Version),
+		Properties:  extraProperties(properties),
 	}
 
 	body, err := json.Marshal(payload)

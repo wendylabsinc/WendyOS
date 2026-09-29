@@ -121,4 +121,18 @@ message PruneCacheResponse {
     // containerd GC pass the agent forces after releasing pins. Absent on
     // dry runs and when the agent could not force GC or measure the delta.
     optional uint64 reclaimed_bytes = 6;
+    // Chunk uploads left staged on the device by earlier deploys and builds
+    // (interrupted deploys, remote build contexts, and every deploy while the
+    // chunk index is disabled) that were (or would be, for dry_run) removed.
+    // The pin age does not apply to them. WDY-3217.
+    uint64 staged_chunks = 7;
+    uint64 staged_bytes = 8;
+    // A deploy or build was using the chunk store (a chunk RPC within the
+    // last minute, or an image preparation or layer assembly in flight), so
+    // the staged chunks were (or would be, for dry_run) left alone.
+    bool staging_in_use = 9;
+    // Layer blobs whose chunk-index entries were dropped because containerd
+    // no longer holds them, counted after the forced GC. Zero on dry runs and
+    // while staging_in_use, when the agent defers this reconcile. WDY-3212.
+    uint64 chunk_index_blobs_dropped = 10;
 }

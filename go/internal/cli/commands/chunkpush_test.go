@@ -152,6 +152,106 @@ type fakeContainerClient struct {
 	compressors   []string
 }
 
+// chunksWrittenLocked reads chunksWritten while uploads may still be running.
+func (f *fakeContainerClient) chunksWrittenLocked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.chunksWritten
+}
+
+// TestPushLayersByChunksTimesUploadAndDevicePhases checks the push marks the
+// end of the upload and of device preparation, so the summary can split them.
+func TestPushLayersByChunksTimesUploadAndDevicePhases(t *testing.T) {
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+	// A regression that never writes a chunk fails at this deadline instead of
+	// hanging the prepare callback's poll loop.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	layerTar := variedChunkTestData(300_000)
+	fake := &fakeContainerClient{
+		queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
+			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
+		},
+	}
+	prog := newChunkPushProgress()
+	_, err := pushLayersByChunksWithPrepareMode(ctx, fake, []localLayer{{
+		Digest:    "sha256:" + sha256Hex(layerTar),
+		MediaType: "application/vnd.oci.image.layer.v1.tar",
+		Blob:      layerTar,
+	}}, func(ctx context.Context, _ []*agentpb.RunContainerLayerHeader) error {
+		// Device-side preparation outlasts the upload by a clear margin: the
+		// device phase must exceed the summary's 100ms threshold even under
+		// -race.
+		for fake.chunksWrittenLocked() == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(300 * time.Millisecond)
+		return nil
+	}, nil, false, prog, gzipChunkUploadConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := prog.Snapshot()
+	if snap.Preparing {
+		t.Fatal("push returned while still marked as preparing")
+	}
+	if snap.DeviceTime < 50*time.Millisecond {
+		t.Fatalf("DeviceTime = %v, want the preparation that outlasted the upload", snap.DeviceTime)
+	}
+	if !strings.Contains(snap.Summary(), "The device then took") {
+		t.Fatalf("Summary() = %q, want the device phase reported", snap.Summary())
+	}
+}
+
+// TestPushLayersByChunksDoesNotReportAFailedPreparation covers the "Image
+// prewarming unavailable" path: the push still succeeds (RunContainer finishes
+// the work during start), but the failed PrepareImage call prepared nothing,
+// so its duration must not be reported as device preparation.
+func TestPushLayersByChunksDoesNotReportAFailedPreparation(t *testing.T) {
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	layerTar := variedChunkTestData(300_000)
+	fake := &fakeContainerClient{
+		queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
+			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
+		},
+	}
+	prog := newChunkPushProgress()
+	_, err := pushLayersByChunksWithPrepareMode(ctx, fake, []localLayer{{
+		Digest:    "sha256:" + sha256Hex(layerTar),
+		MediaType: "application/vnd.oci.image.layer.v1.tar",
+		Blob:      layerTar,
+	}}, func(ctx context.Context, _ []*agentpb.RunContainerLayerHeader) error {
+		// The failing call outlasts the upload, as a real one would.
+		for fake.chunksWrittenLocked() == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(300 * time.Millisecond)
+		return status.Error(codes.Internal, "prewarm failed")
+	}, nil, false, prog, gzipChunkUploadConfig)
+	if err != nil {
+		t.Fatalf("a failed preparation is non-fatal, got %v", err)
+	}
+	snap := prog.Snapshot()
+	if snap.Preparing || snap.Prepared || snap.DeviceTime != 0 {
+		t.Fatalf("snapshot = %+v, want no device phase after a failed preparation", snap)
+	}
+	if got := snap.Summary(); strings.Contains(got, "device then took") {
+		t.Fatalf("Summary() = %q, must not report a failed preparation as device time", got)
+	}
+}
+
 // TestPushLayersByChunksPreparesDuringUpload proves the preparation RPC is
 // started after manifests are known but before WriteChunks finishes. This is
 // the wall-clock overlap the optimization exists to create.

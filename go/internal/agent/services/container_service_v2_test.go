@@ -157,6 +157,25 @@ func TestContainerServiceV2_PruneCacheReportsReclaimedBytes(t *testing.T) {
 	}
 }
 
+func TestContainerServiceV2_PruneCacheReportsChunkStore(t *testing.T) {
+	mc := &cachePruningContainerdClient{
+		mockContainerdClient: &mockContainerdClient{},
+		result: CachePruneResult{
+			MinimumAgeSeconds: 86400, StagedChunks: 12, StagedBytes: 786_432, StagingInUse: true, ChunkIndexBlobsDropped: 3,
+		},
+	}
+	client, cleanup := startContainerV2Server(t, mc)
+	defer cleanup()
+
+	resp, err := client.PruneCache(context.Background(), &agentpbv2.PruneCacheRequest{})
+	if err != nil {
+		t.Fatalf("PruneCache: %v", err)
+	}
+	if resp.GetStagedChunks() != 12 || resp.GetStagedBytes() != 786_432 || !resp.GetStagingInUse() || resp.GetChunkIndexBlobsDropped() != 3 {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
 // TestContainerServiceV2_PruneCacheRejectsOverflowingMinAge guards against
 // time.Duration(*req.MinAgeSeconds) * time.Second overflowing (and
 // potentially going negative) for a min_age_seconds value above

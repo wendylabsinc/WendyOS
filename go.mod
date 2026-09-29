@@ -52,6 +52,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	go.bug.st/serial v1.6.4
+	go.etcd.io/bbolt v1.5.0
 	go.opentelemetry.io/proto/otlp v1.10.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.55.0

@@ -151,12 +151,16 @@ func (s *ContainerServiceV2) PruneCache(ctx context.Context, req *agentpbv2.Prun
 		return nil, status.Errorf(codes.Internal, "failed to prune container cache: %v", err)
 	}
 	return &agentpbv2.PruneCacheResponse{
-		ContentBlobs:      result.ContentBlobs,
-		ContentBytes:      result.ContentBytes,
-		Snapshots:         result.Snapshots,
-		SnapshotBytes:     result.SnapshotBytes,
-		MinimumAgeSeconds: result.MinimumAgeSeconds,
-		ReclaimedBytes:    result.ReclaimedBytes,
+		ContentBlobs:           result.ContentBlobs,
+		ContentBytes:           result.ContentBytes,
+		Snapshots:              result.Snapshots,
+		SnapshotBytes:          result.SnapshotBytes,
+		MinimumAgeSeconds:      result.MinimumAgeSeconds,
+		ReclaimedBytes:         result.ReclaimedBytes,
+		StagedChunks:           result.StagedChunks,
+		StagedBytes:            result.StagedBytes,
+		StagingInUse:           result.StagingInUse,
+		ChunkIndexBlobsDropped: result.ChunkIndexBlobsDropped,
 	}, nil
 }
 
