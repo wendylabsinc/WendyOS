@@ -670,7 +670,8 @@ func TestAttachedWaitReadyInterruptStopsTheAppOnce(t *testing.T) {
 
 // Ctrl-C while the run waits for the gate's verdict after the app's output
 // ended is still a cancellation (ErrUserCancelled): never a nil "stopped"
-// success. A run that started the app stops it; a follow leaves it running.
+// success. It stops nothing: the task a run started has exited (its output
+// ended), and a follow never stops the app.
 func TestAttachedWaitReadyInterruptWhileAwaitingTheGate(t *testing.T) {
 	cfg := &appconfig.AppConfig{AppID: "app"}
 	opts := runOptions{waitReady: true, readinessTimeout: 30 * time.Second}
@@ -697,11 +698,11 @@ func TestAttachedWaitReadyInterruptWhileAwaitingTheGate(t *testing.T) {
 					}
 				})
 				err = streamRunContainerWithStarted(ctx, conn, fake.stream, cfg, opts, nil)
-				if got := fake.stops(); len(got) != 1 || got[0] != "app" {
-					t.Fatalf("StopContainer calls = %v, want [app] (the interrupt's stop)", got)
+				if got := fake.stops(); len(got) != 0 {
+					t.Fatalf("StopContainer calls = %v, want none: the run's task had exited", got)
 				}
-				if notes.outcome != interruptedAppStopped {
-					t.Fatalf("notes = %+v, want stopped", notes)
+				if notes.outcome != interruptedAppLeftRunning {
+					t.Fatalf("notes = %+v, want left running", notes)
 				}
 			case "follow":
 				// Poll 1 is the gate's baseline; the logs then end, so poll 2
@@ -728,6 +729,55 @@ func TestAttachedWaitReadyInterruptWhileAwaitingTheGate(t *testing.T) {
 			}
 			if !errors.Is(err, ErrUserCancelled) {
 				t.Fatalf("err = %v, want ErrUserCancelled", err)
+			}
+		})
+	}
+}
+
+// Another deployment replaces the app while an attached --wait-ready run
+// checks it: the kill ends the run's output, and the gate confirms the kill's
+// record. Ctrl-C or SIGTERM during that confirmation ends the run as a
+// cancellation and stops nothing: the task the run started has exited, and
+// the app the device runs now may be the other deployment's — a stop issued
+// while its container is being created waits for it and then stops it.
+func TestAttachedWaitReadyInterruptWhileConfirmingStopsNothing(t *testing.T) {
+	shortenReplaceConfirm(t, 2*time.Second)
+	for _, path := range []string{"chunk-diff", "registry"} {
+		t.Run(path, func(t *testing.T) {
+			cfg := &appconfig.AppConfig{AppID: "app"}
+			opts := runOptions{waitReady: true, readinessTimeout: 30 * time.Second}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx, notes := withInterruptNotes(ctx)
+			fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{
+				runningSnapshot(0), // the gate's baseline
+				killRecord(),       // the replace's kill, recorded before the output ended
+				killRecord(),       // still being confirmed
+			}}
+			// Poll 1 is the gate's baseline, after which the output ends; poll
+			// 2 is the check the gate makes at once, poll 3 the confirmation's
+			// first: interrupt then.
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, func(n int32) {
+				if n == 3 {
+					cancel()
+				}
+			})}
+			var err error
+			_ = captureStderr(t, func() {
+				if path == "chunk-diff" {
+					err = streamRunContainerWithStarted(ctx, conn, fake.stream, cfg, opts, nil)
+				} else {
+					err = startExistingContainer(ctx, conn, cfg, opts)
+				}
+			})
+			if !errors.Is(err, ErrUserCancelled) {
+				t.Fatalf("err = %v, want ErrUserCancelled", err)
+			}
+			if got := fake.stops(); len(got) != 0 {
+				t.Fatalf("StopContainer calls = %v, want none: the run's task had exited", got)
+			}
+			if notes.outcome != interruptedAppLeftRunning || notes.app != "app" {
+				t.Fatalf("notes = %+v, want app left running", notes)
 			}
 		})
 	}

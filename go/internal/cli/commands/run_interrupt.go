@@ -95,3 +95,22 @@ func stopInterruptedApp(ctx context.Context, conn *grpcclient.AgentConnection, a
 	noteInterruptedApp(ctx, name, interruptedAppStopped, nil)
 	cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
 }
+
+// interruptedAttachedRun ends an attached run that Ctrl-C or SIGTERM
+// interrupted. While the task the run started still runs, it stops the app
+// (stopInterruptedApp). Once that task has exited (taskEnded is closed: the
+// run's output ended) — the run is then checking how the app exited, or
+// waiting for --wait-ready's verdict — nothing of the run's is left to stop,
+// and the app the device runs now may be another deployment's: a stop issued
+// while a new container is being created waits for it and then stops it. So
+// it leaves the app alone. It returns ErrUserCancelled, so a SIGINT still
+// exits 0; runWithInterruptChannel turns it into errTerminated on SIGTERM.
+func interruptedAttachedRun(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, taskEnded <-chan struct{}) error {
+	select {
+	case <-taskEnded:
+		noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
+	default:
+		stopInterruptedApp(ctx, conn, appCfg)
+	}
+	return ErrUserCancelled
+}
