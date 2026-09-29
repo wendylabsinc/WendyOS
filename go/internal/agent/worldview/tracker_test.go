@@ -102,6 +102,9 @@ func TestTrackerLostFiresOnce(t *testing.T) {
 			if e.Kind == KindLost && e.Match != nil {
 				t.Fatalf("lost carries a match")
 			}
+			if e.Kind == KindLost && (e.Last == nil || e.Last.Fused.Confidence != 0.8) {
+				t.Fatalf("lost does not carry the last match: %+v", e.Last)
+			}
 		}
 	}
 	record(tr.Observe("cam0", "bottle", at(1000), nil))
