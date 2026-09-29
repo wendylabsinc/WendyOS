@@ -375,6 +375,15 @@ campaign that relies on it. `depth` requires `objects`:
 | `depth.scale_m` | yes | Metres per depth unit, greater than 0; `0.001` for millimetre depth. |
 | `depth.intrinsics` | yes | `fx`, `fy`, `cx` and `cy` in pixels, each greater than 0. |
 
+`depth.source` must be a `v4l2` camera whose Video for Linux 2 (V4L2) node
+advertises the `Z16 ` pixel format, such as the depth node of an Intel
+RealSense D400 camera. The agent reads that node natively, without GStreamer,
+and serves only its raw depth frames; cameras that deliver depth through a
+vendor software development kit (SDK), such as ZED and OAK-D, cannot be used.
+The colour frames the search scores still come from the campaign's camera
+sources as encoded video, so those are limited to the cameras the agent can
+already stream.
+
 A red can, 6 to 7 centimetres wide and 11 to 13 tall, with a trigger that
 records an Episode when the can is found with confidence above 0.8:
 

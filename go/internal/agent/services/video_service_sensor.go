@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc/codes"
@@ -67,13 +68,55 @@ func (s *VideoService) SupportsSensorSource(sourceID string) bool {
 // defaults (see takeOverDefaultedHub), in which case the subscription
 // reattaches to the restarted stream — a restart initiated by capture is not
 // the subscriber taking anything.
+//
+// A depth node (video_depth.go) has no encoded plane, so SubscribeSensor on one
+// delivers its raw z16 frames exactly as SubscribeSensorRaw does.
 func (s *VideoService) SubscribeSensor(ctx context.Context, sourceID string) (sensorSubscription, error) {
+	return s.subscribeSensor(ctx, sourceID, false)
+}
+
+// SubscribeSensorRaw is SubscribeSensor for the raw capture plane: the camera's
+// own uncompressed frames rather than encoded video. A depth node (Z16) is read
+// natively and serves nothing else; any other camera serves raw through the
+// raw tap when its capture path offers it. Each sample carries Encoding as the
+// lowercase fourcc without padding ("z16", "y16", "yuyv"), the frame's Width
+// and Height, SelfContained true, and the raw plane's own sample id and
+// boot-clock receipt. Raw and encoded sample ids come from separate counters:
+// tell the planes apart by Encoding, never join them by number.
+//
+// A camera that cannot offer raw frames answers with the raw tap's refusal
+// (FailedPrecondition, reason RAW_UNAVAILABLE), either here, when the producer
+// has already decided, or from the first Next, when it decides after joining.
+func (s *VideoService) SubscribeSensorRaw(ctx context.Context, sourceID string) (sensorSubscription, error) {
+	return s.subscribeSensor(ctx, sourceID, true)
+}
+
+// sensorJoinRequest is the parameter-less request a sensor subscriber joins with.
+func sensorJoinRequest(devID uint32, raw bool) *agentpb.StreamVideoRequest {
+	req := &agentpb.StreamVideoRequest{DeviceId: devID}
+	if raw {
+		req.Codec = agentpb.VideoCodec_VIDEO_CODEC_RAW
+	}
+	return req
+}
+
+func (s *VideoService) subscribeSensor(ctx context.Context, sourceID string, raw bool) (sensorSubscription, error) {
 	src, err := s.resolveSensorSource(sourceID)
 	if err != nil {
 		return nil, err
 	}
 	devID, _ := cameraDeviceID(sourceID)
+	if !raw && src.kind == sourceV4L2 && isDepthNode(src.path) {
+		// A depth node has only the raw plane. A caller naming it as a sensor
+		// source wants its depth, so it gets the z16 frames rather than a
+		// refusal to encode them.
+		raw = true
+	}
 	if src.kind == sourceIP {
+		if raw {
+			// The same refusal StreamVideo gives, before any RTSP session opens.
+			return nil, errRawUnavailable("network cameras deliver encoded video only")
+		}
 		if err := s.preflightIPCamera(src.camera); err != nil {
 			return nil, err
 		}
@@ -82,11 +125,11 @@ func (s *VideoService) SubscribeSensor(ctx context.Context, sourceID string) (se
 	// running stream away from a viewer or from episode capture. An empty
 	// request also matches the parameters episode capture uses by default, so
 	// the common case joins one hub rather than creating a second.
-	hub, subID, frames, err := s.joinHub(ctx, src.key, &agentpb.StreamVideoRequest{DeviceId: devID})
+	hub, subID, frames, err := s.joinHub(ctx, src.key, sensorJoinRequest(devID, raw))
 	if err != nil {
 		return nil, err
 	}
-	return &cameraSensorSubscription{video: s, key: src.key, devID: devID, hub: hub, subID: subID, frames: frames}, nil
+	return &cameraSensorSubscription{video: s, key: src.key, devID: devID, raw: raw, hub: hub, subID: subID, frames: frames}, nil
 }
 
 // cameraSensorSubscription adapts one hub subscription to the sensor contract.
@@ -96,9 +139,12 @@ type cameraSensorSubscription struct {
 	// restarts the producer at the campaign's parameters this subscriber
 	// simply rejoins and gets what the producer now provides. video is nil in
 	// unit tests that drive a bare hub; those never see a restarted hub.
-	video  *VideoService
-	key    string
-	devID  uint32
+	video *VideoService
+	key   string
+	devID uint32
+	// raw selects the raw capture plane (SubscribeSensorRaw) instead of
+	// encoded video; a reattach rejoins the same plane.
+	raw    bool
 	hub    *deviceHub
 	subID  int
 	frames chan *videoFrame
@@ -125,6 +171,13 @@ func (c *cameraSensorSubscription) Next(ctx context.Context) (SensorSample, erro
 			return SensorSample{}, ctx.Err()
 		case frame, ok := <-c.frames:
 			if !ok {
+				// The producer closed this subscriber alone: it asked for a
+				// plane the camera does not offer (raw from a camera that
+				// streams H.264 natively, encoded video from a depth node).
+				// That answer belongs to this subscriber, so it comes first.
+				if err := c.hub.subscriberErr(c.subID); err != nil {
+					return SensorSample{}, err
+				}
 				if err := c.hub.terminalErr(); err != nil {
 					return SensorSample{}, err
 				}
@@ -154,6 +207,21 @@ func (c *cameraSensorSubscription) Next(ctx context.Context) (SensorSample, erro
 			c.awaitRandomAccess = false
 			delta := c.pending
 			c.pending = 0
+			if frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW && frame.rawFmt != nil {
+				// A raw frame is one whole capture frame, so it is always
+				// self-contained; its layout travels with it.
+				return SensorSample{
+					SampleID:         frame.sampleID,
+					BootNanos:        frame.receiptBootNanos,
+					UncertaintyNanos: frame.receiptUncertaintyNanos,
+					Payload:          frame.data,
+					Encoding:         rawEncodingName(frame.rawFmt.GetFourcc()),
+					SelfContained:    true,
+					DroppedBefore:    delta,
+					Width:            int(frame.rawFmt.GetWidth()),
+					Height:           int(frame.rawFmt.GetHeight()),
+				}, nil
+			}
 			return SensorSample{
 				SampleID:         frame.sampleID,
 				BootNanos:        frame.receiptBootNanos,
@@ -178,7 +246,7 @@ func (c *cameraSensorSubscription) Next(ctx context.Context) (SensorSample, erro
 func (c *cameraSensorSubscription) reattach(ctx context.Context) error {
 	c.pending += c.hub.unreportedDrops(c.subID)
 	c.hub.unsubscribe(c.subID)
-	hub, subID, frames, err := c.video.joinHub(ctx, c.key, &agentpb.StreamVideoRequest{DeviceId: c.devID})
+	hub, subID, frames, err := c.video.joinHub(ctx, c.key, sensorJoinRequest(c.devID, c.raw))
 	if err != nil {
 		return err
 	}
@@ -193,6 +261,12 @@ func (c *cameraSensorSubscription) Close() {
 	}
 	c.closed = true
 	c.hub.unsubscribe(c.subID)
+}
+
+// rawEncodingName names a raw frame's payload for a model subscriber: the V4L2
+// fourcc in lowercase without its padding, so "Z16 " is "z16".
+func rawEncodingName(fourcc string) string {
+	return strings.ToLower(strings.TrimSpace(fourcc))
 }
 
 // codecEncodingName names the payload bytes for a model subscriber. It is the

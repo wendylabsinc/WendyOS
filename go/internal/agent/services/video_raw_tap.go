@@ -296,7 +296,10 @@ func stackedModeAbove(devicePath string, w, h uint32) (uint32, uint32) {
 // Frames are fixed-size (bytes_per_line x height), so the pipe needs no framing
 // protocol; a short read means the pipeline ended. Timestamps are taken here
 // rather than from GStreamer: the raw branch carries no metadata, and wall-clock
-// at arrival is what the encoded path reports too.
+// at arrival is what the encoded path reports too. The canonical boot-clock
+// receipt and the sample identity are stamped by the sink (deviceHub.publishRaw)
+// the moment the frame is handed over, by the same rule produce applies to
+// encoded frames.
 func (s *VideoService) pumpRawTap(ctx context.Context, r *os.File, format *agentpb.RawFormat, sink rawSink, device string) {
 	defer r.Close() //nolint:errcheck
 	frameBytes := int(format.GetBytesPerLine()) * int(format.GetHeight())
