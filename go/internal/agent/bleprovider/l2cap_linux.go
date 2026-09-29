@@ -136,40 +136,61 @@ var l2capReceiveMTULadder = []int{65535, 32768, 16384, 8192, 4096, 2048}
 
 const l2capOptionsOpt = 1
 
+// settleLog receives settle outcomes; the provider wires its logger at
+// startup. Package default is nop so tests and fixtures stay quiet.
+var settleLog func(mtu int, err error) = func(int, error) {}
+
+func reportSettle(mtu int, err error) {
+	if settleLog != nil {
+		settleLog(mtu, err)
+	}
+}
+
 // settleL2CAPReceiveMTU raises the socket receive MTU post-bind so LE CoC
 // initial credits cover a full connection event of SDUs instead of 3. It is
 // best-effort: failure keeps the kernel default (slower bulk, same
-// correctness) and reports once via report, which callers wire to their
-// logger (nil keeps it silent for tests).
-func settleL2CAPReceiveMTU(fd int, report func(string)) int {
+// correctness). Every attempt reports its outcome via report (nil keeps it
+// silent for tests); the field reading of initial RSP credits decides.
+func settleL2CAPReceiveMTU(fd int, report func(mtu int, err error)) int {
+	var firstErr error
 	for _, mtu := range l2capReceiveMTULadder {
-		if setL2CAPReceiveMTU(fd, mtu) {
-			if report != nil {
-				report("BLE CoC receive MTU settled")
+		if err := setL2CAPReceiveMTU(fd, mtu); err != nil {
+			if firstErr == nil {
+				firstErr = err
 			}
-			return mtu
+			continue
 		}
+		if report != nil {
+			report(mtu, nil)
+		}
+		return mtu
 	}
 	if report != nil {
-		report("BLE CoC receive MTU unavailable; bulk stays single-SDU")
+		report(0, firstErr)
 	}
 	return 0
 }
 
-func setL2CAPReceiveMTU(fd, mtu int) bool {
+// setL2CAPReceiveMTU stages imtu through get-modify-set-verify and reports
+// which stage failed, so field logs distinguish kernel rejection from
+// transport impossible states.
+func setL2CAPReceiveMTU(fd, mtu int) error {
 	var opts [11]byte
 	length := uint32(len(opts))
 	_, _, errno := unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(fd), uintptr(unix.SOL_L2CAP), uintptr(l2capOptionsOpt),
 		uintptr(unsafe.Pointer(&opts[0])), uintptr(unsafe.Pointer(&length)), 0)
-	if errno != 0 || length < 4 {
-		return false
+	if errno != 0 {
+		return fmt.Errorf("l2cap options inspect: %w", errno)
+	}
+	if length < 4 {
+		return fmt.Errorf("l2cap options short read %d", length)
 	}
 	opts[2] = byte(mtu & 0xff)
 	opts[3] = byte(mtu >> 8)
 	_, _, errno = unix.Syscall6(unix.SYS_SETSOCKOPT, uintptr(fd), uintptr(unix.SOL_L2CAP), uintptr(l2capOptionsOpt),
 		uintptr(unsafe.Pointer(&opts[0])), uintptr(length), 0)
 	if errno != 0 {
-		return false
+		return fmt.Errorf("l2cap imtu %d rejected: %w", mtu, errno)
 	}
 	for i := range opts {
 		opts[i] = 0
@@ -178,9 +199,12 @@ func setL2CAPReceiveMTU(fd, mtu int) bool {
 	_, _, errno = unix.Syscall6(unix.SYS_GETSOCKOPT, uintptr(fd), uintptr(unix.SOL_L2CAP), uintptr(l2capOptionsOpt),
 		uintptr(unsafe.Pointer(&opts[0])), uintptr(unsafe.Pointer(&length)), 0)
 	if errno != 0 {
-		return false
+		return fmt.Errorf("l2cap options verify: %w", errno)
 	}
-	return int(opts[2])|int(opts[3])<<8 == mtu
+	if got := int(opts[2]) | int(opts[3])<<8; got != mtu {
+		return fmt.Errorf("l2cap imtu read back %d, want %d", got, mtu)
+	}
+	return nil
 }
 
 func listenL2CAP(psm uint16) (*l2Listener, error) {
@@ -200,7 +224,7 @@ func listenL2CAP(psm uint16) (*l2Listener, error) {
 	if err = unix.Bind(fd, &unix.SockaddrL2{PSM: psm, AddrType: btAddrLEPublic}); err != nil {
 		return nil, fmt.Errorf("L2CAP bind PSM %d: %w", psm, err)
 	}
-	settleL2CAPReceiveMTU(fd, nil)
+	settleL2CAPReceiveMTU(fd, reportSettle)
 	if err = unix.Listen(fd, 8); err != nil {
 		return nil, fmt.Errorf("L2CAP listen: %w", err)
 	}
@@ -273,7 +297,7 @@ func dialL2CAP(ctx context.Context, address, addressType string, psm uint16) (ne
 	if err = unix.Bind(fd, &unix.SockaddrL2{AddrType: btAddrLEPublic}); err != nil {
 		return nil, fmt.Errorf("L2CAP bind outbound LE socket: %w", err)
 	}
-	settleL2CAPReceiveMTU(fd, nil)
+	settleL2CAPReceiveMTU(fd, reportSettle)
 	err = unix.Connect(fd, &unix.SockaddrL2{PSM: psm, Addr: mac, AddrType: remote.Type})
 	if err != nil && err != unix.EINPROGRESS {
 		return nil, fmt.Errorf("L2CAP connect %s: %w", remote, err)

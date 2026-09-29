@@ -197,6 +197,13 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := cfg.defaults(); err != nil {
 		return err
 	}
+	settleLog = func(mtu int, err error) {
+		if err != nil {
+			cfg.Logger.Warn("BLE CoC receive MTU unsettled", zap.Error(err))
+		} else {
+			cfg.Logger.Info("BLE CoC receive MTU settled", zap.Int("mtu", mtu))
+		}
+	}
 	uuid, err := ServiceUUID(cfg.Credentials.Org)
 	if err != nil {
 		return err
