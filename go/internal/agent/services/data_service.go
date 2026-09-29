@@ -55,6 +55,7 @@ func dataStatusError(err error) error {
 
 type DataService struct {
 	inference    *campaignInferenceManager
+	worldView    *campaignWorldViewManager
 	video        inferenceVideo
 	deploymentMu sync.Mutex
 	agentpbv2.UnimplementedDataServiceServer
@@ -468,6 +469,9 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 	if parsed.Notify != nil && parsed.Notify.On == data.NotifyOnEvent && s.inference == nil {
 		return nil, status.Error(codes.FailedPrecondition, "agent campaign notification runtime is unavailable")
 	}
+	if hasEnabledObject(parsed) && (s.worldView == nil || s.video == nil) {
+		return nil, status.Error(codes.FailedPrecondition, "agent campaign world view runtime is unavailable")
+	}
 
 	campaign, err := s.manager.DeployCampaign(req.GetCampaignYaml())
 	if err != nil {
@@ -484,6 +488,12 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 	if s.inference != nil {
 		select {
 		case s.inference.wake <- struct{}{}:
+		default:
+		}
+	}
+	if s.worldView != nil {
+		select {
+		case s.worldView.wake <- struct{}{}:
 		default:
 		}
 	}
@@ -610,7 +620,13 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 	return episode, nil
 }
 
-func (s *DataService) observeApplicationRecord(_ string, record data.ApplicationRecord) {
+func (s *DataService) observeApplicationRecord(appID string, record data.ApplicationRecord) {
+	// An application's detections are class evidence for world view objects.
+	// The world view's own records never reach this observer, since they are
+	// recorded as campaign records, and are excluded here regardless.
+	if s.worldView != nil && record.Type == "prediction" && record.Model != worldViewModel {
+		s.worldView.observePrediction(appID, record)
+	}
 	// Triggers are dropped only for campaigns that are still CAPTURING; other
 	// campaigns (and ad-hoc recordings) capture independently. A campaign whose
 	// previous episode is inside its post-seal drain is not capturing, and

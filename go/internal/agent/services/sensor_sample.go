@@ -39,6 +39,10 @@ type SensorSample struct {
 	SampleRateHz  uint32
 	Channels      uint32
 	DurationNanos int64
+	// Width and Height are the pixel dimensions of a raw frame payload, such as
+	// a z16 depth frame (little-endian uint16, row-major). They are zero for an
+	// encoded stream, whose decoder discovers the dimensions itself.
+	Width, Height int
 }
 
 // sensorSubscription is one consumer attached to a producer.

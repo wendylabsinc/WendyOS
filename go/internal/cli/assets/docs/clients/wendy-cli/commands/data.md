@@ -329,10 +329,14 @@ rather than a trained class: a shape, a size in metres, a colour palette, or a
 label an application's model already emits. Each attribute scores a candidate
 and fusion combines the scores into one confidence per object.
 
-This release validates, stores and hashes the `objects` and `depth` blocks, and
-nothing more. The agent does not search frames yet; the runtime lands in later
-releases, and deployment prints a warning saying so. Until then an
-`object.<name>.confidence` trigger is accepted but never fires.
+The agent runs one perception worker per campaign in the same managed Python
+runtime as `inference`, samples each camera at the fastest cadence any enabled
+object asks for, and scores each object only at its own `rate` or
+`every_frames`. Campaign inspect reports `objects_status`: the runtime state
+(`pending`, `loading`, `running`, `waiting_for_cameras`, `error` or
+`disabled`), the state of each camera and of the depth source, and any
+notification error. A depth source that cannot be opened, or that does not
+deliver `z16` raw frames, is reported there and the search runs without it.
 
 Each key under `objects` is the object's name: a lowercase letter followed by
 up to 63 lowercase letters, numbers or `_`. A campaign defines at most 32
@@ -372,8 +376,7 @@ campaign that relies on it. `depth` requires `objects`:
 | `depth.intrinsics` | yes | `fx`, `fy`, `cx` and `cy` in pixels, each greater than 0. |
 
 A red can, 6 to 7 centimetres wide and 11 to 13 tall, with a trigger that
-will record an Episode when the can is found with confidence above 0.8 once the
-runtime lands:
+records an Episode when the can is found with confidence above 0.8:
 
 ```yaml
 version: 1
@@ -419,10 +422,29 @@ export:
 
 An `object.<name>.confidence` trigger matches a prediction record from model
 `worldview` whose `object` attribute is the object's name and whose numeric
-`confidence` attribute satisfies the comparison; the world view runtime will
-emit those records. `objects` and `depth` enter the
+`confidence` attribute satisfies the comparison. `objects` and `depth` enter the
 revision hash only when declared, so a campaign without them keeps the revision
 it had before they existed.
+
+Records. Each tracked sighting produces prediction records from model
+`worldview`, attributed to `sh.wendy.campaign.<name>`, when it `appeared`,
+reached a new `peak` confidence, `moved`, or was `lost` after `clear_after`.
+Their attributes are `campaign`, `object`, `track_id`, `kind`, `confidence`,
+`scores` (per attribute), `unavailable` and `unweighted` (attribute names),
+`vetoed` (only when a required attribute vetoed), `bbox` (`[x, y, w, h]` in
+pixels), `frame` (`w`, `h`), `source_id`, `sample_id`, `boot_nanos`,
+`position` (`distance_m`, `bearing_deg`) and `size_m` (`w`, `h`) only when a
+depth frame was paired, `requested_rate` or `requested_every_frames`,
+`achieved_fps` (the worker's), `object_achieved_fps` (the object's own scoring
+rate), `depth_paired`, and `model_version` (the campaign revision). A `lost`
+record carries the box and scores of the last match and never starts an
+Episode. On `appeared` the object's `event` is also recorded, with `object`,
+`track_id`, `confidence` and `source_id`. The `class` attribute reads
+detections from application prediction records in the application convention,
+`attributes.detections[]` entries `{class_name, confidence, box: [x, y, w, h]}`;
+corner boxes such as the Hugging Face `[x0, y0, x1, y1]` form are not accepted
+in this release, so the campaign's own `inference` predictions do not count as
+class evidence.
 
 ### Notifications
 

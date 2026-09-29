@@ -748,9 +748,6 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	if campaign.Retention.LocalQuota != "" {
 		campaign.Warnings = append(campaign.Warnings, "retention.local_quota is recorded with the plan, but this release enforces only the device-wide storage quota")
 	}
-	if campaign.Objects != nil {
-		campaign.Warnings = append(campaign.Warnings, "objects and depth are recorded with the plan, but this release does not run the world view search yet, so object.<name>.confidence triggers cannot fire")
-	}
 	if campaign.Notify != nil && len(campaign.Notify.UnknownKeys) > 0 {
 		campaign.Warnings = append(campaign.Warnings, "notify has unknown keys this agent ignores: "+strings.Join(campaign.Notify.UnknownKeys, ", "))
 	}
