@@ -106,6 +106,9 @@ func TestAppExitFailure(t *testing.T) {
 		{name: "running", c: appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0)},
 		{name: "old agent records no exit", c: appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "", 0)},
 		{name: "clean exit", c: appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "exited", 0)},
+		// failure_count counts restarts until the app's next start, so an app
+		// restarted before is listed crash-looping after a clean exit too.
+		{name: "clean exit while crash-looping", c: appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "exited", 2)},
 		{name: "crash", c: appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0), crash: true,
 			want: []string{"app app stopped unexpectedly", "exit code 3", `termination reason "crashed"`, "wendy device logs --app app"}},
 		{name: "oom", c: appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "oom_killed", 0), crash: true,
@@ -158,6 +161,47 @@ func TestStreamRunContainer_AttachedCleanExitStaysSuccessful(t *testing.T) {
 	})
 	if !strings.Contains(out, "stopped") {
 		t.Fatalf("missing the stopped line: %q", out)
+	}
+}
+
+// failure_count counts every restart by the restart policy until the app's
+// next start, so once its restart policy has restarted an app, a clean exit
+// (code 0) under a policy that restarts it again is listed crash-looping with
+// the reason "exited" until that restart. It is still a clean exit: reported
+// at once as a stop, with no confirmation window, on every path that runs
+// without --wait-ready.
+func TestCleanExitWhileCrashLoopingIsAStop(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	cleanLoop := appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "exited", 2)
+	for _, path := range []string{"attached", "follow"} {
+		t.Run(path, func(t *testing.T) {
+			fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{cleanLoop}}
+			wantLists := 1
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, TelemetryService: followTelemetry()}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			out := captureStderr(t, func() {
+				if path == "attached" {
+					err = streamRunContainerWithStarted(ctx, conn, &deploymentAckStream{remaining: 1, err: io.EOF}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, nil)
+				} else {
+					// The reviewer's repro: the follow saw the app running with
+					// its earlier restarts counted, then the clean exit.
+					fake.snapshots = replaceSequence(runningSnapshot(2), cleanLoop)
+					wantLists = 2
+					err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{failures: 2})
+				}
+			})
+			if err != nil {
+				t.Fatalf("err = %v (class %q), want nil: exit code 0 is a clean exit", err, ErrorClass(err))
+			}
+			if strings.Count(out, "Application app") != 1 || !strings.Contains(out, "Application app stopped.") {
+				t.Fatalf("output %q, want exactly the stopped line", out)
+			}
+			if got := fake.lists(); got != wantLists {
+				t.Fatalf("ListContainers calls = %d, want %d: a clean exit is reported at once", got, wantLists)
+			}
+		})
 	}
 }
 

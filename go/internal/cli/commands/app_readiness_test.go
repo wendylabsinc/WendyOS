@@ -103,6 +103,16 @@ func TestAwaitAppReady(t *testing.T) {
 			wantInMessage: "exited before becoming ready (exit code 0)",
 		},
 		{
+			// Listed crash-looping, as after earlier restarts: still exit code 0.
+			name:          "no probe: exits cleanly inside the window, listed crash-looping",
+			checks:        waitReadyChecks{tick: bufferedTicks(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(2), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "exited", 2)})},
+			status:        waitReadyStatusCrashed,
+			readiness:     readinessNotChecked,
+			class:         "app_crashed",
+			wantExitZero:  true,
+			wantInMessage: "exited before becoming ready (exit code 0)",
+		},
+		{
 			name:          "no probe: restarted by the restart policy inside the window",
 			checks:        waitReadyChecks{tick: bufferedTicks(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(2), runningSnapshot(3)})},
 			status:        waitReadyStatusCrashed,

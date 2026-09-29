@@ -50,17 +50,16 @@ func lookupAppContainer(ctx context.Context, conn *grpcclient.AgentConnection, a
 // appExitFailure returns an errAppCrashed error when c shows that appID
 // stopped abnormally: a crash loop, or a stop whose recorded termination
 // reason is anything but a clean exit. It returns nil for a running app, a
-// clean exit ("exited" means exit code 0), an app whose exit was not recorded
+// clean exit ("exited" means exit code 0) whether the app is listed stopped
+// or crash-looping (cleanStop), a stopped app whose exit was not recorded
 // (agents before WDY-1819, or an app the user stopped — the agent hides that
 // exit on purpose), and a nil c.
 func appExitFailure(appID string, c *agentpb.AppContainer) error {
-	if c == nil || c.GetRunningState() == agentpb.AppRunningState_RUNNING {
+	if c == nil || c.GetRunningState() == agentpb.AppRunningState_RUNNING || cleanStop(c) {
 		return nil
 	}
-	if c.GetRunningState() != agentpb.AppRunningState_CRASH_LOOPING {
-		if reason := c.GetTerminationReason(); reason == "" || reason == "exited" {
-			return nil
-		}
+	if c.GetRunningState() != agentpb.AppRunningState_CRASH_LOOPING && c.GetTerminationReason() == "" {
+		return nil
 	}
 	return appCrashedError(appID, c)
 }
@@ -351,11 +350,16 @@ func undecidedVerdict(base appBaseline, latest *agentpb.AppContainer, taskEnded 
 	}
 }
 
-// cleanStop reports whether c records a clean exit (code 0) of a stopped
-// app: a success for a run without --wait-ready, which reports it at once
-// rather than confirm it first (appReplaced).
+// cleanStop reports whether c records a clean exit (code 0) of an app that
+// is not running: listed stopped, or crash-looping — failure_count counts
+// every restart by the restart policy until the app's next start, so once the
+// policy has restarted an app, the agent lists a clean exit it will restart
+// as crash-looping until that restart. A success for a run without
+// --wait-ready, which reports it at once rather than confirm it first
+// (appReplaced).
 func cleanStop(c *agentpb.AppContainer) bool {
-	return c.GetRunningState() == agentpb.AppRunningState_STOPPED && c.GetTerminationReason() == "exited"
+	state := c.GetRunningState()
+	return (state == agentpb.AppRunningState_STOPPED || state == agentpb.AppRunningState_CRASH_LOOPING) && c.GetTerminationReason() == "exited"
 }
 
 // appStoppable reports whether c, the latest record judged of an app that
