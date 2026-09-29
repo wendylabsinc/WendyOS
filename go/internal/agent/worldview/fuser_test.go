@@ -48,30 +48,32 @@ func TestFuseUnavailableIsNotZero(t *testing.T) {
 }
 
 func TestFuse(t *testing.T) {
+	unit := map[string]float64{"shape": 1, "colour": 1, "size": 1, "class": 1}
 	cases := []struct {
 		name        string
 		evidence    []Evidence
 		spec        FusionSpec
 		confidence  float64
 		unavailable []string
+		unweighted  []string
 		vetoed      string
 		matched     bool
 	}{
 		{
 			name:        "no available attributes",
 			evidence:    []Evidence{missing("shape"), missing("colour")},
-			spec:        FusionSpec{Threshold: 0},
+			spec:        FusionSpec{Threshold: 0, Weights: unit},
 			unavailable: []string{"colour", "shape"},
 		},
 		{
 			name:        "no evidence at all",
-			spec:        FusionSpec{Threshold: 0},
+			spec:        FusionSpec{Threshold: 0, Weights: unit},
 			unavailable: []string{},
 		},
 		{
 			name:        "required absent from evidence vetoes",
 			evidence:    []Evidence{avail("shape", 1)},
-			spec:        FusionSpec{Threshold: 0.5, Required: []string{"class"}},
+			spec:        FusionSpec{Threshold: 0.5, Weights: unit, Required: []string{"class"}},
 			confidence:  1,
 			unavailable: []string{"class"},
 			vetoed:      "class",
@@ -79,7 +81,7 @@ func TestFuse(t *testing.T) {
 		{
 			name:        "unavailable required vetoes even with a zero floor",
 			evidence:    []Evidence{avail("shape", 1), missing("size")},
-			spec:        FusionSpec{Threshold: 0.5, Required: []string{"size"}, Min: map[string]float64{"size": 0}},
+			spec:        FusionSpec{Threshold: 0.5, Weights: unit, Required: []string{"size"}, Min: map[string]float64{"size": 0}},
 			confidence:  1,
 			unavailable: []string{"size"},
 			vetoed:      "size",
@@ -87,7 +89,7 @@ func TestFuse(t *testing.T) {
 		{
 			name:        "required below default floor vetoes",
 			evidence:    []Evidence{avail("shape", 1), avail("size", 0.4)},
-			spec:        FusionSpec{Threshold: 0.5, Required: []string{"size"}},
+			spec:        FusionSpec{Threshold: 0.5, Weights: unit, Required: []string{"size"}},
 			confidence:  0.7,
 			unavailable: []string{},
 			vetoed:      "size",
@@ -95,7 +97,7 @@ func TestFuse(t *testing.T) {
 		{
 			name:        "required above custom floor",
 			evidence:    []Evidence{avail("shape", 1), avail("size", 0.4)},
-			spec:        FusionSpec{Threshold: 0.5, Required: []string{"size"}, Min: map[string]float64{"size": 0.3}},
+			spec:        FusionSpec{Threshold: 0.5, Weights: unit, Required: []string{"size"}, Min: map[string]float64{"size": 0.3}},
 			confidence:  0.7,
 			unavailable: []string{},
 			matched:     true,
@@ -103,7 +105,7 @@ func TestFuse(t *testing.T) {
 		{
 			name:        "first failing required in sorted order",
 			evidence:    []Evidence{avail("size", 0.1), avail("colour", 0.1)},
-			spec:        FusionSpec{Required: []string{"size", "colour"}},
+			spec:        FusionSpec{Weights: unit, Required: []string{"size", "colour"}},
 			confidence:  0.1,
 			unavailable: []string{},
 			vetoed:      "colour",
@@ -111,7 +113,7 @@ func TestFuse(t *testing.T) {
 		{
 			name:        "confidence equal to threshold matches",
 			evidence:    []Evidence{avail("shape", 0.5), avail("colour", 1)},
-			spec:        FusionSpec{Threshold: 0.75},
+			spec:        FusionSpec{Threshold: 0.75, Weights: unit},
 			confidence:  0.75,
 			unavailable: []string{},
 			matched:     true,
@@ -119,7 +121,7 @@ func TestFuse(t *testing.T) {
 		{
 			name:        "below threshold does not match",
 			evidence:    []Evidence{avail("shape", 0.5)},
-			spec:        FusionSpec{Threshold: 0.75},
+			spec:        FusionSpec{Threshold: 0.75, Weights: unit},
 			confidence:  0.5,
 			unavailable: []string{},
 		},
@@ -132,17 +134,44 @@ func TestFuse(t *testing.T) {
 			matched:     true,
 		},
 		{
-			name:        "missing weight counts as one",
+			name:        "missing weight is excluded, not one",
 			evidence:    []Evidence{avail("shape", 1), avail("colour", 0)},
 			spec:        FusionSpec{Weights: map[string]float64{"shape": 1}},
-			confidence:  0.5,
+			confidence:  1,
 			unavailable: []string{},
+			unweighted:  []string{"colour"},
 			matched:     true,
+		},
+		{
+			name:        "non-positive weights are excluded",
+			evidence:    []Evidence{avail("size", 0), avail("shape", 0.8), avail("colour", 0)},
+			spec:        FusionSpec{Weights: map[string]float64{"shape": 2, "colour": 0, "size": -1}},
+			confidence:  0.8,
+			unavailable: []string{},
+			unweighted:  []string{"colour", "size"},
+			matched:     true,
+		},
+		{
+			name:        "no weighted attribute left",
+			evidence:    []Evidence{avail("shape", 1), avail("colour", 1)},
+			spec:        FusionSpec{Threshold: 0},
+			confidence:  0,
+			unavailable: []string{},
+			unweighted:  []string{"colour", "shape"},
+		},
+		{
+			name:        "unweighted required attribute still vetoes",
+			evidence:    []Evidence{avail("shape", 1), avail("size", 0.1)},
+			spec:        FusionSpec{Weights: map[string]float64{"shape": 1}, Required: []string{"size"}},
+			confidence:  1,
+			unavailable: []string{},
+			unweighted:  []string{"size"},
+			vetoed:      "size",
 		},
 		{
 			name:        "scores are clamped",
 			evidence:    []Evidence{avail("shape", 7), avail("colour", math.NaN())},
-			spec:        FusionSpec{},
+			spec:        FusionSpec{Weights: unit},
 			confidence:  0.5,
 			unavailable: []string{},
 			matched:     true,
@@ -150,7 +179,7 @@ func TestFuse(t *testing.T) {
 		{
 			name:        "first available duplicate wins",
 			evidence:    []Evidence{missing("shape"), avail("shape", 0.2), avail("shape", 0.9)},
-			spec:        FusionSpec{},
+			spec:        FusionSpec{Weights: unit},
 			confidence:  0.2,
 			unavailable: []string{},
 			matched:     true,
@@ -165,13 +194,20 @@ func TestFuse(t *testing.T) {
 			if !reflect.DeepEqual(got.Unavailable, c.unavailable) {
 				t.Fatalf("unavailable = %#v, want %#v", got.Unavailable, c.unavailable)
 			}
+			unweighted := c.unweighted
+			if unweighted == nil {
+				unweighted = []string{}
+			}
+			if !reflect.DeepEqual(got.Unweighted, unweighted) {
+				t.Fatalf("unweighted = %#v, want %#v", got.Unweighted, unweighted)
+			}
 		})
 	}
 }
 
 func TestFuseDeterministic(t *testing.T) {
 	evidence := []Evidence{avail("a", 0.1), avail("b", 0.2), avail("c", 0.3), avail("d", 0.4), missing("e"), missing("f"), missing("g")}
-	spec := FusionSpec{Weights: map[string]float64{"a": 0.1, "b": 0.7, "c": 0.13, "d": 0.29}}
+	spec := FusionSpec{Weights: map[string]float64{"a": 0.1, "b": 0.7, "c": 0.13, "e": 0.29}}
 	first := Fuse(evidence, spec)
 	for i := 0; i < 200; i++ {
 		if got := Fuse(evidence, spec); !reflect.DeepEqual(got, first) {

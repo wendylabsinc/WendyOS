@@ -1,6 +1,9 @@
 package worldview
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // DefaultRequiredMin is the veto floor for a required attribute whose floor
 // FusionSpec.Min does not set.
@@ -10,7 +13,7 @@ const DefaultRequiredMin = 0.5
 type FusionSpec struct {
 	Threshold float64
 	Required  []string
-	Weights   map[string]float64 // per attribute, > 0; a missing or non-positive weight counts as 1
+	Weights   map[string]float64 // per attribute, > 0; an attribute without one is excluded and listed in Fused.Unweighted
 	Min       map[string]float64 // veto floor for required attributes; default 0.5
 }
 
@@ -19,13 +22,17 @@ type Fused struct {
 	Confidence  float64
 	Scores      map[string]float64 // available attributes only
 	Unavailable []string           // sorted
+	Unweighted  []string           // available but without a weight > 0, so excluded from Confidence; sorted
 	Vetoed      string             // attribute name, or ""
 	Matched     bool
 }
 
 // Fuse combines evidence into a weighted mean whose weights are renormalised
 // over the available attributes only, so an unavailable attribute neither
-// raises nor lowers the confidence. A required attribute that is unavailable
+// raises nor lowers the confidence. An available attribute whose weight is
+// missing or not greater than 0 is excluded from the mean and listed in
+// Unweighted; it still appears in Scores and can still veto. With no weighted
+// attribute left, Confidence is 0 and Matched is false. A required attribute that is unavailable
 // (or absent from evidence altogether), or that scores below its floor, vetoes
 // the match; required attributes are checked in sorted order and the first
 // failure is reported. When an attribute appears more than once the first
@@ -56,12 +63,13 @@ func Fuse(evidence []Evidence, spec FusionSpec) Fused {
 	}
 	out.Unavailable = sortedKeys(unavailable)
 
-	names := sortedKeys(out.Scores)
+	out.Unweighted = []string{}
 	sum, weights := 0.0, 0.0
-	for _, name := range names {
+	for _, name := range sortedKeys(out.Scores) {
 		w := spec.Weights[name]
-		if !(w > 0) {
-			w = 1
+		if !(w > 0) || math.IsInf(w, 0) {
+			out.Unweighted = append(out.Unweighted, name)
+			continue
 		}
 		sum += w * out.Scores[name]
 		weights += w
@@ -83,7 +91,7 @@ func Fuse(evidence []Evidence, spec FusionSpec) Fused {
 			break
 		}
 	}
-	out.Matched = len(out.Scores) > 0 && out.Vetoed == "" && out.Confidence >= spec.Threshold
+	out.Matched = weights > 0 && out.Vetoed == "" && out.Confidence >= spec.Threshold
 	return out
 }
 

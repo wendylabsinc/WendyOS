@@ -158,7 +158,7 @@ func TestTrackerReappearAfterLostIsNewTrack(t *testing.T) {
 // fusedMatches runs Fuse the way the service will and passes only matched
 // proposals to the tracker.
 func fusedMatches(score float64) []Match {
-	f := Fuse([]Evidence{avail("shape", score)}, FusionSpec{Threshold: 0.7})
+	f := Fuse([]Evidence{avail("shape", score)}, FusionSpec{Threshold: 0.7, Weights: map[string]float64{"shape": 1}})
 	if !f.Matched {
 		return nil
 	}

@@ -11,8 +11,10 @@ import (
 const DefaultAssociationWindow = 500 * time.Millisecond
 
 // DefaultColourTolerance is the CIE76 delta E at which a colour entry stops
-// matching when ColourExpect.Tolerance is not positive.
-const DefaultColourTolerance = 20.0
+// matching when ColourExpect.Tolerance is not positive. It must equal
+// defaultColourTolerance in go/internal/agent/data/objects.go, the campaign
+// schema that owns this default (ObjectAttribute.ColourTolerance).
+const DefaultColourTolerance = 25.0
 
 // ClassIoUMin is the Intersection over Union (IoU) a piece of class evidence
 // must reach with a proposal's box to vouch for it.
@@ -32,12 +34,9 @@ type ShapeExpect struct {
 }
 
 // SizeExpect is the expected metric extent in metres, each a [min, max] range.
-// A range of [0, 0] leaves that dimension unconstrained. DepthM constrains the
-// measured distance from the camera (Metric.DistanceM), because the worker
-// measures no object depth extent.
+// A range of [0, 0] leaves that dimension unconstrained.
 type SizeExpect struct {
 	WidthM, HeightM [2]float64
-	DepthM          *[2]float64
 }
 
 // ColourExpect is the expected palette and the delta E at which an entry stops
@@ -205,6 +204,11 @@ func knownSilhouette(name string) bool {
 // paired depth measurement or when no dimension is constrained. Each
 // constrained dimension fits 1 inside its range and falls linearly to 0 at 25
 // percent beyond the violated bound; the score is the minimum fit.
+//
+// The campaign schema also accepts d_m, the object's third extent (its depth
+// as a solid). A single camera view cannot measure that extent, so this
+// version does not score it; it is deliberately absent from SizeExpect, and
+// the distance from the camera is never scored in its place.
 func ScoreSize(p Proposal, expect SizeExpect) Evidence {
 	ev := Evidence{Attribute: AttributeSize, Detail: map[string]any{}}
 	if p.Metric == nil {
@@ -213,7 +217,6 @@ func ScoreSize(p Proposal, expect SizeExpect) Evidence {
 	}
 	ev.Detail["width_m"] = p.Metric.WidthM
 	ev.Detail["height_m"] = p.Metric.HeightM
-	ev.Detail["distance_m"] = p.Metric.DistanceM
 	score, constrainedAny := 1.0, false
 	check := func(name string, v float64, r [2]float64) {
 		fit, constrained := sizeFit(v, r)
@@ -226,9 +229,6 @@ func ScoreSize(p Proposal, expect SizeExpect) Evidence {
 	}
 	check("width", p.Metric.WidthM, expect.WidthM)
 	check("height", p.Metric.HeightM, expect.HeightM)
-	if expect.DepthM != nil {
-		check("distance", p.Metric.DistanceM, *expect.DepthM)
-	}
 	if !constrainedAny {
 		ev.Detail["reason"] = "no constrained dimension"
 		return ev

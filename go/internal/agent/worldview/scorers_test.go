@@ -144,7 +144,6 @@ func TestScoreShapeUnknownSolid(t *testing.T) {
 
 func TestScoreSize(t *testing.T) {
 	bottle := SizeExpect{WidthM: [2]float64{0.06, 0.08}, HeightM: [2]float64{0.18, 0.22}}
-	near3 := SizeExpect{WidthM: bottle.WidthM, HeightM: bottle.HeightM, DepthM: &[2]float64{0.5, 2}}
 	heightOnly := SizeExpect{HeightM: [2]float64{1, 2}}
 	cases := []struct {
 		name      string
@@ -159,9 +158,7 @@ func TestScoreSize(t *testing.T) {
 		{"width at 25 percent below is zero", &Metric{WidthM: 0.045, HeightM: 0.2}, bottle, true, 0},
 		{"minimum of dimensions", &Metric{WidthM: 0.09, HeightM: 0.2475}, bottle, true, 0.5},
 		{"width falloff above", &Metric{WidthM: 0.09, HeightM: 0.2}, bottle, true, 0.5},
-		{"distance inside", &Metric{WidthM: 0.07, HeightM: 0.2, DistanceM: 1}, near3, true, 1},
-		{"distance halfway through falloff", &Metric{WidthM: 0.07, HeightM: 0.2, DistanceM: 2.25}, near3, true, 0.5},
-		{"distance far", &Metric{WidthM: 0.07, HeightM: 0.2, DistanceM: 3}, near3, true, 0},
+		{"distance is never scored", &Metric{WidthM: 0.07, HeightM: 0.2, DistanceM: 1e6}, bottle, true, 1},
 		{"unconstrained width ignored", &Metric{WidthM: 50, HeightM: 1.5}, heightOnly, true, 1},
 		{"nothing constrained is unavailable", &Metric{WidthM: 1, HeightM: 1}, SizeExpect{}, false, 0},
 		{"infinite height", &Metric{WidthM: 0.07, HeightM: math.Inf(1)}, bottle, true, 0},
@@ -198,8 +195,8 @@ func TestScoreColour(t *testing.T) {
 		{"grey at half its share", []PaletteEntry{{grey, 0.3}, {red, 0.4}}, expect, true, 0.6*0.5 + 0.4},
 		{"surplus share is capped", []PaletteEntry{{grey, 0.9}, {red, 0.9}}, expect, true, 1},
 		{"far colour", []PaletteEntry{{[3]float64{0, 0, 0}, 1}}, expect, true, 0},
-		{"zero tolerance uses default", []PaletteEntry{{grey, 0.6}, {[3]float64{50, 70, 0}, 0.4}},
-			ColourExpect{Palette: expect.Palette}, true, 0.6 + 0.4*(1-10/DefaultColourTolerance)},
+		{"zero tolerance uses default of 25", []PaletteEntry{{grey, 0.6}, {[3]float64{50, 70, 0}, 0.4}},
+			ColourExpect{Palette: expect.Palette}, true, 0.6 + 0.4*(1-10.0/25)},
 		{"zero expected shares weigh equally", []PaletteEntry{{grey, 0.5}, {[3]float64{50, 70, 0}, 0.5}},
 			ColourExpect{Palette: []PaletteEntry{{grey, 0}, {red, 0}}, Tolerance: 20}, true, (1 + 0.5) / 2},
 	}
