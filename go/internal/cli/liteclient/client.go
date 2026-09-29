@@ -1015,3 +1015,25 @@ func (c *WendyLiteClient) handshake() error {
 	c.peerProtocolVersion = protocolVersion{Major: ver.GetMajor(), Minor: ver.GetMinor()}
 	return nil
 }
+
+// EnrollmentChallenge is supported only on the physical serial connection.
+// statusOnly observes completion without replacing the bootstrap nonce.
+func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyComEnrollmentChallenge, error) {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_EnrollmentChallenge{
+			EnrollmentChallenge: &wendypb.WendyComEnrollmentChallengeParams{StatusOnly: statusOnly},
+		},
+	}, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return nil, fmt.Errorf("firmware PKI support unavailable: %w", err)
+	}
+	challenge := resp.GetEnrollmentChallenge()
+	if challenge == nil {
+		return nil, fmt.Errorf("device returned no enrollment challenge")
+	}
+	return challenge, nil
+}

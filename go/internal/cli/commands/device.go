@@ -821,11 +821,12 @@ func newDeviceEnrollCmd() *cobra.Command {
 	var cloudGRPC string
 	var orgID int32
 	var acmeDirectoryURL string
+	var liteOptions liteEnrollmentOptions
 
 	cmd := &cobra.Command{
 		Use:    "enroll",
 		Short:  "Enroll this device with Wendy Cloud or a local pki-core",
-		Long:   "Enrolls the connected device using your stored auth session. OIDC accounts use direct PKI enrollment through Cloud's enrollment relay; legacy accounts use Cloud enrollment. Run 'wendy auth login' first.",
+		Long:   "Enrolls the selected device using your stored auth session. WendyOS uses agent gRPC provisioning; Wendy Lite uses Class C enrollment over physical USB and reboots to obtain its certificate from pki-core. Run 'wendy auth login' first.",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -839,15 +840,13 @@ func newDeviceEnrollCmd() *cobra.Command {
 				return err
 			}
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
+			target, err := resolveTarget(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer target.Close()
 
-			promptWifiIfNeeded(ctx, conn)
-
-			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
+			return runSelectedDeviceEnrollment(cmd, target, auth, name, orgID, acmeDirectoryURL, liteOptions)
 		},
 	}
 
@@ -855,6 +854,10 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
 	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use; limits the organization picker to this endpoint")
+	cmd.Flags().StringVar(&liteOptions.brokerHost, "broker-host", "", "WendyCom broker TLS hostname (required for Wendy Lite)")
+	cmd.Flags().Uint32Var(&liteOptions.brokerPort, "broker-port", 5055, "WendyCom broker TLS port for Wendy Lite")
+	cmd.Flags().StringVar(&liteOptions.csrURL, "csr-url", "", "CSR enrollment base URL override for Wendy Lite on self-hosted PKI")
+	cmd.Flags().StringVar(&liteOptions.timeURL, "time-url", "", "Signed-time endpoint override for Wendy Lite on self-hosted PKI")
 	return cmd
 }
 
@@ -924,8 +927,12 @@ func defaultEnrollmentName(host string) string {
 }
 
 func enrollmentDeviceName(conn *grpcclient.AgentConnection, name string) (string, error) {
+	return enrollmentName(conn.Host, name)
+}
+
+func enrollmentName(host, name string) (string, error) {
 	if name == "" {
-		defaultName := defaultEnrollmentName(conn.Host)
+		defaultName := defaultEnrollmentName(host)
 		if !isInteractiveTerminal() {
 			if defaultName != "" {
 				name = defaultName
