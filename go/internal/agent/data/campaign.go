@@ -55,7 +55,8 @@ type SourceCapture struct {
 	Post string `json:"post,omitempty" yaml:"post,omitempty"`
 	// Trigger is a field threshold expression such as "model.uncertainty > 0.9"
 	// or "level_db > -20" (threshold mode only). The 0..1 range applies only to
-	// model.uncertainty; other fields carry their own units.
+	// model.uncertainty and to fields ending in ".confidence"; other fields
+	// carry their own units.
 	Trigger string `json:"trigger,omitempty" yaml:"trigger,omitempty"`
 	// Fragment is the captured duration per threshold crossing (threshold mode only).
 	Fragment string `json:"fragment,omitempty" yaml:"fragment,omitempty"`
@@ -138,6 +139,64 @@ func (s CampaignSource) kind() string {
 type CampaignTrigger struct {
 	Event            string `json:"event,omitempty" yaml:"event,omitempty"`
 	ModelUncertainty string `json:"model_uncertainty,omitempty" yaml:"model.uncertainty,omitempty"`
+	// ObjectConfidence maps a world view object name to its threshold
+	// expression, from a YAML key of the form object.<name>.confidence. A valid
+	// trigger holds at most one entry; the map exists because the object name
+	// is part of the key.
+	ObjectConfidence map[string]string `json:"object_confidence,omitempty" yaml:"-"`
+}
+
+const (
+	objectTriggerPrefix = "object."
+	objectTriggerSuffix = ".confidence"
+)
+
+// objectTriggerName returns the object named by an object.<name>.confidence
+// trigger key.
+func objectTriggerName(key string) (string, bool) {
+	if len(key) <= len(objectTriggerPrefix)+len(objectTriggerSuffix) || !strings.HasPrefix(key, objectTriggerPrefix) || !strings.HasSuffix(key, objectTriggerSuffix) {
+		return "", false
+	}
+	return key[len(objectTriggerPrefix) : len(key)-len(objectTriggerSuffix)], true
+}
+
+// UnmarshalYAML decodes a trigger by hand because an object confidence trigger
+// carries the object's name in its key, which no struct tag can express, and
+// the document-wide KnownFields rejection would refuse it. Every other key is
+// still rejected by name. Decoding into a map of strings first keeps the
+// decoder's duplicate-key and merge-key handling and its scalar-to-string
+// conversion, so event and model.uncertainty decode exactly as they did.
+func (t *CampaignTrigger) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return errors.New(`each capture trigger must be a mapping such as {event: <name>}`)
+	}
+	var fields map[string]string
+	if err := node.Decode(&fields); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		switch value := fields[key]; key {
+		case "event":
+			t.Event = value
+		case "model.uncertainty":
+			t.ModelUncertainty = value
+		default:
+			name, ok := objectTriggerName(key)
+			if !ok {
+				return fmt.Errorf("unknown capture trigger key %q; use event, model.uncertainty or object.<name>.confidence", key)
+			}
+			if t.ObjectConfidence == nil {
+				t.ObjectConfidence = map[string]string{}
+			}
+			t.ObjectConfidence[name] = value
+		}
+	}
+	return nil
 }
 
 type CampaignCapture struct {
@@ -257,6 +316,12 @@ type Campaign struct {
 	Revision          string             `json:"revision" yaml:"-"`
 	DeployedUnixNanos int64              `json:"deployed_unix_nanos" yaml:"-"`
 	Warnings          []string           `json:"warnings" yaml:"-"`
+
+	// Objects and Depth are the world view: objects described as a format that
+	// the agent searches camera frames for. See objects.go.
+	Objects       map[string]*ObjectDescriptor `json:"objects,omitempty" yaml:"objects,omitempty"`
+	Depth         *CampaignDepth               `json:"depth,omitempty" yaml:"depth,omitempty"`
+	ObjectsStatus *ObjectsStatus               `json:"objects_status,omitempty" yaml:"-"`
 }
 
 func ParseCampaign(contents []byte) (Campaign, error) {
@@ -322,6 +387,12 @@ const revisionSchema = 2
 // Adding a field here is a schema change: bump revisionSchema with it. Note
 // that this fix itself moves every existing campaign to a new revision once,
 // because the digest no longer covers the struct's zero-valued fields.
+//
+// The one exception is a field that enters the map only when the author
+// declares it, as objects, depth and a trigger's object_confidence do. No plan
+// written before the field existed can declare it, because the strict decoder
+// would have refused it, so every such plan keeps its digest and the bump
+// would only move them all for nothing.
 func (c Campaign) planDigestInput() map[string]any {
 	sources := make([]map[string]any, 0, len(c.Sources))
 	for _, source := range c.Sources {
@@ -348,10 +419,14 @@ func (c Campaign) planDigestInput() map[string]any {
 	}
 	triggers := make([]map[string]any, 0, len(c.Capture.Triggers))
 	for _, trigger := range c.Capture.Triggers {
-		triggers = append(triggers, map[string]any{
+		entry := map[string]any{
 			"event":             trigger.Event,
 			"model_uncertainty": trigger.ModelUncertainty,
-		})
+		}
+		if len(trigger.ObjectConfidence) > 0 {
+			entry["object_confidence"] = trigger.ObjectConfidence
+		}
+		triggers = append(triggers, entry)
 	}
 	privacy := make([]map[string]any, 0, len(c.Privacy))
 	for _, transform := range c.Privacy {
@@ -394,6 +469,12 @@ func (c Campaign) planDigestInput() map[string]any {
 			"threshold": i.Threshold, "rate": i.Rate, "event": i.Event,
 			"clear_after": i.ClearAfter, "cooldown": i.Cooldown, "enabled": i.Enabled,
 		}
+	}
+	if c.Objects != nil {
+		plan["objects"] = c.objectsDigestInput()
+	}
+	if c.Depth != nil {
+		plan["depth"] = c.Depth.digestInput()
 	}
 	return plan
 }
@@ -464,12 +545,32 @@ func (c Campaign) validate() error {
 	if len(c.Capture.Triggers) == 0 {
 		return errors.New("capture.triggers must contain at least one trigger")
 	}
+	// Objects are checked before the triggers that name them, so a malformed
+	// object is reported as itself rather than as a trigger naming nothing.
+	if err := c.validateObjects(); err != nil {
+		return err
+	}
 	for i, trigger := range c.Capture.Triggers {
-		if (trigger.Event == "") == (trigger.ModelUncertainty == "") {
-			return fmt.Errorf("capture.triggers[%d] must define exactly one event or model.uncertainty", i)
+		forms := len(trigger.ObjectConfidence)
+		if trigger.Event != "" {
+			forms++
+		}
+		if trigger.ModelUncertainty != "" {
+			forms++
+		}
+		if forms != 1 {
+			return fmt.Errorf("capture.triggers[%d] must define exactly one of event, model.uncertainty or object.<name>.confidence", i)
 		}
 		if trigger.ModelUncertainty != "" {
 			if _, _, err := parseThreshold("model.uncertainty", trigger.ModelUncertainty); err != nil {
+				return fmt.Errorf("capture.triggers[%d]: %w", i, err)
+			}
+		}
+		for name, expression := range trigger.ObjectConfidence {
+			if _, defined := c.Objects[name]; !defined {
+				return fmt.Errorf("capture.triggers[%d]: object.%s.confidence names an object that objects does not define", i, name)
+			}
+			if _, _, err := parseThreshold(objectTriggerPrefix+name+objectTriggerSuffix, expression); err != nil {
 				return fmt.Errorf("capture.triggers[%d]: %w", i, err)
 			}
 		}
@@ -646,6 +747,9 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	}
 	if campaign.Retention.LocalQuota != "" {
 		campaign.Warnings = append(campaign.Warnings, "retention.local_quota is recorded with the plan, but this release enforces only the device-wide storage quota")
+	}
+	if campaign.Objects != nil {
+		campaign.Warnings = append(campaign.Warnings, "objects and depth are recorded with the plan, but this release does not run the world view search yet, so object.<name>.confidence triggers cannot fire")
 	}
 	if campaign.Notify != nil && len(campaign.Notify.UnknownKeys) > 0 {
 		campaign.Warnings = append(campaign.Warnings, "notify has unknown keys this agent ignores: "+strings.Join(campaign.Notify.UnknownKeys, ", "))
@@ -1116,9 +1220,28 @@ func (c Campaign) Match(record ApplicationRecord) (string, string, bool) {
 				return fmt.Sprintf("model_uncertainty:%g", value), "model.uncertainty " + trigger.ModelUncertainty, true
 			}
 		}
+		for name, expression := range trigger.ObjectConfidence {
+			if record.Type != "prediction" || record.Model != worldViewModel || record.Attributes["object"] != name {
+				continue
+			}
+			value, ok := numericValue(record.Attributes["confidence"])
+			if !ok {
+				continue
+			}
+			field := objectTriggerPrefix + name + objectTriggerSuffix
+			op, threshold, _ := parseThreshold(field, expression)
+			if compareThreshold(value, op, threshold) {
+				return fmt.Sprintf("object_confidence:%s:%g", name, value), field + " " + expression, true
+			}
+		}
 	}
 	return "", "", false
 }
+
+// worldViewModel is the model name on the prediction records the world view
+// emits, one per object sighting, with the object name and fused confidence as
+// attributes.
+const worldViewModel = "worldview"
 
 func uncertaintyValue(record ApplicationRecord) (float64, bool) {
 	if raw, ok := record.Attributes["uncertainty"]; ok {
@@ -1148,9 +1271,9 @@ func numericValue(value any) (float64, bool) {
 }
 
 // parseThreshold parses an "<operator> <number>" expression for the named
-// field. Value ranges are field dependent: model.uncertainty is a probability
-// clamped to 0..1, while fields such as an audio level_db are legitimately
-// negative and carry no fixed range.
+// field. Value ranges are field dependent: model.uncertainty and any field
+// ending in ".confidence" are probabilities clamped to 0..1, while fields such
+// as an audio level_db are legitimately negative and carry no fixed range.
 func parseThreshold(field, expression string) (string, float64, error) {
 	expression = strings.TrimSpace(expression)
 	for _, operator := range []string{"<=", ">=", "==", "<", ">"} {
@@ -1164,8 +1287,8 @@ func parseThreshold(field, expression string) (string, float64, error) {
 			if math.IsNaN(value) || math.IsInf(value, 0) {
 				return "", 0, fmt.Errorf("%s must compare with a finite number", field)
 			}
-			if field == "model.uncertainty" && (value < 0 || value > 1) {
-				return "", 0, errors.New("model.uncertainty must compare with a number from 0 through 1")
+			if (field == "model.uncertainty" || strings.HasSuffix(field, objectTriggerSuffix)) && (value < 0 || value > 1) {
+				return "", 0, fmt.Errorf("%s must compare with a number from 0 through 1", field)
 			}
 			return operator, value, nil
 		}
