@@ -2610,149 +2610,61 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 	// Two buffers: one dequeued/in-flight, one queued for the camera to fill.
 	// More buffers increase kernel-side lag when the broadcast lags the camera.
 	const numBuffers = 2
-	var req4 v4l2ReqBuffers
-	req4.Count = numBuffers
-	req4.Type = v4l2BufTypeVideoCapture
-	req4.Memory = v4l2MemoryMmap
-
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocReqbufs, uintptr(unsafe.Pointer(&req4))); errno != 0 {
-		return s.errCaptureSetup("VIDIOC_REQBUFS", path, errno)
+	queue, err := s.startV4L2MmapQueue(fd, path, numBuffers)
+	if err != nil {
+		return err
 	}
-	if req4.Count < 2 {
-		return status.Errorf(codes.Internal, "insufficient buffer memory on device")
-	}
+	defer queue.stop()
 
-	// Map and queue each buffer.
-	mapped := make([][]byte, req4.Count)
-
-	for i := uint32(0); i < req4.Count; i++ {
-		var qbuf v4l2Buf
-		qbuf.setIndex(i)
-		qbuf.setType(v4l2BufTypeVideoCapture)
-		qbuf.setMemory(v4l2MemoryMmap)
-
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQuerybuf, uintptr(unsafe.Pointer(&qbuf))); errno != 0 {
-			return s.errCaptureSetup("VIDIOC_QUERYBUF", path, errno)
-		}
-
-		length := uint32(*(*uint32)(unsafe.Pointer(&qbuf[72]))) // length at offset 72 in v4l2_buffer
-		data, err := unix.Mmap(fd, int64(qbuf.offset()), int(length), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-		if err != nil {
-			return status.Errorf(codes.Internal, "mmap buffer %d: %v", i, err)
-		}
-		mapped[i] = data
-
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQbuf, uintptr(unsafe.Pointer(&qbuf))); errno != 0 {
-			return s.errCaptureSetup("VIDIOC_QBUF", path, errno)
-		}
-	}
-	defer func() {
-		for _, data := range mapped {
-			unix.Munmap(data) //nolint:errcheck
-		}
-	}()
-
-	// Start streaming.
-	bufType := uint32(v4l2BufTypeVideoCapture)
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocStreamon, uintptr(unsafe.Pointer(&bufType))); errno != 0 {
-		return s.errCaptureSetup("VIDIOC_STREAMON", path, errno)
-	}
-	defer func() {
-		unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocStreamoff, uintptr(unsafe.Pointer(&bufType))) //nolint:errcheck
-	}()
-
-	if fd > math.MaxInt32 {
-		return status.Errorf(codes.Internal, "file descriptor value out of range for poll")
-	}
-	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	var framesSent int
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	// Device accepted H264 format but failed before delivering any frame:
+	// signal the caller to fall back to the GStreamer software encoder.
+	onDequeueErr := func(errno unix.Errno) error {
+		if framesSent == 0 {
+			return nativeH264NotSupported{msg: fmt.Sprintf("VIDIOC_DQBUF failed before first frame: %v", errno)}
 		}
-
-		// Poll with a short timeout so context cancellation is noticed quickly.
-		// VIDIOC_DQBUF blocks until a buffer arrives; without this a cancelled
-		// context can wait up to one full frame period before the producer exits,
-		// holding the device fd and delaying the next StreamVideo caller.
-		ready, err := unix.Poll(pollFds, 100)
-		if err == unix.EINTR || (err == nil && ready == 0) {
-			continue // timeout or signal — re-check ctx.Done
-		}
-		if err != nil {
-			s.logger.Error("poll failed on video device", zap.String("device", path), zap.Error(err))
-			return status.Errorf(codes.Internal, "video device poll error")
-		}
-
-		var dqbuf v4l2Buf
-		dqbuf.setType(v4l2BufTypeVideoCapture)
-		dqbuf.setMemory(v4l2MemoryMmap)
-
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocDqbuf, uintptr(unsafe.Pointer(&dqbuf))); errno != 0 {
-			if errno == unix.EINTR || errno == unix.EAGAIN {
-				continue
-			}
-			// Before the H264 fallback below: EBUSY is a held camera, not a device that
-			// cannot encode, so it must reach the sharing path, not the software encoder.
-			if isBusyErrno(errno) {
-				return errCameraInUse(path)
-			}
-			// Device accepted H264 format but failed before delivering any frame —
-			// signal the caller to fall back to the GStreamer software encoder.
-			if framesSent == 0 {
-				return nativeH264NotSupported{msg: fmt.Sprintf("VIDIOC_DQBUF failed before first frame: %v", errno)}
-			}
-			return s.errCaptureSetup("VIDIOC_DQBUF", path, errno)
-		}
-
-		idx := dqbuf.index()
-		if n := dqbuf.bytesUsed(); n > 0 {
-			// Cap at maxFrameBytes before allocating: a misbehaving or compromised
-			// V4L2 driver could report bytesUsed up to the full mmap region size.
-			// Capping here bounds the allocation at the source rather than relying
-			// solely on the drop check inside broadcast().
-			if n > maxFrameBytes {
-				n = maxFrameBytes
-			}
-			// Copy out of the mmap region before requeuing: the slice handed to
-			// subscribers must not alias a buffer the camera may refill.
-			data := make([]byte, n)
-			copy(data, mapped[idx][:n])
-			stamp := realtimeFrameTimestamp(time.Now())
-			stamp.nativeNs = dqbuf.timestampNanos()
-			stamp.nativeFlags = dqbuf.flags()
-			stamp.sequence = dqbuf.sequence()
-			stamp.sequenceValid = true
-			// V4L2 compressed capture delivers exactly one encoded frame per
-			// dequeued buffer, so this is the one producer whose frames are
-			// whole access units. The maxFrameBytes cap below can truncate a
-			// pathologically large frame, in which case the alignment promise
-			// no longer holds.
-			stamp.auAligned = n == dqbuf.bytesUsed()
-			const v4l2TimestampMask = uint32(0x0000e000)
-			const v4l2TimestampMonotonic = uint32(0x00002000)
-			if stamp.nativeFlags&v4l2TimestampMask == v4l2TimestampMonotonic {
-				stamp.nativeClock = "CLOCK_MONOTONIC_V4L2"
-			} else {
-				stamp.nativeClock = "V4L2_TIMESTAMP_UNKNOWN"
-			}
-			if !broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264) {
-				return nil
-			}
-			framesSent++
-		}
-
-		// Re-queue the buffer.
-		var qbuf v4l2Buf
-		qbuf.setIndex(idx)
-		qbuf.setType(v4l2BufTypeVideoCapture)
-		qbuf.setMemory(v4l2MemoryMmap)
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQbuf, uintptr(unsafe.Pointer(&qbuf))); errno != 0 {
-			return s.errCaptureSetup("VIDIOC_QBUF", path, errno)
-		}
+		return s.errCaptureSetup("VIDIOC_DQBUF", path, errno)
 	}
+	return s.dequeueLoop(ctx, queue, path, onDequeueErr, func(dqbuf *v4l2Buf, mem []byte) bool {
+		n := dqbuf.bytesUsed()
+		if n == 0 {
+			return true
+		}
+		// Cap at maxFrameBytes before allocating: a misbehaving or compromised
+		// V4L2 driver could report bytesUsed up to the full mmap region size.
+		// Capping here bounds the allocation at the source rather than relying
+		// solely on the drop check inside broadcast().
+		if n > maxFrameBytes {
+			n = maxFrameBytes
+		}
+		// Copy out of the mmap region before requeuing: the slice handed to
+		// subscribers must not alias a buffer the camera may refill.
+		data := make([]byte, n)
+		copy(data, mem[:n])
+		stamp := realtimeFrameTimestamp(time.Now())
+		stamp.nativeNs = dqbuf.timestampNanos()
+		stamp.nativeFlags = dqbuf.flags()
+		stamp.sequence = dqbuf.sequence()
+		stamp.sequenceValid = true
+		// V4L2 compressed capture delivers exactly one encoded frame per
+		// dequeued buffer, so this is the one producer whose frames are
+		// whole access units. The maxFrameBytes cap above can truncate a
+		// pathologically large frame, in which case the alignment promise
+		// no longer holds.
+		stamp.auAligned = n == dqbuf.bytesUsed()
+		const v4l2TimestampMask = uint32(0x0000e000)
+		const v4l2TimestampMonotonic = uint32(0x00002000)
+		if stamp.nativeFlags&v4l2TimestampMask == v4l2TimestampMonotonic {
+			stamp.nativeClock = "CLOCK_MONOTONIC_V4L2"
+		} else {
+			stamp.nativeClock = "V4L2_TIMESTAMP_UNKNOWN"
+		}
+		if !broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264) {
+			return false
+		}
+		framesSent++
+		return true
+	})
 }
 
 // setV4L2KeyframeInterval caps the camera encoder's keyframe interval to gop
