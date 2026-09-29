@@ -73,7 +73,7 @@ func startFakeTelemetryServer(t *testing.T, fake *fakeTelemetryServer) *grpcclie
 
 func TestTelemetryLogs_NotConnected(t *testing.T) {
 	srv := New(&config.Config{}, nil)
-	result, err := srv.callTool(context.Background(), "telemetry_logs", nil)
+	result, err := srv.callTool(context.Background(), "telemetry_logs", map[string]any{"format": "otlp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestTelemetryLogs_ReturnsJSON(t *testing.T) {
 	srv := New(&config.Config{}, nil)
 	srv.SetConn(conn)
 
-	result, err := srv.callTool(context.Background(), "telemetry_logs", map[string]any{"max_batches": 1})
+	result, err := srv.callTool(context.Background(), "telemetry_logs", map[string]any{"max_batches": 1, "format": "otlp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestTelemetryLogs_HasStructuredContent(t *testing.T) {
 	srv := New(&config.Config{}, nil)
 	srv.SetConn(conn)
 
-	result, err := srv.callTool(context.Background(), "telemetry_logs", nil)
+	result, err := srv.callTool(context.Background(), "telemetry_logs", map[string]any{"format": "otlp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestTelemetryLogs_EmptyReturnsEmptyList(t *testing.T) {
 	srv := New(&config.Config{}, nil)
 	srv.SetConn(conn)
 
-	result, err := srv.callTool(context.Background(), "telemetry_logs", nil)
+	result, err := srv.callTool(context.Background(), "telemetry_logs", map[string]any{"format": "otlp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestTelemetryMetrics_ReturnsJSON(t *testing.T) {
 	srv := New(&config.Config{}, nil)
 	srv.SetConn(conn)
 
-	result, err := srv.callTool(context.Background(), "telemetry_metrics", nil)
+	result, err := srv.callTool(context.Background(), "telemetry_metrics", map[string]any{"format": "otlp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestTelemetryTraces_ReturnsJSON(t *testing.T) {
 	srv := New(&config.Config{}, nil)
 	srv.SetConn(conn)
 
-	result, err := srv.callTool(context.Background(), "telemetry_traces", nil)
+	result, err := srv.callTool(context.Background(), "telemetry_traces", map[string]any{"format": "otlp"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

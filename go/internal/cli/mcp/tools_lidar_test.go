@@ -188,7 +188,8 @@ func TestLidarToolFinalErrorBudgetKeepsObservationMetadataConsistent(t *testing.
 		if err := sendLidarSummary(stream, sample); err != nil {
 			return err
 		}
-		return status.Error(codes.Internal, strings.Repeat("failure", 60))
+		// Escaping expands the error in both JSON result representations.
+		return status.Error(codes.Internal, strings.Repeat("\"", 300))
 	}}
 	result := ros2Call(t, ros2TestServer(t, fake), context.Background(), "ros2_lidar_summary", map[string]any{"topic": "/points", "count": 2, "max_bytes": 3500})
 	env := structuredMap(t, result)

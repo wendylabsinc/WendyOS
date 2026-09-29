@@ -10,8 +10,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 )
 
-// All OAuth refreshes share a lock because different sessions also write the
-// same config.json. Hold it across reload, token rotation and persistence.
+// OAuth refreshes and the background update-check writer share this lock because
+// they replace the same config.json. Hold it across reload, token rotation and
+// persistence so the update check cannot restore a consumed refresh token.
 // Opening a separate file handle for each acquisition also serializes goroutines.
 func acquireAuthRefreshLock(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {

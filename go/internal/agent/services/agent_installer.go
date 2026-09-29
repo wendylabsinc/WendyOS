@@ -2,9 +2,8 @@ package services
 
 import "sync"
 
-// AgentInstaller guards agent binary replacement. A single instance is shared
-// between the v1 AgentService and the v2 AgentUpdateService so that concurrent
-// update calls from different API versions cannot race on the same executable.
+// AgentInstaller guards agent binary replacement and OS updates. A single
+// instance is shared by the v1 and v2 handlers so no two updates run at once.
 type AgentInstaller struct {
 	mu         sync.Mutex
 	isUpdating bool

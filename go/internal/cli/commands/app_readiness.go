@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,18 +18,17 @@ import (
 const (
 	// waitReadyStabilityWindow is how long --wait-ready watches an app it
 	// cannot probe from this machine (no readiness probe, or a cloud-tunnel
-	// device whose LAN address does not answer from here) before calling it
-	// running. 10 s is the agent restart monitor's restartBackoffBase and two
-	// of its default 5 s ticks: an app that dies at startup is by then either
-	// visibly not RUNNING (with the exit the agent recorded) or already
-	// restarted, which raises its failure_count.
+	// device with no active Wendy Mesh route whose LAN address does not answer
+	// from here) before calling it running. 10 s is the agent restart
+	// monitor's restartBackoffBase and two of its default 5 s ticks: an app
+	// that dies at startup is by then either visibly not RUNNING (with the
+	// exit the agent recorded) or already restarted, which raises its
+	// failure_count.
 	waitReadyStabilityWindow = 10 * time.Second
 	// waitReadyPollInterval paces --wait-ready's state polls and probe dials.
 	waitReadyPollInterval = time.Second
 	// waitReadyStateTimeout bounds each ListContainers poll, like readinessState.
 	waitReadyStateTimeout = 3 * time.Second
-	// waitReadyDialTimeout matches waitForReadiness's per-attempt dial timeout.
-	waitReadyDialTimeout = 2 * time.Second
 )
 
 // --wait-ready outcome vocabulary: the "status" and "readiness" values of the
@@ -255,9 +252,9 @@ func crashedOutcome(appID string, c *agentpb.AppContainer, baseline uint32, read
 // waitForAppReady is --wait-ready for an app the agent just confirmed started.
 // It probes the readiness port (explicit, or the http entitlement's) from this
 // machine when it can reach the device, within readinessProbeTimeout. Without
-// a probe, through the cloud tunnel when the device's LAN address does not
-// answer from here (see hostSideAppAddress), or over the on-device agent
-// socket, it instead requires the app to stay running for
+// a probe, through the cloud tunnel when neither Wendy Mesh nor the device's
+// LAN address reaches it from here (see hostSideAppAddress), or over the
+// on-device agent socket, it instead requires the app to stay running for
 // waitReadyStabilityWindow (shortened by a smaller --readiness-timeout),
 // polled via ListContainers.
 func waitForAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) waitReadyOutcome {
@@ -309,22 +306,19 @@ func waitForGatedAppReady(ctx context.Context, conn *grpcclient.AgentConnection,
 	}
 	switch {
 	case hasProbe && hostOK:
-		addr := net.JoinHostPort(host, strconv.Itoa(readiness.TCPSocket.Port))
+		addr, probeOnce, closeProbe := makeReadinessProbe(
+			host,
+			readiness.TCPSocket.Port,
+			cloudHTTPReadinessPort(conn, appCfg, readiness, host) != 0,
+		)
+		defer closeProbe()
 		checks.limit = readinessProbeTimeout(readiness, opts.readinessTimeout)
-		checks.probe = func(ctx context.Context) bool {
-			dialer := net.Dialer{Timeout: waitReadyDialTimeout}
-			connection, err := dialer.DialContext(ctx, "tcp", addr)
-			if err != nil {
-				return false
-			}
-			_ = connection.Close()
-			return true
-		}
+		checks.probe = func(ctx context.Context) bool { return probeOnce(ctx) == nil }
 		cliLogln("Waiting up to %s for %s to accept connections on %s...", checks.limit, containerDisplayName(appCfg), tui.Value(addr))
 	case hasProbe && agentSocket:
 		cliLogln("Not checking readiness from here: wendy reaches the device agent through its local socket (WENDY_AGENT_SOCKET) and has no address to probe the app at. Confirming %s stays running for %s instead...", containerDisplayName(appCfg), checks.limit)
 	case hasProbe:
-		cliLogln("Not checking readiness from this machine: the device is connected through Wendy Cloud and its LAN address is not reachable from here. Confirming %s stays running for %s instead...", containerDisplayName(appCfg), checks.limit)
+		cliLogln("Not checking readiness from this machine: the device is connected through Wendy Cloud, Wendy Mesh is not active, and its LAN address is not reachable from here. Confirming %s stays running for %s instead...", containerDisplayName(appCfg), checks.limit)
 	default:
 		cliLogln("No readiness probe configured; confirming %s stays running for %s...", containerDisplayName(appCfg), checks.limit)
 	}

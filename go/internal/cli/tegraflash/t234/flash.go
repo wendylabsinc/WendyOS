@@ -54,6 +54,9 @@ type Stage2 struct {
 	ImagesDir        string
 	Plan             *Plan
 	PortPath         string
+	// StrictPort rejects a sole gadget on another USB path. Durable jobs require
+	// this; the terminal installer permits the USB-speed topology fallback.
+	StrictPort       bool
 	Session          string
 	StatusPath       string
 	LogsPath         string
@@ -107,7 +110,7 @@ func (s *Stage2) SendFlashPackage(ctx context.Context) error {
 	// than the bootROM's recovery device, which moves it to the connector's
 	// other root-hub port (e.g. recovery high-speed at usb 1-1, SuperSpeed
 	// gadget at usb 1-2 — seen live on an Orin Nano on macOS).
-	disk, err := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: FlashpkgVendor, PortPath: s.PortPath, PortHint: true}, flashpkgWait)
+	disk, err := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: FlashpkgVendor, PortPath: s.PortPath, PortHint: !s.StrictPort}, flashpkgWait)
 	if err != nil {
 		return err
 	}
@@ -184,7 +187,7 @@ func (s *Stage2) verifyDeviceIdentity(ctx context.Context, disk UMSDisk) (UMSDis
 			return UMSDisk{}, ctx.Err()
 		case <-time.After(identityRetryDelay):
 		}
-		re, waitErr := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: disk.Vendor, PortPath: disk.PortPath, PortHint: true, Session: disk.Serial}, identityReattachWait)
+		re, waitErr := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: disk.Vendor, PortPath: disk.PortPath, PortHint: !s.StrictPort, Session: disk.Serial}, identityReattachWait)
 		if waitErr != nil {
 			if ctx.Err() != nil {
 				return UMSDisk{}, ctx.Err()

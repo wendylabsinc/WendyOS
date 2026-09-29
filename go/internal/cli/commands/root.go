@@ -90,7 +90,7 @@ func NewRootCmd() *cobra.Command {
 			}
 
 			if dueCLIUpdateCheck(cfg) {
-				scheduleCLIUpdateCheck(cfg)
+				scheduleCLIUpdateCheck()
 			}
 			premark("  prerun: dueCLIUpdateCheck")
 

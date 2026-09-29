@@ -29,12 +29,12 @@ const chunkPushInteractiveTickInterval = 200 * time.Millisecond
 //
 // Detach needs no branch here: it only diverges after Started, downstream
 // of this call.
-func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc) ([]*agentpb.RunContainerLayerHeader, error) {
+func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServiceClient, layers []localLayer, prepare imagePrepareFunc, cfg chunkUploadConfig) ([]*agentpb.RunContainerLayerHeader, error) {
 	prog := newChunkPushProgress()
 
 	if !buildProgressInteractive() {
 		stop := startChunkPushHeartbeat(prog, buildProgressOut, tui.PlainHeartbeatInterval)
-		headers, err := pushLayersByChunksWithPrepareMode(ctx, cs, layers, prepare, nil, false, prog)
+		headers, err := pushLayersByChunksWithPrepareMode(ctx, cs, layers, prepare, nil, false, prog, cfg)
 		stop()
 		if err != nil {
 			return nil, err
@@ -59,7 +59,7 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 	)
 	go func() {
 		defer close(done)
-		h, err := pushLayersByChunksWithPrepareMode(pushCtx, cs, layers, prepare, nil, false, prog)
+		h, err := pushLayersByChunksWithPrepareMode(pushCtx, cs, layers, prepare, nil, false, prog, cfg)
 		headers, pushErr = h, err
 		tp.Send(tui.ProgressDoneMsg{Err: err})
 	}()

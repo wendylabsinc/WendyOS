@@ -84,9 +84,22 @@ func (d *Device) Push(r io.Reader, remotePath string, mode int) error {
 // the interface synchronously when a previous process exits, so a claim can
 // briefly fail with "bad access" until the kernel frees it.
 func Open() (*Device, error) {
+	return openAt(os.Getenv("WENDY_ADB_PATH"), false)
+}
+
+// OpenAt requires the Thor flashing gadget at this exact physical USB path.
+// It never falls back to another ADB device when USB topology changes.
+func OpenAt(path string) (*Device, error) {
+	if path == "" {
+		return nil, fmt.Errorf("a physical USB path is required")
+	}
+	return openAt(path, true)
+}
+
+func openAt(path string, strict bool) (*Device, error) {
 	var lastErr error
 	for attempt := 0; attempt < 12; attempt++ {
-		d, err := openOnce()
+		d, err := openOnce(path, strict)
 		if err == nil {
 			return d, nil
 		}
@@ -101,15 +114,17 @@ func Open() (*Device, error) {
 // Callers classify it to show the right remediation.
 var ErrUSBAccess = errors.New("USB access denied opening the flashing gadget")
 
-func openOnce() (*Device, error) {
+func openOnce(wantPath string, strict bool) (*Device, error) {
 	ctx := gousb.NewContext()
 	ctx.Debug(0)
 
 	// Open every device exposing an ADB interface; we select among them below. We do
 	// NOT pre-filter by WENDY_ADB_PATH here because the flashing gadget can
 	// re-enumerate at a different USB location than the RCM device was selected at.
-	wantPath := os.Getenv("WENDY_ADB_PATH")
 	devs, err := ctx.OpenDevices(func(desc *gousb.DeviceDesc) bool {
+		if strict && (adbPortKey(desc) != wantPath || uint16(desc.Vendor) != 0x0955 || uint16(desc.Product) != 0x7100) {
+			return false
+		}
 		_, _, _, ok := findADBInterface(desc)
 		return ok
 	})
@@ -142,7 +157,7 @@ func openOnce() (*Device, error) {
 			}
 		}
 		if sel == -1 {
-			if len(devs) == 1 {
+			if len(devs) == 1 && !strict {
 				sel = 0
 				fmt.Fprintf(os.Stderr, "wendy adb: no ADB device at usb %s; using the only ADB device present (usb %s)\n", wantPath, adbPortKey(devs[0].Desc))
 			} else {

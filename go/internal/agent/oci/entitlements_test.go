@@ -1085,6 +1085,63 @@ func TestApplyEntitlements_Multiple(t *testing.T) {
 	}
 }
 
+func TestApplyEntitlements_USB(t *testing.T) {
+	originalDir := usbDeviceDir
+	t.Cleanup(func() { usbDeviceDir = originalDir })
+
+	dir := t.TempDir()
+	regularFile := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(regularFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		hostPath  string
+		wantMount bool
+	}{
+		{name: "present", hostPath: dir, wantMount: true},
+		{name: "absent", hostPath: filepath.Join(dir, "absent")},
+		{name: "not a directory", hostPath: regularFile},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			usbDeviceDir = tc.hostPath
+			for _, camera := range []bool{false, true} {
+				t.Run(fmt.Sprintf("camera=%t", camera), func(t *testing.T) {
+					spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+					cfg := &appconfig.AppConfig{AppID: "test-app"}
+					if camera {
+						cfg.Entitlements = append(cfg.Entitlements, appconfig.Entitlement{Type: appconfig.EntitlementCamera})
+					}
+					cfg.Entitlements = append(cfg.Entitlements, appconfig.Entitlement{Type: appconfig.EntitlementUSB})
+					if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+						t.Fatalf("ApplyEntitlements() error = %v", err)
+					}
+
+					mount, mounted := mountForDest(spec, "/dev/bus/usb")
+					if mounted != tc.wantMount {
+						t.Fatalf("USB mount present = %t, want %t for host path %q", mounted, tc.wantMount, tc.hostPath)
+					}
+					if mounted {
+						if mount.Source != tc.hostPath || mount.Type != "bind" {
+							t.Errorf("USB mount = %+v, want bind from %q", mount, tc.hostPath)
+						}
+						if !slices.Contains(mount.Options, "rbind") || !slices.Contains(mount.Options, "rw") {
+							t.Errorf("USB mount options = %v, want rbind and rw", mount.Options)
+						}
+					}
+					if access, ok := majorRuleAccess(spec, 189); !ok || access != "rw" {
+						t.Errorf("USB cgroup access = %q, present = %t, want rw", access, ok)
+					}
+					if hasAllowAllDeviceRule(spec) {
+						t.Error("USB entitlement must not grant access to all devices")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestApplyEntitlements_Input(t *testing.T) {
 	originalLookup := lookupInputGID
 	t.Cleanup(func() { lookupInputGID = originalLookup })

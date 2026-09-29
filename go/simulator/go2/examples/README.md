@@ -48,8 +48,9 @@ while walking. The virtual lidar pattern and mounting calibration remain synthet
 Occluded sectors can stop a patrol even if the nearest visible obstacle is distant.
 
 Odometry uses `/utlidar/robot_odom`, from `odom` to `base_link`. Patrol and Roam
-Docker launches temporarily enable `--ignore-capture-age` and `--allow-scan-gaps`.
-The first uses local arrival time for the 350 ms sensor timeout, allowing boards
+Docker launches wait for an explicit Start service call and enforce capture-age
+and scan-coverage checks. Optional compatibility flags are
+`--ignore-capture-age` and `--allow-scan-gaps`. The first uses local arrival time for the 350 ms sensor timeout, allowing boards
 with unsynchronized clocks. The second allows missing projected returns while
 requiring measured front clearance. Roam also requires measured clearance in
 its chosen turn sectors. Detected obstacles still constrain motion; obstacles
@@ -60,8 +61,8 @@ The Sensors Docker launch enables `--ignore-capture-age` with its existing
 600 ms timeout. It already displays partial clouds. Teleop has no sensor capture
 or coverage checks; its browser heartbeat timeout remains 250 ms.
 
-Remove these flags from the Docker commands to restore strict capture age and
-coverage checks. Strict capture checks require synchronized clocks or an
+Keep the default strict checks when transferring to hardware; diagnose readiness
+failures before choosing a compatibility flag. Strict capture checks require synchronized clocks or an
 independently measured `GO2_SENSOR_CLOCK_OFFSET_SECONDS`, defined as sensor clock
 minus application clock. Arrival time cannot reveal delayed captures. Positive,
 advancing timestamps, frame validation and cloud/odometry pairing within 100 ms

@@ -41,6 +41,7 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 | `hooks` | object | no | Lifecycle hooks for this service. Same schema as the top-level `hooks` field. |
 | `resources` | object | no | CPU/memory/PID ceilings for this service. Overrides the top-level [`resources`](./wendy.json.md#resources) per field. |
 | `frameworks` | object | no | Framework configuration (e.g. ROS 2) for this service, replacing the top-level `frameworks`. |
+| `simulation` | object | no | Explicit environment and entitlement overrides for a matching managed robot VM. See [Simulation backends](#simulation-backends). |
 
 ### Validation rules
 
@@ -58,6 +59,45 @@ Each key is a service name. Each value is a `ServiceConfig` object:
 - More than one `mcp` entitlement within a single service's `entitlements` array.
 
 `ValidateJSON` additionally warns on deprecated entitlement types and unknown entitlement keys within service-level `entitlements` arrays, using the same rules applied to the top-level `entitlements` field.
+
+## Simulation backends
+
+A service can use hardware drivers on a physical device and an app-authored
+backend on a managed robot VM. Declare the simulator grants explicitly:
+
+```json
+{
+  "appId": "com.example.robot",
+  "services": {
+    "camera": {
+      "context": "camera",
+      "entitlements": [{ "type": "usb" }],
+      "simulation": {
+        "profile": "rosmaster-r2",
+        "entitlements": [{ "type": "network", "mode": "host" }],
+        "env": { "R2_SIMULATOR_URL": "http://127.0.0.1:8890" }
+      }
+    }
+  }
+}
+```
+
+The camera image in this example must implement both its USB driver and the
+HTTP simulator backend selected by `R2_SIMULATOR_URL`. Wendy does not translate
+hardware SDK calls or emulate USB/serial firmware.
+
+`profile` must be `rosmaster-r2`, `go2` or `g1`. `entitlements` is required and
+must contain at least one grant. On the matching managed VM, it replaces the
+service's normal entitlements; `env` overlays the service environment per key.
+CLI `--env` values retain precedence. A different managed robot profile is an
+error. Physical devices use the normal configuration. Services without an
+override keep their existing configuration.
+
+Selection happens after resolving the managed VM and before building and
+deploying. It changes the in-memory configuration only. The manifest, build
+context and Dockerfile stay the same. See the
+[R2 exploration tutorial](/docs/guides/tutorials/python/r2-explorer) for a standalone
+app that uses the simulator's lidar, camera and control APIs.
 
 ## Readiness and lifecycle hooks
 

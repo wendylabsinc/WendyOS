@@ -19,6 +19,12 @@ A saved default bypasses the picker. Use `wendy run --device <name-or-address>` 
 
 Install both QEMU and its ARM64 firmware. On Debian or Ubuntu, run `sudo apt install qemu-system-arm qemu-efi-aarch64`. See [simulator setup](/docs/installation/wendyos-virtual-machine).
 
+## TLS authentication failed
+
+If a command reports `TLS authentication failed. Your certificates may be outdated or incompatible with the device.`, run [`wendy auth refresh-certs`](/docs/advanced/clients/wendy-cli/commands/auth/refresh-certs), then retry the original command. If it still fails, rerun with `WENDY_TLS_DEBUG=1` to see TLS diagnostics.
+
+Simulator startup stops retrying when authentication is rejected. It reports the authentication error without the boot-console tail. See [simulator startup and authentication failures](/docs/advanced/clients/wendy-cli/device-selection#simulator-startup-and-authentication-failures).
+
 ## Image build fails
 
 Read the first build error above the deployment failure. For the HTTP quickstart, confirm that Docker and Buildx are installed and Docker is running, or configure the [Apple Container builder](/docs/advanced/clients/wendy-cli/commands/run#image-build-args). Use `wendy run --verbose` to keep build output visible.

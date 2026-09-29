@@ -1,8 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "wendy-agentic-coding",
-  "description": "Reusable Wendy CLI, wendy-agent, WendyOS, project setup, wendy.json, entitlement, device ops, MCP, app lifecycle, and device debugging workflows for Claude Code.",
-  "version": "0.5.3",
+  "description": "Wendy CLI setup, device installation and first-boot checks, template apps, explicit deployment targets, ROS 2 and robot verification workflows.",
+  "version": "0.6.0",
   "author": {
     "name": "Wendy Labs",
     "url": "https://github.com/wendylabsinc"
@@ -24,7 +24,6 @@
   ],
   "skills": "./skills/",
   "commands": "./commands/",
-  "agents": ["./agents/wendy-runtime-debugger.md"],
   "hooks": {
     "Setup": [
       {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -137,13 +140,16 @@ type fakeContainerClient struct {
 	agentpb.WendyContainerServiceClient // embedded nil — satisfies interface
 	queryFn                             func(*agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse
 	queryLayersFn                       func(*agentpb.QueryLayersRequest) *agentpb.QueryLayersResponse
-	writeFn                             func(*agentpb.WriteChunksRequest) error
+	writeFn                             func(*agentpb.WriteChunksRequest) error // called from several streams at once
 	closeErr                            error
-	chunksWritten                       int
-	writeStreams                        int
 	writeStarted                        chan struct{}
 	blockWrites                         bool
 	writeOnce                           sync.Once
+
+	mu            sync.Mutex // guards the counters below; uploads run several streams
+	chunksWritten int
+	writeStreams  int
+	compressors   []string
 }
 
 // TestPushLayersByChunksPreparesDuringUpload proves the preparation RPC is
@@ -231,7 +237,7 @@ func TestPushLayersByChunksStrictPrepareReturnsUnimplemented(t *testing.T) {
 		Blob:      layerTar,
 	}}, func(context.Context, []*agentpb.RunContainerLayerHeader) error {
 		return status.Error(codes.Unimplemented, "old agent")
-	}, nil)
+	}, nil, gzipChunkUploadConfig)
 	if status.Code(err) != codes.Unimplemented {
 		t.Fatalf("strict preparation error = %v, want Unimplemented", err)
 	}
@@ -254,7 +260,7 @@ func TestPushLayersByChunksReportsPostUploadPreparation(t *testing.T) {
 		_, err := pushLayersByChunksWithStrictPrepareOutput(context.Background(), fake, []localLayer{{DiffID: diffID}}, func(context.Context, []*agentpb.RunContainerLayerHeader) error {
 			<-release
 			return nil
-		}, recorder)
+		}, recorder, gzipChunkUploadConfig)
 		done <- err
 	}()
 
@@ -302,7 +308,7 @@ func TestPushLayersByChunksStrictPrepareCancelsUploadOnPrepareFailure(t *testing
 	}}, func(context.Context, []*agentpb.RunContainerLayerHeader) error {
 		<-fake.writeStarted
 		return status.Error(codes.Unimplemented, "old agent")
-	}, nil)
+	}, nil, gzipChunkUploadConfig)
 	if status.Code(err) != codes.Unimplemented {
 		t.Fatalf("strict preparation error = %v, want Unimplemented", err)
 	}
@@ -328,8 +334,17 @@ func (f *fakeContainerClient) QueryLayers(_ context.Context, in *agentpb.QueryLa
 	return f.queryLayersFn(in), nil
 }
 
-func (f *fakeContainerClient) WriteChunks(ctx context.Context, _ ...grpc.CallOption) (grpc.ClientStreamingClient[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse], error) {
+func (f *fakeContainerClient) WriteChunks(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse], error) {
+	compressor := ""
+	for _, o := range opts {
+		if c, ok := o.(grpc.CompressorCallOption); ok {
+			compressor = c.CompressorType
+		}
+	}
+	f.mu.Lock()
 	f.writeStreams++
+	f.compressors = append(f.compressors, compressor)
+	f.mu.Unlock()
 	return &fakeWriteChunksStream{parent: f, ctx: ctx}, nil
 }
 
@@ -341,7 +356,9 @@ type fakeWriteChunksStream struct {
 }
 
 func (s *fakeWriteChunksStream) Send(req *agentpb.WriteChunksRequest) error {
+	s.parent.mu.Lock()
 	s.parent.chunksWritten++
+	s.parent.mu.Unlock()
 	if s.parent.writeStarted != nil {
 		s.parent.writeOnce.Do(func() { close(s.parent.writeStarted) })
 	}
@@ -389,8 +406,10 @@ func TestPushLayerByChunksSurfacesTerminalWriteStatusAfterSendEOF(t *testing.T) 
 func TestPushLayerByChunksBatchesLongUploads(t *testing.T) {
 	manifestCacheTestDir = t.TempDir()
 	t.Cleanup(func() { manifestCacheTestDir = "" })
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "") // a developer's benchmarking knobs must not leak in
+	t.Setenv("WENDY_CHUNK_UPLOAD_BATCH", "")
 
-	layerTar := variedChunkTestData((maxChunksPerWriteStream + 8) * int(chunk.MaxSize))
+	layerTar := variedChunkTestData((chunkupload.DefaultBatchChunks + 8) * int(chunk.MaxSize))
 	fake := &fakeContainerClient{
 		queryFn: func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
 			return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
@@ -403,12 +422,51 @@ func TestPushLayerByChunksBatchesLongUploads(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if fake.chunksWritten <= maxChunksPerWriteStream {
-		t.Fatalf("fixture wrote %d chunks, want more than one %d-chunk batch", fake.chunksWritten, maxChunksPerWriteStream)
+	if fake.chunksWritten <= chunkupload.DefaultBatchChunks {
+		t.Fatalf("fixture wrote %d chunks, want more than one %d-chunk batch", fake.chunksWritten, chunkupload.DefaultBatchChunks)
 	}
-	wantStreams := (fake.chunksWritten + maxChunksPerWriteStream - 1) / maxChunksPerWriteStream
+	wantStreams := (fake.chunksWritten + chunkupload.DefaultBatchChunks - 1) / chunkupload.DefaultBatchChunks
 	if fake.writeStreams != wantStreams {
 		t.Fatalf("WriteChunks streams = %d, want %d for %d chunks", fake.writeStreams, wantStreams, fake.chunksWritten)
+	}
+	for _, c := range fake.compressors {
+		if c != chunkupload.Gzip {
+			t.Fatalf("stream compressor = %q, want gzip: pushLayerByChunks is deliberately gzip-only", c)
+		}
+	}
+}
+
+func TestChunkUploadTuningReadsBenchmarkKnobs(t *testing.T) {
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "")
+	t.Setenv("WENDY_CHUNK_UPLOAD_BATCH", "")
+	if s, b := chunkUploadTuning(); s != chunkupload.DefaultStreams || b != chunkupload.DefaultBatchChunks {
+		t.Fatalf("defaults = %d/%d", s, b)
+	}
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "6")
+	t.Setenv("WENDY_CHUNK_UPLOAD_BATCH", "1024")
+	if s, b := chunkUploadTuning(); s != 6 || b != 1024 {
+		t.Fatalf("knobs = %d/%d, want 6/1024", s, b)
+	}
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "0")
+	t.Setenv("WENDY_CHUNK_UPLOAD_BATCH", "lots")
+	if s, b := chunkUploadTuning(); s != chunkupload.DefaultStreams || b != chunkupload.DefaultBatchChunks {
+		t.Fatalf("invalid knobs must keep defaults, got %d/%d", s, b)
+	}
+	// The streams range is clamped to upload.go's process-wide cap (8): 1 and
+	// 8 are the boundary values that must still be honored, and 9 is one past
+	// the cap and must fall back to the default rather than silently behave
+	// as 8 while a benchmark believes it measured 9.
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "1")
+	if s, _ := chunkUploadTuning(); s != 1 {
+		t.Fatalf("streams = %d, want the minimum 1 to be honored", s)
+	}
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "8")
+	if s, _ := chunkUploadTuning(); s != 8 {
+		t.Fatalf("streams = %d, want the cap 8 to be honored", s)
+	}
+	t.Setenv("WENDY_CHUNK_UPLOAD_STREAMS", "9")
+	if s, _ := chunkUploadTuning(); s != chunkupload.DefaultStreams {
+		t.Fatalf("streams = %d, want one past the cap to fall back to the default %d", s, chunkupload.DefaultStreams)
 	}
 }
 
@@ -441,7 +499,7 @@ func TestResolvedChunkLayerUploadSendsDuplicateHashOnce(t *testing.T) {
 		},
 	}
 	progress := newChunkPushProgress()
-	if err := resolved.upload(context.Background(), fake, nil, nil, progress); err != nil {
+	if err := resolved.upload(context.Background(), fake, nil, nil, progress, chunkupload.Gzip, nil); err != nil {
 		t.Fatal(err)
 	}
 	if fake.chunksWritten != 1 {
@@ -615,6 +673,7 @@ func TestPushLayersByChunksOverlapsRemotePreflightAndLocalCacheReads(t *testing.
 				<-cacheRelease
 				return nil, false
 			},
+			gzipChunkUploadConfig,
 		)
 		done <- err
 	}()
@@ -736,7 +795,7 @@ func TestPushLayersByChunksReportsProgress(t *testing.T) {
 			MediaType: "application/vnd.oci.image.layer.v1.tar",
 			Blob:      layerTar,
 		},
-	}, nil, nil, false, prog)
+	}, nil, nil, false, prog, gzipChunkUploadConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -803,7 +862,7 @@ func TestPushLayersByChunksReuseLineSkipsInteractive(t *testing.T) {
 		restore := forceBuildProgressInteractive(true)
 		defer restore()
 		out := captureStderr(t, func() {
-			if _, err := pushLayersByChunksWithPrepareMode(context.Background(), newFake(), layers, nil, nil, false, newChunkPushProgress()); err != nil {
+			if _, err := pushLayersByChunksWithPrepareMode(context.Background(), newFake(), layers, nil, nil, false, newChunkPushProgress(), gzipChunkUploadConfig); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -816,7 +875,7 @@ func TestPushLayersByChunksReuseLineSkipsInteractive(t *testing.T) {
 		restore := forceBuildProgressInteractive(false)
 		defer restore()
 		out := captureStderr(t, func() {
-			if _, err := pushLayersByChunksWithPrepareMode(context.Background(), newFake(), layers, nil, nil, false, newChunkPushProgress()); err != nil {
+			if _, err := pushLayersByChunksWithPrepareMode(context.Background(), newFake(), layers, nil, nil, false, newChunkPushProgress(), gzipChunkUploadConfig); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -824,4 +883,125 @@ func TestPushLayersByChunksReuseLineSkipsInteractive(t *testing.T) {
 			t.Fatalf("non-interactive/plain mode should keep the reuse line (nothing else renders to stderr there), got %q", out)
 		}
 	})
+}
+
+// TestChunkPushWatchdogStopsAWedgedUncompressedUpload: an uncompressed push
+// whose link wedges with streams open fails with ErrStalled shortly after the
+// stall timeout, instead of waiting out the 15-minute keepalive. A gzip push
+// runs no watchdog.
+func TestChunkPushWatchdogStopsAWedgedUncompressedUpload(t *testing.T) {
+	restore := forceBuildProgressInteractive(false)
+	defer restore()
+	var out strings.Builder
+	restoreOut := setBuildProgressOut(&out)
+	defer restoreOut()
+	t.Setenv("WENDY_CHUNK_UPLOAD_BATCH", "16")
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+
+	layerTar := variedChunkTestData(200 * 64 << 10)
+	layers := []localLayer{{
+		Digest:    "sha256:" + sha256Hex(layerTar),
+		MediaType: "application/vnd.oci.image.layer.v1.tar",
+		Blob:      layerTar,
+	}}
+	agent := &probeAgent{dev: &probeDevice{staged: map[[32]byte]int{}}, stallAfter: 40}
+	conn, _ := startProbeAgent(t, agent)
+	cfg := chunkUploadConfig{stallTimeout: 300 * time.Millisecond}
+
+	start := time.Now()
+	_, err := pushLayersByChunksWithPrepareModeAndCache(context.Background(), conn.ContainerService, layers, nil, nil, false, nil, loadManifestCache, cfg)
+	if !errors.Is(err, chunkupload.ErrStalled) {
+		t.Fatalf("error = %v, want ErrStalled", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("stall surfaced after %v, want about the 300ms timeout", took)
+	}
+	for _, enc := range agent.encodings() {
+		if enc != "" {
+			t.Fatalf("uncompressed push opened a %q stream", enc)
+		}
+	}
+
+	gz := &probeAgent{dev: &probeDevice{staged: map[[32]byte]int{}}}
+	gzConn, _ := startProbeAgent(t, gz)
+	if _, err := pushLayersByChunksWithPrepareModeAndCache(context.Background(), gzConn.ContainerService, layers, nil, nil, false, nil, loadManifestCache, gzipChunkUploadConfig); err != nil {
+		t.Fatal(err)
+	}
+	encs := gz.encodings()
+	if len(encs) == 0 {
+		t.Fatal("gzip push opened no streams")
+	}
+	for _, enc := range encs {
+		if enc != "gzip" {
+			t.Fatalf("gzip push opened a %q stream", enc)
+		}
+	}
+}
+
+// TestPushLayersByChunksWithStrictPrepareOutputRecordsAStall is C1's
+// real-path regression. It runs the watchdog through the actual strict-prepare
+// caller (Compose), with a prepare func shaped exactly like the real agent's
+// PrepareImage: it blocks on its context and, once cancelPrepare() cancels it
+// (fired when the watchdog cancels the upload), returns a bare Canceled
+// status — never ErrStalled itself. Before the C1 fix, that Canceled prepare
+// error overrode uploadErr, so pushLayersByChunksWithPrepareModeAndCache
+// returned Canceled instead of ErrStalled and noteComposeChunkStall never
+// matched, silently dropping the stall.
+func TestPushLayersByChunksWithStrictPrepareOutputRecordsAStall(t *testing.T) {
+	manifestCacheTestDir = t.TempDir()
+	chunkStallTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = ""; chunkStallTestDir = "" })
+
+	layerTar := variedChunkTestData(200 * 64 << 10)
+	layers := []localLayer{{
+		Digest:    "sha256:" + sha256Hex(layerTar),
+		MediaType: "application/vnd.oci.image.layer.v1.tar",
+		Blob:      layerTar,
+	}}
+	agent := &probeAgent{dev: &probeDevice{staged: map[[32]byte]int{}}, stallAfter: 40}
+	conn, _ := startProbeAgent(t, agent)
+	cfg := chunkUploadConfig{stallTimeout: 300 * time.Millisecond, stallKey: "0123abcd@0.19.3"}
+
+	prepare := func(prepareCtx context.Context, _ []*agentpb.RunContainerLayerHeader) error {
+		<-prepareCtx.Done()
+		return status.Error(codes.Canceled, "context canceled")
+	}
+
+	_, err := pushLayersByChunksWithStrictPrepareOutput(context.Background(), conn.ContainerService, layers, prepare, nil, cfg)
+	if !errors.Is(err, chunkupload.ErrStalled) {
+		t.Fatalf("error = %v, want ErrStalled (the strict-prepare Canceled error masked the stall)", err)
+	}
+
+	// The chain works end to end: Compose's noteComposeChunkStall recognizes
+	// this exact error and remembers the device.
+	var log strings.Builder
+	noteComposeChunkStall(&log, err, cfg)
+	if !chunkUploadStalledRecently(cfg.stallKey, time.Now()) {
+		t.Fatal("the stall was not remembered")
+	}
+}
+
+// TestComposeChunkStallIsRemembered: compose has no reconnect-and-retry loop;
+// a stall falls through to its registry fallback, and the device is
+// remembered so the next deploy uses gzip.
+func TestComposeChunkStallIsRemembered(t *testing.T) {
+	chunkStallTestDir = t.TempDir()
+	t.Cleanup(func() { chunkStallTestDir = "" })
+	cfg := chunkUploadConfig{stallTimeout: chunkStallTimeout, stallKey: "0123abcd@0.19.3"}
+
+	var log strings.Builder
+	noteComposeChunkStall(&log, fmt.Errorf("pushing: %w", chunkupload.ErrStalled), cfg)
+	if !chunkUploadStalledRecently("0123abcd@0.19.3", time.Now()) {
+		t.Fatal("a compose stall was not remembered")
+	}
+	if !strings.Contains(log.String(), "gzip") {
+		t.Fatalf("no notice: %q", log.String())
+	}
+
+	log.Reset()
+	noteComposeChunkStall(&log, errors.New("some other failure"), cfg)
+	if log.Len() != 0 {
+		t.Fatalf("a non-stall failure printed %q", log.String())
+	}
 }

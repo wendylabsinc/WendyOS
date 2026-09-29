@@ -731,3 +731,14 @@ func TestWaitForAudioSession(t *testing.T) {
 		t.Error("timeout should proceed anyway rather than skip the reconnect")
 	}
 }
+
+func TestNewManager_WithLinkReporter(t *testing.T) {
+	r := fakeLinkReporter{}
+	m, ok := NewManager(zap.NewNop(), WithLinkReporter(r)).(*BlueZManager)
+	if !ok {
+		t.Fatal("NewManager did not return a *BlueZManager")
+	}
+	if _, ok := m.links.(fakeLinkReporter); !ok {
+		t.Errorf("manager links = %T; want the reporter passed in", m.links)
+	}
+}

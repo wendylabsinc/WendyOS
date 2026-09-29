@@ -1310,15 +1310,22 @@ func applyBluetooth(spec *Spec, proxySocketDir string) {
 	)
 }
 
+// usbDeviceDir is the host USB device tree. Tests redirect it to a temporary
+// directory to cover hosts with and without a USB bus.
+var usbDeviceDir = "/dev/bus/usb"
+
 // applyUSB adds USB device access.
 func applyUSB(spec *Spec) {
-	// Mount /dev/bus/usb for USB access.
-	spec.Mounts = append(spec.Mounts, Mount{
-		Destination: "/dev/bus/usb",
-		Source:      "/dev/bus/usb",
-		Type:        "bind",
-		Options:     []string{"rbind", "rw"},
-	})
+	// Hosts without a USB bus (including VMs) may have no /dev/bus/usb.
+	// A bind mount with a missing source prevents the container from starting.
+	if fi, err := os.Stat(usbDeviceDir); err == nil && fi.IsDir() {
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: "/dev/bus/usb",
+			Source:      usbDeviceDir,
+			Type:        "bind",
+			Options:     []string{"rbind", "rw"},
+		})
+	}
 
 	// Allow USB devices (major 189). Whole-major is kept: /dev/bus/usb is a tree
 	// of per-device nodes that hotplug re-mints under new minors, so the minors

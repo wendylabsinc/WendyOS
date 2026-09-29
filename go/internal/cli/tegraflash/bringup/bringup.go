@@ -54,6 +54,8 @@ type Options struct {
 	// ExpectedProduct pins the selected Jetson family across the re-open. This
 	// prevents a different Jetson on the same host from satisfying the wait.
 	ExpectedProduct uint16
+	// ExpectedECID pins the chip on the claimed handle, before any boot upload.
+	ExpectedECID string
 	// SendOrder is the bootROM image filenames to send, in order. Empty uses the
 	// built-in default (bct_br → mb1 → psc_bl1 → bct_mb1). Driving this from the
 	// flashpack manifest lets a future BSP reorder the chain without a code change.
@@ -107,6 +109,9 @@ func Run(opts Options) error {
 		return fmt.Errorf("waiting for device: %w", err)
 	}
 	defer dev.Close()
+	if err := rcm.VerifyChipID(opts.ExpectedECID, dev.ReadChipID); err != nil {
+		return err
+	}
 	fmt.Fprintf(out, "  device: %s\n", dev.String())
 
 	fmt.Fprintf(out, "Sending %d bootROM images (%s)...\n", len(order), strings.Join(order, ", "))

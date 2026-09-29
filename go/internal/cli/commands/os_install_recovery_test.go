@@ -65,8 +65,11 @@ func TestRootfsOnlyManifestDoesNotFallBackToLegacy(t *testing.T) {
 	if _, err := getRootfsOnlyImageInfo(dm, "1", "nvme"); err == nil {
 		t.Fatal("rootfs-only resolver used a legacy image field")
 	}
-	dm.Versions["1"] = deviceVersion{InstallMode: "recovery", NVMERootfsOnlyPath: "rootfs.img", NVMERootfsOnlySizeBytes: 12}
+	dm.Versions["1"] = deviceVersion{InstallMode: "recovery", NVMERootfsOnlyPath: "rootfs.img", NVMERootfsOnlySizeBytes: 12, NVMERootfsOnlyChecksum: "raw-sha", NVMERootfsOnlyZstChecksum: "compressed-sha", Checksum: "wrong-legacy-sha"}
 	info, err := getRootfsOnlyImageInfo(dm, "1", "nvme")
+	if err == nil && (info.Checksum != "raw-sha" || info.ZstChecksum != "compressed-sha") {
+		t.Fatalf("rootfs-only checksums lost or taken from legacy artifact: %+v", info)
+	}
 	if err != nil || !strings.HasSuffix(info.DownloadURL, "/rootfs.img") {
 		t.Fatalf("rootfs-only info = %+v, %v", info, err)
 	}

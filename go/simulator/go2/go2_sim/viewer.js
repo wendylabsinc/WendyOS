@@ -5,9 +5,14 @@ import { LidarView } from './lidar-view.js';
 // MuJoCo remains the authority: the browser only interpolates world poses.
 // Geometry is fetched once per model; polling is bounded to one request at a time.
 export class SandboxViewer {
-  constructor(canvas, status) {
+  constructor(canvas, status, options = {}) {
     this.canvas = canvas;
     this.status = status;
+    this.fetchJSON = options.request;
+    this.frameInterval = options.frameInterval || 1000 / 30;
+    this.disposed = false;
+    this.controller = new AbortController();
+    this.viewOffset = options.viewOffset || [1.35, -1.6, 0.95];
     this.messageText = 'Loading 3D scene…';
     this.active = true;
     this.followRobot = true;
@@ -29,6 +34,7 @@ export class SandboxViewer {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
     this.controls = new OrbitControls(this.camera, canvas);
+    this.controls.enableZoom = options.wheelZoom !== false;
     this.controls.addEventListener('change', () => { this.needsRender = true; });
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.12;
@@ -56,7 +62,9 @@ export class SandboxViewer {
     grid.rotation.x = Math.PI / 2;
     grid.position.z = 0.002;
     this.scene.add(grid);
-    this.lidar = new LidarView(this.scene);
+    this.lidar = new LidarView(this.scene, options.request);
+    this.lidarAvailable = options.lidar !== false;
+    this.lidar.setEnabled(this.lidarAvailable);
     this.nextPosition = new THREE.Vector3();
     this.nextQuaternion = new THREE.Quaternion();
 
@@ -69,10 +77,11 @@ export class SandboxViewer {
       this.needsRender = true;
     });
     this.resize.observe(canvas);
-    canvas.addEventListener('webglcontextlost', () => {
+    this.contextLostListener = () => {
       this.contextLost = true;
       this.message('3D graphics interrupted. Reload this page to restore the view.');
-    });
+    };
+    canvas.addEventListener('webglcontextlost', this.contextLostListener);
     this.renderer.setAnimationLoop(now => this.draw(now));
     this.poll();
   }
@@ -107,7 +116,7 @@ export class SandboxViewer {
   }
 
   setLidarEnabled(enabled) {
-    this.lidar.setEnabled(enabled);
+    this.lidar.setEnabled(this.lidarAvailable && enabled);
     this.needsRender = true;
   }
 
@@ -118,7 +127,7 @@ export class SandboxViewer {
     this.controls.enableDamping = false;
     this.controls.reset();
     this.controls.target.copy(target);
-    this.camera.position.copy(target).add(new THREE.Vector3(1.35, -1.6, 0.95));
+    this.camera.position.copy(target).add(new THREE.Vector3(...this.viewOffset));
     this.controls.update();
     this.controls.enableDamping = true;
     this.needsRender = true;
@@ -218,12 +227,14 @@ export class SandboxViewer {
   }
 
   async json(path) {
-    const response = await fetch(path, { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+    if (this.fetchJSON) return this.fetchJSON(path);
+    const response = await fetch(path, { cache: 'no-store', signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(15000)]) });
     if (!response.ok) throw Error(`Scene unavailable (${response.status})`);
     return response.json();
   }
 
   async poll() {
+    if (this.disposed) return;
     let delay = 100;
     const started = performance.now();
     try {
@@ -231,30 +242,32 @@ export class SandboxViewer {
         if (!this.sceneId) {
           this.message('Loading 3D scene…');
           const model = await this.json('/api/scene');
+          if (this.disposed) return;
           this.loadScene(model);
           if (!this.active || document.hidden) return;
         }
         const state = await this.json('/api/scene/state');
-        if (!this.active || document.hidden) return;
+        if (this.disposed || !this.active || document.hidden) return;
         if (state.scene_id !== this.sceneId) {
           this.sceneId = null;
           this.samples = [];
         } else {
           this.acceptState(state);
         }
-        delay = Math.max(0, 1000 / 30 - (performance.now() - started));
+        delay = Math.max(0, this.frameInterval - (performance.now() - started));
       }
     } catch (error) {
+      if (this.disposed) return;
       this.message('Connection interrupted · retrying…');
       if (this.active) this.status.title = error.message;
       delay = 1000;
     } finally {
-      this.pollTimer = setTimeout(() => this.poll(), delay);
+      if (!this.disposed) this.pollTimer = setTimeout(() => this.poll(), delay);
     }
   }
 
   draw(now) {
-    if (!this.active || document.hidden || this.contextLost) return;
+    if (this.disposed || !this.active || document.hidden || this.contextLost) return;
     const samples = this.samples;
     if (samples.length) {
       const target = now - 65;
@@ -303,5 +316,34 @@ export class SandboxViewer {
       this.renderer.render(this.scene, this.camera);
       this.needsRender = false;
     }
+  }
+
+  zoom(scale) {
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    const distance = THREE.MathUtils.clamp(offset.length() * scale, this.controls.minDistance, this.controls.maxDistance);
+    this.camera.position.copy(this.controls.target).add(offset.setLength(distance));
+    this.controls.update();
+    this.needsRender = true;
+  }
+
+  dispose() {
+    this.disposed = true;
+    this.active = false;
+    clearTimeout(this.pollTimer);
+    this.controller.abort();
+    this.renderer.setAnimationLoop(null);
+    this.resize.disconnect();
+    this.canvas.removeEventListener('webglcontextlost', this.contextLostListener);
+    this.controls.dispose();
+    this.lidar.dispose();
+    const geometries = new Set(), materials = new Set();
+    this.scene.traverse(object => {
+      if (object.geometry) geometries.add(object.geometry);
+      if (object.material) for (const material of [object.material].flat()) materials.add(material);
+      object.shadow?.map?.dispose();
+    });
+    geometries.forEach(geometry => geometry.dispose());
+    materials.forEach(material => material.dispose());
+    this.renderer.dispose();
   }
 }

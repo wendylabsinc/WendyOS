@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -35,6 +37,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/browseropen"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -796,6 +799,16 @@ func cloudFallbackDeviceName(explicit, flagValue, configDefault string) string {
 	return configDefault
 }
 
+// A LAN hostname often differs from the Cloud display name. When the default
+// has a saved asset identity, look up that exact asset through Cloud; the
+// identity check still verifies the selected org and asset before connecting.
+func cloudDefaultSelector(defaultName string, expected *certs.WendyIdentity) string {
+	if expected != nil && expected.EntityType == certs.EntityAsset && expected.EntityID != "" {
+		return expected.EntityID
+	}
+	return defaultName
+}
+
 // resolveWithCloudFallback is resolveRunTarget with the cloud-tunnel device name
 // stated explicitly rather than read from the --device flag.
 //
@@ -810,11 +823,44 @@ func cloudFallbackDeviceName(explicit, flagValue, configDefault string) string {
 // An empty cloudName preserves the original behaviour for the deploy target,
 // where --device IS the device being resolved.
 func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...resolveOption) (*SelectedDevice, error) {
-	target, err := resolveTarget(ctx, opts...)
+	// A saved default that fails on LAN should get its existing Cloud route
+	// before the picker asks to move this run to another device. The hook is
+	// only called for an implicit default, so explicit --device and build-host
+	// selectors retain their normal fallback behavior.
+	cloudCheckedBeforePicker := false
+	resolveOpts := append(append([]resolveOption(nil), opts...), func(c *resolveConfig) {
+		c.sameTargetFallback = func(ctx context.Context, defaultName string) (*SelectedDevice, error) {
+			cloudCheckedBeforePicker = true
+			cfg, err := config.Load()
+			if err != nil {
+				return nil, err
+			}
+			if len(cfg.Auth) == 0 {
+				return nil, fmt.Errorf("no Wendy Cloud session available")
+			}
+			expected := expectedIdentityFor(pinKeyForAddr(defaultName))
+			conn, err := connectToCloudAgentExpecting(ctx, "", cloudDefaultSelector(defaultName, expected), "", expected)
+			if err != nil {
+				return nil, err
+			}
+			return &SelectedDevice{Agent: conn}, nil
+		}
+	})
+	target, err := resolveTarget(ctx, resolveOpts...)
 	if err == nil {
 		return target, nil
 	}
+	// If Cloud was already checked, the error came from the ensuing recovery
+	// flow (possibly after the user selected another device). Retrying Cloud
+	// here could silently replace that selection with the saved default.
+	if cloudCheckedBeforePicker {
+		return nil, err
+	}
 	if errors.Is(err, ErrUserCancelled) {
+		return nil, err
+	}
+	var stopped *defaultDeviceRecoveryStoppedError
+	if errors.As(err, &stopped) {
 		return nil, err
 	}
 	// The user picked a local VM. Falling back to a cloud device here would
@@ -833,8 +879,15 @@ func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...res
 		return nil, err
 	}
 
-	cloudConn, cloudErr := connectToCloudAgent(ctx, "", deviceName, "")
+	var expected *certs.WendyIdentity
+	if cloudName == "" && deviceFlag == "" && deviceName == cfg.DefaultDevice {
+		expected = expectedIdentityFor(pinKeyForAddr(deviceName))
+	}
+	cloudConn, cloudErr := connectToCloudAgentExpecting(ctx, "", cloudDefaultSelector(deviceName, expected), "", expected)
 	if cloudErr != nil {
+		if errors.Is(cloudErr, errDeviceIdentityRefused) {
+			return nil, cloudErr
+		}
 		return nil, err
 	}
 	maybeFixClock(ctx, cloudConn)
@@ -2077,6 +2130,7 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	if err := rejectUnsupportedWaitReady(cwd, appCfg, opts); err != nil {
 		return err
 	}
+	opts = opts.withConfiguredRestartPolicy(appCfg.RestartPolicy)
 	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
 	}
@@ -2250,25 +2304,27 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// entirely for darwin agents and go straight to the registry push below.
 	isDarwinAgent := strings.EqualFold(agentOS, appconfig.PlatformDarwin)
 
+	mark("run setup (project, build args)")
+
 	// Fast path: when nothing that affects the image has changed since
 	// the last successful deploy to this device, skip the build entirely and
 	// just ensure the existing container is running. Best-effort — a missing or
 	// mismatched fingerprint, a missing app, or any RPC error falls through to
 	// the normal deploy below, so it can never deploy stale code.
+	//
+	// The fingerprint feeds only this fast path and the one recorded when the
+	// chunk-diff deploy below starts. Both are off for darwin agents and
+	// --deploy, and both need digest-pinned bases, so the build context is
+	// hashed only when they can use it: an unpinned FROM python:3.12-slim
+	// never reads it (WDY-3216).
 	deviceKey := deviceFingerprintKey(versionResp)
-	inputHash, hashErr := computeBuildInputHash(cwd, opts.dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, deployEnv)
-	if hashErr == nil {
-		var basesPinned bool
-		basesPinned, hashErr = dockerfileBasesContentPinned(cwd, opts.dockerfile)
-		if hashErr == nil && !basesPinned {
-			hashErr = fmt.Errorf("persistent build skip requires digest-pinned base images")
-		}
+	fingerprintUsed := !isDarwinAgent && !opts.deploy
+	desiredHash, hashErr := "", errBasesNotPinned
+	if fingerprintUsed {
+		desiredHash, hashErr = singleServiceDesiredHash(cwd, opts.dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, deployEnv, appCfg, opts)
 	}
-	desiredHash := ""
-	if hashErr == nil {
-		desiredHash, hashErr = computeDeployDesiredHash(inputHash, appCfg, opts.userArgs, deployEnv, resolveRestartPolicy(opts))
-	}
-	if !isDarwinAgent && !opts.deploy && hashErr == nil {
+	mark("build-input fingerprint")
+	if fingerprintUsed && hashErr == nil {
 		if done, err := tryDeployFastPath(ctx, conn, appCfg, deviceKey, desiredHash, opts); done {
 			mark("fast-path (skipped build)")
 			return err
@@ -2278,6 +2334,8 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 	// A build will run below (the no-build fast path returned above), so make
 	// sure the Apple Container system is up when --builder apple-container is
 	// explicit. This covers both the chunk-diff and the registry-push build.
+	// The emulation notice goes out now, before the build UI owns the terminal.
+	noteEmulatedBuild(platform, true)
 	if err := ensureAppleContainerSystemForBuilder(ctx, opts.builder, opts.yes); err != nil {
 		return err
 	}
@@ -2793,11 +2851,47 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 	return attachedExitOutcome(ctx, conn, appCfg)
 }
 
+// makeReadinessProbe returns one reusable readiness attempt plus its display address and cleanup.
+// HTTP-over-mesh probes complete a request instead of leaving an empty relayed TCP connection in
+// front of the browser request that follows.
+func makeReadinessProbe(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
+	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", port))
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	if !useHTTP {
+		return addr, func(ctx context.Context) error {
+			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			if err != nil {
+				return err
+			}
+			return conn.Close()
+		}, func() {}
+	}
+
+	transport := &http.Transport{
+		Proxy:             nil,
+		DialContext:       dialer.DialContext,
+		DisableKeepAlives: true,
+	}
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	return addr, func(ctx context.Context) error {
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, "http://"+addr, nil)
+		if err != nil {
+			return err
+		}
+		req.Close = true
+		resp, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		return resp.Body.Close()
+	}, transport.CloseIdleConnections
+}
+
 // waitForReadiness polls the readiness probe until it passes or the context is
 // cancelled. Returns nil on success, the parent context error on cancellation,
 // or a timeout error if the probe deadline expires.
-func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string) error {
-	return waitForReadinessWithin(ctx, cfg, hostname, readinessProbeTimeout(cfg, 0))
+func waitForReadiness(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int) error {
+	return waitForReadinessWithin(ctx, cfg, hostname, httpPort, readinessProbeTimeout(cfg, 0))
 }
 
 // readinessProbeTimeout is a readiness probe's deadline: --readiness-timeout
@@ -2813,25 +2907,26 @@ func readinessProbeTimeout(cfg *appconfig.ReadinessConfig, override time.Duratio
 }
 
 // waitForReadinessWithin is waitForReadiness with an explicit deadline.
-func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, timeout time.Duration) error {
+func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration) error {
 	if cfg == nil || cfg.TCPSocket == nil {
 		return nil
 	}
 
-	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", cfg.TCPSocket.Port))
+	addr, probe, closeProbe := makeReadinessProbe(
+		hostname,
+		cfg.TCPSocket.Port,
+		httpPort != 0 && httpPort == cfg.TCPSocket.Port,
+	)
+	defer closeProbe()
 	cliLogln("Waiting for %s to be ready...", tui.Value(addr))
 
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
-	dialer := net.Dialer{Timeout: 2 * time.Second}
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
-		conn, err := dialer.DialContext(probeCtx, "tcp", addr)
-		if err == nil {
-			conn.Close()
+		if err := probe(probeCtx); err == nil {
 			cliLogln("Ready.")
 			return nil
 		}
@@ -2846,6 +2941,26 @@ func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig,
 		case <-ticker.C:
 		}
 	}
+}
+
+// cloudHTTPReadinessPort selects a request-level readiness probe only for an
+// HTTP entitlement reached through the cloud mesh, i.e. when host is the
+// cloud connection's mesh hostname (see hostSideAppAddress). Direct TCP
+// readiness — including a cloud device probed on its reachable LAN address —
+// keeps its documented connect-only semantics, while mesh HTTP avoids leaving
+// an empty relayed connection in front of the real browser request.
+func cloudHTTPReadinessPort(conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, readiness *appconfig.ReadinessConfig, host string) int {
+	if conn == nil || conn.Reconnect == nil || readiness == nil || readiness.TCPSocket == nil {
+		return 0
+	}
+	if host == "" || host != conn.MeshHost {
+		return 0
+	}
+	port, ok := httpEntitlementPort(appCfg.Entitlements)
+	if !ok || port != readiness.TCPSocket.Port {
+		return 0
+	}
+	return port
 }
 
 func shellCommand() (string, []string) {
@@ -2918,30 +3033,79 @@ func announceReachableURL(ctx context.Context, conn *grpcclient.AgentConnection,
 // device IP and the app URL built from it, or two empty strings when there is
 // nothing to show or the agent cannot be queried.
 func reachableAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (ip, url string) {
+	ip = reportedReachableIP(ctx, conn, appCfg)
+	url = reachableAppURLForHost(appCfg, ip)
+	if url == "" {
+		return "", ""
+	}
+	return ip, url
+}
+
+// reportedReachableIP asks the agent for a candidate address only when the app
+// has a URL or port worth surfacing. Keeping this guard here preserves the
+// hook-less cloud fast path: it must not issue an otherwise pointless RPC.
+func reportedReachableIP(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) string {
 	var hookURL string
 	if appCfg.Hooks != nil && appCfg.Hooks.PostStart != nil {
 		hookURL = appCfg.Hooks.PostStart.OpenURL
 	}
 	readiness := effectiveReadiness(appCfg)
-	httpPort, hasHTTPPort := httpEntitlementPort(appCfg.Entitlements)
+	_, hasHTTPPort := httpEntitlementPort(appCfg.Entitlements)
 	hasPort := hasHTTPPort || (readiness != nil && readiness.TCPSocket != nil && readiness.TCPSocket.Port != 0)
 	if hookURL == "" && !hasPort {
-		return "", ""
+		return ""
 	}
 
 	resp, err := agentVersionForRun(ctx, conn)
 	if err != nil {
-		return "", ""
+		return ""
 	}
-	ip = bestReachableIP(resp.GetNetworkInterfaces())
+	ip := bestReachableIP(resp.GetNetworkInterfaces())
 	if name, err := userVMForConnection(conn); err == nil && name != "" {
 		ip = "127.0.0.1"
 	}
-	url = reachableAppURL(hookURL, appCfg.AppID, appCfg.ServiceName, ip, httpPort, readiness)
-	if url == "" {
-		return "", ""
+	return ip
+}
+
+// reachableAppURLForHost builds the app URL for a host already selected by the
+// lifecycle routing logic, or "" when there is nothing to show. That host may
+// be an agent-reported IP or the stable mesh name exposed by the desktop VPN.
+func reachableAppURLForHost(appCfg *appconfig.AppConfig, host string) string {
+	if host == "" {
+		return ""
 	}
-	return ip, url
+	var hookURL string
+	if appCfg.Hooks != nil && appCfg.Hooks.PostStart != nil {
+		hookURL = appCfg.Hooks.PostStart.OpenURL
+	}
+	readiness := effectiveReadiness(appCfg)
+	httpPort, _ := httpEntitlementPort(appCfg.Entitlements)
+	return reachableAppURL(hookURL, appCfg.AppID, appCfg.ServiceName, host, httpPort, readiness)
+}
+
+var meshServicePrefix = netip.MustParsePrefix("10.99.0.0/16")
+
+// activeMeshHost returns conn.MeshHost only when the operating-system resolver
+// maps it into Wendy's mesh service CIDR. The desktop VPN owns that DNS answer,
+// so this distinguishes an active VPN from a merely known cloud asset without
+// coupling the CLI to macOS or to the desktop app's process state.
+func activeMeshHost(ctx context.Context, conn *grpcclient.AgentConnection) string {
+	if conn.MeshHost == "" {
+		return ""
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	addrs, err := osLookupHostFn(lookupCtx, conn.MeshHost)
+	if err != nil {
+		return ""
+	}
+	for _, raw := range addrs {
+		addr, err := netip.ParseAddr(raw)
+		if err == nil && meshServicePrefix.Contains(addr.Unmap()) {
+			return conn.MeshHost
+		}
+	}
+	return ""
 }
 
 // isCloudConnection reports whether conn reaches the device through the Wendy
@@ -2983,21 +3147,27 @@ var lanAddressReachable = func(ctx context.Context, ip string) bool {
 
 // hostSideAppAddress resolves where this machine reaches the app: the host
 // for the readiness probe and postStart hook, and the URL to show ("" when
-// there is nothing to show). conn.Host is right for LAN connections; an IPv6
-// literal is swapped for the IP the agent reports, since it is often an
-// RFC 4941 temporary (privacy) address that rotates away.
+// there is nothing to show). When the desktop VPN is active, its stable mesh
+// hostname wins (activeMeshHost): cloud-reported interface IPs are often
+// private and unreachable from the developer's current network. Otherwise
+// conn.Host is right for LAN connections; an IPv6 literal is swapped for the
+// IP the agent reports, since it is often an RFC 4941 temporary (privacy)
+// address that rotates away.
 //
 // A cloud-tunnel connection's Host is the asset name, which does not resolve
 // from here, and the IP the agent reports is the device's LAN address, which
 // this machine can reach only when it is on (or routed into) that network.
-// So a cloud run checks once, within cloudLANProbeTimeout, whether it can
-// connect to the device's agent at that address (lanAddressReachable): if it
-// can, the address is used as on a LAN connection (WDY-2440). Otherwise — or
-// when the agent reports no IP — ok=false: probing that address, printing it
-// as "App reachable at", or opening it would mislead, so callers skip
-// host-side probes and hooks with cloudHostSkipNotice (readiness is not
-// checked from this machine).
+// So without an active mesh route a cloud run checks once, within
+// cloudLANProbeTimeout, whether it can connect to the device's agent at that
+// address (lanAddressReachable): if it can, the address is used as on a LAN
+// connection (WDY-2440). Otherwise — or when the agent reports no IP —
+// ok=false: probing that address, printing it as "App reachable at", or
+// opening it would mislead, so callers skip host-side probes and hooks with
+// cloudHostSkipNotice (readiness is not checked from this machine).
 func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host, url string, ok bool) {
+	if meshHost := activeMeshHost(ctx, conn); meshHost != "" {
+		return meshHost, reachableAppURLForHost(appCfg, meshHost), true
+	}
 	ip, url := reachableAppAddress(ctx, conn, appCfg)
 	if isCloudConnection(conn) {
 		if ip == "" || !lanAddressReachable(ctx, ip) {
@@ -3026,7 +3196,7 @@ func resolveHookHost(ctx context.Context, conn *grpcclient.AgentConnection, appC
 // cloudHostSkipNotice explains why a cloud-tunnel run skips its host-side
 // readiness check and postStart hook.
 func cloudHostSkipNotice(appCfg *appconfig.AppConfig) string {
-	return fmt.Sprintf("Skipping postStart hook and the readiness check from this machine for %s: the device is connected through Wendy Cloud and its LAN address is not reachable from here.", containerDisplayName(appCfg))
+	return fmt.Sprintf("Skipping postStart hook and the readiness check from this machine for %s: the device is connected through Wendy Cloud, Wendy Mesh is not active, and its LAN address is not reachable from here. Connect the desktop VPN to reach this cloud device.", containerDisplayName(appCfg))
 }
 
 // synthesizedOpenURLHook returns appCfg.Hooks unchanged when the app already
@@ -3543,11 +3713,10 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		return runBuildWithProgress(ctx, buildTitle, shouldDumpChunkDiffBuildLog(opts.chunking), build)
 	}
 
-	// The docker backend exports into a persistent per-app OCI layout DIRECTORY:
-	// BuildKit skips blobs already present there, so a warm rebuild writes only
-	// the changed layers instead of re-serializing the whole image (which costs
-	// seconds per GB of image on every iteration). Tar-only backends and the
-	// WENDY_CHUNK_EXPORT=tar escape hatch keep the legacy temp tar.
+	// Docker and BuildKit export into a persistent per-app OCI layout DIRECTORY.
+	// Their exporters skip blobs already present there, so a warm rebuild writes
+	// only changed layers instead of re-serializing the whole image. Apple
+	// Container and the WENDY_CHUNK_EXPORT=tar escape hatch keep the legacy tar.
 	exportMode := chunkExportPlan(opts.builder)
 	var layoutDir string
 	if exportMode == "dir" {
@@ -3580,7 +3749,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		lease = acquired
 		defer lease.release()
 		build := func(buildCtx context.Context, stream, logw io.Writer) error {
-			return buildImageToOCILayoutDirWithDocker(buildCtx, cwd, dockerfile, platform, buildArgs, layoutDir, stream, logw)
+			return buildImageToOCILayoutDir(buildCtx, cwd, dockerfile, platform, buildArgs, opts.builder, layoutDir, stream, logw)
 		}
 
 		// Native fast path: for a Stagefile project whose deps inputs are
@@ -3601,7 +3770,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 			if st, ok := loadNativeState(layoutDir); ok && st.DepsHash == depsHash {
 				if done, rebuildErr := tryNativeRebuild(layoutDir, platform, cwd, sf, st); rebuildErr == nil && done {
 					nativeDone = true
-					cliLogln("App layer(s) rebuilt natively (deps unchanged; buildx skipped)")
+					cliLogln("App layer(s) rebuilt natively (deps unchanged; container builder skipped)")
 				}
 			}
 		}
@@ -3727,7 +3896,9 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	// fresh connection (WDY-2433), and everything from here on — RunContainer,
 	// its response stream, and the post-start hook — must ride that live
 	// connection rather than the one that just dropped.
-	pushConn, headers, err := pushLayersResumingTunnelDrops(ctx, conn, layers, prepareFor)
+	// gzip or none per link and device; see chooseChunkUploadConfig.
+	uploadCfg := chunkUploadConfigFor(ctx, conn)
+	pushConn, headers, err := pushLayersResumingTunnelDrops(ctx, conn, layers, prepareFor, uploadCfg)
 	if pushConn != conn {
 		defer pushConn.Close()
 	}

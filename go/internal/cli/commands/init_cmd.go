@@ -438,6 +438,18 @@ func resolveInitTargetAndTemplate(opts initOptions) (string, string, *repoMeta, 
 		}
 	}
 
+	// Browse deployment groups inside the platform tabs before choosing a
+	// project. Explicit templates and manual setup flags keep their own flow.
+	manual := opts.entitlementsSet || opts.allEntitlements || opts.noExtraEntitlements
+	if !opts.targetSet && isInteractiveTerminal() && (opts.templateSet || !manual) {
+		meta, err := fetchRepoMetaWithUI(opts.branch)
+		if err != nil {
+			return "", "", nil, err
+		}
+		target, tmpl, err := pickInitProject(meta, "", !opts.templateSet)
+		return target, tmpl, meta, err
+	}
+
 	target, err := resolveInitTarget(opts)
 	if err != nil {
 		return "", "", nil, err
@@ -549,12 +561,8 @@ func templateItemsForTarget(target string, meta *repoMeta) []tui.PickerItem {
 
 // pickTemplateNameForTarget shows a picker with templates available for the given target.
 func pickTemplateNameForTarget(target string, meta *repoMeta) (string, error) {
-	fmt.Println()
-	items := templateItemsForTarget(target, meta)
-	if len(items) == 0 {
-		return "", fmt.Errorf("no templates available for %s", target)
-	}
-	return pickFromItems("Choose a template", items)
+	_, name, err := pickInitProject(meta, target, false)
+	return name, err
 }
 
 // resolveBareTemplatePick handles a bare `--template` (rewritten to the
@@ -582,26 +590,10 @@ func resolveBareTemplatePick(target string, meta *repoMeta) (string, error) {
 	return pickTemplateNameForTarget(target, meta)
 }
 
-// pickTemplateOrSkipForTarget shows templates for the given target plus a "No template" option.
+// pickTemplateOrSkipForTarget groups projects by deployment and allows manual setup.
 func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) {
-	fmt.Println()
-	var items []tui.PickerItem
-	for _, t := range meta.Templates {
-		if templateTargetMatch(t, target) {
-			items = append(items, tui.PickerItem{
-				Name:        t.Name,
-				Description: t.Description,
-				Value:       t.Name,
-			})
-		}
-	}
-	items = append(items, tui.PickerItem{
-		Name:        "No template",
-		Description: "Configure target, language, and entitlements manually",
-		Value:       "",
-		SortKey:     "~",
-	})
-	return pickFromItems("Start from a template?", items)
+	_, name, err := pickInitProject(meta, target, true)
+	return name, err
 }
 
 // resolveTemplateLanguage picks the language for the template flow.
@@ -1105,7 +1097,26 @@ func resolveInitAppID(cwd string, args []string, opts initOptions) (string, erro
 var initTargetItems = []tui.PickerItem{
 	{Name: "WendyOS", Description: "Full Linux-based edge device (Jetson, Raspberry Pi, ...)", Value: targetWendyOS, SortKey: "0"},
 	{Name: "macOS", Description: "Native macOS app deployed to Wendy Agent for Mac", Value: targetDarwin, SortKey: "1"},
-	{Name: "Wendy Lite", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "2"},
+	{Name: "ESP32", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "2"},
+}
+
+func newInitTargetPickerModel(items []tui.PickerItem) tabbedPickerModel {
+	groups := []pickerGroup{
+		{label: "Linux"},
+		{label: "Mac"},
+		{label: "Microcontrollers"},
+	}
+	for _, item := range items {
+		group := 0
+		switch item.Value {
+		case targetDarwin:
+			group = 1
+		case targetWendyLite:
+			group = 2
+		}
+		groups[group].items = append(groups[group].items, item)
+	}
+	return newTabbedPickerModel("What is your target device?", groups)
 }
 
 // initTargetItemsFor filters the shared initTargetItems so a narrowed target
@@ -1149,7 +1160,7 @@ func resolveInitTarget(opts initOptions) (string, error) {
 	}
 
 	fmt.Println()
-	return pickFromItems("What is your target device?", initTargetItems)
+	return runTabbedPicker(newInitTargetPickerModel(initTargetItems))
 }
 
 // resolveInitTargetForTemplate resolves the target when a concrete --template
@@ -1174,7 +1185,7 @@ func resolveInitTargetForTemplate(t repoMetaTemplate) (string, error) {
 	}
 
 	fmt.Println()
-	return pickFromItems("What is your target device?", items)
+	return runTabbedPicker(newInitTargetPickerModel(items))
 }
 
 // printPickerItemsPlainText renders picker items as a plain-text list. Used
@@ -1967,56 +1978,24 @@ func offerAIAssistant(appID, target, language string, entitlements []appconfig.E
 	return runAIAssistantChoice(choice, appID, target, language, entitlements, false, true)
 }
 
-const wendySkillsMarketplace = "wendylabsinc/claude-skills"
-const wendySkillsPluginName = "wendy@claude-skills"
-
-// installWendySkills checks if the Wendy skills plugin is installed and offers
-// to install it if missing. This gives Claude expert knowledge about Wendy
-// development.
+// installWendySkills installs the same end-user group as `wendy mcp setup`.
+// It does not depend on a marketplace or download engineering skills.
 func installWendySkills(autoInstall bool) error {
-	// Check if the plugin is already installed by looking at the plugin list output.
-	out, err := exec.Command("claude", "plugin", "list").Output()
+	home, err := os.UserHomeDir()
 	if err != nil {
+		return err
+	}
+	target := filepath.Join(home, ".claude", "skills")
+	if wendySkillsCurrent(target) {
 		return nil
 	}
-
-	if strings.Contains(string(out), "wendy@claude-skills") {
+	if !autoInstall && !confirmDefaultNoFn("Install Wendy end-user skills for Claude Code?") {
 		return nil
 	}
-
-	cliLogln("\nThe Wendy skills plugin gives Claude expert knowledge about")
-	cliLogln("building and deploying apps to WendyOS and Wendy Lite devices.")
-	fmt.Println()
-
-	if !autoInstall {
-		if !confirmDefaultNoFn("Install Wendy skills for Claude Code?") {
-			return nil
-		}
-
-		fmt.Println()
+	if err := installWendySkillDirs(target); err != nil {
+		return fmt.Errorf("installing Wendy end-user skills: %w", err)
 	}
-
-	// Add the marketplace if not already present.
-	addMarketplace := exec.Command("claude", "plugin", "marketplace", "add", wendySkillsMarketplace)
-	addMarketplace.Stdout = os.Stdout
-	addMarketplace.Stderr = os.Stderr
-	if err := addMarketplace.Run(); err != nil {
-		cliNotice("  Could not add marketplace: %v", err)
-		cliNotice("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
-		return nil
-	}
-
-	// Install the plugin.
-	installCmd := exec.Command("claude", "plugin", "install", wendySkillsPluginName)
-	installCmd.Stdout = os.Stdout
-	installCmd.Stderr = os.Stderr
-	if err := installCmd.Run(); err != nil {
-		cliNotice("  Could not install plugin: %v", err)
-		cliNotice("  You can install manually: claude plugin install " + wendySkillsPluginName)
-		return nil
-	}
-
-	cliSuccess("  Wendy skills installed successfully!")
+	cliSuccess("  Wendy end-user skills installed at %s", target)
 	return nil
 }
 

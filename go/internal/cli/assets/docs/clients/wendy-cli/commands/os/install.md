@@ -240,3 +240,31 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--no-bmap` | false | Disable bmap-accelerated flashing even when a block map is available |
 
 > **TODO**: Post-flashing Linux devices still need certificate provisioning and Wendy Cloud enrollment if `--pre-enroll` was not used. See [`wendy device setup`](../device/setup.md), [PKI](../../../../pki/), and [Wendy Cloud](../../../../cloud/).
+## Agent-driven installation
+
+`wendy install plan` and `wendy install verify` also work under the `wendy os install`
+alias. Both emit JSON. Planning is read-only; it resolves a published release and
+returns the installation method, erase scope, requirements and CLI argument array.
+
+```sh
+wendy install plan --device-type raspberry-pi-5 --drive <confirmed-drive>
+wendy install plan --device-type jetson-orin-nano --carrier developer-kit --storage nvme
+wendy install plan --device-type unitree-g1
+wendy install verify --address <expected-device> --expected-os-version <version> --expected-device-type <board>
+```
+
+Planning supports Pi 3/4/5, Orin/Thor developer kits, G1 PC2 and Linux agent installs.
+Jetson planning requires `--carrier developer-kit`; custom carriers need their
+vendor guide. Raw-media plans require a drive from `wendy os list-drives --all --json`
+before returning a write command. `--rootfs-only` leaves Orin QSPI unchanged.
+The write still runs through the regular installer in a terminal.
+
+Verification never selects a default device. Use `--expected-public-key` to pin
+a previously observed identity, `--require-enrollment` when Cloud enrollment was
+requested, and `--timeout` for a deadline of at most one minute (default 15s).
+It exits nonzero for an unreachable target or unmet expectation and reports
+`application: "not_checked"`; application health needs a separate check.
+For agent-only targets, omit WendyOS version/type expectations.
+
+See [agent-assisted setup](/docs/installation/agent-assisted-setup) for the MCP
+tools and the complete sequence from hardware identification to first application.

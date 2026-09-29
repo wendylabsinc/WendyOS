@@ -1,0 +1,105 @@
+---
+title: Install a device with a coding agent
+description: Plan a WendyOS or Wendy Agent installation, flash through the CLI, and verify first boot before deploying an app.
+---
+
+Install the [Wendy CLI](/docs/#1-install-the-wendy-cli), run
+`wendy mcp setup`, and restart your coding assistant. Call `wendy_status` and
+inspect the live tool list. A new skill or CLI download does not update an MCP
+process that is already running.
+
+Setup configures MCP and installs one Wendy end-user skill group for detected
+Codex, Claude Code, and OpenCode installations. It covers device installation,
+first-boot verification, app creation, deployment, and robot checks. Codex and
+OpenCode use `~/.agents/skills`; Claude Code uses `~/.claude/skills`. Supporting
+references are included.
+
+The same group is available as the optional `wendy-agentic-coding` plugin from
+`wendylabsinc/wendy-agentic-coding`. In Codex, it appears as `@Wendy`. Choose either
+CLI-managed skills or the plugin to avoid duplicate skill entries. Wendy's
+internal engineering skills are separate and are not installed by setup.
+
+## Choose the installation method
+
+Identify the exact board, carrier, existing OS and storage before choosing an
+image. An empty device scan can mean an uninstalled board, a boot failure or a
+network problem.
+
+| Hardware | Initial setup |
+| --- | --- |
+| Raspberry Pi | Write an SD/NVMe image using a confirmed host drive |
+| Orin Nano developer kit | Full USB recovery with a published recovery release; NVMe storage |
+| AGX Orin developer kit | Full USB recovery; choose NVMe or eMMC |
+| AGX Thor developer kit | USB recovery using its flashpack |
+| Unitree G1 PC2 | Keep vendor Ubuntu and [install the Wendy Agent](/docs/installation/wendy-agent-unitree-g1) |
+| Other Linux host | [Install the Wendy Agent](/docs/installation/linux) on the target host |
+
+Custom Jetson carriers need their vendor's image and installation procedure.
+Matching the module's SoC does not establish image compatibility.
+
+## Request a plan
+
+`os_install_plan` and `os_list_drives` work before a device connection exists.
+Their CLI equivalents are:
+
+```sh
+wendy install plan --device-type unitree-g1
+wendy install plan --device-type jetson-orin-nano --carrier developer-kit --storage nvme
+wendy os list-drives --all --json
+wendy install plan --device-type raspberry-pi-5 --drive <confirmed-drive-path>
+```
+
+Plans return JSON containing the resolved release, artifact, installation method,
+erase scope, host drive identity where applicable, requirements and a CLI argument
+array. Planning does not write a disk, prepare USB drivers or establish that a
+recovery-mode board is attached. Unsupported boards return a guide-directed error.
+If `plan` is missing, update the CLI or use the board-specific instructions.
+
+## Write and boot
+
+Review the drive path/model/capacity or the intended recovery board with the
+agent. Authorize erasing that target if you have not already done so. Then run
+the returned command through a terminal. The existing installer handles elevated
+access, artifact verification, progress and flash errors. MCP planning does not
+execute the write or hide administrator prompts.
+
+Choose a device name, networking and optional cloud enrollment before writing.
+Use `--device-name <name>`, WiFi preseed options, or `--no-wifi` for Ethernet.
+Use `--pre-enroll` only with the intended logged-in cloud session. Avoid placing
+credentials in shared transcripts. `--force` skips confirmations; it does not
+grant administrator privileges or bypass internal-drive protection.
+
+Follow the board's recovery, media insertion and power instructions. Flash success
+means the write completed. It does not mean the device has booted or joined the
+network. Keep long-running flash output visible; diagnose the failed stage before
+retrying an interrupted flash.
+
+## Verify the expected device
+
+Use `device_list(scan=true)` or `wendy discover --json`. Match the expected
+device name/address before checking it. Do not use whichever device appears first.
+
+```sh
+wendy install verify --address <name-or-IP> \
+  --expected-os-version <version-from-plan> \
+  --expected-device-type <device-type-from-plan>
+```
+
+The MCP equivalent is `os_install_verify`, with `address`, `expected_os_version`
+and `expected_device_type`. Checks have a bounded deadline and can be repeated
+during first boot. They leave the current MCP session connection unchanged.
+For agent-only installations, omit WendyOS version/type expectations.
+
+The result includes `reachable`, `verified`, reported versions, public key,
+enrollment status and any problems. Record the public key and use
+`--expected-public-key` on subsequent checks to reject another device at the same
+address. A first contact without a known key relies on the selected endpoint and
+the connection's normal authentication; it cannot prove physical board identity.
+Use `--require-enrollment` when cloud enrollment is part of the task. Unknown
+enrollment fails that check. CLI verification exits nonzero when expectations fail.
+
+Finally connect to that target, deploy a non-motion smoke app, inspect container
+state and logs, and test its health endpoint or ROS output. Verification reports
+`application: "not_checked"` until you perform that separate test. For robotics,
+use the [sim-to-real workflow](/docs/integrations/sim-to-real) and verify the stop
+behavior before an authorized physical motion test.

@@ -1,0 +1,89 @@
+---
+title: Explore with a simulated ROSMASTER R2
+description: Run a Python app that explores an indoor world using lidar, depth and odometry, with a live map and timed start/stop controls.
+language: python
+---
+
+[R2 Explorer](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/R2Explorer)
+drives a simulated ROSMASTER R2 through an indoor world. It builds an observed map,
+selects destinations it has not visited, and checks curved forward and reverse
+paths against lidar returns. A front depth check limits forward movement. The
+planner reads sensors and odometry, without reading the simulator's obstacle list.
+
+This sample requires the managed `rosmaster-r2` VM profile. It has no physical
+robot backend and refuses to start without the simulator's identity and sensors.
+
+## Prepare the simulator
+
+You need Git, Go, Docker, and the [Wendy VM prerequisites](/docs/installation/wendyos-virtual-machine#what-youll-need).
+Build Wendy from the same checkout as the sample so the CLI includes its R2 runtime:
+
+```sh
+git clone https://github.com/wendylabsinc/WendyOS.git
+cd WendyOS
+make -C go build-cli
+./go/bin/wendy vm create r2-explorer --profile rosmaster-r2
+./go/bin/wendy vm robot start r2-explorer
+./go/bin/wendy vm robot open r2-explorer
+```
+
+Keep this terminal in the repository root. The first build needs internet access.
+For an existing VM with an older agent, follow the
+[R2 runtime setup](https://github.com/wendylabsinc/WendyOS/tree/main/go/simulator/rosmaster_r2#use-a-managed-wendy-simulator)
+to update the agent. After rebuilding a CLI with changed simulator sources, use
+`./go/bin/wendy vm robot update r2-explorer` to update the pinned runtime.
+
+## Deploy and explore
+
+```sh
+./go/bin/wendy run --prefix Examples/R2Explorer --device vm:r2-explorer --detach
+```
+
+Open [the exploration dashboard](http://127.0.0.1:3510). It starts parked. Select
+**Start exploring** to transfer app control and begin a run. The default duration
+is 120 seconds; the dashboard accepts runs from 5 to 600 seconds. Watch the observed
+map, driven path, goal and color/depth previews as the car moves.
+
+Select **Stop** or press **Space** in the dashboard to stop early. Closing the tab
+does not stop a run; its timer continues in the app container. The simulator's
+Stop, Pause, Reset or controller selection also interrupts exploration. The app
+stops on stale sensors, contact, loss of control or timer expiry and never resumes
+automatically. Select Start again when ready for a new run.
+
+Stop in the app sends zero motion for its own control session. The simulator's
+Stop or controller selection revokes ownership. If another controller has taken
+over, the explorer's Stop does not interrupt that controller.
+
+Read the map and run state from a second terminal:
+
+```sh
+curl --fail http://127.0.0.1:3510/api/status
+```
+
+To stop the deployed app entirely:
+
+```sh
+./go/bin/wendy device apps stop henk-explorer --device vm:r2-explorer
+```
+
+The simulator's 300 ms command watchdog stops motion if the app disappears.
+
+## Change the planner
+
+`Examples/R2Explorer/planner.py` contains visit memory, goal selection and the
+Ackermann path rollout. `app.py` handles sensor freshness, control ownership,
+time limits and HTTP endpoints. The sample uses only Python's standard library.
+Its unit tests and offline simulator acceptance check run from the sample directory:
+
+```sh
+cd Examples/R2Explorer
+python3 -m unittest discover -s tests -v
+python3 tests/simulator_acceptance.py
+```
+
+This is reactive exploration with ideal simulator odometry. It can revisit areas
+or stop where no safe path is available; it does not implement SLAM or guarantee
+complete coverage. Camera optics, depth noise and drivetrain dynamics are
+idealized. A hardware port needs calibrated sensors, localization and a physical
+motion backend. See [sim to real](/docs/integrations/sim-to-real#using-the-rosmaster-r2-template)
+for the supported interfaces and explicit service backend selection.

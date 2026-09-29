@@ -452,11 +452,21 @@ reach, so both are visible before a stream fails.
 | `WENDY_TLS_DEBUG` | Log mTLS handshake details. |
 | `WENDY_MDNS_DEBUG` / `WENDY_MDNS_TIMEOUT` | mDNS debug logging / browse timeout (default `4s`, clamped 1–30s). |
 | `WENDY_TIMING` | Print build/run sub-phase timing to stderr. |
+| `WENDY_CHUNK_UPLOAD_STREAMS` | Concurrent WriteChunks streams per layer upload (1–8, default 4). |
+| `WENDY_CHUNK_UPLOAD_BATCH` | Chunks per stream (1–4096, default 256). |
+| `WENDY_CHUNK_COMPRESSION` | `auto` (default), `gzip` or `none`: compression of chunk uploads. `auto` sends chunks uncompressed only to a device reached at a link-local (USB-C / direct-cable) address, running WendyOS 0.19.0+, with no stall recorded in the last 30 days, with a 30 s stall watchdog that falls back to gzip; a routable LAN/Wi-Fi address, a cloud tunnel, an older or unknown WendyOS version, or a recent stall all keep gzip. |
 | `WENDY_DISCOVER_USB_INTERVAL` / `_ETHERNET_INTERVAL` / `_EXTERNAL_INTERVAL` | Discovery poll intervals (defaults 3s/3s/5s). |
 | `WENDY_BUILDX_BUILDER` | Override the buildx builder name. |
 | `WENDY_REGISTRY_CHAOS` / `WENDY_PUSH_SKIP` | Fault injection for the push/registry path (testing). |
 | `WENDY_ADB_PATH` | Pin a physical USB location (bus + parent-port chain) for Thor/Tegra ADB flashing on multi-device hosts. |
 | `WENDY_CONFIG_PATH` | Override the config directory. |
+
+`WENDY_CHUNK_UPLOAD_STREAMS=1 WENDY_CHUNK_UPLOAD_BATCH=64 WENDY_CHUNK_COMPRESSION=gzip`
+reproduces the pre-WDY-3211 chunk transport exactly (one gzip stream,
+64-chunk stop-and-wait batches) — set all three when diagnosing whether a
+slow or stalled deploy is specific to the parallel, uncompressed uploader.
+Stalls are remembered in `<user cache dir>/wendy/chunk-upload-stalls.json`;
+delete it to give a device a fresh chance at uncompressed uploads.
 
 ### Agent side (`wendy-agent`)
 

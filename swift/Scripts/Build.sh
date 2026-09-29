@@ -22,7 +22,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$DEV_BUILD" -eq 1 ]]; then
-  VERSION="${VERSION:-0000.00.00-000000-dev}"
+  # System extensions are replaced only by a newer bundle version. Give each
+  # local build a monotonic timestamp instead of reusing a fixed dev version.
+  VERSION="${VERSION:-$(date -u +%Y.%m.%d-%H%M%S-dev)}"
 else
   : "${VERSION:?VERSION is required}"
 fi
@@ -46,6 +48,10 @@ ARTIFACT_NAME="wendy-agent-macos-arm64-${VERSION}.zip"
 ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-wendy-notary-profile}"
 ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/Support/WendyAgentMac.entitlements"
+SYSTEM_EXTENSION_ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/WendyNet/WendyNet.entitlements"
+RUNTIME_RESOURCES_PATH="$SWIFT_DIR/WendyAgentMac/Resources/runtime"
+RUNTIME_KERNEL_PATH="$RUNTIME_RESOURCES_PATH/vmlinuz-arm64"
+RUNTIME_INITRAMFS_PATH="$RUNTIME_RESOURCES_PATH/initramfs-arm64.img"
 
 if [[ "$DEV_BUILD" -eq 1 ]]; then
   BUILD_CONFIGURATION="Debug"
@@ -82,6 +88,17 @@ if [ ! -f "$ENTITLEMENTS_PATH" ]; then
   echo "Missing entitlements file: $ENTITLEMENTS_PATH" >&2
   exit 1
 fi
+if [ ! -f "$SYSTEM_EXTENSION_ENTITLEMENTS_PATH" ]; then
+  echo "Missing entitlements file: $SYSTEM_EXTENSION_ENTITLEMENTS_PATH" >&2
+  exit 1
+fi
+for runtime_artifact in "$RUNTIME_KERNEL_PATH" "$RUNTIME_INITRAMFS_PATH"; do
+  if [ ! -r "$runtime_artifact" ]; then
+    echo "Missing runtime guest artifact: $runtime_artifact" >&2
+    echo "Run WendyAgentMac/RuntimeGuest/build.sh before packaging." >&2
+    exit 1
+  fi
+done
 
 sign_path() {
   local path="$1"
@@ -152,12 +169,15 @@ xcodebuild build \
 
 ditto "$BUILT_APP_PATH" "$APP_PATH"
 
+SYSTEM_EXTENSION_PATH="$APP_PATH/Contents/Library/SystemExtensions/sh.wendy.WendyAgentMac.WendyNet.systemextension"
+
 while IFS= read -r nested_code; do
   sign_path "$nested_code"
 done < <(find "$APP_PATH/Contents" \
   \( -name "*.app" -o -name "*.framework" -o -name "*.xpc" -o -name "*.appex" -o -name "*.dylib" \) \
   -print | sort -r)
 
+sign_path "$SYSTEM_EXTENSION_PATH" "$SYSTEM_EXTENSION_ENTITLEMENTS_PATH"
 sign_path "$APP_PATH" "$ENTITLEMENTS_PATH"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"

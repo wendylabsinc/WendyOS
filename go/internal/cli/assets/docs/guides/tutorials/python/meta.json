@@ -11,6 +11,7 @@
     "raw-camera-frames",
     "amd-rocm-pytorch",
     "g1-mujoco-simulation",
+    "r2-explorer",
     "cloud-udp-service",
     "audio",
     "bluetooth-discovery"

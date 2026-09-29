@@ -53,10 +53,11 @@ type serviceHookRunner struct {
 //
 // The dial target for both readiness and the hook is resolveHookHost's
 // result, not r.conn.Host directly — same reasoning as run.go's
-// single-container path (see hostSideAppAddress): an IPv6-literal Host may be
-// a rotating temporary address, so it prefers the agent-reported IP when one
-// is available, and a cloud-tunnel connection's Host is the unresolvable asset
-// name, so it uses the agent-reported LAN address only when that answers from
+// single-container path (see hostSideAppAddress): an active desktop VPN's
+// mesh hostname wins; an IPv6-literal Host may be a rotating temporary
+// address, so it prefers the agent-reported IP when one is available; and a
+// cloud-tunnel connection's Host is the unresolvable asset name, so without
+// the mesh it uses the agent-reported LAN address only when that answers from
 // this machine; otherwise readiness and the hook are skipped with
 // cloudHostSkipNotice. resolveHookHost's announcement runs before the
 // readiness wait (not after a successful one), mirroring run.go's documented

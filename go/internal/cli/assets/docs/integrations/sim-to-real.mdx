@@ -1,6 +1,6 @@
 ---
-title: Sim to real with Unitree
-description: Run a ROS 2 app on a Unitree VM, verify it in simulation, and deploy the same project to a physical robot.
+title: Sim to real with robot simulators
+description: Test apps on Unitree and ROSMASTER R2 VMs, then check their supported interfaces before deploying to physical robots.
 ---
 
 Start with a [Unitree Go2 or G1 simulator template](/docs/installation/unitree-simulators). ROS 2 and the simulated robot run inside the WendyOS VM. You deploy your app with `wendy run`, then select a physical target when you are ready to test on hardware.
@@ -107,6 +107,33 @@ Use ROS 2 Humble, CycloneDDS, domain 0, and `use_sim_time=false`. Start the app'
 G1 native motor messages use `unitree_hg`, not Go2's `unitree_go`. The simulator supports the documented `LocoClient` velocity/FSM subset, `/cmd_vel`, and PR-mode native low-level commands. Arm, audio, trajectory, and factory posture services are not emulated. Use the [G1 compatibility manifest](https://github.com/wendylabsinc/WendyOS/blob/main/go/simulator/g1/compatibility.json) to choose a supported interface. Low-level motor control requires your application to stabilize the humanoid.
 
 The separate [G1 Fruit Ninja example](/docs/guides/tutorials/python/g1-mujoco-simulation) is a simulation-only demo with a supported base. It is not the free-floating G1 VM profile or a deployable physical controller.
+
+## Using the ROSMASTER R2 template
+
+The `rosmaster-r2` VM profile provides an Ackermann car with lidar, odometry, IMU
+and RGB/depth cameras. Try the [R2 Explorer tutorial](/docs/guides/tutorials/python/r2-explorer)
+for an autonomous app with an observed map and timed runs.
+
+R2 ROS apps use ROS 2 Humble, CycloneDDS, domain 0 and `use_sim_time=false`. Publish
+`/cmd_vel` at 10 Hz or faster. `linear.x` is forward velocity and `angular.z` is
+yaw rate; the R2 must move to turn. Commands expire after 300 ms. Browser, app and
+ROS publishers have exclusive ownership. After a stop, pause or reset, explicitly
+select **Use ROS 2** or **Use app** in the viewer before continuing. The exploration
+sample's Start action explicitly selects and claims app control for a new run.
+
+The simulator does not emulate a USB depth camera's firmware or the STM32 serial
+protocol used by `Rosmaster_Lib`. A service that uses those hardware drivers must
+implement a simulator backend and declare a matching
+[`simulation` override](/docs/apps/wendy-services#simulation-backends). Wendy
+selects that override only for the managed VM and keeps the hardware configuration
+for physical targets. Removing a missing USB mount lets a container start; it
+does not create a camera or translate its SDK calls.
+
+The [R2 compatibility manifest](https://github.com/wendylabsinc/WendyOS/blob/main/go/simulator/rosmaster_r2/compatibility.json)
+and [runtime reference](https://github.com/wendylabsinc/WendyOS/tree/main/go/simulator/rosmaster_r2)
+describe topics, HTTP app control, camera calibration and raw depth. Dimensions,
+camera optics and odometry are simulator approximations. R2 Explorer has no
+hardware fallback and must be adapted before it can control a physical robot.
 
 ## Unitree application templates
 

@@ -914,6 +914,10 @@ func (s *AgentService) ForgetBluetoothPeripheral(ctx context.Context, req *agent
 
 const osUpdateUnsupportedForHostMessage = "This setup cannot be updated with wendy os update. Use this machine’s normal OS update tools instead. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install."
 
+const updateInProgressMessage = "Another update is already in progress on this device. Try again once it has finished."
+
+const osUpdateAwaitingRebootMessage = "An OS update is already installed on this device. Reboot the device to apply it."
+
 // systemctlFn runs systemctl; overridable in tests.
 var systemctlFn = func(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "systemctl", args...).CombinedOutput()
@@ -989,9 +993,20 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
 
+	if !s.installer.TryLock() {
+		s.logger.Warn("UpdateOS rejected: another update is already in progress")
+		return sendOSUpdateFailure(stream, updateInProgressMessage)
+	}
+	defer s.installer.Unlock()
+
 	if !s.isWendyOSHost() {
 		s.logger.Warn("UpdateOS rejected: host is not a WendyOS OTA target", zap.String("artifact_url", req.GetArtifactUrl()))
 		return sendOSUpdateFailure(stream, osUpdateUnsupportedForHostMessage)
+	}
+
+	if osUpdateStagedThisBoot(s.osUpdateStateDir) {
+		s.logger.Warn("UpdateOS rejected: an installed OS update is waiting for a reboot")
+		return sendOSUpdateFailure(stream, osUpdateAwaitingRebootMessage)
 	}
 
 	// Stop the auto-updater so it can't SIGTERM the in-flight install mid-OTA;

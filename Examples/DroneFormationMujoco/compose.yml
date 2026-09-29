@@ -1,0 +1,16 @@
+services:
+  sim:
+    image: drone-formation-mujoco:local
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8879:8879"
+    environment:
+      DRONE_FORMATION_HOST: 0.0.0.0
+      DRONE_FORMATION_PORT: "8879"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8879/api/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 18
+      start_period: 20s

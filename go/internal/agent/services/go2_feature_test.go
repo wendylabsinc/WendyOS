@@ -20,7 +20,7 @@ func TestGo2AgentFeatureOnlyAdvertisedByLinuxWendyOSVMs(t *testing.T) {
 	} {
 		got := appendGo2AgentFeature([]string{"gpu"}, tc.os, tc.device)
 		if slices.Contains(got, "go2-virtual-robot") != tc.want ||
-			slices.Contains(got, "g1-virtual-robot") != tc.want || !slices.Contains(got, "gpu") {
+			slices.Contains(got, "g1-virtual-robot") != tc.want || slices.Contains(got, "rosmaster-r2-virtual-robot") != tc.want || !slices.Contains(got, "gpu") {
 			t.Fatalf("features for %s/%s: %v", tc.os, tc.device, got)
 		}
 	}
