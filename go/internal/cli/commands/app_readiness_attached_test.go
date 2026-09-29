@@ -124,6 +124,7 @@ func (s *logsEndAfterStream) Recv() (*agentpb.StreamLogsResponse, error) {
 // run instead of the historical warning, and stops the app when this run
 // started it. A follow of an app it did not start fails without stopping it.
 func TestAttachedWaitReadyStopsAnAppThatNeverBecomesReady(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +132,7 @@ func TestAttachedWaitReadyStopsAnAppThatNeverBecomesReady(t *testing.T) {
 	port := testPort(t, ln)
 	ln.Close() // nothing listens: the probe can never pass
 	cfg := &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: port}}}
-	opts := runOptions{waitReady: true, readinessTimeout: time.Second}
+	opts := runOptions{waitReady: true, readinessTimeout: waitReadyTestWindow}
 
 	for _, path := range []string{"chunk-diff", "registry", "follow"} {
 		t.Run(path, func(t *testing.T) {
@@ -173,6 +174,7 @@ func TestAttachedWaitReadyStopsAnAppThatNeverBecomesReady(t *testing.T) {
 
 // A pass runs the host-side postStart work once, without a second probe.
 func TestAttachedWaitReadyRunsHooksOnceReady(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -223,6 +225,7 @@ func TestAttachedWaitReadyRunsHooksOnceReady(t *testing.T) {
 // the wait fails --wait-ready. The ended stream must not cancel the
 // gate's last poll. Attached runs never add the JSON object to stdout.
 func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	shortenReplaceConfirm(t, sigkillTestWindow) // a failure is confirmed before it is reported
 	previous := jsonOutput
 	t.Cleanup(func() { jsonOutput = previous })
@@ -283,6 +286,7 @@ func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
 // is confirmed: it stays for the window, or the restart policy restarts the
 // app.
 func TestAttachedWaitReadyCrashBeforeReadyFailsViaTheGate(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	shortenReplaceConfirm(t, sigkillTestWindow)
 	for _, tc := range []struct {
 		name      string
@@ -608,6 +612,7 @@ func TestGateTargetForeignNeedsExitReporting(t *testing.T) {
 // because the device shows no sign of reporting exits, which fails the check
 // instead (as not_ready: the app is left alone).
 func TestReadinessGateRunsNoHooksForAReplacement(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -670,6 +675,7 @@ func TestReadinessGateRunsNoHooksForAReplacement(t *testing.T) {
 // follow's baseline (failure_count 2), and the app on the device is left
 // alone.
 func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	shortenReplaceConfirm(t, sigkillTestWindow)
 	withOldCount := appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 2)
 	for _, tc := range []struct {
@@ -677,7 +683,7 @@ func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
 		snapshots []*agentpb.AppContainer
 	}{
 		// Poll 1 is the gate's baseline; the gate's and the follow's first
-		// polls come a second later.
+		// polls come one poll interval later.
 		{name: "SIGKILL records, then running", snapshots: replaceSequence(runningSnapshot(2),
 			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3), runningSnapshot(0))},
 		{name: "the whole replace sequence", snapshots: replaceSequence(runningSnapshot(2),
@@ -726,6 +732,7 @@ func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
 // exit recorded for the whole window is still reported as crashed, and not
 // stopped: this run did not start it.
 func TestFollowWaitReadyReportsACrashThatStays(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	shortenReplaceConfirm(t, sigkillTestWindow)
 	fake := &scriptedContainerClient{snapshots: replaceSequence(runningSnapshot(1), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 1))}
 	conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, TelemetryService: followTelemetry()}

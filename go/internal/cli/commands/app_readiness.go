@@ -25,11 +25,13 @@ const (
 	// exit the agent recorded) or already restarted, which raises its
 	// failure_count.
 	waitReadyStabilityWindow = 10 * time.Second
-	// waitReadyPollInterval paces --wait-ready's state polls and probe dials.
-	waitReadyPollInterval = time.Second
 	// waitReadyStateTimeout bounds each ListContainers poll, like readinessState.
 	waitReadyStateTimeout = 3 * time.Second
 )
+
+// waitReadyPollInterval paces --wait-ready's state polls and probe dials. A
+// variable so tests can shorten it.
+var waitReadyPollInterval = time.Second
 
 // --wait-ready outcome vocabulary: the "status" and "readiness" values of the
 // JSON object a detached JSON-mode run prints.

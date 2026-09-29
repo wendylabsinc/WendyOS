@@ -315,10 +315,11 @@ func TestRunCmdWaitReadyJSONValidationFailurePrintsOneFailedObject(t *testing.T)
 // Once the wait printed its outcome, the run's error is that outcome's: no
 // second object.
 func TestWaitReadyJSONPrintedOutcomeIsTheOnlyObject(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	previous := jsonOutput
 	t.Cleanup(func() { jsonOutput = previous })
 	jsonOutput = true
-	opts := runOptions{detach: true, waitReady: true, readinessTimeout: time.Second}
+	opts := runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow}
 	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)}}
 	conn := &grpcclient.AgentConnection{Host: "dev", ContainerService: fake}
 	var err error

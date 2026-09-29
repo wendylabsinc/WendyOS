@@ -20,6 +20,21 @@ import (
 	"google.golang.org/grpc"
 )
 
+// shortenWaitReadyPoll makes --wait-ready poll every 10ms, so a test's
+// scripted states play out in milliseconds rather than one second per poll.
+// Tests that assert a check ran before the next poll keep the real interval.
+func shortenWaitReadyPoll(t *testing.T) {
+	t.Helper()
+	orig := waitReadyPollInterval
+	waitReadyPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { waitReadyPollInterval = orig })
+}
+
+// waitReadyTestWindow stands in for a short --readiness-timeout where a test
+// waits out the stability window; with shortenWaitReadyPoll it still spans
+// several polls.
+const waitReadyTestWindow = 150 * time.Millisecond
+
 // scriptedState returns a state func that walks snapshots (repeating the last)
 // and an optional error script aligned with it.
 func scriptedState(snapshots []*agentpb.AppContainer, errs ...error) func(context.Context) (*agentpb.AppContainer, error) {
@@ -177,6 +192,7 @@ func TestAwaitAppReadyInterrupted(t *testing.T) {
 }
 
 func TestWaitForAppReadyProbesTheLANAddress(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -204,6 +220,7 @@ func TestWaitForAppReadyProbesTheLANAddress(t *testing.T) {
 // reachable from this machine; --wait-ready then falls back to the stability
 // window instead of probing (or printing) that address.
 func TestWaitForAppReadyCloudUnreachableLANUsesTheStabilityWindow(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +244,7 @@ func TestWaitForAppReadyCloudUnreachableLANUsesTheStabilityWindow(t *testing.T) 
 		}},
 	}
 	cfg := &appconfig.AppConfig{AppID: "app", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementHTTP, Port: port}}}
-	out := waitForAppReady(context.Background(), conn, cfg, runOptions{readinessTimeout: time.Second})
+	out := waitForAppReady(context.Background(), conn, cfg, runOptions{readinessTimeout: waitReadyTestWindow})
 	if out.Status != waitReadyStatusRunning || out.Readiness != readinessNotChecked || out.URL != "" {
 		t.Fatalf("outcome = %+v, want running / not_checked without a URL", out)
 	}
@@ -245,6 +262,7 @@ func TestWaitForAppReadyCloudUnreachableLANUsesTheStabilityWindow(t *testing.T) 
 // (the developer is on its network), --wait-ready probes that address as on a
 // LAN connection and reports its URL (WDY-2440).
 func TestWaitForAppReadyCloudReachableLANProbes(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -278,6 +296,7 @@ func TestWaitForAppReadyCloudReachableLANProbes(t *testing.T) {
 // uses the stability window instead of probing "[unix:…]:<port>" into a false
 // readiness_timeout, and the JSON object leaves "device" out.
 func TestWaitReadyAgentSocketUsesTheStabilityWindow(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	previous := jsonOutput
 	t.Cleanup(func() { jsonOutput = previous })
 	jsonOutput = true
@@ -306,7 +325,7 @@ func TestWaitReadyAgentSocketUsesTheStabilityWindow(t *testing.T) {
 	var stdout string
 	stderr := captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			runErr = waitReadyAfterDetachedStart(context.Background(), conn, cfg, runOptions{detach: true, waitReady: true, readinessTimeout: time.Second})
+			runErr = waitReadyAfterDetachedStart(context.Background(), conn, cfg, runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow})
 		})
 	})
 	if runErr != nil {
@@ -432,9 +451,10 @@ func stoppedThenStarted(states ...*agentpb.AppContainer) *scriptedContainerClien
 }
 
 func TestDetachedPathsWaitForReadinessWhenAsked(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	crashed := []*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)}
 	started := func() *deploymentAckStream { return &deploymentAckStream{remaining: 1, err: io.EOF} }
-	opts := runOptions{detach: true, waitReady: true, readinessTimeout: time.Second}
+	opts := runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow}
 	cfg := &appconfig.AppConfig{AppID: "app"}
 
 	t.Run("chunk-diff", func(t *testing.T) {
@@ -586,9 +606,10 @@ func detachedStartPaths(cfg *appconfig.AppConfig, opts runOptions, lookups ...*a
 // app into a false readiness_timeout. It does not cancel the stream, and the
 // drain stops once the stream ends.
 func TestDetachedWaitReadyDrainsTheStartStream(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	const lines = 50
 	cfg := &appconfig.AppConfig{AppID: "app"}
-	opts := runOptions{detach: true, waitReady: true, readinessTimeout: time.Second}
+	opts := runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow}
 	for _, path := range detachedStartPaths(cfg, opts, runningSnapshot(0)) {
 		t.Run(path.name, func(t *testing.T) {
 			giveUp, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -647,10 +668,11 @@ func TestDetachedRunWithoutWaitReadyDoesNotDrain(t *testing.T) {
 // stdout on every detached single-container path, failures included, and the
 // stdout guard RunE applies keeps build progress off stdout.
 func TestDetachedWaitReadyJSONStdoutIsExactlyOneObject(t *testing.T) {
+	shortenWaitReadyPoll(t)
 	previousJSON, previousOut := jsonOutput, buildProgressOut
 	t.Cleanup(func() { jsonOutput, buildProgressOut = previousJSON, previousOut })
 	jsonOutput = true
-	opts := runOptions{detach: true, waitReady: true, readinessTimeout: time.Second}
+	opts := runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow}
 	cfg := &appconfig.AppConfig{AppID: "app"}
 	healthy := []*agentpb.AppContainer{runningSnapshot(0)}
 	crashed := []*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)}

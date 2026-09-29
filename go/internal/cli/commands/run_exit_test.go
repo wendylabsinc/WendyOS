@@ -376,12 +376,14 @@ func TestFollowExistingContainer_CrashLoopExitsNonZero(t *testing.T) {
 }
 
 // shortenReplaceConfirm shrinks the window a run spends confirming a SIGKILL
-// exit, so the tests that wait it out stay fast.
+// exit, and the follow loop's poll, so the tests that wait them out stay fast.
 func shortenReplaceConfirm(t *testing.T, window time.Duration) {
 	t.Helper()
-	origWindow, origPoll := appReplaceConfirmWindow, appReplaceConfirmPoll
-	appReplaceConfirmWindow, appReplaceConfirmPoll = window, 5*time.Millisecond
-	t.Cleanup(func() { appReplaceConfirmWindow, appReplaceConfirmPoll = origWindow, origPoll })
+	origWindow, origPoll, origFollow := appReplaceConfirmWindow, appReplaceConfirmPoll, followStatePoll
+	appReplaceConfirmWindow, appReplaceConfirmPoll, followStatePoll = window, 5*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() {
+		appReplaceConfirmWindow, appReplaceConfirmPoll, followStatePoll = origWindow, origPoll, origFollow
+	})
 }
 
 const sigkillTestWindow = 200 * time.Millisecond
@@ -575,8 +577,9 @@ func TestFollowExistingContainer_ConfirmsSIGKILLBeforeReportingACrash(t *testing
 	shortenReplaceConfirm(t, sigkillTestWindow)
 	for _, tc := range sigkillExitCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// The follow loop's first state poll comes a second in, so time
-			// the decision from that poll rather than from the call.
+			// The follow loop's first state poll comes one followStatePoll
+			// in, so time the decision from that poll rather than from the
+			// call.
 			var firstPoll time.Time
 			fake := &scriptedContainerClient{snapshots: tc.snapshots, onList: func(call int) {
 				if call == 1 {

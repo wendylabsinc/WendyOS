@@ -12,6 +12,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
+// followStatePoll paces followExistingContainer's app-state polls. A variable
+// so tests can shorten it.
+var followStatePoll = time.Second
+
 // followExistingContainer observes a running app without calling StartContainer
 // or AttachContainer: both RPCs replace the agent's existing task. Telemetry
 // carries stdout/stderr as well as native logs; state polling ends the foreground
@@ -87,7 +91,7 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		return err
 	}
 	gateDone := gate.finished()
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(followStatePoll)
 	defer ticker.Stop()
 	for {
 		var logErr error
