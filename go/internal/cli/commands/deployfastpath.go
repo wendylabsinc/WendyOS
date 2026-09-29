@@ -526,6 +526,13 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		return false, nil
 	}
 	state := container.GetRunningState()
+	if state != agentpb.AppRunningState_RUNNING && container.GetAppVersion() != "" && container.GetAppVersion() != agentAppVersion(appCfg) {
+		// A stopped container of another version is another deployment's,
+		// whatever this machine's fingerprint says. Starting it would make it
+		// this run's app, and its version would then read as a replacement
+		// (startedAppBaseline) — so deploy this project instead.
+		return false, nil
+	}
 
 	if !opts.detach {
 		cliLogln("No changes detected; reusing existing %s.", containerDisplayName(appCfg))

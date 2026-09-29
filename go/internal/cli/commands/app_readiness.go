@@ -64,10 +64,14 @@ type waitReadyOutcome struct {
 	Message           string `json:"message,omitempty"`
 
 	err error
-	// container is the record behind a crashed outcome (nil when the app was
-	// no longer reported, and for every other outcome), for the attached
-	// gate's replacement check (gateAppReplaced).
-	container *agentpb.AppContainer
+	// record is the app's state behind a crashed outcome — nil when the app
+	// was no longer listed — and observed says the outcome has one, for the
+	// attached gate's replacement check (gateAppReplaced).
+	record   *agentpb.AppContainer
+	observed bool
+	// replaced: the wait saw another deployment's app (waitReadyChecks.foreign)
+	// and ended without an outcome of its own.
+	replaced bool
 }
 
 // waitReadyChecks are awaitAppReady's inputs, injectable so the probe and
@@ -79,60 +83,110 @@ type waitReadyChecks struct {
 	deadline <-chan time.Time
 	probe    func(context.Context) bool // nil: readiness is not checked from this machine
 	state    func(context.Context) (*agentpb.AppContainer, error)
+	// ended fires once an attached run's own output has ended — the task it
+	// started exited — so the wait checks the app at once rather than probing
+	// on; nil never fires.
+	ended <-chan struct{}
+	// foreign reports whether c, read by a state poll, is another
+	// deployment's app; taskEnded says ended had fired before that poll. nil:
+	// never (see gateTarget.foreign).
+	foreign func(c *agentpb.AppContainer, taskEnded bool) bool
 }
 
 // awaitAppReady waits for a started app. With a probe it succeeds once the
 // probe passes and the app is still running; without one it succeeds when the
 // deadline (the stability window) finds the app still running and not
 // restarted. It fails as soon as a poll shows the app exited, crash-looping,
-// gone, or restarted (failure_count above the first poll's). Transient
-// ListContainers errors are tolerated until the deadline.
+// gone, or restarted (failure_count above the first poll's), or once ended
+// fires and a poll finds the app running again. It ends without an outcome
+// of its own (replaced) as soon as a poll shows another deployment's app.
+// Transient ListContainers errors are tolerated until the deadline.
 func awaitAppReady(ctx context.Context, c waitReadyChecks) waitReadyOutcome {
 	checked := c.probe != nil
 	onFailure := readinessNotChecked
 	if checked {
 		onFailure = readinessFailed
 	}
+	// poll reads the app's state and whether it is another deployment's app.
+	// It samples ended before the read: a record read before this run's
+	// output ended may be of the run's own task, still running.
+	poll := func() (container *agentpb.AppContainer, foreign bool, err error) {
+		taskEnded := false
+		select {
+		case <-c.ended:
+			taskEnded = true
+		default:
+		}
+		container, err = c.state(ctx)
+		return container, err == nil && c.foreign != nil && c.foreign(container, taskEnded), err
+	}
+	interrupted := func() waitReadyOutcome { return waitReadyOutcome{err: ctx.Err()} }
+	replaced := waitReadyOutcome{replaced: true}
 	var baseline uint32
-	if first, err := c.state(ctx); err == nil && first != nil {
+	first, foreign, err := poll()
+	switch {
+	case ctx.Err() != nil:
+		return interrupted()
+	case foreign:
+		return replaced
+	case err == nil && first != nil:
 		baseline = first.GetFailureCount()
 	}
+	ended := c.ended
 	for {
+		taskEnded := false
 		select {
 		case <-ctx.Done():
-			return waitReadyOutcome{err: ctx.Err()}
+			return interrupted()
 		case <-c.deadline:
 			if checked {
 				return notReadyOutcome(readinessFailed, "app %s did not pass its readiness probe within %s", c.appID, c.limit)
 			}
-			container, err := c.state(ctx)
-			if ctx.Err() != nil {
-				return waitReadyOutcome{err: ctx.Err()}
-			}
-			if err != nil {
+			container, foreign, err := poll()
+			switch {
+			case ctx.Err() != nil:
+				return interrupted()
+			case foreign:
+				return replaced
+			case err != nil:
 				return notReadyOutcome(readinessNotChecked, "could not confirm app %s is still running: %v", c.appID, err)
 			}
 			if out, crashed := crashedOutcome(c.appID, container, baseline, onFailure); crashed {
 				return out
 			}
 			return waitReadyOutcome{Status: waitReadyStatusRunning, Readiness: readinessNotChecked}
+		case <-ended:
+			ended, taskEnded = nil, true
 		case <-c.tick:
 		}
-		container, err := c.state(ctx)
-		if ctx.Err() != nil {
-			return waitReadyOutcome{err: ctx.Err()}
+		container, foreign, err := poll()
+		switch {
+		case ctx.Err() != nil:
+			return interrupted()
+		case foreign:
+			return replaced
 		}
 		if err == nil {
 			if out, crashed := crashedOutcome(c.appID, container, baseline, onFailure); crashed {
 				return out
 			}
+			if taskEnded {
+				// The run's task exited before the app became ready, and the
+				// app runs again with no start resetting its count.
+				err := commandErrorf(errAppCrashed, "app %s exited before becoming ready and was restarted by its restart policy; see its logs with `wendy device logs --app %s`", c.appID, c.appID)
+				return waitReadyOutcome{Status: waitReadyStatusCrashed, Readiness: onFailure, Message: err.Error(), err: err, record: container, observed: true}
+			}
 		}
 		if checked && c.probe(ctx) {
 			if ctx.Err() != nil {
-				return waitReadyOutcome{err: ctx.Err()}
+				return interrupted()
 			}
 			// The port answered; make sure it is still this run's process.
-			if container, err := c.state(ctx); err == nil {
+			container, foreign, err := poll()
+			if foreign {
+				return replaced
+			}
+			if err == nil {
 				if out, crashed := crashedOutcome(c.appID, container, baseline, onFailure); crashed {
 					return out
 				}
@@ -165,7 +219,7 @@ func crashedOutcome(appID string, c *agentpb.AppContainer, baseline uint32, read
 	default:
 		return waitReadyOutcome{}, false
 	}
-	out := waitReadyOutcome{Status: waitReadyStatusCrashed, Readiness: readiness, Message: err.Error(), err: err, container: c}
+	out := waitReadyOutcome{Status: waitReadyStatusCrashed, Readiness: readiness, Message: err.Error(), err: err, record: c, observed: true}
 	if c != nil && c.GetTerminationReason() != "" {
 		code := c.GetExitCode()
 		out.ExitCode, out.TerminationReason = &code, c.GetTerminationReason()
@@ -182,6 +236,13 @@ func crashedOutcome(appID string, c *agentpb.AppContainer, baseline uint32, read
 // waitReadyStabilityWindow (shortened by a smaller --readiness-timeout),
 // polled via ListContainers.
 func waitForAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) waitReadyOutcome {
+	return waitForGatedAppReady(ctx, conn, appCfg, opts, nil)
+}
+
+// waitForGatedAppReady is waitForAppReady for an attached run's gate, whose
+// target also makes the wait watch for the run's task ending and for another
+// deployment's app (waitReadyChecks.ended and foreign); nil is a plain wait.
+func waitForGatedAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, target *gateTarget) waitReadyOutcome {
 	checks := waitReadyChecks{
 		appID: appCfg.AppID,
 		limit: waitReadyStabilityWindow,
@@ -190,6 +251,9 @@ func waitForAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appC
 			defer cancel()
 			return lookupAppContainer(stateCtx, conn, appCfg.AppID)
 		},
+	}
+	if target != nil {
+		checks.ended, checks.foreign = target.taskEnded, target.foreign
 	}
 	if opts.readinessTimeout > 0 && opts.readinessTimeout < checks.limit {
 		checks.limit = opts.readinessTimeout
@@ -313,21 +377,24 @@ var drainDetachedStartOutput = func(stream containerOutputStream) {
 // stream so the attached loop returns Err(). A run that only follows an app it
 // did not start leaves the app alone and watches finished() instead: a
 // host-side failure can be the network's (a firewall or VPN), and a stop
-// would keep the app down across reboots. Before failing, the gate makes sure
-// another deployment did not replace the app meanwhile (gateAppReplaced): if
-// it did, the gate records Replaced() instead — no failure and no stop, since
-// the app running now is the other deployment's — and the caller reports it
-// (noteAppReplaced) and succeeds. A pass launches the host-side postStart
-// work via onReady, whose hook runner skips its own probe
-// (hostReadinessConfirmed). The nil gate (no --wait-ready) is valid: Err
-// returns nil, Replaced false, wait returns at once, and finished never
-// fires.
+// would keep the app down across reboots. A stop is also skipped when the
+// device shows no task of the app (appStoppable). Before failing, the gate
+// makes sure another deployment did not replace the app meanwhile
+// (gateAppReplaced): if it did, the gate records Replaced() instead — no
+// failure and no stop, since the app on the device is the other deployment's
+// — and the caller reports it (noteAppReplaced) and succeeds. A pass launches
+// the host-side postStart work via onReady, whose hook runner skips its own
+// probe (hostReadinessConfirmed); when the run's own task has ended by then,
+// the gate first makes sure the app that passed is not a replacement. The
+// nil gate (no --wait-ready) is valid: Err returns nil, Replaced false, wait
+// returns at once, and finished never fires.
 //
 // When the app's output ends on its own (it exited), callers wait for the gate
-// before reading Err and before cancelling its context: the gate's next poll
-// records whether the app became ready before it exited — a clean exit inside
-// the wait is a failure too. Interrupts and broken streams cancel it first; it
-// then stands down without an outcome or a stop.
+// before reading Err and before cancelling its context: the gate checks the
+// app at once (gateTarget.taskEnded) and records whether it became ready
+// before it exited — a clean exit inside the wait is a failure too — or was
+// replaced. Interrupts and broken streams cancel it first; it then stands
+// down without an outcome or a stop.
 type readinessGate struct {
 	mu       sync.Mutex
 	err      error
@@ -352,30 +419,37 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 	g := &readinessGate{done: make(chan struct{})}
 	go func() {
 		defer close(g.done)
-		out := waitForAppReady(ctx, conn, appCfg, opts)
+		out := waitForGatedAppReady(ctx, conn, appCfg, opts, &target)
 		if ctx.Err() != nil {
 			return // the session ended first; its own teardown decides the outcome
 		}
-		if out.err != nil {
-			// Fail, and stop, only an app that is still this run's.
-			replaced, err := gateAppReplaced(ctx, conn, appCfg, target, out)
+		replaced, stoppable := out.replaced, true
+		if !replaced && (out.err != nil || target.ended()) {
+			// Fail and stop — or, once the run's task has ended, run the
+			// host-side hooks — only for an app that is still this run's.
+			var err error
+			replaced, stoppable, err = gateAppReplaced(ctx, conn, appCfg, target, out)
 			if err != nil {
 				return // the session ended first, as above
 			}
-			if replaced {
-				g.mu.Lock()
-				g.replaced = true
-				g.mu.Unlock()
-				return
-			}
+		}
+		if replaced {
+			g.mu.Lock()
+			g.replaced = true
+			g.mu.Unlock()
+			return
 		}
 		reportWaitReadyOutcome(ctx, appCfg, out, false)
 		if out.err != nil {
 			g.mu.Lock()
 			g.err = out.err
 			g.mu.Unlock()
-			if target.stopOnFailure {
+			switch {
+			case !target.stopOnFailure:
+			case stoppable:
 				stopUnreadyApp(conn, appCfg)
+			default:
+				cliLogln("Not stopping %s: the device shows no task of it to stop.", containerDisplayName(appCfg))
 			}
 			return
 		}
@@ -384,39 +458,40 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 	return g
 }
 
-// gateAppReplaced reports whether a failed --wait-ready check saw another
-// deployment's doing: the app was replaced while the gate checked it, so the
-// failure is not this run's app's, and the app running now must not be
-// stopped. ListContainers reports no container ID, so it judges the record
-// behind a crash verdict or, after a readiness timeout (or when the app was
-// no longer reported), a fresh lookup:
-//   - a record on another app_version than target.base's, or a SIGKILL record
-//     that appReplacedAfterKill confirms, was replaced;
-//   - so was an app running with no restart counted past target.base's once
-//     the run's own output has ended: the task this run started exited, the
-//     restart policy counts every restart it makes, so someone else started
-//     the app.
-//
-// An unreadable lookup keeps the failure. It returns ctx's error if ctx ends
-// first.
-func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, target gateTarget, out waitReadyOutcome) (bool, error) {
-	c := out.container
-	if c == nil {
+// gateAppReplaced reports whether a --wait-ready check that failed, or that
+// passed after the run's own task ended, saw another deployment's doing: the
+// app was replaced while the gate checked it, so the outcome is not this
+// run's app's, and the app running now must not be stopped or get this run's
+// hooks. ListContainers reports no container ID, so it judges the record
+// behind a crash verdict or, otherwise, a fresh lookup (target.foreign first
+// for the latter; the wait already applied it to the former), and confirms
+// an uncertain record with appReplaced. stoppable says whether a failure may
+// stop the app: not when the latest record judged shows no task of it
+// (appStoppable). An unreadable lookup keeps the outcome and today's stop. It
+// returns ctx's error if ctx ends first.
+func gateAppReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, target gateTarget, out waitReadyOutcome) (replaced, stoppable bool, err error) {
+	c := out.record
+	if !out.observed {
+		taskEnded := target.ended() // sampled before the read, as in awaitAppReady
 		lookupCtx, cancel := context.WithTimeout(ctx, waitReadyStateTimeout)
 		now, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		cancel()
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return false, false, ctx.Err()
 		}
 		if err != nil {
-			return false, nil
+			return false, true, nil
+		}
+		if target.foreign(now, taskEnded) {
+			return true, false, nil
 		}
 		c = now
 	}
-	if c.GetRunningState() == agentpb.AppRunningState_RUNNING && c.GetFailureCount() <= target.base.failures && target.ended() {
-		return true, nil
+	replaced, evidence, err := appReplaced(ctx, conn, appCfg, target.base, c, target.ended)
+	if err != nil {
+		return false, false, err
 	}
-	return appReplacedAfterKill(ctx, conn, appCfg, target.base, c)
+	return replaced, appStoppable(evidence), nil
 }
 
 // ended reports whether the run's own output stream has ended.
@@ -427,6 +502,22 @@ func (target gateTarget) ended() bool {
 	default:
 		return false // still open, or no such stream (nil)
 	}
+}
+
+// foreign reports whether c is another deployment's app for certain: on
+// another app_version than the baseline's, or running with a failure_count
+// below the baseline's (a start reset it; the restart policy only raises
+// it), or — when the run's own task had already exited (taskEnded) — at or
+// below it: the run's task is gone, and a restart by the restart policy
+// would have raised the count.
+func (target gateTarget) foreign(c *agentpb.AppContainer, taskEnded bool) bool {
+	if target.base.versionChanged(c) {
+		return true
+	}
+	if c.GetRunningState() != agentpb.AppRunningState_RUNNING {
+		return false
+	}
+	return c.GetFailureCount() < target.base.failures || (taskEnded && c.GetFailureCount() <= target.base.failures)
 }
 
 // Err returns the gate's failure, or nil.

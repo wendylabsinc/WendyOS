@@ -60,6 +60,45 @@ func (c *listHook) ListContainers(ctx context.Context, req *agentpb.ListContaine
 	return stream, err
 }
 
+// endsOnCueStream acknowledges Started, then ends (io.EOF) once exit is
+// closed — the app's task exiting on the test's cue — writing no output.
+type endsOnCueStream struct {
+	grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse]
+	exit    chan struct{}
+	started bool
+}
+
+func (s *endsOnCueStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
+	if !s.started {
+		s.started = true
+		return &agentpb.RunContainerLayersResponse{ResponseType: &agentpb.RunContainerLayersResponse_Started_{Started: &agentpb.RunContainerLayersResponse_Started{}}}, nil
+	}
+	select {
+	case <-s.exit:
+	case <-time.After(10 * time.Second): // a safety net for a broken test, not a cue
+	}
+	return nil, io.EOF
+}
+
+// exitAfterBaselinePoll gives fake an output stream that ends once the first
+// ListContainers call — the gate's baseline poll — has been answered: the
+// app's task exits after the check began, and every later poll sees the
+// device after that exit, as on a device (the agent records an exit before it
+// ends the task's output). after, if set, sees every call too. The run must
+// use the returned client, and fake.stream for the chunk-diff path.
+func exitAfterBaselinePoll(fake *scriptedContainerClient, after func(n int32)) *listHook {
+	stream := &endsOnCueStream{exit: make(chan struct{})}
+	fake.stream = stream
+	return &listHook{scriptedContainerClient: fake, after: func(n int32) {
+		if n == 1 {
+			close(stream.exit)
+		}
+		if after != nil {
+			after(n)
+		}
+	}}
+}
+
 // logsEndAfter is a telemetry client whose log stream ends (io.EOF) once
 // after is closed, which makes followExistingContainer poll at once.
 type logsEndAfter struct {
@@ -192,17 +231,15 @@ func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
 
 	for _, path := range []string{"chunk-diff", "registry", "follow"} {
 		t.Run(path, func(t *testing.T) {
-			stream := &deploymentAckStream{remaining: 1, err: io.EOF} // the app exited on its own
 			fake := &scriptedContainerClient{
 				snapshots: []*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "exited", 0)},
-				stream:    stream,
 			}
-			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake}
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, nil)} // the app exits on its own
 			var err error
 			stdout := captureStdout(t, func() {
 				switch path {
 				case "chunk-diff":
-					err = streamRunContainerWithStarted(context.Background(), conn, stream, cfg, opts, nil)
+					err = streamRunContainerWithStarted(context.Background(), conn, fake.stream, cfg, opts, nil)
 				case "registry":
 					err = startExistingContainer(context.Background(), conn, cfg, opts)
 				case "follow":
@@ -245,17 +282,15 @@ func TestAttachedWaitReadyCleanExitBeforeReadyFails(t *testing.T) {
 func TestAttachedWaitReadyCrashBeforeReadyFailsViaTheGate(t *testing.T) {
 	for _, path := range []string{"chunk-diff", "registry"} {
 		t.Run(path, func(t *testing.T) {
-			stream := &deploymentAckStream{remaining: 1, err: io.EOF}
 			fake := &scriptedContainerClient{
 				snapshots: []*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)},
-				stream:    stream,
 			}
-			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake}
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, nil)}
 			cfg, opts := &appconfig.AppConfig{AppID: "app"}, runOptions{waitReady: true, readinessTimeout: 3 * time.Second}
 			var err error
 			out := captureStderr(t, func() {
 				if path == "chunk-diff" {
-					err = streamRunContainerWithStarted(context.Background(), conn, stream, cfg, opts, nil)
+					err = streamRunContainerWithStarted(context.Background(), conn, fake.stream, cfg, opts, nil)
 				} else {
 					err = startExistingContainer(context.Background(), conn, cfg, opts)
 				}
@@ -276,12 +311,44 @@ func TestAttachedWaitReadyCrashBeforeReadyFailsViaTheGate(t *testing.T) {
 	}
 }
 
+// replaceSequence scripts ListContainers across another deployment's
+// replace of the app, as the agent lists it: the old app running, the SIGKILL
+// record of its task (optional: its recording races the container's delete),
+// no app while the new image is prepared, the new container created but not
+// started (stopped with no exit recorded, or crash-looping while the old
+// registration's count is above 0), and the new app running with a count
+// reset to 0.
+func replaceSequence(before *agentpb.AppContainer, rest ...*agentpb.AppContainer) []*agentpb.AppContainer {
+	return append([]*agentpb.AppContainer{before}, rest...)
+}
+
+// The records of replaceSequence. notListed is the app missing from the list.
+var notListed *agentpb.AppContainer
+
+func killRecord() *agentpb.AppContainer {
+	return appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0)
+}
+
+func createdStopped() *agentpb.AppContainer {
+	return appSnapshot("app", agentpb.AppRunningState_STOPPED, 0, "", 0)
+}
+
+func createdLooping() *agentpb.AppContainer {
+	return appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 1)
+}
+
+func withAppVersion(c *agentpb.AppContainer, version string) *agentpb.AppContainer {
+	c.AppVersion = version
+	return c
+}
+
 // Another deployment can replace the app while an attached --wait-ready run
 // checks it: the replace kills this run's task, which ends the run's output,
-// and starts a fresh app. Whatever the gate then sees — the killed task's
-// SIGKILL record, the fresh app not listening yet, or a record on another
-// app_version — the app running now is the other deployment's: the gate must
-// not stop it, and the run reports the replacement once and succeeds.
+// deletes the container, prepares the image and creates and starts the new
+// one. Whatever the gate sees along the way, the app running now is the
+// other deployment's: the gate must not stop it (a stop issued while the new
+// container is created stops it once it exists), and the run reports the
+// replacement once and succeeds.
 func TestAttachedWaitReadyLeavesAReplacementRunning(t *testing.T) {
 	shortenReplaceConfirm(t, sigkillTestWindow)
 	closed, err := net.Listen("tcp", "127.0.0.1:0")
@@ -290,96 +357,185 @@ func TestAttachedWaitReadyLeavesAReplacementRunning(t *testing.T) {
 	}
 	closedPort := testPort(t, closed)
 	closed.Close() // nothing listens: the probe can never pass
-	withVersion := func(c *agentpb.AppContainer, version string) *agentpb.AppContainer {
-		c.AppVersion = version
-		return c
-	}
 	for _, tc := range []struct {
 		name      string
 		cfg       *appconfig.AppConfig
-		timeout   time.Duration
 		snapshots []*agentpb.AppContainer
 	}{
-		{name: "SIGKILL record, then a fresh app", cfg: &appconfig.AppConfig{AppID: "app"}, timeout: 3 * time.Second, snapshots: []*agentpb.AppContainer{
-			runningSnapshot(0),
-			appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
-			runningSnapshot(0),
-		}},
-		{name: "crash-looping SIGKILL record, then a fresh app", cfg: &appconfig.AppConfig{AppID: "app"}, timeout: 3 * time.Second, snapshots: []*agentpb.AppContainer{
-			runningSnapshot(0),
-			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 1),
-			runningSnapshot(0),
-		}},
+		{name: "the whole replace sequence", snapshots: replaceSequence(runningSnapshot(0), killRecord(), notListed, notListed, createdStopped(), runningSnapshot(0))},
+		{name: "no SIGKILL record: not listed, then running", snapshots: replaceSequence(runningSnapshot(0), notListed, notListed, runningSnapshot(0))},
+		{name: "no SIGKILL record: not listed, then created", snapshots: replaceSequence(runningSnapshot(0), notListed, createdStopped(), runningSnapshot(0))},
+		{name: "created, not started", snapshots: replaceSequence(runningSnapshot(0), createdStopped(), runningSnapshot(0))},
+		{name: "created, not started, listed as crash-looping", snapshots: replaceSequence(runningSnapshot(0), createdLooping(), runningSnapshot(0))},
+		{name: "crash-looping SIGKILL record, then running", snapshots: replaceSequence(runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 1), runningSnapshot(0))},
+		// Its task gone and nothing of it listed for the whole window: the
+		// new image is still being prepared.
+		{name: "not listed for the whole window", snapshots: replaceSequence(runningSnapshot(0), notListed)},
+		// The new app runs but does not accept connections yet: the check
+		// ends as soon as the output does, not at the probe deadline.
 		{
-			name:      "readiness timeout once this run's output ended",
+			name:      "the new app running, not listening yet",
 			cfg:       &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: closedPort}}},
-			timeout:   time.Second,
-			snapshots: []*agentpb.AppContainer{runningSnapshot(0)},
+			snapshots: replaceSequence(runningSnapshot(0)),
 		},
-		{name: "another version's crash", cfg: &appconfig.AppConfig{AppID: "app", Version: "1.0"}, timeout: 3 * time.Second, snapshots: []*agentpb.AppContainer{
-			withVersion(runningSnapshot(0), "1.0"),
-			withVersion(appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0), "2.0"),
-		}},
+		{name: "another version's container", cfg: &appconfig.AppConfig{AppID: "app", Version: "1.0"}, snapshots: replaceSequence(withAppVersion(runningSnapshot(0), "1.0"), withAppVersion(createdStopped(), "2.0"))},
+		{name: "another version's crash", cfg: &appconfig.AppConfig{AppID: "app", Version: "1.0"}, snapshots: replaceSequence(withAppVersion(runningSnapshot(0), "1.0"), withAppVersion(appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0), "2.0"))},
 	} {
 		for _, path := range []string{"chunk-diff", "registry"} {
 			t.Run(tc.name+"/"+path, func(t *testing.T) {
-				stream := &deploymentAckStream{remaining: 1, err: io.EOF} // the replace ended this run's output
-				fake := &scriptedContainerClient{snapshots: tc.snapshots, stream: stream}
-				conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, AgentService: &fakeAgentVersionClient{err: errors.New("no version")}}
-				opts := runOptions{waitReady: true, readinessTimeout: tc.timeout}
+				cfg := tc.cfg
+				if cfg == nil {
+					cfg = &appconfig.AppConfig{AppID: "app"}
+				}
+				fake := &scriptedContainerClient{snapshots: tc.snapshots}
+				conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, nil), AgentService: &fakeAgentVersionClient{err: errors.New("no version")}}
+				opts := runOptions{waitReady: true, readinessTimeout: 10 * time.Second}
 				var runErr error
+				start := time.Now()
 				out := captureStderr(t, func() {
 					if path == "chunk-diff" {
-						runErr = streamRunContainerWithStarted(context.Background(), conn, stream, tc.cfg, opts, nil)
+						runErr = streamRunContainerWithStarted(context.Background(), conn, fake.stream, cfg, opts, nil)
 					} else {
-						runErr = startExistingContainer(context.Background(), conn, tc.cfg, opts)
+						runErr = startExistingContainer(context.Background(), conn, cfg, opts)
 					}
 				})
 				if runErr != nil {
 					t.Fatalf("err = %v, want nil: the app was replaced", runErr)
 				}
 				if got := fake.stops(); len(got) != 0 {
-					t.Fatalf("StopContainer calls = %v, want none: the running app is another deployment's", got)
+					t.Fatalf("StopContainer calls = %v, want none: the app on the device is another deployment's", got)
 				}
 				if n := strings.Count(out, "Application app was replaced by another deployment."); n != 1 {
 					t.Fatalf("replaced notice printed %d times, want once:\n%s", n, out)
 				}
-				if strings.Contains(out, "did not become ready") || strings.Contains(out, "stopped.") {
-					t.Fatalf("a replacement reported as this run's failure or stop:\n%s", out)
+				if strings.Contains(out, "did not become ready") || strings.Contains(out, "stopped.") || strings.Contains(out, "is ready") {
+					t.Fatalf("a replacement reported as this run's outcome:\n%s", out)
+				}
+				// The gate checks as soon as the output ends, not at its next
+				// poll, let alone at the 10s deadline.
+				if took := time.Since(start); took >= waitReadyPollInterval {
+					t.Fatalf("took %s: the check must run as soon as the output ends", took)
 				}
 			})
 		}
 	}
 }
 
-// A follow's gate that sees the followed app replaced reports the
-// replacement, not a crash: the SIGKILL record is judged against the follow's
-// baseline, and the app running now is left alone.
-func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
+// An app stopped with no exit recorded for the whole window is not a
+// replacement: on agents with exit reporting that is a stop by the user (the
+// agent hides that exit on purpose). The check fails as before, but the gate
+// does not stop the app: nothing of it runs, and a replacement's container
+// that has not started yet looks the same.
+func TestAttachedWaitReadyDoesNotStopAnAppStoppedWithNoExitRecorded(t *testing.T) {
 	shortenReplaceConfirm(t, sigkillTestWindow)
-	// Poll 1 is the gate's baseline; the gate's and the follow's first polls
-	// both see the killed task; the fresh app follows.
-	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{
-		runningSnapshot(2),
-		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3),
-		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3),
-		runningSnapshot(0),
-	}}
-	conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, TelemetryService: followTelemetry()}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	var err error
-	out := captureStderr(t, func() {
-		err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{waitReady: true, readinessTimeout: 5 * time.Second}, appBaseline{failures: 2})
-	})
+	for _, path := range []string{"chunk-diff", "registry"} {
+		t.Run(path, func(t *testing.T) {
+			fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{runningSnapshot(0), createdStopped()}}
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: exitAfterBaselinePoll(fake, nil)}
+			cfg, opts := &appconfig.AppConfig{AppID: "app"}, runOptions{waitReady: true, readinessTimeout: 10 * time.Second}
+			var err error
+			out := captureStderr(t, func() {
+				if path == "chunk-diff" {
+					err = streamRunContainerWithStarted(context.Background(), conn, fake.stream, cfg, opts, nil)
+				} else {
+					err = startExistingContainer(context.Background(), conn, cfg, opts)
+				}
+			})
+			if ErrorClass(err) != "app_crashed" || !strings.Contains(err.Error(), "no exit status was recorded") {
+				t.Fatalf("err = %v, want app_crashed with no exit status", err)
+			}
+			if got := fake.stops(); len(got) != 0 {
+				t.Fatalf("StopContainer calls = %v, want none", got)
+			}
+			if strings.Contains(out, "replaced") || !strings.Contains(out, "Not stopping app") {
+				t.Fatalf("want the not-stopping line and no replacement:\n%s", out)
+			}
+		})
+	}
+}
+
+// A check that passes as the run's own task ends may have probed another
+// deployment's app: the gate looks again before the host-side hooks run, and
+// never runs them for a replacement.
+func TestReadinessGateRunsNoHooksForAReplacement(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("err = %v, want nil: the app was replaced", err)
+		t.Fatal(err)
+	}
+	defer ln.Close() // the probe passes
+	ended := make(chan struct{})
+	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{runningSnapshot(0)}}
+	// Poll 1 is the baseline, poll 2 the first tick's, poll 3 the one that
+	// confirms the probe's pass: the run's task ends while it is answered.
+	hook := &listHook{scriptedContainerClient: fake, after: func(n int32) {
+		if n == 3 {
+			close(ended)
+		}
+	}}
+	conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: hook, AgentService: &fakeAgentVersionClient{err: errors.New("no version")}}
+	cfg := &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: testPort(t, ln)}}}
+	var hooks atomic.Int32
+	var gate *readinessGate
+	out := captureStderr(t, func() {
+		gate = startReadinessGate(context.Background(), conn, cfg, runOptions{waitReady: true, readinessTimeout: 10 * time.Second},
+			gateTarget{stopOnFailure: true, base: startedAppBaseline(cfg), taskEnded: ended}, func() { hooks.Add(1) })
+		gate.wait()
+	})
+	if !gate.Replaced() || gate.Err() != nil {
+		t.Fatalf("replaced = %v, err = %v; want a replacement", gate.Replaced(), gate.Err())
+	}
+	if got := hooks.Load(); got != 0 {
+		t.Fatalf("hooks ran %d times for another deployment's app", got)
 	}
 	if got := fake.stops(); len(got) != 0 {
 		t.Fatalf("StopContainer calls = %v, want none", got)
 	}
-	if n := strings.Count(out, "Application app was replaced by another deployment."); n != 1 {
-		t.Fatalf("replaced notice printed %d times, want once:\n%s", n, out)
+	if strings.Contains(out, "is ready") {
+		t.Fatalf("reported the replacement as ready:\n%s", out)
+	}
+}
+
+// A follow's gate that sees the followed app replaced reports the
+// replacement, not a crash or not_ready: records are judged against the
+// follow's baseline (failure_count 2), and the app on the device is left
+// alone.
+func TestFollowWaitReadyReportsAReplacement(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	withOldCount := appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 2)
+	for _, tc := range []struct {
+		name      string
+		snapshots []*agentpb.AppContainer
+	}{
+		// Poll 1 is the gate's baseline; the gate's and the follow's first
+		// polls come a second later.
+		{name: "SIGKILL records, then running", snapshots: replaceSequence(runningSnapshot(2),
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 3), runningSnapshot(0))},
+		{name: "the whole replace sequence", snapshots: replaceSequence(runningSnapshot(2),
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 2), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 2),
+			notListed, notListed, withOldCount, runningSnapshot(0))},
+		{name: "not listed, then created with the old count", snapshots: replaceSequence(runningSnapshot(2), notListed, notListed, withOldCount, runningSnapshot(0))},
+		// A start reset the count; the restart policy only raises it.
+		{name: "running with a count below the baseline", snapshots: replaceSequence(runningSnapshot(2), runningSnapshot(0))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &scriptedContainerClient{snapshots: tc.snapshots}
+			conn := &grpcclient.AgentConnection{Host: "127.0.0.1", ContainerService: fake, TelemetryService: followTelemetry()}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			out := captureStderr(t, func() {
+				err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{waitReady: true, readinessTimeout: 5 * time.Second}, appBaseline{failures: 2})
+			})
+			if err != nil {
+				t.Fatalf("err = %v, want nil: the app was replaced", err)
+			}
+			if got := fake.stops(); len(got) != 0 {
+				t.Fatalf("StopContainer calls = %v, want none", got)
+			}
+			if n := strings.Count(out, "Application app was replaced by another deployment."); n != 1 {
+				t.Fatalf("replaced notice printed %d times, want once:\n%s", n, out)
+			}
+		})
 	}
 }
 
@@ -449,14 +605,14 @@ func TestAttachedWaitReadyInterruptWhileAwaitingTheGate(t *testing.T) {
 			var err error
 			switch path {
 			case "chunk-diff":
-				// Poll 1 is the gate's baseline, poll 2 its first tick, a
-				// second after the stream ended: interrupt then.
-				conn.ContainerService = &listHook{scriptedContainerClient: fake, after: func(n int32) {
+				// Poll 1 is the gate's baseline, after which the output ends;
+				// poll 2 is the check the gate makes at once: interrupt then.
+				conn.ContainerService = exitAfterBaselinePoll(fake, func(n int32) {
 					if n == 2 {
 						cancel()
 					}
-				}}
-				err = streamRunContainerWithStarted(ctx, conn, stream, cfg, opts, nil)
+				})
+				err = streamRunContainerWithStarted(ctx, conn, fake.stream, cfg, opts, nil)
 				if got := fake.stops(); len(got) != 1 || got[0] != "app" {
 					t.Fatalf("StopContainer calls = %v, want [app] (the interrupt's stop)", got)
 				}

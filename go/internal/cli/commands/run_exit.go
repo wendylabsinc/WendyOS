@@ -16,8 +16,8 @@ import (
 // after its output stream ends, so a wedged agent cannot hang the exit.
 const appExitLookupTimeout = 5 * time.Second
 
-// appReplaceConfirmWindow and appReplaceConfirmPoll pace appReplacedAfterKill's
-// re-check of a SIGKILL exit. Variables so tests can shorten them.
+// appReplaceConfirmWindow and appReplaceConfirmPoll pace appReplaced's
+// re-check of an uncertain record. Variables so tests can shorten them.
 var (
 	appReplaceConfirmWindow = 3 * time.Second
 	appReplaceConfirmPoll   = 250 * time.Millisecond
@@ -130,27 +130,67 @@ func noteAppReplaced(appCfg *appconfig.AppConfig) {
 	cliNotice("Application %s was replaced by another deployment.", containerDisplayName(appCfg))
 }
 
-// appReplacedAfterKill reports whether c, the record an app this run
-// deployed or followed left when it stopped, shows that another deployment
-// replaced it; the caller announces that (noteAppReplaced). A record on
-// another app_version than base's is another deployment's outright.
-// Otherwise only a SIGKILL record (killedBySIGKILL) is in doubt; for any
-// other c it returns false at once. For one, it polls the agent for up to
-// appReplaceConfirmWindow: an app no longer reported, on another app_version,
-// stopped with no recorded exit (created, not started), or otherwise past the
-// SIGKILL record with a failure_count at or below base's was replaced — a
-// start resets the count, while the restart policy raises it above the
-// baseline before every restart. A restart by the restart policy, or the
-// SIGKILL record for the whole window, means the app really was killed:
-// false, so the caller reports c as a crash. Unreadable polls keep the
-// SIGKILL record's verdict. It returns ctx's error if ctx ends first.
-func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, base appBaseline, c *agentpb.AppContainer) (bool, error) {
+// appRecordUncertain reports whether c, the agent's record of an app that
+// stopped or failed a check, may show another deployment replacing the app
+// rather than the app's own exit. To replace an app the agent SIGKILLs its
+// task, deletes its container, prepares the new image and creates the new
+// container, which it starts afterwards; the SIGKILL record may not be listed
+// at all (its recording races the delete). So a record can be: the SIGKILL
+// record (killedBySIGKILL); nil, the app not listed (the longest phase); or
+// the new container created but not started — stopped, or crash-looping while
+// the old registration's failure_count is above 0, with no exit recorded. On
+// agents with exit reporting (WDY-1819) a crash always records its exit, so a
+// stopped app with none recorded is otherwise one stopped by the user (the
+// agent hides that exit on purpose); on older agents every exit is unrecorded.
+func appRecordUncertain(c *agentpb.AppContainer) bool {
+	return c == nil || killedBySIGKILL(c) ||
+		(c.GetRunningState() != agentpb.AppRunningState_RUNNING && c.GetTerminationReason() == "")
+}
+
+// appReplaced reports whether another deployment replaced an app this run
+// deployed or followed, judging c — the agent's latest record of the app
+// after it stopped or failed a check — against base. taskEnded reports
+// whether the run knows the task it started has exited (an attached run's
+// output ended); nil means it cannot know (a follow). The caller announces a
+// replacement (noteAppReplaced); otherwise it judges the app by evidence: the
+// latest record seen that recorded an exit, else the latest record seen.
+//
+// A record on another app_version than base's is another deployment's at
+// once, and any other record but an uncertain one (appRecordUncertain) is the
+// app's own: false at once. An uncertain record is polled again for up to
+// appReplaceConfirmWindow, and each poll decides:
+//   - replaced: the app no longer listed after a record of it (its container
+//     was deleted), listed after it was not (a new container), on another
+//     app_version, stopped with no exit recorded after the SIGKILL record (the
+//     recorded exit went with the old container), or running or with a
+//     recorded exit at or below base's failure_count (a start resets the
+//     count; the restart policy raises it above the baseline before every
+//     restart);
+//   - the app's own: running or with a recorded exit above base's
+//     failure_count (restarted by its restart policy);
+//   - undecided (poll again): the same uncertain kind of record, or an
+//     unreadable list.
+//
+// When the window ends undecided, the last record decides:
+//   - the SIGKILL record: the app's own (it really was killed);
+//   - crash-looping with no exit recorded: replaced (only a replacement's
+//     container that has not started is listed that way on agents with exit
+//     reporting; an older agent's crash loop reads as replaced too);
+//   - not listed at all: replaced when taskEnded (nothing of the run's is
+//     listed and its task is gone: the new image is still being prepared),
+//     otherwise the app's own;
+//   - stopped with no exit recorded: the app's own (a stop by the user, or an
+//     older agent's exit, as much as a slow-starting replacement).
+//
+// It returns ctx's error if ctx ends first.
+func appReplaced(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, base appBaseline, c *agentpb.AppContainer, taskEnded func() bool) (replaced bool, evidence *agentpb.AppContainer, err error) {
 	if base.versionChanged(c) {
-		return true, nil
+		return true, c, nil
 	}
-	if !killedBySIGKILL(c) {
-		return false, nil
+	if !appRecordUncertain(c) {
+		return false, c, nil
 	}
+	evidence, latest := c, c
 	windowCtx, cancel := context.WithTimeout(ctx, appReplaceConfirmWindow)
 	defer cancel()
 	ticker := time.NewTicker(appReplaceConfirmPoll)
@@ -158,29 +198,75 @@ func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection,
 	for {
 		select {
 		case <-windowCtx.Done():
-			return false, ctx.Err()
+			if ctx.Err() != nil {
+				return false, evidence, ctx.Err()
+			}
+			return replacedWhenUndecided(latest, taskEnded), evidence, nil
 		case <-ticker.C:
 		}
 		lookupCtx, lookupCancel := context.WithTimeout(windowCtx, appExitLookupTimeout)
 		now, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		lookupCancel()
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return false, evidence, ctx.Err()
+		}
+		if err != nil {
+			continue // unreadable: the last record stands
+		}
+		previous := latest
+		latest = now
+		if now != nil && (now.GetTerminationReason() != "" || evidence.GetTerminationReason() == "") {
+			evidence = now
 		}
 		switch {
-		case err != nil:
-			continue // still the killed task's record, as far as we can tell
-		case now == nil, base.versionChanged(now):
-			return true, nil
+		case now == nil && c == nil:
+			continue
+		case now == nil, c == nil, base.versionChanged(now):
+			return true, evidence, nil
 		case killedBySIGKILL(now):
 			continue
-		case now.GetRunningState() == agentpb.AppRunningState_STOPPED && now.GetTerminationReason() == "",
-			now.GetFailureCount() <= base.failures:
-			return true, nil
+		case appRecordUncertain(now):
+			if previous.GetTerminationReason() != "" {
+				return true, evidence, nil
+			}
+			continue
+		case now.GetFailureCount() <= base.failures:
+			return true, evidence, nil
 		default:
-			return false, nil // restarted (or about to be) by its restart policy
+			return false, evidence, nil // restarted (or about to be) by its restart policy
 		}
 	}
+}
+
+// replacedWhenUndecided is appReplaced's verdict when its window ends on
+// latest, a record still uncertain; see appReplaced.
+func replacedWhenUndecided(latest *agentpb.AppContainer, taskEnded func() bool) bool {
+	switch {
+	case latest == nil:
+		return taskEnded != nil && taskEnded()
+	case killedBySIGKILL(latest):
+		return false
+	default: // no exit recorded
+		return latest.GetRunningState() == agentpb.AppRunningState_CRASH_LOOPING
+	}
+}
+
+// appStoppable reports whether c, the latest record judged of an app that
+// failed --wait-ready, shows something of it to stop: not an app the agent no
+// longer lists — a stop issued while the new container is being created
+// waits for it and then stops it — nor one stopped with no exit recorded:
+// stopped by the user already, or a replacement's container not started yet.
+func appStoppable(c *agentpb.AppContainer) bool {
+	return c != nil && (c.GetRunningState() != agentpb.AppRunningState_STOPPED || c.GetTerminationReason() != "")
+}
+
+// agentAppVersion is the app_version the agent records for a deployment of
+// appCfg: its wendy.json version, or "latest" when it sets none.
+func agentAppVersion(appCfg *appconfig.AppConfig) string {
+	if appCfg.Version == "" {
+		return "latest"
+	}
+	return appCfg.Version
 }
 
 // attachedExitOutcome decides how an attached run ends once the app's output
@@ -191,14 +277,16 @@ func appReplacedAfterKill(ctx context.Context, conn *grpcclient.AgentConnection,
 // exits non-zero. A clean exit keeps the historical "stopped" success, and so
 // does anything the CLI cannot prove was a crash: no container service, an
 // unreadable list, an app the restart policy already brought back, or one
-// another deployment replaced (see appReplacedAfterKill).
+// another deployment replaced (see appReplaced).
 func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) error {
 	if conn != nil && conn.ContainerService != nil {
 		lookupCtx, cancel := context.WithTimeout(ctx, appExitLookupTimeout)
 		c, err := lookupAppContainer(lookupCtx, conn, appCfg.AppID)
 		cancel()
 		if err == nil {
-			replaced, err := appReplacedAfterKill(ctx, conn, appCfg, startedAppBaseline(appCfg), c)
+			// The output ended, so the task this run started has exited.
+			taskEnded := func() bool { return true }
+			replaced, evidence, err := appReplaced(ctx, conn, appCfg, startedAppBaseline(appCfg), c, taskEnded)
 			if err != nil {
 				// Ctrl-C or SIGTERM while confirming. The app this run started
 				// has exited; what runs now may be another deployment's, so
@@ -209,6 +297,7 @@ func attachedExitOutcome(ctx context.Context, conn *grpcclient.AgentConnection, 
 				noteAppReplaced(appCfg)
 				return nil
 			}
+			c = evidence
 			if failure := appExitFailure(appCfg.AppID, c); failure != nil {
 				return failure
 			}

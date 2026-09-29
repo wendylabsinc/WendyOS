@@ -25,6 +25,7 @@ type fastPathContainerClient struct {
 	agentpb.WendyContainerServiceClient // embedded nil — satisfies interface
 
 	appName    string
+	appVersion string
 	state      agentpb.AppRunningState
 	startCtx   context.Context
 	startCalls int
@@ -37,7 +38,7 @@ type fastPathContainerClient struct {
 
 func (f *fastPathContainerClient) ListContainers(_ context.Context, _ *agentpb.ListContainersRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
 	return &fakeListContainersStream{resp: &agentpb.ListContainersResponse{
-		Container: &agentpb.AppContainer{AppName: f.appName, RunningState: f.state},
+		Container: &agentpb.AppContainer{AppName: f.appName, AppVersion: f.appVersion, RunningState: f.state},
 	}}, nil
 }
 

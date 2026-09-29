@@ -261,6 +261,22 @@ var sigkillExitCases = []struct {
 	{name: "crash-looping SIGKILL record stays for the window", crash: "exit code 137", minTime: sigkillTestWindow, snapshots: []*agentpb.AppContainer{
 		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 1),
 	}},
+	// The rest of the agent's replace: it deletes the killed task's
+	// container (the SIGKILL record may never be listed: recording it races
+	// the delete), prepares the new image while the app is not listed, and
+	// creates the new container — stopped with no exit recorded, or
+	// crash-looping while the old registration's count is above 0 — which it
+	// starts afterwards.
+	{name: "the whole replace sequence", lists: 2, snapshots: replaceSequence(killRecord(), notListed, notListed, createdStopped(), runningSnapshot(0))},
+	{name: "no SIGKILL record: not listed, then running", lists: 3, snapshots: replaceSequence(notListed, notListed, runningSnapshot(0))},
+	{name: "no SIGKILL record: not listed, then created", lists: 2, snapshots: replaceSequence(notListed, createdStopped(), runningSnapshot(0))},
+	{name: "created, not started, then running", lists: 2, snapshots: replaceSequence(createdStopped(), runningSnapshot(0))},
+	{name: "created, not started, listed as crash-looping, then running", lists: 2, snapshots: replaceSequence(createdLooping(), runningSnapshot(0))},
+	// Agents with exit reporting record every crash's exit: only a
+	// replacement's container that has not started is listed like this.
+	{name: "crash-looping with no exit recorded for the window", minTime: sigkillTestWindow, snapshots: replaceSequence(createdLooping())},
+	{name: "a crash recorded after a stop with no exit is judged by that crash", crash: "exit code 3", lists: 2, snapshots: replaceSequence(createdStopped(),
+		appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 3, "crashed", 1))},
 	{name: "restarted by the restart policy", crash: "exit code 137", lists: 2, snapshots: []*agentpb.AppContainer{
 		appSnapshot("app", agentpb.AppRunningState_STOPPED, 137, "crashed", 0),
 		appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 1),
@@ -421,6 +437,15 @@ func TestFollowExistingContainer_JudgesAgainstTheFollowedBaseline(t *testing.T) 
 			withVersion(appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 2, "crashed", 3), "1.0"),
 			appSnapshot("app", agentpb.AppRunningState_RUNNING, 0, "", 0),
 		}},
+		// The new container, created but not started, is listed with the old
+		// registration's count, as crash-looping, and no exit recorded.
+		{name: "created with the old count, then running", lists: 2, snapshots: replaceSequence(
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 2), runningSnapshot(0))},
+		{name: "the whole replace sequence", lists: 2, snapshots: replaceSequence(
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 137, "crashed", 2), notListed, notListed,
+			appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 2), runningSnapshot(0))},
+		{name: "not listed, then created with the old count", lists: 2, snapshots: replaceSequence(
+			notListed, appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "", 2), runningSnapshot(0))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var firstPoll time.Time
@@ -440,6 +465,52 @@ func TestFollowExistingContainer_JudgesAgainstTheFollowedBaseline(t *testing.T) 
 				took = time.Since(firstPoll)
 			})
 			checkSIGKILLExit(t, fake, tc.crash, tc.lists, tc.minTime, took, out, err)
+		})
+	}
+}
+
+// When the window ends on a record that is still uncertain, the verdict
+// depends on what the run knows: an app not listed at all is a replacement
+// for a run whose own task ended (nothing of it is listed; the new image is
+// still being prepared), while a follow, which started no task, ends as a
+// stop. An app stopped with no exit recorded is a stop for both — on agents
+// with exit reporting that is how a stop by the user is listed.
+func TestUncertainRecordForTheWholeWindow(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow)
+	for _, tc := range []struct {
+		name, path   string
+		record       *agentpb.AppContainer
+		wantReplaced bool
+	}{
+		{name: "not listed", path: "attached", record: notListed, wantReplaced: true},
+		{name: "not listed", path: "follow", record: notListed},
+		{name: "stopped, no exit recorded", path: "attached", record: createdStopped()},
+		{name: "stopped, no exit recorded", path: "follow", record: createdStopped()},
+	} {
+		t.Run(tc.name+"/"+tc.path, func(t *testing.T) {
+			fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{tc.record}}
+			conn := &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: &runLogsFakeClient{stream: &runLogsFakeStream{response: testRunLogsResponse(false, &logspb.ScopeLogs{})}}}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			out := captureStderr(t, func() {
+				if tc.path == "attached" {
+					err = attachedExitOutcome(ctx, conn, &appconfig.AppConfig{AppID: "app"})
+				} else {
+					err = followExistingContainer(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
+				}
+			})
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			if fake.lists() <= 2 {
+				t.Errorf("ListContainers calls = %d, want the window's repeated polls", fake.lists())
+			}
+			replaced := strings.Contains(out, "Application app was replaced by another deployment.")
+			stopped := strings.Contains(out, "Application app stopped.")
+			if replaced != tc.wantReplaced || stopped == tc.wantReplaced {
+				t.Fatalf("replaced = %v, stopped = %v, want replaced = %v:\n%s", replaced, stopped, tc.wantReplaced, out)
+			}
 		})
 	}
 }
