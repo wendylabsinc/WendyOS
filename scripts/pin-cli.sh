@@ -4,7 +4,8 @@
 #   scripts/pin-cli.sh [--launcher PATH] [--min TAG] [--local DIR] TAG
 #
 # Downloads the five wendy-cli release assets for TAG, checks each one's
-# GitHub build provenance (gh attestation verify), and rewrites the pinned
+# GitHub build provenance (gh attestation verify, signed by the release
+# workflow .github/workflows/build.yml), and rewrites the pinned
 # block of the launcher (default plugins/wendy/scripts/wendy) with TAG, the
 # minimum CLI version it accepts on PATH (--min, default: keep the current
 # one), and the assets' SHA-256 hashes. --local DIR hashes DIR/<asset> instead
@@ -12,6 +13,8 @@
 set -eu
 
 REPO_SLUG="wendylabsinc/WendyOS"
+# Only the release workflow may have built an asset we pin.
+SIGNER_WORKFLOW="$REPO_SLUG/.github/workflows/build.yml"
 BASE="https://github.com/$REPO_SLUG/releases/download"
 PLATFORMS="darwin_arm64 linux_amd64 linux_arm64 windows_amd64 windows_arm64"
 RELEASE_PATTERN='[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
@@ -90,7 +93,7 @@ for p in $PLATFORMS; do
     file="$work/$asset"
     echo "downloading $asset" >&2
     curl -fsSL -o "$file" "$BASE/$tag/$asset" || die "could not download $BASE/$tag/$asset"
-    gh attestation verify "$file" --repo "$REPO_SLUG" >/dev/null ||
+    gh attestation verify "$file" --repo "$REPO_SLUG" --signer-workflow "$SIGNER_WORKFLOW" >/dev/null ||
       die "$asset failed build-provenance verification; do not pin it"
   fi
   echo "SHA256_$p=\"$(sha256_of "$file")\"" >>"$block"
