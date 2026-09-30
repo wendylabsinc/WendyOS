@@ -10,7 +10,7 @@
 //     speaker, so the existing catalog bridge picks publications up
 //     transparently and answers browses from mesh/LAN records.
 //   - The daemon runs in the container netns (nsenter --net) but the host
-//     mount namespace, so state paths stay on the host and avahi's own
+//     mount namespace with private runtime/service mounts, so avahi's own
 //     chroot/user drop still apply. It talks to the private bus only.
 //   - Spawning waits for an IPv4 address inside the netns first
 //     (address-before-daemon); the app itself must still tolerate late
@@ -23,13 +23,18 @@ package avahibridge
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/godbus/dbus/v5"
 	"go.uber.org/zap"
 )
 
@@ -64,7 +69,7 @@ func IsAvailable() bool {
 // missingBinaries names which required host binaries are absent, for logs.
 func missingBinaries() []string {
 	var out []string
-	for _, bin := range []string{"dbus-daemon", "avahi-daemon", "xdg-dbus-proxy", "nsenter", "ip"} {
+	for _, bin := range []string{"dbus-daemon", "avahi-daemon", "xdg-dbus-proxy", "nsenter", "ip", "unshare", "mount", "sh"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			out = append(out, bin)
 		}
@@ -99,6 +104,7 @@ func busConfig(socketPath string) string {
   <type>session</type>
   <listen>unix:path=` + socketPath + `</listen>
   <policy context="default">
+    <allow user="*"/>
     <allow own="*"/>
     <allow send_destination="*" eavesdrop="true"/>
     <allow receive_sender="*"/>
@@ -109,8 +115,11 @@ func busConfig(socketPath string) string {
 
 // avahiConfig renders a per-instance daemon config. disallow-other-stacks
 // must stay off: the agent bridge and app libraries share :5353.
-func avahiConfig() string {
-	return `[server]
+func avahiConfig(containerName string) string {
+	host, _ := os.Hostname()
+	id := sha256.Sum256([]byte(host + "/" + containerName))
+	return fmt.Sprintf(`[server]
+host-name=wendy-%x
 disallow-other-stacks=no
 ratelimit-interval-usec=1000000
 ratelimit-burst=1000
@@ -122,20 +131,17 @@ publish-hinfo=no
 publish-workstation=no
 [reflector]
 enable-reflector=no
-`
-}
-
-type childProc struct {
-	cmd *exec.Cmd
+`, id[:8])
 }
 
 // instance tracks one container's avahi stack.
 type instance struct {
-	cancel context.CancelFunc
-	runCtx context.Context
-	wg     sync.WaitGroup
-	mu     sync.Mutex
-	procs  []*exec.Cmd
+	cancel        context.CancelFunc
+	runCtx        context.Context
+	wg            sync.WaitGroup
+	mu            sync.Mutex
+	procs         []*exec.Cmd
+	daemonStarted bool
 }
 
 // Manager tracks one avahi stack per container name.
@@ -144,16 +150,17 @@ type Manager struct {
 	mu        sync.Mutex
 	baseDir   string
 	instances map[string]*instance
+	ready     func(context.Context, string) error
 }
 
 // NewManager creates an avahi bridge manager.
 func NewManager(logger *zap.Logger) *Manager {
-	return &Manager{logger: logger, baseDir: defaultBaseDir, instances: map[string]*instance{}}
+	return &Manager{logger: logger, baseDir: defaultBaseDir, instances: map[string]*instance{}, ready: waitForDaemon}
 }
 
 // NewManagerInDir creates a manager rooted at dir (tests).
 func NewManagerInDir(logger *zap.Logger, dir string) *Manager {
-	return &Manager{logger: logger, baseDir: dir, instances: map[string]*instance{}}
+	return &Manager{logger: logger, baseDir: dir, instances: map[string]*instance{}, ready: waitForDaemon}
 }
 
 // track registers a child process for teardown with the instance.
@@ -173,19 +180,23 @@ func (m *Manager) Prepare(ctx context.Context, containerName string) (string, er
 		return "", fmt.Errorf("avahi bridge unavailable, missing: %v", missing)
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if prior, exists := m.instances[containerName]; exists && prior.runCtx.Err() != nil {
+		m.stopInstance(containerName, prior, true)
+		delete(m.instances, containerName)
+	}
 	if _, exists := m.instances[containerName]; exists {
 		dir := m.proxyDir(containerName)
-		m.mu.Unlock()
 		return dir, nil
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	inst := &instance{cancel: cancel, runCtx: runCtx}
 	m.instances[containerName] = inst
-	m.mu.Unlock()
 	failed := true
 	defer func() {
 		if failed {
-			m.stopInstance(containerName, inst)
+			m.stopInstance(containerName, inst, true)
+			delete(m.instances, containerName)
 		}
 	}()
 
@@ -194,11 +205,23 @@ func (m *Manager) Prepare(ctx context.Context, containerName string) (string, er
 	if err := os.MkdirAll(proxyDir, 0755); err != nil {
 		return "", fmt.Errorf("avahi state dir: %w", err)
 	}
+	for _, dir := range []string{"daemon-run", "services"} {
+		if err := os.MkdirAll(filepath.Join(stateDir, dir), 0755); err != nil {
+			return "", err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "hosts"), nil, 0644); err != nil {
+		return "", err
+	}
+	// Retain the mounted proxy directory inode across agent restart.
+	_ = os.Remove(filepath.Join(proxyDir, proxySocketName))
 	busSocket := filepath.Join(stateDir, busSocketName)
+	_ = os.Remove(busSocket)
+	_ = os.Remove(filepath.Join(stateDir, "daemon-run", "pid"))
 	if err := os.WriteFile(filepath.Join(stateDir, busConfigName), []byte(busConfig(busSocket)), 0644); err != nil {
 		return "", fmt.Errorf("avahi bus config: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, avahiConfigName), []byte(avahiConfig()), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(stateDir, avahiConfigName), []byte(avahiConfig(containerName)), 0644); err != nil {
 		return "", fmt.Errorf("avahi daemon config: %w", err)
 	}
 
@@ -212,7 +235,15 @@ func (m *Manager) Prepare(ctx context.Context, containerName string) (string, er
 		return "", fmt.Errorf("avahi private bus start: %w", err)
 	}
 	m.track(inst, busCmd)
-	if err := waitForSocket(runCtx, busSocket, proxyStartupTimeout); err != nil {
+	inst.wg.Add(1)
+	go func() {
+		defer inst.wg.Done()
+		_ = busCmd.Wait()
+		if runCtx.Err() == nil {
+			inst.cancel()
+		}
+	}()
+	if err := waitForSocket(ctx, busSocket, proxyStartupTimeout); err != nil {
 		return "", fmt.Errorf("avahi private bus socket: %w", err)
 	}
 	// The avahi user (which the daemon drops to) must traverse and use it.
@@ -230,7 +261,15 @@ func (m *Manager) Prepare(ctx context.Context, containerName string) (string, er
 		return "", fmt.Errorf("avahi dbus proxy start: %w", err)
 	}
 	m.track(inst, proxyCmd)
-	if err := waitForSocket(runCtx, filepath.Join(proxyDir, proxySocketName), proxyStartupTimeout); err != nil {
+	inst.wg.Add(1)
+	go func() {
+		defer inst.wg.Done()
+		_ = proxyCmd.Wait()
+		if runCtx.Err() == nil {
+			inst.cancel()
+		}
+	}()
+	if err := waitForSocket(ctx, filepath.Join(proxyDir, proxySocketName), proxyStartupTimeout); err != nil {
 		return "", fmt.Errorf("avahi proxy socket: %w", err)
 	}
 
@@ -243,10 +282,16 @@ func (m *Manager) Prepare(ctx context.Context, containerName string) (string, er
 // network is configured; fail-closed like Prepare.
 func (m *Manager) StartDaemon(ctx context.Context, containerName, netnsPath string, addrOK func(context.Context) (bool, error)) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	inst, ok := m.instances[containerName]
-	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("avahi bridge not prepared for %q", containerName)
+	}
+	if inst.daemonStarted {
+		return nil
+	}
+	if inst.runCtx.Err() != nil {
+		return fmt.Errorf("avahi stack stopped for %q", containerName)
 	}
 	stateDir := m.stateDir(containerName)
 	// Address-before-daemon: the daemon publishes interface addresses, so it
@@ -268,16 +313,34 @@ func (m *Manager) StartDaemon(ctx context.Context, containerName, netnsPath stri
 		}
 	}
 	inst.wg.Add(1)
-	go m.supervise(inst.runCtx, inst, containerName, netnsPath, stateDir)
-	return nil
+	ready := make(chan error, 1)
+	inst.daemonStarted = true
+	go m.supervise(inst.runCtx, inst, containerName, netnsPath, stateDir, ready)
+	select {
+	case err := <-ready:
+		if err != nil {
+			inst.cancel()
+			inst.daemonStarted = false
+		}
+		return err
+	case <-ctx.Done():
+		inst.cancel()
+		return ctx.Err()
+	}
 }
 
 // supervise runs avahi-daemon in the container netns, restarting it with
 // backoff up to maxRestarts. The daemon self-confines (chroot + user drop);
 // it reaches only the private bus via DBUS_SYSTEM_BUS_ADDRESS.
-func (m *Manager) supervise(ctx context.Context, inst *instance, containerName, netnsPath, stateDir string) {
+func (m *Manager) supervise(ctx context.Context, inst *instance, containerName, netnsPath, stateDir string, ready chan<- error) {
 	defer inst.wg.Done()
-	conf := filepath.Join(stateDir, avahiConfigName)
+	defer inst.cancel()
+	defer func() {
+		select {
+		case ready <- fmt.Errorf("avahi supervisor stopped before readiness"):
+		default:
+		}
+	}()
 	bus := filepath.Join(stateDir, busSocketName)
 	restarts := 0
 	for {
@@ -296,13 +359,65 @@ func (m *Manager) supervise(ctx context.Context, inst *instance, containerName, 
 			case <-time.After(restartBackoff):
 			}
 		}
+		// Each daemon needs its own runtime PID file and static service tree.
+		// The host binaries remain available; Avahi still drops privileges and
+		// chroots normally. All mounts are private to this child process.
 		cmd := exec.CommandContext(ctx, "nsenter", "--net="+netnsPath,
-			"env", "DBUS_SYSTEM_BUS_ADDRESS=unix:path="+bus,
-			"avahi-daemon", "-f", conf)
-		cmd.Stdout, cmd.Stderr = nil, nil
-		m.track(inst, cmd)
+			"unshare", "--mount", "--propagation", "private", "sh", "-c",
+			`mkdir -p /run/avahi-daemon /etc/avahi/services &&
+    mount --bind "$1/daemon-run" /run/avahi-daemon &&
+    mount --bind "$1/services" /etc/avahi/services &&
+    { test ! -e /etc/avahi/hosts || mount --bind "$1/hosts" /etc/avahi/hosts; } &&
+    exec env DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/bus.sock" avahi-daemon -f "$1/avahi-daemon.conf"`,
+			"avahi-instance", stateDir)
+		var stderr daemonOutput
+		cmd.Stderr = &stderr
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
+		cmd.WaitDelay = 2 * time.Second
 		m.logger.Info("avahi daemon starting", zap.String("container", containerName), zap.Int("attempt", restarts+1))
-		err := cmd.Run()
+		err := cmd.Start()
+		if err == nil {
+			m.track(inst, cmd)
+			exited := make(chan error, 1)
+			go func() { exited <- cmd.Wait() }()
+			probeCtx, stopProbe := context.WithTimeout(ctx, addressWaitTimeout)
+			probe := make(chan error, 1)
+			go func() { probe <- m.ready(probeCtx, bus) }()
+			select {
+			case err = <-probe:
+				if err != nil {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+					<-exited
+				}
+				if restarts == 0 {
+					if err != nil {
+						ready <- fmt.Errorf("avahi startup: %w: %s", err, stderr.String())
+					} else {
+						ready <- nil
+					}
+				}
+				stopProbe()
+				if err != nil {
+					return
+				}
+				err = <-exited
+			case err = <-exited:
+				stopProbe()
+				<-probe
+				if err == nil {
+					err = errors.New("avahi exited before readiness")
+				}
+				if restarts == 0 {
+					ready <- fmt.Errorf("avahi startup: %w: %s", err, stderr.String())
+					return
+				}
+			}
+		} else if restarts == 0 {
+			ready <- err
+			return
+		}
+		m.logger.Warn("avahi daemon output", zap.String("container", containerName), zap.String("stderr_tail", stderr.String()))
 		restarts++
 		if ctx.Err() != nil {
 			return
@@ -313,7 +428,7 @@ func (m *Manager) supervise(ctx context.Context, inst *instance, containerName, 
 }
 
 // stopInstance cancels, joins, kills leftovers, and removes state.
-func (m *Manager) stopInstance(containerName string, inst *instance) {
+func (m *Manager) stopInstance(containerName string, inst *instance, preserveDirs bool) {
 	inst.cancel()
 	inst.wg.Wait()
 	inst.mu.Lock()
@@ -323,10 +438,12 @@ func (m *Manager) stopInstance(containerName string, inst *instance) {
 	for _, cmd := range procs {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+			// Child waits are owned by the launch goroutines above.
 		}
 	}
-	_ = os.RemoveAll(m.stateDir(containerName))
+	if !preserveDirs {
+		_ = os.RemoveAll(m.stateDir(containerName))
+	}
 }
 
 // Stop kills a container's avahi stack and removes its state.
@@ -338,8 +455,8 @@ func (m *Manager) Stop(containerName string) error {
 		return nil
 	}
 	delete(m.instances, containerName)
+	m.stopInstance(containerName, inst, false)
 	m.mu.Unlock()
-	m.stopInstance(containerName, inst)
 	return nil
 }
 
@@ -359,7 +476,7 @@ func (m *Manager) StopAll() {
 func waitForSocket(ctx context.Context, path string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		if st, err := os.Stat(path); err == nil && !st.IsDir() {
+		if st, err := os.Stat(path); err == nil && st.Mode()&os.ModeSocket != 0 {
 			return nil
 		}
 		select {
@@ -369,6 +486,61 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("socket %s never appeared", path)
+		}
+	}
+}
+
+// Close leaves directories mounted by surviving tasks in place. A replacement
+// agent recreates socket files inside those same directories.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, inst := range m.instances {
+		m.stopInstance(name, inst, true)
+		delete(m.instances, name)
+	}
+}
+
+type daemonOutput struct {
+	mu   sync.Mutex
+	tail string
+}
+
+func (d *daemonOutput) Write(p []byte) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.tail += string(p)
+	if len(d.tail) > 8192 {
+		d.tail = d.tail[len(d.tail)-8192:]
+	}
+	return len(p), nil
+}
+func (d *daemonOutput) String() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return strings.TrimSpace(d.tail)
+}
+
+func waitForDaemon(ctx context.Context, bus string) error {
+	conn, err := dbus.Connect("unix:path="+bus, dbus.WithContext(ctx))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var lastState int32 = -1
+	for {
+		var state int32
+		err = conn.Object(avahiBusName, "/").CallWithContext(ctx, avahiBusName+".Server.GetState", 0).Store(&state)
+		if err == nil {
+			lastState = state
+		}
+		if err == nil && state == 2 {
+			return nil
+		} // AVAHI_SERVER_RUNNING
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("avahi readiness: %w (last state: %d, last D-Bus error: %v)", ctx.Err(), lastState, err)
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }

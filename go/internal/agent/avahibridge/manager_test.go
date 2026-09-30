@@ -25,7 +25,7 @@ func TestBusConfigListenPath(t *testing.T) {
 }
 
 func TestAvahiConfigDisallowsExclusiveHold(t *testing.T) {
-	cfg := avahiConfig()
+	cfg := avahiConfig("app1")
 	if !strings.Contains(cfg, "disallow-other-stacks=no") {
 		t.Fatalf("config must allow co-binding :5353:\n%s", cfg)
 	}
@@ -38,45 +38,25 @@ func TestAvahiConfigDisallowsExclusiveHold(t *testing.T) {
 // that behave just enough for lifecycle tests and records invocations.
 func stubBinaries(t *testing.T, dir string) {
 	t.Helper()
-	stubs := map[string]string{
-		"dbus-daemon": `#!/bin/sh
-# args contain --config-file=PATH; extract socket from it is overkill:
-# the manager polls for the socket, so create a file at the path given
-# via AVAHI_STUB_SOCKET env.
-while [ $# -gt 0 ]; do case "$1" in --config-file=*) cfg="${1#--config-file=}";; esac; shift; done
-sock=$(grep -o 'unix:path=[^<]*' "$cfg" | head -1 | cut -d= -f2)
-[ -n "$sock" ] && { mkdir -p "$(dirname "$sock")"; touch "$sock"; }
-echo "dbus-stub $@" >> "$AVAHI_STUB_LOG"
-sleep 30 &
-wait
-`,
-		"xdg-dbus-proxy": `#!/bin/sh
-echo "proxy-stub $@" >> "$AVAHI_STUB_LOG"
-# args: <upstream> <socketpath> --filter ...; socket is $2
-mkdir -p "$(dirname "$2")"
-touch "$2"
-sleep 30 &
-wait
-`,
-		"avahi-daemon": `#!/bin/sh
-echo "avahi-stub $@" >> "$AVAHI_STUB_LOG"
-sleep 30 &
-wait
-`,
-		"nsenter": `#!/bin/sh
-echo "nsenter-stub $@" >> "$AVAHI_STUB_LOG"
-# drop through --net=X env VAR=... to avahi-daemon and its args
-while [ $# -gt 0 ]; do
-  case "$1" in avahi-daemon) break;; *) shift;;
-  esac
-done
-exec "$@"
-`,
-		"ip": `#!/bin/sh
-echo "ip-stub $@" >> "$AVAHI_STUB_LOG"
-if [ "$1" = "-o" ]; then echo "9: eth0    inet 10.99.0.5/24 brd x scope global eth0"; fi
-exit 0
-`,
+	body := `#!/usr/bin/env python3
+import os, sys, socket, time
+from pathlib import Path
+name=Path(sys.argv[0]).name
+with open(os.environ['AVAHI_STUB_LOG'], 'a') as f: f.write(name+'-stub '+' '.join(sys.argv[1:])+'\n')
+if name == 'nsenter': os.execvp('avahi-daemon', ['avahi-daemon'])
+path=None
+if name=='dbus-daemon':
+ import re
+ cfg=next(a.split('=',1)[1] for a in sys.argv[1:] if a.startswith('--config-file='))
+ path=re.search(r'unix:path=([^<]+)',Path(cfg).read_text()).group(1)
+if name=='xdg-dbus-proxy': path=sys.argv[2]
+if path:
+ s=socket.socket(socket.AF_UNIX); s.bind(path); s.listen(1)
+while True: time.sleep(1)
+`
+	stubs := map[string]string{}
+	for _, name := range []string{"dbus-daemon", "avahi-daemon", "xdg-dbus-proxy", "nsenter", "ip", "unshare", "mount", "sh"} {
+		stubs[name] = body
 	}
 	for name, body := range stubs {
 		p := filepath.Join(dir, name)
@@ -93,6 +73,7 @@ func TestPrepareAndStartDaemonFullStack(t *testing.T) {
 	log := filepath.Join(bin, "calls.log")
 	t.Setenv("AVAHI_STUB_LOG", log)
 	m := NewManagerInDir(zap.NewNop(), t.TempDir())
+	m.ready = func(context.Context, string) error { return nil }
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	dir, err := m.Prepare(ctx, "app1")
@@ -109,7 +90,7 @@ func TestPrepareAndStartDaemonFullStack(t *testing.T) {
 	}
 	calls, _ := os.ReadFile(log)
 	s := string(calls)
-	for _, want := range []string{"dbus-stub", "proxy-stub"} {
+	for _, want := range []string{"dbus-daemon-stub", "xdg-dbus-proxy-stub"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("missing %s in:\n%s", want, s)
 		}
@@ -119,7 +100,7 @@ func TestPrepareAndStartDaemonFullStack(t *testing.T) {
 	for {
 		calls, _ = os.ReadFile(log)
 		s = string(calls)
-		if strings.Contains(s, "nsenter-stub") && strings.Contains(s, "avahi-stub") {
+		if strings.Contains(s, "nsenter-stub") && strings.Contains(s, "avahi-daemon-stub") {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -143,6 +124,7 @@ func TestPrepareIsIdempotent(t *testing.T) {
 	stubBinaries(t, bin)
 	t.Setenv("AVAHI_STUB_LOG", filepath.Join(bin, "calls.log"))
 	m := NewManagerInDir(zap.NewNop(), t.TempDir())
+	m.ready = func(context.Context, string) error { return nil }
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if _, err := m.Prepare(ctx, "app1"); err != nil {
@@ -163,6 +145,7 @@ func TestStartDaemonWaitsForAddress(t *testing.T) {
 	stubBinaries(t, bin)
 	t.Setenv("AVAHI_STUB_LOG", filepath.Join(bin, "calls.log"))
 	m := NewManagerInDir(zap.NewNop(), t.TempDir())
+	m.ready = func(context.Context, string) error { return nil }
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	calls := 0

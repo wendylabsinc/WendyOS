@@ -87,6 +87,9 @@ func (c *Client) ensureAvahiForStart(ctx context.Context, containerName string, 
 		if filepath.Clean(mount.Source) != expected {
 			continue
 		}
+		if c.avahiManager == nil {
+			return false, fmt.Errorf("avahi bridge unavailable for %q", containerName)
+		}
 		dir, err := c.avahiManager.Prepare(ctx, containerName)
 		if err != nil {
 			return false, fmt.Errorf("recreating avahi bridge for %q: %w", containerName, err)

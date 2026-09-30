@@ -478,6 +478,9 @@ func (c *Client) Close() error {
 	if c.proxyManager != nil {
 		c.proxyManager.StopAll()
 	}
+	if c.avahiManager != nil {
+		c.avahiManager.Close()
+	}
 	if c.chunkIndex != nil {
 		if err := c.chunkIndex.Close(); err != nil {
 			c.logger.Warn("Closing chunk index failed", zap.Error(err))
@@ -2216,10 +2219,14 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// after recreating a proxy, release it again unless the complete start
 	// lifecycle (including network setup) succeeds below.
 	dbusProxyStartedForTask := false
+	avahiStartedForTask := false
 	dbusProxyContainerName := container.ID()
 	defer func() {
 		if dbusProxyStartedForTask && c.proxyManager != nil {
 			_ = c.proxyManager.Stop(dbusProxyContainerName)
+		}
+		if avahiStartedForTask && c.avahiManager != nil {
+			_ = c.avahiManager.Stop(dbusProxyContainerName)
 		}
 	}()
 
@@ -2274,7 +2281,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		if avahiErr != nil {
 			return nil, avahiErr
 		}
-		_ = avahiRestored
+		avahiStartedForTask = avahiRestored
 
 		identities, identityErr := decodeSerialIdentities(containerLabels[labelKeySerialIdentities])
 		if identityErr != nil {
@@ -2761,6 +2768,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			return nil, failStartedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
 		}
 	}
+	avahiStartedForTask = false
 	c.logger.Info("Container started", zap.String("app_name", appName))
 	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
@@ -4728,9 +4736,19 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 			if spec, specErr := ctr.Spec(ctx); specErr != nil {
 				c.logger.Warn("Could not inspect running container start resources",
 					zap.String("id", ctr.ID()), zap.Error(specErr))
-			} else if _, proxyErr := c.restoreDBusProxyForRunningTask(ctx, ctr.ID(), running, spec.Mounts); proxyErr != nil {
-				c.logger.Error("Could not restore running container D-Bus proxy",
-					zap.String("id", ctr.ID()), zap.Error(proxyErr))
+			} else {
+				if _, proxyErr := c.restoreDBusProxyForRunningTask(ctx, ctr.ID(), running, spec.Mounts); proxyErr != nil {
+					c.logger.Error("Could not restore running container D-Bus proxy", zap.String("id", ctr.ID()), zap.Error(proxyErr))
+				}
+				if prepared, avahiErr := c.ensureAvahiForStart(ctx, ctr.ID(), spec.Mounts); avahiErr != nil {
+					c.logger.Error("Could not restore running container Avahi bridge", zap.String("id", ctr.ID()), zap.Error(avahiErr))
+				} else if prepared {
+					if task, taskErr := ctr.Task(ctx, nil); taskErr == nil {
+						if err := c.startAvahiForTask(ctx, ctr.ID(), task.Pid()); err != nil {
+							c.logger.Error("Could not restore running container Avahi daemon", zap.String("id", ctr.ID()), zap.Error(err))
+						}
+					}
+				}
 			}
 		}
 
@@ -5473,7 +5491,7 @@ func (c *Client) startAvahiForTask(ctx context.Context, containerName string, pi
 		out, err := exec.CommandContext(ctx, "nsenter", "--net="+nsPath,
 			"ip", "-o", "-4", "addr", "show", "up").CombinedOutput()
 		if err != nil {
-			return false, nil
+			return false, fmt.Errorf("checking task network namespace: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		for _, line := range strings.Split(string(out), "\n") {
 			f := strings.Fields(line)
