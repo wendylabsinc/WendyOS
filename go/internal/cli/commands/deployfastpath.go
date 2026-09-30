@@ -648,12 +648,14 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		RestartPolicy: resolveRestartPolicy(opts),
 	})
 	if err != nil {
-		// Could not start the existing container; fall back to a full deploy.
-		return false, nil
+		return true, fmt.Errorf("starting existing container: %w", err)
 	}
+	// Creating the stream does not acknowledge task.Start. Keep the RPC alive
+	// through Started, including any preceding output, before closing the CLI.
 	if err := awaitStarted(stream); err != nil {
-		return true, fmt.Errorf("waiting for container start: %w", err)
+		return true, fmt.Errorf("waiting for existing container start: %w", err)
 	}
+	opts.reportDeployStarted()
 	cliLogln("No changes detected; started existing %s.", containerDisplayName(appCfg))
 	return true, opts.reportDetachedRun(ctx, conn, appCfg.AppID, appCfg)
 }
