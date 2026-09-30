@@ -2463,26 +2463,14 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	phaseStarted = time.Now()
 	exitStatusCh, err := task.Wait(taskCtx)
 	if err != nil {
-		_, _ = task.Delete(taskCtx)
-		stdoutR.Close()
-		stdoutW.Close()
-		stderrR.Close()
-		stderrW.Close()
-		c.recordStartFailure(ctx, appName, err)
-		return nil, fmt.Errorf("waiting on task for %q: %w", appName, err)
+		return nil, c.failTaskStart(taskCtx, task, appName, fmt.Errorf("waiting on task for %q: %w", appName, err), stdoutR, stderrR, stdoutW, stderrW)
 	}
 	waitDuration = time.Since(phaseStarted)
 
 	// Start the task.
 	phaseStarted = time.Now()
 	if err := task.Start(taskCtx); err != nil {
-		_, _ = task.Delete(taskCtx)
-		stdoutR.Close()
-		stdoutW.Close()
-		stderrR.Close()
-		stderrW.Close()
-		c.recordStartFailure(ctx, appName, err)
-		return nil, fmt.Errorf("starting task for %q: %w", appName, err)
+		return nil, c.failTaskStart(taskCtx, task, appName, fmt.Errorf("starting task for %q: %w", appName, err), stdoutR, stderrR, stdoutW, stderrW)
 	}
 	runtimeStartDuration = time.Since(phaseStarted)
 
@@ -2490,13 +2478,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// close its unconsumed pipes, and record a did-not-start diagnostic. The
 	// post-start hook is intentionally delayed until network setup commits.
 	failStartedTask := func(cause error) error {
-		_, _ = task.Delete(taskCtx, containerd.WithProcessKill)
-		stdoutR.Close()
-		stdoutW.Close()
-		stderrR.Close()
-		stderrW.Close()
-		c.recordStartFailure(ctx, appName, cause)
-		return cause
+		return c.failTaskStart(taskCtx, task, appName, cause, stdoutR, stderrR, stdoutW, stderrW)
 	}
 
 	// Track the primary PID for shared-namespace app groups.
