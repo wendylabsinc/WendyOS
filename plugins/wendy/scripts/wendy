@@ -32,6 +32,7 @@ wendy_root="${WENDY_CONFIG_DIR:-${HOME:-}/.wendy}"
 cli_root="$wendy_root/cli"
 error_file="$cli_root/last-error.txt"
 log_file="$cli_root/install.log"
+lock_dir="$cli_root/.lock"
 base_url="${WENDY_CLI_DOWNLOAD_BASE:-$DOWNLOAD_BASE}"
 well_known_dirs="${WENDY_LAUNCHER_WELL_KNOWN_DIRS:-/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin}"
 upgrade_hint="brew upgrade wendy, winget upgrade WendyLabs.Wendy, or curl -fsSL https://install.wendy.dev/cli.sh | bash"
@@ -177,11 +178,39 @@ link_current() {
   fi
 }
 
+# lock_is_stale: the holder has exited, or the lock is older than 10 minutes.
+lock_is_stale() {
+  pid=$(cat "$lock_dir/pid" 2>/dev/null)
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +10 2>/dev/null)" ]
+}
+
+acquire_lock() {
+  waited=0
+  until mkdir "$lock_dir" 2>/dev/null; do
+    if lock_is_stale; then
+      rm -rf "$lock_dir"
+      continue
+    fi
+    waited=$((waited + 1))
+    [ "$waited" -le 600 ] ||
+      fail "another Wendy CLI install has held $lock_dir for 10 minutes" "if no install is running, delete $lock_dir and restart the Wendy MCP server"
+    sleep 1
+  done
+  echo "$$" >"$lock_dir/pid"
+}
+
 # install_managed downloads CLI_VERSION, checks it against the pinned SHA-256,
-# and moves it into place. Call it in a subshell: it exits on failure.
+# and moves it into place, holding the install lock. It runs as its own
+# process (see --wendy-launcher-install) that ignores hangups and terminations,
+# so an MCP client that gives up on a slow first start can't leave a
+# half-finished install behind: the next start finds the finished one.
 install_managed() {
+  acquire_lock
   tmp="$cli_root/.tmp.$$"
-  trap 'rm -rf "$tmp"' EXIT
+  trap 'rm -rf "$tmp" "$lock_dir"' EXIT
   [ ! -x "$managed" ] || exit 0
   asset="wendy-cli-$os-$arch-$CLI_VERSION.$archive"
   want=$(pinned_sha256)
@@ -233,6 +262,14 @@ consider() {
 
 # --- main ----------------------------------------------------------------------
 
+if [ "${1:-}" = "--wendy-launcher-install" ]; then
+  trap '' HUP INT TERM
+  detect_platform
+  make_root || fail "cannot create $cli_root" "check that $wendy_root is writable"
+  install_managed
+  exit 0
+fi
+
 if [ -n "${WENDY_CLI:-}" ]; then
   [ -f "$WENDY_CLI" ] && [ -x "$WENDY_CLI" ] ||
     fail "WENDY_CLI is set to $WENDY_CLI, which is not an executable file" "unset WENDY_CLI, or point it at a wendy binary"
@@ -260,7 +297,8 @@ if [ -z "$chosen_cli" ]; then
     make_root || fail "cannot create $cli_root" "check that $wendy_root is writable"
     rm -f "$error_file"
     say "installing the Wendy CLI $CLI_VERSION into $cli_root (first run, about 15 MB)"
-    (install_managed) </dev/null >>"$log_file" 2>&1
+    (trap '' HUP INT TERM && exec sh "$0" --wendy-launcher-install) </dev/null >>"$log_file" 2>&1 &
+    wait "$!"
     if [ ! -x "$managed" ]; then
       if [ -f "$error_file" ]; then cat "$error_file" >&2; else fail "the Wendy CLI install did not finish" "see $log_file, then restart the Wendy MCP server"; fi
       exit 1

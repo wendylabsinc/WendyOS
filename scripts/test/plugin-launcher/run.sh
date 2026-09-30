@@ -365,6 +365,59 @@ test_new_root_is_private() {
   [ -n "$(find "$WENDY_CONFIG_DIR" -maxdepth 0 -perm 700)" ] || fail_case "root mode is not 0700"
 }
 
+test_concurrent_launches_download_once() {
+  make_release "$V"
+  pin "$V" "$V"
+  FIXTURE_SLOW_SECONDS=2
+  export FIXTURE_SLOW_SECONDS
+  serve
+  sh "$L" mcp serve >"$T/out1" 2>"$T/err1" &
+  p1=$!
+  sh "$L" mcp serve >"$T/out2" 2>"$T/err2" &
+  p2=$!
+  wait "$p1"
+  wait "$p2"
+  assert_eq "$(cat "$T/out1")" "stub-wendy $V args:[mcp][serve]" "first launcher"
+  assert_eq "$(cat "$T/out2")" "stub-wendy $V args:[mcp][serve]" "second launcher"
+  assert_eq "$(requests_for "$(host_asset)")" "1" "one download"
+}
+
+test_killed_launcher_still_completes_install() {
+  make_release "$V"
+  pin "$V" "$V"
+  FIXTURE_SLOW_SECONDS=3
+  export FIXTURE_SLOW_SECONDS
+  serve
+  sh "$L" mcp serve >/dev/null 2>&1 &
+  lp=$!
+  sleep 1
+  # Kill the launcher's whole process tree, children first, the way a client
+  # that tears down its MCP server's process group would.
+  pkill -TERM -P "$lp"
+  kill -TERM "$lp"
+  wait "$lp" 2>/dev/null
+  i=0
+  while [ ! -x "$WENDY_CONFIG_DIR/cli/$V/wendy" ] && [ "$i" -lt 150 ]; do sleep 0.1; i=$((i + 1)); done
+  [ -x "$WENDY_CONFIG_DIR/cli/$V/wendy" ] || fail_case "install did not finish after the launcher was killed"
+  no_network
+  out=$(sh "$L" mcp serve 2>/dev/null)
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "next start uses the finished install"
+  [ ! -d "$WENDY_CONFIG_DIR/cli/.lock" ] || fail_case "lock released"
+}
+
+test_stale_lock_is_broken() {
+  make_release "$V"
+  pin "$V" "$V"
+  sh -c 'exit 0' &
+  dead=$!
+  wait "$dead"
+  mkdir -p "$WENDY_CONFIG_DIR/cli/.lock"
+  echo "$dead" >"$WENDY_CONFIG_DIR/cli/.lock/pid"
+  serve
+  out=$(sh "$L" mcp serve 2>"$T/err")
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "install proceeds past a dead holder's lock"
+}
+
 # --- cases: pin-cli.sh ---------------------------------------------------------
 
 sha_of() {
