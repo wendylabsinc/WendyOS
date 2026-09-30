@@ -1053,6 +1053,9 @@ func main() {
 		logger.Warn("mesh proxy failed to start; mesh egress disabled", zap.Error(err))
 	}
 	udpProxy, udpErr := mesh.NewUDPProxy(mesh.UDPDialFunc(func(dialCtx context.Context, peer int32, port uint16) (mesh.UDPFlow, error) {
+		if meshDialer.IsSelf(peer) {
+			return meshsession.DialLocalUDP(dialCtx, meshIngress, port)
+		}
 		localMeshMu.RLock()
 		snapshot := localMeshSnapshot
 		credentials := localMeshCredentials
