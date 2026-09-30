@@ -61,7 +61,7 @@ fail() {
     printf 'time: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     printf 'error: %s\n' "$1"
     printf 'next step: %s\n' "$2"
-  } >"$error_file" 2>/dev/null
+  } 2>/dev/null >"$error_file"
   say "$1"
   say "next step: $2"
   exit 1
@@ -136,9 +136,9 @@ detect_platform() {
 
 download() {
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 2 --connect-timeout 20 -o "$2" "$1"
+    curl -fsSL --retry 2 --connect-timeout 20 --speed-limit 1024 --speed-time 60 -o "$2" "$1"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$2" "$1"
+    wget -q -T 60 -O "$2" "$1"
   else
     return 127
   fi
@@ -233,11 +233,11 @@ install_managed() {
   rm -rf "$tmp"
   mkdir -p "$tmp" || fail "cannot create $tmp" "check that $cli_root is writable"
   download "$base_url/$CLI_VERSION/$asset" "$tmp/$asset" ||
-    fail "could not download $base_url/$CLI_VERSION/$asset" "check the network connection (and that curl or wget is installed), then restart the Wendy MCP server"
+    fail "could not download $base_url/$CLI_VERSION/$asset" "check the network connection (and that curl or wget is installed; details in $log_file), then restart the Wendy MCP server"
   got=$(sha256_of "$tmp/$asset")
   [ -n "$got" ] || fail "no SHA-256 tool found (shasum, sha256sum or openssl)" "install one of them, then restart the Wendy MCP server"
   [ "$got" = "$want" ] ||
-    fail "checksum mismatch for $asset: expected $want, got $got; the download was deleted" "don't install it by hand; report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues"
+    fail "checksum mismatch for $asset: expected $want, got $got; the download was deleted" "if you are behind a captive portal or a proxy that rewrites downloads, fix that and restart the Wendy MCP server; otherwise don't install it by hand and report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues"
   case "$archive" in
     tar.gz) tar -xzf "$tmp/$asset" -C "$tmp" ;;
     zip) unzip -q "$tmp/$asset" -d "$tmp" ;;
