@@ -7,3 +7,9 @@ swift/Sources/*/Proto/**/*.grpc.swift  linguist-generated=true
 go/proto/gen/**                        linguist-generated=true
 *.pb.go                                linguist-generated=true
 *_grpc.pb.go                           linguist-generated=true
+
+# The Wendy plugin launcher and its tests run under sh (Git Bash on Windows)
+# and parse each other line by line, so they keep LF on every checkout.
+plugins/wendy/scripts/* text eol=lf
+scripts/pin-cli.sh text eol=lf
+scripts/test/plugin-launcher/* text eol=lf
