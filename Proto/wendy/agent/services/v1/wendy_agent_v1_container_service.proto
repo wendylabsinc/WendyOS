@@ -10,6 +10,15 @@ service WendyContainerService {
     rpc CreateContainer(CreateContainerRequest) returns (CreateContainerResponse);
     rpc CreateContainerWithProgress(CreateContainerRequest) returns (stream CreateContainerProgressResponse);
     rpc RunContainer(RunContainerLayersRequest) returns (stream RunContainerLayersResponse);
+    // Prepares a candidate before replacing the current container, starts it,
+    // and checks readiness on the agent. A Started event is not success: callers
+    // must wait for the deployment result. Output continues after success until
+    // the app exits or the caller disconnects. Disconnecting after cutover does
+    // not cancel the bounded verification/rollback on the agent.
+    rpc DeployContainer(DeployContainerRequest) returns (stream RunContainerLayersResponse);
+    // The same verified transaction with stdin attached from its first start.
+    // First input must be deployment; subsequent inputs carry stdin bytes.
+    rpc DeployContainerAttached(stream DeployContainerInput) returns (stream RunContainerLayersResponse);
     rpc StartContainer(StartContainerRequest) returns (stream RunContainerLayersResponse);
     rpc AttachContainer(stream AttachContainerRequest) returns (stream RunContainerLayersResponse);
     // ExecContainer runs a process inside an existing container with an
@@ -155,6 +164,47 @@ message CreateContainerRequest {
 
 message CreateContainerResponse {}
 
+message DeployContainerRequest {
+    // Empty layers use an image already delivered to the device registry.
+    RunContainerLayersRequest container = 1;
+    // Optional readiness timeout override, in seconds (1..3600).
+    int32 timeout_seconds = 2;
+    // Refuse before cutover if the application has no readiness probe.
+    bool require_readiness = 3;
+    // Service configs inherit app-level HTTP permissions, which do not mean
+    // each service serves that port. When true, only container.app_config's
+    // explicit readiness probe is used; callers synthesize service-owned HTTP
+    // readiness into that config before sending it.
+    bool skip_implicit_readiness = 4;
+}
+
+message DeployContainerInput {
+    oneof input {
+        DeployContainerRequest deployment = 1;
+        bytes stdin_data = 2;
+    }
+}
+
+enum DeploymentState {
+    DEPLOYMENT_STATE_UNSPECIFIED = 0;
+    // The process started; no application readiness probe was configured.
+    RUNNING = 1;
+    READY = 2;
+    // The candidate failed and the prior revision was restored.
+    ROLLED_BACK = 3;
+    FAILED = 4;
+    ROLLBACK_FAILED = 5;
+}
+
+message DeploymentResult {
+    string app_name = 1;
+    string revision = 2;
+    string previous_revision = 3;
+    DeploymentState state = 4;
+    string message = 5;
+    bool readiness_checked = 6;
+}
+
 message CreateContainerProgress {
     enum Phase {
         PHASE_UNSPECIFIED = 0;
@@ -257,6 +307,7 @@ message RunContainerLayersResponse {
         Started started = 1;
         ConsoleOutput stdout_output = 2;
         ConsoleOutput stderr_output = 3;
+        DeploymentResult deployment = 4;
     }
 
     message Started {}
