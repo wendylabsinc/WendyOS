@@ -494,6 +494,15 @@ label {
   align-items: center;
   gap: 8px;
 }
+.telemetry-heading {
+  margin-bottom: 16px;
+}
+.telemetry-heading h2 {
+  margin: 0;
+}
+.telemetry-heading > button {
+  margin-inline-start: auto;
+}
 .device-hero {
   display: flex;
   background: var(--panel);

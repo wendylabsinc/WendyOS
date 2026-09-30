@@ -880,7 +880,7 @@ function Workspace() {
               )}
               {(tab === "Metrics" || tab === "Logs") && (
                 <div className="panel">
-                  <div className="actions">
+                  <div className="actions telemetry-heading">
                     <h2>{tab}</h2>
                     <button disabled={!!busy} onClick={() => void openTab(tab)}>
                       {busy === "Reading " + tab.toLowerCase()
