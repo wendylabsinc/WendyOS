@@ -899,6 +899,9 @@ footer {
 .app-open {
   margin-left: auto;
 }
+.app-open-error {
+  margin: 12px 0 0;
+}
 
 .simulators-panel {
   min-width: 0;

@@ -24,7 +24,7 @@ export async function call(
     if (String(e).includes("trusted tool scope")) {
       window.dispatchEvent(new Event("wendy:refresh-connection"));
       throw new ToolScopeError(
-        "Open ChatGPT Plugins, select Wendy, and click Refresh in its connection details. Then open Wendy in a new conversation.",
+        "Open ChatGPT Plugins → Wendy → Manage app → Refresh tools. Then open Wendy in a new conversation.",
       );
     }
     throw e;

@@ -1,4 +1,5 @@
-import { useId } from "react";
+import { useId, useRef, useState } from "react";
+import { toolErrorMessage } from "./bridge";
 
 export type GatewayApp = {
   name: string;
@@ -64,6 +65,9 @@ function AppCard({
   onOpen,
 }: Omit<AppsPanelProps, "apps" | "refreshing"> & { app: GatewayApp }) {
   const id = useId();
+  const [opening, setOpening] = useState(false);
+  const [openError, setOpenError] = useState("");
+  const openingLock = useRef(false);
   const state = normalizeState(app.state);
   const running = state === "RUNNING";
   const stopped = state === "STOPPED";
@@ -74,7 +78,7 @@ function AppCard({
     : !knownControlState
       ? "Start and stop are unavailable until the app state is confirmed."
       : undefined;
-  const pending = busy ? "An action is in progress." : undefined;
+  const pending = busy || opening ? "An action is in progress." : undefined;
   const startReason =
     unavailable ||
     pending ||
@@ -89,6 +93,24 @@ function AppCard({
     : stopped || state === "CRASH_LOOPING"
       ? "stopped"
       : "unknown";
+
+  async function open() {
+    if (!running || busy || !onOpen || openingLock.current) return;
+    openingLock.current = true;
+    setOpening(true);
+    setOpenError("");
+    try {
+      await onOpen(app);
+    } catch (error) {
+      setOpenError(
+        toolErrorMessage(error) ||
+          "ChatGPT has not loaded the app-opening tool. Go to Plugins → Wendy → Manage app → Refresh tools, then reopen Wendy.",
+      );
+    } finally {
+      openingLock.current = false;
+      setOpening(false);
+    }
+  }
 
   return (
     <li className="app-card">
@@ -189,7 +211,7 @@ function AppCard({
           <button
             type="button"
             className="app-control app-open"
-            disabled={!running || busy || !onOpen}
+            disabled={!running || busy || opening || !onOpen}
             aria-label={"Open " + app.name}
             title={
               !running
@@ -198,14 +220,17 @@ function AppCard({
                   ? "Opening apps is unavailable in this host."
                   : "Open " + app.name
             }
-            onClick={() => {
-              if (running && !busy) void onOpen?.(app);
-            }}
+            onClick={() => void open()}
           >
-            Open app ↗
+            {opening ? "Opening…" : "Open app ↗"}
           </button>
         )}
       </div>
+      {openError && (
+        <p className="error app-open-error" role="alert">
+          {openError}
+        </p>
+      )}
       {unavailable && (
         <small className="app-control-note" id={id}>
           {unavailable}

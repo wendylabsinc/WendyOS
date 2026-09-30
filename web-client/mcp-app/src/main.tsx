@@ -351,8 +351,8 @@ function Workspace() {
               <div>
                 <strong>Update the Wendy connection</strong>
                 <p>
-                  Open ChatGPT Plugins, select Wendy, and click Refresh in its
-                  connection details. Then close this tab and open Wendy in a
+                  Open ChatGPT Plugins, select Wendy, and scroll to Manage app.
+                  Click Refresh tools, then close this tab and open Wendy in a
                   new conversation. Refresh fleet only updates the device list.
                 </p>
                 <button
@@ -625,24 +625,29 @@ function Workspace() {
               )}
               {tab === "Apps" && (
                 <AppsPanel
+                  key={selected}
                   apps={inspection?.apps || []}
                   canControl={!!row?.can_control_apps}
                   busy={!!busy}
                   onOpen={
                     inspection?.can_open_apps
                       ? async (a) => {
-                          await action("Opening app", async () => {
-                            const r = await call("open_robot_app", {
-                              robot_id: selected,
-                              app_name: a.name,
-                            });
-                            const url = r.structuredContent?.url;
-                            if (typeof url !== "string")
-                              throw Error(
-                                "The app did not return a web address.",
-                              );
-                            await app.openLink({ url });
+                          const g = generation.current;
+                          const r = await call("open_robot_app", {
+                            robot_id: selected,
+                            app_name: a.name,
                           });
+                          const url = r.structuredContent?.url;
+                          if (typeof url !== "string")
+                            throw Error(
+                              "The app did not return a web address.",
+                            );
+                          if (g !== generation.current) return;
+                          const opened = await app.openLink({ url });
+                          if (opened.isError)
+                            throw Error(
+                              "ChatGPT could not open the app's browser window. Try Open app again.",
+                            );
                         }
                       : undefined
                   }
