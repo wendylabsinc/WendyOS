@@ -287,8 +287,9 @@ if [ "${1:-}" = "--wendy-launcher-install" ]; then
 fi
 
 if [ -n "${WENDY_CLI:-}" ]; then
-  [ -f "$WENDY_CLI" ] && [ -x "$WENDY_CLI" ] ||
+  if [ ! -f "$WENDY_CLI" ] || [ ! -x "$WENDY_CLI" ]; then
     fail "WENDY_CLI is set to $WENDY_CLI, which is not an executable file" "unset WENDY_CLI, or point it at a wendy binary"
+  fi
   run_cli "$WENDY_CLI" "$@"
 fi
 
