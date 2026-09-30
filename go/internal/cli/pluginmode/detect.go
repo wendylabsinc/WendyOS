@@ -1,0 +1,140 @@
+package pluginmode
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+
+	toml "github.com/BurntSushi/toml"
+)
+
+// pluginName is the Wendy plugin's name in Claude's and Codex's plugin
+// registries, where installs are keyed "<name>@<marketplace>".
+const pluginName = "wendy"
+
+func isWendyPluginKey(key string) bool {
+	name, _, ok := strings.Cut(key, "@")
+	return ok && name == pluginName
+}
+
+// readJSON decodes the JSON file at path into v and reports success.
+func readJSON(path string, v any) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && json.Unmarshal(data, v) == nil
+}
+
+// ClaudePluginActive reports whether Claude Code has the Wendy plugin
+// installed at user scope and enabled. A project-scoped install does not
+// count: every other project still uses the user-level server `wendy mcp
+// setup` writes. Anything unreadable counts as "not active", so setup keeps
+// writing the user-level server rather than leaving Claude with no Wendy tools.
+func ClaudePluginActive(home string) bool {
+	return claudeMarketplacePluginActive(home) || claudeSyncedPluginPresent(home)
+}
+
+func claudeMarketplacePluginActive(home string) bool {
+	var installed struct {
+		Plugins map[string][]struct {
+			Scope       string `json:"scope"`
+			InstallPath string `json:"installPath"`
+		} `json:"plugins"`
+	}
+	if !readJSON(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), &installed) {
+		return false
+	}
+	var settings struct {
+		EnabledPlugins map[string]bool `json:"enabledPlugins"`
+	}
+	if !readJSON(filepath.Join(home, ".claude", "settings.json"), &settings) {
+		return false
+	}
+	for key, installs := range installed.Plugins {
+		if !isWendyPluginKey(key) || !settings.EnabledPlugins[key] {
+			continue
+		}
+		for _, in := range installs {
+			if (in.Scope == "" || in.Scope == "user") && providesWendyServer(filepath.Join(in.InstallPath, ".mcp.json")) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// providesWendyServer reports whether the plugin MCP file at path declares the
+// Wendy plugin's server: a "wendy" entry whose env sets WENDY_PLUGIN. Earlier
+// `wendy mcp setup` runs registered a skills-only plugin also named "wendy"
+// (wendy@wendy-skills); it has no MCP file, so it never counts.
+func providesWendyServer(path string) bool {
+	var f struct {
+		MCPServers map[string]struct {
+			Env map[string]string `json:"env"`
+		} `json:"mcpServers"`
+	}
+	if !readJSON(path, &f) {
+		return false
+	}
+	_, ok := f.MCPServers["wendy"].Env[EnvVar]
+	return ok
+}
+
+// claudeSyncedPluginPresent reports whether the Wendy plugin reached Claude
+// Code as a synced plugin (added from the claude.ai directory; Claude Code
+// loads it as "wendy@synced"). Spike S3 records how such installs appear on
+// disk — see the S3 section of
+// docs/superpowers/specs/2026-09-29-wendy-plugin-spike-findings.md — and Task 9
+// of plan 2 fills this in from it. Until then it reports false, which only
+// means setup keeps writing the user-level server for synced installs.
+func claudeSyncedPluginPresent(home string) bool {
+	return false
+}
+
+// CodexPluginActive reports whether <home>/.codex/config.toml enables a Wendy
+// plugin ([plugins."wendy@<marketplace>"] enabled = true). A missing enabled
+// key counts as disabled, for the same reason as in ClaudePluginActive.
+func CodexPluginActive(home string) bool {
+	var cfg struct {
+		Plugins map[string]struct {
+			Enabled *bool `toml:"enabled"`
+		} `toml:"plugins"`
+	}
+	if _, err := toml.DecodeFile(filepath.Join(home, ".codex", "config.toml"), &cfg); err != nil {
+		return false
+	}
+	for key, p := range cfg.Plugins {
+		if isWendyPluginKey(key) && p.Enabled != nil && *p.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+// UserLevelServer returns the config file holding a user-level "wendy" MCP
+// server for client ("claude": ~/.claude.json, "codex": ~/.codex/config.toml).
+// Next to the plugin's own server it lists every Wendy tool twice.
+func UserLevelServer(client, home string) (string, bool) {
+	switch client {
+	case "claude":
+		path := filepath.Join(home, ".claude.json")
+		var cfg struct {
+			MCPServers map[string]json.RawMessage `json:"mcpServers"`
+		}
+		if readJSON(path, &cfg) {
+			if _, ok := cfg.MCPServers["wendy"]; ok {
+				return path, true
+			}
+		}
+	case "codex":
+		path := filepath.Join(home, ".codex", "config.toml")
+		var cfg struct {
+			MCPServers map[string]toml.Primitive `toml:"mcp_servers"`
+		}
+		if _, err := toml.DecodeFile(path, &cfg); err == nil {
+			if _, ok := cfg.MCPServers["wendy"]; ok {
+				return path, true
+			}
+		}
+	}
+	return "", false
+}
