@@ -25,12 +25,23 @@ func (g *RobotGateway) registerAppWebTool() {
 }
 
 func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return g.openRobotAppView(ctx, req, 30*time.Minute)
+}
+
+func (g *RobotGateway) openRobotAppView(ctx context.Context, req mcpgo.CallToolRequest, viewLifetime time.Duration) (*mcpgo.CallToolResult, error) {
+	// Setup must finish even if the MCP host supplies no request deadline.
+	// Only a successfully opened view may outlive this operation.
+	ctx, finishOpen := context.WithTimeout(ctx, 45*time.Second)
+	defer finishOpen()
 	if ctx.Value(gatewayLocalContextKey{}) != true || !g.hasScope(ctx, RobotToolsScope) {
 		return mcpgo.NewToolResultError("App web views require a local gateway with app-tool access."), nil
 	}
 	r, err := g.authorize(ctx, req.GetString("robot_id", ""), RobotReadScope)
 	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return gatewayAppOpenError(ctx, err.Error()), nil
+	}
+	if ctx.Err() != nil {
+		return gatewayAppOpenError(ctx, "Could not open this app."), nil
 	}
 	select {
 	case g.webSlots <- struct{}{}:
@@ -43,21 +54,31 @@ func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolReque
 			<-g.webSlots
 		}
 	}()
-	viewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Minute)
+	viewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), viewLifetime)
 	defer func() {
 		if !retained {
 			cancel()
 		}
 	}()
 	connectCtx, connectCancel := context.WithCancel(viewCtx)
+	// Cloud connections retain their establishment context. Follow the caller
+	// during setup, then detach only after the homepage check succeeds.
+	stopOpenCancel := context.AfterFunc(ctx, connectCancel)
+	defer stopOpenCancel()
 	connectTimer := time.AfterFunc(20*time.Second, connectCancel)
 	conn, err := g.connect(connectCtx, r.Device)
 	connectTimer.Stop()
 	// The connection's cloud dialer may use its establishment context, so keep
 	// it alive with the view and bound individual HTTP dials below.
+	if err == nil {
+		err = connectCtx.Err()
+	}
 	if err != nil {
 		connectCancel()
-		return mcpgo.NewToolResultError("Could not connect to this app's device."), nil
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return gatewayAppOpenError(ctx, "Could not connect to this app's device."), nil
 	}
 	defer func() {
 		if !retained {
@@ -67,9 +88,11 @@ func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolReque
 	}()
 	s := New(&config.Config{}, nil)
 	s.SetConn(conn)
-	apps, err := gatewayApps(ctx, r, s)
+	inspectCtx, finishInspect := context.WithTimeout(ctx, 15*time.Second)
+	defer finishInspect()
+	apps, err := gatewayApps(inspectCtx, r, s)
 	if err != nil {
-		return mcpgo.NewToolResultError("Could not inspect this app."), nil
+		return gatewayAppOpenError(ctx, "Could not inspect this app. Check the device connection and try again."), nil
 	}
 	appName := req.GetString("app_name", "")
 	port := uint32(0)
@@ -91,10 +114,13 @@ func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolReque
 			target = net.JoinHostPort(host, strconv.Itoa(int(port)))
 		}
 		if err != nil {
-			return mcpgo.NewToolResultError("This device has no verified route to its app web UI."), nil
+			return gatewayAppOpenError(ctx, "This device has no verified route to its app web UI."), nil
 		}
 	}
-	transport := &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	// Some device apps use a single-threaded HTTP/1.1 server. An idle upstream
+	// connection can prevent every other browser/view from reaching that app.
+	// WebSocket upgrades still retain their connection for the live session.
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		if conn.RegistryDialer != nil {
 			return gatewayAppWebDial(viewCtx, ctx, func(dialCtx context.Context) (net.Conn, error) {
 				return conn.RegistryDialer(dialCtx, int(port))
@@ -115,7 +141,10 @@ func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolReque
 	token := uuid.NewString()
 	host := ln.Addr().String()
 	if err := gatewayAppHomepage(ctx, transport, host); err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
+		return gatewayAppOpenError(ctx, err.Error()), nil
+	}
+	if !stopOpenCancel() || ctx.Err() != nil || connectCtx.Err() != nil {
+		return gatewayAppOpenError(ctx, "Opening this app was canceled. Try again."), nil
 	}
 	upstream := &url.URL{Scheme: "http", Host: "wendy-app.invalid"}
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
@@ -132,6 +161,16 @@ func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolReque
 	}()
 	expiresAt, _ := viewCtx.Deadline()
 	return okResult(map[string]any{"app_name": appName, "robot_id": r.ID, "url": "http://" + host + "/?wendy_view=" + token, "expires_at": expiresAt.UTC().Format(time.RFC3339Nano), "expires_in_seconds": int(time.Until(expiresAt).Seconds()), "scope": "gateway_laptop"}), nil
+}
+
+func gatewayAppOpenError(ctx context.Context, message string) *mcpgo.CallToolResult {
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
+		message = "Opening this app timed out. Check the device connection and try again."
+	case context.Canceled:
+		message = "Opening this app was canceled. Try again."
+	}
+	return mcpgo.NewToolResultError(message)
 }
 
 // An HTTP entitlement can expose an inference API without a browser UI. Check

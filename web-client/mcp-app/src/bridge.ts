@@ -4,6 +4,12 @@ import {
   applyHostStyleVariables,
 } from "@modelcontextprotocol/ext-apps";
 import { OpenAIExtensions } from "@openai/mcp-extensions/app";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
+export const APP_WEB_REQUEST_OPTIONS = {
+  timeout: 50_000,
+  maxTotalTimeout: 50_000,
+  resetTimeoutOnProgress: false,
+};
 export const app = new App({ name: "Wendy devices", version: "0.2.0" });
 export const extensions = new OpenAIExtensions(app);
 class ToolScopeError extends Error {}
@@ -15,7 +21,10 @@ export function toolErrorMessage(error: unknown): string {
 export async function call(
   name: string,
   args: Record<string, unknown> = {},
-  options?: { timeout?: number },
+  options?: Pick<
+    RequestOptions,
+    "timeout" | "maxTotalTimeout" | "resetTimeoutOnProgress" | "signal"
+  >,
 ) {
   let r;
   try {

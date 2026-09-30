@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { app as host, toolErrorMessage } from "./bridge";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 export type GatewayApp = {
   name: string;
@@ -95,7 +96,7 @@ function AppCard({
     : !knownControlState
       ? "Start and stop are unavailable until the app state is confirmed."
       : undefined;
-  const pending = busy || opening ? "An action is in progress." : undefined;
+  const pending = busy ? "An action is in progress." : undefined;
   const startReason =
     unavailable ||
     pending ||
@@ -117,12 +118,15 @@ function AppCard({
     const currentOperation = operation.current;
     setOpening(true);
     setOpenError("");
+    let prepared = false;
+    if (view && view.expiresAt <= Date.now()) setView(undefined);
     try {
       // Retain a prepared URL so a second click opens it directly from the
       // user's gesture and does not allocate another expiring gateway view.
       const next =
         view && view.expiresAt > Date.now() ? view : await onOpen(app);
       if (!next || currentOperation !== operation.current) return;
+      prepared = true;
       setView(next);
       setLinkStatus(
         "Web address ready. If no window opened, copy this address into your browser.",
@@ -131,15 +135,31 @@ function AppCard({
         throw Error(
           "This host cannot open browser windows. Use the web address below.",
         );
-      const opened = await host.openLink({ url: next.url });
+      const opened = await host.openLink(
+        { url: next.url },
+        {
+          timeout: 5_000,
+          maxTotalTimeout: 5_000,
+          resetTimeoutOnProgress: false,
+        },
+      );
       if (opened.isError)
         throw Error(
           "ChatGPT could not open the browser window. Use the web address below.",
         );
     } catch (error) {
       if (currentOperation !== operation.current) return;
+      const timedOut =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === ErrorCode.RequestTimeout;
       setOpenError(
-        toolErrorMessage(error) ||
+        (timedOut
+          ? prepared
+            ? "ChatGPT did not confirm opening the browser. Use the web address below."
+            : "The app did not return a web address in time. Check its logs or try again."
+          : toolErrorMessage(error)) ||
           "ChatGPT has not loaded the app-opening tool. Go to Plugins → Wendy → Manage app → Refresh tools, then reopen Wendy.",
       );
     } finally {
@@ -279,6 +299,11 @@ function AppCard({
           </button>
         )}
       </div>
+      {opening && !view && (
+        <p className="app-control-note" role="status">
+          Connecting to this app…
+        </p>
+      )}
       {openError && (
         <p className="error app-open-error" role="alert">
           {openError}

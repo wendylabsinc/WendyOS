@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   app,
+  APP_WEB_REQUEST_OPTIONS,
   extensions,
   call,
   share,
@@ -634,10 +635,11 @@ function Workspace() {
                       ? async (a) => {
                           const g = generation.current;
                           const requestedAt = Date.now();
-                          const r = await call("open_robot_app", {
-                            robot_id: selected,
-                            app_name: a.name,
-                          });
+                          const r = await call(
+                            "open_robot_app",
+                            { robot_id: selected, app_name: a.name },
+                            APP_WEB_REQUEST_OPTIONS,
+                          );
                           const url = r.structuredContent?.url;
                           if (typeof url !== "string")
                             throw Error(

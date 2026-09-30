@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -10,11 +12,288 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
 )
+
+type gatewayWebInventoryClient struct {
+	agentpb.WendyContainerServiceClient
+	list func(context.Context) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error)
+}
+
+func (c gatewayWebInventoryClient) ListContainers(ctx context.Context, _ *agentpb.ListContainersRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+	return c.list(ctx)
+}
+
+type gatewayWebInventoryStream struct {
+	grpc.ClientStream
+	app *agentpb.AppContainer
+}
+
+func (s *gatewayWebInventoryStream) Recv() (*agentpb.ListContainersResponse, error) {
+	if s.app == nil {
+		return nil, io.EOF
+	}
+	app := s.app
+	s.app = nil
+	return &agentpb.ListContainersResponse{Container: app}, nil
+}
+
+type gatewayWebCloseFunc func() error
+
+func (f gatewayWebCloseFunc) Close() error { return f() }
+
+func TestGatewayWebOpenCancelsPendingDeviceConnection(t *testing.T) {
+	started := make(chan struct{})
+	g, err := NewRobotGateway(gatewayTestConfig(), func(ctx context.Context, _ string) (*grpcclient.AgentConnection, error) {
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(gatewayAccessContext(robotGatewayScopes, true))
+	defer cancel()
+	done := make(chan *mcpgo.CallToolResult, 1)
+	go func() {
+		result, _ := g.openRobotApp(ctx, callToolReq("open_robot_app", map[string]any{"robot_id": "alpha", "app_name": "companion"}))
+		done <- result
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("device connection did not start")
+	}
+	cancel()
+	select {
+	case result := <-done:
+		if result == nil || !result.IsError || len(g.webSlots) != 0 {
+			t.Fatal("canceled setup did not fail and release its view slot")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("device connection ignored opening cancellation")
+	}
+}
+
+func TestGatewayWebOpenBoundsInventoryAndCleansUpFailure(t *testing.T) {
+	var closed atomic.Bool
+	var connectionCtx context.Context
+	g, err := NewRobotGateway(gatewayTestConfig(), func(ctx context.Context, _ string) (*grpcclient.AgentConnection, error) {
+		connectionCtx = ctx
+		return &grpcclient.AgentConnection{
+			ExtraClosers: []io.Closer{gatewayWebCloseFunc(func() error { closed.Store(true); return nil })},
+			ContainerService: gatewayWebInventoryClient{list: func(ctx context.Context) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+				deadline, bounded := ctx.Deadline()
+				if !bounded || time.Until(deadline) > 15*time.Second || time.Until(deadline) <= 0 {
+					t.Error("app inventory has no bounded setup deadline")
+				}
+				return nil, fmt.Errorf("fixture inventory unavailable")
+			}},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := g.openRobotApp(gatewayAccessContext(robotGatewayScopes, true), callToolReq("open_robot_app", map[string]any{"robot_id": "alpha", "app_name": "companion"}))
+	if err != nil || !result.IsError || !closed.Load() || connectionCtx.Err() == nil || len(g.webSlots) != 0 {
+		t.Fatalf("failed inventory leaked view resources: %v %v", result, err)
+	}
+}
+
+func TestGatewayWebOpenRetainsSuccessfulViewAfterToolCompletion(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/socket" {
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade with HTTP keep-alives disabled: %v", err)
+				return
+			}
+			defer conn.Close()
+			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+			kind, message, err := conn.ReadMessage()
+			if err == nil {
+				_ = conn.WriteMessage(kind, message)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, "<html>Working app</html>")
+	}))
+	defer upstream.Close()
+	closed := make(chan struct{})
+	var connectionCtx context.Context
+	g, err := NewRobotGateway(gatewayTestConfig(), func(ctx context.Context, _ string) (*grpcclient.AgentConnection, error) {
+		connectionCtx = ctx
+		return &grpcclient.AgentConnection{
+			ExtraClosers: []io.Closer{gatewayWebCloseFunc(func() error { close(closed); return nil })},
+			ContainerService: gatewayWebInventoryClient{list: func(context.Context) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+				return &gatewayWebInventoryStream{app: &agentpb.AppContainer{AppName: "companion", RunningState: agentpb.AppRunningState_RUNNING, HttpPort: 8080}}, nil
+			}},
+			RegistryDialer: func(dialCtx context.Context, port int) (net.Conn, error) {
+				if port != 8080 {
+					return nil, fmt.Errorf("wrong app port %d", port)
+				}
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return (&net.Dialer{}).DialContext(dialCtx, "tcp", upstream.Listener.Addr().String())
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, finishRequest := context.WithCancel(gatewayAccessContext(robotGatewayScopes, true))
+	defer finishRequest()
+	// Shorten only the view lease so the real server expires during this test.
+	result, err := g.openRobotAppView(ctx, callToolReq("open_robot_app", map[string]any{"robot_id": "alpha", "app_name": "companion"}), 2*time.Second)
+	if err != nil || result.IsError {
+		t.Fatalf("open app: %v %v", result, err)
+	}
+	finishRequest()
+	if connectionCtx.Err() != nil {
+		t.Fatal("tool completion canceled the retained Cloud connection")
+	}
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar, Timeout: time.Second}
+	response, err := client.Get(result.StructuredContent.(map[string]any)["url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Working app") {
+		t.Fatalf("retained view failed: status=%d, error=%v", response.StatusCode, err)
+	}
+	viewURL, _ := url.Parse(result.StructuredContent.(map[string]any)["url"].(string))
+	headers := http.Header{"Origin": []string{"http://" + viewURL.Host}}
+	for _, cookie := range jar.Cookies(viewURL) {
+		headers.Add("Cookie", cookie.String())
+	}
+	dialer := websocket.Dialer{HandshakeTimeout: time.Second}
+	websocketConn, _, err := dialer.Dial("ws://"+viewURL.Host+"/socket", headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer websocketConn.Close()
+	_ = websocketConn.SetReadDeadline(time.Now().Add(time.Second))
+	if err := websocketConn.WriteMessage(websocket.TextMessage, []byte("live update")); err != nil {
+		t.Fatal(err)
+	}
+	_, message, err := websocketConn.ReadMessage()
+	if err != nil || string(message) != "live update" {
+		t.Fatalf("retained view WebSocket failed: %q %v", message, err)
+	}
+	_ = websocketConn.Close()
+	select {
+	case <-closed:
+		if connectionCtx.Err() == nil || len(g.webSlots) != 0 {
+			t.Fatal("expired view did not release its connection and slot")
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("view did not expire")
+	}
+}
+
+// Match Python HTTPServer: service one HTTP/1.1 connection until it closes
+// before accepting another. Idle keep-alive connections block other clients.
+func gatewaySingleThreadedHTTPFixture(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		_ = listener.Close()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+			reader := bufio.NewReader(conn)
+			for {
+				req, err := http.ReadRequest(reader)
+				if err != nil {
+					break
+				}
+				_ = req.Body.Close()
+				connectionHeader := ""
+				if req.Close {
+					connectionHeader = "Connection: close\r\n"
+				}
+				_, err = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 8\r\n%s\r\napp okay", connectionHeader)
+				if err != nil || req.Close {
+					break
+				}
+			}
+			stopCancel()
+			_ = conn.Close()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+func TestGatewayWebViewsDoNotMonopolizeSingleThreadedApp(t *testing.T) {
+	upstream := gatewaySingleThreadedHTTPFixture(t)
+	closed := make(chan struct{}, 2)
+	g, err := NewRobotGateway(gatewayTestConfig(), func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		return &grpcclient.AgentConnection{
+			ExtraClosers: []io.Closer{gatewayWebCloseFunc(func() error { closed <- struct{}{}; return nil })},
+			ContainerService: gatewayWebInventoryClient{list: func(context.Context) (grpc.ServerStreamingClient[agentpb.ListContainersResponse], error) {
+				return &gatewayWebInventoryStream{app: &agentpb.AppContainer{AppName: "companion", RunningState: agentpb.AppRunningState_RUNNING, HttpPort: 8080}}, nil
+			}},
+			RegistryDialer: func(ctx context.Context, _ int) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", upstream)
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		ctx, cancel := context.WithTimeout(gatewayAccessContext(robotGatewayScopes, true), time.Second)
+		result, err := g.openRobotAppView(ctx, callToolReq("open_robot_app", map[string]any{"robot_id": "alpha", "app_name": "companion"}), 3*time.Second)
+		cancel()
+		if err != nil || result.IsError {
+			t.Fatalf("view %d was blocked by another view's idle connection: %v %v", i, result, err)
+		}
+		jar, _ := cookiejar.New(nil)
+		client := &http.Client{Jar: jar, Timeout: time.Second}
+		response, err := client.Get(result.StructuredContent.(map[string]any)["url"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if err != nil || string(body) != "app okay" {
+			t.Fatalf("view %d did not read its page: %q, %v", i, body, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-closed:
+		case <-time.After(5 * time.Second):
+			t.Fatal("view did not release its app connection")
+		}
+	}
+}
 
 func TestGatewayAppHomepageRejectsAPIAndMissingPages(t *testing.T) {
 	for _, scenario := range []struct {
