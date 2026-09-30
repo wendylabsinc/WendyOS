@@ -20,6 +20,16 @@ type SimulatorBackend struct {
 	Create func(context.Context, SimulatorCreateOptions) (*SimulatorInfo, error)
 	Stop   func(context.Context, string, bool, time.Duration) (*SimulatorInfo, error)
 	Delete func(context.Context, string) error
+	Viewer func(context.Context, string) (*SimulatorViewer, error)
+}
+
+type SimulatorViewer struct {
+	Name    string `json:"name"`
+	Profile string `json:"profile"`
+	URL     string `json:"url"`
+	Ready   bool   `json:"ready"`
+	Healthy bool   `json:"healthy"`
+	Mode    string `json:"mode"`
 }
 
 type SimulatorInfo struct {

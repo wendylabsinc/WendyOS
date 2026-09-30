@@ -105,7 +105,14 @@ Add Automations and an Events inbox to the app, plus per-device rule status and 
 | `Examples/WendyDataPeople/`, `Examples/WendyDataModelApp/`, `go/internal/agent/data/`, `go/internal/agent/inference/` | Reuse persistent detection campaigns, YOLO app events, episode capture, and notification delivery. Add gateway tools, event evidence, and durable delivery. |
 | `scripts/chatgpt-panel-preview.mjs`, `chatgpt-panel.test.mjs`, `verify-chatgpt-gateway.py` | Extend the host fixture and wire checks for both entrypoints, routing, rendering, and SDK lifecycle. |
 
-The ChatGPT gateway, panel, plugin package, RobotCompanion example, and associated verification scripts above are dependencies from separate, in-progress pilot work. They are not included in this plan-only change. Integrate that work before the dependent implementation and preserve its existing authorization and compatibility contracts.
+The draft implementation now includes the pilot gateway, plugin package,
+RobotCompanion example and verification scripts. The built React/TypeScript app
+in `web-client/mcp-app/` replaces `robot_panel.html` and its hand-written bridge.
+The embedded output is `go/internal/cli/mcp/desktop_app.html`. Go tests and the
+official SDK replace the pilot bridge tests. See
+[implementation status](../plugins/wendy-chatgpt/SPEC.md) for completed behavior,
+device checks and remaining host verification. The durable delivery service and
+automatic fleet rollout described in this plan remain follow-on work.
 
 ## What the user sees
 

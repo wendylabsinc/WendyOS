@@ -19,6 +19,9 @@ option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agent
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 service DataService {
+  // Bounded, durable event inbox. An empty cursor starts at the current tail;
+  // replay=true reads retained history. Expired cursors report a gap explicitly.
+  rpc Events(DataEventsRequest) returns (DataEventsResponse);
   // Operator-only snapshot of retained durable records, including those
   // received while no episode was active. Does not delete or acknowledge upload.
   rpc ExportRecording(DataRecordingExportRequest) returns (stream wendy.agent.apps.v1.StoredRecord);
@@ -36,6 +39,9 @@ service DataService {
   rpc CampaignInspect(DataCampaignInspectRequest) returns (DataCampaign);
   rpc CampaignTrigger(DataCampaignTriggerRequest) returns (DataEpisode);
 }
+
+message DataEventsRequest { string app_id = 1; string event = 2; string cursor = 3; bool replay = 4; }
+message DataEventsResponse { bytes events_json = 1; string cursor = 2; bool gap = 3; }
 
 message DataSource {
   string id = 1;

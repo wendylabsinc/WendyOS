@@ -1,0 +1,38 @@
+{
+  "thor": {
+    "source": "marketing-website/public/models/jetson-thor/nvidia-jetson-thor-devkit-web.glb",
+    "sourceSHA256": "5d5b8723d480dc03fbebeafacac00b9847e06be81aa86a185b51624e5fa808b6",
+    "sha256": "70886af8bce0ff5d529fe0dfdafb6d0220c70cd66029644e7e5fbeb522aa4551",
+    "bytes": 4229596
+  },
+  "go2": {
+    "source": "marketing-website/public/models/unitree-go2/go2.web.glb",
+    "sourceSHA256": "97b6b8e43a02401239f8e6e5a3c9e12bc19716aaf353a54b9e00c9e8327bafcb",
+    "sha256": "fb1110517ed957b13949c960f979df829fe3b7a421589b994dcdfbde20e7fdf8",
+    "bytes": 798304
+  },
+  "orin": {
+    "source": "marketing-website/public/models/quickstart/jetson-orin-nano.glb",
+    "sourceSHA256": "c20c2c2f3e8de6cb6e4ea3bc5a7e53b55ee8ff0bbfb75a1c6ec4d53d13166070",
+    "sha256": "68c911d203a6f76fb7ee030291acf14ef0698e00febfd0362c1e9541eca07c70",
+    "bytes": 6645140
+  },
+  "dragonwing": {
+    "source": "marketing-website/public/models/quickstart/dragonwing-iq-9075.glb",
+    "sourceSHA256": "16157b6e81b8745c06e7ad6945b7e6e4bbcd68951cb7ff1bc53d01cd567eb8a1",
+    "sha256": "391366955c5a0336dc39d6cd0ec22797ece0b7226390d2d5af66f8a45a2ab083",
+    "bytes": 8142956
+  },
+  "dgx": {
+    "source": "marketing-website/public/models/dgx-spark/nvidia-dgx-spark.glb",
+    "sourceSHA256": "0931d0c29e3aced2cc7aa13450c55c8f687444de8c2da193bda64d9ca02d5380",
+    "sha256": "d90014ff57e1f5eb204750a2caff3d9d9de440d0fcdf189ef329e6a07a24a77b",
+    "bytes": 1941728
+  },
+  "macbook": {
+    "source": "marketing-website/public/models/macbook/macbook.web.glb",
+    "sourceSHA256": "69d7f60e19ae0388a27ac8fe96caa2338e5984f6248d116b30ec0b9d07ebb291",
+    "sha256": "1226cede12e849b8f708afede37dbefac9f7312782c7141523d6e58e7fc8d3d9",
+    "bytes": 324180
+  }
+}

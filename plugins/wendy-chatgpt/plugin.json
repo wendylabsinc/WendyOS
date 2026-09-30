@@ -1,0 +1,27 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "wendy-robots",
+  "version": "0.2.0",
+  "description": "Browse Wendy devices, preview cameras, operate approved apps, and develop with laptop simulators in ChatGPT.",
+  "author": { "name": "Wendy Labs", "url": "https://wendy.dev" },
+  "homepage": "https://wendy.dev",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Wendy Robots",
+        "shortDescription": "Your devices and their apps",
+        "longDescription": "Browse your fleet with Wendy 3D models, inspect devices, preview cameras, open app web UIs, and control approved apps. With local permissions, create robot simulators and open their live MuJoCo scenes. Share selected device and camera context with ChatGPT.",
+        "developerName": "Wendy Labs",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://wendy.dev",
+        "brandColor": "#171C23",
+        "defaultPrompt": [
+          "Open Wendy and show my robots.",
+          "Look through my robot's camera and describe the scene.",
+          "Check which apps are running on my robot."
+        ]
+      }
+    }
+  }
+}

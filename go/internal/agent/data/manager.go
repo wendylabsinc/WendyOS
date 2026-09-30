@@ -74,6 +74,7 @@ var (
 const AdHocEpisodeKey = ""
 
 type Manager struct {
+	eventMu           sync.Mutex
 	streamMu          sync.Mutex
 	recordings        *recordingStore
 	streamPreRoll     []bufferedStreamRecord
@@ -1167,6 +1168,11 @@ func (m *Manager) recordApplication(appID string, record ApplicationRecord, obse
 		stamp = record.ClientBootNanos
 	}
 	stored := storedApplicationRecord{ApplicationRecord: record, AppID: appID, AgentReceiptBootNanos: receipt, ClientTimestampAccepted: accepted, TimestampUncertaintyNanos: (after - before + 1) / 2}
+	if record.Type == "event" {
+		if err := m.appendDeviceEvent(appID, record, agentBootID, receipt); err != nil {
+			return "rejected", err
+		}
+	}
 	m.mu.Lock()
 	// Every open episode that selected the applications source receives the
 	// record on its own timeline; episodes that excluded it are skipped. Open

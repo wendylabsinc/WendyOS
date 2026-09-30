@@ -1,5 +1,9 @@
 # Wendy skill groups
 
+The separate [Wendy ChatGPT robot plugin](wendy-chatgpt/README.md) provides a
+robot panel, scoped device operations, and reviewed app tools. Its gateway is
+configured separately from the agentic coding skill groups below.
+
 `wendy-agentic-coding` is the single end-user group. It covers CLI and MCP setup,
 device installation and first boot, app creation, deployment, debugging, and
 robot verification. Its `skills/` directory is the source for both the plugin

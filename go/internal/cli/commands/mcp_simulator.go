@@ -15,7 +15,25 @@ import (
 )
 
 func simulatorBackend() wendymcp.SimulatorBackend {
-	return newSimulatorBackend(vm.NewStore, fetchMCPSimulatorImage)
+	b := newSimulatorBackend(vm.NewStore, fetchMCPSimulatorImage)
+	b.Viewer = func(ctx context.Context, name string) (*wendymcp.SimulatorViewer, error) {
+		if err := vm.ValidName(name); err != nil {
+			return nil, err
+		}
+		_, profile, port, err := robotEndpoint(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		state, err := readRobotStatus(ctx, port)
+		if err != nil {
+			return nil, err
+		}
+		if err = state.matches(name, profile); err != nil {
+			return nil, err
+		}
+		return &wendymcp.SimulatorViewer{Name: name, Profile: profile.Kind, URL: robotURL(port), Ready: state.Ready, Healthy: state.Healthy, Mode: state.Mode}, nil
+	}
+	return b
 }
 
 type simulatorImageResolver func(context.Context, string) (string, string, func(), error)
