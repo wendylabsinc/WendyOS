@@ -120,14 +120,23 @@ pin() {
 # serve starts the fixture server and points the launcher at it.
 serve() {
   rm -f "$T/port"
-  python3 "$HERE/fixture_server.py" "$FIX" "$T/port" &
+  python3 "$HERE/fixture_server.py" "$FIX" "$T/port" 2>"$T/server.err" &
   SERVER_PID=$!
   i=0
   while [ ! -s "$T/port" ] && [ "$i" -lt 100 ]; do
     sleep 0.1
     i=$((i + 1))
   done
-  WENDY_CLI_DOWNLOAD_BASE="http://127.0.0.1:$(cat "$T/port")"
+  if [ ! -s "$T/port" ]; then
+    state=exited
+    kill -0 "$SERVER_PID" 2>/dev/null && state=running
+    echo "    fixture server wrote no port in 10 s ($state; python3 -> $(readlink "$T/sysbin/python3"))" >&2
+    sed 's/^/      server stderr: /' "$T/server.err" >&2
+    start=$(date +%s)
+    python3 -c 'import sys; print("      python3 -c: " + sys.executable + " " + sys.version.split()[0])' >&2 2>&1
+    echo "      python3 -c took $(($(date +%s) - start)) s" >&2
+  fi
+  WENDY_CLI_DOWNLOAD_BASE="http://127.0.0.1:$(cat "$T/port" 2>/dev/null)"
   export WENDY_CLI_DOWNLOAD_BASE
 }
 
