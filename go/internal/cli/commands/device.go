@@ -1099,6 +1099,7 @@ func resolveAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 // connection error carries better context than a guess made here.
 func reportStaleCertificate(err error) {
 	if jsonOutput {
+		plainNotice("warning: %s. Sign in again to get a new one: wendy auth login", err.Error())
 		return
 	}
 	fmt.Fprintln(os.Stderr, tui.WarningMessage(capitalizeFirst(err.Error())+"."))

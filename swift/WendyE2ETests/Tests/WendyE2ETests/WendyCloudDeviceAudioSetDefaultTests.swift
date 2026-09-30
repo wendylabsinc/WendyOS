@@ -101,7 +101,7 @@ struct `'wendy cloud device audio set-default'` {
             try await cli.sh("wendy cloud device audio set-default") { result in
                 #expect(result.status.isFailure)
                 #expect(result.stdout == "")
-                #expect(result.stderr.contains("required flag(s) \"id\" not set"))
+                #expect(result.readableStderr.contains("required flag(s) \"id\" not set"))
             }
         }
     }

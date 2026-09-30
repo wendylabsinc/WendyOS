@@ -38,6 +38,7 @@ require (
 	github.com/hashicorp/mdns v1.0.7
 	github.com/klauspost/compress v1.19.1
 	github.com/mark3labs/mcp-go v0.54.0
+	github.com/mattn/go-isatty v0.0.21
 	github.com/miekg/dns v1.1.72
 	github.com/moby/buildkit v0.32.2
 	github.com/moby/patternmatcher v0.6.1
@@ -107,7 +108,6 @@ require (
 	github.com/in-toto/in-toto-golang v0.11.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
-	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect

@@ -72,7 +72,7 @@ func newBuildCmd() *cobra.Command {
 		Long:  "Detects the project type and builds a Docker image for the target device architecture. For a wendy.json with a services map, builds one local image per service tagged <appid>-<service>:latest; nothing is pushed or deployed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.dockerfile != "" && opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
-				return fmt.Errorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
+				return usageErrorf("--dockerfile cannot be used with --build-type=%s", opts.buildType)
 			}
 			normalizedBuilder, err := normalizeImageBuilder(opts.builder)
 			if err != nil {
@@ -83,7 +83,7 @@ func newBuildCmd() *cobra.Command {
 			}
 			cmd.SetContext(withStagefileBackend(cmd.Context(), opts.stagefileBackend))
 			if opts.maxConcurrency < 0 {
-				return fmt.Errorf("--max-concurrency must be >= 0 (0 = default limit of 4)")
+				return usageErrorf("--max-concurrency must be >= 0 (0 = default limit of 4)")
 			}
 			if err := validateBuildHostFlags(opts.buildHost, opts.builder); err != nil {
 				return err

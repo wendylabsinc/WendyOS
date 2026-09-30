@@ -375,6 +375,9 @@ func TestErrorClass_Mapping(t *testing.T) {
 		{"eof", io.EOF, "unexpected_eof"},
 		{"truncated_stream", fmt.Errorf("upload: %w", io.ErrUnexpectedEOF), "unexpected_eof"},
 		{"subprocess", &exec.ExitError{}, "process_failed"},
+		{"unknown_subcommand", commands.UnknownSubcommandError([]string{"device", "banana"}), "cli_usage"},
+		{"bundled_device_argument", commands.UnknownSubcommandError([]string{"--device foo", "device", "info"}), "cli_usage"},
+		{"cobra_root_unknown_command", errors.New(`unknown command "banana" for "wendy"`), "cli_usage"},
 		{"message_is_not_a_category", errors.New("rpc error: code = Unavailable: secret.local build failed"), "other"},
 		{"non_grpc", errors.New("some plain failure"), "other"},
 	} {
@@ -688,6 +691,143 @@ func TestFormatError_CloudTunnelVerdictIsShown(t *testing.T) {
 	for _, noise := range []string{"authentication handshake failed", "connection error", "transport:", "clock", "offline"} {
 		if strings.Contains(msg, noise) {
 			t.Errorf("message %q still carries %q", msg, noise)
+		}
+	}
+}
+
+var refusedDial = status.Error(codes.Unavailable,
+	`connection error: desc = "transport: Error while dialing: dial tcp 127.0.0.1:1: connect: connection refused"`)
+
+// A hint appended after the gRPC error (fmt.Errorf("...: %w\n  hint")) used to
+// vanish when formatError replaced the transport text with fixed prose.
+func TestFormatError_KeepsHintAppendedAfterGRPCError(t *testing.T) {
+	err := fmt.Errorf("default device %q is set but could not be reached: %w\n  Confirm it with 'wendy device get-default'.",
+		"127.0.0.1:1", refusedDial)
+	want := `default device "127.0.0.1:1" is set but could not be reached: ` +
+		"Could not connect to device. Is it powered on and connected to the network?\n" +
+		"  Confirm it with 'wendy device get-default'."
+	if got := formatError(err).Error(); got != want {
+		t.Errorf("formatError() = %q, want %q", got, want)
+	}
+
+	// The Unavailable-with-description branch keeps the suffix too, once.
+	err = fmt.Errorf("registering deployment with Cloud: %w; use --skip-cloud-registration for an offline deployment",
+		status.Error(codes.Unavailable, "deployment registry is restarting"))
+	want = "registering deployment with Cloud: deployment registry is restarting; use --skip-cloud-registration for an offline deployment"
+	if got := formatError(err).Error(); got != want {
+		t.Errorf("formatError() = %q, want %q", got, want)
+	}
+}
+
+// formatErrorParts must render exactly the text formatError always printed,
+// and report the advice lines it added as separate steps.
+func TestFormatErrorParts_ReportsItsOwnSteps(t *testing.T) {
+	err := fmt.Errorf("querying device version: %w", status.Error(codes.Unavailable,
+		`connection error: desc = "transport: authentication handshake failed: remote error: tls: bad certificate"`))
+	f := formatErrorParts(err)
+	wantText := "querying device version: TLS handshake rejected by device (possible clock skew or cert mismatch).\n" +
+		"  Check the device clock: ssh wendy@<host> 'timedatectl status'\n" +
+		"  For full TLS details rerun with WENDY_TLS_DEBUG=1"
+	if f.text != wantText {
+		t.Errorf("text = %q, want %q", f.text, wantText)
+	}
+	wantSteps := []string{"Check the device clock: ssh wendy@<host> 'timedatectl status'", "For full TLS details rerun with WENDY_TLS_DEBUG=1"}
+	if strings.Join(f.steps, "|") != strings.Join(wantSteps, "|") {
+		t.Errorf("steps = %q, want %q", f.steps, wantSteps)
+	}
+}
+
+// With the status error flattened by %v, nothing after the gRPC text can be
+// told apart from it; formatError keeps its long-standing behaviour.
+func TestFormatError_FlattenedGRPCErrorStillRewrites(t *testing.T) {
+	err := fmt.Errorf("listing volumes: %v", status.Error(codes.Unimplemented, "unknown method ListVolumes for service x"))
+	if got, want := formatError(err).Error(), "listing volumes: Not supported by this agent version. Try updating the agent."; got != want {
+		t.Errorf("formatError() = %q, want %q", got, want)
+	}
+}
+
+// dialedError stands in for commands' device dial error: the cause's message,
+// plus the address the dial was aimed at.
+type dialedError struct {
+	addr  string
+	cause error
+}
+
+func (e dialedError) Error() string         { return e.cause.Error() }
+func (e dialedError) Unwrap() error         { return e.cause }
+func (e dialedError) DeviceAddress() string { return e.addr }
+
+func TestFormatError_ConnectErrorsNameTheDevice(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{dialedError{"127.0.0.1:1", refusedDial},
+			"Could not connect to device at 127.0.0.1:1. Is it powered on and connected to the network?"},
+		{refusedDial,
+			"Could not connect to device. Is it powered on and connected to the network?"},
+		{dialedError{"10.0.0.9:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")},
+			"Connection to device at 10.0.0.9:50051 timed out."},
+		{status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			"Connection timed out."},
+		// An empty description used to render as an empty message.
+		{dialedError{"10.0.0.9:50051", status.Error(codes.Unavailable, "")},
+			"Device at 10.0.0.9:50051 is unavailable."},
+		{status.Error(codes.Unavailable, ""),
+			"Device is unavailable."},
+	} {
+		if got := formatError(tc.err).Error(); got != tc.want {
+			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+// A device that is off, or a host name that does not resolve, is exit 5
+// whether the dial was refused, timed out, or never found an address.
+func TestErrorClass_DeviceDialFailures(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{dialedError{"10.255.255.1:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded while waiting for connections to become ready")}, "device_unreachable"},
+		{fmt.Errorf("default device: %w", dialedError{"x.local:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")}), "device_unreachable"},
+		{dialedError{"127.0.0.1:1", refusedDial}, "device_unreachable"},
+		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_not_resolved"},
+		{dialedError{"wendyos-zzz:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_unreachable"},
+		// Without a dialled address a deadline is still just a deadline.
+		{status.Error(codes.DeadlineExceeded, "context deadline exceeded"), "grpc_deadline"},
+		{fmt.Errorf("waiting: %w", context.DeadlineExceeded), "context_deadline"},
+		// Ctrl-C during a dial is a cancellation, not a verdict on the device.
+		{dialedError{"127.0.0.1:1", fmt.Errorf("dialing: %w", context.Canceled)}, "context_canceled"},
+	} {
+		if got := errorClass(tc.err); got != tc.want {
+			t.Errorf("errorClass(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+}
+
+// A host name that resolves to nothing is named in the message, which the
+// resolver's own text ("produced zero addresses") never does.
+func TestFormatError_UnresolvedDeviceNamesTheHost(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host nosuchhost.invalid.\n  Check the name, or connect by IP address."},
+		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable,
+			`connection error: desc = "transport: Error while dialing: dial tcp: lookup nosuchhost.invalid: no such host"`)},
+			"Could not resolve device host nosuchhost.invalid.\n  Check the name, or connect by IP address."},
+		{dialedError{"wendyos-x.local:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host wendyos-x.local.\n  The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out."},
+		{dialedError{"wendyos-zzz:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host wendyos-zzz.\n  The device may be offline, or mDNS may be blocked on this network; connect by IP address to rule that out."},
+		// A fully qualified name's trailing dot must not double the full stop.
+		{dialedError{"nosuchhost.invalid.:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")},
+			"Could not resolve device host nosuchhost.invalid.\n  Check the name, or connect by IP address."},
+	} {
+		if got := formatError(tc.err).Error(); got != tc.want {
+			t.Errorf("formatError(%v) = %q, want %q", tc.err, got, tc.want)
 		}
 	}
 }
