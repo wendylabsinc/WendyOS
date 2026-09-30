@@ -96,6 +96,9 @@ func (s *oidcEnrollmentServer) EnrollDevice(ctx context.Context, req *cloudpbv2.
 
 func enrollmentServers(t *testing.T, cloud *oidcEnrollmentServer, agent *acmeProvisioningServer) (*grpcclient.AgentConnection, string) {
 	t.Helper()
+	// Minted-but-unredeemed credentials are kept under the config dir; a
+	// fresh one per test stops one test's failure from resuming in the next.
+	t.Setenv("HOME", t.TempDir())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +274,7 @@ func TestOIDCEnrollmentFailures(t *testing.T) {
 		{name: "malformed EAB", kind: "eab", key: "secret-not-hex", want: "hex-encoded", wantCloud: true},
 		{name: "already enrolled", enrolled: true, want: "already enrolled"},
 		{name: "old agent", kind: "eab", key: "abcd", agentErr: status.Error(codes.Unimplemented, "missing"), want: "update the agent", wantCloud: true, wantAgent: true},
-		{name: "handoff failure", kind: "eab", key: "abcd", agentErr: status.Error(codes.Unavailable, "device disconnected"), want: "asset-uuid", wantCloud: true, wantAgent: true},
+		{name: "handoff failure", kind: "eab", key: "abcd", agentErr: status.Error(codes.Unavailable, "device disconnected"), want: "re-run this command", wantCloud: true, wantAgent: true},
 		{name: "wrong identity", kind: "eab", key: "abcd", wrongIdentity: true, want: "unexpected enrollment identity", wantCloud: true, wantAgent: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -366,5 +369,65 @@ func TestOIDCEnrollmentPreflightFailureDoesNotMint(t *testing.T) {
 				t.Fatalf("missing update hint: %v", err)
 			}
 		})
+	}
+}
+
+// Cloud reserves the name and returns the EAB once. A re-run after the agent
+// step failed must finish with that same device and credential, without asking
+// cloud again (which would refuse the reserved name).
+func TestOIDCEnrollmentResumesAfterAgentFailure(t *testing.T) {
+	cloud := &oidcEnrollmentServer{response: &cloudpbv2.EnrollDeviceResponse{AssetId: "asset-uuid", CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
+	agent := &acmeProvisioningServer{startErr: status.Error(codes.FailedPrecondition, "direct ACME enrollment is experimental")}
+	conn, host := enrollmentServers(t, cloud, agent)
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = host
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := runEnrollDevice(ctx, conn, auth, "sim", 0)
+	if err == nil || agent.req == nil {
+		t.Fatalf("first run: error=%v, agent called=%v", err, agent.req != nil)
+	}
+	first := agent.req
+	if !strings.Contains(err.Error(), first.DeviceId) || !strings.Contains(err.Error(), "re-run this command") || strings.Contains(err.Error(), "asset") {
+		t.Fatalf("failure should name the device id and the next step, never the asset: %v", err)
+	}
+
+	cloud.req, agent.req, agent.startErr = nil, nil, nil
+	cloud.err = status.Error(codes.AlreadyExists, "another device in this organization is already named sim")
+	if err := runEnrollDevice(ctx, conn, auth, "sim", 0); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	if cloud.req != nil {
+		t.Fatal("resume asked cloud to mint again for a reserved name")
+	}
+	if agent.req.DeviceId != first.DeviceId || agent.req.EabKeyId != first.EabKeyId || agent.req.EabHmacKey != first.EabHmacKey || agent.req.DirectoryUrl != first.DirectoryUrl {
+		t.Fatalf("resume used different enrollment material: %+v vs %+v", agent.req, first)
+	}
+
+	// Redeemed: the credential is gone, so the next enrollment mints afresh.
+	if err := runEnrollDevice(ctx, conn, auth, "sim", 0); err == nil || cloud.req == nil {
+		t.Fatalf("after success, want a fresh mint; error=%v, cloud called=%v", err, cloud.req != nil)
+	}
+}
+
+// A kept credential belongs to one name; another device must not pick it up.
+func TestOIDCEnrollmentPendingIsPerName(t *testing.T) {
+	cloud := &oidcEnrollmentServer{response: &cloudpbv2.EnrollDeviceResponse{AssetId: "asset-uuid", CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
+	agent := &acmeProvisioningServer{startErr: status.Error(codes.Unavailable, "device disconnected")}
+	conn, host := enrollmentServers(t, cloud, agent)
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = host
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runEnrollDevice(ctx, conn, auth, "sim", 0); err == nil {
+		t.Fatal("want agent failure")
+	}
+	cloud.req, agent.startErr = nil, nil
+	if err := runEnrollDevice(ctx, conn, auth, "other", 0); err != nil {
+		t.Fatal(err)
+	}
+	if cloud.req == nil {
+		t.Fatal("a different name reused another device's pending credential")
 	}
 }

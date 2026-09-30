@@ -34,11 +34,13 @@ DNS label; renaming it does not change the certificate identity.
      that is not an expiration time for the resulting EAB credential.
 3. Cloud checks `device:enroll` permission, reserves the asset name and relays
    the enrollment JWS unchanged to PKI's private `RelayEnrollment` RPC.
-4. Cloud returns an asset UUID and the once-only EAB credentials. The CLI
-   passes these directly to the agent's v2 `StartACMEProvisioning` RPC.
+4. Cloud returns the once-only EAB credentials. The CLI keeps them until the
+   agent's v2 `StartACMEProvisioning` RPC redeems them.
 
 No credentials file is needed. The login certificate signs the request; PKI
-mints the EAB secret. The CLI neither prints nor persists that secret.
+mints the EAB secret. The CLI never prints that secret; it keeps it
+owner-readable under `~/.wendy/pending-enrollments/` only until the agent
+redeems it.
 
 The Cloud signature header carries only the operator leaf certificate: Cloud
 validates it against PKI's own CA material. Including the ML-DSA intermediates
@@ -76,11 +78,13 @@ to legacy enrollment. This command supports class B; class A attestation and
 class C EST enrollment are not implemented.
 
 Cloud and device enrollment are separate operations. If Cloud succeeds but the
-device step fails, Cloud keeps the asset and name reservation. The CLI reports
-the asset UUID; restarting the command does not retrieve the original secret
-and may encounter that reservation. Automatic recovery across those two
-operations requires additional Cloud support. The agent retains its ACME
-account key for retries, but Cloud has no credential retrieval RPC.
+device step fails, Cloud keeps the name reservation. The CLI reports the device
+ID and keeps the credential, so re-running the same command (same session,
+same name) skips Cloud and finishes the device step with the same device ID.
+The agent retains its ACME account key for those retries. Cloud has no
+credential retrieval RPC, so a credential lost before it was kept (a CLI older
+than this behavior, or another machine) cannot be recovered: that reservation
+holds the name until the device is deleted in Cloud.
 
 ## Contract sources
 

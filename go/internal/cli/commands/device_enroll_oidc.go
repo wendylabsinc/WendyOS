@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
@@ -53,20 +54,31 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return fmt.Errorf("agent returned an unknown enrollment state")
 	}
 
-	tokenCtx, err := cloudContext(ctx, auth)
+	pending, resumed, err := cloudenroll.LoadPending(cfg, name)
 	if err != nil {
 		return err
 	}
-	cloudConn, err := dialCloudGRPC(auth)
-	if err != nil {
-		return err
-	}
-	defer cloudConn.Close()
+	if resumed {
+		cfg = pending
+		fmt.Printf("Resuming enrollment of %s as device %s with the credential Cloud issued earlier...\n", name, cfg.DeviceID)
+	} else {
+		tokenCtx, err := cloudContext(ctx, auth)
+		if err != nil {
+			return err
+		}
+		cloudConn, err := dialCloudGRPC(auth)
+		if err != nil {
+			return err
+		}
+		defer cloudConn.Close()
 
-	fmt.Printf("Enrolling %s as %s with PKI...\n", name, deviceID)
-	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name)
-	if err != nil {
-		return err
+		fmt.Printf("Enrolling %s as device %s with PKI...\n", name, deviceID)
+		if cfg, _, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name); err != nil {
+			return err
+		}
+		if err := cloudenroll.SavePending(cfg, name); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not keep the enrollment credential (%v); if the next step fails, re-running cannot resume it.\n", err)
+		}
 	}
 
 	resp, err := agent.StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
@@ -74,15 +86,19 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
 	})
 	if status.Code(err) == codes.Unimplemented {
-		return fmt.Errorf("Cloud registered asset %s, but this agent does not support direct PKI enrollment; update the agent (the device name is now reserved in Cloud)", assetID)
+		return fmt.Errorf("Cloud reserved %s for device %s, but this agent does not support direct PKI enrollment; update the agent, then re-run this command to finish", name, cfg.DeviceID)
 	}
 	if err != nil {
-		return fmt.Errorf("Cloud registered asset %s, but device PKI enrollment failed (the device name is now reserved in Cloud): %w", assetID, err)
+		path, _ := cloudenroll.PendingPath(cfg, name)
+		return fmt.Errorf("Cloud reserved %s for device %s, but device PKI enrollment failed: %w\nFix the cause above, then re-run this command: it resumes with the same device and the credential kept in %s", name, cfg.DeviceID, err, path)
+	}
+	if err := cloudenroll.ClearPending(cfg, name); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not remove the redeemed enrollment credential: %v\n", err)
 	}
 	expected, _ := cfg.PrincipalURI()
 	if resp.GetPrincipalUri() != expected {
 		return fmt.Errorf("agent returned an unexpected enrollment identity")
 	}
-	fmt.Printf("Device enrolled (name: %s, identity: %s, asset: %s).\n", name, resp.GetPrincipalUri(), assetID)
+	fmt.Printf("Device enrolled (name: %s, device id: %s, identity: %s).\n", name, cfg.DeviceID, resp.GetPrincipalUri())
 	return nil
 }
