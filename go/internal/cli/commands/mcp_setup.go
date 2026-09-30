@@ -24,11 +24,7 @@ func newMCPSetupCmd() *cobra.Command {
 			mcpResults := setupMCPForAllTools()
 			results := append(append([]mcpSetupResult(nil), mcpResults...), installSkillsForAllTools()...)
 			for _, r := range results {
-				if r.err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", r.tool, r.err)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "✓ %s: configured at %s\n", r.tool, r.path)
-				}
+				fmt.Fprintln(cmd.OutOrStdout(), mcpSetupResultLine(r))
 			}
 			if len(results) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "No supported AI tools detected.")
@@ -138,7 +134,7 @@ func mcpRestartNotice(results []mcpSetupResult) string {
 	var b strings.Builder
 	for _, r := range results {
 		hint, ok := mcpRestartHints[r.tool]
-		if !ok || r.err != nil {
+		if !ok || r.err != nil || r.note != "" {
 			continue
 		}
 		fmt.Fprintf(&b, "  • %s: %s\n", r.tool, hint)
@@ -153,6 +149,9 @@ type mcpSetupResult struct {
 	tool string
 	path string
 	err  error
+	// note is mcpNoteSkippedForPlugin or mcpNoteRemovedForPlugin for a client
+	// whose Wendy plugin provides the MCP server, else "".
+	note string
 }
 
 func setupMCPForAllTools() []mcpSetupResult {
@@ -164,10 +163,16 @@ func setupMCPForAllTools() []mcpSetupResult {
 	}
 
 	var results []mcpSetupResult
+	home, _ := os.UserHomeDir()
 
-	// Claude Code (~/.claude.json)
+	// Claude Code (~/.claude.json). With the Wendy plugin active, the plugin
+	// runs the server: write none, and remove the one an earlier setup wrote.
 	if claudeCodePath := claudeCodeConfigPath(); claudeCodePath != "" {
-		if err := addMCPToJSONConfig(claudeCodePath, "mcpServers", "wendy", entry); err != nil {
+		if home != "" && pluginmode.ClaudePluginActive(home) {
+			results = append(results, pluginProvidedResult("Claude Code", claudeCodePath, func() (bool, error) {
+				return removeMCPFromJSONConfig(claudeCodePath, "mcpServers", "wendy")
+			}))
+		} else if err := addMCPToJSONConfig(claudeCodePath, "mcpServers", "wendy", entry); err != nil {
 			results = append(results, mcpSetupResult{tool: "Claude Code", path: claudeCodePath, err: err})
 		} else {
 			results = append(results, mcpSetupResult{tool: "Claude Code", path: claudeCodePath})
@@ -201,9 +206,13 @@ func setupMCPForAllTools() []mcpSetupResult {
 		}
 	}
 
-	// Codex (~/.codex/config.toml)
+	// Codex (~/.codex/config.toml), plugin-aware like Claude Code.
 	if codexPath := codexConfigPath(); codexPath != "" {
-		if err := addMCPToTOMLConfig(codexPath, "mcp_servers", "wendy", wendyBin, []string{"mcp", "serve"}); err != nil {
+		if home != "" && pluginmode.CodexPluginActive(home) {
+			results = append(results, pluginProvidedResult("Codex", codexPath, func() (bool, error) {
+				return removeMCPFromTOMLConfig(codexPath, "mcp_servers", "wendy")
+			}))
+		} else if err := addMCPToTOMLConfig(codexPath, "mcp_servers", "wendy", wendyBin, []string{"mcp", "serve"}); err != nil {
 			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, err: err})
 		} else {
 			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath})
