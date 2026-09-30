@@ -2582,7 +2582,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		}
 		cniDeleteDuration = time.Since(phaseStarted)
 		phaseStarted = time.Now()
-		ip, cniResult, cniErr := c.CNIAdd(ctx, appID, appName, netnsPath)
+		ip, cniResult, cniErr := c.CNIAdd(ctx, appID, appName, netnsPath, needsInternetDefaultRoute(entitlements))
 		cniAddDuration = time.Since(phaseStarted)
 		if cniErr != nil {
 			// Roll back any partial state the failed ADD left behind (e.g. a
@@ -4910,7 +4910,7 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 			zap.String("container_id", ctr.ID()), zap.Error(err))
 		return
 	}
-	if err := c.CNICheck(ctx, appID, ctr.ID(), path, checkResult); err != nil {
+	if err := c.CNICheck(ctx, appID, ctr.ID(), path, checkResult, false); err != nil {
 		c.logger.Warn("mesh ingress: inherited task failed CNI CHECK; ports remain denied",
 			zap.String("container_id", ctr.ID()), zap.Error(err))
 		return
