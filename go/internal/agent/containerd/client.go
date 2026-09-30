@@ -117,6 +117,10 @@ type Client struct {
 	mu                      sync.Mutex
 	proxyManager            dbusProxyManager // nil if xdg-dbus-proxy is not available
 	avahiManager            *avahibridge.Manager
+	outputMu                sync.Mutex
+	outputPIDs              map[string]uint32
+	recoveredOutput         map[string]*recoveredTaskOutput
+	outputClosed            bool
 	systemAPISocketProvider AppSystemAPISocketProvider
 	dataSocketProvider      AppDataSocketProvider
 
@@ -465,6 +469,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 // Close releases the underlying containerd client connection and stops all
 // D-Bus proxy processes.
 func (c *Client) Close() error {
+	c.closeRecoveredTaskOutput()
 	c.meshIngressStopOnce.Do(func() {
 		if c.meshIngressStop != nil {
 			close(c.meshIngressStop)
@@ -2811,6 +2816,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
+	c.trackTaskOutput(appName, task.Pid())
 	meshIngressStarted = true
 	nanStartLease.committed = true
 	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, nanTaskAppID, meshIngressRun, stdoutR, stderrR, stdoutW, stderrW)
@@ -3893,6 +3899,7 @@ func (c *Client) streamOutput(
 	stdoutW, stderrW *io.PipeWriter,
 ) {
 	defer close(outputCh)
+	defer c.forgetTaskOutput(appName, task.Pid())
 
 	// Read stdout and stderr concurrently.
 	var wg sync.WaitGroup
@@ -4785,6 +4792,11 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 			c.logger.Warn("ListBootContainers: missing/invalid app id label, skipping isolation hydration",
 				zap.String("id", ctr.ID()))
 		}
+		// Restart intent does not remove resources from an already-running task.
+		// Recover its verified mesh grants and gateway DNS even for --no-restart.
+		if running {
+			c.rehydrateRunningMeshIngress(ctx, ctr, info.Labels)
+		}
 
 		if info.Labels[labelKeyStoppedByUser] == "true" {
 			continue // user stopped it on purpose — stay down across reboot
@@ -4792,9 +4804,6 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 		policy, maxRetries := parseRestartPolicyLabel(info.Labels[labelKeyRestartPolicy])
 		if policy == "no" {
 			continue // opted out of auto-restart (e.g. wendy run --no-restart)
-		}
-		if running {
-			c.rehydrateRunningMeshIngress(ctx, ctr, info.Labels)
 		}
 		result = append(result, services.BootContainer{
 			Name:          ctr.ID(),
@@ -4806,8 +4815,9 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 }
 
 // rehydrateRunningMeshIngress covers an agent-only restart, which leaves
-// containerd tasks and their bridge namespaces running. A persisted label is
-// not enough to authorize a host port: the task must still be running and
+// containerd tasks and their bridge namespaces running. This also restores
+// gateway DNS for bridge tasks. A persisted label is not enough to authorize
+// a host port or DNS listener: the task must still be running and
 // CNI CHECK must prove its live network namespace.
 // Without those proofs the registry stays empty until an ordinary task start.
 func (c *Client) rehydrateRunningMeshIngress(ctx context.Context, ctr containerd.Container, labels map[string]string) {
@@ -4839,18 +4849,21 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 			}
 		}()
 	}
-	if c.meshIngress == nil || labels[labelKeyIsolation] != "isolated" {
+	entitlements := parseEntitlementsFromAnnotations(labels)
+	if !needsGatewayDNS(labels[labelKeyIsolation], entitlements) {
 		return
 	}
-	c.meshIngressMu.Lock()
-	_, alreadyTracked := c.meshIngressRuns[ctr.ID()]
-	c.meshIngressMu.Unlock()
-	if alreadyTracked {
-		return // a normal start or earlier recovery already owns this task
-	}
-	ent, ok := findMeshEntitlement(parseEntitlementsFromAnnotations(labels))
-	if !ok {
-		return
+	ent, meshTask := findMeshEntitlement(entitlements)
+	if meshTask {
+		if c.meshIngress == nil {
+			return
+		}
+		c.meshIngressMu.Lock()
+		_, alreadyTracked := c.meshIngressRuns[ctr.ID()]
+		c.meshIngressMu.Unlock()
+		if alreadyTracked {
+			return // a normal start or earlier recovery already owns this task
+		}
 	}
 	appID := labels[labelKeyAppID]
 	if appconfig.ValidateAppID(appID) != nil {
@@ -4908,6 +4921,14 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 	}
 	status, err = task.Status(ctx)
 	if err != nil || status.Status != containerd.Running || task.Pid() != pid {
+		return
+	}
+	gateway, err := meshGateway(appID)
+	if err != nil {
+		return
+	}
+	if !meshTask {
+		c.ensureMeshDNS(ctr.ID(), gateway)
 		return
 	}
 	// The wait channel is required before publishing: without an exit watcher
@@ -4968,6 +4989,9 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 		c.releaseMeshIngressRun(ctr.ID(), run)
 		return
 	}
+	// The previous process owned the listener, so surviving routes and port
+	// rules alone do not restore device-name or upstream DNS for this task.
+	c.ensureMeshDNS(ctr.ID(), gateway)
 	go func() {
 		defer cancelWait()
 		<-exitCh
