@@ -25,7 +25,8 @@ func readJSON(path string, v any) bool {
 }
 
 // ClaudePluginActive reports whether Claude Code has the Wendy plugin
-// installed at user scope and enabled. A project-scoped install does not
+// installed at user scope and enabled, or synced from the claude.ai directory
+// (see claudeSyncedPluginPresent). A project-scoped install does not
 // count: every other project still uses the user-level server `wendy mcp
 // setup` writes. Anything unreadable counts as "not active", so setup keeps
 // writing the user-level server rather than leaving Claude with no Wendy tools.
@@ -83,13 +84,45 @@ func providesWendyServer(path string) bool {
 }
 
 // claudeSyncedPluginPresent reports whether the Wendy plugin reached Claude
-// Code as a synced plugin (added from the claude.ai directory; Claude Code
-// loads it as "wendy@synced"). Spike S3 records how such installs appear on
-// disk — see the S3 section of
-// docs/superpowers/specs/2026-09-29-wendy-plugin-spike-findings.md — and Task 9
-// of plan 2 fills this in from it. Until then it reports false, which only
-// means setup keeps writing the user-level server for synced installs.
+// Code as a synced plugin: one added from the claude.ai directory, which Claude
+// Code loads as "wendy@synced". Such a plugin has no installed_plugins.json or
+// enabledPlugins entry; its root is ~/.claude/plugins/synced/<bucket>/<name>/,
+// exactly one level under the bucket. It counts only when that folder's
+// .mcp.json declares the Wendy server AND the bucket's manifest.json lists the
+// plugin (a leftover folder alone doesn't count: doubt means not active).
+// Hidden bucket entries (.staging, .marketplaces.json, ...) are skipped. The
+// files appear only after a Claude Code session has started once since the
+// directory install, so setup run before that keeps the user-level server. No
+// per-plugin disable flag was observed. See the S3 section of
+// docs/superpowers/specs/2026-09-29-wendy-plugin-spike-findings.md.
 func claudeSyncedPluginPresent(home string) bool {
+	synced := filepath.Join(home, ".claude", "plugins", "synced")
+	buckets, err := os.ReadDir(synced)
+	if err != nil {
+		return false
+	}
+	for _, b := range buckets {
+		if !b.IsDir() || strings.HasPrefix(b.Name(), ".") {
+			continue
+		}
+		bucket := filepath.Join(synced, b.Name())
+		if !providesWendyServer(filepath.Join(bucket, pluginName, ".mcp.json")) {
+			continue
+		}
+		var manifest struct {
+			Plugins []struct {
+				Name string `json:"name"`
+			} `json:"plugins"`
+		}
+		if !readJSON(filepath.Join(bucket, "manifest.json"), &manifest) {
+			continue
+		}
+		for _, p := range manifest.Plugins {
+			if p.Name == pluginName {
+				return true
+			}
+		}
+	}
 	return false
 }
 

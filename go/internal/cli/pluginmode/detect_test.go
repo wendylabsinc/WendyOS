@@ -61,12 +61,63 @@ func TestClaudePluginActive(t *testing.T) {
 		{"old skills-only wendy@wendy-skills, enabled", &claudeFixture{"wendy@wendy-skills", "user", "", &yes}, false},
 		{"a plugin named wendy without the wendy server", &claudeFixture{key, "user", `{"mcpServers":{"other":{"command":"x"}}}`, &yes}, false},
 		{"different plugin name", &claudeFixture{"wendy-engineering@wendy-agentic-coding", "user", wendyPluginMCPJSON, &yes}, false},
+		{"uploaded zip (Cowork/desktop)", &claudeFixture{"wendy@local-desktop-app-uploads", "user", wendyPluginMCPJSON, &yes}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
 			if tt.fixture != nil {
 				tt.fixture.write(t, home)
+			}
+			if got := ClaudePluginActive(home); got != tt.want {
+				t.Errorf("ClaudePluginActive = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudePluginActive_SyncedInstall(t *testing.T) {
+	const bucket = "0b1c2d3e-4f50-6789-abcd-ef0123456789_9f8e7d6c-5b4a-3210-fedc-ba9876543210"
+	const manifestWendy = `{"lastUpdated":1,"plugins":[{"pluginId":"plugin_1","name":"wendy","version":"1"}]}`
+	const manifestOther = `{"lastUpdated":1,"plugins":[{"pluginId":"plugin_2","name":"auth0","version":"0008"}]}`
+	tests := []struct {
+		name  string
+		files map[string]string // relative to ~/.claude/plugins/synced
+		want  bool
+	}{
+		{"folder and manifest", map[string]string{
+			bucket + "/wendy/.mcp.json": wendyPluginMCPJSON,
+			bucket + "/manifest.json":   manifestWendy,
+		}, true},
+		{"manifest lists only other plugins", map[string]string{
+			bucket + "/wendy/.mcp.json": wendyPluginMCPJSON,
+			bucket + "/manifest.json":   manifestOther,
+		}, false},
+		{"no manifest", map[string]string{
+			bucket + "/wendy/.mcp.json": wendyPluginMCPJSON,
+		}, false},
+		{"no .mcp.json", map[string]string{
+			bucket + "/wendy/README.md": "hi",
+			bucket + "/manifest.json":   manifestWendy,
+		}, false},
+		{"other server only", map[string]string{
+			bucket + "/wendy/.mcp.json": `{"mcpServers":{"other":{"command":"x"}}}`,
+			bucket + "/manifest.json":   manifestWendy,
+		}, false},
+		{"two levels deep", map[string]string{
+			bucket + "/wendy-agentic-coding/wendy/.mcp.json": wendyPluginMCPJSON,
+			bucket + "/manifest.json":                        manifestWendy,
+		}, false},
+		{"hidden bucket", map[string]string{
+			".staging/wendy/.mcp.json": wendyPluginMCPJSON,
+			".staging/manifest.json":   manifestWendy,
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			for rel, content := range tt.files {
+				writeFile(t, filepath.Join(home, ".claude", "plugins", "synced", filepath.FromSlash(rel)), content)
 			}
 			if got := ClaudePluginActive(home); got != tt.want {
 				t.Errorf("ClaudePluginActive = %v, want %v", got, tt.want)
