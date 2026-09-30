@@ -63,8 +63,9 @@ func (s *mcpServer) handleWendyStatus(_ context.Context, _ mcpgo.CallToolRequest
 
 // addPluginStatus adds a "plugin" block to a wendy_status result when the
 // Wendy plugin started this server: the client it runs in and, when that
-// client also has a user-level wendy server — which lists every Wendy tool a
-// second time — the file configuring it and how to remove it.
+// client also has a user-level wendy server, the file configuring it and how
+// to remove it. In Claude the duplicate lists every Wendy tool twice; in Codex
+// the user-level entry shadows the plugin's same-name server.
 func addPluginStatus(out map[string]any) {
 	client := pluginmode.Client()
 	if client == "" {
@@ -74,14 +75,13 @@ func addPluginStatus(out map[string]any) {
 	if home, err := os.UserHomeDir(); err == nil {
 		if path, found := pluginmode.UserLevelServer(client, home); found {
 			plugin["duplicate_server"] = path
-			if pluginmode.SetupRemovesUserLevelServer(client, home) {
+			switch {
+			case client == "codex":
+				plugin["fix"] = fmt.Sprintf("%s defines a user-level wendy MCP server. In Codex it takes the place of the plugin's server of the same name when a session starts, so new Codex sessions run that entry rather than the plugin's. `wendy mcp setup` keeps it because the Codex IDE extension, which loads no plugins, uses it. To run the plugin's copy instead, remove it with `codex mcp remove wendy` and start a new Codex session.", path)
+			case pluginmode.SetupRemovesUserLevelServer(client, home):
 				plugin["fix"] = fmt.Sprintf("%s also configures a user-level wendy MCP server, so every Wendy tool is listed twice. Run '%s mcp setup' (it removes that entry because the plugin provides the server), then restart this client.", path, pluginmode.CLIInvocation())
-			} else {
-				removeCmd := "`claude mcp remove wendy -s user`"
-				if client == "codex" {
-					removeCmd = "`codex mcp remove wendy`"
-				}
-				plugin["fix"] = fmt.Sprintf("%s also configures a user-level wendy MCP server, so every Wendy tool is listed twice. `wendy mcp setup` keeps that entry (it was customized, or the plugin is not installed for your user and enabled). If you use Wendy only through the plugin, remove it with %s, then restart this client.", path, removeCmd)
+			default:
+				plugin["fix"] = fmt.Sprintf("%s also configures a user-level wendy MCP server, so every Wendy tool is listed twice. `wendy mcp setup` keeps that entry (it was customized, or the plugin is not installed for your user and enabled). If you use Wendy only through the plugin, remove it with `claude mcp remove wendy -s user`, then restart this client.", path)
 			}
 		}
 	}

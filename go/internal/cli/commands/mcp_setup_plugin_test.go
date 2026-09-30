@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	toml "github.com/BurntSushi/toml"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -164,7 +163,7 @@ func TestSetupMCPForAllTools_OldWendySkillsPluginIsNotThePlugin(t *testing.T) {
 	}
 }
 
-func TestSetupMCPForAllTools_CodexPluginRemovesOwnEntry(t *testing.T) {
+func TestSetupMCPForAllTools_CodexPluginKeepsUserEntry(t *testing.T) {
 	home := setupMCPRefreshTest(t)
 	codexPath := filepath.Join(home, ".codex", "config.toml")
 	src := "# my codex config\nmodel = \"gpt-6\"\n\n" +
@@ -175,20 +174,15 @@ func TestSetupMCPForAllTools_CodexPluginRemovesOwnEntry(t *testing.T) {
 	}
 
 	r := resultFor(t, setupMCPForAllTools(), "Codex")
-	if r.err != nil || r.note != mcpNoteRemovedForPlugin {
-		t.Fatalf("Codex result = %+v, want note %q", r, mcpNoteRemovedForPlugin)
+	if r.err != nil || r.note != mcpNoteSkippedForPlugin {
+		t.Fatalf("Codex result = %+v, want note %q", r, mcpNoteSkippedForPlugin)
 	}
 	got, err := os.ReadFile(codexPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "# my codex config\nmodel = \"gpt-6\"\n\n[plugins.\"wendy@wendy-agentic-coding\"]\nenabled = true\n"
-	if string(got) != want {
-		t.Errorf("config.toml:\n%q\nwant:\n%q", got, want)
-	}
-	var doc map[string]any
-	if _, err := toml.Decode(string(got), &doc); err != nil {
-		t.Fatalf("result is not valid TOML: %v", err)
+	if string(got) != src {
+		t.Errorf("config.toml changed:\n%q\nwant:\n%q", got, src)
 	}
 }
 
@@ -199,8 +193,10 @@ func TestMCPSetupCmd_ReportsPluginClients(t *testing.T) {
 		[]byte(`{"mcpServers": {"wendy": {"command": "/old/wendy", "args": ["mcp", "serve"]}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"),
-		[]byte("[plugins.\"wendy@wendy-agentic-coding\"]\nenabled = true\n"), 0o600); err != nil {
+	codexPath := filepath.Join(home, ".codex", "config.toml")
+	codexOrig := "[mcp_servers.wendy]\ncommand = \"/old/wendy\"\nargs = [\"mcp\", \"serve\"]\n\n" +
+		"[plugins.\"wendy@wendy-agentic-coding\"]\nenabled = true\n"
+	if err := os.WriteFile(codexPath, []byte(codexOrig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -224,6 +220,9 @@ func TestMCPSetupCmd_ReportsPluginClients(t *testing.T) {
 		if strings.Contains(out.String(), unwanted) {
 			t.Errorf("restart notice lists a plugin client (%q):\n%s", unwanted, out.String())
 		}
+	}
+	if got, err := os.ReadFile(codexPath); err != nil || string(got) != codexOrig {
+		t.Errorf("config.toml changed by setup (err %v):\n%s", err, got)
 	}
 }
 
@@ -266,7 +265,7 @@ func TestMCPSetupResultLine(t *testing.T) {
 		want string
 	}{
 		{"error", mcpSetupResult{tool: "Cursor", err: errors.New("boom")}, "✗ Cursor: boom"},
-		{"removed", mcpSetupResult{tool: "Codex", note: mcpNoteRemovedForPlugin}, "✓ Codex: removed the user-level wendy server (the plugin provides it)"},
+		{"removed", mcpSetupResult{tool: "Claude Code", note: mcpNoteRemovedForPlugin}, "✓ Claude Code: removed the user-level wendy server (the plugin provides it)"},
 		{"skipped", mcpSetupResult{tool: "Codex", note: mcpNoteSkippedForPlugin}, "↷ Codex: skipped — the Wendy plugin provides the MCP server"},
 		{"free-form note", mcpSetupResult{tool: "Claude Code skills", note: "skipped — the Wendy plugin provides these skills"}, "↷ Claude Code skills: skipped — the Wendy plugin provides these skills"},
 		{"configured", mcpSetupResult{tool: "Cursor", path: "/p"}, "✓ Cursor: configured at /p"},

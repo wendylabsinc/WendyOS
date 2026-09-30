@@ -33,9 +33,9 @@ func mcpSetupResultLine(r mcpSetupResult) string {
 }
 
 // pluginProvidedResult is setup's result for a client whose Wendy plugin
-// already runs the MCP server. Setup writes no user-level entry there — both
-// would list every Wendy tool twice — and remove takes out the one an earlier
-// setup wrote, reporting whether there was one.
+// already runs the MCP server and namespaces it (Claude Code). Setup writes no
+// user-level entry there — both would list every Wendy tool twice — and remove
+// takes out the one an earlier setup wrote, reporting whether there was one.
 func pluginProvidedResult(tool, path string, remove func() (bool, error)) mcpSetupResult {
 	removed, err := remove()
 	switch {
@@ -47,6 +47,10 @@ func pluginProvidedResult(tool, path string, remove func() (bool, error)) mcpSet
 		return mcpSetupResult{tool: tool, path: path, note: mcpNoteSkippedForPlugin}
 	}
 }
+
+// mcpServeArgs are the args setup writes. An existing wendy entry whose args
+// start with them is setup's own; anything else is the user's.
+var mcpServeArgs = []string{"mcp", "serve"}
 
 // removeMCPFromJSONConfig deletes cfg[topKey][name] from the JSON file at path
 // when it is an entry setup wrote (its args start with "mcp serve") and

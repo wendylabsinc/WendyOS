@@ -152,20 +152,22 @@ type mcpSetupResult struct {
 	path string
 	err  error
 	// note is mcpNoteSkippedForPlugin or mcpNoteRemovedForPlugin for a client
-	// whose Wendy plugin provides the MCP server, else "".
+	// whose Wendy plugin provides the MCP server, free-form text that
+	// mcpSetupResultLine shows verbatim, or "" for a plain configure.
 	note string
 }
 
 // setupMCPForAllTools is `wendy mcp setup` (and the tour): it configures every
-// detected MCP client and removes the user-level entry of a client whose
-// Wendy plugin provides the server.
+// detected MCP client. Where the Wendy plugin is active it writes nothing; it
+// removes the user-level entry only for Claude Code, never for Codex.
 func setupMCPForAllTools() []mcpSetupResult {
 	return configureMCPClients(true)
 }
 
 // configureMCPClients configures every detected MCP client. For a client whose
-// Wendy plugin is active it writes nothing and, when removePluginDuplicates is
-// set, removes the user-level entry an earlier setup wrote.
+// Wendy plugin is active it writes nothing. When removePluginDuplicates is set,
+// Claude Code also loses the user-level entry an earlier setup wrote; Codex
+// keeps its entry either way.
 func configureMCPClients(removePluginDuplicates bool) []mcpSetupResult {
 	// keepEntry is the remove func for a plugin client when nothing may be removed.
 	keepEntry := func() (bool, error) { return false, nil }
@@ -180,7 +182,8 @@ func configureMCPClients(removePluginDuplicates bool) []mcpSetupResult {
 	home, _ := os.UserHomeDir()
 
 	// Claude Code (~/.claude.json). With the Wendy plugin active, the plugin
-	// runs the server: write none, and remove the one an earlier setup wrote.
+	// runs the server: write none, and (when removePluginDuplicates is set)
+	// remove the one an earlier setup wrote.
 	if claudeCodePath := claudeCodeConfigPath(); claudeCodePath != "" {
 		if home != "" && pluginmode.ClaudePluginActive(home) {
 			remove := keepEntry
@@ -224,16 +227,14 @@ func configureMCPClients(removePluginDuplicates bool) []mcpSetupResult {
 		}
 	}
 
-	// Codex (~/.codex/config.toml), plugin-aware like Claude Code.
+	// Codex (~/.codex/config.toml). With the Wendy plugin active, setup writes
+	// nothing and keeps any existing entry: in Codex a user-level "wendy"
+	// server takes the place of the plugin's same-name server, so removing it
+	// cleans up nothing, and the Codex IDE extension, which loads no plugins,
+	// still uses it.
 	if codexPath := codexConfigPath(); codexPath != "" {
 		if home != "" && pluginmode.CodexPluginActive(home) {
-			remove := keepEntry
-			if removePluginDuplicates {
-				remove = func() (bool, error) {
-					return removeMCPFromTOMLConfig(codexPath, "mcp_servers", "wendy")
-				}
-			}
-			results = append(results, pluginProvidedResult("Codex", codexPath, remove))
+			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, note: mcpNoteSkippedForPlugin})
 		} else if err := addMCPToTOMLConfig(codexPath, "mcp_servers", "wendy", wendyBin, []string{"mcp", "serve"}); err != nil {
 			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, err: err})
 		} else {

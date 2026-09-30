@@ -104,6 +104,33 @@ func TestWendyStatus_PluginBlock(t *testing.T) {
 			t.Errorf("fix = %q, want it to name `claude mcp remove wendy -s user` (setup keeps the entry without the plugin)", fix)
 		}
 	})
+	t.Run("codex: user-level server shadows the plugin's", func(t *testing.T) {
+		t.Setenv("WENDY_PLUGIN", "codex")
+		path := filepath.Join(home, ".codex", "config.toml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		src := "[mcp_servers.wendy]\ncommand = \"/usr/local/bin/wendy\"\nargs = [\"mcp\", \"serve\"]\n\n[plugins.\"wendy@wendy-agentic-coding\"]\nenabled = true\n"
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Remove(path) })
+		p, _ := statusPlugin(t)
+		if p["duplicate_server"] != path {
+			t.Errorf("duplicate_server = %v, want %s", p["duplicate_server"], path)
+		}
+		fix, _ := p["fix"].(string)
+		for _, want := range []string{"codex mcp remove wendy", "keeps it"} {
+			if !strings.Contains(fix, want) {
+				t.Errorf("fix = %q, want it to contain %q", fix, want)
+			}
+		}
+		for _, unwanted := range []string{"listed twice", "(it removes"} {
+			if strings.Contains(fix, unwanted) {
+				t.Errorf("fix = %q, must not contain %q", fix, unwanted)
+			}
+		}
+	})
 	t.Run("plugin registered: setup removes the user-level server", func(t *testing.T) {
 		t.Setenv("WENDY_PLUGIN", "claude")
 		const key = "wendy@wendy-agentic-coding"

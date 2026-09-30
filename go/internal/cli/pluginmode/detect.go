@@ -143,11 +143,13 @@ func UserLevelServer(client, home string) (string, bool) {
 }
 
 // SetupRemovesUserLevelServer reports whether `wendy mcp setup` would remove
-// client's user-level "wendy" MCP server under home: the Wendy plugin is active
-// for that client (ClaudePluginActive or CodexPluginActive) and the entry is
-// one setup wrote, i.e. its args start with "mcp serve". Anything else — a
-// customized entry, a plugin loaded only per project or with --plugin-dir, or
-// an unreadable file — means setup keeps the entry.
+// client's user-level "wendy" MCP server under home. Only Claude Code's is
+// removed: the plugin is active (ClaudePluginActive) and the entry is one setup
+// wrote, i.e. its args start with "mcp serve". Anything else — a customized
+// entry, a plugin loaded only per project or with --plugin-dir, or an
+// unreadable file — means setup keeps the entry. Setup never removes the Codex
+// entry: a user-level "wendy" server shadows the plugin's same-name server in
+// Codex, so removal cleans up nothing, and the Codex IDE extension needs it.
 func SetupRemovesUserLevelServer(client, home string) bool {
 	switch client {
 	case "claude":
@@ -161,19 +163,6 @@ func SetupRemovesUserLevelServer(client, home string) bool {
 		}
 		return readJSON(filepath.Join(home, ".claude.json"), &cfg) &&
 			argsStartWithMCPServe(cfg.MCPServers["wendy"].Args)
-	case "codex":
-		if !CodexPluginActive(home) {
-			return false
-		}
-		var cfg struct {
-			MCPServers map[string]struct {
-				Args []any `toml:"args"`
-			} `toml:"mcp_servers"`
-		}
-		if _, err := toml.DecodeFile(filepath.Join(home, ".codex", "config.toml"), &cfg); err != nil {
-			return false
-		}
-		return argsStartWithMCPServe(cfg.MCPServers["wendy"].Args)
 	}
 	return false
 }

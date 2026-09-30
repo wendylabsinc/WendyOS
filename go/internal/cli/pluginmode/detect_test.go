@@ -158,7 +158,7 @@ func TestSetupRemovesUserLevelServer(t *testing.T) {
 		{"claude active, own entry", "claude", &claudeFixture{key, "user", wendyPluginMCPJSON, &yes}, ownJSON, "", true},
 		{"claude active, wrapper args", "claude", &claudeFixture{key, "user", wendyPluginMCPJSON, &yes}, wrapperJSON, "", false},
 		{"claude not active, own entry", "claude", &claudeFixture{key, "user", wendyPluginMCPJSON, &no}, ownJSON, "", false},
-		{"codex enabled, own entry", "codex", nil, "", ownTOML + "[plugins.\"" + key + "\"]\nenabled = true\n", true},
+		{"codex enabled, own entry (never removed)", "codex", nil, "", ownTOML + "[plugins.\"" + key + "\"]\nenabled = true\n", false},
 		{"codex disabled, own entry", "codex", nil, "", ownTOML + "[plugins.\"" + key + "\"]\nenabled = false\n", false},
 		{"unknown client", "cursor", &claudeFixture{key, "user", wendyPluginMCPJSON, &yes}, ownJSON, ownTOML + "[plugins.\"" + key + "\"]\nenabled = true\n", false},
 	}
