@@ -52,7 +52,7 @@ setup() {
   mkdir -p "$HOME" "$T/wellknown" "$T/sysbin"
   STUB="$T/stubbin"
   mkdir -p "$STUB"
-  for tool in sh awk cat chmod cmp cp curl cut date dirname expr find grep head \
+  for tool in sh awk cat chmod cmp cp curl cut date dirname expr find grep gzip head \
     kill ln ls mkdir mktemp mv openssl pkill python3 readlink rm sed sha256sum \
     shasum sleep sysctl tar touch tr uname unzip wget; do
     p=$(PATH="$ORIG_PATH" command -v "$tool" 2>/dev/null) && ln -s "$p" "$T/sysbin/$tool"
@@ -88,6 +88,7 @@ if [ "\${1:-}" = "--version" ]; then echo "wendy version $2"; exit 0; fi
 printf 'stub-wendy %s args:' "$2"
 for a in "\$@"; do printf '[%s]' "\$a"; done
 echo
+if [ -n "\${STUB_PRINT_ENV:-}" ]; then echo "env:OS=\${OS:-} ARCH=\${ARCH:-} CLI=\${CLI:-}"; fi
 if [ -n "\${STUB_READ_STDIN:-}" ]; then IFS= read -r line; echo "stdin:\$line"; fi
 EOF
   chmod 755 "$1"
@@ -297,6 +298,27 @@ test_download_failure_names_the_next_step() {
   err=$(cat "$WENDY_CONFIG_DIR/cli/last-error.txt")
   assert_contains "$err" "could not download" "error"
   assert_contains "$err" "next step: check the network connection" "next step"
+}
+
+test_environment_reaches_the_cli_unchanged() {
+  make_release "$V"
+  pin "$V" "$V"
+  serve
+  out=$(OS=Windows_NT ARCH=sparc CLI=mine STUB_PRINT_ENV=1 sh "$L" mcp serve 2>"$T/err")
+  assert_contains "$out" "env:OS=Windows_NT ARCH=sparc CLI=mine" "the CLI sees the caller's environment unchanged"
+}
+
+test_install_that_never_ran_leaves_a_fresh_error() {
+  make_release "$V"
+  pin "$V" "$V"
+  mkdir -p "$WENDY_CONFIG_DIR/cli/install.log"
+  echo "error: old failure" >"$WENDY_CONFIG_DIR/cli/last-error.txt"
+  serve
+  sh "$L" mcp serve >/dev/null 2>"$T/err"
+  assert_eq "$?" "1" "exit code"
+  err=$(cat "$WENDY_CONFIG_DIR/cli/last-error.txt")
+  case "$err" in *"old failure"*) fail_case "stale error reported as the current failure" ;; esac
+  assert_contains "$err" "did not finish" "fresh error file"
 }
 
 fake_platform() {
