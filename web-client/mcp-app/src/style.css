@@ -902,6 +902,23 @@ footer {
 .app-open-error {
   margin: 12px 0 0;
 }
+.app-web-address {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.app-web-address p {
+  margin: 0;
+  color: var(--muted);
+}
+.app-web-address input {
+  min-width: 0;
+  width: 100%;
+}
+.app-web-address button {
+  justify-self: start;
+}
 
 .simulators-panel {
   min-width: 0;

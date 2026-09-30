@@ -35,15 +35,18 @@ var gatewayIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 // RobotGatewayConfig is operator-owned policy, never model-provided routing.
 // HTTP users can only exercise the intersection of OAuth scopes and their grant.
 type RobotGatewayConfig struct {
-	Workspaces          []GatewayWorkspace   `json:"workspaces,omitempty"`
-	AllowHostOperations bool                 `json:"allow_host_operations,omitempty"`
-	AllowSimulators     bool                 `json:"allow_simulators,omitempty"`
-	StateDirectory      string               `json:"state_directory,omitempty"`
-	Robots              []GatewayRobot       `json:"robots"`
-	Grants              []GatewayGrant       `json:"grants"`
-	LocalSubject        string               `json:"local_subject,omitempty"`
-	HTTP                *GatewayHTTPConfig   `json:"http,omitempty"`
-	CloudSources        []GatewayCloudSource `json:"cloud_sources,omitempty"`
+	Workspaces          []GatewayWorkspace `json:"workspaces,omitempty"`
+	AllowHostOperations bool               `json:"allow_host_operations,omitempty"`
+	AllowSimulators     bool               `json:"allow_simulators,omitempty"`
+	// Adds cameras and installed-app control to discovered local simulators.
+	// It does not authorize arbitrary host files, commands, or OS operations.
+	AllowSimulatorDeviceAccess bool                 `json:"allow_simulator_device_access,omitempty"`
+	StateDirectory             string               `json:"state_directory,omitempty"`
+	Robots                     []GatewayRobot       `json:"robots"`
+	Grants                     []GatewayGrant       `json:"grants"`
+	LocalSubject               string               `json:"local_subject,omitempty"`
+	HTTP                       *GatewayHTTPConfig   `json:"http,omitempty"`
+	CloudSources               []GatewayCloudSource `json:"cloud_sources,omitempty"`
 }
 
 // GatewayCloudSource pins discovery to an operator-selected Cloud identity.
@@ -54,6 +57,9 @@ type GatewayCloudSource struct {
 	OrganizationID int32  `json:"organization_id,omitempty"`
 	TenantUUID     string `json:"tenant_uuid,omitempty"`
 	AllowCamera    bool   `json:"allow_camera,omitempty"`
+	// Permits start/stop of installed apps, including future installs, when
+	// the caller also has apps:control. Explicit robot policies take precedence.
+	AllowAllApps bool `json:"allow_all_apps,omitempty"`
 }
 
 type GatewayRobot struct {
@@ -65,8 +71,10 @@ type GatewayRobot struct {
 	Apps        []string         `json:"apps"`
 	AllowCamera bool             `json:"allow_camera"`
 	ListAllApps bool             `json:"list_all_apps,omitempty"`
-	Exports     []GatewayExport  `json:"exports,omitempty"`
-	discovered  bool
+	// Lists all installed apps and permits start/stop with apps:control.
+	AllowAllApps bool            `json:"allow_all_apps,omitempty"`
+	Exports      []GatewayExport `json:"exports,omitempty"`
+	discovered   bool
 }
 
 // A trigger is an operator-reviewed campaign, not arbitrary model code or YAML

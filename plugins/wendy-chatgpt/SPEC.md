@@ -86,8 +86,9 @@ The UI reports this requirement when a host still has an older trusted catalog.
 - open_robot: render the robot panel, optionally with an explicit robot ID.
 - inspect_robot: current device version, app states, and cameras.
 - capture_robot_image: fresh finite snapshot with robot/camera/time metadata.
-- start_robot_app, stop_robot_app: operate only on configured apps; inspect state
-  afterward and keep application readiness unknown without application evidence.
+- start_robot_app, stop_robot_app: operate on configured apps or all installed
+  apps when the operator enables `allow_all_apps`; inspect state afterward and
+  keep application readiness unknown without application evidence.
 - Configured app tools: explicit robot routing and the app's published schema.
 
 ## Cloud discovery correction
@@ -99,6 +100,12 @@ devices by default, supports offline inventory, search and pagination, and keeps
 configured aliases and action policies for existing targets. Cloud presence does
 not prove an agent connection. New discoveries allow inspection, including app
 states; camera capture is opt-in per source and app control remains explicit.
+The `allow_all_apps` option permits installed-app control on a robot or Cloud
+source, including future installs, subject to grant and token scopes. It defaults
+to false. Explicit robot policies take precedence over source options. Local
+simulators have a separate `allow_simulator_device_access` opt-in for cameras
+and installed apps; local simulator authorization and operation scopes still
+apply. Shared HTTP sessions cannot access those local simulator entries.
 Discovery failures report an incomplete inventory instead of presenting the
 configured test devices as the user's complete account.
 

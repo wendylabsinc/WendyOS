@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -18,10 +19,29 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
 
-const robotPanelURI = "ui://wendy/device-workspace-v3.html"
-
 //go:embed desktop_app.html
 var robotPanelHTML string
+
+// Hosts cache UI resources by URI. Each built bundle needs its own identity so
+// an updated descriptor cannot reuse an older workspace's HTML or JavaScript.
+var robotPanelURI = fmt.Sprintf("ui://wendy/device-workspace-%x.html", sha256.Sum256([]byte(robotPanelHTML)))
+
+const legacyRobotPanelHTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Refresh Wendy</title>
+<style>:root{color-scheme:light dark}body{margin:0;padding:32px;font:16px/1.5 system-ui,sans-serif;color:light-dark(#171c23,#f1eee7);background:light-dark(#fff,#1e242d)}main{max-width:560px;margin:0 auto}h1{font-size:22px;font-weight:600}p{margin:16px 0}</style></head>
+<body><main><h1>Refresh Wendy</h1><p>This saved Wendy view uses an older app version.</p><p>In ChatGPT, open Plugins → Wendy → Manage app → Refresh tools. Then close this view and open Wendy in a new conversation.</p></main>
+<script>
+(() => {
+  const id = "wendy-upgrade-initialize";
+  const ready = (event) => {
+    if (event.source !== window.parent || event.data?.jsonrpc !== "2.0" || event.data.id !== id || !event.data.result) return;
+    window.removeEventListener("message", ready);
+    window.parent.postMessage({jsonrpc:"2.0",method:"ui/notifications/initialized"}, "*");
+  };
+  window.addEventListener("message", ready);
+  window.parent.postMessage({jsonrpc:"2.0",id,method:"ui/initialize",params:{protocolVersion:"2026-01-26",appInfo:{name:"Wendy update",version:"1.0.0"},appCapabilities:{}}}, "*");
+})();
+</script></body></html>`
 
 type gatewayPrincipal struct {
 	Subject string
@@ -118,14 +138,17 @@ func NewRobotGateway(cfg RobotGatewayConfig, connect ConnectFunc, options ...Rob
 		}
 		return []mcpgo.ResourceContents{mcpgo.TextResourceContents{URI: robotPanelURI, MIMEType: resource.MIMEType, Text: robotPanelHTML, Meta: meta}}, nil
 	})
-	// Keep already-installed pilot descriptors usable until the host refreshes.
-	for _, uri := range []string{"ui://wendy/robot-v1.html", "ui://wendy/device-workspace-v2.html"} {
+	// Old descriptors may retain an old tool scope. Never run a new bundle under
+	// their cached URI or issue newer helper calls from these compatibility views.
+	legacyMeta := map[string]any{"ui": map[string]any{"csp": map[string]any{"connectDomains": []string{}, "resourceDomains": []string{}}}}
+	for _, uri := range []string{"ui://wendy/robot-v1.html", "ui://wendy/device-workspace-v2.html", "ui://wendy/device-workspace-v3.html"} {
 		legacy := mcpgo.NewResource(uri, "Wendy devices", mcpgo.WithMIMEType("text/html;profile=mcp-app"))
+		legacy.Meta = mcpgo.NewMetaFromMap(legacyMeta)
 		g.protocol.AddResource(legacy, func(ctx context.Context, req mcpgo.ReadResourceRequest) ([]mcpgo.ResourceContents, error) {
 			if !g.hasScope(ctx, RobotReadScope) {
 				return nil, fmt.Errorf("unauthorized")
 			}
-			return []mcpgo.ResourceContents{mcpgo.TextResourceContents{URI: req.Params.URI, MIMEType: legacy.MIMEType, Text: robotPanelHTML, Meta: meta}}, nil
+			return []mcpgo.ResourceContents{mcpgo.TextResourceContents{URI: req.Params.URI, MIMEType: legacy.MIMEType, Text: legacyRobotPanelHTML, Meta: legacyMeta}}, nil
 		})
 	}
 	return g, nil
@@ -167,12 +190,14 @@ func (g *RobotGateway) authorize(ctx context.Context, id, scope string) (*Gatewa
 			return &g.cfg.Robots[i], nil
 		}
 	}
-	// Inventory grants authorize inspection, with camera capture only when
-	// explicitly enabled on the source. They never grant app writes/exports.
-	if scope == RobotReadScope || scope == RobotCameraScope {
+	// Discovery permits inspection by default. Camera capture and app control
+	// each require an explicit source opt-in as well as the caller's scope.
+	// App tool exports still require a reviewed, explicit robot configuration.
+	if scope == RobotReadScope || scope == RobotCameraScope || scope == RobotControlScope {
 		rows, warnings := g.catalog(ctx, true)
 		for _, row := range rows {
-			if row.ID == id && (scope == RobotReadScope || row.AllowCamera) {
+			allowed := scope == RobotReadScope || (scope == RobotCameraScope && row.AllowCamera) || (scope == RobotControlScope && row.AllowAllApps)
+			if row.ID == id && allowed {
 				return &row.GatewayRobot, nil
 			}
 		}
@@ -292,7 +317,7 @@ func (g *RobotGateway) registerTools() {
 			data := result.StructuredContent.(map[string]any)
 			rows := data["robots"].([]map[string]any)
 			if !slices.ContainsFunc(rows, func(row map[string]any) bool { return row["id"] == id }) {
-				data["robots"] = append(rows, map[string]any{"id": r.ID, "name": r.Name, "connection": "unknown", "can_capture": r.AllowCamera && g.hasScope(ctx, RobotCameraScope), "can_control_apps": len(r.Apps) > 0 && g.hasScope(ctx, RobotControlScope)})
+				data["robots"] = append(rows, map[string]any{"id": r.ID, "name": r.Name, "connection": "unknown", "can_capture": r.AllowCamera && g.hasScope(ctx, RobotCameraScope), "can_control_apps": (r.AllowAllApps || len(r.Apps) > 0) && g.hasScope(ctx, RobotControlScope)})
 			}
 			result.StructuredContent.(map[string]any)["selected_robot_id"] = id
 			return okResult(result.StructuredContent), nil

@@ -76,6 +76,7 @@ func TestRobotGatewayOAuthIntrospection(t *testing.T) {
 
 func TestRobotGatewayOAuthDiscoveryAndScopeIntersection(t *testing.T) {
 	cfg := gatewayTestConfig()
+	cfg.Robots[0].AllowAllApps = true
 	cfg.HTTP = &GatewayHTTPConfig{ResourceURL: "https://robots.example/mcp", OAuth: &GatewayOAuthConfig{Issuer: "https://auth.example/robots", IntrospectionURL: "https://auth.example/robots/introspect", ClientID: "gateway", ClientSecretEnv: "SECRET"}}
 	var connects int
 	g, err := NewRobotGateway(cfg, func(context.Context, string) (*grpcclient.AgentConnection, error) {
@@ -111,6 +112,10 @@ func TestRobotGatewayOAuthDiscoveryAndScopeIntersection(t *testing.T) {
 	result, err := c.CallTool(context.Background(), callToolReq("capture_robot_image", map[string]any{"robot_id": "alpha", "camera_id": 0}))
 	if err != nil || !result.IsError || connects != 0 {
 		t.Fatal("grant widened the access token scope")
+	}
+	result, err = c.CallTool(context.Background(), callToolReq("start_robot_app", map[string]any{"robot_id": "alpha", "app_name": "private-app"}))
+	if err != nil || !result.IsError || connects != 0 {
+		t.Fatal("all-app access widened the access token scope")
 	}
 }
 

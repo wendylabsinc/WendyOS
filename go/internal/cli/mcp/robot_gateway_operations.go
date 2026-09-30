@@ -26,6 +26,11 @@ func (g *RobotGateway) inspect(ctx context.Context, r *GatewayRobot, s *mcpServe
 	if err != nil {
 		warnings = append(warnings, "App state unavailable.")
 	} else {
+		if !g.hasScope(ctx, RobotControlScope) {
+			for _, app := range apps {
+				app["can_control"] = false
+			}
+		}
 		out["apps"] = apps
 	}
 	cameras := []map[string]any{}
@@ -59,10 +64,10 @@ func gatewayApps(ctx context.Context, r *GatewayRobot, s *mcpServer) ([]map[stri
 			return nil, err
 		}
 		c := resp.GetContainer()
-		if c == nil || (!r.discovered && !r.ListAllApps && !slices.Contains(r.Apps, c.GetAppName())) {
+		if c == nil || (!r.discovered && !r.ListAllApps && !r.AllowAllApps && !slices.Contains(r.Apps, c.GetAppName())) {
 			continue
 		}
-		apps = append(apps, map[string]any{"name": c.GetAppName(), "version": c.GetAppVersion(), "state": c.GetRunningState().String(), "failure_count": c.GetFailureCount(), "readiness": "unknown", "http_port": c.GetHttpPort(), "can_control": slices.Contains(r.Apps, c.GetAppName())})
+		apps = append(apps, map[string]any{"name": c.GetAppName(), "version": c.GetAppVersion(), "state": c.GetRunningState().String(), "failure_count": c.GetFailureCount(), "readiness": "unknown", "http_port": c.GetHttpPort(), "can_control": r.AllowAllApps || slices.Contains(r.Apps, c.GetAppName())})
 	}
 	return nil, fmt.Errorf("app inventory exceeded the gateway limit")
 }
@@ -94,7 +99,15 @@ func (g *RobotGateway) snapshot(ctx context.Context, r *GatewayRobot, s *mcpServ
 
 func (g *RobotGateway) controlApp(ctx context.Context, r *GatewayRobot, s *mcpServer, req mcpgo.CallToolRequest, action string) (*mcpgo.CallToolResult, error) {
 	app := req.GetString("app_name", "")
-	if !slices.Contains(r.Apps, app) {
+	if r.AllowAllApps {
+		apps, err := gatewayApps(ctx, r, s)
+		if err != nil {
+			return mcpgo.NewToolResultError("Could not verify installed apps. No app operation was started."), nil
+		}
+		if !slices.ContainsFunc(apps, func(installed map[string]any) bool { return installed["name"] == app }) {
+			return mcpgo.NewToolResultError("This app is not installed on the selected device."), nil
+		}
+	} else if !slices.Contains(r.Apps, app) {
 		return mcpgo.NewToolResultError("App is not permitted for this robot."), nil
 	}
 	conn := s.GetConn()

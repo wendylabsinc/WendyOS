@@ -633,6 +633,7 @@ function Workspace() {
                     inspection?.can_open_apps
                       ? async (a) => {
                           const g = generation.current;
+                          const requestedAt = Date.now();
                           const r = await call("open_robot_app", {
                             robot_id: selected,
                             app_name: a.name,
@@ -643,11 +644,30 @@ function Workspace() {
                               "The app did not return a web address.",
                             );
                           if (g !== generation.current) return;
-                          const opened = await app.openLink({ url });
-                          if (opened.isError)
+                          const parsed = new URL(url);
+                          if (
+                            parsed.protocol !== "http:" ||
+                            parsed.hostname !== "127.0.0.1" ||
+                            parsed.username ||
+                            parsed.password
+                          )
                             throw Error(
-                              "ChatGPT could not open the app's browser window. Try Open app again.",
+                              "The gateway returned an unsupported app web address.",
                             );
+                          const lifetime =
+                            r.structuredContent?.expires_in_seconds;
+                          if (
+                            typeof lifetime !== "number" ||
+                            lifetime <= 0 ||
+                            lifetime > 1800
+                          )
+                            throw Error(
+                              "The app web address has no valid expiry.",
+                            );
+                          return {
+                            url: parsed.href,
+                            expiresAt: requestedAt + lifetime * 1000,
+                          };
                         }
                       : undefined
                   }

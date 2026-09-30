@@ -1,5 +1,5 @@
-import { useId, useRef, useState } from "react";
-import { toolErrorMessage } from "./bridge";
+import { useEffect, useId, useRef, useState } from "react";
+import { app as host, toolErrorMessage } from "./bridge";
 
 export type GatewayApp = {
   name: string;
@@ -17,8 +17,10 @@ export type AppsPanelProps = {
   busy: boolean;
   refreshing?: boolean;
   onToggle: (app: GatewayApp) => void | Promise<void>;
-  onOpen?: (app: GatewayApp) => void | Promise<void>;
+  onOpen?: (app: GatewayApp) => Promise<AppWebView | undefined>;
 };
+
+export type AppWebView = { url: string; expiresAt: number };
 
 function normalizeState(state: string) {
   return state
@@ -67,7 +69,22 @@ function AppCard({
   const id = useId();
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState("");
+  const [view, setView] = useState<AppWebView>();
+  const [linkStatus, setLinkStatus] = useState("");
+  const address = useRef<HTMLInputElement>(null);
   const openingLock = useRef(false);
+  const operation = useRef(0);
+  useEffect(() => {
+    operation.current++;
+    openingLock.current = false;
+    setOpening(false);
+    setView(undefined);
+    setLinkStatus("");
+    setOpenError("");
+    return () => {
+      operation.current++;
+    };
+  }, [app.state, app.version, app.http_port]);
   const state = normalizeState(app.state);
   const running = state === "RUNNING";
   const stopped = state === "STOPPED";
@@ -97,18 +114,54 @@ function AppCard({
   async function open() {
     if (!running || busy || !onOpen || openingLock.current) return;
     openingLock.current = true;
+    const currentOperation = operation.current;
     setOpening(true);
     setOpenError("");
     try {
-      await onOpen(app);
+      // Retain a prepared URL so a second click opens it directly from the
+      // user's gesture and does not allocate another expiring gateway view.
+      const next =
+        view && view.expiresAt > Date.now() ? view : await onOpen(app);
+      if (!next || currentOperation !== operation.current) return;
+      setView(next);
+      setLinkStatus(
+        "Web address ready. If no window opened, copy this address into your browser.",
+      );
+      if (!host.getHostCapabilities()?.openLinks)
+        throw Error(
+          "This host cannot open browser windows. Use the web address below.",
+        );
+      const opened = await host.openLink({ url: next.url });
+      if (opened.isError)
+        throw Error(
+          "ChatGPT could not open the browser window. Use the web address below.",
+        );
     } catch (error) {
+      if (currentOperation !== operation.current) return;
       setOpenError(
         toolErrorMessage(error) ||
           "ChatGPT has not loaded the app-opening tool. Go to Plugins → Wendy → Manage app → Refresh tools, then reopen Wendy.",
       );
     } finally {
-      openingLock.current = false;
-      setOpening(false);
+      if (currentOperation === operation.current) {
+        openingLock.current = false;
+        setOpening(false);
+      }
+    }
+  }
+
+  async function copyAddress() {
+    if (!view) return;
+    try {
+      if (!navigator.clipboard) throw Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(view.url);
+      setLinkStatus("Web address copied.");
+    } catch {
+      address.current?.focus();
+      address.current?.select();
+      setLinkStatus(
+        "Address selected. Copy it and paste it into your browser.",
+      );
     }
   }
 
@@ -230,6 +283,22 @@ function AppCard({
         <p className="error app-open-error" role="alert">
           {openError}
         </p>
+      )}
+      {view && running && (
+        <div className="app-web-address">
+          <p role="status">{linkStatus}</p>
+          <label htmlFor={id + "-address"}>App web address</label>
+          <input
+            id={id + "-address"}
+            ref={address}
+            value={view.url}
+            readOnly
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <button type="button" onClick={() => void copyAddress()}>
+            Copy address
+          </button>
+        </div>
       )}
       {unavailable && (
         <small className="app-control-note" id={id}>

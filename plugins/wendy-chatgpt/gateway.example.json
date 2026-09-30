@@ -1,10 +1,12 @@
 {
+  "allow_simulator_device_access": false,
   "robots": [
     {
       "id": "workshop",
       "name": "Workshop robot",
       "device": "workshop.local:50052",
       "apps": ["com.wendylabs.robot-companion"],
+      "allow_all_apps": false,
       "allow_camera": true,
       "exports": []
     }

@@ -74,7 +74,7 @@ func (g *RobotGateway) catalog(ctx context.Context, includeOffline bool) ([]gate
 				if item.Profile == "go2" {
 					model = "go2"
 				}
-				rows = append(rows, gatewayCatalogRobot{GatewayRobot: GatewayRobot{ID: id, Name: item.Name, Device: item.Device, Model: model, discovered: true}, source: "simulator", presence: item.State, deviceType: item.Profile + " simulator"})
+				rows = append(rows, gatewayCatalogRobot{GatewayRobot: GatewayRobot{ID: id, Name: item.Name, Device: item.Device, Model: model, AllowAllApps: g.cfg.AllowSimulatorDeviceAccess, AllowCamera: g.cfg.AllowSimulatorDeviceAccess, discovered: true}, source: "simulator", presence: item.State, deviceType: item.Profile + " simulator"})
 				seen[id] = true
 			}
 		}
@@ -116,7 +116,7 @@ func (g *RobotGateway) catalog(ctx context.Context, includeOffline bool) ([]gate
 			}
 			name = string([]rune(name)[:min(len([]rune(name)), 128)])
 			byDevice[device.Device], seen[id] = len(rows), true
-			rows = append(rows, gatewayCatalogRobot{GatewayRobot: GatewayRobot{ID: id, Name: name, Device: device.Device, AllowCamera: source.AllowCamera, discovered: true}, source: "cloud", presence: presence, deviceType: device.Type})
+			rows = append(rows, gatewayCatalogRobot{GatewayRobot: GatewayRobot{ID: id, Name: name, Device: device.Device, AllowCamera: source.AllowCamera, AllowAllApps: source.AllowAllApps, discovered: true}, source: "cloud", presence: presence, deviceType: device.Type})
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
@@ -135,7 +135,7 @@ func (g *RobotGateway) listRobots(ctx context.Context, req mcpgo.CallToolRequest
 		if query != "" && !strings.Contains(strings.ToLower(row.Name), query) && !strings.Contains(strings.ToLower(row.ID), query) {
 			continue
 		}
-		robots = append(robots, map[string]any{"id": row.ID, "name": row.Name, "connection": "unknown", "cloud_presence": row.presence, "source": row.source, "device_type": row.deviceType, "model": gatewayModel(row.GatewayRobot, row.deviceType), "can_read_events": len(row.Triggers) > 0 && g.hasScope(ctx, RobotEventsScope), "can_capture": row.AllowCamera && g.hasScope(ctx, RobotCameraScope), "can_control_apps": len(row.Apps) > 0 && g.hasScope(ctx, RobotControlScope)})
+		robots = append(robots, map[string]any{"id": row.ID, "name": row.Name, "connection": "unknown", "cloud_presence": row.presence, "source": row.source, "device_type": row.deviceType, "model": gatewayModel(row.GatewayRobot, row.deviceType), "can_read_events": len(row.Triggers) > 0 && g.hasScope(ctx, RobotEventsScope), "can_capture": row.AllowCamera && g.hasScope(ctx, RobotCameraScope), "can_control_apps": (row.AllowAllApps || len(row.Apps) > 0) && g.hasScope(ctx, RobotControlScope)})
 	}
 	limit, offset := req.GetInt("limit", 100), req.GetInt("offset", 0)
 	if limit < 1 || limit > 200 || offset < 0 {

@@ -105,7 +105,8 @@ as they join your account, add a Cloud source and grant its ID to the caller:
       "id": "my-cloud",
       "endpoint": "<cloud-host>:443",
       "organization_id": 2,
-      "allow_camera": false
+      "allow_camera": false,
+      "allow_all_apps": false
     }
   ]
 }
@@ -126,17 +127,36 @@ inventory, and its offline checkbox loads all pages. A discovery error returns
 warnings and `discovery_complete: false`; it is not an empty account.
 
 Discovered devices can be inspected, including their installed app states. App
-start/stop and exported tools still require an explicit robot policy. Camera
-access requires the source's `allow_camera` option and the caller's camera
-scope. Existing configured robots retain their own permissions and names.
+start/stop is disabled by default for discovered devices. Set `allow_all_apps`
+to true on a Cloud source to permit control of all installed apps on its
+discovered devices, including apps installed later. Camera access requires
+the source's `allow_camera` option and the caller's camera scope.
 Permission flags do not establish hardware capabilities, and Cloud presence
 does not verify a working Agent connection.
+
+`allow_all_apps` also applies to individual `robots` entries and defaults to
+false wherever it is omitted. When enabled, it lists all installed apps and
+permits start/stop without adding their names to `apps`. Each operation first
+checks the device's current inventory. A missing app or failed inventory check
+prevents the operation. App tool exports still require explicit robot policies
+and reviewed descriptors.
+
+Explicit robot entries retain their own names and permissions when they also
+appear in Cloud inventory. Their policies take precedence over Cloud source
+options, including `allow_all_apps` and `allow_camera`. A caller must have the
+explicit robot ID in its `robots` grant; a Cloud source grant cannot bypass it.
+For other discovered devices, the caller needs that source in its
+`cloud_sources` grant. App control always requires `apps:control` in the
+subject's grant and, over OAuth HTTP, in the access token. Camera access requires
+`cameras:capture` in both. These options do not expand token scopes or grant
+deployment, shell, or app-tool export access.
 
 To grant camera access to just one discovered device, add an explicit robot
 entry using its existing catalog ID and device selector, set `allow_camera` to
 true, and add that ID to the subject's `robots` grant. Set `list_all_apps` to
-true to retain read-only inventory of its installed apps. Only names in `apps`
-are eligible for start/stop, and the caller still needs `apps:control`.
+true to retain read-only inventory of its installed apps. With `allow_all_apps`
+left false, only names in `apps` are eligible for start/stop, and the caller
+still needs `apps:control`. The example policy keeps this limited access.
 
 ## Run and export an app
 
@@ -257,6 +277,15 @@ viewer opens in the browser, with an optional embedded view. This does not grant
 disk installation or other host operations, and these tools are unavailable
 through the shared HTTP gateway. Creating a simulator leaves it stopped; the
 UI then explicitly starts it. Initial setup can take several minutes.
+
+Camera and installed-app control on discovered simulators require the separate
+top-level `"allow_simulator_device_access": true` option. It defaults to false.
+When enabled, it covers running local simulators created later and their future
+installed apps. The local simulator policy above must also permit the session,
+and the caller still needs `cameras:capture` for cameras or `apps:control` for
+start/stop. Explicit simulator entries in `robots` keep their own policies.
+This option does not expose local simulators through the shared HTTP gateway or
+grant arbitrary host files, shell commands, OS operations, or deployments.
 
 If a downloaded VM image has an older agent, refresh simulator status and use
 **Finish setup**. This updates only that running simulator's agent from the

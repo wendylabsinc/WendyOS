@@ -16,6 +16,59 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+func TestGatewayAppHomepageRejectsAPIAndMissingPages(t *testing.T) {
+	for _, scenario := range []struct {
+		name        string
+		status      int
+		contentType string
+		wantError   string
+	}{
+		{"web UI", 200, "text/html; charset=utf-8", ""},
+		{"API only", 200, "application/json", "exposes an API"},
+		{"no homepage", 404, "text/html", "no web page"},
+		{"browser authentication", 401, "text/html", ""},
+		{"browser sign-in page", 403, "text/html", ""},
+		{"unavailable", 503, "text/plain", "HTTP 503"},
+		{"redirect without following", 302, "text/html", ""},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" || r.URL.Path != "/" {
+					t.Errorf("unexpected probe: %s %s", r.Method, r.URL.Path)
+				}
+				w.Header().Set("Content-Type", scenario.contentType)
+				w.Header().Set("Location", "http://must-not-follow.invalid/")
+				w.WriteHeader(scenario.status)
+			}))
+			defer srv.Close()
+			err := gatewayAppHomepage(context.Background(), http.DefaultTransport, strings.TrimPrefix(srv.URL, "http://"))
+			if scenario.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), scenario.wantError) {
+				t.Fatalf("error = %v, want %q", err, scenario.wantError)
+			}
+		})
+	}
+}
+
+func TestGatewayAppHomepageAcceptsNegotiatedHTML(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, "<html>Operator console</html>")
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{ "api": true }`)
+		}
+	}))
+	defer srv.Close()
+	if err := gatewayAppHomepage(context.Background(), http.DefaultTransport, strings.TrimPrefix(srv.URL, "http://")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGatewayWebDialRetainsCloudStreamUntilConnectionCloses(t *testing.T) {
 	viewCtx, closeView := context.WithCancel(context.Background())
 	defer closeView()

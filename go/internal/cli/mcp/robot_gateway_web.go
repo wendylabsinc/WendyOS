@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"crypto/subtle"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -105,8 +106,17 @@ func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolReque
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if !retained {
+			_ = ln.Close()
+			transport.CloseIdleConnections()
+		}
+	}()
 	token := uuid.NewString()
 	host := ln.Addr().String()
+	if err := gatewayAppHomepage(ctx, transport, host); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 	upstream := &url.URL{Scheme: "http", Host: "wendy-app.invalid"}
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	proxy.Transport = transport
@@ -120,7 +130,41 @@ func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolReque
 		go func() { <-viewCtx.Done(); _ = server.Close() }()
 		_ = server.Serve(ln)
 	}()
-	return okResult(map[string]any{"app_name": appName, "robot_id": r.ID, "url": "http://" + host + "/?wendy_view=" + token, "expires_in_seconds": 1800, "scope": "gateway_laptop"}), nil
+	expiresAt, _ := viewCtx.Deadline()
+	return okResult(map[string]any{"app_name": appName, "robot_id": r.ID, "url": "http://" + host + "/?wendy_view=" + token, "expires_at": expiresAt.UTC().Format(time.RFC3339Nano), "expires_in_seconds": int(time.Until(expiresAt).Seconds()), "scope": "gateway_laptop"}), nil
+}
+
+// An HTTP entitlement can expose an inference API without a browser UI. Check
+// the homepage before asking the host to open it; never follow a redirect to a
+// different service or turn an API response into a claimed working web page.
+func gatewayAppHomepage(ctx context.Context, transport http.RoundTripper, host string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host+"/", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
+	res, err := transport.RoundTrip(req)
+	if err != nil {
+		return fmt.Errorf("The app's web endpoint is not responding. Check its state and try again.")
+	}
+	defer res.Body.Close()
+	switch res.StatusCode {
+	case http.StatusNotFound, http.StatusGone:
+		return fmt.Errorf("This app has no web page at its root address. It may expose an API or use a separate web UI path.")
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// Let the browser show the app's login challenge or sign-in page.
+		return nil
+	}
+	if res.StatusCode >= 400 {
+		return fmt.Errorf("The app's web endpoint returned HTTP %d. Check its logs before opening it.", res.StatusCode)
+	}
+	contentType := strings.ToLower(res.Header.Get("Content-Type"))
+	if res.StatusCode == http.StatusOK && (strings.HasPrefix(contentType, "application/json") || strings.Contains(contentType, "+json")) {
+		return fmt.Errorf("This app exposes an API at its root address, rather than a browser interface.")
+	}
+	return nil
 }
 
 // A cloud dial returns a gRPC-backed connection that keeps using its context.
