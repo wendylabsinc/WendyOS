@@ -11,9 +11,12 @@ param([switch]$InstallWorker)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$pinned = @{}
+$pinned = New-Object System.Collections.Hashtable ([StringComparer]::Ordinal)
+$inBlock = $false
 foreach ($line in Get-Content -LiteralPath (Join-Path $PSScriptRoot 'wendy')) {
-    if ($line -match '^([A-Za-z0-9_]+)="([^"]*)"$') { $pinned[$Matches[1]] = $Matches[2] }
+    if ($line -cmatch '^# >>> pinned by scripts/pin-cli\.sh') { $inBlock = $true; continue }
+    if ($line -ceq '# <<< pinned') { break }
+    if ($inBlock -and $line -cmatch '^([A-Za-z0-9_]+)="([^"]*)"$') { $pinned[$Matches[1]] = $Matches[2] }
 }
 $CliVersion = $pinned['CLI_VERSION']
 $MinVersion = $pinned['MIN_VERSION']
@@ -118,8 +121,13 @@ function Select-Cli([string]$Path) {
     exit 0
 }
 
+foreach ($name in 'CLI_VERSION', 'MIN_VERSION', 'DOWNLOAD_BASE') {
+    if (-not $pinned[$name]) { Fail "the launcher's pinned block has no $name" 'update the Wendy plugin' }
+}
+
 if ($InstallWorker) {
-    Install-Managed
+    try { Install-Managed }
+    catch { Fail "the Wendy CLI install failed: $($_.Exception.Message)" "see $LogFile, then restart the Wendy MCP server" }
     exit 0
 }
 
