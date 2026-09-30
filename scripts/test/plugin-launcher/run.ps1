@@ -10,9 +10,10 @@ $V = '2026.10.01-000000'
 
 function New-StubExe([string]$Path, [string]$Version) {
     New-Item -ItemType Directory -Force -Path (Split-Path $Path) | Out-Null
+    $cls = 'Stub' + [Guid]::NewGuid().ToString('N')
     $src = @"
 using System;
-public static class Program {
+public static class $cls {
     public static int Main(string[] args) {
         if (args.Length == 1 && args[0] == "--version") { Console.WriteLine("wendy version $Version"); return 0; }
         Console.Write("stub-wendy $Version args:");

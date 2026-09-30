@@ -88,10 +88,11 @@ function Install-Managed {
         New-Item -ItemType Directory -Force -Path $tmp | Out-Null
         try {
             $zip = Join-Path $tmp $asset
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             try { Invoke-WebRequest -UseBasicParsing -Uri "$Base/$CliVersion/$asset" -OutFile $zip }
-            catch { Fail "could not download $Base/$CliVersion/$asset ($($_.Exception.Message))" 'check the network connection, then restart the Wendy MCP server' }
+            catch { Fail "could not download $Base/$CliVersion/$asset ($($_.Exception.Message))" "check the network connection (details in $LogFile), then restart the Wendy MCP server" }
             $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
-            if ($got -ne $want) { Fail "checksum mismatch for ${asset}: expected $want, got $got; the download was deleted" "don't install it by hand; report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues" }
+            if ($got -ne $want) { Fail "checksum mismatch for ${asset}: expected $want, got $got; the download was deleted" "if you are behind a captive portal or a proxy that rewrites downloads, fix that and restart the Wendy MCP server; otherwise don't install it by hand and report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues" }
             Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
             $pkg = Join-Path $tmp "wendy-cli-windows-$Arch"
             if (-not (Test-Path -LiteralPath (Join-Path $pkg 'wendy.exe'))) { Fail "$asset has no wendy.exe inside" 'report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues' }
@@ -157,7 +158,7 @@ if (-not (Test-Path -LiteralPath $Managed)) {
     New-Item -ItemType Directory -Force -Path $CliRoot | Out-Null
     Remove-Item -Force -LiteralPath $ErrorFile -ErrorAction SilentlyContinue
     Say "installing the Wendy CLI $CliVersion into $CliRoot (first run, about 15 MB)"
-    $worker = Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -PassThru -ArgumentList @(
+    $worker = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -WindowStyle Hidden -PassThru -ArgumentList @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-InstallWorker')
     $worker.WaitForExit()
     if (-not (Test-Path -LiteralPath $Managed)) {
