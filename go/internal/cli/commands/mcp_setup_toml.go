@@ -203,6 +203,22 @@ func hasKeyPrefix(key, prefix []string) bool {
 	return true
 }
 
+// tomlUnmanagedKey returns the key path, cut to len(path), of the first
+// key/value line outside path's own [tables] that defines path, or a parent
+// of it, with inline-table or dotted-key syntax.
+func tomlUnmanagedKey(lines []tomlLine, path []string) (string, bool) {
+	for _, ln := range lines {
+		if ln.key == nil || hasKeyPrefix(ln.table, path) {
+			continue // not a key line, or inside the entry's own [tables]
+		}
+		full := append(append([]string(nil), ln.table...), ln.key...)
+		if hasKeyPrefix(full, path) || hasKeyPrefix(path, full) {
+			return strings.Join(full[:min(len(full), len(path))], "."), true
+		}
+	}
+	return "", false
+}
+
 // sameKeyPath reports whether a and b name the same key.
 func sameKeyPath(a, b []string) bool {
 	return len(a) == len(b) && hasKeyPrefix(a, b)
@@ -447,15 +463,9 @@ func upsertCodexMCPServer(src []byte, topKey, name, command string, args []strin
 
 	path := []string{topKey, name}
 	lines := scanTOMLLines(src)
-	for _, ln := range lines {
-		if ln.key == nil || hasKeyPrefix(ln.table, path) {
-			continue // not a key line, or inside the entry's own [tables]
-		}
-		full := append(append([]string(nil), ln.table...), ln.key...)
-		if hasKeyPrefix(full, path) || hasKeyPrefix(path, full) {
-			return nil, fmt.Errorf("%s %w; move it into a [%s.%s] table or delete it, then re-run `wendy mcp setup`",
-				strings.Join(full[:min(len(full), len(path))], "."), errTOMLUnmanagedEntry, topKey, name)
-		}
+	if key, ok := tomlUnmanagedKey(lines, path); ok {
+		return nil, fmt.Errorf("%s %w; move it into a [%s.%s] table or delete it, then re-run `wendy mcp setup`",
+			key, errTOMLUnmanagedEntry, topKey, name)
 	}
 
 	var owned []tomlKeyValue
@@ -607,15 +617,9 @@ func removeCodexMCPServer(src []byte, topKey, name string) ([]byte, bool, error)
 
 	path := []string{topKey, name}
 	lines := scanTOMLLines(src)
-	for _, ln := range lines {
-		if ln.key == nil || hasKeyPrefix(ln.table, path) {
-			continue // not a key line, or inside the entry's own [tables]
-		}
-		full := append(append([]string(nil), ln.table...), ln.key...)
-		if hasKeyPrefix(full, path) || hasKeyPrefix(path, full) {
-			return nil, false, fmt.Errorf("%s %w; remove the wendy server from it by hand",
-				strings.Join(full[:min(len(full), len(path))], "."), errTOMLUnmanagedEntry)
-		}
+	if key, ok := tomlUnmanagedKey(lines, path); ok {
+		return nil, false, fmt.Errorf("%s %w; remove the wendy server from it by hand",
+			key, errTOMLUnmanagedEntry)
 	}
 
 	drop := make([]bool, len(lines))   // lines of a removed section
