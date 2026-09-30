@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { app, extensions, call, share, theme } from "./bridge";
+import {
+  app,
+  extensions,
+  call,
+  share,
+  theme,
+  toolErrorMessage,
+} from "./bridge";
 import { Model, ModelLayer } from "./model";
 import { AppsPanel, type GatewayApp } from "./apps";
 import { CameraPanel } from "./camera";
@@ -97,8 +104,7 @@ function Workspace() {
     try {
       await fn();
     } catch (e) {
-      if (g === generation.current)
-        setError(String(e instanceof Error ? e.message : e));
+      if (g === generation.current) setError(toolErrorMessage(e));
     } finally {
       if (g === generation.current) setBusy("");
     }
@@ -294,7 +300,9 @@ function Workspace() {
               ? r.cloud_presence === "running"
               : r.cloud_presence === "online";
             const presence = online
-              ? simulator ? "Local simulator running" : "Cloud online"
+              ? simulator
+                ? "Local simulator running"
+                : "Cloud online"
               : simulator && r.cloud_presence === "stopped"
                 ? "Local simulator stopped"
                 : !simulator && r.cloud_presence === "offline"
@@ -308,7 +316,10 @@ function Workspace() {
                 title={presence}
                 aria-label={`${r.name}: ${presence}`}
               >
-                <span className={"dot " + (online ? "online" : "")} aria-hidden="true" />
+                <span
+                  className={"dot " + (online ? "online" : "")}
+                  aria-hidden="true"
+                />
                 <span>{r.name}</span>
               </button>
             );
@@ -337,8 +348,23 @@ function Workspace() {
           </div>
           {needsRefresh && (
             <div className="notice" role="status">
-              Wendy has new tools. Open ChatGPT Plugins, refresh the Wendy
-              connection, and reopen this workspace.
+              <div>
+                <strong>Update the Wendy connection</strong>
+                <p>
+                  Open ChatGPT Plugins, select Wendy, and click Refresh in its
+                  connection details. Then close this tab and open Wendy in a
+                  new conversation. Refresh fleet only updates the device list.
+                </p>
+                <button
+                  onClick={() =>
+                    void app
+                      .openLink({ url: "https://chatgpt.com/plugins" })
+                      .catch((e) => setError(toolErrorMessage(e)))
+                  }
+                >
+                  Open ChatGPT Plugins
+                </button>
+              </div>
             </div>
           )}
           {error && (

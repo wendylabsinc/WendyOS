@@ -16,6 +16,7 @@ import (
 
 func simulatorBackend() wendymcp.SimulatorBackend {
 	b := newSimulatorBackend(vm.NewStore, fetchMCPSimulatorImage)
+	b.UpdateAgent = updateMCPSimulatorAgent
 	b.Viewer = func(ctx context.Context, name string) (*wendymcp.SimulatorViewer, error) {
 		if err := vm.ValidName(name); err != nil {
 			return nil, err

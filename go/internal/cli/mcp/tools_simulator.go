@@ -16,11 +16,20 @@ import (
 
 // SimulatorBackend keeps host image downloads and VM provisioning in the CLI.
 type SimulatorBackend struct {
-	List   func(context.Context) ([]SimulatorInfo, error)
-	Create func(context.Context, SimulatorCreateOptions) (*SimulatorInfo, error)
-	Stop   func(context.Context, string, bool, time.Duration) (*SimulatorInfo, error)
-	Delete func(context.Context, string) error
-	Viewer func(context.Context, string) (*SimulatorViewer, error)
+	List        func(context.Context) ([]SimulatorInfo, error)
+	Create      func(context.Context, SimulatorCreateOptions) (*SimulatorInfo, error)
+	Stop        func(context.Context, string, bool, time.Duration) (*SimulatorInfo, error)
+	Delete      func(context.Context, string) error
+	Viewer      func(context.Context, string) (*SimulatorViewer, error)
+	UpdateAgent func(context.Context, string) (*SimulatorAgentUpdate, error)
+}
+
+type SimulatorAgentUpdate struct {
+	Name               string `json:"name"`
+	Device             string `json:"device"`
+	Version            string `json:"version"`
+	Updated            bool   `json:"updated"`
+	CapabilityVerified bool   `json:"capability_verified"`
 }
 
 type SimulatorViewer struct {

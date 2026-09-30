@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -184,11 +185,12 @@ func gatewayAppWebHandler(host, token string, next http.Handler) http.Handler {
 			http.Error(w, "Open this app from Wendy to continue.", http.StatusUnauthorized)
 			return
 		}
-		// Do not leak the gateway's access cookie to the app.
+		// Cookies are scoped to a host, not its port. Other open app views on
+		// 127.0.0.1 also send their access cookies here; none belong upstream.
 		cookies := r.Cookies()
 		r.Header.Del("Cookie")
 		for _, c := range cookies {
-			if c.Name != cookieName {
+			if !strings.HasPrefix(c.Name, "wendy_view_") {
 				r.AddCookie(c)
 			}
 		}

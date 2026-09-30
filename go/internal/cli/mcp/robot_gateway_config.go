@@ -64,6 +64,7 @@ type GatewayRobot struct {
 	Device      string           `json:"device"`
 	Apps        []string         `json:"apps"`
 	AllowCamera bool             `json:"allow_camera"`
+	ListAllApps bool             `json:"list_all_apps,omitempty"`
 	Exports     []GatewayExport  `json:"exports,omitempty"`
 	discovered  bool
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { app, call } from "./bridge";
+import { app, call, toolErrorMessage } from "./bridge";
 
 type Frame = { data: string; mimeType: string; meta: Record<string, unknown> };
 type Camera = { id: number; name: string };
@@ -90,7 +90,7 @@ export function CameraPanel({
           timer.current = setTimeout(next, 250);
         } catch (e) {
           if (current === epoch.current) {
-            setError(String(e instanceof Error ? e.message : e));
+            setError(toolErrorMessage(e));
             await stop();
           }
         }
@@ -98,7 +98,7 @@ export function CameraPanel({
       await next();
     } catch (e) {
       if (current === epoch.current) {
-        setError(String(e instanceof Error ? e.message : e));
+        setError(toolErrorMessage(e));
         setBusy("");
       }
     }
@@ -116,8 +116,7 @@ export function CameraPanel({
       if (current === epoch.current && image?.type === "image")
         setFrame({ ...image, meta: r.structuredContent || {} });
     } catch (e) {
-      if (current === epoch.current)
-        setError(String(e instanceof Error ? e.message : e));
+      if (current === epoch.current) setError(toolErrorMessage(e));
     } finally {
       if (current === epoch.current) setBusy("");
     }
@@ -143,7 +142,7 @@ export function CameraPanel({
         ],
       });
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      setError(toolErrorMessage(e));
     } finally {
       setBusy("");
     }

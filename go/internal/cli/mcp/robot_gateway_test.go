@@ -248,6 +248,47 @@ func TestRobotGatewayConcurrentDeviceCallsAndVerifiedAppState(t *testing.T) {
 	}
 }
 
+func TestRobotGatewayAppInventoryDoesNotGrantControl(t *testing.T) {
+	addr, agent := gatewayFixture(t, "alpha-version")
+	cfg := gatewayTestConfig()
+	cfg.Robots[0].Apps = nil
+	cfg.Robots[0].ListAllApps = true
+	g, err := NewRobotGateway(cfg, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		cc, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			return nil, err
+		}
+		return grpcclient.NewFromConn(cc), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := gatewayTestHTTP(t, g)
+	c := gatewayHTTPClient(t, host.URL, gatewayTestEnv("ALICE_TOKEN"))
+	r, err := c.CallTool(context.Background(), callToolReq("inspect_robot", map[string]any{"robot_id": "alpha"}))
+	if err != nil || r.IsError {
+		t.Fatal(r, err)
+	}
+	data := structuredMap(t, r)
+	apps := data["apps"].([]any)
+	if len(apps) != 2 {
+		t.Fatalf("expected full app inventory, got %v", apps)
+	}
+	for _, raw := range apps {
+		app := raw.(map[string]any)
+		if app["can_control"] != false {
+			t.Fatalf("inventory granted control: %v", app)
+		}
+		r, err := c.CallTool(context.Background(), callToolReq("start_robot_app", map[string]any{"robot_id": "alpha", "app_name": app["name"]}))
+		if err != nil || !r.IsError {
+			t.Fatalf("unapproved app control: %v, %v", r, err)
+		}
+	}
+	if agent.starts.Load() != 0 {
+		t.Fatal("read-only inventory started an app")
+	}
+}
+
 func TestRobotGatewayExportContractAndValidation(t *testing.T) {
 	cfg := gatewayTestConfig()
 	descriptor := gatewayTool("set_message", "Set the companion message.", mutating(), mcpgo.WithString("message", mcpgo.Required(), mcpgo.MaxLength(50)))

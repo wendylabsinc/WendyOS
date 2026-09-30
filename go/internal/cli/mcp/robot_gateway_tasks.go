@@ -35,7 +35,7 @@ func gatewayTaskHooks() (*server.Hooks, *server.TaskHooks) {
 	pending := map[context.Context]*gatewayTaskState{}
 	running := map[string]*gatewayTaskState{}
 	hooks.AddBeforeCallTool(func(ctx context.Context, _ any, r *mcpgo.CallToolRequest) {
-		if r.Params.Task == nil || (r.Params.Name != "wait_for_device_event" && r.Params.Name != "simulator_start" && r.Params.Name != "simulator_create") {
+		if r.Params.Task == nil || (r.Params.Name != "wait_for_device_event" && r.Params.Name != "simulator_start" && r.Params.Name != "simulator_create" && r.Params.Name != "simulator_update_agent") {
 			return
 		}
 		duration := 5 * time.Minute

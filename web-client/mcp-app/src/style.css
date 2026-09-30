@@ -234,8 +234,9 @@ aside {
   min-height: 0;
 }
 .device-nav .dot.online {
-  background: var(--color-text-success, #268454);
-  border-color: var(--color-text-success, #268454);
+  /* Hosts may supply a neutral success token; online presence must stay green. */
+  background: #2d9d63;
+  border-color: #2d9d63;
 }
 .aside-bottom {
   margin-top: auto;

@@ -6,6 +6,12 @@ import {
 import { OpenAIExtensions } from "@openai/mcp-extensions/app";
 export const app = new App({ name: "Wendy devices", version: "0.2.0" });
 export const extensions = new OpenAIExtensions(app);
+class ToolScopeError extends Error {}
+export function toolErrorMessage(error: unknown): string {
+  // The workspace owns one actionable banner for a stale host tool catalog.
+  if (error instanceof ToolScopeError) return "";
+  return error instanceof Error ? error.message : String(error);
+}
 export async function call(
   name: string,
   args: Record<string, unknown> = {},
@@ -17,8 +23,8 @@ export async function call(
   } catch (e) {
     if (String(e).includes("trusted tool scope")) {
       window.dispatchEvent(new Event("wendy:refresh-connection"));
-      throw Error(
-        "Refresh the Wendy connection in ChatGPT Plugins, then reopen Wendy to load its updated tools.",
+      throw new ToolScopeError(
+        "Open ChatGPT Plugins, select Wendy, and click Refresh in its connection details. Then open Wendy in a new conversation.",
       );
     }
     throw e;

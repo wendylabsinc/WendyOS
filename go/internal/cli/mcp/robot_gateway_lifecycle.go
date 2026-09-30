@@ -20,7 +20,7 @@ import (
 
 type gatewayLocalContextKey struct{}
 
-var gatewayHostTools = []string{"os_install_plan", "os_list_drives", "os_install_start", "os_install_status", "os_install_resume", "os_install_verify", "simulator_list", "simulator_create", "simulator_start", "simulator_viewer", "simulator_stop", "simulator_delete"}
+var gatewayHostTools = []string{"os_install_plan", "os_list_drives", "os_install_start", "os_install_status", "os_install_resume", "os_install_verify", "simulator_list", "simulator_create", "simulator_start", "simulator_update_agent", "simulator_viewer", "simulator_stop", "simulator_delete"}
 var gatewayLifecycleTools = []string{"list_workspaces", "validate_device_project", "plan_fleet_deployment", "start_device_deployment", "get_deployment_job", "cancel_deployment_job"}
 
 func WithGatewayLifecycle(install onboarding.Backend, project ProjectBackend, simulator SimulatorBackend) RobotGatewayOption {

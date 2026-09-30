@@ -132,6 +132,12 @@ scope. Existing configured robots retain their own permissions and names.
 Permission flags do not establish hardware capabilities, and Cloud presence
 does not verify a working Agent connection.
 
+To grant camera access to just one discovered device, add an explicit robot
+entry using its existing catalog ID and device selector, set `allow_camera` to
+true, and add that ID to the subject's `robots` grant. Set `list_all_apps` to
+true to retain read-only inventory of its installed apps. Only names in `apps`
+are eligible for start/stop, and the caller still needs `apps:control`.
+
 ## Run and export an app
 
 The included companion app has no motion or audio effects. It stores a message
@@ -251,6 +257,11 @@ viewer opens in the browser, with an optional embedded view. This does not grant
 disk installation or other host operations, and these tools are unavailable
 through the shared HTTP gateway. Creating a simulator leaves it stopped; the
 UI then explicitly starts it. Initial setup can take several minutes.
+
+If a downloaded VM image has an older agent, refresh simulator status and use
+**Finish setup**. This updates only that running simulator's agent from the
+official stable channel, verifies the uploaded binary and robot capability,
+then provisions the simulation. Compatible agents are left unchanged.
 
 The local `open_robot_app` tool opens a running app's declared HTTP entitlement.
 It routes through the authenticated device connection, binds to loopback, and

@@ -59,10 +59,10 @@ func gatewayApps(ctx context.Context, r *GatewayRobot, s *mcpServer) ([]map[stri
 			return nil, err
 		}
 		c := resp.GetContainer()
-		if c == nil || (!r.discovered && !slices.Contains(r.Apps, c.GetAppName())) {
+		if c == nil || (!r.discovered && !r.ListAllApps && !slices.Contains(r.Apps, c.GetAppName())) {
 			continue
 		}
-		apps = append(apps, map[string]any{"name": c.GetAppName(), "version": c.GetAppVersion(), "state": c.GetRunningState().String(), "failure_count": c.GetFailureCount(), "readiness": "unknown", "http_port": c.GetHttpPort()})
+		apps = append(apps, map[string]any{"name": c.GetAppName(), "version": c.GetAppVersion(), "state": c.GetRunningState().String(), "failure_count": c.GetFailureCount(), "readiness": "unknown", "http_port": c.GetHttpPort(), "can_control": slices.Contains(r.Apps, c.GetAppName())})
 	}
 	return nil, fmt.Errorf("app inventory exceeded the gateway limit")
 }

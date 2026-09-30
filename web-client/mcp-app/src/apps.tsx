@@ -68,7 +68,7 @@ function AppCard({
   const running = state === "RUNNING";
   const stopped = state === "STOPPED";
   const knownControlState = running || stopped;
-  const allowed = app.can_control ?? canControl;
+  const allowed = canControl && app.can_control !== false;
   const unavailable = !allowed
     ? "Control access is not enabled for this app."
     : !knownControlState

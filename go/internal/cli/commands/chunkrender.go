@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 // renders directly off CreateContainerWithProgress responses) — the push
 // goroutines only mutate shared counters — so a ticker is the render loop.
 const chunkPushInteractiveTickInterval = 200 * time.Millisecond
+
+var chunkPushPlainHeartbeatInterval = tui.PlainHeartbeatInterval
 
 // pushLayersWithProgress wraps the chunk push with live progress: a
 // periodic heartbeat line on non-interactive terminals (CI/piped output,
@@ -42,8 +45,12 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 		}()
 	}
 
-	if !buildProgressInteractive() {
-		stop := startChunkPushHeartbeat(prog, buildProgressOut, tui.PlainHeartbeatInterval)
+	if !buildProgressInteractive() || detachedJSONRun(ctx) {
+		out := buildProgressOut
+		if detachedJSONRun(ctx) {
+			out = os.Stderr
+		}
+		stop := startChunkPushHeartbeat(prog, out, chunkPushPlainHeartbeatInterval)
 		headers, err := pushLayersByChunksWithPrepareMode(ctx, cs, layers, prepare, nil, false, prog, cfg)
 		stop()
 		if err != nil {

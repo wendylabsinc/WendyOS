@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { app, call, share } from "./bridge";
+import { app, call, share, toolErrorMessage } from "./bridge";
 
 export type Simulator = {
   name: string;
@@ -123,13 +123,13 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
       await operation(current);
     } catch (e) {
       if (current !== epoch.current) return;
-      const message = e instanceof Error ? e.message : String(e);
+      const message = toolErrorMessage(e);
       setError(
-        mutation
+        mutation && message
           ? `${message} Refresh simulator status before retrying. The operation may have continued on your laptop.`
           : message,
       );
-      if (mutation) setMustRefresh(true);
+      if (mutation && message) setMustRefresh(true);
       setStatus("");
     } finally {
       if (current === epoch.current) {
@@ -184,7 +184,17 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
     simulatorProfile: string | undefined,
     current: number,
   ) {
-    await call("simulator_start", { name: simulatorName }, longOperation);
+    try {
+      await call("simulator_start", { name: simulatorName }, longOperation);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes("lacks") && message.includes("virtual-robot")) {
+        throw Error(
+          `${simulatorName} is running, but its agent needs an update for this robot. Refresh status, then choose Finish setup to install the official agent and start the simulation.`,
+        );
+      }
+      throw e;
+    }
     if (current !== epoch.current) return;
     changed.current?.();
     await readList(current);
@@ -444,11 +454,15 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
               <div className="simulator-card-controls">
                 <button
                   type="button"
-                  disabled={!!busy || mustRefresh || !stopped}
+                  disabled={
+                    !!busy || mustRefresh || (!stopped && !(running && robot))
+                  }
                   title={
-                    !stopped
-                      ? "Start is available when the simulator is stopped."
-                      : undefined
+                    running && robot
+                      ? "Connect to the robot runtime and finish any incomplete setup. An already healthy world is preserved."
+                      : !stopped
+                        ? "Start is available when the simulator is stopped."
+                        : undefined
                   }
                   onClick={() =>
                     void perform(
@@ -463,7 +477,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
                     )
                   }
                 >
-                  ▷ Start
+                  {running && robot ? "▷ Start simulation" : "▷ Start"}
                 </button>
                 <button
                   type="button"
@@ -477,6 +491,35 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
                 >
                   □ Stop
                 </button>
+                {robot && (
+                  <button
+                    type="button"
+                    disabled={!!busy || mustRefresh || !running}
+                    title="Install the official stable Wendy agent if robot support is missing, restart that simulator's agent, then start the simulation."
+                    onClick={() =>
+                      void perform(
+                        `Finishing ${simulator.name} setup. Checking its agent and installing an official update if needed...`,
+                        async (current) => {
+                          await call(
+                            "simulator_update_agent",
+                            { name: simulator.name },
+                            longOperation,
+                          );
+                          if (current !== epoch.current) return;
+                          setStatus(`Starting ${simulator.name} simulation...`);
+                          await startSimulator(
+                            simulator.name,
+                            simulator.profile,
+                            current,
+                          );
+                        },
+                        true,
+                      )
+                    }
+                  >
+                    Finish setup
+                  </button>
+                )}
                 {robot && (
                   <button
                     type="button"

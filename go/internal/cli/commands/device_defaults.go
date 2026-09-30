@@ -226,6 +226,10 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 // straight to the local unix socket regardless of device, so device is
 // vestigial in that mode and must not be validated as a hostname.
 func connectMCPDevice(ctx context.Context, device string) (*grpcclient.AgentConnection, error) {
+	// A simulator connection can build and deploy its managed robot runtime.
+	// Reserve stdout for JSON-RPC throughout that work, including warm deploys
+	// that skip the build and only emit an upload heartbeat.
+	ctx = context.WithValue(ctx, detachedJSONRunKey{}, true)
 	if os.Getenv("WENDY_AGENT_SOCKET") == "" {
 		selected, matched, err := connectNamedDeviceSelector(robotRuntimePromptContext(ctx, true), device, true)
 		if err != nil {
