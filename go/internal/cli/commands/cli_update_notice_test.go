@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -108,5 +109,77 @@ func TestNotifyCLIUpdate_ReadOnlyConfigDirNeverFails(t *testing.T) {
 		if !shown || !strings.Contains(out, "2026.02.01-000000") {
 			t.Fatalf("run %d: shown=%v out=%q, want the notice", i+1, shown, out)
 		}
+	}
+}
+
+// runUpdateNotice records a pending update from 2026.01.01-000000 to
+// 2026.02.01-000000, poses as the binary at exe, and returns what
+// notifyCLIUpdate printed on stderr.
+func runUpdateNotice(t *testing.T, exe string) string {
+	t.Helper()
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	oldVersion := version.Version
+	version.Version = "2026.01.01-000000"
+	t.Cleanup(func() { version.Version = oldVersion })
+	oldExe := cliExecutable
+	cliExecutable = func() (string, error) { return exe, nil }
+	t.Cleanup(func() { cliExecutable = oldExe })
+	oldTTY := isInteractiveTerminalFn
+	isInteractiveTerminalFn = func() bool { return false }
+	t.Cleanup(func() { isInteractiveTerminalFn = oldTTY })
+	if err := config.Save(&config.Config{AvailableCLIUpdate: "2026.02.01-000000"}); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{}
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	shown, err := notifyCLIUpdate(cmd)
+	if err != nil || !shown {
+		t.Fatalf("notifyCLIUpdate = %v, %v; want a shown notice", shown, err)
+	}
+	return stderr.String()
+}
+
+func TestNotifyCLIUpdate_PluginManagedCLI(t *testing.T) {
+	home := isolateAIToolHome(t)
+	managed := filepath.Join(home, ".wendy", "cli", "2026.01.01-000000", "wendy")
+	if err := os.MkdirAll(filepath.Dir(managed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(managed, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runUpdateNotice(t, managed)
+	if !strings.Contains(out, "managed by the Wendy plugin; update the plugin to get 2026.02.01-000000") {
+		t.Errorf("notice does not point at the plugin:\n%s", out)
+	}
+	for _, installer := range []string{"brew", "winget", "cli.sh"} {
+		if strings.Contains(out, installer) {
+			t.Errorf("notice for a plugin-managed CLI suggests %s:\n%s", installer, out)
+		}
+	}
+
+	// Like the non-interactive notice, it shows once per release.
+	if shown, again := runNotifyCLIUpdate(t); shown || again != "" {
+		t.Errorf("second run repeated the plugin notice: shown=%v out=%q", shown, again)
+	}
+}
+
+// WENDY_PLUGIN alone does not make a CLI plugin-managed: a user whose PATH
+// wendy (Homebrew) is new enough runs that binary under the plugin, and
+// Homebrew is still how it updates.
+func TestNotifyCLIUpdate_HomebrewCLIUnderPluginKeepsInstallerAdvice(t *testing.T) {
+	home := isolateAIToolHome(t)
+	t.Setenv(pluginmode.EnvVar, "claude")
+	brew := filepath.Join(home, "homebrew", "bin", "wendy")
+
+	out := runUpdateNotice(t, brew)
+	if strings.Contains(out, "managed by the Wendy plugin") {
+		t.Errorf("a Homebrew CLI was reported as plugin-managed:\n%s", out)
+	}
+	if !strings.Contains(out, "Update with:") {
+		t.Errorf("notice lost its installer advice:\n%s", out)
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -30,6 +31,20 @@ func notifyCLIUpdate(cmd *cobra.Command) (shown bool, err error) {
 		return false, nil
 	}
 	newVersion := cfg.AvailableCLIUpdate
+
+	// A CLI the Wendy plugin's launcher installed is replaced by updating the
+	// plugin, which pins the next version; Homebrew or winget would install a
+	// second copy that the plugin never runs. There is nothing for the CLI to
+	// run, so there is no prompt: the notice shows once per release.
+	if pluginManagedCLI() {
+		if cfg.CLIUpdateNoticeShown == newVersion {
+			return false, nil
+		}
+		cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\nThis CLI is managed by the Wendy plugin; update the plugin to get %s.\n", newVersion, version.Version, newVersion)
+		cfg.CLIUpdateNoticeShown = newVersion
+		_ = config.Save(cfg) // best-effort: if it can't be saved, the notice just repeats
+		return true, nil
+	}
 
 	var updateShellCmd string
 	switch runtime.GOOS {
@@ -104,4 +119,19 @@ func notifyCLIUpdate(cmd *cobra.Command) (shown bool, err error) {
 		return true, fmt.Errorf("update failed: %w", runErr)
 	}
 	return true, nil
+}
+
+// cliExecutable is os.Executable; a variable so tests can pose as a
+// plugin-managed install.
+var cliExecutable = os.Executable
+
+// pluginManagedCLI reports whether this binary is one the Wendy plugin's
+// launcher installed under the wendy config directory.
+func pluginManagedCLI() bool {
+	exe, err := cliExecutable()
+	if err != nil {
+		return false
+	}
+	dir, err := config.ConfigDir()
+	return err == nil && pluginmode.ManagedInstall(exe, dir)
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -105,9 +106,12 @@ func mcpRefreshRunsAsForeignUser() bool {
 // underlying setup helpers no-op for tools they don't detect. It never runs as
 // a user other than HOME's owner: sudo keeps $HOME on macOS, so a `sudo wendy …`
 // right after an upgrade would otherwise leave the user root-owned AI tool
-// configs. The next run as HOME's owner refreshes instead.
+// configs. The next run as HOME's owner refreshes instead. Nor does it run when
+// the Wendy plugin's launcher started this CLI for Claude or Codex: that
+// process must not rewrite AI tool configs behind the user's back, and the
+// next command the user runs in a terminal refreshes instead.
 func maybeRefreshMCPSetup(cfg *config.Config) {
-	if mcpRefreshRunsAsForeignUser() || !shouldRefreshMCPSetup(cfg.LastMCPSetupVersion, version.Version) {
+	if pluginmode.Client() != "" || mcpRefreshRunsAsForeignUser() || !shouldRefreshMCPSetup(cfg.LastMCPSetupVersion, version.Version) {
 		return
 	}
 	setupMCPForAllTools()
