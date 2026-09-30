@@ -582,3 +582,126 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	}
 	return os.Rename(tmp.Name(), path)
 }
+
+// mcpServeArgs are the args setup writes. An existing wendy entry whose args
+// start with them is setup's own; anything else is the user's.
+var mcpServeArgs = []string{"mcp", "serve"}
+
+// removeCodexMCPServer returns src without the [topKey.name] table and its
+// sub-tables when that entry is one setup wrote (its args start with "mcp
+// serve"); removed reports whether anything was taken out. Each removed
+// section goes from its header to its last key line: comment and blank lines
+// after that usually introduce the next table, so they stay, except blank
+// lines that would pile up where the section was. The result must decode to
+// the original document minus exactly that entry; otherwise nothing changes
+// and an error says to edit the file by hand.
+func removeCodexMCPServer(src []byte, topKey, name string) ([]byte, bool, error) {
+	var before map[string]any
+	if _, err := toml.Decode(string(src), &before); err != nil {
+		return nil, false, fmt.Errorf("parsing: %w", err)
+	}
+	entry, ok := tomlEntry(before, topKey, name)
+	if !ok || !mcpArgsStartWith(entry["args"], mcpServeArgs) {
+		return src, false, nil
+	}
+
+	path := []string{topKey, name}
+	lines := scanTOMLLines(src)
+	for _, ln := range lines {
+		if ln.key == nil || hasKeyPrefix(ln.table, path) {
+			continue // not a key line, or inside the entry's own [tables]
+		}
+		full := append(append([]string(nil), ln.table...), ln.key...)
+		if hasKeyPrefix(full, path) || hasKeyPrefix(path, full) {
+			return nil, false, fmt.Errorf("%s %w; remove the wendy server from it by hand",
+				strings.Join(full[:min(len(full), len(path))], "."), errTOMLUnmanagedEntry)
+		}
+	}
+
+	drop := make([]bool, len(lines))   // lines of a removed section
+	spacer := make([]bool, len(lines)) // blank lines trailing a removed section
+	for i := 0; i < len(lines); i++ {
+		if lines[i].header == nil || !hasKeyPrefix(lines[i].header, path) {
+			continue
+		}
+		end := i + 1
+		for end < len(lines) && lines[end].header == nil {
+			end++
+		}
+		last := end
+		for last > i+1 && lines[last-1].trivia {
+			last--
+		}
+		for j := i; j < end; j++ {
+			drop[j] = j < last
+			spacer[j] = j >= last && isBlankTOMLLine(src, lines[j])
+		}
+		i = end - 1
+	}
+
+	var out bytes.Buffer
+	prevBlank := true // a blank line at the very top is never needed
+	for i, ln := range lines {
+		if drop[i] || (spacer[i] && prevBlank) {
+			continue
+		}
+		out.Write(src[ln.start:ln.end])
+		prevBlank = isBlankTOMLLine(src, ln)
+	}
+	res := out.Bytes()
+
+	var after map[string]any
+	if _, err := toml.Decode(string(res), &after); err != nil {
+		return nil, false, fmt.Errorf("removing [%s.%s] would produce invalid TOML (%v); edit the file by hand", topKey, name, err)
+	}
+	keys := make([]string, 0, len(entry))
+	for k := range entry {
+		keys = append(keys, k)
+	}
+	want, errWant := canonicalTOML(withoutTOMLKeys(before, topKey, name, keys...))
+	got, errGot := canonicalTOML(withoutTOMLKeys(after, topKey, name))
+	if err := errors.Join(errWant, errGot); err != nil || want != got {
+		return nil, false, fmt.Errorf("could not remove [%s.%s] without touching other settings; edit the file by hand", topKey, name)
+	}
+	return res, true, nil
+}
+
+// isBlankTOMLLine reports whether ln is an empty or whitespace-only line
+// outside any value.
+func isBlankTOMLLine(src []byte, ln tomlLine) bool {
+	return ln.trivia && len(bytes.TrimSpace(src[ln.start:ln.end])) == 0
+}
+
+// removeMCPFromTOMLConfig removes the [topKey.name] server setup wrote from
+// the TOML file at path, preserving every other byte (see
+// removeCodexMCPServer), and reports whether the file changed. A missing file
+// is not an error. A symlinked config is edited at its target so the link
+// survives, and the file keeps its mode.
+func removeMCPFromTOMLConfig(path, topKey, name string) (bool, error) {
+	target := path
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		target = resolved
+	}
+	src, err := os.ReadFile(target)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading %s: %w", path, err)
+	}
+	out, removed, err := removeCodexMCPServer(src, topKey, name)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	if !removed {
+		return false, nil
+	}
+	mode := os.FileMode(0o600)
+	if fi, err := os.Stat(target); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	if err := writeFileAtomic(target, out, mode); err != nil {
+		return false, err
+	}
+	return true, nil
+}
