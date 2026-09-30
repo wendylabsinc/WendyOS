@@ -1,0 +1,51 @@
+name: Plugin launcher
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/wendy/scripts/**'
+      - 'scripts/pin-cli.sh'
+      - 'scripts/test/plugin-launcher/**'
+      - '.github/workflows/plugin-launcher.yml'
+      - '.gitattributes'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/wendy/scripts/**'
+      - 'scripts/pin-cli.sh'
+      - 'scripts/test/plugin-launcher/**'
+      - '.github/workflows/plugin-launcher.yml'
+      - '.gitattributes'
+
+permissions:
+  contents: read
+
+jobs:
+  posix:
+    name: POSIX (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: shellcheck
+        if: runner.os == 'Linux'
+        run: shellcheck -s sh plugins/wendy/scripts/wendy scripts/pin-cli.sh scripts/test/plugin-launcher/run.sh
+      - name: Launcher tests (sh)
+        run: sh scripts/test/plugin-launcher/run.sh
+      - name: Launcher tests (dash)
+        if: runner.os == 'Linux'
+        run: dash scripts/test/plugin-launcher/run.sh
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Launcher tests (cmd + PowerShell 5.1)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test\plugin-launcher\run.ps1

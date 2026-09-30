@@ -1,0 +1,330 @@
+#!/bin/sh
+# Wendy CLI launcher, bundled with the Wendy plugin for Claude and Codex.
+#
+# Runs the Wendy CLI with this script's arguments; the plugin's MCP entry runs
+# `wendy mcp serve` through it. The CLI is, in order:
+#   1. $WENDY_CLI, an explicit path, used as is;
+#   2. `wendy` on PATH, or in a directory GUI apps leave off PATH, when it is at
+#      least MIN_VERSION (a dev build is accepted with a notice);
+#   3. the plugin-managed copy in ${WENDY_CONFIG_DIR:-~/.wendy}/cli/<CLI_VERSION>/;
+#   4. otherwise CLI_VERSION, downloaded from GitHub Releases and checked
+#      against the SHA-256 pinned below before it is installed there.
+#
+# Nothing here writes to stdout or reads stdin: for `mcp serve` they carry the
+# MCP protocol. Messages go to stderr, and a failure is also written to
+# <root>/cli/last-error.txt, which the wendy-install skill tells the assistant
+# to read when the Wendy tools are missing.
+
+set -u
+
+# SECURITY: each pinned SHA-256 matches a release asset attested by .github/workflows/build.yml (build provenance for darwin-arm64, SPDX SBOM for the other four until #2135 adds provenance); pin-cli.sh now requires build.yml provenance, and the plugin release re-pins with it.
+# >>> pinned by scripts/pin-cli.sh (do not edit by hand)
+CLI_VERSION="2026.09.28-142251"
+MIN_VERSION="2026.09.28-142251"
+DOWNLOAD_BASE="https://github.com/wendylabsinc/WendyOS/releases/download"
+SHA256_darwin_arm64="d3e27519f43216880d062aada2eaa5e18b640d7ebc9e8d45fd97e2b7bed920a2"
+SHA256_linux_amd64="6bf20c1750591a5f3c2878c489dc2758ed7e78a12f0dea2e6611b7fd18736c43"
+SHA256_linux_arm64="cf793d2f851babebd2e53e35508862ffe24baefd6a4b1652e08259a4b5cf7429"
+SHA256_windows_amd64="e9aa03851e3cbb751b8e11d6b997dc2a5d7f18759b616e5ca6699ab3db31c31d"
+SHA256_windows_arm64="35d245cce31980a809eaa5c521ba7717c6fa22dc78b417a473c04d814effa2d6"
+# <<< pinned
+
+wendy_root="${WENDY_CONFIG_DIR:-${HOME:-}/.wendy}"
+cli_root="$wendy_root/cli"
+error_file="$cli_root/last-error.txt"
+log_file="$cli_root/install.log"
+lock_dir="$cli_root/.lock"
+base_url="${WENDY_CLI_DOWNLOAD_BASE:-$DOWNLOAD_BASE}"
+well_known_dirs="${WENDY_LAUNCHER_WELL_KNOWN_DIRS:-/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin}"
+upgrade_hint="brew upgrade wendy, winget upgrade WendyLabs.Wendy, or curl -fsSL https://install.wendy.dev/cli.sh | bash"
+release_pattern='[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+
+# --- helpers ------------------------------------------------------------------
+
+say() {
+  printf 'wendy launcher: %s\n' "$*" >&2
+}
+
+# make_root creates the managed root private to the user: the CLI keeps its
+# credentials in the same directory.
+make_root() {
+  if [ ! -d "$wendy_root" ]; then
+    (umask 077 && mkdir -p "$wendy_root") || return 1
+  fi
+  mkdir -p "$cli_root"
+}
+
+# fail records why the CLI can't run, for the person (stderr) and for the
+# assistant (last-error.txt), then exits.
+fail() {
+  make_root 2>/dev/null
+  {
+    printf 'time: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'error: %s\n' "$1"
+    printf 'next step: %s\n' "$2"
+  } 2>/dev/null >"$error_file"
+  say "$1"
+  say "next step: $2"
+  exit 1
+}
+
+# run_cli clears a stale failure record and replaces this process with the CLI.
+run_cli() {
+  rm -f "$error_file" 2>/dev/null
+  cli=$1
+  shift
+  exec "$cli" "$@"
+}
+
+# cli_version prints the version a wendy binary reports ("wendy version X").
+cli_version() {
+  "$1" --version </dev/null 2>/dev/null | awk 'NR == 1 { print $NF }'
+}
+
+# version_status sorts a reported version: 0 = new enough, 2 = a dev build
+# (accepted), 1 = too old or unrecognised.
+version_status() {
+  # shellcheck disable=SC2254 # release_pattern is a glob on purpose
+  case "$1" in
+    dev | *-dev) return 2 ;;
+    $release_pattern)
+      LC_ALL=C expr "$1" \>= "$MIN_VERSION" >/dev/null && return 0
+      return 1
+      ;;
+  esac
+  return 1
+}
+
+chosen_cli=""
+old_notice=""
+
+# detect_platform sets os, arch, exe, archive and managed for the managed
+# install, or fails on a platform the Wendy CLI has no build for.
+detect_platform() {
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) os=darwin ;;
+    Linux) os=linux ;;
+    MINGW* | MSYS* | CYGWIN*) os=windows ;;
+    *) os=other ;;
+  esac
+  case "$(uname -m 2>/dev/null)" in
+    x86_64 | amd64) arch=amd64 ;;
+    arm64 | aarch64) arch=arm64 ;;
+    *) arch=other ;;
+  esac
+  # A shell running under Rosetta reports x86_64 on an Apple silicon Mac.
+  if [ "$os-$arch" = darwin-amd64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+    arch=arm64
+  fi
+  case "$os-$arch" in
+    darwin-arm64 | linux-amd64 | linux-arm64)
+      exe=""
+      archive=tar.gz
+      ;;
+    windows-amd64 | windows-arm64)
+      exe=.exe
+      archive=zip
+      ;;
+    darwin-amd64)
+      fail "the Wendy CLI has no build for Intel Macs" "use an Apple silicon Mac or a Linux machine for Wendy development"
+      ;;
+    *)
+      fail "the Wendy CLI has no build for $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" "Wendy runs on macOS (Apple silicon), Linux (x86_64, arm64) and Windows (x64, arm64)"
+      ;;
+  esac
+  managed="$cli_root/$CLI_VERSION/wendy$exe"
+}
+
+download() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 --connect-timeout 20 --speed-limit 1024 --speed-time 60 -o "$2" "$1"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -T 60 -O "$2" "$1"
+  else
+    return 127
+  fi
+}
+
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r "$1" | awk '{ print $1 }'
+  fi
+}
+
+# pinned_sha256 prints the pinned SHA-256 of this platform's release asset.
+pinned_sha256() {
+  case "$os-$arch" in
+    darwin-arm64) echo "$SHA256_darwin_arm64" ;;
+    linux-amd64) echo "$SHA256_linux_amd64" ;;
+    linux-arm64) echo "$SHA256_linux_arm64" ;;
+    windows-amd64) echo "$SHA256_windows_amd64" ;;
+    windows-arm64) echo "$SHA256_windows_arm64" ;;
+  esac
+}
+
+# link_current points <root>/bin/wendy at the managed CLI, so a person can run
+# it from a terminal after adding <root>/bin to PATH.
+link_current() {
+  mkdir -p "$wendy_root/bin" || return 0
+  if [ "$os" = windows ]; then
+    cp -f "$managed" "$wendy_root/bin/wendy.exe" 2>/dev/null ||
+      say "could not update $wendy_root/bin/wendy.exe (in use?)"
+  else
+    rm -f "$wendy_root/bin/wendy"
+    ln -s "$managed" "$wendy_root/bin/wendy"
+  fi
+}
+
+# lock_is_stale: the holder has exited, or the lock is older than 10 minutes.
+lock_is_stale() {
+  pid=$(cat "$lock_dir/pid" 2>/dev/null)
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +10 2>/dev/null)" ]
+}
+
+acquire_lock() {
+  waited=0
+  until mkdir "$lock_dir" 2>/dev/null; do
+    if lock_is_stale; then
+      rm -rf "$lock_dir"
+      continue
+    fi
+    waited=$((waited + 1))
+    [ "$waited" -le 600 ] ||
+      fail "another Wendy CLI install has held $lock_dir for 10 minutes" "if no install is running, delete $lock_dir and restart the Wendy MCP server"
+    sleep 1
+  done
+  echo "$$" >"$lock_dir/pid"
+}
+
+# prune_versions keeps CLI_VERSION and the newest other version (what a
+# client on the previous plugin release may still run) and deletes the rest.
+prune_versions() {
+  previous=""
+  for dir in "$cli_root"/$release_pattern; do
+    [ -d "$dir" ] || continue
+    [ "${dir##*/}" = "$CLI_VERSION" ] || previous=${dir##*/}
+  done
+  for dir in "$cli_root"/$release_pattern; do
+    [ -d "$dir" ] || continue
+    v=${dir##*/}
+    [ "$v" = "$CLI_VERSION" ] || [ "$v" = "$previous" ] || rm -rf "$dir"
+  done
+}
+
+# install_managed downloads CLI_VERSION, checks it against the pinned SHA-256,
+# and moves it into place, holding the install lock. It runs as its own
+# process (see --wendy-launcher-install) that ignores hangups and terminations,
+# so an MCP client that gives up on a slow first start can't leave a
+# half-finished install behind: the next start finds the finished one.
+install_managed() {
+  acquire_lock
+  tmp="$cli_root/.tmp.$$"
+  trap 'rm -rf "$tmp" "$lock_dir"' EXIT
+  [ ! -x "$managed" ] || exit 0
+  asset="wendy-cli-$os-$arch-$CLI_VERSION.$archive"
+  want=$(pinned_sha256)
+  [ -n "$want" ] || fail "this launcher has no pinned checksum for $os-$arch" "update the Wendy plugin"
+  rm -rf "$tmp"
+  mkdir -p "$tmp" || fail "cannot create $tmp" "check that $cli_root is writable"
+  download "$base_url/$CLI_VERSION/$asset" "$tmp/$asset" ||
+    fail "could not download $base_url/$CLI_VERSION/$asset" "check the network connection (and that curl or wget is installed; details in $log_file), then restart the Wendy MCP server"
+  got=$(sha256_of "$tmp/$asset")
+  [ -n "$got" ] || fail "no SHA-256 tool found (shasum, sha256sum or openssl)" "install one of them, then restart the Wendy MCP server"
+  [ "$got" = "$want" ] ||
+    fail "checksum mismatch for $asset: expected $want, got $got; the download was deleted" "if you are behind a captive portal or a proxy that rewrites downloads, fix that and restart the Wendy MCP server; otherwise don't install it by hand and report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues"
+  case "$archive" in
+    tar.gz) tar -xzf "$tmp/$asset" -C "$tmp" ;;
+    zip) unzip -q "$tmp/$asset" -d "$tmp" ;;
+  esac || fail "could not unpack $asset" "restart the Wendy MCP server to download it again"
+  pkg="$tmp/wendy-cli-$os-$arch"
+  [ -f "$pkg/wendy$exe" ] || fail "$asset has no wendy$exe inside" "report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues"
+  chmod 755 "$pkg/wendy$exe"
+  if [ ! -x "$managed" ]; then
+    rm -rf "${cli_root:?}/$CLI_VERSION"
+    mv "$pkg" "$cli_root/$CLI_VERSION" || fail "could not move the CLI into $cli_root/$CLI_VERSION" "check that $cli_root is writable"
+  fi
+  link_current
+  prune_versions
+}
+
+# consider picks the wendy binary at $1 if nothing was picked yet and it is
+# usable. This launcher itself (say, symlinked onto PATH as wendy) is skipped.
+consider() {
+  [ -z "$chosen_cli" ] || return 0
+  [ -f "$1" ] && [ -x "$1" ] || return 0
+  # shellcheck disable=SC3013 # -ef works in dash, bash, busybox and macOS sh
+  [ "$1" -ef "$0" ] && return 0
+  v=$(cli_version "$1")
+  version_status "$v"
+  case $? in
+    0) chosen_cli=$1 ;;
+    2)
+      say "using development build $1 ($v)"
+      chosen_cli=$1
+      ;;
+    *)
+      if [ -n "$v" ] && [ -z "$old_notice" ]; then
+        old_notice="$1 is version $v, older than $MIN_VERSION, so the plugin uses its own copy of $CLI_VERSION (to upgrade yours: $upgrade_hint)"
+      fi
+      ;;
+  esac
+}
+
+# --- main ----------------------------------------------------------------------
+
+if [ "${1:-}" = "--wendy-launcher-install" ]; then
+  trap '' HUP INT TERM
+  detect_platform
+  make_root || fail "cannot create $cli_root" "check that $wendy_root is writable"
+  install_managed
+  exit 0
+fi
+
+if [ -n "${WENDY_CLI:-}" ]; then
+  if [ ! -f "$WENDY_CLI" ] || [ ! -x "$WENDY_CLI" ]; then
+    fail "WENDY_CLI is set to $WENDY_CLI, which is not an executable file" "unset WENDY_CLI, or point it at a wendy binary"
+  fi
+  run_cli "$WENDY_CLI" "$@"
+fi
+
+consider "$(command -v wendy 2>/dev/null)"
+saved_ifs=$IFS
+IFS=:
+for dir in $well_known_dirs; do
+  IFS=$saved_ifs
+  consider "$dir/wendy"
+  consider "$dir/wendy.exe"
+  IFS=:
+done
+IFS=$saved_ifs
+
+if [ -z "$chosen_cli" ]; then
+  detect_platform
+  if [ -x "$managed" ]; then
+    chosen_cli=$managed
+  else
+    [ -z "$old_notice" ] || say "$old_notice"
+    old_notice=""
+    make_root || fail "cannot create $cli_root" "check that $wendy_root is writable"
+    rm -f "$error_file"
+    say "installing the Wendy CLI $CLI_VERSION into $cli_root (first run, about 15 MB)"
+    (trap '' HUP INT TERM && exec sh "$0" --wendy-launcher-install) </dev/null >>"$log_file" 2>&1 &
+    wait "$!"
+    if [ ! -x "$managed" ]; then
+      if [ -f "$error_file" ]; then cat "$error_file" >&2; else fail "the Wendy CLI install did not finish" "see $log_file, then restart the Wendy MCP server"; fi
+      exit 1
+    fi
+    say "installed the Wendy CLI $CLI_VERSION"
+    chosen_cli=$managed
+  fi
+  [ -z "$old_notice" ] || say "$old_notice"
+fi
+
+run_cli "$chosen_cli" "$@"
