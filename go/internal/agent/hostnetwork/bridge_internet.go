@@ -45,7 +45,7 @@ func RevokeBridgeInternetAccess(owner string) error {
 	out, err := meshIPTables("-t", "filter", "-S", BridgeInternetChain)
 	if err != nil {
 		if exitCode(err) == 1 {
-			return nil
+			return revokeBridgeReplyRules(owner)
 		}
 		return fmt.Errorf("inspect bridge Internet grants: %w: %s", err, out)
 	}
@@ -74,7 +74,7 @@ func RevokeBridgeInternetAccess(owner string) error {
 			return fmt.Errorf("revoke bridge Internet grant: %w: %s", e, output)
 		}
 	}
-	return nil
+	return revokeBridgeReplyRules(owner)
 }
 func EnsureBridgeInternetAccess(owner, bridge string, ips []net.IP) (err error) {
 	rules, err := bridgeInternetRules(owner, bridge, ips)
@@ -87,6 +87,22 @@ func EnsureBridgeInternetAccess(owner, bridge string, ips []net.IP) (err error) 
 	if err = RevokeBridgeInternetAccess(owner); err != nil {
 		return err
 	}
+	// Revoke removed any previously recorded ownership. Refuse to adopt an
+	// otherwise matching unrecorded rule in the reserved reply-rule slot.
+	for _, raw := range ips {
+		if ip := raw.To4(); ip != nil {
+			present, e := bridgeReplyRulePresent(ip.String())
+			if e != nil {
+				return e
+			}
+			if present {
+				return fmt.Errorf("unowned bridge reply rule already exists")
+			}
+		}
+	}
+	if err = rememberBridgeGrant(owner, bridge, ips); err != nil {
+		return err
+	}
 	defer func() {
 		if err != nil {
 			_ = RevokeBridgeInternetAccess(owner)
@@ -95,6 +111,13 @@ func EnsureBridgeInternetAccess(owner, bridge string, ips []net.IP) (err error) 
 	for _, rule := range rules {
 		if out, e := meshIPTables(append([]string{"-t", "filter", "-A", BridgeInternetChain}, rule...)...); e != nil {
 			return fmt.Errorf("grant bridge Internet access: %w: %s", e, out)
+		}
+	}
+	for _, raw := range ips {
+		if ip := raw.To4(); ip != nil {
+			if err = ensureBridgeReplyRule(ip.String()); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -107,6 +130,17 @@ func CheckBridgeInternetAccess(owner, bridge string, ips []net.IP) error {
 	for _, rule := range rules {
 		if out, e := meshIPTables(append([]string{"-t", "filter", "-C", BridgeInternetChain}, rule...)...); e != nil {
 			return fmt.Errorf("bridge Internet grant missing: %w: %s", e, out)
+		}
+	}
+	for _, raw := range ips {
+		if ip := raw.To4(); ip != nil {
+			ok, err := bridgeReplyRulePresent(ip.String())
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("bridge reply rule missing")
+			}
 		}
 	}
 	return nil

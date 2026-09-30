@@ -811,16 +811,15 @@ func dnsConfSet(dnsConf types.DNS) bool {
 		dnsConf.Domain != ""
 }
 
-func CmdDel(args *skel.CmdArgs) error {
+func CmdDel(args *skel.CmdArgs) (resultErr error) {
 	n, _, err := loadNetConf(args.StdinData, args.Args)
 	if err != nil {
 		return err
 	}
 
-	// Revoke even if the namespace disappeared or DEL received legacy config.
-	if err := hostnetwork.RevokeBridgeInternetAccess(n.Name + "/" + args.ContainerID + "/" + args.IfName); err != nil {
-		return err
-	}
+	// A grant-revocation error must not prevent veth/IPAM/NAT cleanup.
+	grantErr := hostnetwork.RevokeBridgeInternetAccess(n.Name + "/" + args.ContainerID + "/" + args.IfName)
+	defer func() { resultErr = errors.Join(resultErr, grantErr) }()
 	isLayer3 := n.IPAM.Type != ""
 
 	ipamDel := func() error {
