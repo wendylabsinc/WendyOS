@@ -15,33 +15,63 @@ import (
 )
 
 func (g *RobotGateway) inspect(ctx context.Context, r *GatewayRobot, s *mcpServer, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	conn := s.GetConn()
-	v, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	// These independent inventories share the same authenticated connection.
+	// Start them together so Cloud round trips do not add to one another.
+	type appResult struct {
+		apps []map[string]any
+		err  error
+	}
+	appsReady := make(chan appResult, 1)
+	go func() {
+		appCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		apps, err := gatewayApps(appCtx, r, s)
+		appsReady <- appResult{apps, err}
+	}()
+	type cameraResult struct {
+		response *agentpb.ListVideoDevicesResponse
+		err      error
+	}
+	camerasReady := make(chan cameraResult, 1)
+	if r.AllowCamera && g.hasScope(ctx, RobotCameraScope) {
+		go func() {
+			cameraCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			response, err := conn.VideoService.ListVideoDevices(cameraCtx, &agentpb.ListVideoDevicesRequest{})
+			camerasReady <- cameraResult{response, err}
+		}()
+	} else {
+		camerasReady <- cameraResult{}
+	}
+	versionCtx, finishVersion := context.WithTimeout(ctx, 10*time.Second)
+	v, err := conn.AgentService.GetAgentVersion(versionCtx, &agentpb.GetAgentVersionRequest{})
+	finishVersion()
 	if err != nil {
 		return mcpgo.NewToolResultError("Robot did not respond to the status check."), nil
 	}
 	out := map[string]any{"robot_id": r.ID, "name": r.Name, "connected": true, "agent_version": v.GetVersion(), "device_type": v.GetDeviceType(), "model": gatewayModel(*r, v.GetDeviceType()), "observed_at": time.Now().UTC().Format(time.RFC3339Nano)}
 	warnings := []string{}
-	apps, err := gatewayApps(ctx, r, s)
-	if err != nil {
+	appState := <-appsReady
+	if appState.err != nil {
 		warnings = append(warnings, "App state unavailable.")
 	} else {
 		if !g.hasScope(ctx, RobotControlScope) {
-			for _, app := range apps {
+			for _, app := range appState.apps {
 				app["can_control"] = false
 			}
 		}
-		out["apps"] = apps
+		out["apps"] = appState.apps
 	}
 	cameras := []map[string]any{}
-	if r.AllowCamera && g.hasScope(ctx, RobotCameraScope) {
-		resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{})
-		if err != nil {
-			warnings = append(warnings, "Camera inventory unavailable.")
-		} else {
-			for _, c := range resp.GetDevices() {
-				cameras = append(cameras, map[string]any{"id": c.GetId(), "name": c.GetName()})
-			}
+	cameraState := <-camerasReady
+	if cameraState.err != nil {
+		warnings = append(warnings, "Camera inventory unavailable.")
+	} else {
+		for _, c := range cameraState.response.GetDevices() {
+			cameras = append(cameras, map[string]any{"id": c.GetId(), "name": c.GetName()})
 		}
 	}
 	out["cameras"], out["warnings"] = cameras, warnings

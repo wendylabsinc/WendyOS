@@ -1,177 +1,68 @@
-import { useEffect, useRef, useState } from "react";
-import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { call } from "./bridge";
+import dgx from "./assets/devices/dgx.webp";
+import orin from "./assets/devices/orin.webp";
+import thor from "./assets/devices/thor.webp";
+import dragonwing from "./assets/devices/dragonwing.webp";
+import macbook from "./assets/devices/macbook.webp";
+import rpi from "./assets/devices/rpi.webp";
+import desktop from "./assets/devices/desktop.webp";
+import g1 from "./assets/devices/g1.webp";
+import go2 from "./assets/devices/go2.webp";
+import { displayModel } from "./device-visual";
 
-// One renderer per app, regardless of fleet size. Render only on changes and
-// scroll/resize; no idle animation, remote decoder, or GPU context per card.
-const entries = new Map<HTMLElement, { model: string; angle: number }>();
-const scenes = new Map<string, THREE.Scene>();
-const pending = new Set<string>();
-let renderer: THREE.WebGLRenderer | undefined,
-  frame = 0, generation = 0;
+const images: Record<string, { src: string; name: string }> = {
+  dgx: { src: dgx, name: "NVIDIA DGX Spark" },
+  orin: { src: orin, name: "NVIDIA Jetson Orin Nano" },
+  thor: { src: thor, name: "NVIDIA Jetson AGX Thor" },
+  dragonwing: { src: dragonwing, name: "Qualcomm Dragonwing" },
+  macbook: { src: macbook, name: "MacBook" },
+  rpi: { src: rpi, name: "Raspberry Pi" },
+  desktop: { src: desktop, name: "Desktop computer" },
+  g1: { src: g1, name: "Unitree G1" },
+  go2: { src: go2, name: "Unitree Go2" },
+};
 
-function dispose(scene: THREE.Object3D) {
-  scene.traverse(o => {
-    if (o instanceof THREE.Mesh) {
-      o.geometry.dispose();
-      for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-        for (const v of Object.values(m)) if (v instanceof THREE.Texture) v.dispose();
-        m.dispose();
-      }
-    }
-  });
+export function SimulatorIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 64 64"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden="true"
+    >
+      <rect x="8" y="10" width="48" height="34" rx="3" />
+      <path d="M24 54h16M32 44v10M24 21l-6 6 6 6M40 21l6 6-6 6M35 19l-6 16" />
+    </svg>
+  );
 }
-const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
-function schedule() {
-  if (!frame) frame = requestAnimationFrame(render);
-}
-async function load(id: string) {
-  if (pending.has(id) || scenes.has(id)) return;
-  pending.add(id);
-  const started = generation;
-  try {
-    const r = await call("get_device_model", { model: id }),
-      raw = r._meta?.glb;
-    if (typeof raw !== "string") throw Error("Model not available");
-    const bytes = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
-    const gltf = await new GLTFLoader().parseAsync(bytes.buffer, "");
-    if (started !== generation) { dispose(gltf.scene); return; }
-    const box = new THREE.Box3().setFromObject(gltf.scene),
-      size = box.getSize(new THREE.Vector3()),
-      center = box.getCenter(new THREE.Vector3());
-    const root = new THREE.Group();
-    root.add(gltf.scene);
-    gltf.scene.position.sub(center);
-    root.scale.setScalar(2.4 / Math.max(size.x, size.y, size.z));
-    const scene = new THREE.Scene();
-    scene.add(root, new THREE.HemisphereLight(0xffffff, 0x768381, 3));
-    const key = new THREE.DirectionalLight(0xffffff, 4);
-    key.position.set(4, 7, 5);
-    scene.add(key);
-    scenes.set(id, scene);
-  } catch {
-    for (const [el, e] of entries)
-      if (e.model === id) el.dataset.failed = "true";
-  } finally {
-    schedule();
-  }
-}
-function render() {
-  frame = 0;
-  if (!renderer || document.hidden) return;
-  const w = innerWidth,
-    h = innerHeight;
-  renderer.setSize(w, h, false);
-  renderer.setScissorTest(false);
-  renderer.clear();
-  renderer.setScissorTest(true);
-  for (const [el, e] of entries) {
-    const b = el.getBoundingClientRect();
-    if (
-      b.bottom < 0 ||
-      b.top > h ||
-      b.right < 0 ||
-      b.left > w ||
-      !b.width ||
-      !b.height
-    )
-      continue;
-    const scene = scenes.get(e.model);
-    if (!scene) {
-      void load(e.model);
-      continue;
-    }
-    el.dataset.loaded = "true";
-    scene.children[0].rotation.y = e.angle;
-    camera.aspect = b.width / b.height;
-    camera.position.set(3, 2.0, 4.5);
-    camera.lookAt(0, 0, 0);
-    camera.updateProjectionMatrix();
-    renderer.setViewport(b.left, h - b.bottom, b.width, b.height);
-    renderer.setScissor(
-      Math.max(0, b.left),
-      Math.max(0, h - b.bottom),
-      Math.min(b.width, w - b.left),
-      Math.min(b.height, h - b.top),
-    );
-    renderer.render(scene, camera);
-  }
-}
-export function ModelLayer() {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    try {
-      renderer = new THREE.WebGLRenderer({
-        canvas: ref.current!,
-        alpha: true,
-        antialias: true,
-      });
-      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
-      renderer.setClearColor(0, 0);
-    } catch {
-      return;
-    }
-    const observer = new ResizeObserver(schedule);
-    observer.observe(document.body);
-    addEventListener("resize", schedule);
-    addEventListener("scroll", schedule, true);
-    document.addEventListener("visibilitychange", schedule);
-    schedule();
-    return () => {
-      generation++;
-      observer.disconnect();
-      removeEventListener("resize", schedule);
-      removeEventListener("scroll", schedule, true);
-      document.removeEventListener("visibilitychange", schedule);
-      cancelAnimationFrame(frame);
-      frame = 0;
-      renderer?.dispose();
-      renderer = undefined;
-      for (const scene of scenes.values())
-        scene.traverse((o) => {
-          if (o instanceof THREE.Mesh) {
-            o.geometry.dispose();
-            for (const m of Array.isArray(o.material)
-              ? o.material
-              : [o.material]) {
-              for (const v of Object.values(m))
-                if (v instanceof THREE.Texture) v.dispose();
-              m.dispose();
-            }
-          }
-        });
-      scenes.clear();
-      pending.clear();
-    };
-  }, []);
-  return <canvas ref={ref} className="model-layer" aria-hidden="true" />;
-}
+
 export function Model({
-  id = "generic",
+  id,
+  name = "",
+  kind,
   large = false,
 }: {
   id?: string;
+  name?: string;
+  kind?: "simulator";
   large?: boolean;
 }) {
-  const ref = useRef<HTMLDivElement>(null),
-    [angle, setAngle] = useState(-0.5);
-  useEffect(() => {
-    const el = ref.current!;
-    if (id === "generic") return;
-    entries.set(el, { model: id, angle });
-    const o = new ResizeObserver(schedule);
-    o.observe(el);
-    schedule();
-    return () => {
-      entries.delete(el);
-      o.disconnect();
-      schedule();
-    };
-  }, [id, angle]);
+  const image = images[displayModel(id, name)];
+  const simulation = kind === "simulator";
   return (
     <div className={"model " + (large ? "large" : "")}>
-      <div ref={ref} className="model-slot">
+      {image ? (
+        <img
+          className="device-image"
+          src={image.src}
+          alt={image.name}
+          loading="lazy"
+          decoding="async"
+        />
+      ) : simulation ? (
+        <SimulatorIcon className="model-fallback simulator-illustration" />
+      ) : (
         <svg
           className="model-fallback"
           viewBox="0 0 100 70"
@@ -185,18 +76,15 @@ export function Model({
           />
           <path d="m27 28 16 8v10l-16-8Z" fill="currentColor" />
         </svg>
-      </div>
-      {large && id !== "generic" && (
-        <button
-          className="rotate"
-          onClick={() => setAngle(angle + Math.PI / 4)}
-        >
-          Rotate model
-        </button>
       )}
-      <span className="model-label">
-        {id === "generic" ? "Model unavailable" : "Display model"}
-      </span>
+      {simulation && (
+        <span className="simulation-label">
+          <SimulatorIcon />
+          {image?.name.startsWith("Unitree")
+            ? "MuJoCo · VM"
+            : "Virtual machine"}
+        </span>
+      )}
     </div>
   );
 }

@@ -29,14 +29,13 @@ window.addEventListener('message',async event=>{
 async function fixture({ name, arguments: args }) {
   let data;
   switch (name) {
-    case "open_devices": case "list_robots": data = {total_count:5,robots:[['go2','Lab Go2','Unitree Go2'],['orin','Vision bench','Jetson Orin Nano'],['dragonwing','Warehouse edge','Dragonwing IQ-9075'],['dgx','Training server','NVIDIA DGX Spark'],['macbook','Development Mac','MacBook']].map(([model,name,device_type])=>({id:model,model,name,device_type,cloud_presence:'online',can_capture:true,can_control_apps:true,can_read_events:true}))};break;
-    case "get_device_model": if(!['go2','orin','dragonwing','dgx','macbook'].includes(args.model))throw Error('Unknown model');return {content:[],structuredContent:{model:args.model},_meta:{glb:(await readFile(new URL('../go/internal/cli/mcp/desktop_assets/'+args.model+'.glb',import.meta.url))).toString('base64')}};
-    case "read_device_settings":data={values:{show_3d:true,include_offline:false}};break;
+    case "open_devices": case "list_robots": data = {total_count:7,robots:[['go2','Lab Go2','Unitree Go2'],['orin','Vision bench','Jetson Orin Nano'],['dragonwing','Warehouse edge','Dragonwing IQ-9075'],['dgx','Training server','NVIDIA DGX Spark'],['macbook','Development Mac','MacBook'],['g1','Unitree G1','Unitree G1'],['generic','Local VM','WendyOS simulator']].map(([model,name,device_type])=>({id:model,model,name,device_type,source: model==='generic'?'simulator':'configured',cloud_presence:model==='generic'?'running':'online',can_capture:true,can_control_apps:true,can_read_events:true}))};break;
+    case "read_device_settings":data={values:{include_offline:false}};break;
     case "update_device_settings":data={values:args.set};break;
     case "list_device_triggers":data={triggers:[{id:'people',name:'Person detected',event:'person_detected',state:'fixture',managed:false,can_configure:false}]};break;
     case "list_device_events":data={status:'observed',events:[{name:'person_detected',observed_at:new Date().toISOString(),attributes:{confidence:0.94},fixture:true}],gap:false};break;
-    case "read_device_metrics":data={fixture:true,metrics:[{name:'cpu.utilization',value:23,unit:'%'},{name:'memory.used',value:3.2,unit:'GiB'}]};break;
-    case "read_device_logs":data={fixture:true,logs:[{timestamp:new Date().toISOString(),message:'Fixture application ready'}]};break;
+    case "read_device_metrics":data={fixture:true,metrics:Array.from({length:12},(_,i)=>({name:'cpu.utilization',value:20+(i%5)*3,unit:'%',timestamp:new Date(Date.now()-(11-i)*5000).toISOString(),attributes:{'cpu.mode':'user'}}))};break;
+    case "read_device_logs":data={fixture:true,logs:[{timestamp:new Date().toISOString(),severityText:'INFO',message:'Fixture application ready'}]};break;
     case "inspect_robot": data = {robot_id:"preview",name:"Workshop robot",connected:true,observed_at:new Date().toISOString(),cameras:[{id:0,name:"Front camera"}],apps:[...apps].map(([name,state])=>({name,state,readiness:"unknown"})),warnings:[]}; break;
     case "start_robot_app": case "stop_robot_app": apps.set(args.app_name,name.startsWith("start")?"RUNNING":"STOPPED");data={robot_id:args.robot_id,app_name:args.app_name,state:apps.get(args.app_name),state_verified:true,readiness:"unknown"};break;
     case "capture_robot_image": return {isError:true,content:[{type:"text",text:"Fixture mode has no camera. Connect the preview host to a gateway to capture a real frame."}]};

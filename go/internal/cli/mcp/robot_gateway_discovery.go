@@ -71,8 +71,8 @@ func (g *RobotGateway) catalog(ctx context.Context, includeOffline bool) ([]gate
 					continue
 				}
 				model := "generic"
-				if item.Profile == "go2" {
-					model = "go2"
+				if item.Profile == "go2" || item.Profile == "g1" {
+					model = item.Profile
 				}
 				rows = append(rows, gatewayCatalogRobot{GatewayRobot: GatewayRobot{ID: id, Name: item.Name, Device: item.Device, Model: model, AllowAllApps: g.cfg.AllowSimulatorDeviceAccess, AllowCamera: g.cfg.AllowSimulatorDeviceAccess, discovered: true}, source: "simulator", presence: item.State, deviceType: item.Profile + " simulator"})
 				seen[id] = true

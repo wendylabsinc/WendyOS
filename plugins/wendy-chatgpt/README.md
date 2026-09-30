@@ -1,7 +1,7 @@
 # Wendy robots for ChatGPT
 
 This desktop workspace adds Wendy to ChatGPT's global navigation and conversation
-extensions. It opens on a device gallery with existing Wendy 3D assets, then lets
+extensions. It opens on a device gallery with static renders of existing Wendy device assets, then lets
 you inspect devices, preview cameras, share selected frames, read telemetry, and
 operate approved apps through Wendy Cloud or a direct connection.
 

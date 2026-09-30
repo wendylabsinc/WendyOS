@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
@@ -27,8 +28,8 @@ func gatewayModel(r GatewayRobot, deviceType string) string {
 	if r.Model != "" {
 		return r.Model
 	}
-	t := strings.ReplaceAll(strings.ToLower(deviceType), "-", " ")
-	for _, pair := range [][2]string{{"agx thor", "thor"}, {"go2", "go2"}, {"orin nano", "orin"}, {"dragonwing", "dragonwing"}, {"dgx spark", "dgx"}, {"macbook", "macbook"}} {
+	t := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(deviceType))
+	for _, pair := range [][2]string{{"unitree g1", "g1"}, {"dgxspark", "dgx"}, {"dgx spark", "dgx"}, {"raspberry pi", "rpi"}, {"linux desktop", "desktop"}, {"agx thor", "thor"}, {"go2", "go2"}, {"orin nano", "orin"}, {"dragonwing", "dragonwing"}, {"macbook", "macbook"}} {
 		if strings.Contains(t, pair[0]) {
 			return pair[1]
 		}
@@ -36,13 +37,18 @@ func gatewayModel(r GatewayRobot, deviceType string) string {
 	return "generic"
 }
 func (g *RobotGateway) registerDesktopTools() {
-	g.protocol.AddTool(gatewayTool("identify_device", "Read only agent identity to select an accurate display model. Does not activate cameras or inspect apps.", readOnly(), robotArgument()), g.withRobot(RobotReadScope, func(ctx context.Context, r *GatewayRobot, s *mcpServer, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	identity := g.withRobot(RobotReadScope, func(ctx context.Context, r *GatewayRobot, s *mcpServer, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		v, err := s.GetConn().AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
 		if err != nil {
 			return mcpgo.NewToolResultError("Device identity unavailable"), nil
 		}
 		return okResult(map[string]any{"robot_id": r.ID, "device_type": v.GetDeviceType(), "model": gatewayModel(*r, v.GetDeviceType()), "agent_version": v.GetVersion()}), nil
-	}))
+	})
+	g.protocol.AddTool(gatewayTool("identify_device", "Read only agent identity to select an accurate display model. Does not activate cameras or inspect apps.", readOnly(), robotArgument()), func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return identity(ctx, req)
+	})
 
 	t := gatewayTool("open_devices", "Open the Wendy fleet workspace. Browse authorized devices, inspect a device, and work with its apps and detection events.", readOnly())
 	t.Meta = mcpgo.NewMetaFromMap(map[string]any{"ui": map[string]any{"resourceUri": robotPanelURI}, "openai/ui": map[string]any{"entrypoints": []map[string]string{{"type": "global"}}}})
@@ -101,6 +107,7 @@ func (g *RobotGateway) registerDesktopTools() {
 			if kind == "logs" {
 				return s.handleTelemetryLogs(ctx, q)
 			}
+			q.Params.Arguments = map[string]any{"last_n": 20, "max_batches": 20, "max_records": 1000, "max_bytes": 200000}
 			return s.handleTelemetryMetrics(ctx, q)
 		}))
 	}
@@ -154,7 +161,7 @@ func (g *RobotGateway) registerGatewaySettings() {
 		if err != nil {
 			return nil, err
 		}
-		return okResult(gatewaySettingsResult{Schema: map[string]any{"type": "object", "properties": map[string]any{"show_3d": map[string]any{"type": "boolean", "title": "Show 3D device models"}, "include_offline": map[string]any{"type": "boolean", "title": "Include offline enrollments"}}}, Values: v, CanUpdate: g.hasScope(ctx, RobotSettingsScope)}), nil
+		return okResult(gatewaySettingsResult{Schema: map[string]any{"type": "object", "properties": map[string]any{"include_offline": map[string]any{"type": "boolean", "title": "Include offline enrollments"}}}, Values: v, CanUpdate: g.hasScope(ctx, RobotSettingsScope)}), nil
 	})
 	update := mcpgo.NewToolWithRawSchema("update_device_settings", "Save your device workspace preferences.", json.RawMessage(`{"type":"object","properties":{"set":{"type":"object","properties":{"show_3d":{"type":"boolean"},"include_offline":{"type":"boolean"}},"additionalProperties":false}},"required":["set"],"additionalProperties":false}`))
 	update.Annotations = mcpgo.ToolAnnotation{ReadOnlyHint: mcpgo.ToBoolPtr(false), DestructiveHint: mcpgo.ToBoolPtr(false), IdempotentHint: mcpgo.ToBoolPtr(true), OpenWorldHint: mcpgo.ToBoolPtr(false)}

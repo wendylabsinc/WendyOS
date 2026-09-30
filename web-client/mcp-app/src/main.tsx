@@ -9,11 +9,16 @@ import {
   theme,
   toolErrorMessage,
 } from "./bridge";
-import { Model, ModelLayer } from "./model";
+import { Model, SimulatorIcon } from "./model";
 import { AppsPanel, type GatewayApp } from "./apps";
 import { CameraPanel } from "./camera";
 import { TelemetryPanel } from "./telemetry";
 import { SimulatorsPanel } from "./simulators";
+import {
+  displayIdentity,
+  withDisplayIdentity,
+  type DisplayIdentity,
+} from "./fleet-identity";
 import css from "./style.css";
 import logoSlate from "./assets/wendy-logo-slate.svg";
 import logoCream from "./assets/wendy-logo-cream.svg";
@@ -32,6 +37,7 @@ type Row = {
 };
 type Catalog = {
   robots: Row[];
+  include_offline?: boolean;
   selected_robot_id?: string;
   next_offset?: number | null;
   total_count?: number;
@@ -71,7 +77,6 @@ function Workspace() {
     [section, setSection] = useState("devices"),
     [query, setQuery] = useState(""),
     [offline, setOffline] = useState(false),
-    [three, setThree] = useState(true),
     [tab, setTab] = useState("Overview"),
     [inspection, setInspection] = useState<Inspection>(),
     [triggers, setTriggers] = useState<Trigger[]>([]),
@@ -79,17 +84,25 @@ function Workspace() {
     [detail, setDetail] = useState<unknown>(),
     [busy, setBusy] = useState(""),
     [error, setError] = useState(""),
-    [needsRefresh, setNeedsRefresh] = useState(false),
-    [canSaveSettings, setCanSaveSettings] = useState(false);
+    [needsRefresh, setNeedsRefresh] = useState(false);
   const generation = useRef(0),
+    actionGeneration = useRef(0),
     fleetGeneration = useRef(0),
-    lastDeepLink = useRef(""),
-    identified = useRef(new Set<string>());
+    loadedFilters = useRef({ query: "", includeOffline: false }),
+    tabReadController = useRef<AbortController | undefined>(undefined),
+    selectedRef = useRef(""),
+    identities = useRef(new Map<string, DisplayIdentity>()),
+    preferencesTouched = useRef({ offline: false }),
+    lastDeepLink = useRef("");
   const row = catalog.robots.find((r) => r.id === selected);
   function select(id: string) {
-    generation.current++;
-    setSelected(id);
     setSection("devices");
+    if (id === selectedRef.current) return;
+    selectedRef.current = id;
+    generation.current++;
+    tabReadController.current?.abort();
+    tabReadController.current = undefined;
+    setSelected(id);
     setInspection(undefined);
     setDetail(undefined);
     setEvents(undefined);
@@ -98,31 +111,63 @@ function Workspace() {
     setError("");
     setTab("Overview");
   }
+  function rememberIdentity(id: string, value: unknown) {
+    const identity = displayIdentity(value);
+    if (!identity) return;
+    identities.current.set(id, identity);
+    setCatalog((c) => ({
+      ...c,
+      robots: c.robots.map((r) => (r.id === id ? { ...r, ...identity } : r)),
+    }));
+  }
+  function preserveIdentity(c: Catalog): Catalog {
+    return {
+      ...c,
+      robots: c.robots.map((r) =>
+        withDisplayIdentity(r, identities.current.get(r.id)),
+      ),
+    };
+  }
   async function action(label: string, fn: () => Promise<void>) {
     const g = generation.current;
+    const currentAction = ++actionGeneration.current;
     setBusy(label);
     setError("");
     try {
       await fn();
     } catch (e) {
-      if (g === generation.current) setError(toolErrorMessage(e));
+      if (
+        g === generation.current &&
+        currentAction === actionGeneration.current
+      )
+        setError(toolErrorMessage(e));
     } finally {
-      if (g === generation.current) setBusy("");
+      if (
+        g === generation.current &&
+        currentAction === actionGeneration.current
+      )
+        setBusy("");
     }
   }
-  async function refresh(append = false) {
+  async function refresh(append = false, includeOffline = offline) {
+    preferencesTouched.current.offline = true;
+    const appendToLoaded =
+      append &&
+      loadedFilters.current.query === query &&
+      loadedFilters.current.includeOffline === includeOffline;
     const seq = ++fleetGeneration.current;
     await action("Loading devices", async () => {
       const r = await call("list_robots", {
         query,
-        include_offline: offline,
-        ...(append ? { offset: catalog.next_offset } : {}),
+        include_offline: includeOffline,
+        ...(appendToLoaded ? { offset: catalog.next_offset } : {}),
       });
       if (seq !== fleetGeneration.current) return;
-      const c = r.structuredContent as unknown as Catalog;
+      const c = preserveIdentity(r.structuredContent as unknown as Catalog);
+      loadedFilters.current = { query, includeOffline };
       setCatalog((old) => ({
         ...c,
-        robots: append
+        robots: appendToLoaded
           ? [
               ...old.robots,
               ...c.robots.filter((r) => !old.robots.some((o) => o.id === r.id)),
@@ -145,12 +190,18 @@ function Workspace() {
     }
   }
   useEffect(() => {
+    const settingsController = new AbortController();
+    let settingsTimer: ReturnType<typeof setTimeout> | undefined;
     const stale = () => setNeedsRefresh(true);
     window.addEventListener("wendy:refresh-connection", stale);
     app.ontoolresult = (r) => {
       if (r.structuredContent && Array.isArray(r.structuredContent.robots)) {
         const c = r.structuredContent as unknown as Catalog;
-        setCatalog(c);
+        loadedFilters.current = {
+          query: "",
+          includeOffline: c.include_offline === true,
+        };
+        setCatalog(preserveIdentity(c));
         select(c.selected_robot_id || "");
       }
     };
@@ -160,22 +211,44 @@ function Workspace() {
     };
     void app
       .connect()
-      .then(async () => {
+      .then(() => {
+        if (settingsController.signal.aborted) return;
         theme();
         setReady(true);
         route();
-        try {
-          const r = await call("read_device_settings"),
-            v = r.structuredContent?.values as Record<string, boolean>;
-          setCanSaveSettings(r.structuredContent?.can_update === true);
-          setThree(v.show_3d);
-          setOffline(v.include_offline);
-        } catch {
-          /* Defaults keep the workspace usable. */
-        }
+        settingsTimer = setTimeout(() => {
+          void (async () => {
+            try {
+              const r = await call(
+                "read_device_settings",
+                {},
+                {
+                  priority: "background",
+                  signal: settingsController.signal,
+                  timeout: 6000,
+                  resetTimeoutOnProgress: false,
+                },
+              );
+              if (settingsController.signal.aborted) return;
+              const v = r.structuredContent?.values as
+                | Record<string, unknown>
+                | undefined;
+              if (
+                !preferencesTouched.current.offline &&
+                typeof v?.include_offline === "boolean"
+              )
+                setOffline(v.include_offline);
+            } catch {
+              /* Preferences must not block the device workspace. */
+            }
+          })();
+        }, 200);
       })
       .catch((e) => setError(String(e)));
     return () => {
+      clearTimeout(settingsTimer);
+      settingsController.abort();
+      tabReadController.current?.abort();
       window.removeEventListener("wendy:refresh-connection", stale);
       void app.close();
     };
@@ -183,62 +256,72 @@ function Workspace() {
   useEffect(() => {
     if (!ready || !selected) return;
     const g = generation.current;
+    const controller = new AbortController();
     void action("Inspecting device", async () => {
-      const r = await call("inspect_robot", { robot_id: selected });
-      if (g !== generation.current) return;
-      const i = r.structuredContent as unknown as Inspection;
-      setInspection(i);
-    });
-  }, [selected, ready]);
-  useEffect(() => {
-    if (!ready) return;
-    let stopped = false;
-    const queue = catalog.robots
-      .filter(
-        (r) =>
-          (!r.model || r.model === "generic") && !identified.current.has(r.id),
-      )
-      .slice(0, 12);
-    for (const r of queue) identified.current.add(r.id);
-    const worker = async () => {
-      while (queue.length && !stopped) {
-        const r = queue.shift()!;
-        try {
-          const result = await call("identify_device", { robot_id: r.id });
-          if (!stopped)
-            setCatalog((c) => ({
-              ...c,
-              robots: c.robots.map((row) =>
-                row.id === r.id ? { ...row, ...result.structuredContent } : row,
-              ),
-            }));
-        } catch {
-          /* Unknown identity keeps its honest fallback. */
-        }
+      try {
+        const r = await call(
+          "inspect_robot",
+          { robot_id: selected },
+          {
+            signal: controller.signal,
+            timeout: 50_000,
+            resetTimeoutOnProgress: false,
+          },
+        );
+        if (controller.signal.aborted || g !== generation.current) return;
+        const i = r.structuredContent as unknown as Inspection;
+        setInspection(i);
+        rememberIdentity(selected, i);
+      } catch (error) {
+        if (!controller.signal.aborted) throw error;
       }
-    };
-    void Promise.all([worker(), worker(), worker()]);
-    return () => {
-      stopped = true;
-      for (const row of queue) identified.current.delete(row.id);
-    };
-  }, [ready, catalog.robots.map((r) => r.id).join(",")]);
+    });
+    return () => controller.abort();
+  }, [selected, ready]);
+  async function readDeviceTab(
+    name:
+      | "inspect_robot"
+      | "list_device_triggers"
+      | "list_device_events"
+      | "read_device_metrics"
+      | "read_device_logs",
+    args: Record<string, unknown> = {},
+  ) {
+    if (!selected || selected !== selectedRef.current) return;
+    const controller = tabReadController.current ?? new AbortController();
+    tabReadController.current = controller;
+    try {
+      return await call(
+        name,
+        { ...args, robot_id: selected },
+        {
+          signal: controller.signal,
+          timeout: 50_000,
+          resetTimeoutOnProgress: false,
+        },
+      );
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    }
+  }
   async function openTab(t: string) {
+    // Mutation completion callbacks may belong to a device we have left.
+    if (selected !== selectedRef.current) return;
     setTab(t);
-    setDetail(undefined);
+    if (t !== tab) setDetail(undefined);
     const g = generation.current;
     if (t === "Events")
       await action("Loading triggers", async () => {
-        const r = await call("list_device_triggers", { robot_id: selected });
-        if (g === generation.current)
+        const r = await readDeviceTab("list_device_triggers");
+        if (r && g === generation.current)
           setTriggers((r.structuredContent?.triggers || []) as Trigger[]);
       });
     if (t === "Metrics" || t === "Logs")
       await action("Reading " + t.toLowerCase(), async () => {
-        const r = await call("read_device_" + t.toLowerCase(), {
-          robot_id: selected,
-        });
-        if (g === generation.current) setDetail(r.structuredContent);
+        const r = await readDeviceTab(
+          t === "Metrics" ? "read_device_metrics" : "read_device_logs",
+        );
+        if (r && g === generation.current) setDetail(r.structuredContent);
       });
   }
   async function attach() {
@@ -264,11 +347,12 @@ function Workspace() {
     });
   const lifecycle = (kind: string) =>
     send(
-      `${kind} for Wendy device ${selected || "a new device"}. Use explicit targets, check capabilities, and verify results. ${kind === "Install WendyOS" ? "Start with an installation plan and identify the drive fingerprint. Ask for erase authorization before any write. Preserve vendor Ubuntu on Unitree G1 PC2." : ""}`,
+      kind === "Install WendyOS"
+        ? "Help me install WendyOS. First identify the target hardware model and connection method with me. Then use the matching installation plan and an explicit target. If that plan writes an OS image, identify the destination drive and obtain erase authorization before writing. Verify the result."
+        : `${kind} for Wendy device ${selected || "a new device"}. Use explicit targets, check capabilities, and verify results.`,
     );
   return (
     <div className="workspace">
-      {three && ready && <ModelLayer />}
       <aside>
         <div className="brand">
           <img className="logo-light" src={logoSlate} alt="Wendy" />
@@ -291,7 +375,8 @@ function Workspace() {
             setSection("simulators");
           }}
         >
-          ◇ <span>Simulators</span>
+          <SimulatorIcon className="simulator-nav-icon" />{" "}
+          <span>Simulators</span>
         </button>
         <div className="nav-label">YOUR DEVICES</div>
         <div className="device-nav">
@@ -321,6 +406,7 @@ function Workspace() {
                   className={"dot " + (online ? "online" : "")}
                   aria-hidden="true"
                 />
+                {simulator && <SimulatorIcon className="simulator-nav-icon" />}
                 <span>{r.name}</span>
               </button>
             );
@@ -422,26 +508,14 @@ function Workspace() {
                   <input
                     type="checkbox"
                     checked={offline}
-                    onChange={(e) => setOffline(e.target.checked)}
-                  />{" "}
-                  Include offline
-                </label>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={three}
                     onChange={(e) => {
-                      const v = e.target.checked;
-                      setThree(v);
-                      if (canSaveSettings)
-                        void action("Saving preference", async () => {
-                          await call("update_device_settings", {
-                            set: { show_3d: v },
-                          });
-                        });
+                      preferencesTouched.current.offline = true;
+                      const value = e.target.checked;
+                      setOffline(value);
+                      void refresh(false, value);
                     }}
                   />{" "}
-                  3D models
+                  Include offline
                 </label>
               </div>
               <div className="fleet-summary">
@@ -473,7 +547,11 @@ function Workspace() {
                       </span>
                       <span>↗</span>
                     </div>
-                    {three ? <Model id={r.model} /> : <div className="model" />}
+                    <Model
+                      id={r.model}
+                      name={r.name}
+                      kind={r.source === "simulator" ? "simulator" : undefined}
+                    />
                     <div className="card-info">
                       <h2>{r.name}</h2>
                       <p>{r.device_type || "Wendy device"}</p>
@@ -560,7 +638,12 @@ function Workspace() {
                 </div>
               </div>
               <div className="device-hero">
-                {three && <Model id={inspection?.model || row?.model} large />}
+                <Model
+                  id={inspection?.model || row?.model}
+                  name={row?.name || inspection?.name}
+                  kind={row?.source === "simulator" ? "simulator" : undefined}
+                  large
+                />
                 <div className="device-facts">
                   <span className="badge online">
                     {inspection?.connected
@@ -683,10 +766,9 @@ function Workspace() {
                           : "start_robot_app",
                         { robot_id: selected, app_name: a.name },
                       );
-                      const r = await call("inspect_robot", {
-                        robot_id: selected,
-                      });
-                      if (g === generation.current)
+                      if (g !== generation.current) return;
+                      const r = await readDeviceTab("inspect_robot");
+                      if (r && g === generation.current)
                         setInspection(
                           r.structuredContent as unknown as Inspection,
                         );
@@ -759,12 +841,14 @@ function Workspace() {
                           onClick={() => {
                             const g = generation.current;
                             void action("Reading events", async () => {
-                              const r = await call("list_device_events", {
-                                robot_id: selected,
-                                trigger_id: t.id,
-                                replay: true,
-                              });
-                              if (g === generation.current)
+                              const r = await readDeviceTab(
+                                "list_device_events",
+                                {
+                                  trigger_id: t.id,
+                                  replay: true,
+                                },
+                              );
+                              if (r && g === generation.current)
                                 setEvents(r.structuredContent);
                             });
                           }}
@@ -796,8 +880,15 @@ function Workspace() {
               )}
               {(tab === "Metrics" || tab === "Logs") && (
                 <div className="panel">
-                  <h2>{tab}</h2>
-                  {detail != null ? (
+                  <div className="actions">
+                    <h2>{tab}</h2>
+                    <button disabled={!!busy} onClick={() => void openTab(tab)}>
+                      {busy === "Reading " + tab.toLowerCase()
+                        ? "Refreshing…"
+                        : "Refresh sample"}
+                    </button>
+                  </div>
+                  {detail != null || busy === "Reading " + tab.toLowerCase() ? (
                     <TelemetryPanel kind={tab} data={detail} loading={!!busy} />
                   ) : (
                     <p>No sample loaded.</p>

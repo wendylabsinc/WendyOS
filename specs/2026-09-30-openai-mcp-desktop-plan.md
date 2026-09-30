@@ -2,9 +2,9 @@
 
 Proposed implementation plan, 2026-09-30. This is a design and delivery plan, not an implementation or deployment record.
 
-Build a device workspace inside the OpenAI desktop host. A single **Wendy** entry in global navigation opens the user's fleet, with a recognizable 3D representation of every device. A **Device inspector** tab beside a conversation shows the device being discussed. Both use the same catalog, device identity, components, and gateway operations.
+Build a device workspace inside the OpenAI desktop host. A single **Wendy** entry in global navigation opens the user's fleet, with a recognizable static device illustration. A **Device inspector** tab beside a conversation shows the device being discussed. Both use the same catalog, device identity, components, and gateway operations.
 
-The product must support installing, developing, deploying, and scaling robotics and Edge AI. Those are first-class workflows in this plan. The 3D fleet is the shared way to choose hardware, inspect compatibility, and follow outcomes throughout that lifecycle.
+The product must support installing, developing, deploying, and scaling robotics and Edge AI. Those are first-class workflows in this plan. The device gallery is the shared way to choose hardware, inspect compatibility, and follow outcomes throughout that lifecycle.
 
 Keep the existing `wendy-robots` plugin identity and Go gateway. Broaden the product language to devices without breaking existing robot tool calls or grants. Use the host's composer and conversations. Wendy owns the device views and operations.
 
@@ -124,20 +124,20 @@ OpenAI sidebar       Wendy app, permanent tab             Host conversation
 Wendy                Organization / source   Search       Discuss this device
                      All  Online  Offline  Unknown        Attached device
 
-                     Devices      [3D Go2] [3D Jetson]    Messages
+                     Devices      [Go2 image] [Jetson image]    Messages
                      Projects     Name     Name
                      Simulators   Status   Status         Composer
                      Deployments
                      Fleet
                                   Selected device
-                                  [large 3D model]
+                                  [device image]
                                   Overview  Apps  Cameras
                                   Metrics   Logs  Hardware
 ```
 
 The sketch describes information placement, not control over host chrome. The host determines the position of its composer and conversation. Wendy's internal rail collapses to a compact selector when space is limited. Do not attempt to inject a changing list of devices into the host sidebar.
 
-Use the host's typography, spacing, control styles, and light/dark theme, with Wendy green for the selected device and primary actions. Keep the 3D lighting neutral and consistent between models. Reserve status colors for real state, pair them with text, and place labels outside the canvas so they remain readable and accessible.
+Use the host's typography, spacing, control styles, and light/dark theme, with neutral selected states and primary actions. Keep the static device renders neutral and consistent between models. Reserve status colors for real state, pair them with text, and place labels outside the canvas so they remain readable and accessible.
 
 Every card shows a model or model-derived poster, device name, hardware label, source, and dated status. Show Cloud presence separately from verified Agent reachability. Selecting a card opens its detail view immediately; inspection fills in current data afterward. Search, filtering, and returning to the fleet preserve scroll position.
 
@@ -156,33 +156,24 @@ The thread inspector uses the same device detail components in a narrow layout. 
 
 User-facing actions include "Attach device," "Ask about this device," "Explain these errors," and "Compare selected devices." Comparison initially allows up to four devices and shows shared measurements with their observation times. Attaching context prepares the conversation. An explicit Ask action sends a message.
 
-## Reuse the existing 3D assets
+## Static renders from existing assets
 
-The assets are in the sibling `marketing-website` repository, not currently in this repository's web client. The sizes below are approximate files on disk. They are not GPU memory estimates.
+Device cards and the inspector use static images. Render robot meshes once during asset preparation; the gallery does not download GLB files, create WebGL contexts, or animate device models. The live MuJoCo viewer remains interactive and separate from these illustrations.
 
-| Hardware | Existing source under `../marketing-website/` | Plan |
+| Hardware | Existing source | Presentation |
 | --- | --- | --- |
-| Unitree Go2 | `public/models/unitree-go2/go2.web.glb`, about 304 KiB | Use the existing compressed display model and named joint hierarchy. |
-| Jetson Orin Nano | `public/models/quickstart/jetson-orin-nano.glb`, about 708 KiB | Use the prepared gallery asset. Load the 7.1 MiB detailed source only if useful in the inspector. |
-| Qualcomm IQ-9075 | `public/models/quickstart/dragonwing-iq-9075.glb`, about 916 KiB | Reuse, but measure render cost. Its README reports about 281,000 decoded triangles. |
-| DGX Spark | `public/models/dgx-spark/nvidia-dgx-spark.glb`, about 1.3 MiB | Reuse after measuring geometry, textures, and draw calls. |
-| Jetson Thor | `public/models/jetson-thor/nvidia-jetson-thor-devkit-web.glb`, about 12 MiB | Produce a smaller display derivative for gallery use. Preserve the source. |
-| MacBook | `public/models/macbook/macbook.web.glb`, about 164 KiB | Use only for a matching device or an explicitly labeled family illustration. |
-| Raspberry Pi | `src/components/blocks/get-started/raspberry-board.tsx` | Reuse the procedural 3D illustration and required logo asset. There is no GLB in this asset set. Label it as a family illustration. |
-| Unitree G1 | `go/simulator/g1/assets.lock.json` in this repository | Build a display GLB from the pinned simulator meshes and transforms. No ready-made G1 GLB was found in the inspected display assets. |
-| Other hardware | Existing drone/arm assets where applicable; generic procedural board or enclosure otherwise | Use an honest family/generic illustration until an exact model exists. |
+| Unitree Go2 | `go/internal/cli/mcp/desktop_assets/go2.glb`, derived from the marketing website's Go2 model | Transparent still render, retaining the existing pose and materials. |
+| Unitree G1 | `Examples/G1FruitNinjaMujoco/models/unitree_g1/g1_29dof.xml` and referenced STL meshes | Transparent still render using MJCF transforms and visual colors. |
+| DGX Spark, Orin Nano, Thor, Dragonwing, MacBook | `../marketing-website/public/images/platform/` | Existing transparent product renders from the shared 3D models. |
+| Raspberry Pi and desktop computers | The same platform image directory | Family illustrations, without asserting an exact board revision. |
+| Simulators | Explicit simulator profile and a VM icon | Robot profile image where available, with a MuJoCo/VM label. |
+| Other hardware | Generic device illustration | Keep the placeholder until a matching asset exists. |
 
-Start from the existing `board-preview-canvas.tsx`, `board-preview.tsx`, and `blocks/three/lightweight-canvas.tsx`. They already cover model fitting, lazy visibility, reduced motion, and capped rendering. The canvas component is reusable code, but it still creates a canvas per instance. Fleet-scale rendering needs an additional resource limit.
+`web-client/mcp-app/scripts/render-robot-images.mjs` rebuilds the G1 and Go2 images. The asset manifest records source paths and hashes; redistribution notices accompany the rendered derivatives. Runtime image loading uses the bundled static images without remote renderers or decoders.
 
-Publish a versioned hardware asset manifest with `modelKey`, revision, source hash, source provenance, display GLB or procedural renderer, poster, camera pose, coordinate convention, bounds, and optional named hotspots. Record redistribution notices alongside derivatives. The Go2 README already includes its source and license.
+Use configured model metadata and structured hardware identity when available. A recognizable device name may choose a display illustration, but it must never establish capabilities or enable a control. Prefer verified chassis identity for a robot, with its embedded computer shown in Hardware. Orin Nano artwork must not be presented as AGX Orin. Opening a device verifies its agent identity; simply rendering the fleet must not open a connection to each agent.
 
-Choose the model using structured hardware identifiers. Prefer verified chassis identity for a robot, with its embedded computer shown in Hardware. Fall back to verified board identity, then explicit family metadata, then a generic illustration. A saved user override can choose an illustration, but it must remain distinguishable from detected hardware. Never infer the board solely from a device nickname. IQ-9075 artwork must not silently become an exact IQ-8275 model; Orin Nano must not become AGX Orin.
-
-Every device gets a 3D representation. Render posters from those same assets for fast first paint, then progressively enable interactive 3D for visible cards. Use one shared renderer with scissored card views, capped work per frame, and one additional renderer for the focused inspector if needed. Do not allocate a WebGL context for each of hundreds of devices. Cache decoded geometry by asset revision and release it on a bounded least-recently-used policy.
-
-Use 24 fps as the initial gallery animation ceiling, render idle scenes on demand, and stop work when the app is hidden. Respect reduced motion. Avoid continuous rotation by default; allow pointer drag, keyboard rotation, zoom buttons, and Reset view. Wheel scrolling continues to scroll the page. All device information and actions must remain available when WebGL fails.
-
-A hardware illustration does not imply live robot pose or sensor coverage. Show live pose only after adding a timestamped, validated joint-state adapter. Clicking a camera hotspot selects its camera; it does not activate it. Render a hotspot only when its physical mapping is known.
+The illustration does not imply live robot pose or sensor coverage. Keep online status, runtime state, and camera availability separate from the image. Camera activation remains an explicit action.
 
 ## Application and gateway architecture
 
@@ -294,7 +285,7 @@ Live camera video, intercom, and live robot pose are follow-on device capabiliti
 
 2. **Complete the catalog and assets.** Add hardware identity, accurate presence, partial-inventory states, compatible pagination, and the versioned asset manifest. Produce posters and Thor/G1 display derivatives. Prove correct representation for Go2, G1, Pi, Orin Nano, AGX unknown/fallback, IQ-9075, and a generic device. Verify revoked access and configured policy precedence across sources.
 
-3. **Ship the global fleet.** Implement search, filters, favorites, progressive 3D, virtualized records, empty/error states, selection, and device routes. Exercise at least 500 fixture devices, including duplicate names and mixed online/unknown/offline states. Opening the fleet must not trigger hundreds of Agent connections or WebGL contexts.
+3. **Ship the global fleet.** Implement search, filters, favorites, static device images, virtualized records, empty/error states, selection, and device routes. Exercise at least 500 fixture devices, including duplicate names and mixed online/unknown/offline states. Opening the fleet must not trigger hundreds of Agent connections or WebGL contexts.
 
 4. **Ship the thread inspector.** Reuse app and camera operations, add bounded metrics/logs, and support narrow layouts. Verify two concurrent threads can inspect and operate different devices without state leakage. Test changing selection during slow reads, capture, and writes. Retain the correct source identity and timestamp on every result.
 

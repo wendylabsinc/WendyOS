@@ -11,3 +11,7 @@ declare module "*.woff2" {
   const uri: string;
   export default uri;
 }
+declare module "*.webp" {
+  const uri: string;
+  export default uri;
+}

@@ -9,7 +9,7 @@ npm run build
 ```
 
 `build.mjs` bundles the official MCP Apps bridge, OpenAI Extensions, React,
-Three.js, styles, fonts and logos into
+static device illustrations, styles, fonts and logos into
 `go/internal/cli/mcp/desktop_app.html`. Commit the generated HTML with source
 changes, then rebuild the CLI. Runtime scripts do not load from a CDN.
 
@@ -23,18 +23,25 @@ responses from an older selection cannot replace the current device view.
 Host theme variables style neutral controls. Green and red convey device and app
 status. Camera frames enter model context only through explicit attachment.
 
-Device models come from Wendy's existing marketing-website repository:
+Device cards use bundled static images from Wendy's existing marketing assets.
+`src/assets/devices/manifest.json` records source paths and hashes. Robot images
+are still renders of the existing robot meshes. Unknown hardware uses a generic
+illustration; simulators carry a VM badge. These images are separate from the
+simulator's live MuJoCo scene. The old `get_device_model` tool remains available
+for compatibility, but this UI downloads no GLB files and creates no WebGL canvas.
+Geist's license is in `src/assets/Geist-LICENSE.txt`; logos come from Wendy's brand
+assets.
 
-```sh
-node import-models.mjs /path/to/marketing-website
-```
+Fleet rendering uses discovery metadata without opening background connections
+to every device. Opening a device inspects identity, apps and cameras concurrently
+on one authenticated connection. Refresh preserves display identity only; access
+and presence always come from fresh discovery. A small request queue prioritizes
+user actions over preferences and cancels reads left behind during navigation.
 
-The import decodes Draco at build time and simplifies display meshes so the app
-does not need remote decoders or workers. `desktop_assets/manifest.json` records
-source paths and hashes. `GO2-LICENSE.md` preserves model attribution. Geist's
-license is in `src/assets/Geist-LICENSE.txt`; logos come from Wendy's brand assets.
-One renderer draws visible cards. Unknown hardware uses a generic illustration.
-These display models are separate from the simulator's live MuJoCo scene.
+Metrics request a bounded recent history and graph each OTLP series separately.
+Charts preserve timestamps, units and cumulative/interval semantics; a single
+sample is shown without inventing a trend. Refresh sample loads new data while
+keeping the previous sample visible. Logs use time, severity and message columns.
 
 See [gateway setup](../../plugins/wendy-chatgpt/README.md) for scopes, local
 simulators, app web views and ChatGPT connection refresh instructions.

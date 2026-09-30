@@ -1,0 +1,51 @@
+{
+  "dgx": {
+    "source": "marketing-website/public/images/platform/dgx-spark.webp",
+    "sha256": "242c0ce11025bb54da5434f2c1cb255f98c95e05d0c0ae14a6b1f6021d972cdc",
+    "bytes": 113278
+  },
+  "orin": {
+    "source": "marketing-website/public/images/platform/jetson-orin-nano.webp",
+    "sha256": "2561619dc748e77f95913172694994690b6c29d3aea0c2a25055c3395397ae1c",
+    "bytes": 117882
+  },
+  "thor": {
+    "source": "marketing-website/public/images/platform/jetson-thor.webp",
+    "sha256": "0c08c28d1e896a495d84690cfc7c02b426a840f98d0a49202b8e5d901f023e99",
+    "bytes": 117052
+  },
+  "dragonwing": {
+    "source": "marketing-website/public/images/platform/qualcomm-dragonwing.webp",
+    "sha256": "57086099fdf2154c54b58cb5b48ed37429e356013d141f1628fc314e8d83ab2a",
+    "bytes": 140828
+  },
+  "macbook": {
+    "source": "marketing-website/public/images/platform/macbook.webp",
+    "sha256": "dd76663c76f6b25fd9a22fd3c8c8f40b4bdfd343fc3b3093e0ed1c66ab371d83",
+    "bytes": 109848
+  },
+  "rpi": {
+    "source": "marketing-website/public/images/platform/raspberry-pi-5.webp",
+    "sha256": "a9de7b8f6547e941aa0d08b9dea3fc066486275a4504cfbf1d8f87ead7ecda1a",
+    "bytes": 155496
+  },
+  "desktop": {
+    "source": "marketing-website/public/images/platform/x86-nuc.webp",
+    "sha256": "defa4cf0a5f4daac116d72523d41702d5f147af30af71b4101471ba4f66d35ff",
+    "bytes": 103516
+  },
+  "g1": {
+    "source": "Examples/G1FruitNinjaMujoco/models/unitree_g1/g1_29dof.xml",
+    "sourceSHA256": "000dadc78ed8fbf012db24b5c832a3d859a9d80e2c9a64098bcecefa37e09590",
+    "renderer": "web-client/mcp-app/scripts/render-robot-images.mjs",
+    "sha256": "02cd75457ac749d736971006da1587fa74990383917f9906b078823cc73e1457",
+    "bytes": 18122
+  },
+  "go2": {
+    "source": "go/internal/cli/mcp/desktop_assets/go2.glb",
+    "sourceSHA256": "fb1110517ed957b13949c960f979df829fe3b7a421589b994dcdfbde20e7fdf8",
+    "renderer": "web-client/mcp-app/scripts/render-robot-images.mjs",
+    "sha256": "fcda59a51073882bea3c90fe215d97c26275a75d85b7a4d434af7f88e407a21b",
+    "bytes": 29816
+  }
+}

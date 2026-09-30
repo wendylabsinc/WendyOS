@@ -5,6 +5,8 @@ import {
 } from "@modelcontextprotocol/ext-apps";
 import { OpenAIExtensions } from "@openai/mcp-extensions/app";
 import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import { RequestQueue, type Priority } from "./request-queue";
+const requests = new RequestQueue();
 export const APP_WEB_REQUEST_OPTIONS = {
   timeout: 50_000,
   maxTotalTimeout: 50_000,
@@ -24,11 +26,16 @@ export async function call(
   options?: Pick<
     RequestOptions,
     "timeout" | "maxTotalTimeout" | "resetTimeoutOnProgress" | "signal"
-  >,
+  > & { priority?: Priority },
 ) {
   let r;
   try {
-    r = await app.callServerTool({ name, arguments: args }, options);
+    const { priority, ...requestOptions } = options ?? {};
+    r = await requests.enqueue(
+      () => app.callServerTool({ name, arguments: args }, requestOptions),
+      priority,
+      requestOptions.signal,
+    );
   } catch (e) {
     if (String(e).includes("trusted tool scope")) {
       window.dispatchEvent(new Event("wendy:refresh-connection"));
