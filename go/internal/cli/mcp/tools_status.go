@@ -3,9 +3,11 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
 
@@ -32,6 +34,7 @@ func (s *mcpServer) handleWendyStatus(_ context.Context, _ mcpgo.CallToolRequest
 			"simulator_management":  s.simulators.List != nil,
 			"proxy_diagnostics":     s.proxyDiagnostics(),
 		}
+		addPluginStatus(out)
 		return okResult(out), nil
 	}
 
@@ -54,5 +57,25 @@ func (s *mcpServer) handleWendyStatus(_ context.Context, _ mcpgo.CallToolRequest
 	if target.Device != "" {
 		out["command_target"] = target
 	}
+	addPluginStatus(out)
 	return okResult(out), nil
+}
+
+// addPluginStatus adds a "plugin" block to a wendy_status result when the
+// Wendy plugin started this server: the client it runs in and, when that
+// client also has a user-level wendy server — which lists every Wendy tool a
+// second time — the file configuring it and how to remove it.
+func addPluginStatus(out map[string]any) {
+	client := pluginmode.Client()
+	if client == "" {
+		return
+	}
+	plugin := map[string]any{"client": client}
+	if home, err := os.UserHomeDir(); err == nil {
+		if path, found := pluginmode.UserLevelServer(client, home); found {
+			plugin["duplicate_server"] = path
+			plugin["fix"] = fmt.Sprintf("%s also configures a user-level wendy MCP server, so every Wendy tool is listed twice. Run '%s mcp setup' (it removes that entry because the plugin provides the server), then restart this client.", path, pluginmode.CLIInvocation())
+		}
+	}
+	out["plugin"] = plugin
 }
