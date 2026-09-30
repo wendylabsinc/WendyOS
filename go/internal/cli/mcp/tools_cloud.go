@@ -266,18 +266,28 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
-	cloudConn, err := mcpDialCloudGRPC(auth)
+	// A credential an earlier call minted but the agent never redeemed is
+	// reused: cloud holds the name and will not mint for it again.
+	pending, resumed, err := cloudenroll.LoadPending(cfg, name)
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
-	defer cloudConn.Close()
-	tokenCtx, err := mcpCloudContext(ctx, auth)
-	if err != nil {
-		return cloudErrResult(err), nil
-	}
-	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name)
-	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+	if resumed {
+		cfg = pending
+	} else {
+		cloudConn, err := mcpDialCloudGRPC(auth)
+		if err != nil {
+			return cloudErrResult(err), nil
+		}
+		defer cloudConn.Close()
+		tokenCtx, err := mcpCloudContext(ctx, auth)
+		if err != nil {
+			return cloudErrResult(err), nil
+		}
+		if cfg, _, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name); err != nil {
+			return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		}
+		_ = cloudenroll.SavePending(cfg, name) // best effort: only costs the resume
 	}
 
 	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
@@ -285,10 +295,10 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
 	})
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return errResult(codeFromGRPC(err), fmt.Sprintf("device %s: %s; call again to resume with the same credential", cfg.DeviceID, grpcErrString(err))), nil
 	}
+	_ = cloudenroll.ClearPending(cfg, name)
 	out := map[string]any{
-		"asset_id":      assetID,
 		"device_id":     cfg.DeviceID,
 		"principal_uri": resp.GetPrincipalUri(),
 		"cloud_host":    auth.CloudGRPC,
