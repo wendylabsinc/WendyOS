@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -42,7 +43,9 @@ const (
 	// A self-describing add-on bakes its module list into the .raw; systemd-sysext
 	// exposes it here once merged. ListDrivers falls back to this when the /data
 	// override is absent, mirroring wendyos-sysext-apply's precedence.
-	driverBakedModulesDir = "/usr/lib/modules-load.d"
+	driverBakedModulesDir   = "/usr/lib/modules-load.d"
+	driverPrivatePayloadDir = "/usr/lib/wendyos-driver-payloads"
+	driverActiveStateDir    = "/usr/lib/wendyos-driver-state"
 )
 
 // maxDriverImageSize caps a driver .raw to guard against a runaway upload/download.
@@ -81,13 +84,15 @@ type DriverService struct {
 	requireSignature bool
 
 	// Seams for tests.
-	enabledDir      string
-	modulesDir      string
-	bakedModulesDir string
-	applyScript     string
-	unameR          func() string
-	loadedModules   func() []string
-	httpGet         func(ctx context.Context, url string) (io.ReadCloser, error)
+	enabledDir        string
+	modulesDir        string
+	bakedModulesDir   string
+	privatePayloadDir string
+	activeStateDir    string
+	applyScript       string
+	unameR            func() string
+	loadedModules     func() []string
+	httpGet           func(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
 // NewDriverService builds the driver service with production defaults. Signature
@@ -95,15 +100,17 @@ type DriverService struct {
 // driver-signing key is embedded, matching the agent-update/container paths).
 func NewDriverService(logger *zap.Logger) *DriverService {
 	return &DriverService{
-		logger:          logger,
-		verifier:        sigverify.DefaultVerifier,
-		enabledDir:      driverEnabledDir,
-		modulesDir:      driverModulesDir,
-		bakedModulesDir: driverBakedModulesDir,
-		applyScript:     sysextApplyScript,
-		unameR:          unameRelease,
-		loadedModules:   loadedKernelModules,
-		httpGet:         httpGetBody,
+		logger:            logger,
+		verifier:          sigverify.DefaultVerifier,
+		enabledDir:        driverEnabledDir,
+		modulesDir:        driverModulesDir,
+		bakedModulesDir:   driverBakedModulesDir,
+		privatePayloadDir: driverPrivatePayloadDir,
+		activeStateDir:    driverActiveStateDir,
+		applyScript:       sysextApplyScript,
+		unameR:            unameRelease,
+		loadedModules:     loadedKernelModules,
+		httpGet:           httpGetBody,
 	}
 }
 
@@ -353,6 +360,7 @@ func (s *DriverService) finalize(ctx context.Context, spec DriverInstallSpec, tm
 		s.pruneStore(target)
 		return false, nil
 	}
+	previousGeneration := s.activationGeneration(spec.Name)
 	if err := s.apply(ctx, spec.Name); err != nil {
 		s.removePlaced(kernel, spec.Name)
 		snap.restore()
@@ -363,6 +371,12 @@ func (s *DriverService) finalize(ctx context.Context, spec DriverInstallSpec, tm
 
 	// Still resident from before the install: modprobe could not replace it, so
 	// the kernel runs the old code until a reboot.
+	// A fresh runtime receipt proves which resident modules were actually unloaded.
+	// Older runtimes have no receipt, so retain the conservative reboot fallback.
+	if generation := s.activationGeneration(spec.Name); generation != "" && generation != previousGeneration {
+		replaced := readModulesConf(filepath.Join(s.activeStateDir, spec.Name, "replaced-modules"))
+		resident = modulesDifference(resident, replaced)
+	}
 	if stuck := s.residentModules(resident); len(stuck) > 0 {
 		s.logger.Info("driver add-on installed but a reboot is needed to load it",
 			zap.String("name", spec.Name), zap.Strings("resident_modules", stuck))
@@ -737,7 +751,7 @@ func (s *DriverService) ListDrivers(ctx context.Context, _ *agentpbv2.ListDriver
 			KernelVersion: kernel,
 			Unreadable:    !readable,
 			ModulesLoad:   mods,
-			Loaded:        allModulesLoaded(mods, loaded),
+			Loaded:        readable && (kernel == "" || kernel == s.unameR()) && s.payloadActive(c.name) && allModulesLoaded(mods, loaded),
 		})
 	}
 	return resp, nil
@@ -1209,14 +1223,49 @@ func (s *DriverService) declaredModules(name string) []string {
 		s.confPath(s.unameR(), name),
 		s.confPath(unpinnedKernelDir, name),
 		filepath.Join(s.modulesDir, name+".conf"),
+		filepath.Join(s.privatePayloadDir, name, "modules-load.conf"),
 		filepath.Join(s.bakedModulesDir, name+".conf"),
 	}
 	for _, path := range candidates {
-		if mods := readModulesConf(path); len(mods) > 0 {
-			return mods
+		if data, err := os.ReadFile(path); err == nil {
+			return parseModulesConf(strings.NewReader(string(data)))
 		}
 	}
 	return nil
+}
+
+// Private metadata is inert until the runtime records successful exposure.
+// A rejected package must not appear loaded just because another add-on loaded
+// modules with the same names. Legacy images retain their original semantics.
+func (s *DriverService) payloadActive(name string) bool {
+	_, err := os.Stat(filepath.Join(s.privatePayloadDir, name))
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(s.activeStateDir, name, "files"))
+	return err == nil
+}
+
+func (s *DriverService) activationGeneration(name string) string {
+	data, _ := os.ReadFile(filepath.Join(s.activeStateDir, name, "generation"))
+	return strings.TrimSpace(string(data))
+}
+
+func modulesDifference(modules, removed []string) []string {
+	gone := make(map[string]bool, len(removed))
+	for _, m := range removed {
+		gone[strings.ReplaceAll(m, "-", "_")] = true
+	}
+	var kept []string
+	for _, m := range modules {
+		if !gone[strings.ReplaceAll(m, "-", "_")] {
+			kept = append(kept, m)
+		}
+	}
+	return kept
 }
 
 // modulesUnion is the set an install can disturb: what the add-on already
@@ -1287,16 +1336,31 @@ func mergedSysextNames(ctx context.Context) []string {
 	if err != nil {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, bin, "status", "--no-legend")
+	cmd := exec.CommandContext(ctx, bin, "status", "--json=short")
 	cmd.Env = driverEnvWithPath()
 	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
+	return parseMergedSysextNames(out)
+}
+
+func parseMergedSysextNames(out []byte) []string {
+	var rows []struct {
+		Hierarchy  string          `json:"hierarchy"`
+		Extensions json.RawMessage `json:"extensions"`
+	}
+	if json.Unmarshal(out, &rows) != nil {
+		return nil
+	}
 	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "/usr" && fields[1] != "none" {
-			names = append(names, fields[1])
+	for _, row := range rows {
+		if row.Hierarchy != "/usr" {
+			continue
+		}
+		var extensions []string
+		if json.Unmarshal(row.Extensions, &extensions) == nil {
+			names = append(names, extensions...)
 		}
 	}
 	return names
