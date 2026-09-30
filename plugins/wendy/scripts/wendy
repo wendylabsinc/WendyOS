@@ -17,6 +17,7 @@
 
 set -u
 
+# SECURITY: each pinned SHA-256 matches a release asset attested by .github/workflows/build.yml (build provenance for darwin-arm64, SPDX SBOM for the other four until #2135 adds provenance); pin-cli.sh now requires build.yml provenance, and the plugin release re-pins with it.
 # >>> pinned by scripts/pin-cli.sh (do not edit by hand)
 CLI_VERSION="2026.09.28-142251"
 MIN_VERSION="2026.09.28-142251"
