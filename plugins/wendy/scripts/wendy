@@ -202,6 +202,21 @@ acquire_lock() {
   echo "$$" >"$lock_dir/pid"
 }
 
+# prune_versions keeps CLI_VERSION and the newest other version (what a
+# client on the previous plugin release may still run) and deletes the rest.
+prune_versions() {
+  previous=""
+  for dir in "$cli_root"/$release_pattern; do
+    [ -d "$dir" ] || continue
+    [ "${dir##*/}" = "$CLI_VERSION" ] || previous=${dir##*/}
+  done
+  for dir in "$cli_root"/$release_pattern; do
+    [ -d "$dir" ] || continue
+    v=${dir##*/}
+    [ "$v" = "$CLI_VERSION" ] || [ "$v" = "$previous" ] || rm -rf "$dir"
+  done
+}
+
 # install_managed downloads CLI_VERSION, checks it against the pinned SHA-256,
 # and moves it into place, holding the install lock. It runs as its own
 # process (see --wendy-launcher-install) that ignores hangups and terminations,
@@ -235,6 +250,7 @@ install_managed() {
     mv "$pkg" "$cli_root/$CLI_VERSION" || fail "could not move the CLI into $cli_root/$CLI_VERSION" "check that $cli_root is writable"
   fi
   link_current
+  prune_versions
 }
 
 # consider picks the wendy binary at $1 if nothing was picked yet and it is

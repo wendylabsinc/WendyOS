@@ -418,6 +418,19 @@ test_stale_lock_is_broken() {
   assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "install proceeds past a dead holder's lock"
 }
 
+test_prune_keeps_current_and_previous() {
+  for old in 2026.01.01-000000 2026.02.01-000000 2026.03.01-000000; do
+    make_stub_cli "$WENDY_CONFIG_DIR/cli/$old/wendy" "$old"
+  done
+  make_release "$V"
+  pin "$V" "$V"
+  serve
+  sh "$L" --version >/dev/null 2>&1
+  left=""
+  for d in "$WENDY_CONFIG_DIR"/cli/2026.*; do left="$left${d##*/} "; done
+  assert_eq "$left" "2026.03.01-000000 $V " "kept versions"
+}
+
 # --- cases: pin-cli.sh ---------------------------------------------------------
 
 sha_of() {
