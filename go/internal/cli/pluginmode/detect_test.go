@@ -141,3 +141,66 @@ func TestUserLevelServer(t *testing.T) {
 		t.Error("unknown clients never report a server")
 	}
 }
+
+func TestSetupRemovesUserLevelServer(t *testing.T) {
+	yes, no := true, false
+	const key = "wendy@wendy-agentic-coding"
+	const ownJSON = `{"mcpServers":{"wendy":{"command":"/w","args":["mcp","serve"]}}}`
+	const wrapperJSON = `{"mcpServers":{"wendy":{"command":"/w","args":["wrap","mcp","serve"]}}}`
+	const ownTOML = "[mcp_servers.wendy]\ncommand = \"/w\"\nargs = [\"mcp\", \"serve\"]\n"
+	tests := []struct {
+		name, client string
+		fixture      *claudeFixture
+		claudeJSON   string
+		codexTOML    string
+		want         bool
+	}{
+		{"claude active, own entry", "claude", &claudeFixture{key, "user", wendyPluginMCPJSON, &yes}, ownJSON, "", true},
+		{"claude active, wrapper args", "claude", &claudeFixture{key, "user", wendyPluginMCPJSON, &yes}, wrapperJSON, "", false},
+		{"claude not active, own entry", "claude", &claudeFixture{key, "user", wendyPluginMCPJSON, &no}, ownJSON, "", false},
+		{"codex enabled, own entry", "codex", nil, "", ownTOML + "[plugins.\"" + key + "\"]\nenabled = true\n", true},
+		{"codex disabled, own entry", "codex", nil, "", ownTOML + "[plugins.\"" + key + "\"]\nenabled = false\n", false},
+		{"unknown client", "cursor", &claudeFixture{key, "user", wendyPluginMCPJSON, &yes}, ownJSON, ownTOML + "[plugins.\"" + key + "\"]\nenabled = true\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tt.fixture != nil {
+				tt.fixture.write(t, home)
+			}
+			if tt.claudeJSON != "" {
+				writeFile(t, filepath.Join(home, ".claude.json"), tt.claudeJSON)
+			}
+			if tt.codexTOML != "" {
+				writeFile(t, filepath.Join(home, ".codex", "config.toml"), tt.codexTOML)
+			}
+			if got := SetupRemovesUserLevelServer(tt.client, home); got != tt.want {
+				t.Errorf("SetupRemovesUserLevelServer = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClaudePluginActive_RelativeInstallPathNeverCounts(t *testing.T) {
+	for _, rel := range []string{"", "rel"} {
+		t.Run("installPath="+rel, func(t *testing.T) {
+			home := t.TempDir()
+			cwd := t.TempDir()
+			writeFile(t, filepath.Join(cwd, ".mcp.json"), wendyPluginMCPJSON)
+			if rel != "" {
+				writeFile(t, filepath.Join(cwd, rel, ".mcp.json"), wendyPluginMCPJSON)
+			}
+			t.Chdir(cwd)
+			const key = "wendy@wendy-agentic-coding"
+			installed, _ := json.Marshal(map[string]any{
+				"version": 2,
+				"plugins": map[string]any{key: []map[string]any{{"scope": "user", "installPath": rel}}},
+			})
+			writeFile(t, filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), string(installed))
+			writeFile(t, filepath.Join(home, ".claude", "settings.json"), `{"enabledPlugins":{"`+key+`":true}}`)
+			if ClaudePluginActive(home) {
+				t.Error("a relative installPath must not count as active")
+			}
+		})
+	}
+}

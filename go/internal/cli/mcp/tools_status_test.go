@@ -100,8 +100,35 @@ func TestWendyStatus_PluginBlock(t *testing.T) {
 		if p["duplicate_server"] != path {
 			t.Errorf("duplicate_server = %v, want %s", p["duplicate_server"], path)
 		}
-		if fix, _ := p["fix"].(string); !strings.Contains(fix, "mcp setup") {
-			t.Errorf("fix = %q, want it to name `mcp setup`", fix)
+		if fix, _ := p["fix"].(string); !strings.Contains(fix, "claude mcp remove wendy -s user") {
+			t.Errorf("fix = %q, want it to name `claude mcp remove wendy -s user` (setup keeps the entry without the plugin)", fix)
+		}
+	})
+	t.Run("plugin registered: setup removes the user-level server", func(t *testing.T) {
+		t.Setenv("WENDY_PLUGIN", "claude")
+		const key = "wendy@wendy-agentic-coding"
+		installPath := filepath.Join(home, ".claude", "plugins", "cache", "fixture", key)
+		write := func(path, content string) {
+			t.Helper()
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Remove(path) })
+		}
+		write(filepath.Join(installPath, ".mcp.json"), `{"mcpServers":{"wendy":{"command":"x","args":["mcp","serve"],"env":{"WENDY_PLUGIN":"claude"}}}}`)
+		installed, _ := json.Marshal(map[string]any{
+			"version": 2,
+			"plugins": map[string]any{key: []map[string]any{{"scope": "user", "installPath": installPath}}},
+		})
+		write(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"), string(installed))
+		write(filepath.Join(home, ".claude", "settings.json"), `{"enabledPlugins":{"`+key+`":true}}`)
+		write(filepath.Join(home, ".claude.json"), `{"mcpServers":{"wendy":{"command":"/usr/local/bin/wendy","args":["mcp","serve"]}}}`)
+		p, _ := statusPlugin(t)
+		if fix, _ := p["fix"].(string); !strings.Contains(fix, "mcp setup' (it removes") {
+			t.Errorf("fix = %q, want the `mcp setup` text", fix)
 		}
 	})
 	t.Run("connected sessions report it too", func(t *testing.T) {

@@ -74,7 +74,15 @@ func addPluginStatus(out map[string]any) {
 	if home, err := os.UserHomeDir(); err == nil {
 		if path, found := pluginmode.UserLevelServer(client, home); found {
 			plugin["duplicate_server"] = path
-			plugin["fix"] = fmt.Sprintf("%s also configures a user-level wendy MCP server, so every Wendy tool is listed twice. Run '%s mcp setup' (it removes that entry because the plugin provides the server), then restart this client.", path, pluginmode.CLIInvocation())
+			if pluginmode.SetupRemovesUserLevelServer(client, home) {
+				plugin["fix"] = fmt.Sprintf("%s also configures a user-level wendy MCP server, so every Wendy tool is listed twice. Run '%s mcp setup' (it removes that entry because the plugin provides the server), then restart this client.", path, pluginmode.CLIInvocation())
+			} else {
+				removeCmd := "`claude mcp remove wendy -s user`"
+				if client == "codex" {
+					removeCmd = "`codex mcp remove wendy`"
+				}
+				plugin["fix"] = fmt.Sprintf("%s also configures a user-level wendy MCP server, so every Wendy tool is listed twice. `wendy mcp setup` keeps that entry (it was customized, or the plugin is not installed for your user and enabled). If you use Wendy only through the plugin, remove it with %s, then restart this client.", path, removeCmd)
+			}
 		}
 	}
 	out["plugin"] = plugin

@@ -54,6 +54,9 @@ func claudeMarketplacePluginActive(home string) bool {
 			continue
 		}
 		for _, in := range installs {
+			if !filepath.IsAbs(in.InstallPath) {
+				continue // a relative path would resolve against the working directory
+			}
 			if (in.Scope == "" || in.Scope == "user") && providesWendyServer(filepath.Join(in.InstallPath, ".mcp.json")) {
 				return true
 			}
@@ -137,4 +140,44 @@ func UserLevelServer(client, home string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// SetupRemovesUserLevelServer reports whether `wendy mcp setup` would remove
+// client's user-level "wendy" MCP server under home: the Wendy plugin is active
+// for that client (ClaudePluginActive or CodexPluginActive) and the entry is
+// one setup wrote, i.e. its args start with "mcp serve". Anything else — a
+// customized entry, a plugin loaded only per project or with --plugin-dir, or
+// an unreadable file — means setup keeps the entry.
+func SetupRemovesUserLevelServer(client, home string) bool {
+	switch client {
+	case "claude":
+		if !ClaudePluginActive(home) {
+			return false
+		}
+		var cfg struct {
+			MCPServers map[string]struct {
+				Args []any `json:"args"`
+			} `json:"mcpServers"`
+		}
+		return readJSON(filepath.Join(home, ".claude.json"), &cfg) &&
+			argsStartWithMCPServe(cfg.MCPServers["wendy"].Args)
+	case "codex":
+		if !CodexPluginActive(home) {
+			return false
+		}
+		var cfg struct {
+			MCPServers map[string]struct {
+				Args []any `toml:"args"`
+			} `toml:"mcp_servers"`
+		}
+		if _, err := toml.DecodeFile(filepath.Join(home, ".codex", "config.toml"), &cfg); err != nil {
+			return false
+		}
+		return argsStartWithMCPServe(cfg.MCPServers["wendy"].Args)
+	}
+	return false
+}
+
+func argsStartWithMCPServe(args []any) bool {
+	return len(args) >= 2 && args[0] == "mcp" && args[1] == "serve"
 }
