@@ -31,6 +31,8 @@ SHA256_windows_arm64="35d245cce31980a809eaa5c521ba7717c6fa22dc78b417a473c04d814e
 WENDY_ROOT="${WENDY_CONFIG_DIR:-${HOME:-}/.wendy}"
 CLI_ROOT="$WENDY_ROOT/cli"
 ERROR_FILE="$CLI_ROOT/last-error.txt"
+LOG_FILE="$CLI_ROOT/install.log"
+BASE="${WENDY_CLI_DOWNLOAD_BASE:-$DOWNLOAD_BASE}"
 WELL_KNOWN_DIRS="${WENDY_LAUNCHER_WELL_KNOWN_DIRS:-/opt/homebrew/bin:/usr/local/bin:${HOME:-}/.local/bin}"
 UPGRADE_HINT="brew upgrade wendy, winget upgrade WendyLabs.Wendy, or curl -fsSL https://install.wendy.dev/cli.sh | bash"
 RELEASE_PATTERN='[0-9][0-9][0-9][0-9].[0-9][0-9].[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
@@ -94,6 +96,118 @@ version_status() {
 CLI=""
 OLD_NOTICE=""
 
+# detect_platform sets OS, ARCH, EXE, ARCHIVE and MANAGED for the managed
+# install, or fails on a platform the Wendy CLI has no build for.
+detect_platform() {
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) OS=darwin ;;
+    Linux) OS=linux ;;
+    MINGW* | MSYS* | CYGWIN*) OS=windows ;;
+    *) OS=other ;;
+  esac
+  case "$(uname -m 2>/dev/null)" in
+    x86_64 | amd64) ARCH=amd64 ;;
+    arm64 | aarch64) ARCH=arm64 ;;
+    *) ARCH=other ;;
+  esac
+  # A shell running under Rosetta reports x86_64 on an Apple silicon Mac.
+  if [ "$OS-$ARCH" = darwin-amd64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+    ARCH=arm64
+  fi
+  case "$OS-$ARCH" in
+    darwin-arm64 | linux-amd64 | linux-arm64)
+      EXE=""
+      ARCHIVE=tar.gz
+      ;;
+    windows-amd64 | windows-arm64)
+      EXE=.exe
+      ARCHIVE=zip
+      ;;
+    darwin-amd64)
+      fail "the Wendy CLI has no build for Intel Macs" "use an Apple silicon Mac or a Linux machine for Wendy development"
+      ;;
+    *)
+      fail "the Wendy CLI has no build for $(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" "Wendy runs on macOS (Apple silicon), Linux (x86_64, arm64) and Windows (x64, arm64)"
+      ;;
+  esac
+  MANAGED="$CLI_ROOT/$CLI_VERSION/wendy$EXE"
+}
+
+download() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 --connect-timeout 20 -o "$2" "$1"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$2" "$1"
+  else
+    return 127
+  fi
+}
+
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{ print $1 }'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r "$1" | awk '{ print $1 }'
+  fi
+}
+
+# pinned_sha256 prints the pinned SHA-256 of this platform's release asset.
+pinned_sha256() {
+  case "$OS-$ARCH" in
+    darwin-arm64) echo "$SHA256_darwin_arm64" ;;
+    linux-amd64) echo "$SHA256_linux_amd64" ;;
+    linux-arm64) echo "$SHA256_linux_arm64" ;;
+    windows-amd64) echo "$SHA256_windows_amd64" ;;
+    windows-arm64) echo "$SHA256_windows_arm64" ;;
+  esac
+}
+
+# link_current points <root>/bin/wendy at the managed CLI, so a person can run
+# it from a terminal after adding <root>/bin to PATH.
+link_current() {
+  mkdir -p "$WENDY_ROOT/bin" || return 0
+  if [ "$OS" = windows ]; then
+    cp -f "$MANAGED" "$WENDY_ROOT/bin/wendy.exe" 2>/dev/null ||
+      say "could not update $WENDY_ROOT/bin/wendy.exe (in use?)"
+  else
+    rm -f "$WENDY_ROOT/bin/wendy"
+    ln -s "$MANAGED" "$WENDY_ROOT/bin/wendy"
+  fi
+}
+
+# install_managed downloads CLI_VERSION, checks it against the pinned SHA-256,
+# and moves it into place. Call it in a subshell: it exits on failure.
+install_managed() {
+  tmp="$CLI_ROOT/.tmp.$$"
+  trap 'rm -rf "$tmp"' EXIT
+  [ ! -x "$MANAGED" ] || exit 0
+  asset="wendy-cli-$OS-$ARCH-$CLI_VERSION.$ARCHIVE"
+  want=$(pinned_sha256)
+  [ -n "$want" ] || fail "this launcher has no pinned checksum for $OS-$ARCH" "update the Wendy plugin"
+  rm -rf "$tmp"
+  mkdir -p "$tmp" || fail "cannot create $tmp" "check that $CLI_ROOT is writable"
+  download "$BASE/$CLI_VERSION/$asset" "$tmp/$asset" ||
+    fail "could not download $BASE/$CLI_VERSION/$asset" "check the network connection (and that curl or wget is installed), then restart the Wendy MCP server"
+  got=$(sha256_of "$tmp/$asset")
+  [ -n "$got" ] || fail "no SHA-256 tool found (shasum, sha256sum or openssl)" "install one of them, then restart the Wendy MCP server"
+  [ "$got" = "$want" ] ||
+    fail "checksum mismatch for $asset: expected $want, got $got; the download was deleted" "don't install it by hand; report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues"
+  case "$ARCHIVE" in
+    tar.gz) tar -xzf "$tmp/$asset" -C "$tmp" ;;
+    zip) unzip -q "$tmp/$asset" -d "$tmp" ;;
+  esac || fail "could not unpack $asset" "restart the Wendy MCP server to download it again"
+  pkg="$tmp/wendy-cli-$OS-$ARCH"
+  [ -f "$pkg/wendy$EXE" ] || fail "$asset has no wendy$EXE inside" "report this at https://github.com/wendylabsinc/wendy-agentic-coding/issues"
+  chmod 755 "$pkg/wendy$EXE"
+  if [ ! -x "$MANAGED" ]; then
+    rm -rf "${CLI_ROOT:?}/$CLI_VERSION"
+    mv "$pkg" "$CLI_ROOT/$CLI_VERSION" || fail "could not move the CLI into $CLI_ROOT/$CLI_VERSION" "check that $CLI_ROOT is writable"
+  fi
+  link_current
+}
+
 # consider picks the wendy binary at $1 if nothing was picked yet and it is
 # usable. This launcher itself (say, symlinked onto PATH as wendy) is skipped.
 consider() {
@@ -137,8 +251,23 @@ done
 IFS=$saved_ifs
 
 if [ -z "$CLI" ]; then
+  detect_platform
+  if [ -x "$MANAGED" ]; then
+    CLI=$MANAGED
+  else
+    [ -z "$OLD_NOTICE" ] || say "$OLD_NOTICE"
+    OLD_NOTICE=""
+    make_root || fail "cannot create $CLI_ROOT" "check that $WENDY_ROOT is writable"
+    say "installing the Wendy CLI $CLI_VERSION into $CLI_ROOT (first run, about 15 MB)"
+    (install_managed) </dev/null >>"$LOG_FILE" 2>&1
+    if [ ! -x "$MANAGED" ]; then
+      if [ -f "$ERROR_FILE" ]; then cat "$ERROR_FILE" >&2; else say "the install failed; see $LOG_FILE"; fi
+      exit 1
+    fi
+    say "installed the Wendy CLI $CLI_VERSION"
+    CLI=$MANAGED
+  fi
   [ -z "$OLD_NOTICE" ] || say "$OLD_NOTICE"
-  fail "no Wendy CLI found" "install it with: $UPGRADE_HINT"
 fi
 
 run_cli "$CLI" "$@"

@@ -219,6 +219,130 @@ test_success_clears_a_stale_error() {
   [ ! -e "$WENDY_CONFIG_DIR/cli/last-error.txt" ] || fail_case "stale last-error.txt was kept"
 }
 
+# --- cases: managed install -----------------------------------------------------
+
+V=2026.10.01-000000
+
+# host_asset is the fixture asset the launcher downloads on this machine.
+host_asset() {
+  echo "wendy-cli-$(host_platform)-$V.tar.gz"
+}
+
+test_fresh_install_verifies_links_and_runs() {
+  make_release "$V"
+  pin "$V" "$V"
+  serve
+  out=$(sh "$L" mcp serve 2>"$T/err")
+  assert_eq "$?" "0" "exit code"
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "stdout is only the managed CLI's"
+  [ -x "$WENDY_CONFIG_DIR/cli/$V/wendy" ] || fail_case "managed CLI missing"
+  assert_eq "$(readlink "$WENDY_CONFIG_DIR/bin/wendy")" "$WENDY_CONFIG_DIR/cli/$V/wendy" "bin/wendy link"
+  assert_contains "$(cat "$T/err")" "installing the Wendy CLI $V" "progress on stderr"
+  [ ! -e "$WENDY_CONFIG_DIR/cli/last-error.txt" ] || fail_case "no error file after success"
+}
+
+test_second_run_needs_no_network() {
+  make_release "$V"
+  pin "$V" "$V"
+  serve
+  sh "$L" --version >/dev/null 2>&1
+  no_network
+  out=$(sh "$L" mcp serve 2>/dev/null)
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "managed CLI reused"
+  assert_eq "$(requests_for "$(host_asset)")" "1" "downloaded once"
+}
+
+test_old_path_wendy_falls_back_to_managed() {
+  make_release "$V"
+  pin "$V" "$V"
+  make_stub_cli "$STUB/wendy" "2026.01.01-000000"
+  serve
+  out=$(sh "$L" mcp serve 2>"$T/err")
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "managed CLI used"
+  assert_contains "$(cat "$T/err")" "is version 2026.01.01-000000, older than $V" "notice names both versions"
+}
+
+test_unrecognised_path_wendy_falls_back_quietly() {
+  make_release "$V"
+  pin "$V" "$V"
+  printf '#!/bin/sh\nexit 3\n' >"$STUB/wendy"
+  chmod 755 "$STUB/wendy"
+  serve
+  out=$(sh "$L" mcp serve 2>"$T/err")
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "managed CLI used"
+  case "$(cat "$T/err")" in *"older than"*) fail_case "no age notice for an unreadable version" ;; esac
+}
+
+test_checksum_mismatch_installs_nothing() {
+  make_release "$V"
+  pin "$V" "$V"
+  echo tampered >>"$FIX/$V/$(host_asset)"
+  serve
+  out=$(sh "$L" mcp serve 2>"$T/err")
+  assert_eq "$?" "1" "exit code"
+  assert_eq "$out" "" "stdout stays empty"
+  assert_contains "$(cat "$WENDY_CONFIG_DIR/cli/last-error.txt")" "checksum mismatch" "error file"
+  assert_contains "$(cat "$T/err")" "checksum mismatch" "stderr"
+  [ ! -e "$WENDY_CONFIG_DIR/cli/$V" ] || fail_case "nothing installed"
+  [ -z "$(find "$WENDY_CONFIG_DIR/cli" -name '.tmp.*')" ] || fail_case "temp dir removed"
+}
+
+test_download_failure_names_the_next_step() {
+  make_release "$V"
+  pin "$V" "$V"
+  rm "$FIX/$V/$(host_asset)"
+  serve
+  sh "$L" mcp serve >/dev/null 2>"$T/err"
+  assert_eq "$?" "1" "exit code"
+  err=$(cat "$WENDY_CONFIG_DIR/cli/last-error.txt")
+  assert_contains "$err" "could not download" "error"
+  assert_contains "$err" "next step: check the network connection" "next step"
+}
+
+fake_platform() {
+  # shellcheck disable=SC2016 # the $1 belongs to the generated uname script
+  printf '#!/bin/sh\ncase "$1" in -s) echo %s ;; -m) echo %s ;; *) echo "%s %s" ;; esac\n' "$1" "$2" "$1" "$2" >"$STUB/uname"
+  printf '#!/bin/sh\necho %s\n' "$3" >"$STUB/sysctl"
+  chmod 755 "$STUB/uname" "$STUB/sysctl"
+}
+
+test_intel_mac_is_unsupported() {
+  make_release "$V"
+  pin "$V" "$V"
+  fake_platform Darwin x86_64 0
+  out=$(sh "$L" mcp serve 2>"$T/err")
+  assert_eq "$?" "1" "exit code"
+  assert_eq "$out" "" "stdout stays empty"
+  assert_contains "$(cat "$WENDY_CONFIG_DIR/cli/last-error.txt")" "Intel Macs" "error file"
+}
+
+test_rosetta_shell_installs_arm64() {
+  make_release "$V"
+  pin "$V" "$V"
+  fake_platform Darwin x86_64 1
+  serve
+  out=$(sh "$L" mcp serve 2>"$T/err")
+  assert_eq "$out" "stub-wendy $V args:[mcp][serve]" "arm64 build runs"
+  assert_eq "$(requests_for "wendy-cli-darwin-arm64-$V.tar.gz")" "1" "fetched darwin-arm64"
+}
+
+test_other_os_is_unsupported() {
+  make_release "$V"
+  pin "$V" "$V"
+  fake_platform SunOS sparc 0
+  sh "$L" mcp serve >/dev/null 2>"$T/err"
+  assert_eq "$?" "1" "exit code"
+  assert_contains "$(cat "$WENDY_CONFIG_DIR/cli/last-error.txt")" "no build for SunOS/sparc" "error file"
+}
+
+test_new_root_is_private() {
+  make_release "$V"
+  pin "$V" "$V"
+  serve
+  sh "$L" --version >/dev/null 2>&1
+  [ -n "$(find "$WENDY_CONFIG_DIR" -maxdepth 0 -perm 700)" ] || fail_case "root mode is not 0700"
+}
+
 # --- cases: pin-cli.sh ---------------------------------------------------------
 
 sha_of() {
