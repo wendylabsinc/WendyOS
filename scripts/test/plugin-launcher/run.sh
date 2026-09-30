@@ -219,6 +219,56 @@ test_success_clears_a_stale_error() {
   [ ! -e "$WENDY_CONFIG_DIR/cli/last-error.txt" ] || fail_case "stale last-error.txt was kept"
 }
 
+# --- cases: pin-cli.sh ---------------------------------------------------------
+
+sha_of() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{ print $1 }'; else sha256sum "$1" | awk '{ print $1 }'; fi
+}
+
+test_pin_rewrites_only_the_block() {
+  make_release 2026.10.01-000000
+  sed '/^# >>> pinned/,/^# <<< pinned$/d' "$L" >"$T/before"
+  pin 2026.10.01-000000 2026.09.30-000000
+  sed '/^# >>> pinned/,/^# <<< pinned$/d' "$L" >"$T/after"
+  cmp -s "$T/before" "$T/after" || fail_case "lines outside the pinned block changed"
+  assert_contains "$(cat "$L")" 'CLI_VERSION="2026.10.01-000000"' "version"
+  assert_contains "$(cat "$L")" 'MIN_VERSION="2026.09.30-000000"' "min"
+  want=$(sha_of "$FIX/2026.10.01-000000/wendy-cli-linux-amd64-2026.10.01-000000.tar.gz")
+  assert_contains "$(cat "$L")" "SHA256_linux_amd64=\"$want\"" "linux-amd64 hash"
+  [ -x "$L" ] || fail_case "pin must keep the launcher executable"
+}
+
+test_pin_keeps_min_by_default() {
+  make_release 2026.10.01-000000
+  make_release 2026.11.01-000000
+  pin 2026.10.01-000000 2026.09.30-000000
+  sh "$PIN" --launcher "$L" --local "$FIX/2026.11.01-000000" 2026.11.01-000000 >/dev/null
+  assert_contains "$(cat "$L")" 'MIN_VERSION="2026.09.30-000000"' "min kept"
+  assert_contains "$(cat "$L")" 'CLI_VERSION="2026.11.01-000000"' "version moved"
+}
+
+test_pin_rejects_min_after_tag() {
+  make_release 2026.10.01-000000
+  cp "$L" "$T/orig"
+  sh "$PIN" --launcher "$L" --local "$FIX/2026.10.01-000000" --min 2026.12.01-000000 2026.10.01-000000 >/dev/null 2>&1
+  assert_eq "$?" "2" "exit code"
+  cmp -s "$T/orig" "$L" || fail_case "launcher changed on a rejected pin"
+}
+
+test_pin_fails_when_an_asset_is_missing() {
+  make_release 2026.10.01-000000
+  rm "$FIX/2026.10.01-000000/wendy-cli-linux-arm64-2026.10.01-000000.tar.gz"
+  cp "$L" "$T/orig"
+  sh "$PIN" --launcher "$L" --local "$FIX/2026.10.01-000000" 2026.10.01-000000 >/dev/null 2>&1
+  assert_eq "$?" "1" "exit code"
+  cmp -s "$T/orig" "$L" || fail_case "launcher changed on a failed pin"
+}
+
+test_pin_rejects_a_non_release_tag() {
+  sh "$PIN" --launcher "$L" --local "$FIX" v1.2.3 >/dev/null 2>&1
+  assert_eq "$?" "2" "exit code"
+}
+
 # --- runner --------------------------------------------------------------------
 
 ORIG_PATH=$PATH
