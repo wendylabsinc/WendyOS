@@ -2470,33 +2470,22 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	phaseStarted = time.Now()
 	exitStatusCh, err := task.Wait(taskCtx)
 	if err != nil {
+		muHeld = false
+		c.mu.Unlock()
 		return nil, c.failTaskStart(taskCtx, task, appName, fmt.Errorf("waiting on task for %q: %w", appName, err), stdoutR, stderrR, stdoutW, stderrW)
 	}
 	waitDuration = time.Since(phaseStarted)
 
-	// Start the task.
-	phaseStarted = time.Now()
-	if err := task.Start(taskCtx); err != nil {
-		return nil, c.failTaskStart(taskCtx, task, appName, fmt.Errorf("starting task for %q: %w", appName, err), stdoutR, stderrR, stdoutW, stderrW)
-	}
-	runtimeStartDuration = time.Since(phaseStarted)
-
-	// From this point through network setup, every failure must kill the task,
-	// close its unconsumed pipes, and record a did-not-start diagnostic. The
-	// post-start hook is intentionally delayed until network setup commits.
-	failStartedTask := func(cause error) error {
-		return c.failTaskStart(taskCtx, task, appName, cause, stdoutR, stderrR, stdoutW, stderrW)
-	}
-
-	// Track the primary PID for shared-namespace app groups.
-	// getIsolation requires c.mu (held here via muHeld).
-	if appconfig.IsSharedNamespaceIsolation(isolation) {
-		// Presence alone is not enough: a per-service stop leaves the group
-		// entry behind, so a dead PID must be replaced rather than kept.
-		primaryPID, hasPrimary := c.getPrimaryPID(appID)
-		if !hasPrimary || !c.primaryTaskAlive(ctx, appID, primaryPID) {
-			c.setPrimaryPID(appID, task.Pid())
+	// NewTask creates the init process and its namespaces, but the runtime holds
+	// the entrypoint until Start. Configure all networking while it is held:
+	// applications must see their address, routes, DNS and private Avahi on entry.
+	taskStarted := false
+	failPreparedTask := func(cause error) error {
+		if muHeld {
+			c.mu.Unlock()
+			muHeld = false
 		}
+		return c.failTaskStart(taskCtx, task, appName, cause, stdoutR, stderrR, stdoutW, stderrW)
 	}
 
 	// Entitlements are read back from the container's own labels (written at
@@ -2516,7 +2505,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		nsPath := fmt.Sprintf("/proc/%d/ns/net", task.Pid())
 		netnsRef, err = os.Open(nsPath)
 		if err != nil {
-			return nil, failStartedTask(fmt.Errorf("anchoring network namespace for app %q: %w", appID, err))
+			return nil, failPreparedTask(fmt.Errorf("anchoring network namespace for app %q: %w", appID, err))
 		}
 	}
 	netnsAnchored := netnsRef != nil
@@ -2540,21 +2529,21 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// On Linux the bind-mount is used; on other platforms the fd path is the fallback.
 	if reusedNetworkSandbox != nil {
 		// Mandatory for both in-memory reuse and restart recovery: neither path
-		// may skip this post-start task<->namespace binding check.
+		// may skip this pre-start task<->namespace binding check.
 		if !taskUsesNetworkSandbox(reusedNetworkSandbox.path, task.Pid()) {
 			c.destroyNetworkSandbox(ctx, appName)
-			return nil, failStartedTask(fmt.Errorf("reusable network sandbox validation failed for app %q after task start", appID))
+			return nil, failPreparedTask(fmt.Errorf("reusable network sandbox validation failed for app %q before task start", appID))
 		}
 		if isolation == "isolated" {
 			if ent, ok := findMeshEntitlement(entitlements); ok {
 				if err := c.applyMeshIngressPorts(appName, appID, reusedNetworkSandbox.path, reusedNetworkSandbox.ip, ent.Ports); err != nil {
-					return nil, failStartedTask(fmt.Errorf("mesh ingress setup failed for reused sandbox %q: %w", appName, err))
+					return nil, failPreparedTask(fmt.Errorf("mesh ingress setup failed for reused sandbox %q: %w", appName, err))
 				}
 				if err := hostnetwork.AddMeshUDPIntercept(reusedNetworkSandbox.ip, ent.ServiceCIDR, bridgeName(appID), mesh.UDPProxyPort); err != nil {
-					return nil, failStartedTask(fmt.Errorf("mesh UDP redirect setup failed for reused sandbox %q: %w", appName, err))
+					return nil, failPreparedTask(fmt.Errorf("mesh UDP redirect setup failed for reused sandbox %q: %w", appName, err))
 				}
 				if err := c.claimMeshSource(appName, appID, reusedNetworkSandbox.ip, ent.ServiceCIDR); err != nil {
-					return nil, failStartedTask(fmt.Errorf("mesh source attribution failed for reused sandbox %q: %w", appName, err))
+					return nil, failPreparedTask(fmt.Errorf("mesh source attribution failed for reused sandbox %q: %w", appName, err))
 				}
 			}
 		}
@@ -2606,40 +2595,46 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			}
 			cleanupNetns()
 			c.logger.Error("CNI ADD failed", zap.String(logfields.AppID, appID), zap.Error(cniErr))
-			return nil, failStartedTask(fmt.Errorf("CNI ADD failed for app %q: %w", appID, cniErr))
+			return nil, failPreparedTask(fmt.Errorf("CNI ADD failed for app %q: %w", appID, cniErr))
 		} else {
 			phaseStarted = time.Now()
 			// netnsPath (the bind-mount) must stay mounted through mesh egress
 			// setup below, which needs a live netns to install the service-CIDR
 			// route via nsenter (SetMeshRoute). Until every subsequent setup step
 			// succeeds, a deferred rollback releases both IPAM and the bind mount.
-			networkReady := false
 			keepNetns := false
 			defer func() {
-				if !networkReady {
-					_ = c.CNIDel(context.WithoutCancel(ctx), appID, appName, netnsPath)
-					if needsGatewayDNS(isolation, entitlements) {
-						c.releaseMeshDNS(appName, appID)
+				if !taskStarted {
+					// A registered sandbox is still provisional until the runtime
+					// releases the entrypoint. Retire its persisted join path too.
+					if keepNetns {
+						c.destroyNetworkSandbox(context.WithoutCancel(ctx), appName)
+						_ = c.persistNetworkNamespace(context.WithoutCancel(ctx), container, "", identity, "")
+					} else {
+						_ = c.CNIDel(context.WithoutCancel(ctx), appID, appName, netnsPath)
+						if needsGatewayDNS(isolation, entitlements) {
+							c.releaseMeshDNS(appName, appID)
+						}
+						c.teardownMeshEgress(entitlements, appName, appID, ip)
+						cleanupNetns()
 					}
-					c.teardownMeshEgress(entitlements, appName, appID, ip)
-					cleanupNetns()
+					c.mu.Lock()
+					delete(c.serviceIPs[appID], serviceName)
+					if serviceName != "" {
+						if path, err := safeJoin("/run/wendy/hosts", appID); err == nil {
+							_ = writeHostsFile(path, c.serviceIPs[appID])
+						}
+					}
+					c.mu.Unlock()
 				} else if !keepNetns {
 					cleanupNetns()
 				}
 			}()
 
-			// /etc/hosts bookkeeping is specific to multi-service isolated app
-			// groups (sibling services resolve each other by name); a
-			// single-service bridge-mode app has no siblings, so serviceName is
-			// empty and this whole block — including the concurrent-stop
-			// discard guard below, which is keyed on the isolated-group cache
-			// c.appIsolation and would misfire for a bridge app that never sets
-			// it — is skipped entirely for bridge mode. This is an accepted
-			// gap, not an oversight: a concurrent StopContainer racing a
-			// bridge-mode app's CNI ADD is left to self-heal via the CNI DEL
-			// issued at stop time (stopOne/deleteOne, gated by
-			// needsCNIBridgeWiring), instead of duplicating this guard for
-			// serviceName == "".
+			// Sibling service names resolve through the shared hosts file.
+			// The keyed lifecycle lock serializes per-container stop/delete;
+			// whole-app stop also publishes appStopping, checked before Start.
+
 			if serviceName != "" {
 				c.mu.Lock()
 				// Guard against a concurrent StopContainer that may have deleted
@@ -2650,7 +2645,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					c.mu.Unlock()
 					c.logger.Warn("CNI ADD: app already stopped before IP could be recorded, discarding IP",
 						zap.String(logfields.AppID, appID), zap.String("ip", ip))
-					return nil, failStartedTask(fmt.Errorf("app %q stopped during CNI ADD; container not started", appID))
+					return nil, failPreparedTask(fmt.Errorf("app %q stopped during CNI ADD; container not started", appID))
 				}
 				c.recordServiceIP(appID, serviceName, ip)
 				hostsPath, pathErr := safeJoin("/run/wendy/hosts", appID)
@@ -2664,7 +2659,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					c.logger.Error("security: appID produces unsafe hosts path",
 						zap.String(logfields.AppID, appID), zap.Error(pathErr))
 					c.mu.Unlock()
-					return nil, failStartedTask(fmt.Errorf("security: appID %q produces unsafe hosts path: %w", appID, pathErr))
+					return nil, failPreparedTask(fmt.Errorf("security: appID %q produces unsafe hosts path: %w", appID, pathErr))
 				}
 				_ = writeHostsFile(hostsPath, c.serviceIPs[appID])
 				c.mu.Unlock()
@@ -2694,15 +2689,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			// egress's fallible steps, as applyMeshEgress's own comment
 			// requires.
 			//
-			// Best-effort — without it, DNS lookups fail inside the namespace
-			// but the container still starts (NAT egress by IP literal still
-			// works), mirroring the rest of this block's error handling.
+			// DNS is a startup prerequisite, just like the assigned address.
 			if _, ok := findBridgeEntitlement(entitlements); ok {
 				if gw, gwErr := meshGateway(appID); gwErr == nil {
 					bridgeDNSHealthy = c.ensureMeshDNS(appName, gw)
 				} else {
-					c.logger.Warn("bridge: could not derive gateway for DNS listener",
-						zap.String(logfields.AppID, appID), zap.Error(gwErr))
+					return nil, failPreparedTask(fmt.Errorf("bridge gateway for app %q: %w", appID, gwErr))
+				}
+				if !bridgeDNSHealthy {
+					return nil, failPreparedTask(fmt.Errorf("bridge DNS setup failed for app %q", appID))
 				}
 			}
 
@@ -2715,13 +2710,13 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					fmt.Sprintf("/proc/%d/ns/net", task.Pid()), ip); meshErr != nil {
 					c.logger.Error("mesh egress setup failed; failing container start",
 						zap.String("app_id", appID), zap.Error(meshErr))
-					return nil, failStartedTask(fmt.Errorf("mesh egress setup failed for app %q: %w", appID, meshErr))
+					return nil, failPreparedTask(fmt.Errorf("mesh egress setup failed for app %q: %w", appID, meshErr))
 				}
 				if _, meshApp := findMeshEntitlement(entitlements); meshApp {
 					// Agent restarts leave the task and CNI namespace alive. Persist
 					// the ADD result so CHECK can prove it before ingress recovery.
 					if err := writeNetworkSandboxResult(appName, cniResult); err != nil {
-						return nil, failStartedTask(fmt.Errorf("persisting mesh CNI proof for %q: %w", appName, err))
+						return nil, failPreparedTask(fmt.Errorf("persisting mesh CNI proof for %q: %w", appName, err))
 					}
 				}
 			}
@@ -2732,7 +2727,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			c.mu.Lock()
 			if c.appStopping[appID] {
 				c.mu.Unlock()
-				return nil, failStartedTask(fmt.Errorf("app %q stopped during network sandbox setup; container not started", appID))
+				return nil, failPreparedTask(fmt.Errorf("app %q stopped during network sandbox setup; container not started", appID))
 			}
 			if retainsBridge && bridgeDNSHealthy && persistentNetns && identity != "" {
 				if err := writeNetworkSandboxResult(appName, cniResult); err == nil {
@@ -2751,23 +2746,48 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					c.logger.Warn("Could not persist reusable CNI result", zap.String("container_id", appName), zap.Error(err))
 				}
 			}
-			networkReady = true
 			c.mu.Unlock()
 			networkFinalizeDuration = time.Since(phaseStarted)
 		}
 	}
 
-	// The fully configured Bluetooth task now owns the proxy until stop/delete.
-	// Do not let the failure-only defer above tear it down on the successful path.
-	dbusProxyStartedForTask = false
 	if hasAvahiEntitlement(entitlements) {
+		avahiStartedForTask = true
 		if isolation != "isolated" {
-			return nil, failStartedTask(fmt.Errorf("app %q declares the avahi entitlement without an isolated network namespace", appID))
+			return nil, failPreparedTask(fmt.Errorf("app %q declares the avahi entitlement without an isolated network namespace", appID))
 		}
 		if err := c.startAvahiForTask(ctx, appName, task.Pid()); err != nil {
-			return nil, failStartedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
+			return nil, failPreparedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
 		}
 	}
+	// Order the release of the entrypoint against whole-app StopContainer's
+	// appStopping marker. Per-container stop/delete also holds our keyed lock.
+	// The IO context survives RPC disconnect, but a request canceled during
+	// preparation must not release a new application process.
+	c.mu.Lock()
+	muHeld = true
+	if c.appStopping[appID] {
+		return nil, failPreparedTask(fmt.Errorf("%w: %q", errAppStopping, appID))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, failPreparedTask(fmt.Errorf("container %q start canceled before execution: %w", appName, err))
+	}
+	phaseStarted = time.Now()
+	if err := task.Start(ctx); err != nil {
+		return nil, failPreparedTask(fmt.Errorf("starting task for %q: %w", appName, err))
+	}
+	runtimeStartDuration = time.Since(phaseStarted)
+	taskStarted = true
+	if appconfig.IsSharedNamespaceIsolation(isolation) {
+		primaryPID, hasPrimary := c.getPrimaryPID(appID)
+		if !hasPrimary || !c.primaryTaskAlive(ctx, appID, primaryPID) {
+			c.setPrimaryPID(appID, task.Pid())
+		}
+	}
+	muHeld = false
+	c.mu.Unlock()
+	// The successfully started task now owns its proxies until stop/delete.
+	dbusProxyStartedForTask = false
 	avahiStartedForTask = false
 	c.logger.Info("Container started", zap.String("app_name", appName))
 	c.startPostStartAgentHook(postStartAgentCommand, appName)
@@ -5480,8 +5500,8 @@ func hasBluetooth(cfg *appconfig.AppConfig) bool {
 }
 
 // startAvahiForTask launches the per-container avahi-daemon inside the task
-// network namespace once networking is configured. addrOK polls for an IPv4
-// in that namespace via nsenter so the daemon never starts address-less.
+// network namespace before the entrypoint is released. The address check
+// asserts the completed CNI setup so the daemon never starts address-less.
 func (c *Client) startAvahiForTask(ctx context.Context, containerName string, pid uint32) error {
 	if pid == 0 {
 		return fmt.Errorf("no task PID for avahi netns")

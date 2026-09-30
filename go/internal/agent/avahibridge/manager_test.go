@@ -140,7 +140,7 @@ func TestPrepareIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestStartDaemonWaitsForAddress(t *testing.T) {
+func TestStartDaemonRequiresPreparedAddress(t *testing.T) {
 	bin := t.TempDir()
 	stubBinaries(t, bin)
 	t.Setenv("AVAHI_STUB_LOG", filepath.Join(bin, "calls.log"))
@@ -157,7 +157,41 @@ func TestStartDaemonWaitsForAddress(t *testing.T) {
 		calls++
 		return false, nil
 	})
-	if err == nil || !strings.Contains(err.Error(), "no IPv4") {
-		t.Fatalf("expected address timeout, got %v (checks=%d)", err, calls)
+	if err == nil || !strings.Contains(err.Error(), "no IPv4") || calls != 1 {
+		t.Fatalf("expected missing-address error, got %v (checks=%d)", err, calls)
+	}
+}
+
+// A task restart gets a new daemon without replacing the mounted directory.
+func TestPrepareForTaskRetiresPreviousStack(t *testing.T) {
+	bin := t.TempDir()
+	stubBinaries(t, bin)
+	t.Setenv("AVAHI_STUB_LOG", filepath.Join(bin, "calls.log"))
+	m := NewManagerInDir(zap.NewNop(), t.TempDir())
+	m.ready = func(context.Context, string) error { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dir, err := m.Prepare(ctx, "app1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop("app1")
+	before, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StartDaemon(ctx, "app1", "/proc/1/ns/net", func(context.Context) (bool, error) { return true, nil }); err != nil {
+		t.Fatal(err)
+	}
+	old := m.instances["app1"]
+	if _, err := m.PrepareForTask(ctx, "app1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) || old.runCtx.Err() == nil || m.instances["app1"] == old || m.instances["app1"].daemonStarted {
+		t.Fatal("new task retained the previous stack or replaced its mounted directory")
 	}
 }

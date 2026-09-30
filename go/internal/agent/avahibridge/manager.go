@@ -12,9 +12,8 @@
 //   - The daemon runs in the container netns (nsenter --net) but the host
 //     mount namespace with private runtime/service mounts, so avahi's own
 //     chroot/user drop still apply. It talks to the private bus only.
-//   - Spawning waits for an IPv4 address inside the netns first
-//     (address-before-daemon); the app itself must still tolerate late
-//     addresses per the platform contract.
+//   - The caller configures the namespace before spawning the daemon,
+//     then releases the application entrypoint only after daemon readiness.
 //   - Fail-closed: any setup failure is an error and the caller must refuse
 //     container start. A daemon that dies mid-run is restarted with
 //     backoff (up to maxRestarts); then the container keeps running
@@ -52,8 +51,7 @@ const (
 
 	proxyStartupTimeout = 5 * time.Second
 	proxyPollWait       = 50 * time.Millisecond
-	addressWaitTimeout  = 15 * time.Second
-	addressPollWait     = 500 * time.Millisecond
+	daemonReadyTimeout  = 15 * time.Second
 	maxRestarts         = 3
 	restartBackoff      = 5 * time.Second
 )
@@ -181,6 +179,27 @@ func (m *Manager) Prepare(ctx context.Context, containerName string) (string, er
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.prepareLocked(ctx, containerName)
+}
+
+// PrepareForTask retires a previous task's daemon and bus before NewTask
+// consumes its mounts. Keeping the directory inode also supports a surviving
+// task during agent recovery. A fresh namespace must never reuse the daemon
+// that was launched in an exited task's namespace.
+func (m *Manager) PrepareForTask(ctx context.Context, containerName string) (string, error) {
+	if missing := missingBinaries(); len(missing) > 0 {
+		return "", fmt.Errorf("avahi bridge unavailable, missing: %v", missing)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if prior, exists := m.instances[containerName]; exists {
+		m.stopInstance(containerName, prior, true)
+		delete(m.instances, containerName)
+	}
+	return m.prepareLocked(ctx, containerName)
+}
+
+func (m *Manager) prepareLocked(ctx context.Context, containerName string) (string, error) {
 	if prior, exists := m.instances[containerName]; exists && prior.runCtx.Err() != nil {
 		m.stopInstance(containerName, prior, true)
 		delete(m.instances, containerName)
@@ -277,7 +296,7 @@ func (m *Manager) Prepare(ctx context.Context, containerName string) (string, er
 	return proxyDir, nil
 }
 
-// StartDaemon waits for an IPv4 address inside netnsPath and then launches
+// StartDaemon requires an IPv4 address inside netnsPath and then launches
 // the supervised per-container avahi-daemon. Call after the container
 // network is configured; fail-closed like Prepare.
 func (m *Manager) StartDaemon(ctx context.Context, containerName, netnsPath string, addrOK func(context.Context) (bool, error)) error {
@@ -296,21 +315,14 @@ func (m *Manager) StartDaemon(ctx context.Context, containerName, netnsPath stri
 	stateDir := m.stateDir(containerName)
 	// Address-before-daemon: the daemon publishes interface addresses, so it
 	// must only start once the netns actually has an IPv4.
-	addrCtx, addrCancel := context.WithTimeout(ctx, addressWaitTimeout)
+	addrCtx, addrCancel := context.WithTimeout(ctx, daemonReadyTimeout)
 	defer addrCancel()
-	for {
-		ok, err := addrOK(addrCtx)
-		if err != nil {
-			return fmt.Errorf("avahi netns address check: %w", err)
-		}
-		if ok {
-			break
-		}
-		select {
-		case <-addrCtx.Done():
-			return fmt.Errorf("avahi netns has no IPv4 address: %w", addrCtx.Err())
-		case <-time.After(addressPollWait):
-		}
+	ok, err := addrOK(addrCtx)
+	if err != nil {
+		return fmt.Errorf("avahi netns address check: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("avahi netns has no IPv4 address after network setup")
 	}
 	inst.wg.Add(1)
 	ready := make(chan error, 1)
@@ -381,7 +393,7 @@ func (m *Manager) supervise(ctx context.Context, inst *instance, containerName, 
 			m.track(inst, cmd)
 			exited := make(chan error, 1)
 			go func() { exited <- cmd.Wait() }()
-			probeCtx, stopProbe := context.WithTimeout(ctx, addressWaitTimeout)
+			probeCtx, stopProbe := context.WithTimeout(ctx, daemonReadyTimeout)
 			probe := make(chan error, 1)
 			go func() { probe <- m.ready(probeCtx, bus) }()
 			select {

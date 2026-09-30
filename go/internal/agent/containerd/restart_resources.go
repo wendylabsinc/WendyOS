@@ -77,7 +77,7 @@ func (c *Client) ensureDBusProxyForStart(ctx context.Context, containerName stri
 
 // ensureAvahiForStart recreates the avahi bus+proxy for a rebooted container
 // whose persisted spec already mounts the avahi proxy directory. The daemon
-// itself respawns through the normal post-network hook when the task starts.
+// itself starts after CNI and before the application entrypoint is released.
 func (c *Client) ensureAvahiForStart(ctx context.Context, containerName string, mounts []specs.Mount) (bool, error) {
 	for _, mount := range mounts {
 		if mount.Destination != "/var/run/dbus" {
@@ -90,7 +90,7 @@ func (c *Client) ensureAvahiForStart(ctx context.Context, containerName string, 
 		if c.avahiManager == nil {
 			return false, fmt.Errorf("avahi bridge unavailable for %q", containerName)
 		}
-		dir, err := c.avahiManager.Prepare(ctx, containerName)
+		dir, err := c.avahiManager.PrepareForTask(ctx, containerName)
 		if err != nil {
 			return false, fmt.Errorf("recreating avahi bridge for %q: %w", containerName, err)
 		}
