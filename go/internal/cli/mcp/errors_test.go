@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -38,5 +39,35 @@ func TestCodeFromGRPC(t *testing.T) {
 		if got := codeFromGRPC(status.Error(c, "x")); got != want {
 			t.Errorf("codeFromGRPC(%v) = %v, want %v", c, got, want)
 		}
+	}
+}
+
+// fakeHintRewrite stands in for a plugin-managed CLI that is not on PATH.
+func fakeHintRewrite(t *testing.T) {
+	t.Helper()
+	old := rewriteCLIHints
+	rewriteCLIHints = func(msg string) string {
+		return strings.NewReplacer("'wendy ", "'/home/u/.wendy/bin/wendy ", "`wendy ", "`/home/u/.wendy/bin/wendy ").Replace(msg)
+	}
+	t.Cleanup(func() { rewriteCLIHints = old })
+}
+
+func TestErrResult_RewritesCLIHints(t *testing.T) {
+	fakeHintRewrite(t)
+	r := errResult(errCodeInternal, "auth entry has no certificates; re-run 'wendy auth login'")
+	want := "auth entry has no certificates; re-run '/home/u/.wendy/bin/wendy auth login'"
+	if got := structuredMap(t, r)["message"]; got != want {
+		t.Errorf("structured message = %q, want %q", got, want)
+	}
+	if text := toolResultText(t, r); !strings.Contains(text, want) {
+		t.Errorf("text fallback = %q, want it to contain %q", text, want)
+	}
+}
+
+func TestROS2Error_RewritesCLIHints(t *testing.T) {
+	fakeHintRewrite(t)
+	r := ros2Error(status.Error(codes.Unimplemented, "unknown service"))
+	if text := toolResultText(t, r); !strings.Contains(text, "`/home/u/.wendy/bin/wendy device update`") {
+		t.Errorf("ros2Error text = %q, want the rewritten update hint", text)
 	}
 }

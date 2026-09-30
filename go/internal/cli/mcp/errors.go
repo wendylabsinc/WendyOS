@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -24,9 +25,16 @@ const (
 	errCodeInternal          errorCode = "INTERNAL"
 )
 
+// rewriteCLIHints is pluginmode.RewriteCLIHints; a variable so tests can pose
+// as a plugin-managed CLI that is not on PATH.
+var rewriteCLIHints = pluginmode.RewriteCLIHints
+
 // errResult builds an error tool result with a machine-readable code and a
-// human-readable "[CODE] message" text fallback.
+// human-readable "[CODE] message" text fallback. 'wendy …' commands quoted in
+// msg are made runnable when this CLI is a plugin-managed install that PATH
+// does not reach (see pluginmode.CLIInvocation).
 func errResult(code errorCode, msg string) *mcpgo.CallToolResult {
+	msg = rewriteCLIHints(msg)
 	r := mcpgo.NewToolResultStructured(
 		map[string]any{"error_code": string(code), "message": msg},
 		fmt.Sprintf("[%s] %s", code, msg),
