@@ -105,12 +105,14 @@ func mcpRefreshRunsAsForeignUser() bool {
 // configs. The next run as HOME's owner refreshes instead. Nor does it run when
 // the Wendy plugin's launcher started this CLI for Claude or Codex: that
 // process must not rewrite AI tool configs behind the user's back, and the
-// next command the user runs in a terminal refreshes instead.
+// next command the user runs in a terminal refreshes instead. The silent
+// refresh never removes a user-level entry for a client whose Wendy plugin is
+// active; explicit `wendy mcp setup` does, and reports it.
 func maybeRefreshMCPSetup(cfg *config.Config) {
 	if pluginmode.Client() != "" || mcpRefreshRunsAsForeignUser() || !shouldRefreshMCPSetup(cfg.LastMCPSetupVersion, version.Version) {
 		return
 	}
-	setupMCPForAllTools()
+	configureMCPClients(false)
 	installSkillsForAllTools()
 	cfg.LastMCPSetupVersion = version.Version
 	_ = config.Save(cfg)
@@ -154,7 +156,19 @@ type mcpSetupResult struct {
 	note string
 }
 
+// setupMCPForAllTools is `wendy mcp setup` (and the tour): it configures every
+// detected MCP client and removes the user-level entry of a client whose
+// Wendy plugin provides the server.
 func setupMCPForAllTools() []mcpSetupResult {
+	return configureMCPClients(true)
+}
+
+// configureMCPClients configures every detected MCP client. For a client whose
+// Wendy plugin is active it writes nothing and, when removePluginDuplicates is
+// set, removes the user-level entry an earlier setup wrote.
+func configureMCPClients(removePluginDuplicates bool) []mcpSetupResult {
+	// keepEntry is the remove func for a plugin client when nothing may be removed.
+	keepEntry := func() (bool, error) { return false, nil }
 	wendyBin := wendyBinaryPath()
 	entry := map[string]any{
 		"type":    "stdio",
@@ -169,9 +183,13 @@ func setupMCPForAllTools() []mcpSetupResult {
 	// runs the server: write none, and remove the one an earlier setup wrote.
 	if claudeCodePath := claudeCodeConfigPath(); claudeCodePath != "" {
 		if home != "" && pluginmode.ClaudePluginActive(home) {
-			results = append(results, pluginProvidedResult("Claude Code", claudeCodePath, func() (bool, error) {
-				return removeMCPFromJSONConfig(claudeCodePath, "mcpServers", "wendy")
-			}))
+			remove := keepEntry
+			if removePluginDuplicates {
+				remove = func() (bool, error) {
+					return removeMCPFromJSONConfig(claudeCodePath, "mcpServers", "wendy")
+				}
+			}
+			results = append(results, pluginProvidedResult("Claude Code", claudeCodePath, remove))
 		} else if err := addMCPToJSONConfig(claudeCodePath, "mcpServers", "wendy", entry); err != nil {
 			results = append(results, mcpSetupResult{tool: "Claude Code", path: claudeCodePath, err: err})
 		} else {
@@ -209,9 +227,13 @@ func setupMCPForAllTools() []mcpSetupResult {
 	// Codex (~/.codex/config.toml), plugin-aware like Claude Code.
 	if codexPath := codexConfigPath(); codexPath != "" {
 		if home != "" && pluginmode.CodexPluginActive(home) {
-			results = append(results, pluginProvidedResult("Codex", codexPath, func() (bool, error) {
-				return removeMCPFromTOMLConfig(codexPath, "mcp_servers", "wendy")
-			}))
+			remove := keepEntry
+			if removePluginDuplicates {
+				remove = func() (bool, error) {
+					return removeMCPFromTOMLConfig(codexPath, "mcp_servers", "wendy")
+				}
+			}
+			results = append(results, pluginProvidedResult("Codex", codexPath, remove))
 		} else if err := addMCPToTOMLConfig(codexPath, "mcp_servers", "wendy", wendyBin, []string{"mcp", "serve"}); err != nil {
 			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, err: err})
 		} else {
@@ -270,7 +292,17 @@ func claudeDesktopConfigPath() string {
 }
 
 func wendyBinaryPath() string {
-	if p, err := os.Executable(); err == nil {
+	if p, err := cliExecutable(); err == nil {
+		// On Linux os.Executable resolves ~/.wendy/bin/wendy to a versioned
+		// copy the launcher later prunes; register the stable pointer.
+		if pluginManagedCLI() {
+			if dir, err := config.ConfigDir(); err == nil {
+				pointer := filepath.Join(dir, "bin", filepath.Base(p))
+				if _, err := os.Stat(pointer); err == nil {
+					return pointer
+				}
+			}
+		}
 		return p
 	}
 	if p, err := exec.LookPath("wendy"); err == nil {

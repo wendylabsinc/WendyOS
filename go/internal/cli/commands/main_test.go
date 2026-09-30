@@ -16,6 +16,9 @@ func TestMain(m *testing.M) {
 	// have it copied into deviceFlag by every test that executes the root
 	// command, and leak from there into later tests.
 	os.Unsetenv("WENDY_DEVICE")
+	// A shell inside a plugin-launched Claude/Codex session exports
+	// WENDY_PLUGIN, which switches the CLI into plugin-managed behavior.
+	os.Unsetenv("WENDY_PLUGIN")
 	if tmp, err := os.MkdirTemp("", "wendy-commands-test-home-"); err == nil {
 		os.Setenv("HOME", tmp)
 		os.Setenv("USERPROFILE", tmp) // Windows: os.UserHomeDir consults this

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -24,6 +25,8 @@ func mcpSetupResultLine(r mcpSetupResult) string {
 		return fmt.Sprintf("✓ %s: removed the user-level wendy server (the plugin provides it)", r.tool)
 	case r.note == mcpNoteSkippedForPlugin:
 		return fmt.Sprintf("↷ %s: skipped — the Wendy plugin provides the MCP server", r.tool)
+	case r.note != "":
+		return fmt.Sprintf("↷ %s: %s", r.tool, r.note)
 	default:
 		return fmt.Sprintf("✓ %s: configured at %s", r.tool, r.path)
 	}
@@ -50,7 +53,8 @@ func pluginProvidedResult(tool, path string, remove func() (bool, error)) mcpSet
 // reports whether it did. Numbers are kept exactly as written (large
 // timestamps and counters in ~/.claude.json exceed float64 precision), HTML
 // characters are not escaped, the file keeps its mode, a symlink keeps
-// pointing at the edited target, and the write is atomic. A missing or empty
+// pointing at the edited target, and the write is atomic. The file is
+// re-encoded (keys sorted, two-space indent), like the add path. A missing or empty
 // file is not an error.
 func removeMCPFromJSONConfig(path, topKey, name string) (bool, error) {
 	target := path
@@ -72,6 +76,9 @@ func removeMCPFromJSONConfig(path, topKey, name string) (bool, error) {
 	dec.UseNumber()
 	if err := dec.Decode(&cfg); err != nil {
 		return false, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return false, fmt.Errorf("parsing %s: unexpected data after the JSON value", path)
 	}
 	top, _ := cfg[topKey].(map[string]any)
 	entry, ok := top[name].(map[string]any)

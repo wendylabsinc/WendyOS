@@ -3,12 +3,14 @@ package commands
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	toml "github.com/BurntSushi/toml"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 // writeClaudeWendyPlugin registers the Wendy plugin for Claude Code under
@@ -222,5 +224,100 @@ func TestMCPSetupCmd_ReportsPluginClients(t *testing.T) {
 		if strings.Contains(out.String(), unwanted) {
 			t.Errorf("restart notice lists a plugin client (%q):\n%s", unwanted, out.String())
 		}
+	}
+}
+
+func TestMaybeRefreshMCPSetup_KeepsUserEntryForPluginClient(t *testing.T) {
+	home := setupMCPRefreshTest(t)
+	writeClaudeWendyPlugin(t, home, true)
+	claudePath := filepath.Join(home, ".claude.json")
+	codexPath := filepath.Join(home, ".codex", "config.toml")
+	claudeOrig := `{"mcpServers":{"wendy":{"command":"/old/wendy","args":["mcp","serve"]}}}`
+	codexOrig := "[mcp_servers.wendy]\ncommand = \"/old/wendy\"\nargs = [\"mcp\", \"serve\"]\n\n" +
+		"[plugins.\"wendy@wendy-agentic-coding\"]\nenabled = true\n"
+	if err := os.WriteFile(claudePath, []byte(claudeOrig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexPath, []byte(codexOrig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{LastMCPSetupVersion: "9.9.8"}
+	maybeRefreshMCPSetup(cfg)
+
+	for path, want := range map[string]string{claudePath: claudeOrig, codexPath: codexOrig} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("%s changed by the silent refresh:\n%s", path, got)
+		}
+	}
+	if cfg.LastMCPSetupVersion != "9.9.9" {
+		t.Errorf("LastMCPSetupVersion = %q, want 9.9.9", cfg.LastMCPSetupVersion)
+	}
+}
+
+func TestMCPSetupResultLine(t *testing.T) {
+	tests := []struct {
+		name string
+		r    mcpSetupResult
+		want string
+	}{
+		{"error", mcpSetupResult{tool: "Cursor", err: errors.New("boom")}, "✗ Cursor: boom"},
+		{"removed", mcpSetupResult{tool: "Codex", note: mcpNoteRemovedForPlugin}, "✓ Codex: removed the user-level wendy server (the plugin provides it)"},
+		{"skipped", mcpSetupResult{tool: "Codex", note: mcpNoteSkippedForPlugin}, "↷ Codex: skipped — the Wendy plugin provides the MCP server"},
+		{"free-form note", mcpSetupResult{tool: "Claude Code skills", note: "skipped — the Wendy plugin provides these skills"}, "↷ Claude Code skills: skipped — the Wendy plugin provides these skills"},
+		{"configured", mcpSetupResult{tool: "Cursor", path: "/p"}, "✓ Cursor: configured at /p"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mcpSetupResultLine(tt.r); got != tt.want {
+				t.Errorf("mcpSetupResultLine = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRemoveMCPFromJSONConfig_RefusesTrailingData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude.json")
+	orig := `{"mcpServers":{"wendy":{"args":["mcp","serve"]}}} trailing`
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := removeMCPFromJSONConfig(path, "mcpServers", "wendy")
+	if err == nil || removed {
+		t.Fatalf("removeMCPFromJSONConfig = %v, %v; want an error", removed, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != orig {
+		t.Errorf("file changed despite the error: %s", got)
+	}
+}
+
+func TestWendyBinaryPath_PrefersManagedPointer(t *testing.T) {
+	home := isolateAIToolHome(t)
+	versioned := filepath.Join(home, ".wendy", "cli", "2026.01.01-000000", "wendy")
+	pointer := filepath.Join(home, ".wendy", "bin", "wendy")
+	for _, p := range []string{versioned, pointer} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(versioned, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := cliExecutable
+	cliExecutable = func() (string, error) { return versioned, nil }
+	t.Cleanup(func() { cliExecutable = old })
+
+	if got := wendyBinaryPath(); got != versioned {
+		t.Errorf("without the pointer: wendyBinaryPath = %q, want %q", got, versioned)
+	}
+	if err := os.WriteFile(pointer, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := wendyBinaryPath(); got != pointer {
+		t.Errorf("with the pointer: wendyBinaryPath = %q, want %q", got, pointer)
 	}
 }
