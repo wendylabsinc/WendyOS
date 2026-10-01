@@ -1,6 +1,6 @@
 # Model watch (P-WDY-258): session handoff
 
-**Date:** 2026-09-25 (updated after milestone M2 was implemented)
+**Date:** 2026-09-25 (updated after milestone M2 was implemented, and on 2026-10-01 after the device smoke test)
 **Branch:** `ed/model-watch-design` in `/media/work/WendyAgent`, based on `main` at `f36f361af`; pushed, with a draft PR against `main`
 **Owner:** Ethan, lead of the Linear project P-WDY-258 "Wendy Chat: Let LLM spawn 'any model'"
 
@@ -11,27 +11,48 @@ Read this first when you pick up the work. It tells you where things stand and w
 - **Design approved:** `specs/2026-09-25-model-watch-design.md`. Brainstorming split P-WDY-258 into six sub-projects, and this is the design for the first slice, "model watch".
 - **Plan approved and executed:** `specs/2026-09-25-model-watch-plan-2-agent-service.md` (milestone M2: the agent's `WendyModelService` and the `wendy device model` CLI) was executed task by task with `superpowers:subagent-driven-development`. Every task was reviewed, then the whole branch; review fixes are in the branch history.
 - **Done:** Tasks 1–17 through Task 17 Step 5 — proto, catalog, file cache, supervisor (leases, restarts, engine builds, events, replay), two-plane camera pins, the data-socket sink, the containerd model-host runtime, the gRPC service, agent wiring, the CLI, and the fake host with its workflow.
-- **Not done:** Task 17 Step 6, the device smoke test (needs Ethan; see below). The draft PR's description has an unchecked smoke-test list to fill in.
+- **Smoke test passed (2026-10-01)** on a Jetson Orin Nano: Task 17 Step 6, with a side-loaded host image and a virtual H.264 camera (see "Smoke test record" below). The results are in the PR description.
+- **After the first push (2026-10-01):** `main` merged in; the security review's two MEDIUM findings fixed (model file downloads follow only https redirects and fail after a minute without data; the PR job of `model-host.yml` no longer holds `packages: write`); the plan split in two (`…-plan-2-agent-service.md` holds Tasks 1–8, `…-part-2.md` Tasks 9–17) because one 235 KB file made the API review skip the whole PR.
 - **Verified locally at the branch head:** `go build ./...` and `go vet` clean; `go test -race` passes for the models, services, containerd, data, cmd/wendy-agent, grpcclient and appconfig packages and the fake host, and `go test` for the CLI commands — except the pre-existing, machine-specific failures listed under Environment notes.
 
 ## What to do next
 
-1. **Run the Jetson smoke test** — plan Task 17 Step 6, with the notes below.
-2. **Record the outcome in the draft PR's description** (the plan asks for that) and mark the PR ready for review. The PR lives on the canonical repo `wendylabsinc/WendyOS`.
+1. **Decide on the smoke-test findings** below (two small M2 fixes, one pre-existing loopback bug), then mark the PR ready for review. The PR lives on the canonical repo `wendylabsinc/WendyOS`. Its remaining red checks (`Format Check`, `Test` in `internal/cli/mcp`) fail on `main` and other open PRs too.
+2. **Publish the fake host** once `model-host.yml` is on `main` (manual dispatch with publish), and make the package public; the anonymous ghcr pull is the one path the smoke test did not cover.
 3. **Plan the next milestone** with `superpowers:writing-plans` (design §13: M3 is MCP and chat; M1 is the Mojo host). Carry the follow-ups below into those plans.
 
-### Smoke test notes (Task 17 Step 6)
+### Smoke test record (Task 17 Step 6, 2026-10-01)
 
-The plan's Step 6 still applies. What changed or was learned since it was written:
+Run on `hopeful-glider`, a Jetson Orin Nano reached over USB-C from a Mac, with the agent built from this branch. Everything passed:
 
-- **Workstation prerequisites.** Docker needs the buildx plugin (`sudo pacman -S docker-buildx`), and this user currently gets "permission denied" on `/var/run/docker.sock` (add the user to the `docker` group or use `sudo`). Step 4's local image build was not run in the implementation session for these reasons; Step 6's `docker buildx build … --push` is the first real build of `go/modelhost/fakehost/Dockerfile`.
-- **Image visibility.** The agent pulls model host images anonymously, so `ghcr.io/wendylabsinc/wendy-model-host-fake` must be public (Step 6.1 says how).
-- **Camera.** Use a USB camera that delivers native H.264 (the class of camera `Examples/WendyDataModelApp` was proven with). The two-plane path binds only access-unit-aligned native V4L2 H.264; other cameras are now refused at `StartModel` with "camera cannot stream to a model: …".
-- **Dev catalog.** The model file in Step 6.2 (this repo's `LICENSE` at `f36f361a…`) was checked: sha256 `c71d239d…0ab4`, 11357 bytes, and the raw.githubusercontent.com URL is public.
-- **Expected behaviour after the review fixes.**
-  - `wendy device model run` may take up to 10 s to return from its start while a new camera node produces its first frame.
-  - Ctrl+C in `run` detaches the watch explicitly, so the model stops at once when it was the only watcher; `wendy device model list` is empty straight away. Only a killed client (`kill -9`, Step 6.5) leaves the model for the 60 s grace, so "gone within 90 s" still applies there.
-  - Restarting the agent (Step 6.6) now stops model instances before the servers drain: the `run` stream ends with `state: stopped: the agent is shutting down`, and boot cleanup finds nothing left.
+| Check | Result |
+|---|---|
+| `catalog` | lists `fake-detector` (`image_cached: true`) and both cameras |
+| `run` on the virtual camera | preparing → starting → ready at 10 fps; `person entered` (sequence 1) about 20 s in, `left` (sequence 2) 20 s later |
+| Ctrl+C | `run` exits at once; `list` is empty 1 s later; log: "stopped by its last watcher" |
+| `kill -9` of `run` | instance gone at +63 s; log: "no watchers for 60 s"; no `wendy-model-` containers |
+| agent restart | stream ends with `STOPPED: the agent is shutting down`; no `wendy-model-` containers after boot |
+| the Brio 101 | refused at start: "camera cannot stream to a model: … unaligned byte stream, not whole access units …" |
+| host container spec | uid/gid 65534 (extra gids 44, 2000), read-only root, no capabilities, `noNewPrivileges`, own network namespace, one allowed device (81:4, the agent's loopback node), model and labels mounted `ro,nosuid,nodev,noexec` |
+
+**How it was run, where it departs from the plan:**
+
+- **Agent unit** is `wendyos-agent.service` on current WendyOS images, not `edge-agent.service`.
+- **`wendy device shell -- <cmd>`** now runs commands without a TTY, so no interactive shell is needed. The command still runs in a PTY: pass `--no-pager` to `systemctl show`, or it waits on `less` forever.
+- **Host image, side-loaded rather than published:** `docker buildx build --platform linux/arm64 … --load`, push it to a throwaway `registry:2` on the workstation (port 5001; macOS holds 5000), then on the device `ctr -n default images pull --plain-http <workstation-ip>:5001/wendy-model-host-fake@<digest>` and `ctr -n default images tag` it to `ghcr.io/wendylabsinc/wendy-model-host-fake@<digest>`. `EnsureImage` then finds it and never pulls.
+- **Virtual H.264 camera.** The attached Logitech Brio 101 offers only YUYV and MJPEG, and an Orin Nano has no H.264 encoder (no NVENC; the image has no `x264enc` or `h264parse`), so the H.264 is made on the workstation:
+  1. Create `/dev/video60` with `V4L2LOOPBACK_CTL_ADD` (`0x40487E01`, a 72-byte `v4l2_loopback_config` with `output_nr=60`, `max_openers=8`). Python's `fcntl.ioctl` does it. Keep the number outside 128–255, which the agent skips when listing local cameras.
+  2. On the device: `systemd-run --unit=m2-fakecam gst-launch-1.0 udpsrc port=5004 caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" ! rtpjitterbuffer ! rtph264depay ! video/x-h264,stream-format=byte-stream,alignment=au ! capssetter replace=true caps="video/x-h264,stream-format=byte-stream,alignment=au,width=640,height=480,framerate=15/1,parsed=(boolean)true,pixel-aspect-ratio=1/1,colorimetry=bt709" ! v4l2sink device=/dev/video60 sync=false`. `v4l2sink` needs `parsed=true` and an explicit `colorimetry`, or it fails with not-negotiated.
+  3. On the workstation: `ffmpeg -re -f lavfi -i testsrc2=size=640x480:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -pix_fmt yuv420p -x264-params repeat-headers=1:aud=1 -payload_type 96 -f rtp rtp://<device-usb-ip>:5004`.
+  4. Remove the node afterwards with `V4L2LOOPBACK_CTL_REMOVE` (`0x40047E02`), passing the number **by value**.
+
+**Found during the smoke test, not fixed:**
+
+- **M2:** catalog camera names carry the raw transport enum (`Brio 101 VIDEO_TRANSPORT_USB`), because `ModelCameras.List` uses `data.Source.Detail`.
+- **M2:** after the stream reports `STOPPED`, `run` still sends `StopModel`, and the agent logs `NotFound` as a gRPC handler error.
+- **Pre-existing, outside M2, affects it:** `removeLoopbackNode` (`internal/agent/ipcam/loopback_linux.go`) passes `V4L2LOOPBACK_CTL_REMOVE` a pointer, but v4l2loopback 0.15.4 takes the device number by value. The kernel answers `ENODEV`, which the agent treats as "already gone", so loopback nodes are never removed. `AllocateAuxNodeNumber` skips existing nodes, so every two-plane teardown leaks a number until the shared 200–255 band is exhausted and two-plane starts fail until a reboot. The test device had leaked six (`/dev/video250`–`255`).
+- Confirmed on hardware: a second `run` on a refused camera says `unknown camera` (the M3 follow-up below).
+- Once, the first `catalog` right after the agent update hung for a minute; it did not happen again.
 
 ## Decisions already made (do not re-ask)
 
@@ -67,7 +88,7 @@ Settled while executing M2:
 |---|---|---|
 | M0 | Spikes S1–S5 (detector, Qualcomm engine path, Jetson TensorRT, Pi decode, Mojo interop) | Needs hardware; not planned yet |
 | M1 | Mojo host and CPU image, run as a plain app on a Pi 5 | Needs S1, S4, S5 |
-| **M2** | **Agent service and CLI** | **Implemented; smoke test pending** |
+| **M2** | **Agent service and CLI** | **Implemented; smoke test passed 2026-10-01** |
 | M3 | MCP tools, notifications, chat event turns | Needs M2 |
 | M4 | Jetson and Qualcomm images and adapters | Needs S2, S3 |
 | M5 | Hardware validation and write-up | Needs the rest |
@@ -105,6 +126,10 @@ Settled while executing M2:
 - Test gaps: pull/download failure paths, the 8 s/30 s backoffs and 15 s stall threshold, build-slot release paths, `--json` for `list`/`stop`, and several catalog validation branches.
 
 ## Environment notes for this checkout
+
+**The Mac checkout (2026-10-01)** is the worktree `/Users/ethan/Documents/WendyAgent-model-watch`. Docker Desktop there has buildx, and `user.email` is already the noreply address. Every M2 agent package passes `go test -race` on it, including `internal/agent/services`. In `internal/cli/commands`, `TestSimulatorFilterAsksOnlyVMsItCanReachAndDoesNotKnow` fails in a full package run and passes alone, on `main` as well. The `gh` token has no `write:packages`, so a ghcr push needs `gh auth refresh -h github.com -s write:packages` first.
+
+**The Linux checkout** (`/media/work/WendyAgent`), where M2 was implemented:
 
 - **Committing:** `git config user.name` is unset, and GitHub refuses command-line pushes of commits authored with the private `ebrogames@gmail.com` (error GH007). Commit with `git -c user.name=Ethan -c user.email=24462281+EBro912@users.noreply.github.com commit`. End messages with the single `Co-Authored-By` line above; no `Claude-Session` link.
 - **Branch names:** Ethan's branches use the prefix `ed/`.
