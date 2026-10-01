@@ -8,20 +8,27 @@ import (
 	"strconv"
 )
 
-// HelperRequest is one parsed `__t234-write` invocation: a USB release, a LUN
-// unmount or eject, or exactly one writer operation. Stage2 builds the argument
-// lists (see flash.go); this parser is shared by the privileged helper
-// subcommand (macOS/Linux, re-exec'd under sudo) and the in-process path
-// (Windows, where the whole process is already elevated), so both sides always
-// agree. Unmount and Eject are privileged too (umount/diskutil/udisksctl/eject
-// all need root on Linux/macOS), so they route through the same helper rather
-// than running in the unprivileged parent; Writer.Device carries their target.
+// HelperRequest is one parsed `__t234-write` invocation: a LUN unmount or
+// eject, enabling media polling, or exactly one writer operation. Stage2
+// builds the argument lists (see flash.go); this parser is shared by the
+// privileged helper subcommand (macOS/Linux, re-exec'd under sudo) and the
+// in-process path (Windows, where the whole process is already elevated), so
+// both sides always agree. Unmount and Eject are privileged too (umount,
+// diskutil and eject all need root on Linux/macOS), so they route through the
+// same helper; Writer.Device carries their target.
 type HelperRequest struct {
+	Unmount bool
+	// Eject ejects only the LUN's medium; the USB device stays attached.
+	Eject bool
+	// LegacyEject permits USB power-off so Linux refreshes SCSI identity.
+	LegacyEject bool
+	// PollMedia turns on host media polling for the LUNs of Session.
+	PollMedia bool
+	Session   string
+	// Release is the scoped USB-disconnect fallback for legacy initrds only.
 	Release       bool
 	ReleaseSerial string
 	ReleasePort   string
-	Unmount       bool
-	Eject         bool
 	Writer        WriterOptions
 }
 
@@ -31,6 +38,14 @@ type HelperRequest struct {
 // two directions against each other.
 func (r HelperRequest) Args() []string {
 	switch {
+	case r.Unmount:
+		return []string{"--unmount", "--device", r.Writer.Device}
+	case r.Eject:
+		return []string{"--eject", "--device", r.Writer.Device}
+	case r.LegacyEject:
+		return []string{"--eject-legacy", "--device", r.Writer.Device}
+	case r.PollMedia:
+		return []string{"--poll-media", "--session", r.Session}
 	case r.Release:
 		args := []string{"--release"}
 		if r.ReleaseSerial != "" {
@@ -40,10 +55,6 @@ func (r HelperRequest) Args() []string {
 			args = append(args, "--port", r.ReleasePort)
 		}
 		return args
-	case r.Unmount:
-		return []string{"--unmount", "--device", r.Writer.Device}
-	case r.Eject:
-		return []string{"--eject", "--device", r.Writer.Device}
 	}
 	w := r.Writer
 	args := []string{"--device", w.Device}
@@ -97,12 +108,19 @@ func ParseWriterArgs(args []string) (HelperRequest, error) {
 				req.Writer.DumpBytes, err = strconv.ParseInt(v, 10, 64)
 			}
 			i++
-		case "--release":
-			req.Release = true
 		case "--unmount":
 			req.Unmount = true
 		case "--eject":
 			req.Eject = true
+		case "--eject-legacy":
+			req.LegacyEject = true
+		case "--poll-media":
+			req.PollMedia = true
+		case "--session":
+			req.Session, err = next(i, flag)
+			i++
+		case "--release":
+			req.Release = true
 		case "--serial":
 			req.ReleaseSerial, err = next(i, flag)
 			i++
@@ -123,13 +141,16 @@ func ParseWriterArgs(args []string) (HelperRequest, error) {
 // lines to progress (may be nil).
 func RunHelperRequest(req HelperRequest, progress io.Writer) error {
 	switch {
-	case req.Release:
-		return ReleaseUSB(req.ReleaseSerial, req.ReleasePort)
 	case req.Unmount:
 		return unmountUMSDisk(UMSDisk{DevPath: req.Writer.Device})
 	case req.Eject:
-		ejectUMSDisk(UMSDisk{DevPath: req.Writer.Device})
-		return nil
+		return ejectUMSDisk(UMSDisk{DevPath: req.Writer.Device})
+	case req.LegacyEject:
+		return ejectLegacyUMSDisk(UMSDisk{DevPath: req.Writer.Device})
+	case req.PollMedia:
+		return enableMediaPolling(req.Session)
+	case req.Release:
+		return ReleaseUSB(req.ReleaseSerial, req.ReleasePort)
 	}
 	opts := req.Writer
 	opts.Progress = progress

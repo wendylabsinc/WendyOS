@@ -51,8 +51,9 @@ use `--device-name`, WiFi preseed options, or `--no-wifi` for Ethernet. Optional
 `--pre-enroll` requires the intended Wendy Cloud login. See the
 [installation command reference](/docs/advanced/clients/wendy-cli/commands/os/install).
 
-On macOS, the terminal may need Full Disk Access. If macOS says the flashing disk
-is unreadable, choose **Ignore**, not Initialize or Eject. On Windows, allow the
+On macOS, the terminal may need Full Disk Access. `wendy` claims the flashing
+disks so macOS neither mounts them nor asks about unreadable disks; if such a
+prompt still appears, choose **Ignore**, not Initialize or Eject. On Windows, allow the
 installer's required driver/elevation step and cancel any request to format the
 newly attached raw disk. The installer reports these platform-specific steps.
 
