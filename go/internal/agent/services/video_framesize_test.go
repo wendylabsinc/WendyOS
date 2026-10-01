@@ -136,3 +136,49 @@ func TestBuildGStreamerArgs_USB_RawWhenNoJpegdec(t *testing.T) {
 		t.Fatalf("expected raw capture without jpegdec available, got: %s", joined)
 	}
 }
+
+// A thermal module offers none of the formats a webcam does. The PureThermal
+// carrying a FLIR Lepton advertises Y16, UYVY and GREY — so probing only
+// {YUYV, MJPEG} found nothing, the agent concluded the camera had no frame
+// sizes, and zero dimensions took out the whole capture path: no caps on the
+// pipeline, no frame ever negotiated, and the raw tap declined for "no discrete
+// frame size". Observed on enmax01 with the agent holding /dev/video2 open in a
+// pipeline that could never produce a frame.
+func TestFrameSizeProbeFormatsCoversThermalPixelFormats(t *testing.T) {
+	probed := frameSizeProbeFormats()
+
+	seen := make(map[uint32]bool, len(probed))
+	for _, f := range probed {
+		seen[f] = true
+	}
+
+	for _, want := range []struct {
+		name   string
+		pixfmt uint32
+	}{
+		{"YUYV", v4l2PixFmtYUYV},
+		{"UYVY", v4l2PixFmtUYVY},
+		{"Y16", v4l2PixFmtY16},
+		{"GREY", v4l2PixFmtGrey},
+		{"MJPEG", v4l2PixFmtMJPEG},
+	} {
+		if !seen[want.pixfmt] {
+			t.Errorf("frame size probe omits %s (0x%08x); a camera offering only "+
+				"that format reports no sizes and becomes unstreamable", want.name, want.pixfmt)
+		}
+	}
+
+	// Every format the raw tap can capture must be probed, or the tap can be
+	// offered a format whose sizes were never enumerated.
+	for _, f := range rawPixelFormats {
+		if !seen[f.v4l2] {
+			t.Errorf("raw tap handles %q but the frame size probe does not ask about it",
+				strings.TrimSpace(f.fourcc))
+		}
+	}
+
+	// The common webcam path must be unchanged: YUYV is still tried first.
+	if len(probed) == 0 || probed[0] != v4l2PixFmtYUYV {
+		t.Errorf("probe order changed: want YUYV first, got %v", probed)
+	}
+}
