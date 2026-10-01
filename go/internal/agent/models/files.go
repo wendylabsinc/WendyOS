@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // ErrDigestMismatch means a downloaded model file did not match the catalog.
@@ -22,17 +23,42 @@ var ErrDigestMismatch = errors.New("model file failed verification")
 type FileCache struct {
 	root   string
 	client *http.Client
+	stall  time.Duration // a download that receives nothing for this long fails
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // one per digest, so one download serves concurrent starts
 }
 
-// NewFileCache stores files under root. A nil client uses http.DefaultClient.
+const (
+	maxModelFileRedirects = 5
+	// downloadStall bounds silence, not the whole download, so a large file
+	// on a slow link still arrives.
+	downloadStall = time.Minute
+)
+
+var errDownloadStalled = errors.New("download stalled")
+
+// NewFileCache stores files under root. A nil client uses the default
+// transport. Whatever the client, a download follows only https redirects.
 func NewFileCache(root string, client *http.Client) *FileCache {
-	if client == nil {
-		client = http.DefaultClient
+	c := http.Client{}
+	if client != nil {
+		c = *client
 	}
-	return &FileCache{root: root, client: client, locks: map[string]*sync.Mutex{}}
+	c.CheckRedirect = httpsRedirectsOnly
+	return &FileCache{root: root, client: &c, stall: downloadStall, locks: map[string]*sync.Mutex{}}
+}
+
+// httpsRedirectsOnly keeps a download on https: the catalog pins https URLs,
+// and a redirect must not weaken that. The digest still decides what is kept.
+func httpsRedirectsOnly(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing a redirect to %s", req.URL.Redacted())
+	}
+	if len(via) >= maxModelFileRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxModelFileRedirects)
+	}
+	return nil
 }
 
 // Path is where the file with this digest lives once fetched.
@@ -83,13 +109,23 @@ func (c *FileCache) Fetch(ctx context.Context, f File) (string, error) {
 }
 
 func (c *FileCache) download(ctx context.Context, f File, dst io.Writer) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	timer := time.AfterFunc(c.stall, func() { cancel(errDownloadStalled) })
+	defer timer.Stop()
+	failed := func(err error) error {
+		if context.Cause(ctx) == errDownloadStalled {
+			return fmt.Errorf("downloading model file: no data for %s: %w", c.stall, errDownloadStalled)
+		}
+		return fmt.Errorf("downloading model file: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.URL, nil)
 	if err != nil {
 		return err
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("downloading model file: %w", err)
+		return failed(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -97,9 +133,10 @@ func (c *FileCache) download(ctx context.Context, f File, dst io.Writer) error {
 	}
 	h := sha256.New()
 	// Read one byte past the declared size so an oversized body is caught.
-	n, err := io.Copy(io.MultiWriter(dst, h), io.LimitReader(resp.Body, f.Bytes+1))
+	body := stallReader{r: io.LimitReader(resp.Body, f.Bytes+1), timer: timer, stall: c.stall}
+	n, err := io.Copy(io.MultiWriter(dst, h), body)
 	if err != nil {
-		return fmt.Errorf("downloading model file: %w", err)
+		return failed(err)
 	}
 	if n != f.Bytes {
 		return fmt.Errorf("%w: got %d bytes, want %d", ErrDigestMismatch, n, f.Bytes)
@@ -108,6 +145,21 @@ func (c *FileCache) download(ctx context.Context, f File, dst io.Writer) error {
 		return fmt.Errorf("%w: sha256 %s, want %s", ErrDigestMismatch, got, f.SHA256)
 	}
 	return nil
+}
+
+// stallReader pushes the stall deadline back whenever data arrives.
+type stallReader struct {
+	r     io.Reader
+	timer *time.Timer
+	stall time.Duration
+}
+
+func (s stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.timer.Reset(s.stall)
+	}
+	return n, err
 }
 
 func (c *FileCache) lock(sha string) *sync.Mutex {

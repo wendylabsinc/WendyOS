@@ -9,8 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func digest(b []byte) string {
@@ -81,6 +83,69 @@ func TestFileCacheReportsHTTPErrors(t *testing.T) {
 	_, err := cache.Fetch(context.Background(), File{URL: srv.URL + "/m", SHA256: digest([]byte("x")), Bytes: 1})
 	if err == nil || errors.Is(err, ErrDigestMismatch) {
 		t.Fatalf("Fetch = %v, want an HTTP error", err)
+	}
+}
+
+func TestFileCacheFollowsOnlyHTTPSRedirects(t *testing.T) {
+	body := []byte("model weights")
+	var plainHits atomic.Int32
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		plainHits.Add(1)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(plain.Close)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/to-https":
+			http.Redirect(w, r, "/m", http.StatusFound)
+		case "/to-http":
+			http.Redirect(w, r, plain.URL+"/m", http.StatusFound)
+		default:
+			_, _ = w.Write(body)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	f := File{SHA256: digest(body), Bytes: int64(len(body))}
+
+	f.URL = srv.URL + "/to-https"
+	if _, err := NewFileCache(t.TempDir(), srv.Client()).Fetch(context.Background(), f); err != nil {
+		t.Fatalf("Fetch through an https redirect = %v", err)
+	}
+	f.URL = srv.URL + "/to-http"
+	if _, err := NewFileCache(t.TempDir(), srv.Client()).Fetch(context.Background(), f); err == nil {
+		t.Fatal("Fetch followed a redirect to plain http")
+	}
+	if plainHits.Load() != 0 {
+		t.Fatalf("the plain http server was asked %d times", plainHits.Load())
+	}
+}
+
+func TestFileCacheAbandonsAStalledDownload(t *testing.T) {
+	body := []byte("model weights")
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body[:4])
+		w.(http.Flusher).Flush()
+		select { // never send the rest
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs first, so Close does not wait on the handler
+	cache := NewFileCache(t.TempDir(), srv.Client())
+	cache.stall = 100 * time.Millisecond
+	f := File{URL: srv.URL + "/m", SHA256: digest(body), Bytes: int64(len(body))}
+
+	done := make(chan error, 1)
+	go func() { _, err := cache.Fetch(context.Background(), f); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "stalled") {
+			t.Fatalf("Fetch = %v, want a stall error", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Fetch is still waiting on a server that stopped sending")
 	}
 }
 
