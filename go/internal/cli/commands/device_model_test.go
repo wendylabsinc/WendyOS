@@ -10,6 +10,8 @@ import (
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // fakeModelService records calls; Task 16 extends it with watching.
@@ -20,6 +22,8 @@ type fakeModelService struct {
 	events  []*agentpbv2.ModelWatchMessage
 	// confirm, when set, holds WatchModel's WatchStarted until it closes.
 	confirm chan struct{}
+	// fail, when set, ends WatchModel with this error after the events.
+	fail error
 
 	mu      sync.Mutex
 	stopped []string // "instance/watch"
@@ -160,7 +164,7 @@ func (f *fakeModelService) WatchModel(req *agentpbv2.WatchModelRequest, stream g
 			return err
 		}
 	}
-	return nil
+	return f.fail
 }
 
 func (f *fakeModelService) watched() *agentpbv2.WatchModelRequest {
@@ -179,7 +183,10 @@ func finalStatus(state agentpbv2.ModelState, detail string) *agentpbv2.ModelWatc
 		InstanceId: "m-1", State: state, StateDetail: detail}}}
 }
 
-func TestModelRunPrintsEventsAndDetaches(t *testing.T) {
+// TestModelRunPrintsEventsUntilTheDeviceEndsTheWatch: a stream the device
+// ends cleanly means the watch is already over, so the run must not detach
+// it; the agent would log a NotFound for the StopModel.
+func TestModelRunPrintsEventsUntilTheDeviceEndsTheWatch(t *testing.T) {
 	fake := &fakeModelService{events: []*agentpbv2.ModelWatchMessage{personEntered(), finalStatus(agentpbv2.ModelState_MODEL_STATE_STOPPED, "stopped")}}
 	serveModels(t, fake)
 	jsonOutput = false
@@ -195,6 +202,23 @@ func TestModelRunPrintsEventsAndDetaches(t *testing.T) {
 	}
 	if got := fake.watched().GetClasses(); len(got) != 1 || got[0] != "person" {
 		t.Fatalf("watched classes = %v", got)
+	}
+	if got := fake.stops(); len(got) != 0 {
+		t.Fatalf("stops = %v, want none for a watch the device ended", got)
+	}
+}
+
+// TestModelRunDetachesAfterABrokenStream: a stream that breaks with an error
+// may leave the watch alive on the device, so the run still detaches it.
+func TestModelRunDetachesAfterABrokenStream(t *testing.T) {
+	fake := &fakeModelService{fail: status.Error(codes.Internal, "stream broke")}
+	serveModels(t, fake)
+	jsonOutput = true
+	err := withModelClient(context.Background(), func(c agentpbv2.WendyModelServiceClient) error {
+		return runModelWatch(context.Background(), c, io.Discard, modelRunOptions{Model: "coco-detector", Camera: "v4l2:/dev/video0"})
+	})
+	if err == nil {
+		t.Fatal("a broken stream returned no error")
 	}
 	if got := fake.stops(); len(got) != 1 || got[0] != "m-1/w-1" {
 		t.Fatalf("stops = %v, want the watch detached", got)

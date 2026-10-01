@@ -297,6 +297,9 @@ func runModelWatch(ctx context.Context, client agentpbv2.WendyModelServiceClient
 		}
 		if r.err != nil {
 			if r.err == io.EOF {
+				// The device ends a stream cleanly only once the watch is
+				// over, so there is nothing left to detach.
+				detached = true
 				if last.GetState() == agentpbv2.ModelState_MODEL_STATE_FAILED {
 					return fmt.Errorf("the model failed: %s", last.GetStateDetail())
 				}
