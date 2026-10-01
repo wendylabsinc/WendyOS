@@ -257,6 +257,11 @@ jobs:
           tar -czvf "$ARCHIVE" "${ARTIFACT}/"
           echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ env.archive }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -816,6 +821,9 @@ jobs:
     permissions:
       id-token: write
       contents: read
+      # Re-signing changes the zip, so the build job's attestation no longer
+      # matches the released asset; attest the signed zip here.
+      attestations: write
     strategy:
       matrix:
         include:
@@ -867,6 +875,11 @@ jobs:
           $ARCHIVE = "wendy-cli-windows-${{ matrix.goarch }}-${VERSION}.zip"
           Remove-Item $ARCHIVE
           Compress-Archive -Path "wendy-cli-windows-${{ matrix.goarch }}" -DestinationPath $ARCHIVE
+
+      - name: Attest build provenance (signed zip)
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: wendy-cli-windows-${{ matrix.goarch }}-${{ needs.determine-version.outputs.version }}.zip
 
       - name: Upload signed zip
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
