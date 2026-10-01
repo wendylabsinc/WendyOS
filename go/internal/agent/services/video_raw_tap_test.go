@@ -509,3 +509,53 @@ func TestPlan_RefusalNamesTheFormatsRawSupports(t *testing.T) {
 		}
 	}
 }
+
+// A thermal core advertises both an 8-bit preview and its real measurements at
+// the same size — a FLIR Lepton behind a PureThermal offers UYVY, Y16 and GREY
+// at 160x120. Picking by list order handed back UYVY, so the tap served a
+// picture and the temperatures were unreachable: nothing in the API lets a
+// caller name a format, and the hub refuses a second producer with different
+// parameters. Rank by bits of real measurement instead.
+func TestRawFormatPrefersDeeperSamplesOverListOrder(t *testing.T) {
+	const w, h = 160, 120
+
+	restore := deviceSupportsRawSize
+	defer func() { deviceSupportsRawSize = restore }()
+
+	advertise := func(offered ...uint32) {
+		set := make(map[uint32]bool, len(offered))
+		for _, f := range offered {
+			set[f] = true
+		}
+		deviceSupportsRawSize = func(_ string, pixfmt, width, height uint32) bool {
+			return set[pixfmt] && width == w && height == h
+		}
+	}
+
+	// The Lepton case: Y16 must win even though UYVY comes first in the table.
+	advertise(v4l2PixFmtUYVY, v4l2PixFmtY16, v4l2PixFmtGrey)
+	got := rawFormatFor("/dev/video0", w, h)
+	if got == nil || strings.TrimSpace(got.fourcc) != "Y16" {
+		t.Fatalf("thermal core: want Y16 (16-bit measurements), got %v", got)
+	}
+
+	// A plain webcam is unchanged.
+	advertise(v4l2PixFmtYUYV)
+	if got = rawFormatFor("/dev/video0", w, h); got == nil || got.fourcc != "YUYV" {
+		t.Fatalf("webcam: want YUYV, got %v", got)
+	}
+
+	// YUYV still wins outright when offered, preserving the existing guarantee
+	// (TestPlan_PrefersYUYVWhenACameraOffersSeveral) that widening the format
+	// table changed nothing for cameras that already worked.
+	advertise(v4l2PixFmtYUYV, v4l2PixFmtY16, v4l2PixFmtUYVY)
+	if got = rawFormatFor("/dev/video0", w, h); got == nil || got.fourcc != "YUYV" {
+		t.Fatalf("tie: want YUYV by list order, got %v", got)
+	}
+
+	// Nothing advertised is still a refusal, not a silent fallback.
+	advertise()
+	if got = rawFormatFor("/dev/video0", w, h); got != nil {
+		t.Fatalf("no formats advertised: want nil, got %v", got)
+	}
+}
