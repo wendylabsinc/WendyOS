@@ -344,6 +344,25 @@ func TestModelCamerasListsHealthyLocalCameras(t *testing.T) {
 	}
 }
 
+// TestModelCamerasNameCamerasAsTheyReportThemselves: the catalog shows the
+// device's own name, not the data source's detail, which also carries the
+// transport (seen on a Jetson as "Brio 101 VIDEO_TRANSPORT_USB").
+func TestModelCamerasNameCamerasAsTheyReportThemselves(t *testing.T) {
+	video := newTestVideoService(
+		func() ([]string, error) { return []string{"/dev/video0"}, nil },
+		func(string) (string, error) { return "Brio 101", nil },
+	)
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetSourceProvider(newCameraDataAdapter(video).Discover)
+	got := ModelCameras{Video: video, Data: m}.List(context.Background())
+	if want := []models.Camera{{SourceID: "v4l2:/dev/video0", Name: "Brio 101"}}; !slices.Equal(got, want) {
+		t.Fatalf("cameras = %+v, want %+v", got, want)
+	}
+}
+
 // TestModelCamerasHideRefusedCameras: a camera whose stream the two-plane
 // path has refused cannot stream to a model, so the catalog must not offer it.
 func TestModelCamerasHideRefusedCameras(t *testing.T) {
