@@ -755,9 +755,11 @@ type GetAgentVersionResponse struct {
 	// Runtimes an app can use on the NPU (e.g. "qnn" for the Qualcomm Hexagon
 	// reached over FastRPC). Only populated when has_npu is true; empty when the
 	// vendor's runtime is unrecognized, or on agents predating this field.
-	NpuBackends   []string `protobuf:"bytes,27,rep,name=npu_backends,json=npuBackends,proto3" json:"npu_backends,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	NpuBackends []string `protobuf:"bytes,27,rep,name=npu_backends,json=npuBackends,proto3" json:"npu_backends,omitempty"`
+	// True when /var/lib/containerd is served from the OS root slot on a WendyOS host whose /data bind mount is inactive (WDY-3127). Absent on agents predating this field and on non-Linux hosts.
+	ContainerStorageDegraded *bool `protobuf:"varint,28,opt,name=container_storage_degraded,json=containerStorageDegraded,proto3,oneof" json:"container_storage_degraded,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *GetAgentVersionResponse) Reset() {
@@ -977,6 +979,13 @@ func (x *GetAgentVersionResponse) GetNpuBackends() []string {
 		return x.NpuBackends
 	}
 	return nil
+}
+
+func (x *GetAgentVersionResponse) GetContainerStorageDegraded() bool {
+	if x != nil && x.ContainerStorageDegraded != nil {
+		return *x.ContainerStorageDegraded
+	}
+	return false
 }
 
 // A network interface on the device and the IP addresses assigned to it.
@@ -4472,7 +4481,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\aupdated\x18\x01 \x01(\v24.wendy.agent.services.v1.UpdateAgentResponse.UpdatedH\x00R\aupdated\x1a\t\n" +
 	"\aUpdatedB\x0f\n" +
 	"\rresponse_type\"\x18\n" +
-	"\x16GetAgentVersionRequest\"\x9a\v\n" +
+	"\x16GetAgentVersionRequest\"\xfc\v\n" +
 	"\x17GetAgentVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -4511,7 +4520,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"npu_vendor\x18\x18 \x01(\tH\rR\tnpuVendor\x88\x01\x01\x12X\n" +
 	"\x11container_storage\x18\x19 \x01(\v2&.wendy.agent.services.v1.DiskPartitionH\x0eR\x10containerStorage\x88\x01\x01\x12S\n" +
 	"\x10gpu_capabilities\x18\x1a \x03(\v2(.wendy.agent.services.v1.GpuCapabilitiesR\x0fgpuCapabilities\x12!\n" +
-	"\fnpu_backends\x18\x1b \x03(\tR\vnpuBackendsB\r\n" +
+	"\fnpu_backends\x18\x1b \x03(\tR\vnpuBackends\x12A\n" +
+	"\x1acontainer_storage_degraded\x18\x1c \x01(\bH\x0fR\x18containerStorageDegraded\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +
@@ -4529,7 +4539,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_service_proto_rawDesc = "" +
 	"\n" +
 	"\b_has_npuB\r\n" +
 	"\v_npu_vendorB\x14\n" +
-	"\x12_container_storage\"I\n" +
+	"\x12_container_storageB\x1d\n" +
+	"\x1b_container_storage_degraded\"I\n" +
 	"\x10NetworkInterface\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12!\n" +
 	"\fip_addresses\x18\x02 \x03(\tR\vipAddresses\"\xa7\x01\n" +

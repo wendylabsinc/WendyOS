@@ -51,6 +51,8 @@ message GetDeviceInfoResponse {
     // reached over FastRPC). Only populated when has_npu is true; empty when the
     // vendor's runtime is unrecognized, or on agents predating this field.
     repeated string npu_backends = 22;
+    // True when /var/lib/containerd is served from the OS root slot on a WendyOS host whose /data bind mount is inactive (WDY-3127). Absent on agents predating this field and on non-Linux hosts.
+    optional bool container_storage_degraded = 23;
 }
 
 // Usage information for a single mounted filesystem.
