@@ -12,4 +12,4 @@ contract in `go/internal/agent/models`:
 
 Once published, reference it from a development catalog by digest, and point
 the agent at that catalog with `WENDY_MODEL_CATALOG_FILE`. The smoke test in
-`specs/2026-09-25-model-watch-plan-2-agent-service.md` (Task 17) walks through it.
+`specs/2026-09-25-model-watch-plan-2-agent-service-part-2.md` (Task 17) walks through it.
