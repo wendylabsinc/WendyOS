@@ -348,6 +348,9 @@ func runRemoteBuild(
 			return fmt.Errorf("connecting to %s: %w", name, err)
 		}
 		fleetConns = append(fleetConns, conn)
+		if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
+			return fmt.Errorf("registering deployment on %s: %w", name, err)
+		}
 
 		// One build produces one image for one platform. A device of a different
 		// architecture cannot run it, and finding that out after delivery would
@@ -585,7 +588,7 @@ func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, a
 	}
 	prov, ok := resp.GetResponse().(*agentpb.IsProvisionedResponse_Provisioned)
 	if !ok {
-		return nil, fmt.Errorf("the target device is not provisioned, so a build host cannot reach its registry; provision it or omit --build-host")
+		return nil, fmt.Errorf("the target device is not enrolled, so a build host cannot reach its registry; run 'wendy device enroll' for the target or omit --build-host")
 	}
 	agentOS, err := targetAgentOS(ctx, target)
 	if err != nil {

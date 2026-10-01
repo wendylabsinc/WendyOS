@@ -271,8 +271,9 @@ func (l *Loopback) detect() error {
 }
 
 // sweepAutoCreatedNodes removes any loopback device numbered below Wendy's
-// complete virtual-camera band. ROS 2 cameras occupy 128-199 and IP cameras
-// occupy 200-255, so neither kind may be swept as an auto-created node.
+// complete virtual-camera band. MCU cameras occupy 96-127, ROS 2 cameras
+// 128-199 and IP cameras 200-255, so none of them may be swept as an
+// auto-created node.
 func (l *Loopback) sweepAutoCreatedNodes() {
 	for nr := 0; nr < LoopbackBandStart; nr++ {
 		if !l.deps.nodeExists(nr) {
@@ -315,10 +316,10 @@ func (l *Loopback) EnsureNodes(ctx context.Context) error {
 }
 
 // EnsureNode creates one Wendy-managed v4l2loopback device. It is shared by
-// the IP-camera supervisor and the ROS 2 camera bridge so module detection and
-// the control-device ABI have one owner.
+// the IP-camera supervisor, the ROS 2 camera bridge and the sensor-pairing
+// supervisor so module detection and the control-device ABI have one owner.
 func (l *Loopback) EnsureNode(ctx context.Context, id uint32, label string) error {
-	if id < LoopbackBandStart || id > MCUBandEnd {
+	if id < LoopbackBandStart || id > LoopbackBandEnd {
 		return fmt.Errorf("camera ID %d is outside Wendy's loopback band", id)
 	}
 	if err := ctx.Err(); err != nil {

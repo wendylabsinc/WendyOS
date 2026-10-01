@@ -68,7 +68,7 @@ func newVMCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Create from a pull request's build, so a change can be tried before it merges")
 	cmd.Flags().IntVar(&diskGiB, "disk", 16, "Disk size in GiB (the image is grown to this size)")
-	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2 or g1 (provisioned on first connection)")
+	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2, g1 or rosmaster-r2 (provisioned on first connection)")
 	return cmd
 }
 
@@ -315,13 +315,13 @@ func runVMStart(cmd *cobra.Command, name string, o vmStartOptions) error {
 			return err
 		}
 		fmt.Fprintf(out, "Started %s in the background (pid %d).\n", name, st.PID)
-		vmPrintReachability(out, spec.Net, o.hostPort)
+		vmPrintReachability(out, name, spec.Net, o.hostPort)
 		fmt.Fprintf(out, "Console: 'wendy vm logs %s'. Stop it with 'wendy vm stop %s'.\n", name, name)
 		return nil
 	}
 
 	fmt.Fprintf(out, "Starting %s (%s acceleration, %s networking).\n", name, spec.Accel, spec.Net.Mode)
-	vmPrintReachability(out, spec.Net, o.hostPort)
+	vmPrintReachability(out, name, spec.Net, o.hostPort)
 	fmt.Fprintln(out, "Press Ctrl-A then X to power it off.")
 
 	// Hand the terminal to QEMU: the guest console is the point of `vm start`.
@@ -414,13 +414,16 @@ const consoleTailBytes = 8 << 10
 const vmConsoleTailLines = 15
 
 // vmPrintReachability says how to reach the guest, which differs by net mode.
-func vmPrintReachability(out io.Writer, net vm.NetConfig, hostPort int) {
+// A user-mode VM is named by its alias, not its forwarded port: vm:<name>
+// follows the VM if the port moves, and keeps its identity pin apart from every
+// other loopback target.
+func vmPrintReachability(out io.Writer, name string, net vm.NetConfig, hostPort int) {
 	if net.SupportsDiscovery() {
 		fmt.Fprintln(out, "Once it boots, find it with 'wendy discover'.")
 		return
 	}
-	fmt.Fprintf(out, "Once it boots, reach it with 'wendy --device 127.0.0.1:%d device info', "+
-		"or pick it from the Simulator tab of 'wendy discover'.\n", hostPort)
+	fmt.Fprintf(out, "Once it boots, reach it with 'wendy --device %s%s device info' (its agent is forwarded to 127.0.0.1:%d), "+
+		"or pick it from the Simulator tab of 'wendy discover'.\n", vmDeviceIDPrefix, name, hostPort)
 	fmt.Fprintln(out, "It is not on your network, though: nothing else can reach a user-mode VM. "+
 		"Use --net shared for that.")
 }

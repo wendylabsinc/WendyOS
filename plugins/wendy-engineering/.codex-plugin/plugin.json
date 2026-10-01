@@ -1,0 +1,21 @@
+{
+  "name": "wendy-engineering",
+  "version": "0.1.0",
+  "description": "Internal Wendy engineering workflows for repository changes, runtime implementation debugging, and pull requests.",
+  "author": {
+    "name": "Wendy Labs"
+  },
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Wendy Engineering",
+    "shortDescription": "Internal Wendy repository and pull request workflows.",
+    "longDescription": "Trace Wendy CLI and agent implementation issues, orient in the repository, and prepare and validate pull requests. Install separately from Wendy's end-user skills.",
+    "developerName": "Wendy Labs",
+    "category": "Developer tools",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Use Wendy Engineering to trace this CLI or agent implementation issue."
+    ]
+  }
+}

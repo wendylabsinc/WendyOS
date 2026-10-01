@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -206,6 +207,111 @@ func TestPrintDocsTopic_RendersROS2ViaSlug(t *testing.T) {
 	}
 	if !strings.Contains(out, "View online: https://docs.wendy.dev/latest/integrations/ros2/") {
 		t.Errorf("output missing the public docs URL fallback, got: %q", out)
+	}
+}
+
+func TestNewDocsCmd_DottedTopic(t *testing.T) {
+	prevJSON := jsonOutput
+	t.Cleanup(func() { jsonOutput = prevJSON })
+
+	for _, mode := range []struct {
+		name string
+		json bool
+	}{
+		{"text", false},
+		{"json", true},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			jsonOutput = mode.json
+			for _, arg := range []string{
+				"apps/wendy.json",
+				"wendy.json",
+				"apps/wendy.json.md",
+				"wendy.json.md",
+				"apps/wendy.json.mdx",
+				" /apps/wendy.json/ ",
+			} {
+				t.Run(arg, func(t *testing.T) {
+					cmd := newDocsCmd()
+					var buf bytes.Buffer
+					cmd.SetOut(&buf)
+					cmd.SetErr(&buf)
+					cmd.SetArgs([]string{arg})
+					if err := cmd.Execute(); err != nil {
+						t.Fatalf("wendy docs %q: %v", arg, err)
+					}
+					if !mode.json {
+						if !strings.Contains(buf.String(), "View online: https://docs.wendy.dev/latest/apps/wendy.json/") {
+							t.Fatal("text output does not identify the wendy.json documentation")
+						}
+						return
+					}
+					var rendered struct {
+						Path string `json:"path"`
+						Body string `json:"body"`
+					}
+					if err := json.Unmarshal(buf.Bytes(), &rendered); err != nil {
+						t.Fatalf("decode rendered topic: %v", err)
+					}
+					if rendered.Path != "apps/wendy.json" || rendered.Body == "" {
+						t.Fatalf("expected the wendy.json documentation, got path %q and %d body bytes", rendered.Path, len(rendered.Body))
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestPrintDocsTopic_UnknownExtension(t *testing.T) {
+	topics, err := docsTopics()
+	if err != nil {
+		t.Fatalf("docsTopics: %v", err)
+	}
+	for _, arg := range []string{"ros2.json", "integrations/ros2.txt", "apps/wendy.json.bak"} {
+		t.Run(arg, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := printDocsTopic(&buf, topics, arg)
+			if err == nil || !strings.Contains(err.Error(), "unknown doc topic") {
+				t.Fatalf("expected an unknown-topic error for %q, got %v", arg, err)
+			}
+			if buf.Len() != 0 {
+				t.Fatalf("unknown topic %q rendered a different document", arg)
+			}
+		})
+	}
+}
+
+func TestPrintDocsTopicList_TopicsResolve(t *testing.T) {
+	prevJSON := jsonOutput
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = prevJSON })
+
+	topics, err := docsTopics()
+	if err != nil {
+		t.Fatalf("docsTopics: %v", err)
+	}
+	var buf bytes.Buffer
+	printDocsTopicList(&buf, topics)
+	var listed []struct {
+		Path string `json:"path"`
+		Slug string `json:"slug"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &listed); err != nil {
+		t.Fatalf("decode topic list: %v", err)
+	}
+	if len(listed) == 0 {
+		t.Fatal("topic list is empty")
+	}
+	for _, topic := range listed {
+		arg := topic.Path
+		if arg == "" {
+			arg = topic.Slug
+		}
+		t.Run(arg, func(t *testing.T) {
+			if err := printDocsTopic(io.Discard, topics, arg); err != nil {
+				t.Fatalf("listed topic %q cannot be opened: %v", arg, err)
+			}
+		})
 	}
 }
 

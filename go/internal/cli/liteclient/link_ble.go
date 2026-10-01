@@ -112,6 +112,7 @@ func (c *WendyLiteClient) ConnectViaBLEInsecure(address string, psm uint16) erro
 func (c *WendyLiteClient) ConnectViaBLEWithMutualAuthentication(
 	address string, psm uint16, cert tls.Certificate, rootCAs x509.CertPool) error {
 
+	var verifiedLeaf *x509.Certificate
 	tlsCfg := &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		MinVersion:         tls.VersionTLS12,
@@ -135,8 +136,13 @@ func (c *WendyLiteClient) ConnectViaBLEWithMutualAuthentication(
 			if _, err := certs[0].Verify(opts); err != nil {
 				return fmt.Errorf("device certificate verification failed: %w", err)
 			}
+			verifiedLeaf = certs[0]
 			return nil
 		},
 	}
-	return c.ConnectViaBLE(address, psm, tlsCfg)
+	if err := c.ConnectViaBLE(address, psm, tlsCfg); err != nil {
+		return err
+	}
+	c.peerCert = verifiedLeaf
+	return nil
 }

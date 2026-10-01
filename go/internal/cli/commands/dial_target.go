@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
@@ -174,24 +176,202 @@ func governingPin(pinKey string) (config.DevicePin, string, bool) {
 // means. A resolved IP is deliberately never used as a key — it changes on
 // ordinary DHCP churn — but an address the user typed as a literal IP is the
 // name they asked for, so it keys a pin like any other host.
-// Loopback gets no special case. It used to: local VMs all answer on 127.0.0.1,
-// so two of them collide on one key. But every alternative was worse -- an
-// empty key reads as "unpinned" and disarms the guard against reaching a
-// previously-authenticated host over plaintext, and a port-qualified key
-// orphans the pins existing users already hold under the bare host. Known VM
-// aliases instead use their own vm:<name> key (see connectSimulatorAgent),
-// leaving typed IP addresses governed by their existing pins.
+//
+// Loopback keeps the host key too: every local agent and port forward answers
+// on it, but every alternative was worse -- an empty key reads as "unpinned"
+// and disarms the guard against reaching a previously-authenticated host over
+// plaintext, and a port-qualified key orphans the pins existing users already
+// hold under the bare host, turning a mismatch into a silent first use. So
+// 127.0.0.1:50061, localhost:50051 and [::1]:50051 are keyed 127.0.0.1,
+// localhost and ::1, whatever the port.
+//
+// The one exception is a running local VM's own forward: the literal text
+// 127.0.0.1 — the one address QEMU's user-mode forward binds — on the
+// forwarded plaintext agent port of a running user-mode VM is keyed as that
+// VM, vm:<name>, the key its alias already uses. That VM is known by name, so
+// two VMs on different ports never share a pin, and a bare 127.0.0.1 pin never
+// refuses a VM answering on its own forward — the same trust the alias gets
+// (see connectSimulatorAgent). Nothing else maps to a VM: the mTLS port beside
+// it is re-aimed at the agent port by the callers that dial it (see
+// vmForwardDialAddr), localhost can resolve to ::1 first, ::1, 127.0.0.x and
+// IPv4-mapped addresses are other sockets that something other than the VM can
+// answer on, and "127.0.0.1." or a padded " 127.0.0.1" is not dialled as that
+// address at all. Once the VM stops, its address is keyed 127.0.0.1 again; a
+// typed connection to the VM also records its identity there, as the bare key
+// always did (see typedVMBarePinKey).
 func pinKeyForAddr(addr string) string {
 	// SplitHostPort accepts non-numeric service names, so vm:dev would
 	// otherwise become just "vm" when set-default/unpin derives its key.
 	if name, matched, err := simulatorName(addr); err == nil && matched {
 		return vmDeviceIDPrefix + name
 	}
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return strings.TrimSpace(addr)
 	}
+	// Compared as typed: only the literal address reaches the forward.
+	if host == vmForwardHost {
+		if p, convErr := strconv.Atoi(port); convErr == nil {
+			if name, ok := loopbackVMNameFn(p); ok {
+				return vmDeviceIDPrefix + name
+			}
+		}
+	}
 	return host
+}
+
+// vmForwardHost is the only address a user-mode VM's agent forward listens on:
+// the launcher binds hostfwd to 127.0.0.1 explicitly (vm.NetConfig's QEMU
+// arguments), never to localhost, ::1 or the rest of 127/8.
+const vmForwardHost = "127.0.0.1"
+
+// loopbackVMNameFn names the running user-mode VM whose agent is forwarded to
+// a loopback port. A seam over the VM store for tests.
+var loopbackVMNameFn = runningVMOnLoopbackPort
+
+// runningVMOnLoopbackPort reports which running user-mode VM forwards its
+// plaintext agent port to port on 127.0.0.1. It is consulted for
+// vmForwardHost only. The mTLS port beside it (AgentPort+1) does not name the
+// VM: the dial ladder tries the given port and the one after it, and
+// AgentPort+2 is not forwarded — something else can listen there — so a dial
+// at AgentPort+1 is never made under the VM's key. A direct dial there is
+// re-aimed at AgentPort first (vmForwardDialAddr); anything else keys it as
+// the bare 127.0.0.1. A run record counts only while its VM holds the run lock
+// (vm.Store.Status reaps stale ones), and two records claiming one port name no
+// VM: the key then stays the bare host rather than a guess.
+func runningVMOnLoopbackPort(port int) (string, bool) {
+	statuses, err := vmStatusesFn()
+	if err != nil {
+		return "", false
+	}
+	match := ""
+	for _, st := range statuses {
+		if !st.Running || st.State.NetMode != vm.NetUser || st.State.AgentPort == 0 {
+			continue
+		}
+		if port != st.State.AgentPort {
+			continue
+		}
+		if match != "" {
+			return "", false
+		}
+		match = st.Name
+	}
+	return match, match != ""
+}
+
+// runningVMAgentPortFn reports the plaintext agent port a running user-mode VM
+// forwards on 127.0.0.1. A seam over the VM store for tests.
+var runningVMAgentPortFn = runningVMAgentPort
+
+// runningVMAgentPort reports name's plaintext agent port while it runs in user
+// mode — the port QEMU forwards on 127.0.0.1, with its mTLS port beside it.
+func runningVMAgentPort(name string) (int, bool) {
+	statuses, err := vmStatusesFn()
+	if err != nil {
+		return 0, false
+	}
+	for _, st := range statuses {
+		if st.Name == name && st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
+			return st.State.AgentPort, true
+		}
+	}
+	return 0, false
+}
+
+// dialPinKeyForDevice is the pin key a dial to device — as typed for --device
+// or set-default — is checked under. It adds the default agent port and
+// re-aims a running VM's mTLS forward first, exactly as resolveDeviceAddress
+// does, because a running VM's forward is keyed by its port: `set-default
+// 127.0.0.1` dials 127.0.0.1:50051, which is checked under vm:<name> while a
+// VM forwards that port and under the bare 127.0.0.1 otherwise.
+func dialPinKeyForDevice(device string) string {
+	if _, matched, err := simulatorName(device); matched || err != nil {
+		return pinKeyForAddr(device)
+	}
+	if _, _, err := net.SplitHostPort(device); err != nil {
+		device = hostPort(device, defaultAgentPort)
+	}
+	return pinKeyForAddr(vmForwardDialAddr(device))
+}
+
+// typedVMBarePinKey is the key a connection judged under pinKey, and dialled
+// by a front door at dialAddr — the address the user typed — also records its
+// accepted identity under (see recordTypedVMBarePin): the bare 127.0.0.1 when
+// pinKey is a running VM's vm:<name> key reached at its literal 127.0.0.1
+// forward. That is the key main judged and pinned the same typed connection
+// under, so the address stays as pinned as main left it once the VM stops and
+// pinKeyForAddr keys it as the bare host again.
+//
+// "" for every other connection: a vm:<name> key reached by its alias (the
+// dialled address is then not a typed 127.0.0.1 one, and main never filed a
+// bare pin for the alias), a connection some fallback substituted for the dial
+// (dialAddr ""), and every key that already is the bare host or is not
+// loopback at all.
+func typedVMBarePinKey(pinKey, dialAddr string) string {
+	if !strings.HasPrefix(pinKey, vmDeviceIDPrefix) || dialAddr == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(dialAddr)
+	if err != nil || host != vmForwardHost {
+		return ""
+	}
+	return vmForwardHost
+}
+
+// vmAgentForwardAddr maps a VM's mTLS forward, 127.0.0.1:AgentPort+1 — what
+// conn.Addr holds after a provisioned connection, and so what a reconnect
+// after an agent update passes — back to its plaintext agent forward. The
+// dial ladder tries the given port and the one after it, so dialling the mTLS
+// forward would also try AgentPort+2, which QEMU does not forward. Any other
+// address, or a VM the store cannot place, is returned unchanged.
+func vmAgentForwardAddr(name, addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != vmForwardHost {
+		return addr
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return addr
+	}
+	agentPort, ok := runningVMAgentPortFn(name)
+	if !ok || p != agentPort+agentMTLSPortOffset {
+		return addr
+	}
+	return net.JoinHostPort(vmForwardHost, strconv.Itoa(agentPort))
+}
+
+// vmForwardDialAddr is vmAgentForwardAddr for a direct dial that does not know
+// it is reaching a VM: a typed --device address, or the conn.Addr a reconnect
+// after an agent update dials. The literal forward address 127.0.0.1 on the
+// mTLS port of a running user-mode VM (AgentPort+1, a port that is not itself
+// a VM's agent port) becomes that VM's agent forward, 127.0.0.1:AgentPort, so
+// the connection is keyed vm:<name> by pinKeyForAddr, exactly like a dial of
+// the agent port or the vm:<name> alias.
+//
+// Keyed by its own port instead, the same running VM would be judged under the
+// bare 127.0.0.1 key at its mTLS port and under vm:<name> at its agent port,
+// and its ladder would also try AgentPort+2, which QEMU does not forward.
+// Every other address is returned unchanged — without reading the VM store
+// unless the host is the literal forward address.
+func vmForwardDialAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host != vmForwardHost {
+		return addr
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p <= agentMTLSPortOffset {
+		return addr
+	}
+	// A VM's own agent port keys as that VM already.
+	if _, ok := loopbackVMNameFn(p); ok {
+		return addr
+	}
+	name, ok := loopbackVMNameFn(p - agentMTLSPortOffset)
+	if !ok {
+		return addr
+	}
+	return vmAgentForwardAddr(name, addr)
 }
 
 // isLoopbackHost reports whether host names this machine. "localhost" is
@@ -653,4 +833,23 @@ func spkiRefusal(pinKey string, pm *devicepin.PinMismatchError) error {
 	return refuseIdentity(
 		"device %q presented a different certificate key than the one pinned for %s (pinned %s, now %s); refusing to connect — if its certificate was legitimately reissued, run 'wendy device unpin %s'",
 		named, pm.Key, pm.Want, pm.Got, unpinArg)
+}
+
+// errVMChangedDuringConnect is a front door's refusal of a connection whose
+// pin key changed while it was being made: a local VM started or stopped
+// between the dial and the check, so the check would judge the connection
+// under a pin its dial was not made under. Retrying derives the key afresh.
+var errVMChangedDuringConnect = errors.New("VM state changed during connect")
+
+// recheckDialPinKey derives the pin key for addr — the address a front door
+// dialled, already re-aimed — again after the connection is made, and returns
+// errVMChangedDuringConnect, naming both keys, when it no longer equals
+// pinKey, the key the dial was made under and the check is about to use. A
+// non-loopback address never reads the VM store, so its key cannot change.
+func recheckDialPinKey(addr, pinKey string) error {
+	now := pinKeyForAddr(vmForwardDialAddr(addr))
+	if now == pinKey {
+		return nil
+	}
+	return fmt.Errorf("%w: %s was dialled as %q but now keys as %q (a local VM started or stopped); retry the command", errVMChangedDuringConnect, addr, pinKey, now)
 }

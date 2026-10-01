@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func peopleCampaign(t *testing.T) []byte {
@@ -16,6 +18,39 @@ func peopleCampaign(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return contents
+}
+
+func TestYOLOInferenceValidationAndRevision(t *testing.T) {
+	c, err := ParseCampaign(peopleCampaign(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Inference.Backend = "yolo_onnx"
+	c.Inference.ModelFile = "onnx/model.onnx"
+	raw, _ := yaml.Marshal(c)
+	parsed, err := ParseCampaign(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Inference.ModelFile = "onnx/other.onnx"
+	raw, _ = yaml.Marshal(c)
+	other, err := ParseCampaign(raw)
+	if err != nil || parsed.Revision == other.Revision {
+		t.Fatal("model file did not change immutable campaign revision", err)
+	}
+	for _, file := range []string{"", "../model.onnx", "/model.onnx", "onnx/../model.onnx", "model.pt", "onnx\\model.onnx"} {
+		c.Inference.ModelFile = file
+		raw, _ = yaml.Marshal(c)
+		if _, err := ParseCampaign(raw); err == nil {
+			t.Fatalf("accepted unsafe model file %q", file)
+		}
+	}
+	c.Inference.Backend = "remote_python"
+	c.Inference.ModelFile = "model.onnx"
+	raw, _ = yaml.Marshal(c)
+	if _, err := ParseCampaign(raw); err == nil {
+		t.Fatal("accepted unsupported executable backend")
+	}
 }
 
 func TestInferenceExampleAndModelURL(t *testing.T) {
@@ -31,7 +66,7 @@ func TestInferenceExampleAndModelURL(t *testing.T) {
 	if campaign.Revision != fromURL.Revision {
 		t.Fatal("equivalent model URL changed campaign revision")
 	}
-	if !campaign.Inference.IsEnabled() || campaign.Notify.On != NotifyOnEpisodeCommitted {
+	if !campaign.Inference.IsEnabled() || campaign.Notify.On != NotifyOnEvent || campaign.Notify.Event != "person_detected" || campaign.Notify.Webhook != "" {
 		t.Fatalf("bad example: %+v", campaign)
 	}
 	campaign.InferenceStatus = &InferenceStatus{State: "error", Error: "transient runtime error"}
@@ -56,7 +91,6 @@ func TestInferenceRejectsInvalidConfiguration(t *testing.T) {
 		{"clear_after: 5s", "clear_after: -1s"},
 		{"cooldown: 30s", "cooldown: 48h"},
 		{"event: person_detected\n  clear_after", "event: another_event\n  clear_after"},
-		{"  on: episode_committed", "  on: detection"},
 	}
 	for _, change := range changes {
 		t.Run(change[1], func(t *testing.T) {
@@ -140,13 +174,13 @@ func TestInferenceDisabledPersistsWithoutChangingOtherFields(t *testing.T) {
 func TestDetectionNotificationRequiresValidWebhook(t *testing.T) {
 	raw := string(peopleCampaign(t))
 	for _, endpoint := range []string{"https://notify.example/person", "http://localhost:8080/person"} {
-		configured := strings.ReplaceAll(raw, "  on: episode_committed", "  on: detection\n  webhook: "+endpoint)
+		configured := strings.ReplaceAll(raw, "  on: event\n  event: person_detected", "  on: detection\n  webhook: "+endpoint)
 		if _, err := ParseCampaign([]byte(configured)); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, endpoint := range []string{"file:///tmp/notify", "https://user:password@notify.example", "https://notify.example/#token", "relative/path", "https://"} {
-		configured := strings.ReplaceAll(raw, "  on: episode_committed", "  on: detection\n  webhook: "+endpoint)
+		configured := strings.ReplaceAll(raw, "  on: event\n  event: person_detected", "  on: detection\n  webhook: "+endpoint)
 		if _, err := ParseCampaign([]byte(configured)); err == nil {
 			t.Fatalf("accepted invalid webhook %q", endpoint)
 		}
@@ -188,7 +222,7 @@ func TestNamedEventNotificationValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, event := range []string{"person_detected", "door.open", "person-left"} {
-		configured := strings.ReplaceAll(string(raw), "  on: episode_committed", "  on: event\n  event: "+event+"\n  webhook: https://notify.example/events")
+		configured := strings.ReplaceAll(string(raw), "  on: event\n  event: person_detected", "  on: event\n  event: "+event+"\n  webhook: https://notify.example/events")
 		campaign, err := ParseCampaign([]byte(configured))
 		if err != nil {
 			t.Fatal(err)
@@ -200,18 +234,17 @@ func TestNamedEventNotificationValidation(t *testing.T) {
 	for _, notify := range []string{
 		"  on: event\n  webhook: https://notify.example/events",
 		"  on: event\n  event: person detected\n  webhook: https://notify.example/events",
-		"  on: event\n  event: person_detected",
 		"  on: episode_committed\n  event: person_detected",
 		"  on: detection\n  event: person_detected\n  webhook: https://notify.example/events",
 	} {
-		if _, err := ParseCampaign([]byte(strings.ReplaceAll(string(raw), "  on: episode_committed", notify))); err == nil {
+		if _, err := ParseCampaign([]byte(strings.ReplaceAll(string(raw), "  on: event\n  event: person_detected", notify))); err == nil {
 			t.Fatalf("accepted invalid notification: %s", notify)
 		}
 	}
 }
 
 func TestNotificationSettingsChangeCampaignRevision(t *testing.T) {
-	raw := strings.ReplaceAll(string(peopleCampaign(t)), "  on: episode_committed", "  on: event\n  event: person_detected\n  webhook: https://notify.example/events")
+	raw := strings.ReplaceAll(string(peopleCampaign(t)), "  on: event\n  event: person_detected", "  on: event\n  event: person_detected\n  webhook: https://notify.example/events")
 	base, err := ParseCampaign([]byte(raw))
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +259,19 @@ func TestNotificationSettingsChangeCampaignRevision(t *testing.T) {
 		}
 		if changed.Revision == base.Revision {
 			t.Fatal("notification plan change did not change revision")
+		}
+	}
+}
+
+func TestCampaignImmediateNotificationDefaultsToCloud(t *testing.T) {
+	for _, notify := range []string{"  on: detection", "  on: event\n  event: person_detected"} {
+		raw := strings.ReplaceAll(string(peopleCampaign(t)), "  on: event\n  event: person_detected", notify)
+		campaign, err := ParseCampaign([]byte(raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if campaign.Notify.Webhook != "" {
+			t.Fatal("Cloud notification unexpectedly requires a webhook")
 		}
 	}
 }

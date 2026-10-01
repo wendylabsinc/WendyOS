@@ -84,10 +84,18 @@ func (p *AppleContainerProvider) CheckRequirements(ctx context.Context) error {
 }
 
 func (p *AppleContainerProvider) DiscoverDevices(ctx context.Context) ([]models.ExternalDevice, error) {
-	if !p.IsAvailable(ctx) {
+	// Same bound as DockerProvider.DiscoverDevices: a wedged `container`
+	// apiserver must not stall discovery.
+	timeout := ProbeTimeout(ctx)
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if !p.IsAvailable(probeCtx) {
+		if probeTimedOut(ctx, probeCtx) {
+			return nil, &ProbeTimeoutError{Runtime: p.DisplayName(), After: timeout}
+		}
 		return nil, nil
 	}
-	version := appleContainerVersion(ctx)
+	version := appleContainerVersion(probeCtx)
 	return []models.ExternalDevice{
 		{
 			ID:              p.Key(),

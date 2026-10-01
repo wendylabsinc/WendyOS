@@ -15,9 +15,11 @@ const (
 	errCodeInvalidArgument   errorCode = "INVALID_ARGUMENT"
 	errCodeDeviceUnreachable errorCode = "DEVICE_UNREACHABLE"
 	errCodeEntitlementDenied errorCode = "ENTITLEMENT_DENIED"
+	errCodeAuthRequired      errorCode = "AUTH_REQUIRED"
 	errCodeMultipleSessions  errorCode = "MULTIPLE_SESSIONS"
 	errCodeNotFound          errorCode = "NOT_FOUND"
 	errCodeTimeout           errorCode = "TIMEOUT"
+	errCodeCancelled         errorCode = "CANCELLED"
 	errCodeUnsupported       errorCode = "UNSUPPORTED"
 	errCodeInternal          errorCode = "INTERNAL"
 )

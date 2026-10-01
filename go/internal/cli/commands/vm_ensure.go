@@ -12,6 +12,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // errSimulatorUnavailable marks a failure to bring up the selected simulator.
@@ -138,9 +140,9 @@ func waitForSimulatorAgent(ctx context.Context, name, addr string, budget time.D
 			_ = vmRecordHostnameFn(name, resp.GetHostname())
 			return conn, nil
 		}
-		// An unreachable pinned endpoint is expected during boot. Retry the
-		// same authenticated ladder, but stop if a different identity answered.
-		if errors.Is(err, errDeviceIdentityRefused) {
+		// An unreachable pinned endpoint is expected during boot. An explicit
+		// authentication failure needs user action, not another boot retry.
+		if simulatorAuthenticationFailed(err) {
 			return nil, err
 		}
 		// Under emulation the budget is five minutes. Without this, a guest that
@@ -162,9 +164,23 @@ func waitForSimulatorAgent(ctx context.Context, name, addr string, budget time.D
 	}
 }
 
+// simulatorAuthenticationFailed distinguishes a responding peer rejecting
+// authentication from an agent that has not started listening yet.
+func simulatorAuthenticationFailed(err error) bool {
+	var orgMismatch orgMismatchDeviceError
+	return errors.Is(err, errDeviceIdentityRefused) ||
+		errors.Is(err, errTLSHandshakeRejected) ||
+		errors.As(err, &orgMismatch) ||
+		status.Code(err) == codes.Unauthenticated ||
+		status.Code(err) == codes.PermissionDenied
+}
+
 // VM aliases carry identity separately from their current loopback port. Never
 // consult a localhost pin or session cached for an unrelated VM/container.
 func connectSimulatorAgent(ctx context.Context, name, addr string) (*grpcclient.AgentConnection, *agentpb.GetAgentVersionResponse, error) {
+	// A reconnect passes conn.Addr, the mTLS forward; dial the plaintext
+	// forward so the ladder never tries a port QEMU does not forward.
+	addr = vmAgentForwardAddr(name, addr)
 	conn, resp, err := probeSimulatorAgent(ctx, name, addr)
 	if err != nil {
 		return nil, nil, err
@@ -258,7 +274,8 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 			return nil, err
 		}
 	}
-	if err := reconcileSimulatorRobotFn(ctx, picked.Agent); err != nil {
+	picked.Agent, err = reconcileSimulatorRobotWithAgentUpdate(ctx, picked.Agent)
+	if err != nil {
 		picked.Agent.Close()
 		return nil, markSimulatorUnavailable(err)
 	}
@@ -328,12 +345,17 @@ func awaitSimulatorWith(ctx context.Context, name, addr string, booting bool,
 		conn, err = wait(ctx)
 	}
 	if err != nil {
-		if errors.Is(err, ErrUserCancelled) {
+		if errors.Is(err, ErrUserCancelled) || errors.Is(err, context.Canceled) {
 			return nil, err
+		}
+		if simulatorAuthenticationFailed(err) {
+			// Boot output cannot explain a rejected certificate. Preserve the
+			// actionable error and its type without appending the login banner.
+			return nil, markSimulatorUnavailable(err)
 		}
 		// A silent timeout after minutes of waiting is the worst outcome, so
 		// hand back what the guest actually printed.
-		return nil, fmt.Errorf("%w: %v%s", errSimulatorUnavailable, err, vmConsoleTail(name))
+		return nil, fmt.Errorf("%w: %w%s", errSimulatorUnavailable, err, vmConsoleTail(name))
 	}
 	return conn, nil
 }

@@ -21,29 +21,40 @@ func newMCPCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newMCPServeCmd())
 	cmd.AddCommand(newMCPSetupCmd())
+	cmd.AddCommand(newMCPGatewayCmd())
+	cmd.AddCommand(newMCPExportRobotToolCmd())
 	return cmd
 }
 
 func newMCPServeCmd() *cobra.Command {
 	var deviceFlag string
+	var toolGroups []string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the MCP server on stdio",
 		Long:  "Start a Model Context Protocol server that exposes wendy device tools over stdio.\nConfigure your AI tool to run: wendy mcp serve\nOr run 'wendy mcp setup' to configure automatically.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Long-lived: read credentials fresh rather than from the snapshot
+			// loaded below (see wendymcp.EnableConfigReload).
+			wendymcp.EnableConfigReload(config.Load)
 			ctx := cmd.Context()
 			cfg, err := config.Load()
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
 			srv := wendymcp.New(cfg, connectMCPDevice)
+			srv.SetCLIUpdateChecker(checkCLIUpdateIfDue)
+			if err := srv.SetToolGroups(toolGroups); err != nil {
+				return err
+			}
+			srv.SetInstallationBackend(installationJobBackend())
+			srv.SetSimulatorBackend(simulatorBackend())
+			srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject})
 			srv.SetLANDiscoverer(func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 				return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 			})
-			address := deviceFlag
-			if address == "" {
-				address = cfg.DefaultDevice
-			}
+			srv.SetUSBSetupNotice(pendingUSBSetupNotice)
+			address := mcpStartupDevice(deviceFlag, cfg)
 			switch {
 			case os.Getenv("WENDY_AGENT_SOCKET") != "":
 				// Admin-entitled on-device container: connect over the local
@@ -68,6 +79,7 @@ func newMCPServeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&deviceFlag, "device", "d", "", "Device name or IP:port to connect on startup")
+	cmd.Flags().StringSliceVar(&toolGroups, "tool-groups", []string{"core"}, "Advertised tools: core, setup, simulator, hardware, robotics, observability, cloud, all (comma-separated; groups can also be selected with wendy_tools)")
 	return cmd
 }
 

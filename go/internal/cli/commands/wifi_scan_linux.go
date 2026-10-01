@@ -21,7 +21,7 @@ const wifiScanCacheHint = ""
 // scanLocalWifiNetworks uses nmcli on Linux to list WiFi networks visible to
 // the host machine. Returns errNoWifiAdapter when the host has no wifi-type
 // device, so callers can offer to skip WiFi setup instead of failing.
-func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
+func scanLocalWifiNetworks(ctx context.Context) ([]localWifiNetwork, error) {
 	nmcliPath, err := exec.LookPath("nmcli")
 	if err != nil {
 		return nil, fmt.Errorf("nmcli not found on PATH: %w", err)
@@ -30,16 +30,16 @@ func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 	// Distinguish "no WiFi hardware" from a transient scan failure before
 	// attempting the scan (WDY-1474). A status-command failure is ignored:
 	// the scan below will surface its own error.
-	if statusOut, statusErr := nmcli.Command(context.Background(), nmcliPath, "-t", "-f", "DEVICE,TYPE", "device", "status").Output(); statusErr == nil {
+	if statusOut, statusErr := nmcli.Command(ctx, nmcliPath, "-t", "-f", "DEVICE,TYPE", "device", "status").Output(); statusErr == nil {
 		if !nmcliHasWifiDevice(string(statusOut)) {
 			return nil, errNoWifiAdapter
 		}
 	}
 
 	// Trigger a rescan first (may fail if already scanning).
-	_ = nmcli.Command(context.Background(), nmcliPath, "device", "wifi", "rescan").Run()
+	_ = nmcli.Command(ctx, nmcliPath, "device", "wifi", "rescan").Run()
 
-	return nmcliListWifi(nmcliPath)
+	return nmcliListWifi(ctx, nmcliPath)
 }
 
 // cachedLocalWifiNetworks reads nmcli's current scan cache without forcing a
@@ -48,12 +48,12 @@ func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 // blocking on a fresh scan when the cache is stale. Best-effort: any failure
 // (including no nmcli on PATH, or an nmcli too old to know `--rescan`) yields
 // no networks rather than an error — the authoritative scan still runs after.
-func cachedLocalWifiNetworks() []localWifiNetwork {
+func cachedLocalWifiNetworks(ctx context.Context) []localWifiNetwork {
 	nmcliPath, err := exec.LookPath("nmcli")
 	if err != nil {
 		return nil
 	}
-	nets, err := nmcliListWifi(nmcliPath, "--rescan", "no")
+	nets, err := nmcliListWifi(ctx, nmcliPath, "--rescan", "no")
 	if err != nil {
 		return nil
 	}
@@ -63,9 +63,9 @@ func cachedLocalWifiNetworks() []localWifiNetwork {
 // nmcliListWifi lists the WiFi networks nmcli currently knows about and parses
 // the result. It does not trigger a rescan itself; extraArgs (e.g. "--rescan",
 // "no") are appended to the list command.
-func nmcliListWifi(nmcliPath string, extraArgs ...string) ([]localWifiNetwork, error) {
+func nmcliListWifi(ctx context.Context, nmcliPath string, extraArgs ...string) ([]localWifiNetwork, error) {
 	args := append([]string{"-t", "-f", "SSID,SIGNAL,SECURITY", "device", "wifi", "list"}, extraArgs...)
-	cmd := nmcli.Command(context.Background(), nmcliPath, args...)
+	cmd := nmcli.Command(ctx, nmcliPath, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("scanning WiFi networks: %w", exitErrWithStderr(err))

@@ -11,7 +11,7 @@ import (
 
 func TestWriteReadRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
-	env := &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Frame{Frame: &sensorlinkpb.SensorFrame{ChannelId: 3, Payload: []byte("hi")}}}
+	env := &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Data{Data: &sensorlinkpb.SensorData{ChannelId: 3, Payload: []byte("hi")}}}
 	if err := sensorlink.WriteMessage(&buf, env); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if got.GetFrame().ChannelId != 3 || string(got.GetFrame().Payload) != "hi" {
+	if got.GetData().ChannelId != 3 || string(got.GetData().Payload) != "hi" {
 		t.Fatalf("mismatch: %+v", got)
 	}
 }

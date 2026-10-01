@@ -438,6 +438,18 @@ func resolveInitTargetAndTemplate(opts initOptions) (string, string, *repoMeta, 
 		}
 	}
 
+	// Browse deployment groups inside the platform tabs before choosing a
+	// project. Explicit templates and manual setup flags keep their own flow.
+	manual := opts.entitlementsSet || opts.allEntitlements || opts.noExtraEntitlements
+	if !opts.targetSet && isInteractiveTerminal() && (opts.templateSet || !manual) {
+		meta, err := fetchRepoMetaWithUI(opts.branch)
+		if err != nil {
+			return "", "", nil, err
+		}
+		target, tmpl, err := pickInitProject(meta, "", !opts.templateSet)
+		return target, tmpl, meta, err
+	}
+
 	target, err := resolveInitTarget(opts)
 	if err != nil {
 		return "", "", nil, err
@@ -549,12 +561,8 @@ func templateItemsForTarget(target string, meta *repoMeta) []tui.PickerItem {
 
 // pickTemplateNameForTarget shows a picker with templates available for the given target.
 func pickTemplateNameForTarget(target string, meta *repoMeta) (string, error) {
-	fmt.Println()
-	items := templateItemsForTarget(target, meta)
-	if len(items) == 0 {
-		return "", fmt.Errorf("no templates available for %s", target)
-	}
-	return pickFromItems("Choose a template", items)
+	_, name, err := pickInitProject(meta, target, false)
+	return name, err
 }
 
 // resolveBareTemplatePick handles a bare `--template` (rewritten to the
@@ -582,26 +590,10 @@ func resolveBareTemplatePick(target string, meta *repoMeta) (string, error) {
 	return pickTemplateNameForTarget(target, meta)
 }
 
-// pickTemplateOrSkipForTarget shows templates for the given target plus a "No template" option.
+// pickTemplateOrSkipForTarget groups projects by deployment and allows manual setup.
 func pickTemplateOrSkipForTarget(target string, meta *repoMeta) (string, error) {
-	fmt.Println()
-	var items []tui.PickerItem
-	for _, t := range meta.Templates {
-		if templateTargetMatch(t, target) {
-			items = append(items, tui.PickerItem{
-				Name:        t.Name,
-				Description: t.Description,
-				Value:       t.Name,
-			})
-		}
-	}
-	items = append(items, tui.PickerItem{
-		Name:        "No template",
-		Description: "Configure target, language, and entitlements manually",
-		Value:       "",
-		SortKey:     "~",
-	})
-	return pickFromItems("Start from a template?", items)
+	_, name, err := pickInitProject(meta, target, true)
+	return name, err
 }
 
 // resolveTemplateLanguage picks the language for the template flow.
@@ -1105,7 +1097,26 @@ func resolveInitAppID(cwd string, args []string, opts initOptions) (string, erro
 var initTargetItems = []tui.PickerItem{
 	{Name: "WendyOS", Description: "Full Linux-based edge device (Jetson, Raspberry Pi, ...)", Value: targetWendyOS, SortKey: "0"},
 	{Name: "macOS", Description: "Native macOS app deployed to Wendy Agent for Mac", Value: targetDarwin, SortKey: "1"},
-	{Name: "Wendy Lite", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "2"},
+	{Name: "ESP32", Description: "Microcontroller running WASM (ESP32)", Value: targetWendyLite, SortKey: "2"},
+}
+
+func newInitTargetPickerModel(items []tui.PickerItem) tabbedPickerModel {
+	groups := []pickerGroup{
+		{label: "Linux"},
+		{label: "Mac"},
+		{label: "Microcontrollers"},
+	}
+	for _, item := range items {
+		group := 0
+		switch item.Value {
+		case targetDarwin:
+			group = 1
+		case targetWendyLite:
+			group = 2
+		}
+		groups[group].items = append(groups[group].items, item)
+	}
+	return newTabbedPickerModel("What is your target device?", groups)
 }
 
 // initTargetItemsFor filters the shared initTargetItems so a narrowed target
@@ -1149,7 +1160,7 @@ func resolveInitTarget(opts initOptions) (string, error) {
 	}
 
 	fmt.Println()
-	return pickFromItems("What is your target device?", initTargetItems)
+	return runTabbedPicker(newInitTargetPickerModel(initTargetItems))
 }
 
 // resolveInitTargetForTemplate resolves the target when a concrete --template
@@ -1174,7 +1185,7 @@ func resolveInitTargetForTemplate(t repoMetaTemplate) (string, error) {
 	}
 
 	fmt.Println()
-	return pickFromItems("What is your target device?", items)
+	return runTabbedPicker(newInitTargetPickerModel(items))
 }
 
 // printPickerItemsPlainText renders picker items as a plain-text list. Used
@@ -1273,6 +1284,10 @@ func pickInitLanguage(target string) (string, error) {
 				Value:       l.key,
 			})
 		}
+		if !isInteractiveTerminal() {
+			printPickerItemsPlainText("Available languages", items)
+			return "", fmt.Errorf("--language is required when running non-interactively (valid: %s, %s)", langSwift, langPython)
+		}
 		return pickFromItems("What language will you use?", items)
 	}
 }
@@ -1302,6 +1317,15 @@ var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitle
 			Description: q.description,
 			Value:       q.entitlement,
 		}
+	}
+
+	// The checklist needs a terminal; without one, say which flags answer it.
+	if !isInteractiveTerminal() {
+		names := make([]string, len(wendyOSEntitlementQuestions))
+		for i, q := range wendyOSEntitlementQuestions {
+			names[i] = q.entitlement
+		}
+		return nil, fmt.Errorf("--entitlement is required when running non-interactively: repeat it (or comma-separate) for each one the app needs (%s), or pass --no-extra-entitlements for network access only", strings.Join(names, ", "))
 	}
 
 	selected, err := tui.RunChecklist("What does your app need access to?", items)
@@ -1858,7 +1882,14 @@ dependencies = []
 
 [project.scripts]
 %s = "%s:main"
-`, appID, pkgName, pkgName)
+
+# A build system makes uv install the package, and with it the script above
+# that the Dockerfile's CMD runs. Without one, uv treats the project as
+# "virtual" and 'uv run %s' fails with "Failed to spawn".
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+`, appID, pkgName, pkgName, pkgName)
 
 		if err := os.WriteFile(pyprojectPath, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("creating pyproject.toml: %w", err)
@@ -1909,15 +1940,21 @@ if __name__ == "__main__":
 
 WORKDIR /app
 
-# Install dependencies first for better caching
+# Install dependencies first for better caching. uv.lock is optional: with a
+# committed lock the build is reproducible (--frozen); without one (a fresh
+# scaffold), uv resolves from pyproject.toml. Run 'uv lock' and commit
+# uv.lock to pin dependency versions.
 COPY pyproject.toml uv.lock* ./
-RUN uv sync --frozen --no-install-project
+RUN if [ -f uv.lock ]; then uv sync --frozen --no-install-project; else uv sync --no-install-project; fi
 
 # Copy application code
 COPY . .
-RUN uv sync --frozen
+RUN if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
-CMD ["uv", "run", "%s"]
+# --no-sync: the build above already installed the project. Without it, uv
+# re-checks the install on every container start, finds it stale (image
+# layers don't keep file ctimes) and rebuilds it, which needs network access.
+CMD ["uv", "run", "--no-sync", "%s"]
 `, pkgName)
 
 		if err := os.WriteFile(dockerPath, []byte(content), 0o644); err != nil {
@@ -1935,6 +1972,14 @@ func offerAIAssistant(appID, target, language string, entitlements []appconfig.E
 	hasCodex := isCommandAvailable("codex")
 
 	if !hasClaude && !hasCodex {
+		return nil
+	}
+
+	// The picker needs a terminal. Without one (an agent shell, CI, a pipe),
+	// the project is already scaffolded, so skip the offer rather than fail
+	// the whole command — a retry would only hit "wendy.json already exists".
+	if !isInteractiveTerminal() {
+		cliLogln("Not starting an AI assistant (no interactive terminal); pass --assistant claude, codex, or skip to choose explicitly.")
 		return nil
 	}
 
@@ -1967,56 +2012,24 @@ func offerAIAssistant(appID, target, language string, entitlements []appconfig.E
 	return runAIAssistantChoice(choice, appID, target, language, entitlements, false, true)
 }
 
-const wendySkillsMarketplace = "wendylabsinc/claude-skills"
-const wendySkillsPluginName = "wendy@claude-skills"
-
-// installWendySkills checks if the Wendy skills plugin is installed and offers
-// to install it if missing. This gives Claude expert knowledge about Wendy
-// development.
+// installWendySkills installs the same end-user group as `wendy mcp setup`.
+// It does not depend on a marketplace or download engineering skills.
 func installWendySkills(autoInstall bool) error {
-	// Check if the plugin is already installed by looking at the plugin list output.
-	out, err := exec.Command("claude", "plugin", "list").Output()
+	home, err := os.UserHomeDir()
 	if err != nil {
+		return err
+	}
+	target := filepath.Join(home, ".claude", "skills")
+	if wendySkillsCurrent(target) {
 		return nil
 	}
-
-	if strings.Contains(string(out), "wendy@claude-skills") {
+	if !autoInstall && !confirmDefaultNoFn("Install Wendy end-user skills for Claude Code?") {
 		return nil
 	}
-
-	cliLogln("\nThe Wendy skills plugin gives Claude expert knowledge about")
-	cliLogln("building and deploying apps to WendyOS and Wendy Lite devices.")
-	fmt.Println()
-
-	if !autoInstall {
-		if !confirmDefaultNoFn("Install Wendy skills for Claude Code?") {
-			return nil
-		}
-
-		fmt.Println()
+	if err := installWendySkillDirs(target); err != nil {
+		return fmt.Errorf("installing Wendy end-user skills: %w", err)
 	}
-
-	// Add the marketplace if not already present.
-	addMarketplace := exec.Command("claude", "plugin", "marketplace", "add", wendySkillsMarketplace)
-	addMarketplace.Stdout = os.Stdout
-	addMarketplace.Stderr = os.Stderr
-	if err := addMarketplace.Run(); err != nil {
-		cliNotice("  Could not add marketplace: %v", err)
-		cliNotice("  You can install manually: claude plugin marketplace add " + wendySkillsMarketplace)
-		return nil
-	}
-
-	// Install the plugin.
-	installCmd := exec.Command("claude", "plugin", "install", wendySkillsPluginName)
-	installCmd.Stdout = os.Stdout
-	installCmd.Stderr = os.Stderr
-	if err := installCmd.Run(); err != nil {
-		cliNotice("  Could not install plugin: %v", err)
-		cliNotice("  You can install manually: claude plugin install " + wendySkillsPluginName)
-		return nil
-	}
-
-	cliSuccess("  Wendy skills installed successfully!")
+	cliSuccess("  Wendy end-user skills installed at %s", target)
 	return nil
 }
 

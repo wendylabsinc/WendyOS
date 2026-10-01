@@ -1,16 +1,13 @@
 {
-  "title": "Target setup",
+  "title": "Set up a device",
   "pages": [
-    "developer-machine-setup",
+    "agent-assisted-setup",
     "wendyos-virtual-machine",
-    "unitree-simulators",
     "wendyos-nvidia-jetson-orin-nano",
     "wendyos-nvidia-jetson-agx-thor",
     "wendyos-raspberry-pi-5",
     "linux",
     "wendy-agent-macos",
-    "wendy-agent-unitree-g1",
-    "unitree-g1-reflash",
     "wendy-lite-esp32"
   ]
 }

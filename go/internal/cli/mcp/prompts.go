@@ -16,7 +16,8 @@ func (s *mcpServer) registerPrompts(srv *server.MCPServer) {
 		mcpgo.NewPrompt("deploy_app",
 			mcpgo.WithPromptDescription("Walks through connecting to a device and deploying a project with the run tool."),
 			mcpgo.WithArgument("project_path", mcpgo.ArgumentDescription("Path to the project to deploy (defaults to the current directory).")),
-			mcpgo.WithArgument("device_name", mcpgo.ArgumentDescription("Cloud device name to target the run at (defaults to the currently connected/default device).")),
+			mcpgo.WithArgument("device", mcpgo.ArgumentDescription("Device selector from device_list (host:port, vm:NAME or a cloud:// selector); omit to reuse the connection.")),
+			mcpgo.WithArgument("device_name", mcpgo.ArgumentDescription("Explicit cloud device name; omit to reuse the current direct, simulator or cloud session target.")),
 		),
 		s.handleDeployAppPrompt,
 	)
@@ -52,7 +53,14 @@ func promptArg(req mcpgo.GetPromptRequest, name, defaultVal string) string {
 
 func (s *mcpServer) handleDeployAppPrompt(_ context.Context, req mcpgo.GetPromptRequest) (*mcpgo.GetPromptResult, error) {
 	projectPath := promptArg(req, "project_path", ".")
-	device := promptArg(req, "device_name", "")
+	device := promptArg(req, "device", "")
+	argument := ""
+	if device != "" {
+		argument = fmt.Sprintf(", device=%q", device)
+	} else {
+		device = promptArg(req, "device_name", "")
+		argument = deviceArg(device)
+	}
 
 	deviceClause := "the currently connected device"
 	if device != "" {
@@ -61,10 +69,10 @@ func (s *mcpServer) handleDeployAppPrompt(_ context.Context, req mcpgo.GetPrompt
 
 	text := fmt.Sprintf(`Deploy the project at %s to %s.
 
-1. Make sure a device is connected: use device_connect (for a LAN/direct device by host:port) or cloud_connect (for a cloud-enrolled device). If already connected, you can skip this.
-2. Deploy with the run tool: run(project_path=%q%s). This builds the project and starts it on the device.
-3. Verify it came up: check container_list for the app's running_state, and tail telemetry_logs for startup errors.
-`, projectPath, deviceClause, projectPath, deviceArg(device))
+1. Confirm the intended target with wendy_status. If it is not connected, use device_connect with a device selector from device_list: host:port for LAN, vm:NAME for a simulator, or a cloud:// selector. Reuse a connection only if it is the intended target. On blank hardware, enable setup with wendy_tools, use os_install_plan and verify first boot before connecting.
+2. Enable setup and call project_validate for this project. Address its errors, then deploy with the run tool: run(project_path=%q%s). This builds the project and starts it on that target. With no connection and no device, run returns NOT_CONNECTED.
+3. Check the returned target; if it is not the connected device, device_connect to it first. run always detaches and does not wait for readiness: check container_list for the app's running_state and termination_reason, telemetry_logs for startup errors, and the app's actual health endpoint or ROS output. Do not infer physical motion from deployment success.
+`, projectPath, deviceClause, projectPath, argument)
 
 	return mcpgo.NewGetPromptResult(
 		"Deploy a project to a Wendy device",
@@ -75,8 +83,7 @@ func (s *mcpServer) handleDeployAppPrompt(_ context.Context, req mcpgo.GetPrompt
 }
 
 // deviceArg renders the optional device_name argument suffix for the run tool
-// call shown in the deploy_app prompt text. The run tool's device selector is
-// device_name (not device), so the rendered example must match that param.
+// call shown in the deploy_app prompt text; this legacy prompt arg is cloud-only.
 func deviceArg(device string) string {
 	if device == "" {
 		return ""
@@ -97,8 +104,8 @@ func (s *mcpServer) handleDiagnoseContainerPrompt(_ context.Context, req mcpgo.G
 	text := fmt.Sprintf(`Diagnose %s.
 
 1. Call %s and inspect running_state and termination_reason. An error_code of ENTITLEMENT_DENIED means the container was denied a capability at start — fix the relevant permission in wendy.json and redeploy.
-2. Call container_stats to check CPU/memory usage for signs of resource exhaustion or a crash loop.
-3. Call telemetry_logs to read recent stdout/stderr output for the app-level error.
+2. Enable observability with wendy_tools and call app_inspect for the selected app. Inspect individual service states, recorded exit, resource usage and recent warning/error logs. Missing or unsupported readiness checks remain unknown.
+3. Call telemetry_logs for broader application output or device_os_logs for kernel errors.
 4. If the container is reachable but requests are failing, read the wendy://diagnostics resource — it records container-MCP proxy failures (app name, stage, error, time) that would otherwise only show up on stderr.
 `, target, listHint)
 
@@ -115,14 +122,14 @@ func (s *mcpServer) handleProvisionDevicePrompt(_ context.Context, req mcpgo.Get
 
 	connectHint := "device_connect (discover the address first with device_list scan=true if you don't have one)"
 	if address != "" {
-		connectHint = fmt.Sprintf("device_connect(address=%q)", address)
+		connectHint = fmt.Sprintf("device_connect(device=%q)", address)
 	}
 
 	text := fmt.Sprintf(`Provision a device with Wendy Cloud.
 
-1. Connect to the device: %s.
+1. Enable setup with wendy_tools(groups=["setup"]), then connect to the device: %s.
 2. Check provisioning_status to see whether it is already provisioned or awaiting enrollment.
-3. If unprovisioned, call provisioning_start with an enrollment_token (and cloud_host/organization_id as needed for your Wendy Cloud account) to begin enrollment.
+3. If unprovisioned, use cloud_enroll_device with the current cloud login. Use provisioning_start only when given an external enrollment_token and its cloud_host/organization_id.
 4. Poll provisioning_status again to watch progress until it reports success (or an error you need to address, e.g. an expired token).
 `, connectHint)
 

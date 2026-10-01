@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         category: "AppDelegate"
     )
     private let wendyAgent = WendyAgent(configuration: .default)
+    private let localBuildService = WendyRuntimeVM()
+    private let meshVPN = MeshVPNController.shared
     private let welcomeAndPermissions = WelcomeAndPermissions()
     private var statusMenuController: StatusMenuController?
     private var welcomeAndPermissionsWindow: NSWindow?
@@ -29,8 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Task {
             self.statusMenuController = await StatusMenuController(
                 wendyAgent: self.wendyAgent,
+                localBuildService: self.localBuildService,
+                meshVPN: self.meshVPN,
                 delegate: self
             )
+
+            await self.meshVPN.connectAutomatically()
 
             // Registered before start() so the services the agent builds at
             // startup capture it. A self-update must end this process without
@@ -66,6 +72,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         self.showWelcomeAndPermissionsWindow()
     }
 
+    func statusMenuController(
+        _ controller: StatusMenuController,
+        didSetLocalBuildServiceEnabled enabled: Bool
+    ) {
+        Task {
+            if enabled {
+                await self.localBuildService.start()
+            } else {
+                await self.localBuildService.stop()
+            }
+        }
+    }
+
+    func statusMenuController(
+        _ controller: StatusMenuController,
+        didSetMeshVPNEnabled enabled: Bool
+    ) {
+        Task {
+            if enabled {
+                await self.meshVPN.connect()
+            } else {
+                await self.meshVPN.disable()
+            }
+        }
+    }
+
+    func statusMenuControllerDidSelectNetworkExtensionSettings(
+        _ controller: StatusMenuController
+    ) {
+        self.openNetworkExtensionSettings()
+    }
+
     func statusMenuControllerDidSelectQuit(_ controller: StatusMenuController) {
         self.performQuit()
     }
@@ -78,14 +116,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         Task {
             await self.statusMenuController?.invalidate()
             await self.wendyAgent.stop()
+            await self.localBuildService.stop()
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        self.localBuildService.requestStop()
     }
 
     /// Ends only the agent app after a committed self-update. The detached
     /// relaunch watcher opens the freshly-installed bundle once this PID exits.
     private func performUpdateQuit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    private func openNetworkExtensionSettings() {
+        guard
+            let url = URL(
+                string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+            )
+        else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 
     func windowWillClose(_ notification: Notification) {

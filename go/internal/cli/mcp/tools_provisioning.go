@@ -18,7 +18,7 @@ func (s *mcpServer) registerProvisioningTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("provisioning_status", statusOpts...), s.handleProvisioningStatus)
 
 	startOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Provision the device with Wendy Cloud and wait for completion (up to 2 minutes)"),
+		mcpgo.WithDescription("Enroll with an externally supplied cloud enrollment token; waits up to 2 minutes. Prefer cloud_enroll_device when using your current cloud login."),
 		mcpgo.WithString("enrollment_token",
 			mcpgo.Required(),
 			mcpgo.Description("Enrollment token obtained from Wendy Cloud"),

@@ -38,6 +38,12 @@ func listUMSDisks() ([]UMSDisk, error) {
 				d.SizeBytes = n * 512
 			}
 		}
+		if d.PortPath != "" {
+			// sysfs reports negotiated speed in Mb/s, including fractional
+			// values for low-speed devices. Missing speed is diagnostic only.
+			speed, _ := strconv.ParseFloat(sysfsString(filepath.Join("/sys/bus/usb/devices", d.PortPath, "speed")), 64)
+			d.USBSpeedMbps = int64(speed)
+		}
 		disks = append(disks, d)
 	}
 	return disks, nil

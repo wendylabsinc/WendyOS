@@ -53,9 +53,7 @@ func runXcodebuildAttempt(ctx context.Context, dir string, allowRecovery bool, a
 	fmt.Fprintf(logFile, "xcodebuild %s\n%s\n\n", strings.Join(args, " "), time.Now().Format(time.RFC3339))
 
 	hintStyle := lipgloss.NewStyle().Foreground(tui.ColorPrimary)
-	fmt.Println()
-	fmt.Println(hintStyle.Render("  tail -f .xcode/xcodebuild.log"))
-	fmt.Println()
+	fmt.Fprintf(runProgressWriter(ctx), "\n%s\n\n", hintStyle.Render("  tail -f .xcode/xcodebuild.log"))
 
 	var stderrBuf strings.Builder
 	cmd := execCommandContext(ctx, "xcodebuild", args...)
@@ -65,7 +63,7 @@ func runXcodebuildAttempt(ctx context.Context, dir string, allowRecovery bool, a
 
 	if err := cmd.Run(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return fmt.Errorf("xcodebuild is required but not found in PATH; install Xcode from the App Store")
+			return commandErrorf(errBuilderUnavailable, "xcodebuild is required but not found in PATH; install Xcode from the App Store")
 		}
 		if allowRecovery && looksLikeCLTOnlySelected(stderrBuf.String()) {
 			if selErr := xcodeSelectGuidanceFn(ctx); selErr != nil {
@@ -147,7 +145,7 @@ func findXcodeSchemeAttempt(ctx context.Context, dir string, allowRecovery bool)
 
 	if err := cmd.Run(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
-			return "", fmt.Errorf("xcodebuild is required but not found in PATH; install Xcode from the App Store")
+			return "", commandErrorf(errBuilderUnavailable, "xcodebuild is required but not found in PATH; install Xcode from the App Store")
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
@@ -269,7 +267,7 @@ func xcodeSelectGuidance(ctx context.Context) error {
 
 	selectCmd := execCommandContext(ctx, "sudo", "xcode-select", "-s", developerDir)
 	selectCmd.Stdin = os.Stdin
-	selectCmd.Stdout = os.Stdout
+	selectCmd.Stdout = runProgressWriter(ctx)
 	selectCmd.Stderr = os.Stderr
 	if err := selectCmd.Run(); err != nil {
 		return fmt.Errorf("sudo xcode-select -s %s failed: %w", developerDir, err)
@@ -451,7 +449,7 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 		deviceArch = "arm64"
 	}
 	if deviceArch != runtime.GOARCH {
-		return fmt.Errorf("architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
+		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
 	}
 
 	// Find the .xcodeproj directory.
@@ -494,7 +492,7 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 		"-skipMacroValidation",
 		"-skipPackagePluginValidation",
 	); err != nil {
-		return fmt.Errorf("xcodebuild failed: %w", err)
+		return commandErrorf(errBuildFailed, "xcodebuild failed: %w", err)
 	}
 	cliLogln("Build completed.")
 
@@ -512,7 +510,7 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 
 	// Sync files to the device.
 	if err := syncFiles(ctx, conn, appCfg.AppID, syncEntries); err != nil {
-		return fmt.Errorf("syncing files: %w", err)
+		return commandErrorf(errTransferFailed, "syncing files: %w", err)
 	}
 
 	// Create and start the container.

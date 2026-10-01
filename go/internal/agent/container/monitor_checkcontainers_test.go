@@ -477,3 +477,18 @@ func TestProbeExposedPortsInvokesProber(t *testing.T) {
 		t.Fatalf("WarnPubliclyExposedPorts called %d times, want 1", f.probeCalls)
 	}
 }
+
+func TestRestartSingle_DoesNotResurrectRetiredAlias(t *testing.T) {
+	fake := &fakeContainerd{started: make(chan string, 1)}
+	m := newMonitorWithClient(fake)
+	m.Register("demo", RestartUnlessStopped, 0)
+	m.Unregister("demo")
+	m.Register("demo_relay", RestartUnlessStopped, 0)
+	m.MarkExplicitStop("demo_relay")
+	// Model old alias work already scheduled before canonical registration.
+	m.restartSingle(context.Background(), "demo")
+	m.restartSingle(context.Background(), "demo_relay")
+	if calls := fake.startCallsSnapshot(); len(calls) != 0 {
+		t.Fatalf("stopped app resurrected: %v", calls)
+	}
+}

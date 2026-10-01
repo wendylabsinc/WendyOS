@@ -60,6 +60,11 @@ var tlsDebugWriter io.Writer = os.Stderr
 type AgentConnection struct {
 	Conn *grpc.ClientConn
 	Host string // hostname or IP of the connected agent
+	// MeshHost is the device's stable mesh DNS name
+	// (device-<assetID>.mesh.wendy.internal). Cloud transports populate it so
+	// developer-side traffic can use the desktop VPN when it is active instead
+	// of relying on a device-reported LAN address.
+	MeshHost string
 	// Addr is the full host:port this connection dialed — the endpoint that
 	// actually answered, mTLS port included. Empty for unix-socket and
 	// pre-built (NewFromConn) connections.
@@ -347,7 +352,19 @@ func newAgentTLSConfig(
 		}
 	}
 	tlsCfg := &tls.Config{
-		Certificates:       []tls.Certificate{cert},
+		Certificates: []tls.Certificate{cert},
+		GetClientCertificate: func(request *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			// This connection has one explicitly selected operator identity.
+			// Older agents advertise incomplete issuer hints. Those hints are
+			// for certificate selection, not trust; both peers still verify
+			// the full chain and the device identity remains pinned.
+			supported := *request
+			supported.AcceptableCAs = nil
+			if err := supported.SupportsCertificate(&cert); err != nil {
+				return nil, fmt.Errorf("device cannot use the operator certificate: %w", err)
+			}
+			return &cert, nil
+		},
 		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
 		MinVersion:         tls.VersionTLS12,
 	}

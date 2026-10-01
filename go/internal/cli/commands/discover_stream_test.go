@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,24 +20,11 @@ func probeKey(dev models.LANDevice) string {
 	return discoverycache.Key(dev.ID, dev.DisplayName)
 }
 
-// lanCachedEvent builds a lanEventMsg for a device that just appeared from
-// the on-disk cache (unverified this session). ch is left nil: none of these
-// tests execute the returned re-arm command, only the state transition it
-// produces.
-func lanCachedEvent(dev models.LANDevice) lanEventMsg {
-	return lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANCached, Device: dev}}
-}
-
 // lanFoundEvent builds a lanEventMsg for a live-confirmed, agent-probed
 // sighting (Probed: true) — the common case in these tests, where the
 // device's full metadata is already known.
 func lanFoundEvent(dev models.LANDevice) lanEventMsg {
 	return lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANFound, Device: dev, Probed: true}}
-}
-
-// lanOfflineEvent builds a lanEventMsg reporting dev as confirmed offline.
-func lanOfflineEvent(dev models.LANDevice) lanEventMsg {
-	return lanEventMsg{ev: discovery.LANEvent{Kind: discovery.LANOffline, Device: dev}}
 }
 
 // discoverAgentCell returns the Agent-column cell of the single table row.
@@ -89,106 +77,97 @@ func searchLANEventMsg(cmd tea.Cmd) (lanEventMsg, bool) {
 	return lanEventMsg{}, false
 }
 
-// TestCLILANStreamOptions_UsesCacheAndProber pins the CLI's single definition
-// of how a LAN scan should run — cliLANStreamOptions — to the contract every
-// consumer (one-shot/JSON discover, MCP's device_list, fleet commands, and
-// the batch helpers in helpers.go) relies on: cached rows are read (UseCache)
-// and every candidate is confirmed by a live agent probe, never a bare mDNS
-// sighting (Prober set). This is also what makes discover.go's removal of the
-// old post-hoc resolveLANVersions() pass safe: that function no longer
-// exists (deleted with its last caller), so any accidental reintroduction of
-// a call to it fails the build, not just this test.
+// Cached addresses still accelerate discovery, but they need verification.
 func TestCLILANStreamOptions_UsesCacheAndProber(t *testing.T) {
 	opts := cliLANStreamOptions(context.Background())
 	if !opts.UseCache {
-		t.Error("UseCache = false; want true so cached rows appear instantly")
+		t.Error("UseCache = false; want cached addresses probed in the background")
 	}
 	if opts.Prober == nil {
-		t.Error("Prober = nil; want lanProber so a cached row can be confirmed (or found offline)")
+		t.Error("Prober = nil; want cached addresses verified")
 	}
 }
 
-// TestDiscoverStream_CachedThenProbedUpdatesInPlace drives the discover
-// model's real Init/Update wiring — a fake lanStreamFn feeds events through
-// the channel Init hands to waitLANEvent — and verifies: a cached row shows
-// up pending, a later probed sighting of the same identity updates that row
-// in place rather than duplicating it, and going offline flips it to
-// ProbeOffline while keeping it listed.
-func TestDiscoverStream_CachedThenProbedUpdatesInPlace(t *testing.T) {
+// Exercise Init/Update through the stream so ignoring cache events must still
+// re-arm the reader and allow a later confirmation to reach the table.
+func TestDiscoverStream_CachedDevicesStayHiddenUntilConfirmed(t *testing.T) {
 	orig := lanStreamFn
 	t.Cleanup(func() { lanStreamFn = orig })
-
 	ch := make(chan discovery.LANEvent, 8)
 	lanStreamFn = func(ctx context.Context, opts discovery.StreamOptions) <-chan discovery.LANEvent {
-		// The CRITICAL wiring rule (Task 3's design): with a nil Prober a
-		// cached row can never be confirmed offline. Both surfaces that
-		// consume StreamLAN must always pass a real prober.
-		if opts.Prober == nil {
-			t.Error("StreamOptions.Prober must be set — a nil Prober can never confirm a cached row offline")
-		}
-		if !opts.UseCache {
-			t.Error("StreamOptions.UseCache must be true so cached rows appear instantly")
+		if !opts.UseCache || opts.Prober == nil {
+			t.Error("LAN stream must probe cached addresses")
 		}
 		return ch
 	}
 
 	m := newDiscoverModel(context.Background(), discovery.DiscoveryOptions{Types: []models.InterfaceType{models.InterfaceLAN}}, true)
 	cmd := m.Init()
-	if cmd == nil {
-		t.Fatal("Init() returned a nil cmd")
-	}
-
 	dev := models.LANDevice{ID: "dev-1", DisplayName: "alpha", Hostname: "alpha.local", Port: defaultAgentPort}
 
-	// Cached: the row appears immediately, pending — instant visibility is
-	// the entire point of this task.
-	ch <- discovery.LANEvent{Kind: discovery.LANCached, Device: dev}
-	msg := findLANEventMsg(t, cmd)
-	updated, nextCmd := m.Update(msg)
-	dm := updated.(discoverModel)
-	if got := len(dm.collection.LANDevices); got != 1 {
-		t.Fatalf("LANDevices = %d after cached event; want 1", got)
-	}
-	if dm.probe[probeKey(dev)] != tui.ProbePending {
-		t.Fatalf("probe state = %v; want ProbePending", dm.probe[probeKey(dev)])
-	}
-	if cell := discoverAgentCell(t, dm); cell == "" {
-		t.Fatal("pending device Agent cell should show a spinner frame, got blank")
+	for _, kind := range []discovery.LANEventKind{discovery.LANCached, discovery.LANOffline} {
+		ch <- discovery.LANEvent{Kind: kind, Device: dev}
+		updated, nextCmd := m.Update(findLANEventMsg(t, cmd))
+		m, cmd = updated.(discoverModel), nextCmd
+		if len(m.collection.LANDevices) != 0 || len(m.table.Rows()) != 0 || len(m.probe) != 0 {
+			t.Fatalf("unconfirmed device was listed after event %v: devices=%+v, rows=%v, probe=%v", kind, m.collection.LANDevices, m.table.Rows(), m.probe)
+		}
+		if m.hasResults {
+			t.Fatal("cache-only events must not count as discovery results")
+		}
 	}
 
-	// Probed Found for the same identity: the row updates in place — no
-	// duplicate — and the version appears.
-	probedDev := dev
-	probedDev.AgentVersion = "0.10.4"
-	probedDev.OSVersion = "WendyOS-0.10.4"
-	ch <- discovery.LANEvent{Kind: discovery.LANFound, Device: probedDev, Probed: true}
-	msg = findLANEventMsg(t, nextCmd)
-	updated, nextCmd = dm.Update(msg)
-	dm = updated.(discoverModel)
-	if got := len(dm.collection.LANDevices); got != 1 {
-		t.Fatalf("LANDevices = %d after probed update; want 1 (no duplicate row)", got)
+	// A later successful retry adds the device, and subsequent updates merge.
+	dev.AgentVersion = "0.10.4"
+	dev.OSVersion = "WendyOS-0.10.4"
+	for _, kind := range []discovery.LANEventKind{discovery.LANFound, discovery.LANUpdated} {
+		ch <- discovery.LANEvent{Kind: kind, Device: dev, Probed: true}
+		updated, nextCmd := m.Update(findLANEventMsg(t, cmd))
+		m, cmd = updated.(discoverModel), nextCmd
+		if got := len(m.collection.LANDevices); got != 1 {
+			t.Fatalf("LANDevices = %d after confirmation; want 1", got)
+		}
+		if m.probe[probeKey(dev)] != tui.ProbeOK {
+			t.Fatalf("probe state = %v; want ProbeOK", m.probe[probeKey(dev)])
+		}
+		if cell := discoverAgentCell(t, m); cell != "0.10.4" {
+			t.Fatalf("Agent cell = %q; want 0.10.4", cell)
+		}
 	}
-	if dm.probe[probeKey(probedDev)] != tui.ProbeOK {
-		t.Fatalf("probe state = %v; want ProbeOK", dm.probe[probeKey(probedDev)])
-	}
-	if cell := discoverAgentCell(t, dm); cell != "0.10.4" {
-		t.Fatalf("resolved Agent cell = %q; want 0.10.4", cell)
-	}
+}
 
-	// Offline: the row stays listed (never removed) but flips to
-	// ProbeOffline.
-	ch <- discovery.LANEvent{Kind: discovery.LANOffline, Device: probedDev}
-	msg = findLANEventMsg(t, nextCmd)
-	updated, _ = dm.Update(msg)
-	dm = updated.(discoverModel)
-	if got := len(dm.collection.LANDevices); got != 1 {
-		t.Fatalf("LANDevices = %d after offline event; want 1 (row stays listed)", got)
+func TestLANPickerCachedDevicesStayHiddenUntilConfirmed(t *testing.T) {
+	picker := tui.NewPicker()
+	picker.MergeItem = mergePickerItem
+	m := newDevicePickerModel(context.Background(), picker, nil, 0, false, devicePickerLocalTab)
+	dev := models.LANDevice{ID: "dev-1", DisplayName: "cached-board", Hostname: "cached-board.local", Port: defaultAgentPort, IsMTLS: true}
+	steps := []struct {
+		ev      discovery.LANEvent
+		visible bool
+		hint    bool
+	}{
+		{ev: discovery.LANEvent{Kind: discovery.LANCached, Device: dev}},
+		{ev: discovery.LANEvent{Kind: discovery.LANOffline, Device: dev}},
+		{ev: discovery.LANEvent{Kind: discovery.LANFound, Device: dev}, visible: true},
+		{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: dev, ProbeFailed: true}, visible: true, hint: true},
+		{ev: discovery.LANEvent{Kind: discovery.LANUpdated, Device: dev, Probed: true}, visible: true},
+		{ev: discovery.LANEvent{Kind: discovery.LANRetracted, Device: dev}},
 	}
-	if dm.probe[probeKey(probedDev)] != tui.ProbeOffline {
-		t.Fatalf("probe state = %v; want ProbeOffline", dm.probe[probeKey(probedDev)])
-	}
-	if cell := discoverAgentCell(t, dm); cell != "offline" {
-		t.Fatalf("offline Agent cell = %q; want %q", cell, "offline")
+	for _, step := range steps {
+		if step.ev.Probed {
+			step.ev.Device.AgentVersion = "0.10.4"
+		}
+		if msg := lanPickerEventMsg(step.ev); msg != nil {
+			updated, _ := m.Update(devicePickerLocalMsg{msg: msg})
+			m = updated.(devicePickerModel)
+		}
+		view := m.View()
+		if got := strings.Contains(view, dev.DisplayName); got != step.visible {
+			t.Fatalf("event %+v: visible = %v, want %v; view=%q", step.ev, got, step.visible, view)
+		}
+		if got := strings.Contains(view, "does not have access"); got != step.hint {
+			t.Fatalf("event %+v: no-access hint = %v, want %v; view=%q", step.ev, got, step.hint, view)
+		}
 	}
 }
 
@@ -343,10 +322,10 @@ func TestDiscoverStream_SupersededRowIsDropped(t *testing.T) {
 	m := newDiscoverModel(context.Background(), defaultOpts(), true)
 
 	minted := models.LANDevice{ID: "orin", DisplayName: "orin", Hostname: "orin.local", IPAddress: "10.0.0.5", Port: defaultAgentPort}
-	updated, _ := m.Update(lanCachedEvent(minted))
+	updated, _ := m.Update(lanFoundEvent(minted))
 	dm := updated.(discoverModel)
 	if got := len(dm.collection.LANDevices); got != 1 {
-		t.Fatalf("LANDevices = %d after the cached minted row; want 1", got)
+		t.Fatalf("LANDevices = %d after the confirmed minted row; want 1", got)
 	}
 
 	real := models.LANDevice{ID: "uuid-1", DisplayName: "orin", Hostname: "orin.local", IPAddress: "10.0.0.5", Port: defaultAgentPort}
@@ -384,12 +363,10 @@ func TestLANRowState(t *testing.T) {
 		wantProbe    tui.ProbeState
 		wantInsecure bool
 	}{
-		{"cached row verifies", discovery.LANEvent{Kind: discovery.LANCached, Device: plain}, tui.ProbePending, false},
 		{"unprobed sighting verifies", discovery.LANEvent{Kind: discovery.LANFound, Device: plain}, tui.ProbePending, false},
 		{"probed mTLS row is secure", discovery.LANEvent{Kind: discovery.LANFound, Device: mtls, Probed: true}, tui.ProbeOK, false},
 		{"probed plaintext row is insecure", discovery.LANEvent{Kind: discovery.LANUpdated, Device: plain, Probed: true}, tui.ProbeOK, true},
 		{"failed probe stops the spinner", discovery.LANEvent{Kind: discovery.LANUpdated, Device: plain, ProbeFailed: true}, tui.ProbeFailed, false},
-		{"offline row stays listed", discovery.LANEvent{Kind: discovery.LANOffline, Device: plain}, tui.ProbeOffline, false},
 	}
 
 	for _, tt := range cases {

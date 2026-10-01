@@ -4,9 +4,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"os"
 	"path/filepath"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
 // Config represents the top-level CLI configuration.
@@ -25,6 +27,10 @@ type Config struct {
 	DefaultCloudGRPC   string `json:"defaultCloudGRPC,omitempty"`
 	LastCLIUpdateCheck string `json:"lastCLIUpdateCheck,omitempty"` // RFC3339
 	AvailableCLIUpdate string `json:"availableCLIUpdate,omitempty"` // tag of a newer release, if any
+	// CLIUpdateNoticeShown is the AvailableCLIUpdate tag whose non-interactive
+	// update notice has already been printed, so scripts and agents see it
+	// once per release instead of after every command.
+	CLIUpdateNoticeShown string `json:"cliUpdateNoticeShown,omitempty"`
 	// LastMCPSetupVersion records the CLI version that last ran `wendy mcp
 	// setup`. It lets the root command detect when an upgrade should refresh
 	// the MCP server config and bundled skills. Empty means the user has never
@@ -125,8 +131,19 @@ type FixNotice struct {
 	FixedInRelease string `json:"fixedInRelease,omitempty"`
 }
 
-// ConfigDir returns the path to the ~/.wendy directory, creating it if necessary.
+// ConfigDir returns the device/cloud state directory, creating it if necessary.
+// WENDY_CONFIG_DIR gives automation an isolated config, trust store and VM store
+// without changing the user's home or their coding agent/model settings.
 func ConfigDir() (string, error) {
+	if dir := os.Getenv("WENDY_CONFIG_DIR"); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", fmt.Errorf("WENDY_CONFIG_DIR must be an absolute directory")
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", fmt.Errorf("creating configured device state directory: %w", err)
+		}
+		return filepath.Clean(dir), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("determining home directory: %w", err)
@@ -255,11 +272,45 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writeConfigFile(path, data); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
 	return nil
+}
+
+// writeConfigFile replaces path with data without ever exposing a partial
+// file: a crash or a concurrent reader sees the old config or the new one,
+// never the truncated file os.WriteFile leaves mid-write. The file is always
+// 0600 — it holds credentials. A symlinked config.json (a dotfiles repo) is
+// written through to its target — including a dangling target that does not
+// exist yet — so the link survives the rename. The write preserves the
+// existing owner (or, for a fresh config.json, its directory's owner)
+// instead of leaving it root-owned, since `wendy` re-execs itself under sudo
+// with the invoking user's HOME for some operations.
+//
+// Before writing, it probes the target for write permission and fails
+// without touching the file if that probe fails. A rename replaces a file
+// regardless of that file's own permissions — only the containing
+// directory's permissions matter — so without this probe Save would silently
+// override a config.json the user deliberately made read-only (e.g. chmod
+// 444 to stop `wendy` from rewriting a hand-edited or generated config).
+// os.WriteFile respected that mode by construction; this preserves the same
+// behavior under the new rename-based write path.
+func writeConfigFile(path string, data []byte) error {
+	resolved, err := atomicfile.ResolveWritePath(path)
+	if err != nil {
+		return err
+	}
+	path = resolved
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		_ = f.Close()
+	}
+	return atomicfile.WritePreservingOwner(path, data, 0o600)
 }
 
 // authEntryOrgID returns the organization ID from the first certificate in an

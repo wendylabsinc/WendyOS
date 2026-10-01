@@ -1,0 +1,1083 @@
+[
+  {
+    "id": "deploy-http",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "Use Wendy to deploy the HTTP app in the current directory to {device}. Leave it running and verify that /health returns this app's settings. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
+    "timeout_seconds": 600,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 90,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "deploy-http",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "deploy-http",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "deploy-http",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "fixture": "builtin"
+  },
+  {
+    "id": "repair-startup",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "The HTTP app {app_id} on {device} crashes at startup. Its source is in the current directory. Find and fix the cause, deploy the fix using Wendy, and verify /health works. Preserve the app ID and settings. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
+    "timeout_seconds": 600,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 90,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "repair-startup",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "repair-startup",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "repair-startup",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "fixture": "builtin"
+  },
+  {
+    "id": "update-http",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "Use Wendy to update the HTTP app {app_id} on {device} so /health reports version v2. Its source is in the current directory. Preserve the app ID, nonce, and port. Deploy and verify the change. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
+    "timeout_seconds": 600,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 90,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "update-http",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "update-http",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "update-http",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "fixture": "builtin"
+  },
+  {
+    "id": "stop-app",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "Use Wendy to stop the app {app_id} on {device}. Keep it deployed so it can be started later, and verify it stopped. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
+    "timeout_seconds": 600,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 90,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "stop-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "stop-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "stop-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "fixture": "builtin"
+  },
+  {
+    "id": "create-simulator",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Use Wendy to create a generic WendyOS simulator named {vm_name}. Start it and verify that its agent is ready to run apps. Leave it running. Use the cached VM image if available. Work only on this benchmark app and the named target. Do not change other apps or device settings.",
+    "timeout_seconds": 600,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 90,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "create-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "create-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "create-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "fixture": "builtin",
+    "owns_vm": true
+  },
+  {
+    "id": "start-app",
+    "fixture": "builtin",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "Use Wendy to start the stopped app {app_id} on {device}. Keep its existing deployment and settings. Verify /health and leave it running. Work only on this benchmark app and the named target.",
+    "timeout_seconds": 600,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 120,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "start-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "start-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "start-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ]
+  },
+  {
+    "id": "compose-app",
+    "fixture": "builtin",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "Create and deploy a Python Docker Compose app to {device} using requirements.json. Create exactly two services, frontend and worker, under app ID {app_id}. The frontend must serve GET /compute?value=<integer>&challenge=<string> on the specified frontend port. It forwards each request to the worker, which calculates the square and echoes the challenge with worker_id from requirements.json. The frontend returns JSON with exactly app_id, worker_id, result, and challenge. The frontend must return HTTP 503 when the worker is unavailable and recover when it returns. Include python3 in the frontend image so operators can probe it. Use the specified worker port. Verify both services and leave them running. Work only on this benchmark app and the named target.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 180,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "compose-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "compose-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "compose-app",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ]
+  },
+  {
+    "id": "create-go2-simulator",
+    "fixture": "builtin",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Use Wendy to create a new Unitree Go2 hardware simulator named {vm_name}. Install/boot its WendyOS VM, start its managed robot runtime, and verify its robot identity, health, and live ROS 2 odometry and joint data. Leave it running. Use cached images and build assets if available. Work only on this new simulator; preserve all other VMs and physical devices. Do not bridge its ROS network to hardware.",
+    "timeout_seconds": 1800,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 150,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "create-go2-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "create-go2-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "create-go2-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "owns_vm": true
+  },
+  {
+    "id": "create-g1-simulator",
+    "fixture": "builtin",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "Use Wendy to create a new Unitree G1 hardware simulator named {vm_name}. Install/boot its WendyOS VM, start its managed robot runtime, and verify its robot identity, health, and live ROS 2 odometry and joint data. Leave it running. Use cached images and build assets if available. Work only on this new simulator; preserve all other VMs and physical devices. Do not bridge its ROS network to hardware.",
+    "timeout_seconds": 1800,
+    "setup_timeout_seconds": 900,
+    "verify_timeout_seconds": 150,
+    "prepare": [
+      "python3",
+      "{here}/fixtures.py",
+      "prepare",
+      "create-g1-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/fixtures.py",
+      "verify",
+      "create-g1-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/fixtures.py",
+      "cleanup",
+      "create-g1-simulator",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "owns_vm": true
+  },
+  {
+    "id": "install-physical",
+    "fixture": "external",
+    "environments": [
+      "physical"
+    ],
+    "requires": [
+      "disposable-install-media"
+    ],
+    "destructive": true,
+    "prompt": "Install WendyOS for the supplied Raspberry Pi 5 or other explicitly specified board onto the supplied disposable installation medium. The medium identified in the fixture brief can be completely erased. Verify the medium identity before writing. Boot and connect to the board at the supplied first-boot address, verify the installed OS, and deploy the supplied smoke app. Preserve every other drive and device. Complete the installation without asking for further steering.",
+    "timeout_seconds": 1800,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Stable drive identity and board model match the handed-over medium; no other media changes",
+      "Actual image write completes; an installation plan alone does not pass",
+      "Fresh boot identity and expected OS artifact/version match at the explicit address",
+      "Smoke app runs and reports the trial nonce after first boot",
+      "Any operator card transfer or recovery-button step is logged separately from LLM steering"
+    ]
+  },
+  {
+    "id": "ota-update",
+    "fixture": "external",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "requires": [
+      "disposable-ota"
+    ],
+    "destructive": true,
+    "prompt": "Use Wendy to OTA-update {device} from the supplied baseline to the exact supplied WendyOS artifact. Verify that it reboots into the committed new OS, reconnects over the original transport, and preserves the supplied app and persistent data. Preserve other device configuration. Updating only the Wendy Agent does not complete this task.",
+    "timeout_seconds": 1800,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Initial OS build differs from target, with a repeatable reset to baseline per trial",
+      "Artifact identity, boot ID or slot transition, and committed update-engine verdict match",
+      "Reconnection succeeds over the selected transport, including cloud if selected",
+      "Canary app, persisted random data, enrollment and required peripherals survive reboot",
+      "A no-op already-current update, rollback, or agent-only update fails"
+    ]
+  },
+  {
+    "id": "debug-otel-logs",
+    "fixture": "builtin",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "The supplied app on {device} has a reproducible problem: a request fails. Diagnose it using Wendy OpenTelemetry logs, fix the cause in the supplied source or app configuration, redeploy, and verify recovery under the provided workload. Preserve the app identity, instrumentation, and unrelated apps. Explain which telemetry evidence supports the diagnosis. The required request behavior and latency limit are in requirements.json. Keep telemetry.py unchanged.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "App-filtered OTEL error record with the trial/request ID and relevant diagnostic attributes",
+      "Verifier captures bad baseline before the attempt and replays an independent nonce workload after it",
+      "Transcript contains a successful telemetry query and its returned evidence, not only a final claim",
+      "The fault is fixed; fresh workload succeeds and the relevant signal recovers without disabling or filtering away instrumentation"
+    ],
+    "prepare": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "prepare",
+      "logs",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "verify",
+      "logs",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}",
+      "--events",
+      "{agent_events}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "cleanup",
+      "logs",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ]
+  },
+  {
+    "id": "debug-otel-metrics",
+    "fixture": "builtin",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "The supplied app on {device} has a reproducible problem: requests are too slow or failing at a high rate. Diagnose it using Wendy OpenTelemetry metrics, fix the cause in the supplied source or app configuration, redeploy, and verify recovery under the provided workload. Preserve the app identity, instrumentation, and unrelated apps. Explain which telemetry evidence supports the diagnosis. The required request behavior and latency limit are in requirements.json. Keep telemetry.py unchanged.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Metric series scoped to the app and interval, with observed values and units",
+      "Verifier captures bad baseline before the attempt and replays an independent nonce workload after it",
+      "Transcript contains a successful telemetry query and its returned evidence, not only a final claim",
+      "The fault is fixed; fresh workload succeeds and the relevant signal recovers without disabling or filtering away instrumentation"
+    ],
+    "prepare": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "prepare",
+      "metrics",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "verify",
+      "metrics",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}",
+      "--events",
+      "{agent_events}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "cleanup",
+      "metrics",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ]
+  },
+  {
+    "id": "debug-otel-traces",
+    "fixture": "builtin",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "prompt": "The supplied app on {device} has a reproducible problem: an end-to-end request is slow or fails in one service. Diagnose it using Wendy OpenTelemetry traces, fix the cause in the supplied source or app configuration, redeploy, and verify recovery under the provided workload. Preserve the app identity, instrumentation, and unrelated apps. Explain which telemetry evidence supports the diagnosis. The required request behavior and latency limit are in requirements.json. Keep telemetry.py unchanged.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Correlated root/child spans with the failing or slow operation, trace ID and durations",
+      "Verifier captures bad baseline before the attempt and replays an independent nonce workload after it",
+      "Transcript contains a successful telemetry query and its returned evidence, not only a final claim",
+      "The fault is fixed; fresh workload succeeds and the relevant signal recovers without disabling or filtering away instrumentation"
+    ],
+    "prepare": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "prepare",
+      "traces",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "verify",
+      "traces",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}",
+      "--events",
+      "{agent_events}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/otel_fixture.py",
+      "cleanup",
+      "traces",
+      "--wendy",
+      "{wendy}",
+      "--device",
+      "{device}",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ]
+  },
+  {
+    "id": "debug-ros2",
+    "fixture": "external",
+    "environments": [
+      "cloud",
+      "physical"
+    ],
+    "requires": [
+      "ros2-fixture"
+    ],
+    "destructive": false,
+    "prompt": "The supplied ROS 2 consumer on {device} is not receiving usable robot data. Use Wendy to inspect the graph, topic types, rates, QoS, domain, frames, and timestamps as needed. Diagnose and repair the consumer or its deployment, then verify fresh meaningful data reaches the app. Preserve the robot runtime and keep physical actuation disabled.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Real DDS publisher/consumer with a seeded domain, topic, QoS, frame or clock fault",
+      "Fault is reproduced before the attempt; consumer processing is independently observed afterward",
+      "Fresh increasing source stamps, correct frame/type, finite payloads and configured minimum sample rate",
+      "No synthetic replacement publisher, disabled validation or physical motion; Go2 and G1 results stay separate"
+    ]
+  },
+  {
+    "id": "camera-capture",
+    "fixture": "external",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "requires": [
+      "camera-fixture"
+    ],
+    "destructive": false,
+    "prompt": "Use Wendy to test the camera on {device} identified in the fixture brief. Capture a short sequence and demonstrate that frames are fresh, decodable and from the correct camera. Save the evidence in the current directory. Preserve other apps and device settings.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Selected camera identity and permissions match the fixture",
+      "Multiple decoded frames have expected dimensions/encoding and fresh increasing timestamps",
+      "Random visual stimulus or simulated scene change appears in captured pixels; listing devices or a stale JPEG fails",
+      "Simulator rendering and a physical camera are distinct results"
+    ]
+  },
+  {
+    "id": "camera-repair",
+    "fixture": "external",
+    "environments": [
+      "cloud",
+      "physical"
+    ],
+    "requires": [
+      "camera-fault-fixture"
+    ],
+    "destructive": false,
+    "prompt": "The supplied camera app on {device} produces no usable frames. Diagnose and repair the fault using Wendy, then verify fresh camera output from the expected sensor. Preserve app identity and other apps.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "A known entitlement, device-selection, disabled-sensor or format fault is reproduced first",
+      "Independent capture proves correct sensor, fresh timestamps, expected image format and stimulus",
+      "Fix is in the actual capture path; prerecorded or generated replacement frames fail"
+    ]
+  },
+  {
+    "id": "audio-loopback",
+    "fixture": "external",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "requires": [
+      "audio-fixture"
+    ],
+    "destructive": false,
+    "prompt": "Use Wendy to test audio input and output on {device} with the specified audio fixture. Play and capture the supplied test signal through the selected endpoints. Diagnose and fix the supplied app/configuration fault, then save a recording and verify that playback and capture work. Preserve other apps and device settings.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Named physical endpoints or explicitly labeled virtual loopback are selected",
+      "Verifier generates a fresh challenge waveform after repair and captures it independently",
+      "Recorded PCM has expected rate/channels, duration, correlation, latency, level and clipping bounds",
+      "Muted, silent, stale or file-copied output fails; Unitree sims do not imply factory audio support"
+    ]
+  },
+  {
+    "id": "peripheral-io",
+    "fixture": "external",
+    "environments": [
+      "simulator",
+      "cloud",
+      "physical"
+    ],
+    "requires": [
+      "peripheral-fixture"
+    ],
+    "destructive": false,
+    "prompt": "Use Wendy to diagnose the supplied peripheral app on {device}, repair its configuration or access issue, and demonstrate successful communication with the named peripheral. Use only the supplied loopback or test fixture and preserve other apps.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 1800,
+    "verify_timeout_seconds": 300,
+    "cleanup_timeout_seconds": 900,
+    "acceptance": [
+      "Explicit device identity and interface, such as USB serial, GPIO loopback or I2C fixture",
+      "Known fault reproduced before the attempt",
+      "Independent fresh challenge/response or externally observed electrical transition after repair",
+      "Listing devices or opening a device node alone does not pass; virtual and physical fixtures stay separate"
+    ]
+  },
+  {
+    "id": "debug-go2-ros2",
+    "fixture": "builtin",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "The supplied ROS 2 consumer {app_id} on vm:{vm_name}, a Unitree Go2 simulator, is receiving no odometry. Use Wendy to inspect live ROS data and repair the consumer or deployment configuration. Keep app.py unchanged. Verify that the consumer receives fresh odometry with the correct frames. Preserve the app identity, nonce and port. Work only on this consumer and the named simulator; do not publish replacement robot data or bridge DDS to physical hardware.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 2700,
+    "verify_timeout_seconds": 240,
+    "cleanup_timeout_seconds": 180,
+    "prepare": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "prepare",
+      "go2",
+      "ros2",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "verify",
+      "go2",
+      "ros2",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "cleanup",
+      "go2",
+      "ros2",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "owns_vm": true
+  },
+  {
+    "id": "repair-go2-camera",
+    "fixture": "builtin",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "The camera on the Unitree Go2 simulator vm:{vm_name} produces no fresh frames. Use Wendy and the simulator diagnostics to find and repair the cause. Verify actual fresh RGB images with the correct format and timestamps. Summarize image metadata without dumping raw pixel arrays. Leave the camera and robot runtime running. Work only on the named simulator; preserve all other devices and VMs.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 2700,
+    "verify_timeout_seconds": 240,
+    "cleanup_timeout_seconds": 180,
+    "prepare": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "prepare",
+      "go2",
+      "camera",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "verify",
+      "go2",
+      "camera",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "cleanup",
+      "go2",
+      "camera",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "owns_vm": true
+  },
+  {
+    "id": "debug-g1-ros2",
+    "fixture": "builtin",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "The supplied ROS 2 consumer {app_id} on vm:{vm_name}, a Unitree G1 simulator, is receiving no odometry. Use Wendy to inspect live ROS data and repair the consumer or deployment configuration. Keep app.py unchanged. Verify that the consumer receives fresh odometry with the correct frames. Preserve the app identity, nonce and port. Work only on this consumer and the named simulator; do not publish replacement robot data or bridge DDS to physical hardware.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 2700,
+    "verify_timeout_seconds": 240,
+    "cleanup_timeout_seconds": 180,
+    "prepare": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "prepare",
+      "g1",
+      "ros2",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "verify",
+      "g1",
+      "ros2",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "cleanup",
+      "g1",
+      "ros2",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "owns_vm": true
+  },
+  {
+    "id": "repair-g1-camera",
+    "fixture": "builtin",
+    "environments": [
+      "simulator"
+    ],
+    "prompt": "The camera on the Unitree G1 simulator vm:{vm_name} produces no fresh frames. Use Wendy and the simulator diagnostics to find and repair the cause. Verify actual fresh RGB images with the correct format and timestamps. Summarize image metadata without dumping raw pixel arrays. Leave the camera and robot runtime running. Work only on the named simulator; preserve all other devices and VMs.",
+    "timeout_seconds": 900,
+    "setup_timeout_seconds": 2700,
+    "verify_timeout_seconds": 240,
+    "cleanup_timeout_seconds": 180,
+    "prepare": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "prepare",
+      "g1",
+      "camera",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "verify": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "verify",
+      "g1",
+      "camera",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "cleanup": [
+      "python3",
+      "{here}/robot_diagnostics.py",
+      "cleanup",
+      "g1",
+      "camera",
+      "--wendy",
+      "{wendy}",
+      "--agent-binary",
+      "{root}/go/bin/wendy-agent-linux-arm64",
+      "--run-id",
+      "{run_id}",
+      "--port",
+      "{port}"
+    ],
+    "owns_vm": true
+  }
+]

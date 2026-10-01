@@ -1,0 +1,39 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "wendyos",
+  "version": "0.1.0",
+  "description": "Guidance on building and deploying apps to robots and edge devices using WendyOS, including NVIDIA Jetson, Raspberry Pi, Qualcomm Dragonwing, and MuJoCo simulation.",
+  "author": { "name": "Wendy Labs Inc", "url": "https://wendy.dev" },
+  "homepage": "https://wendy.dev",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/wendy/references/skills/wendy-onboarding/SKILL.md",
+      "interface": {
+        "displayName": "Wendy",
+        "shortDescription": "Build apps for robots and edge",
+        "longDescription": "Guidance on building and deploying apps to robots and edge devices using WendyOS, including NVIDIA Jetson, Raspberry Pi, Qualcomm Dragonwing, and MuJoCo simulation. Get help with device setup, app templates, hardware permissions, ROS 2, deployment, and debugging. The bundled workflows guide you through testing in simulation and checking results on hardware. This skills-only plugin provides instructions. Executing commands or accessing a device requires separately available tools and an authorized connection.",
+        "developerName": "Wendy Labs Inc",
+        "category": "Productivity",
+        "websiteURL": "https://wendy.dev",
+        "supportURL": "https://wendy.dev/schedule-demo",
+        "privacyPolicyURL": "https://wendy.dev/privacy",
+        "termsOfServiceURL": "https://wendy.dev/terms",
+        "logo": "./assets/wendy-icon.png",
+        "composerIcon": "./assets/wendy-icon.png",
+        "brandColor": "#171C23",
+        "defaultPrompt": [
+          "Help me build and deploy an app to a WendyOS edge device.",
+          "Help me test a robot app in MuJoCo simulation.",
+          "Help me debug my app on a Qualcomm Dragonwing board."
+        ]
+      },
+      "publication": {
+        "release_notes": "Initial skills-only Wendy release with bundled guidance for device setup, app development, hardware permissions, deployment, debugging, ROS 2, and robot simulation.",
+        "countries": []
+      },
+      "review": {
+        "commerce": false
+      }
+    }
+  }
+}

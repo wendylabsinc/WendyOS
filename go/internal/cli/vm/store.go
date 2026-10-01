@@ -69,9 +69,21 @@ func (s *Store) CheckCreatable(name string) error {
 //
 // meta records where the image came from. It is written last, inside the same
 // rollback guard, so a VM directory never outlives a failed create.
-func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes int64, meta Meta) (retErr error) {
+func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes int64, meta Meta) error {
+	return s.CreateFromWithRobotProfile(name, image, imageSize, diskBytes, meta, nil)
+}
+
+// CreateFromWithRobotProfile creates the image and optional robot profile under
+// one lifecycle lock and rollback guard. A failed profile write must not leave
+// a generic VM behind when the caller requested a robot.
+func (s *Store) CreateFromWithRobotProfile(name string, image io.Reader, imageSize, diskBytes int64, meta Meta, profile *RobotProfile) (retErr error) {
 	if err := ValidName(name); err != nil {
 		return err
+	}
+	if profile != nil {
+		if err := profile.Validate(); err != nil {
+			return err
+		}
 	}
 	// A disk truncated below the image loses the last partition and the GPT
 	// backup header that sits at the very end.
@@ -171,6 +183,11 @@ func (s *Store) CreateFrom(name string, image io.Reader, imageSize, diskBytes in
 	meta.DiskBytes = diskBytes
 	if meta.CreatedAt.IsZero() {
 		meta.CreatedAt = time.Now().UTC()
+	}
+	if profile != nil {
+		if err := writeJSON(s.RobotProfilePath(name), *profile); err != nil {
+			return fmt.Errorf("recording robot profile: %w", err)
+		}
 	}
 	if err := s.WriteMeta(meta); err != nil {
 		return fmt.Errorf("recording VM metadata: %w", err)

@@ -94,3 +94,31 @@ func TestUnknownSubcommandErrorSuggests(t *testing.T) {
 		t.Errorf("UnknownSubcommandError = %q, want it to suggest %q", err, "unenroll")
 	}
 }
+
+func TestBundledDeviceArgumentExplainsShellMistake(t *testing.T) {
+	for _, args := range [][]string{
+		{"--device vm:robot", "device", "ros2", "topics"},
+		{"--json", "--device\tvm:robot", "device", "ros2", "echo", "/odom"},
+	} {
+		err := UnknownSubcommandError(args)
+		if err == nil || !strings.Contains(err.Error(), "one argument") ||
+			!strings.Contains(err.Error(), `--device "$DEVICE"`) || !strings.Contains(err.Error(), "retrying") {
+			t.Fatalf("missing actionable shell diagnostic for %q: %v", args, err)
+		}
+	}
+}
+
+func TestBundledDeviceArgumentPreservesValuesAndForwardedArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"--device", "robot with spaces", "device", "info"},
+		{"--device=robot with spaces", "device", "info"},
+		{"--device", "--device literal", "device", "info"},
+		{"device", "attach", "app", "--", "program", "--device literal"},
+		{"chat", "--prompt", "--device literal"},
+		{"--", "--device literal"},
+	} {
+		if err := bundledDeviceArgumentError(args); err != nil {
+			t.Fatalf("valid value or forwarded argument rejected: %q: %v", args, err)
+		}
+	}
+}

@@ -16,6 +16,14 @@ does not get to assert what that identity is. pki-core reads the principal off
 the presented certificate and stamps it into the new leaf itself; any identity
 the CSR asserts is replaced or refused.
 
+## When you see a TLS authentication failure
+
+If a command reports `TLS authentication failed. Your certificates may be
+outdated or incompatible with the device.`, run `wendy auth refresh-certs`,
+then retry the original command. If it still fails, rerun the original command
+with `WENDY_TLS_DEBUG=1` to see TLS diagnostics. See the renewal limits below
+if refreshing the certificates is refused.
+
 ## Usage
 
 ```sh

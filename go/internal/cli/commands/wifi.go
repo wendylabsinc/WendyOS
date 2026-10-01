@@ -718,7 +718,7 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		// once when the scan completes.
 		go func() {
 			defer p.Send(tui.PickerDoneMsg{})
-			if err := streamLocalWifiScan(func(batch []localWifiNetwork) {
+			if err := streamLocalWifiScan(scanCtx, func(batch []localWifiNetwork) {
 				p.Send(tui.PickerAddMsg{Items: localWifiPickerItems(batch)})
 			}); err != nil {
 				recordScanErr(fmt.Errorf("scanning local WiFi networks: %w", err))
@@ -878,7 +878,7 @@ func wifiDisconnectViaBLEAgent(device *models.BluetoothDevice) error {
 
 func wifiListFromHost() error {
 	cliLogln("Scanning for WiFi networks on this computer...")
-	networks, err := scanLocalWifiNetworks()
+	networks, err := scanLocalWifiNetworks(context.Background())
 	if err != nil {
 		return err
 	}

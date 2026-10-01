@@ -1,0 +1,192 @@
+---
+title: Wendy MCP tools
+description: Tool groups, device selectors, compact results, and current CLI coverage.
+---
+
+Wendy starts with 15 core tools for connecting, deploying, inspecting containers,
+reading logs, and discovering hardware. Running apps can provide additional tools.
+
+For ChatGPT Desktop, run `wendy mcp setup chatgpt` to add the Wendy plugin to
+your personal marketplace. It includes a scoped local MCP gateway, device
+workspace, and bundled skills. Follow the
+[ChatGPT setup guide](/docs/guides/chatgpt) to install it and enable access.
+The tool groups below describe the broader `wendy mcp serve` developer server.
+
+## Skills and first-time setup
+
+The server also exposes the bundled end-user skills through the MCP skills
+extension. Call `skills/list` with `{}` to get the single `wendy` entry, then
+`skills/get` with its URI. Read instructions and supporting files through
+`resources/read`; each catalog resource includes its SHA-256 digest. These calls
+work offline without a device connection or a local skill installation.
+
+The bundle includes `wendy-onboarding` for installing and verifying a first
+physical device, or setting up a local simulator when hardware is unavailable.
+The ChatGPT plugin's setup entry opens this skill. Native skill installation
+through `wendy mcp setup` remains available for other clients.
+
+OpenAI imports MCP skills as a snapshot during Scan Tools. Restart the MCP
+server after a CLI update, then scan again before submitting updated skills.
+
+## CLI update notices
+
+`wendy_status` includes `cli_version` for the running MCP server and `cli_update`
+for cached update details. When a newer release is known, `cli_update` includes
+`latest_version`, `update_command`, `restart_required`, and a message to relay to
+the user. `last_checked_at` records the last release-check attempt;
+`available=false` does not confirm that the check succeeded or the CLI is current.
+
+`wendy mcp serve` checks the cache at startup and hourly, contacting the release
+API only when the existing 24-hour check interval expires. Development builds
+skip release checks. The next tool result carries a text notice once per release
+per MCP session, including sessions where a terminal already printed the notice.
+The notice preserves the tool's result and error state. Run the supplied update
+command, then restart the Wendy MCP server to load the new version and tools.
+
+## Enable specialist tools
+
+Call `wendy_tools` with `{"groups":["robotics"]}` to expose ROS inspection tools.
+The selection replaces the previous specialist groups. Core tools always remain.
+Omit `groups` to inspect the selection, or pass an empty array to return to core.
+
+| Group | Operations |
+| --- | --- |
+| `core` | Session status, group selection, device discovery/connection/info, deployment, container lifecycle/exec/stats, logs, hardware discovery |
+| `setup` | Installation jobs and verification, project validation, agent/OS updates, WiFi, enrollment, default device |
+| `simulator` | Local simulator list, create, stop, delete |
+| `hardware` | Bluetooth, camera discovery/controls/snapshots |
+| `robotics` | ROS topics, topic info, samples, rates, LiDAR summaries |
+| `observability` | App inspection, kernel logs, metrics and traces |
+| `cloud` | Cloud discovery/connection, tunnel open/list/close, ping |
+| `all` | Every advertised built-in tool |
+
+Clients receive `notifications/tools/list_changed` when the selection changes.
+For clients that cache tools at startup, configure
+`wendy mcp serve --tool-groups core,robotics` or `--tool-groups all`.
+Groups control discovery, not authorization. Known tools remain callable, and
+app-provided tools remain visible. Restart the MCP process after upgrading the CLI.
+
+## Device selection
+
+`device_list` returns a `device` selector for every entry. Pass it unchanged to
+`device_connect` or `run`. Cloud selectors pin the endpoint, organization or
+tenant, and device identity. `vm:name` selects an existing local simulator and
+starts it if needed. `run` without `device` uses the current connection's target.
+
+`run(start=false)` creates the container without starting it. Starting or
+restarting a container may interrupt its current task. Use `telemetry_logs` for
+passive inspection and `container_exec` for a command in a running container.
+
+For compatibility, `device_connect(address=...)` still works. `run` still accepts
+legacy `device_name`, `cloud_grpc`, `broker_url`, and `deploy` arguments even though
+new schemas omit them. `deploy=true` is equivalent to `start=false`; contradictory
+arguments fail. `run` always detaches, so `detach=false` fails. `container_attach`
+remains callable by existing clients but is not advertised because its restart
+behavior is easy to mistake for observation.
+
+## Bounded results
+
+Telemetry defaults to `format="compact"`, with up to 100 records and 16384 JSON
+bytes. Logs, metric points, and trace spans appear under `logs`, `metrics`, and
+`traces`. Resource attributes, instrumentation scope, timestamps, and measurement
+fields accompany records. OTLP AnyValue wrappers are flattened; OTLP integer and
+timestamp strings remain strings to preserve precision.
+
+Use `format="otlp"` for the original `batches` envelope. Consumers of the old
+default telemetry shape must set this explicitly. `max_records` applies to compact
+output; `max_batches` bounds collection in both formats. Collection also ends
+after ten seconds. Raw format preserves the original protobuf JSON fields.
+
+List truncation retains a prefix of complete rows and adds `returned`, `omitted`,
+and `truncated`. These counts describe collected rows only. An oversized first row
+can leave no rows in the result; increase `max_bytes` or narrow the query.
+`collection_limited` indicates that compact collection reached its batch limit.
+Its absence or false value does not establish that all historical telemetry was read.
+The byte budget covers the JSON payload; MCP may also carry its text fallback.
+
+## Host and diagnostic workflows
+
+Enable `simulator` to list, create, stop and delete local simulators. Creation
+returns a stopped simulator and its `vm:name` selector. `device_connect` boots it
+and provisions its selected `generic`, `go2` or `g1` profile. Creation downloads
+images without a terminal UI and does not install QEMU. Stop waits for a graceful
+shutdown unless `force=true`; delete refuses a running simulator.
+
+Enable `observability` and call `app_inspect(app_name=...)` for app and service
+states, recorded exit, memory/storage/CPU usage, and recent warning/error logs.
+CPU usage is cumulative nanoseconds, not a percentage. Optional `project_path`
+reads local TCP readiness declarations; it does not prove that configuration is
+deployed. Direct TCP probes can pass or fail. Cloud and simulator forwarding can
+accept a local connection before the application answers, so those checks remain
+unknown. Missing declarations and unavailable diagnostics remain explicit.
+
+`device_os_logs` returns a bounded kernel-log tail, with timestamps in microseconds
+since boot. `device_update_agent` is in `setup`: it updates only the agent and
+verifies the result through the existing CLI updater. It preserves the connected
+device selector and reconnects unless another device was selected during the
+update. A timeout is an unconfirmed update, not proof that no change occurred.
+
+`cloud_tunnel_list` shows only forwards owned by this MCP server. Use their IDs
+with `cloud_tunnel_close` to release listeners and active connections. Closing an
+already closed ID is safe. Tunnels are closed when the server stops.
+
+Use `project_validate` in `setup` before deployment to inspect configuration and
+build inputs without running a build or project hooks. Device compatibility may
+remain unknown when disconnected or when the device supplies insufficient data.
+
+## CLI flows without dedicated built-in MCP tools
+
+| Flow | Current route |
+| --- | --- |
+| Simulator console logs and editing existing robot profiles | `wendy vm logs`, `wendy vm robot`; MCP can select a profile when creating a simulator |
+| Project creation, entitlements/framework configuration, build-only and watch workflows | `wendy init`, `wendy project`, build/watch CLI options |
+| Rename, unenrollment, pairing, time sync | `wendy device` subcommands |
+| Driver add-ons, persistent volumes, cache management | `wendy device drivers`, `volumes`, `cache` |
+| Audio, live camera streams | Device audio/camera CLI; MCP supports camera snapshots and controls |
+| ROS nodes, services, parameters, actions, lifecycle, graph, bags | `wendy device ros2`; MCP provides topic and LiDAR inspection |
+| Data sources, recording, episodes, campaigns, downloads | `wendy data` |
+| Cloud login/logout and credential-session selection | `wendy cloud` / `wendy auth` |
+| Agent-only installation and first-boot WiFi/name/enrollment customization | Installation plan instructions or terminal installer; MCP image jobs use Ethernet for first boot |
+
+An agent with shell access can invoke these commands. MCP-only clients do not
+automatically have shell access. App-provided tools may cover additional workflows.
+
+## Installation with physical steps
+
+Enable `setup`, call `os_install_plan`, and inspect media with `os_list_drives`
+when applicable. `os_install_start` creates a persistent job for a supported
+raw-media or Jetson developer-kit recovery installation. It records the exact
+published artifact and checksum and returns physical instructions without writing.
+G1 PC2 keeps vendor Ubuntu; agent-only installation follows the plan's terminal
+instructions instead of an image job.
+
+| Phase | Completion condition |
+| --- | --- |
+| Plan | Exact board/carrier, artifact, target, and erase scope recorded |
+| `waiting_for_target` | User follows physical instructions; `os_install_resume` probes the selected media or USB recovery board |
+| `awaiting_erase_confirmation` | User approves the target and erase scope; resume with its `target.fingerprint` as `target_id` and `confirm_erase=true`; non-removable media also needs `confirm_internal=true` |
+| `queued` / `running` | Detached worker prepares the pinned artifact, rechecks identity and records the write boundary before flashing; poll `os_install_status` |
+| `waiting_for_boot` | Write completed; follow power/recovery instructions, connect Ethernet, identify the booted device |
+| `completed` | Resume with explicit `address` and optional `expected_public_key`; expected agent, OS version and board are verified |
+| `write_outcome_unknown` | Worker stopped after writing began; inspect hardware and logs. The job cannot repeat the write. Verify a booted target or create and authorize a new recovery job |
+
+Show the returned instructions to the user between calls. Job IDs survive client
+and server restarts; status and repeated resume calls cannot restart a completed
+write. User acknowledgment alone never authorizes erasure or replaces the probe.
+The workflow works without MCP elicitation support.
+
+Jobs do not prompt for administrator passwords over MCP. When elevation is needed,
+the job returns an exact terminal command to resume the same job after password
+entry. Use the supplied executable, job root and target fingerprint. Jobs do not
+pre-seed WiFi, device names or cloud enrollment; use the terminal installer for
+those options. USB recovery requires the appropriate host driver and a readable
+chip identity, checked again on the claimed recovery handle. The flashing gadget
+must stay on the confirmed physical USB path; a topology change during recovery
+stops the job and may require the terminal installer. The gadget protocol does
+not expose the recovery chip ID, so later stages use path and session identity.
+Media identity uses serial/WWN when available; some SD adapters
+only expose path, model and capacity, so check those carefully before authorizing.
+
+`os_install_verify` can also check first boot independently, including enrollment.
+Boot verification does not verify application behavior. An empty discovery scan
+does not establish a network failure.

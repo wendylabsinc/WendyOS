@@ -1,0 +1,22 @@
+{
+  "allow_simulator_device_access": false,
+  "robots": [
+    {
+      "id": "workshop",
+      "name": "Workshop robot",
+      "device": "workshop.local:50052",
+      "apps": ["com.wendylabs.robot-companion"],
+      "allow_all_apps": false,
+      "allow_camera": true,
+      "exports": []
+    }
+  ],
+  "grants": [
+    {
+      "subject": "local-owner",
+      "robots": ["workshop"],
+      "scopes": ["robots:read", "cameras:capture", "apps:control", "apps:tools", "preferences:write"]
+    }
+  ],
+  "local_subject": "local-owner"
+}

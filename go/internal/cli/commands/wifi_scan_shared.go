@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -38,11 +39,11 @@ func exitErrWithStderr(err error) error {
 // feed each into the picker, which dedups by SSID. The returned error is the
 // fresh scan's error (errNoWifiAdapter, a transient failure, or nil) — the
 // cached pre-paint is best-effort and never surfaces an error.
-func streamLocalWifiScan(emit func([]localWifiNetwork)) error {
-	if cached := cachedLocalWifiNetworks(); len(cached) > 0 {
+func streamLocalWifiScan(ctx context.Context, emit func([]localWifiNetwork)) error {
+	if cached := cachedLocalWifiNetworks(ctx); len(cached) > 0 {
 		emit(cached)
 	}
-	nets, err := scanLocalWifiNetworks()
+	nets, err := scanLocalWifiNetworks(ctx)
 	if err != nil {
 		return err
 	}

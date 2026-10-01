@@ -267,9 +267,7 @@ jobs:
 
   build-go-macos:
     name: ${{ matrix.artifact-name }}
-    runs-on:
-      group: wendy-developer
-      labels: [self-hosted, macOS, ARM64, wendy-macos-26]
+    runs-on: macos-26
     needs: [determine-version]
     # Attest SLSA build provenance in the job that produces the archive, so the
     # provenance reflects the actual build environment (not a downstream job).
@@ -282,7 +280,7 @@ jobs:
         include:
           # Intel (amd64) macOS is not built: the CLI links libusb via cgo
           # (github.com/google/gousb), and cross-compiling x86_64 on the arm64
-          # macos-15 runner fails to link the arm64-only Homebrew libusb.
+          # macos-26 runner fails to link the arm64-only Homebrew libusb.
           - artifact-name: wendy-cli-darwin-arm64
             goarch: arm64
     steps:
@@ -341,15 +339,68 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  build-agent-macos-app:
-    name: wendy-agent-macos-app
-    runs-on:
-      group: wendy-developer
-      labels: [self-hosted, macOS, ARM64, wendy-macos-26]
-    timeout-minutes: 45
+  build-macos-runtime-guest:
+    name: wendy-macos-runtime-guest-arm64
+    runs-on: ubuntu-24.04-arm
     needs: [determine-version]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build runtime guest
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpio
+          bash swift/WendyAgentMac/RuntimeGuest/build.sh
+
+          VERSION="${{ needs.determine-version.outputs.version }}"
+          ARCHIVE="wendy-macos-runtime-guest-arm64-${VERSION}.tar.gz"
+          tar -C swift/WendyAgentMac/Resources/runtime -czf "$ARCHIVE" \
+            vmlinuz-arm64 initramfs-arm64.img
+          echo "archive=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ env.archive }}
+
+      - name: Upload runtime guest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}
+          path: ${{ env.archive }}
+          retention-days: 14
+          if-no-files-found: error
+
+  build-agent-macos-app:
+    name: wendy-agent-macos-app
+    runs-on: macos-26
+    timeout-minutes: 45
+    needs: [determine-version, build-macos-runtime-guest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Download runtime guest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}
+          path: ${{ runner.temp }}/wendy-macos-runtime-guest
+
+      - name: Install runtime guest resources
+        shell: bash
+        run: |
+          tar -C swift/WendyAgentMac/Resources/runtime -xzf \
+            "${RUNNER_TEMP}/wendy-macos-runtime-guest/wendy-macos-runtime-guest-arm64-${{ needs.determine-version.outputs.version }}.tar.gz"
 
       - name: Select Xcode ${{ env.XCODE_VERSION }}
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1

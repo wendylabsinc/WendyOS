@@ -112,3 +112,32 @@ func TestNewAgentTLSConfigDebugLogsResumption(t *testing.T) {
 		t.Errorf("debug output %q missing resumed=true", buf.String())
 	}
 }
+
+func TestOperatorCertificateSelectionIgnoresIssuerHintsOnly(t *testing.T) {
+	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
+	cfg, err := newAgentTLSConfig("device:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &tls.CertificateRequestInfo{Version: tls.VersionTLS13, SignatureSchemes: []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256}, AcceptableCAs: [][]byte{[]byte("unrelated issuer")}}
+	if err := request.SupportsCertificate(&cfg.Certificates[0]); err == nil {
+		t.Fatal("fixture must reproduce default selection rejection")
+	}
+	if cfg.GetClientCertificate == nil {
+		t.Fatal("operator certificate selector missing")
+	}
+	selected, err := cfg.GetClientCertificate(request)
+	if err != nil || selected == nil || len(selected.Certificate) == 0 {
+		t.Fatalf("operator certificate omitted: %v", err)
+	}
+	if len(request.AcceptableCAs) != 1 {
+		t.Fatal("mutated server request")
+	}
+	request.SignatureSchemes = []tls.SignatureScheme{tls.PSSWithSHA256}
+	if _, err := cfg.GetClientCertificate(request); err == nil {
+		t.Fatal("accepted an incompatible signature scheme")
+	}
+	if cfg.VerifyConnection == nil {
+		t.Fatal("device certificate verification removed")
+	}
+}

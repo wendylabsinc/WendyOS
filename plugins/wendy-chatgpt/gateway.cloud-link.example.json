@@ -1,0 +1,32 @@
+{
+  "state_directory": "/var/lib/wendy-chatgpt",
+  "robots": [],
+  "grants": [],
+  "http": {
+    "resource_url": "https://gateway.your-domain.example/mcp",
+    "cloud_link": {
+      "services": {
+        "auth_base": "https://auth.your-domain.example",
+        "client_id": "REPLACE_WITH_REGISTERED_WENDY_OAUTH_CLIENT",
+        "identity_resource": "https://pki.your-domain.example/identity",
+        "identity_endpoint": "https://identity.your-domain.example/v1/identity/certificate",
+        "cloud_resource": "https://cloud.your-domain.example/api",
+        "cloud_grpc": "api.your-domain.example:443",
+        "relay_issuer": "https://api.your-domain.example"
+      },
+      "state_file": "/var/lib/wendy-chatgpt/accounts.enc",
+      "encryption_key_env": "WENDY_CHATGPT_STATE_KEY",
+      "clients": [
+        {
+          "id": "REPLACE_WITH_PREDEFINED_CHATGPT_CLIENT_ID",
+          "name": "ChatGPT",
+          "redirect_uris": ["https://chatgpt.com/REPLACE_WITH_EXACT_REGISTERED_CALLBACK"],
+          "secret_env": "WENDY_CHATGPT_CLIENT_SECRET"
+        }
+      ],
+      "scopes": ["robots:read", "cameras:capture", "apps:control", "preferences:write"],
+      "allow_camera": true,
+      "allow_all_apps": true
+    }
+  }
+}

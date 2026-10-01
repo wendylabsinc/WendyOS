@@ -24,11 +24,14 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	g1bundle "github.com/wendylabsinc/wendy/go/simulator/g1"
 	go2bundle "github.com/wendylabsinc/wendy/go/simulator/go2"
+	r2bundle "github.com/wendylabsinc/wendy/go/simulator/rosmaster_r2"
 )
 
 const (
 	go2RuntimeAppID = "sh.wendy.simulator.go2"
 	g1RuntimeAppID  = "sh.wendy.simulator.g1"
+	r2RuntimeAppID  = "sh.wendy.simulator.rosmaster-r2"
+	r2ModelBundle   = "r2-ackermann-kinematic-v1"
 	go2PolicyBundle = "go2-moe-cts-164k-0.6715-v1"
 	g1PolicyBundle  = "g1-29dof-velocity-v0-4960b847-v1"
 )
@@ -52,6 +55,12 @@ func robotRuntimeForKind(kind string) (robotRuntime, error) {
 			name: "Unitree G1", appID: g1RuntimeAppID, agentFeature: "g1-virtual-robot",
 			policyBundle: g1PolicyBundle, envPrefix: "G1_",
 			sourceDigest: g1bundle.SourceDigest, materialize: g1bundle.Materialize,
+		}, nil
+	case vm.RobotKindRosmasterR2:
+		return robotRuntime{
+			name: "Yahboom ROSMASTER R2", appID: r2RuntimeAppID, agentFeature: "rosmaster-r2-virtual-robot",
+			policyBundle: r2ModelBundle, envPrefix: "R2_",
+			sourceDigest: r2bundle.SourceDigest, materialize: r2bundle.Materialize,
 		}, nil
 	default:
 		return robotRuntime{}, fmt.Errorf("unsupported robot kind %q", kind)
@@ -89,12 +98,13 @@ var pickSimulatorProfileFn = func() (string, error) {
 		{Name: "Generic WendyOS", Description: "An ordinary VM for application development", Value: "generic"},
 		{Name: "Unitree Go2", Description: "A walking virtual robot with ROS 2 and a MuJoCo sandbox", Value: "go2"},
 		{Name: "Unitree G1", Description: "A humanoid virtual robot with ROS 2 and a MuJoCo sandbox", Value: "g1"},
+		{Name: "Yahboom ROSMASTER R2", Description: "An Ackermann car with ROS 2 and a 3D driving sandbox", Value: vm.RobotKindRosmasterR2},
 	})
 }
 
 func validateSimulatorProfile(kind string) error {
-	if kind != "generic" && kind != vm.RobotKindGo2 && kind != vm.RobotKindG1 {
-		return fmt.Errorf("unsupported simulator profile %q; choose generic, go2 or g1", kind)
+	if kind != "generic" && kind != vm.RobotKindGo2 && kind != vm.RobotKindG1 && kind != vm.RobotKindRosmasterR2 {
+		return fmt.Errorf("unsupported simulator profile %q; choose generic, go2, g1 or rosmaster-r2", kind)
 	}
 	return nil
 }
@@ -348,6 +358,62 @@ func reconcileSimulatorRobot(ctx context.Context, conn *grpcclient.AgentConnecti
 	return reconcileRobot(ctx, conn, true)
 }
 
+type robotAgentCapabilityError struct {
+	name    string
+	runtime robotRuntime
+	info    *agentpb.GetAgentVersionResponse
+}
+
+func (e *robotAgentCapabilityError) Error() string {
+	return fmt.Sprintf("VM %q agent %q lacks %s support. Update it with 'wendy --device vm:%s device update', "+
+		"or use 'wendy --device vm:%s device update --binary <path-to-agent-binary>' for a development build. "+
+		"The selected release or binary must include virtual robot support", e.name, e.info.GetVersion(), e.runtime.agentFeature, e.name, e.name)
+}
+
+var robotAgentUpdateFn = performAgentUpdate
+
+// Return the replacement connection so the app uses the updated agent and the
+// caller owns its cleanup. Reconciliation releases its lock before we prompt.
+func reconcileSimulatorRobotWithAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection) (*grpcclient.AgentConnection, error) {
+	err := reconcileSimulatorRobotFn(ctx, conn)
+	var missing *robotAgentCapabilityError
+	nonInteractive, _ := ctx.Value(robotRuntimeNonInteractiveKey{}).(bool)
+	if !errors.As(err, &missing) || nonInteractive || jsonOutput || !isInteractiveTerminalFn() {
+		return conn, err
+	}
+	// An update cannot turn a physical device or a different platform into a VM.
+	info := missing.info
+	if (info.GetOs() != "linux" && info.GetOs() != "wendyos") || info.GetDeviceType() != "vm-arm64" {
+		return conn, err
+	}
+	if err := ctx.Err(); err != nil {
+		return conn, err
+	}
+	question := fmt.Sprintf("VM %q agent %q lacks %s support. Update the agent now?", missing.name, info.GetVersion(), missing.runtime.name)
+	if !confirmFn(question) {
+		return conn, ErrUserCancelled
+	}
+	if err := ctx.Err(); err != nil {
+		return conn, err
+	}
+	if err := robotAgentUpdateFn(ctx, conn, info.GetOs(), info.GetCpuArchitecture(), false); err != nil && !errors.Is(err, errAgentUpdateUnconfirmed) {
+		return conn, fmt.Errorf("updating simulator agent: %w", err)
+	}
+	conn.Close()
+	cliLogln("Waiting for simulator agent to restart...")
+	// The upload acknowledgement can arrive before the old process exits.
+	if err := sleepContext(ctx, defaultAgentRestartInitialDelay); err != nil {
+		return nil, err
+	}
+	conn, err = reconnectAgentAfterRestart(ctx, conn)
+	if err != nil {
+		return conn, fmt.Errorf("agent did not come back after update: %w", err)
+	}
+	// Retry once, including the live capability check. A release may still lack
+	// support for a robot introduced by a development CLI.
+	return conn, reconcileSimulatorRobotFn(ctx, conn)
+}
+
 func requireRobotAgentCapability(ctx context.Context, conn *grpcclient.AgentConnection, kind string) error {
 	runtime, err := robotRuntimeForKind(kind)
 	if err != nil {
@@ -365,9 +431,7 @@ func requireRobotAgentCapability(ctx context.Context, conn *grpcclient.AgentConn
 	if (info.GetOs() == "linux" || info.GetOs() == "wendyos") && info.GetDeviceType() == "vm-arm64" && slices.Contains(info.GetFeatureset(), runtime.agentFeature) {
 		return nil
 	}
-	return fmt.Errorf("VM %q agent %q lacks %s support. Update it with 'wendy --device vm:%s device update', "+
-		"or use 'wendy --device vm:%s device update --binary <path-to-agent-binary>' for a development build. "+
-		"The selected release or binary must include virtual robot support", conn.SimulatorName, info.GetVersion(), runtime.agentFeature, conn.SimulatorName, conn.SimulatorName)
+	return &robotAgentCapabilityError{name: conn.SimulatorName, runtime: runtime, info: info}
 }
 
 func reconcileRobot(ctx context.Context, conn *grpcclient.AgentConnection, update bool) error {
@@ -629,15 +693,15 @@ func newVMRobotCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "robot", Short: "Inspect and manage a simulator's virtual robot"}
 	configure := &cobra.Command{
 		Use:   "configure <name>",
-		Short: "Attach a Unitree robot profile to an existing VM",
-		Long: "Attach a Unitree Go2 or G1 profile to an existing VM, pinning this CLI's robot runtime. " +
+		Short: "Attach a robot profile to an existing VM",
+		Long: "Attach a Go2, G1 or ROSMASTER R2 profile to an existing VM, pinning this CLI's robot runtime. " +
 			"Existing robot profiles are never replaced.\n\n" +
 			"This records the profile without booting or restarting the VM. " +
 			"Run 'wendy vm robot start <name>' to build and start the robot runtime.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error { return runVMRobot(c, "configure", args[0]) },
 	}
-	configure.Flags().String("profile", vm.RobotKindGo2, "Robot profile: go2 or g1")
+	configure.Flags().String("profile", vm.RobotKindGo2, "Robot profile: go2, g1 or rosmaster-r2")
 	cmd.AddCommand(configure)
 	for _, action := range []string{"status", "open", "reset", "start", "restart", "update"} {
 		cmd.AddCommand(&cobra.Command{
@@ -774,17 +838,21 @@ func prepareRobotAppConfig(conn *grpcclient.AgentConnection, cfg *appconfig.AppC
 	if err != nil {
 		return nil, err
 	}
-	_, exists, err := store.ReadRobotProfile(conn.SimulatorName)
+	profile, exists, err := store.ReadRobotProfile(conn.SimulatorName)
 	if err != nil {
 		return nil, err
 	}
 	if !exists {
 		return cfg, nil
 	}
-	if cfg.AppID == go2RuntimeAppID || cfg.AppID == g1RuntimeAppID {
+	if cfg.AppID == go2RuntimeAppID || cfg.AppID == g1RuntimeAppID || cfg.AppID == r2RuntimeAppID {
 		return nil, fmt.Errorf("%s is reserved for the managed robot; use 'wendy vm robot update %s'", cfg.AppID, conn.SimulatorName)
 	}
-	return normalizeRobotROSConfig(cfg, overrides)
+	configured, err := applyRobotSimulationConfig(cfg, profile.Kind)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeRobotROSConfig(configured, overrides)
 }
 
 func normalizeRobotROSConfig(cfg *appconfig.AppConfig, overrides []string) (*appconfig.AppConfig, error) {

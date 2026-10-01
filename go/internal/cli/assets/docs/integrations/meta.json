@@ -3,7 +3,10 @@
   "description": "Build, deploy, and operate ROS 2 robots with WendyOS",
   "pages": [
     "index",
+    "../installation/unitree-simulators",
     "sim-to-real",
+    "../installation/wendy-agent-unitree-g1",
+    "../installation/unitree-g1-reflash",
     "ros2",
     "robot-diagnostics",
     "foxglove"

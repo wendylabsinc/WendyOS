@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -44,6 +45,25 @@ func TestCameraPairDiscoveryFallsBackForOlderAgents(t *testing.T) {
 		t.Fatalf("discovery fallback failed: %+v", msg)
 	}
 }
+
+func TestCameraPairSwiftMacExplainsUnsupportedNetworkCameras(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	h := &cameraPairHandler{ctx: ctx, client: conn.VideoService, preflight: func(ctx context.Context) error {
+		return cameraServicePreflight(ctx, conn, cameraNetworkManagement)
+	}}
+	model, _ := cameraPairUpdate(newCameraPairModel(h), h.scan()())
+	if !strings.Contains(model.message, "not supported") || strings.Contains(model.message, "wendy device enroll") {
+		t.Fatalf("camera pair message = %q, want unsupported network camera operation", model.message)
+	}
+}
+
 func (c *cameraPairTestClient) SetCameraCredentials(_ context.Context, req *agentpb.SetCameraCredentialsRequest, _ ...grpc.CallOption) (*agentpb.SetCameraCredentialsResponse, error) {
 	c.saved = req
 	return &agentpb.SetCameraCredentialsResponse{}, c.err

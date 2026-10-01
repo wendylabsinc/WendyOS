@@ -82,6 +82,7 @@ The bypass applies only to that PowerShell invocation. Run it from a non-elevate
 | `syft` | Generate SPDX SBOMs locally (`scripts/generate-sbom.sh`) | [github.com/anchore/syft](https://github.com/anchore/syft) or `brew install syft` |
 | `gh` | Verify release attestations (`gh attestation verify`) | [cli.github.com](https://cli.github.com) or `brew install gh` |
 | `cosign` | Alternative attestation verification | [docs.sigstore.dev](https://docs.sigstore.dev/cosign/system_config/installation/) or `brew install cosign` |
+| `cpio` | Building the WendyAgentMac Linux runtime guest initramfs | Included with macOS; install the distribution package on Linux |
 
 ### Environment Variables
 
@@ -155,6 +156,22 @@ go build -ldflags "-s -w -X github.com/wendylabsinc/wendy/go/internal/shared/ver
 ```
 
 A `dev` version is embedded when `VERSION` is not set.
+
+### Build WendyAgentMac and its runtime guest
+
+Before packaging WendyAgentMac, generate the Linux kernel and initramfs used by
+the optional Local Build Service:
+
+```sh
+bash swift/WendyAgentMac/RuntimeGuest/build.sh
+```
+
+The script requires Go, `cpio`, and either a reachable `buildctl` daemon or
+Docker with Buildx. It writes ignored `vmlinuz-arm64` and
+`initramfs-arm64.img` files under
+`swift/WendyAgentMac/Resources/runtime/`. Release CI runs this step before
+`swift/Scripts/Build.sh`; local packaging fails with an explicit message when
+the guest files are absent.
 
 ## Running locally without overwriting your installed binaries
 

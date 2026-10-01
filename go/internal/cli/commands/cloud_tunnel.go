@@ -20,6 +20,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshname"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -98,6 +99,13 @@ func cloudContext(ctx context.Context, auth *config.AuthConfig) (context.Context
 }
 
 func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL string) (*grpcclient.AgentConnection, error) {
+	return connectToCloudAgentExpecting(ctx, cloudGRPC, deviceName, brokerURL, nil)
+}
+
+// connectToCloudAgentExpecting checks a saved LAN identity before treating a
+// Cloud name match as the same default device. A reused name in another org or
+// after re-enrollment must not silently redirect a run to a different asset.
+func connectToCloudAgentExpecting(ctx context.Context, cloudGRPC, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
 	auth, err := pickAuthEntry(cloudGRPC)
 	if err != nil {
 		return nil, err
@@ -107,9 +115,29 @@ func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL s
 	if err != nil {
 		return nil, err
 	}
+	if err := verifyCloudDefaultIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
+		return nil, err
+	}
 	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
 
 	return asset.connect(ctx, auth, brokerURL)
+}
+
+func verifyCloudDefaultIdentity(deviceName string, expected *certs.WendyIdentity, actual certs.WendyIdentity) error {
+	if expected == nil || expected.SameEntity(actual) {
+		return nil
+	}
+	return refuseIdentity("Cloud device %q has identity %s, which does not match the identity saved for the default device (%s). Choose the device explicitly or update the saved default if it was re-enrolled.", deviceName, actual.IdentityKey(), expected.IdentityKey())
+}
+
+func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice) certs.WendyIdentity {
+	cert := auth.Certificates[0]
+	identity := certs.WendyIdentity{OrgID: int32(cert.OrganizationID), EntityType: certs.EntityAsset, EntityID: asset.key}
+	if asset.v2 != nil {
+		identity.TenantUUID = cert.TenantUUID()
+		identity.Principal = certs.DeviceSPIFFEURI(identity.TenantUUID, asset.key)
+	}
+	return identity
 }
 
 func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
@@ -158,15 +186,11 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	if err != nil {
 		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
 	}
-	expectedIdentity := &certs.WendyIdentity{OrgID: int32(cert.OrganizationID), EntityType: "asset", EntityID: asset.key}
-	if asset.v2 != nil {
-		expectedIdentity.TenantUUID = cert.TenantUUID()
-		expectedIdentity.Principal = "spiffe://wendy.sh/tenant/" + cert.TenantUUID() + "/device/" + asset.key
-	}
+	expectedIdentity := cloudDiscoveryIdentity(auth, asset)
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
 		ChainPEM:         cert.PemCertificateChain,
 		ExpectedOrgID:    int32(cert.OrganizationID),
-		ExpectedIdentity: expectedIdentity,
+		ExpectedIdentity: &expectedIdentity,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("building TLS verifier: %w", err)
@@ -198,6 +222,9 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 
 	agentConn := grpcclient.NewFromConn(grpcConn)
 	agentConn.Host = asset.GetName()
+	if asset.legacy != nil {
+		agentConn.MeshHost = meshname.Device(asset.legacy.GetId())
+	}
 	agentConn.IsMTLS = true
 	agentConn.CertInfo = &cert
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
@@ -480,7 +507,7 @@ func resolveCloudAsset(assets []*cloudpb.Asset, deviceName string) (*cloudpb.Ass
 		for _, a := range assets {
 			if strings.ToLower(a.GetName()) == lower {
 				if matched != nil {
-					return nil, fmt.Errorf("multiple devices match %q; use a more specific name", deviceName)
+					return nil, commandErrorf(errDeviceAmbiguous, "multiple devices match %q; use a more specific name", deviceName)
 				}
 				matched = a
 			}
@@ -512,7 +539,7 @@ func resolveCloudAsset(assets []*cloudpb.Asset, deviceName string) (*cloudpb.Ass
 		}
 		fmt.Fprintf(&b, "%d=%s", a.GetId(), name)
 	}
-	return nil, fmt.Errorf("multiple cloud devices found; rerun with --device <id|name> (%s)", b.String())
+	return nil, commandErrorf(errDeviceAmbiguous, "multiple cloud devices found; rerun with --device <id|name> (%s)", b.String())
 }
 
 // upgradeOfflineResolveErr re-checks a resolveCloudAsset miss against the
@@ -533,7 +560,7 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if clouddefaults.FindAssetByNameOrID(allAssets, deviceName) == nil {
 			return resolveErr
 		}
-		return fmt.Errorf("device %q is enrolled but currently reported offline; check the device's power and network connection, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", deviceName)
+		return commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check the device's power and network connection, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", deviceName)
 	case errors.Is(resolveErr, errNoCloudDevicesEnrolled):
 		allAssets, err := fetchAll()
 		if err != nil {
@@ -542,7 +569,7 @@ func upgradeOfflineResolveErr(resolveErr error, deviceName string, fetchAll func
 		if len(allAssets) == 0 {
 			return resolveErr
 		}
-		return fmt.Errorf("all %d enrolled devices are currently reported offline; check their power and network connections, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", len(allAssets))
+		return commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check their power and network connections, then retry ('wendy cloud discover --all --json' lists all enrolled devices)", len(allAssets))
 	default:
 		return resolveErr
 	}
@@ -653,7 +680,7 @@ func pickCloudDeviceFromRoster(ctx context.Context, auth *config.AuthConfig, dev
 		return nil, ErrUserCancelled
 	}
 	if cm.selected == nil {
-		return nil, fmt.Errorf("no device selected")
+		return nil, commandErrorf(errNoDevice, "no device selected")
 	}
 	return cm.selected, nil
 }

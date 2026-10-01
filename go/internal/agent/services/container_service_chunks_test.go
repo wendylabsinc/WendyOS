@@ -5,12 +5,16 @@ import (
 	"context"
 	"crypto/sha256"
 	"io"
+	"math/rand"
+	"sync"
 	"testing"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	grpcgzip "google.golang.org/grpc/encoding/gzip"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -22,6 +26,8 @@ type fakeContainerd struct {
 	missingFn    func(ctx context.Context, hashes [][32]byte) ([][32]byte, error)
 	presentFn    func(ctx context.Context, diffIDs []string) (map[string]int64, error)
 	stageChunkFn func(ctx context.Context, h [32]byte, data []byte) error
+
+	stageMu      sync.Mutex // WriteChunks streams run concurrently
 	stagedChunks []stagedChunk
 }
 
@@ -52,7 +58,9 @@ func (f *fakeContainerd) PresentLayers(ctx context.Context, diffIDs []string) (m
 
 // StageChunk records the (hash, data) pair and delegates to stageChunkFn when set.
 func (f *fakeContainerd) StageChunk(ctx context.Context, h [32]byte, data []byte) error {
+	f.stageMu.Lock()
 	f.stagedChunks = append(f.stagedChunks, stagedChunk{hash: h, data: data})
+	f.stageMu.Unlock()
 	if f.stageChunkFn != nil {
 		return f.stageChunkFn(ctx, h, data)
 	}
@@ -190,5 +198,45 @@ func TestWriteChunksAcceptsGzipOverGRPC(t *testing.T) {
 	}
 	if fake.stagedChunks[0].hash != hash || !bytes.Equal(fake.stagedChunks[0].data, data) {
 		t.Fatal("gzip WriteChunks did not preserve the original hash and data")
+	}
+}
+
+// TestWriteChunksAcceptsParallelChunkUploads drives the shared uploader against
+// the real WriteChunks handler over gRPC, with and without gzip, using more
+// streams than one. Every chunk must be staged with its original bytes.
+func TestWriteChunksAcceptsParallelChunkUploads(t *testing.T) {
+	for _, compressor := range []string{chunkupload.Gzip, ""} {
+		t.Run("compressor="+compressor, func(t *testing.T) {
+			fake := newFakeContainerd()
+			client, cleanup := startContainerServer(t, fake)
+			defer cleanup()
+
+			layer := make([]byte, 1<<20)
+			rand.New(rand.NewSource(7)).Read(layer)
+			refs, err := chunk.ChunkBytes(layer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			missing := make(map[[32]byte]bool, len(refs))
+			for _, r := range refs {
+				missing[r.Hash] = true
+			}
+			plan, _ := chunkupload.Plan(refs, missing)
+			if err := chunkupload.Upload(context.Background(), client, bytes.NewReader(layer), plan, chunkupload.Options{
+				Layer: "sha256:parallel", BatchChunks: 2, Streams: 4, Compressor: compressor,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			staged := map[[32]byte][]byte{}
+			for _, sc := range fake.stagedChunks {
+				staged[sc.hash] = sc.data
+			}
+			for _, r := range plan {
+				if !bytes.Equal(staged[r.Hash], layer[r.Offset:r.Offset+r.Len]) {
+					t.Fatalf("chunk at %d was not staged with its original bytes", r.Offset)
+				}
+			}
+		})
 	}
 }

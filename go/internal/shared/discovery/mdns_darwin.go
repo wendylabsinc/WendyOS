@@ -165,37 +165,19 @@ func mdnsStreamBackend(ctx context.Context, serviceType string, emit func(MDNSSe
 
 // resolveServiceFn is the resolve step mdnsStreamResolveAndEmit calls. A var,
 // not a direct call to resolveMDNSService, so tests can force a resolve
-// failure deterministically and pin the isValidHostnameLabel fallback gate
-// below without depending on real dns-sd failure conditions.
+// failure without depending on real dns-sd failure conditions.
 var resolveServiceFn = resolveMDNSService
 
-// mdnsStreamResolveAndEmit resolves one browse result and hands the outcome
-// to emit. A resolve failure still emits an identity synthesized from the
-// instance name when that name is usable as a hostname label — hostname
-// "<instance>.local" on the agent's default port, exactly what the pre-stream
-// deviceFromBrowse fallback built — so a device with no TXT records, or a
-// transient resolve failure, is neither dropped from the stream nor surfaced
-// as an un-dialable, nameless row. Otherwise (an instance name that cannot
-// stand in as a hostname, e.g. one containing a space) the result is skipped
-// rather than emitting a misleading dialable-looking identity.
+// mdnsStreamResolveAndEmit emits only resolved services. A browse result can
+// come from mDNSResponder's cache after the device has left the network;
+// inventing a hostname when resolution fails would report it as live and
+// refresh its entry in Wendy's cache on every scan.
 func mdnsStreamResolveAndEmit(ctx context.Context, inst browseResult, serviceType string, emit func(MDNSService)) {
 	resolveCtx, cancel := context.WithTimeout(ctx, dnssdResolveTimeout)
 	defer cancel()
 
 	svc, err := resolveServiceFn(resolveCtx, inst, serviceType)
 	if err != nil {
-		// The synthesized .local:50051 identity is specific to the WendyOS
-		// agent service. Applying it to generic services such as
-		// _wendy-lite._tcp fabricates selectable rows for stale mDNS browse
-		// records even though their service cannot be resolved anymore.
-		if serviceType == wendyServiceType && isValidHostnameLabel(inst.instanceName) {
-			emit(MDNSService{
-				InstanceName:  inst.instanceName,
-				Hostname:      inst.instanceName + ".local",
-				Port:          defaultAgentPort,
-				InterfaceName: inst.interfaceName,
-			})
-		}
 		return
 	}
 	svc.InterfaceName = inst.interfaceName

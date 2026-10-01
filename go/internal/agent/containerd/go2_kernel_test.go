@@ -216,3 +216,26 @@ func TestG1KernelPreparationPinsRobotIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestR2KernelPreparationPinsRobotIdentity(t *testing.T) {
+	for _, mixed := range []string{"", "GO2_", "G1_"} {
+		t.Run("other-prefix-"+mixed, func(t *testing.T) {
+			labels, spec, deps, calls := go2KernelFixture(t)
+			labels[labelKeyAppID] = "sh.wendy.simulator.rosmaster-r2"
+			for i, value := range spec.Process.Env {
+				spec.Process.Env[i] = strings.Replace(value, "GO2_", "R2_", 1)
+			}
+			if mixed != "" {
+				spec.Process.Env = append(spec.Process.Env, mixed+"VM_NAME=other")
+			}
+			err := prepareGo2KernelModules(context.Background(), labels, spec, deps)
+			if mixed == "" {
+				if err != nil || len(*calls) != 1 {
+					t.Fatalf("R2 preparation failed: %v, %v", err, *calls)
+				}
+			} else if err == nil || len(*calls) != 0 {
+				t.Fatalf("mixed identity accepted: %v", err)
+			}
+		})
+	}
+}

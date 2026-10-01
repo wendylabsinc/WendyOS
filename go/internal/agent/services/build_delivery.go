@@ -17,11 +17,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
-	grpcgzip "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -67,10 +67,6 @@ const (
 	// CPU work with another's network round trips, and each in-flight layer
 	// spills its uncompressed tar to disk rather than RAM.
 	maxConcurrentDeliveryLayers = 4
-	// maxChunksPerDeliveryStream bounds one client-streaming WriteChunks RPC.
-	// Closing a batch gets an application-level acknowledgement, so at most
-	// this many chunks (4 MiB) can be in flight unconfirmed when a link drops.
-	maxChunksPerDeliveryStream = 64
 	// deliveryProgressInterval paces the byte-count lines sent to the CLI.
 	deliveryProgressInterval = time.Second
 	// deliveryVertexBase numbers the synthetic BuildKit progress vertex one
@@ -570,70 +566,15 @@ func uploadLayerChunks(ctx context.Context, cs agentpb.WendyContainerServiceClie
 		copy(h[:], hb)
 		missing[h] = true
 	}
-	var missingBytes int64
-	planned := make(map[[32]byte]bool, len(missing))
-	for _, ref := range dl.refs {
-		if !missing[ref.Hash] || planned[ref.Hash] {
-			continue
-		}
-		planned[ref.Hash] = true
-		missingBytes += int64(ref.Len)
-	}
+	plan, missingBytes := chunkupload.Plan(dl.refs, missing)
 	rep.planned(missingBytes)
-	if len(missing) == 0 {
-		return nil
-	}
-
-	var wc grpc.ClientStreamingClient[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse]
-	inStream := 0
-	for i, ref := range dl.refs {
-		if !missing[ref.Hash] {
-			continue
-		}
-		if wc == nil {
-			// Compressed on the wire, as the CLI sends them: gRPC inflates the
-			// message before the agent hashes and stages the original bytes.
-			wc, err = cs.WriteChunks(ctx, grpc.UseCompressor(grpcgzip.Name))
-			if err != nil {
-				return fmt.Errorf("opening chunk upload for layer %s: %w", diffID, err)
-			}
-		}
-		buf := make([]byte, ref.Len) // ref.Len <= chunk.MaxSize (64 KiB)
-		if _, err := dl.f.ReadAt(buf, int64(ref.Offset)); err != nil {
-			return fmt.Errorf("reading chunk %d/%d of layer %s: %w", i+1, len(dl.refs), diffID, err)
-		}
-		hb := ref.Hash
-		if err := wc.Send(&agentpb.WriteChunksRequest{Hash: hb[:], Data: buf}); err != nil {
-			// Send reports io.EOF once the server has closed the stream; the
-			// terminal status — ResourceExhausted, InvalidArgument, Unavailable —
-			// comes from CloseAndRecv, and is the one worth reporting and the
-			// one the resume decision is made on.
-			if errors.Is(err, io.EOF) {
-				if _, terminal := wc.CloseAndRecv(); terminal != nil {
-					err = terminal
-				}
-			}
-			return fmt.Errorf("sending chunk %d/%d of layer %s: %w", i+1, len(dl.refs), diffID, err)
-		}
-		// The ordered manifest may reference identical content more than once.
-		// One staged copy satisfies every occurrence, so do not spend network or
-		// progress budget sending it again during this attempt.
-		delete(missing, ref.Hash)
-		rep.advanced(len(buf))
-		inStream++
-		if inStream == maxChunksPerDeliveryStream {
-			if _, err := wc.CloseAndRecv(); err != nil {
-				return fmt.Errorf("confirming chunk upload batch for layer %s: %w", diffID, err)
-			}
-			wc, inStream = nil, 0
-		}
-	}
-	if wc != nil {
-		if _, err := wc.CloseAndRecv(); err != nil {
-			return fmt.Errorf("confirming chunk upload for layer %s: %w", diffID, err)
-		}
-	}
-	return nil
+	return chunkupload.Upload(ctx, cs, dl.f, plan, chunkupload.Options{
+		Layer: diffID,
+		// Compressed on the wire, as the CLI sends them: gRPC inflates the
+		// message before the agent hashes and stages the original bytes.
+		Compressor: chunkupload.Gzip,
+		OnSent:     rep.advanced,
+	})
 }
 
 // classifyPrepareError maps the device's answer to PrepareImage. Unimplemented

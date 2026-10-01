@@ -13,6 +13,7 @@ type Message struct {
 	ToolCalls  []ToolCall
 	ToolCallID string
 	Images     []Image
+	Usage      *TokenUsage
 	// ResponseItems preserves native OpenAI response items, including opaque
 	// reasoning state required when continuing a tool-calling conversation.
 	ResponseItems []json.RawMessage
@@ -64,11 +65,12 @@ type Executor interface {
 
 type ApproveFunc func(context.Context, ToolCall) (bool, error)
 
-// Event types are text, tool_start, tool_result, status, and memory.
+// Event types include text, tool_start, tool_result, status, memory, and usage.
 type Event struct {
 	AgentID string
 	Profile string
 	Type    string
 	Text    string
 	Call    *ToolCall
+	Usage   *TokenUsage
 }

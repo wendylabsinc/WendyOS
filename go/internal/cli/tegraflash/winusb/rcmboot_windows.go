@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/tegraflash/rcm"
 )
 
 // StageOneOptions controls a Windows stage-1 RCM boot.
@@ -24,6 +26,7 @@ type StageOneOptions struct {
 	Location        string   // optional location path to pin the device
 	Instance        string   // optional PnP instance ID pinning the exact devnode (wins over Location)
 	ExpectedProduct uint16
+	ExpectedECID    string
 	Out             io.Writer
 }
 
@@ -83,6 +86,9 @@ func StageOneBoot(opts StageOneOptions) error {
 		return err
 	}
 	defer dev.Close()
+	if err := rcm.VerifyChipID(opts.ExpectedECID, dev.ReadChipID); err != nil {
+		return err
+	}
 	// The bootROM often sends no status; bound the tolerant reads so they don't
 	// block on the long default ADB timeout.
 	dev.SetReadTimeout(responseReadTimeoutMs)

@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"io"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,30 +74,28 @@ func newDeviceUnpinCmd() *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := strings.TrimSpace(args[0])
-
-			cfg, err := config.Load()
-			if err != nil {
-				return fmt.Errorf("loading config: %w", err)
-			}
+			// Derived outside the config lock: it may read the VM store.
+			pinKey := unpinPinKey(target)
 
 			var cleared []clearedPin
-			// Detect the identity form by parsing it, not by guessing at its
-			// shape: a hostname is never a spiffe:// URI nor six colon-separated
-			// fields beginning "urn:wendy:org", and certs owns what a well-formed
-			// identity is.
-			if identity, urnErr := certs.ParseIdentityURN(target); urnErr == nil {
-				cleared = clearPinsForIdentity(cfg, identity)
-			} else {
-				// pinKeyForAddr, not the raw argument: a pin recorded via
-				// `--device host.local:50051` files under "host.local" (the port
-				// stripped), and a user unpinning must be able to hand back exactly
-				// what they used to connect. This is the same bug fixed in
-				// set-default in Task 6 — do not reintroduce it here.
-				cleared = clearPinsGoverning(cfg, pinKeyForAddr(target))
-			}
-
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("saving config: %w", err)
+			if err := config.Update(func(cfg *config.Config) (bool, error) {
+				// Detect the identity form by parsing it, not by guessing at its
+				// shape: a hostname is never a spiffe:// URI nor six colon-separated
+				// fields beginning "urn:wendy:org", and certs owns what a well-formed
+				// identity is.
+				if identity, urnErr := certs.ParseIdentityURN(target); urnErr == nil {
+					cleared = clearPinsForIdentity(cfg, identity)
+				} else {
+					// The pin key, not the raw argument: a pin recorded via
+					// `--device host.local:50051` files under "host.local" (the port
+					// stripped), and a user unpinning must be able to hand back exactly
+					// what they used to connect. This is the same bug fixed in
+					// set-default in Task 6 — do not reintroduce it here.
+					cleared = clearPinsGoverning(cfg, pinKey)
+				}
+				return true, nil
+			}); err != nil {
+				return fmt.Errorf("unpinning %q: %w", target, err)
 			}
 
 			// A prepared session broker may retain an authenticated transport
@@ -112,6 +111,19 @@ func newDeviceUnpinCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// unpinPinKey is the pin key `wendy device unpin <target>` clears: the key a
+// dial of target is checked under. A host:port target is re-aimed first, as a
+// dial of it is (vmForwardDialAddr), so a running VM's mTLS forward,
+// 127.0.0.1:AgentPort+1, names that VM, not the bare 127.0.0.1 pin every other
+// loopback port shares. A bare host is never re-aimed and never names a VM:
+// `wendy device unpin 127.0.0.1` clears the shared pin.
+func unpinPinKey(target string) string {
+	if _, _, err := net.SplitHostPort(target); err == nil {
+		return pinKeyForAddr(vmForwardDialAddr(target))
+	}
+	return pinKeyForAddr(target)
 }
 
 // printClearedPins reports every entry an unpin removed, one line each.

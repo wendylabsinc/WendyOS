@@ -223,6 +223,15 @@ It also restores the socket for a container that remains running across an
 agent-only restart. The app or its Bluetooth library must reconnect any D-Bus
 connection that closed when the old proxy exited.
 
+### USB entitlement
+
+Declare `{ "type": "usb" }` for raw USB device access. Wendy mounts `/dev/bus/usb`
+only when that directory exists on the host. Hosts without a USB bus, including
+VMs, can start the container without a missing-mount OCI error. This does not
+emulate a camera or other USB hardware. Apps with hardware drivers need an
+explicit [simulator backend](/docs/apps/wendy-services#simulation-backends) on
+robot VMs. Redeploy if the USB directory appears after deployment.
+
 ### Serial / UART Entitlement
 
 The `serial` entitlement grants one USB serial tty to an app. The device must be

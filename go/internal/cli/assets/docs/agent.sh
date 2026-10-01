@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 
 # Re-exec under bash if invoked via sh (pipefail and [[ ]] require bash).
+# Read from a pipe (`curl … | sh`, where sh is dash on Debian/Ubuntu) there is
+# no file to re-exec — $0 is just the shell's name — so say how to run it.
 if [ -z "${BASH_VERSION:-}" ]; then
-  exec bash "$0" "$@"
+  if [ -f "$0" ]; then
+    exec bash "$0" "$@"
+  fi
+  echo "This installer needs bash: curl -fsSL https://install.wendy.dev/agent.sh | bash" >&2
+  exit 1
 fi
 
 set -euo pipefail
@@ -25,7 +31,7 @@ debugging and deployment capabilities.
 Usage: install-agent.sh [OPTIONS]
 
 Options:
-  -y            Skip confirmation prompt
+  -y            Skip confirmation prompt (assumed when no terminal is attached)
   -d DIR        Install directory (default: /usr/local/bin, only for binary fallback)
   -h, --help    Show this help message
 
@@ -137,6 +143,17 @@ download() {
     wget -qO "$dest" "$url"
   fi
 }
+
+# have_tty reports whether a controlling terminal can actually be opened.
+# `[[ -r /dev/tty ]]` is not enough: in agent shells and CI the node exists and
+# passes the permission check, but open(2) fails with ENXIO ("Device not
+# configured"), which aborts a `read </dev/tty` under `set -e`. The probe runs
+# in a subshell: where sh is bash (Fedora, macOS), `curl … | sh` runs this in
+# POSIX mode, and there a failed redirection on a special builtin such as `:`
+# or `exec` exits the shell. Only the subshell exits.
+have_tty() {
+  (exec </dev/tty) 2>/dev/null
+}
 # <<< wendy-install-shared
 
 # --- Homebrew helpers (macOS) ---
@@ -216,6 +233,11 @@ yum_install_or_upgrade() {
 # --- Prompt for confirmation ---
 confirm() {
   if [[ "$YES" == true ]]; then return 0; fi
+  if ! have_tty; then
+    echo "No interactive terminal; continuing as if -y was passed."
+    YES=true
+    return 0
+  fi
   printf "%s [y/N] " "$1"
   read -r answer </dev/tty
   case "$answer" in

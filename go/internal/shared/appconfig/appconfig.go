@@ -190,9 +190,36 @@ type FrameworksConfig struct {
 	ROS2 *ROS2Config `json:"ros2,omitempty"`
 }
 
+// SimulationConfig selects an app-authored backend only on a matching managed
+// robot VM. Entitlements replace the hardware grants; Env overlays service Env.
+// It does not claim USB/firmware emulation.
+type SimulationConfig struct {
+	Profile      string            `json:"profile"`
+	Entitlements []Entitlement     `json:"entitlements"`
+	Env          map[string]string `json:"env,omitempty"`
+}
+
+func (sim *SimulationConfig) validate(prefix string) error {
+	if sim == nil {
+		return nil
+	}
+	if sim.Profile != "rosmaster-r2" && sim.Profile != "go2" && sim.Profile != "g1" {
+		return fmt.Errorf("%s.profile: expected rosmaster-r2, go2 or g1", prefix)
+	}
+	if len(sim.Entitlements) == 0 {
+		return fmt.Errorf("%s.entitlements: explicitly declare the simulator grants", prefix)
+	}
+	if err := validateEntitlements(sim.Entitlements, prefix+".entitlement"); err != nil {
+		return err
+	}
+	return ValidateEnv(prefix+".env", sim.Env)
+}
+
 // ServiceConfig holds the per-service build and runtime configuration for a
 // multi-service wendy.json (the services map).
 type ServiceConfig struct {
+	Simulation *SimulationConfig `json:"simulation,omitempty"`
+
 	// Context is the build context directory, relative to wendy.json.
 	// Required for standalone multi-service apps; omitted in compose companion files.
 	Context      string            `json:"context"`
@@ -265,18 +292,20 @@ type AppConfig struct {
 	// ServiceName is set when this AppConfig describes a single service within
 	// a multi-service app.  When non-empty the agent uses the
 	// {appId}_{serviceName} container naming convention (WDY-878).
-	ServiceName  string           `json:"serviceName,omitempty"`
-	Version      string           `json:"version,omitempty"`
-	Platform     string           `json:"platform,omitempty"`
-	Language     string           `json:"language,omitempty"`
-	Xcode        *XcodeConfig     `json:"xcode,omitempty"`
-	Run          *RunConfig       `json:"run,omitempty"`
-	Entitlements []Entitlement    `json:"entitlements,omitempty"`
-	Readiness    *ReadinessConfig `json:"readiness,omitempty"`
-	Hooks        *HooksConfig     `json:"hooks,omitempty"`
-	Python       *PythonConfig    `json:"python,omitempty"`
-	Debug        bool             `json:"debug,omitempty"`
-	Files        []FileSyncEntry  `json:"files,omitempty"`
+	ServiceName string `json:"serviceName,omitempty"`
+	Version     string `json:"version,omitempty"`
+	// RestartPolicy supplies the default for wendy run; explicit CLI flags win.
+	RestartPolicy string           `json:"restartPolicy,omitempty"`
+	Platform      string           `json:"platform,omitempty"`
+	Language      string           `json:"language,omitempty"`
+	Xcode         *XcodeConfig     `json:"xcode,omitempty"`
+	Run           *RunConfig       `json:"run,omitempty"`
+	Entitlements  []Entitlement    `json:"entitlements,omitempty"`
+	Readiness     *ReadinessConfig `json:"readiness,omitempty"`
+	Hooks         *HooksConfig     `json:"hooks,omitempty"`
+	Python        *PythonConfig    `json:"python,omitempty"`
+	Debug         bool             `json:"debug,omitempty"`
+	Files         []FileSyncEntry  `json:"files,omitempty"`
 	// Brewfile is an optional Homebrew Bundle manifest path for native Darwin
 	// deployments. It is relative to wendy.json and synced to the target Mac
 	// before the agent runs `brew bundle --file`.
@@ -733,6 +762,11 @@ func ValidateReadiness(prefix string, r *ReadinessConfig) error {
 
 // Validate checks the AppConfig for required fields and valid entitlement types.
 func (c *AppConfig) Validate() error {
+	switch c.RestartPolicy {
+	case "", "no", "on-failure", "unless-stopped":
+	default:
+		return fmt.Errorf("restartPolicy must be no, on-failure, or unless-stopped")
+	}
 	if c.Run != nil {
 		if err := c.validateNativeRun(); err != nil {
 			return err
@@ -813,6 +847,9 @@ func (c *AppConfig) Validate() error {
 			if _, ok := c.Services[dep]; !ok {
 				return fmt.Errorf("services[%q]: dependsOn references unknown service %q", name, dep)
 			}
+		}
+		if err := svc.Simulation.validate(fmt.Sprintf("services[%q].simulation", name)); err != nil {
+			return err
 		}
 		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
 			return err
@@ -1025,6 +1062,9 @@ func LoadComposeCompanion(dir string) (*AppConfig, []string, error) {
 	for name, svc := range cfg.Services {
 		if svc == nil {
 			return nil, nil, fmt.Errorf("services[%q]: must not be null", name)
+		}
+		if err := svc.Simulation.validate(fmt.Sprintf("services[%q].simulation", name)); err != nil {
+			return nil, nil, err
 		}
 		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
 			return nil, nil, err

@@ -177,6 +177,28 @@ type loginCallbackResult struct {
 	APIKey          string
 }
 
+// browserLoginTimeout bounds how long a login waits for the browser to call
+// back, for both the legacy dashboard flow and the OIDC flow. A var only so
+// tests can shrink it.
+var browserLoginTimeout = 5 * time.Minute
+
+// browserLoginTimeoutError is what both login flows return when no browser
+// finished the sign-in within browserLoginTimeout. It doesn't name `wendy auth
+// login`: the same flows run inside `cloud org switch`, org setup and device
+// enrollment.
+func browserLoginTimeoutError() error {
+	return fmt.Errorf("timed out after %s: no browser finished the sign-in; run the command again and complete it in the browser", browserLoginTimeout)
+}
+
+// printLoginURLForManualOpen is used instead of opening a browser when no
+// person is at the terminal (see humanPresent): an agent or script driving the
+// CLI can't use a browser window it didn't ask for, but can relay a URL. The URL goes alone on
+// its own line so it can be copied verbatim.
+func printLoginURLForManualOpen(loginURL string) {
+	fmt.Println("Open this URL in a browser on this machine to sign in:")
+	fmt.Println(loginURL)
+}
+
 func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	// Step 1: Start a local HTTP server to receive the OAuth callback.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -264,20 +286,28 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	// Step 2: Open browser to login URL with callback port.
 	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/cli-callback", port)
 	loginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, url.QueryEscape(redirectURI))
-	fmt.Println(tui.InfoMessage("Opening browser for authentication"))
-	fmt.Printf("  %s\n", loginURL)
-
-	if err := openBrowser(loginURL); err != nil {
-		fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
+	if !humanPresent() {
+		printLoginURLForManualOpen(loginURL)
+	} else {
+		fmt.Println(tui.InfoMessage("Opening browser for authentication"))
 		fmt.Printf("  %s\n", loginURL)
+
+		if err := openBrowser(loginURL); err != nil {
+			fmt.Println(tui.WarningMessage("Could not open browser automatically. Please visit:"))
+			fmt.Printf("  %s\n", loginURL)
+		}
 	}
 
-	// Show a QR code the user can scan with the Wendy iOS app to log in on their phone.
-	mobileRedirect := url.QueryEscape("wendy://cloud-login")
-	mobileLoginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, mobileRedirect)
-	if qr, qrErr := qrcode.New(mobileLoginURL, qrcode.Medium); qrErr == nil {
-		fmt.Println(tui.InfoMessage("Or scan with the Wendy iOS app:"))
-		fmt.Println(qr.ToSmallString(false))
+	// Show a QR code the user can scan with the Wendy iOS app to log in on
+	// their phone — only for a person at the terminal; for an agent it is
+	// noise around the one line it needs.
+	if humanPresent() {
+		mobileRedirect := url.QueryEscape("wendy://cloud-login")
+		mobileLoginURL := fmt.Sprintf("%s/cli-auth?redirect_uri=%s", cloudDashboard, mobileRedirect)
+		if qr, qrErr := qrcode.New(mobileLoginURL, qrcode.Medium); qrErr == nil {
+			fmt.Println(tui.InfoMessage("Or scan with the Wendy iOS app:"))
+			fmt.Println(qr.ToSmallString(false))
+		}
 	}
 
 	fmt.Println(tui.InfoMessage("Waiting for authentication..."))
@@ -291,6 +321,8 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 		return fmt.Errorf("login failed: %w", loginErr)
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-time.After(browserLoginTimeout):
+		return browserLoginTimeoutError()
 	}
 
 	// Step 3: Generate a key pair and CSR.

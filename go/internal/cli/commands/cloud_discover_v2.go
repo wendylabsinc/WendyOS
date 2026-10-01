@@ -201,10 +201,10 @@ func pickCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, name
 		all, fetchErr := fetchCloudDiscoveryDevices(ctx, auth, false)
 		if fetchErr == nil {
 			if name == "" && len(all) > 0 {
-				return cloudDiscoveryDevice{}, fmt.Errorf("all %d enrolled devices are currently reported offline; check the agents' Cloud presence logs ('wendy cloud discover --all --json' lists enrolled devices)", len(all))
+				return cloudDiscoveryDevice{}, commandErrorf(errDeviceOffline, "all %d enrolled devices are currently reported offline; check the agents' Cloud presence logs ('wendy cloud discover --all --json' lists enrolled devices)", len(all))
 			}
 			if _, e := resolveCloudDiscoveryDevice(all, name); e == nil {
-				return cloudDiscoveryDevice{}, fmt.Errorf("device %q is enrolled but currently reported offline; check its Cloud presence logs", name)
+				return cloudDiscoveryDevice{}, commandErrorf(errDeviceOffline, "device %q is enrolled but currently reported offline; check its Cloud presence logs", name)
 			}
 		}
 	}
@@ -228,7 +228,7 @@ func resolveCloudDiscoveryDevice(devices []cloudDiscoveryDevice, name string) (c
 		for i := range devices {
 			if strings.EqualFold(devices[i].GetName(), name) {
 				if match != nil {
-					return cloudDiscoveryDevice{}, fmt.Errorf("multiple devices match %q; use a device UUID", name)
+					return cloudDiscoveryDevice{}, commandErrorf(errDeviceAmbiguous, "multiple devices match %q; use a device UUID", name)
 				}
 				match = &devices[i]
 			}
@@ -245,5 +245,5 @@ func resolveCloudDiscoveryDevice(devices []cloudDiscoveryDevice, name string) (c
 	for _, d := range devices {
 		names = append(names, d.key+"="+d.GetName())
 	}
-	return cloudDiscoveryDevice{}, fmt.Errorf("multiple cloud devices found; rerun with --device <id|name> (%s)", strings.Join(names, ", "))
+	return cloudDiscoveryDevice{}, commandErrorf(errDeviceAmbiguous, "multiple cloud devices found; rerun with --device <id|name> (%s)", strings.Join(names, ", "))
 }

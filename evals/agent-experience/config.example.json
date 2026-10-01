@@ -1,0 +1,110 @@
+{
+  "wendy": "wendy",
+  "port": 18765,
+  "budget_usd": 100,
+  "trial_reserve_usd": 15,
+  "context_policy": "Fresh transcript and workspace; configured host settings; supplied Wendy skills. Use a dedicated OS account for controlled comparisons.",
+  "agents": {
+    "codex": {
+      "adapter": "codex",
+      "model": "SET_CODEX_MODEL",
+      "command": [
+        "codex",
+        "-c",
+        "approval_policy=\"never\"",
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+        "--add-dir",
+        "{wendy_home}",
+        "--add-dir",
+        "{wendy_cache}",
+        "--add-dir",
+        "{wendy_build_cache}",
+        "--add-dir",
+        "{docker_buildx_cache}",
+        "-c",
+        "sandbox_workspace_write.network_access=true",
+        "-c",
+        "mcp_servers.wendy.command=\"{wendy}\"",
+        "-c",
+        "mcp_servers.wendy.args=[\"mcp\",\"serve\"]",
+        "-c",
+        "mcp_servers.wendy.required=true",
+        "-c",
+        "mcp_servers.wendy.env.WENDY_CONFIG_DIR=\"{wendy_home}\"",
+        "-c",
+        "mcp_servers.wendy.env.WENDY_SECRET_STORE=\"file\"",
+        "--model",
+        "{model}",
+        "{prompt}"
+      ]
+    },
+    "claude": {
+      "adapter": "claude",
+      "model": "SET_CLAUDE_MODEL",
+      "command": [
+        "claude",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--permission-mode",
+        "dontAsk",
+        "--permission-prompts",
+        "none",
+        "--allowedTools",
+        "Bash,Read,Edit,Write,Glob,Grep,mcp__wendy__*",
+        "--plugin-dir",
+        "{root}/plugins/wendy-agentic-coding",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "{workspace}/mcp.json",
+        "--max-budget-usd",
+        "15",
+        "--model",
+        "{model}",
+        "{prompt}"
+      ]
+    },
+    "wendy": {
+      "adapter": "wendy",
+      "model": "SET_WENDY_MODEL",
+      "command": [
+        "{wendy}",
+        "chat",
+        "--no-memory",
+        "--json",
+        "--yes",
+        "--model",
+        "{model}",
+        "--prompt",
+        "{prompt}"
+      ]
+    }
+  },
+  "targets": {
+    "simulator": {
+      "kind": "simulator",
+      "device": "vm:wendy-eval-pilot",
+      "cache_state": "shared build/image cache; record cold first run separately",
+      "capabilities": [],
+      "fixtures": {}
+    },
+    "cloud-orin": {
+      "kind": "cloud",
+      "device": "cloud://SET_HOST/org/SET_ORG/asset/SET_ASSET",
+      "cache_state": "shared build/image cache; sequential trials",
+      "capabilities": [],
+      "fixtures": {}
+    }
+  },
+  "prior_spend_usd": 0,
+  "isolate_device_state": true,
+  "max_agent_seconds": 900,
+  "syntax_error_limit": 3
+}

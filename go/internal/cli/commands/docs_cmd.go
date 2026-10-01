@@ -261,12 +261,15 @@ func printDocsTopicList(w io.Writer, topics []docsTopic) {
 }
 
 // printDocsTopic resolves arg against topics and prints the match. arg may be
-// a short slug or the full path (with or without extension). An unresolvable
-// or ambiguous arg returns an error that lists the way out, matching the
+// a short slug or the full path (with or without a Markdown extension). An
+// unresolvable or ambiguous arg returns an error that lists the way out, matching the
 // quality of feedback `wendy project entitlements add <bad-type>` gives.
 func printDocsTopic(w io.Writer, topics []docsTopic, arg string) error {
 	needle := strings.Trim(strings.TrimSpace(arg), "/")
-	needle = strings.TrimSuffix(needle, path.Ext(needle))
+	// Dotted topic names such as wendy.json are listed without a Markdown extension.
+	if ext := path.Ext(needle); ext == ".md" || ext == ".mdx" {
+		needle = strings.TrimSuffix(needle, ext)
+	}
 
 	for _, t := range topics {
 		if t.urlPath() == needle {

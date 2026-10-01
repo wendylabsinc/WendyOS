@@ -41,6 +41,9 @@ const legacyRedirects: Record<string, string> = {
   'installation/ubuntu': '/installation/linux/',
   'guides/tutorials/camera-exposure': '/guides/camera-exposure/',
   'guides/tutorials/fleet-deployment': '/guides/fleet-deployment/',
+  'get-started/hardware': '/',
+  'get-started/mac': '/installation/wendy-agent-macos/',
+  'installation/developer-machine-setup': '/',
 };
 
 function getLegacyRedirect(slug?: string[]) {

@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -24,6 +25,9 @@ type fakeMacRunState struct {
 	fakeSyncServer
 	createReqs []*agentpb.CreateContainerRequest
 	startReqs  []*agentpb.StartContainerRequest
+	// sendStarted makes StartContainer acknowledge the start, as a real
+	// agent does, instead of closing the stream silently.
+	sendStarted bool
 }
 
 type fakeMacAgentServer struct {
@@ -67,8 +71,13 @@ func (s *fakeMacContainerServer) ListContainers(_ *agentpb.ListContainersRequest
 	return nil
 }
 
-func (s *fakeMacContainerServer) StartContainer(req *agentpb.StartContainerRequest, _ grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
+func (s *fakeMacContainerServer) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
 	s.state.startReqs = append(s.state.startReqs, proto.Clone(req).(*agentpb.StartContainerRequest))
+	if s.state.sendStarted {
+		return stream.Send(&agentpb.RunContainerLayersResponse{
+			ResponseType: &agentpb.RunContainerLayersResponse_Started_{Started: &agentpb.RunContainerLayersResponse_Started{}},
+		})
+	}
 	return nil
 }
 
@@ -110,7 +119,10 @@ func startFakeMacRunServer(t *testing.T, state *fakeMacRunState) (*grpcclient.Ag
 	return ac, cleanup
 }
 
-func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *testing.T) {
+// newStubbedXcodeProject creates an Xcode project directory whose build is
+// stubbed: the "xcodebuild" run writes the scheme's product and succeeds.
+func newStubbedXcodeProject(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "MyApp.xcodeproj"), 0o755); err != nil {
 		t.Fatalf("Mkdir: %v", err)
@@ -135,6 +147,11 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 		}
 		return exec.CommandContext(ctx, "true")
 	}
+	return dir
+}
+
+func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *testing.T) {
+	dir := newStubbedXcodeProject(t)
 
 	state := &fakeMacRunState{}
 	conn, cleanup := startFakeMacRunServer(t, state)
@@ -146,6 +163,19 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 		Xcode:    &appconfig.XcodeConfig{Scheme: "MyScheme"},
 		Run:      &appconfig.RunConfig{Args: []string{"--from-config", "hello world"}},
 	}
+
+	// The Xcode path is one of the dispatch-and-return branches in
+	// runWithAgentRecorded that has no phase timings of its own (WDY-3215);
+	// assert it still reports exactly one deploy_completed event, correctly
+	// labeled, rather than being silently swallowed by deployMetrics.emit's
+	// transport=="" guard.
+	var events []map[string]string
+	analytics.SetTrackHookForTesting(func(event string, props map[string]string) {
+		if event == "deploy_completed" {
+			events = append(events, props)
+		}
+	})
+	t.Cleanup(func() { analytics.SetTrackHookForTesting(nil) })
 
 	err := runWithAgent(context.Background(), conn, dir, appCfg, runOptions{
 		deploy:   true,
@@ -167,6 +197,50 @@ func TestRunWithAgent_AllowsNativeDarwinXcodeAndUsesRunArgsFromAppConfig(t *test
 	}
 	if len(got.UserArgs) != 2 || got.UserArgs[0] != "--from-config" || got.UserArgs[1] != "hello world" {
 		t.Fatalf("UserArgs = %v, want %v", got.UserArgs, appCfg.Run.Args)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("deploy_completed events = %d, want 1: %v", len(events), events)
+	}
+	if got := events[0]["deploy_transport"]; got != "xcode" {
+		t.Fatalf("deploy_transport = %q, want %q", got, "xcode")
+	}
+}
+
+// TestRunWithAgent_ReportsTheStartedAcknowledgementOnAnEarlyPath drives a
+// detached Xcode deploy through runWithAgent. The agent's Started
+// acknowledgement, received deep in runMacOSNativeContainer, must reach the
+// deploy_completed event, and the target platform must already be known on
+// this dispatch-and-return path, which runs before the image-build paths.
+func TestRunWithAgent_ReportsTheStartedAcknowledgementOnAnEarlyPath(t *testing.T) {
+	dir := newStubbedXcodeProject(t)
+	state := &fakeMacRunState{sendStarted: true}
+	conn, cleanup := startFakeMacRunServer(t, state)
+	defer cleanup()
+	events := captureDeployEvents(t)
+
+	appCfg := &appconfig.AppConfig{
+		AppID:    "sh.wendy.MyXcodeApp",
+		Platform: appconfig.PlatformDarwin,
+		Xcode:    &appconfig.XcodeConfig{Scheme: "MyScheme"},
+	}
+	if err := runWithAgent(context.Background(), conn, dir, appCfg, runOptions{detach: true}); err != nil {
+		t.Fatalf("runWithAgent: %v", err)
+	}
+
+	if len(*events) != 1 {
+		t.Fatalf("deploy_completed events = %d, want 1: %v", len(*events), *events)
+	}
+	want := map[string]string{
+		"deploy_transport":       "xcode",
+		"deploy_started":         "true",
+		"success":                "true",
+		"deploy_target_platform": resolveAgentPlatform(appCfg.Platform, "darwin", runtime.GOARCH),
+	}
+	for k, v := range want {
+		if got := (*events)[0][k]; got != v {
+			t.Errorf("%s = %q, want %q", k, got, v)
+		}
 	}
 }
 
@@ -654,7 +728,7 @@ func TestStartAndStreamContainer_FallsBackWhenCreateProgressIsUnimplemented(t *t
 	t.Cleanup(func() { isInteractiveTerminalFn = origInteractive })
 	isInteractiveTerminalFn = func() bool { return false }
 
-	state := &fakeMacRunState{}
+	state := &fakeMacRunState{sendStarted: true}
 	conn, cleanup := startFakeMacRunServer(t, state)
 	defer cleanup()
 

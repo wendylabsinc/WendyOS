@@ -369,7 +369,13 @@ func (c *proxiedAppMCPClient) Close() error {
 }
 
 func connectAppMCP(lifetimeCtx, initCtx context.Context, conn *grpcclient.AgentConnection, appName string) (appMCPClient, error) {
-	addr, closeProxy, err := startMCPProxy(lifetimeCtx, conn, appName)
+	proxyErrors := make(chan error, 1)
+	addr, closeProxy, err := startMCPProxy(lifetimeCtx, conn, appName, func(err error) {
+		select {
+		case proxyErrors <- err:
+		default:
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -379,8 +385,16 @@ func connectAppMCP(lifetimeCtx, initCtx context.Context, conn *grpcclient.AgentC
 		return nil, err
 	}
 	proxied := &proxiedAppMCPClient{Client: client, closeProxy: closeProxy}
-	if _, err := client.Initialize(initCtx, mcpgo.InitializeRequest{}); err != nil {
+	var init mcpgo.InitializeRequest
+	init.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
+	init.Params.ClientInfo = mcpgo.Implementation{Name: "wendy-app-proxy", Version: "1"}
+	if _, err := client.Initialize(initCtx, init); err != nil {
 		_ = proxied.Close()
+		select {
+		case proxyErr := <-proxyErrors:
+			return nil, fmt.Errorf("app MCP transport: %w", proxyErr)
+		default:
+		}
 		return nil, err
 	}
 	return proxied, nil
