@@ -1669,3 +1669,21 @@ func TestNeedsQualcommNPURuntime(t *testing.T) {
 		t.Error("a gpu-only app must not get the Qualcomm NPU runtime")
 	}
 }
+
+// TestCreateContainerRefusesAReservedAppName: with no appId in its config,
+// a create takes its app id from the request's app name. An app named like a
+// model host (sh.wendy.model.<instance>) would get that host's data-socket
+// identity and cgroup scope and could forge its detections, so the reserved
+// prefix must be refused there as it is for an appId.
+func TestCreateContainerRefusesAReservedAppName(t *testing.T) {
+	const name = "sh.wendy.model.m-1"
+	// The app is marked as stopping only so that, should validation let the
+	// name through, the create ends at its stop guard instead of reaching a
+	// containerd this test does not have.
+	c := &Client{logger: zap.NewNop(), appStopping: map[string]bool{name: true}}
+	req := &agentpb.CreateContainerRequest{AppName: name, ImageName: "docker.io/library/busybox:latest"}
+	err := c.CreateContainer(context.Background(), req, &appconfig.AppConfig{})
+	if err == nil || !strings.Contains(err.Error(), appconfig.ReservedModelAppIDPrefix) || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("CreateContainer with app name %q = %v, want the reserved prefix refused", name, err)
+	}
+}
