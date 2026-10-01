@@ -2,11 +2,9 @@ package commands
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -17,19 +15,27 @@ import (
 )
 
 var entitlementDescriptions = map[string]string{
-	appconfig.EntitlementNetwork:   "Access network interfaces",
-	appconfig.EntitlementBluetooth: "Access Bluetooth peripherals",
-	appconfig.EntitlementVideo:     "Deprecated: use camera instead",
-	appconfig.EntitlementGPU:       "Access GPU for AI or compute workloads",
-	appconfig.EntitlementNPU:       "Access the NPU for on-device AI inference",
-	appconfig.EntitlementPersist:   "Persist data across restarts",
-	appconfig.EntitlementAudio:     "Access audio input/output devices",
-	appconfig.EntitlementCamera:    "Access camera devices",
-	appconfig.EntitlementUSB:       "Access USB peripherals",
-	appconfig.EntitlementI2C:       "Access I2C bus devices",
-	appconfig.EntitlementGPIO:      "Access GPIO pins",
-	appconfig.EntitlementSPI:       "Access SPI bus devices (displays, sensors, flash - may require GPIO access)",
-	appconfig.EntitlementInput:     "Access Linux input devices (game controllers, barcode scanners, keyboards)",
+	appconfig.EntitlementNetwork:       "Access network interfaces",
+	appconfig.EntitlementBluetooth:     "Access Bluetooth peripherals",
+	appconfig.EntitlementVideo:         "Deprecated: use camera instead",
+	appconfig.EntitlementGPU:           "Access GPU for AI or compute workloads",
+	appconfig.EntitlementNPU:           "Access the NPU for on-device AI inference",
+	appconfig.EntitlementPersist:       "Persist data across restarts",
+	appconfig.EntitlementAudio:         "Access audio input/output devices",
+	appconfig.EntitlementCamera:        "Access camera devices",
+	appconfig.EntitlementUSB:           "Access USB peripherals",
+	appconfig.EntitlementI2C:           "Access I2C bus devices",
+	appconfig.EntitlementGPIO:          "Access GPIO pins",
+	appconfig.EntitlementSPI:           "Access SPI bus devices (displays, sensors, flash - may require GPIO access)",
+	appconfig.EntitlementInput:         "Access Linux input devices (game controllers, barcode scanners, keyboards)",
+	appconfig.EntitlementSerial:        "Access a USB serial device",
+	appconfig.EntitlementMCP:           "Declare the app's MCP server port",
+	appconfig.EntitlementHTTP:          "Declare the app's web interface port",
+	appconfig.EntitlementDisplay:       "Access the device display",
+	appconfig.EntitlementEpisodeWrite:  "Write application events to episode recordings",
+	appconfig.EntitlementNotifications: "Send app notifications",
+	appconfig.EntitlementAdmin:         "Full local control of the device agent",
+	appconfig.EntitlementBuild:         "Grant privileges for nested container builds",
 }
 
 // frameworkDescriptions mirrors entitlementDescriptions for the "frameworks"
@@ -42,26 +48,42 @@ var frameworkDescriptions = map[string]string{
 
 func newProjectCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "project",
-		Short: "Manage Wendy project configuration",
+		Use:     "project",
+		Short:   "View and edit your project manifest",
+		Long:    "View and edit wendy.json. Run without a subcommand for a guided editor.\nUse direct commands and flags in scripts; --json never prompts.",
+		Example: "  wendy project\n  wendy project add http --port 8080\n  wendy project edit ros2 --domain-id 42\n  wendy project show --json\n  wendy project validate",
+		Args:    cobra.NoArgs,
+		RunE:    runProjectHome,
 	}
 
+	cmd.PersistentFlags().String("file", "wendy.json", "Manifest file or project directory")
+	cmd.AddCommand(newProjectShowCmd(), newProjectValidateCmd())
+	cmd.AddCommand(newProjectChangeCmd("add", ""), newProjectChangeCmd("edit", ""), newProjectChangeCmd("remove", ""))
 	cmd.AddCommand(newEntitlementsCmd())
 	cmd.AddCommand(newFrameworksCmd())
-	cmd.AddCommand(newOptimizeCmd())
+	optimizeCmd := newOptimizeCmd()
+	optimizeCmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
+		if cmd.Flags().Changed("file") {
+			return fmt.Errorf("project optimize uses the current working directory; change into the project directory instead of passing --file")
+		}
+		return nil
+	}
+	cmd.AddCommand(optimizeCmd)
 	return cmd
 }
 
 func newEntitlementsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "entitlements",
-		Short: "Manage project entitlements",
+		Use:    "entitlements",
+		Short:  "Manage project entitlements",
+		Hidden: true,
 	}
 
 	cmd.AddCommand(
 		newEntitlementsListCmd(),
 		newEntitlementsAddCmd(),
 		newEntitlementsRemoveCmd(),
+		newProjectChangeCmd("edit", "entitlements"),
 	)
 	return cmd
 }
@@ -104,14 +126,21 @@ func listAllEntitlementTypes(cmd *cobra.Command) error {
 
 	fmt.Fprintln(out, "Available entitlement types:")
 	for _, t := range types {
-		fmt.Fprintf(out, "  %s\n", t)
+		fmt.Fprintf(out, "  %s  %s\n", t, entitlementDescriptions[t])
 	}
 	return nil
 }
 
 func listProjectEntitlements(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
-	cfg, _, err := loadProjectConfig()
+	doc, err := commandProjectManifest(cmd)
+	if err != nil {
+		return err
+	}
+	if err := doc.requireExisting(); err != nil {
+		return err
+	}
+	cfg, _, err := loadProjectConfigAt(doc.path)
 	if err != nil {
 		return err
 	}
@@ -138,156 +167,25 @@ func listProjectEntitlements(cmd *cobra.Command) error {
 }
 
 func newEntitlementsAddCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "add [type]",
-		Short: "Add an entitlement to the project",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, cfgPath, err := loadProjectConfig()
-			if err != nil {
-				return err
-			}
-
-			existing := make(map[string]bool, len(cfg.Entitlements))
-			for _, e := range cfg.Entitlements {
-				existing[e.Type] = true
-			}
-
-			var entType string
-			if len(args) > 0 {
-				entType = args[0]
-			} else {
-				// Build picker items from entitlement types not yet in the project.
-				var items []tui.PickerItem
-				for _, t := range appconfig.ValidEntitlementTypes {
-					if !existing[t] {
-						items = append(items, tui.PickerItem{Name: t, Description: entitlementDescriptions[t], Value: t})
-					}
-				}
-				if len(items) == 0 {
-					cliLogln("All entitlement types are already added.")
-					return nil
-				}
-
-				selected, err := pickFromItems("Select an entitlement to add", items)
-				if err != nil {
-					return err
-				}
-				entType = selected
-			}
-
-			// ROS 2 (and any future framework) is a common guess here, since
-			// nothing else in the CLI names "frameworks" as the place device
-			// integrations live. Redirect before falling into the generic
-			// "unknown type" error, which would otherwise say nothing about
-			// where "ros2" actually belongs.
-			if slices.Contains(appconfig.ValidFrameworkTypes, entType) {
-				return fmt.Errorf("%q is a framework, not an entitlement — configure it with `wendy project frameworks add %s`",
-					entType, entType)
-			}
-
-			if !slices.Contains(appconfig.ValidEntitlementTypes, entType) {
-				return fmt.Errorf("unknown entitlement type %q\nValid types: %s",
-					entType, strings.Join(appconfig.ValidEntitlementTypes, ", "))
-			}
-
-			if existing[entType] {
-				return fmt.Errorf("entitlement %q already exists", entType)
-			}
-
-			ent := appconfig.Entitlement{Type: entType}
-
-			if err := promptEntitlementFields(&ent); err != nil {
-				if errors.Is(err, tui.ErrCancelled) {
-					return ErrUserCancelled
-				}
-				return err
-			}
-
-			cfg.Entitlements = append(cfg.Entitlements, ent)
-
-			if err := saveProjectConfig(cfg, cfgPath); err != nil {
-				return err
-			}
-
-			cliSuccess("Added %q entitlement", entType)
-			return nil
-		},
-	}
+	return newProjectChangeCmd("add", "entitlements")
 }
 
 func newEntitlementsRemoveCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "remove [type]",
-		Short: "Remove an entitlement from the project",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, cfgPath, err := loadProjectConfig()
-			if err != nil {
-				return err
-			}
-
-			var entType string
-			if len(args) > 0 {
-				entType = args[0]
-			} else {
-				if len(cfg.Entitlements) == 0 {
-					cliLogln("No entitlements configured.")
-					return nil
-				}
-
-				var items []tui.PickerItem
-				for _, e := range cfg.Entitlements {
-					items = append(items, tui.PickerItem{Name: e.Type, Description: entitlementDescriptions[e.Type], Value: e.Type})
-				}
-
-				selected, err := pickFromItems("Select an entitlement to remove", items)
-				if err != nil {
-					return err
-				}
-				entType = selected
-			}
-
-			idx := -1
-			for i, e := range cfg.Entitlements {
-				if e.Type == entType {
-					idx = i
-					break
-				}
-			}
-
-			if idx == -1 {
-				return fmt.Errorf("entitlement %q not found in project", entType)
-			}
-
-			cfg.Entitlements = slices.Delete(cfg.Entitlements, idx, idx+1)
-
-			if err := saveProjectConfig(cfg, cfgPath); err != nil {
-				return err
-			}
-
-			cliSuccess("Removed %q entitlement", entType)
-			return nil
-		},
-	}
+	return newProjectChangeCmd("remove", "entitlements")
 }
 
-// newFrameworksCmd builds the `wendy project frameworks` command group. It
-// mirrors `wendy project entitlements` (list/add/remove, same error quality
-// for an unknown type) for the "frameworks" key in wendy.json, which
-// previously had no CLI-native way to discover its valid values or shape —
-// unlike entitlements, whose `add` command already lists valid types on a bad
-// guess.
 func newFrameworksCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "frameworks",
-		Short: "Manage project framework configuration (e.g. ROS 2)",
+		Use:    "frameworks",
+		Short:  "Manage project framework configuration (e.g. ROS 2)",
+		Hidden: true,
 	}
 
 	cmd.AddCommand(
 		newFrameworksListCmd(),
 		newFrameworksAddCmd(),
 		newFrameworksRemoveCmd(),
+		newProjectChangeCmd("edit", "frameworks"),
 	)
 	return cmd
 }
@@ -349,7 +247,14 @@ func listAllFrameworkTypes(cmd *cobra.Command) error {
 
 func listProjectFrameworks(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
-	cfg, _, err := loadProjectConfig()
+	doc, err := commandProjectManifest(cmd)
+	if err != nil {
+		return err
+	}
+	if err := doc.requireExisting(); err != nil {
+		return err
+	}
+	cfg, _, err := loadProjectConfigAt(doc.path)
 	if err != nil {
 		return err
 	}
@@ -378,139 +283,13 @@ func listProjectFrameworks(cmd *cobra.Command) error {
 }
 
 func newFrameworksAddCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "add [type]",
-		Short: "Add a framework to the project",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, cfgPath, err := loadProjectConfig()
-			if err != nil {
-				return err
-			}
-
-			existing := configuredFrameworkTypes(cfg.Frameworks)
-			existingSet := make(map[string]bool, len(existing))
-			for _, t := range existing {
-				existingSet[t] = true
-			}
-
-			var fwType string
-			if len(args) > 0 {
-				fwType = args[0]
-			} else {
-				var items []tui.PickerItem
-				for _, t := range appconfig.ValidFrameworkTypes {
-					if !existingSet[t] {
-						items = append(items, tui.PickerItem{Name: t, Description: frameworkDescriptions[t], Value: t})
-					}
-				}
-				if len(items) == 0 {
-					cliLogln("All framework types are already added.")
-					return nil
-				}
-
-				selected, err := pickFromItems("Select a framework to add", items)
-				if err != nil {
-					return err
-				}
-				fwType = selected
-			}
-
-			if !slices.Contains(appconfig.ValidFrameworkTypes, fwType) {
-				return fmt.Errorf("unknown framework type %q\nValid types: %s",
-					fwType, strings.Join(appconfig.ValidFrameworkTypes, ", "))
-			}
-
-			if existingSet[fwType] {
-				return fmt.Errorf("framework %q already exists", fwType)
-			}
-
-			if cfg.Frameworks == nil {
-				cfg.Frameworks = &appconfig.FrameworksConfig{}
-			}
-			switch fwType {
-			case appconfig.FrameworkROS2:
-				// All ROS2Config fields are optional with sensible defaults
-				// (humble, CycloneDDS, a stable per-app domain ID), so unlike
-				// persist/i2c/gpio entitlements there is nothing required to
-				// prompt for here — an empty config already enables it.
-				cfg.Frameworks.ROS2 = &appconfig.ROS2Config{}
-			}
-
-			if err := saveProjectConfig(cfg, cfgPath); err != nil {
-				return err
-			}
-
-			cliSuccess("Added %q framework", fwType)
-			if fwType == appconfig.FrameworkROS2 {
-				cliLogln("Using defaults (distro %q, rmw %q, domain ID derived from appId). "+
-					"Edit \"frameworks.ros2\" in wendy.json to customize, or see `wendy docs ros2`.",
-					appconfig.ROS2DefaultDistro, appconfig.ROS2DefaultRMW)
-			}
-			return nil
-		},
-	}
+	return newProjectChangeCmd("add", "frameworks")
 }
 
 func newFrameworksRemoveCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "remove [type]",
-		Short: "Remove a framework from the project",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, cfgPath, err := loadProjectConfig()
-			if err != nil {
-				return err
-			}
-
-			existing := configuredFrameworkTypes(cfg.Frameworks)
-
-			var fwType string
-			if len(args) > 0 {
-				fwType = args[0]
-			} else {
-				if len(existing) == 0 {
-					cliLogln("No frameworks configured.")
-					return nil
-				}
-
-				var items []tui.PickerItem
-				for _, t := range existing {
-					items = append(items, tui.PickerItem{Name: t, Description: frameworkDescriptions[t], Value: t})
-				}
-
-				selected, err := pickFromItems("Select a framework to remove", items)
-				if err != nil {
-					return err
-				}
-				fwType = selected
-			}
-
-			if !slices.Contains(existing, fwType) {
-				return fmt.Errorf("framework %q not found in project", fwType)
-			}
-
-			switch fwType {
-			case appconfig.FrameworkROS2:
-				cfg.Frameworks.ROS2 = nil
-			}
-			if cfg.Frameworks != nil && cfg.Frameworks.ROS2 == nil {
-				cfg.Frameworks = nil
-			}
-
-			if err := saveProjectConfig(cfg, cfgPath); err != nil {
-				return err
-			}
-
-			cliSuccess("Removed %q framework", fwType)
-			return nil
-		},
-	}
+	return newProjectChangeCmd("remove", "frameworks")
 }
 
-// promptEntitlementFields interactively prompts for required fields based on
-// the entitlement type. Uses Bubble Tea text inputs with inline validation
-// so the user can fix errors without restarting the wizard.
 func promptEntitlementFields(ent *appconfig.Entitlement) error {
 	notEmpty := func(label string) tui.ValidateFunc {
 		return func(v string) error {
@@ -638,31 +417,23 @@ func pickFromItemsWithColumns(title string, items []tui.PickerItem, columns []tu
 }
 
 func loadProjectConfig() (*appconfig.AppConfig, string, error) {
+	return loadProjectConfigAt("")
+}
+
+func loadProjectConfigAt(path string) (*appconfig.AppConfig, string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, "", fmt.Errorf("getting working directory: %w", err)
 	}
 
-	cfgPath := filepath.Join(cwd, "wendy.json")
+	cfgPath := path
+	if cfgPath == "" {
+		cfgPath = filepath.Join(cwd, "wendy.json")
+	}
 	cfg, err := appconfig.LoadFromFile(cfgPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("loading wendy.json: %w", err)
 	}
 
 	return cfg, cfgPath, nil
-}
-
-func saveProjectConfig(cfg *appconfig.AppConfig, path string) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
-	}
-
-	data = append(data, '\n')
-
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("writing wendy.json: %w", err)
-	}
-
-	return nil
 }
