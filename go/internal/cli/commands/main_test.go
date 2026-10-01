@@ -1,8 +1,11 @@
 package commands
 
 import (
+	"context"
 	"os"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 )
 
 // TestMain sandboxes HOME/USERPROFILE to a throwaway directory for the whole
@@ -12,6 +15,14 @@ import (
 // ~/.wendy. Individual tests may still override HOME via t.Setenv. It also
 // clears WENDY_DEVICE, which the root command would otherwise apply.
 func TestMain(m *testing.M) {
+	// Model-only tests can create discovery sessions without running their
+	// event loops. Keep their default stream off the developer's live LAN;
+	// stream behavior tests supply explicit events through this same seam.
+	lanStreamFn = func(context.Context, discovery.StreamOptions) <-chan discovery.LANEvent {
+		events := make(chan discovery.LANEvent)
+		close(events)
+		return events
+	}
 	// A developer who exported WENDY_DEVICE (as the docs suggest) must not
 	// have it copied into deviceFlag by every test that executes the root
 	// command, and leak from there into later tests.
