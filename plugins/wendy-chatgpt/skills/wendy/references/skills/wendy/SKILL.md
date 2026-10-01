@@ -10,6 +10,18 @@ WendyOS is an Embedded Linux operating system for edge computing. It supports:
 - Raspberry Pi 4/5 (edge devices)
 - ARM64/AMD64 VMs (development)
 
+## Simulation and sim-to-real
+
+Simulation and sim-to-real must NEVER use any form of scripting. Every behavior
+decision must come from interpreting fresh sensor readings and measured motor
+movement. Use the target's exposed sensor and motor tools, with real physics in
+simulation and actual feedback on hardware. Never substitute scripts, scripted
+control loops, timed command sequences, canned trajectories or replayed motion.
+Read `wendy-robot-deploy` before a robot simulation or sim-to-real task. If the
+required sensor or motor tools are unavailable, report the missing capability
+and stop rather than creating a scripted substitute. This rule takes precedence
+over the general app examples and deployment guidance below.
+
 ## Learning About Wendy
 
 Before helping with Wendy commands, explore the command tree with the built-in help:
@@ -75,7 +87,8 @@ Devices are discovered over USB or LAN. On Linux, USB tethering may need a
 one-time host setup: run `wendy discover` in a terminal and accept its USB-C
 setup prompt (it needs sudo). An empty scan can also mean a blank board.
 Use `wendy-device-install` and `os_install_plan` for initial installation and
-`os_install_verify` for first boot. Full Jetson recovery updates boot firmware;
+`os_install_verify` for first boot; both are in the MCP `setup` tool group, which
+`wendy_tools(groups=["setup"])` enables. Full Jetson recovery updates boot firmware;
 rootfs-only media writes do not. Unitree G1 PC2 keeps vendor Ubuntu and receives
 the Agent, not a generic Jetson image.
 

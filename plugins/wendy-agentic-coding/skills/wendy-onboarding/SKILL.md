@@ -151,6 +151,12 @@ when it matches the user's purpose; preserve other VMs and their disks. Use
 `generic` for ordinary WendyOS app development. Choose `go2` or `g1` only when
 the user wants that robot simulation.
 
+Before a robot simulation task, read
+[wendy-robot-deploy](../wendy-robot-deploy/SKILL.md). Simulation and sim-to-real
+must NEVER use any form of scripting. Interpret live sensor readings and measured
+motor movement through the target's supported tools for each behavior decision.
+Do not create a scripted demo or replay motion to verify the simulator.
+
 Create a named VM with `simulator_create`, using a name from the user's context
 or an unused simple name such as `wendy-dev`. Omit `version` for the published
 stable default unless the project requires a specific image. Explain that the
@@ -162,7 +168,8 @@ Creation returns a stopped VM. Start it through the tools the server exposes:
 - Local ChatGPT gateway: `simulator_start(name="<name>")` boots it. Use task
   augmentation when supported and poll that task rather than starting it again.
 - Terminal: inspect `wendy vm --help`, create with
-  `wendy vm create <name> --profile generic`, then connect with a device inspection
+  `wendy vm create <name> --profile <selected-profile>`, using the `generic`, `go2`
+  or `g1` profile selected above, then connect with a device inspection
   such as `wendy --json device info --device vm:<name>`.
 
 Refresh the simulator state and inspect the agent to verify the connection. For
@@ -194,3 +201,5 @@ actual response; `vm:<name>` is a device selector, not a browser address.
 When physical hardware arrives, install and verify it using the physical path,
 check its capabilities and entitlements, then deploy the same project with an
 explicit new target. Keep the simulator unless the user asks to remove it.
+For robot sim-to-real, follow `wendy-robot-deploy` and interpret fresh hardware
+sensor and motor feedback. Never transfer or replay a scripted simulator sequence.

@@ -81,6 +81,11 @@ An interpreter installed in the image can read a persisted script, for example
 That works for scripts; it does not make a compiled executable runnable on a
 `noexec` mount.
 
+This stored-script guidance does not apply to simulation or sim-to-real, which
+must NEVER use any form of scripting. Follow
+[wendy-robot-deploy](../wendy-robot-deploy/SKILL.md) for live sensor interpretation
+and motor feedback.
+
 ## Example patterns
 
 Web server:

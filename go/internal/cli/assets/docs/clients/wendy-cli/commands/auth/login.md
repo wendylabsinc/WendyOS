@@ -5,21 +5,21 @@
 > context commands (`use`, `rename`, `default`, `refresh-certs`) remain under
 > `wendy auth`.
 
-Signing in to Wendy Cloud temporarily uses the legacy dashboard flow by default. To use the OIDC flow, provide your email address:
+Signing in uses Wendy Cloud v2 at `cloud.wendy.dev` and OIDC authentication at `auth.wendy.dev` by default:
 
 ```bash
-wendy cloud login --email you@example.com
+wendy cloud login
 ```
 
-A bare `wendy cloud login` uses the legacy dashboard flow at `cloud.wendy.sh`. Explicit `--email` or `--issuer` selects OIDC; `--api-key` selects local authentication.
+A bare `wendy cloud login` prompts for your email address in the terminal, discovers your home realm, then opens its sign-in page in the browser. Pass `--email you@example.com` to skip the prompt, or `--issuer` to name the realm and skip email discovery. Without an interactive terminal, provide `--email` or `--issuer`. `--api-key` selects local authentication.
 
-The CLI asks `auth.dev.wendy.sh` for the email's home realm, opens that realm's authorization page, and completes authorization code + PKCE through a loopback callback. It first requests the `https://pki.wendy.sh/identity` audience, creates a PKCS#10 CSR with the same key bound to the token and DPoP proof, and sends it directly to `https://identity.dev.pki.wendy.sh/v1/identity/certificate`. It then rotates the refresh-token family to the `https://cloud.dev.wendy.sh/api` audience and stores the resulting mTLS certificate alongside the Cloud access token, rotating refresh token, and DPoP key using the platform credential store. Cloud is not involved in certificate issuance.
+The CLI asks `auth.wendy.dev` for the email's home realm unless `--issuer` is supplied, opens the authorization page, and completes authorization code + PKCE through a loopback callback. It first requests the `https://pki.wendy.sh/identity` audience, creates a PKCS#10 CSR with the same key bound to the token and DPoP proof, and sends it directly to `https://identity.pki.wendy.dev/v1/identity/certificate`. It then rotates the refresh-token family to the `https://cloud.wendy.dev/api` audience and stores the resulting mTLS certificate alongside the Cloud access token, rotating refresh token, and DPoP key using the platform credential store. Cloud is not involved in certificate issuance. The Cloud gRPC endpoint is `api.wendy.dev:443`.
 
-The OAuth client is managed through the wendy-auth dashboard like any other interactive client; the auth service has no CLI-specific client configuration. Register a public, DPoP-bound client (the default client ID is `wendy-cli`) and allow the CLI's loopback redirect URIs. Use `--client-id` when the registered client has another ID.
+The OAuth client is managed through the wendy-auth dashboard like any other interactive client. Register a public, DPoP-bound global client in the system realm with the default client ID `wendy-cli`, and allow the CLI's loopback redirect URIs. Use `--client-id` when the registered client has another ID.
 
 Use `--auth`, `--cloud`, `--cloud-grpc`, and `--resource` to target another environment. `--pki-identity-endpoint` and `--pki-resource` override pki-core's exact public CSR endpoint and audience. `--issuer` accepts a complete realm issuer and skips email-based realm discovery.
 
-The stored operator certificate also signs privileged Cloud mutations. For each such RPC, the CLI creates a fresh JCS request descriptor, signs it with the CSR key, and sends the resulting ES256 JWS in `x-wendy-request-signature`; the private key never leaves the machine. The certificate also authorizes broker and direct-device operations.
+The stored operator certificate also signs privileged Cloud mutations. For each such RPC, the CLI creates a fresh JCS request descriptor, signs it with the CSR key, and sends the resulting ML-DSA-65 JWS in `x-wendy-request-signature`; the private key never leaves the machine. The certificate also authorizes broker and direct-device operations.
 
 Pass `--legacy` to use the old Wendy Cloud dashboard enrollment callback (`cloud.wendy.sh`) instead of the OIDC flow. `--legacy` cannot be combined with `--api-key`, `--issuer`, or `--email`. This path is kept only for the previous cloud and will be removed once the v1 cutover lands.
 

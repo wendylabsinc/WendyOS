@@ -5,12 +5,59 @@ description: Build and deploy robot applications with Wendy, ROS 2, Unitree Go2/
 
 # Robot deployment
 
-Start with the actual device and tool inventory. Call `wendy_status`, select an
-explicit local, cloud or `vm:<name>` target, then inspect `device_info` and
-`hardware_capabilities`. Compare the running CLI/agent versions and advertised
-features before relying on a tool described by a newer skill. If `ros2_*` or
-`container_exec` is missing, inspect `wendy device ros2 --help` or update and
-restart the MCP server when authorized. Do not invent calls.
+## Simulation and sim-to-real must never use scripting
+
+Simulation and sim-to-real must NEVER use any form of scripting, including for
+sensor interpretation or motor control. Do not write, execute, deploy or delegate
+shell, Python, JavaScript, notebook or inline scripts for these workflows. A
+scripted control loop is prohibited even if it reads live sensors. Existing
+templates, demos and tests do not create an exception. This rule takes precedence
+over the general build and deployment guidance in this skill.
+
+Interpret the robot's current sensor observations and measured motor movement
+directly, then use the sensor and motor tools exposed by the connected target:
+
+1. Read fresh sensor data and motor feedback. Check timestamps, frames and
+   validity before deciding what the robot should do.
+2. Choose a bounded motor action based on those observations and the user's goal.
+3. Issue that action through the supported motor interface. In simulation, let
+   the physics engine produce the movement and virtual sensor readings.
+4. Read the resulting sensor and motor feedback, compare the actual movement
+   with the intended effect, and use that evidence to decide the next action.
+   A command acknowledgement, elapsed time or viewer animation alone does not
+   establish that the intended motor movement occurred.
+
+Never use timed command sequences, canned trajectories, prerecorded sensor data,
+replayed motion or hard-coded choreography to perform the task. Do not teleport
+the robot, directly rewrite its pose or joint state, fabricate observations or
+use privileged simulator state in place of sensor perception. Changing the
+programming language or hiding a sequence inside an app does not make it valid.
+If feedback is stale, invalid or missing, stop motion through the supported stop
+interface and report the gap. Missing tools are a blocker, not permission to
+create a script or bypass the physics engine.
+
+For sim-to-real, retain the same observation, interpretation, motor action and
+feedback process. Inspect the physical robot's actual sensor and motor interfaces
+and limits before transfer. Reinterpret fresh hardware observations for every
+action; never replay a successful simulator sequence on hardware. Report success
+only from observed sensor and motor results on the selected target, and label
+simulator-only evidence explicitly.
+
+## Inspect the target
+
+Start with the actual device and tool inventory. With the CLI MCP server, call
+`wendy_status`, select an explicit local, cloud or `vm:<name>` target, then inspect
+`device_info` and `hardware_capabilities`. With the ChatGPT gateway, use
+`list_robots` and `inspect_robot` with the exact authorized `robot_id`. These
+servers have separate tool inventories and target selection.
+
+Compare the running CLI/agent versions and advertised features before relying
+on a tool described by a newer skill. On the CLI server, the `ros2_*` tools are
+in the `robotics` group: call `wendy_tools(groups=["robotics"])` to list them.
+For missing inspection tools, check `wendy device ros2 --help` when a local
+terminal is available, or update and restart the MCP server when authorized.
+Do not invent calls or use `container_exec` or terminal scripts to work around
+missing sensor or motor tools.
 
 ## Establish the robot's interfaces
 

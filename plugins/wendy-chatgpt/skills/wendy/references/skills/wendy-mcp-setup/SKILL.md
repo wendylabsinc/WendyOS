@@ -97,7 +97,8 @@ Codex and OpenCode under `~/.agents/skills`, and Claude Code under
 separate. If the optional plugin is also installed, choose one installation
 method to avoid duplicate skill selectors.
 
-No connected device is required for `os_install_plan` or `os_list_drives`.
+No connected device is required for `os_install_plan` or `os_list_drives`. They are
+in the `setup` tool group: call `wendy_tools(groups=["setup"])` to list them.
 Use `wendy-device-install` for a blank board before debugging device RPCs.
 
 Before blaming MCP, verify device access directly with `wendy-device-ops`:
