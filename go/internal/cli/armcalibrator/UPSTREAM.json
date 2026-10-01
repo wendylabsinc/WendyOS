@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/wendylabsinc/yam-arm-calibrator",
+  "commit": "0f5ca712146d1a89d903c2d803b8d3e75d292665",
+  "version": "0.1.0",
+  "sha256": "08dc5a1074d8d6d29e309f8e3fbe8ce5e6066c46005c230c4ef6e82c77372a50",
+  "build": "python3 tools/build_zipapp.py"
+}

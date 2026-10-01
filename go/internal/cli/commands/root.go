@@ -269,6 +269,7 @@ func NewRootCmd() *cobra.Command {
 		// Manage
 		projectCmd,
 		deviceCmd,
+		newCalibrateCmd(),
 		newVMCmd(),
 		dataCmd,
 		// Cloud
