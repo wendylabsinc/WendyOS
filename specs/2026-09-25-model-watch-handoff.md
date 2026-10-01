@@ -17,7 +17,7 @@ Read this first when you pick up the work. It tells you where things stand and w
 
 ## What to do next
 
-1. **Decide on the smoke-test findings** below (two small M2 fixes, one pre-existing loopback bug), then mark the PR ready for review. The PR lives on the canonical repo `wendylabsinc/WendyOS`. Its remaining red checks (`Format Check`, `Test` in `internal/cli/mcp`) fail on `main` and other open PRs too.
+1. **Mark the PR ready for review.** The smoke-test findings are fixed: two in this PR, and the loopback leak in #2142, which should merge too, because model watch hits that leak within a few dozen runs. The PR lives on the canonical repo `wendylabsinc/WendyOS`. Its remaining red checks (`Format Check`, `Test` in `internal/cli/mcp`) fail on `main` and other open PRs too.
 2. **Publish the fake host** once `model-host.yml` is on `main` (manual dispatch with publish), and make the package public; the anonymous ghcr pull is the one path the smoke test did not cover.
 3. **Plan the next milestone** with `superpowers:writing-plans` (design §13: M3 is MCP and chat; M1 is the Mojo host). Carry the follow-ups below into those plans.
 
@@ -46,11 +46,11 @@ Run on `hopeful-glider`, a Jetson Orin Nano reached over USB-C from a Mac, with 
   3. On the workstation: `ffmpeg -re -f lavfi -i testsrc2=size=640x480:rate=15 -c:v libx264 -preset ultrafast -tune zerolatency -bf 0 -g 15 -pix_fmt yuv420p -x264-params repeat-headers=1:aud=1 -payload_type 96 -f rtp rtp://<device-usb-ip>:5004`.
   4. Remove the node afterwards with `V4L2LOOPBACK_CTL_REMOVE` (`0x40047E02`), passing the number **by value**.
 
-**Found during the smoke test, not fixed:**
+**Found during the smoke test:**
 
-- **M2:** catalog camera names carry the raw transport enum (`Brio 101 VIDEO_TRANSPORT_USB`), because `ModelCameras.List` uses `data.Source.Detail`.
-- **M2:** after the stream reports `STOPPED`, `run` still sends `StopModel`, and the agent logs `NotFound` as a gRPC handler error.
-- **Pre-existing, outside M2, affects it:** `removeLoopbackNode` (`internal/agent/ipcam/loopback_linux.go`) passes `V4L2LOOPBACK_CTL_REMOVE` a pointer, but v4l2loopback 0.15.4 takes the device number by value. The kernel answers `ENODEV`, which the agent treats as "already gone", so loopback nodes are never removed. `AllocateAuxNodeNumber` skips existing nodes, so every two-plane teardown leaks a number until the shared 200–255 band is exhausted and two-plane starts fail until a reboot. The test device had leaked six (`/dev/video250`–`255`).
+- **Fixed (M2):** catalog camera names carried the raw transport enum (`Brio 101 VIDEO_TRANSPORT_USB`), because `ModelCameras.List` used `data.Source.Detail`; they now use the device's own name.
+- **Fixed (M2):** after the device ended the stream, `run` still sent `StopModel`, and the agent logged `NotFound` as a gRPC handler error. `run` now detaches only after Ctrl+C or a broken stream.
+- **Fixed in #2142 (pre-existing, outside M2, affects it):** `removeLoopbackNode` (`internal/agent/ipcam/loopback_linux.go`) passes `V4L2LOOPBACK_CTL_REMOVE` a pointer, but v4l2loopback 0.15.4 takes the device number by value. The kernel answers `ENODEV`, which the agent treats as "already gone", so loopback nodes are never removed. `AllocateAuxNodeNumber` skips existing nodes, so every two-plane teardown leaks a number until the shared 200–255 band is exhausted and two-plane starts fail until a reboot. The test device had leaked six (`/dev/video250`–`255`).
 - Confirmed on hardware: a second `run` on a refused camera says `unknown camera` (the M3 follow-up below).
 - Once, the first `catalog` right after the agent update hung for a minute; it did not happen again.
 
