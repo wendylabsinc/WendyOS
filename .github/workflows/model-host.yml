@@ -16,7 +16,21 @@ permissions:
   contents: read
 
 jobs:
+  # Pull requests build untrusted code, so this job never holds a token that
+  # can write packages.
   fakehost:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Test and build
+        run: docker build -f go/modelhost/fakehost/Dockerfile -t fakehost:test .
+
+  publish-fakehost:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: fakehost
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     permissions:
@@ -24,15 +38,12 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Test and build
-        run: docker build -f go/modelhost/fakehost/Dockerfile -t fakehost:test .
-      - name: Publish
-        if: github.event_name == 'workflow_dispatch' && inputs.publish
+      - name: Build and publish
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE: ghcr.io/wendylabsinc/wendy-model-host-fake:dev
         run: |
+          docker build -f go/modelhost/fakehost/Dockerfile -t "$IMAGE" .
           printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker tag fakehost:test "$IMAGE"
           docker push "$IMAGE"
           docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest.Digest}}'
