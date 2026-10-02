@@ -10,6 +10,8 @@ service WendyWiFiService {
     rpc ListKnownWiFiNetworks(ListKnownWiFiNetworksRequest) returns (ListKnownWiFiNetworksResponse);
     rpc SetWiFiNetworkPriority(SetWiFiNetworkPriorityRequest) returns (SetWiFiNetworkPriorityResponse);
     rpc ReorderKnownWiFiNetworks(ReorderKnownWiFiNetworksRequest) returns (ReorderKnownWiFiNetworksResponse);
+    rpc GetWiFiRegulatory(GetWiFiRegulatoryRequest) returns (WiFiRegulatoryStatus);
+    rpc RequestWiFiCountry(RequestWiFiCountryRequest) returns (WiFiRegulatoryStatus);
     rpc ForgetWiFiNetwork(ForgetWiFiNetworkRequest) returns (ForgetWiFiNetworkResponse);
 }
 
@@ -105,4 +107,30 @@ message ForgetWiFiNetworkRequest {
 message ForgetWiFiNetworkResponse {
     bool success = 1;
     optional string error_message = 2;
+}
+
+// Read-only kernel regulatory snapshot, independent of NetworkManager.
+message GetWiFiRegulatoryRequest {}
+// An explicit operator request to the kernel global regulatory domain. This is
+// a hint, not a persistent setting or an override of self-managed PHY domains.
+message RequestWiFiCountryRequest { string country_code = 1; }
+message WiFiRegulatoryStatus {
+    string global_country = 1;
+    repeated WiFiRegulatoryPhy phys = 2;
+    string raw_regulatory = 3;
+    string requested_country = 4;
+    string detail = 5;
+}
+message WiFiRegulatoryPhy {
+    string name = 1;
+    string country = 2;
+    bool self_managed = 3;
+    string regulatory_source = 4;
+    repeated WiFiRegulatoryChannel channels = 5;
+    // Full kernel output retains bandwidth, DFS, power and future constraints.
+    string raw_phy = 6;
+}
+message WiFiRegulatoryChannel {
+    double frequency_mhz = 1;
+    string constraints = 2;
 }

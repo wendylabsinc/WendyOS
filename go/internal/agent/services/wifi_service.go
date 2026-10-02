@@ -13,8 +13,9 @@ import (
 
 type WiFiService struct {
 	agentpbv2.UnimplementedWendyWiFiServiceServer
-	logger         *zap.Logger
-	networkManager NetworkManager
+	logger            *zap.Logger
+	networkManager    NetworkManager
+	regulatoryCommand func(context.Context, ...string) ([]byte, error)
 }
 
 func NewWiFiService(logger *zap.Logger, nm NetworkManager) *WiFiService {

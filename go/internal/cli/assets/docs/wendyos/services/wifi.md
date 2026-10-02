@@ -148,3 +148,22 @@ On a host with Avahi or mDNS, find devices with:
 ```sh
 dns-sd -B _wendyos._udp local.
 ```
+
+## Runtime regulatory state
+
+The v2 WiFi service adds `GetWiFiRegulatory` and `RequestWiFiCountry`. Both use
+`iw` on Linux, independently of NetworkManager, with a ten-second operation
+budget. The query returns the global domain separately from per-PHY domains,
+self-managed status, channel constraints, and full raw kernel output. An
+operator request requires an ISO 3166-1 alpha-2 country; there is no default.
+A successful request reports submission and the observed state, rather than
+claiming that firmware accepted or applied that country. It is not persisted.
+Existing authentication and target selection apply. Older servers can continue
+serving existing WiFi methods and return Unimplemented for these new RPCs.
+
+Local validation covers command argv, bounded contexts, different global/PHY
+countries, renamed PHYs, channel flags, RPC round trips and CLI output. Hardware
+acceptance remains pending: query a self-managed device; compare with `iw reg
+get` and `iw phy`; verify JSON retains restrictions. Country mutation testing
+requires a separate explicit operator request appropriate to the device's
+physical location and a documented original-state restoration.
