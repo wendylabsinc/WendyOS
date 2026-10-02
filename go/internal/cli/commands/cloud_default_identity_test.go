@@ -9,11 +9,15 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCloudDefaultIdentityMustMatchSavedPin(t *testing.T) {
 	legacyAuth := &config.AuthConfig{Certificates: []config.CertificateInfo{{OrganizationID: 64}}}
-	legacy := cloudDiscoveryIdentity(legacyAuth, cloudDiscoveryDevice{legacy: &cloudpb.Asset{}, key: "486"})
+	legacy, err := cloudDiscoveryIdentity(legacyAuth, cloudDiscoveryDevice{legacy: &cloudpb.Asset{}, key: "486"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	matching := certs.WendyIdentity{OrgID: 64, EntityType: certs.EntityAsset, EntityID: "486"}
 	otherAsset := certs.WendyIdentity{OrgID: 64, EntityType: certs.EntityAsset, EntityID: "566"}
 	otherOrg := certs.WendyIdentity{OrgID: 2, EntityType: certs.EntityAsset, EntityID: "486"}
@@ -43,7 +47,14 @@ func TestCloudDefaultIdentityUsesV2DevicePrincipal(t *testing.T) {
 	const tenant = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	const device = "11111111-2222-3333-4444-555555555555"
 	auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test"}}}
-	actual := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{v2: &cloudpbv2.Asset{}, key: device})
+	const assetID = "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	actual, err := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: assetID, OrganizationId: tenant, PkiDeviceName: proto.String(device)}, key: assetID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.EntityID != device || actual.EntityID == assetID {
+		t.Fatalf("peer identity = %q; must use the PKI binding, not Cloud asset ID", actual.EntityID)
+	}
 	want := certs.DeviceSPIFFEURI(tenant, device)
 	if actual.Principal != want {
 		t.Fatalf("Cloud identity = %q, want %q", actual.Principal, want)
@@ -51,6 +62,37 @@ func TestCloudDefaultIdentityUsesV2DevicePrincipal(t *testing.T) {
 	expected := certs.WendyIdentity{Principal: want}
 	if err := verifyCloudDefaultIdentity("wendy-voice-agent", &expected, actual); err != nil {
 		t.Fatalf("matching V2 pin refused: %v", err)
+	}
+	wrongPin := certs.WendyIdentity{Principal: certs.DeviceSPIFFEURI(tenant, assetID)}
+	if err := verifyCloudDefaultIdentity("wendy-voice-agent", &wrongPin, actual); !errors.Is(err, errDeviceIdentityRefused) {
+		t.Fatalf("asset-ID-derived pin accepted: %v", err)
+	}
+}
+
+func TestCloudDiscoveryIdentityRefusesInvalidV2Binding(t *testing.T) {
+	const tenant = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test"}}}
+	for _, tc := range []struct {
+		name  string
+		asset *cloudpbv2.Asset
+	}{
+		{"absent binding", &cloudpbv2.Asset{OrganizationId: tenant}},
+		{"empty binding", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("")}},
+		{"wrong tenant", &cloudpbv2.Asset{OrganizationId: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", PkiDeviceName: proto.String("device")}},
+		{"missing tenant", &cloudpbv2.Asset{PkiDeviceName: proto.String("device")}},
+		{"invalid path", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("other/device")}},
+		{"query", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("device?query")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{v2: tc.asset, key: "asset-uuid"}); err == nil {
+				t.Fatal("accepted invalid binding or derived a peer from the asset UUID")
+			}
+		})
+	}
+	for _, auth := range []*config.AuthConfig{nil, {}} {
+		if _, err := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{}); err == nil {
+			t.Fatal("accepted missing operator certificate")
+		}
 	}
 }
 
