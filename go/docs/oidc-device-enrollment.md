@@ -1,11 +1,15 @@
 # Device enrollment with an OIDC account
 
-Direct ACME enrollment is experimental and disabled by default on the agent.
-Notifications, mesh routing, and legacy Avahi identity advertisements still
-require numeric organization and asset IDs. Use legacy enrollment for those
-services. For development, explicitly set `WENDY_EXPERIMENTAL_ACME_ENROLLMENT=1`
-in the agent environment before attempting OIDC enrollment. The agent rejects
-disabled enrollment before generating keys or spending EAB credentials.
+Direct ACME enrollment is the default device-side path for OIDC accounts;
+no agent environment flag is required. The CLI and MCP enrollment tool check
+the agent's read-only capability before requesting an EAB or reserving a Cloud
+name. Older agents that do not advertise support must be updated before using
+these clients; older clients remain compatible but do not perform this preflight.
+
+Enrollment establishes the v2 PKI identity and starts the principal-based Cloud
+relay. It does not migrate legacy notification, mesh-roster or Avahi numeric-ID
+paths. Those paths still require numeric organization and asset IDs and keep
+their existing identity/proof checks; v2 enrollment does not fabricate those IDs.
 
 ```sh
 wendy device enroll --name sim
@@ -23,8 +27,11 @@ DNS label; renaming it does not change the certificate identity.
 
 ## Automatic credential handoff
 
-1. Check that the agent is not already provisioned and validate the device
-   name and ACME directory before requesting credentials.
+1. Check that the agent is not already provisioned and explicitly advertises
+   ACME enrollment supported in v2 `IsProvisioned.not_provisioned`. Validate the
+   device name and ACME directory before requesting credentials. Missing or
+   unsupported capability stops before contacting Cloud. Capability does not
+   guarantee network health or successful issuance.
 2. Call `wendycloud.v2.DeviceEnrollmentService/EnrollDevice` with the OIDC
    bearer token and two separate operator signatures:
    - `x-wendy-request-signature`, scoped to the Cloud method and
@@ -81,6 +88,10 @@ the asset UUID; restarting the command does not retrieve the original secret
 and may encounter that reservation. Automatic recovery across those two
 operations requires additional Cloud support. The agent retains its ACME
 account key for retries, but Cloud has no credential retrieval RPC.
+
+Successful certificate provisioning is not proof of broker heartbeat or live
+metadata. Verify those independently before reporting Cloud device readiness.
+Legacy notification and mesh-roster paths remain subject to the limitations above.
 
 ## Contract sources
 

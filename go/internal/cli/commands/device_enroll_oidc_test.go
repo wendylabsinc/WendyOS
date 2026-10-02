@@ -52,11 +52,13 @@ func oidcEnrollmentAuth(t *testing.T) *config.AuthConfig {
 
 type acmeProvisioningServer struct {
 	agentpbv2.UnimplementedWendyProvisioningServiceServer
-	req           *agentpbv2.StartACMEProvisioningRequest
-	enrolled      bool
-	preflightErr  error
-	startErr      error
-	wrongIdentity bool
+	req              *agentpbv2.StartACMEProvisioningRequest
+	enrolled         bool
+	preflightErr     error
+	startErr         error
+	wrongIdentity    bool
+	unsupported      bool
+	unknownReadiness bool
 }
 
 func (s *acmeProvisioningServer) IsProvisioned(context.Context, *agentpbv2.IsProvisionedRequest) (*agentpbv2.IsProvisionedResponse, error) {
@@ -66,7 +68,12 @@ func (s *acmeProvisioningServer) IsProvisioned(context.Context, *agentpbv2.IsPro
 	if s.enrolled {
 		return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{Provisioned: &agentpbv2.ProvisionedResponse{}}}, nil
 	}
-	return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_NotProvisioned{NotProvisioned: &agentpbv2.NotProvisionedResponse{}}}, nil
+	state := &agentpbv2.NotProvisionedResponse{}
+	if !s.unknownReadiness {
+		supported := !s.unsupported
+		state.AcmeEnrollmentSupported = &supported
+	}
+	return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_NotProvisioned{NotProvisioned: state}}, nil
 }
 func (s *acmeProvisioningServer) StartACMEProvisioning(_ context.Context, req *agentpbv2.StartACMEProvisioningRequest) (*agentpbv2.StartACMEProvisioningResponse, error) {
 	s.req = req
@@ -345,6 +352,33 @@ func TestEnrollmentCommandsExposeDirectoryOverride(t *testing.T) {
 		if cmd.Flags().Lookup("acme-directory-url") == nil || cmd.Flags().Lookup("acme-config") != nil {
 			t.Fatal("expected directory override without manual EAB flag")
 		}
+	}
+}
+
+func TestOIDCEnrollmentReadinessDoesNotMint(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent acmeProvisioningServer
+		want  string
+	}{
+		{name: "unsupported", agent: acmeProvisioningServer{unsupported: true}, want: "does not support"},
+		{name: "old agent", agent: acmeProvisioningServer{unknownReadiness: true}, want: "update the agent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := &oidcEnrollmentServer{}
+			conn, host := enrollmentServers(t, cloud, &tc.agent)
+			auth := oidcEnrollmentAuth(t)
+			auth.CloudGRPC = host
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			err := runEnrollDevice(ctx, conn, auth, "sim", 0)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("unexpected preflight result: %v", err)
+			}
+			if cloud.req != nil || tc.agent.req != nil {
+				t.Fatal("unready agent caused reservation or credential handoff")
+			}
+		})
 	}
 }
 
