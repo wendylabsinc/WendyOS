@@ -21,7 +21,7 @@ func newMeshCatalogManager(string, *meshingress.Registry, *zap.Logger) *meshCata
 func (*meshCatalogManager) Activate(context.Context, *localmesh.Credentials, func() localmesh.NodeSnapshot, func(), bool, bool) error {
 	return nil
 }
-func (*meshCatalogManager) Deactivate() {}
+func (*meshCatalogManager) Deactivate()                   {}
 func (*meshCatalogManager) DisablePhysicalLANProjection() {}
 func (*meshCatalogManager) StartMeshApp(string, string, string, string, string, string, []appconfig.PortMapping) error {
 	return nil
