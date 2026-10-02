@@ -115,7 +115,11 @@ func connectToCloudAgentExpecting(ctx context.Context, cloudGRPC, deviceName, br
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyCloudDefaultIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
+	actual, err := cloudDiscoveryIdentity(auth, asset)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyCloudDefaultIdentity(deviceName, expected, actual); err != nil {
 		return nil, err
 	}
 	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
@@ -130,14 +134,29 @@ func verifyCloudDefaultIdentity(deviceName string, expected *certs.WendyIdentity
 	return refuseIdentity("Cloud device %q has identity %s, which does not match the identity saved for the default device (%s). Choose the device explicitly or update the saved default if it was re-enrolled.", deviceName, actual.IdentityKey(), expected.IdentityKey())
 }
 
-func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice) certs.WendyIdentity {
-	cert := auth.Certificates[0]
-	identity := certs.WendyIdentity{OrgID: int32(cert.OrganizationID), EntityType: certs.EntityAsset, EntityID: asset.key}
-	if asset.v2 != nil {
-		identity.TenantUUID = cert.TenantUUID()
-		identity.Principal = certs.DeviceSPIFFEURI(identity.TenantUUID, asset.key)
+func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice) (certs.WendyIdentity, error) {
+	if auth == nil || len(auth.Certificates) == 0 {
+		return certs.WendyIdentity{}, fmt.Errorf("Cloud device verification requires an operator certificate")
 	}
-	return identity
+	cert := auth.Certificates[0]
+	if asset.v2 == nil {
+		return certs.WendyIdentity{OrgID: int32(cert.OrganizationID), EntityType: certs.EntityAsset, EntityID: asset.key}, nil
+	}
+	// The asset UUID identifies the Cloud row, not the peer certificate. Only
+	// the authenticated Cloud binding may identify the expected PKI device.
+	tenant := cert.TenantUUID()
+	device := asset.v2.GetPkiDeviceName()
+	if tenant == "" || asset.v2.GetOrganizationId() != tenant {
+		return certs.WendyIdentity{}, fmt.Errorf("Cloud asset %s does not match the selected operator tenant", asset.key)
+	}
+	if device == "" {
+		return certs.WendyIdentity{}, fmt.Errorf("Cloud asset %s has no PKI device binding; refusing to derive one from its asset UUID", asset.key)
+	}
+	identity, err := certs.ParsePrincipal(certs.DeviceSPIFFEURI(tenant, device))
+	if err != nil || identity.EntityID != device || strings.ContainsAny(device, "/?#% \t\r\n") {
+		return certs.WendyIdentity{}, fmt.Errorf("Cloud asset %s has an invalid PKI device binding", asset.key)
+	}
+	return identity, nil
 }
 
 func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
@@ -186,7 +205,10 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	if err != nil {
 		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
 	}
-	expectedIdentity := cloudDiscoveryIdentity(auth, asset)
+	expectedIdentity, err := cloudDiscoveryIdentity(auth, asset)
+	if err != nil {
+		return nil, err
+	}
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
 		ChainPEM:         cert.PemCertificateChain,
 		ExpectedOrgID:    int32(cert.OrganizationID),
