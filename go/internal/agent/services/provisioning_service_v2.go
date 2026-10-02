@@ -52,8 +52,16 @@ func (s *ProvisioningServiceV2) StartProvisioning(ctx context.Context, req *agen
 	return &agentpbv2.StartProvisioningResponse{}, nil
 }
 
-func (s *ProvisioningServiceV2) Unprovision(ctx context.Context, _ *agentpbv2.UnprovisionRequest) (*agentpbv2.UnprovisionResponse, error) {
-	if _, err := s.v1.Unprovision(ctx, &agentpb.UnprovisionRequest{}); err != nil {
+func (s *ProvisioningServiceV2) Unprovision(ctx context.Context, req *agentpbv2.UnprovisionRequest) (*agentpbv2.UnprovisionResponse, error) {
+	s.v1.mu.Lock()
+	if s.v1.principalURI != "" {
+		if err := s.v1.requirePKIOperator(ctx); err != nil {
+			s.v1.mu.Unlock()
+			return nil, err
+		}
+	}
+	s.v1.mu.Unlock()
+	if _, err := s.v1.unprovision(req.GetExpectedPrincipalUri(), req.GetExpectedCertificateSha256()); err != nil {
 		return nil, err
 	}
 	return &agentpbv2.UnprovisionResponse{}, nil

@@ -87,14 +87,13 @@ func TestACMEProvisioningPersistsIdentityWithoutCredentials(t *testing.T) {
 	if string(key) != string(deviceKey) {
 		t.Fatal("device key was lost")
 	}
-	if _, err := reloaded.Unprovision(context.Background(), &agentpb.UnprovisionRequest{}); err != nil {
-		t.Fatal(err)
+	if _, err := reloaded.Unprovision(context.Background(), &agentpb.UnprovisionRequest{}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("legacy reset must refuse direct PKI enrollment: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "acme-account-key.pem")); !os.IsNotExist(err) {
-		t.Fatal("unprovision retained the ACME account key")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "acme-account-key.pem.d")); !os.IsNotExist(err) {
-		t.Fatal("unprovision retained scoped ACME account keys")
+	for _, name := range []string{"acme-account-key.pem", "acme-account-key.pem.d", "device-key.pem", "provisioning.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("unsafe reset removed recovery material %s: %v", name, err)
+		}
 	}
 }
 

@@ -338,6 +338,10 @@ func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyP
 // the response is sent so the agent can revert its mDNS advertisement and
 // restart into plaintext mode.
 func (s *ProvisioningService) Unprovision(_ context.Context, _ *agentpb.UnprovisionRequest) (*agentpb.UnprovisionResponse, error) {
+	return s.unprovision("", "")
+}
+
+func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint string) (*agentpb.UnprovisionResponse, error) {
 	s.mu.Lock()
 	locked := true
 	defer func() {
@@ -348,6 +352,15 @@ func (s *ProvisioningService) Unprovision(_ context.Context, _ *agentpb.Unprovis
 
 	if !s.enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "agent is not provisioned")
+	}
+
+	if s.principalURI != "" {
+		if expectedPrincipal == "" || expectedPrincipal != s.principalURI {
+			return nil, status.Error(codes.FailedPrecondition, "direct PKI reset requires the exact expected principal through v2")
+		}
+		if expectedFingerprint == "" || expectedFingerprint != s.certificateFingerprintLocked() || !s.revocationConfirmedLocked() {
+			return nil, status.Error(codes.FailedPrecondition, "revoke the installed ACME certificate before clearing enrollment keys")
+		}
 	}
 
 	s.logger.Info("Unprovisioning device",
@@ -403,6 +416,7 @@ func (s *ProvisioningService) clearStateFiles() error {
 		filepath.Join(s.configPath, "ca.pem"),
 		filepath.Join(s.configPath, ".provisioned"),
 		filepath.Join(s.configPath, "acme-account-key.pem"),
+		filepath.Join(s.configPath, acmeRevocationFile),
 	}
 	for _, f := range files {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
