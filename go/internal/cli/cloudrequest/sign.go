@@ -189,6 +189,16 @@ func signedResource(method string, req any) (string, bool, error) {
 			return "", true, requestTypeError(method, req)
 		}
 		return fmt.Sprintf("asset/%d", in.GetId()), true, nil
+	case "wendycloud.v2.AssetService/DeleteAsset":
+		in, ok := req.(*cloudpbv2.DeleteAssetRequest)
+		if !ok {
+			return "", true, requestTypeError(method, req)
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", true, fmt.Errorf("v2 asset deletion requires a canonical UUID")
+		}
+		return "asset/" + in.GetId(), true, nil
 	case "wendycloud.v1.CertificateService/RevokeCertificate":
 		in, ok := req.(*cloudpb.RevokeCertificateRequest)
 		if !ok {

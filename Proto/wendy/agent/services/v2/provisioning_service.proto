@@ -11,6 +11,9 @@ service WendyProvisioningService {
     // stored enrollment certificates and provisioning state, then restarts the
     // agent so it comes back up serving plaintext on the unprovisioned port.
     rpc Unprovision(UnprovisionRequest) returns (UnprovisionResponse);
+    // Revoke only the currently installed ACME certificate using its existing
+    // account. Keeps all local state/keys for subsequent Cloud cleanup/recovery.
+    rpc RevokeACMECertificate(RevokeACMECertificateRequest) returns (RevokeACMECertificateResponse);
 }
 
 message IsProvisionedRequest {}
@@ -41,9 +44,24 @@ message StartProvisioningRequest {
 
 message StartProvisioningResponse {}
 
-message UnprovisionRequest {}
+message UnprovisionRequest {
+    // Required for direct PKI identities; checked atomically before reset.
+    string expected_principal_uri = 1;
+    string expected_certificate_sha256 = 2;
+}
 
 message UnprovisionResponse {}
+
+message RevokeACMECertificateRequest {
+    string expected_principal_uri = 1;
+    string expected_certificate_sha256 = 2;
+}
+
+message RevokeACMECertificateResponse {
+    string principal_uri = 1;
+    string certificate_sha256 = 2;
+    string certificate_serial = 3;
+}
 
 // EAB credentials are delivered once and must never be logged or returned.
 message StartACMEProvisioningRequest {
