@@ -89,6 +89,36 @@ and may encounter that reservation. Automatic recovery across those two
 operations requires additional Cloud support. The agent retains its ACME
 account key for retries, but Cloud has no credential retrieval RPC.
 
+## Imaging and first boot
+
+`os install --pre-enroll` reserves a Cloud name and writes the device UUID,
+ACME directory, EAB and Cloud host to `/config/acme-enrollment.json`. This is
+credential staging, not verified device enrollment. Agents predating this
+consumer do not read that file; use an image containing the compatible Agent.
+
+The baked handoff is trusted provisioning input, not a signed artifact. Anyone
+who can replace it before consumption can choose the device's PKI deployment,
+tenant and identity. Use only trusted imaging hosts/media and restrict access
+to the config partition through first boot; FAT media do not enforce Unix file
+permissions. Do not use this path where the imaging/config-partition write
+boundary is untrusted; handoff signing/sealing is not implemented here.
+
+The agent reads the baked handoff automatically after
+provisioning callbacks are installed and uses the same ACME provisioning path
+as manual enrollment. The attempt is non-blocking, bounded to two minutes,
+and does not fall back to legacy enrollment. Conflicting legacy and ACME
+handoffs are retained without choosing an identity. Invalid handoffs and
+already-provisioned devices retain the baked credential without redeeming it.
+
+Before redemption, a private, nonsecret `acme-first-boot-attempt.json` marker
+records the expected PKI principal. A failure or interrupted attempt retains
+the baked credential and device/account keys, but blocks automatic attempts
+on later agent restarts. Do not delete the marker or rotate keys blindly:
+issuance may have completed even when local provisioning failed. Recovery
+requires authoritative identity and certificate evidence and explicit operator
+authorization. The baked file is removed only after successful provisioning;
+a file-removal failure does not trigger another issuance.
+
 Successful certificate provisioning is not proof of broker heartbeat or live
 metadata. Verify those independently before reporting Cloud device readiness.
 Legacy notification and mesh-roster paths remain subject to the limitations above.
