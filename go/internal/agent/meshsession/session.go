@@ -19,7 +19,7 @@ import (
 )
 
 const ALPN = "wendy-app-mesh/1"
-const Port = 43021
+const Port = localmesh.AppSessionPort
 const appSessionSetupTimeout = 60 * time.Second
 
 var ErrNoRoute = errors.New("no authenticated local mesh route")
