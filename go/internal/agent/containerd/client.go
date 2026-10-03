@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -45,6 +46,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
+	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
@@ -2449,6 +2451,12 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 				if err := c.applyMeshIngressPorts(appName, appID, reusedNetworkSandbox.ip, ent.Ports); err != nil {
 					return nil, failStartedTask(fmt.Errorf("mesh ingress setup failed for reused sandbox %q: %w", appName, err))
 				}
+				if err := hostnetwork.AddMeshUDPIntercept(reusedNetworkSandbox.ip, ent.ServiceCIDR, bridgeName(appID), mesh.UDPProxyPort); err != nil {
+					return nil, failStartedTask(fmt.Errorf("mesh UDP redirect setup failed for reused sandbox %q: %w", appName, err))
+				}
+				if err := c.claimMeshSource(appName, appID, reusedNetworkSandbox.ip, ent.ServiceCIDR); err != nil {
+					return nil, failStartedTask(fmt.Errorf("mesh source attribution failed for reused sandbox %q: %w", appName, err))
+				}
 			}
 		}
 		c.logger.Info("Reused CNI network sandbox",
@@ -4000,6 +4008,7 @@ func (c *Client) ResolveAppContainerIDs(ctx context.Context, name string) ([]str
 func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	// Deny remote sessions as soon as stop begins, including when the task
 	// already exited and the network teardown below has no task to inspect.
+	meshSourceIP := c.meshIngress.SourceIP(containerID)
 	c.releaseMeshIngress(containerID)
 	container, err := c.client.LoadContainer(ctx, containerID)
 	if err != nil {
@@ -4010,6 +4019,20 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	// compatible redeploy, it must release the retained namespace and all CNI,
 	// DNS, and mesh state even when the task has already exited.
 	labels, _ := container.Labels(ctx)
+	stopEntitlements := parseEntitlementsFromAnnotations(labels)
+	if appID, svcName, parseErr := ParseContainerName(containerID); parseErr == nil {
+		if _, meshApp := findMeshEntitlement(stopEntitlements); meshApp {
+			c.mu.Lock()
+			ip := c.serviceIPs[appID][svcName]
+			c.mu.Unlock()
+			if ip == "" {
+				ip = meshSourceIP
+			}
+			// Host rules must be removed even when CNI proof cleanup reports
+			// a released sandbox or the task exited before this stop.
+			c.teardownMeshEgress(stopEntitlements, containerID, appID, ip)
+		}
+	}
 	spec, _ := container.Spec(ctx)
 	desiredNetworkIdentity, _ := networkIdentityFromLabels(labels)
 	releasedSandbox := c.destroyNetworkSandbox(ctx, containerID)
@@ -4077,24 +4100,6 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 				c.releaseMeshDNS(containerID, appID)
 			}
 
-			// Mesh egress teardown: remove the host iptables rule installed by
-			// applyMeshEgress at start (StartContainer). teardownMeshEgress is a
-			// no-op for apps without the network/mesh entitlement (including
-			// bridge-mode apps). The netns route itself needs no cleanup — it
-			// is destroyed with the namespace when the task exits below.
-			//
-			// The container's IP is recovered from c.serviceIPs (populated by
-			// recordServiceIP after CNI ADD, keyed by appID/serviceName — empty
-			// for single-service bridge apps, which is fine: teardownMeshEgress
-			// no-ops for them regardless of ip), not from the CNI host-local
-			// IPAM on-disk state — that state lives under cniStateDir/<appID>
-			// keyed by allocated IP, not by containerID, so recovering "this
-			// container's IP" from it would require an extra reverse-index the
-			// plugin does not provide as a stable public format.
-			c.mu.Lock()
-			ip := c.serviceIPs[appID][svcName]
-			c.mu.Unlock()
-			c.teardownMeshEgress(entitlements, containerID, appID, ip)
 		}
 	}
 
@@ -4636,6 +4641,28 @@ func (c *Client) rehydrateRunningMeshIngress(ctx context.Context, ctr containerd
 func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr containerd.Container, labels map[string]string, retries int) {
 	unlockNetwork := c.lockNetworkOperation(ctr.ID())
 	defer unlockNetwork()
+	scheduleRetry := func(reason string, cause error) {
+		if retries <= 0 {
+			c.logger.Error("mesh ingress: exhausted inherited task recovery attempts",
+				zap.String("container_id", ctr.ID()), zap.String("reason", reason), zap.Error(cause))
+			return
+		}
+		c.logger.Warn("mesh ingress: scheduling inherited task recheck",
+			zap.String("container_id", ctr.ID()), zap.String("reason", reason), zap.Error(cause), zap.Int("retries_left", retries))
+		go func() {
+			timer := time.NewTimer(5 * time.Second)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-c.meshIngressStop:
+				return
+			}
+			fresh, err := ctr.Labels(c.withNamespace(context.Background()))
+			if err == nil {
+				c.rehydrateRunningMeshIngressAttempt(context.Background(), ctr, fresh, retries-1)
+			}
+		}()
+	}
 	if c.meshIngress == nil || labels[labelKeyIsolation] != "isolated" {
 		return
 	}
@@ -4721,12 +4748,34 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 	if err := c.applyMeshIngressPorts(ctr.ID(), appID, ip, ent.Ports); err != nil {
 		cancelWait()
 		c.releaseMeshIngressRun(ctr.ID(), run)
-		c.logger.Warn("mesh ingress: could not rehydrate inherited task ports",
-			zap.String("container_id", ctr.ID()), zap.Error(err))
+		scheduleRetry("port setup", err)
+		return
+	}
+	if err := hostnetwork.AddMeshUDPIntercept(ip, ent.ServiceCIDR, bridgeName(appID), mesh.UDPProxyPort); err != nil {
+		cancelWait()
+		c.releaseMeshIngressRun(ctr.ID(), run)
+		scheduleRetry("UDP interception", err)
+		return
+	}
+	bridge, bridgeErr := net.InterfaceByName(bridgeName(appID))
+	if bridgeErr != nil {
+		cancelWait()
+		c.releaseMeshIngressRun(ctr.ID(), run)
+		scheduleRetry("app bridge", bridgeErr)
+		return
+	}
+	if err := c.meshIngress.ClaimSource(ctr.ID(), appID, ip, ent.ServiceCIDR, bridge.Index); err != nil {
+		cancelWait()
+		c.releaseMeshIngressRun(ctr.ID(), run)
+		scheduleRetry("source attribution", err)
 		return
 	}
 	for _, pm := range ent.Ports {
-		if c.meshIngress.OwnedBy(ctr.ID(), pm.Host) {
+		owned := c.meshIngress.OwnedBy(ctr.ID(), pm.Host)
+		if pm.Protocol == "udp" {
+			owned = c.meshIngress.OwnedUDPBy(ctr.ID(), pm.Host)
+		}
+		if owned {
 			continue
 		}
 		// An iptables update may have lost xtables.lock to containerd or
@@ -4734,26 +4783,7 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 		// contention subsides. Each retry rechecks the live task and CNI.
 		cancelWait()
 		c.releaseMeshIngressRun(ctr.ID(), run)
-		if retries > 0 {
-			c.logger.Warn("mesh ingress: port forward unavailable; scheduling task recheck",
-				zap.String("container_id", ctr.ID()), zap.Uint16("port", pm.Host), zap.Int("retries_left", retries))
-			go func() {
-				timer := time.NewTimer(5 * time.Second)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-c.meshIngressStop:
-					return
-				}
-				fresh, err := ctr.Labels(c.withNamespace(context.Background()))
-				if err == nil {
-					c.rehydrateRunningMeshIngressAttempt(context.Background(), ctr, fresh, retries-1)
-				}
-			}()
-		} else {
-			c.logger.Error("mesh ingress: exhausted inherited task port recovery attempts",
-				zap.String("container_id", ctr.ID()), zap.Uint16("port", pm.Host))
-		}
+		scheduleRetry(fmt.Sprintf("port %d forward", pm.Host), meshingress.ErrPortDenied)
 		return
 	}
 	status, err = task.Status(ctx)

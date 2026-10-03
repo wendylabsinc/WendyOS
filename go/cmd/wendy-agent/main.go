@@ -247,6 +247,14 @@ func main() {
 	if err := hostnetwork.InitMeshNATChain(); err != nil {
 		logger.Warn("failed to init mesh nat chain", zap.Error(err))
 	}
+	meshUDPReady := false
+	if runtime.GOOS == "linux" {
+		if err := hostnetwork.InitMeshUDPTProxy(mesh.UDPProxyPort); err != nil {
+			logger.Warn("mesh UDP VIP interception unavailable", zap.Error(err))
+		} else {
+			meshUDPReady = true
+		}
+	}
 	// Same non-fatal treatment for the nat-table chain that forwards the
 	// agent's own loopback MeshDial dial into a meshed container's published
 	// port (see hostnetwork.MeshPortsChainName).
@@ -349,6 +357,22 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	if meshUDPReady {
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := hostnetwork.EnsureMeshUDPTProxyPolicy(); err != nil {
+						logger.Warn("mesh UDP VIP policy repair failed", zap.Error(err))
+					}
+				}
+			}
+		}()
+	}
 
 	// Keep the chunk store bounded (WDY-3212, WDY-3217). This retires the
 	// staging left by the previous run, so it must precede serving any RPC.
@@ -1009,6 +1033,26 @@ func main() {
 	if err := meshProxy.Start(fmt.Sprintf(":%d", mesh.ProxyPort)); err != nil {
 		logger.Warn("mesh proxy failed to start; mesh egress disabled", zap.Error(err))
 	}
+	udpProxy, udpErr := mesh.NewUDPProxy(mesh.UDPDialFunc(func(dialCtx context.Context, peer int32, port uint16) (mesh.UDPFlow, error) {
+		localMeshMu.RLock()
+		snapshot := localMeshSnapshot
+		credentials := localMeshCredentials
+		localMeshMu.RUnlock()
+		if snapshot == nil || credentials == nil {
+			return nil, meshsession.ErrNoRoute
+		}
+		address, err := meshsession.Resolve(snapshot(), credentials.Org, peer)
+		if err != nil {
+			return nil, err
+		}
+		return meshsession.DialUDP(dialCtx, credentials, peer, address, port)
+	}), meshIngress)
+	if udpErr == nil {
+		udpErr = udpProxy.Start(fmt.Sprintf(":%d", mesh.UDPProxyPort))
+	}
+	if udpErr != nil {
+		logger.Warn("mesh UDP proxy failed to start; UDP VIP egress disabled", zap.Error(udpErr))
+	}
 
 	// Hybrid friendly-name resolver: <devicename>.<org-slug>.cloud.wendy.dev.
 	// Mirrors the meshDialer construction just above — not gated on
@@ -1316,6 +1360,12 @@ func main() {
 
 	cancel()
 	_ = meshProxy.Close()
+	if udpProxy != nil {
+		_ = udpProxy.Close()
+	}
+	if meshUDPReady {
+		_ = hostnetwork.CloseMeshUDPTProxy()
+	}
 	if agentServer != nil {
 		agentServer.GracefulStop()
 	}
