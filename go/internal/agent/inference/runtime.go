@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
@@ -81,7 +82,16 @@ type ManagedFactory struct {
 	mu   sync.Mutex
 }
 
+var assetFiles = []string{"worker.py", "pyproject.toml", "uv.lock"}
+
 func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
+	return f.Prepare(ctx, assets, assetFiles)
+}
+
+// Prepare installs the shared, checksum-pinned uv under Root and materialises
+// files from assets into a runtime directory named by their content hash, so
+// every worker shares one uv while keeping its own locked environment.
+func (f *ManagedFactory) Prepare(ctx context.Context, assets fs.FS, files []string) (uv, dir string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	artifact, ok := uvArtifacts[runtime.GOOS+"/"+runtime.GOARCH]
@@ -95,7 +105,7 @@ func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return "", "", err
 	}
-	uv := filepath.Join(root, "uv-"+uvVersion)
+	uv = filepath.Join(root, "uv-"+uvVersion)
 	valid, err := validCachedUV(uv, artifact.binarySHA)
 	if err != nil {
 		return "", "", err
@@ -108,17 +118,19 @@ func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
 	}
 
 	hash := sha256.New()
-	files := []string{"worker.py", "pyproject.toml", "uv.lock"}
-	for _, name := range files {
-		b, _ := assets.ReadFile(name)
-		hash.Write(b)
+	contents := make([][]byte, len(files))
+	for i, name := range files {
+		if contents[i], err = fs.ReadFile(assets, name); err != nil {
+			return "", "", err
+		}
+		hash.Write(contents[i])
 	}
-	dir := filepath.Join(root, "runtime-"+hex.EncodeToString(hash.Sum(nil))[:16])
+	dir = filepath.Join(root, "runtime-"+hex.EncodeToString(hash.Sum(nil))[:16])
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", "", err
 	}
-	for _, name := range files {
-		b, _ := assets.ReadFile(name)
+	for i, name := range files {
+		b := contents[i]
 		path := filepath.Join(dir, name)
 		existing, err := os.ReadFile(path)
 		if err == nil && bytes.Equal(existing, b) {
@@ -235,15 +247,14 @@ func (f *ManagedFactory) Start(ctx context.Context, config data.CampaignInferenc
 		return nil, err
 	}
 	childCtx, cancel := context.WithCancel(ctx)
-	command := exec.CommandContext(childCtx, uv, "run", "--project", dir, "--frozen", "--no-dev", "--no-build", "--managed-python", "--python", "3.12", "python", "-u", filepath.Join(dir, "worker.py"))
-	command.Dir = dir
+	command := BindContext(childCtx, Command(uv, dir, "worker.py"))
 	if err := os.MkdirAll(filepath.Join(f.Root, "home"), 0700); err != nil {
 		cancel()
 		return nil, fmt.Errorf("creating model runtime home: %w", err)
 	}
-	command.Env = runtimeEnvironment(f.Root)
-	configureProcess(command)
-	stderr := &tailBuffer{}
+	command.Env = RuntimeEnvironment(f.Root)
+	ConfigureProcess(command)
+	stderr := &TailBuffer{}
 	command.Stderr = stderr
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -349,12 +360,34 @@ func (s *processSession) Send(input Input) error {
 func (s *processSession) Results() <-chan Result { return s.results }
 func (s *processSession) Close() error           { s.cancel(); <-s.done; return s.stdin.Close() }
 
-type tailBuffer struct {
+// Command builds the locked, offline uv invocation that runs script from a
+// runtime directory returned by Prepare. The caller sets the environment.
+func Command(uv, dir, script string) *exec.Cmd {
+	command := exec.Command(uv, "run", "--project", dir, "--frozen", "--no-dev", "--no-build", "--managed-python", "--python", "3.12", "python", "-u", filepath.Join(dir, script))
+	command.Dir = dir
+	return command
+}
+
+// BindContext rebuilds an unstarted command's path, arguments, directory and
+// environment as exec.CommandContext would, so it is killed when ctx is done.
+func BindContext(ctx context.Context, command *exec.Cmd) *exec.Cmd {
+	bound := exec.CommandContext(ctx, command.Path)
+	bound.Args, bound.Dir, bound.Env, bound.Err = command.Args, command.Dir, command.Env, command.Err
+	return bound
+}
+
+// TailBuffer keeps the last 8KiB written to it, for worker diagnostics.
+type TailBuffer struct {
 	mu sync.Mutex
 	b  []byte
 }
 
-func (b *tailBuffer) Write(p []byte) (int, error) {
+// tailBuffer and runtimeEnvironment keep the original private names working.
+type tailBuffer = TailBuffer
+
+func runtimeEnvironment(root string) []string { return RuntimeEnvironment(root) }
+
+func (b *TailBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.b = append(b.b, p...)
@@ -363,11 +396,11 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
-func (b *tailBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return string(b.b) }
+func (b *TailBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return string(b.b) }
 
-// runtimeEnvironment deliberately excludes agent tokens, cloud credentials,
+// RuntimeEnvironment deliberately excludes agent tokens, cloud credentials,
 // Python injection settings and the agent's home/configuration directories.
-func runtimeEnvironment(root string) []string {
+func RuntimeEnvironment(root string) []string {
 	env := []string{
 		"HOME=" + filepath.Join(root, "home"),
 		"UV_CACHE_DIR=" + filepath.Join(root, "cache"),

@@ -233,15 +233,22 @@ func (d *SystemHardwareDiscoverer) discoverGPIO() []*agentpb.ListHardwareCapabil
 	return caps
 }
 
+// videoNodeGlob is where discoverCamera looks for V4L2 nodes. A var so tests
+// can point it at a directory of stand-in files.
+var videoNodeGlob = "/dev/video*"
+
 // discoverCamera enumerates V4L2 video devices and classifies each one as
 // USB, CSI, or unknown. Transport and kernel driver are surfaced via the
 // HardwareCapability.properties map (which is additive, so no proto change is
 // required). When exactly one CSI device and one libcamera entry are found,
-// the libcamera id is also attached.
+// the libcamera id is also attached. Each node's capture pixel formats are
+// listed as "pixel_formats", and a node that offers Z16 depth frames is marked
+// "depth": "z16"; a node that refuses format enumeration simply carries
+// neither key.
 func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability {
 	var caps []*agentpb.ListHardwareCapabilitiesResponse_HardwareCapability
 
-	entries, err := filepath.Glob("/dev/video*")
+	entries, err := filepath.Glob(videoNodeGlob)
 	if err != nil {
 		return nil
 	}
@@ -271,6 +278,11 @@ func (d *SystemHardwareDiscoverer) discoverCamera(ctx context.Context) []*agentp
 		props := map[string]string{"transport": transport.String()}
 		if driver != "" {
 			props["driver"] = driver
+		}
+		if formats, err := enumeratePixelFormats(path); err != nil {
+			d.logger.Debug("pixel format enumeration failed", zap.String("device", path), zap.Error(err))
+		} else {
+			addPixelFormatProperties(props, formats)
 		}
 
 		c := &agentpb.ListHardwareCapabilitiesResponse_HardwareCapability{

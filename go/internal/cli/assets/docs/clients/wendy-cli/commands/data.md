@@ -164,6 +164,8 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 | `models` | no | Map of model name to deployed version, copied into Episodes. |
 | `privacy` | no | List of declared transforms with optional revisions. |
 | `inference` | no | Agent-managed Hugging Face object detection; see below. |
+| `objects` | no | World view objects described by shape, size, colour or an application's class label; see below. |
+| `depth` | no | Depth source and camera intrinsics the world view `size` attribute needs; requires `objects`. |
 | `notify` | no | Episode-commit notification intent or immediate event/detection delivery; see below. |
 
 Each `sources` item selects exactly one source:
@@ -189,7 +191,7 @@ Fields belonging to a different mode than the declared one are rejected.
 | `rate` | `continuous` | Optional capture frequency cap in hertz. |
 | `interval` | `snapshot` | Required snapshot period, for example `2s`. |
 | `pre`, `post` | `fragment` | Durations bounding a fragment around an occurrence; at least one is required. |
-| `trigger` | `threshold` | Required expression `<field> <op> <number>`, for example `model.uncertainty > 0.9` or `level_db > -20`. Only `model.uncertainty` is bounded to 0 through 1; other fields carry their own units. |
+| `trigger` | `threshold` | Required expression `<field> <op> <number>`, for example `model.uncertainty > 0.9` or `level_db > -20`. Only `model.uncertainty` and fields ending in `.confidence` are bounded to 0 through 1; other fields carry their own units. |
 | `fragment` | `threshold` | Optional captured duration per threshold crossing. |
 | `max_resolution` | any | Camera sources only: `WxH` cap such as `1280x720`. |
 
@@ -276,6 +278,7 @@ condition:
 |---|---|
 | `event: <name>` | Matches an entitled application's event name. |
 | `model.uncertainty: "> 0.65"` | Compares prediction uncertainty with `<`, `<=`, `==`, `>=`, or `>` and a value in `[0, 1]`. |
+| `object.<name>.confidence: "> 0.8"` | Compares a world view object's fused confidence with the same operators and a value in `[0, 1]`. `<name>` must be defined under `objects`. |
 
 Prediction uncertainty is read from the structured `uncertainty` attribute
 when present, otherwise from the prediction value.
@@ -300,10 +303,10 @@ disk space outside the episode quota. Remote model code is disabled.
 |---|---|---|
 | `model` | yes | `owner/repository` or `https://huggingface.co/owner/repository`; a Transformers object-detection checkpoint. |
 | `revision` | yes | Lowercase, 40-character Hugging Face commit SHA. Branch names are rejected. |
-| `labels` | yes | 1–32 unique, nonempty model labels, each at most 128 bytes. |
+| `labels` | yes | 1 to 32 unique, nonempty model labels, each at most 128 bytes. |
 | `threshold` | yes | Detection confidence in `(0, 1]`. |
 | `rate` | yes | Frames per second per camera in `(0, 30]`. |
-| `event` | yes | Event emitted on detection; 1–128 letters, numbers, `.`, `-`, or `_`. |
+| `event` | yes | Event emitted on detection; 1 to 128 letters, numbers, `.`, `-`, or `_`. |
 | `clear_after` | yes | Continuous absence needed to clear presence; positive duration, at most 24h. |
 | `cooldown` | yes | Minimum interval between detection events; positive duration, at most 24h. |
 | `enabled` | no | Defaults to `true`; `false` keeps the configuration but stops inference. |
@@ -318,6 +321,149 @@ See [the all-camera people example](https://github.com/wendylabsinc/WendyOS/tree
 for a complete campaign. Campaign revision hashing now uses revision schema 2,
 which includes inference and notification settings. Existing plans receive new
 revision hashes when redeployed; the YAML `version` remains `1`.
+
+### World view objects
+
+An `objects` block describes things to look for in camera frames as a format
+rather than a trained class: a shape, a size in metres, a colour palette, or a
+label an application's model already emits. Each attribute scores a candidate
+and fusion combines the scores into one confidence per object.
+
+The agent runs one perception worker per campaign in the same managed Python
+runtime as `inference`, samples each camera at the fastest cadence any enabled
+object asks for, and scores each object only at its own `rate` or
+`every_frames`. Campaign inspect reports `objects_status`: the runtime state
+(`pending`, `loading`, `running`, `waiting_for_cameras`, `error` or
+`disabled`), the state of each camera and of the depth source, and any
+notification error. A depth source that cannot be opened, or that does not
+deliver `z16` raw frames, is reported there and the search runs without it.
+
+Each key under `objects` is the object's name: a lowercase letter followed by
+up to 63 lowercase letters, numbers or `_`. A campaign defines at most 32
+objects and needs at least one camera source.
+
+| Field | Required | Description |
+|---|---|---|
+| `event` | yes | Event emitted when the object is found; 1 to 128 letters, numbers, `.`, `-`, or `_`. Unique across objects, and different from `inference.event`. |
+| `rate` | one of | Frames per second per camera in `(0, 30]`. |
+| `every_frames` | one of | Search every Nth frame, N in `[1, 300]`. Set exactly one of `rate` and `every_frames`. |
+| `clear_after` | yes | Continuous absence needed to clear presence; positive duration, at most 24h. |
+| `cooldown` | yes | Minimum interval between events; positive duration, at most 24h. |
+| `fusion.threshold` | yes | Fused confidence in `(0, 1]` a candidate must reach. |
+| `fusion.required` | no | Attributes that veto a candidate whose own score is below that attribute's `min`, whatever the fused score. Each must be one of the object's attributes, listed once. |
+| `attributes` | yes | At least one attribute, keyed by kind. Each has `expect`, a `weight` greater than 0, and an optional `min` in `[0, 1]`, the veto floor for a required attribute. An omitted `min` takes the default of 0.5; an explicit `min: 0` is kept as 0. |
+| `composition` | no | 1 to 8 parts, each `{primitive, w_m, h_m}`, for an object built from several solids, listed bottom to top. A composition replaces the `shape` attribute's scoring and takes that attribute's weight; the `shape` attribute's `expect` is not read. Declare `shape` with a weight when you use `composition`, or the composition is scored but listed in `unweighted` and does not move the confidence. |
+| `enabled` | no | Defaults to `true`; `false` keeps the configuration but stops the search. |
+
+Attribute kinds and their `expect` keys. Unknown kinds and unknown `expect`
+keys are rejected.
+
+| Kind | `expect` |
+|---|---|
+| `shape` | `primitive`: one of `cylinder`, `box`, `sphere` or `cone`. Optional `aspect`: a `[min, max]` aspect ratio range, `0 < min <= max`. |
+| `size` | `w_m` and `h_m`: `[min, max]` in metres, `0 < min <= max <= 10`. Optional `d_m` in the same form. |
+| `colour` | `palette`: 1 to 8 entries `{lab: [L, a, b], share: 0..1}` in the International Commission on Illumination (CIE) L\*a\*b\* colour space, L in `0..100`, a and b in `-128..127`, shares summing to at most 1. Optional `tolerance`: CIE76 delta E in `(0, 100]`, default 25. |
+| `class` | `source: app` and `label`, the label an application's predictions carry, at most 128 bytes. Optional `model` names the application model. |
+
+`size` measures metric extent, which a camera frame alone cannot give. Without
+a `depth` block the `size` attribute is unavailable, so declare `depth` on any
+campaign that relies on it. `depth` requires `objects`:
+
+| Field | Required | Description |
+|---|---|---|
+| `depth.source` | yes | The depth node to read: a camera selector, resolved as a `camera:` source is (an exact source ID, a `/dev/videoN` path, a unique fragment of the camera's name, or `front` or `default` when exactly one healthy camera exists), but naming one camera; `*` is refused. |
+| `depth.scale_m` | yes | Metres per depth unit, greater than 0; `0.001` for millimetre depth. |
+| `depth.intrinsics` | yes | `fx`, `fy`, `cx` and `cy` in pixels, each greater than 0. These are the colour camera's intrinsics at the resolution it streams: boxes are measured in colour-frame pixels, and the depth frame is resized to the colour frame to match, so depth must be aligned to colour. |
+
+`depth.source` must be a `v4l2` camera whose Video for Linux 2 (V4L2) node
+advertises the `Z16 ` pixel format, such as the depth node of an Intel
+RealSense D400 camera. The agent reads that node natively, without GStreamer,
+and serves only its raw depth frames; cameras that deliver depth through a
+vendor software development kit (SDK), such as ZED and OAK-D, cannot be used.
+The colour frames the search scores still come from the campaign's camera
+sources as encoded video, so those are limited to the cameras the agent can
+already stream.
+
+Depth pairs only when the campaign resolves to exactly one colour camera, since
+one intrinsics block describes one camera. The depth node is never counted or
+searched as a colour camera, so `camera: "*"` pairs when the depth node is the
+only other camera. With more colour cameras, or when `depth.source` does not
+resolve, `objects_status` reports the depth source as `depth unavailable` with
+the reason and the search runs without depth.
+
+A red can, 6 to 7 centimetres wide and 11 to 13 tall, with a trigger that
+records an Episode when the can is found with confidence above 0.8:
+
+```yaml
+version: 1
+name: coke-can-watch
+sources:
+  - camera: front
+objects:
+  coke_can:
+    event: coke_can_seen
+    rate: 2
+    clear_after: 5s
+    cooldown: 30s
+    fusion:
+      threshold: 0.75
+      required: [shape, colour]
+    attributes:
+      shape:
+        expect: {primitive: cylinder}
+        weight: 1
+      size:
+        expect: {w_m: [0.06, 0.07], h_m: [0.11, 0.13]}
+        weight: 0.5
+      colour:
+        expect:
+          palette:
+            - {lab: [45, 65, 45], share: 0.6}
+          tolerance: 25
+        weight: 1.5
+depth:
+  source: front-depth
+  scale_m: 0.001
+  intrinsics: {fx: 615.2, fy: 615.9, cx: 320.5, cy: 240.25}
+capture:
+  buffer: 5s
+  after_trigger: 10s
+  triggers:
+    - object.coke_can.confidence: "> 0.8"
+upload:
+  when: wifi
+export:
+  annotation: cvat
+```
+
+An `object.<name>.confidence` trigger matches a prediction record from model
+`worldview` whose `object` attribute is the object's name and whose numeric
+`confidence` attribute satisfies the comparison. `objects` and `depth` enter the
+revision hash only when declared, so a campaign without them keeps the revision
+it had before they existed.
+
+Records. Each tracked sighting produces prediction records from model
+`worldview`, attributed to `sh.wendy.campaign.<name>`, when it `appeared`,
+reached a new `peak` confidence, `moved`, or was `lost` after `clear_after`.
+Their attributes are `campaign`, `object`, `track_id`, `kind`, `confidence`,
+`scores` (per attribute), `unavailable` and `unweighted` (attribute names),
+`vetoed` (only when a required attribute vetoed), `bbox` (`[x, y, w, h]` in
+pixels), `frame` (`w`, `h`), `source_id`, `sample_id`, `boot_nanos`,
+`position` (`distance_m`, `bearing_deg`) and `size_m` (`w`, `h`) only when a
+depth frame was paired, `requested_rate` or `requested_every_frames`,
+`achieved_fps` (the worker's), `object_achieved_fps` (the object's own scoring
+rate), `depth_paired`, and `model_version` (the campaign revision). A `lost`
+record carries the box and scores of the last match and never starts an
+Episode. On `appeared` the object's `event` is also recorded, with `object`,
+`track_id`, `confidence` and `source_id`. The `class` attribute reads
+detections from application prediction records in the application convention,
+`attributes.detections[]` entries `{class_name, confidence, box: [x, y, w, h]}`;
+corner boxes such as the Hugging Face `[x0, y0, x1, y1]` form are not accepted
+in this release, so the campaign's own `inference` predictions do not count as
+class evidence.
+
+See [the objects and depth example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataObjects)
+for a complete campaign.
 
 ### Notifications
 

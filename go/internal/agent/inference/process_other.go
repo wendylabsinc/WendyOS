@@ -4,4 +4,5 @@ package inference
 
 import "os/exec"
 
-func configureProcess(cmd *exec.Cmd) {}
+// ConfigureProcess is a no-op where process groups are unavailable.
+func ConfigureProcess(cmd *exec.Cmd) {}
