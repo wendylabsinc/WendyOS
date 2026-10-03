@@ -43,11 +43,18 @@ func InitMeshChain() error {
 	return nil
 }
 
+// Containerd and concurrently starting apps also write iptables during boot.
+// Wait briefly for xtables.lock on every mesh filter/NAT operation, including
+// presence checks; without -w, a transient lock appears as a fatal exit 4.
+func meshIPTables(args ...string) ([]byte, error) {
+	return exec.Command("iptables", append([]string{"-w", "5"}, args...)...).CombinedOutput()
+}
+
 // ensureChain creates the named filter-table chain if it does not already
 // exist. `iptables -N <chain>` exits non-zero with "Chain already exists" on
 // stderr when the chain is present, which is treated as success.
 func ensureChain(chain string) error {
-	out, err := exec.Command("iptables", "-t", "filter", "-N", chain).CombinedOutput()
+	out, err := meshIPTables("-t", "filter", "-N", chain)
 	if err == nil {
 		return nil
 	}
@@ -67,7 +74,7 @@ func ensureForwardJump(chain string) error {
 	if exists {
 		return nil
 	}
-	out, err := exec.Command("iptables", "-t", "filter", "-A", "FORWARD", "-j", chain).CombinedOutput()
+	out, err := meshIPTables("-t", "filter", "-A", "FORWARD", "-j", chain)
 	if err != nil {
 		return fmt.Errorf("iptables -A FORWARD -j %s: %w (%s)", chain, err, strings.TrimSpace(string(out)))
 	}
@@ -79,8 +86,7 @@ func ensureForwardJump(chain string) error {
 // exists, 1 means it doesn't, and anything else is a real error (e.g.
 // missing permissions or a malformed rule specification).
 func forwardJumpExists(chain string) (bool, error) {
-	cmd := exec.Command("iptables", "-t", "filter", "-C", "FORWARD", "-j", chain)
-	out, err := cmd.CombinedOutput()
+	out, err := meshIPTables("-t", "filter", "-C", "FORWARD", "-j", chain)
 	if err == nil {
 		return true, nil
 	}
