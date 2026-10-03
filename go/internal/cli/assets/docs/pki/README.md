@@ -169,6 +169,47 @@ A hostname the CLI has never connected to has no pin, so its first connection is
 
 The trust bundle may contain multiple CA certificates sharing the same subject DN. This is normal during a CA key rollover, where an old CA and a new CA temporarily coexist in the bundle. The agent's ML-DSA client certificate verifier (`verifyMLDSAClientCert`) tries every CA whose subject DN matches the client certificate's issuer DN. Verification succeeds as soon as any matching CA validates the certificate. If all matching CAs fail, the error from the last attempted CA is returned. If no CA in the pool has a matching subject DN, the verifier returns a "client certificate issuer not found in trusted CA pool" error.
 
+## Client certificate revocation
+
+The agent requires a fresh, issuer-signed full CRL before accepting a client
+certificate on its mTLS listeners. It checks TLS session resumptions too. The
+mTLS gRPC server also checks each RPC and polls open streams every 30 seconds,
+canceling the handler context and closing the stream when status no longer
+permits access. It does not undo completed operations or interrupt a unary
+handler that has already started. Existing registry and BLE sessions receive
+handshake checks, but do not yet have periodic cancellation.
+
+The checker accepts ECDSA and ML-DSA CRL signatures, verifies the issuer and
+key identifier, and requires a CRL number and current `ThisUpdate`/`NextUpdate`
+window. Delta, indirect and partitioned CRLs are rejected. Cached evidence is
+refetched after 30 seconds or at `NextUpdate`, whichever comes first. Missing
+CDPs, failed refreshes, stale evidence and invalid signatures deny access.
+Fetches have a five-second deadline and an 8 MiB response limit. Active gRPC
+streams therefore observe a newly published CRL within a polling interval plus
+fetch time under normal scheduling. Publication delay adds to this interval.
+An attacker replaying an older, still signed and current CRL can delay detection
+until its `NextUpdate`; polling is not an instantaneous revocation guarantee.
+
+Before rolling out this agent, configure pki-core's CRL publication and
+`crl_url_template`, and reissue client certificates that lack CRL distribution
+points. The issuer must have `cRLSign` usage. The existing pki-core full-CRL
+endpoint is `GET /crl/{tenant_id}/{ca_id}`. Exercise a real revoke and subsequent
+device rejection before enabling hosted MCP access. This changes admission for
+all mTLS clients, including local CLI clients and peer devices.
+
+Distribution URLs come from authenticated certificates. Both HTTPS and HTTP
+are supported because CRL signatures authenticate their contents and a
+self-hosted PKI may publish on a private network. The CA controls these outbound
+destinations. Redirects, credentials in URLs and environment HTTP proxies are
+not accepted. No SaaS address is hard-coded. A disconnected device can use its
+in-memory evidence for at most 30 seconds before a refresh is required; after
+restart it must fetch fresh evidence. Running apps remain running when remote
+access is denied. This implementation checks leaf revocation, not revocation of
+CA trust anchors, and does not subscribe to SSF push events.
+
+CRL freshness uses the real system clock. The `NotBefore` floor below cannot
+substitute for a synchronized clock when deciding revocation status.
+
 ## Clock skew and the NotBefore floor
 
 A device that reboots without network connectivity (e.g. a power cycle with no WiFi) may not have synchronised its clock via NTP before the mTLS server starts. With an unsynchronised clock that predates the certificates, every incoming client certificate would be rejected as "not yet valid", silently making the mTLS port unusable.
