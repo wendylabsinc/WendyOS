@@ -97,3 +97,28 @@ wendy device wifi disconnect
 ```
 
 > **Note:** `wendy device wifi connect` and `wendy device wifi disconnect` stop the running app on the device before applying the new Wi-Fi configuration. If no app is currently running, this step is skipped silently — no warning is printed.
+
+
+## Regulatory country and channel constraints
+
+For a Linux WendyOS agent with `iw` installed:
+
+```sh
+wendy --device <selector> device wifi regulatory
+wendy --device <selector> --json device wifi regulatory
+wendy --device <selector> device wifi regulatory set-country GB
+```
+
+The query reports the kernel global country hint, each PHY's country and whether
+its regulatory domain is self-managed, and effective channel flags such as
+`no IR`, disabled channels, DFS and transmit power. JSON also retains complete
+kernel regulatory and PHY output, including bandwidth and DFS details.
+
+Setting a country requires an explicit ISO 3166-1 alpha-2 code for the device's
+actual location. No country is selected automatically. It submits `iw reg set`
+as a runtime hint, then reads the current kernel state. Processing can be
+asynchronous, so query again to see the resulting state. Success submitting a
+hint does not mean a self-managed radio changed country or gained channels.
+Firmware, driver and channel restrictions remain authoritative. The request is
+not persisted across boots and does not restart Wi-Fi, NAN or the agent.
+Older agents and non-Linux agents return an unsupported-operation error.
