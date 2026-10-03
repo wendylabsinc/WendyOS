@@ -24,10 +24,12 @@ import (
 type fastPathContainerClient struct {
 	agentpb.WendyContainerServiceClient // embedded nil — satisfies interface
 
-	appName    string
-	state      agentpb.AppRunningState
-	startCtx   context.Context
-	startCalls int
+	appName     string
+	state       agentpb.AppRunningState
+	startCtx    context.Context
+	startCalls  int
+	startStream grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse]
+	startErr    error
 	// presentLayers is the set of diff IDs the device reports holding via
 	// QueryLayers. The fast path only skips when every recorded layer is present
 	// (WDY-1824), so tests that expect a skip must list the fingerprint's layers
@@ -54,6 +56,12 @@ func (f *fastPathContainerClient) QueryLayers(_ context.Context, in *agentpb.Que
 func (f *fastPathContainerClient) StartContainer(ctx context.Context, _ *agentpb.StartContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
 	f.startCalls++
 	f.startCtx = ctx
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
+	if f.startStream != nil {
+		return f.startStream, nil
+	}
 	return &fakeRunContainerStream{}, nil
 }
 

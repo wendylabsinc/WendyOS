@@ -76,6 +76,7 @@ type MeshDialer struct {
 	dialLAN    func(ctx context.Context, hostport string, deviceID int32, port uint16) (net.Conn, error)
 	dialBroker func(ctx context.Context, deviceID int32, port uint16) (net.Conn, error)
 	localDial  func(ctx context.Context, deviceID int32, port uint16) (net.Conn, error)
+	selfDial   func(ctx context.Context, port uint16) (net.Conn, error)
 	now        func() time.Time
 
 	mu    sync.Mutex
@@ -89,6 +90,42 @@ func (d *MeshDialer) SetLocalMeshDialer(dial func(context.Context, int32, uint16
 	d.mu.Lock()
 	d.localDial = dial
 	d.mu.Unlock()
+}
+
+// SetSelfDialer supplies the same live ingress authorization used by peer
+// sessions for this device's own VIP. A local app never needs a Babel route
+// or a peer session to reach a sibling app on its own device.
+func (d *MeshDialer) SetSelfDialer(dial func(context.Context, uint16) (net.Conn, error)) {
+	d.mu.Lock()
+	d.selfDial = dial
+	d.mu.Unlock()
+}
+
+// IsSelf identifies a current provisioned device before choosing local ingress.
+func (d *MeshDialer) IsSelf(deviceID int32) bool {
+	ident := d.identity()
+	return ident.orgID > 0 && ident.assetID > 0 && deviceID == ident.assetID
+}
+
+func (d *MeshDialer) dialSelf(ctx context.Context, deviceID int32, port uint16) (net.Conn, string, error, bool) {
+	d.mu.Lock()
+	ident, dial := d.ident, d.selfDial
+	d.mu.Unlock()
+	if ident.orgID <= 0 || ident.assetID <= 0 || deviceID != ident.assetID {
+		return nil, "", nil, false
+	}
+	started := d.now()
+	var conn net.Conn
+	err := fmt.Errorf("local mesh app ingress is unavailable")
+	if dial != nil {
+		conn, err = dial(ctx, port)
+	}
+	result := "ok"
+	if err != nil {
+		result = "error"
+	}
+	d.metrics.RecordDial(deviceID, "local-app", result, float64(d.now().Sub(started).Milliseconds()))
+	return conn, "local-app", err, true
 }
 
 type lanCacheEntry struct {
@@ -159,6 +196,9 @@ func (d *MeshDialer) identity() meshIdentity {
 // mesh.connections + mesh.dial.duration_ms for each leg it attempts (the
 // failed LAN leg included, when it falls back to the broker).
 func (d *MeshDialer) DialDevice(ctx context.Context, deviceID int32, port uint16) (net.Conn, string, error) {
+	if conn, mode, err, own := d.dialSelf(ctx, deviceID, port); own {
+		return conn, mode, err
+	}
 	if hostport, ok := d.lanAddr(ctx, deviceID); ok {
 		lanStart := d.now()
 		conn, err := d.dialLAN(ctx, hostport, deviceID, port)

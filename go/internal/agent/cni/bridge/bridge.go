@@ -57,6 +57,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/cni/hostlocal"
+	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 )
 
 // For testcases to force an error after IPAM has been performed
@@ -783,6 +784,21 @@ func CmdAdd(args *skel.CmdArgs) error {
 		result.DNS = n.DNS
 	}
 
+	if n.IsDefaultGW {
+		var ips []net.IP
+		for _, ipc := range result.IPs {
+			ips = append(ips, ipc.Address.IP)
+		}
+		owner := n.Name + "/" + args.ContainerID + "/" + args.IfName
+		if err := hostnetwork.EnsureBridgeInternetAccess(owner, n.BrName, ips); err != nil {
+			return err
+		}
+		defer func() {
+			if !success {
+				_ = hostnetwork.RevokeBridgeInternetAccess(owner)
+			}
+		}()
+	}
 	success = true
 
 	return types.PrintResult(result, cniVersion)
@@ -795,12 +811,15 @@ func dnsConfSet(dnsConf types.DNS) bool {
 		dnsConf.Domain != ""
 }
 
-func CmdDel(args *skel.CmdArgs) error {
+func CmdDel(args *skel.CmdArgs) (resultErr error) {
 	n, _, err := loadNetConf(args.StdinData, args.Args)
 	if err != nil {
 		return err
 	}
 
+	// A grant-revocation error must not prevent veth/IPAM/NAT cleanup.
+	grantErr := hostnetwork.RevokeBridgeInternetAccess(n.Name + "/" + args.ContainerID + "/" + args.IfName)
+	defer func() { resultErr = errors.Join(resultErr, grantErr) }()
 	isLayer3 := n.IPAM.Type != ""
 
 	ipamDel := func() error {
@@ -1037,6 +1056,15 @@ func CmdCheck(args *skel.CmdArgs) error {
 		return err
 	}
 
+	if n.IsDefaultGW {
+		var ips []net.IP
+		for _, ipc := range result.IPs {
+			ips = append(ips, ipc.Address.IP)
+		}
+		if err := hostnetwork.CheckBridgeInternetAccess(n.Name+"/"+args.ContainerID+"/"+args.IfName, n.BrName, ips); err != nil {
+			return err
+		}
+	}
 	var errLink error
 	var contCNI, vethCNI cniBridgeIf
 	var brMap, contMap current.Interface

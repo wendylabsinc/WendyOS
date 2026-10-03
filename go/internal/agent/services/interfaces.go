@@ -186,6 +186,19 @@ type BootContainer struct {
 	MaxRetries    int
 }
 
+// RunningTaskOutputRecoverer reconnects stdout/stderr for tasks that survive an
+// agent restart, including tasks whose policy disables automatic restart.
+// Publish must consume output without waiting for a remote log subscriber.
+type RunningTaskOutputRecoverer interface {
+	RecoverRunningTaskOutput(context.Context, func(string, ContainerOutput)) error
+}
+
+// InterruptedTaskStartRecoverer cleans held tasks left by an agent crash,
+// including apps whose policy deliberately prevents automatic restart.
+type InterruptedTaskStartRecoverer interface {
+	RecoverInterruptedTaskStarts(context.Context) error
+}
+
 // GroupRestarter is the optional capability a ContainerdClient may provide to
 // restart a shared-namespace app group as a unit. The container monitor
 // type-asserts for it and falls back to single-container restarts when the

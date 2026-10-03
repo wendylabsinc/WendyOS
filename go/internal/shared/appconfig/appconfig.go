@@ -35,6 +35,14 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,55}[a-z0-9])?$`)
 const (
 	EntitlementNetwork   = "network"
 	EntitlementBluetooth = "bluetooth"
+	// EntitlementAvahi grants an app its own Avahi mDNS stack: the agent
+	// runs a per-container avahi-daemon inside the app network namespace
+	// and exposes only that instance over a filtered D-Bus socket. Apps use
+	// stock avahi-compat (dns_sd.h) or native Avahi clients with no special
+	// socket handling; the daemon multicasts on the app bridge exactly like
+	// any other speaker, so the existing catalog bridge picks publications
+	// up transparently.
+	EntitlementAvahi = "avahi"
 	// EntitlementNAN grants direct control of the host's NAN management socket.
 	// Network access for NDP traffic is a separate entitlement.
 	EntitlementNAN     = "nan"
@@ -85,6 +93,7 @@ const (
 var ValidEntitlementTypes = []string{
 	EntitlementNetwork,
 	EntitlementBluetooth,
+	EntitlementAvahi,
 	EntitlementNAN,
 	EntitlementVideo,
 	EntitlementGPU,
@@ -124,6 +133,7 @@ var deprecatedEntitlementReplacements = map[string]string{
 var allowedKeys = map[string][]string{
 	EntitlementNetwork:       {"type", "mode", "ports", "serviceCIDR"},
 	EntitlementBluetooth:     {"type", "mode"},
+	EntitlementAvahi:         {"type"},
 	EntitlementNAN:           {"type"},
 	EntitlementVideo:         {"type", "mode", "allowlist"},
 	EntitlementGPU:           {"type"},

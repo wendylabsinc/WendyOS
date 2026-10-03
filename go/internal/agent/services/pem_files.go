@@ -1,7 +1,9 @@
 package services
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -65,6 +67,31 @@ func syncWriteFile(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// pemFileMatches avoids replacing an already correct projection on startup.
+// Lstat and opened-file identity checks prevent accepting a symlink as the
+// projection; a changed, unreadable or incorrectly permissioned path uses the
+// same durable atomic writer as a missing file.
+func pemFileMatches(path string, data []byte, perm os.FileMode) bool {
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || before.Mode() != perm || before.Size() != int64(len(data)) {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	opened, statErr := f.Stat()
+	if statErr != nil || !os.SameFile(before, opened) || opened.Mode() != perm {
+		_ = f.Close()
+		return false
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(f, int64(len(data))+1))
+	closeErr := f.Close()
+	after, statErr := os.Lstat(path)
+	return readErr == nil && closeErr == nil && statErr == nil &&
+		after.Mode() == perm && os.SameFile(opened, after) && bytes.Equal(contents, data)
+}
+
 func WritePEMFiles(configPath, keyPEM, certPEM, chainPEM string) error {
 	if err := os.MkdirAll(configPath, 0o700); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
@@ -84,13 +111,23 @@ func WritePEMFiles(configPath, keyPEM, certPEM, chainPEM string) error {
 		if f.data == "" {
 			continue
 		}
-		if err := syncWriteFile(filepath.Join(configPath, f.name), []byte(f.data), f.mode); err != nil {
+		path := filepath.Join(configPath, f.name)
+		data := []byte(f.data)
+		if pemFileMatches(path, data, f.mode) {
+			continue
+		}
+		if err := syncWriteFile(path, data, f.mode); err != nil {
 			return fmt.Errorf("writing %s: %w", f.name, err)
 		}
 	}
 
-	_ = os.WriteFile(filepath.Join(configPath, ".provisioned"),
-		[]byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+	// This is an existence sentinel, not the last startup time. Preserve an
+	// existing marker; exclusive creation also avoids following a symlink.
+	// Marker failures remain best effort, as before.
+	if marker, err := os.OpenFile(filepath.Join(configPath, ".provisioned"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644); err == nil {
+		_, _ = marker.WriteString(time.Now().UTC().Format(time.RFC3339) + "\n")
+		_ = marker.Close()
+	}
 
 	return nil
 }
