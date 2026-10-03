@@ -205,6 +205,7 @@ func main() {
 	var meshDNS *mesh.DNSServer
 	meshIngress := meshingress.NewRegistry()
 	meshCatalog := newMeshCatalogManager(configPath, meshIngress, logger)
+	meshSharing := newMeshSharingManager(configPath, meshCatalog, logger)
 	containerdAddr := os.Getenv("WENDY_CONTAINERD_ADDR")
 	if containerdAddr == "" {
 		containerdAddr = agentcontainerd.DefaultAddress
@@ -668,6 +669,11 @@ func main() {
 	// their locks so a local-socket build cannot race an mTLS build for the same
 	// app and replace its source tree while buildctl is reading it.
 	buildContextLocks := services.NewBuildContextLockSet()
+	localMeshAdminSvc := services.NewLocalMeshAdminService(logger, configPath, func() (int32, int32) {
+		_, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+		return orgID, assetID
+	})
+	localMeshAdminSvc.SetRuntimeStatusSource(meshSharing.Status)
 
 	registerAllServices := func(srv *grpc.Server) {
 		// MeshService's own-tenant check (assetIdentityFromContext / MeshDial)
@@ -719,6 +725,7 @@ func main() {
 		agentpbv2.RegisterWendyTimeSyncServiceServer(srv, timeSyncSvc)
 		agentpbv2.RegisterWendyWiFiServiceServer(srv, wifiSvc)
 		agentpbv2.RegisterWendyBluetoothServiceServer(srv, bluetoothSvc)
+		agentpbv2.RegisterWendyLocalMeshAdminServiceServer(srv, localMeshAdminSvc)
 		agentpbv2.RegisterWendyAgentUpdateServiceServer(srv, agentUpdateSvc)
 		agentpbv2.RegisterWendyOSUpdateServiceServer(srv, osUpdateSvc)
 		agentpbv2.RegisterWendyContainerServiceServer(srv, containerSvcV2)
@@ -921,7 +928,7 @@ func main() {
 					err := runConfiguredMeshCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Org: orgID, Asset: assetID, Name: name, AgentPort: uint16(mtlsPortNum),
 						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
-					}, logger, meshCatalog, func(snapshot func() localmesh.NodeSnapshot) {
+					}, logger, meshCatalog, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
 						localMeshMu.Unlock()

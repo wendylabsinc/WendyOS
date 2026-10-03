@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -57,14 +58,55 @@ func (p *HostPolicy) add(ctx context.Context, share bool, table, chain string, a
 	return nil
 }
 
-func (p *HostPolicy) remove(ctx context.Context, rules []policyRule) error {
+// remove returns only rules whose deletion failed. Successful deletions must
+// not be retried: iptables -D removes one matching rule, which could otherwise
+// belong to another owner after our rule is gone.
+func (p *HostPolicy) remove(ctx context.Context, rules []policyRule) ([]policyRule, error) {
 	var errs []error
+	var remaining []policyRule
 	for i := len(rules) - 1; i >= 0; i-- {
 		r := rules[i]
 		_, err := policyCommand(ctx, "iptables", append([]string{"-w", "3", "-t", r.table, "-D", r.chain}, r.args...)...)
-		errs = append(errs, err)
+		if err != nil {
+			errs = append(errs, err)
+			remaining = append(remaining, r)
+		}
 	}
-	return errors.Join(errs...)
+	slices.Reverse(remaining)
+	return remaining, errors.Join(errs...)
+}
+
+// A killed agent cannot run Close. Reclaim only rules bearing this policy's
+// marker before installing the new session, including duplicate rules left by
+// repeated crashes. Rule numbers are deleted in reverse so unrelated rules
+// retain their position.
+func cleanupOwnedPolicyRules(ctx context.Context) error {
+	for _, target := range []struct{ table, chain string }{
+		{"filter", "FORWARD"}, {"filter", "INPUT"}, {"nat", "POSTROUTING"},
+	} {
+		out, err := policyCommand(ctx, "iptables", "-w", "3", "-t", target.table, "-S", target.chain)
+		if err != nil {
+			return err
+		}
+		var owned []int
+		number := 0
+		for _, line := range strings.Split(string(out), "\n") {
+			if !strings.HasPrefix(line, "-A "+target.chain+" ") {
+				continue
+			}
+			number++
+			if strings.Contains(line, "-m comment --comment wendy-local-mesh-v1") {
+				owned = append(owned, number)
+			}
+		}
+		for i := len(owned) - 1; i >= 0; i-- {
+			if _, err := policyCommand(ctx, "iptables", "-w", "3", "-t", target.table,
+				"-D", target.chain, fmt.Sprint(owned[i])); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func NewHostPolicy(ctx context.Context, asset int32) (p *HostPolicy, err error) {
@@ -74,6 +116,9 @@ func NewHostPolicy(ctx context.Context, asset int32) (p *HostPolicy, err error) 
 			_ = p.Close()
 		}
 	}()
+	if err = cleanupOwnedPolicyRules(ctx); err != nil {
+		return nil, err
+	}
 	previous, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
 	if err != nil {
 		return nil, err
@@ -118,9 +163,11 @@ func (p *HostPolicy) stopSharing(ctx context.Context) error {
 		p.dns = nil
 		p.dnsDone = nil
 	}
-	err := p.remove(ctx, p.share)
-	p.share = nil
-	p.sharing = ""
+	var err error
+	p.share, err = p.remove(ctx, p.share)
+	if len(p.share) == 0 {
+		p.sharing = ""
+	}
 	return err
 }
 
@@ -133,12 +180,11 @@ func (p *HostPolicy) SetSharing(ctx context.Context, iface, dns string) (err err
 		select {
 		case exit := <-p.dnsDone:
 			p.dnsDone <- exit
-			_ = p.stopSharing(ctx)
-			return fmt.Errorf("mesh DNS proxy stopped: %v", exit)
+			return errors.Join(fmt.Errorf("mesh DNS proxy stopped: %v", exit), p.stopSharing(ctx))
 		default:
 		}
 	}
-	if desired == p.sharing {
+	if desired == p.sharing && ((desired == "" && len(p.share) == 0) || (desired != "" && p.dns != nil)) {
 		return nil
 	}
 	if err = p.stopSharing(ctx); err != nil {
@@ -152,7 +198,7 @@ func (p *HostPolicy) SetSharing(ctx context.Context, iface, dns string) (err err
 	}
 	defer func() {
 		if err != nil {
-			_ = p.stopSharing(context.Background())
+			err = errors.Join(err, p.stopSharing(context.Background()))
 		}
 	}()
 	if err = p.add(ctx, true, "nat", "POSTROUTING", "-s", "10.88.0.0/16", "-o", iface, "-j", "MASQUERADE"); err != nil {
@@ -245,8 +291,9 @@ func (p *HostPolicy) Close() error {
 		errs = append(errs, err)
 		p.forwardChanged = false
 	}
-	errs = append(errs, p.remove(ctx, p.base))
-	p.base = nil
+	var removeErr error
+	p.base, removeErr = p.remove(ctx, p.base)
+	errs = append(errs, removeErr)
 	return errors.Join(errs...)
 }
 

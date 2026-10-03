@@ -1,0 +1,41 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+// User administration of an enrolled device's local mesh. Asset certificates
+// cannot change carrier or Internet-sharing policy.
+service WendyLocalMeshAdminService {
+  rpc ConfigureLocalMesh(ConfigureLocalMeshRequest) returns (LocalMeshStatus);
+  rpc GetLocalMeshStatus(GetLocalMeshStatusRequest) returns (LocalMeshStatus);
+}
+
+message ConfigureLocalMeshRequest {
+  // Presence means update; omitted fields preserve the saved value.
+  optional bool participate = 1;
+  optional bool roam = 2;
+  optional bool share_uplink = 3;
+  optional bool nan = 4;
+  optional bool ble = 5;
+}
+
+message GetLocalMeshStatusRequest {}
+
+message LocalMeshConfiguration {
+  bool participate = 1;
+  bool roam = 2;
+  bool share_uplink = 3;
+  bool nan = 4;
+  bool ble = 5;
+  string tcp_listen = 6;
+  uint32 configured_tcp_peers = 7;
+}
+
+message LocalMeshStatus {
+  LocalMeshConfiguration configured = 1;
+  // Persisted intent is not proof that radios, routes or a donor are healthy.
+  bool runtime_available = 2;
+  string state = 3;
+  string detail = 4;
+  uint32 authenticated_peers = 5;
+  int32 gateway_asset_id = 6;
+}
