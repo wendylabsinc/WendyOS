@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,6 +90,17 @@ func (p Provider) Run(parent context.Context) error {
 		return err
 	}
 	plan := planSession(previouslyStarted, reclaimed, marked)
+	if hasAppNANNDI() {
+		// App-entitled sessions share this radio-wide cluster. If we inherited
+		// an ownership marker from an older provider, relinquish it instead
+		// of resetting nan0 out from under the app.
+		plan = sessionPlan{}
+		if marked {
+			if err := clearSessionOwner(id); err != nil {
+				return err
+			}
+		}
+	}
 	if plan.own {
 		// Record ownership before START: a process killed during START must not
 		// leave an unclaimable nan0. The exclusive provider lock is held here.
@@ -114,6 +126,13 @@ func (p Provider) Run(parent context.Context) error {
 				logger.Warn("NAN ownership changed; preserving interface", zap.Error(ownerErr))
 				return
 			}
+			if hasAppNANNDI() {
+				logger.Info("Preserving NAN interface for app-owned NDP sessions")
+				if err := clearSessionOwner(id); err != nil {
+					logger.Warn("NAN ownership marker removal failed", zap.Error(err))
+				}
+				return
+			}
 			if err := runHelper(context.Background(), "stop"); err != nil {
 				logger.Warn("NAN stop failed", zap.Error(err))
 			} else if err := clearSessionOwner(id); err != nil {
@@ -124,6 +143,9 @@ func (p Provider) Run(parent context.Context) error {
 	if plan.reset {
 		// An interrupted provider can leave old service handles and a live
 		// cluster behind. Clear them before opening this provider's radio.
+		if hasAppNANNDI() {
+			return errors.New("cannot reset shared NAN interface while an app NDI exists")
+		}
 		if err := runHelper(ctx, "stop"); err != nil {
 			return fmt.Errorf("reset abandoned NAN session: %w", err)
 		}
@@ -211,6 +233,9 @@ func (r *nanRecovery) next(noRX bool) nanResetAction {
 }
 
 func restartOwnedNAN(ctx context.Context, id Identity) error {
+	if hasAppNANNDI() {
+		return errors.New("cannot restart shared NAN interface while an app NDI exists")
+	}
 	current, err := nanControlSocketIdentity()
 	if err != nil {
 		return fmt.Errorf("NAN control socket before owned restart: %w", err)
@@ -239,6 +264,22 @@ func restartOwnedNAN(ctx context.Context, id Identity) error {
 		return err
 	}
 	return runHelper(ctx, "schedule-default")
+}
+
+var appNANNDIPattern = regexp.MustCompile(`^wa[0-9a-f]{12}$`)
+
+func hasAppNANNDI() bool {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		// Preserve shared nan0 when we cannot establish that it is unused.
+		return true
+	}
+	for _, iface := range ifaces {
+		if appNANNDIPattern.MatchString(iface.Name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p Provider) runNDIEpoch(parent context.Context, id Identity, logger *zap.Logger, allowSoftReset bool) error {

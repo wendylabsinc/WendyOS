@@ -1125,7 +1125,7 @@ func toCreateContainerProgress(progress UnpackProgress) *agentpb.CreateContainer
 	}
 }
 
-func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
+func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) (createErr error) {
 	createStarted := time.Now()
 	var replaceDuration, imageResolveDuration, unpackDuration, specDuration, snapshotDuration time.Duration
 	var replacedExisting bool
@@ -1166,10 +1166,16 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	containerName := ContainerName(appID, serviceName)
 	unlockNetwork := c.lockNetworkOperation(containerName)
 	defer unlockNetwork()
+	unlockNAN := c.lockNANOperation(appID)
+	defer unlockNAN()
 	lockStarted := time.Now()
 	c.mu.Lock()
 	lockWait := time.Since(lockStarted)
-	defer c.mu.Unlock()
+	nanLease := nanCreateLease{client: c, ctx: ctx, appID: appID}
+	defer func() {
+		c.mu.Unlock()
+		nanLease.finish(&createErr)
+	}()
 
 	// Reject creation while a concurrent StopContainer is tearing down this app.
 	// Without this check a new container could be created after resolveStopOrder
@@ -1236,10 +1242,12 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 
 		oldHadSystemAPI := false
 		oldHadData := false
+		oldHadNAN := false
 		if oldLabels, labelErr := existing.Labels(ctx); labelErr == nil {
 			oldEntitlements := parseEntitlementsFromAnnotations(oldLabels)
 			oldHadSystemAPI = entitlementsContain(oldEntitlements, appconfig.EntitlementNotifications)
 			oldHadData = entitlementsContain(oldEntitlements, appconfig.EntitlementEpisodeWrite)
+			oldHadNAN = hasNANEntitlement(oldEntitlements)
 			oldSpec, _ := existing.Spec(ctx)
 			if oldLabels[labelKeyNetworkIdentity] == desiredNetworkIdentity {
 				reusedNetworkSandbox, _ = c.reusableNetworkSandbox(ctx, containerName, desiredNetworkIdentity)
@@ -1261,11 +1269,18 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 				zap.String("container_name", containerName), zap.String("netns", reusedNetworkSandbox.path))
 		}
 		c.logger.Info("Removing existing container", zap.String("container_name", containerName))
-		// Kill the old task's whole process group — not just init — and wait
-		// for it to exit. A surviving process keeps devices/ports the new
-		// container needs (WDY-1818: /dev/video0 held for hours after replace).
+		// Terminate the old task's whole process group — not just init — and
+		// wait for it to exit. NAN apps first get SIGTERM so they can cancel
+		// supplicant publish/NDP handles; other apps keep immediate SIGKILL.
+		// A surviving process keeps devices/ports the new container needs
+		// (WDY-1818: /dev/video0 held for hours after replace).
 		if task, taskErr := existing.Task(ctx, nil); taskErr == nil {
-			if termErr := c.terminateTask(ctx, task, containerName, syscall.SIGKILL, killWaitTimeout, killWaitTimeout); termErr != nil {
+			// The container and NAN operation keys retain ownership while
+			// graceful task exit waits outside the global metadata mutex.
+			c.mu.Unlock()
+			termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN)
+			c.mu.Lock()
+			if termErr != nil {
 				c.logger.Error("Failed to delete old task during replace; forcing runtime delete",
 					zap.String("container_name", containerName),
 					zap.Error(termErr))
@@ -1286,7 +1301,12 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 			c.logger.Warn("Existing container still has a running task after kill; retrying",
 				zap.String("container_name", containerName), zap.Error(delErr))
 			if task, taskErr := existing.Task(ctx, nil); taskErr == nil {
-				if termErr := c.terminateTask(ctx, task, containerName, syscall.SIGKILL, killWaitTimeout, killWaitTimeout); termErr != nil {
+				// The container and NAN operation keys retain ownership while
+				// graceful task exit waits outside the global metadata mutex.
+				c.mu.Unlock()
+				termErr := c.terminateReplacedTask(ctx, task, containerName, oldHadNAN)
+				c.mu.Lock()
+				if termErr != nil {
 					// Mirror the first attempt's fallback above: if the
 					// re-kill itself fails, fall back to force-deleting the
 					// task via the runtime directly before retrying, rather
@@ -1307,6 +1327,14 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		}
 		if oldHadData && c.dataSocketProvider != nil {
 			c.dataSocketProvider.Release(appID, serviceName)
+		}
+		if oldHadNAN && !appCfg.HasEntitlement(appconfig.EntitlementNAN) {
+			c.mu.Unlock()
+			nanErr := c.releaseNANIfIdleLocked(ctx, appID)
+			c.mu.Lock()
+			if nanErr != nil {
+				return fmt.Errorf("cleaning up removed nan entitlement: %w", nanErr)
+			}
 		}
 		// Stop old D-Bus proxy if any.
 		if c.proxyManager != nil {
@@ -1550,6 +1578,17 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	entCfg := *appCfg
 	entCfg.AppID = appID
 	entCfg.ServiceName = serviceName
+	if entCfg.HasEntitlement(appconfig.EntitlementNAN) {
+		nanLease.attempted = true
+		c.mu.Unlock()
+		ndi, nanErr := prepareNANEntitlement(ctx, appID)
+		c.mu.Lock()
+		if nanErr != nil {
+			return fmt.Errorf("preparing nan entitlement: %w", nanErr)
+		}
+		opts.NANDataInterface = ndi
+		opts.NANClientDirectory = nanAppClientDir(appID)
+	}
 
 	// Pre-create v4l2loopback camera nodes before ApplyEntitlements runs, for
 	// apps with the camera entitlement or its deprecated alias, video
@@ -1826,6 +1865,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	if err != nil {
 		return fmt.Errorf("creating container %q: %w", containerName, err)
 	}
+	nanLease.committed = true
 	reusedNetworkSandboxCommitted = true
 	snapshotDuration = time.Since(phaseStarted)
 
@@ -2163,6 +2203,20 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// network-operation lock above still serializes this container's lifecycle.
 	muHeld = false
 	c.mu.Unlock()
+	if hasNANEntitlement(parseEntitlementsFromAnnotations(containerLabels)) {
+		unlockNAN := c.lockNANOperation(appID)
+		defer unlockNAN()
+	}
+	// Failed restart preparation/NewTask must not leave an idle app NDI.
+	// Cleanup executes outside the global map mutex, while the app lock stays held.
+	nanStartLease := nanCreateLease{client: c, ctx: ctx, appID: appID}
+	defer func() {
+		if muHeld {
+			c.mu.Unlock()
+			muHeld = false
+		}
+		nanStartLease.finishStart()
+	}()
 
 	// Reboot resilience for wendy-managed DNS files: host-network and meshed
 	// containers bind-mount /etc/resolv.conf from tmpfs paths written once at
@@ -2240,6 +2294,22 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// joins its bind mount. The second condition prevents skipping CNI for a
 	// legacy/private spec that would start in an unrelated fresh namespace.
 	entitlements := parseEntitlementsFromAnnotations(containerLabels)
+	nanTaskAppID := ""
+	if hasNANEntitlement(entitlements) {
+		nanTaskAppID = appID
+		nanStartLease.attempted = true
+		if storedSpecErr != nil {
+			return nil, fmt.Errorf("nan entitlement needs a readable container spec: %w", storedSpecErr)
+		}
+		// A restart can win the old exit callback. Retire only an idle app's
+		// previous NDI before preparing the new task's interface.
+		if nanErr := c.releaseNANIfIdleLocked(ctx, appID); nanErr != nil {
+			return nil, fmt.Errorf("cleaning stale nan entitlement before start: %w", nanErr)
+		}
+		if _, nanErr := prepareNANEntitlement(ctx, appID); nanErr != nil {
+			return nil, fmt.Errorf("preparing nan entitlement before start: %w", nanErr)
+		}
+	}
 	needsBridge := needsCNIBridgeWiring(isolation, serviceName, entitlements)
 	identity, retainsBridge := networkIdentityFromLabels(containerLabels)
 	var reusedNetworkSandbox *networkSandbox
@@ -2298,7 +2368,16 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			c.releaseMeshIngressRun(appName, meshIngressRun)
 		}
 	}()
-	if err := c.deleteStaleTask(ctx, container, appName); err != nil {
+	// Keep any runtime/shim wait outside the global container map lock.
+	muHeld = false
+	c.mu.Unlock()
+	staleErr := c.deleteStaleTask(ctx, container, appName)
+	c.mu.Lock()
+	muHeld = true
+	if c.appStopping[appID] {
+		return nil, fmt.Errorf("%w: %q", errAppStopping, appID)
+	}
+	if err := staleErr; err != nil {
 		// A STOPPED task can leave a live shim. Do not race NewTask against an
 		// incomplete delete; report a recoverable start error so the monitor
 		// retries once containerd or its shim responds again.
@@ -2685,7 +2764,8 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
 	meshIngressStarted = true
-	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, meshIngressRun, stdoutR, stderrR, stdoutW, stderrW)
+	nanStartLease.committed = true
+	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, nanTaskAppID, meshIngressRun, stdoutR, stderrR, stdoutW, stderrW)
 
 	// Recompute camera-loopback nodes/consumers from truth now that this
 	// container is running: it may have just become an entitled consumer.
@@ -3759,6 +3839,7 @@ func (c *Client) streamOutput(
 	exitStatusCh <-chan containerd.ExitStatus,
 	outputCh chan<- services.ContainerOutput,
 	appName string,
+	nanAppID string,
 	meshIngressRun uint64,
 	stdoutR, stderrR *io.PipeReader,
 	stdoutW, stderrW *io.PipeWriter,
@@ -3795,6 +3876,9 @@ func (c *Client) streamOutput(
 	taskExited := err == nil
 	if taskExited {
 		c.releaseMeshIngressRun(appName, meshIngressRun)
+		if nanAppID != "" {
+			go c.releaseNANAfterTaskExit(context.WithoutCancel(ctx), appName, nanAppID, meshIngressRun)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -4147,6 +4231,12 @@ func (c *Client) StopContainer(ctx context.Context, name string) error {
 		c.mu.Unlock()
 		return err
 	}
+	nanEntitled := false
+	for _, ctr := range ctrs {
+		if labels, labelErr := ctr.Labels(ctx); labelErr == nil && hasNANEntitlement(parseEntitlementsFromAnnotations(labels)) {
+			nanEntitled = true
+		}
+	}
 	if c.appStopping[appID] {
 		c.mu.Unlock()
 		return fmt.Errorf("%w: %q", errAppStopping, appID)
@@ -4216,6 +4306,11 @@ func (c *Client) StopContainer(ctx context.Context, name string) error {
 					errs = append(errs, stopErr)
 				}
 			}
+		}
+	}
+	if nanEntitled {
+		if nanErr := c.releaseNANIfIdle(ctx, appID); nanErr != nil {
+			errs = append(errs, fmt.Errorf("cleaning up app NAN data interface: %w", nanErr))
 		}
 	}
 
@@ -4486,6 +4581,12 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 		c.mu.Unlock()
 		return err
 	}
+	nanEntitled := false
+	for _, ctr := range ctrs {
+		if labels, labelErr := ctr.Labels(ctx); labelErr == nil && hasNANEntitlement(parseEntitlementsFromAnnotations(labels)) {
+			nanEntitled = true
+		}
+	}
 	if c.appStopping[appID] {
 		c.mu.Unlock()
 		return fmt.Errorf("%w: %q", errAppStopping, appID)
@@ -4543,6 +4644,14 @@ func (c *Client) DeleteContainer(ctx context.Context, name string, deleteImage b
 		}
 	}
 	c.releaseSocketsAfterDelete(appID, deletedServices, wholeApp, len(errs) == 0)
+	if nanEntitled && len(deletedServices) > 0 {
+		c.mu.Unlock()
+		nanErr := c.releaseNANIfIdle(ctx, appID)
+		c.mu.Lock()
+		if nanErr != nil {
+			errs = append(errs, fmt.Errorf("cleaning up app NAN data interface: %w", nanErr))
+		}
+	}
 
 	// Recompute camera-loopback nodes/consumers from truth now that some or
 	// all of this app's containers are gone (unconditional: even a partial

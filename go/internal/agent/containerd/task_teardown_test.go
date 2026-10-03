@@ -184,6 +184,42 @@ func TestTerminateTaskGracefulExitDoesNotEscalate(t *testing.T) {
 	}
 }
 
+func TestTerminateReplacedTaskGivesOnlyNANAppGrace(t *testing.T) {
+	oldGrace := nanReplacementGracePeriod
+	nanReplacementGracePeriod = 5 * time.Millisecond
+	t.Cleanup(func() { nanReplacementGracePeriod = oldGrace })
+	for _, tc := range []struct {
+		name   string
+		hadNAN bool
+		exitOn syscall.Signal
+		want   []syscall.Signal
+	}{
+		{"NAN app cleans publish on SIGTERM", true, syscall.SIGTERM, []syscall.Signal{syscall.SIGTERM}},
+		{"NAN app hangs and escalates", true, syscall.SIGKILL, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}},
+		{"ordinary app preserves immediate kill", false, syscall.SIGKILL, []syscall.Signal{syscall.SIGKILL}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := newFakeTeardownTask()
+			task.exitOnSignal = tc.exitOn
+			if err := newTeardownTestClient().terminateReplacedTask(context.Background(), task, "camera", tc.hadNAN); err != nil {
+				t.Fatal(err)
+			}
+			kills := task.recordedKills()
+			if len(kills) != len(tc.want) {
+				t.Fatalf("kills = %v, want %v", kills, tc.want)
+			}
+			for i, signal := range tc.want {
+				if kills[i].sig != signal || !kills[i].all {
+					t.Fatalf("kill %d = %+v, want %s on whole group", i, kills[i], signal)
+				}
+			}
+			if !task.deleted {
+				t.Fatal("old task was not deleted")
+			}
+		})
+	}
+}
+
 func TestTerminateTaskFallsBackToInitKillWhenGroupKillFails(t *testing.T) {
 	task := newFakeTeardownTask()
 	task.exitOnSignal = syscall.SIGKILL
