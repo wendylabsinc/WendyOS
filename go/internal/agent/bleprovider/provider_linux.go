@@ -164,6 +164,9 @@ func Run(ctx context.Context, cfg Config) error {
 			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, payload)
 		})
 	}()
+	if cfg.Status != nil {
+		cfg.Status(localmesh.CarrierStatus{Ready: true})
+	}
 	var loopErr error
 	select {
 	case <-ctx.Done():
