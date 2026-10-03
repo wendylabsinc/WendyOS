@@ -75,7 +75,8 @@ Devices are discovered over USB or LAN. On Linux, USB tethering may need a
 one-time host setup: run `wendy discover` in a terminal and accept its USB-C
 setup prompt (it needs sudo). An empty scan can also mean a blank board.
 Use `wendy-device-install` and `os_install_plan` for initial installation and
-`os_install_verify` for first boot. Full Jetson recovery updates boot firmware;
+`os_install_verify` for first boot; both are in the MCP `setup` tool group, which
+`wendy_tools(groups=["setup"])` enables. Full Jetson recovery updates boot firmware;
 rootfs-only media writes do not. Unitree G1 PC2 keeps vendor Ubuntu and receives
 the Agent, not a generic Jetson image.
 
