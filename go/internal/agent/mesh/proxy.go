@@ -51,11 +51,14 @@ type Proxy struct {
 // calls are skipped when it is.
 func NewProxy(logger *zap.Logger, dialer PeerDialer, metrics ConnMetrics) *Proxy {
 	return &Proxy{
-		logger:      logger,
-		dialer:      dialer,
-		metrics:     metrics,
-		origDst:     originalDst,
-		dialTimeout: 15 * time.Second,
+		logger:  logger,
+		dialer:  dialer,
+		metrics: metrics,
+		origDst: originalDst,
+		// A cold end-to-end QUIC handshake can cross multiple contended BLE
+		// hops before the app port ACK returns. Keep setup bounded while
+		// allowing those high-cost but healthy routes to settle.
+		dialTimeout: 60 * time.Second,
 	}
 }
 

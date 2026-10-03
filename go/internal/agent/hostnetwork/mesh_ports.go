@@ -38,6 +38,13 @@ func EnableRouteLocalnet(bridge string) error {
 // "connection refused" for every isolated mesh app that publishes a port.
 const MeshPortsChainName = "WENDY-MESH-PORTS"
 
+// The agent reconciles ingress while containerd and other startup services
+// may also update iptables. Wait a bounded five seconds for xtables.lock;
+// callers still fail closed if the lock cannot be acquired.
+func meshPortsIPTables(args ...string) ([]byte, error) {
+	return exec.Command("iptables", append([]string{"-w", "5"}, args...)...).CombinedOutput()
+}
+
 // InitMeshPortsChain ensures the WENDY-MESH-PORTS chain exists in the nat
 // table and that OUTPUT jumps into it. Idempotent and safe on every agent
 // startup, mirroring InitMeshNATChain — but hooked to OUTPUT (locally
@@ -57,15 +64,14 @@ func InitMeshPortsChain() error {
 // already present, so repeated calls never create duplicate jump rules.
 // Mirrors ensurePreroutingJump in mesh_redirect.go.
 func ensureOutputJump(chain string) error {
-	cmd := exec.Command("iptables", "-t", "nat", "-C", "OUTPUT", "-j", chain)
-	out, err := cmd.CombinedOutput()
+	out, err := meshPortsIPTables("-t", "nat", "-C", "OUTPUT", "-j", chain)
 	if err == nil {
 		return nil
 	}
 	if exitCode(err) != 1 {
 		return fmt.Errorf("iptables -t nat -C OUTPUT -j %s: %w (%s)", chain, err, strings.TrimSpace(string(out)))
 	}
-	out, err = exec.Command("iptables", "-t", "nat", "-A", "OUTPUT", "-j", chain).CombinedOutput()
+	out, err = meshPortsIPTables("-t", "nat", "-A", "OUTPUT", "-j", chain)
 	if err != nil {
 		return fmt.Errorf("iptables -t nat -A OUTPUT -j %s: %w (%s)", chain, err, strings.TrimSpace(string(out)))
 	}
@@ -134,7 +140,7 @@ func meshPortMasqueradeArgs(containerIP string, containerPort uint16) []string {
 // the same port number. The fully-owned MeshPortsChainName flush passes ""
 // since every rule in that chain is already known to be ours.
 func flushStaleRulesForPort(chain string, port uint16, requireSubstr string) error {
-	out, err := exec.Command("iptables", "-t", "nat", "-S", chain).CombinedOutput()
+	out, err := meshPortsIPTables("-t", "nat", "-S", chain)
 	if err != nil {
 		return fmt.Errorf("iptables -t nat -S %s: %w (%s)", chain, err, strings.TrimSpace(string(out)))
 	}
@@ -153,7 +159,7 @@ func flushStaleRulesForPort(chain string, port uint16, requireSubstr string) err
 		}
 		fields[0] = "-D"
 		delArgs := append([]string{"-t", "nat"}, fields...)
-		if delOut, delErr := exec.Command("iptables", delArgs...).CombinedOutput(); delErr != nil {
+		if delOut, delErr := meshPortsIPTables(delArgs...); delErr != nil {
 			return fmt.Errorf("iptables -t nat -D %s (stale rule cleanup): %w (%s)", chain, delErr, strings.TrimSpace(string(delOut)))
 		}
 	}
@@ -171,7 +177,10 @@ func AddIngressPortForward(hostPort uint16, containerIP string, containerPort ui
 	if err := flushStaleRulesForPort(MeshPortsChainName, hostPort, ""); err != nil {
 		return fmt.Errorf("flushing stale ingress forwards for port %d: %w", hostPort, err)
 	}
-	if err := flushStaleRulesForPort("POSTROUTING", containerPort, "MASQUERADE"); err != nil {
+	// A different app may publish the same container port behind a different
+	// host port. Its hairpin rule must remain in place. Only clear a stale
+	// rule for this exact container IP and port.
+	if err := flushStaleRulesForPort("POSTROUTING", containerPort, "-d "+containerIP+"/32"); err != nil {
 		return fmt.Errorf("flushing stale ingress masquerades for port %d: %w", containerPort, err)
 	}
 
@@ -181,7 +190,7 @@ func AddIngressPortForward(hostPort uint16, containerIP string, containerPort ui
 	}
 	if !exists {
 		args := append([]string{"-A", MeshPortsChainName}, meshPortForwardArgs(hostPort, containerIP, containerPort)...)
-		out, err := exec.Command("iptables", args...).CombinedOutput()
+		out, err := meshPortsIPTables(args...)
 		if err != nil {
 			return fmt.Errorf("iptables -t nat -A %s: %w (%s)", MeshPortsChainName, err, strings.TrimSpace(string(out)))
 		}
@@ -193,7 +202,7 @@ func AddIngressPortForward(hostPort uint16, containerIP string, containerPort ui
 	}
 	if !masqExists {
 		args := append([]string{"-A", "POSTROUTING"}, meshPortMasqueradeArgs(containerIP, containerPort)...)
-		out, err := exec.Command("iptables", args...).CombinedOutput()
+		out, err := meshPortsIPTables(args...)
 		if err != nil {
 			return fmt.Errorf("iptables -t nat -A POSTROUTING: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
@@ -210,7 +219,7 @@ func RemoveIngressPortForward(hostPort uint16, containerIP string, containerPort
 	}
 	if exists {
 		args := append([]string{"-D", MeshPortsChainName}, meshPortForwardArgs(hostPort, containerIP, containerPort)...)
-		out, err := exec.Command("iptables", args...).CombinedOutput()
+		out, err := meshPortsIPTables(args...)
 		if err != nil {
 			return fmt.Errorf("iptables -t nat -D %s: %w (%s)", MeshPortsChainName, err, strings.TrimSpace(string(out)))
 		}
@@ -222,7 +231,7 @@ func RemoveIngressPortForward(hostPort uint16, containerIP string, containerPort
 	}
 	if masqExists {
 		args := append([]string{"-D", "POSTROUTING"}, meshPortMasqueradeArgs(containerIP, containerPort)...)
-		out, err := exec.Command("iptables", args...).CombinedOutput()
+		out, err := meshPortsIPTables(args...)
 		if err != nil {
 			return fmt.Errorf("iptables -t nat -D POSTROUTING: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
@@ -232,7 +241,7 @@ func RemoveIngressPortForward(hostPort uint16, containerIP string, containerPort
 
 func meshPortForwardExists(hostPort uint16, containerIP string, containerPort uint16) (bool, error) {
 	args := append([]string{"-C", MeshPortsChainName}, meshPortForwardArgs(hostPort, containerIP, containerPort)...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := meshPortsIPTables(args...)
 	if err == nil {
 		return true, nil
 	}
@@ -244,7 +253,7 @@ func meshPortForwardExists(hostPort uint16, containerIP string, containerPort ui
 
 func meshPortMasqueradeExists(containerIP string, containerPort uint16) (bool, error) {
 	args := append([]string{"-C", "POSTROUTING"}, meshPortMasqueradeArgs(containerIP, containerPort)...)
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := meshPortsIPTables(args...)
 	if err == nil {
 		return true, nil
 	}

@@ -75,11 +75,20 @@ type MeshDialer struct {
 	lanLookup  func(ctx context.Context, assetID int32) (hostport string, ok bool)
 	dialLAN    func(ctx context.Context, hostport string, deviceID int32, port uint16) (net.Conn, error)
 	dialBroker func(ctx context.Context, deviceID int32, port uint16) (net.Conn, error)
+	localDial  func(ctx context.Context, deviceID int32, port uint16) (net.Conn, error)
 	now        func() time.Time
 
 	mu    sync.Mutex
 	ident meshIdentity
 	cache map[int32]lanCacheEntry
+}
+
+// SetLocalMeshDialer supplies the end-to-end QUIC path over the routed mesh.
+// A missing authenticated route is reported with meshsession.ErrNoRoute.
+func (d *MeshDialer) SetLocalMeshDialer(dial func(context.Context, int32, uint16) (net.Conn, error)) {
+	d.mu.Lock()
+	d.localDial = dial
+	d.mu.Unlock()
 }
 
 type lanCacheEntry struct {
@@ -159,10 +168,9 @@ func (d *MeshDialer) DialDevice(ctx context.Context, deviceID int32, port uint16
 			return conn, "lan-direct", nil
 		}
 		d.metrics.RecordDial(deviceID, "lan-direct", "error", durMs)
-		d.logger.Warn("mesh: LAN dial failed, falling back to cloud relay",
+		d.logger.Warn("mesh: LAN dial failed",
 			zap.Int32("device_id", deviceID), zap.String("lan_addr", hostport), zap.Error(err))
 	}
-
 	brokerStart := d.now()
 	conn, err := d.dialBroker(ctx, deviceID, port)
 	durMs := float64(d.now().Sub(brokerStart).Milliseconds())
