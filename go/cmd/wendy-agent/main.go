@@ -241,6 +241,15 @@ func main() {
 	if err := hostnetwork.InitMeshChain(); err != nil {
 		logger.Warn("failed to init mesh chain", zap.Error(err))
 	}
+	// A live app netns can survive agent restart, including its /32 LAN route.
+	// Revoke old port grants before any inherited task is reauthorized. Keep
+	// destination DROP guards so a stale route cannot fall through FORWARD.
+	if runtime.GOOS == "linux" {
+		if err := hostnetwork.RevokeOrphanLANServiceAllows(); err != nil {
+			logger.Warn("physical LAN service grants could not be revoked; projection disabled", zap.Error(err))
+			meshCatalog.DisablePhysicalLANProjection()
+		}
+	}
 	// Same non-fatal treatment for the NAT chain that redirects mesh VIP
 	// traffic to the local mesh proxy (started below, once cert material is
 	// in scope).

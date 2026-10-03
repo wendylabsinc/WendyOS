@@ -17,6 +17,7 @@ import (
 const (
 	SyncPort              = 43022
 	syncALPN              = "wendy-mesh-catalog/1"
+	syncALPNv2            = "wendy-mesh-catalog/2"
 	bundleHintLifetime    = 30 * time.Minute
 	maxBundleHintsPerPeer = 64
 	maxBundleHintPeers    = 128
@@ -40,6 +41,9 @@ type Runtime struct {
 type catalogPeer struct {
 	conn net.Conn
 	out  chan SignedRecord
+	// ready means an initial, ordered snapshot from this authenticated peer
+	// has been received and all missing origin identities were repaired.
+	ready bool
 }
 
 func NewRuntime(catalog *Catalog, snapshot func() localmesh.NodeSnapshot) (*Runtime, error) {
@@ -182,7 +186,7 @@ func (r *Runtime) serverTLS() *tls.Config {
 		Certificates: []tls.Certificate{r.catalog.creds.Certificate},
 		MinVersion:   tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		ClientAuth: tls.RequireAnyClientCert,
-		NextProtos: []string{syncALPN},
+		NextProtos: []string{syncALPNv2, syncALPN},
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
 			for _, cert := range state.PeerCertificates {
@@ -210,7 +214,7 @@ func (r *Runtime) inbound(ctx context.Context, raw net.Conn) {
 		return
 	}
 	state := conn.ConnectionState()
-	if state.NegotiatedProtocol != syncALPN || len(state.PeerCertificates) == 0 {
+	if !catalogALPN(state.NegotiatedProtocol) || len(state.PeerCertificates) == 0 {
 		return
 	}
 	chain := make([][]byte, 0, len(state.PeerCertificates))
@@ -230,7 +234,7 @@ func (r *Runtime) inbound(ctx context.Context, raw net.Conn) {
 		return
 	}
 	_ = conn.SetDeadline(time.Time{})
-	r.session(ctx, id.Asset, conn)
+	r.sessionWithProtocol(ctx, id.Asset, conn, state.NegotiatedProtocol == syncALPNv2)
 }
 
 func (r *Runtime) discover(ctx context.Context, now time.Time) {
@@ -291,6 +295,37 @@ func (r *Runtime) eligible(asset int32, now time.Time) bool {
 	return eligibleSnapshot(r.snapshot(), r.catalog.org, asset, now)
 }
 
+func catalogALPN(protocol string) bool { return protocol == syncALPNv2 || protocol == syncALPN }
+
+// ProjectionReady is true only after a current route and a fresh, complete
+// anti-entropy snapshot from the service origin. Cached records alone can be
+// stale when the origin withdrew a service during a partition.
+func (r *Runtime) ProjectionReady(asset int32) bool {
+	if !r.eligible(asset, time.Now()) {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	peer := r.peers[asset]
+	return peer != nil && peer.ready
+}
+
+// InvalidateProjection forces a new snapshot after the origin's route was
+// observed down. Closing the old session also handles a brief cut shorter than
+// Runtime's periodic route scan, for which a previously completed snapshot
+// would otherwise still look current on heal.
+func (r *Runtime) InvalidateProjection(asset int32) {
+	r.mu.Lock()
+	peer := r.peers[asset]
+	if peer != nil {
+		peer.ready = false
+	}
+	r.mu.Unlock()
+	if peer != nil {
+		_ = peer.conn.Close()
+	}
+}
+
 func (r *Runtime) outbound(ctx context.Context, asset int32) {
 	defer func() { r.mu.Lock(); delete(r.dialing, asset); r.mu.Unlock() }()
 	self, _, err := localmesh.Addresses(r.catalog.org, r.catalog.asset)
@@ -301,10 +336,13 @@ func (r *Runtime) outbound(ctx context.Context, asset int32) {
 	if err != nil {
 		return
 	}
-	conf, err := r.catalog.creds.PeerTLSWithTickets(asset, syncALPN, "catalog-tls")
+	conf, err := r.catalog.creds.PeerTLSWithTickets(asset, syncALPNv2, "catalog-tls")
 	if err != nil {
 		return
 	}
+	// Prefer the snapshot-completion protocol, but keep the original ALPN
+	// during rolling image updates. Old agents must never see a new frame kind.
+	conf.NextProtos = []string{syncALPNv2, syncALPN}
 	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	dialer := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IP(self.AsSlice())}}
@@ -317,13 +355,18 @@ func (r *Runtime) outbound(ctx context.Context, asset int32) {
 	if err := conn.HandshakeContext(dialCtx); err != nil {
 		return
 	}
-	if conn.ConnectionState().NegotiatedProtocol != syncALPN || !r.eligible(asset, time.Now()) {
+	protocol := conn.ConnectionState().NegotiatedProtocol
+	if !catalogALPN(protocol) || !r.eligible(asset, time.Now()) {
 		return
 	}
-	r.session(ctx, asset, conn)
+	r.sessionWithProtocol(ctx, asset, conn, protocol == syncALPNv2)
 }
 
 func (r *Runtime) session(ctx context.Context, asset int32, conn net.Conn) {
+	r.sessionWithProtocol(ctx, asset, conn, true)
+}
+
+func (r *Runtime) sessionWithProtocol(ctx context.Context, asset int32, conn net.Conn, snapshotMarker bool) {
 	// A failed peer session must also cancel its reader when the decoded
 	// message queue is full. Closing conn alone cannot wake a channel send,
 	// and the runtime context normally survives many peer reconnects.
@@ -336,6 +379,12 @@ func (r *Runtime) session(ctx context.Context, asset int32, conn net.Conn) {
 		return
 	}
 	r.peers[asset] = peer
+	if !snapshotMarker {
+		// Version 1 has no completion marker. Keep the previous projection
+		// behavior during a mixed-version rollout; strict route-heal freshness
+		// begins once both endpoints negotiate version 2.
+		peer.ready = true
+	}
 	r.mu.Unlock()
 	defer func() {
 		_ = conn.Close()
@@ -392,6 +441,7 @@ func (r *Runtime) session(ctx context.Context, asset int32, conn net.Conn) {
 	initial := r.catalog.Records(time.Now())
 	initialQueued := false
 	var queue legacyQueue
+	snapshotComplete := false
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -407,6 +457,9 @@ func (r *Runtime) session(ctx context.Context, asset int32, conn net.Conn) {
 			if len(initial) == 0 {
 				initial = nil
 				initialQueued = true
+				if snapshotMarker && queue.add(Message{Kind: "snapshot-done"}) != nil {
+					return
+				}
 			}
 		}
 		var next chan Message
@@ -441,6 +494,16 @@ func (r *Runtime) session(ctx context.Context, asset int32, conn net.Conn) {
 			replies, changed, err := syncer.Receive(m, time.Now())
 			if err != nil {
 				return
+			}
+			if m.Kind == "snapshot-done" {
+				snapshotComplete = true
+			}
+			if snapshotComplete && !syncer.PendingIdentity() {
+				r.mu.Lock()
+				if r.peers[asset] == peer {
+					peer.ready = true
+				}
+				r.mu.Unlock()
 			}
 			if queue.add(replies...) != nil {
 				return

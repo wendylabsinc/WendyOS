@@ -623,6 +623,7 @@ func rebuildCachesFromLabels(containerLabels []map[string]string) (
 // recovery. Idempotent — fills only entries not already present; a
 // concurrently-created live entry always wins.
 func (c *Client) RebuildAppStateCaches(ctx context.Context) {
+	c.reconcileLANReplyGuards(ctx)
 	ctx = c.withNamespace(ctx)
 	ctrs, err := c.client.Containers(ctx, fmt.Sprintf("labels.%q", labelKeyAppID))
 	if err != nil {
@@ -2448,7 +2449,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		}
 		if isolation == "isolated" {
 			if ent, ok := findMeshEntitlement(entitlements); ok {
-				if err := c.applyMeshIngressPorts(appName, appID, reusedNetworkSandbox.ip, ent.Ports); err != nil {
+				if err := c.applyMeshIngressPorts(appName, appID, reusedNetworkSandbox.path, reusedNetworkSandbox.ip, ent.Ports); err != nil {
 					return nil, failStartedTask(fmt.Errorf("mesh ingress setup failed for reused sandbox %q: %w", appName, err))
 				}
 				if err := hostnetwork.AddMeshUDPIntercept(reusedNetworkSandbox.ip, ent.ServiceCIDR, bridgeName(appID), mesh.UDPProxyPort); err != nil {
@@ -2612,7 +2613,8 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			// does not actually have. applyMeshEgress is a complete no-op for
 			// apps without that entitlement (including bridge-mode apps).
 			if isolation == "isolated" {
-				if meshErr := c.applyMeshEgress(entitlements, appName, appID, netnsPath, ip); meshErr != nil {
+				if meshErr := c.applyMeshEgress(entitlements, appName, appID, netnsPath,
+					fmt.Sprintf("/proc/%d/ns/net", task.Pid()), ip); meshErr != nil {
 					c.logger.Error("mesh egress setup failed; failing container start",
 						zap.String("app_id", appID), zap.Error(meshErr))
 					return nil, failStartedTask(fmt.Errorf("mesh egress setup failed for app %q: %w", appID, meshErr))
@@ -4425,6 +4427,7 @@ func (c *Client) deleteOne(ctx context.Context, ctr containerd.Container, wantIm
 				zap.Error(proxyErr))
 		}
 	}
+	c.reconcileLANReplyGuards(ctx)
 	c.logger.Info("Container deleted", zap.String("container_id", ctr.ID()))
 	return imgName, nil
 }
@@ -4745,7 +4748,7 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 		return
 	}
 	run := c.beginMeshIngressRun(ctr.ID())
-	if err := c.applyMeshIngressPorts(ctr.ID(), appID, ip, ent.Ports); err != nil {
+	if err := c.applyMeshIngressPorts(ctr.ID(), appID, path, ip, ent.Ports); err != nil {
 		cancelWait()
 		c.releaseMeshIngressRun(ctr.ID(), run)
 		scheduleRetry("port setup", err)

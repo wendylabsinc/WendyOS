@@ -18,11 +18,12 @@ type meshCatalogManager struct{}
 func newMeshCatalogManager(string, *meshingress.Registry, *zap.Logger) *meshCatalogManager {
 	return &meshCatalogManager{}
 }
-func (*meshCatalogManager) Activate(context.Context, *localmesh.Credentials, func() localmesh.NodeSnapshot, func()) error {
+func (*meshCatalogManager) Activate(context.Context, *localmesh.Credentials, func() localmesh.NodeSnapshot, func(), bool, bool) error {
 	return nil
 }
 func (*meshCatalogManager) Deactivate() {}
-func (*meshCatalogManager) StartMeshApp(string, string, string, string, []appconfig.PortMapping) error {
+func (*meshCatalogManager) DisablePhysicalLANProjection() {}
+func (*meshCatalogManager) StartMeshApp(string, string, string, string, string, string, []appconfig.PortMapping) error {
 	return nil
 }
 func (*meshCatalogManager) StopMeshApp(string) {}
