@@ -27,6 +27,177 @@ type tlsByteConn struct {
 	written atomic.Int64
 }
 
+type countedPacketConn struct {
+	net.PacketConn
+	written atomic.Int64
+}
+
+func (c *countedPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	n, err := c.PacketConn.WriteTo(p, addr)
+	c.written.Add(int64(n))
+	return n, err
+}
+
+// Two fresh UDP transports model a NAN-to-LAN carrier change: the QUIC
+// connection and socket are replaced, but the authenticated peer and TLS
+// security context are identical. The ticket must survive that change without
+// allowing a different peer or protocol to use it.
+func TestLinkQUICResumesAcrossCarriers(t *testing.T) {
+	a, b := testCredentials(t)
+	type result struct {
+		resumed                  bool
+		clientBytes, serverBytes int64
+	}
+	handshake := func(carrier, alpn, scope string) (result, error) {
+		clientTLS, err := a.PeerTLSWithTickets(b.Asset, alpn, scope)
+		if err != nil {
+			return result{}, err
+		}
+		serverTLS, err := b.PeerTLSWithTickets(a.Asset, alpn, scope)
+		if err != nil {
+			return result{}, err
+		}
+		var serverSocket, clientSocket net.PacketConn
+		if carrier == "lan" {
+			// The configured and discovered LAN paths frame QUIC packets on
+			// a TCP socket. QUIC's TLS session state must also work here.
+			tcpListener, listenErr := net.Listen("tcp4", "127.0.0.1:0")
+			if listenErr != nil {
+				return result{}, listenErr
+			}
+			clientTCP, dialErr := net.Dial("tcp4", tcpListener.Addr().String())
+			if dialErr != nil {
+				tcpListener.Close()
+				return result{}, dialErr
+			}
+			serverTCP, acceptErr := tcpListener.Accept()
+			tcpListener.Close()
+			if acceptErr != nil {
+				clientTCP.Close()
+				return result{}, acceptErr
+			}
+			serverSocket, err = NewTCPPacketConn(serverTCP)
+			if err == nil {
+				clientSocket, err = NewTCPPacketConn(clientTCP)
+			}
+			if err != nil {
+				serverTCP.Close()
+				clientTCP.Close()
+				return result{}, err
+			}
+		} else {
+			serverSocket, err = net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				return result{}, err
+			}
+			clientSocket, err = net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				serverSocket.Close()
+				return result{}, err
+			}
+		}
+		defer serverSocket.Close()
+		defer clientSocket.Close()
+		serverMeter := &countedPacketConn{PacketConn: serverSocket}
+		clientMeter := &countedPacketConn{PacketConn: clientSocket}
+		serverTransport := &quic.Transport{Conn: serverMeter}
+		defer serverTransport.Close()
+		clientTransport := &quic.Transport{Conn: clientMeter}
+		defer clientTransport.Close()
+		listener, err := serverTransport.Listen(serverTLS, QUICConfig())
+		if err != nil {
+			return result{}, err
+		}
+		defer listener.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		serverDone := make(chan error, 1)
+		go func() {
+			conn, err := listener.Accept(ctx)
+			if err != nil {
+				serverDone <- err
+				return
+			}
+			defer conn.CloseWithError(0, "done")
+			stream, err := conn.AcceptStream(ctx)
+			if err == nil {
+				var one [1]byte
+				_, err = io.ReadFull(stream, one[:])
+			}
+			serverDone <- err
+		}()
+		conn, err := clientTransport.Dial(ctx, listener.Addr(), clientTLS, QUICConfig())
+		if err != nil {
+			return result{}, err
+		}
+		defer conn.CloseWithError(0, "done")
+		state := conn.ConnectionState()
+		if state.TLS.NegotiatedProtocol != alpn {
+			return result{}, fmt.Errorf("unexpected QUIC ALPN %q", state.TLS.NegotiatedProtocol)
+		}
+		stream, err := conn.OpenStreamSync(ctx)
+		if err == nil {
+			_, err = stream.Write([]byte{1})
+		}
+		if err != nil {
+			return result{}, err
+		}
+		if err = <-serverDone; err != nil {
+			return result{}, err
+		}
+		// QUIC sends the TLS 1.3 ticket after the handshake. Wait until the
+		// client processes it before tearing down this fixture socket.
+		until := time.Now().Add(time.Second)
+		for {
+			if _, ok := clientTLS.ClientSessionCache.Get(clientTLS.ServerName); ok {
+				break
+			}
+			if time.Now().After(until) {
+				return result{}, fmt.Errorf("QUIC session ticket was not received")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		return result{state.TLS.DidResume, clientMeter.written.Load(), serverMeter.written.Load()}, nil
+	}
+	cold, err := handshake("nan", LinkALPN, LinkQUICSessionScope)
+	if err != nil || cold.resumed {
+		t.Fatalf("cold NAN QUIC: %+v %v", cold, err)
+	}
+	warm, err := handshake("lan", LinkALPN, LinkQUICSessionScope)
+	if err != nil || !warm.resumed {
+		t.Fatalf("LAN QUIC after NAN: %+v %v", warm, err)
+	}
+	t.Logf("QUIC NAN-to-LAN packet payload bytes: cold client=%d server=%d total=%d; resumed client=%d server=%d total=%d",
+		cold.clientBytes, cold.serverBytes, cold.clientBytes+cold.serverBytes,
+		warm.clientBytes, warm.serverBytes, warm.clientBytes+warm.serverBytes)
+	if warm.clientBytes+warm.serverBytes >= cold.clientBytes+cold.serverBytes {
+		t.Fatalf("cross-carrier resumption did not save bytes: cold=%+v warm=%+v", cold, warm)
+	}
+	separate, err := handshake("nan", "wendy-app-mesh/1", "app-quic")
+	if err != nil || separate.resumed {
+		t.Fatalf("app QUIC resumed mesh link ticket: %+v %v", separate, err)
+	}
+	separate, err = handshake("nan", LinkALPN, "ble-tls")
+	if err != nil || separate.resumed {
+		t.Fatalf("BLE TLS scope resumed mesh link ticket: %+v %v", separate, err)
+	}
+	var peerCerts []*x509.Certificate
+	for _, der := range b.Certificate.Certificate {
+		cert, parseErr := x509.ParseCertificate(der)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		peerCerts = append(peerCerts, cert)
+	}
+	wrongAsset, err := a.PeerTLSWithTickets(b.Asset+1, LinkALPN, LinkQUICSessionScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wrongAsset.VerifyConnection(tls.ConnectionState{DidResume: true, PeerCertificates: peerCerts}); err == nil {
+		t.Fatal("resumed cross-carrier QUIC bypassed peer asset pin")
+	}
+}
+
 func (c *tlsByteConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	c.written.Add(int64(n))
@@ -117,6 +288,23 @@ func TestScopedPeerTLSResumesOnlyWithinCredentialALPNAndTransport(t *testing.T) 
 		warm.clientHandshake, warm.clientTotal, warm.serverHandshake, warm.serverTotal)
 	if warm.clientTotal+warm.serverTotal >= cold.clientTotal+cold.serverTotal {
 		t.Fatal("resumed handshake did not save TLS record bytes")
+	}
+
+	// Keep the client's real ticket while aggregate pressure evicts its server
+	// secret. TLS must authenticate fully, then issue a usable fresh ticket.
+	memory := b.ticketCache()
+	memory.mu.Lock()
+	memory.maxEntries = 1
+	memory.mu.Unlock()
+	memory.put(sessionKey{scope: "pressure", key: "replacement"}, []byte{1}, nil)
+	memory.mu.Lock()
+	memory.maxEntries = meshSessionCacheEntries
+	memory.mu.Unlock()
+	if fallback, err := handshake(a, "wendy-mesh-test/1", "ble-tls"); err != nil || fallback.resumed {
+		t.Fatalf("evicted server secret failed full mTLS fallback: %+v %v", fallback, err)
+	}
+	if fresh, err := handshake(a, "wendy-mesh-test/1", "ble-tls"); err != nil || !fresh.resumed {
+		t.Fatalf("post-eviction replacement ticket did not resume: %+v %v", fresh, err)
 	}
 	if other, err := handshake(a, "wendy-mesh-test/1", "nan-quic"); err != nil || other.resumed {
 		t.Fatalf("cross-transport ticket reused=%+v err=%v", other, err)
