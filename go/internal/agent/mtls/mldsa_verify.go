@@ -11,6 +11,7 @@ import (
 	circlSign "github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/timefmt"
 	"go.uber.org/zap"
@@ -189,6 +190,10 @@ func effectiveVerificationTime(realNow, notBeforeFloor, certNotBefore time.Time)
 // so that certs issued at provisioning time are still accepted. Pass a zero
 // time.Time to disable the floor.
 func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time) func([][]byte, [][]*x509.Certificate) error {
+	return buildVerifyPeerCertificateWithDelegation(caPool, caCerts, logger, notBeforeFloor, false)
+}
+
+func buildVerifyPeerCertificateWithDelegation(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time, allowDelegation bool) func([][]byte, [][]*x509.Certificate) error {
 	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		if len(rawCerts) == 0 {
 			return fmt.Errorf("no client certificate presented")
@@ -197,6 +202,13 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 		leaf, err := x509.ParseCertificate(rawCerts[0])
 		if err != nil {
 			return fmt.Errorf("parsing client certificate: %w", err)
+		}
+
+		if allowDelegation {
+			leaf, err = interceptor.DelegatedCertificateForVerification(leaf)
+			if err != nil {
+				return err
+			}
 		}
 
 		realNow := time.Now()
