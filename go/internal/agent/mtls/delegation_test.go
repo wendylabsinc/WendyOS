@@ -1,9 +1,11 @@
 package mtls
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -28,6 +30,7 @@ func TestDelegatedCertificateOnlyAcceptedByScopedGRPCVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	crl := serveTestCRL(t, ca, key)
 	owner := "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/user"
 	device := "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/robot"
 	raw := func(s string) asn1.RawValue { return asn1.RawValue{Tag: asn1.TagUTF8String, Bytes: []byte(s)} }
@@ -41,7 +44,7 @@ func TestDelegatedCertificateOnlyAcceptedByScopedGRPCVerifier(t *testing.T) {
 	ent, _ := asn1.Marshal([]asn1.RawValue{raw("entitlement:wendy.agent.services.v2.WendyContainerService:StopContainer:allow")})
 	u, _ := url.Parse(owner)
 	clientKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leaf := &x509.Certificate{SerialNumber: big.NewInt(42), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, URIs: []*url.URL{u}, ExtraExtensions: []pkix.Extension{{Id: delegation.ScopeOID, Critical: true, Value: scope}, {Id: delegation.EntitlementsOID, Value: ent}}}
+	leaf := &x509.Certificate{CRLDistributionPoints: []string{crl.server.URL}, SerialNumber: big.NewInt(42), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, URIs: []*url.URL{u}, ExtraExtensions: []pkix.Extension{{Id: delegation.ScopeOID, Critical: true, Value: scope}, {Id: delegation.EntitlementsOID, Value: ent}}}
 	der, err := x509.CreateCertificate(rand.Reader, leaf, ca, &clientKey.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +56,31 @@ func TestDelegatedCertificateOnlyAcceptedByScopedGRPCVerifier(t *testing.T) {
 	}
 	if err := buildVerifyPeerCertificateWithDelegation(pool, []*x509.Certificate{ca}, nil, time.Time{}, true)([][]byte{der}, nil); err != nil {
 		t.Fatalf("scoped verifier rejected valid delegated cert: %v", err)
+	}
+
+	// Revocation must consume the original critical-scope certificate, without
+	// weakening generic TLS verification or mutating its extension list.
+	peerLeaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(peerLeaf.UnhandledCriticalExtensions) == 0 {
+		t.Fatal("test certificate lacks critical FleetScope")
+	}
+	checker := newRevocationChecker([]*x509.Certificate{ca})
+	now := time.Now()
+	checker.now = func() time.Time { return now }
+	state := tls.ConnectionState{PeerCertificates: []*x509.Certificate{peerLeaf}}
+	if err := checker.check(context.Background(), state); err != nil {
+		t.Fatalf("revocation rejected valid scoped certificate: %v", err)
+	}
+	if len(peerLeaf.UnhandledCriticalExtensions) == 0 {
+		t.Fatal("revocation mutated critical FleetScope")
+	}
+	crl.publish(t, ca, key, 2, now, now.Add(time.Hour), peerLeaf.SerialNumber)
+	now = now.Add(revocationRefresh)
+	if err := checker.check(context.Background(), state); err == nil {
+		t.Fatal("revoked scoped certificate accepted")
 	}
 	leaf.ExtraExtensions[0].Critical = false
 	der, err = x509.CreateCertificate(rand.Reader, leaf, ca, &clientKey.PublicKey, key)

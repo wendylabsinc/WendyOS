@@ -80,11 +80,9 @@ func peerAddr(ctx context.Context) string {
 // that do not satisfy this requirement. Call this from RPC handlers that require
 // explicit per-handler auth enforcement in addition to the server-level interceptor.
 //
-// Certificate revocation is handled at the TLS layer by the VerifyPeerCertificate
-// hook in mtls.NewTLSConfig: it enforces a maximum certificate lifetime (2 years)
-// as a compensating control, bounding exposure from a compromised credential.
-// By the time this function runs the handshake has already applied that policy,
-// so no duplicate revocation check is needed here.
+// The server checks signed CRLs at the TLS handshake, on each RPC, and while
+// streams remain open. Certificate lifetime limits do not establish revocation
+// status. This function checks the authenticated identity and tenant only.
 //
 // Audit logging: successful checks are silent. Rejections and grace-mode
 // exceptions include the certificate serial number when available. Subject CN

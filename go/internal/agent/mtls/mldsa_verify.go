@@ -17,14 +17,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// maxCertLifetime is the maximum accepted certificate validity window.
-// Certificates valid for longer than this are rejected because they cannot be
-// promptly revoked: Go's crypto/tls does not fetch CRL distribution points
-// during the TLS handshake, and doing so from server code introduces SSRF
-// vectors, cache-poisoning risk, and availability dependencies.
-//
-// The value is 732 days (2 × 365 + 2) to cover any real-world "2-year"
-// certificate whose validity window includes a leap-year Feb 29 (max 731 days).
+// maxCertLifetime independently limits accepted certificate lifetimes.
+// Revocation is enforced by signed CRL checks in revocation.go.
 const maxCertLifetime = (2*365 + 2) * 24 * time.Hour
 
 // maxClockSkewTolerance is the maximum amount by which the NotBefore floor may
@@ -34,9 +28,8 @@ const maxCertLifetime = (2*365 + 2) * 24 * time.Hour
 // future (e.g. years ahead) cannot be accepted by a device with a stuck clock.
 const maxClockSkewTolerance = 24 * time.Hour
 
-// checkRevocation enforces that leaf was issued with a validity window short
-// enough that a compromised credential expires within maxCertLifetime even
-// without an explicit CRL/OCSP revocation check.
+// checkRevocation is the legacy name for the certificate lifetime ceiling.
+// It is independent of the actual CRL revocation check.
 func checkRevocation(leaf *x509.Certificate) error {
 	lifetime := leaf.NotAfter.Sub(leaf.NotBefore)
 	if lifetime > maxCertLifetime {

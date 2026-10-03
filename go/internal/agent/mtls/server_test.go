@@ -36,7 +36,8 @@ func TestPKIDeviceTLSRequiresSameTenantOnFullAndResumedSessions(t *testing.T) {
 				t.Fatal(err)
 			}
 			certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
-			caPEM, _ := testCACertificate(t, "root")
+			ca, caKey, caPEM := testCAKeyPair(t)
+			crl := serveTestCRL(t, ca, caKey)
 			cfg, err := NewTLSConfig(certPEM, caPEM, keyPEM, nil, time.Time{})
 			if err != nil {
 				t.Fatal(err)
@@ -55,7 +56,17 @@ func TestPKIDeviceTLSRequiresSameTenantOnFullAndResumedSessions(t *testing.T) {
 					{"urn:wendy:org:7:user:alice", true},
 				} {
 					u, _ := url.Parse(tc.principal)
-					cs := tls.ConnectionState{DidResume: resumed, PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{u}}}}
+					peer := revocationPeer(t, ca, caKey, crl.server.URL)
+					peer.URIs = []*url.URL{u}
+					der, err := x509.CreateCertificate(rand.Reader, peer, ca, &caKey.PublicKey, caKey)
+					if err != nil {
+						t.Fatal(err)
+					}
+					peer, err = x509.ParseCertificate(der)
+					if err != nil {
+						t.Fatal(err)
+					}
+					cs := tls.ConnectionState{DidResume: resumed, PeerCertificates: []*x509.Certificate{peer}}
 					if err := cfg.VerifyConnection(cs); (err != nil) != tc.wantErr {
 						t.Errorf("principal=%s resumed=%v error=%v", tc.principal, resumed, err)
 					}
@@ -113,7 +124,7 @@ func testCACertificate(t *testing.T, commonName string) (certPEM, keyPEM string)
 		Subject:               pkix.Name{CommonName: commonName},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -293,7 +304,7 @@ func testCAKeyPair(t *testing.T) (cert *x509.Certificate, key *ecdsa.PrivateKey,
 		Subject:               pkix.Name{CommonName: "Test Peer-Pinning CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}

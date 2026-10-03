@@ -16,6 +16,9 @@ import (
 )
 
 type resumptionPKI struct {
+	ca                                 *x509.Certificate
+	caKey                              *ecdsa.PrivateKey
+	crl                                *crlFixture
 	serverCertPEM, serverKeyPEM, caPEM string
 	clientCert                         tls.Certificate
 }
@@ -31,7 +34,7 @@ func newResumptionPKI(t *testing.T) resumptionPKI {
 		Subject:               pkix.Name{CommonName: "Resumption Test CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(48 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
@@ -44,18 +47,20 @@ func newResumptionPKI(t *testing.T) resumptionPKI {
 		t.Fatalf("parse CA: %v", err)
 	}
 
+	crl := serveTestCRL(t, caCert, caKey)
 	leaf := func(cn string, eku x509.ExtKeyUsage) (string, string, tls.Certificate) {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("gen key: %v", err)
 		}
 		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(time.Now().UnixNano()),
-			Subject:      pkix.Name{CommonName: cn},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(24 * time.Hour),
-			KeyUsage:     x509.KeyUsageDigitalSignature,
-			ExtKeyUsage:  []x509.ExtKeyUsage{eku},
+			SerialNumber:          big.NewInt(time.Now().UnixNano()),
+			Subject:               pkix.Name{CommonName: cn},
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			KeyUsage:              x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:           []x509.ExtKeyUsage{eku},
+			CRLDistributionPoints: []string{crl.server.URL},
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
 		if err != nil {
@@ -72,7 +77,7 @@ func newResumptionPKI(t *testing.T) resumptionPKI {
 
 	serverCertPEM, serverKeyPEM, _ := leaf("resumption-server", x509.ExtKeyUsageServerAuth)
 	_, _, clientCert := leaf("resumption-client", x509.ExtKeyUsageClientAuth)
-	return resumptionPKI{
+	return resumptionPKI{ca: caCert, caKey: caKey, crl: crl,
 		serverCertPEM: serverCertPEM,
 		serverKeyPEM:  serverKeyPEM,
 		caPEM:         string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
@@ -95,6 +100,8 @@ func newResumptionPKI(t *testing.T) resumptionPKI {
 // the synchronized `now` / `stripWindow` indirection below, which the
 // installed hooks consult via atomic loads on every handshake.
 type resumptionEnv struct {
+	pki         resumptionPKI
+	revocation  *revocationChecker
 	addr        string
 	cfg         *tls.Config
 	clientCert  tls.Certificate
@@ -117,11 +124,12 @@ type resumptionEnv struct {
 func newResumptionEnv(t *testing.T, ticketsDisabled bool) *resumptionEnv {
 	t.Helper()
 	pki := newResumptionPKI(t)
-	cfg, err := NewTLSConfig(pki.serverCertPEM, pki.caPEM, pki.serverKeyPEM, nil, time.Time{})
+	revocation := newRevocationChecker([]*x509.Certificate{pki.ca})
+	cfg, err := newTLSConfig(pki.serverCertPEM, pki.caPEM, pki.serverKeyPEM, nil, time.Time{}, false, revocation)
 	if err != nil {
 		t.Fatalf("NewTLSConfig: %v", err)
 	}
-	env := &resumptionEnv{cfg: cfg, verifyCount: new(atomic.Int32), srvResumed: make(chan bool, 16)}
+	env := &resumptionEnv{pki: pki, revocation: revocation, cfg: cfg, verifyCount: new(atomic.Int32), srvResumed: make(chan bool, 16)}
 	realNow := time.Now
 	env.now.Store(&realNow)
 
@@ -272,5 +280,41 @@ func TestResumptionTicketsDisabledStillConnects(t *testing.T) {
 	c2, s2 := env.dial(t, cache)
 	if c2 || s2 {
 		t.Fatalf("resumed with tickets disabled (client=%v server=%v)", c2, s2)
+	}
+}
+
+func TestRevokedCertificateRejectedOnTLSResumption(t *testing.T) {
+	env := newResumptionEnv(t, false)
+	cache := tls.NewLRUClientSessionCache(4)
+	env.dial(t, cache)
+	clientResumed, serverResumed := env.dial(t, cache)
+	if !clientResumed || !serverResumed {
+		t.Fatal("test did not establish TLS resumption")
+	}
+	leaf, err := x509.ParseCertificate(env.clientCert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Second)
+	env.pki.crl.publish(t, env.pki.ca, env.pki.caKey, 2, now, now.Add(time.Hour), leaf.SerialNumber)
+	// Expire only the revocation cache. Preserve the live TLS session ticket.
+	env.revocation.mu <- struct{}{}
+	for key, entry := range env.revocation.cache {
+		entry.fetched = time.Time{}
+		env.revocation.cache[key] = entry
+	}
+	<-env.revocation.mu
+	before := env.verifyCount.Load()
+	conn, err := tls.Dial("tcp", env.addr, &tls.Config{Certificates: []tls.Certificate{env.clientCert}, InsecureSkipVerify: true, ClientSessionCache: cache, MinVersion: tls.VersionTLS13})
+	if err == nil {
+		defer conn.Close()
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		_, err = conn.Read(make([]byte, 1))
+	}
+	if err == nil {
+		t.Fatal("revoked session resumed successfully")
+	}
+	if env.verifyCount.Load() != before {
+		t.Fatal("test used a full handshake instead of exercising resumed VerifyConnection")
 	}
 }

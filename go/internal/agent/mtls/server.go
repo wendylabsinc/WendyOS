@@ -2,6 +2,7 @@
 package mtls
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -27,10 +28,10 @@ import (
 // certs remain valid when the device clock has not yet been synchronised via NTP. Pass a
 // zero time.Time to disable the floor.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
-	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor, false)
+	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor, false, nil)
 }
 
-func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time, allowDelegation bool) (*tls.Config, error) {
+func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time, allowDelegation bool, revocation *revocationChecker) (*tls.Config, error) {
 	if chainPEM == "" {
 		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
@@ -100,6 +101,20 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 			}
 		}
 	}
+	if revocation == nil {
+		revocation = newRevocationChecker(caCerts)
+	}
+	previous := cfg.VerifyConnection
+	cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+		if previous != nil {
+			if err := previous(cs); err != nil {
+				return err
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), revocationTimeout)
+		defer cancel()
+		return revocation.check(ctx, cs)
+	}
 	return cfg, nil
 }
 
@@ -113,7 +128,12 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 // expected and orgMode are forwarded to the mandatory mTLS interceptors, which
 // enforce tenant-equality between the connecting client cert and this device.
 func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
-	tlsConfig, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor, true)
+	roots, err := parseCertsFromPEM([]byte(chainPEM))
+	if err != nil {
+		return nil, err
+	}
+	revocation := newRevocationChecker(roots)
+	tlsConfig, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, notBeforeFloor, true, revocation)
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
@@ -129,8 +149,8 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		grpc.Creds(creds),
 		// mTLS interceptors are mandatory: they run before any caller-provided interceptors
 		// so that no handler can be reached without a verified client certificate.
-		grpc.ChainUnaryInterceptor(interceptor.UnaryMTLSInterceptor(logger, expected, orgMode), interceptor.UnaryDelegationInterceptor(devicePrincipal)),
-		grpc.ChainStreamInterceptor(interceptor.StreamMTLSInterceptor(logger, expected, orgMode), interceptor.StreamDelegationInterceptor(devicePrincipal)),
+		grpc.ChainUnaryInterceptor(interceptor.UnaryMTLSInterceptor(logger, expected, orgMode), revocation.unaryInterceptor(), interceptor.UnaryDelegationInterceptor(devicePrincipal)),
+		grpc.ChainStreamInterceptor(interceptor.StreamMTLSInterceptor(logger, expected, orgMode), revocation.streamInterceptor(), interceptor.StreamDelegationInterceptor(devicePrincipal)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{

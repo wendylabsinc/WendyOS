@@ -10,6 +10,8 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -120,7 +122,7 @@ func newIntegrationPKI(t *testing.T) integrationPKI {
 		Subject:               pkix.Name{CommonName: "Resumption E2E CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(48 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
@@ -133,18 +135,25 @@ func newIntegrationPKI(t *testing.T) integrationPKI {
 		t.Fatalf("parse CA: %v", err)
 	}
 
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(1), ThisUpdate: time.Now().Add(-time.Minute), NextUpdate: time.Now().Add(time.Hour)}, caCert, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Write(crlDER) }))
+	t.Cleanup(crlServer.Close)
 	leaf := func(cn string, eku x509.ExtKeyUsage) (certPEM, keyPEM string) {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("gen key: %v", err)
 		}
 		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(time.Now().UnixNano()),
-			Subject:      pkix.Name{CommonName: cn},
-			NotBefore:    time.Now().Add(-time.Hour),
-			NotAfter:     time.Now().Add(24 * time.Hour),
-			KeyUsage:     x509.KeyUsageDigitalSignature,
-			ExtKeyUsage:  []x509.ExtKeyUsage{eku},
+			SerialNumber:          big.NewInt(time.Now().UnixNano()),
+			Subject:               pkix.Name{CommonName: cn},
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			KeyUsage:              x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:           []x509.ExtKeyUsage{eku},
+			CRLDistributionPoints: []string{crlServer.URL},
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
 		if err != nil {
