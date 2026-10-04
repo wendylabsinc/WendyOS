@@ -84,9 +84,10 @@ type legacyLoginSession struct {
 	tokenReceived chan struct{} // closed when the browser delivers the enrollment token
 	done          chan struct{} // closed when the session ends, signed in or not
 
-	mu       sync.Mutex
-	err      error
-	warnings []string
+	mu           sync.Mutex
+	err          error
+	warnings     []string
+	keyAlgorithm string
 }
 
 // URL is the sign-in link for a browser on this machine.
@@ -119,10 +120,19 @@ func (l *legacyLoginSession) Warnings() []string {
 	return append([]string(nil), l.warnings...)
 }
 
-func (l *legacyLoginSession) finish(err error, warnings []string) {
+// KeyAlgorithm names the algorithm of the session key this login generated;
+// empty until the session signs in.
+func (l *legacyLoginSession) KeyAlgorithm() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.keyAlgorithm
+}
+
+func (l *legacyLoginSession) finish(err error, warnings []string, keyAlgorithm string) {
 	l.mu.Lock()
 	l.err = err
 	l.warnings = warnings
+	l.keyAlgorithm = keyAlgorithm
 	l.mu.Unlock()
 	close(l.done)
 }
@@ -233,36 +243,37 @@ func beginLegacyLogin(ctx context.Context, cloudDashboard, cloudGRPC string) (*l
 		case result = <-tokenCh:
 			close(session.tokenReceived)
 		case loginErr := <-errCh:
-			session.finish(fmt.Errorf("login failed: %w", loginErr), nil)
+			session.finish(fmt.Errorf("login failed: %w", loginErr), nil, "")
 			return
 		case <-ctx.Done():
-			session.finish(ctx.Err(), nil)
+			session.finish(ctx.Err(), nil, "")
 			return
 		case <-timeout.C:
-			session.finish(browserLoginTimeoutError(), nil)
+			session.finish(browserLoginTimeoutError(), nil, "")
 			return
 		}
-		warnings, err := completeLegacyLogin(ctx, cloudDashboard, cloudGRPC, result)
-		session.finish(err, warnings)
+		warnings, keyAlgorithm, err := completeLegacyLogin(ctx, cloudDashboard, cloudGRPC, result)
+		session.finish(err, warnings, keyAlgorithm)
 	}()
 	return session, nil
 }
 
 // completeLegacyLogin turns the browser's enrollment token into a saved
 // certificate: a new key, a CSR the cloud signs, and a new auth context in
-// config.json. It returns the cloud's issuance warnings.
-func completeLegacyLogin(ctx context.Context, cloudDashboard, cloudGRPC string, result loginCallbackResult) ([]string, error) {
+// config.json. It returns the cloud's issuance warnings and the session key's
+// algorithm.
+func completeLegacyLogin(ctx context.Context, cloudDashboard, cloudGRPC string, result loginCallbackResult) ([]string, string, error) {
 	privateKeyPEM, err := certs.GenerateKeyPair()
 	if err != nil {
-		return nil, fmt.Errorf("generating key pair: %w", err)
+		return nil, "", fmt.Errorf("generating key pair: %w", err)
 	}
 	commonName, identityURIs, err := enrollmentTokenIdentity(result.EnrollmentToken)
 	if err != nil {
-		return nil, fmt.Errorf("reading enrollment token identity: %w", err)
+		return nil, "", fmt.Errorf("reading enrollment token identity: %w", err)
 	}
 	csrPEM, err := certs.GenerateCSR([]byte(privateKeyPEM), commonName, identityURIs)
 	if err != nil {
-		return nil, fmt.Errorf("generating CSR: %w", err)
+		return nil, "", fmt.Errorf("generating CSR: %w", err)
 	}
 	// Only the cloud request is bounded; cancelling ctx still aborts it at once.
 	issueCtx, cancelIssue := context.WithTimeout(ctx, legacyIssueTimeout)
@@ -273,16 +284,16 @@ func completeLegacyLogin(ctx context.Context, cloudDashboard, cloudGRPC string, 
 	})
 	if err != nil {
 		if ctx.Err() == nil && issueCtx.Err() != nil {
-			return nil, fmt.Errorf("cloud did not issue a certificate within %s: %w (%w)", legacyIssueTimeout, err, context.DeadlineExceeded)
+			return nil, "", fmt.Errorf("cloud did not issue a certificate within %s: %w (%w)", legacyIssueTimeout, err, context.DeadlineExceeded)
 		}
-		return nil, err
+		return nil, "", err
 	}
 	if issueResp.GetError() != nil {
-		return nil, fmt.Errorf("certificate issuance error: %s", issueResp.GetError().GetMessage())
+		return nil, "", fmt.Errorf("certificate issuance error: %s", issueResp.GetError().GetMessage())
 	}
 	cert := issueResp.GetCertificate()
 	if cert == nil {
-		return nil, fmt.Errorf("no certificate returned from cloud")
+		return nil, "", fmt.Errorf("no certificate returned from cloud")
 	}
 
 	authEntry := config.AuthConfig{
@@ -306,8 +317,8 @@ func completeLegacyLogin(ctx context.Context, cloudDashboard, cloudGRPC string, 
 		cfg.EnsureContexts()
 		return true, nil
 	}); err != nil {
-		return nil, fmt.Errorf("saving config: %w", err)
+		return nil, "", fmt.Errorf("saving config: %w", err)
 	}
 	clitimesync.CacheProof(ctx)
-	return issueResp.GetWarnings(), nil
+	return issueResp.GetWarnings(), privateKeyAlgorithm(privateKeyPEM), nil
 }

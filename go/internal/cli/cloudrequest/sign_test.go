@@ -3,6 +3,8 @@ package cloudrequest
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -284,6 +286,51 @@ func TestNewSignerRejectsNonOperatorPrincipal(t *testing.T) {
 	auth.Certificates[0].PrincipalURI = "urn:wendy:org:7:user:op-42"
 	if _, err := newSigner(auth); err == nil {
 		t.Fatal("newSigner accepted a non-operator principal")
+	}
+}
+
+// WDY-3032 is a hard cutover with no ECDSA fallback: an EC operator session is
+// refused rather than signed with, and the refusal names the fix. Mirrors
+// TestDPoPRefusesLegacyECSessions for the request-signature path.
+func TestNewSignerRefusesECOperatorKey(t *testing.T) {
+	auth, _, _ := testAuth(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(auth.Certificates[0].PrincipalURI)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), URIs: []*url.URL{u}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.Certificates[0].PemCertificate = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	auth.Certificates[0].PemPrivateKey = string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
+
+	signer, err := newSigner(auth)
+	if err == nil {
+		t.Fatalf("newSigner accepted an ECDSA operator key (%T); the cutover is not enforced", signer.privateKey)
+	}
+	if !strings.Contains(err.Error(), "ML-DSA-65") || !strings.Contains(err.Error(), "wendy auth login") {
+		t.Errorf("refusal should name the required algorithm and the fix, got: %v", err)
+	}
+}
+
+// The steady state: an ML-DSA session signs with ML-DSA-65, asserted on the key
+// actually selected rather than inferred from the absence of an error.
+func TestNewSignerSelectsMLDSA65(t *testing.T) {
+	auth, _, _ := testAuth(t)
+	signer, err := newSigner(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, ok := signer.privateKey.Public().(*mldsa.PublicKey)
+	if !ok || pub.Parameters() != mldsa.MLDSA65() {
+		t.Fatalf("selected signing key %T, want ML-DSA-65", signer.privateKey.Public())
 	}
 }
 

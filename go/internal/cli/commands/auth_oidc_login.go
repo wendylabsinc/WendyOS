@@ -306,6 +306,7 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		return fmt.Errorf("saving OAuth session and certificates: %w", err)
 	}
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
+	fmt.Println(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
 	clitimesync.CacheProof(ctx)
 	return nil
 }
