@@ -11,7 +11,7 @@ Signing in to Wendy Cloud temporarily uses the legacy dashboard flow by default.
 wendy cloud login --email you@example.com
 ```
 
-A bare `wendy cloud login` uses the legacy dashboard flow at `cloud.wendy.sh`. Explicit `--email` or `--issuer` selects OIDC; `--api-key` selects local authentication.
+A bare `wendy cloud login` uses the legacy dashboard flow at `cloud.wendy.sh`. Explicit `--email` or `--issuer` selects OIDC; `--service-account` selects headless service-account login; `--api-key` selects local authentication.
 
 The CLI asks `auth.dev.wendy.sh` for the email's home realm, opens that realm's authorization page, and completes authorization code + PKCE through a loopback callback. It first requests the `https://pki.wendy.sh/identity` audience, creates a PKCS#10 CSR with the same key bound to the token and DPoP proof, and sends it directly to `https://identity.dev.pki.wendy.sh/v1/identity/certificate`. It then rotates the refresh-token family to the `https://cloud.dev.wendy.sh/api` audience and stores the resulting mTLS certificate alongside the Cloud access token, rotating refresh token, and DPoP key using the platform credential store. Cloud is not involved in certificate issuance.
 
@@ -24,6 +24,32 @@ The stored operator certificate also signs privileged Cloud mutations. For each 
 Pass `--legacy` to use the old Wendy Cloud dashboard enrollment callback (`cloud.wendy.sh`) instead of the OIDC flow. `--legacy` cannot be combined with `--api-key`, `--issuer`, or `--email`. This path is kept only for the previous cloud and will be removed once the v1 cutover lands.
 
 The legacy dashboard callback also prints a QR code. You can scan it with the **Wendy iOS app** to authenticate on your phone instead of the local browser.
+
+## Service-account login
+
+Scripts and CI pipelines sign in as a wendy-auth **service account** instead of a person. There are no personal access tokens; a service account holds a private key.
+
+1. A tenant admin creates the service account in wendy-auth and mints a one-time enrollment secret for it.
+2. On the machine that will hold the key, register a new key with that secret:
+
+   ```bash
+   wendy auth service-account enroll <one-time-secret> \
+     --issuer https://auth.dev.wendy.sh/realms/<realm> \
+     --output wendy-service-account.json
+   ```
+
+   The CLI generates an ML-DSA-65 key, proves possession of it to wendy-auth, and writes the key file with mode `0600`. The secret is consumed; the file is never overwritten.
+3. Sign in, with no browser or terminal needed:
+
+   ```bash
+   wendy auth login --service-account wendy-service-account.json
+   ```
+
+   In CI, put the key file's contents in `WENDY_SERVICE_ACCOUNT_KEY` and run `wendy auth login` with no mode flag; an explicit `--email`, `--issuer`, `--api-key`, or `--legacy` takes precedence over the variable.
+
+The CLI signs a short-lived assertion with the key, exchanges it for an access token that is DPoP-bound to the key, and stores the session as a context like any other login. Every API call carries a fresh DPoP proof. There is no refresh token: when the token expires, the CLI mints a new one from the stored key. No operator certificate is issued for a service account. `--cloud`, `--cloud-grpc`, and `--resource` target another environment as for OIDC login.
+
+Disabling or deleting the service account in wendy-auth stops new tokens immediately; a token already issued lasts until it expires (one hour by default).
 
 ## Auth contexts
 

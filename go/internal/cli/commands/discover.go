@@ -306,7 +306,7 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 		switch {
 		case errors.Is(err, errDevicePickerLogin):
 			openOn = devicePickerCloudTab
-			if err := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); err != nil {
+			if err := relogin(ctx, cloudAuth); err != nil {
 				return err
 			}
 			cfg, err = config.Load()

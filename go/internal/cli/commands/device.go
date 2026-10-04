@@ -752,7 +752,7 @@ func newDeviceSetupCmd() *cobra.Command {
 				if loadCLICert() == nil {
 					fmt.Println("You are not logged in to Wendy Cloud.")
 					if confirmFn("Log in now?") {
-						if loginErr := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); loginErr != nil {
+						if loginErr := relogin(ctx, firstAuthEntryForRelogin()); loginErr != nil {
 							return fmt.Errorf("login failed: %w", loginErr)
 						}
 					}

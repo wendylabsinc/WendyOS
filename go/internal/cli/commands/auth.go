@@ -51,6 +51,7 @@ func newAuthCmd() *cobra.Command {
 		newAuthRenameCmd(),
 		newAuthDefaultCmd(),
 		newAuthListOrgsCmd(),
+		newAuthServiceAccountCmd(),
 	)
 
 	return cmd
@@ -70,14 +71,42 @@ func newAuthLoginCmd() *cobra.Command {
 	var identityEndpoint string
 	var printClaims bool
 	var legacy bool
+	var serviceAccount string
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to Wendy Cloud or a local pki-core instance",
 		Long: "Signs in to Wendy Cloud. For now, defaults to the legacy dashboard login (cloud.wendy.sh). For the OIDC flow, pass --email to discover your realm (or --issuer to name it), sign in with authorization code + PKCE, obtain an operator certificate directly from pki-core, and save a refreshable Cloud API session.\n" +
 			"With --api-key: issues a certificate from a self-hosted pki-core instance using a Bearer API key.\n" +
+			"With --service-account <key-file> (or " + serviceAccountKeyEnv + "): signs in headlessly as a wendy-auth service account; no browser or terminal is needed.\n" +
 			"With --legacy: uses the old Wendy Cloud dashboard enrollment callback (cloud.wendy.sh). Kept for the previous cloud only.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			otherMode := legacy || apiKey != "" || issuer != "" || email != ""
+			if serviceAccount != "" && otherMode {
+				return fmt.Errorf("--service-account selects headless service-account login and cannot be combined with --legacy, --api-key, --issuer, or --email")
+			}
+			// An explicit mode flag wins over a key in the environment.
+			saKey, err := readServiceAccountKey(serviceAccount)
+			if err != nil {
+				return err
+			}
+			if saKey != nil && !otherMode {
+				if cloudDashboard == "" {
+					cloudDashboard = defaultDevCloudDashboard
+				}
+				if cloudGRPC == "" {
+					cloudGRPC = defaultDevCloudGRPC
+				}
+				if resource == "" {
+					resource = defaultDevCloudResource
+				}
+				return performServiceAccountLogin(cmd.Context(), serviceAccountLoginOptions{
+					KeyFile:   saKey,
+					CloudURL:  cloudDashboard,
+					CloudGRPC: cloudGRPC,
+					Resource:  resource,
+				})
+			}
 			// Temporarily default to legacy login until the new cloud is ready.
 			// Explicit OIDC or local authentication options keep their existing behavior.
 			if !cmd.Flags().Changed("legacy") && email == "" && issuer == "" && apiKey == "" {
@@ -164,6 +193,7 @@ func newAuthLoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&identityResource, "pki-resource", defaultPKIIdentityResource, "RFC 8707 pki-core identity resource (used with OIDC login)")
 	cmd.Flags().StringVar(&identityEndpoint, "pki-identity-endpoint", defaultDevPKIIdentityEndpoint, "pki-core operator identity CSR endpoint (used with OIDC login)")
 	cmd.Flags().BoolVar(&printClaims, "print-claims", false, "Print the decoded access-token claims after login (used with --issuer)")
+	cmd.Flags().StringVar(&serviceAccount, "service-account", "", "Service-account key file for headless login (or set "+serviceAccountKeyEnv+" to its contents)")
 	cmd.Flags().BoolVar(&legacy, "legacy", false, "Use the old Wendy Cloud dashboard enrollment flow (cloud.wendy.sh) (the temporary default unless --email, --issuer, or --api-key is provided)")
 	return cmd
 }

@@ -132,14 +132,19 @@ func newDPoPProofWithAccessToken(key crypto.Signer, htm, htu, nonce, accessToken
 		sum := sha256.Sum256([]byte(accessToken))
 		payload["ath"] = dpopBase64URL(sum[:])
 	}
+	return SignJWS(key, header, payload)
+}
 
+// SignJWS serializes header and payload and signs them with the operator key
+// as a compact JWS. The caller sets header "alg" (see OperatorPublicJWK).
+func SignJWS(key crypto.Signer, header, payload map[string]any) (string, error) {
 	headerJSON, err := json.Marshal(header)
 	if err != nil {
-		return "", fmt.Errorf("marshaling DPoP header: %w", err)
+		return "", fmt.Errorf("marshaling JWS header: %w", err)
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("marshaling DPoP payload: %w", err)
+		return "", fmt.Errorf("marshaling JWS payload: %w", err)
 	}
 	signingInput := dpopBase64URL(headerJSON) + "." + dpopBase64URL(payloadJSON)
 	sig, err := signOperatorJWS(key, signingInput)

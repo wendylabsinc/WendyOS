@@ -99,6 +99,10 @@ type AuthConfig struct {
 	RefreshToken   string            `json:"refreshToken,omitempty"`
 	DPoPPrivateKey string            `json:"dpopPrivateKey,omitempty"`
 	Certificates   []CertificateInfo `json:"certificates,omitempty"`
+	// ServiceAccount is the wendy-auth service-account sub of a headless
+	// session. Its token is re-minted from DPoPPrivateKey; there is no
+	// refresh token.
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 }
 
 // CertificateInfo holds certificate material for mTLS authentication.
@@ -331,6 +335,7 @@ func (c *Config) AddAuth(auth AuthConfig) {
 		if existing.CloudDashboard == auth.CloudDashboard &&
 			existing.CloudGRPC == auth.CloudGRPC &&
 			existing.OAuthIssuer == auth.OAuthIssuer &&
+			existing.ServiceAccount == auth.ServiceAccount &&
 			existing.OrganizationKey() == incomingOrg {
 			c.Auth[i] = auth
 			return

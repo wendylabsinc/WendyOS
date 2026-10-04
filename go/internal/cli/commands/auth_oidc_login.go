@@ -570,6 +570,9 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	if err == nil && time.Until(expiresAt) > 90*time.Second {
 		return nil
 	}
+	if auth.ServiceAccount != "" {
+		return remintServiceAccountSession(ctx, auth)
+	}
 	refreshToken, err := auth.OAuthRefreshToken()
 	if err != nil {
 		return fmt.Errorf("loading OAuth refresh token: %w", err)
