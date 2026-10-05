@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	digest "github.com/opencontainers/go-digest"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/status"
 )
 
 // Server is the embedded OCI registry HTTP server.
@@ -53,7 +54,32 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return err
 }
 
-func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config) (*Server, error) {
+// startConfig holds the options accumulated from Start's StartOption
+// arguments.
+type startConfig struct {
+	ingestGate func() error
+}
+
+// StartOption configures optional behavior for Start.
+type StartOption func(*startConfig)
+
+// WithIngestGate causes the registry's write operations (PushBlob,
+// PushBlobChunked, PushBlobChunkedResume, MountBlob, PushManifest) to call
+// check first and refuse with HTTP 507 Insufficient Storage and code
+// WENDY_STORAGE_DEGRADED when it returns an error, instead of reaching
+// containerd's content store (WDY-3127). Read operations are unaffected.
+func WithIngestGate(check func() error) StartOption {
+	return func(c *startConfig) {
+		c.ingestGate = check
+	}
+}
+
+func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.Logger, tlsConfig *tls.Config, opts ...StartOption) (*Server, error) {
+	var cfg startConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	client, err := containerd.New(containerdAddr, containerd.WithDefaultNamespace("default"))
 	if err != nil {
 		return nil, fmt.Errorf("connecting to containerd for registry: %w", err)
@@ -81,6 +107,12 @@ func Start(ctx context.Context, containerdAddr, listenAddr string, logger *zap.L
 
 	var backend ociregistry.Interface = safeDeleteRegistry{
 		Interface: reg,
+	}
+	if cfg.ingestGate != nil {
+		backend = gatedRegistry{
+			Interface: backend,
+			check:     cfg.ingestGate,
+		}
 	}
 
 	ociHandler := ociserver.New(backend, nil)
@@ -571,6 +603,79 @@ func (s safeDeleteRegistry) DeleteTag(ctx context.Context, repo string, name str
 		return ociregistry.ErrDenied
 	}
 	return s.Interface.DeleteTag(ctx, repo, name)
+}
+
+// ErrCodeStorageDegraded is the OCI distribution-spec error code returned to
+// clients when an ingest gate refuses a write because container storage is
+// degraded (WDY-3127).
+const ErrCodeStorageDegraded = "WENDY_STORAGE_DEGRADED"
+
+// storageDegradedError wraps msg as an ociregistry error that marshals to
+// HTTP 507 Insufficient Storage with code ErrCodeStorageDegraded. 507 is
+// deliberately not one of go-containerregistry's remote.Write retry
+// statuses, so a client sees the refusal immediately instead of after three
+// silent retries of what MarshalError would otherwise report as a generic
+// UNKNOWN/500.
+func storageDegradedError(msg string) error {
+	return ociregistry.NewHTTPError(ociregistry.NewError(msg, ErrCodeStorageDegraded, nil), http.StatusInsufficientStorage, nil, nil)
+}
+
+// gatedRegistry wraps an ociregistry.Interface and refuses its write
+// operations (blob/manifest ingestion) when check reports an error,
+// leaving reads untouched (WDY-3127). The embedded registry writes
+// straight into containerd's content store, which on WendyOS lives on
+// /data; if that bind mount is gone, ingestion would otherwise land on
+// (and can fill or corrupt) the OS root slot.
+type gatedRegistry struct {
+	ociregistry.Interface
+	check func() error
+}
+
+// refuse returns a storageDegradedError built from check's plain message
+// when check reports an error, or nil otherwise. check is expected to
+// return a gRPC status error (as *services.ContainerStorageGate.Check
+// does); status.Convert(err).Message() extracts its plain text so the
+// wire error doesn't leak the "rpc error: code = ... desc = ..." wrapper.
+func (g gatedRegistry) refuse() error {
+	if err := g.check(); err != nil {
+		return storageDegradedError(status.Convert(err).Message())
+	}
+	return nil
+}
+
+func (g gatedRegistry) PushBlob(ctx context.Context, repo string, desc ociregistry.Descriptor, reader io.Reader) (ociregistry.Descriptor, error) {
+	if err := g.refuse(); err != nil {
+		return ociregistry.Descriptor{}, err
+	}
+	return g.Interface.PushBlob(ctx, repo, desc, reader)
+}
+
+func (g gatedRegistry) PushBlobChunked(ctx context.Context, repo string, chunkSize int) (ociregistry.BlobWriter, error) {
+	if err := g.refuse(); err != nil {
+		return nil, err
+	}
+	return g.Interface.PushBlobChunked(ctx, repo, chunkSize)
+}
+
+func (g gatedRegistry) PushBlobChunkedResume(ctx context.Context, repo, id string, offset int64, chunkSize int) (ociregistry.BlobWriter, error) {
+	if err := g.refuse(); err != nil {
+		return nil, err
+	}
+	return g.Interface.PushBlobChunkedResume(ctx, repo, id, offset, chunkSize)
+}
+
+func (g gatedRegistry) MountBlob(ctx context.Context, fromRepo, toRepo string, d ociregistry.Digest) (ociregistry.Descriptor, error) {
+	if err := g.refuse(); err != nil {
+		return ociregistry.Descriptor{}, err
+	}
+	return g.Interface.MountBlob(ctx, fromRepo, toRepo, d)
+}
+
+func (g gatedRegistry) PushManifest(ctx context.Context, repo string, tag string, contents []byte, mediaType string) (ociregistry.Descriptor, error) {
+	if err := g.refuse(); err != nil {
+		return ociregistry.Descriptor{}, err
+	}
+	return g.Interface.PushManifest(ctx, repo, tag, contents, mediaType)
 }
 
 // ---------------------------------------------------------------------------

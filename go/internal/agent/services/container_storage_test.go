@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"go.uber.org/zap"
+
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -100,4 +102,78 @@ func TestDeviceMetadataListsEveryGPU(t *testing.T) {
 	if !v1.GetHasGpu() || v1.GetGpuVendor() == "" {
 		t.Fatalf("legacy singular fields dropped: has_gpu=%v vendor=%q", v1.GetHasGpu(), v1.GetGpuVendor())
 	}
+}
+
+// TestDeviceMetadataReportsContainerStorageDegraded covers WDY-3127 Task 4:
+// container_storage_degraded must mirror the storage gate's Degraded() on
+// both the v1 GetAgentVersion and v2 GetDeviceInfo responses, and must be
+// absent (not merely false) when no gate is configured at all.
+func TestDeviceMetadataReportsContainerStorageDegraded(t *testing.T) {
+	degraded := newContainerStorageGate(zap.NewNop(),
+		func() bool { return true },                                      // isWendyOS
+		func(string) bool { return true },                                // unitLoaded
+		func() bool { return true },                                      // probe
+		func() (partitionUsage, bool) { return partitionUsage{}, false }, // describeUsage
+	)
+	// isWendyOS=true, unitLoaded=true, probe=false: a genuinely healthy
+	// expected gate, not the permanent no-op (WDY-3127 M-D2) — this exercises
+	// the expected=true && !degraded branch instead of re-testing the no-op
+	// path that TestContainerStorageGateNoopOffWendyOS already covers.
+	healthy := newContainerStorageGate(zap.NewNop(),
+		func() bool { return true },
+		func(string) bool { return true },
+		func() bool { return false },
+		func() (partitionUsage, bool) { return partitionUsage{}, false },
+	)
+
+	t.Run("degraded gate reports true on both surfaces", func(t *testing.T) {
+		v1, err := (&AgentService{storageGate: degraded}).GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v2, err := (&DeviceInfoService{storageGate: degraded}).GetDeviceInfo(context.Background(), &agentpbv2.GetDeviceInfoRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !v1.GetContainerStorageDegraded() {
+			t.Error("v1 ContainerStorageDegraded = false, want true")
+		}
+		if !v2.GetContainerStorageDegraded() {
+			t.Error("v2 ContainerStorageDegraded = false, want true")
+		}
+	})
+
+	t.Run("healthy gate reports false (present) on both surfaces", func(t *testing.T) {
+		v1, err := (&AgentService{storageGate: healthy}).GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v2, err := (&DeviceInfoService{storageGate: healthy}).GetDeviceInfo(context.Background(), &agentpbv2.GetDeviceInfoRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v1.ContainerStorageDegraded == nil || v1.GetContainerStorageDegraded() {
+			t.Errorf("v1 ContainerStorageDegraded = %v, want a present false", v1.ContainerStorageDegraded)
+		}
+		if v2.ContainerStorageDegraded == nil || v2.GetContainerStorageDegraded() {
+			t.Errorf("v2 ContainerStorageDegraded = %v, want a present false", v2.ContainerStorageDegraded)
+		}
+	})
+
+	t.Run("no gate leaves the field absent on both surfaces", func(t *testing.T) {
+		v1, err := (&AgentService{}).GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		v2, err := (&DeviceInfoService{}).GetDeviceInfo(context.Background(), &agentpbv2.GetDeviceInfoRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v1.ContainerStorageDegraded != nil {
+			t.Errorf("v1 ContainerStorageDegraded = %v, want nil (absent)", v1.ContainerStorageDegraded)
+		}
+		if v2.ContainerStorageDegraded != nil {
+			t.Errorf("v2 ContainerStorageDegraded = %v, want nil (absent)", v2.ContainerStorageDegraded)
+		}
+	})
 }
