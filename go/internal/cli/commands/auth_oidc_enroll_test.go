@@ -223,14 +223,14 @@ func TestSplitCertificateChainPEMKeepsUnsupportedChainOpaque(t *testing.T) {
 	}
 }
 
-func TestCertXFCCUsesSPIFFEPrincipal(t *testing.T) {
+// WDY-3461 ruling (b): a PKI-principal session sends no identity header (the
+// new cloud reads none); a legacy urn:wendy session keeps sending its own.
+func TestCertXFCCOnlyForLegacySessions(t *testing.T) {
 	const principal = "spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/operator/alice"
-	got := certXFCC(config.CertificateInfo{
-		PrincipalURI:   principal,
-		OrganizationID: 7,
-		UserID:         "legacy-user",
-	})
-	if got != "URI="+principal {
-		t.Fatalf("certXFCC = %q", got)
+	if got := certXFCC(config.CertificateInfo{PrincipalURI: principal, OrganizationID: 7, UserID: "legacy-user"}); got != "" {
+		t.Fatalf("certXFCC(PKI principal) = %q, want none", got)
+	}
+	if got := certXFCC(config.CertificateInfo{OrganizationID: 7, UserID: "legacy-user"}); got != "URI=urn:wendy:org:7:user:legacy-user" {
+		t.Fatalf("certXFCC(legacy) = %q", got)
 	}
 }

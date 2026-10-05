@@ -15,9 +15,6 @@ import (
 // StartACMEProvisioning is separate from the legacy Cloud RPC so older agents
 // reject an unsupported method before spending any EAB credentials.
 func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *agentpbv2.StartACMEProvisioningRequest) (*agentpbv2.StartACMEProvisioningResponse, error) {
-	if os.Getenv("WENDY_EXPERIMENTAL_ACME_ENROLLMENT") != "1" {
-		return nil, status.Error(codes.FailedPrecondition, "direct ACME enrollment is experimental: notifications and mesh still require legacy enrollment; set WENDY_EXPERIMENTAL_ACME_ENROLLMENT=1 on the agent to opt in")
-	}
 	cfg := acmeenroll.Config{
 		DirectoryURL: req.GetDirectoryUrl(), DeviceID: req.GetDeviceId(),
 		EABKeyID: req.GetEabKeyId(), EABHMACKey: req.GetEabHmacKey(),

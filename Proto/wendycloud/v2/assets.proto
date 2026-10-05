@@ -2,8 +2,10 @@ syntax = "proto3";
 
 package wendycloud.v2;
 
-import "google/protobuf/timestamp.proto";
 import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
 
 enum AssetKind {
   ASSET_KIND_UNSPECIFIED = 0;
@@ -14,10 +16,19 @@ enum AssetKind {
 }
 
 service AssetService {
-  rpc CreateAsset(CreateAssetRequest) returns (Asset);
+  // Signed; payload_type "wendycloud.v2.CreateAssetRequest".
+  rpc CreateAsset(SignedRequest) returns (Asset) {
+    option (wendy.signed_request) = true;
+  }
   rpc GetAsset(GetAssetRequest) returns (Asset);
-  rpc UpdateAsset(UpdateAssetRequest) returns (Asset);
-  rpc DeleteAsset(DeleteAssetRequest) returns (DeleteAssetResponse);
+  // Signed; payload_type "wendycloud.v2.UpdateAssetRequest".
+  rpc UpdateAsset(SignedRequest) returns (Asset) {
+    option (wendy.signed_request) = true;
+  }
+  // Signed; payload_type "wendycloud.v2.DeleteAssetRequest".
+  rpc DeleteAsset(SignedRequest) returns (DeleteAssetResponse) {
+    option (wendy.signed_request) = true;
+  }
   // Server-streamed pagination using offset/limit (matches OrganizationService)
   rpc ListAssets(ListAssetsRequest) returns (stream ListAssetsResponse);
   rpc ListAssetsByApp(ListAssetsByAppRequest) returns (stream ListAssetsByAppResponse);

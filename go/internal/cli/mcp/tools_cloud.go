@@ -259,6 +259,10 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		return cloudErrResult(err), nil
 	}
 
+	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
+		return cloudErrResult(err), nil
+	}
+
 	// Same EAB path as the CLI: mint device_id, operator-sign the enrollment
 	// request, EnrollDevice -> EAB, then have the connected agent ACME-enroll.
 	deviceID := uuid.NewString()
@@ -793,12 +797,15 @@ func mcpCloudContext(ctx context.Context, auth *config.AuthConfig) (context.Cont
 		}
 		md.Set("authorization", "Bearer "+bearerToken)
 	}
-	certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:user:unknown", certInfo.OrganizationID)
-	if certInfo.UserID != "" {
-		certHeader = fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", certInfo.OrganizationID, certInfo.UserID)
+	// Legacy (urn:wendy) sessions only; see certXFCC in the CLI.
+	if certInfo.PrincipalURI == "" {
+		certHeader := fmt.Sprintf("URI=urn:wendy:org:%d:user:unknown", certInfo.OrganizationID)
+		if certInfo.UserID != "" {
+			certHeader = fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", certInfo.OrganizationID, certInfo.UserID)
+		}
+		md.Set("x-wendy-client-cert", certHeader)
+		md.Set("x-forwarded-client-cert", certHeader)
 	}
-	md.Set("x-wendy-client-cert", certHeader)
-	md.Set("x-forwarded-client-cert", certHeader)
 	return metadata.NewOutgoingContext(ctx, md), nil
 }
 
@@ -827,13 +834,6 @@ func mcpDialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
 	dialOptions := []grpc.DialOption{transport}
-	signingOption, err := cloudrequest.DialOption(auth)
-	if err != nil {
-		return nil, fmt.Errorf("configuring Cloud request signing: %w", err)
-	}
-	if signingOption != nil {
-		dialOptions = append(dialOptions, signingOption)
-	}
 	// Per-RPC DPoP proof for a cnf-bound token; nil for unbound sessions. The
 	// MCP provider uses the stored token without refreshing (WDY-3107).
 	dialOptions = append(dialOptions, cloudrequest.DPoPDialOptions(auth, mcpDPoPTokenProvider(auth))...)

@@ -10,6 +10,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 type fakeCloudAssetServer struct {
@@ -696,5 +697,29 @@ func TestCloudAuthEntry_NotSignedInAsksForAuthLogin(t *testing.T) {
 	sc := structuredMap(t, r)
 	if sc["error_code"] != string(errCodeAuthRequired) || !strings.Contains(sc["message"].(string), "auth_login") {
 		t.Fatalf("result = %v, want AUTH_REQUIRED pointing at auth_login", sc)
+	}
+}
+
+// WDY-3461 ruling (b): a PKI-principal session sends no client-cert identity
+// header pair; a legacy urn:wendy session keeps sending it.
+func TestMCPCloudContextIdentityHeadersOnlyForLegacy(t *testing.T) {
+	for _, tc := range []struct {
+		principal string
+		want      string
+	}{
+		{"spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/operator/alice", ""},
+		{"", "URI=urn:wendy:org:7:user:bob"},
+	} {
+		auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{PrincipalURI: tc.principal, OrganizationID: 7, UserID: "bob"}}}
+		ctx, err := mcpCloudContext(context.Background(), auth)
+		if err != nil {
+			t.Fatal(err)
+		}
+		md, _ := metadata.FromOutgoingContext(ctx)
+		for _, key := range []string{"x-wendy-client-cert", "x-forwarded-client-cert"} {
+			if got := strings.Join(md.Get(key), ","); got != tc.want {
+				t.Errorf("principal %q: %s = %q, want %q", tc.principal, key, got, tc.want)
+			}
+		}
 	}
 }

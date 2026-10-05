@@ -568,3 +568,7 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 
 	return nil
 }
+
+// unmountBeforeWrite is a no-op on Windows: the writers lock and dismount the
+// disk's volumes themselves when they open it.
+func unmountBeforeWrite(_ drive) error { return nil }

@@ -241,8 +241,7 @@ func switchCloudOrganizationV2(ctx context.Context, cfg *config.Config, source *
 		return selected, cfg, nil
 	}
 	fmt.Println(tui.InfoMessage(fmt.Sprintf("No credentials are stored for %s (%s). Complete login and select that organization in the browser.", chosen.Name, id)))
-	dashboard, endpoint := loginTargetsForAuth(source)
-	if err := performLoginFn(ctx, dashboard, endpoint); err != nil {
+	if err := relogin(ctx, source); err != nil {
 		return nil, cfg, err
 	}
 	fresh, err := loadCloudOrgConfig()

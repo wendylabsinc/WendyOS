@@ -2,6 +2,9 @@ package commands
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/mldsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -51,6 +54,7 @@ func newAuthCmd() *cobra.Command {
 		newAuthRenameCmd(),
 		newAuthDefaultCmd(),
 		newAuthListOrgsCmd(),
+		newAuthServiceAccountCmd(),
 	)
 
 	return cmd
@@ -70,14 +74,42 @@ func newAuthLoginCmd() *cobra.Command {
 	var identityEndpoint string
 	var printClaims bool
 	var legacy bool
+	var serviceAccount string
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to Wendy Cloud or a local pki-core instance",
 		Long: "Signs in to Wendy Cloud. For now, defaults to the legacy dashboard login (cloud.wendy.sh). For the OIDC flow, pass --email to discover your realm (or --issuer to name it), sign in with authorization code + PKCE, obtain an operator certificate directly from pki-core, and save a refreshable Cloud API session.\n" +
 			"With --api-key: issues a certificate from a self-hosted pki-core instance using a Bearer API key.\n" +
+			"With --service-account <key-file> (or " + serviceAccountKeyEnv + "): signs in headlessly as a wendy-auth service account; no browser or terminal is needed.\n" +
 			"With --legacy: uses the old Wendy Cloud dashboard enrollment callback (cloud.wendy.sh). Kept for the previous cloud only.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			otherMode := legacy || apiKey != "" || issuer != "" || email != ""
+			if serviceAccount != "" && otherMode {
+				return fmt.Errorf("--service-account selects headless service-account login and cannot be combined with --legacy, --api-key, --issuer, or --email")
+			}
+			// An explicit mode flag wins over a key in the environment.
+			saKey, err := readServiceAccountKey(serviceAccount)
+			if err != nil {
+				return err
+			}
+			if saKey != nil && !otherMode {
+				if cloudDashboard == "" {
+					cloudDashboard = defaultDevCloudDashboard
+				}
+				if cloudGRPC == "" {
+					cloudGRPC = defaultDevCloudGRPC
+				}
+				if resource == "" {
+					resource = defaultDevCloudResource
+				}
+				return performServiceAccountLogin(cmd.Context(), serviceAccountLoginOptions{
+					KeyFile:   saKey,
+					CloudURL:  cloudDashboard,
+					CloudGRPC: cloudGRPC,
+					Resource:  resource,
+				})
+			}
 			// Temporarily default to legacy login until the new cloud is ready.
 			// Explicit OIDC or local authentication options keep their existing behavior.
 			if !cmd.Flags().Changed("legacy") && email == "" && issuer == "" && apiKey == "" {
@@ -164,6 +196,7 @@ func newAuthLoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&identityResource, "pki-resource", defaultPKIIdentityResource, "RFC 8707 pki-core identity resource (used with OIDC login)")
 	cmd.Flags().StringVar(&identityEndpoint, "pki-identity-endpoint", defaultDevPKIIdentityEndpoint, "pki-core operator identity CSR endpoint (used with OIDC login)")
 	cmd.Flags().BoolVar(&printClaims, "print-claims", false, "Print the decoded access-token claims after login (used with --issuer)")
+	cmd.Flags().StringVar(&serviceAccount, "service-account", "", "Service-account key file for headless login (or set "+serviceAccountKeyEnv+" to its contents)")
 	cmd.Flags().BoolVar(&legacy, "legacy", false, "Use the old Wendy Cloud dashboard enrollment flow (cloud.wendy.sh) (the temporary default unless --email, --issuer, or --api-key is provided)")
 	return cmd
 }
@@ -244,6 +277,7 @@ func performLogin(ctx context.Context, cloudDashboard, cloudGRPC string) error {
 	}
 
 	fmt.Println(tui.SuccessMessage("Authentication successful. Certificates saved."))
+	fmt.Println(sessionKeyLine(session.KeyAlgorithm(), "legacy"))
 	if warnings := session.Warnings(); len(warnings) > 0 {
 		fmt.Println(tui.WarningMessage("Warnings:"))
 		for _, w := range warnings {
@@ -379,6 +413,7 @@ func performLocalLogin(ctx context.Context, cloudGRPC, apiKey string, orgID int3
 
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Local authentication successful (org=%d, device=%s). Certificates saved.",
 		issueResp.GetOrganizationId(), deviceID)))
+	fmt.Println(sessionKeyLine(privateKeyAlgorithm(privateKeyPEM), "legacy"))
 	clitimesync.CacheProof(ctx)
 
 	return nil
@@ -615,6 +650,7 @@ type authStatusCert struct {
 	ExpiresAt    time.Time `json:"expiresAt"`
 	Expired      bool      `json:"expired"`
 	ExpiringSoon bool      `json:"expiringSoon"`
+	KeyAlgorithm string    `json:"keyAlgorithm"`
 }
 
 // authStatusSession is one stored cloud session in `auth status --json`. It
@@ -627,7 +663,44 @@ type authStatusSession struct {
 	UserID         string          `json:"userId,omitempty"`
 	OrganizationID int             `json:"organizationId,omitempty"`
 	PrincipalURI   string          `json:"principalUri,omitempty"`
+	LoginPath      string          `json:"loginPath"`
 	Certificate    *authStatusCert `json:"certificate,omitempty"`
+}
+
+// keyAlgorithmName names a session key's algorithm for the operator. No silent
+// algorithm downgrade (RULINGS 2026-10-04): a classical session is shown as
+// one, never left unsaid.
+func keyAlgorithmName(pub crypto.PublicKey) string {
+	switch k := pub.(type) {
+	case *mldsa.PublicKey:
+		return k.Parameters().String()
+	case *ecdsa.PublicKey:
+		return "ECDSA " + k.Curve.Params().Name
+	}
+	return fmt.Sprintf("%T", pub)
+}
+
+// sessionLoginPath names the login that minted a session: an OIDC session
+// records its issuer; bare `wendy auth login` and --local do not.
+func sessionLoginPath(auth config.AuthConfig) string {
+	if auth.OAuthIssuer != "" {
+		return "OIDC"
+	}
+	return "legacy"
+}
+
+// privateKeyAlgorithm names the algorithm of a key a login just generated.
+func privateKeyAlgorithm(privateKeyPEM string) string {
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return "unreadable key"
+	}
+	return keyAlgorithmName(key.Public())
+}
+
+// sessionKeyLine is the line every login prints naming the key it minted.
+func sessionKeyLine(algorithm, path string) string {
+	return tui.InfoMessage(fmt.Sprintf("Session key: %s (%s login).", algorithm, path))
 }
 
 type authStatusJSON struct {
@@ -655,6 +728,7 @@ func authStatusCertInfo(pemCert string, now time.Time) *authStatusCert {
 		ExpiresAt:    expiry,
 		Expired:      now.After(expiry),
 		ExpiringSoon: !now.After(expiry) && expiry.Sub(now) < certExpiryWindow,
+		KeyAlgorithm: keyAlgorithmName(x509Cert.PublicKey),
 	}
 }
 
@@ -722,6 +796,7 @@ func newAuthStatusCmd() *cobra.Command {
 				}
 
 				if info := authStatusCertInfo(cert.PemCertificate, time.Now()); info != nil {
+					fmt.Fprintf(out, "  Key:  %s (%s login)\n", info.KeyAlgorithm, sessionLoginPath(auth))
 					expiryStr := info.ExpiresAt.Format("2006-01-02 15:04 UTC")
 					switch {
 					case info.Expired:
@@ -753,6 +828,7 @@ func writeAuthStatusJSON(w io.Writer, cfg *config.Config, now time.Time) error {
 			Current:   auth.Name != "" && auth.Name == cfg.CurrentContext,
 			Cloud:     authStatusEndpoint(auth),
 			CloudGRPC: auth.CloudGRPC,
+			LoginPath: sessionLoginPath(auth),
 		}
 		if len(auth.Certificates) > 0 {
 			cert := auth.Certificates[0]
