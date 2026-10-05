@@ -118,26 +118,35 @@ func performV2Unenroll(ctx context.Context, j *v2UnenrollJournal, ops v2Unenroll
 	return ops.save(*j)
 }
 
+func directUnenrollPeerFingerprint(conn *grpcclient.AgentConnection, verifiedPeer *grpcpeer.Peer, principal certs.WendyIdentity) (string, error) {
+	// The legacy ObservedServerIdentity sink drops numeric org 0, including
+	// valid UUID tenant identities. Use the authenticated direct RPC transport's
+	// peer certificate below, not that numeric-only bookkeeping cache.
+	if conn == nil || !conn.IsMTLS || conn.IsSessionProxy || verifiedPeer == nil {
+		return "", fmt.Errorf("v2 unenroll requires a directly verified mTLS device connection; use its LAN hostname/IP")
+	}
+	peerTLS, ok := verifiedPeer.AuthInfo.(credentials.TLSInfo)
+	if !ok || !peerTLS.State.HandshakeComplete || len(peerTLS.State.PeerCertificates) == 0 {
+		return "", fmt.Errorf("verified peer certificate unavailable; no mutation performed")
+	}
+	leaf := peerTLS.State.PeerCertificates[0]
+	peerPrincipal, ok := certs.TenantPrincipalFromCert(leaf)
+	if !ok || peerPrincipal != principal.Principal {
+		return "", fmt.Errorf("Agent state disagrees with its verified TLS identity")
+	}
+	peerDigest := sha256.Sum256(leaf.Raw)
+	return hex.EncodeToString(peerDigest[:]), nil
+}
+
 func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, prov *agentpbv2.ProvisionedResponse, verifiedPeer *grpcpeer.Peer, override, assetOverride string, yes bool) error {
 	principal, err := certs.ParsePrincipal(prov.GetPrincipalUri())
 	if err != nil || principal.EntityType != certs.EntityAsset {
 		return fmt.Errorf("invalid direct PKI device identity")
 	}
-	actual, verified := conn.ObservedServerIdentity()
-	if !conn.IsMTLS || !verified || !actual.SameEntity(principal) {
-		return fmt.Errorf("v2 unenroll requires a directly verified mTLS device connection; use its LAN hostname/IP")
+	peerFingerprint, err := directUnenrollPeerFingerprint(conn, verifiedPeer, principal)
+	if err != nil {
+		return err
 	}
-	peerTLS, ok := verifiedPeer.AuthInfo.(credentials.TLSInfo)
-	if !ok || len(peerTLS.State.PeerCertificates) == 0 {
-		return fmt.Errorf("verified peer certificate unavailable; no mutation performed")
-	}
-	leaf := peerTLS.State.PeerCertificates[0]
-	peerPrincipal, ok := certs.TenantPrincipalFromCert(leaf)
-	if !ok || peerPrincipal != principal.Principal {
-		return fmt.Errorf("Agent state disagrees with its verified TLS identity")
-	}
-	peerDigest := sha256.Sum256(leaf.Raw)
-	peerFingerprint := hex.EncodeToString(peerDigest[:])
 	cloud := prov.GetCloudHost()
 	if cloud == "" || (override != "" && override != cloud) {
 		return fmt.Errorf("cleanup endpoint must match the device's enrolled Cloud host")
