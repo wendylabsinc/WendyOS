@@ -49,7 +49,7 @@ func isHostedMCPSelector(selector string) bool { return strings.HasPrefix(select
 
 // Owner settings use the ordinary Cloud session, with a fresh DPoP proof.
 func newCloudMCPCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "mcp", Short: "Manage organization hosted MCP access"}
+	cmd := &cobra.Command{Use: "mcp", Short: "Manage organization hosted MCP access", Hidden: true}
 	for _, operation := range []string{"status", "enable", "disable"} {
 		var organization, subject, origin string
 		child := &cobra.Command{Use: operation, Short: operation + " organization hosted MCP", Args: cobra.NoArgs,
