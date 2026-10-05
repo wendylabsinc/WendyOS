@@ -80,7 +80,11 @@ func TestCloudDiscoveryIdentityRefusesInvalidV2Binding(t *testing.T) {
 		{"empty binding", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("")}},
 		{"wrong tenant", &cloudpbv2.Asset{OrganizationId: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", PkiDeviceName: proto.String("device")}},
 		{"missing tenant", &cloudpbv2.Asset{PkiDeviceName: proto.String("device")}},
-		{"invalid path", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("other/device")}},
+		{"invalid path", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("other//device")}},
+		{"traversal", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("fleet/../device")}},
+		{"fragment", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("device#fragment")}},
+		{"escape", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("fleet%2fdevice")}},
+		{"overlong segment", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String(strings.Repeat("a", 65))}},
 		{"query", &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String("device?query")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,6 +96,18 @@ func TestCloudDiscoveryIdentityRefusesInvalidV2Binding(t *testing.T) {
 	for _, auth := range []*config.AuthConfig{nil, {}} {
 		if _, err := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{}); err == nil {
 			t.Fatal("accepted missing operator certificate")
+		}
+	}
+}
+
+func TestCloudDiscoveryIdentityPreservesPathShapedPKIBinding(t *testing.T) {
+	const tenant = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test"}}}
+	for _, name := range []string{"fleet/box-01", "fleet/subfleet/box_02.v1", strings.Repeat("a", 64)} {
+		asset := &cloudpbv2.Asset{OrganizationId: tenant, PkiDeviceName: proto.String(name)}
+		identity, err := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{v2: asset, key: "unrelated-asset-uuid"})
+		if err != nil || identity.EntityID != name || identity.Principal != certs.DeviceSPIFFEURI(tenant, name) {
+			t.Fatalf("valid PKI binding %q changed/refused: %+v %v", name, identity, err)
 		}
 	}
 }

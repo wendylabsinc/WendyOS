@@ -153,10 +153,26 @@ func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice)
 		return certs.WendyIdentity{}, fmt.Errorf("Cloud asset %s has no PKI device binding; refusing to derive one from its asset UUID", asset.key)
 	}
 	identity, err := certs.ParsePrincipal(certs.DeviceSPIFFEURI(tenant, device))
-	if err != nil || identity.EntityID != device || strings.ContainsAny(device, "/?#% \t\r\n") {
+	if err != nil || identity.EntityID != device || !validCloudPKIDeviceName(device) {
 		return certs.WendyIdentity{}, fmt.Errorf("Cloud asset %s has an invalid PKI device binding", asset.key)
 	}
 	return identity, nil
+}
+
+// Match the PKI device-name contract: path-shaped names are valid, but empty,
+// traversal, escaped or URL-control segments must never identify another peer.
+func validCloudPKIDeviceName(name string) bool {
+	for _, segment := range strings.Split(name, "/") {
+		if len(segment) == 0 || len(segment) > 64 || segment == "." || segment == ".." {
+			return false
+		}
+		for _, ch := range segment {
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '.' || ch == '_' || ch == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func connectCloudAsset(ctx context.Context, auth *config.AuthConfig, asset *cloudpb.Asset, brokerURL string) (*grpcclient.AgentConnection, error) {
