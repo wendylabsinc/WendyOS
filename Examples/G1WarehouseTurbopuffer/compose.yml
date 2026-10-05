@@ -1,0 +1,20 @@
+services:
+  sim:
+    image: g1-warehouse-turbopuffer:local
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8880:8880"
+    environment:
+      G1_WAREHOUSE_HOST: 0.0.0.0
+      G1_WAREHOUSE_PORT: "8880"
+      # Taken from the shell that runs compose; without a key the app uses a keyword stand-in.
+      TURBOPUFFER_API_KEY: ${TURBOPUFFER_API_KEY:-}
+      TURBOPUFFER_REGION: ${TURBOPUFFER_REGION:-gcp-us-central1}
+      TURBOPUFFER_NAMESPACE: ${TURBOPUFFER_NAMESPACE:-wendy-g1-warehouse}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8880/api/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 18
+      start_period: 30s

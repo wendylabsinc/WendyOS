@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
@@ -46,8 +47,8 @@ type fakeTargetAgent struct {
 	noPrepare  bool  // PrepareImage answers Unimplemented: an agent that cannot register by name
 	prepareErr error // PrepareImage fails with this immediately
 	noLayers   bool  // QueryLayers answers Unimplemented: an agent that cannot say which layers it holds
-	// dropAfter, when > 0, fails the WriteChunks stream that receives the Nth
-	// chunk overall with Unavailable, once — a link dying mid-transfer.
+	// dropAfter, when > 0, drops the connection that receives the Nth chunk
+	// overall with Unavailable, once — a link dying mid-transfer.
 	dropAfter int
 	dropped   bool
 }
@@ -89,6 +90,7 @@ func (f *fakeTargetAgent) QueryLayers(_ context.Context, req *agentpb.QueryLayer
 }
 
 func (f *fakeTargetAgent) WriteChunks(stream grpc.ClientStreamingServer[agentpb.WriteChunksRequest, agentpb.WriteChunksResponse]) error {
+	connection := stream.Context().Value(fakeTargetConnectionKey{}).(*fakeTargetConnection)
 	f.mu.Lock()
 	f.streams++
 	f.mu.Unlock()
@@ -106,12 +108,17 @@ func (f *fakeTargetAgent) WriteChunks(stream grpc.ClientStreamingServer[agentpb.
 			return status.Error(codes.InvalidArgument, "staged chunk hash mismatch")
 		}
 		f.mu.Lock()
+		if connection.dropped {
+			f.mu.Unlock()
+			return status.Error(codes.Unavailable, "error reading from server: EOF")
+		}
 		f.chunks[h] = msg.GetData()
 		f.written++
 		f.writtenBytes += int64(len(msg.GetData()))
 		drop := f.dropAfter > 0 && !f.dropped && f.written >= f.dropAfter
 		if drop {
 			f.dropped = true
+			connection.dropped = true
 		}
 		f.mu.Unlock()
 		if drop {
@@ -180,6 +187,27 @@ func (f *fakeTargetAgent) snapshot() (written, streams int, prepared []*agentpb.
 	return f.written, f.streams, append([]*agentpb.RunContainerLayersRequest(nil), f.prepared...)
 }
 
+type fakeTargetConnectionKey struct{}
+
+type fakeTargetConnection struct {
+	// Protected by fakeTargetAgent.mu. Every stream on a dropped connection
+	// must stop staging, even if gRPC has buffered messages for a sibling.
+	dropped bool
+}
+
+type fakeTargetConnectionStats struct{}
+
+func (fakeTargetConnectionStats) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+	return context.WithValue(ctx, fakeTargetConnectionKey{}, &fakeTargetConnection{})
+}
+
+func (fakeTargetConnectionStats) TagRPC(ctx context.Context, _ *stats.RPCTagInfo) context.Context {
+	return ctx
+}
+
+func (fakeTargetConnectionStats) HandleConn(context.Context, stats.ConnStats) {}
+func (fakeTargetConnectionStats) HandleRPC(context.Context, stats.RPCStats)   {}
+
 // serveFakeTargets runs one gRPC server per asset id over bufconn and returns a
 // targetDialer that routes by the push target's asset id, the way the mesh
 // dialer would.
@@ -188,7 +216,7 @@ func serveFakeTargets(t *testing.T, fakes map[int32]*fakeTargetAgent) targetDial
 	listeners := make(map[int32]*bufconn.Listener, len(fakes))
 	for assetID, fake := range fakes {
 		lis := bufconn.Listen(1 << 20)
-		srv := grpc.NewServer()
+		srv := grpc.NewServer(grpc.StatsHandler(fakeTargetConnectionStats{}))
 		agentpb.RegisterWendyContainerServiceServer(srv, fake)
 		go func() { _ = srv.Serve(lis) }()
 		t.Cleanup(func() { srv.Stop(); _ = lis.Close() })

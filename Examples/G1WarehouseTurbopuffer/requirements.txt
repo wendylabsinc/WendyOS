@@ -1,0 +1,5 @@
+mujoco==3.3.7
+numpy==1.26.4
+onnxruntime==1.23.2
+PyYAML==6.0.3
+turbopuffer==2.10.2

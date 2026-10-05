@@ -1,13 +1,13 @@
 # `wendy device wifi`
 
-Manages WiFi **on the connected WendyOS device**, through the device's agent.
-Run with no subcommand for an interactive session.
+Manages WiFi on the connected WendyOS or Wendy Lite device.
+Run with no subcommand to open the WiFi management table on WendyOS, or start
+the interactive connection flow on Wendy Lite.
 
-The one exception is the host-scan fallback: a Wendy Lite device reached over
-BLE, or a device behind a provider that manages WiFi itself, cannot scan from
-the device, so those are offered the networks visible from the host machine
-instead. The [Platform behavior](#platform-behavior) section below describes
-that host-side scan only.
+Wendy Lite devices reached over BLE, and devices behind providers that manage
+WiFi themselves, use the networks visible from the host machine because they
+cannot scan from the device. The [Platform behavior](#platform-behavior)
+section below describes that host-side scan.
 
 ## Subcommands
 
@@ -83,13 +83,11 @@ Keychain lookup is not supported. Windows has no equivalent of macOS's auto-stor
 
 ## Wendy Lite devices
 
-Running `wendy device wifi` in interactive mode against a Wendy Lite device is not supported. The command exits immediately with:
+Running `wendy device wifi` against a Wendy Lite device starts the same
+interactive connection flow as `wendy device wifi connect`: select a network
+visible from the host machine, enter its password, and connect the device.
 
-```
-selected device does not support full Wi-Fi management; use 'wendy device wifi connect' and 'wendy device wifi disconnect' instead
-```
-
-Use the explicit subcommands instead:
+You can also use the explicit subcommands:
 
 ```sh
 wendy device wifi connect --ssid <network>

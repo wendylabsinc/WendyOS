@@ -146,3 +146,12 @@ func TestGuideListsEveryErrorCode(t *testing.T) {
 		}
 	}
 }
+
+func TestServerInstructionsSendAuthRequiredToAuthLogin(t *testing.T) {
+	if !strings.Contains(serverInstructions, "AUTH_REQUIRED") || !strings.Contains(serverInstructions, "`auth_login`") {
+		t.Fatal("instructions must send AUTH_REQUIRED to `auth_login`")
+	}
+	if !strings.Contains(guideText, "auth_login") {
+		t.Fatal("guide must mention auth_login")
+	}
+}

@@ -688,3 +688,13 @@ func TestCloudConnect_OfflineRequeryFails_KeepsOriginalNotFound(t *testing.T) {
 		t.Fatalf("len(fake.reqs) = %d, want 2 (online listing, then the failed offline re-query)", len(fake.reqs))
 	}
 }
+
+func TestCloudAuthEntry_NotSignedInAsksForAuthLogin(t *testing.T) {
+	srv := New(&config.Config{}, nil)
+	_, err := srv.cloudAuthEntry("")
+	r := cloudErrResult(err)
+	sc := structuredMap(t, r)
+	if sc["error_code"] != string(errCodeAuthRequired) || !strings.Contains(sc["message"].(string), "auth_login") {
+		t.Fatalf("result = %v, want AUTH_REQUIRED pointing at auth_login", sc)
+	}
+}

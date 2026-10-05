@@ -4095,7 +4095,7 @@ func pickDevice(ctx context.Context, excludeProviders map[string]bool, includeBl
 			}
 		case errors.Is(err, errDevicePickerLogin):
 			openOn = devicePickerCloudTab
-			if err := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); err != nil {
+			if err := relogin(ctx, cloudAuth); err != nil {
 				return nil, err
 			}
 			cfg, err = config.Load()

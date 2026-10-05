@@ -8,11 +8,12 @@ import (
 )
 
 // backoffSchedule is the delay sequence after a failed Roughtime query.
+// Cap waits at a minute so restored internet is discovered promptly even when
+// local interfaces and routes do not change.
 var backoffSchedule = []time.Duration{
 	5 * time.Second,
 	30 * time.Second,
-	5 * time.Minute,
-	30 * time.Minute,
+	time.Minute,
 }
 
 // resyncInterval is the wait after a query that disciplined the clock.

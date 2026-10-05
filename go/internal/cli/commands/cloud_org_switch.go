@@ -113,8 +113,7 @@ func switchCloudOrganization(ctx context.Context, cfg *config.Config) (*config.A
 		return nil, cfg, fmt.Errorf("selected organization %d is no longer available", orgID)
 	}
 	fmt.Println(tui.InfoMessage(fmt.Sprintf("No credentials are stored for %s (org %d). Complete login and select that organization in the browser.", orgName, orgID)))
-	dashboard, grpcEndpoint := loginTargetsForAuth(entry.source)
-	if err := performLoginFn(ctx, dashboard, grpcEndpoint); err != nil {
+	if err := relogin(ctx, entry.source); err != nil {
 		return nil, cfg, err
 	}
 

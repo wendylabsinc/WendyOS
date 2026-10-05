@@ -514,6 +514,9 @@ func (s *mcpServer) cloudAuthEntry(cloudGRPC string) (*config.AuthConfig, error)
 	// MCP is non-interactive: pass a nil picker so resolution stops at the
 	// persisted default (or errors when several sessions remain ambiguous).
 	auth, err := config.ResolveAuth(s.currentConfig(), cloudGRPC, nil)
+	if errors.Is(err, config.ErrNotLoggedIn) {
+		return nil, &cloudResolveErr{code: errCodeAuthRequired, msg: "not signed in to Wendy Cloud; call auth_login and show the user the link (or run 'wendy auth login' in a terminal)"}
+	}
 	if errors.Is(err, config.ErrMultipleSessions) {
 		return nil, &cloudResolveErr{code: errCodeMultipleSessions, msg: "multiple auth sessions exist; pass cloud_grpc to select one, or set a default with 'wendy auth use'"}
 	}
