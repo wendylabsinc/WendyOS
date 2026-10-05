@@ -104,7 +104,17 @@ func TestPrincipalSignerRefusesECDSADowngrade(t *testing.T) {
 	}
 }
 func TestDeviceEndpoints(t *testing.T) {
-	for _, tt := range []struct{ cloud, override, want string }{{"api.dev.wendy.sh:443", "", "devices.dev.wendy.sh:443"}, {"https://api.wendy.sh", "", "devices.wendy.sh:443"}, {"localhost:8501", "localhost:9443", "localhost:9443"}, {"api.dev.wendy.sh:443", "https://custom.example:9443", "custom.example:9443"}} {
+	for _, tt := range []struct{ cloud, override, want string }{
+		{"api.dev.wendy.sh:443", "", "devices.dev.wendy.sh:443"},
+		{"https://api.wendy.sh", "", "devices.wendy.sh:443"},
+		{"api.wendy.dev:443", "", "devices.wendy.dev:443"},
+		{"https://api.wendy.dev", "", "devices.wendy.dev:443"},
+		{"https://api.wendy.dev:9443", "", "devices.wendy.dev:9443"},
+		{"custom.example:443", "", "custom.example:443"},
+		{"localhost:8501", "localhost:9443", "localhost:9443"},
+		{"api.dev.wendy.sh:443", "https://custom.example:9443", "custom.example:9443"},
+		{"api.wendy.dev:443", "https://custom.example:9443", "custom.example:9443"},
+	} {
 		got, e := DeviceEndpoint(tt.cloud, tt.override)
 		if e != nil || got != tt.want {
 			t.Fatalf("endpoint(%q,%q)=%q,%v", tt.cloud, tt.override, got, e)
@@ -115,8 +125,10 @@ func TestDeviceEndpoints(t *testing.T) {
 			t.Fatalf("accepted unsafe target %q", s)
 		}
 	}
-	if got, e := Issuer("api.dev.wendy.sh:443", ""); e != nil || got != "https://api.dev.wendy.sh" {
-		t.Fatalf("issuer=%s,%v", got, e)
+	for _, host := range []string{"api.dev.wendy.sh", "api.wendy.dev"} {
+		if got, e := Issuer(host+":443", ""); e != nil || got != "https://"+host {
+			t.Fatalf("issuer(%q)=%s,%v", host, got, e)
+		}
 	}
 }
 func TestRelayKeysPersistDistinctAndPrivate(t *testing.T) {

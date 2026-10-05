@@ -11,8 +11,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
-var enrollmentOIDCLoginFn = performOIDCLogin
-
 // Interactive enrollment always asks which organization to use. The saved
 // default positions the picker cursor, but does not skip the choice.
 func resolveEnrollmentAuthEntry(cloudGRPC string, orgOverride int32) (*config.AuthConfig, error) {
@@ -82,12 +80,7 @@ func prepareEnrollmentAuth(ctx context.Context, auth *config.AuthConfig) (*confi
 	}
 	// Keep the selected realm and custom deployment settings. The legacy
 	// dashboard login would discard the OIDC session and use a different API.
-	if lerr := enrollmentOIDCLoginFn(ctx, oidcLoginOptions{
-		Issuer: auth.OAuthIssuer, ClientID: auth.OAuthClientID,
-		CloudResource: auth.OAuthResource, IdentityResource: auth.PKIResource,
-		IdentityEndpoint: auth.PKIEndpoint,
-		CloudURL:         auth.CloudDashboard, CloudGRPC: auth.CloudGRPC,
-	}); lerr != nil {
+	if lerr := performOIDCLoginFn(ctx, oidcReloginOptions(auth)); lerr != nil {
 		return nil, fmt.Errorf("signing in before enrollment: %w", lerr)
 	}
 	cfg, err := config.Load()

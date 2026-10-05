@@ -8,8 +8,11 @@ stages:
       PORT: "8000"
       PYTHONUNBUFFERED: "1"
     install:
+      apt:
+        packages: [libportaudio2]
       pip:
         - requirements: requirements.txt
+        - requirements: requirements-audio.txt
     copy:
       - from: local
         paths: [app.py]

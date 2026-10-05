@@ -137,8 +137,9 @@ Use the run tool to build and deploy to an explicit device or the connected targ
   run(project_path="/path/to/project", device="vm:go2")
   run(project_path="/path/to/project") // reuse current direct/cloud session target
 Use start=false to create the container without starting it. With no connection
-and no device, run returns NOT_CONNECTED; AUTH_REQUIRED means the user must run
-'wendy auth login' in a terminal.
+and no device, run returns NOT_CONNECTED; on AUTH_REQUIRED call auth_login
+and show the user the returned link (only if auth_login is unavailable, ask them to
+run 'wendy auth login' in a terminal).
 Enable setup and use project_validate before building. run always detaches: it
 returns status, target and a build-log tail but does not stream app logs or check
 readiness (readiness is "not_checked"). Verify with container_list, telemetry_logs,

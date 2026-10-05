@@ -59,6 +59,9 @@ type mcpServer struct {
 	installation         onboarding.Backend
 	simulators           SimulatorBackend
 	project              ProjectBackend
+	loginMu              sync.Mutex   // guards login and loginStarter
+	login                LoginSession // the latest auth_login session, pending or ended
+	loginStarter         LoginStarter
 }
 
 // SetStartupConnect configures the optional device connection attempted after
@@ -270,6 +273,7 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 	}
 	s.registerToolGroups(srv)
 	s.registerStatusTools(srv)
+	s.registerAuthTools(srv)
 	s.registerGuideResource(srv)
 	s.registerDiagnosticsResource(srv)
 	s.registerPrompts(srv)

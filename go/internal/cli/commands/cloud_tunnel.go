@@ -14,7 +14,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
-	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -53,9 +52,12 @@ func (f closeFunc) Close() error {
 	return nil
 }
 
+// certXFCC is the identity header pair only legacy (urn:wendy) sessions send to
+// the old cloud. A PKI-principal session gets none: the new cloud reads no
+// identity header (WDY-2346); the old one is retired with the v1 cutover.
 func certXFCC(cert config.CertificateInfo) string {
 	if cert.PrincipalURI != "" {
-		return "URI=" + cert.PrincipalURI
+		return ""
 	}
 	if cert.UserID != "" {
 		return fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", cert.OrganizationID, cert.UserID)
@@ -78,7 +80,7 @@ func cloudContext(ctx context.Context, auth *config.AuthConfig) (context.Context
 	}
 	md := metadata.MD{}
 	// A DPoP-bound token (OAuth login) must not go out as Bearer — the DPoP
-	// interceptor (dpopDialOptions, installed by withCloudRequestSigning) sets
+	// interceptor (dpopDialOptions, appended at dial) sets
 	// `authorization: DPoP <token>` plus a per-call proof. Only unbound
 	// API-key/legacy sessions carry a Bearer here (WDY-3107).
 	if auth.HasAPIKey() && !authIsDPoPBound(auth) {
@@ -134,8 +136,14 @@ func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice)
 	cert := auth.Certificates[0]
 	identity := certs.WendyIdentity{OrgID: int32(cert.OrganizationID), EntityType: certs.EntityAsset, EntityID: asset.key}
 	if asset.v2 != nil {
+		// Cloud routes by asset ID, but enrollment can bind that row to a
+		// different PKI device name. Verify the operator-set binding, never
+		// an identity learned from the peer. Older rows use their asset ID.
+		if deviceName := asset.v2.GetPkiDeviceName(); deviceName != "" {
+			identity.EntityID = deviceName
+		}
 		identity.TenantUUID = cert.TenantUUID()
-		identity.Principal = certs.DeviceSPIFFEURI(identity.TenantUUID, asset.key)
+		identity.Principal = certs.DeviceSPIFFEURI(identity.TenantUUID, identity.EntityID)
 	}
 	return identity
 }
@@ -722,41 +730,21 @@ func dialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 	} else {
 		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	dialOptions, err := withCloudRequestSigning(auth,
+	dialOptions := append([]grpc.DialOption{
 		transport,
-		grpc.WithInitialWindowSize(8*1024*1024),
-		grpc.WithInitialConnWindowSize(16*1024*1024),
-		grpc.WithReadBufferSize(256*1024),
-		grpc.WithWriteBufferSize(256*1024),
+		grpc.WithInitialWindowSize(8 * 1024 * 1024),
+		grpc.WithInitialConnWindowSize(16 * 1024 * 1024),
+		grpc.WithReadBufferSize(256 * 1024),
+		grpc.WithWriteBufferSize(256 * 1024),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                clouddefaults.KeepalivePing,
 			Timeout:             clouddefaults.KeepaliveACKTimeout,
 			PermitWithoutStream: true,
 		}),
-	)
-	if err != nil {
-		return nil, err
-	}
+	}, dpopDialOptions(auth)...)
 	conn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}
 	return conn, nil
-}
-
-// withCloudRequestSigning installs the pki-core operator-certificate signer.
-// The bootstrap paths that construct their own connection use this helper too,
-// so all Cloud mutations share one wire contract.
-func withCloudRequestSigning(auth *config.AuthConfig, options ...grpc.DialOption) ([]grpc.DialOption, error) {
-	signingOption, err := cloudrequest.DialOption(auth)
-	if err != nil {
-		return nil, fmt.Errorf("configuring Cloud request signing: %w", err)
-	}
-	if signingOption != nil {
-		options = append(options, signingOption)
-	}
-	// Per-RPC DPoP proof for a sender-constrained (cnf-bound) OAuth token; nil
-	// for unbound sessions (WDY-3107).
-	options = append(options, dpopDialOptions(auth)...)
-	return options, nil
 }

@@ -22,11 +22,11 @@ const serverInstructions = "Wendy MCP manages WendyOS edge devices (Raspberry Pi
 	"`run` returns status, target and a build-log tail; readiness is not_checked. " +
 	"Check `container_list` (running_state, termination_reason), read `telemetry_logs` for startup errors, " +
 	"and test the app itself, e.g. its HTTP port. A first build can take minutes: raise timeout_seconds (default 300). " +
-	"AUTH_REQUIRED means the user must run `wendy auth login` in a terminal.\n\n" +
+	"On AUTH_REQUIRED call `auth_login` and show the user its link (else: `wendy auth login` in a terminal).\n\n" +
 	"MCP or CLI: prefer these tools for device state, containers, logs and deploys; " +
 	"results are structured and reuse this session's connection. " +
 	"Only core tools are listed at first: enable setup, simulator, hardware, robotics, observability or cloud tools with `wendy_tools`. " +
-	"Use the CLI for work without a tool, such as `wendy auth login` and `wendy run --watch`. " +
+	"Use the CLI where no tool exists, such as `wendy run --watch`. " +
 	"In a shell, keep each flag and its value as separate words (wendy run --device \"$DEVICE\"). " +
 	"Avoid DEV=\"--device robot\": zsh passes it as one argument. " +
 	"Relay CLI update notices to the user with the update command and MCP server restart step.\n\n" +

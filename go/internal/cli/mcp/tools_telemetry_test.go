@@ -163,8 +163,17 @@ func TestTelemetryMetricsHistoryRespectsCallerCancellation(t *testing.T) {
 	fake := &fakeMetricsReplayServer{requests: make(chan *agentpb.StreamMetricsRequest, 1), canceled: make(chan struct{})}
 	s := New(&config.Config{}, nil)
 	s.SetConn(startFakeTelemetryServer(t, fake))
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// Cancel from the caller after the subscription opens, rather than racing
+	// the client's deadline timer against the server's propagated deadline.
+	go func() {
+		select {
+		case <-fake.requests:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	started := time.Now()
 	result, err := s.handleTelemetryMetrics(ctx, callToolReq("telemetry_metrics", map[string]any{"last_n": 20, "max_batches": 20}))
 	if err != nil || result.IsError || len(listPayload(t, result, "metrics")) != 0 || time.Since(started) > time.Second {

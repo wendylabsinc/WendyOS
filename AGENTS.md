@@ -23,6 +23,8 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Codex.
 
 1. Call `wendy_status` to see current connection state and a suggested next step.
    Check the running server's version and tool list; new skills do not update an existing MCP process.
+   If it reports `auth` as `logged_out` or `expired`, call `auth_login` and show
+   the user the returned link.
 2. Call `device_list` (optionally `scan: true`) to find available devices.
    - On Linux, a USB-C tethered device can't be reached until the host's USB-C link
      is configured; `device_list` then returns a `usb` warning. Ask the user to run

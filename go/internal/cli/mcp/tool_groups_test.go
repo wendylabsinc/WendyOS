@@ -42,7 +42,7 @@ func TestToolGroupsProtocolDiscovery(t *testing.T) {
 	if !*srv.GetTool("wendy_tools").Tool.Annotations.ReadOnlyHint {
 		t.Fatal("catalog selection should not require device-mutation approval")
 	}
-	if len(initial) != 15 {
+	if len(initial) != 16 {
 		t.Fatalf("default count = %d", len(initial))
 	}
 	encoded, _ := json.Marshal(initial)

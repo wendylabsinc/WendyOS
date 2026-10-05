@@ -68,6 +68,11 @@ holds repository orientation, PR workflows, and implementation debugging. CLI
 setup never installs it. The separate `claude-skills` repository is not a source
 or installation dependency for the end-user group.
 
+[`wendy-mods`](wendy-mods/README.md) is an opt-in Claude Code mod, a plugin of
+function hooks rather than skills. It verifies Wendy MCP deploys and shows the
+connected device above the prompt. It is not in any marketplace or the public
+mirror while the mod API is early access.
+
 ## Existing installations
 
 Setup does not uninstall separately installed plugins or personal engineering

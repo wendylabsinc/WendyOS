@@ -13,11 +13,14 @@ its custom carrier. Distinguish a new board from an installed but unreachable on
 ## Plan without writing
 
 Call `wendy_status` and inspect the tools actually exposed by the running MCP
-server. Use `os_install_plan` without a device connection. It returns the method,
+server. Install tools are in the `setup` group, which is not listed until you
+call `wendy_tools(groups=["setup"])`. Use `os_install_plan` without a device
+connection. It returns the method,
 published version/artifact, erase scope, requirements and command argument array.
 Jetson planning requires `carrier="developer-kit"`; do not infer this from its SoC.
 
-If the tool is missing, check `wendy install plan --help`. Update the CLI and
+If the tool is still missing after enabling `setup`, check
+`wendy install plan --help`. Update the CLI and
 restart the MCP host when authorized, or use the board's installed documentation
 through `wendy docs`. Do not invent tools or assume a recent skill means a recent
 server binary.

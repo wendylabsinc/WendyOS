@@ -73,10 +73,7 @@ func preEnrollDevice(ctx context.Context, auth *config.AuthConfig, deviceName st
 		transportOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
 
-	dialOptions, err := withCloudRequestSigning(auth, transportOpt)
-	if err != nil {
-		return nil, err
-	}
+	dialOptions := append([]grpc.DialOption{transportOpt}, dpopDialOptions(auth)...)
 	cloudConn, err := dialer(ctx, auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)

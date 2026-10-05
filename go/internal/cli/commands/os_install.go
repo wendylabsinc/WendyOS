@@ -229,9 +229,13 @@ func runOSInstallDirect(imagePath string, driveID string, force bool, yesOverwri
 
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	fmt.Println(elevationHint())
+	if err := unmountBeforeWrite(*targetDrive); err != nil {
+		return err
+	}
 	if err := writeImageToDisk(stream, stream.uncompressedSize, *targetDrive, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
+	markFATVolumes(*targetDrive)
 
 	fmt.Printf("\nSuccessfully installed image on %s.\n", targetDrive.Name)
 	return nil
@@ -342,6 +346,12 @@ func pickWendyLiteBoard(target string, nightly bool) (string, error) {
 }
 
 func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, noBmap, rootfsOnly, rootfsOnlyExplicit bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int) error {
+	// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
+	// Rejected before any manifest fetch: the answer never depends on it.
+	switch flagDeviceType {
+	case "esp32-c5", "esp32-c6", "esp32-c61", "esp32-p4", "esp32-s3":
+		return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
+	}
 	if storageOverride != "" && storageOverride != "nvme" && storageOverride != "sd" && storageOverride != "emmc" {
 		return fmt.Errorf("invalid --storage %q: must be \"nvme\", \"sd\", or \"emmc\" (jetson-agx-orin only)", storageOverride)
 	}
@@ -494,11 +504,6 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 	// Resolve device — use flag or interactive picker.
 	var selected string
 	if flagDeviceType != "" {
-		// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
-		switch flagDeviceType {
-		case "esp32-c5", "esp32-c6", "esp32-c61", "esp32-p4", "esp32-s3":
-			return fmt.Errorf("--device-type does not support ESP32 targets; use the interactive picker for Wendy Lite devices")
-		}
 		if _, ok := deviceMap[flagDeviceType]; !ok {
 			var available []string
 			for k, d := range deviceMap {
@@ -985,6 +990,10 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		return err
 	}
 
+	if err := unmountBeforeWrite(targetDrive); err != nil {
+		return err
+	}
+
 	// Step 6: Write image to drive with progress bar.
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
 	writeProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
@@ -1009,12 +1018,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	go func() {
-		var writeErr error
-		switch {
-		case seekableZst != "":
-			fmt.Println("Using seekable block map for faster flashing.")
-			writeErr = writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, func(written int64) {
-				lastWritten.Store(written)
+		progress := func(written int64) {
+			lastWritten.Store(written)
+			if seekableZst != "" {
 				var pct float64
 				if seekableTotal > 0 {
 					pct = float64(written) / float64(seekableTotal)
@@ -1024,22 +1030,20 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 					Written: written,
 					Total:   seekableTotal,
 				})
-			})
+			} else if msg, ok := stream.writeProgressMsg(written); ok {
+				wp.Send(msg)
+			}
+		}
+		var writeErr error
+		switch {
+		case seekableZst != "":
+			fmt.Println("Using seekable block map for faster flashing.")
+			writeErr = writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, progress)
 		case bmapPath != "":
 			fmt.Println("Using block map for faster flashing.")
-			writeErr = writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, func(written int64) {
-				lastWritten.Store(written)
-				if msg, ok := stream.writeProgressMsg(written); ok {
-					wp.Send(msg)
-				}
-			})
+			writeErr = writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, progress)
 		default:
-			writeErr = writeImageToDisk(stream, stream.uncompressedSize, targetDrive, func(written int64) {
-				lastWritten.Store(written)
-				if msg, ok := stream.writeProgressMsg(written); ok {
-					wp.Send(msg)
-				}
-			})
+			writeErr = writeImageToDisk(stream, stream.uncompressedSize, targetDrive, progress)
 		}
 		wp.Send(tui.ProgressDoneMsg{Err: writeErr})
 	}()
@@ -1149,6 +1153,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		provisionErr = provisionConfigWithRetry(targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData)
 	}
 
+	markFATVolumes(targetDrive)
 	ejectDisk(targetDrive)
 
 	// Requested provisioning that never reached the card is a failed install:

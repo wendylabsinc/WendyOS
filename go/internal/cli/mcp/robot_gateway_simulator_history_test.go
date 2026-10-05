@@ -42,15 +42,22 @@ func TestSimulatorPoseHistoryRetainsFootLiftBetweenToolReads(t *testing.T) {
 		Frames   []simulatorPoseFrame
 		Sequence uint64
 		Dropped  bool
-	} { t.Helper(); result, err := g.protocol.ListTools()["simulator_scene_read"].Handler(ctx, callToolReq("simulator_scene_read", map[string]any{"session_id": id, "part": "state", "history": true, "after_sequence": after})); if err != nil || result.IsError || len(result.Content) != 0 || result.StructuredContent != nil {
-		t.Fatal("history must be UI-only", result, err)
-	}; var packet struct {
-		Frames   []simulatorPoseFrame
-		Sequence uint64
-		Dropped  bool
-	}; if json.Unmarshal(result.Meta.AdditionalFields["scene_data"].(json.RawMessage), &packet) != nil {
-		t.Fatal("invalid packet")
-	}; return packet }
+	} {
+		t.Helper()
+		result, err := g.protocol.ListTools()["simulator_scene_read"].Handler(ctx, callToolReq("simulator_scene_read", map[string]any{"session_id": id, "part": "state", "history": true, "after_sequence": after}))
+		if err != nil || result.IsError || len(result.Content) != 0 || result.StructuredContent != nil {
+			t.Fatal("history must be UI-only", result, err)
+		}
+		var packet struct {
+			Frames   []simulatorPoseFrame
+			Sequence uint64
+			Dropped  bool
+		}
+		if json.Unmarshal(result.Meta.AdditionalFields["scene_data"].(json.RawMessage), &packet) != nil {
+			t.Fatal("invalid packet")
+		}
+		return packet
+	}
 	first := read(0)
 	deadline := time.After(2 * time.Second)
 	for {

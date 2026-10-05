@@ -1,9 +1,16 @@
-# Change detection
+# Visual and audio change detection
 
 A fixed-camera Wendy app that detects changed regions, compares aligned before
 and after crops, and tracks persistence, growth, and movement. The dashboard
 shows the reference, current frame, compensated residual, region masks, class
 scores, and liquid-candidate events.
+
+An optional audio monitor adds independent hopper and conveyor channels for
+[WDY-3366](https://linear.app/wendylabsinc/issue/WDY-3366/simulation-suncor-oil-sands-dump-hopper-conveyor-metal-detection-and).
+It compares PCM audio with a frozen normal-operation baseline, confirms
+metal-impact and belt-rip **candidates**, retains evidence clips, and latches an
+in-process conveyor-stop simulation. Synthetic audio, recorded WAVs, and live
+microphone input share the same detector. Audio is off unless explicitly enabled.
 
 The default demo runs without a camera or model download. It uses an **untrained
 rule baseline**, whose scores are not probabilities. An optional Siamese model
@@ -52,6 +59,108 @@ Local serving binds to `127.0.0.1`. Use `--host 0.0.0.0` to allow other machines
 on a trusted network. This example has shared controls and no authentication.
 Pause, scene selection, and reference resets affect every connected viewer.
 
+## Hopper and conveyor audio
+
+Run both synthetic microphone channels alongside a quiet camera scene:
+
+```sh
+python app.py --scenario empty --audio-source demo --scene-id suncor-demo
+```
+
+The audio panel shows a hopper/conveyor schematic with microphone placements,
+waveform envelopes, spectra, anomaly histories, and the simulated conveyor state.
+Select **Metal impact in hopper** or **Conveyor belt rip**. Each scenario starts
+with normal operation, introduces a sound at five seconds, and confirms its
+candidate at 5.5 or 5.75 seconds respectively. The confirmation then stops the
+belt animation. Audio runs at real time; the original visual demo has its own
+accelerated clock. Changing a visual scene does not reset audio.
+
+Normal operation, an unrelated tone, silence, and clipping exercise the negative
+paths. Silence and clipping are input-quality statuses; an unfamiliar sound is
+`unknown`. None is interpreted as confirmed metal or a belt rip. Audio continues
+after a simulated stop so that evidence remains available. **Restart audio
+session** clears the stop, events and baseline. Selecting a different audio
+scenario also restarts that session. Pause freezes synthetic/file playback;
+live microphone samples are discarded while paused so resuming cannot replay
+stale sound. Pause interrupts any partial confirmation.
+
+Select an event to listen to its retained evidence. Choose a human label and
+export a ZIP containing `audio.wav` and `sample.json`. Each clip includes up to
+three seconds ending at confirmation. Metadata contains the predicted and human
+labels, zone, source timestamps, UTC observation time, measured features, anomaly
+score, confirmation duration, and simulated stop dispatch duration. The latest
+30 events and clips are held in memory; restarting clears them. Confidence is
+explicitly `null`: the rule score is not a calibrated probability.
+
+### Recorded and live audio
+
+```sh
+# Stereo: left channel = hopper microphone, right channel = conveyor microphone.
+python app.py --scenario empty --audio-source /path/to/recording.wav
+
+# Mono: choose the physical microphone's zone.
+python app.py --scenario empty --audio-source /path/to/belt.wav --audio-zone conveyor
+
+# Live microphone capture, with an optional PortAudio device index or name.
+pip install -r requirements.txt -r requirements-audio.txt
+python -m sounddevice
+python app.py --scenario empty --audio-source mic --audio-zone hopper --audio-device 0
+```
+
+WAV input supports uncompressed 16-bit PCM, mono or stereo, at 8–96 kHz. It uses
+sample-count timestamps and stops at EOF, retaining the last result. An
+incomplete final window is discarded. Microphones capture mono at 16 kHz using
+[sounddevice/PortAudio](https://python-sounddevice.readthedocs.io/en/0.5.1/api/streams.html).
+On Linux, install `libportaudio2`; the Wendy container includes it. The local
+synthetic and WAV modes only need `requirements.txt` and do not open a microphone.
+Microphone overflow, timeout, and device errors stop audio processing and make
+`/health` return 503. There is no automatic reconnect. Restarting audio clears
+its error and attempts processing again; an unplugged device may require an
+application restart after reconnection. Video continues independently.
+
+Start with at least three seconds of representative normal machine operation.
+Recalibrate when the operating condition changes. The detector cannot recover
+an anomaly that was incorporated into its normal baseline. Camera and audio
+timestamps are independent; this example does not fuse or synchronize them.
+
+### Audio detector and stop semantics
+
+Each channel processes non-overlapping 250 ms windows. Short overlapping FFTs
+measure high-frequency energy, tonality, flatness and spectral centroid. RMS
+level is measured in dBFS, not calibrated acoustic dB SPL. The first three seconds
+of valid sound establish a median and median absolute deviation for RMS level
+and relative high-frequency energy. That baseline then stays frozen.
+
+An anomaly score of six or more means one of those measurements deviated at
+least six robust scale units. A minimum scale of 3 dB limits sensitivity to an
+artificially stable reference. Increased high-band energy plus tonal ringing
+in the hopper yields a metal-impact candidate. Increased broadband high-frequency
+energy in the conveyor yields a belt-rip candidate. They require 0.5 and 0.75
+seconds of consecutive evidence respectively. Gaps, pauses, and bad signal
+quality break confirmation. A sustained candidate generates one event until
+it clears for one second. These thresholds and signatures are sample rules,
+not a trained acoustic classifier.
+
+Either confirmed audio channel latches `SimulatedConveyor`. Events report
+`stop_transport: "in_process_simulation"`. `stop_latency_ms` measures only the
+in-process latch operation after confirmation. It excludes the capture window,
+confirmation time, processing, network, PLC and mechanical stopping time.
+`confirmation_seconds` and source timestamps are reported separately.
+
+This implements the **two audio paths as a prototype** for WDY-3366. It does
+not implement visual tramp-metal or visual belt-rip recognition, Modbus/OPC UA,
+a real safety-rated emergency stop, or a hosted client showcase. The existing
+liquid detector is unchanged. Machinery, rocks and other impacts can resemble
+these synthetic signatures. Real recordings, held-out site evaluation and a
+trained/calibrated classifier are needed before claiming detection performance.
+Silence and capture failure report monitoring loss rather than issuing a
+physical stop. No physical outputs are connected.
+
+The audio exports are evidence for a future audio dataset. They are not inputs
+to the image-based Siamese trainer below. Collect normal operation, confounding
+sounds and faults across loads and microphone placements; split by recording
+session/site when developing an audio model.
+
 ## Run on WendyOS
 
 ```sh
@@ -60,13 +169,21 @@ wendy run --device <device-name>
 
 # Capture a device camera instead of running the synthetic demo.
 wendy run --device <device-name> --env SOURCE=0 --env SCENE_ID=pump-room-camera-1
+
+# Add synthetic audio, or use AUDIO_SOURCE=mic with AUDIO_ZONE=conveyor.
+wendy run --device <device-name> --env AUDIO_SOURCE=demo --env AUDIO_SCENARIO=belt_rip
 ```
 
-`wendy.json` grants camera access and exposes HTTP on port 8000. The Stagefile
+`wendy.json` grants camera and audio access and exposes HTTP on port 8000. The Stagefile
 installs the CPU dependencies and starts `app.py` on all interfaces. It follows
 the other camera examples by running as root for V4L2 device access. The default
 demo needs no GPU. `SOURCE`, `SCENE_ID`, `HOST`, `PORT`, and `CHECKPOINT` can also
 be supplied as environment variables.
+
+Audio settings are `AUDIO_SOURCE`, `AUDIO_SCENARIO`, `AUDIO_ZONE`, and
+`AUDIO_DEVICE`. The container includes microphone dependencies from
+`requirements-audio.txt`; audio still defaults to off. No GPU or model download
+is needed for the audio baseline.
 
 The default image contains the rule baseline. To deploy a trained checkpoint,
 change the Stagefile's pip requirements to `requirements-training.txt`, add a
@@ -204,6 +321,16 @@ playback speed.
 | `POST /api/reset` | JSON `{}` to capture a new reference or restart the demo. |
 | `POST /api/demo` | JSON `{"scenario":"shadow"}`, only in demo mode. |
 | `POST /api/export` | JSON `{"id":1,"label":"liquid"}` to download the current region as a ZIP. |
+| `GET /api/audio/clip?id=1` | Retained event evidence as a WAV for listening. |
+| `POST /api/audio/pause` | JSON `{"paused":true}` or `{"paused":false}`; independent of video. |
+| `POST /api/audio/reset` | Restart audio, recalibrate, clear evidence and the simulated stop. |
+| `POST /api/audio/demo` | JSON `{"scenario":"belt_rip"}`; synthetic audio only. |
+| `POST /api/audio/export` | JSON `{"id":1,"label":"belt_rip"}` for a labeled WAV + metadata ZIP. |
+
+`/api/state` includes audio channels, measurements, events and simulated conveyor
+state under `audio`. `/health` includes `audio_error` and returns 503 if either
+enabled input worker has failed or reached EOF. Calibration and signal-quality
+statuses live in `/api/state`; HTTP health does not certify detection readiness.
 
 ```sh
 python -m unittest discover -s tests -v
@@ -216,3 +343,9 @@ HTTP controls, health failures, and ZIP exports. Installing training dependencie
 also enables tests for a real gradient update, frozen BatchNorm statistics,
 checkpoint loading, and split leakage. Model tests use random encoder weights
 and make no network requests or accuracy claims.
+
+Audio tests cover both positive scenarios and negative controls, calibration,
+temporal gaps and confirmation, frozen baselines, multiple sample rates, WAV
+replay and EOF, microphone overflow, pause/reset, evidence export, worker failure,
+and the latched simulated stop. Microphone tests use a fake capture device;
+physical microphone access and deployment must be verified on the target device.

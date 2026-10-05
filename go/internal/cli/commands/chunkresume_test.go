@@ -277,14 +277,16 @@ func TestPushLayersResumingTunnelDropsWrapsAFailedReconnectAfterAStall(t *testin
 	conn, _ := startProbeAgent(t, agent)
 	// No Reconnect closure: reconnectAgentAfterRestart falls to the LAN
 	// redial path (waitForAgentRestart), which re-dials this bogus address,
-	// never finds an agent, and fails once ctx expires.
+	// never finds an agent, and fails once ctx is canceled.
 	conn.Addr = "127.0.0.1:1"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	cfg := chunkUploadConfig{stallTimeout: 30 * time.Millisecond, stallKey: "0123abcd@0.19.3"}
 
-	_, _, err := pushLayersResumingTunnelDrops(ctx, conn, layers, nil, cfg, nil)
+	// Cancel only after the upload attempt finishes so planning and hashing
+	// cannot exhaust a parent deadline before the stall watchdog fires.
+	_, _, err := pushLayersResumingTunnelDrops(ctx, conn, layers, nil, cfg, func(chunkPushSnapshot) { cancel() })
 	if !errors.Is(err, chunkupload.ErrStalled) {
 		t.Fatalf("error = %v, want it to still satisfy errors.Is(err, chunkupload.ErrStalled)\n%s", err, out.String())
 	}
