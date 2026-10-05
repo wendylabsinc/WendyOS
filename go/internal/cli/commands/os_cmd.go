@@ -1541,6 +1541,18 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 		return "", fmt.Errorf("creating temp file: %w", err)
 	}
 
+	// Unattended OTA and JSON callers have no terminal for Bubble Tea.
+	// Finish the download synchronously before handing it to the local server.
+	if jsonOutput || !isInteractiveTerminal() {
+		_, copyErr := io.Copy(tmpFile, resp.Body)
+		closeErr := tmpFile.Close()
+		if err := errors.Join(copyErr, closeErr); err != nil {
+			os.Remove(tmpFile.Name())
+			return "", fmt.Errorf("downloading artifact: %w", err)
+		}
+		return tmpFile.Name(), nil
+	}
+
 	total := resp.ContentLength
 	prog := tui.NewProgress("Downloading artifact...")
 	p := tui.NewProgressProgram(prog)
