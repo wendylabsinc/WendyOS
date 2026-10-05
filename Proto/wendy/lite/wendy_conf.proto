@@ -41,6 +41,12 @@ message WendyConfEnrollment {
     string broker_host = 6;
     uint32 broker_port = 7;
     bytes signed_time = 8; // nonce-bound RFC 3161 response, verified on-device
+    // Explicit operator trust provisioning over physical USB/UART only.
+    // All three PEM CA bundles are required when provision_trust is true.
+    bytes device_roots = 9;
+    bytes tsa_roots = 10;
+    bytes https_roots = 11;
+    bool provision_trust = 12;
 }
 
 message WendyConf {

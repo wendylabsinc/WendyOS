@@ -24,7 +24,7 @@ func TestEnrollmentUsesExistingCommands(t *testing.T) {
 		t.Fatalf("existing Cloud enrollment command unavailable: %v", err)
 	}
 	for _, cmd := range []*cobra.Command{cmd, newDeviceEnrollCmd()} {
-		for _, flag := range []string{"name", "org", "cloud-grpc", "acme-directory-url", "broker-host", "broker-port", "csr-url", "time-url"} {
+		for _, flag := range []string{"name", "org", "cloud-grpc", "acme-directory-url", "broker-host", "broker-port", "csr-url", "time-url", "device-roots", "tsa-roots", "https-roots"} {
 			if cmd.Flags().Lookup(flag) == nil {
 				t.Errorf("%s is missing --%s", cmd.Name(), flag)
 			}

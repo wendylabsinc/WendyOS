@@ -11,7 +11,10 @@ go build -o ./wendy ./cmd/wendy
   --device wendy-lite:/dev/cu.usbmodemXXXX \
   --name lite-desk \
   --broker-host YOUR_WENDYCOM_BROKER_HOST \
-  --broker-port 5055
+  --broker-port 5055 \
+  --device-roots device-ca-bundle.pem \
+  --tsa-roots tsa-ca-bundle.pem \
+  --https-roots server-ca-bundle.pem
 ```
 
 This is the same `cloud enroll-device` command used for WendyOS. The selected
@@ -20,9 +23,28 @@ Lite. Omit `--device` to use the normal picker, or use the USB device ID shown b
 `wendy discover`. The hidden `wendy device enroll` alias uses the same dispatch.
 
 The board needs Wi-Fi and the PKI-enabled firmware from
-[wendy-lite#49](https://github.com/wendylabsinc/wendy-lite/pull/49), built with
-pre-pinned deployment trust bundles and a dedicated identity partition. A normal
-Lite release without the enrollment command fails before the CLI mints a token.
+[wendy-lite#49](https://github.com/wendylabsinc/wendy-lite/pull/49) and its dedicated
+identity partition. Trust bundles can be provisioned during USB enrollment, so
+the firmware does not need deployment-specific roots. The CLI checks firmware
+support before minting a token.
+
+All three root flags are required together. Supplying them explicitly authorizes
+trust provisioning over the physical USB link. Obtain these files through your
+PKI administration process; a certificate chain returned by an unverified endpoint
+is not a trusted source. Device, timestamp, and HTTPS services may use different
+CA hierarchies. The CLI validates each PEM CA bundle and uses the HTTPS bundle
+when requesting signed time.
+
+The firmware stores bundles with enrollment configuration and uses them after
+reboot. Each bundle supports at most eight CA certificates and 16 KiB. Bundles
+plus the signed-time response must fit within 64 KiB. Normal Wi-Fi configuration
+updates preserve enrollment. Replacing or erasing the entire configuration removes
+its bundles; changing an enrolled board's trust through the CLI requires operator
+recovery. This does not introduce remote trust rotation.
+
+Omit all three flags to retain the existing build-pinned trust flow. A device with
+neither provisioned nor embedded roots refuses to connect. Older firmware cannot
+accept these flags; upgrade it first.
 
 The CLI obtains the board's nonce, fetches its signed time seed, and asks Cloud's
 `DeviceEnrollmentService.EnrollDevice` for a Class C credential. Both the Cloud

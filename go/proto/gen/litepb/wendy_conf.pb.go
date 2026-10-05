@@ -289,17 +289,23 @@ func (x *WendyConfCloudProvisioning) GetChain() []byte {
 
 // Operator-authorized Tier C bootstrap. Contains no device private key.
 type WendyConfEnrollment struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	DeviceId      string                 `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
-	Token         string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
-	CsrUrl        string                 `protobuf:"bytes,4,opt,name=csr_url,json=csrUrl,proto3" json:"csr_url,omitempty"`    // https://csr.<deployment>/v1/<tenant>
-	TimeUrl       string                 `protobuf:"bytes,5,opt,name=time_url,json=timeUrl,proto3" json:"time_url,omitempty"` // https://codesign.<deployment>/v1/time
-	BrokerHost    string                 `protobuf:"bytes,6,opt,name=broker_host,json=brokerHost,proto3" json:"broker_host,omitempty"`
-	BrokerPort    uint32                 `protobuf:"varint,7,opt,name=broker_port,json=brokerPort,proto3" json:"broker_port,omitempty"`
-	SignedTime    []byte                 `protobuf:"bytes,8,opt,name=signed_time,json=signedTime,proto3" json:"signed_time,omitempty"` // nonce-bound RFC 3161 response, verified on-device
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	TenantId   string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	DeviceId   string                 `protobuf:"bytes,2,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	Token      string                 `protobuf:"bytes,3,opt,name=token,proto3" json:"token,omitempty"`
+	CsrUrl     string                 `protobuf:"bytes,4,opt,name=csr_url,json=csrUrl,proto3" json:"csr_url,omitempty"`    // https://csr.<deployment>/v1/<tenant>
+	TimeUrl    string                 `protobuf:"bytes,5,opt,name=time_url,json=timeUrl,proto3" json:"time_url,omitempty"` // https://codesign.<deployment>/v1/time
+	BrokerHost string                 `protobuf:"bytes,6,opt,name=broker_host,json=brokerHost,proto3" json:"broker_host,omitempty"`
+	BrokerPort uint32                 `protobuf:"varint,7,opt,name=broker_port,json=brokerPort,proto3" json:"broker_port,omitempty"`
+	SignedTime []byte                 `protobuf:"bytes,8,opt,name=signed_time,json=signedTime,proto3" json:"signed_time,omitempty"` // nonce-bound RFC 3161 response, verified on-device
+	// Explicit operator trust provisioning over physical USB/UART only.
+	// All three PEM CA bundles are required when provision_trust is true.
+	DeviceRoots    []byte `protobuf:"bytes,9,opt,name=device_roots,json=deviceRoots,proto3" json:"device_roots,omitempty"`
+	TsaRoots       []byte `protobuf:"bytes,10,opt,name=tsa_roots,json=tsaRoots,proto3" json:"tsa_roots,omitempty"`
+	HttpsRoots     []byte `protobuf:"bytes,11,opt,name=https_roots,json=httpsRoots,proto3" json:"https_roots,omitempty"`
+	ProvisionTrust bool   `protobuf:"varint,12,opt,name=provision_trust,json=provisionTrust,proto3" json:"provision_trust,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *WendyConfEnrollment) Reset() {
@@ -386,6 +392,34 @@ func (x *WendyConfEnrollment) GetSignedTime() []byte {
 		return x.SignedTime
 	}
 	return nil
+}
+
+func (x *WendyConfEnrollment) GetDeviceRoots() []byte {
+	if x != nil {
+		return x.DeviceRoots
+	}
+	return nil
+}
+
+func (x *WendyConfEnrollment) GetTsaRoots() []byte {
+	if x != nil {
+		return x.TsaRoots
+	}
+	return nil
+}
+
+func (x *WendyConfEnrollment) GetHttpsRoots() []byte {
+	if x != nil {
+		return x.HttpsRoots
+	}
+	return nil
+}
+
+func (x *WendyConfEnrollment) GetProvisionTrust() bool {
+	if x != nil {
+		return x.ProvisionTrust
+	}
+	return false
 }
 
 type WendyConf struct {
@@ -477,7 +511,7 @@ const file_wendy_conf_proto_rawDesc = "" +
 	"\basset_id\x18\x04 \x01(\x05R\aassetId\x12\x10\n" +
 	"\x03key\x18\x05 \x01(\fR\x03key\x12\x12\n" +
 	"\x04cert\x18\x06 \x01(\fR\x04cert\x12\x14\n" +
-	"\x05chain\x18\a \x01(\fR\x05chain\"\xfc\x01\n" +
+	"\x05chain\x18\a \x01(\fR\x05chain\"\x86\x03\n" +
 	"\x13WendyConfEnrollment\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x14\n" +
@@ -489,7 +523,13 @@ const file_wendy_conf_proto_rawDesc = "" +
 	"\vbroker_port\x18\a \x01(\rR\n" +
 	"brokerPort\x12\x1f\n" +
 	"\vsigned_time\x18\b \x01(\fR\n" +
-	"signedTime\"\xdc\x01\n" +
+	"signedTime\x12!\n" +
+	"\fdevice_roots\x18\t \x01(\fR\vdeviceRoots\x12\x1b\n" +
+	"\ttsa_roots\x18\n" +
+	" \x01(\fR\btsaRoots\x12\x1f\n" +
+	"\vhttps_roots\x18\v \x01(\fR\n" +
+	"httpsRoots\x12'\n" +
+	"\x0fprovision_trust\x18\f \x01(\bR\x0eprovisionTrust\"\xdc\x01\n" +
 	"\tWendyConf\x12$\n" +
 	"\vdevice_name\x18\x01 \x01(\tH\x00R\n" +
 	"deviceName\x88\x01\x01\x12\"\n" +

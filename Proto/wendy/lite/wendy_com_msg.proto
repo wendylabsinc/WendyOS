@@ -88,7 +88,11 @@ message WendyComGetDeviceInfoParams {}
 message WendyComEnrollmentChallengeParams {
     bool status_only = 1;
 }
-message WendyComEnrollmentChallenge { string nonce_hex = 1; bool enrolled = 2; }
+message WendyComEnrollmentChallenge {
+    string nonce_hex = 1;
+    bool enrolled = 2;
+    bool usb_trust_supported = 3; // accepts explicitly provisioned CA bundles
+}
 
 
 // Params for WENDY_COM_CMD_CONSOLE_ATTACH — start streaming console output as
@@ -161,7 +165,6 @@ message WendyComCommand {
         wendy.lite.sensorlink.GetSensorManifest sensor_link_get_manifest = 16;
         wendy.lite.sensorlink.Subscribe         sensor_link_subscribe    = 17;
         wendy.lite.sensorlink.Unsubscribe       sensor_link_unsubscribe  = 18;
-        // 16–18 are used by the SensorLink extension.
         WendyComEnrollmentChallengeParams enrollment_challenge = 19;
     }
 }

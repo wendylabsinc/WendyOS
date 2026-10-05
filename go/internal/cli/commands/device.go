@@ -848,6 +848,9 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().Uint32Var(&liteOptions.brokerPort, "broker-port", 5055, "WendyCom broker TLS port for Wendy Lite")
 	cmd.Flags().StringVar(&liteOptions.csrURL, "csr-url", "", "CSR enrollment base URL override for Wendy Lite on self-hosted PKI")
 	cmd.Flags().StringVar(&liteOptions.timeURL, "time-url", "", "Signed-time endpoint override for Wendy Lite on self-hosted PKI")
+	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over USB (requires all three root bundle flags)")
+	cmd.Flags().StringVar(&liteOptions.tsaRoots, "tsa-roots", "", "Provision this signed-time PEM CA bundle over USB")
+	cmd.Flags().StringVar(&liteOptions.httpsRoots, "https-roots", "", "Provision this HTTPS/broker PEM CA bundle over USB")
 	return cmd
 }
 

@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -16,8 +15,9 @@ import (
 )
 
 type liteEnrollmentOptions struct {
-	csrURL, timeURL, brokerHost string
-	brokerPort                  uint32
+	csrURL, timeURL, brokerHost       string
+	deviceRoots, tsaRoots, httpsRoots string
+	brokerPort                        uint32
 }
 
 // Enrollment uses the selected device's protocol, sharing auth and selection
@@ -38,6 +38,9 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 			return fmt.Errorf("--broker-host is required for Wendy Lite enrollment")
 		}
 		return runLiteEnrollmentFn(cmd, serialPort, auth, name, opts)
+	}
+	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" {
+		return fmt.Errorf("USB trust bundle flags apply only to Wendy Lite devices")
 	}
 	conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: true})
 	if err != nil {
@@ -72,6 +75,11 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 	if err != nil {
 		return err
 	}
+	timeClient, err := liteenroll.ProvisionTrust(cfg, opts.deviceRoots, opts.tsaRoots, opts.httpsRoots)
+	if err != nil {
+		return err
+	}
+	defer timeClient.CloseIdleConnections()
 	challenge, err := device.EnrollmentChallenge(false)
 	if err != nil {
 		return err
@@ -79,9 +87,15 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 	if challenge.Enrolled {
 		return fmt.Errorf("this board already has an issued identity; use its existing enrollment or operator recovery")
 	}
-	cfg.SignedTime, err = liteenroll.SignedTime(ctx, http.DefaultClient, cfg.TimeUrl, challenge.NonceHex)
+	if err := liteenroll.CheckTrustSupport(cfg, challenge); err != nil {
+		return err
+	}
+	cfg.SignedTime, err = liteenroll.SignedTime(ctx, timeClient, cfg.TimeUrl, challenge.NonceHex)
 	if err != nil {
 		return err
+	}
+	if len(cfg.SignedTime)+len(cfg.DeviceRoots)+len(cfg.TsaRoots)+len(cfg.HttpsRoots) > 65536 {
+		return fmt.Errorf("signed time and trust bundles exceed the firmware's 64 KiB enrollment limit")
 	}
 	cloud, err := dialCloudGRPC(auth)
 	if err != nil {
