@@ -46,6 +46,7 @@ const (
 	v4l2PixFmtUYVY          = 0x59565955 // 'UYVY'
 	v4l2PixFmtY16           = 0x20363159 // 'Y16 ' -- note the trailing space
 	v4l2PixFmtGrey          = 0x59455247 // 'GREY'
+	v4l2PixFmtZ16           = 0x2036315A // 'Z16 ' 16-bit depth; read natively, see video_depth.go
 	v4l2FieldNone           = 1
 
 	v4l2CapVideoCapture = 0x00000001
@@ -53,6 +54,7 @@ const (
 	v4l2CapDeviceCaps   = 0x80000000
 
 	vidiocQueryCap  = 0x80685600
+	vidiocEnumFmt   = 0xC0405602 // _IOWR('V', 2, struct v4l2_fmtdesc), 64 bytes
 	vidiocSFmt      = 0xC0D05605
 	vidiocReqbufs   = 0xC0145608
 	vidiocQuerybuf  = 0xC0585609
@@ -203,9 +205,16 @@ func bestDefaultFrameSize(fd int, pixfmt uint32) (uint32, uint32) {
 	return fallbackW, fallbackH
 }
 
+// capturePixelFormats are the formats whose discrete sizes count as a camera's
+// modes when choosing a default size and validating an explicit one: YUYV and
+// MJPEG for the GStreamer path, and Z16 for a depth node, which the agent reads
+// natively (video_depth.go). Without Z16 a depth-only node advertises no size at
+// all and every request to it is refused before its producer runs.
+var capturePixelFormats = []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG, v4l2PixFmtZ16}
+
 // bestDefaultFrameSizeForDevice opens path just long enough to ask what the
-// camera can do, and returns the largest discrete size across the pixel formats
-// the GStreamer path can negotiate. (0,0) when the device cannot be opened or
+// camera can do, and returns the largest discrete size across
+// capturePixelFormats. (0,0) when the device cannot be opened or
 // advertises nothing discrete, in which case the caller leaves caps unset and
 // gets the old behaviour.
 //
@@ -223,7 +232,7 @@ var bestDefaultFrameSizeForDevice = func(path string) (uint32, uint32) {
 	defer unix.Close(fd) //nolint:errcheck
 
 	var bestW, bestH uint32
-	for _, pixfmt := range []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG} {
+	for _, pixfmt := range capturePixelFormats {
 		w, h := bestDefaultFrameSize(fd, pixfmt)
 		if uint64(w)*uint64(h) > uint64(bestW)*uint64(bestH) {
 			bestW, bestH = w, h
@@ -476,6 +485,19 @@ type deviceHub struct {
 	// has served the same device key. It outlives the hub so sample identities
 	// stay monotonic across producer restarts within one episode.
 	sampleSeq *atomic.Uint64
+	// rawSampleSeq is the same kind of per-device counter for the raw capture
+	// plane (video_raw_tap.go), kept separate from sampleSeq on purpose. The raw
+	// tap and the encoder are two branches of one GStreamer tee, read from two
+	// pipes, and the encoded pipe yields byte-stream chunks rather than whole
+	// frames, so there is no way to hand a raw frame the identifier of "its"
+	// encoded frame. Drawing both planes from one counter would instead punch a
+	// hole in the encoded identifiers for every raw frame delivered, which a
+	// loopback reader is documented to read as a producer-side drop
+	// (hub_loopback_binding.go). A raw sample is therefore identified by its
+	// source, its raw encoding and a sample id drawn from this counter, and is
+	// never joined to an encoded sample by number.
+	// Nil in tests that build a bare hub; raw frames then carry sample id 0.
+	rawSampleSeq *atomic.Uint64
 	// Whether this producer tees raw capture frames (video_raw_tap.go). Undecided
 	// until the producer has chosen its capture path; a raw subscriber that joins
 	// before then waits, one that joins after a refusal is turned away up front.
@@ -483,6 +505,10 @@ type deviceHub struct {
 	rawState  rawTapState
 	rawReason string
 	rawFormat *agentpb.RawFormat
+	// encodedReason, when non-empty, marks a raw-only hub: its producer has no
+	// encoded frames to give (a depth node, video_depth.go), and every encoded
+	// subscriber is turned away with this reason. Protected by h.mu.
+	encodedReason string
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -526,6 +552,14 @@ func (h *deviceHub) subscribeAsKind(explicitHolder string, raw bool) (int, chan 
 	if len(h.subs) >= maxSubscribersPerHub {
 		h.mu.Unlock()
 		return 0, nil, status.Errorf(codes.ResourceExhausted, "too many concurrent streams for this device (max %d)", maxSubscribersPerHub)
+	}
+	if !raw && h.encodedReason != "" {
+		// Checked here rather than in each caller so that every way of joining
+		// (a viewer, episode capture, a model subscriber, the loopback pump)
+		// gets the same answer from a raw-only hub.
+		reason := h.encodedReason
+		h.mu.Unlock()
+		return 0, nil, errEncodedUnavailable(reason)
 	}
 	id := h.nextID
 	h.nextID++
@@ -677,7 +711,8 @@ func frameTooLarge(frame *videoFrame) bool {
 // produce takes one physical frame from the camera producer, stamps it with its
 // harness-wide identity and agent receipt, and delivers it. Every producer path
 // funnels through here (see the closure in runProducer), and this is the ONLY
-// place a sample identity is minted.
+// place an encoded sample identity is minted. The raw capture plane mints its
+// own, from a separate counter, in publishRaw.
 //
 // Minting belongs to the arrival of a frame, not to a delivery of it. The hub
 // can deliver one physical frame on more than one plane — encoded video to
@@ -701,13 +736,22 @@ func (h *deviceHub) produce(frame *videoFrame) bool {
 	// Stamp the identity and receipt before the frame becomes shared: it is
 	// immutable from the moment the first subscriber can see it, and every
 	// consumer must read the same values.
-	if h.sampleSeq != nil {
-		frame.sampleID = h.sampleSeq.Add(1)
+	stampArrival(frame, h.sampleSeq)
+	return h.broadcast(frame)
+}
+
+// stampArrival gives a frame arriving from the producer its sample identity from
+// seq (left zero when seq is nil) and the agent's bracketed CLOCK_BOOTTIME
+// receipt: the midpoint of the bracket, with half its width as the uncertainty.
+// It is the one stamping rule both planes share, so an encoded frame and a raw
+// frame taken at the same instant carry receipts on the same timeline.
+func stampArrival(frame *videoFrame, seq *atomic.Uint64) {
+	if seq != nil {
+		frame.sampleID = seq.Add(1)
 	}
 	if before, receipt, after, err := data.CaptureReceipt(); err == nil {
 		frame.receiptBootNanos, frame.receiptUncertaintyNanos = receipt, (after-before+1)/2
 	}
-	return h.broadcast(frame)
 }
 
 // broadcast delivers a frame to the subscribers that want its kind — encoded
@@ -773,9 +817,20 @@ func (h *deviceHub) wantRaw() bool {
 	return false
 }
 
-// publishRaw hands one raw capture frame to the hub's raw subscribers.
+// publishRaw hands one raw capture frame to the hub's raw subscribers. It is the
+// raw plane's counterpart of produce: the frame is stamped once on arrival, with
+// an identity from the device's raw counter and a boot-clock receipt, before it
+// becomes shared. tsNs stays the wall-clock read time pumpRawTap reports.
+//
+// An oversized frame is dropped before stamping, for the same reason produce
+// does: a gap in the raw identifiers must always mean a frame that was lost.
 func (h *deviceHub) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
-	return h.broadcast(&videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format})
+	frame := &videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format}
+	if frameTooLarge(frame) {
+		return true // oversized frame: drop silently, keep the hub alive
+	}
+	stampArrival(frame, h.rawSampleSeq)
+	return h.broadcast(frame)
 }
 
 // rawOffered records that this producer tees raw frames of the given layout.
@@ -800,6 +855,23 @@ func (h *deviceHub) rawNotOffered(reason string) {
 	for _, sub := range h.subs {
 		if sub.raw && !sub.closed {
 			sub.err = errRawUnavailable(reason)
+			sub.closed = true
+			close(sub.ch)
+		}
+	}
+}
+
+// encodedNotOffered makes this a raw-only hub: its producer will deliver no
+// encoded frames. Encoded subscribers already waiting are closed with the
+// reason, the same way rawNotOffered turns away raw ones, and later encoded
+// joins are refused up front by subscribeAsKind.
+func (h *deviceHub) encodedNotOffered(reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.encodedReason = reason
+	for _, sub := range h.subs {
+		if !sub.raw && !sub.closed {
+			sub.err = errEncodedUnavailable(reason)
 			sub.closed = true
 			close(sub.ch)
 		}
@@ -963,6 +1035,9 @@ type VideoService struct {
 	// a producer restart does not reissue sample identities the harness has
 	// already handed out for that source.
 	sampleSeqs map[string]*atomic.Uint64
+	// rawSampleSeqs is the raw capture plane's counterpart of sampleSeqs (see
+	// deviceHub.rawSampleSeq for why the planes do not share one counter).
+	rawSampleSeqs map[string]*atomic.Uint64
 }
 
 // NewVideoService creates a VideoService whose producer goroutines are tied to ctx.
@@ -970,11 +1045,12 @@ type VideoService struct {
 func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, rosRuntime ...ROS2Runtime) *VideoService {
 	svcCtx, cancel := context.WithCancel(ctx)
 	svc := &VideoService{
-		logger:     logger,
-		ctx:        svcCtx,
-		cancel:     cancel,
-		hubs:       make(map[string]*deviceHub),
-		sampleSeqs: make(map[string]*atomic.Uint64),
+		logger:        logger,
+		ctx:           svcCtx,
+		cancel:        cancel,
+		hubs:          make(map[string]*deviceHub),
+		sampleSeqs:    make(map[string]*atomic.Uint64),
+		rawSampleSeqs: make(map[string]*atomic.Uint64),
 		globDevices: func() ([]string, error) {
 			return filepath.Glob("/dev/video*")
 		},
@@ -1640,15 +1716,16 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 
 	hctx, cancel := context.WithCancel(s.ctx)
 	h = &deviceHub{
-		subs:      make(map[int]*hubSubscriber),
-		subDrops:  make(map[int]uint64),
-		ctx:       hctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		width:     req.GetWidth(),
-		height:    req.GetHeight(),
-		framerate: req.GetFramerate(),
-		sampleSeq: s.sampleSeqLocked(path),
+		subs:         make(map[int]*hubSubscriber),
+		subDrops:     make(map[int]uint64),
+		ctx:          hctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+		width:        req.GetWidth(),
+		height:       req.GetHeight(),
+		framerate:    req.GetFramerate(),
+		sampleSeq:    s.sampleSeqLocked(path),
+		rawSampleSeq: s.rawSampleSeqLocked(path),
 	}
 	// New hub: the first subscriber is always within the cap.
 	id, ch, _ = h.subscribeAsKind(explicitHolder, req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW)
@@ -1808,15 +1885,16 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 
 	hctx, cancel := context.WithCancel(s.ctx)
 	h = &deviceHub{
-		subs:      make(map[int]*hubSubscriber),
-		subDrops:  make(map[int]uint64),
-		ctx:       hctx,
-		cancel:    cancel,
-		done:      make(chan struct{}),
-		width:     req.GetWidth(),
-		height:    req.GetHeight(),
-		framerate: req.GetFramerate(),
-		sampleSeq: s.sampleSeqLocked(key),
+		subs:         make(map[int]*hubSubscriber),
+		subDrops:     make(map[int]uint64),
+		ctx:          hctx,
+		cancel:       cancel,
+		done:         make(chan struct{}),
+		width:        req.GetWidth(),
+		height:       req.GetHeight(),
+		framerate:    req.GetFramerate(),
+		sampleSeq:    s.sampleSeqLocked(key),
+		rawSampleSeq: s.rawSampleSeqLocked(key),
 	}
 	id, ch, _ = h.subscribeAs(hubHolderEpisodeCapture)
 	s.hubs[key] = h
@@ -1910,6 +1988,21 @@ func (s *VideoService) sampleSeqLocked(path string) *atomic.Uint64 {
 	return seq
 }
 
+// rawSampleSeqLocked is sampleSeqLocked for the raw capture plane: one counter
+// per device key, created on first use, never removed, so raw identities stay
+// monotonic across producer restarts. Callers must hold s.mu.
+func (s *VideoService) rawSampleSeqLocked(path string) *atomic.Uint64 {
+	if s.rawSampleSeqs == nil {
+		s.rawSampleSeqs = make(map[string]*atomic.Uint64)
+	}
+	seq := s.rawSampleSeqs[path]
+	if seq == nil {
+		seq = new(atomic.Uint64)
+		s.rawSampleSeqs[path] = seq
+	}
+	return seq
+}
+
 // subscribeExistingHub joins the live hub for path at whatever stream
 // parameters it is already running with, asserting none of its own. It returns
 // ok=false (and no error) when no live hub exists or the hub is shutting down,
@@ -1952,6 +2045,11 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 		// holding a decoded frame, so there is nothing raw to offer.
 		h.rawNotOffered("network cameras deliver encoded video only")
 		err = s.runIPProducer(ctx, broadcast, path, req)
+	} else if isDepthNode(path) {
+		// A depth node has no picture to encode and GStreamer cannot read its
+		// format, so it gets the native raw-only producer (video_depth.go).
+		s.logger.Info("depth camera detected, capturing Z16 natively", zap.String("device", path))
+		err = s.runDepthProducer(ctx, h, path, req)
 	} else {
 		transport, _ := s.classifyTransport(filepath.Base(path))
 		libcameraID := s.lookupLibcameraID(ctx, transport)
@@ -2143,7 +2241,7 @@ var commonFrameSizes = [][2]uint32{
 }
 
 // deviceAdvertisesFrameSize reports whether path enumerates w×h as a discrete
-// mode for any pixel format the GStreamer path can negotiate.
+// mode in any of capturePixelFormats.
 //
 // VIDIOC_ENUM_FRAMESIZES only needs a read-only open, so this still answers
 // while another process is streaming the camera — which is the common case,
@@ -2155,7 +2253,7 @@ func deviceAdvertisesFrameSize(path string, w, h uint32) (advertised, known bool
 	}
 	defer unix.Close(fd) //nolint:errcheck
 
-	for _, pixfmt := range []uint32{v4l2PixFmtYUYV, v4l2PixFmtMJPEG} {
+	for _, pixfmt := range capturePixelFormats {
 		for index := uint32(0); index < 64; index++ {
 			fse := v4l2FrmSizeEnum{Index: index, PixelFormat: pixfmt}
 			if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocEnumFramesizes,
@@ -2565,149 +2663,61 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 	// Two buffers: one dequeued/in-flight, one queued for the camera to fill.
 	// More buffers increase kernel-side lag when the broadcast lags the camera.
 	const numBuffers = 2
-	var req4 v4l2ReqBuffers
-	req4.Count = numBuffers
-	req4.Type = v4l2BufTypeVideoCapture
-	req4.Memory = v4l2MemoryMmap
-
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocReqbufs, uintptr(unsafe.Pointer(&req4))); errno != 0 {
-		return s.errCaptureSetup("VIDIOC_REQBUFS", path, errno)
+	queue, err := s.startV4L2MmapQueue(fd, path, numBuffers)
+	if err != nil {
+		return err
 	}
-	if req4.Count < 2 {
-		return status.Errorf(codes.Internal, "insufficient buffer memory on device")
-	}
+	defer queue.stop()
 
-	// Map and queue each buffer.
-	mapped := make([][]byte, req4.Count)
-
-	for i := uint32(0); i < req4.Count; i++ {
-		var qbuf v4l2Buf
-		qbuf.setIndex(i)
-		qbuf.setType(v4l2BufTypeVideoCapture)
-		qbuf.setMemory(v4l2MemoryMmap)
-
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQuerybuf, uintptr(unsafe.Pointer(&qbuf))); errno != 0 {
-			return s.errCaptureSetup("VIDIOC_QUERYBUF", path, errno)
-		}
-
-		length := uint32(*(*uint32)(unsafe.Pointer(&qbuf[72]))) // length at offset 72 in v4l2_buffer
-		data, err := unix.Mmap(fd, int64(qbuf.offset()), int(length), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
-		if err != nil {
-			return status.Errorf(codes.Internal, "mmap buffer %d: %v", i, err)
-		}
-		mapped[i] = data
-
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQbuf, uintptr(unsafe.Pointer(&qbuf))); errno != 0 {
-			return s.errCaptureSetup("VIDIOC_QBUF", path, errno)
-		}
-	}
-	defer func() {
-		for _, data := range mapped {
-			unix.Munmap(data) //nolint:errcheck
-		}
-	}()
-
-	// Start streaming.
-	bufType := uint32(v4l2BufTypeVideoCapture)
-	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocStreamon, uintptr(unsafe.Pointer(&bufType))); errno != 0 {
-		return s.errCaptureSetup("VIDIOC_STREAMON", path, errno)
-	}
-	defer func() {
-		unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocStreamoff, uintptr(unsafe.Pointer(&bufType))) //nolint:errcheck
-	}()
-
-	if fd > math.MaxInt32 {
-		return status.Errorf(codes.Internal, "file descriptor value out of range for poll")
-	}
-	pollFds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
 	var framesSent int
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	// Device accepted H264 format but failed before delivering any frame:
+	// signal the caller to fall back to the GStreamer software encoder.
+	onDequeueErr := func(errno unix.Errno) error {
+		if framesSent == 0 {
+			return nativeH264NotSupported{msg: fmt.Sprintf("VIDIOC_DQBUF failed before first frame: %v", errno)}
 		}
-
-		// Poll with a short timeout so context cancellation is noticed quickly.
-		// VIDIOC_DQBUF blocks until a buffer arrives; without this a cancelled
-		// context can wait up to one full frame period before the producer exits,
-		// holding the device fd and delaying the next StreamVideo caller.
-		ready, err := unix.Poll(pollFds, 100)
-		if err == unix.EINTR || (err == nil && ready == 0) {
-			continue // timeout or signal — re-check ctx.Done
-		}
-		if err != nil {
-			s.logger.Error("poll failed on video device", zap.String("device", path), zap.Error(err))
-			return status.Errorf(codes.Internal, "video device poll error")
-		}
-
-		var dqbuf v4l2Buf
-		dqbuf.setType(v4l2BufTypeVideoCapture)
-		dqbuf.setMemory(v4l2MemoryMmap)
-
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocDqbuf, uintptr(unsafe.Pointer(&dqbuf))); errno != 0 {
-			if errno == unix.EINTR || errno == unix.EAGAIN {
-				continue
-			}
-			// Before the H264 fallback below: EBUSY is a held camera, not a device that
-			// cannot encode, so it must reach the sharing path, not the software encoder.
-			if isBusyErrno(errno) {
-				return errCameraInUse(path)
-			}
-			// Device accepted H264 format but failed before delivering any frame —
-			// signal the caller to fall back to the GStreamer software encoder.
-			if framesSent == 0 {
-				return nativeH264NotSupported{msg: fmt.Sprintf("VIDIOC_DQBUF failed before first frame: %v", errno)}
-			}
-			return s.errCaptureSetup("VIDIOC_DQBUF", path, errno)
-		}
-
-		idx := dqbuf.index()
-		if n := dqbuf.bytesUsed(); n > 0 {
-			// Cap at maxFrameBytes before allocating: a misbehaving or compromised
-			// V4L2 driver could report bytesUsed up to the full mmap region size.
-			// Capping here bounds the allocation at the source rather than relying
-			// solely on the drop check inside broadcast().
-			if n > maxFrameBytes {
-				n = maxFrameBytes
-			}
-			// Copy out of the mmap region before requeuing: the slice handed to
-			// subscribers must not alias a buffer the camera may refill.
-			data := make([]byte, n)
-			copy(data, mapped[idx][:n])
-			stamp := realtimeFrameTimestamp(time.Now())
-			stamp.nativeNs = dqbuf.timestampNanos()
-			stamp.nativeFlags = dqbuf.flags()
-			stamp.sequence = dqbuf.sequence()
-			stamp.sequenceValid = true
-			// V4L2 compressed capture delivers exactly one encoded frame per
-			// dequeued buffer, so this is the one producer whose frames are
-			// whole access units. The maxFrameBytes cap below can truncate a
-			// pathologically large frame, in which case the alignment promise
-			// no longer holds.
-			stamp.auAligned = n == dqbuf.bytesUsed()
-			const v4l2TimestampMask = uint32(0x0000e000)
-			const v4l2TimestampMonotonic = uint32(0x00002000)
-			if stamp.nativeFlags&v4l2TimestampMask == v4l2TimestampMonotonic {
-				stamp.nativeClock = "CLOCK_MONOTONIC_V4L2"
-			} else {
-				stamp.nativeClock = "V4L2_TIMESTAMP_UNKNOWN"
-			}
-			if !broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264) {
-				return nil
-			}
-			framesSent++
-		}
-
-		// Re-queue the buffer.
-		var qbuf v4l2Buf
-		qbuf.setIndex(idx)
-		qbuf.setType(v4l2BufTypeVideoCapture)
-		qbuf.setMemory(v4l2MemoryMmap)
-		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocQbuf, uintptr(unsafe.Pointer(&qbuf))); errno != 0 {
-			return s.errCaptureSetup("VIDIOC_QBUF", path, errno)
-		}
+		return s.errCaptureSetup("VIDIOC_DQBUF", path, errno)
 	}
+	return s.dequeueLoop(ctx, queue, path, onDequeueErr, func(dqbuf *v4l2Buf, mem []byte) bool {
+		n := dqbuf.bytesUsed()
+		if n == 0 {
+			return true
+		}
+		// Cap at maxFrameBytes before allocating: a misbehaving or compromised
+		// V4L2 driver could report bytesUsed up to the full mmap region size.
+		// Capping here bounds the allocation at the source rather than relying
+		// solely on the drop check inside broadcast().
+		if n > maxFrameBytes {
+			n = maxFrameBytes
+		}
+		// Copy out of the mmap region before requeuing: the slice handed to
+		// subscribers must not alias a buffer the camera may refill.
+		data := make([]byte, n)
+		copy(data, mem[:n])
+		stamp := realtimeFrameTimestamp(time.Now())
+		stamp.nativeNs = dqbuf.timestampNanos()
+		stamp.nativeFlags = dqbuf.flags()
+		stamp.sequence = dqbuf.sequence()
+		stamp.sequenceValid = true
+		// V4L2 compressed capture delivers exactly one encoded frame per
+		// dequeued buffer, so this is the one producer whose frames are
+		// whole access units. The maxFrameBytes cap above can truncate a
+		// pathologically large frame, in which case the alignment promise
+		// no longer holds.
+		stamp.auAligned = n == dqbuf.bytesUsed()
+		const v4l2TimestampMask = uint32(0x0000e000)
+		const v4l2TimestampMonotonic = uint32(0x00002000)
+		if stamp.nativeFlags&v4l2TimestampMask == v4l2TimestampMonotonic {
+			stamp.nativeClock = "CLOCK_MONOTONIC_V4L2"
+		} else {
+			stamp.nativeClock = "V4L2_TIMESTAMP_UNKNOWN"
+		}
+		if !broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264) {
+			return false
+		}
+		framesSent++
+		return true
+	})
 }
 
 // setV4L2KeyframeInterval caps the camera encoder's keyframe interval to gop
