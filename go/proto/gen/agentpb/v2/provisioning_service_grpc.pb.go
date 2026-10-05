@@ -24,6 +24,7 @@ const (
 	WendyProvisioningService_IsProvisioned_FullMethodName         = "/wendy.agent.services.v2.WendyProvisioningService/IsProvisioned"
 	WendyProvisioningService_Unprovision_FullMethodName           = "/wendy.agent.services.v2.WendyProvisioningService/Unprovision"
 	WendyProvisioningService_RevokeACMECertificate_FullMethodName = "/wendy.agent.services.v2.WendyProvisioningService/RevokeACMECertificate"
+	WendyProvisioningService_CheckACMERevocation_FullMethodName   = "/wendy.agent.services.v2.WendyProvisioningService/CheckACMERevocation"
 )
 
 // WendyProvisioningServiceClient is the client API for WendyProvisioningService service.
@@ -41,6 +42,8 @@ type WendyProvisioningServiceClient interface {
 	// Revoke only the currently installed ACME certificate using its existing
 	// account. Keeps all local state/keys for subsequent Cloud cleanup/recovery.
 	RevokeACMECertificate(ctx context.Context, in *RevokeACMECertificateRequest, opts ...grpc.CallOption) (*RevokeACMECertificateResponse, error)
+	// Read-only directory + existing account lookup. Success is NOT revocation.
+	CheckACMERevocation(ctx context.Context, in *RevokeACMECertificateRequest, opts ...grpc.CallOption) (*RevokeACMECertificateResponse, error)
 }
 
 type wendyProvisioningServiceClient struct {
@@ -101,6 +104,16 @@ func (c *wendyProvisioningServiceClient) RevokeACMECertificate(ctx context.Conte
 	return out, nil
 }
 
+func (c *wendyProvisioningServiceClient) CheckACMERevocation(ctx context.Context, in *RevokeACMECertificateRequest, opts ...grpc.CallOption) (*RevokeACMECertificateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RevokeACMECertificateResponse)
+	err := c.cc.Invoke(ctx, WendyProvisioningService_CheckACMERevocation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WendyProvisioningServiceServer is the server API for WendyProvisioningService service.
 // All implementations must embed UnimplementedWendyProvisioningServiceServer
 // for forward compatibility.
@@ -116,6 +129,8 @@ type WendyProvisioningServiceServer interface {
 	// Revoke only the currently installed ACME certificate using its existing
 	// account. Keeps all local state/keys for subsequent Cloud cleanup/recovery.
 	RevokeACMECertificate(context.Context, *RevokeACMECertificateRequest) (*RevokeACMECertificateResponse, error)
+	// Read-only directory + existing account lookup. Success is NOT revocation.
+	CheckACMERevocation(context.Context, *RevokeACMECertificateRequest) (*RevokeACMECertificateResponse, error)
 	mustEmbedUnimplementedWendyProvisioningServiceServer()
 }
 
@@ -140,6 +155,9 @@ func (UnimplementedWendyProvisioningServiceServer) Unprovision(context.Context, 
 }
 func (UnimplementedWendyProvisioningServiceServer) RevokeACMECertificate(context.Context, *RevokeACMECertificateRequest) (*RevokeACMECertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RevokeACMECertificate not implemented")
+}
+func (UnimplementedWendyProvisioningServiceServer) CheckACMERevocation(context.Context, *RevokeACMECertificateRequest) (*RevokeACMECertificateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckACMERevocation not implemented")
 }
 func (UnimplementedWendyProvisioningServiceServer) mustEmbedUnimplementedWendyProvisioningServiceServer() {
 }
@@ -253,6 +271,24 @@ func _WendyProvisioningService_RevokeACMECertificate_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendyProvisioningService_CheckACMERevocation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeACMECertificateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyProvisioningServiceServer).CheckACMERevocation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyProvisioningService_CheckACMERevocation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyProvisioningServiceServer).CheckACMERevocation(ctx, req.(*RevokeACMECertificateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WendyProvisioningService_ServiceDesc is the grpc.ServiceDesc for WendyProvisioningService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -279,6 +315,10 @@ var WendyProvisioningService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeACMECertificate",
 			Handler:    _WendyProvisioningService_RevokeACMECertificate_Handler,
+		},
+		{
+			MethodName: "CheckACMERevocation",
+			Handler:    _WendyProvisioningService_CheckACMERevocation_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

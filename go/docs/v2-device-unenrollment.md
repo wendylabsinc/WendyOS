@@ -33,6 +33,19 @@ retains its normal membership, permission and operator-signature checks. A
 Cloud-only connection cannot be relied upon after its asset is deleted, so the
 CLI requires a directly verified mTLS connection for this workflow.
 
+## Read-only diagnosis
+
+`device unenroll --check --asset-id <UUID> --json` verifies the Cloud/peer binding
+and calls `CheckACMERevocation` to check the scoped directory and look up the
+existing account with `onlyReturnExisting`. It never sends `revokeCert`,
+registers an account, saves revocation progress, deletes an asset or resets keys.
+Success means account lookup is ready, **not** that a certificate is revoked.
+Errors expose only a fixed phase, HTTP status and allowlisted ACME problem type;
+backend details, URLs, nonces and credentials are not printed. An older Agent
+fails with `Unimplemented`. A PKI endpoint returning `externalAccountRequired`
+for an existing-account-only lookup needs a server-side RFC 8555 correction;
+do not supply a fabricated EAB or burn a new credential to bypass it.
+
 ## Failures and retries
 
 This is a convergent cleanup workflow, **not a distributed transaction**. A

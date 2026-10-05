@@ -1128,6 +1128,7 @@ func newDeviceUnenrollCmd() *cobra.Command {
 	var assumeYes bool
 	var cloudGRPC string
 	var uuidAssetID string
+	var checkOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "unenroll",
@@ -1163,13 +1164,13 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			var verifiedPeer grpcpeer.Peer
 			v2State, v2Err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}, grpc.Peer(&verifiedPeer))
 			if v2Err == nil && v2State.GetProvisioned().GetPrincipalUri() != "" {
-				return runV2DeviceUnenroll(ctx, conn, v2State.GetProvisioned(), &verifiedPeer, cloudGRPC, uuidAssetID, assumeYes)
+				return runV2DeviceUnenroll(ctx, conn, v2State.GetProvisioned(), &verifiedPeer, cloudGRPC, uuidAssetID, assumeYes, checkOnly)
 			}
 			if orgID <= 0 || assetID <= 0 {
 				return fmt.Errorf("cannot safely identify this enrollment; refusing numeric legacy cleanup; update the Agent for v2 unenrollment")
 			}
-			if uuidAssetID != "" {
-				return fmt.Errorf("--asset-id is for v2 UUID enrollments only")
+			if uuidAssetID != "" || checkOnly {
+				return fmt.Errorf("--asset-id and --check are for v2 UUID enrollments only")
 			}
 
 			if !assumeYes {
@@ -1232,6 +1233,7 @@ func newDeviceUnenrollCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Skip the confirmation prompt")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint to use for cleanup (defaults to the device's enrolled cloud host)")
 	cmd.Flags().StringVar(&uuidAssetID, "asset-id", "", "Exact Cloud asset UUID for v2 cleanup (otherwise resolved from its authenticated PKI binding)")
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "Check binding and existing ACME account lookup only; never revoke, delete, or reset")
 	return cmd
 }
 

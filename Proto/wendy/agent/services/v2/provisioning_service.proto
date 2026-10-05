@@ -14,6 +14,8 @@ service WendyProvisioningService {
     // Revoke only the currently installed ACME certificate using its existing
     // account. Keeps all local state/keys for subsequent Cloud cleanup/recovery.
     rpc RevokeACMECertificate(RevokeACMECertificateRequest) returns (RevokeACMECertificateResponse);
+    // Read-only directory + existing account lookup. Success is NOT revocation.
+    rpc CheckACMERevocation(RevokeACMECertificateRequest) returns (RevokeACMECertificateResponse);
 }
 
 message IsProvisionedRequest {}

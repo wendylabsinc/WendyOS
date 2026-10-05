@@ -138,7 +138,7 @@ func directUnenrollPeerFingerprint(conn *grpcclient.AgentConnection, verifiedPee
 	return hex.EncodeToString(peerDigest[:]), nil
 }
 
-func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, prov *agentpbv2.ProvisionedResponse, verifiedPeer *grpcpeer.Peer, override, assetOverride string, yes bool) error {
+func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, prov *agentpbv2.ProvisionedResponse, verifiedPeer *grpcpeer.Peer, override, assetOverride string, yes, checkOnly bool) error {
 	principal, err := certs.ParsePrincipal(prov.GetPrincipalUri())
 	if err != nil || principal.EntityType != certs.EntityAsset {
 		return fmt.Errorf("invalid direct PKI device identity")
@@ -234,6 +234,16 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 		if err := checkV2UnenrollBinding(asset, j); err != nil {
 			return err
 		}
+	}
+	if checkOnly {
+		_, probeErr := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).CheckACMERevocation(ctx, &agentpbv2.RevokeACMECertificateRequest{ExpectedPrincipalUri: j.Principal, ExpectedCertificateSha256: j.Fingerprint})
+		if jsonOutput {
+			out, _ := json.Marshal(map[string]any{"principal": j.Principal, "accountLookupReady": probeErr == nil, "revocationAttempted": false, "assetDeleted": false, "deviceReset": false})
+			fmt.Println(string(out))
+		} else if probeErr == nil {
+			fmt.Println("Existing ACME account lookup succeeded. No revocation, deletion or reset attempted.")
+		}
+		return probeErr
 	}
 	if !yes {
 		if !isInteractiveTerminal() {

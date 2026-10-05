@@ -9,19 +9,21 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestRevokeExistingAccountOnly(t *testing.T) {
-	for _, problem := range []string{"", "alreadyRevoked", "unauthorized", "serverInternal"} {
+	for _, problem := range []string{"", "probe", "externalAccountRequired", "alreadyRevoked", "unauthorized", "serverInternal"} {
 		t.Run(problem, func(t *testing.T) {
 			var base string
 			var lookups, revocations atomic.Int32
@@ -42,6 +44,10 @@ func TestRevokeExistingAccountOnly(t *testing.T) {
 					t.Error("registration/EAB attempted")
 				}
 				w.Header().Set("Replay-Nonce", "bm9uY2U")
+				if problem == "externalAccountRequired" {
+					writeJSON(w, http.StatusUnauthorized, map[string]any{"type": "urn:ietf:params:acme:error:externalAccountRequired", "detail": "sensitive backend diagnostic"})
+					return
+				}
 				w.Header().Set("Location", base+scope+"/acct/1")
 				writeJSON(w, 200, map[string]any{"status": "valid"})
 			})
@@ -96,12 +102,29 @@ func TestRevokeExistingAccountOnly(t *testing.T) {
 				t.Fatal(err)
 			}
 			before, _ := os.ReadFile(scoped)
-			err = Revoke(context.Background(), cfg, path, certificate)
-			success := problem == "" || problem == "alreadyRevoked"
+			if problem == "probe" {
+				err = CheckRevocationAccount(context.Background(), cfg, path, certificate)
+			} else {
+				err = Revoke(context.Background(), cfg, path, certificate)
+			}
+			success := problem == "" || problem == "probe" || problem == "alreadyRevoked"
 			if (err == nil) != success {
 				t.Fatalf("result %v", err)
 			}
-			if lookups.Load() != 1 || revocations.Load() != 1 {
+			wantRevocations := int32(1)
+			if problem == "probe" || problem == "externalAccountRequired" {
+				wantRevocations = 0
+			}
+			if err != nil && strings.Contains(err.Error(), "sensitive") {
+				t.Fatal("backend detail leaked")
+			}
+			if problem == "externalAccountRequired" {
+				var diagnostic *RevocationError
+				if !errors.As(err, &diagnostic) || diagnostic.Phase != "existing_account_lookup" || diagnostic.HTTPStatus != 401 || diagnostic.ProblemType != problem {
+					t.Fatalf("wrong redacted phase: %v", err)
+				}
+			}
+			if lookups.Load() != 1 || revocations.Load() != wantRevocations {
 				t.Fatalf("unexpected calls %d/%d", lookups.Load(), revocations.Load())
 			}
 			after, _ := os.ReadFile(scoped)

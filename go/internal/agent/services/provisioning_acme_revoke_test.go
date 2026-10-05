@@ -181,6 +181,49 @@ func TestACMERevokeDurableAckAndGuardedReset(t *testing.T) {
 		}
 	}
 }
+func TestACMERevocationProbeNeverWritesAckOrRevokes(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ready", true: "external-account-required"}[failure], func(t *testing.T) {
+			svc, req := revokeTestService(t)
+			old := checkACMERevocationAccount
+			checkACMERevocationAccount = func(context.Context, acmeenroll.Config, string, string) error {
+				if failure {
+					return &acmeenroll.RevocationError{Phase: "existing_account_lookup", HTTPStatus: 401, ProblemType: "externalAccountRequired"}
+				}
+				return nil
+			}
+			t.Cleanup(func() { checkACMERevocationAccount = old })
+			stubRevoke(t, func(context.Context, acmeenroll.Config, string, string) error {
+				t.Fatal("probe must not revoke")
+				return nil
+			})
+			ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
+			before, err := os.ReadFile(svc.statePath())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = NewProvisioningServiceV2(svc).CheckACMERevocation(ctx, req)
+			if (err != nil) != failure {
+				t.Fatalf("probe error: %v", err)
+			}
+			if failure && !strings.Contains(err.Error(), "existing_account_lookup") {
+				t.Fatal("missing safe phase")
+			}
+			after, _ := os.ReadFile(svc.statePath())
+			if string(before) != string(after) {
+				t.Fatal("probe changed enrollment")
+			}
+			assertRevokeKeysRetained(t, svc)
+			if svc.revocationConfirmedLocked() {
+				t.Fatal("probe acknowledged revocation")
+			}
+			if _, err := os.Stat(filepath.Join(svc.configPath, acmeRevocationFile)); !os.IsNotExist(err) {
+				t.Fatal("probe wrote ack")
+			}
+		})
+	}
+}
+
 func TestACMERevocationAckDoesNotCoverRotatedCertificate(t *testing.T) {
 	svc, req := revokeTestService(t)
 	if err := writeACMERevocationRecord(svc.configPath, acmeRevocationRecord{Principal: req.ExpectedPrincipalUri, Fingerprint: req.ExpectedCertificateSha256, Serial: "2a"}); err != nil {

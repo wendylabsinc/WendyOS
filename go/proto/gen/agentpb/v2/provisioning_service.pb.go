@@ -715,13 +715,14 @@ const file_wendy_agent_services_v2_provisioning_service_proto_rawDesc = "" +
 	"\feab_hmac_key\x18\x05 \x01(\tR\n" +
 	"eabHmacKey\"D\n" +
 	"\x1dStartACMEProvisioningResponse\x12#\n" +
-	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri2\x82\x05\n" +
+	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri2\x89\x06\n" +
 	"\x18WendyProvisioningService\x12z\n" +
 	"\x11StartProvisioning\x121.wendy.agent.services.v2.StartProvisioningRequest\x1a2.wendy.agent.services.v2.StartProvisioningResponse\x12\x86\x01\n" +
 	"\x15StartACMEProvisioning\x125.wendy.agent.services.v2.StartACMEProvisioningRequest\x1a6.wendy.agent.services.v2.StartACMEProvisioningResponse\x12n\n" +
 	"\rIsProvisioned\x12-.wendy.agent.services.v2.IsProvisionedRequest\x1a..wendy.agent.services.v2.IsProvisionedResponse\x12h\n" +
 	"\vUnprovision\x12+.wendy.agent.services.v2.UnprovisionRequest\x1a,.wendy.agent.services.v2.UnprovisionResponse\x12\x86\x01\n" +
-	"\x15RevokeACMECertificate\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\x15RevokeACMECertificate\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponse\x12\x84\x01\n" +
+	"\x13CheckACMERevocation\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_provisioning_service_proto_rawDescOnce sync.Once
@@ -758,13 +759,15 @@ var file_wendy_agent_services_v2_provisioning_service_proto_depIdxs = []int32{
 	0,  // 4: wendy.agent.services.v2.WendyProvisioningService.IsProvisioned:input_type -> wendy.agent.services.v2.IsProvisionedRequest
 	6,  // 5: wendy.agent.services.v2.WendyProvisioningService.Unprovision:input_type -> wendy.agent.services.v2.UnprovisionRequest
 	8,  // 6: wendy.agent.services.v2.WendyProvisioningService.RevokeACMECertificate:input_type -> wendy.agent.services.v2.RevokeACMECertificateRequest
-	5,  // 7: wendy.agent.services.v2.WendyProvisioningService.StartProvisioning:output_type -> wendy.agent.services.v2.StartProvisioningResponse
-	11, // 8: wendy.agent.services.v2.WendyProvisioningService.StartACMEProvisioning:output_type -> wendy.agent.services.v2.StartACMEProvisioningResponse
-	1,  // 9: wendy.agent.services.v2.WendyProvisioningService.IsProvisioned:output_type -> wendy.agent.services.v2.IsProvisionedResponse
-	7,  // 10: wendy.agent.services.v2.WendyProvisioningService.Unprovision:output_type -> wendy.agent.services.v2.UnprovisionResponse
-	9,  // 11: wendy.agent.services.v2.WendyProvisioningService.RevokeACMECertificate:output_type -> wendy.agent.services.v2.RevokeACMECertificateResponse
-	7,  // [7:12] is the sub-list for method output_type
-	2,  // [2:7] is the sub-list for method input_type
+	8,  // 7: wendy.agent.services.v2.WendyProvisioningService.CheckACMERevocation:input_type -> wendy.agent.services.v2.RevokeACMECertificateRequest
+	5,  // 8: wendy.agent.services.v2.WendyProvisioningService.StartProvisioning:output_type -> wendy.agent.services.v2.StartProvisioningResponse
+	11, // 9: wendy.agent.services.v2.WendyProvisioningService.StartACMEProvisioning:output_type -> wendy.agent.services.v2.StartACMEProvisioningResponse
+	1,  // 10: wendy.agent.services.v2.WendyProvisioningService.IsProvisioned:output_type -> wendy.agent.services.v2.IsProvisionedResponse
+	7,  // 11: wendy.agent.services.v2.WendyProvisioningService.Unprovision:output_type -> wendy.agent.services.v2.UnprovisionResponse
+	9,  // 12: wendy.agent.services.v2.WendyProvisioningService.RevokeACMECertificate:output_type -> wendy.agent.services.v2.RevokeACMECertificateResponse
+	9,  // 13: wendy.agent.services.v2.WendyProvisioningService.CheckACMERevocation:output_type -> wendy.agent.services.v2.RevokeACMECertificateResponse
+	8,  // [8:14] is the sub-list for method output_type
+	2,  // [2:8] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
