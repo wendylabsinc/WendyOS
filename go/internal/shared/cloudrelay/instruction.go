@@ -96,7 +96,7 @@ func decryptInstruction(e *pb.EncryptedDialInstructionEnvelope, c claims, lease 
 }
 
 func validateService(d *pb.DialInstruction) error {
-	// Cloud's standard catalog currently contains only these two TCP services.
+	// Cloud's standard catalog pins each supported TCP service to a loopback port.
 	// Refuse unknown descriptors and non-loopback targets before opening a socket.
 	if d.Transport != pb.DialTransport_DIAL_TRANSPORT_TCP || len(d.AuthorizedDatagramDestinations) != 0 {
 		return fmt.Errorf("unsupported Cloud dial transport")
@@ -109,6 +109,14 @@ func validateService(d *pb.DialInstruction) error {
 	case "wendy-agent":
 		if d.Port != 50052 {
 			return fmt.Errorf("invalid agent service port")
+		}
+	case "wendy-registry":
+		if d.Port != 5000 {
+			return fmt.Errorf("invalid registry service port")
+		}
+	case "wendy-registry-darwin":
+		if d.Port != 5555 {
+			return fmt.Errorf("invalid Darwin registry service port")
 		}
 	case "ssh":
 		if d.Port != 22 {

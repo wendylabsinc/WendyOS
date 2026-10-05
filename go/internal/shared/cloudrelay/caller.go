@@ -121,7 +121,7 @@ func OpenTCP(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier 
 	if _, err := uuid.Parse(assetID); err != nil {
 		return nil, fmt.Errorf("invalid Cloud asset UUID")
 	}
-	if service != "wendy-agent" && service != "ssh" {
+	if service != "wendy-agent" && service != "ssh" && service != "wendy-registry" && service != "wendy-registry-darwin" {
 		return nil, fmt.Errorf("Cloud has no supported tunnel service %q", service)
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

@@ -1266,6 +1266,9 @@ func connectToAgentInner(ctx context.Context, opts ...resolveOption) (*grpcclien
 		}
 		device = loaded.DefaultDevice
 	}
+	if isHostedMCPSelector(device) {
+		return connectHostedMCP(ctx, device)
+	}
 	// Before resolveDeviceAddress, whose error would otherwise fall through to
 	// the interactive picker below.
 	if err := rejectNumericDeviceName(device); err != nil {
@@ -3452,6 +3455,13 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		isDefault = device != ""
 	}
 
+	if isHostedMCPSelector(device) {
+		conn, err := connectHostedMCP(ctx, device)
+		if err != nil {
+			return nil, err
+		}
+		return &SelectedDevice{Agent: conn}, nil
+	}
 	// Before provider discovery: a dotless name would otherwise spin up every
 	// provider (findDeviceByID) before being dialled as 283:50051.
 	if err := rejectNumericDeviceName(device); err != nil {

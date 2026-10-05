@@ -428,6 +428,19 @@ func requestPKIIdentityCertificate(
 	key crypto.Signer,
 	accessToken, tenantUUID, subject string,
 ) (config.CertificateInfo, error) {
+	return requestPKIPrincipalCertificate(ctx, client, endpoint, privateKeyPEM, key, accessToken, tenantUUID, "operator", subject)
+}
+
+func requestPKIPrincipalCertificate(
+	ctx context.Context,
+	client HTTPDoer,
+	endpoint, privateKeyPEM string,
+	key crypto.Signer,
+	accessToken, tenantUUID, kind, subject string,
+) (config.CertificateInfo, error) {
+	if (kind != "operator" && kind != "service") || (kind == "service" && (!canonicalUUID(tenantUUID) || subject == "" || strings.ContainsAny(subject, "/?#%"))) {
+		return config.CertificateInfo{}, fmt.Errorf("invalid PKI principal")
+	}
 	if accessToken == "" {
 		return config.CertificateInfo{}, fmt.Errorf("requesting pki-core identity certificate: access token is empty")
 	}
@@ -495,7 +508,7 @@ func requestPKIIdentityCertificate(
 	if err != nil || !bytes.Equal(gotPublicKey, wantPublicKey) {
 		return config.CertificateInfo{}, fmt.Errorf("pki-core returned a certificate for a different key")
 	}
-	principalURI := fmt.Sprintf("spiffe://wendy.sh/tenant/%s/operator/%s", tenantUUID, subject)
+	principalURI := fmt.Sprintf("spiffe://wendy.sh/tenant/%s/%s/%s", tenantUUID, kind, subject)
 	principalMatches := 0
 	for _, uri := range leaf.URIs {
 		if uri.String() == principalURI {

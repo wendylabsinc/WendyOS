@@ -36,18 +36,23 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 	}
 	cert, access, key := s.certificate, s.tokens.Access, s.key
 	auth := &config.AuthConfig{CloudGRPC: s.settings().CloudGRPC, OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: s.privatePEM, Certificates: []config.CertificateInfo{cert}}
-	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, s.settings().CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
+	return connectAuthenticatedDevice(ctx, s.settings(), auth, access, key, s.profile.Tenant, asset, dial, httpClient)
+}
+
+func connectAuthenticatedDevice(ctx context.Context, settings Settings, auth *config.AuthConfig, access string, key crypto.Signer, tenant, asset string, dial func(context.Context, string) (net.Conn, error), httpClient *http.Client) (*grpcclient.AgentConnection, error) {
+	cert := auth.Certificates[0]
+	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, settings.CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
 	opts = append(opts, cloudrequest.DPoPDialOptions(auth, func(context.Context) (string, crypto.Signer, error) { return access, key, nil })...)
-	cloud, err := grpc.NewClient("passthrough:///"+s.settings().CloudGRPC, opts...)
+	cloud, err := grpc.NewClient("passthrough:///"+settings.CloudGRPC, opts...)
 	if err != nil {
 		return nil, err
 	}
-	signer, err := cloudrelay.PrincipalSigner(cert.PemCertificate, []byte(s.privatePEM))
+	signer, err := cloudrelay.PrincipalSigner(cert.PemCertificate, []byte(auth.DPoPPrivateKey))
 	if err != nil {
 		cloud.Close()
 		return nil, err
 	}
-	verifier := &cloudrelay.Verifier{Issuer: s.settings().RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
+	verifier := &cloudrelay.Verifier{Issuer: settings.RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
 		target, err := cloudrelay.BrowserBrokerTarget(endpoint)
 		if err != nil {
 			return nil, err
@@ -60,7 +65,7 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 		cloud.Close()
 		return nil, fmt.Errorf("Looking up device certificate identity: %w", err)
 	}
-	expected, err := cloudDeviceIdentity(record, asset, s.profile.Tenant)
+	expected, err := cloudDeviceIdentity(record, asset, tenant)
 	if err != nil {
 		cloud.Close()
 		return nil, err
