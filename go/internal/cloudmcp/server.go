@@ -7,7 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -43,6 +47,7 @@ type Access struct {
 	TenantID       string    `json:"tenant_id"`
 	UserID         string    `json:"user_id"`
 	ServiceSubject string    `json:"service_subject"`
+	DecisionID     string    `json:"decision_id"`
 	Enabled        bool      `json:"enabled"`
 	UserAllowed    bool      `json:"user_allowed"`
 	ServiceAllowed bool      `json:"service_allowed"`
@@ -69,6 +74,7 @@ type Backend interface {
 	Organization(context.Context, string) (Organization, error)
 	Authorize(ctx context.Context, token, organization, device, method string) (Access, error)
 	Devices(ctx context.Context, access Access) (json.RawMessage, error)
+	Record(context.Context, Access, GatewayEvent) error
 }
 
 // Connector must authenticate as access.ServiceSubject in access.TenantID and
@@ -83,21 +89,30 @@ type Server struct {
 	backend   Backend
 	connector Connector
 	protocol  *server.StreamableHTTPServer
+	logger    *slog.Logger
+	tracer    trace.Tracer
+	slots     chan struct{}
 }
 
-type caller struct{ token, org string }
+type caller struct {
+	token, org string
+	access     Access
+}
 type callerKey struct{}
 
-func New(baseURL string, backend Backend, connector Connector) (*Server, error) {
+func New(baseURL string, backend Backend, connector Connector, options ...func(*Server)) (*Server, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil || base.Scheme != "https" || base.Host == "" || base.Path != "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || backend == nil || connector == nil {
 		return nil, fmt.Errorf("MCP requires an explicit HTTPS origin, authorization backend, and device connector")
 	}
-	s := &Server{base: base, backend: backend, connector: connector}
-	protocol := server.NewMCPServer("wendy-cloud", "1.0.0", server.WithToolCapabilities(false))
-	protocol.AddTool(mcp.NewTool("device_list", mcp.WithDescription("List devices accessible to both you and this organization's MCP service account."), mcp.WithReadOnlyHintAnnotation(true)), s.listDevices)
-	protocol.AddTool(mcp.NewTool("device_methods", mcp.WithDescription("Describe a Wendy Agent RPC's request fields, or list supported RPC methods."), mcp.WithString("method"), mcp.WithReadOnlyHintAnnotation(true)), s.describeMethods)
-	protocol.AddTool(mcp.NewTool("device_rpc", mcp.WithDescription("Call a Wendy Agent RPC through the organization's service account. Both your current permissions and the service account's permissions must allow it. Client-streaming RPCs use the CLI tunnel."), mcp.WithString("device_id", mcp.Required()), mcp.WithString("method", mcp.Required()), mcp.WithObject("request"), mcp.WithNumber("max_messages"), mcp.WithNumber("timeout_seconds"), mcp.WithReadOnlyHintAnnotation(false), mcp.WithDestructiveHintAnnotation(true), mcp.WithOpenWorldHintAnnotation(true)), s.callDevice)
+	s := &Server{base: base, backend: backend, connector: connector, logger: slog.Default(), tracer: otel.Tracer("wendy.cloudmcp"), slots: make(chan struct{}, 128)}
+	for _, option := range options {
+		option(s)
+	}
+	protocol := server.NewMCPServer("wendy-cloud", "1.0.0", server.WithToolCapabilities(false), server.WithHooks(s.protocolHooks()))
+	protocol.AddTool(mcp.NewTool("device_list", mcp.WithDescription("List devices accessible to both you and this organization's MCP service account."), mcp.WithReadOnlyHintAnnotation(true)), s.observedTool("device_list", s.listDevices))
+	protocol.AddTool(mcp.NewTool("device_methods", mcp.WithDescription("Describe a Wendy Agent RPC's request fields, or list supported RPC methods."), mcp.WithString("method"), mcp.WithReadOnlyHintAnnotation(true)), s.observedTool("device_methods", s.describeMethods))
+	protocol.AddTool(mcp.NewTool("device_rpc", mcp.WithDescription("Call a Wendy Agent RPC through the organization's service account. Both your current permissions and the service account's permissions must allow it. Client-streaming RPCs use the CLI tunnel."), mcp.WithString("device_id", mcp.Required()), mcp.WithString("method", mcp.Required()), mcp.WithObject("request"), mcp.WithNumber("max_messages"), mcp.WithNumber("timeout_seconds"), mcp.WithReadOnlyHintAnnotation(false), mcp.WithDestructiveHintAnnotation(true), mcp.WithOpenWorldHintAnnotation(true)), s.observedTool("device_rpc", s.callDevice))
 	s.protocol = server.NewStreamableHTTPServer(protocol, server.WithStateLess(true))
 	return s, nil
 }
@@ -107,7 +122,7 @@ func canonicalUUID(value string) bool {
 	return err == nil && id != uuid.Nil && id.String() == value
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Host != s.base.Host {
 		http.Error(w, "invalid host", http.StatusBadRequest)
@@ -154,7 +169,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "OAuth authentication required", http.StatusUnauthorized)
 		return
 	}
-	c := caller{strings.TrimPrefix(values[0], "Bearer "), org}
+	c := caller{token: strings.TrimPrefix(values[0], "Bearer "), org: org}
+	r = r.WithContext(context.WithValue(r.Context(), callerKey{}, c))
 	device, operation := "", "mcp.connect"
 	if isTunnel {
 		device, operation = parts[3], "cli.connect"
@@ -162,7 +178,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isService {
 		device, operation = parts[3], "service:"+parts[5]
 	}
-	access, err := s.backend.Authorize(r.Context(), c.token, org, device, operation)
+	ctx, finishAuth := s.observe(r.Context(), "mcp.authorization", attribute.String("wendy.operation", operation))
+	access, err := s.backend.Authorize(ctx, c.token, org, device, operation)
+	if err != nil || !access.permits(org) {
+		finishAuth("denied")
+	} else {
+		finishAuth("ok")
+	}
 	if err != nil {
 		if errors.Is(err, ErrUnauthenticated) {
 			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+s.base.String()+"/.well-known/oauth-protected-resource"+resourcePath+`"`)
@@ -176,6 +198,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "organization access denied", http.StatusForbidden)
 		return
 	}
+	c.access = access
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 	r = r.WithContext(context.WithValue(r.Context(), callerKey{}, c))
 	if isService {
@@ -194,10 +217,13 @@ func (s *Server) authorize(ctx context.Context, device, method string) (Access, 
 	if !ok {
 		return Access{}, errors.New("missing authenticated caller")
 	}
+	ctx, end := s.observe(ctx, "mcp.authorization", attribute.String("wendy.operation", method), attribute.String("wendy.device_id", device))
 	a, err := s.backend.Authorize(ctx, c.token, c.org, device, method)
 	if err != nil || !a.permits(c.org) {
+		end("denied")
 		return Access{}, errors.New("operation denied")
 	}
+	end("ok")
 	return a, nil
 }
 
@@ -314,23 +340,27 @@ func (s *Server) callDevice(ctx context.Context, request mcp.CallToolRequest) (*
 	if err := protojson.Unmarshal(encoded, in); err != nil {
 		return mcp.NewToolResultError("RPC request does not match the method schema"), nil
 	}
-	conn, err := s.connector.Connect(ctx, a, device)
+	ctx, finishRPC := s.observe(ctx, "mcp.device_rpc", attribute.String("rpc.method", name), attribute.String("wendy.device_id", device))
+	rpcOutcome := "error"
+	defer func() { finishRPC(rpcOutcome) }()
+	conn, closeConnection, err := s.connect(ctx, a, device)
 	if err != nil {
 		return mcp.NewToolResultError("device connection unavailable"), nil
 	}
-	defer conn.Close()
+	defer closeConnection()
 	if !method.IsStreamingServer() {
 		out := dynamicpb.NewMessage(method.Output())
-		if err := conn.Conn.Invoke(ctx, name, in, out); err != nil {
+		if err := conn.Conn.Invoke(deviceTraceContext(ctx), name, in, out); err != nil {
 			return mcp.NewToolResultError("device RPC failed"), nil
 		}
 		data, err := protojson.Marshal(out)
 		if err != nil || len(data) > maxBody {
 			return mcp.NewToolResultError("device response exceeds the MCP limit"), nil
 		}
+		rpcOutcome = "ok"
 		return mcp.NewToolResultText(string(data)), nil
 	}
-	stream, err := conn.Conn.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, name)
+	stream, err := conn.Conn.NewStream(deviceTraceContext(ctx), &grpc.StreamDesc{ServerStreams: true}, name)
 	if err != nil {
 		return mcp.NewToolResultError("device stream unavailable"), nil
 	}
@@ -349,6 +379,7 @@ func (s *Server) callDevice(ctx context.Context, request mcp.CallToolRequest) (*
 		out := dynamicpb.NewMessage(method.Output())
 		err := stream.RecvMsg(out)
 		if errors.Is(err, io.EOF) {
+			rpcOutcome = "ok"
 			return result(map[string]any{"messages": messages, "truncated": false})
 		}
 		if err != nil {
@@ -357,9 +388,11 @@ func (s *Server) callDevice(ctx context.Context, request mcp.CallToolRequest) (*
 		data, err := protojson.Marshal(out)
 		size += len(data)
 		if err != nil || size > maxBody {
+			rpcOutcome = "truncated"
 			return result(map[string]any{"messages": messages, "truncated": true})
 		}
 		messages = append(messages, data)
 	}
+	rpcOutcome = "truncated"
 	return result(map[string]any{"messages": messages, "truncated": true})
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/propagation"
 	"io"
 	"net/http"
 	"net/url"
@@ -83,6 +84,10 @@ func (b *CloudBackend) request(ctx context.Context, org, operation string, body 
 		req.Header.Set("Authorization", "DPoP "+auth.APIKey)
 		req.Header.Set("DPoP", proof)
 		req.Header.Set("Content-Type", "application/json")
+	}
+	propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(req.Header))
+	if id, ok := ctx.Value(correlationKey{}).(string); ok {
+		req.Header.Set("X-Correlation-ID", id)
 	}
 	response, err := b.client.Do(req)
 	if err != nil {

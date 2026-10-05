@@ -34,6 +34,7 @@ type configuration struct {
 	Listen         string               `json:"listen"`
 	TLSCertificate string               `json:"tls_certificate"`
 	TLSKey         string               `json:"tls_key"`
+	TraceEndpoint  string               `json:"trace_endpoint,omitempty"`
 	Services       browserauth.Settings `json:"services"`
 	Machines       []machineConfig      `json:"machines"`
 }
@@ -56,6 +57,11 @@ func run(ctx context.Context, path string) error {
 	if err := cfg.Services.Validate(); err != nil {
 		return err
 	}
+	shutdownTelemetry, err := configureTelemetry(ctx, cfg.TraceEndpoint)
+	if err != nil {
+		return err
+	}
+	defer shutdownTelemetry()
 	sessions := make(map[string]*browserauth.MachineSession, len(cfg.Machines))
 	for _, machine := range cfg.Machines {
 		if _, exists := sessions[machine.Organization]; exists {
@@ -86,23 +92,12 @@ func run(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	// Bound aggregate memory and concurrent control-plane/device work. Excess work
-	// is retried by clients; it never accumulates in an unbounded queue.
-	slots := make(chan struct{}, 128)
 	server := &http.Server{Addr: cfg.Listen, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10,
 		TLSConfig:   &tls.Config{MinVersion: tls.VersionTLS13},
 		BaseContext: func(net.Listener) context.Context { return ctx },
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-			select {
-			case slots <- struct{}{}:
-				defer func() { <-slots }()
-			default:
-				w.Header().Set("Retry-After", "5")
-				http.Error(w, "server busy", http.StatusServiceUnavailable)
 				return
 			}
 			handler.ServeHTTP(w, r)

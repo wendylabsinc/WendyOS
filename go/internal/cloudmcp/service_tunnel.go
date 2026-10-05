@@ -3,6 +3,7 @@ package cloudmcp
 import (
 	"context"
 	"github.com/coder/websocket"
+	"go.opentelemetry.io/otel/attribute"
 	"io"
 	"net"
 	"net/http"
@@ -40,7 +41,14 @@ func (s *Server) serveServiceTunnel(w http.ResponseWriter, r *http.Request, devi
 	defer cancel()
 	ctx, stop := s.watchAuthorization(ctx, device, "service:"+service, a)
 	defer stop()
-	upstream, err := connector.OpenService(ctx, a, device, service)
+	ctx, finish, auditErr := s.audited(ctx, "mcp.service_connection", a, attribute.String("wendy.device_id", device), attribute.String("wendy.service", service))
+	if auditErr != nil {
+		http.Error(w, "audit unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	outcome := "error"
+	defer func() { finish(outcome) }()
+	upstream, err := connector.OpenService(deviceTraceContext(ctx), a, device, service)
 	if err != nil {
 		http.Error(w, "device service unavailable", http.StatusBadGateway)
 		return
@@ -51,6 +59,7 @@ func (s *Server) serveServiceTunnel(w http.ResponseWriter, r *http.Request, devi
 		return
 	}
 	defer ws.CloseNow()
+	outcome = "closed"
 	ws.SetReadLimit(1 << 20)
 	downstream := websocket.NetConn(ctx, ws, websocket.MessageBinary)
 	defer downstream.Close()

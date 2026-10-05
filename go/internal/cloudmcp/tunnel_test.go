@@ -6,6 +6,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -54,11 +55,15 @@ func (c *tunnelConnector) Connect(ctx context.Context, a Access, device string) 
 type testAgent struct {
 	agentpb.UnimplementedWendyAgentServiceServer
 	agentpb.UnimplementedWendyShellServiceServer
-	leaked atomic.Bool
+	leaked      atomic.Bool
+	correlation atomic.Value
+	traceparent atomic.Value
 }
 
 func (s *testAgent) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentVersionRequest) (*agentpb.GetAgentVersionResponse, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
+	s.correlation.Store(strings.Join(md.Get("x-correlation-id"), ","))
+	s.traceparent.Store(strings.Join(md.Get("traceparent"), ","))
 	if len(md.Get("authorization")) != 0 || len(md.Get("x-wendy-client-cert")) != 0 {
 		s.leaked.Store(true)
 	}
@@ -93,13 +98,15 @@ func TestTunnelProxiesAndRechecksAuthorization(t *testing.T) {
 	httpServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { server.ServeHTTP(w, r) }))
 	t.Cleanup(httpServer.Close)
 	var err error
-	server, err = New(httpServer.URL, backend, connector)
+	provider := sdktrace.NewTracerProvider()
+	defer provider.Shutdown(context.Background())
+	server, err = New(httpServer.URL, backend, connector, WithTelemetry(nil, provider))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	ws, _, err := websocket.Dial(ctx, httpServer.URL+"/orgs/"+testOrg+"/devices/"+testDevice+"/tunnel", &websocket.DialOptions{HTTPClient: httpServer.Client(), HTTPHeader: http.Header{"Authorization": {"Bearer user-token"}}})
+	ws, handshake, err := websocket.Dial(ctx, httpServer.URL+"/orgs/"+testOrg+"/devices/"+testDevice+"/tunnel", &websocket.DialOptions{HTTPClient: httpServer.Client(), HTTPHeader: http.Header{"Authorization": {"Bearer user-token"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +127,9 @@ func TestTunnelProxiesAndRechecksAuthorization(t *testing.T) {
 	version, err := client.GetAgentVersion(callCtx, &agentpb.GetAgentVersionRequest{})
 	if err != nil || version.GetVersion() != "hosted-test" || agent.leaked.Load() {
 		t.Fatalf("version=%v err=%v leaked=%v", version, err, agent.leaked.Load())
+	}
+	if agent.correlation.Load() != handshake.Header.Get("X-Request-ID") || !strings.HasPrefix(agent.traceparent.Load().(string), "00-") {
+		t.Fatal("lost correlation across CLI tunnel")
 	}
 	shell, err := agentpb.NewWendyShellServiceClient(conn).HostShell(ctx)
 	if err != nil {
@@ -168,3 +178,5 @@ func TestMCPDeviceRPCUsesOperatorConnection(t *testing.T) {
 		t.Fatal(response.Code, response.Body.String())
 	}
 }
+
+func (*tunnelBackend) Record(context.Context, Access, GatewayEvent) error { return nil }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"io"
 	"net"
 	"net/http"
@@ -52,6 +54,12 @@ func (s *Server) serveTunnel(w http.ResponseWriter, r *http.Request, device stri
 	defer cancel()
 	ctx, stop := s.watchAuthorization(ctx, device, "cli.connect", access)
 	defer stop()
+	ctx, finishTunnel, auditErr := s.audited(ctx, "mcp.cli_connection", access, attribute.String("wendy.device_id", device))
+	if auditErr != nil {
+		http.Error(w, "audit unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer func() { finishTunnel("closed") }()
 	ws, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
@@ -132,7 +140,7 @@ func (rawCodec) Unmarshal(data []byte, value any) error {
 // The public tunnel terminates gRPC here. It is not an unrestricted byte relay:
 // each method is identified and authorized before opening an operator connection.
 func (s *Server) proxyDevice(callerContext context.Context, device string) grpc.StreamHandler {
-	return func(_ any, downstream grpc.ServerStream) error {
+	return func(_ any, downstream grpc.ServerStream) (rpcError error) {
 		method, ok := grpc.MethodFromServerStream(downstream)
 		if !ok {
 			return status.Error(codes.InvalidArgument, "missing method")
@@ -147,19 +155,33 @@ func (s *Server) proxyDevice(callerContext context.Context, device string) grpc.
 			return status.Error(codes.Unauthenticated, "missing caller")
 		}
 		ctx = context.WithValue(ctx, callerKey{}, identity)
+		ctx = context.WithValue(ctx, correlationKey{}, callerContext.Value(correlationKey{}))
+		ctx = trace.ContextWithSpanContext(ctx, trace.SpanContextFromContext(callerContext))
 		access, err := s.authorize(ctx, device, method)
 		if err != nil {
 			return status.Error(codes.PermissionDenied, "device operation denied")
 		}
+		ctx, finishRPC, auditErr := s.audited(ctx, "mcp.cli_rpc", access, attribute.String("rpc.method", method), attribute.String("wendy.device_id", device))
+		if auditErr != nil {
+			return status.Error(codes.Unavailable, "audit unavailable")
+		}
+		rpcError = status.Error(codes.Unknown, "execution interrupted")
+		defer func() {
+			if rpcError == nil {
+				finishRPC("ok")
+			} else {
+				finishRPC("error")
+			}
+		}()
 		ctx, stopExpiry := context.WithDeadline(ctx, access.ExpiresAt)
 		defer stopExpiry()
 		ctx, stop := s.watchAuthorization(ctx, device, method, access)
 		defer stop()
-		conn, err := s.connector.Connect(ctx, access, device)
+		conn, closeConnection, err := s.connect(ctx, access, device)
 		if err != nil {
 			return status.Error(codes.Unavailable, "device connection unavailable")
 		}
-		defer conn.Close()
+		defer closeConnection()
 		// Only application routing metadata crosses into the operator connection.
 		// User tokens, asserted identities, and signatures never do.
 		incoming, _ := metadata.FromIncomingContext(downstream.Context())
@@ -169,7 +191,7 @@ func (s *Server) proxyDevice(callerContext context.Context, device string) grpc.
 				outgoing[name] = append([]string(nil), values...)
 			}
 		}
-		ctx = metadata.NewOutgoingContext(ctx, outgoing)
+		ctx = deviceTraceContext(metadata.NewOutgoingContext(ctx, outgoing))
 		upstream, err := conn.Conn.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true, ServerStreams: true}, method, grpc.ForceCodec(rawCodec{}))
 		if err != nil {
 			return status.Error(codes.Unavailable, "device stream unavailable")

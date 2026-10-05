@@ -59,7 +59,7 @@ func connectAuthenticatedDevice(ctx context.Context, settings Settings, auth *co
 		}
 		return grpc.NewClient("passthrough:///"+target, grpc.WithTransportCredentials(insecure.NewCredentials()), clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, target) }))
 	}}
-	authCtx := grpcmetadata.NewOutgoingContext(ctx, grpcmetadata.Pairs("x-wendy-client-cert", "URI="+cert.PrincipalURI, "x-forwarded-client-cert", "URI="+cert.PrincipalURI))
+	authCtx := deviceDiagnosticContext(ctx, ctx, cert.PrincipalURI)
 	record, err := cloudpbv2.NewAssetServiceClient(cloud).GetAsset(authCtx, &cloudpbv2.GetAssetRequest{Id: asset})
 	if err != nil {
 		cloud.Close()
@@ -72,7 +72,7 @@ func connectAuthenticatedDevice(ctx context.Context, settings Settings, auth *co
 	}
 
 	conn, err := grpcclient.ConnectWithTLSExpecting(ctx, "passthrough:///cloud-device", &cert, nil, expected, clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) {
-		authCtx := grpcmetadata.NewOutgoingContext(c, grpcmetadata.Pairs("x-wendy-client-cert", "URI="+cert.PrincipalURI, "x-forwarded-client-cert", "URI="+cert.PrincipalURI))
+		authCtx := deviceDiagnosticContext(c, ctx, cert.PrincipalURI)
 		return cloudrelay.OpenTCP(c, authCtx, cloud, verifier, asset, "wendy-agent", signer)
 	}))
 	if err != nil {
@@ -108,4 +108,18 @@ func cloudDeviceIdentity(asset *cloudpbv2.Asset, id, tenant string) (*certs.Wend
 		return nil, err
 	}
 	return &identity, nil
+}
+
+// gRPC dial contexts are not request contexts. Carry only diagnostic metadata
+// from the initiating flow, alongside the existing certificate identity hints.
+// Never copy bearer tokens or other caller headers into the relay request.
+func deviceDiagnosticContext(ctx, source context.Context, principal string) context.Context {
+	md := grpcmetadata.Pairs("x-wendy-client-cert", "URI="+principal, "x-forwarded-client-cert", "URI="+principal)
+	parent, _ := grpcmetadata.FromOutgoingContext(source)
+	for _, key := range []string{"traceparent", "x-correlation-id"} {
+		if values := parent.Get(key); len(values) == 1 {
+			md.Set(key, values[0])
+		}
+	}
+	return grpcmetadata.NewOutgoingContext(ctx, md)
 }

@@ -184,3 +184,5 @@ func TestAgentCatalogRejectsCloudAndUnknownMethods(t *testing.T) {
 		}
 	}
 }
+
+func (*fakeBackend) Record(context.Context, Access, GatewayEvent) error { return nil }
