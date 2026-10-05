@@ -59,12 +59,14 @@ func (s *Server) serveTunnel(w http.ResponseWriter, r *http.Request, device stri
 		http.Error(w, "audit unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	defer func() { finishTunnel("closed") }()
+	outcome := "error"
+	defer func() { finishTunnel(outcome) }()
 	ws, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer ws.CloseNow()
+	outcome = "closed"
 	ws.SetReadLimit(4 << 20)
 	conn := &leaseConn{Conn: websocket.NetConn(ctx, ws, websocket.MessageBinary), cancel: cancel}
 	listener := &singleListener{ctx: ctx, conn: conn}

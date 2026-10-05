@@ -14,8 +14,9 @@ in `feat/hosted-org-mcp`, including migration 000085.
 ## Provisioning and owner opt-in
 
 1. Register an ML-DSA-65 machine-account key in the organization's Wendy Auth
-   realm. Give that account an explicit Cloud organization role. It gets no
-   automatic membership. Store its private key in the gateway's secret mount.
+   realm. Give that account a suitable Cloud organization role. Cloud's normal
+   service-principal admission rules apply; it cannot adopt an organization or
+   gain owner access through adoption. Store its private key in the gateway's secret mount.
 2. Add its organization UUID, issuer, subject, and `key_file` (or `key_pem` inside
    the Secret Manager configuration) to the deployment's `machines` array.
    The organization UUID must be its immutable tenant UUID. Restart/roll the
@@ -132,16 +133,72 @@ They do not deploy until bootstrap provides the dedicated runtime identity,
 secret containers, external dual-stack subnet, DNS zone and immutable images.
 Production still deploys only through Cloud's immutable release-tag workflow.
 
+## Audit and tracing
+
+Every inbound HTTP request gets a server-generated `X-Request-ID`. That same UUID
+is `correlation_id` in logs and `x-correlation-id` on internal calls. A fresh
+OpenTelemetry trace contains authorization, MCP tool, device RPC, and connection
+spans. Valid incoming W3C trace context is retained only as a link; callers cannot
+select the gateway's trace ID or sampling policy. Baggage and tracestate are not
+forwarded. Initialization, discovery/list calls, protocol errors, and rejected
+HTTP requests have diagnostic records as well.
+
+Cloud appends successful and denied authorization decisions to its existing
+per-organization hash-chained audit log before returning the decision. Gateway
+start/completion reports refer to a recent decision issued to that same machine
+and organization. Cloud takes the actor, target, and operation from its own
+record and marks these reports `gateway_reported`. Device work does not start
+if its start report cannot be persisted. Completion reports have a separate
+five-second delivery deadline after disconnect; failures produce
+`audit_delivery_failed`, and an unmatched start remains an unknown outcome.
+There is no claim of exactly-once delivery or rollback after an audit failure.
+
+A gRPC connection is reported connected only after it reaches Ready. The agent's
+mTLS interceptors record traced RPC start/completion with the peer certificate
+fingerprint and gRPC status. These records are `device_observed`; correlation is
+explicitly a `peer_hint`. No human identity is inferred from headers. A compromised
+gateway can omit hints or misreport its own events; certificate-plus-grant
+enforcement remains a separate follow-up. Raw SSH/registry connections have
+connection-level records, not command, file-content, or individual registry-request audits.
+
+Records exclude OAuth tokens, DPoP proofs, certificate/key material, request and
+response bodies, shell commands, MCP arguments/results, arbitrary JSON-RPC IDs,
+and client-supplied names/User-Agent strings. They identify the verified Wendy
+user and organization. They do not identify a ChatGPT account or assert that an
+unverified client name proves a request originated from ChatGPT.
+
+The standalone service writes JSON logs. Managed deployments send container logs
+to Cloud Logging using the attached runtime identity, which needs only log-entry
+creation, not deletion or log-configuration permissions. Cloud's database audit
+is independent of the gateway's runtime identity. Self-hosted deployments can
+collect stdout and retain Cloud's existing audit/checkpoint storage.
+
+For actual trace export, set `trace_endpoint` in the gateway configuration to an
+operator-controlled OTLP HTTP traces URL, such as `https://collector.example/v1/traces`.
+Include the collector path. HTTPS is required except for a
+loopback HTTP collector. Standard `OTEL_EXPORTER_OTLP_*` environment configuration
+is also supported when supplied to the process. With no endpoint, structured logs
+still have trace/span IDs, but spans are not exported to a tracing backend. Export
+uses a bounded queue and does not gate authorization; durable Cloud audit does.
+Configure the collector, access policies, retention, and alerts before rollout.
+
+Search by the response's `X-Request-ID` to join gateway logs, Cloud audit rows,
+Cloud tunnel records, and device logs. A finished tool span with an error can
+coexist with a successfully opened connection; neither implies that an earlier
+side effect was undone. Audit reads retain Cloud's tenant scoping and existing
+checkpoint verification. Monitor missing completion records, audit delivery errors,
+and trace export errors.
+
 ## Local verification (2026-10-05)
 
-- 124 passing Go test cases, including subtests, under `-race` across `cloudmcp`,
-  `browserauth`, `hostedmcp`, and `cloudrelay`.
+- 180 passing Go test cases, including subtests, under `-race` across `cloudmcp`,
+  `agent/interceptor`, `browserauth`, `hostedmcp`, and `cloudrelay`.
 - Two focused CLI command tests pass. The broader command suite has a failure in
   `TestSimulatorFilterAsksOnlyVMsItCanReachAndDoesNotKnow` when LAN discovery sees
   local devices; no simulator code was changed for this feature.
 - Linux amd64 gateway binary builds with CGO disabled; scoped `go vet` passes.
-- Companion Cloud: 88 Swift tests in eight suites pass, including real PostgreSQL
-  opt-in, permission reduction, audience rejection and audit checks. Swift format
+- Companion Cloud: 93 Swift tests in nine suites pass, including real PostgreSQL
+  opt-in, permission reduction, audience rejection, event binding, and audit-chain checks. Swift format
   lint passes; infrastructure tests pass in all three packages.
 - No live DNS deployment, OAuth-client registration, or physical-device smoke test
   has been performed. Those checks remain part of rollout.

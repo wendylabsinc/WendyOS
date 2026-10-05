@@ -3,12 +3,12 @@ package cloudmcp
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
-	"fmt"
 	"github.com/google/uuid"
 	mcp "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
