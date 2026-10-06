@@ -289,8 +289,14 @@ struct `'wendy device info'` {
 
                 #expect(!result.status.isSuccess)
                 #expect(result.stdout == "")
-                #expect(stderr.contains("name resolver error"))
-                #expect(stderr.contains("produced zero addresses"))
+                // A name that does not resolve is its own failure class (exit 5),
+                // named for the device rather than in the resolver's words.
+                #expect(stderr.contains("\"code\":\"device_not_resolved\""))
+                #expect(
+                    result.readableStderr.contains(
+                        "Could not resolve device host definitely-not-a-wendy-device.invalid."
+                    )
+                )
                 #expect(!stderr.contains("Select a device"))
             }
         }
