@@ -43,11 +43,10 @@ For scripts and coding agents, add `--json`:
 wendy --json run --detach --wait-ready
 ```
 
-Each verified deployment emits an object with `app_name`, `revision`,
-`previous_revision`, `state`, `readiness_checked`, and `message`. Service groups
-emit one object per outcome as JSON Lines. Application output is sent to stderr
-so stdout remains available for these results. Only `READY` with
-`readiness_checked: true` confirms a successful probe; `RUNNING` does not.
+Each verified deployment emits an object with `app_name`, `state`, and
+`message`. Service groups emit one object per outcome as JSON Lines. Application
+output is sent to stderr so stdout remains available for these results. Only
+`READY` confirms a successful probe; `RUNNING` does not.
 
 After a successful deployment, the agent retains the current container and at
 most one preceding revision's specification and writable snapshot. At agent

@@ -15,20 +15,11 @@ import (
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
-// DeployContainer owns cutover, verification, and recovery as one serialized
-// operation. Prepare is cancellable; once cutover begins the agent completes
-// bounded verification and recovery even if the client disconnects.
-func (s *ContainerService) DeployContainer(req *agentpb.DeployContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
-	return s.streamDeployment(req, stream, nil)
-}
-
-func (s *ContainerService) DeployContainerAttached(stream grpc.BidiStreamingServer[agentpb.DeployContainerInput, agentpb.RunContainerLayersResponse]) error {
-	first, err := stream.Recv()
-	if err != nil {
-		return err
-	}
-	if first.GetDeployment() == nil {
-		return status.Error(codes.InvalidArgument, "first input must contain a deployment request")
+// attachDeployment runs a verified deployment whose process reads stdin from the
+// rest of an AttachContainer stream.
+func (s *ContainerService) attachDeployment(req *agentpb.RunContainerLayersRequest, stream grpc.BidiStreamingServer[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse]) error {
+	if !req.GetVerified() {
+		return status.Error(codes.InvalidArgument, "attached deploy requires verified")
 	}
 	stdinR, stdinW := io.Pipe()
 	defer stdinR.Close()
@@ -46,10 +37,13 @@ func (s *ContainerService) DeployContainerAttached(stream grpc.BidiStreamingServ
 			}
 		}
 	}()
-	return s.streamDeployment(first.GetDeployment(), stream, stdinR)
+	return s.streamDeployment(req, stream, stdinR)
 }
 
-func (s *ContainerService) streamDeployment(req *agentpb.DeployContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse], stdin io.Reader) error {
+// streamDeployment owns cutover, verification, and recovery as one serialized
+// operation. Prepare is cancellable; once cutover begins the agent completes
+// bounded verification and recovery even if the client disconnects.
+func (s *ContainerService) streamDeployment(req *agentpb.RunContainerLayersRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse], stdin io.Reader) error {
 	events := make(chan *agentpb.RunContainerLayersResponse, 128)
 	done := make(chan error, 1)
 	// A slow or disconnected log reader must not hold verification, recovery,
@@ -99,7 +93,7 @@ func (s *deploymentEventStream) Send(event *agentpb.RunContainerLayersResponse) 
 	return nil
 }
 
-func (s *ContainerService) deployContainer(req *agentpb.DeployContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse], stdin io.Reader) error {
+func (s *ContainerService) deployContainer(candidate *agentpb.RunContainerLayersRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse], stdin io.Reader) error {
 	runtime, ok := s.containerd.(DeploymentRuntime)
 	if !ok {
 		return status.Error(codes.Unimplemented, "this runtime does not support recoverable deployments")
@@ -107,10 +101,6 @@ func (s *ContainerService) deployContainer(req *agentpb.DeployContainerRequest, 
 	prober, ok := s.containerd.(ContainerReadinessProber)
 	if !ok {
 		return status.Error(codes.Unimplemented, "this runtime does not support agent-owned readiness")
-	}
-	candidate := req.GetContainer()
-	if candidate == nil {
-		return status.Error(codes.InvalidArgument, "container is required")
 	}
 	if err := appconfig.ValidateAppID(candidate.GetAppName()); err != nil {
 		return status.Errorf(codes.InvalidArgument, "invalid app name: %v", err)
@@ -131,23 +121,11 @@ func (s *ContainerService) deployContainer(req *agentpb.DeployContainerRequest, 
 	if err := cfg.Validate(); err != nil {
 		return status.Errorf(codes.InvalidArgument, "invalid app config: %v", err)
 	}
-	probe := appconfig.EffectiveReadiness(cfg)
-	if req.GetSkipImplicitReadiness() {
-		probe = nil
-		if cfg.Readiness.HasProbe() {
-			probe = cfg.Readiness
-		}
-	}
-	if req.GetRequireReadiness() && probe == nil {
-		return status.Error(codes.FailedPrecondition, "wait-ready requires a readiness probe or an HTTP entitlement")
-	}
-	if req.GetTimeoutSeconds() < 0 || req.GetTimeoutSeconds() > 3600 {
-		return status.Error(codes.InvalidArgument, "readiness timeout must be between 1 and 3600 seconds, or zero for the configured default")
-	}
-	if probe != nil && req.GetTimeoutSeconds() > 0 {
-		copy := *probe
-		copy.TimeoutSeconds = int(req.GetTimeoutSeconds())
-		probe = &copy
+	// Only an explicit probe counts: the caller resolves implicit readiness
+	// (HTTP entitlement, service ownership, timeout overrides) into app_config.
+	var probe *appconfig.ReadinessConfig
+	if cfg.Readiness.HasProbe() {
+		probe = cfg.Readiness
 	}
 	ctx := stream.Context()
 	unlock := s.appMu.lockApp(candidate.GetAppName())
@@ -197,9 +175,8 @@ func (s *ContainerService) deployContainer(req *agentpb.DeployContainerRequest, 
 	if err := ctx.Err(); err != nil {
 		return status.FromContextError(err).Err()
 	}
-	result := &agentpb.DeploymentResult{
-		AppName: create.AppName, Revision: tx.Revision(), PreviousRevision: tx.PreviousRevision(),
-	}
+	result := &agentpb.DeploymentResult{}
+	hadPrevious := tx.PreviousRevision() != ""
 	var readCh <-chan ContainerOutput
 	var releaseDrain func()
 	activationErr := tx.Activate(operationCtx)
@@ -223,7 +200,6 @@ func (s *ContainerService) deployContainer(req *agentpb.DeployContainerRequest, 
 		}
 	}
 	if activationErr == nil {
-		result.ReadinessChecked = probe != nil
 		send(&agentpb.RunContainerLayersResponse{ResponseType: &agentpb.RunContainerLayersResponse_Started_{Started: &agentpb.RunContainerLayersResponse_Started{}}})
 		checked := make(chan error, 1)
 		go func() { checked <- waitForAgentReadiness(operationCtx, prober, create.AppName, probe) }()
@@ -259,14 +235,14 @@ func (s *ContainerService) deployContainer(req *agentpb.DeployContainerRequest, 
 		if recoveryErr != nil {
 			result.State = agentpb.DeploymentState_ROLLBACK_FAILED
 			result.Message += "; recovery failed: " + recoveryErr.Error()
-		} else if result.PreviousRevision != "" {
+		} else if hadPrevious {
 			result.State = agentpb.DeploymentState_ROLLED_BACK
 			result.Message += "; previous revision restored"
 		}
 		// Never let the restart monitor revive an unverified candidate after
 		// failed recovery releases its suppression lease.
 		monitorCtx, monitorCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		if recoveryErr != nil || result.PreviousRevision == "" {
+		if recoveryErr != nil || !hadPrevious {
 			if s.monitor != nil {
 				s.monitor.Unregister(create.AppName)
 				s.monitor.MarkExplicitStop(create.AppName)

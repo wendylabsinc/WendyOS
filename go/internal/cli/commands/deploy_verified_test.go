@@ -41,7 +41,7 @@ func (s *verifiedTestStream) Recv() (*agentpb.RunContainerLayersResponse, error)
 
 type verifiedTestClient struct {
 	agentpb.WendyContainerServiceClient
-	requests []*agentpb.DeployContainerRequest
+	requests []*agentpb.RunContainerLayersRequest
 	streams  []*verifiedTestStream
 	onSubmit func(int)
 	err      error
@@ -50,22 +50,22 @@ type verifiedTestClient struct {
 
 type verifiedTestBidiStream struct {
 	verifiedTestStream
-	inputs []*agentpb.DeployContainerInput
+	inputs []*agentpb.AttachContainerRequest
 	closed chan struct{}
 }
 
-func (s *verifiedTestBidiStream) Send(input *agentpb.DeployContainerInput) error {
-	s.inputs = append(s.inputs, proto.Clone(input).(*agentpb.DeployContainerInput))
+func (s *verifiedTestBidiStream) Send(input *agentpb.AttachContainerRequest) error {
+	s.inputs = append(s.inputs, proto.Clone(input).(*agentpb.AttachContainerRequest))
 	return nil
 }
 
 func (s *verifiedTestBidiStream) CloseSend() error { close(s.closed); return nil }
 
-func (c *verifiedTestClient) DeployContainerAttached(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentpb.DeployContainerInput, agentpb.RunContainerLayersResponse], error) {
+func (c *verifiedTestClient) AttachContainer(context.Context, ...grpc.CallOption) (grpc.BidiStreamingClient[agentpb.AttachContainerRequest, agentpb.RunContainerLayersResponse], error) {
 	return c.attached, c.err
 }
 
-func (c *verifiedTestClient) DeployContainer(_ context.Context, req *agentpb.DeployContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
+func (c *verifiedTestClient) RunContainer(_ context.Context, req *agentpb.RunContainerLayersRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse], error) {
 	i := len(c.requests)
 	if c.onSubmit != nil {
 		c.onSubmit(i)
@@ -77,9 +77,9 @@ func (c *verifiedTestClient) DeployContainer(_ context.Context, req *agentpb.Dep
 	return c.streams[i], nil
 }
 
-func deploymentTestResponse(name string, state agentpb.DeploymentState, checked bool) *agentpb.RunContainerLayersResponse {
+func deploymentTestResponse(state agentpb.DeploymentState) *agentpb.RunContainerLayersResponse {
 	return &agentpb.RunContainerLayersResponse{ResponseType: &agentpb.RunContainerLayersResponse_Deployment{Deployment: &agentpb.DeploymentResult{
-		AppName: name, State: state, ReadinessChecked: checked, Revision: "candidate", PreviousRevision: "previous", Message: "test outcome",
+		State: state, Message: "test outcome",
 	}}}
 }
 
@@ -88,7 +88,7 @@ func deploymentStartedResponse() *agentpb.RunContainerLayersResponse {
 }
 
 func TestVerifiedDetachedWaitsForOutcomeWithoutStartingAgain(t *testing.T) {
-	stream := &verifiedTestStream{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse("app", agentpb.DeploymentState_READY, true)}}
+	stream := &verifiedTestStream{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse(agentpb.DeploymentState_READY)}}
 	client := &verifiedTestClient{streams: []*verifiedTestStream{stream}}
 	cfg := &appconfig.AppConfig{AppID: "app", Readiness: &appconfig.ReadinessConfig{TCPSocket: &appconfig.TCPSocketProbe{Port: 8080}}}
 	request := &agentpb.CreateContainerRequest{AppName: "app", ImageName: "localhost:5000/app:latest", Cmd: "serve", WorkingDir: "/app", UserArgs: []string{"--port", "8080"}, Env: []string{"KEY=value"}}
@@ -100,8 +100,12 @@ func TestVerifiedDetachedWaitsForOutcomeWithoutStartingAgain(t *testing.T) {
 		t.Fatalf("read %d responses; sent %d requests", stream.read, len(client.requests))
 	}
 	got := client.requests[0]
-	if !got.RequireReadiness || got.TimeoutSeconds != 45 || len(got.Container.Layers) != 0 || got.Container.WorkingDir != "/app" || got.Container.Cmd != "serve" || strings.Join(got.Container.Env, ",") != "KEY=value" || len(got.Container.UserArgs) != 2 {
-		t.Fatalf("request lost deployment options: %+v", got)
+	var sent appconfig.AppConfig
+	if err := json.Unmarshal(got.AppConfig, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Verified || !sent.Readiness.HasProbe() || sent.Readiness.TimeoutSeconds != 45 || len(got.Layers) != 0 || got.WorkingDir != "/app" || got.Cmd != "serve" || strings.Join(got.Env, ",") != "KEY=value" || len(got.UserArgs) != 2 {
+		t.Fatalf("request lost deployment options: %+v %+v", got, sent.Readiness)
 	}
 }
 
@@ -119,7 +123,7 @@ func TestVerifiedAttachedForwardsStdinOnOriginalTransaction(t *testing.T) {
 	}
 	writer.Close()
 	stream := &verifiedTestBidiStream{
-		verifiedTestStream: verifiedTestStream{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse("app", agentpb.DeploymentState_RUNNING, false)}},
+		verifiedTestStream: verifiedTestStream{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse(agentpb.DeploymentState_RUNNING)}},
 		closed:             make(chan struct{}),
 	}
 	client := &verifiedTestClient{attached: stream}
@@ -135,7 +139,7 @@ func TestVerifiedAttachedForwardsStdinOnOriginalTransaction(t *testing.T) {
 	if len(client.requests) != 0 || len(stream.inputs) != 2 {
 		t.Fatalf("unary calls=%d bidi messages=%d", len(client.requests), len(stream.inputs))
 	}
-	if stream.inputs[0].GetDeployment().GetContainer().GetAppName() != "app" || string(stream.inputs[1].GetStdinData()) != "hello application\n" {
+	if !stream.inputs[0].GetDeploy().GetVerified() || stream.inputs[0].GetDeploy().GetAppName() != "app" || string(stream.inputs[1].GetStdinData()) != "hello application\n" {
 		t.Fatalf("lost deployment or stdin: %v", stream.inputs)
 	}
 }
@@ -146,7 +150,7 @@ func TestVerifiedDeploymentFailureIsTerminalAndJSON(t *testing.T) {
 	t.Cleanup(func() { jsonOutput = oldJSON })
 	for _, state := range []agentpb.DeploymentState{agentpb.DeploymentState_ROLLED_BACK, agentpb.DeploymentState_FAILED, agentpb.DeploymentState_ROLLBACK_FAILED} {
 		t.Run(state.String(), func(t *testing.T) {
-			stream := &verifiedTestStream{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse("app", state, false)}}
+			stream := &verifiedTestStream{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse(state)}}
 			var gotErr error
 			stdout, _ := captureBoth(t, func() {
 				gotErr = streamRunContainer(context.Background(), nil, stream, &appconfig.AppConfig{AppID: "app"}, runOptions{verifiedDeployment: true, detach: true})
@@ -158,7 +162,7 @@ func TestVerifiedDeploymentFailureIsTerminalAndJSON(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
 				t.Fatalf("invalid JSON %q: %v", stdout, err)
 			}
-			if result["state"] != state.String() || result["previous_revision"] != "previous" {
+			if result["state"] != state.String() || result["app_name"] != "app" || result["message"] != "test outcome" {
 				t.Fatalf("missing structured failure: %v", result)
 			}
 		})
@@ -172,8 +176,7 @@ func TestVerifiedDeploymentRejectsIncompleteOrFalseSuccess(t *testing.T) {
 		require  bool
 	}{
 		{"started-only", []*agentpb.RunContainerLayersResponse{deploymentStartedResponse()}, false},
-		{"ready-unchecked", []*agentpb.RunContainerLayersResponse{deploymentTestResponse("app", agentpb.DeploymentState_READY, false)}, false},
-		{"required-but-running", []*agentpb.RunContainerLayersResponse{deploymentTestResponse("app", agentpb.DeploymentState_RUNNING, false)}, true},
+		{"required-but-running", []*agentpb.RunContainerLayersResponse{deploymentTestResponse(agentpb.DeploymentState_RUNNING)}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := streamRunContainer(context.Background(), nil, &verifiedTestStream{messages: tc.messages}, &appconfig.AppConfig{AppID: "app"}, runOptions{verifiedDeployment: true, detach: true, waitReady: tc.require})
@@ -227,8 +230,8 @@ func TestVerifiedServicesWaitInOrderAndPreserveProbeScope(t *testing.T) {
 	}
 	web := verifiedServiceConfig(&appconfig.AppConfig{AppID: "app", ServiceName: "web"}, &appconfig.AppConfig{AppID: "app", ServiceName: "web", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementHTTP, Port: 8080}}})
 	streams := []*verifiedTestStream{
-		{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse("app_db", agentpb.DeploymentState_RUNNING, false)}},
-		{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse("app_web", agentpb.DeploymentState_READY, true)}},
+		{messages: []*agentpb.RunContainerLayersResponse{deploymentStartedResponse(), deploymentTestResponse(agentpb.DeploymentState_RUNNING)}},
+		{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse(agentpb.DeploymentState_READY)}},
 	}
 	client := &verifiedTestClient{streams: streams, onSubmit: func(i int) {
 		if i == 1 && streams[0].read != 2 {
@@ -241,10 +244,12 @@ func TestVerifiedServicesWaitInOrderAndPreserveProbeScope(t *testing.T) {
 	if err := runVerifiedServiceGroup(context.Background(), &grpcclient.AgentConnection{ContainerService: client}, []string{"db", "web"}, cfgs, cfgs, requests, nil, opts); err != nil {
 		t.Fatal(err)
 	}
-	for _, req := range client.requests {
-		if !req.SkipImplicitReadiness {
-			t.Fatal("group implicitly probes inherited HTTP entitlement")
-		}
+	var sentDB appconfig.AppConfig
+	if err := json.Unmarshal(client.requests[0].AppConfig, &sentDB); err != nil {
+		t.Fatal(err)
+	}
+	if !client.requests[0].Verified || sentDB.Readiness != nil {
+		t.Fatal("group implicitly probes inherited HTTP entitlement")
 	}
 }
 
@@ -299,8 +304,8 @@ func TestRunWithAgentMultiServiceEnablesVerifiedDeployment(t *testing.T) {
 		return nil
 	}
 	streams := []*verifiedTestStream{
-		{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse("app_svc00", agentpb.DeploymentState_RUNNING, false)}},
-		{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse("app_svc01", agentpb.DeploymentState_READY, true)}},
+		{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse(agentpb.DeploymentState_RUNNING)}},
+		{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse(agentpb.DeploymentState_READY)}},
 	}
 	client := &verifiedTestClient{streams: streams}
 	conn := &grpcclient.AgentConnection{ContainerService: client, ProvisioningService: &verifiedTestProvisioningClient{}}
@@ -310,14 +315,14 @@ func TestRunWithAgentMultiServiceEnablesVerifiedDeployment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(client.requests) != 2 {
-		t.Fatalf("DeployContainer calls = %d, want 2", len(client.requests))
+		t.Fatalf("RunContainer calls = %d, want 2", len(client.requests))
 	}
 	for i, req := range client.requests {
 		var serviceCfg appconfig.AppConfig
-		if err := json.Unmarshal(req.Container.AppConfig, &serviceCfg); err != nil {
+		if err := json.Unmarshal(req.AppConfig, &serviceCfg); err != nil {
 			t.Fatal(err)
 		}
-		if !req.SkipImplicitReadiness || req.Container.AppName != fmt.Sprintf("app_svc%02d", i) || serviceCfg.ContainerName() != req.Container.AppName {
+		if !req.Verified || req.AppName != fmt.Sprintf("app_svc%02d", i) || serviceCfg.ContainerName() != req.AppName {
 			t.Fatalf("invalid service identity or probe scope: %+v %+v", req, serviceCfg)
 		}
 		if i == 0 && serviceCfg.Readiness.HasProbe() {
@@ -339,14 +344,21 @@ func TestRunWithAgentComposeUsesServiceReadiness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "wendy.json"), []byte(`{"appId":"app"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	client := &verifiedTestClient{streams: []*verifiedTestStream{{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse("app_web", agentpb.DeploymentState_READY, true)}}}}
+	client := &verifiedTestClient{streams: []*verifiedTestStream{{messages: []*agentpb.RunContainerLayersResponse{deploymentTestResponse(agentpb.DeploymentState_READY)}}}}
 	conn := &grpcclient.AgentConnection{ContainerService: client, ProvisioningService: &verifiedTestProvisioningClient{}}
 	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", CpuArchitecture: "arm64", Featureset: []string{"verified-deployment"}})
 	if err := runWithAgent(context.Background(), conn, dir, &appconfig.AppConfig{AppID: "app"}, runOptions{detach: true, waitReady: true, builder: "docker"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.requests) != 1 || !client.requests[0].RequireReadiness || !client.requests[0].SkipImplicitReadiness || client.requests[0].Container.AppName != "app_web" {
+	if len(client.requests) != 1 || !client.requests[0].Verified || client.requests[0].AppName != "app_web" {
 		t.Fatalf("lost Compose service readiness: %+v", client.requests)
+	}
+	var sent appconfig.AppConfig
+	if err := json.Unmarshal(client.requests[0].AppConfig, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if !sent.Readiness.HasProbe() || sent.Readiness.TCPSocket.Port != 8080 {
+		t.Fatalf("Compose readiness not sent to the agent: %+v", sent.Readiness)
 	}
 }
 
@@ -356,7 +368,7 @@ func TestVerifiedServiceLogsKeepPrefixesAndJSONClean(t *testing.T) {
 	t.Cleanup(func() { jsonOutput = oldJSON })
 	stream := &verifiedTestStream{messages: []*agentpb.RunContainerLayersResponse{
 		{ResponseType: &agentpb.RunContainerLayersResponse_StdoutOutput{StdoutOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{Data: []byte("booting\n")}}},
-		deploymentTestResponse("app_web", agentpb.DeploymentState_RUNNING, false),
+		deploymentTestResponse(agentpb.DeploymentState_RUNNING),
 		{ResponseType: &agentpb.RunContainerLayersResponse_StdoutOutput{StdoutOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{Data: []byte("par")}}},
 		{ResponseType: &agentpb.RunContainerLayersResponse_StdoutOutput{StdoutOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{Data: []byte("tial line\n")}}},
 		{ResponseType: &agentpb.RunContainerLayersResponse_StderrOutput{StderrOutput: &agentpb.RunContainerLayersResponse_ConsoleOutput{Data: []byte("error without newline")}}},

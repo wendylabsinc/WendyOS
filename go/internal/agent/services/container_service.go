@@ -400,6 +400,9 @@ func (s *ContainerService) validateSignedLayerBinding(imageConfig []byte, layers
 }
 
 func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {
+	if req.GetVerified() {
+		return s.streamDeployment(req, stream, nil)
+	}
 	ctx := stream.Context()
 
 	appCfg, err := parseAppConfig(req.GetAppConfig())
@@ -807,6 +810,9 @@ func (s *ContainerService) AttachContainer(stream grpc.BidiStreamingServer[agent
 	}
 	if err != nil {
 		return err
+	}
+	if deploy := first.GetDeploy(); deploy != nil {
+		return s.attachDeployment(deploy, stream)
 	}
 	appName := first.GetAppName()
 	if appName == "" {

@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -26,20 +29,20 @@ func (f *attachedDeploymentRuntime) StartContainerWithStdin(_ context.Context, _
 	return f.startOutputCh, nil
 }
 
-func TestDeployContainerAttachedVerifiesOriginalProcessWithStdin(t *testing.T) {
+func TestAttachedDeployVerifiesOriginalProcessWithStdin(t *testing.T) {
 	f := &attachedDeploymentRuntime{fakeDeploymentRuntime: newFakeDeploymentRuntime(), input: make(chan string, 1)}
 	client, cleanup := startContainerServer(t, f)
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := client.DeployContainerAttached(ctx)
+	stream, err := client.AttachContainer(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&agentpb.DeployContainerInput{Input: &agentpb.DeployContainerInput_Deployment{Deployment: deploymentTestRequest(true)}}); err != nil {
+	if err := stream.Send(&agentpb.AttachContainerRequest{RequestType: &agentpb.AttachContainerRequest_Deploy{Deploy: deploymentTestRequest(true)}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&agentpb.DeployContainerInput{Input: &agentpb.DeployContainerInput_StdinData{StdinData: []byte("interactive input\n")}}); err != nil {
+	if err := stream.Send(&agentpb.AttachContainerRequest{RequestType: &agentpb.AttachContainerRequest_StdinData{StdinData: []byte("interactive input\n")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := stream.CloseSend(); err != nil {
@@ -87,7 +90,9 @@ func TestDeploymentOutcomeSurvivesSaturatedLogs(t *testing.T) {
 	t.Fatal("slow log reader lost deployment outcome")
 }
 
-func TestDeployContainerCanSkipInheritedHTTPReadiness(t *testing.T) {
+// The caller resolves implicit readiness into app_config; the agent never
+// infers a probe from an HTTP entitlement.
+func TestVerifiedDeployRunsOnlyExplicitReadiness(t *testing.T) {
 	f := newFakeDeploymentRuntime()
 	f.probe = func(_ context.Context, probe *appconfig.ReadinessConfig) error {
 		if probe != nil {
@@ -100,9 +105,8 @@ func TestDeployContainerCanSkipInheritedHTTPReadiness(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req := deploymentTestRequest(false)
-	req.Container.AppConfig = []byte(`{"appId":"test-app","entitlements":[{"type":"http","port":8080}]}`)
-	req.SkipImplicitReadiness = true
-	stream, err := client.DeployContainer(ctx, req)
+	req.AppConfig = []byte(`{"appId":"test-app","entitlements":[{"type":"http","port":8080}]}`)
+	stream, err := client.RunContainer(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +116,32 @@ func TestDeployContainerCanSkipInheritedHTTPReadiness(t *testing.T) {
 			t.Fatal(err)
 		}
 		if result := event.GetDeployment(); result != nil {
-			if result.State != agentpb.DeploymentState_RUNNING || result.ReadinessChecked {
+			if result.State != agentpb.DeploymentState_RUNNING {
 				t.Fatalf("result=%v", result)
 			}
 			break
 		}
 	}
 	close(f.startOutputCh)
+}
+
+func TestAttachedDeployRequiresVerified(t *testing.T) {
+	f := newFakeDeploymentRuntime()
+	client, cleanup := startContainerServer(t, f)
+	defer cleanup()
+	stream, err := client.AttachContainer(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := deploymentTestRequest(true)
+	req.Verified = false
+	if err := stream.Send(&agentpb.AttachContainerRequest{RequestType: &agentpb.AttachContainerRequest_Deploy{Deploy: req}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("error=%v", err)
+	}
+	if f.prepared.Load() != 0 {
+		t.Fatal("unverified attached deploy prepared a candidate")
+	}
 }

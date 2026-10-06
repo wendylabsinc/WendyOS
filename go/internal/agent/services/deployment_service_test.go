@@ -74,12 +74,12 @@ func (f *fakeDeploymentRuntime) ProbeReadiness(ctx context.Context, _ string, cf
 func newFakeDeploymentRuntime() *fakeDeploymentRuntime {
 	return &fakeDeploymentRuntime{mockContainerdClient: &mockContainerdClient{startOutputCh: make(chan ContainerOutput)}, tx: &fakeDeploymentTransaction{previous: "previous-revision", previousWasRunning: true, closed: make(chan struct{})}}
 }
-func deploymentTestRequest(probe bool) *agentpb.DeployContainerRequest {
+func deploymentTestRequest(probe bool) *agentpb.RunContainerLayersRequest {
 	config := `{"appId":"test-app"}`
 	if probe {
 		config = `{"appId":"test-app","readiness":{"tcpSocket":{"port":8080},"timeoutSeconds":1}}`
 	}
-	return &agentpb.DeployContainerRequest{Container: &agentpb.RunContainerLayersRequest{AppName: "test-app", ImageName: "test:latest", AppConfig: []byte(config)}}
+	return &agentpb.RunContainerLayersRequest{AppName: "test-app", ImageName: "test:latest", AppConfig: []byte(config), Verified: true}
 }
 
 func TestDeployContainerOutcomes(t *testing.T) {
@@ -110,7 +110,7 @@ func TestDeployContainerOutcomes(t *testing.T) {
 			defer cleanup()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			stream, err := client.DeployContainer(ctx, deploymentTestRequest(tc.probe))
+			stream, err := client.RunContainer(ctx, deploymentTestRequest(tc.probe))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -124,10 +124,6 @@ func TestDeployContainerOutcomes(t *testing.T) {
 			}
 			if result.State != tc.state {
 				t.Fatalf("state=%v, want %v: %s", result.State, tc.state, result.Message)
-			}
-			checked := tc.probe && f.tx.activateErr == nil && f.startErr == nil
-			if result.ReadinessChecked != checked || result.Revision != "candidate-revision" {
-				t.Fatalf("bad result: %v", result)
 			}
 			f.tx.mu.Lock()
 			calls := append([]string(nil), f.tx.calls...)
@@ -150,7 +146,7 @@ func TestRollbackKeepsPreviouslyStoppedRevisionOutOfRestartMonitor(t *testing.T)
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := client.DeployContainer(ctx, deploymentTestRequest(true))
+	stream, err := client.RunContainer(ctx, deploymentTestRequest(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,14 +176,12 @@ func TestRollbackKeepsPreviouslyStoppedRevisionOutOfRestartMonitor(t *testing.T)
 func TestDeployContainerRejectsBeforePreparing(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		change func(*agentpb.DeployContainerRequest)
+		change func(*agentpb.RunContainerLayersRequest)
 		code   codes.Code
 	}{
-		{"probe-required", func(r *agentpb.DeployContainerRequest) { r.RequireReadiness = true }, codes.FailedPrecondition},
-		{"timeout-bound", func(r *agentpb.DeployContainerRequest) { r.TimeoutSeconds = 3601 }, codes.InvalidArgument},
-		{"identity", func(r *agentpb.DeployContainerRequest) { r.Container.AppName = "another-app" }, codes.InvalidArgument},
-		{"invalid-probe", func(r *agentpb.DeployContainerRequest) {
-			r.Container.AppConfig = []byte(`{"appId":"test-app","readiness":{"tcpSocket":{"port":0}}}`)
+		{"identity", func(r *agentpb.RunContainerLayersRequest) { r.AppName = "another-app" }, codes.InvalidArgument},
+		{"invalid-probe", func(r *agentpb.RunContainerLayersRequest) {
+			r.AppConfig = []byte(`{"appId":"test-app","readiness":{"tcpSocket":{"port":0}}}`)
 		}, codes.InvalidArgument},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -196,7 +190,7 @@ func TestDeployContainerRejectsBeforePreparing(t *testing.T) {
 			defer cleanup()
 			r := deploymentTestRequest(false)
 			tc.change(r)
-			stream, err := client.DeployContainer(context.Background(), r)
+			stream, err := client.RunContainer(context.Background(), r)
 			if err == nil {
 				_, err = stream.Recv()
 			}
@@ -217,7 +211,7 @@ func TestDeployContainerReadinessFailureRestoresPrevious(t *testing.T) {
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := client.DeployContainer(ctx, deploymentTestRequest(true))
+	stream, err := client.RunContainer(ctx, deploymentTestRequest(true))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +249,7 @@ func TestDeployContainerDisconnectStillCommitsVerifiedCandidate(t *testing.T) {
 	client, cleanup := startContainerServer(t, f)
 	defer cleanup()
 	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := client.DeployContainer(ctx, deploymentTestRequest(true))
+	stream, err := client.RunContainer(ctx, deploymentTestRequest(true))
 	if err != nil {
 		t.Fatal(err)
 	}
