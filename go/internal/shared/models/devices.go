@@ -47,12 +47,22 @@ func (d USBDevice) HumanReadable() string {
 	return strings.TrimSpace(s)
 }
 
+// ProbeFailure is a diagnostic from this scan, never persisted in discovery's
+// address cache. Code is machine-readable; message and next steps are safe to
+// display without exposing raw transport errors.
+type ProbeFailure struct {
+	Code      string   `json:"code"`
+	Message   string   `json:"message"`
+	NextSteps []string `json:"next_steps,omitempty"`
+}
+
 // LANDevice represents a device discovered via mDNS on the local network.
 type LANDevice struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"displayName"`
-	Hostname    string `json:"hostname"`
-	IPAddress   string `json:"ipAddress,omitempty"`
+	ProbeFailure *ProbeFailure `json:"probeFailure,omitempty"`
+	ID           string        `json:"id"`
+	DisplayName  string        `json:"displayName"`
+	Hostname     string        `json:"hostname"`
+	IPAddress    string        `json:"ipAddress,omitempty"`
 	// Addresses is the union of every IP this device was seen at across
 	// interfaces and sightings (e.g. a WiFi IPv4, a USB link-local, an IPv6),
 	// IPAddress-first. It lets the dial ladder try every reachable path when

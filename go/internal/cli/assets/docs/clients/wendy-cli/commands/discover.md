@@ -166,3 +166,24 @@ devices as a JSON array. Each object contains:
 | `address` | string | IP address (or hostname) and port |
 | `version` | string | Agent version (omitted when unknown) |
 | `provisioned` | string | `Provisioned` or `Unprovisioned` for LAN devices (omitted for other transports) |
+
+## Device verification failures
+
+A device can advertise itself on the LAN even when its agent cannot be reached.
+Select a failed row to see the observed failure and a suggested next step.
+A one-shot text scan prints these hints below the table.
+
+Discovery distinguishes refused connections, timeouts, changed device identities,
+TLS rejection, and missing or expired client credentials. A TLS rejection can
+have several causes, including a wrong device clock; it does not by itself prove
+that logging in or refreshing certificates will help. Identity-change warnings
+require you to verify the device before deliberately clearing a pin.
+
+In `--json` output, a failed `lanDevices` entry includes an optional
+`probeFailure` object with `code`, `message`, and `next_steps`. Clipboard JSON
+includes the same object. Codes are `connection_refused`, `timeout`,
+`device_identity_mismatch`, `device_org_mismatch`, `tls_rejected`,
+`credentials_missing`, `credentials_expired`, `probe_cancelled`, or `probe_failed`
+(for an unclassified failure). The diagnostic clears after a successful probe
+and is not saved in the discovery cache. Its absence alone is not proof of a
+successful probe: a device may still be awaiting verification when a scan ends.

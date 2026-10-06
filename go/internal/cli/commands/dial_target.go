@@ -534,9 +534,12 @@ var errDeviceIdentityRefused = errors.New("device identity refused")
 type deviceIdentityRefusalError struct {
 	msg        string
 	diagnostic *devicePinDiagnostic
+	cause      error
 }
 
 func (e *deviceIdentityRefusalError) Error() string { return e.msg }
+
+func (e *deviceIdentityRefusalError) Unwrap() error { return e.cause }
 
 func (e *deviceIdentityRefusalError) Is(target error) bool {
 	return target == errDeviceIdentityRefused
@@ -830,9 +833,11 @@ func spkiRefusal(pinKey string, pm *devicepin.PinMismatchError) error {
 	if unpinArg == "" {
 		unpinArg = named
 	}
-	return refuseIdentity(
+	refusal := refuseIdentity(
 		"device %q presented a different certificate key than the one pinned for %s (pinned %s, now %s); refusing to connect — if its certificate was legitimately reissued, run 'wendy device unpin %s'",
 		named, pm.Key, pm.Want, pm.Got, unpinArg)
+	refusal.cause = pm
+	return refusal
 }
 
 // errVMChangedDuringConnect is a front door's refusal of a connection whose
