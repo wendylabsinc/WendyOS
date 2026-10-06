@@ -116,13 +116,13 @@ func TestRunDirectAppliesDegradedConsensus(t *testing.T) {
 // either: it retries on the backoff ladder, because the servers that were
 // unreachable may be reachable again shortly.
 func TestRunDirectRetriesWhenNotVerified(t *testing.T) {
-	h := newDirectHarness(3, consensusResult(ConfidenceUnbounded, 1))
+	h := newDirectHarness(4, consensusResult(ConfidenceUnbounded, 1))
 	h.run(t)
 
 	if len(h.applied) != 0 {
 		t.Fatalf("applied %v; a single unverified response must not set the clock", h.applied)
 	}
-	want := []time.Duration{backoffSchedule[0], backoffSchedule[1], backoffSchedule[2]}
+	want := []time.Duration{5 * time.Second, 30 * time.Second, time.Minute, time.Minute}
 	if len(h.waits) != len(want) {
 		t.Fatalf("waits = %v, want the backoff ladder %v", h.waits, want)
 	}

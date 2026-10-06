@@ -54,6 +54,26 @@ func TestCloudDefaultIdentityUsesV2DevicePrincipal(t *testing.T) {
 	}
 }
 
+func TestCloudDefaultIdentityUsesPKIBindingInsteadOfAssetID(t *testing.T) {
+	const tenant = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	const assetID = "d41e332f-3e9e-43e7-a001-64d38d9708a0"
+	deviceName := "c42efa0d-d443-452f-8128-b093fe0a3cc6"
+	auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test"}}}
+	asset := cloudDiscoveryDevice{v2: &cloudpbv2.Asset{Id: assetID, PkiDeviceName: &deviceName}, key: assetID}
+	actual := cloudDiscoveryIdentity(auth, asset)
+	want := certs.DeviceSPIFFEURI(tenant, deviceName)
+	if actual.Principal != want || actual.EntityID != deviceName {
+		t.Fatalf("Cloud identity = %+v, want bound device %s", actual, want)
+	}
+	if err := verifyCloudDefaultIdentity("simsim", &certs.WendyIdentity{Principal: want}, actual); err != nil {
+		t.Fatalf("bound device refused: %v", err)
+	}
+	wrong := certs.WendyIdentity{Principal: certs.DeviceSPIFFEURI(tenant, assetID)}
+	if err := verifyCloudDefaultIdentity("simsim", &wrong, actual); !errors.Is(err, errDeviceIdentityRefused) {
+		t.Fatalf("database ID accepted as device identity: %v", err)
+	}
+}
+
 func TestCloudDefaultSelectorUsesSavedAssetID(t *testing.T) {
 	defaultName := "wendyos-voice-agent.local"
 	legacy := certs.WendyIdentity{OrgID: 64, EntityType: certs.EntityAsset, EntityID: "486"}

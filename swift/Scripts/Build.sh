@@ -48,7 +48,11 @@ ARTIFACT_NAME="wendy-agent-macos-arm64-${VERSION}.zip"
 ARTIFACT_PATH="${OUTPUT_DIR}/${ARTIFACT_NAME}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-wendy-notary-profile}"
 ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/Support/WendyAgentMac.entitlements"
-SYSTEM_EXTENSION_ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/WendyNet/WendyNet.entitlements"
+SYSTEM_EXTENSION_ENTITLEMENTS_PATH="$SWIFT_DIR/WendyAgentMac/WendyAgentMacNetProxy/WendyAgentMacNetProxy.entitlements"
+RELEASE_VALIDATOR_PATH="$SCRIPT_DIR/ValidateMacRelease.sh"
+LAUNCH_SMOKE_TEST_PATH="$SCRIPT_DIR/SmokeTestMacReleaseLaunch.sh"
+APP_PROVISIONING_PROFILE_PATH="${APP_PROVISIONING_PROFILE_PATH:-}"
+NET_PROXY_PROVISIONING_PROFILE_PATH="${NET_PROXY_PROVISIONING_PROFILE_PATH:-}"
 RUNTIME_RESOURCES_PATH="$SWIFT_DIR/WendyAgentMac/Resources/runtime"
 RUNTIME_KERNEL_PATH="$RUNTIME_RESOURCES_PATH/vmlinuz-arm64"
 RUNTIME_INITRAMFS_PATH="$RUNTIME_RESOURCES_PATH/initramfs-arm64.img"
@@ -84,13 +88,25 @@ if [ -z "${SIGNING_IDENTITY:-}" ]; then
   exit 1
 fi
 
-if [ ! -f "$ENTITLEMENTS_PATH" ]; then
-  echo "Missing entitlements file: $ENTITLEMENTS_PATH" >&2
-  exit 1
-fi
-if [ ! -f "$SYSTEM_EXTENSION_ENTITLEMENTS_PATH" ]; then
-  echo "Missing entitlements file: $SYSTEM_EXTENSION_ENTITLEMENTS_PATH" >&2
-  exit 1
+for required_file in "$ENTITLEMENTS_PATH" "$SYSTEM_EXTENSION_ENTITLEMENTS_PATH"; do
+  if [ ! -f "$required_file" ]; then
+    echo "Missing entitlements file: $required_file" >&2
+    exit 1
+  fi
+done
+if [[ "$DEV_BUILD" -ne 1 ]]; then
+  for required_file in "$RELEASE_VALIDATOR_PATH" "$LAUNCH_SMOKE_TEST_PATH"; do
+    if [[ ! -x "$required_file" ]]; then
+      echo "Missing executable release validation script: $required_file" >&2
+      exit 1
+    fi
+  done
+  for profile_path in "$APP_PROVISIONING_PROFILE_PATH" "$NET_PROXY_PROVISIONING_PROFILE_PATH"; do
+    if [[ -z "$profile_path" || ! -r "$profile_path" ]]; then
+      echo "Missing readable Developer ID provisioning profile: ${profile_path:-<unset>}" >&2
+      exit 1
+    fi
+  done
 fi
 for runtime_artifact in "$RUNTIME_KERNEL_PATH" "$RUNTIME_INITRAMFS_PATH"; do
   if [ ! -r "$runtime_artifact" ]; then
@@ -169,7 +185,14 @@ xcodebuild build \
 
 ditto "$BUILT_APP_PATH" "$APP_PATH"
 
-SYSTEM_EXTENSION_PATH="$APP_PATH/Contents/Library/SystemExtensions/sh.wendy.WendyAgentMac.WendyNet.systemextension"
+SYSTEM_EXTENSION_PATH="$APP_PATH/Contents/Library/SystemExtensions/sh.wendy.WendyAgentMac.NetProxy.systemextension"
+
+if [[ "$DEV_BUILD" -ne 1 ]]; then
+  cp "$APP_PROVISIONING_PROFILE_PATH" "$APP_PATH/Contents/embedded.provisionprofile"
+  cp \
+    "$NET_PROXY_PROVISIONING_PROFILE_PATH" \
+    "$SYSTEM_EXTENSION_PATH/Contents/embedded.provisionprofile"
+fi
 
 while IFS= read -r nested_code; do
   sign_path "$nested_code"
@@ -181,6 +204,9 @@ sign_path "$SYSTEM_EXTENSION_PATH" "$SYSTEM_EXTENSION_ENTITLEMENTS_PATH"
 sign_path "$APP_PATH" "$ENTITLEMENTS_PATH"
 
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+if [[ "$DEV_BUILD" -ne 1 ]]; then
+  "$RELEASE_VALIDATOR_PATH" "$APP_PATH" "$SIGNING_IDENTITY"
+fi
 
 if [[ "$DEV_BUILD" -ne 1 ]]; then
   ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"
@@ -193,11 +219,24 @@ if [[ "$DEV_BUILD" -ne 1 ]]; then
   xcrun stapler staple -v "$APP_PATH"
   xcrun stapler validate "$APP_PATH"
   spctl -a -vv --type exec "$APP_PATH"
+  "$RELEASE_VALIDATOR_PATH" "$APP_PATH" "$SIGNING_IDENTITY"
+  "$LAUNCH_SMOKE_TEST_PATH" "$APP_PATH"
 fi
 
 ditto -c -k --sequesterRsrc --keepParent \
   "$APP_PATH" \
   "$ARTIFACT_PATH"
+
+if [[ "$DEV_BUILD" -ne 1 ]]; then
+  ARTIFACT_VALIDATION_DIR=$(mktemp -d)
+  trap 'rm -rf "$ARTIFACT_VALIDATION_DIR"' EXIT
+  ditto -x -k "$ARTIFACT_PATH" "$ARTIFACT_VALIDATION_DIR"
+  "$RELEASE_VALIDATOR_PATH" \
+    "$ARTIFACT_VALIDATION_DIR/$APP_NAME" \
+    "$SIGNING_IDENTITY"
+  rm -rf "$ARTIFACT_VALIDATION_DIR"
+  trap - EXIT
+fi
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
   {

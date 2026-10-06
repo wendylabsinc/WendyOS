@@ -30,6 +30,8 @@ func DeviceEndpoint(cloud, override string) (string, error) {
 		host = "devices.dev.wendy.sh"
 	case "api.wendy.sh":
 		host = "devices.wendy.sh"
+	case "api.wendy.dev":
+		host = "devices.wendy.dev"
 	}
 	return net.JoinHostPort(host, port), nil
 }

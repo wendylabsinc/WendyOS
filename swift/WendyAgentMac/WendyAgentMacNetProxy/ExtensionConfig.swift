@@ -3,7 +3,7 @@ import WendyAgentCore
 import os
 
 private let extensionConfigLog = Logger(
-    subsystem: "sh.wendy.WendyAgentMac.WendyNet",
+    subsystem: "sh.wendy.WendyAgentMac.NetProxy",
     category: "ExtensionConfig"
 )
 

@@ -754,7 +754,7 @@ func newDeviceSetupCmd() *cobra.Command {
 				if loadCLICert() == nil {
 					fmt.Println("You are not logged in to Wendy Cloud.")
 					if confirmFn("Log in now?") {
-						if loginErr := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); loginErr != nil {
+						if loginErr := relogin(ctx, firstAuthEntryForRelogin()); loginErr != nil {
 							return fmt.Errorf("login failed: %w", loginErr)
 						}
 					}
@@ -1016,10 +1016,7 @@ func runEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth
 	} else {
 		cloudTransport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	dialOptions, err := withCloudRequestSigning(auth, cloudTransport)
-	if err != nil {
-		return err
-	}
+	dialOptions := append([]grpc.DialOption{cloudTransport}, dpopDialOptions(auth)...)
 	cloudConn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return fmt.Errorf("connecting to cloud: %w", err)
@@ -1277,10 +1274,7 @@ func dialCloud(ctx context.Context, target, deviceCloudHost string) (*grpc.Clien
 		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
 
-	dialOptions, dialErr := withCloudRequestSigning(auth, transport)
-	if dialErr != nil {
-		return nil, nil, dialErr
-	}
+	dialOptions := append([]grpc.DialOption{transport}, dpopDialOptions(auth)...)
 	cloudConn, dialErr := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if dialErr != nil {
 		return nil, nil, fmt.Errorf("connecting to cloud: %w", dialErr)

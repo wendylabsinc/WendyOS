@@ -42,7 +42,8 @@ func acquireAuthRefreshLock(ctx context.Context) (func(), error) {
 // overwrites another session on the same Cloud endpoint.
 func sameOAuthSession(a, b *config.AuthConfig) bool {
 	return a.CloudDashboard == b.CloudDashboard && a.CloudGRPC == b.CloudGRPC &&
-		a.OAuthIssuer == b.OAuthIssuer && a.OrganizationKey() == b.OrganizationKey()
+		a.OAuthIssuer == b.OAuthIssuer && a.ServiceAccount == b.ServiceAccount &&
+		a.OrganizationKey() == b.OrganizationKey()
 }
 
 func reloadOAuthSession(auth *config.AuthConfig) error {

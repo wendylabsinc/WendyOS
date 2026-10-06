@@ -129,9 +129,11 @@ New Orin releases default to full USB recovery on macOS, Linux, and Windows. Sup
 - Orin Nano P3767-0005 on P3768-0000, NVMe.
 - AGX Orin P3701-0005 on P3737-0000, NVMe or eMMC.
 
-The CLI RCM-boots a signed recovery initrd, correlates its mass-storage LUNs to the selected physical USB port and session, and reads `device.json` before any persistent write. A module/carrier mismatch aborts before the flash-package handoff. It then writes/ejects the flash package, writes the exported `nvme0n1` or `mmcblk0` according to the signed partition layout, collects device logs, and reports success only when the final status is `SUCCESS`.
+The CLI RCM-boots a signed recovery initrd, correlates its mass-storage LUNs to the selected physical USB port and session, and reads `device.json` before any persistent write. A module/carrier mismatch aborts before the flash-package handoff. It then writes/ejects the flash package, writes the target storage (NVMe or eMMC, exported as a second disk of the same USB device) according to the signed partition layout, collects device logs, and reports success only when the final status is `SUCCESS`. With a recovery initrd that advertises single-enumeration support, the Jetson keeps one USB connection and switches the disks’ media in place. Older recovery packages continue using their existing disconnect/reconnect handoffs.
 
-Full recovery erases QSPI and every partition on the chosen storage, including `/data`. After the handoff, the first Ctrl+C warns that the device may be partially written; a second Ctrl+C confirms the abort. On Windows, the first flash installs a WinUSB driver for the Jetson recovery device and raw disk writes require elevation — expect a single administrator (UAC) prompt as soon as the flash mode is settled for a Jetson Orin target (answered at the interactive flash-mode question, or pinned by `--rootfs-only`/`--storage emmc`/a non-interactive run); accepting it continues the command, including the remaining setup questions, in a new elevated console window. If Windows offers to format one of the Jetson's flashing disks mid-flash, always choose Cancel.
+Full recovery erases QSPI and every partition on the chosen storage, including `/data`. After the handoff, the first Ctrl+C warns that the device may be partially written; a second Ctrl+C confirms the abort. If the Jetson reboots into USB recovery mode mid-flash, the install stops and has to be started again; with single enumeration, the CLI also prints a reconnect hint when the flashing gadget stays off USB. On Windows, the first flash installs a WinUSB driver for the Jetson recovery device and raw disk writes require elevation — expect a single administrator (UAC) prompt as soon as the flash mode is settled for a Jetson Orin target (answered at the interactive flash-mode question, or pinned by `--rootfs-only`/`--storage emmc`/a non-interactive run); accepting it continues the command, including the remaining setup questions, in a new elevated console window. If Windows offers to format one of the Jetson's flashing disks mid-flash, always choose Cancel. On macOS, `wendy` claims the flashing disks so macOS neither mounts them nor reports them as unreadable; if such a prompt still appears, choose Ignore, as Eject interrupts the flash. On Linux, the `eject` tool must be installed (Debian/Ubuntu: `apt install eject`); with an initrd that supports single enumeration, the CLI checks for it before the command handoff and stops the install if it is missing.
+
+Orin recovery retains the schema-v2 flashpack format. Published command packages default to the legacy USB handoff, so existing CLIs can still use them. A newer CLI validates the initrd’s identity and optional capability, then selects single enumeration by adding `conf/usb-mode` through an ext4 library to a private copy; the downloaded cache is preserved. Packages already selecting single enumeration need no editing and require a capable initrd. Unsupported modes are refused before the command handoff.
 
 `--drive`, `--no-bmap`, and `--yes-overwrite-internal` apply only with rootfs-only imaging. eMMC has no rootfs-only mode. Rootfs-only emits a warning because it does not update QSPI. Versions that predate recovery flashpacks fall back to their legacy SD/NVMe image automatically (with a warning; `--rootfs-only=false` turns the fallback into an error); a recovery-capable flash never falls back to raw imaging on failure.
 
@@ -172,6 +174,16 @@ Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wen
 `/data` is blanked rather than overwritten: the flash clears the head of the filesystem and the device recreates it on first boot. That makes the old contents unreachable, but it is not a secure erase — blocks behind the superblock are only overwritten as they are reused. Do not rely on it before handing a board to someone else.
 
 Provisioning works as it does on Thor: the bundle ships no config image, so wendy builds one on the host and programs it into the config partition. `--wifi`, `--device-name` and `--pre-enroll` all apply, and a freshly downloaded `wendy-agent` is seeded on every flash.
+
+## Arduino UNO Q path
+
+```sh
+wendy install --device-type arduino-uno-q
+```
+
+The UNO Q is flashed over EDL like the Dragonwing boards, with the same chip-id check, factory reset and provisioning. To enter EDL, unplug the board, short its two EDL pins with a jumper, and plug in the USB-C cable ([Arduino's guide](https://docs.arduino.cc/software/app-lab/configure/flash/) shows the pins); the short can come off once the board is detected. After success, unplug the board, remove the short and plug it back in.
+
+The UNO Q keeps its boot firmware on the same eMMC, so the flash also rewrites it (with Arduino's own ABL and U-Boot) and replaces the Debian image, which Arduino's flasher restores.
 
 ## Linux Desktop / Headless Mac path
 

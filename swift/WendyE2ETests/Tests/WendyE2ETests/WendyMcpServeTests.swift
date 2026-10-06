@@ -75,9 +75,11 @@ struct `'wendy mcp serve'` {
                 let toolsResult = try #require(toolsResponse["result"] as? [String: Any])
                 let tools = try #require(toolsResult["tools"] as? [[String: Any]])
                 let names = Set(tools.compactMap { $0["name"] as? String })
-                #expect(names.count == 15)
+                #expect(names.count == tools.count)
+                #expect(tools.count == 16)
                 #expect(names.contains("wendy_status"))
                 #expect(names.contains("wendy_tools"))
+                #expect(names.contains("auth_login"))
                 #expect(names.contains("device_connect"))
                 #expect(!names.contains("cloud_connect"))
             }

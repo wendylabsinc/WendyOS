@@ -284,7 +284,8 @@ func detectGPUInfoFrom(devices []gpudiscovery.Device) gpuInfo {
 }
 
 // FastRPC transport nodes; the "-secure" ones are the root-only signed-PD path.
-// Kept in step with the npu entitlement in agent/oci, which grants the same set.
+// The npu entitlement in agent/oci grants every non-secure node, while detection
+// counts only a compute DSP's (isComputeDSPNode).
 // Behind vars so tests can point them at a fixture tree.
 var (
 	fastrpcDeviceGlob   = "/dev/fastrpc-*"
@@ -311,13 +312,20 @@ func detectNPUInfo() npuInfo {
 		return npuInfo{}
 	}
 	for _, node := range nodes {
-		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+		if strings.HasSuffix(node, fastrpcSecureSuffix) || !isComputeDSPNode(node) {
 			continue
 		}
 		vendor := dspVendor()
 		return npuInfo{hasNPU: true, vendor: vendor, backends: npuBackends(vendor)}
 	}
 	return npuInfo{}
+}
+
+// isComputeDSPNode reports whether a FastRPC node belongs to a compute DSP. The
+// audio, modem and sensor DSPs expose FastRPC too, but run no app offload.
+func isComputeDSPNode(node string) bool {
+	name := filepath.Base(node)
+	return strings.HasPrefix(name, "fastrpc-cdsp") || strings.HasPrefix(name, "fastrpc-gdsp")
 }
 
 // npuBackends names the runtime an app can use on a reachable NPU. The vendor

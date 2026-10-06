@@ -3,36 +3,61 @@ syntax = "proto3";
 package wendycloud.v2;
 
 import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
 
 // Service for issuing, refreshing, revoking, and querying X.509 certificates
 // for assets within an organization. Backed by Google Cloud Certificate
 // Authority Service (CAS).
 service CertificateService {
   // Issue a new X.509 certificate for an asset using a CSR (PEM PKCS#10).
-  rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse);
+  // Deprecated: unimplemented, removed by WDY-2900.
+  rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse) {
+    option deprecated = true;
+  }
 
   // Refresh/rotate the certificate by submitting a new CSR for the same asset.
-  rpc RefreshCertificate(RefreshCertificateRequest) returns (RefreshCertificateResponse);
+  // Deprecated: unimplemented, removed by WDY-2900.
+  rpc RefreshCertificate(RefreshCertificateRequest) returns (RefreshCertificateResponse) {
+    option deprecated = true;
+  }
 
   // Revoke an issued certificate.
-  rpc RevokeCertificate(RevokeCertificateRequest) returns (RevokeCertificateResponse);
+  // Deprecated: superseded by PKIAdminService.RevokeIssuedCertificate (WDY-3409).
+  // Signed; payload_type "wendycloud.v2.RevokeCertificateRequest".
+  rpc RevokeCertificate(SignedRequest) returns (RevokeCertificateResponse) {
+    option (wendy.signed_request) = true;
+    option deprecated = true;
+  }
 
   // Get current status/details of a certificate.
-  rpc GetCertificate(GetCertificateRequest) returns (Certificate);
+  // Deprecated: superseded by PKIAdminService.GetIssuedCertificate (WDY-3409).
+  rpc GetCertificate(GetCertificateRequest) returns (Certificate) {
+    option deprecated = true;
+  }
 
   // List certificates for an asset (history and current) using server streaming
   // and offset/limit pagination (matches OrganizationService).
-  rpc ListCertificates(ListCertificatesRequest) returns (stream ListCertificatesResponse);
+  // Deprecated: superseded by PKIAdminService.ListIssuedCertificates (WDY-3409).
+  rpc ListCertificates(ListCertificatesRequest) returns (stream ListCertificatesResponse) {
+    option deprecated = true;
+  }
 
   // Retrieve the CA trust bundle used to validate issued certificates.
   rpc GetCaBundle(GetCaBundleRequest) returns (GetCaBundleResponse);
 
   // CLI-only: Create a short-lived enrollment token to give to an asset's `wendy-agent`
   // `wendy-agent` will use this token to ask for `IssueCertificateRequest` RPCs
-  rpc CreateAssetEnrollmentToken(CreateAssetEnrollmentTokenRequest) returns (CreateAssetEnrollmentTokenResponse);
+  // Deprecated: unimplemented, removed by WDY-2900/2901.
+  rpc CreateAssetEnrollmentToken(CreateAssetEnrollmentTokenRequest) returns (CreateAssetEnrollmentTokenResponse) {
+    option deprecated = true;
+  }
 
   // Dashboard-only: Create a short-lived enrollment token for a user (for companion SDK or Wendy CLI).
-  rpc CreateUserEnrollmentToken(CreateUserEnrollmentTokenRequest) returns (CreateUserEnrollmentTokenResponse);
+  // Deprecated: unimplemented, removed by WDY-2900/2901.
+  rpc CreateUserEnrollmentToken(CreateUserEnrollmentTokenRequest) returns (CreateUserEnrollmentTokenResponse) {
+    option deprecated = true;
+  }
 
   // Get certificate metadata (organization, asset, or user) from the client's mTLS certificate
   rpc GetCertificateMetadata(GetCertificateMetadataRequest) returns (GetCertificateMetadataResponse);

@@ -125,6 +125,11 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             -skipMacroValidation
 
+      - name: Test macOS provisioning validation
+        working-directory: swift
+        shell: bash
+        run: python3 ./Scripts/ValidateMacProvisioning_test.py
+
   lint:
     name: Lint Swift Sources
     runs-on: ubuntu-latest

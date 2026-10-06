@@ -4,18 +4,26 @@ package wendycloud.v2;
 
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
 import "wendycloud/v2/organizations.proto";
+import "wendycloud/v2/signed_request.proto";
 
 service NotificationService {
   // Legacy single-user creation API. Kept for existing dashboard and legacy clients.
   // MIGRATION(wendycloud.v2): Remove this RPC and request; see API_V2_MIGRATION.md.
-  rpc CreateNotification(CreateNotificationRequest) returns (Notification) {
+  // Signed; payload_type "wendycloud.v2.CreateNotificationRequest".
+  rpc CreateNotification(SignedRequest) returns (Notification) {
+    option (wendy.signed_request) = true;
     option deprecated = true;
   }
   // Creates per-user Notifications for the union of users, organization teams, and roles.
   // User credentials and provisioned-device credentials are both supported.
   // notification_id is the caller-chosen resource UUID. Any reuse of its canonical UUID,
   // including an otherwise identical request, fails with ALREADY_EXISTS.
+  // A provisioned device is authenticated by its devices-mTLS leaf alone. The
+  // x-wendy-device-uri, x-wendy-device-certificate-serial,
+  // x-wendy-device-timestamp and x-wendy-device-signature proof headers are
+  // retired with no body replacement (WDY-3464).
   rpc CreateNotificationV2(CreateNotificationV2Request) returns (CreateNotificationV2Response);
   // Legacy server-streamed offset pagination.
   rpc ListNotifications(ListNotificationsRequest) returns (stream ListNotificationsResponse);
@@ -28,11 +36,16 @@ service NotificationService {
   // Performs one stored custom control for the authenticated recipient. Cloud loads the
   // canonical control and derives publisher routing; the caller supplies no payload.
   rpc PerformNotificationControlAction(PerformNotificationControlActionRequest) returns (PerformNotificationControlActionResponse);
-  rpc DeleteNotification(DeleteNotificationRequest) returns (DeleteNotificationResponse);
+  rpc DeleteNotification(DeleteNotificationRequest) returns (DeleteNotificationResponse) {
+    option deprecated = true;
+  }
+  rpc DeleteNotifications(DeleteNotificationsRequest) returns (DeleteNotificationsResponse);
+  rpc DeleteNotificationsThrough(DeleteNotificationsThroughRequest) returns (DeleteNotificationsThroughResponse);
   rpc MarkAsRead(MarkAsReadRequest) returns (MarkAsReadResponse) {
     option deprecated = true;
   }
   rpc SetNotificationReadStatus(SetNotificationReadStatusRequest) returns (SetNotificationReadStatusResponse);
+  rpc SetNotificationReadStatusThrough(SetNotificationReadStatusThroughRequest) returns (SetNotificationReadStatusThroughResponse);
   rpc CountNotifications(CountNotificationsRequest) returns (CountNotificationsResponse);
   rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse) {
     option deprecated = true;
@@ -340,6 +353,29 @@ message DeleteNotificationResponse {
   bool success = 1;
 }
 
+message DeleteNotificationsRequest {
+  // Canonical UUIDs; at most 200. Unknown or unauthorized IDs fail the entire request.
+  repeated string notification_ids = 1;
+}
+
+message DeleteNotificationsResponse {
+  // Number of previously active recipient projections deleted. Duplicate and
+  // already-deleted IDs do not increase this count.
+  int32 deleted_count = 1;
+}
+
+message DeleteNotificationsThroughRequest {
+  string organization_id = 1;
+  optional NotificationSeverity severity_filter = 2;
+  // Required canonical UUID of the newest Notification in the caller's current view.
+  // The mutation includes this Notification and all older matching Notifications.
+  string through_notification_id = 3;
+}
+
+message DeleteNotificationsThroughResponse {
+  int32 deleted_count = 1;
+}
+
 message MarkAsReadRequest {
   // Legacy recipient projection IDs.
   repeated string notification_ids = 1;
@@ -359,6 +395,20 @@ message SetNotificationReadStatusRequest {
 }
 
 message SetNotificationReadStatusResponse {
+  int32 updated_count = 1;
+}
+
+message SetNotificationReadStatusThroughRequest {
+  string organization_id = 1;
+  optional NotificationSeverity severity_filter = 2;
+  // Required; NOTIFICATION_READ_STATUS_UNSPECIFIED is invalid.
+  NotificationReadStatus read_status = 3;
+  // Required canonical UUID of the newest Notification in the caller's current view.
+  // The mutation includes this Notification and all older matching Notifications.
+  string through_notification_id = 4;
+}
+
+message SetNotificationReadStatusThroughResponse {
   int32 updated_count = 1;
 }
 

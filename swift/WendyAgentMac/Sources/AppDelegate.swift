@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private let wendyAgent = WendyAgent(configuration: .default)
     private let localBuildService = WendyRuntimeVM()
     private let meshVPN = MeshVPNController.shared
+    private let meshVPNIsAvailable = MeshSystemExtensionInstaller.isBundled
     private let welcomeAndPermissions = WelcomeAndPermissions()
     private var statusMenuController: StatusMenuController?
     private var welcomeAndPermissionsWindow: NSWindow?
@@ -33,10 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 wendyAgent: self.wendyAgent,
                 localBuildService: self.localBuildService,
                 meshVPN: self.meshVPN,
+                meshVPNIsAvailable: self.meshVPNIsAvailable,
                 delegate: self
             )
 
-            await self.meshVPN.connectAutomatically()
+            if self.meshVPNIsAvailable {
+                await self.meshVPN.connectAutomatically()
+            }
 
             // Registered before start() so the services the agent builds at
             // startup capture it. A self-update must end this process without
@@ -89,6 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         _ controller: StatusMenuController,
         didSetMeshVPNEnabled enabled: Bool
     ) {
+        guard self.meshVPNIsAvailable else { return }
+
         Task {
             if enabled {
                 await self.meshVPN.connect()

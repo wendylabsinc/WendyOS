@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -263,8 +264,9 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 			return svc.RevokeACMECertificate(ctx, &agentpbv2.RevokeACMECertificateRequest{ExpectedPrincipalUri: p, ExpectedCertificateSha256: fingerprint})
 		},
 		delete: func(ctx context.Context, id string) error {
-			_, err := assets.DeleteAsset(rpcctx, &cloudpbv2.DeleteAssetRequest{Id: id})
-			return err
+			return cloudrequest.Invoke(rpcctx, cloudConn, auth,
+				cloudpbv2.AssetService_DeleteAsset_FullMethodName,
+				&cloudpbv2.DeleteAssetRequest{Id: id}, &cloudpbv2.DeleteAssetResponse{})
 		},
 		reset: func(ctx context.Context, p, fingerprint string) error {
 			_, err := svc.Unprovision(ctx, &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: p, ExpectedCertificateSha256: fingerprint})
