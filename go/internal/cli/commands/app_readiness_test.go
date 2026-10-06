@@ -76,6 +76,22 @@ func TestAwaitAppReady(t *testing.T) {
 		calls := 0
 		return func(context.Context) bool { calls++; return calls >= n }
 	}
+	// neverConfirmed's probe passes and fires its deadline, while every state
+	// poll after the first fails.
+	neverConfirmedDeadline := make(chan time.Time, 1)
+	neverConfirmed := waitReadyChecks{
+		tick:     bufferedTicks(1),
+		deadline: neverConfirmedDeadline,
+		limit:    30 * time.Second,
+		probe: func(context.Context) bool {
+			select {
+			case neverConfirmedDeadline <- time.Time{}:
+			default:
+			}
+			return true
+		},
+		state: scriptedState([]*agentpb.AppContainer{runningSnapshot(0)}, nil, errors.New("agent busy"), errors.New("agent busy"), errors.New("agent busy")),
+	}
 	for _, tc := range []struct {
 		name          string
 		checks        waitReadyChecks
@@ -120,7 +136,7 @@ func TestAwaitAppReady(t *testing.T) {
 		{
 			// Listed crash-looping, as after earlier restarts: still exit code 0.
 			name:          "no probe: exits cleanly inside the window, listed crash-looping",
-			checks:        waitReadyChecks{tick: bufferedTicks(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(2), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "exited", 2)})},
+			checks:        waitReadyChecks{baseline: 2, tick: bufferedTicks(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(2), appSnapshot("app", agentpb.AppRunningState_CRASH_LOOPING, 0, "exited", 2)})},
 			status:        waitReadyStatusCrashed,
 			readiness:     readinessNotChecked,
 			class:         "app_crashed",
@@ -129,11 +145,36 @@ func TestAwaitAppReady(t *testing.T) {
 		},
 		{
 			name:          "no probe: restarted by the restart policy inside the window",
-			checks:        waitReadyChecks{tick: bufferedTicks(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(2), runningSnapshot(3)})},
+			checks:        waitReadyChecks{baseline: 2, tick: bufferedTicks(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(2), runningSnapshot(3)})},
 			status:        waitReadyStatusCrashed,
 			readiness:     readinessNotChecked,
 			class:         "app_crashed",
 			wantInMessage: "restarted 1 time(s)",
+		},
+		{
+			// The run started the app, so the count began at 0: a restart
+			// before the first poll is still a restart (thombles, #2102).
+			name:          "no probe: restarted before the first poll",
+			checks:        waitReadyChecks{tick: make(chan time.Time), deadline: firedDeadline(), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(1)})},
+			status:        waitReadyStatusCrashed,
+			readiness:     readinessNotChecked,
+			class:         "app_crashed",
+			wantInMessage: "restarted 1 time(s)",
+		},
+		{
+			name:          "probe: restarted before the first poll",
+			checks:        waitReadyChecks{tick: bufferedTicks(1), probe: probeOnCall(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(1)})},
+			status:        waitReadyStatusCrashed,
+			readiness:     readinessFailed,
+			class:         "app_crashed",
+			wantInMessage: "restarted 1 time(s)",
+		},
+		{
+			// A followed app's earlier restarts are not this run's to report.
+			name:      "no probe: restarts before a followed app's baseline",
+			checks:    waitReadyChecks{baseline: 2, tick: make(chan time.Time), deadline: firedDeadline(), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(2)})},
+			status:    waitReadyStatusRunning,
+			readiness: readinessNotChecked,
 		},
 		{
 			name:          "probe never passes",
@@ -148,6 +189,24 @@ func TestAwaitAppReady(t *testing.T) {
 			checks:    waitReadyChecks{tick: bufferedTicks(3), probe: probeOnCall(2), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(0)}, nil, errors.New("agent busy"))},
 			status:    waitReadyStatusReady,
 			readiness: readinessPassed,
+		},
+		{
+			// An unread state does not confirm a passed probe; the next
+			// tick's poll then shows the crash (thombles, #2102).
+			name:      "probe passes but the confirmation poll fails",
+			checks:    waitReadyChecks{tick: bufferedTicks(2), probe: probeOnCall(1), state: scriptedState([]*agentpb.AppContainer{runningSnapshot(0), runningSnapshot(0), runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)}, nil, nil, errors.New("agent busy"))},
+			status:    waitReadyStatusCrashed,
+			readiness: readinessFailed,
+			class:     "app_crashed",
+			exitCode:  3,
+		},
+		{
+			name:          "probe passes but the app's state is never confirmed",
+			checks:        neverConfirmed,
+			status:        waitReadyStatusNotReady,
+			readiness:     readinessFailed,
+			class:         "readiness_timeout",
+			wantInMessage: "accepted connections within 30s, but its state could not be read to confirm it is still running: agent busy",
 		},
 		{
 			name:      "probe passes but the app is gone by the confirmation poll",
@@ -207,7 +266,7 @@ func TestWaitForAppReadyProbesTheLANAddress(t *testing.T) {
 		}},
 	}
 	cfg := &appconfig.AppConfig{AppID: "app", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementHTTP, Port: port}}}
-	out := waitForAppReady(context.Background(), conn, cfg, runOptions{})
+	out := waitForAppReady(context.Background(), conn, cfg, runOptions{}, startedAppBaseline(cfg))
 	if out.Status != waitReadyStatusReady || out.err != nil {
 		t.Fatalf("outcome = %+v, want ready", out)
 	}
@@ -244,7 +303,7 @@ func TestWaitForAppReadyCloudUnreachableLANUsesTheStabilityWindow(t *testing.T) 
 		}},
 	}
 	cfg := &appconfig.AppConfig{AppID: "app", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementHTTP, Port: port}}}
-	out := waitForAppReady(context.Background(), conn, cfg, runOptions{readinessTimeout: waitReadyTestWindow})
+	out := waitForAppReady(context.Background(), conn, cfg, runOptions{readinessTimeout: waitReadyTestWindow}, startedAppBaseline(cfg))
 	if out.Status != waitReadyStatusRunning || out.Readiness != readinessNotChecked || out.URL != "" {
 		t.Fatalf("outcome = %+v, want running / not_checked without a URL", out)
 	}
@@ -279,7 +338,7 @@ func TestWaitForAppReadyCloudReachableLANProbes(t *testing.T) {
 		}},
 	}
 	cfg := &appconfig.AppConfig{AppID: "app", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementHTTP, Port: port}}}
-	out := waitForAppReady(context.Background(), conn, cfg, runOptions{readinessTimeout: 5 * time.Second})
+	out := waitForAppReady(context.Background(), conn, cfg, runOptions{readinessTimeout: 5 * time.Second}, startedAppBaseline(cfg))
 	if out.Status != waitReadyStatusReady || out.Readiness != readinessPassed || out.err != nil {
 		t.Fatalf("outcome = %+v, want ready / passed", out)
 	}
@@ -325,7 +384,7 @@ func TestWaitReadyAgentSocketUsesTheStabilityWindow(t *testing.T) {
 	var stdout string
 	stderr := captureStderr(t, func() {
 		stdout = captureStdout(t, func() {
-			runErr = waitReadyAfterDetachedStart(context.Background(), conn, cfg, runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow})
+			runErr = waitReadyAfterDetachedStart(context.Background(), conn, cfg, runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow}, startedAppBaseline(cfg))
 		})
 	})
 	if runErr != nil {
@@ -416,7 +475,9 @@ func TestWaitReadyAfterDetachedStartInterruptedPrintsNothing(t *testing.T) {
 	fake := &scriptedContainerClient{snapshots: []*agentpb.AppContainer{runningSnapshot(0)}}
 	conn := &grpcclient.AgentConnection{Host: "dev", ContainerService: fake}
 	var err error
-	stdout := captureStdout(t, func() { err = waitReadyAfterDetachedStart(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}) })
+	stdout := captureStdout(t, func() {
+		err = waitReadyAfterDetachedStart(ctx, conn, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
+	})
 	if !errors.Is(err, context.Canceled) || stdout != "" {
 		t.Fatalf("err = %v stdout = %q, want context.Canceled and no JSON", err, stdout)
 	}
@@ -703,12 +764,19 @@ func TestDetachedWaitReadyJSONStdoutIsExactlyOneObject(t *testing.T) {
 			return err
 		}
 	}
+	// A run that started the app judges restarts from 0, as the start reset
+	// the count; the fast path that found it running keeps its count.
+	restartedEarly := []*agentpb.AppContainer{runningSnapshot(1)}
 	for _, tc := range []struct {
 		name   string
 		run    func(*testing.T) error
 		status string
 	}{
 		{"chunk-diff healthy", chunkDiff(healthy), waitReadyStatusRunning},
+		{"chunk-diff restarted before the first poll", chunkDiff(restartedEarly), waitReadyStatusCrashed},
+		{"registry restarted before the first poll", registry(restartedEarly), waitReadyStatusCrashed},
+		{"no-change fast path started, restarted before the first poll", fastPath(fastPathScriptedClient{stoppedThenStarted(restartedEarly...)}), waitReadyStatusCrashed},
+		{"no-change fast path running with earlier restarts", fastPath(fastPathScriptedClient{&scriptedContainerClient{snapshots: []*agentpb.AppContainer{runningSnapshot(2)}}}), waitReadyStatusRunning},
 		{"chunk-diff crash", chunkDiff(crashed), waitReadyStatusCrashed},
 		{"registry healthy", registry(healthy), waitReadyStatusRunning},
 		{"registry crash", registry(crashed), waitReadyStatusCrashed},

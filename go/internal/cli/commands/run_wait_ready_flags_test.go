@@ -325,7 +325,7 @@ func TestWaitReadyJSONPrintedOutcomeIsTheOnlyObject(t *testing.T) {
 	var err error
 	stdout := captureStdout(t, func() {
 		err = runReportingWaitReadyFailure(context.Background(), opts, func(ctx context.Context) error {
-			return waitReadyAfterDetachedStart(ctx, conn, &appconfig.AppConfig{AppID: "app"}, opts)
+			return waitReadyAfterDetachedStart(ctx, conn, &appconfig.AppConfig{AppID: "app"}, opts, appBaseline{})
 		})
 	})
 	if ErrorClass(err) != "app_crashed" {

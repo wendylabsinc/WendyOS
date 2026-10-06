@@ -644,7 +644,9 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	if state == agentpb.AppRunningState_RUNNING {
 		cliLogln("No changes detected; %s is already up to date and running.", containerDisplayName(appCfg))
 		if opts.waitReady {
-			return true, waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
+			// This run did not start the app: restarts it already had are
+			// not this run's to report.
+			return true, waitReadyAfterDetachedStart(ctx, conn, appCfg, opts, observedAppBaseline(container))
 		}
 		// Detached deploys don't run host-side postStart or block on readiness; see
 		// runPostStartIfReady's doc comment. The container is untouched, so the
@@ -670,7 +672,7 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	cliLogln("No changes detected; started existing %s.", containerDisplayName(appCfg))
 	if opts.waitReady {
 		drainDetachedStartOutput(stream)
-		return true, waitReadyAfterDetachedStart(ctx, conn, appCfg, opts)
+		return true, waitReadyAfterDetachedStart(ctx, conn, appCfg, opts, startedAppBaseline(appCfg))
 	}
 	return true, opts.reportDetachedRun(ctx, conn, appCfg.AppID, appCfg)
 }

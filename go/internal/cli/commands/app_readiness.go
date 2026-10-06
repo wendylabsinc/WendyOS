@@ -85,6 +85,13 @@ type waitReadyChecks struct {
 	deadline <-chan time.Time
 	probe    func(context.Context) bool // nil: readiness is not checked from this machine
 	state    func(context.Context) (*agentpb.AppContainer, error)
+	// baseline is the app's restart count (failure_count) when the wait
+	// began; a poll showing more means the restart policy restarted it. It
+	// is known before the first poll, which may already show a restart: 0
+	// for an app this run started, since the agent resets the count on
+	// start, or the count the run saw when it chose to follow an app it
+	// found running (appBaseline.failures).
+	baseline uint32
 	// ended fires once an attached run's own output has ended — the task it
 	// started exited — so the wait checks the app at once rather than probing
 	// on; nil never fires.
@@ -100,12 +107,13 @@ type waitReadyChecks struct {
 // probe passes and the app is still running; without one it succeeds when the
 // deadline (the stability window) finds the app still running and not
 // restarted. It fails as soon as a poll shows the app exited, crash-looping,
-// gone, or restarted (failure_count above the first poll's), or once ended
-// fires and a poll finds the app running again. It ends without an outcome
+// gone, or restarted (failure_count above c.baseline), or once ended fires
+// and a poll finds the app running again. It ends without an outcome
 // of its own (appWasReplaced) as soon as a poll shows another deployment's
 // app, and as not_ready (unreportedExitOutcome) when a poll shows one it
 // cannot tell from that. Transient ListContainers errors are tolerated until
-// the deadline.
+// the deadline, but a passed probe counts only once a poll right after it
+// confirms the app is still running.
 func awaitAppReady(ctx context.Context, c waitReadyChecks) waitReadyOutcome {
 	checked := c.probe != nil
 	onFailure := readinessNotChecked
@@ -136,16 +144,16 @@ func awaitAppReady(ctx context.Context, c waitReadyChecks) waitReadyOutcome {
 		}
 		return waitReadyOutcome{verdict: appWasReplaced}
 	}
-	var baseline uint32
-	first, foreign, err := poll()
+	_, foreign, _ := poll()
 	switch {
 	case ctx.Err() != nil:
 		return interrupted()
 	case foreign != appOwn:
 		return foreignOutcome(foreign)
-	case err == nil && first != nil:
-		baseline = first.GetFailureCount()
 	}
+	// unconfirmed is the error of the latest poll that failed to confirm a
+	// passed probe; nil once one succeeds.
+	var unconfirmed error
 	ended := c.ended
 	for {
 		taskEnded := false
@@ -153,6 +161,9 @@ func awaitAppReady(ctx context.Context, c waitReadyChecks) waitReadyOutcome {
 		case <-ctx.Done():
 			return interrupted()
 		case <-c.deadline:
+			if checked && unconfirmed != nil {
+				return notReadyOutcome(readinessFailed, "app %s accepted connections within %s, but its state could not be read to confirm it is still running: %v", c.appID, c.limit, unconfirmed)
+			}
 			if checked {
 				return notReadyOutcome(readinessFailed, "app %s did not pass its readiness probe within %s", c.appID, c.limit)
 			}
@@ -165,7 +176,7 @@ func awaitAppReady(ctx context.Context, c waitReadyChecks) waitReadyOutcome {
 			case err != nil:
 				return notReadyOutcome(readinessNotChecked, "could not confirm app %s is still running: %v", c.appID, err)
 			}
-			if out, crashed := crashedOutcome(c.appID, container, baseline, onFailure); crashed {
+			if out, crashed := crashedOutcome(c.appID, container, c.baseline, onFailure); crashed {
 				return out
 			}
 			return waitReadyOutcome{Status: waitReadyStatusRunning, Readiness: readinessNotChecked}
@@ -181,7 +192,7 @@ func awaitAppReady(ctx context.Context, c waitReadyChecks) waitReadyOutcome {
 			return foreignOutcome(foreign)
 		}
 		if err == nil {
-			if out, crashed := crashedOutcome(c.appID, container, baseline, onFailure); crashed {
+			if out, crashed := crashedOutcome(c.appID, container, c.baseline, onFailure); crashed {
 				return out
 			}
 			if taskEnded {
@@ -196,14 +207,18 @@ func awaitAppReady(ctx context.Context, c waitReadyChecks) waitReadyOutcome {
 				return interrupted()
 			}
 			// The port answered; make sure it is still this run's process.
+			// Without a state to judge, the probe proves nothing yet: probe
+			// and confirm again on the next tick, until the deadline.
 			container, foreign, err := poll()
-			if foreign != appOwn {
+			switch {
+			case foreign != appOwn:
 				return foreignOutcome(foreign)
+			case err != nil:
+				unconfirmed = err
+				continue
 			}
-			if err == nil {
-				if out, crashed := crashedOutcome(c.appID, container, baseline, onFailure); crashed {
-					return out
-				}
+			if out, crashed := crashedOutcome(c.appID, container, c.baseline, onFailure); crashed {
+				return out
 			}
 			return waitReadyOutcome{Status: waitReadyStatusReady, Readiness: readinessPassed}
 		}
@@ -259,17 +274,23 @@ func crashedOutcome(appID string, c *agentpb.AppContainer, baseline uint32, read
 // on-device agent socket, it instead requires the app to stay running for
 // waitReadyStabilityWindow (shortened by a smaller --readiness-timeout),
 // polled via ListContainers.
-func waitForAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) waitReadyOutcome {
-	return waitForGatedAppReady(ctx, conn, appCfg, opts, nil)
+//
+// base is the app's baseline: startedAppBaseline for an app the run just
+// started, observedAppBaseline for one it found running; a restart counted
+// above base.failures fails the wait.
+func waitForAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, base appBaseline) waitReadyOutcome {
+	return waitForGatedAppReady(ctx, conn, appCfg, opts, base, nil)
 }
 
 // waitForGatedAppReady is waitForAppReady for an attached run's gate, whose
 // target also makes the wait watch for the run's task ending and for another
 // deployment's app (waitReadyChecks.ended and foreign); nil is a plain wait.
-func waitForGatedAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, target *gateTarget) waitReadyOutcome {
+// The gate passes target.base as base.
+func waitForGatedAppReady(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, base appBaseline, target *gateTarget) waitReadyOutcome {
 	checks := waitReadyChecks{
-		appID: appCfg.AppID,
-		limit: waitReadyStabilityWindow,
+		appID:    appCfg.AppID,
+		limit:    waitReadyStabilityWindow,
+		baseline: base.failures,
 		state: func(ctx context.Context) (*agentpb.AppContainer, error) {
 			stateCtx, cancel := context.WithTimeout(ctx, waitReadyStateTimeout)
 			defer cancel()
@@ -370,13 +391,15 @@ func reportWaitReadyOutcome(ctx context.Context, appCfg *appconfig.AppConfig, ou
 }
 
 // waitReadyAfterDetachedStart runs --wait-ready for a detached run whose
-// container the agent just confirmed started, reports the outcome, and returns
-// the run's error. A caller holding the start stream drains it meanwhile
+// container the agent just confirmed started (base: startedAppBaseline), or
+// that the no-change fast path found already running (base:
+// observedAppBaseline of the record it found), reports the outcome, and
+// returns the run's error. A caller holding the start stream drains it meanwhile
 // (drainDetachedStartOutput). An interrupted wait prints no outcome and leaves
 // the app running; runWithInterruptChannel turns Ctrl-C into exit 0 and
 // SIGTERM into errTerminated.
-func waitReadyAfterDetachedStart(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) error {
-	out := waitForAppReady(ctx, conn, appCfg, opts)
+func waitReadyAfterDetachedStart(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, base appBaseline) error {
+	out := waitForAppReady(ctx, conn, appCfg, opts, base)
 	if out.Status == "" {
 		noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
 		return out.err
@@ -457,7 +480,7 @@ func startReadinessGate(ctx context.Context, conn *grpcclient.AgentConnection, a
 	g := &readinessGate{done: make(chan struct{})}
 	go func() {
 		defer close(g.done)
-		out := waitForGatedAppReady(ctx, conn, appCfg, opts, &target)
+		out := waitForGatedAppReady(ctx, conn, appCfg, opts, target.base, &target)
 		if ctx.Err() != nil {
 			return // the session ended first; its own teardown decides the outcome
 		}
