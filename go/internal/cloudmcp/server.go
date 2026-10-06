@@ -41,7 +41,10 @@ const (
 // OAuth token and resolves both principals' current permissions. No field may
 // be populated from unverified token claims or caller-provided identity headers.
 type Access struct {
-	bearer string // stays inside the trusted backend; never serialized
+	OwnerPrincipal string   `json:"owner_principal"`
+	DelegationID   string   `json:"delegation_id"`
+	Entitlements   []string `json:"entitlements"`
+	bearer         string   // stays inside the trusted backend; never serialized
 
 	OrganizationID string    `json:"organization_id"`
 	TenantID       string    `json:"tenant_id"`
@@ -55,7 +58,7 @@ type Access struct {
 }
 
 func (a Access) sameIdentity(b Access) bool {
-	return a.OrganizationID == b.OrganizationID && a.TenantID == b.TenantID && a.UserID == b.UserID && a.ServiceSubject == b.ServiceSubject
+	return a.OrganizationID == b.OrganizationID && a.TenantID == b.TenantID && a.UserID == b.UserID && a.ServiceSubject == b.ServiceSubject && a.DelegationID == b.DelegationID
 }
 
 func (a Access) permits(org string) bool {
@@ -160,7 +163,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"resource": resource, "authorization_servers": []string{organization.Issuer}, "bearer_methods_supported": []string{"header"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"resource": resource, "authorization_servers": []string{organization.Issuer}, "bearer_methods_supported": []string{"header"}, "scopes_supported": []string{"mcp:read", "mcp:control"}})
 		return
 	}
 	values := r.Header.Values("Authorization")
@@ -268,7 +271,8 @@ func agentMethod(name string) (protoreflect.MethodDescriptor, error) {
 }
 
 func (s *Server) describeMethods(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if _, err := s.authorize(ctx, "", "device_methods"); err != nil {
+	access, err := s.authorize(ctx, "", "device_methods")
+	if err != nil {
 		return mcp.NewToolResultError("access denied"), nil
 	}
 	name := request.GetString("method", "")
@@ -281,13 +285,19 @@ func (s *Server) describeMethods(ctx context.Context, request mcp.CallToolReques
 			for i := 0; i < file.Services().Len(); i++ {
 				service := file.Services().Get(i)
 				for j := 0; j < service.Methods().Len(); j++ {
-					methods = append(methods, "/"+string(service.FullName())+"/"+string(service.Methods().Get(j).Name()))
+					name := "/" + string(service.FullName()) + "/" + string(service.Methods().Get(j).Name())
+					if access.DelegationID == "" || permitsMethod(access, name) {
+						methods = append(methods, name)
+					}
 				}
 			}
 			return true
 		})
 		sort.Strings(methods)
 		return result(methods)
+	}
+	if access.DelegationID != "" && !permitsMethod(access, name) {
+		return mcp.NewToolResultError("method is outside delegation"), nil
 	}
 	method, err := agentMethod(name)
 	if err != nil {
@@ -395,4 +405,17 @@ func (s *Server) callDevice(ctx context.Context, request mcp.CallToolRequest) (*
 	}
 	rpcOutcome = "truncated"
 	return result(map[string]any{"messages": messages, "truncated": true})
+}
+
+func permitsMethod(a Access, method string) bool {
+	parts := strings.Split(strings.TrimPrefix(method, "/"), "/")
+	if len(parts) != 2 {
+		return false
+	}
+	for _, e := range a.Entitlements {
+		if e == "entitlement:"+parts[0]+":"+parts[1]+":allow" {
+			return true
+		}
+	}
+	return false
 }

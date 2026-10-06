@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -26,14 +27,19 @@ type wireScope struct {
 	OwnerPrincipal   string `asn1:"utf8"`
 	DevicePrincipals []asn1.RawValue
 	AppIDs           []asn1.RawValue
+	Audience         string `asn1:"optional,utf8"`
+	Gateway          string `asn1:"optional,utf8"`
 }
 
 type Scope struct {
-	ID      string
-	Owner   string
-	Devices []string
-	Apps    []string
-	rules   []string
+	Version  int
+	Audience string
+	Gateway  string
+	ID       string
+	Owner    string
+	Devices  []string
+	Apps     []string
+	rules    []string
 }
 
 func values(raw []asn1.RawValue) ([]string, error) {
@@ -79,7 +85,7 @@ func Parse(leaf *x509.Certificate) (*Scope, error) {
 	}
 	var w wireScope
 	rest, err := asn1.Unmarshal(scopeDER, &w)
-	if err != nil || len(rest) != 0 || w.Version != 1 {
+	if err != nil || len(rest) != 0 || (w.Version != 1 && w.Version != 2) {
 		return nil, fmt.Errorf("unsupported delegation scope")
 	}
 	canonical, marshalErr := asn1.Marshal(w)
@@ -95,6 +101,15 @@ func Parse(leaf *x509.Certificate) (*Scope, error) {
 	parts := strings.Split(principal, "/")
 	if ownerErr != nil || !ok || len(parts) < 7 || parts[5] != "operator" || principal != w.OwnerPrincipal {
 		return nil, fmt.Errorf("delegation owner does not match operator identity")
+	}
+	if w.Version == 2 {
+		audience, err := url.Parse(w.Audience)
+		gateway, gatewayErr := certs.ParsePrincipal(w.Gateway)
+		if err != nil || audience.Scheme != "https" || audience.Host == "" || audience.User != nil || audience.RawQuery != "" || audience.Fragment != "" || gatewayErr != nil || gateway.TenantUUID != ownerID.TenantUUID || !strings.HasPrefix(w.Gateway, strings.Join(parts[:5], "/")+"/service/") {
+			return nil, fmt.Errorf("invalid MCP audience or gateway")
+		}
+	} else if w.Audience != "" || w.Gateway != "" {
+		return nil, fmt.Errorf("v1 scope cannot carry v2 bindings")
 	}
 	devices, err := values(w.DevicePrincipals)
 	if err != nil || len(devices) == 0 {
@@ -131,7 +146,7 @@ func Parse(leaf *x509.Certificate) (*Scope, error) {
 			return nil, fmt.Errorf("invalid delegated entitlement")
 		}
 	}
-	return &Scope{ID: w.DelegationID, Owner: principal, Devices: devices, Apps: apps, rules: rules}, nil
+	return &Scope{Version: w.Version, Audience: w.Audience, Gateway: w.Gateway, ID: w.DelegationID, Owner: principal, Devices: devices, Apps: apps, rules: rules}, nil
 }
 
 func contains(values []string, want string) bool {
@@ -169,3 +184,5 @@ func (s *Scope) Authorize(device, method, app string) error {
 		return fmt.Errorf("operation has no delegated resource policy")
 	}
 }
+
+func (s *Scope) Rules() []string { return append([]string(nil), s.rules...) }

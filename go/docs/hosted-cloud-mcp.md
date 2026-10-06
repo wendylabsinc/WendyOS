@@ -1,137 +1,89 @@
 # Hosted organization MCP
 
-The `wendy-cloud-mcp` executable serves these Streamable HTTP resources:
+The `wendy-cloud-mcp` executable serves Streamable HTTP at
+`https://mcp.dev.wendy.sh/orgs/<organization-uuid>/mcp` in dev and
+`https://mcp.wendy.dev/orgs/<organization-uuid>/mcp` in production.
+WDY-3526 and WDY-3529 add the per-user authority path; WDY-3527 adds Cloud approval.
 
-- Production: `https://mcp.wendy.dev/orgs/<organization-uuid>/mcp`
-- Test: `https://mcp.dev.wendy.sh/orgs/<organization-uuid>/mcp`
+## OpenAI connection and approval
 
-It is a separate, always-on service. Cloud owns organization opt-in, identity
-verification, inventory, and authorization. The gateway owns the MCP transport,
-CLI proxy, and each organization's machine-account private key. Keys are never
-returned to clients. This implementation requires the companion Cloud changes
-in `feat/hosted-org-mcp`, including migration 000085.
+1. Register the gateway's ML-DSA-65 service-account key and Cloud role. Configure
+   its subject in Auth's `WENDY_AUTH_HOSTED_MCP_POLICY` and its full SPIFFE service
+   principal in PKI's `hosted_mcp_gateway_principals`. Both are deployment-owned.
+   The service receives only a purpose-marked, DPoP-bound Cloud token, never an
+   unrestricted identity certificate or PKI identity token.
+2. Register a dedicated public OAuth client with exact OpenAI redirect URIs,
+   PKCE S256, consent and the exact organization MCP resource. Require realm MFA.
+   Grant `mcp:read`, and optionally `mcp:control` for start/stop. The access token
+   lasts at most five minutes; rotating refresh families last at most 24 hours.
+3. An authorized operator enables hosted MCP in Cloud Settings or with
+   `wendy cloud mcp enable`. This signed organization setting is only an opt-in.
+4. Connect ChatGPT. The gateway verifies OpenAI's managed TLS client certificate,
+   then Cloud verifies the user's OAuth token. The gateway generates a separate
+   ML-DSA-65 key and requests pending consent for that verified user.
+5. In Cloud Settings, sign in again with a recorded second factor. Review the
+   pending key fingerprint, gateway and audience. Select devices, explicit RPCs,
+   app IDs for start/stop, and an expiry of one, eight or 24 hours. Sign approval
+   with your operator key. Cloud requires fresh authentication within five minutes.
+6. Retry the device action. PKI verifies the signed consent and Cloud grant and
+   issues a leaf valid for at most five minutes. The user can prepare another
+   approval after expiry. Keys are memory-only and isolated by tenant, user and
+   gateway; restarting or reaching another replica may require another approval.
 
-## Provisioning and owner opt-in
+The external bearer exception is restricted to OpenAI's managed mTLS connection.
+The shared certificate authenticates OpenAI's platform, not a particular ChatGPT
+user or token holder. User identity comes from Wendy OAuth. Health and protected
+resource metadata are public. Forwarded certificate headers are never trusted.
+The default trust anchor is OpenAI's published connector intermediate, with
+clientAuth EKU and exact DNS SAN `mtls.prod.connectors.openai.com`. A custom
+connector CA requires a matching explicit DNS identity. See
+[OpenAI authentication](https://developers.openai.com/plugins/build/auth#mutual-tls-mtls).
+No live ChatGPT or Responses API compatibility claim is made by these changes.
 
-1. Register an ML-DSA-65 machine-account key in the organization's Wendy Auth
-   realm. Give that account a suitable Cloud organization role. Cloud's normal
-   service-principal admission rules apply; it cannot adopt an organization or
-   gain owner access through adoption. Store its private key in the gateway's secret mount.
-2. Add its organization UUID, issuer, subject, and `key_file` (or `key_pem` inside
-   the Secret Manager configuration) to the deployment's `machines` array.
-   The organization UUID must be its immutable tenant UUID. Restart/roll the
-   gateway after updating this configuration.
-3. Register the connecting OAuth clients in the realm. Permit the organization's
-   exact MCP URL as an OAuth resource and configure the clients' exact redirect
-   URIs. Hosted clients use their registered OAuth client ID/secret; this does
-   not add dynamic client registration to Wendy Auth.
-4. An organization owner signs into the ordinary Cloud API and enables access:
+## Authority on device calls
 
-   ```sh
-   wendy cloud mcp enable --organization <uuid> --service-account <subject> \
-     --cloud-http https://api.dev.wendy.sh
-   wendy cloud mcp status --organization <uuid> --cloud-http https://api.dev.wendy.sh
-   ```
+Every tool request intersects the user's current Cloud permissions, the gateway's
+current permissions, OAuth scopes and signed delegation. Inventory additionally
+requires `device:list`. Organization opt-in alone cannot authorize device work.
+The implemented RPC policy covers device information, hardware capabilities and
+app start/stop; app control needs `mcp:control` and exact approved app IDs. Unknown
+RPCs, generic CLI transport and raw SSH/registry forwarding are denied.
 
-   Production uses `https://api.wendy.dev`. Enabling and disabling are owner-only,
-   DPoP-protected Cloud requests and write an audit event with the settings change.
-   Provisioning the machine account is a prerequisite; enabling the setting does
-   not create an Auth account or upload its key.
-5. Connect the organization MCP URL in a standard OAuth-capable MCP client.
-   Protected-resource metadata advertises that organization's realm issuer.
+PKI issues FleetScope version 2 with the exact user owner, devices, apps, MCP
+audience and gateway. The gateway validates the actual leaf against independently
+configured roots, its own key and the approved scope. No machine credential
+fallback exists. Its scoped key signs the D18 request, including delegation ID,
+device principal, audience and gateway. Cloud binds the issued leaf to the same
+forwarded user; PKI validates the critical scope and proof independently. Only the
+dedicated Cloud MCP route admits that request. The inner device TLS connection
+uses the same user-owned leaf and verifies the enrolled device identity. Device
+interceptors enforce the critical scope and method/app entitlements.
 
-Disable with `wendy cloud mcp disable --organization <uuid> --cloud-http <origin>`.
-New work is denied immediately after the setting commits. Active streams recheck
-at five-second intervals with a five-second backend timeout and close on a failed
-check, identity change, or token expiry. Backend failures fail closed.
-
-## Authorization and certificates
-
-The incoming user-to-MCP connection accepts OAuth bearer tokens, including direct
-hosted clients. This is a resource-specific exception: it does not relax Cloud's
-machine authentication or the device transport. Cloud verifies the user's token
-against the exact organization MCP audience, issuer, tenant and revocation state.
-The token travels only to Cloud's authorization component of this resource server;
-it is not used as a Cloud API credential or forwarded to devices.
-
-Every operation requires BOTH the user's and the configured machine account's
-current organization role and resolved permissions. Device work requires
-`device:read` and `tunnel:connect`; inventory also requires `device:list`. These
-are Cloud's existing device/tunnel permissions, including its deny rules. This
-change does not invent a separate per-RPC permission catalog. The selected asset
-must belong to that organization and have a PKI enrollment binding.
-
-The machine uses RFC 7523 assertions signed by its registered ML-DSA-65 key. It
-obtains a DPoP-bound PKI token and a `/service/<subject>` operator-capable
-certificate, then a separate DPoP-bound Cloud API token. Certificate identity,
-public key, validity, and token binding are checked. Device RPCs use operator mTLS
-inside Cloud's signed relay, with the device certificate identity pinned to its
-Cloud enrollment record.
-
-The existing relay protocol still uses P-256 ephemeral session keys and its
-specified HPKE suite. Those ephemeral transport keys are separate from the
-ML-DSA-65 service-account identity and certificate.
-
-## Tools and CLI
-
-`device_list` lists the eligible device inventory (up to 1,000 rows).
-`device_methods` lists Agent RPCs or their top-level request fields. `device_rpc`
-accepts a device UUID, a full RPC method, and a protobuf JSON request. It handles
-unary and bounded server streams. Defaults are 30 seconds and 20 responses;
-maximums are 60 seconds, 100 responses and 1 MiB of result data. Client-streaming
-and bidirectional operations use the CLI transport.
-
-Log into a separate saved MCP session using the existing PKCE login flow. Giving
-it its own `--cloud-grpc` value keeps it separate from the ordinary Cloud session:
-
-```sh
-wendy auth login --issuer https://auth.dev.wendy.sh/realms/<realm> \
-  --cloud-grpc mcp.dev.wendy.sh:443 \
-  --resource https://mcp.dev.wendy.sh/orgs/<uuid>/mcp
-wendy device info --device mcp://mcp.dev.wendy.sh/orgs/<uuid>/devices/<asset-uuid>
-wendy run --device mcp://mcp.dev.wendy.sh/orgs/<uuid>/devices/<asset-uuid>
-```
-
-Use the corresponding production Auth/PKI login flags for production, as with an
-ordinary production CLI login. The CLI refreshes the saved OAuth session and
-opens a TLS WebSocket carrying gRPC. The gateway terminates gRPC, authorizes each
-method, and creates the machine-authenticated device connection. It does not
-forward caller identity headers. Streams are limited to one hour or the earlier
-user/machine token expiry; reconnect obtains fresh credentials.
-
-Image registry uploads use explicit Cloud catalog services: `wendy-registry`
-(loopback port 5000) and `wendy-registry-darwin` (5555). Devices must run the updated
-relay catalog for these entries. SSH forwarding uses the existing `ssh` entry:
-
-```sh
-wendy cloud mcp tunnel \
-  --device mcp://mcp.dev.wendy.sh/orgs/<uuid>/devices/<asset-uuid> \
-  --service ssh --listen 127.0.0.1:2222
-```
-
-Local forwarding binds only loopback. Arbitrary hosts/ports and raw `wendy-agent`
-forwarding are refused. Device calls go through the gRPC authorization path.
+Generic identity enrollment, renewal and generic certificate validation continue
+to reject this purpose or its critical extension. The existing P-256 relay join
+keys and HPKE remain separate from the delegated ML-DSA-65 identity key.
 
 ## Running the service
 
-Build from the WendyOS repository root:
+Build from the repository root with `go build -o wendy-cloud-mcp
+./go/cmd/wendy-cloud-mcp`. Example configurations live in `go/ops/cloud-mcp`.
+Configure exactly one of `delegation_roots_file` or `delegation_roots_pem` with
+independently trusted operator/device roots. The inline form supports existing
+secret-mounted JSON deployments. Never take roots from a certificate response.
+Configure the server TLS chain/key, pinned Auth/Cloud/relay endpoints and machine
+accounts. Optional `connector_ca_file` and `connector_dns_name` must be set together.
+All keys and configuration load at startup; roll instances after rotations.
 
-```sh
-go build -o wendy-cloud-mcp ./go/cmd/wendy-cloud-mcp
-```
+Cloud migrations through 000092 and the companion Auth, PKI and WendyOS changes
+are prerequisites. Apply policy to existing gateway identities before enabling
+this flow; old generic credentials must no longer authorize enrollment or D18.
+These PRs do not deploy anything or register OAuth clients.
 
-Example configurations and a systemd unit are in `go/ops/cloud-mcp`. The service
-requires an HTTPS origin, a TLS chain/key, pinned Auth/PKI/Cloud endpoints, and
-machine-account configuration. It never reads a developer's saved login.
-`/healthz` reports process liveness. SIGTERM cancels active requests and drains
-HTTP connections. Mounted keys/configuration and server TLS certificates are
-loaded at startup; roll instances after rotations.
-
-The Cloud Pulumi changes create a separate COS instance group and IPv4/IPv6
-passthrough load-balancer frontends when `hostedMCPImageDigest` is configured.
-They do not deploy until bootstrap provides the dedicated runtime identity,
-secret containers, external dual-stack subnet, DNS zone and immutable images.
-Production still deploys only through Cloud's immutable release-tag workflow.
+Independent revocation/status distribution, a 60-second cancellation guarantee,
+isolated durable key custody and one-use write approvals remain step 5. Full
+adversarial rollout testing and live OpenAI/device verification remain step 6.
+Existing live permission checks and expiry bounds are not a substitute for those
+controls. In particular, do not claim immediate offline-device revocation.
 
 ## Audit and tracing
 
@@ -157,9 +109,9 @@ A gRPC connection is reported connected only after it reaches Ready. The agent's
 mTLS interceptors record traced RPC start/completion with the peer certificate
 fingerprint and gRPC status. These records are `device_observed`; correlation is
 explicitly a `peer_hint`. No human identity is inferred from headers. A compromised
-gateway can omit hints or misreport its own events; certificate-plus-grant
-enforcement remains a separate follow-up. Raw SSH/registry connections have
-connection-level records, not command, file-content, or individual registry-request audits.
+gateway can omit hints or misreport its own events. The scoped certificate and
+PKI-verified tunnel request independently constrain its authority. Raw SSH and
+registry forwarding are denied for hosted MCP.
 
 Records exclude OAuth tokens, DPoP proofs, certificate/key material, request and
 response bodies, shell commands, MCP arguments/results, arbitrary JSON-RPC IDs,
@@ -188,17 +140,3 @@ coexist with a successfully opened connection; neither implies that an earlier
 side effect was undone. Audit reads retain Cloud's tenant scoping and existing
 checkpoint verification. Monitor missing completion records, audit delivery errors,
 and trace export errors.
-
-## Local verification (2026-10-05)
-
-- 180 passing Go test cases, including subtests, under `-race` across `cloudmcp`,
-  `agent/interceptor`, `browserauth`, `hostedmcp`, and `cloudrelay`.
-- Two focused CLI command tests pass. The broader command suite has a failure in
-  `TestSimulatorFilterAsksOnlyVMsItCanReachAndDoesNotKnow` when LAN discovery sees
-  local devices; no simulator code was changed for this feature.
-- Linux amd64 gateway binary builds with CGO disabled; scoped `go vet` passes.
-- Companion Cloud: 93 Swift tests in nine suites pass, including real PostgreSQL
-  opt-in, permission reduction, audience rejection, event binding, and audit-chain checks. Swift format
-  lint passes; infrastructure tests pass in all three packages.
-- No live DNS deployment, OAuth-client registration, or physical-device smoke test
-  has been performed. Those checks remain part of rollout.

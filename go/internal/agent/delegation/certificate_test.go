@@ -22,7 +22,7 @@ func stringsDER(values ...string) []asn1.RawValue {
 func fixture(t *testing.T) (*x509.Certificate, wireScope) {
 	t.Helper()
 	u, _ := url.Parse(owner)
-	w := wireScope{1, "22222222-2222-4222-8222-222222222222", owner, stringsDER(device), stringsDER("demo")}
+	w := wireScope{1, "22222222-2222-4222-8222-222222222222", owner, stringsDER(device), stringsDER("demo"), "", ""}
 	leaf := &x509.Certificate{URIs: []*url.URL{u}}
 	setScope(t, leaf, w)
 	der, _ := asn1.Marshal(stringsDER("entitlement:wendy.agent.services.v2.WendyContainerService:StopContainer:allow"))
