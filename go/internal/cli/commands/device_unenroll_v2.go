@@ -178,7 +178,7 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return err
 	}
 	digest := sha256.Sum256([]byte(cloud + "\x00" + principal.Principal))
-	journalPath := filepath.Join(dir, "unenroll-v2", hex.EncodeToString(digest[:])+".json")
+	journalPath := filepath.Join(dir, "unenroll", hex.EncodeToString(digest[:])+".json")
 	j := v2UnenrollJournal{Cloud: cloud, Principal: principal.Principal}
 	data, readErr := os.ReadFile(journalPath)
 	if readErr == nil {

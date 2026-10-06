@@ -169,7 +169,7 @@ func TestV2UnenrollRejectsDifferentCertificateAck(t *testing.T) {
 }
 
 func TestV2UnenrollJournalPrivateDurableReplacement(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "unenroll-v2", "journal.json")
+	path := filepath.Join(t.TempDir(), "unenroll", "journal.json")
 	j := testUnenrollJournal()
 	if err := saveV2UnenrollJournal(path, j); err != nil {
 		t.Fatal(err)

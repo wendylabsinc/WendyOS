@@ -56,7 +56,7 @@ No numeric-ID fallback or alternate PKI management mutation is attempted.
 
 The Agent stores public principal/fingerprint/serial acknowledgement in
 `acme-revocation.json`. The CLI stores a nonsecret, mode-0600 transaction under
-its config directory's `unenroll-v2/`. Do not remove these records to force a
+its config directory's `unenroll/`. Do not remove these records to force a
 retry. A missing asset is accepted on retry only with previously persisted
 revocation progress, followed by the Agent's matching acknowledgement. An
 unexpected binding or certificate change stops cleanup. A reset response
