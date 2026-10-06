@@ -192,3 +192,14 @@ func TestMachineCredentialsRejectWrongAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestMachineCloudCredentialsDoNotEnrollCertificate(t *testing.T) {
+	m, calls := machineFixture(t, "")
+	auth, err := m.CloudCredentials(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *calls != 1 || len(auth.Certificates) != 0 || !m.certificateExpires.IsZero() {
+		t.Fatal("Cloud authentication enrolled a device credential")
+	}
+}

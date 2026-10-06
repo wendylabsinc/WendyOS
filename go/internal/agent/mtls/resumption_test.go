@@ -56,6 +56,7 @@ func newResumptionPKI(t *testing.T) resumptionPKI {
 		tmpl := &x509.Certificate{
 			SerialNumber:          big.NewInt(time.Now().UnixNano()),
 			Subject:               pkix.Name{CommonName: cn},
+			IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
 			NotBefore:             time.Now().Add(-time.Hour),
 			NotAfter:              time.Now().Add(24 * time.Hour),
 			KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -187,20 +188,14 @@ func newResumptionEnv(t *testing.T, ticketsDisabled bool) *resumptionEnv {
 			}(c)
 		}
 	}()
-	// The client mirrors grpcclient's config shape: cert presented,
-	// hostname verification off (test CA has no SANs for 127.0.0.1).
+	// The client verifies the fixture CA and loopback server identity.
 	env.clientCert = pki.clientCert
 	return env
 }
 
 func (env *resumptionEnv) dial(t *testing.T, cache tls.ClientSessionCache) (clientResumed, serverResumed bool) {
 	t.Helper()
-	conn, err := tls.Dial("tcp", env.addr, &tls.Config{
-		Certificates:       []tls.Certificate{env.clientCert},
-		InsecureSkipVerify: true,
-		ClientSessionCache: cache,
-		MinVersion:         tls.VersionTLS12,
-	})
+	conn, err := tls.Dial("tcp", env.addr, env.clientConfig(cache))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -305,7 +300,7 @@ func TestRevokedCertificateRejectedOnTLSResumption(t *testing.T) {
 	}
 	<-env.revocation.mu
 	before := env.verifyCount.Load()
-	conn, err := tls.Dial("tcp", env.addr, &tls.Config{Certificates: []tls.Certificate{env.clientCert}, InsecureSkipVerify: true, ClientSessionCache: cache, MinVersion: tls.VersionTLS13})
+	conn, err := tls.Dial("tcp", env.addr, env.clientConfig(cache))
 	if err == nil {
 		defer conn.Close()
 		conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -317,4 +312,10 @@ func TestRevokedCertificateRejectedOnTLSResumption(t *testing.T) {
 	if env.verifyCount.Load() != before {
 		t.Fatal("test used a full handshake instead of exercising resumed VerifyConnection")
 	}
+}
+
+func (env *resumptionEnv) clientConfig(cache tls.ClientSessionCache) *tls.Config {
+	roots := x509.NewCertPool()
+	roots.AddCert(env.pki.ca)
+	return &tls.Config{RootCAs: roots, Certificates: []tls.Certificate{env.clientCert}, ClientSessionCache: cache, MinVersion: tls.VersionTLS12}
 }

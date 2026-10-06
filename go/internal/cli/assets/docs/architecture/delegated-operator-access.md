@@ -2,8 +2,7 @@
 
 MCP operator credentials retain the enabling user's operator SPIFFE identity and
 use a separate key. The certificate's critical FleetScope extension limits which
-devices and applications the delegated key can reach. Wendy Cloud tracks the
-certificate fingerprint, its owner, and its immutable MCP purpose label.
+devices and applications the delegated key can reach. PKI records the certificate fingerprint, owner and MCP delegation ID.
 
 FleetScope uses OID `1.3.6.1.4.1.65441.1.4`. Its value is a DER sequence with these
 fields, in order:
@@ -44,7 +43,10 @@ ordinary user's full authority when an endpoint cannot enforce the delegation.
 These certificate constraints are an upper bound, not a live permission lookup.
 Cloud must intersect them with the user's current permissions and active MCP grant
 on every tool request. Disabling a grant must revoke the certificate through the
-revocation service. Revocation checking is implemented in a separate change.
+revocation service. The mTLS server checks signed full CRLs on handshakes, resumed sessions and RPCs,
+and polls active streams every 30 seconds. Unavailable or stale evidence denies access.
+This requires issuer publication infrastructure and does not turn an old but unexpired
+CRL into evidence of a newly revoked certificate.
 The backend must never retain an upstream user OAuth access or refresh token that
 could enroll an unrestricted replacement certificate. Issuance and reissuance need
 a fresh browser-authorized Cloud grant carrying these exact constraints.
@@ -55,3 +57,17 @@ can issue the same signed constraints under its configured trusted CA.
 The device implementation recognizes the Wendy production OIDs above. Self-hosted
 PKI configuration must use the same OIDs for interoperable delegated credentials;
 custom OID assignments are not accepted by this implementation.
+
+## Hosted gateway status
+
+The gateway authenticates GET discovery with its configured machine's DPoP token
+and a proof bound to the GET URL. This path no longer enrolls a machine certificate.
+CLI enable/disable settings carry an ML-DSA-65 operator signature over the exact JSON
+body, organization, HTTP operation, audience, time window and nonce; enabling also
+requires an explicit service-account subject. Cloud verifies signer ownership and
+persists the approval with the settings.
+
+Hosted device and raw-service connections currently fail closed. They cannot use
+the service-account certificate as a fallback. Per-user issuance and tunnel-principal
+integration, including preventing unrestricted machine enrollment, remain WDY-3526.
+These changes do not enable the hosted service or approve bearer-token exceptions.

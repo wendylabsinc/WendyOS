@@ -58,6 +58,9 @@ func newCloudMCPCmd() *cobra.Command {
 				if err != nil || id == uuid.Nil || id.String() != organization {
 					return fmt.Errorf("--organization must be a canonical UUID")
 				}
+				if operation == "enable" && subject == "" {
+					return fmt.Errorf("--service-account is required when enabling MCP")
+				}
 				u, err := url.Parse(origin)
 				if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 					return fmt.Errorf("--cloud-http must be an HTTPS origin")
@@ -108,6 +111,15 @@ func newCloudMCPCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				if operation != "status" {
+					correlationID := uuid.NewString()
+					signature, err := cloudrequest.HostedMCPSettings(auth, organization, encoded, correlationID)
+					if err != nil {
+						return err
+					}
+					request.Header.Set("X-Wendy-Signature", signature)
+					request.Header.Set("X-Correlation-ID", correlationID)
+				}
 				request.Header.Set("Authorization", "DPoP "+auth.APIKey)
 				request.Header.Set("DPoP", proof)
 				request.Header.Set("Content-Type", "application/json")
@@ -118,7 +130,7 @@ func newCloudMCPCmd() *cobra.Command {
 				}
 				defer response.Body.Close()
 				if response.StatusCode != http.StatusOK {
-					return fmt.Errorf("Cloud refused MCP settings (HTTP %d); organization ownership is required", response.StatusCode)
+					return fmt.Errorf("Cloud refused MCP settings (HTTP %d); org:update permission and an operator signature are required", response.StatusCode)
 				}
 				result, err := io.ReadAll(io.LimitReader(response.Body, 65537))
 				if err != nil {
