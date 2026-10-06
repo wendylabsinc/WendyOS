@@ -64,11 +64,17 @@ func usbDirectPreDial(ctx context.Context, cand discovery.USBDirectCandidate) bo
 }
 
 // anyAgentPortAnswers reports whether a TCP connect succeeds on either agent
-// port at the addresses addrForPort builds. Both are dialed concurrently so a
-// dead peer costs one timeout rather than two.
+// port at the addresses addrForPort builds, within usbDirectPreDialTimeout.
 func anyAgentPortAnswers(ctx context.Context, addrForPort func(port int) string) bool {
-	ports := [...]int{defaultAgentPort, defaultAgentPort + agentMTLSPortOffset}
-	dialCtx, cancel := context.WithTimeout(ctx, usbDirectPreDialTimeout)
+	return anyPortAnswers(ctx, addrForPort, []int{defaultAgentPort, defaultAgentPort + agentMTLSPortOffset}, usbDirectPreDialTimeout)
+}
+
+// anyPortAnswers reports whether a TCP connect completes within timeout on
+// any of ports at the addresses addrForPort builds. A refused or failed dial
+// does not count. All are dialed concurrently so a dead peer costs one
+// timeout rather than one per port.
+func anyPortAnswers(ctx context.Context, addrForPort func(port int) string, ports []int, timeout time.Duration) bool {
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	answered := make(chan bool, len(ports))

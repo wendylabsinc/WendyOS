@@ -11,7 +11,13 @@ import (
 // code paths would scaffold into the developer's real ~/Documents or mutate
 // ~/.wendy. Individual tests may still override HOME via t.Setenv. It also
 // clears WENDY_DEVICE, which the root command would otherwise apply.
+//
+// It also lets postStart openURL hooks reach browserOpen, which tests swap for
+// a recorder: `go test` has no interactive terminal, so the production gate
+// (defaultPostStartBrowserAllowed, tested directly) would otherwise suppress
+// every hook those tests observe.
 func TestMain(m *testing.M) {
+	postStartBrowserAllowed = func() bool { return true }
 	// A developer who exported WENDY_DEVICE (as the docs suggest) must not
 	// have it copied into deviceFlag by every test that executes the root
 	// command, and leak from there into later tests.

@@ -102,6 +102,7 @@ func TestTryDeployFastPath_AttachedStoppedRunsHostLifecycle(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses touch")
 	}
+	shortenReplaceConfirm(t, sigkillTestWindow) // its exit lists as a stop with no exit recorded
 	isolateFingerprintCache(t)
 	sentinel := filepath.Join(t.TempDir(), "ready-hook")
 	cfg := &appconfig.AppConfig{AppID: "foreground-app", Hooks: &appconfig.HooksConfig{PostStart: &appconfig.HookCommand{CLI: fmt.Sprintf("touch %q", sentinel)}}}
@@ -148,7 +149,11 @@ func TestTryDeployFastPath_AttachedRunningPreservesTaskAndFollowsLogs(t *testing
 		}
 	}()
 	done, err := tryDeployFastPath(ctx, conn, cfg, "device", "inputs", runOptions{})
-	if !done || err != nil || fake.startCalls != 0 {
+	// Cancelling ctx here stands in for Ctrl-C/SIGTERM interrupting the follow:
+	// followExistingContainer reports that as ErrUserCancelled rather than a
+	// silent nil, and leaves the app it did not start running (this fake has no
+	// StopContainer).
+	if !done || !errors.Is(err, ErrUserCancelled) || fake.startCalls != 0 {
 		t.Fatalf("done=%v err=%v starts=%d", done, err, fake.startCalls)
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -187,17 +192,64 @@ func TestTryDeployFastPath_AttachedRejectsUnverifiedDeployment(t *testing.T) {
 	}
 }
 
+// A stopped container of another version is another deployment's, whatever
+// this machine's fingerprint says: the fast path must not start it (the run
+// would then read its version as a replacement of its own app) but deploy the
+// project instead. The agent records "latest" for a wendy.json without a
+// version; a device that reports no version is not compared.
+func TestTryDeployFastPath_StoppedContainerOfAnotherVersionIsRedeployed(t *testing.T) {
+	for _, tc := range []struct {
+		name, cfgVersion, deviceVersion string
+		detach, wantFastPath            bool
+	}{
+		{name: "another version, attached", cfgVersion: "1.0", deviceVersion: "2.0"},
+		{name: "another version, detached", cfgVersion: "1.0", deviceVersion: "2.0", detach: true},
+		{name: "a version where wendy.json sets none", deviceVersion: "1.0", detach: true},
+		{name: "latest where wendy.json sets none", deviceVersion: "latest", detach: true, wantFastPath: true},
+		{name: "the same version", cfgVersion: "1.0", deviceVersion: "1.0", detach: true, wantFastPath: true},
+		{name: "no version reported", cfgVersion: "1.0", detach: true, wantFastPath: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateFingerprintCache(t)
+			cfg := &appconfig.AppConfig{AppID: "app", Version: tc.cfgVersion}
+			saveDeployFingerprint(cfg.AppID, "device", deployFingerprint{InputHash: "inputs", LayerDiffIDs: []string{"layer"}})
+			fake := &foregroundFastPathClient{
+				fastPathContainerClient: fastPathContainerClient{appName: cfg.AppID, appVersion: tc.deviceVersion, state: agentpb.AppRunningState_STOPPED, presentLayers: map[string]bool{"layer": true}},
+				stream:                  &deploymentAckStream{remaining: 1, err: io.EOF},
+			}
+			var done bool
+			var err error
+			out := captureStderr(t, func() {
+				done, err = tryDeployFastPath(context.Background(), &grpcclient.AgentConnection{ContainerService: fake}, cfg, "device", "inputs", runOptions{detach: tc.detach})
+			})
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if tc.wantFastPath {
+				if !done || fake.startCalls != 1 {
+					t.Fatalf("done=%v starts=%d; want the existing container started", done, fake.startCalls)
+				}
+				return
+			}
+			if done || fake.startCalls != 0 || strings.Contains(out, "No changes detected") {
+				t.Fatalf("done=%v starts=%d output %q; want the normal deploy path", done, fake.startCalls, out)
+			}
+		})
+	}
+}
+
 func TestFollowExistingContainer_LogFailureDoesNotRestart(t *testing.T) {
 	want := errors.New("connection lost")
 	fake := &fastPathContainerClient{appName: "app", state: agentpb.AppRunningState_RUNNING}
 	telemetry := &runLogsFakeClient{stream: &runLogsFakeStream{receiveErr: want}}
-	err := followExistingContainer(context.Background(), &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+	err := followExistingContainer(context.Background(), &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 	if !errors.Is(err, want) || fake.startCalls != 0 {
 		t.Fatalf("err=%v starts=%d", err, fake.startCalls)
 	}
 }
 
 func TestFollowExistingContainer_ShowsContainerLogsAndExitsWhenStopped(t *testing.T) {
+	shortenReplaceConfirm(t, sigkillTestWindow) // a stop with no exit recorded is re-checked
 	fake := &fastPathContainerClient{appName: "app", state: agentpb.AppRunningState_STOPPED}
 	record := testLogRecord("preserved stdout")
 	record.Attributes = []*commonpb.KeyValue{testStringAttribute("stream", "stdout")}
@@ -205,7 +257,7 @@ func TestFollowExistingContainer_ShowsContainerLogsAndExitsWhenStopped(t *testin
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	output := captureStdout(t, func() {
-		err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{})
+		err := followExistingContainer(ctx, &grpcclient.AgentConnection{ContainerService: fake, TelemetryService: telemetry}, &appconfig.AppConfig{AppID: "app"}, runOptions{}, appBaseline{})
 		if err != nil {
 			t.Fatal(err)
 		}

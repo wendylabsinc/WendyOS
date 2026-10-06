@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -11,11 +12,17 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
+// followStatePoll paces followExistingContainer's app-state polls. A variable
+// so tests can shorten it.
+var followStatePoll = time.Second
+
 // followExistingContainer observes a running app without calling StartContainer
 // or AttachContainer: both RPCs replace the agent's existing task. Telemetry
 // carries stdout/stderr as well as native logs; state polling ends the foreground
 // session when the app stops. Watch sessions already own their log subscription.
-func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions) error {
+// base is the followed app's baseline (observedAppBaseline of the lookup that
+// chose to follow it), against which a stop is told from a replacement.
+func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, opts runOptions, base appBaseline) error {
 	if conn.TelemetryService == nil {
 		return fmt.Errorf("cannot follow existing app: device telemetry is unavailable")
 	}
@@ -47,40 +54,115 @@ func followExistingContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 			}
 		}
 	}()
-	runner := &serviceHookRunner{conn: conn, opts: opts}
+	runner := &serviceHookRunner{conn: conn, opts: hookRunnerOptions(opts)}
+	var gate *readinessGate
 	defer func() {
 		cancel()
+		gate.wait()
 		runner.reap()
 		if logDone != nil {
 			<-logDone
 		}
 	}()
-	runner.startAsync(runCtx, appCfg)
+	if opts.waitReady {
+		// Following never started the app, so a failed --wait-ready fails the
+		// run without stopping it.
+		gate = startReadinessGate(runCtx, conn, appCfg, opts, gateTarget{base: base}, func() { runner.startAsync(runCtx, appCfg) })
+	} else {
+		runner.startAsync(runCtx, appCfg)
+	}
 
-	ticker := time.NewTicker(time.Second)
+	// Following never started the app, so an interrupt leaves it running —
+	// unchanged Ctrl-C behavior; SIGTERM's error says so. Report
+	// ErrUserCancelled so a SIGINT still exits 0; runWithInterruptChannel
+	// turns it into errTerminated on SIGTERM.
+	interrupted := func() error {
+		noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
+		return ErrUserCancelled
+	}
+	// notReady ends the run on a --wait-ready failure the gate saw first. The
+	// app was not stopped; a readiness timeout last saw it running (a crash
+	// already says what happened to it).
+	notReady := func(err error) error {
+		if errors.Is(err, errReadinessTimeout) {
+			cliLogln("Not stopping %s: this run did not start it.", containerDisplayName(appCfg))
+			noteInterruptedApp(ctx, appCfg.ContainerName(), interruptedAppLeftRunning, nil)
+		}
+		return err
+	}
+	gateDone := gate.finished()
+	ticker := time.NewTicker(followStatePoll)
 	defer ticker.Stop()
 	for {
 		var logErr error
 		select {
 		case <-ctx.Done():
-			return nil
+			return interrupted()
+		case <-gateDone:
+			// --wait-ready decided: a failure ends the run now, since nothing
+			// stops the app; a pass keeps following.
+			gateDone = nil
+			if ctx.Err() != nil {
+				return interrupted()
+			}
+			if gate.Replaced() {
+				noteFollowedAppEnded(appCfg)
+				return nil
+			}
+			if err := gate.Err(); err != nil {
+				return notReady(err)
+			}
+			continue
 		case logErr = <-logDone:
 			logDone = nil
 			if ctx.Err() != nil {
-				return nil
+				return interrupted()
 			}
 		case <-ticker.C:
 		}
 		probeCtx, probeCancel := context.WithTimeout(runCtx, 5*time.Second)
-		state, found, err := lookupAppState(probeCtx, conn, appCfg.AppID)
+		container, err := lookupAppContainer(probeCtx, conn, appCfg.AppID)
 		probeCancel()
 		if ctx.Err() != nil {
-			return nil
+			return interrupted()
 		}
 		if err != nil {
 			return fmt.Errorf("checking existing app state: %w", err)
 		}
-		if !found || state != agentpb.AppRunningState_RUNNING {
+		if container == nil || container.GetRunningState() != agentpb.AppRunningState_RUNNING {
+			// The app stopped on its own. Let the gate finish first, so its
+			// next poll records whether the app became ready before exiting.
+			gate.wait()
+			if ctx.Err() != nil {
+				return interrupted() // Ctrl-C or SIGTERM during that wait
+			}
+			if gate.Replaced() {
+				noteFollowedAppEnded(appCfg)
+				return nil
+			}
+			if err := gate.Err(); err != nil {
+				return err
+			}
+			if !cleanStop(container) {
+				// Following started no task, so it never knows one ended. A
+				// verdict that the device did not report how the app exited
+				// (appExitUnreported) ends the follow neutrally, like a
+				// replacement.
+				verdict, _, last, err := appReplaced(ctx, conn, appCfg, base, container, nil)
+				if err != nil {
+					return interrupted() // Ctrl-C or SIGTERM while confirming a replacement
+				}
+				replaced := verdict != appOwn
+				switch {
+				case followedExitStands(replaced, last):
+					if failure := appExitFailure(appCfg.AppID, last); failure != nil {
+						return failure
+					}
+				case replaced, last == nil, last.GetRunningState() == agentpb.AppRunningState_RUNNING:
+					noteFollowedAppEnded(appCfg)
+					return nil
+				}
+			}
 			cliLogln("\nApplication %s stopped.", containerDisplayName(appCfg))
 			return nil
 		}

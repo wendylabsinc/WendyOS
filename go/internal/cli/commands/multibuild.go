@@ -840,7 +840,8 @@ func buildServicesParallelCore(
 
 	// Collect per-service failures. For failed services, summarize their buffered
 	// output now that the spinner has exited and the terminal is clean, retaining
-	// the full raw log in a temporary file for deeper inspection. The caller
+	// the full raw log in a temporary file for deeper inspection, and name the
+	// failing step and its cause in the service's error. The caller
 	// decides whether any failure aborts the group (default) or only its own
 	// service is dropped (--keep-going, WDY-1691).
 	failed := map[string]error{}
@@ -851,7 +852,7 @@ func buildServicesParallelCore(
 			// "no registry on the Mac agent" error, where retried-push spam would
 			// bury the actionable message.
 			if progressErr == nil && buildCtx.Err() == nil && r.log != "" && !isRegistryUnavailable(r.err) {
-				renderBuildFailure(os.Stderr, r.name, r.log, r.err)
+				failed[r.name] = renderBuildFailure(os.Stderr, r.name, r.log, r.err)
 			}
 		}
 	}
@@ -909,6 +910,12 @@ func buildServicesParallelWithContent(
 	quietBuild bool,
 	sfOpts ...stagefile.Option,
 ) (map[string]error, map[string][]string, error) {
+	// Tag the context so ociLayoutBuildWaitNotice knows quietBuild routes every
+	// worker's logOutput into a failure-only buffer below, regardless of
+	// terminal interactivity (see quietBuildLogKey). Set once here rather than
+	// per worker: buildServicesParallelCore derives buildCtx from this ctx via
+	// context.WithCancel, which preserves values.
+	ctx = contextWithQuietBuildLog(ctx, quietBuild)
 	// Resolved once for the group: every service deploys to this one device,
 	// so they share its GPU architecture.
 	gpuArch := serviceGPUArch(ctx, cwd, services, conn)

@@ -53,7 +53,9 @@ jobs:
         # Keep the compiler's per-package concurrency workaround for race
         # builds, but let Go build and test packages in parallel. Vet has its
         # own required job, so do not repeat it in every race build.
-        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 120s
+        # -timeout is per package: internal/cli/commands alone took 115s of
+        # the former 120s under -race on main (2026-10-06).
+        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
 
       - name: Check runtime skill packaging
         run: python3 scripts/sync-agent-skills.py --check
