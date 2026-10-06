@@ -140,3 +140,20 @@ coexist with a successfully opened connection; neither implies that an earlier
 side effect was undone. Audit reads retain Cloud's tenant scoping and existing
 checkpoint verification. Monitor missing completion records, audit delivery errors,
 and trace export errors.
+
+
+## Blanket app consent (WDY-3527)
+
+FleetScope version 3 adds `all_apps: true` to the signed JSON delegation and a
+trailing DER `allApps BOOLEAN OPTIONAL` after audience and gateway. Version 3
+requires true, an empty app-ID sequence, and the same exact nonempty device set,
+owner, audience and gateway bindings as version 2. Versions 1 and 2 forbid true.
+The optional false value is omitted in canonical DER, preserving existing encodings.
+The consent and issued scope must match exactly; a Cloud grant cannot expand a
+specific-app consent into all-app consent. Old verifiers reject the new version.
+
+The web UI defaults approval to 30 minutes. Consent still has a hard 24-hour cap,
+with leaves capped at five minutes and at the signed consent/owner/grant expiry.
+Refresh never renews consent. Devices are snapshotted at approval (maximum 128);
+new devices need new approval. All apps on those devices are covered only for
+supported, explicitly entitled RPCs. Live Cloud user/workload checks remain required.

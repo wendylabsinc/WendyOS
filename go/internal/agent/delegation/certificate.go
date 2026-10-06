@@ -29,9 +29,11 @@ type wireScope struct {
 	AppIDs           []asn1.RawValue
 	Audience         string `asn1:"optional,utf8"`
 	Gateway          string `asn1:"optional,utf8"`
+	AllApps          bool   `asn1:"optional"`
 }
 
 type Scope struct {
+	AllApps  bool
 	Version  int
 	Audience string
 	Gateway  string
@@ -85,7 +87,7 @@ func Parse(leaf *x509.Certificate) (*Scope, error) {
 	}
 	var w wireScope
 	rest, err := asn1.Unmarshal(scopeDER, &w)
-	if err != nil || len(rest) != 0 || (w.Version != 1 && w.Version != 2) {
+	if err != nil || len(rest) != 0 || (w.Version != 1 && w.Version != 2 && w.Version != 3) {
 		return nil, fmt.Errorf("unsupported delegation scope")
 	}
 	canonical, marshalErr := asn1.Marshal(w)
@@ -102,7 +104,7 @@ func Parse(leaf *x509.Certificate) (*Scope, error) {
 	if ownerErr != nil || !ok || len(parts) < 7 || parts[5] != "operator" || principal != w.OwnerPrincipal {
 		return nil, fmt.Errorf("delegation owner does not match operator identity")
 	}
-	if w.Version == 2 {
+	if w.Version >= 2 {
 		audience, err := url.Parse(w.Audience)
 		gateway, gatewayErr := certs.ParsePrincipal(w.Gateway)
 		if err != nil || audience.Scheme != "https" || audience.Host == "" || audience.User != nil || audience.RawQuery != "" || audience.Fragment != "" || gatewayErr != nil || gateway.TenantUUID != ownerID.TenantUUID || !strings.HasPrefix(w.Gateway, strings.Join(parts[:5], "/")+"/service/") {
@@ -110,6 +112,9 @@ func Parse(leaf *x509.Certificate) (*Scope, error) {
 		}
 	} else if w.Audience != "" || w.Gateway != "" {
 		return nil, fmt.Errorf("v1 scope cannot carry v2 bindings")
+	}
+	if (w.Version == 3) != w.AllApps || (w.AllApps && len(w.AppIDs) != 0) {
+		return nil, fmt.Errorf("all-app scope requires v3 and no explicit app IDs")
 	}
 	devices, err := values(w.DevicePrincipals)
 	if err != nil || len(devices) == 0 {
@@ -146,7 +151,7 @@ func Parse(leaf *x509.Certificate) (*Scope, error) {
 			return nil, fmt.Errorf("invalid delegated entitlement")
 		}
 	}
-	return &Scope{Version: w.Version, Audience: w.Audience, Gateway: w.Gateway, ID: w.DelegationID, Owner: principal, Devices: devices, Apps: apps, rules: rules}, nil
+	return &Scope{AllApps: w.AllApps, Version: w.Version, Audience: w.Audience, Gateway: w.Gateway, ID: w.DelegationID, Owner: principal, Devices: devices, Apps: apps, rules: rules}, nil
 }
 
 func contains(values []string, want string) bool {
@@ -176,7 +181,7 @@ func (s *Scope) Authorize(device, method, app string) error {
 	case "/wendy.agent.services.v2.WendyDeviceInfoService/GetDeviceInfo", "/wendy.agent.services.v2.WendyDeviceInfoService/ListHardwareCapabilities", "/wendy.agent.services.v1.WendyAgentService/ListHardwareCapabilities":
 		return nil
 	case "/wendy.agent.services.v2.WendyContainerService/StartContainer", "/wendy.agent.services.v2.WendyContainerService/StopContainer", "/wendy.agent.services.v1.WendyContainerService/StartContainer", "/wendy.agent.services.v1.WendyContainerService/StopContainer":
-		if app != "" && contains(s.Apps, app) {
+		if appIDPattern.MatchString(app) && ((s.Version == 3 && s.AllApps) || contains(s.Apps, app)) {
 			return nil
 		}
 		return fmt.Errorf("app is outside delegation")

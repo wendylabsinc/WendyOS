@@ -18,6 +18,11 @@ import (
 )
 
 func TestInspectDelegatedCredential(t *testing.T) {
+	t.Run("v2", func(t *testing.T) { inspectDelegatedCredential(t, 2) })
+	t.Run("v3", func(t *testing.T) { inspectDelegatedCredential(t, 3) })
+}
+
+func inspectDelegatedCredential(t *testing.T, version int) {
 	tenant := "11111111-1111-4111-8111-111111111111"
 	owner := "spiffe://wendy.sh/tenant/" + tenant + "/operator/alice"
 	gateway := "spiffe://wendy.sh/tenant/" + tenant + "/service/mcp"
@@ -54,7 +59,8 @@ func TestInspectDelegatedCredential(t *testing.T) {
 		Apps     []asn1.RawValue
 		Audience string `asn1:"optional,utf8"`
 		Gateway  string `asn1:"optional,utf8"`
-	}{2, id, owner, []asn1.RawValue{rawString(device)}, []asn1.RawValue{}, audience, gateway}
+		AllApps  bool   `asn1:"optional"`
+	}{version, id, owner, []asn1.RawValue{rawString(device)}, []asn1.RawValue{}, audience, gateway, version == 3}
 	scopeDER, err := asn1.Marshal(wire)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +77,8 @@ func TestInspectDelegatedCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	issued := issuedDelegation{ID: id, Certificate: der, Chain: rootDER, Devices: map[string]string{"asset": device}}
-	issued.Specification.Delegation.Version = 2
+	issued.Specification.Delegation.Version = version
+	issued.Specification.Delegation.AllApps = version == 3
 	issued.Specification.Delegation.ID = id
 	issued.Specification.Delegation.Owner = owner
 	issued.Specification.Delegation.Devices = []string{device}
@@ -81,7 +88,7 @@ func TestInspectDelegatedCredential(t *testing.T) {
 	issued.Specification.Entitlements = []string{right}
 	issued.Specification.Exp = time.Now().Add(time.Hour).Unix()
 	a := Access{OrganizationID: tenant, TenantID: tenant, UserID: "alice", OwnerPrincipal: owner, ServiceSubject: "mcp", DelegationID: id}
-	for _, name := range []string{"valid", "wrong key", "wrong delegation", "wrong gateway", "wrong audience", "wrong owner", "wrong scope", "untrusted chain", "expired consent"} {
+	for _, name := range []string{"valid", "wrong version", "wrong all apps", "wrong key", "wrong delegation", "wrong gateway", "wrong audience", "wrong owner", "wrong scope", "untrusted chain", "expired consent"} {
 		t.Run(name, func(t *testing.T) {
 			backend := &CloudBackend{}
 			if err := backend.ConfigureDelegations(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}), "https://cloud.example", "https://mcp.example"); err != nil {
@@ -91,6 +98,10 @@ func TestInspectDelegatedCredential(t *testing.T) {
 			access := a
 			value := issued
 			switch name {
+			case "wrong version":
+				value.Specification.Delegation.Version = 100
+			case "wrong all apps":
+				value.Specification.Delegation.AllApps = !value.Specification.Delegation.AllApps
 			case "wrong key":
 				entry.privatePEM, err = certs.GenerateMLDSAKeyPair()
 				if err != nil {

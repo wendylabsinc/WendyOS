@@ -156,6 +156,7 @@ type issuedDelegation struct {
 			Owner    string   `json:"owner_principal"`
 			Devices  []string `json:"device_principals"`
 			Apps     []string `json:"app_ids"`
+			AllApps  bool     `json:"all_apps"`
 			Audience string   `json:"audience"`
 			Gateway  string   `json:"gateway_principal"`
 		} `json:"delegation"`
@@ -183,7 +184,7 @@ func (b *CloudBackend) inspectIssued(a Access, entry *userDelegatedKey, issued i
 	}
 	want := issued.Specification.Delegation
 	gateway := "spiffe://wendy.sh/tenant/" + a.TenantID + "/service/" + a.ServiceSubject
-	if scope.Version != 2 || scope.ID != entry.id || scope.ID != a.DelegationID || scope.Owner != entry.owner || scope.Owner != want.Owner || scope.ID != want.ID || scope.Gateway != gateway || scope.Gateway != want.Gateway || scope.Audience != b.mcpOrigin+"/orgs/"+a.OrganizationID+"/mcp" || scope.Audience != want.Audience || !reflect.DeepEqual(scope.Devices, want.Devices) || !reflect.DeepEqual(scope.Apps, want.Apps) || !sameStrings(scope.Rules(), issued.Specification.Entitlements) || leaf.NotAfter.After(time.Now().Add(5*time.Minute)) || leaf.NotAfter.Unix() > issued.Specification.Exp {
+	if (scope.Version != 2 && scope.Version != 3) || scope.Version != want.Version || scope.AllApps != want.AllApps || scope.ID != entry.id || scope.ID != a.DelegationID || scope.Owner != entry.owner || scope.Owner != want.Owner || scope.ID != want.ID || scope.Gateway != gateway || scope.Gateway != want.Gateway || scope.Audience != b.mcpOrigin+"/orgs/"+a.OrganizationID+"/mcp" || scope.Audience != want.Audience || !reflect.DeepEqual(scope.Devices, want.Devices) || !reflect.DeepEqual(scope.Apps, want.Apps) || !sameStrings(scope.Rules(), issued.Specification.Entitlements) || leaf.NotAfter.After(time.Now().Add(5*time.Minute)) || leaf.NotAfter.Unix() > issued.Specification.Exp {
 		return nil, nil, "", fmt.Errorf("issued certificate exceeds approved delegation")
 	}
 	intermediates := x509.NewCertPool()
