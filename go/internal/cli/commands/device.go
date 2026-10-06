@@ -1135,8 +1135,7 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			"resets local state. Requires an updated Agent and directly verified mTLS connection. " +
 			"Numeric legacy enrollment retains its separate cleanup path.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Minute)
-			defer cancel()
+			ctx := cmd.Context()
 
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
 			if err != nil {
@@ -1158,12 +1157,16 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			orgID := prov.GetOrganizationId()
 			assetID := prov.GetAssetId()
 
-			var verifiedPeer grpcpeer.Peer
-			v2State, v2Err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}, grpc.Peer(&verifiedPeer))
-			if v2Err == nil && v2State.GetProvisioned().GetPrincipalUri() != "" {
-				return runV2DeviceUnenroll(ctx, conn, v2State.GetProvisioned(), &verifiedPeer, cloudGRPC, uuidAssetID, assumeYes, checkOnly)
-			}
-			if orgID <= 0 || assetID <= 0 {
+			// Numeric Cloud v1 keeps its original RPC path and caller context;
+			// it must not depend on a v2 Agent endpoint or the new timeout.
+			if !isLegacyCloudEnrollment(orgID, assetID) {
+				v2Ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+				defer cancel()
+				var verifiedPeer grpcpeer.Peer
+				v2State, v2Err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(v2Ctx, &agentpbv2.IsProvisionedRequest{}, grpc.Peer(&verifiedPeer))
+				if v2Err == nil && v2State.GetProvisioned().GetPrincipalUri() != "" {
+					return runV2DeviceUnenroll(v2Ctx, conn, v2State.GetProvisioned(), &verifiedPeer, cloudGRPC, uuidAssetID, assumeYes, checkOnly)
+				}
 				return fmt.Errorf("cannot safely identify this enrollment; refusing numeric legacy cleanup; update the Agent for v2 unenrollment")
 			}
 			if uuidAssetID != "" || checkOnly {

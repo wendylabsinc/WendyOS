@@ -25,7 +25,11 @@ An older Agent returns `Unimplemented` before any asset deletion or key reset.
 The new Agent refuses legacy v1 reset of direct PKI identities. Direct PKI v2
 reset now requires expected principal, expected certificate SHA-256 and a
 matching durable revocation acknowledgement; old empty requests fail closed.
-Numeric legacy enrollment behavior remains separate and unchanged.
+Numeric Cloud v1 enrollment behavior remains unchanged: it uses the original
+reset-first, best-effort Cloud cleanup path without a v2 capability probe or
+new command timeout. The three-minute timeout applies only to UUID/v2 cleanup.
+The Agent v1 reset refusal above concerns direct PKI/v2 enrollment, not numeric
+Cloud v1 devices.
 
 Both new destructive RPC paths require a same-tenant **operator** mTLS peer,
 not a device/service certificate or a plaintext connection. Cloud deletion

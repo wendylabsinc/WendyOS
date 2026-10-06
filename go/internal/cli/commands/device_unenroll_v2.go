@@ -37,6 +37,12 @@ type v2UnenrollJournal struct {
 	Reset       bool   `json:"deviceReset"`
 }
 
+// Positive numeric IDs identify the existing Cloud v1 enrollment path.
+// UUID enrollments must never fall back to numeric cleanup.
+func isLegacyCloudEnrollment(orgID, assetID int32) bool {
+	return orgID > 0 && assetID > 0
+}
+
 type v2UnenrollOps struct {
 	get    func(context.Context, string) (*cloudpbv2.Asset, error)
 	revoke func(context.Context, string, string) (*agentpbv2.RevokeACMECertificateResponse, error)
