@@ -26,14 +26,20 @@ import (
 const testOperatorTenant = "2558fd76-afc7-466e-9613-6b715296a526"
 const testOperatorSubject = "operator-subject"
 
-func TestOIDCLoginUsesDevPKIIdentityEndpointByDefault(t *testing.T) {
+func TestOIDCLoginPKIIdentityEndpointPreservesDefaultAndSupportsTargets(t *testing.T) {
 	cmd := newAuthLoginCmd()
 	flag := cmd.Flags().Lookup("pki-identity-endpoint")
 	if flag == nil {
 		t.Fatal("pki-identity-endpoint flag is missing")
 	}
-	if got, want := flag.DefValue, "https://identity.dev.pki.wendy.sh/v1/identity/certificate"; got != want {
-		t.Fatalf("pki-identity-endpoint default = %q, want %q", got, want)
+	if got := flag.DefValue; got != defaultDevPKIIdentityEndpoint {
+		t.Fatalf("pki-identity-endpoint flag default = %q, want existing development default %q", got, defaultDevPKIIdentityEndpoint)
+	}
+	if productionCloudLoginTarget.identityEndpoint != defaultProdPKIIdentityEndpoint {
+		t.Fatalf("production identity endpoint = %q", productionCloudLoginTarget.identityEndpoint)
+	}
+	if developmentCloudLoginTarget.identityEndpoint != defaultDevPKIIdentityEndpoint {
+		t.Fatalf("development identity endpoint = %q", developmentCloudLoginTarget.identityEndpoint)
 	}
 }
 
@@ -155,7 +161,7 @@ func TestRequestPKIIdentityCertificateUsesBoundCSRFlow(t *testing.T) {
 
 	got, err := requestPKIIdentityCertificate(
 		context.Background(), server.Client(), endpoint, privateKeyPEM, key,
-		"identity-access-token", testOperatorTenant, testOperatorSubject,
+		"identity-access-token", "", testOperatorSubject,
 	)
 	if err != nil {
 		t.Fatalf("requestPKIIdentityCertificate: %v", err)
@@ -168,6 +174,9 @@ func TestRequestPKIIdentityCertificateUsesBoundCSRFlow(t *testing.T) {
 	}
 	if got.PrincipalURI != "spiffe://wendy.sh/tenant/"+testOperatorTenant+"/operator/"+testOperatorSubject {
 		t.Fatalf("principal URI = %q", got.PrincipalURI)
+	}
+	if got.TenantUUID() != testOperatorTenant {
+		t.Fatalf("certificate tenant = %q", got.TenantUUID())
 	}
 }
 

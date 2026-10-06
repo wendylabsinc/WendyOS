@@ -156,7 +156,7 @@ func TestPerformOIDCLogin_NonInteractivePrintsURLAndTimesOut(t *testing.T) {
 
 	var issuer string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/.well-known/openid-configuration" {
+		if r.URL.Path != "/realms/test/.well-known/openid-configuration" {
 			http.NotFound(w, r)
 			return
 		}
@@ -168,7 +168,7 @@ func TestPerformOIDCLogin_NonInteractivePrintsURLAndTimesOut(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	issuer = srv.URL
+	issuer = srv.URL + "/realms/test"
 
 	var err error
 	out := captureStdout(t, func() {

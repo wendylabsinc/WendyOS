@@ -224,7 +224,7 @@ func TestDecodeJWTClaimsRejectsMalformed(t *testing.T) {
 // realm: "openid+email" fails, "openid%20email" succeeds.
 func TestBuildAuthorizeURLPercentEncodesScopeSpaces(t *testing.T) {
 	meta := &oidcProviderMetadata{AuthorizationEndpoint: "https://auth.example/realms/x/authorize"}
-	got, err := buildAuthorizeURL(meta, "wendy-cli", "http://127.0.0.1:8765/callback", "chal", "state", defaultDevCloudResource)
+	got, err := buildAuthorizeURL(meta, "wendy-cli", "http://127.0.0.1:8765/callback", "chal", "state", "nonce", defaultDevCloudResource)
 	if err != nil {
 		t.Fatalf("buildAuthorizeURL: %v", err)
 	}
@@ -241,6 +241,9 @@ func TestBuildAuthorizeURLPercentEncodesScopeSpaces(t *testing.T) {
 	}
 	if s := u.Query().Get("scope"); s != oidcScopes {
 		t.Fatalf("scope round-trip = %q, want %q", s, oidcScopes)
+	}
+	if got := u.Query().Get("nonce"); got != "nonce" {
+		t.Fatalf("nonce = %q, want nonce", got)
 	}
 }
 
