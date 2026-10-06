@@ -28,9 +28,9 @@ type ProgramEntry struct {
 	Sparse     bool   `xml:"sparse,attr"`
 	Filename   string `xml:"filename,attr"`
 	Label      string `xml:"label,attr"`
-	// SizeKB is the descriptor's own statement of the payload size — the only
-	// per-payload integrity signal the bundle carries, so a mismatch means a
-	// truncated or wrong file.
+	// SizeKB is the partition size. An image built to fill its partition must
+	// match it exactly — the only per-payload integrity signal the bundle
+	// carries, so a mismatch means a truncated or wrong file.
 	SizeKB float64 `xml:"size_in_KB,attr"`
 	// StartSector stays a string because the descriptor may express it
 	// relative to the disk size (e.g. "NUM_DISK_SECTORS-5."); the programmer
@@ -333,12 +333,26 @@ func checkPayload(dir string, e ProgramEntry) error {
 	// SectorsFor only rejects a payload too large for its partition. Without
 	// this a truncated one would be programmed as a handful of sectors and the
 	// flash would report success on an unbootable board.
-	if want := int64(e.SizeKB * 1024); want > 0 && info.Size() != want {
+	if want := int64(e.SizeKB * 1024); want > 0 && info.Size() != want && fillsPartition(e) {
 		return fmt.Errorf("payload %q is %d bytes but the descriptor declares %d",
 			e.Filename, info.Size(), want)
 	}
 	_, err = SectorsFor(e, info.Size())
 	return err
+}
+
+// fillsPartition reports whether an entry's payload is built to its partition's
+// exact size: whatever the host generates, the OS images and the GPT copies.
+// Boot firmware, which only eMMC layouts carry, is smaller than its partition.
+func fillsPartition(e ProgramEntry) bool {
+	if e.localPath != "" {
+		return true
+	}
+	switch e.Label {
+	case "efi", "rootfsA", "rootfsB", "PrimaryGPT", "BackupGPT":
+		return true
+	}
+	return false
 }
 
 // ResolveBundleDir finds the directory holding the flash descriptors. A

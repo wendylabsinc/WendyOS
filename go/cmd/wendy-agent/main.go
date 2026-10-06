@@ -1048,10 +1048,19 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Self-enroll from a token staged by agent.sh (Linux Desktop install).
-	// Best-effort and non-blocking: a cloud outage must never delay the agent
-	// coming up locally (mDNS discovery still works unenrolled).
-	go provisioningSvc.ApplyEnrollmentFile(context.Background())
+	// Enrollment is non-blocking and begins only after callbacks are installed.
+	// A baked ACME credential must not fall through to legacy enrollment when
+	// invalid or already attempted. Conflicting handoffs require operator recovery.
+	go func() {
+		const bakedACMEPath = "/config/acme-enrollment.json"
+		if _, err := os.Stat(bakedACMEPath); err == nil {
+			provisioningSvcV2.ApplyACMEEnrollmentFile(ctx, bakedACMEPath)
+		} else if os.IsNotExist(err) {
+			provisioningSvc.ApplyEnrollmentFile(ctx)
+		} else {
+			logger.Warn("Cannot inspect first-boot ACME handoff; automatic enrollment skipped")
+		}
+	}()
 
 	// Restore audio peripherals paired before the last reboot. Nothing else
 	// does: BlueZ only reconnects after a link supervision timeout and has no

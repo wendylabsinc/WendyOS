@@ -34,7 +34,6 @@ import (
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	grpcmetadata "google.golang.org/grpc/metadata"
 )
 
 const AuthBase = "https://auth.dev.wendy.sh"
@@ -565,7 +564,6 @@ func (s *Session) DiscoverFiltered(ctx context.Context, dial func(context.Contex
 		return nil, e
 	}
 	defer conn.Close()
-	ctx = grpcmetadata.NewOutgoingContext(ctx, grpcmetadata.Pairs("x-wendy-client-cert", "URI="+s.profile.Principal, "x-forwarded-client-cert", "URI="+s.profile.Principal))
 	if s.profile.Email == "" {
 		if err := s.loadUserInfo(ctx); err != nil {
 			s.profile.ProfileWarning = "Email lookup unavailable: " + err.Error()

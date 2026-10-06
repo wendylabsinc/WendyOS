@@ -23,8 +23,8 @@ func authIsDPoPBound(auth *config.AuthConfig) bool {
 
 // dpopDialOptions installs the shared per-RPC DPoP interceptor for a bound
 // session, driven by the CLI token provider (which refreshes an expired token).
-// Unbound sessions get nil and keep Bearer. Installed by withCloudRequestSigning
-// so it rides every commands-package cloud dial.
+// Unbound sessions get nil and keep Bearer. Every commands-package Cloud dial
+// appends it.
 func dpopDialOptions(auth *config.AuthConfig) []grpc.DialOption {
 	return cloudrequest.DPoPDialOptions(auth, cliDPoPTokenProvider(auth))
 }

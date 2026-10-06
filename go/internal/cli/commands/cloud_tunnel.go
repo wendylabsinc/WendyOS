@@ -14,7 +14,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
-	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -53,9 +52,12 @@ func (f closeFunc) Close() error {
 	return nil
 }
 
+// certXFCC is the identity header pair only legacy (urn:wendy) sessions send to
+// the old cloud. A PKI-principal session gets none: the new cloud reads no
+// identity header (WDY-2346); the old one is retired with the v1 cutover.
 func certXFCC(cert config.CertificateInfo) string {
 	if cert.PrincipalURI != "" {
-		return "URI=" + cert.PrincipalURI
+		return ""
 	}
 	if cert.UserID != "" {
 		return fmt.Sprintf("URI=urn:wendy:org:%d:user:%s", cert.OrganizationID, cert.UserID)
@@ -78,7 +80,7 @@ func cloudContext(ctx context.Context, auth *config.AuthConfig) (context.Context
 	}
 	md := metadata.MD{}
 	// A DPoP-bound token (OAuth login) must not go out as Bearer — the DPoP
-	// interceptor (dpopDialOptions, installed by withCloudRequestSigning) sets
+	// interceptor (dpopDialOptions, appended at dial) sets
 	// `authorization: DPoP <token>` plus a per-call proof. Only unbound
 	// API-key/legacy sessions carry a Bearer here (WDY-3107).
 	if auth.HasAPIKey() && !authIsDPoPBound(auth) {
@@ -146,6 +148,9 @@ func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice)
 	// the authenticated Cloud binding may identify the expected PKI device.
 	tenant := cert.TenantUUID()
 	device := asset.v2.GetPkiDeviceName()
+	if asset.key == "" || asset.v2.GetId() != asset.key {
+		return certs.WendyIdentity{}, fmt.Errorf("Cloud returned a different asset than the selected routing target")
+	}
 	if tenant == "" || asset.v2.GetOrganizationId() != tenant {
 		return certs.WendyIdentity{}, fmt.Errorf("Cloud asset %s does not match the selected operator tenant", asset.key)
 	}
@@ -187,6 +192,10 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	expectedIdentity, err := cloudDiscoveryIdentity(auth, asset)
+	if err != nil {
+		return nil, err
+	}
 	var brokerConn *grpc.ClientConn
 	if asset.legacy != nil {
 		var err error
@@ -220,10 +229,6 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	x509Cert, err := certs.TLSKeyPair(cert.PemCertificate, cert.PemCertificateChain, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
-	}
-	expectedIdentity, err := cloudDiscoveryIdentity(auth, asset)
-	if err != nil {
-		return nil, err
 	}
 	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
 		ChainPEM:         cert.PemCertificateChain,
@@ -760,41 +765,21 @@ func dialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 	} else {
 		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
 	}
-	dialOptions, err := withCloudRequestSigning(auth,
+	dialOptions := append([]grpc.DialOption{
 		transport,
-		grpc.WithInitialWindowSize(8*1024*1024),
-		grpc.WithInitialConnWindowSize(16*1024*1024),
-		grpc.WithReadBufferSize(256*1024),
-		grpc.WithWriteBufferSize(256*1024),
+		grpc.WithInitialWindowSize(8 * 1024 * 1024),
+		grpc.WithInitialConnWindowSize(16 * 1024 * 1024),
+		grpc.WithReadBufferSize(256 * 1024),
+		grpc.WithWriteBufferSize(256 * 1024),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                clouddefaults.KeepalivePing,
 			Timeout:             clouddefaults.KeepaliveACKTimeout,
 			PermitWithoutStream: true,
 		}),
-	)
-	if err != nil {
-		return nil, err
-	}
+	}, dpopDialOptions(auth)...)
 	conn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
 	}
 	return conn, nil
-}
-
-// withCloudRequestSigning installs the pki-core operator-certificate signer.
-// The bootstrap paths that construct their own connection use this helper too,
-// so all Cloud mutations share one wire contract.
-func withCloudRequestSigning(auth *config.AuthConfig, options ...grpc.DialOption) ([]grpc.DialOption, error) {
-	signingOption, err := cloudrequest.DialOption(auth)
-	if err != nil {
-		return nil, fmt.Errorf("configuring Cloud request signing: %w", err)
-	}
-	if signingOption != nil {
-		options = append(options, signingOption)
-	}
-	// Per-RPC DPoP proof for a sender-constrained (cnf-bound) OAuth token; nil
-	// for unbound sessions (WDY-3107).
-	options = append(options, dpopDialOptions(auth)...)
-	return options, nil
 }

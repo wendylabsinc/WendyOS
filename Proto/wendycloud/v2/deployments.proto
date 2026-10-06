@@ -3,17 +3,27 @@ syntax = "proto3";
 package wendycloud.v2;
 
 import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
 
 service DeploymentService {
   // ==================== App Releases ====================
-  rpc CreateAppRelease(CreateAppReleaseRequest) returns (AppRelease);
-  rpc UpdateAppRelease(UpdateAppReleaseRequest) returns (AppRelease);
+  // Signed; payload_type "wendycloud.v2.CreateAppReleaseRequest".
+  rpc CreateAppRelease(SignedRequest) returns (AppRelease) {
+    option (wendy.signed_request) = true;
+  }
+  // Signed; payload_type "wendycloud.v2.UpdateAppReleaseRequest".
+  rpc UpdateAppRelease(SignedRequest) returns (AppRelease) {
+    option (wendy.signed_request) = true;
+  }
   rpc ListAppReleases(ListAppReleasesRequest) returns (stream ListAppReleasesResponse);
   rpc GetPushImageCredentials(GetPushImageCredentialsRequest) returns (GetPushImageCredentialsResponse);
 
-
   // ==================== Deployments ====================
-  rpc CreateDeployment(CreateDeploymentRequest) returns (Deployment);
+  // Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
+  rpc CreateDeployment(SignedRequest) returns (Deployment) {
+    option (wendy.signed_request) = true;
+  }
   rpc GetDeployment(GetDeploymentRequest) returns (Deployment);
   rpc ListDeployments(ListDeploymentsRequest) returns (stream ListDeploymentsResponse);
 
@@ -24,7 +34,10 @@ service DeploymentService {
 
   // ==================== Device Container Control ====================
   rpc ListDeviceContainers(ListDeviceContainersRequest) returns (stream DeviceContainer);
-  rpc ControlContainer(ControlContainerRequest) returns (ControlContainerResponse);
+  // Signed; payload_type "wendycloud.v2.ControlContainerRequest".
+  rpc ControlContainer(SignedRequest) returns (ControlContainerResponse) {
+    option (wendy.signed_request) = true;
+  }
 }
 
 // ==================== App Releases ====================

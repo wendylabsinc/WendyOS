@@ -173,6 +173,16 @@ Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wen
 
 Provisioning works as it does on Thor: the bundle ships no config image, so wendy builds one on the host and programs it into the config partition. `--wifi`, `--device-name` and `--pre-enroll` all apply, and a freshly downloaded `wendy-agent` is seeded on every flash.
 
+## Arduino UNO Q path
+
+```sh
+wendy install --device-type arduino-uno-q
+```
+
+The UNO Q is flashed over EDL like the Dragonwing boards, with the same chip-id check, factory reset and provisioning. To enter EDL, unplug the board, short its two EDL pins with a jumper, and plug in the USB-C cable ([Arduino's guide](https://docs.arduino.cc/software/app-lab/configure/flash/) shows the pins); the short can come off once the board is detected. After success, unplug the board, remove the short and plug it back in.
+
+The UNO Q keeps its boot firmware on the same eMMC, so the flash also rewrites it (with Arduino's own ABL and U-Boot) and replaces the Debian image, which Arduino's flasher restores.
+
 ## Linux Desktop / Headless Mac path
 
 Choosing **Linux Desktop** or **Headless Mac** (or `--device-type linux-desktop` / `--device-type headless-mac`) does not write a drive. The command prints the `agent.sh` one-liner from the [Linux installation guide](/docs/installation/linux) (the script auto-detects the target platform). When `--pre-enroll` is supplied and a valid auth session exists, a 1-hour enrollment token is embedded in the command; the agent self-enrolls on first startup without a separate `wendy device enroll` step. Run `wendy discover` afterwards to find the device.
