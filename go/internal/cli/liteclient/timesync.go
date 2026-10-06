@@ -32,8 +32,8 @@ func (c *WendyLiteClient) SyncTimeChallenge(ctx context.Context, nonceHex string
 }
 
 func relayRoughtime(ctx context.Context, nonceHex string,
-    query func(context.Context, roughtime.Server, []byte) (roughtime.Result, error),
-    send func(*pb.WendyComCommand) (*pb.WendyComResponse, error)) (time.Time, error) {
+	query func(context.Context, roughtime.Server, []byte) (roughtime.Result, error),
+	send func(*pb.WendyComCommand) (*pb.WendyComResponse, error)) (time.Time, error) {
 	nonce, err := hex.DecodeString(nonceHex)
 	if err != nil || len(nonce) != 32 {
 		return time.Time{}, fmt.Errorf("invalid device Roughtime nonce")
@@ -63,7 +63,7 @@ func relayRoughtime(ctx context.Context, nonceHex string,
 				continue
 			}
 			reply, err := send(&pb.WendyComCommand{
-				Params:    &pb.WendyComCommand_SyncTime{SyncTime: &pb.WendyComSyncTimeParams{ServerIndex: uint32(a.index), Response: a.result.RawResponse}},
+				Params: &pb.WendyComCommand_SyncTime{SyncTime: &pb.WendyComSyncTimeParams{ServerIndex: uint32(a.index), Response: a.result.RawResponse}},
 			})
 			if err != nil {
 				return time.Time{}, err
