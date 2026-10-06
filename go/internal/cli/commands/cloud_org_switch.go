@@ -74,6 +74,15 @@ func cloudAuthForOrg(cfg *config.Config, orgID int32) *config.AuthConfig {
 // org switches immediately. Selecting an unauthenticated org starts login and
 // requires that the chosen org's certificate be present afterwards.
 func switchCloudOrganization(ctx context.Context, cfg *config.Config) (*config.AuthConfig, *config.Config, error) {
+	// UUID certificates are tenant-scoped. Querying only the current session
+	// hides other stored tenants and legacy contexts in other environments.
+	if cfg != nil && len(authPickerItems(cfg, nil)) > 1 {
+		for i := range cfg.Auth {
+			if len(cfg.Auth[i].Certificates) > 0 && cfg.Auth[i].Certificates[0].TenantUUID() != "" {
+				return switchCloudOrganizationAcrossContexts(ctx, cfg)
+			}
+		}
+	}
 	if auth := devicePickerInitialAuth(cfg); auth != nil && len(auth.Certificates) > 0 && auth.Certificates[0].TenantUUID() != "" {
 		return switchCloudOrganizationV2(ctx, cfg, auth)
 	}
