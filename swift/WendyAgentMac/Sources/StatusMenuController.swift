@@ -26,6 +26,7 @@ final class StatusMenuController: NSObject {
     init(
         wendyAgent: WendyAgent,
         localBuildService: WendyRuntimeVM,
+        localBuildServiceIsAvailable: Bool,
         meshVPN: MeshVPNController,
         meshVPNIsAvailable: Bool,
         delegate: (any StatusMenuControllerDelegate)? = nil,
@@ -33,6 +34,7 @@ final class StatusMenuController: NSObject {
     ) async {
         self.wendyAgent = wendyAgent
         self.localBuildService = localBuildService
+        self.localBuildServiceIsAvailable = localBuildServiceIsAvailable
         self.localBuildServiceState = localBuildService.state
         self.meshVPN = meshVPN
         self.meshVPNIsAvailable = meshVPNIsAvailable
@@ -71,6 +73,7 @@ final class StatusMenuController: NSObject {
 
     private let bundleDisplayName: String
     private let localBuildService: WendyRuntimeVM
+    private let localBuildServiceIsAvailable: Bool
     private let meshVPN: MeshVPNController
     private let meshVPNIsAvailable: Bool
     private let statusItem: NSStatusItem
@@ -134,26 +137,30 @@ final class StatusMenuController: NSObject {
 
         self.menu.addItem(.separator())
 
-        let localBuildServiceItem = NSMenuItem(
-            title: self.localBuildServiceState.menuTitle,
-            action: #selector(self.localBuildServiceSelected),
-            keyEquivalent: ""
-        )
-        localBuildServiceItem.target = self
-        localBuildServiceItem.state = self.localBuildServiceState == .running ? .on : .off
-        localBuildServiceItem.isEnabled = self.localBuildServiceCanToggle
-        localBuildServiceItem.image = NSImage(
-            systemSymbolName: self.localBuildServiceState.menuImageName,
-            accessibilityDescription: "Local Build Service"
-        )
-        self.menu.addItem(localBuildServiceItem)
+        if self.localBuildServiceIsAvailable {
+            let localBuildServiceItem = NSMenuItem(
+                title: self.localBuildServiceState.menuTitle,
+                action: #selector(self.localBuildServiceSelected),
+                keyEquivalent: ""
+            )
+            localBuildServiceItem.target = self
+            localBuildServiceItem.state = self.localBuildServiceState == .running ? .on : .off
+            localBuildServiceItem.isEnabled = self.localBuildServiceCanToggle
+            localBuildServiceItem.image = NSImage(
+                systemSymbolName: self.localBuildServiceState.menuImageName,
+                accessibilityDescription: "Local Build Service"
+            )
+            self.menu.addItem(localBuildServiceItem)
 
-        if let detail = self.localBuildServiceState.failureDetail {
-            self.menu.addItem(self.makeDisabledMenuItem(title: detail))
+            if let detail = self.localBuildServiceState.failureDetail {
+                self.menu.addItem(self.makeDisabledMenuItem(title: detail))
+            }
         }
 
         if self.meshVPNIsAvailable {
-            self.menu.addItem(.separator())
+            if self.localBuildServiceIsAvailable {
+                self.menu.addItem(.separator())
+            }
 
             let meshItem = NSMenuItem(
                 title: self.meshMenuTitle,
@@ -191,7 +198,9 @@ final class StatusMenuController: NSObject {
             }
         }
 
-        self.menu.addItem(.separator())
+        if self.localBuildServiceIsAvailable || self.meshVPNIsAvailable {
+            self.menu.addItem(.separator())
+        }
 
         let statusItem = self.makeDisabledMenuItem(title: self.currentStatus.menuTitle)
         statusItem.image = self.makeStatusImage(for: self.currentStatus)
@@ -274,12 +283,12 @@ final class StatusMenuController: NSObject {
         button.imagePosition = self.buttonImagePosition(for: self.currentStatus, image: image)
         button.imageScaling = .scaleProportionallyDown
         let serviceTitles = [
-            self.localBuildServiceState.menuTitle,
+            self.localBuildServiceIsAvailable ? self.localBuildServiceState.menuTitle : nil,
             self.meshVPNIsAvailable ? self.meshMenuTitle : nil,
         ].compactMap { $0 }
         button.toolTip =
-            "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle); "
-            + serviceTitles.joined(separator: "; ")
+            "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle)"
+            + (serviceTitles.isEmpty ? "" : "; \(serviceTitles.joined(separator: "; "))")
         button.setAccessibilityTitle(self.bundleDisplayName)
     }
 

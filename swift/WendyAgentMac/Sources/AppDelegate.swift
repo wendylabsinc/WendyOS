@@ -13,8 +13,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     )
     private let wendyAgent = WendyAgent(configuration: .default)
     private let localBuildService = WendyRuntimeVM()
+    // DISABLED: Local Build Service is hidden while the BuildKit experience remains unfinished.
+    private let localBuildServiceIsEnabled = false
     private let meshVPN = MeshVPNController.shared
-    private let meshVPNIsAvailable = MeshSystemExtensionInstaller.isBundled
+    // DISABLED: Wendy Mesh is hidden until its sign-in and account experience is ready.
+    private let meshVPNIsEnabled = false
+    private var meshVPNIsAvailable: Bool {
+        self.meshVPNIsEnabled && MeshSystemExtensionInstaller.isBundled
+    }
     private let welcomeAndPermissions = WelcomeAndPermissions()
     private var statusMenuController: StatusMenuController?
     private var welcomeAndPermissionsWindow: NSWindow?
@@ -33,13 +39,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
             self.statusMenuController = await StatusMenuController(
                 wendyAgent: self.wendyAgent,
                 localBuildService: self.localBuildService,
+                localBuildServiceIsAvailable: self.localBuildServiceIsEnabled,
                 meshVPN: self.meshVPN,
                 meshVPNIsAvailable: self.meshVPNIsAvailable,
                 delegate: self
             )
 
+            if !self.localBuildServiceIsEnabled {
+                // DISABLED: Stop any process-local BuildKit runtime so the hidden service cannot
+                // remain active without visible controls.
+                await self.localBuildService.stop()
+            }
+
             if self.meshVPNIsAvailable {
                 await self.meshVPN.connectAutomatically()
+            } else {
+                // DISABLED: Clear prior opt-ins and stop existing tunnels so hidden Mesh cannot
+                // remain active or reconnect in the background.
+                await self.meshVPN.disable()
             }
 
             // Registered before start() so the services the agent builds at
@@ -80,6 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         _ controller: StatusMenuController,
         didSetLocalBuildServiceEnabled enabled: Bool
     ) {
+        guard self.localBuildServiceIsEnabled else { return }
+
         Task {
             if enabled {
                 await self.localBuildService.start()

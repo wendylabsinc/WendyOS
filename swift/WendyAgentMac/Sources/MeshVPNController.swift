@@ -95,22 +95,19 @@ final class MeshVPNController: NSObject, ObservableObject {
 
     func disable() async {
         UserDefaults.standard.set(false, forKey: autoConnectKey)
-        if manager == nil {
-            manager = try? await loadManager()
-        }
         if packetManager == nil {
-            packetManager = try? await loadPacketManager()
+            packetManager = try? await existingPacketManager()
         }
         packetManager?.connection.stopVPNTunnel()
         packetManager?.isEnabled = false
         try? await packetManager?.saveToPreferences()
-        guard let manager else {
-            status = .disabled
-            return
+
+        if manager == nil {
+            manager = try? await existingManager()
         }
-        manager.connection.stopVPNTunnel()
-        manager.isEnabled = false
-        try? await manager.saveToPreferences()
+        manager?.connection.stopVPNTunnel()
+        manager?.isEnabled = false
+        try? await manager?.saveToPreferences()
         status = .disabled
     }
 
