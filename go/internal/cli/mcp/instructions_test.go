@@ -83,7 +83,7 @@ func TestServerInstructionsShape(t *testing.T) {
 			t.Errorf("first paragraph does not mention %s", want)
 		}
 	}
-	for _, want := range []string{"vm:NAME", "cloud://", "before verifying", "NOT_CONNECTED", "AUTH_REQUIRED", "wendy://guide", "separate words"} {
+	for _, want := range []string{"vm:NAME", "cloud://", "before verifying", "NOT_CONNECTED", "AUTH_REQUIRED", "wendy://guide", "separate words", "Relay CLI update notices", "MCP server restart"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("instructions do not mention %q", want)
 		}
@@ -144,5 +144,14 @@ func TestGuideListsEveryErrorCode(t *testing.T) {
 		if !strings.Contains(section, string(code)) {
 			t.Errorf("guide error-code list is missing %s", code)
 		}
+	}
+}
+
+func TestServerInstructionsSendAuthRequiredToAuthLogin(t *testing.T) {
+	if !strings.Contains(serverInstructions, "AUTH_REQUIRED") || !strings.Contains(serverInstructions, "`auth_login`") {
+		t.Fatal("instructions must send AUTH_REQUIRED to `auth_login`")
+	}
+	if !strings.Contains(guideText, "auth_login") {
+		t.Fatal("guide must mention auth_login")
 	}
 }

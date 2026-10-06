@@ -10,6 +10,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const rawWriteFlags = os.O_RDWR
+
 // blockDeviceSize reports the size of dev in bytes. Regular files (tests)
 // short-circuit to Stat. Physical drives are sized via
 // IOCTL_DISK_GET_DRIVE_GEOMETRY_EX (FILE_ANY_ACCESS, so it works on the

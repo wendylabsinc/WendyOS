@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "wendy-robots": {
+      "type": "stdio",
+      "command": "wendy",
+      "args": ["mcp", "gateway"]
+    }
+  }
+}

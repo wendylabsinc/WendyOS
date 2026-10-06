@@ -179,6 +179,10 @@ func TestAgentInferenceAllCamerasRecordAndNotify(t *testing.T) {
 	if notification1.ID == notification2.ID {
 		t.Fatal("different cameras shared a notification ID")
 	}
+	retained, _, _, err := service.manager.Notifications("", "", "", true)
+	if err != nil || len(retained) != 2 || retained[0].ID != notification1.ID || retained[1].ID != notification2.ID || retained[0].OccurredAt == "" {
+		t.Fatalf("detection notifications were not durably retained: %v %v", retained, err)
+	}
 
 	episodes := service.manager.ActiveEpisodeKeys()
 	if len(episodes) != 1 {
@@ -272,6 +276,62 @@ func TestAgentInferenceRedeployStopsOldRevision(t *testing.T) {
 	}
 	if len(service.manager.ActiveEpisodeKeys()) != 0 {
 		t.Fatal("stale result started recording")
+	}
+}
+
+func TestInferenceDisabledWaitsForRetiredWorker(t *testing.T) {
+	manager, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := data.ParseCampaign(inferenceTestYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old.Notify = &data.CampaignNotify{On: data.NotifyOnDetection}
+	disabled := old
+	config := *old.Inference
+	enabled := false
+	config.Enabled = &enabled
+	disabled.Inference = &config
+	raw, err := yaml.Marshal(disabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err = manager.DeployCampaign(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, done := make(chan struct{}), make(chan struct{})
+	service := NewDataService(manager)
+	service.inference = &campaignInferenceManager{service: service, jobs: map[string]*campaignInferenceJob{
+		old.Name: {campaign: old, cancel: func() { close(canceled) }, done: done, status: data.InferenceStatus{State: "running"}},
+	}}
+	state := func() string {
+		t.Helper()
+		message, err := service.campaignMessage(disabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plan data.Campaign
+		if err := json.Unmarshal(message.PlanJson, &plan); err != nil {
+			t.Fatal(err)
+		}
+		return plan.InferenceStatus.State
+	}
+	if got := state(); got != "stopping" {
+		t.Fatalf("before cancellation: %s", got)
+	}
+	reconciled := make(chan struct{})
+	go func() { defer close(reconciled); service.inference.reconcile(context.Background()) }()
+	receiveInference(t, canceled)
+	if got := state(); got != "stopping" {
+		t.Fatalf("before process exit: %s", got)
+	}
+	close(done)
+	receiveInference(t, reconciled)
+	if got := state(); got != "disabled" {
+		t.Fatalf("after process exit: %s", got)
 	}
 }
 
@@ -499,6 +559,10 @@ func TestAgentInferenceEventNotificationWithoutModelOrUpload(t *testing.T) {
 	}
 	if len(manager.ActiveEpisodeKeys()) != 0 {
 		t.Fatal("notification created an episode")
+	}
+	retained, _, _, err := manager.Notifications("", "", "", true)
+	if err != nil || len(retained) != 1 || retained[0].Event != "person_detected" || retained[0].OccurredAt == "" {
+		t.Fatalf("named event notification was not durably retained: %v %v", retained, err)
 	}
 }
 

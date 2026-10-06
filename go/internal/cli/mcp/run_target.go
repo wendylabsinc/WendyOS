@@ -43,11 +43,13 @@ func withDefaultAgentPort(host string) string {
 func (s *mcpServer) runNextStep(target commandTarget) string {
 	_, _, session := s.connectionSnapshot()
 	deployed := runTargetIdentity(target)
-	connect := fmt.Sprintf("device_connect(address=%q)", deployed)
+	connect := fmt.Sprintf("device_connect(device=%q)", deployed)
 	if target.Transport == "cloud" && target.Selector == "" {
-		connect = fmt.Sprintf("cloud_connect(device_name=%q)", target.Device)
+		// cloud_connect is outside the core tool group, so name the step that
+		// makes it callable.
+		connect = fmt.Sprintf(`wendy_tools(groups=["cloud"]), then cloud_connect(device_name=%q)`, target.Device)
 		if target.CloudGRPC != "" {
-			connect = fmt.Sprintf("cloud_connect(device_name=%q, cloud_grpc=%q)", target.Device, target.CloudGRPC)
+			connect = fmt.Sprintf(`wendy_tools(groups=["cloud"]), then cloud_connect(device_name=%q, cloud_grpc=%q)`, target.Device, target.CloudGRPC)
 		}
 	}
 	const verify = " before container_list or telemetry_logs, then test the app's health endpoint or ROS interface. Deployment alone does not verify behavior."

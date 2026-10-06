@@ -13,6 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
@@ -371,7 +373,7 @@ func (s *mcpServer) handleContainerExec(ctx context.Context, req mcpgo.CallToolR
 		}
 		if failure != nil {
 			out["error_code"], out["message"] = string(codeFromGRPC(failure)), grpcErrString(failure)
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if containerExecTimedOut(ctx, failure) {
 				out["error_code"], out["message"] = string(errCodeTimeout), "container exec timed out before completion was observed"
 			}
 		}
@@ -416,4 +418,15 @@ func (s *mcpServer) handleContainerExec(ctx context.Context, req mcpgo.CallToolR
 			return result(&output.ExitCode, nil), nil
 		}
 	}
+}
+
+func containerExecTimedOut(ctx context.Context, failure error) bool {
+	ctxErr := ctx.Err()
+	if errors.Is(ctxErr, context.DeadlineExceeded) || status.Code(failure) == codes.DeadlineExceeded {
+		return true
+	}
+	// The peer can reset the stream at its deadline before the local context's
+	// timer runs. Check the deadline itself while that timer is still pending.
+	deadline, ok := ctx.Deadline()
+	return ctxErr == nil && ok && !time.Now().Before(deadline)
 }

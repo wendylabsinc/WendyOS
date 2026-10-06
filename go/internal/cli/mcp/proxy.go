@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 
@@ -15,7 +16,7 @@ import (
 // startMCPProxy starts a local TCP listener that proxies each incoming connection
 // to the named container's MCP server via StreamMCP. Returns the listener address
 // (e.g. "127.0.0.1:52341") and a close function.
-func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appName string) (addr string, closeFn func(), err error) {
+func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appName string, onError ...func(error)) (addr string, closeFn func(), err error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, fmt.Errorf("starting MCP proxy for %q: %w", appName, err)
@@ -35,7 +36,11 @@ func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appNam
 			connections.Add(1)
 			go func() {
 				defer connections.Done()
-				serveMCPProxyConn(pctx, conn, appName, tcpConn)
+				if err := serveMCPProxyConn(pctx, conn, appName, tcpConn); err != nil && err != io.EOF {
+					for _, report := range onError {
+						report(err)
+					}
+				}
 			}()
 		}
 	}()
@@ -48,7 +53,7 @@ func startMCPProxy(ctx context.Context, conn *grpcclient.AgentConnection, appNam
 	}, nil
 }
 
-func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, appName string, tcpConn net.Conn) {
+func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, appName string, tcpConn net.Conn) error {
 	defer tcpConn.Close()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -58,7 +63,7 @@ func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, ap
 
 	stream, err := conn.ContainerService.StreamMCP(ctx)
 	if err != nil {
-		return
+		return err
 	}
 
 	errc := make(chan error, 2)
@@ -102,9 +107,11 @@ func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, ap
 
 	select {
 	case <-ctx.Done():
-	case <-errc:
+		err = ctx.Err()
+	case err = <-errc:
 	}
 	cancel()
 	_ = tcpConn.Close()
 	pumps.Wait()
+	return err
 }

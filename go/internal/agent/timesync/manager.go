@@ -2,6 +2,7 @@ package timesync
 
 import (
 	"context"
+	"net"
 	"sync"
 	"time"
 
@@ -17,14 +18,15 @@ type Manager struct {
 	mu         sync.RWMutex
 	latest     *Consensus
 
-	// Injection points for deterministic tests of RunDirect. They replace the
-	// network query, the clock write and the wait, so a test can drive the
-	// loop's policy without a Roughtime server, root privileges or the real
-	// six-hour interval. Nil means "use the real one", so a zero-value Manager
-	// still behaves.
+	// Injection points for tests of time-sync loops. Nil means use the real
+	// network, clock write and retry timer, so a zero-value Manager still behaves.
 	query func(context.Context, []roughtime.Server) (Consensus, error)
 	apply func(time.Time)
 	sleep func(time.Duration) <-chan time.Time
+
+	multicastListen     func() (multicastPacketConn, error)
+	multicastInterfaces func() ([]net.Interface, error)
+	multicastInterval   time.Duration
 }
 
 func (m *Manager) queryConsensus(ctx context.Context, servers []roughtime.Server) (Consensus, error) {

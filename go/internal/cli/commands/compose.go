@@ -292,7 +292,7 @@ func buildComposeServicesParallel(ctx context.Context, conn *grpcclient.AgentCon
 	sem := make(chan struct{}, concurrency)
 
 	var prog *tea.Program
-	if !quietBuild && isInteractiveTerminal() {
+	if !quietBuild && isInteractiveTerminal() && !detachedJSONRun(ctx) {
 		prog = tui.NewProgressProgram(tui.NewMultiSpinner(fmt.Sprintf("Building %d Compose service(s)...", len(names)), names))
 	}
 
@@ -322,7 +322,7 @@ func buildComposeServicesParallel(ctx context.Context, conn *grpcclient.AgentCon
 
 			start := time.Now()
 			var logBuf bytes.Buffer
-			var buildOut io.Writer = os.Stdout
+			var buildOut io.Writer = runProgressWriter(ctx)
 			var logOut io.Writer = os.Stderr
 			var layerDiffIDs []string
 			var tally func() tui.BuildTally = func() tui.BuildTally { return tui.BuildTally{} }
@@ -1553,6 +1553,19 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if runErr != nil {
 		return runErr
 	}
+	if opts.detach {
+		configs := []*appconfig.AppConfig{appLevelCfg}
+		for _, name := range ordered {
+			configs = append(configs, svcLifecycleCfgs[name])
+		}
+		appID := projectName
+		if companion != nil && companion.AppID != "" {
+			appID = companion.AppID
+		}
+		if err := opts.reportDetachedRun(ctx, conn, appID, configs...); err != nil {
+			return err
+		}
+	}
 	if ctx.Err() == nil {
 		for _, name := range ordered {
 			if h := desiredHashes[name]; h != "" {
@@ -1569,8 +1582,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 // Each start carries the service's agent-side postStart hook as gRPC metadata,
 // so in-container hooks still run on the device.
 //
-// No host-side lifecycle work: detached runs do not wait for readiness,
-// announce the app URL, or fire host postStart hooks — see
+// Detached runs do not wait for readiness or fire host postStart hooks — see
 // runPostStartIfReady's doc comment (WDY-2041).
 func composeStartDetached(ctx context.Context, conn *grpcclient.AgentConnection, ordered []string, svcCfgs map[string]*appconfig.AppConfig, projectName string) error {
 	for _, name := range ordered {
@@ -1581,7 +1593,7 @@ func composeStartDetached(ctx context.Context, conn *grpcclient.AgentConnection,
 		if err != nil {
 			return fmt.Errorf("starting service %s: %w", name, err)
 		}
-		if _, err := stream.Recv(); err != nil && err != io.EOF {
+		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for service %s start: %w", name, err)
 		}
 		cliLogln("Service %s started.", name)

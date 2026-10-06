@@ -16,9 +16,10 @@ import (
 
 func withUMSScan(t *testing.T, scan func() ([]UMSDisk, error)) {
 	t.Helper()
-	previous := scanUMSDisks
+	previous, previousLUNs := scanUMSDisks, scanUMSLUNs
 	scanUMSDisks = scan
-	t.Cleanup(func() { scanUMSDisks = previous })
+	scanUMSLUNs = scan
+	t.Cleanup(func() { scanUMSDisks, scanUMSLUNs = previous, previousLUNs })
 }
 
 func withFastUMSPoll(t *testing.T) {
@@ -221,6 +222,15 @@ func TestStrictJobHandoffNeverSelectsAnOffPortGadget(t *testing.T) {
 	}
 }
 
+func TestStrictJobLaterLUNsStayOnTheConfirmedPort(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		s := Stage2{PortPath: "1-1", StrictPort: strict}
+		if got := s.laterLUN(context.Background(), RootfsLUNVendor).PortHint; got == strict {
+			t.Fatalf("StrictPort=%v: later LUN PortHint = %v", strict, got)
+		}
+	}
+}
+
 func TestFirstLUNWaitPrefersExactPortMatch(t *testing.T) {
 	withUMSScan(t, func() ([]UMSDisk, error) {
 		return []UMSDisk{
@@ -242,13 +252,13 @@ func TestFirstLUNWaitRejectsMultipleOffPortCandidates(t *testing.T) {
 		}, nil
 	})
 	_, err := WaitForUMSDiskAt(context.Background(), LUNSelector{Vendor: FlashpkgVendor, PortPath: "1-1", PortHint: true}, time.Second)
-	if err == nil || !strings.Contains(err.Error(), "none is at the recovery port") {
+	if err == nil || !strings.Contains(err.Error(), "none is at the expected port") {
 		t.Fatalf("multi-candidate error = %v", err)
 	}
 }
 
-// Waits after the first LUN pin the gadget's own port + session; an off-port
-// LUN must never satisfy them, hint or not.
+// Without PortHint a wait pins the gadget's own port + session; an off-port LUN
+// must never satisfy it.
 func TestSubsequentLUNWaitRequiresExactPort(t *testing.T) {
 	withFastUMSPoll(t)
 	withUMSScan(t, func() ([]UMSDisk, error) {
@@ -376,6 +386,7 @@ func TestVerifyDeviceIdentityRejectsUndersizedReattachedLUN(t *testing.T) {
 // identity before touching the disk, and only unmount ahead of the write.
 func TestSendFlashPackageVerifiesIdentityBeforeUnmount(t *testing.T) {
 	withFastUMSPoll(t)
+	withPollingMissing(t, true)
 	fixture, err := io.ReadAll(openFixture(t, "flashpkg-identity-1k.ext4.gz"))
 	if err != nil {
 		t.Fatal(err)
@@ -396,10 +407,12 @@ func TestSendFlashPackageVerifiesIdentityBeforeUnmount(t *testing.T) {
 		FlashPackagePath: pkg, PortPath: "1-3", ExpectedIdentity: identityExpectation, Out: io.Discard, TempDir: t.TempDir(),
 		RunHelper: func(_ context.Context, req HelperRequest, _ func(int64, int64)) error {
 			switch {
+			case req.PollMedia:
+				ops = append(ops, "poll "+req.Session)
 			case req.Unmount:
 				ops = append(ops, "unmount")
-			case req.Eject:
-				ops = append(ops, "eject")
+			case req.LegacyEject:
+				ops = append(ops, "eject-legacy")
 				ejected = true
 			case req.Writer.DumpTo != "":
 				ops = append(ops, "dump")
@@ -413,7 +426,11 @@ func TestSendFlashPackageVerifiesIdentityBeforeUnmount(t *testing.T) {
 	if err := stage.SendFlashPackage(context.Background()); err != nil {
 		t.Fatalf("SendFlashPackage = %v", err)
 	}
-	if want := []string{"dump", "unmount", "write", "dump", "eject"}; !slices.Equal(ops, want) {
+	// An archived initrd advertises no capability and needs no media polling.
+	if stage.USBMode != USBModeLegacy {
+		t.Fatalf("mode = %q, want legacy", stage.USBMode)
+	}
+	if want := []string{"dump", "unmount", "write", "dump", "eject-legacy"}; !slices.Equal(ops, want) {
 		t.Fatalf("helper ops = %v, want %v", ops, want)
 	}
 }

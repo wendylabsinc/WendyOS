@@ -18,13 +18,75 @@ struct `'wendy auth login'` {
             try await cli.sh("wendy auth login --help") { result in
                 let stdout = result.stdout
                 #expect(result.status.isSuccess)
-                #expect(stdout.contains("Signs in to Wendy Cloud"))
+                #expect(stdout.contains("dashboard flow by default"))
                 #expect(stdout.contains("wendy auth login [flags]"))
                 #expect(stdout.contains("--api-key"))
                 #expect(stdout.contains("--cloud"))
                 #expect(stdout.contains("--cloud-grpc"))
                 #expect(stdout.contains("--org"))
+                #expect(!stdout.contains("--production"))
+                #expect(!stdout.contains("--development"))
+                #expect(!stdout.contains("--legacy"))
                 #expect(result.stderr == "")
+            }
+        }
+    }
+
+    /**
+     Production and development Cloud login stop before opening a browser or
+     contacting an auth service when neither the temporarily required email nor
+     an explicit issuer is present. The error names the selected environment and
+     explains both inputs accepted by the Cloud OIDC flow. The `cloud login`
+     alias shares the same command behavior.
+     */
+    @Test
+    func `requires an email or issuer for the selected Cloud target`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            for command in ["wendy auth login --production", "wendy cloud login --production"] {
+                try await cli.sh(command) { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stdout == "")
+                    #expect(
+                        result.stderr.contains(
+                            "production Cloud login currently requires --email <address> to discover your organization, or --issuer <url> to select its OIDC realm directly"
+                        )
+                    )
+                }
+            }
+
+            try await cli.sh("wendy cloud login --development") { result in
+                #expect(result.status.isFailure)
+                #expect(result.stdout == "")
+                #expect(
+                    result.stderr.contains(
+                        "development Cloud login currently requires --email <address> to discover your organization, or --issuer <url> to select its OIDC realm directly"
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     A login can select only one built-in Cloud target. Conflicting target flags
+     fail locally before browser, credential, configuration, or network work.
+     */
+    @Test
+    func `rejects conflicting Cloud targets`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            for flags in [
+                "--production --development",
+                "--production --legacy",
+                "--development --legacy",
+            ] {
+                try await cli.sh("wendy auth login \(flags)") { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stdout == "")
+                    #expect(
+                        result.stderr.contains(
+                            "--production, --development, and --legacy are mutually exclusive"
+                        )
+                    )
+                }
             }
         }
     }

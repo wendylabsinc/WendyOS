@@ -4,6 +4,8 @@ set -euo pipefail
 required=(
   DEVELOPER_ID_CERTIFICATE
   DEVELOPER_ID_KEY
+  WENDY_AGENT_MAC_PROVISIONING_PROFILE
+  WENDY_AGENT_MAC_NET_PROXY_PROVISIONING_PROFILE
   NOTARY_APPLE_ID
   NOTARY_TEAM_ID
   NOTARY_PASSWORD
@@ -21,6 +23,8 @@ KEYCHAIN_PATH="${TEMP_DIR}/wendy-signing.keychain-db"
 KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
 CERT_PATH="${TEMP_DIR}/developer-id-application.cer"
 KEY_PATH="${TEMP_DIR}/developer-id-application.key"
+APP_PROVISIONING_PROFILE_PATH="${TEMP_DIR}/WendyAgentMac.provisionprofile"
+NET_PROXY_PROVISIONING_PROFILE_PATH="${TEMP_DIR}/WendyAgentMacNetProxy.provisionprofile"
 DEVELOPER_ID_CA_PATH="${TEMP_DIR}/developer-id-g2-ca.cer"
 DEVELOPER_ID_CA_URL="https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer"
 DEVELOPER_ID_CA_SHA256="f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a"
@@ -29,14 +33,21 @@ SIGNING_SETUP_COMPLETE=0
 
 cleanup() {
   rm -f "$CERT_PATH" "$KEY_PATH" "$DEVELOPER_ID_CA_PATH"
-  if [[ "$SIGNING_SETUP_COMPLETE" -ne 1 && -f "$KEYCHAIN_PATH" ]]; then
-    security delete-keychain "$KEYCHAIN_PATH" || true
+  if [[ "$SIGNING_SETUP_COMPLETE" -ne 1 ]]; then
+    rm -f "$APP_PROVISIONING_PROFILE_PATH" "$NET_PROXY_PROVISIONING_PROFILE_PATH"
+    if [[ -f "$KEYCHAIN_PATH" ]]; then
+      security delete-keychain "$KEYCHAIN_PATH" || true
+    fi
   fi
 }
 trap cleanup EXIT
 
 printf '%s' "$DEVELOPER_ID_CERTIFICATE" | base64 --decode > "$CERT_PATH"
 printf '%s' "$DEVELOPER_ID_KEY" | base64 --decode > "$KEY_PATH"
+printf '%s' "$WENDY_AGENT_MAC_PROVISIONING_PROFILE" \
+  | base64 --decode > "$APP_PROVISIONING_PROFILE_PATH"
+printf '%s' "$WENDY_AGENT_MAC_NET_PROXY_PROVISIONING_PROFILE" \
+  | base64 --decode > "$NET_PROXY_PROVISIONING_PROFILE_PATH"
 
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -96,6 +107,8 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "keychain_path=$KEYCHAIN_PATH"
     echo "signing_identity=$SIGNING_IDENTITY"
     echo "notary_profile=$NOTARY_PROFILE"
+    echo "app_provisioning_profile_path=$APP_PROVISIONING_PROFILE_PATH"
+    echo "net_proxy_provisioning_profile_path=$NET_PROXY_PROVISIONING_PROFILE_PATH"
   } >> "$GITHUB_OUTPUT"
 fi
 

@@ -728,7 +728,7 @@ func TestStartAndStreamContainer_FallsBackWhenCreateProgressIsUnimplemented(t *t
 	t.Cleanup(func() { isInteractiveTerminalFn = origInteractive })
 	isInteractiveTerminalFn = func() bool { return false }
 
-	state := &fakeMacRunState{}
+	state := &fakeMacRunState{sendStarted: true}
 	conn, cleanup := startFakeMacRunServer(t, state)
 	defer cleanup()
 

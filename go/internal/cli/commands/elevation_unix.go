@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 // preAuthElevation pre-authenticates sudo so the password prompt appears
@@ -58,8 +60,9 @@ const (
 )
 
 // wendyJetsonUdevRulePaths are the standard udev rules directories where the
-// 70-wendy-jetson.rules file (installed by the deb/rpm package or `wendy device
-// usb-setup`) grants non-root access to the Jetson recovery/flashing USB device.
+// 70-wendy-jetson.rules file (installed by the deb/rpm package, or by hand with
+// jetsonUdevRuleInstallHint) grants non-root access to the Jetson
+// recovery/flashing USB device.
 var wendyJetsonUdevRulePaths = []string{
 	"/etc/udev/rules.d/70-wendy-jetson.rules",
 	"/usr/lib/udev/rules.d/70-wendy-jetson.rules",
@@ -99,8 +102,10 @@ func thorElevationDecision(goos string, euid int, hasUdevRule, interactive bool)
 
 // thorSudoPreserveEnv keeps the elevated (sudo) re-exec pointed at the same
 // flashpack cache (HOME / XDG_CACHE_HOME feed os.UserCacheDir) and network config
-// (proxy vars) instead of re-downloading the ~3 GB flashpack under root's env.
-const thorSudoPreserveEnv = "--preserve-env=HOME,XDG_CACHE_HOME,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy"
+// (proxy vars) instead of re-downloading the ~3 GB flashpack under root's env. It
+// also keeps the user's wendy settings: without WENDY_ANALYTICS an opted-out user
+// looks like a first run, and without WENDY_CONFIG_DIR config lands in $HOME/.wendy.
+const thorSudoPreserveEnv = "--preserve-env=HOME,XDG_CACHE_HOME,WENDY_ANALYTICS,WENDY_CONFIG_DIR,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy"
 
 // hasDeviceTypeFlag reports whether args already carries a --device-type flag in
 // either "--device-type X" or "--device-type=X" form.
@@ -152,13 +157,33 @@ func pinCacheDirEnv(environ []string, cacheBase string) []string {
 	return out
 }
 
-// thorElevationReason is the one-line explanation printed just before the sudo
-// re-exec, tailored per platform.
+// jetsonUdevRuleInstallHint returns the shell commands that install the wendy
+// Jetson udev rule by hand — the same rule the deb/rpm packages ship — one per
+// line, each prefixed with indent.
+func jetsonUdevRuleInstallHint(indent string) string {
+	return indent + "echo '" + usbUdevRule + "' | sudo tee " + usbUdevRulePath + "\n" +
+		indent + "sudo udevadm control --reload-rules && sudo udevadm trigger"
+}
+
+// thorElevationReason is the explanation printed just before the sudo re-exec,
+// tailored per platform.
 func thorElevationReason(goos string) string {
 	if goos == "darwin" {
 		return "Flashing a Jetson AGX Thor needs administrator access — it talks to the board's USB recovery device directly, which requires root on macOS."
 	}
-	return "Flashing a Jetson AGX Thor needs USB access to the board's recovery device.\n  Tip: install the udev rule once to skip sudo next time — `wendy device usb-setup`."
+	return "Flashing a Jetson AGX Thor needs USB access to the board's recovery device.\n" +
+		"  Tip: install the udev rule once (the wendy deb/rpm packages include it) to skip sudo next time:\n" +
+		jetsonUdevRuleInstallHint("    ")
+}
+
+// createElevatedRunDirs creates, as the user, the cache and log directories the
+// elevated run writes into. The elevated run gives what it creates back to the
+// user when it exits (HandBackSudoFiles), but not if it's killed; created by
+// root, these directories, and on a fresh host ~/.cache itself, would then stay
+// root-owned. Best-effort: the elevated run creates any that are missing.
+func createElevatedRunDirs() {
+	_, _ = osCacheDir()
+	_, _ = config.LogDir()
 }
 
 // errThorNeedsRoot is returned when a Thor flash needs elevation but cannot obtain
@@ -168,7 +193,8 @@ func errThorNeedsRoot() error {
 	msg := "flashing a Jetson AGX Thor requires administrator access — it opens the board's USB recovery device directly, which needs root.\n" +
 		"  Re-run:  sudo wendy install --device-type " + thorDeviceType
 	if runtime.GOOS == "linux" {
-		msg += "\n  (or install the udev rule once with `wendy device usb-setup`, then no sudo)"
+		msg += "\n  Or install the udev rule once (the wendy deb/rpm packages include it), then no sudo is needed:\n" +
+			jetsonUdevRuleInstallHint("    ")
 	}
 	return errors.New(msg)
 }
@@ -206,6 +232,7 @@ func ensureThorRootAccess() error {
 	fmt.Println(thorElevationReason(runtime.GOOS))
 	fmt.Println("Re-running under sudo (you may be prompted for your password)…")
 
+	createElevatedRunDirs()
 	argv := append([]string{"sudo"}, buildSudoReexecArgs(self, os.Args[1:])...)
 	// Pin XDG_CACHE_HOME to this (unprivileged) user's cache base so the elevated
 	// run reuses the already-downloaded flashpack even if sudo rewrites HOME.

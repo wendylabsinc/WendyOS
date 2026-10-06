@@ -3,6 +3,8 @@ package commands
 import (
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 func TestValidateHostnameArg(t *testing.T) {
@@ -48,5 +50,33 @@ func TestResolveRenameNameFromArg(t *testing.T) {
 
 	if _, err := resolveRenameName([]string{"Bad_Name"}); err == nil {
 		t.Errorf("resolveRenameName with invalid arg: expected error, got nil")
+	}
+}
+
+func TestRepointDefaultDeviceFollowsARenamedMDNSDefault(t *testing.T) {
+	origFlag := deviceFlag
+	t.Cleanup(func() { deviceFlag = origFlag })
+	deviceFlag = ""
+
+	setTempConfig(t, &config.Config{
+		DefaultDevice: "old-name.local",
+		DevicePins:    map[string]config.DevicePin{"old-name": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"}},
+	})
+	repointDefaultDevice("new-name")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultDevice != "new-name.local" {
+		t.Fatalf("DefaultDevice = %q, want new-name.local", cfg.DefaultDevice)
+	}
+	if _, ok := cfg.DevicePinFor("old-name"); !ok {
+		t.Fatal("repointing the default dropped an unrelated field")
+	}
+
+	setTempConfig(t, &config.Config{DefaultDevice: "192.168.1.5"})
+	repointDefaultDevice("new-name")
+	if cfg, _ := config.Load(); cfg.DefaultDevice != "192.168.1.5" {
+		t.Fatalf("an IP default was repointed to %q", cfg.DefaultDevice)
 	}
 }

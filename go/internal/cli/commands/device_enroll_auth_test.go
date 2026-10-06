@@ -118,9 +118,9 @@ func expiredEnrollmentAuth(t *testing.T) *config.AuthConfig {
 
 func stubEnrollmentLogin(t *testing.T, login func(context.Context, oidcLoginOptions) error) {
 	t.Helper()
-	orig := enrollmentOIDCLoginFn
-	enrollmentOIDCLoginFn = login
-	t.Cleanup(func() { enrollmentOIDCLoginFn = orig })
+	orig := performOIDCLoginFn
+	performOIDCLoginFn = login
+	t.Cleanup(func() { performOIDCLoginFn = orig })
 }
 
 func TestEnrollmentExpiredCredentialsStopBeforeDeviceAccess(t *testing.T) {

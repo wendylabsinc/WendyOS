@@ -52,6 +52,9 @@ func main() {
 	}
 	trackCommand(executed, err, time.Since(start))
 	analytics.Close()
+	// After Close, whose delivered events can still record milestones: a sudo
+	// run gives what it created in ~/.wendy and the cache back to the user.
+	commands.HandBackSudoFiles()
 
 	exitCode := 0
 	if err != nil && !errors.Is(err, commands.ErrUserCancelled) && !errors.Is(err, commands.ErrDefaultCleared) {

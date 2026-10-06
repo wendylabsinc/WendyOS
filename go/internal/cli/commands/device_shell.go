@@ -1,12 +1,14 @@
 package commands
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"golang.org/x/term"
 )
@@ -37,6 +39,27 @@ func shellWinSizeFrame(rows, cols uint32) *agentpb.HostShellRequest {
 	}}
 }
 
+// Host shell is deliberately absent from plaintext listeners and from the
+// Swift macOS agent. Check the connection before opening a stream so gRPC's
+// generic Unimplemented (or an early EOF) cannot turn either case into update
+// advice. The Go agent may also run on Darwin and serves shell over mTLS.
+func hostShellPreflight(ctx context.Context, conn *grpcclient.AgentConnection) error {
+	if err := diagnosticContextError(ctx); err != nil {
+		return err
+	}
+	version := diagnosticAgentVersion(ctx, conn)
+	if err := diagnosticContextError(ctx); err != nil {
+		return err
+	}
+	if isSwiftMacAgent(version) {
+		return fmt.Errorf("host shell is not supported by Wendy Agent for macOS")
+	}
+	if !conn.IsMTLS {
+		return fmt.Errorf("host shell requires an authenticated mTLS connection; this connection is unauthenticated. If the device is not enrolled, run 'wendy device enroll'; otherwise reconnect using its enrolled endpoint")
+	}
+	return nil
+}
+
 func newDeviceShellCmd() *cobra.Command {
 	return &cobra.Command{
 		Hidden: true,
@@ -44,8 +67,8 @@ func newDeviceShellCmd() *cobra.Command {
 		Short:  "Open an interactive shell on the device host",
 		Long: "Open a full interactive TTY on the device host (the device's root\n" +
 			"filesystem, not a container), running the login shell by default or a\n" +
-			"command given after `--`. Uses the existing mTLS/PKI trust; the shell\n" +
-			"runs as root.\n\n" +
+			"command given after `--`. Requires an enrolled device running the Go\n" +
+			"agent over authenticated mTLS; the shell runs as root.\n\n" +
 			"With `--`, no local terminal is required: the command can be run\n" +
 			"non-interactively (e.g. piped or scripted). The device still runs it\n" +
 			"in a PTY, so output is CRLF-terminated and stderr is merged into\n" +
@@ -74,6 +97,9 @@ func runDeviceShell(cmd *cobra.Command, shellCmd []string) error {
 		return err
 	}
 	defer conn.Close()
+	if err := hostShellPreflight(ctx, conn); err != nil {
+		return err
+	}
 
 	stream, err := conn.ShellService.HostShell(ctx)
 	if err != nil {

@@ -33,3 +33,10 @@ func Unlock(f *os.File) error {
 	ol := new(windows.Overlapped)
 	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, ol)
 }
+
+// lookupOwner is a no-op on Windows: file ownership there isn't chown-based,
+// so there is nothing meaningful to report, and Acquire's geteuid()==0 check
+// never fires on this platform anyway.
+func lookupOwner(string) (uid, gid int, ok bool) {
+	return 0, 0, false
+}

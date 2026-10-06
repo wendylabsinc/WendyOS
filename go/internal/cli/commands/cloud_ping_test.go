@@ -173,3 +173,37 @@ func TestPingFirstRequestFailureIsReported(t *testing.T) {
 		t.Fatalf("first request failure lost: %+v", stats)
 	}
 }
+
+// TestCloudPingFollowsWENDY_DEVICE covers I2: unlike its siblings `cloud
+// tunnel` and `cloud run`, `cloud ping`'s RunE used to pass its local
+// --device flag straight through without effectiveDeviceName's fallback, so
+// WENDY_DEVICE was silently dropped and the interactive picker opened
+// instead. cloudPingCommand itself reaches pickAuthEntry and
+// pickCloudDiscoveryDevice, which need real config and network access, so
+// this stubs cloudPingCommandFn — the lowest seam that still exercises the
+// actual RunE closure's argument-building, which is exactly what the bug was
+// in — rather than reaching further into cloud discovery machinery that has
+// nothing to do with this regression.
+func TestCloudPingFollowsWENDY_DEVICE(t *testing.T) {
+	restoreDeviceGlobals(t)
+	deviceFlag = ""
+	t.Setenv(deviceEnvVar, "thor.local")
+	applyDeviceEnv()
+
+	orig := cloudPingCommandFn
+	var gotDevice string
+	cloudPingCommandFn = func(_ context.Context, _, device, _ string, _ int, _ time.Duration) error {
+		gotDevice = device
+		return nil
+	}
+	t.Cleanup(func() { cloudPingCommandFn = orig })
+
+	cmd := newCloudPingCmd()
+	cmd.SetContext(context.Background())
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("RunE: %v", err)
+	}
+	if gotDevice != "thor.local" {
+		t.Fatalf("cloud ping resolved device %q, want thor.local from WENDY_DEVICE", gotDevice)
+	}
+}

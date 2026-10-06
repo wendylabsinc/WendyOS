@@ -1,14 +1,19 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 )
 
 // cloudGRPCForOrg returns the cloud gRPC endpoint of the auth session that owns
@@ -52,6 +57,11 @@ type observedDeviceIdentity struct {
 	principal string
 }
 
+// observeDeviceIdentityFn is a seam over observeDeviceIdentity: only a real
+// TLS handshake can set the verified server identity it reads, so a test of
+// the paths that enforce a pin stubs the reading instead.
+var observeDeviceIdentityFn = observeDeviceIdentity
+
 // observeDeviceIdentity reads what conn proved about the device it reached.
 func observeDeviceIdentity(conn *grpcclient.AgentConnection) observedDeviceIdentity {
 	if conn == nil || !conn.IsMTLS || conn.CertInfo == nil {
@@ -70,6 +80,17 @@ func observeDeviceIdentity(conn *grpcclient.AgentConnection) observedDeviceIdent
 // enforceDevicePin checks the (organisation, cloud host, asset) pin for a
 // freshly connected device (WDY-1149) and records or challenges it.
 func enforceDevicePin(hostname string, conn *grpcclient.AgentConnection) error {
+	return enforceDevicePinAt(hostname, "", conn)
+}
+
+// enforceDevicePinAt is enforceDevicePin for a connection a front door dialled
+// at dialAddr, the address the user typed ("" for one some fallback
+// substituted for the dial). The address matters only for a connection judged
+// under a running VM's vm:<name> key at its literal 127.0.0.1 forward: its
+// accepted identity is then also recorded under the bare 127.0.0.1 key, as
+// main recorded the same typed connection (see typedVMBarePinKey and
+// recordTypedVMBarePin). Every other connection ignores it.
+func enforceDevicePinAt(hostname, dialAddr string, conn *grpcclient.AgentConnection) error {
 	if conn == nil {
 		return nil
 	}
@@ -78,7 +99,7 @@ func enforceDevicePin(hostname string, conn *grpcclient.AgentConnection) error {
 	if hostname == "" {
 		return nil
 	}
-	return enforceDeviceIdentity(hostname, observeDeviceIdentity(conn))
+	return enforceDeviceIdentityAt(hostname, typedVMBarePinKey(hostname, dialAddr), observeDeviceIdentityFn(conn))
 }
 
 // enforceDeviceIdentity compares what a connection proved about a device
@@ -102,15 +123,142 @@ func enforceDevicePin(hostname string, conn *grpcclient.AgentConnection) error {
 //
 // A device with no pin that answers unprovisioned is the ordinary
 // out-of-the-box case and passes silently. It is best-effort about local state:
-// a config read/write failure never blocks an already-verified connection.
+// a config read/write/lock failure never blocks an already-verified connection
+// — and never skips the check either (see the read-only fallback below).
 func enforceDeviceIdentity(hostname string, obs observedDeviceIdentity) error {
+	return enforceDeviceIdentityAt(hostname, "", obs)
+}
+
+// enforceDeviceIdentityAt is enforceDeviceIdentity for a typed connection to a
+// running VM: an accepted identity is also recorded under bareKey (see
+// recordTypedVMBarePin), in the same locked update. An empty bareKey records
+// nothing extra.
+func enforceDeviceIdentityAt(hostname, bareKey string, obs observedDeviceIdentity) error {
+	var refusal error
+	judged := false
+	// Under the config lock so a pin recorded here cannot be reverted by, or
+	// revert, another wendy process's concurrent write.
+	updateErr := config.Update(func(cfg *config.Config) (bool, error) {
+		judged = true
+		changed, err := applyDeviceIdentity(cfg, hostname, bareKey, obs)
+		refusal = err
+		return changed && err == nil, nil
+	})
+	if judged {
+		return refusal
+	}
+	// Update never reached the check: the lock could not be taken (a read-only
+	// config dir, a hung wendy process) or the config could not be read.
+	// Recording a pin needs the lock; judging one must not, or an unwritable
+	// ~/.wendy would switch enforcement off. Judge what can be read.
 	cfg, err := config.Load()
 	if err != nil {
 		return nil
 	}
+	before := maps.Clone(cfg.DevicePins)
+	changed, refusal := applyDeviceIdentity(cfg, hostname, bareKey, obs)
+	switch decideFallbackAction(updateErr, changed, refusal) {
+	case fallbackWarnUnrecorded:
+		// Another wendy process holds config.lock — hung, or just busy. Writing
+		// without the lock risks reverting that process's own change, so this
+		// verdict is judged but never recorded here. Say so, naming every key
+		// it would have written: without a warning, the next connection there
+		// would silently treat this as a first use (or a swap) all over again.
+		fmt.Fprint(os.Stderr, unrecordedIdentityWarning(hostname, unrecordedPinKeys(before, cfg.DevicePins), updateErr))
+	case fallbackSaveUnlocked:
+		// The lock file itself could not be opened or created (a read-only or
+		// foreign-owned config dir), or Update's own Load failed after taking
+		// the lock. No process can be holding a lock that could not even be
+		// opened, so this is exactly main's pre-lock behaviour: an unlocked
+		// best-effort save that can lose to a concurrent writer but never
+		// accepts anything. Skipping it here would silently reopen the
+		// trust-on-first-use window main did not have.
+		_ = config.Save(cfg)
+	}
+	return refusal
+}
 
+// unrecordedPinKeys lists, sorted, the pin keys a verdict changed in after
+// that are not so in before: what the lock fallback judged but could not
+// record.
+func unrecordedPinKeys(before, after map[string]config.DevicePin) []string {
+	var keys []string
+	for key, pin := range after {
+		if prev, ok := before[key]; !ok || prev != pin {
+			keys = append(keys, key)
+		}
+	}
+	for key := range before {
+		if _, ok := after[key]; !ok {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// unrecordedIdentityWarning is the lock fallback's warning that a verdict was
+// judged but not recorded. It names every key that verdict would have written
+// — for a typed connection to a running VM that can be the bare 127.0.0.1
+// alone, or beside vm:<name> — and hostname only when it has no list.
+func unrecordedIdentityWarning(hostname string, keys []string, updateErr error) string {
+	if len(keys) == 0 {
+		keys = []string{hostname}
+	}
+	quoted := make([]string, len(keys))
+	for i, key := range keys {
+		quoted[i] = strconv.Quote(key)
+	}
+	return fmt.Sprintf("wendy: device identity for %s was not recorded: another wendy process holds the config lock (%v)\n", strings.Join(quoted, " and "), updateErr)
+}
+
+// fallbackAction is what enforceDeviceIdentity's read-only fallback does with
+// a verdict config.Update could not reach.
+type fallbackAction int
+
+const (
+	// fallbackNothing covers a refusal (already returned as-is; nothing to
+	// save) and a verdict with nothing to record at all.
+	fallbackNothing fallbackAction = iota
+	// fallbackWarnUnrecorded is a verdict that would have written a pin, lost
+	// because another wendy process holds config.lock.
+	fallbackWarnUnrecorded
+	// fallbackSaveUnlocked is a verdict that would have written a pin, tried
+	// unlocked because the lock itself could not be taken by anyone.
+	fallbackSaveUnlocked
+)
+
+// decideFallbackAction chooses what enforceDeviceIdentity's read-only fallback
+// does with applyDeviceIdentity's verdict, given the error config.Update
+// returned before it could reach that verdict. It is pure so the branch that
+// distinguishes "another process holds the lock" from "the lock could not be
+// taken at all" is testable without a real 10s lock-contention wait: the
+// timeout shape itself is covered by config's own
+// TestUpdateGivesUpWhileAnotherProcessHoldsTheLock.
+//
+// changed && refusal == nil is the only case with anything to lose — a
+// refusal is returned exactly as it would have been under the lock, and
+// "nothing to save" needs nothing done either way.
+func decideFallbackAction(updateErr error, changed bool, refusal error) fallbackAction {
+	if !changed || refusal != nil {
+		return fallbackNothing
+	}
+	if errors.Is(updateErr, flock.ErrTimeout) {
+		return fallbackWarnUnrecorded
+	}
+	return fallbackSaveUnlocked
+}
+
+// applyDeviceIdentity is enforceDeviceIdentity's decision, made against cfg and
+// recorded into it. changed reports whether cfg must be saved; refusal is the
+// error to return when the device must not be used (cfg is then unchanged).
+//
+// The decision is made under hostname alone. An accepted mTLS judgement then
+// also records the identity under bareKey, when there is one — which can only
+// add a pin or adopt an asset, never refuse (see recordTypedVMBarePin).
+func applyDeviceIdentity(cfg *config.Config, hostname, bareKey string, obs observedDeviceIdentity) (changed bool, refusal error) {
 	if !obs.mTLS {
-		return challengeUnprovisionedDevice(cfg, hostname)
+		return false, challengeUnprovisionedDevice(cfg, hostname)
 	}
 
 	cloud := cloudGRPCForOrg(cfg, obs.orgID)
@@ -122,24 +270,61 @@ func enforceDeviceIdentity(hostname string, obs observedDeviceIdentity) error {
 		// the device's SPKI entry.
 		if prev, ok := cfg.DevicePinFor(hostname); ok && prev.Principal == "" && obs.principal != "" {
 			cfg.SetDevicePinFrom(hostname, prev.OrgID, prev.CloudGRPC, prev.AssetID, obs.principal, cfg.PinSource(hostname))
-			_ = config.Save(cfg)
+			changed = true
 		}
-		return nil
 	case config.PinFirstUse, config.PinAdoptAsset:
 		// PinAdoptAsset is a pin written before asset ids were recorded: org and
 		// cloud already match, so this is a silent upgrade, not a challenge.
 		cfg.SetDevicePin(hostname, obs.orgID, cloud, obs.assetID, obs.principal)
-		_ = config.Save(cfg)
-		return nil
+		changed = true
 	default: // config.PinMismatch
 		prev, _ := cfg.DevicePinFor(hostname)
-		return refuseDevicePin(devicePinDiagnostic{
+		return false, refuseDevicePin(devicePinDiagnostic{
 			hostname: hostname,
 			heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", hostname),
 			details: fmt.Sprintf("Saved: organization %d via %s%s\nNow:   organization %d via %s%s",
 				prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID),
 				obs.orgID, displayCloud(cloud), assetSuffix(obs.assetID)),
 		})
+	}
+	if recordTypedVMBarePin(cfg, bareKey, obs, cloud) {
+		changed = true
+	}
+	return changed, nil
+}
+
+// recordTypedVMBarePin records an identity just accepted under a running VM's
+// vm:<name> key, for a connection typed at the VM's 127.0.0.1 forward, under
+// bareKey — the bare 127.0.0.1 main judged and pinned that same typed
+// connection under (see typedVMBarePinKey). Once the VM stops, pinKeyForAddr
+// keys its address as the bare host again, and it is then as pinned as main
+// left it. obs is what the connection proved; cloud is its organisation's
+// cloud host.
+//
+// It never refuses — the connection's own key has already judged it, and a
+// VM's key never consults the bare pin — and it writes exactly what main's
+// connection wrote there, where main's would not have refused:
+//
+//   - no bare pin (first use), or an org-only bare pin in the same
+//     organisation and cloud with a certificate naming its asset (adopt): the
+//     observed identity is filed, as main's SetDevicePin filed it (an
+//     adoptable pin is never cloud-sourced, so its source stays LAN);
+//   - a pin that matches, or that names a different identity: nothing. It
+//     keeps governing every other loopback port, and this address once the VM
+//     stops, exactly as it did.
+//
+// So it never overwrites a pin naming another device and never moves or clears
+// anything.
+func recordTypedVMBarePin(cfg *config.Config, bareKey string, obs observedDeviceIdentity, cloud string) bool {
+	if bareKey == "" {
+		return false
+	}
+	switch cfg.EvaluateDevicePin(bareKey, obs.orgID, cloud, obs.assetID) {
+	case config.PinFirstUse, config.PinAdoptAsset:
+		cfg.SetDevicePin(bareKey, obs.orgID, cloud, obs.assetID, obs.principal)
+		return true
+	default: // config.PinMatch, config.PinMismatch
+		return false
 	}
 }
 
@@ -239,17 +424,13 @@ func challengeUnprovisionedDevice(cfg *config.Config, hostname string) error {
 // name does not mention pins, and the user is the only one who can notice it
 // touched something they did not mean. Stderr keeps it out of any JSON output.
 func clearDevicePinForRepin(hostname string) {
-	cfg, err := config.Load()
-	if err != nil {
-		return
-	}
-	cleared := clearPinsGoverning(cfg, hostname)
+	var cleared []clearedPin
+	_ = config.Update(func(cfg *config.Config) (bool, error) {
+		cleared = clearPinsGoverning(cfg, hostname)
+		// The SPKI half flushes itself, so only a config-store clear needs a save.
+		return clearedAnyConfigPin(cleared), nil
+	})
 	printClearedPins(os.Stderr, cleared)
-	// The SPKI half flushes itself, so only a config-store clear needs a save.
-	if !clearedAnyConfigPin(cleared) {
-		return
-	}
-	_ = config.Save(cfg)
 }
 
 // shellQuoteArg renders s so a copy-paste of the recovery command survives a

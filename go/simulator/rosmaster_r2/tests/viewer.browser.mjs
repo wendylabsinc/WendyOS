@@ -55,6 +55,7 @@ try {
     await page.click(`#${view}`); await page.waitForTimeout(200);
     await page.screenshot({path:join(tmpdir(),`rosmaster-r2-${view}.png`)});
   }
+  await page.locator('summary').filter({hasText:'Environment'}).click();
   await page.click('#lidar'); await page.click('#lidar');
   await page.click('#follow'); await page.click('#follow');
   await page.click('#enable');

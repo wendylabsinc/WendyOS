@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -31,22 +32,21 @@ func notifyCLIUpdate(cmd *cobra.Command) (shown bool, err error) {
 	}
 	newVersion := cfg.AvailableCLIUpdate
 
-	var updateShellCmd string
-	switch runtime.GOOS {
-	case "windows":
-		updateShellCmd = "winget upgrade WendyLabs.Wendy"
-	case "darwin":
-		updateShellCmd = "brew update && brew install wendy"
-	default:
-		updateShellCmd = "curl -fsSL https://install.wendy.dev/cli.sh | bash"
-	}
+	updateShellCmd := cliupdate.Command(runtime.GOOS)
 
 	if jsonOutput || !isInteractiveTerminal() {
+		// No prompt here, so nothing else clears AvailableCLIUpdate: remember
+		// which release was announced and stay quiet until a newer one appears.
+		if cfg.CLIUpdateNoticeShown == newVersion {
+			return false, nil
+		}
 		msg := "\nA new version of the Wendy CLI is available: %s (you have %s)\nUpdate with: %s\n"
 		if runtime.GOOS == "darwin" {
 			msg += "  (if the tap is untrusted: brew trust wendylabsinc/tap)\n"
 		}
 		cmd.PrintErrf(msg, newVersion, version.Version, updateShellCmd)
+		cfg.CLIUpdateNoticeShown = newVersion
+		_ = config.Save(cfg) // best-effort: if it can't be saved, the notice just repeats
 		return true, nil
 	}
 

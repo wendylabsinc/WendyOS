@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -11,8 +12,10 @@ import (
 )
 
 // CampaignInference is executed by the agent, not by a user application.
-// This first backend supports Transformers object-detection checkpoints.
+// Empty Backend uses Transformers; yolo_onnx runs a pinned ONNX detection export.
 type CampaignInference struct {
+	Backend    string   `json:"backend,omitempty" yaml:"backend,omitempty"`
+	ModelFile  string   `json:"model_file,omitempty" yaml:"model_file,omitempty"`
 	Model      string   `json:"model" yaml:"model"`
 	Revision   string   `json:"revision" yaml:"revision"`
 	Labels     []string `json:"labels" yaml:"labels"`
@@ -54,6 +57,18 @@ func (i *CampaignInference) validate() error {
 	}
 	if !modelRevisionRE.MatchString(i.Revision) {
 		return fmt.Errorf("inference.revision must pin a 40-character Hugging Face commit SHA")
+	}
+	switch i.Backend {
+	case "", "transformers":
+		if i.ModelFile != "" {
+			return fmt.Errorf("inference.model_file requires backend: yolo_onnx")
+		}
+	case "yolo_onnx":
+		if len(i.ModelFile) > 256 || !strings.HasSuffix(i.ModelFile, ".onnx") || path.Clean(i.ModelFile) != i.ModelFile || strings.HasPrefix(i.ModelFile, "/") || strings.HasPrefix(i.ModelFile, "../") || strings.ContainsAny(i.ModelFile, "\\\x00\r\n") {
+			return fmt.Errorf("inference.model_file must be a relative .onnx file inside the Hugging Face repository")
+		}
+	default:
+		return fmt.Errorf("inference.backend must be transformers or yolo_onnx")
 	}
 	if len(i.Labels) == 0 || len(i.Labels) > 32 {
 		return fmt.Errorf("inference.labels must contain 1..32 labels")

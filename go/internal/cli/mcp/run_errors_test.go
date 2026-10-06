@@ -124,7 +124,8 @@ func TestRunExplicitDeviceOverridesSessionAndSaysToConnect(t *testing.T) {
 		t.Fatalf("result target = %v", out["target"])
 	}
 	next := out["suggested_next_step"].(string)
-	for _, want := range []string{"robot-a.local:50051", `device_connect(address="robot-b.local:50051")`, "before container_list"} {
+	// device is the schema's required parameter; address is a legacy alias.
+	for _, want := range []string{"robot-a.local:50051", `device_connect(device="robot-b.local:50051")`, "before container_list"} {
 		if !strings.Contains(next, want) {
 			t.Fatalf("suggested_next_step does not name %q: %s", want, next)
 		}
@@ -139,8 +140,12 @@ func TestRunExplicitDeviceOverridesSessionAndSaysToConnect(t *testing.T) {
 	fresh := New(&config.Config{}, nil)
 	fresh.runCommandFn = s.runCommandFn
 	cloud, _ := fresh.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device_name": "robot-c"}))
-	if next := structuredMap(t, cloud)["suggested_next_step"].(string); !strings.Contains(next, `cloud_connect(device_name="robot-c")`) {
-		t.Fatalf("cloud deploy without a session: %s", next)
+	// cloud_connect is outside the core tool group, so the hint enables it first.
+	next = structuredMap(t, cloud)["suggested_next_step"].(string)
+	for _, want := range []string{`wendy_tools(groups=["cloud"])`, `cloud_connect(device_name="robot-c")`} {
+		if !strings.Contains(next, want) {
+			t.Fatalf("cloud deploy without a session does not name %q: %s", want, next)
+		}
 	}
 }
 

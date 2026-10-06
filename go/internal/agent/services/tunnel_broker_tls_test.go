@@ -8,10 +8,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // ecdsaCertKeyPEM returns a valid self-signed ECDSA leaf cert + key in PEM form.
@@ -139,5 +142,65 @@ func TestBrokerTLSConfig_TrailingBytesChainAccepted(t *testing.T) {
 	}
 	if cfg.VerifyConnection == nil {
 		t.Fatal("expected a VerifyConnection callback pinning the chain")
+	}
+}
+
+// Each broker auth-strength downgrade is an audit-trail event (the agent's
+// audit trail is its structured journal log): it names what was lost, and the
+// connection's actual strength matches it. RULINGS 2026-10-04: no silent
+// downgrade.
+func TestBrokerDialOpts_DowngradesAreAudited(t *testing.T) {
+	p256Cert, _ := ecdsaCertKeyPEM(t)
+	p384Key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &p384Key.PublicKey, p384Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(p384Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384Cert := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	p384KeyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	validCert, validKey := ecdsaCertKeyPEM(t)
+
+	for _, tc := range []struct {
+		name, certPEM, keyPEM string
+		want                  []string // auth_downgrade values, in order
+	}{
+		{"none", validCert, validKey, nil},
+		// tls.X509KeyPair accepts P-384; the P-256-only proof does not.
+		{"proof only", p384Cert, p384KeyPEM, []string{"signed_proof->unsigned_headers"}},
+		{"mtls and proof", p256Cert, "-----BEGIN EC PRIVATE KEY-----\nnot a key\n-----END EC PRIVATE KEY-----\n",
+			[]string{"mtls_client_cert->none", "signed_proof->unsigned_headers"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, logs := observer.New(zap.WarnLevel)
+			_, requestMetadata, err := brokerDialOpts(zap.New(core), 7, 42, tc.certPEM, tc.keyPEM, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, e := range logs.All() {
+				if v, ok := e.ContextMap()["auth_downgrade"].(string); ok {
+					got = append(got, v)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("audited downgrades = %v, want %v", got, tc.want)
+			}
+			md, err := requestMetadata("/wendycloud.v1.TunnelBrokerService/RegisterPresence")
+			if err != nil {
+				t.Fatal(err)
+			}
+			signed := len(md.Get("x-wendy-certificate-signature")) == 1
+			if wantSigned := !slices.Contains(tc.want, "signed_proof->unsigned_headers"); signed != wantSigned {
+				t.Fatalf("request carries signed proof = %v, want %v", signed, wantSigned)
+			}
+		})
 	}
 }

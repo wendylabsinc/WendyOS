@@ -602,6 +602,11 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	// namespace join is resolved at container create time against the
 	// primary's running task, so the primary must be started before the
 	// next service is created.
+	// A partial deployment returns non-zero. Do not emit a complete detached
+	// success result for the group after starting only its healthy subset.
+	if partialErr != nil {
+		opts.detachedOutput = false
+	}
 	if err := startAndStreamServices(ctx, conn, appCfg.AppID, ordered, preservedLifecycle, opts, createService, svcCfgs, svcLifecycleCfgs, appLevelCfg); err != nil {
 		return err
 	}
@@ -709,7 +714,7 @@ func buildServicesParallelCore(
 	sem := make(chan struct{}, concurrency)
 
 	var prog *tea.Program
-	if !quietBuild && isInteractiveTerminal() {
+	if !quietBuild && isInteractiveTerminal() && !detachedJSONRun(ctx) {
 		title := fmt.Sprintf("Building %d service(s)...", len(names))
 		m := tui.NewMultiSpinner(title, names)
 		prog = tui.NewProgressProgram(m)
@@ -774,7 +779,7 @@ func buildServicesParallelCore(
 			} else if quietBuild {
 				buildOut = &logBuf
 			} else {
-				buildOut = os.Stdout
+				buildOut = runProgressWriter(ctx)
 			}
 			var logOutW io.Writer = &logBuf
 			if prog == nil && !quietBuild {
@@ -1194,16 +1199,20 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			if err != nil {
 				return fmt.Errorf("starting service %s: %w", name, err)
 			}
-			if _, err := stream.Recv(); err != nil && err != io.EOF {
+			if err := awaitStarted(stream); err != nil {
 				return fmt.Errorf("waiting for service %s to start: %w", name, err)
 			}
 		}
 		cliLogln("App group %s running in detached mode.", appID)
-		// No host-side lifecycle work: detached runs do not wait for readiness,
-		// announce the app URL, or fire host postStart hooks — see
+		// Detached runs report endpoints without waiting for readiness
+		// or firing host postStart hooks — see
 		// runPostStartIfReady's doc comment (WDY-2041). The agent-side hooks
 		// attached to the start RPCs above still run on the device.
-		return nil
+		configs := []*appconfig.AppConfig{appLevelCfg}
+		for _, name := range ordered {
+			configs = append(configs, svcLifecycleCfgs[name])
+		}
+		return opts.reportDetachedRun(ctx, conn, appID, configs...)
 	}
 
 	if opts.isWatch() {

@@ -488,6 +488,12 @@ Declares the app's primary HTTP port. The agent reports it over gRPC (`AppContai
 { "type": "http", "port": 8080 }
 ```
 
+A detached agent deployment includes declared HTTP ports in its
+[reported endpoints](../clients/wendy-cli/commands/run.md#detached-output), using
+host loopback forwarding for user-networked VMs. Reporting does not check HTTP
+health or open a browser. A TCP readiness port alone does not declare an HTTP
+endpoint; an explicit hostname-based HTTP(S) `openURL` can also supply one.
+
 > **Networking:** Browser reachability currently requires `{ "type": "network", "mode": "host" }`. Bridge mode provides outbound NAT only and does not publish host/LAN ports. A `network.ports` mapping in mesh mode serves mesh-peer traffic; it does not make the URL reachable from the developer's browser.
 
 If the app configures an explicit hostname-templated `hooks.postStart.openURL`, that URL wins for display and browser opening. Otherwise the HTTP entitlement port wins, followed by `readiness.tcpSocket.port`. An explicit readiness TCP port remains the probe target, so an app can probe port `9000` while advertising and opening its HTTP UI on port `8080`.

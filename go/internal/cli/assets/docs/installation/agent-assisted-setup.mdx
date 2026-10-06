@@ -8,6 +8,10 @@ Install the [Wendy CLI](/docs/#1-install-the-wendy-cli), run
 inspect the live tool list. A new skill or CLI download does not update an MCP
 process that is already running.
 
+For ChatGPT Desktop, use `wendy mcp setup chatgpt` instead. It adds Wendy to
+your personal marketplace. Follow the [ChatGPT setup guide](/docs/guides/chatgpt)
+to install the plugin and enable device or simulator access.
+
 Setup configures MCP and installs one Wendy end-user skill group for detected
 Codex, Claude Code, and OpenCode installations. It covers device installation,
 first-boot verification, app creation, deployment, and robot checks. Codex and
@@ -40,6 +44,7 @@ Matching the module's SoC does not establish image compatibility.
 ## Request a plan
 
 `os_install_plan` and `os_list_drives` work before a device connection exists.
+MCP clients list them after calling `wendy_tools` with `{"groups":["setup"]}`.
 Their CLI equivalents are:
 
 ```sh

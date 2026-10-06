@@ -299,24 +299,28 @@ func runBuildWithProgress(ctx context.Context, title string, dumpRawOnFailure fu
 	start := time.Now()
 	raw := &boundedBuffer{max: maxRawBuildCapture}
 	var setupLog bytes.Buffer
+	out := buildProgressOut
+	if detachedJSONRun(ctx) {
+		out = os.Stderr
+	}
 
-	if !buildProgressInteractive() {
-		emit, tally, stopHeartbeat := tui.NewBuildPlainRenderer(buildProgressOut)
+	if !buildProgressInteractive() || detachedJSONRun(ctx) {
+		emit, tally, stopHeartbeat := tui.NewBuildPlainRenderer(out)
 		parser := tui.NewBuildParser(emit)
 		buildStream := io.MultiWriter(parser, raw)
 		setupw, finishSetup := newBuildSetupStepWriter(emit, &setupLog)
 		stream := firstWriteHook(buildStream, finishSetup)
-		fmt.Fprintf(buildProgressOut, "%s\n", title)
+		fmt.Fprintf(out, "%s\n", title)
 		err := build(ctx, stream, setupw)
 		finishSetup() // idempotent; catches builds that never write to stream
 		stopHeartbeat()
 		if err != nil {
 			if ctx.Err() == nil && dumpRawOnFailure(err) {
-				return renderBuildFailure(buildProgressOut, "", string(raw.Bytes())+setupLog.String(), err)
+				return renderBuildFailure(out, "", string(raw.Bytes())+setupLog.String(), err)
 			}
 			return err
 		}
-		printBuildSummary(buildProgressOut, tally(), time.Since(start))
+		printBuildSummary(out, tally(), time.Since(start))
 		return nil
 	}
 

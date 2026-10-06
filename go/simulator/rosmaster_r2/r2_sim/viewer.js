@@ -104,7 +104,7 @@ async function poll() {
     if (epoch !== status.epoch) { epoch=status.epoch; trail.length=0; forgetControls(); }
     if (status.control_mode!=='browser') forgetControls();
     $('connection').textContent=status.healthy ? (paused?'Simulation paused':'Simulator connected') : 'Simulator fault';
-    $('connection').style.color=status.healthy?'#a6c4b1':'#ffa998';
+    $('connection').style.color=status.healthy?'#d4d4d8':'#fca5a5';
     $('speed').textContent=state.speed.toFixed(2); $('steering').textContent=(state.steering*180/Math.PI).toFixed(1);
     $('position').textContent=`${state.x.toFixed(2)}, ${state.y.toFixed(2)} m`;
     $('heading').textContent=`${(state.yaw*180/Math.PI).toFixed(1)}°`; $('distance').textContent=`${state.distance.toFixed(2)} m`;
@@ -118,7 +118,7 @@ async function poll() {
       trailGeometry.setFromPoints(trail);
     }
   } catch(error) {
-    forgetControls(); $('connection').textContent='Connection lost'; $('connection').style.color='#ffa998'; notice('Reconnecting. Enable controls again after the connection returns.');
+    forgetControls(); $('connection').textContent='Connection lost'; $('connection').style.color='#fca5a5'; notice('Reconnecting. Enable controls again after the connection returns.');
   }
   setTimeout(poll,50);
 }

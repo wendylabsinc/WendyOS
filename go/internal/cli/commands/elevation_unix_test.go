@@ -5,6 +5,7 @@ package commands
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -86,14 +87,28 @@ func TestErrThorNeedsRoot(t *testing.T) {
 	if !strings.Contains(msg, "sudo wendy install --device-type "+thorDeviceType) {
 		t.Errorf("error should give the exact re-run command: %q", msg)
 	}
+	if strings.Contains(msg, "usb-setup") {
+		t.Errorf("error must not point at usb-setup, which does not install the Jetson rule: %q", msg)
+	}
+	if runtime.GOOS == "linux" && !strings.Contains(msg, usbUdevRulePath) {
+		t.Errorf("linux error should give the udev rule install commands: %q", msg)
+	}
 }
 
 func TestThorElevationReason(t *testing.T) {
 	if !strings.Contains(thorElevationReason("darwin"), "root on macOS") {
 		t.Errorf("darwin reason should mention macOS root: %q", thorElevationReason("darwin"))
 	}
-	if !strings.Contains(thorElevationReason("linux"), "wendy device usb-setup") {
-		t.Errorf("linux reason should mention the udev-setup tip: %q", thorElevationReason("linux"))
+	linux := thorElevationReason("linux")
+	for _, want := range []string{usbUdevRulePath, usbUdevRule, "udevadm control --reload-rules"} {
+		if !strings.Contains(linux, want) {
+			t.Errorf("linux reason should give the udev rule install commands (missing %q): %q", want, linux)
+		}
+	}
+	// `wendy device usb-setup` configures the USB-C network link, not the
+	// Jetson recovery rule, so the hint must not send people there.
+	if strings.Contains(linux, "usb-setup") {
+		t.Errorf("linux reason must not point at usb-setup: %q", linux)
 	}
 }
 
@@ -126,6 +141,46 @@ func TestBuildSudoReexecArgs(t *testing.T) {
 	got = buildSudoReexecArgs(self, []string{"install", "--device-type=" + thorDeviceType})
 	if n := strings.Count(strings.Join(got, " "), "--device-type"); n != 1 {
 		t.Errorf("device-type duplicated for equals form: %v", got)
+	}
+}
+
+// sudo's env_reset drops variables it isn't told to keep. Losing
+// WENDY_ANALYTICS made the elevated run treat an opted-out user as a first run:
+// it sent analytics and wrote a root-owned ~/.wendy/config.json. Losing
+// WENDY_CONFIG_DIR sent its writes to $HOME/.wendy instead.
+func TestThorSudoPreserveEnvKeepsWendySettings(t *testing.T) {
+	kept := strings.Split(strings.TrimPrefix(thorSudoPreserveEnv, "--preserve-env="), ",")
+	for _, want := range []string{"WENDY_ANALYTICS", "WENDY_CONFIG_DIR"} {
+		found := false
+		for _, k := range kept {
+			if k == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s is not preserved through sudo: %q", want, thorSudoPreserveEnv)
+		}
+	}
+}
+
+// The elevated run hands what it creates back to the user when it exits, but
+// not if it's killed. The directories it writes into are created beforehand, as
+// the user, so a killed flash can't leave ~/.cache itself root-owned.
+func TestCreateElevatedRunDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	base, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createElevatedRunDirs()
+
+	for _, dir := range []string{filepath.Join(base, "wendy", "os-images"), filepath.Join(base, "wendy", "logs")} {
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			t.Errorf("%s was not created before elevating: %v", dir, err)
+		}
 	}
 }
 

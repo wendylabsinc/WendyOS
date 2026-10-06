@@ -549,9 +549,34 @@ func notificationDeviceProofContext(
 	return metadata.NewOutgoingContext(ctx, md), nil
 }
 
-// CloudNotificationSender authenticates its request with a short-lived proof
-// signed by the provisioned device key. This preserves device attribution when
-// the production Cloud ingress cannot forward the TLS client certificate.
+// notificationRequestContext adds the header device proof only for a legacy
+// urn:wendy enrollment. A PKI-enrolled device (non-empty principal) is
+// identified by its mTLS leaf alone: Cloud no longer reads the x-wendy-device-*
+// headers (WDY-3427, WDY-3464), so it sends none.
+func notificationRequestContext(
+	ctx context.Context,
+	request *cloudpb.CreateNotificationV2Request,
+	principal string,
+	orgID, assetID int32,
+	certPEM string,
+	keyData []byte,
+) (context.Context, error) {
+	if principal != "" {
+		return ctx, nil
+	}
+	if orgID <= 0 || assetID <= 0 {
+		return nil, status.Error(codes.FailedPrecondition, "device proof requires positive organization and asset IDs")
+	}
+	proofCtx, err := notificationDeviceProofContext(ctx, request, deviceProofFullMethod, certs.AssetURN(orgID, assetID), time.Now().Unix(), certPEM, keyData, rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("create notification device request proof: %w", err)
+	}
+	return proofCtx, nil
+}
+
+// CloudNotificationSender sends app notifications to Wendy Cloud over device
+// mTLS. A legacy enrollment also signs a short-lived header proof with the
+// provisioned device key (see notificationRequestContext).
 type CloudNotificationSender struct {
 	logger          *zap.Logger
 	provisioningSvc *ProvisioningService
@@ -572,9 +597,6 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 	if !enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "device must be enrolled before sending notifications")
 	}
-	if orgID <= 0 || assetID <= 0 {
-		return nil, status.Error(codes.FailedPrecondition, "device proof requires positive organization and asset IDs")
-	}
 	certPEM, chainPEM, keyData := s.provisioningSvc.ProvisioningCerts()
 	defer func() {
 		for i := range keyData {
@@ -582,18 +604,9 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 		}
 	}()
 
-	proofCtx, err := notificationDeviceProofContext(
-		ctx,
-		request,
-		deviceProofFullMethod,
-		certs.AssetURN(orgID, assetID),
-		time.Now().Unix(),
-		certPEM,
-		keyData,
-		rand.Reader,
-	)
+	proofCtx, err := notificationRequestContext(ctx, request, s.provisioningSvc.ProvisioningPrincipal(), orgID, assetID, certPEM, keyData)
 	if err != nil {
-		return nil, fmt.Errorf("create notification device request proof: %w", err)
+		return nil, err
 	}
 	connection, err := s.connectionFor(cloudHost, certPEM, chainPEM, keyData)
 	if err != nil {

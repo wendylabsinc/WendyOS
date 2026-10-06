@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 const { chromium } = await import(process.argv[2] || process.env.PLAYWRIGHT_MODULE || 'playwright');
 const html = await readFile(new URL('../go2_sim/index.html', import.meta.url), 'utf8');
 const origin = 'http://go2-controls.test';
-const browser = await chromium.launch({ headless: true, channel: 'chromium' });
+const browser = await chromium.launch({ headless: true, channel: process.env.BROWSER_CHANNEL || 'chromium' });
 const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
 const errors = [], posts = [];
 page.on('pageerror', error => errors.push(error.message));
@@ -25,6 +25,8 @@ const third = { publisher_gid: '33333333333333333333333333333333', kind: 'twist'
 await page.route(`${origin}/**`, route => {
   const request = route.request(), path = new URL(request.url()).pathname;
   if (path === '/') return route.fulfill({ contentType: 'text/html', body: html });
+  if (path.startsWith('/vendor/') || path === '/lidar-view.js')
+    return route.fulfill({ contentType: 'text/javascript', body: '' });
   if (path === '/viewer.js') {
     // The controls regression does not need WebGL or simulation geometry.
     return route.fulfill({ contentType: 'text/javascript', body: `
@@ -68,6 +70,7 @@ async function sameOptions(message) {
 
 try {
   await page.goto(origin);
+  await page.locator('#app-control > summary').click();
   await poll();
   const select = page.locator('#source');
   assert.equal(await select.locator('option').count(), 1);

@@ -29,7 +29,10 @@ func TestInstallationJobsUseHostBackendWithoutConnection(t *testing.T) {
 			return &onboarding.Job{}, nil
 		},
 	})
-	srv := s.newProtocolServer()
+	srv, err := s.newProtocolServer()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -71,7 +74,10 @@ func TestInstallResumeRejectsMalformedAuthorizationBeforeBackend(t *testing.T) {
 }
 
 func TestInstallationJobAnnotationsReflectWrites(t *testing.T) {
-	srv := New(&config.Config{}, nil).newProtocolServer()
+	srv, err := New(&config.Config{}, nil).newProtocolServer()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name              string
 		read, destructive bool

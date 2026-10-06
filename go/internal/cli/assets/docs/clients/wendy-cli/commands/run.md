@@ -4,7 +4,7 @@ Runs your app on a Wendy-enabled device:
 2. [Queries the platform and architecture](./device/version.md) of this device
 3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](../../../debugging/) if needed
 4. Uploads the artifact(s) for Linux (via the container registry) or macOS
-5. [Starts the app](./device/apps/start.md), then waits for readiness and prints the reachable URL (attached runs, or any run with `--wait-ready`)
+5. [Starts the app](./device/apps/start.md). Attached runs, and any run with `--wait-ready`, then wait for readiness and print the reachable URL; other detached agent deployments report configured HTTP endpoints as described in [Detached output](#detached-output).
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
 
 
@@ -15,7 +15,7 @@ Runs your app on a Wendy-enabled device:
 | Flag | Description |
 |------|-------------|
 | `--deploy` | Build and create the container but do not start it. |
-| `--detach` | Start the container and return without streaming logs or opening the app URL. Waits for readiness only with `--wait-ready`. |
+| `--detach` | Start the container and return without streaming logs or opening the app URL. Waits for readiness only with `--wait-ready`. Agent deployments report configured HTTP endpoints; see [Detached output](#detached-output). |
 | `--wait-ready` | Succeed only once the app is ready: its readiness probe passes or, without a probe this machine can reach, it stays running for 10 seconds (or a shorter `--readiness-timeout`). Fails if the app crashes or the probe times out. See [Waiting for readiness](#waiting-for-readiness---wait-ready). |
 | `--readiness-timeout <duration>` | Override the readiness deadline, from `1s` to `1h` in whole seconds. With `--detach` it requires `--wait-ready`. |
 | `--restart-unless-stopped` | Restart the container unless manually stopped. |
@@ -74,6 +74,49 @@ When another deployment replaces the app (for example `wendy run --detach` from 
 
 When the image build fails, `wendy run` prints the build failure details, including the builder's own error and the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last informative line of the step's output, skipping generic closing lines such as make's `make: *** [...] Error 1` or pip's closing notes, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
 
+## Detached output
+
+For an ordinary single-device deployment to a Wendy agent, `--json --detach`
+emits one result on stdout after start is acknowledged (or the unchanged app is
+already running). Build progress and pre-start application output go to stderr:
+
+```sh
+wendy --json --device vm:dev run --yes --detach
+```
+
+```json
+{
+  "status": "started",
+  "app": "com.example.web",
+  "device": "vm:dev",
+  "readiness": "not_checked",
+  "url": "http://127.0.0.1:18880",
+  "endpoints": [
+    { "app": "com.example.web", "url": "http://127.0.0.1:18880" }
+  ]
+}
+```
+
+`readiness: "not_checked"` means no health probe or host `postStart` action ran.
+Verify the HTTP response separately. In text mode, URLs appear as
+`App URL (<app>): <url>` notices. With `--wait-ready`, the run checks the app
+and prints its outcome instead of this result; see
+[Waiting for readiness](#waiting-for-readiness---wait-ready).
+
+URLs come from [`http` entitlements](../../../apps/wendy.json.md#http) and
+HTTP(S) `hooks.postStart.openURL` values that contain `WENDY_HOSTNAME`.
+`endpoints` contains distinct reported URLs, each with its app or service
+identifier; a service may have several URLs. `url` is the first entry
+and is omitted when `endpoints` is empty, including when routing cannot be
+determined. A TCP readiness probe alone does not declare an HTTP endpoint.
+
+For user-networked VMs, URLs use the connected VM's live forwarding on host
+loopback. See [VM HTTP verification](../../../installation/wendyos-virtual-machine.mdx#reaching-an-app-you-deployed).
+Multi-service and Compose runs emit one group result after the selected services
+start. A partial deployment returns non-zero without a whole-group success
+result. Fleet runs, `--deploy`, watch mode, and local container providers do not
+produce this result.
+
 ## Waiting for readiness: `--wait-ready`
 
 `--wait-ready` makes `wendy run` report whether the app actually came up:
@@ -90,7 +133,7 @@ After the device confirms the container started, `wendy run` does one of two che
 
 The run fails with a non-zero exit when, during the check, the app exits (even with exit code 0), is restarted by its restart policy, or is no longer reported by the device; when the probe deadline passes; or when, without a probe, the app's state cannot be read at the end of the window.
 
-With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is not a terminal), stdout carries exactly one JSON object, failures included, unless the run is interrupted or its command line does not parse (see below). Its `status` is one of five values:
+With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is not a terminal), stdout carries exactly one JSON object, failures included, unless the run is interrupted or its command line does not parse (see below). It takes the place of the `started` result that `--detach` alone prints (see [Detached output](#detached-output)): `started` means only that the device acknowledged the start, while this object reports the check. Its `status` is one of five values:
 
 ```json
 {"status":"ready","app":"my-app","device":"192.168.1.207","readiness":"passed","url":"http://192.168.1.207:8080"}
@@ -110,7 +153,7 @@ With `--detach` in JSON mode (`--json`; on by default when stdin or stdout is no
 
 `app` is the app ID from `wendy.json`. `device` is the address `wendy run` connected to: for a direct connection that is often an IP address rather than the `.local` name, and through Wendy Cloud it is the device's cloud name. On the device itself (`WENDY_AGENT_SOCKET`), `device` is omitted and readiness is never probed, so the outcome is `running`, `crashed`, `not_ready` or `failed`. A `failed` object also omits `app` and `device` until the run knows them, and it never carries `exit_code`, `termination_reason` or `url`.
 
-`failed` covers every error `wendy run` itself reports before the check: a flag value or combination it rejects (for example `--readiness-timeout 1500ms`, `--env FOO`, or `--wait-ready` with `--watch`, `--hil` or `--deploy`), a project or target `--wait-ready` does not support (listed at the end of this section), an invalid `wendy.json`, device selection, the build, the push, and the container start. The run also prints the error on stderr. Errors that stop the command before `wendy run` starts, such as an unknown flag, a malformed value like `--readiness-timeout abc`, or a CLI configuration that cannot be loaded, print only the error on stderr and no object. A run without `--wait-ready` never prints an object, even when it is rejected (for example `--detach --readiness-timeout 30s`). Ctrl-C (exit 0) or SIGTERM (non-zero exit) prints no object at any point; during the wait, both leave the app running.
+`failed` covers every error `wendy run` itself reports before the check: a flag value or combination it rejects (for example `--readiness-timeout 1500ms`, `--env FOO`, or `--wait-ready` with `--watch`, `--hil` or `--deploy`), a project or target `--wait-ready` does not support (listed at the end of this section), an invalid `wendy.json`, device selection, the build, the push, and the container start. The run also prints the error on stderr. Errors that stop the command before `wendy run` starts, such as an unknown flag, a malformed value like `--readiness-timeout abc`, or a CLI configuration that cannot be loaded, print only the error on stderr and no object. A run without `--wait-ready` prints no object when it fails, even when it is rejected (for example `--detach --readiness-timeout 30s`); a successful one prints the `started` result described in [Detached output](#detached-output). Ctrl-C (exit 0) or SIGTERM (non-zero exit) prints no object at any point; during the wait, both leave the app running.
 
 A detached check does not look for another deployment. If one replaces the app during the check, the outcome is whatever the polls see: `crashed` when a poll finds the old app stopped (the device records it like a SIGKILL crash, exit code 137) or the app missing or not yet started, or `ready` or `running` when the polls see only the new app running.
 
@@ -120,7 +163,7 @@ Without `--detach`, `--wait-ready` runs the same check while streaming logs. A f
 
 ## Reachable app URLs
 
-After the app starts, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
+In attached mode after the app starts, and in a detached run with `--wait-ready` once its check passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
 
 ```text
 App reachable at http://192.168.123.222:3000

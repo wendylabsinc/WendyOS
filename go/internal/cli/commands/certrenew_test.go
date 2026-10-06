@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"crypto/mldsa"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -280,13 +281,15 @@ func TestRenewStatusMapping(t *testing.T) {
 			}
 			t.Cleanup(func() { renewHTTPClientForFn = origClient })
 
+			csrPEM, _ := proofTestCSR(t)
 			origCSR := renewCSRForFn
-			renewCSRForFn = func(config.CertificateInfo) (csrPEM, keyPEM string, err error) {
-				return "csr-pem", "key-pem", nil
+			renewCSRForFn = func(config.CertificateInfo) (string, string, error) {
+				return csrPEM, "key-pem", nil
 			}
 			t.Cleanup(func() { renewCSRForFn = origCSR })
 
-			auth := &config.AuthConfig{Certificates: []config.CertificateInfo{{PemCertificate: "stored"}}}
+			key, _ := mldsa.GenerateKey(mldsa.MLDSA65())
+			auth := &config.AuthConfig{Certificates: []config.CertificateInfo{proofTestCert(t, key)}}
 			certPEM, _, keyPEM, err := renewViaPKICoreImpl(context.Background(), srv.URL+"/v1/renew", auth)
 			if tc.wantErr {
 				if err == nil {

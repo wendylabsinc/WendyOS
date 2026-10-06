@@ -665,14 +665,16 @@ func TestDetachedRunWithoutWaitReadyDoesNotDrain(t *testing.T) {
 }
 
 // A `--detach --wait-ready` run in JSON mode prints exactly one JSON object on
-// stdout on every detached single-container path, failures included, and the
-// stdout guard RunE applies keeps build progress off stdout.
+// stdout on every detached single-container path, failures included: its
+// outcome replaces the "started" result (reportDetachedRun) that RunE's
+// detachedOutput enables for every detached run. The stdout guard RunE applies
+// keeps build progress off stdout.
 func TestDetachedWaitReadyJSONStdoutIsExactlyOneObject(t *testing.T) {
 	shortenWaitReadyPoll(t)
 	previousJSON, previousOut := jsonOutput, buildProgressOut
 	t.Cleanup(func() { jsonOutput, buildProgressOut = previousJSON, previousOut })
 	jsonOutput = true
-	opts := runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow}
+	opts := runOptions{detach: true, waitReady: true, readinessTimeout: waitReadyTestWindow, detachedOutput: true}
 	cfg := &appconfig.AppConfig{AppID: "app"}
 	healthy := []*agentpb.AppContainer{runningSnapshot(0)}
 	crashed := []*agentpb.AppContainer{runningSnapshot(0), appSnapshot("app", agentpb.AppRunningState_STOPPED, 3, "crashed", 0)}

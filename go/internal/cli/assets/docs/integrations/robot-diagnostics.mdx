@@ -9,7 +9,9 @@ subscriptions, and topics that produced no readings during an observation.
 
 ## Inspect a sensor
 
-1. Call `wendy_status`, then connect using `device_connect` or `cloud_connect`.
+1. Call `wendy_status`, then connect using `device_connect` with a selector from
+   `device_list`. Call `wendy_tools` with `{"groups":["robotics"]}` to list the
+   ROS 2 tools used below.
 2. Call `ros2_topics` to discover topic names, message types, and middleware.
 3. Call `ros2_topic_info` with the selected `topic` to inspect publisher counts
    and verbose endpoint information, including QoS.

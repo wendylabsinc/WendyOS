@@ -1,0 +1,39 @@
+name: Set up Go for CI
+description: Install Go and reuse a build cache for this kind of check.
+
+inputs:
+  cache-name:
+    description: Separate race, vet, and cross-compilation artifacts.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      id: go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      with:
+        go-version-file: go.mod
+        cache: false
+
+    - name: Locate Go caches
+      id: paths
+      shell: bash
+      run: |
+        echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+        echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+
+    # setup-go's dependency-only key is shared by every job and never updated
+    # on a hit. A format or non-race build can leave race tests rebuilding the
+    # same packages on every run. Save each check's artifacts per commit and
+    # restore the latest compatible cache when source or dependencies change.
+    - name: Cache Go modules and build artifacts
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: |
+          ${{ steps.paths.outputs.modules }}
+          ${{ steps.paths.outputs.build }}
+        key: go-ci-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-name }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          go-ci-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-name }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-
+          go-ci-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-name }}-${{ steps.go.outputs.go-version }}-

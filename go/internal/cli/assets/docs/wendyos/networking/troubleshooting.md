@@ -69,9 +69,10 @@ nmcli connection show | grep -i usb
 ```
 
 If the host is not set up for sharing, the simplest fix on Linux is to run
-`wendy discover` and accept the offered USB setup — it configures a NetworkManager
-"shared" profile (serving DHCP to the device) and installs a udev rule so
-ModemManager leaves the gadget alone.
+`wendy discover` and accept the offered USB setup — it configures a link-local
+NetworkManager profile bound to the gadget's MAC (so it survives a change of USB
+port) and installs a udev rule so ModemManager leaves the gadget alone. It does
+not share internet; use the NM shared profile below for that.
 
 The equivalent manual steps:
 ```bash
@@ -81,7 +82,7 @@ nmcli connection add type ethernet ifname enxXXXXXXXXXXXX con-name usb-gadget-sh
 nmcli connection up usb-gadget-sharing
 ```
 
-To remove what the CLI installed: `nmcli connection delete wendy-usb` and
+To remove what the CLI installed: `nmcli connection delete wendy-usb-<mac>` and
 `sudo rm -f /etc/udev/rules.d/99-wendy-usb.rules`.
 
 **Step 2 — check NetworkManager on the device:**

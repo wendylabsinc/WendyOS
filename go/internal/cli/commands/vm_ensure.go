@@ -178,6 +178,9 @@ func simulatorAuthenticationFailed(err error) bool {
 // VM aliases carry identity separately from their current loopback port. Never
 // consult a localhost pin or session cached for an unrelated VM/container.
 func connectSimulatorAgent(ctx context.Context, name, addr string) (*grpcclient.AgentConnection, *agentpb.GetAgentVersionResponse, error) {
+	// A reconnect passes conn.Addr, the mTLS forward; dial the plaintext
+	// forward so the ladder never tries a port QEMU does not forward.
+	addr = vmAgentForwardAddr(name, addr)
 	conn, resp, err := probeSimulatorAgent(ctx, name, addr)
 	if err != nil {
 		return nil, nil, err

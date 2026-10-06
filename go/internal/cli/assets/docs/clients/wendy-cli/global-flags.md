@@ -10,6 +10,13 @@ Outputs command results as JSON instead of the default interactive TUI or table 
 wendy device list --json
 ```
 
+For ordinary single-device deployments to a Wendy agent,
+`wendy --json run --detach` emits one result on stdout, with progress and
+pre-start logs on stderr.
+See [`wendy run` — Detached output](./commands/run.md#detached-output) for the
+result shape and supported modes. Attached run and build commands still emit
+progress/log output.
+
 When stdout is not a TTY (for example, when piping output, running in CI, or executing from a script), `--json` is automatically enabled. An explicit `--json` or `--json=false` always takes precedence over the automatic detection.
 
 ```sh
@@ -30,6 +37,16 @@ Specifies a target device by IP address, hostname, provider key, or explicit `ho
 wendy --device 192.168.1.42 device apps list
 wendy --device my-mac.local:50051 device info --json
 ```
+
+When `--device` is not given, the CLI uses the `WENDY_DEVICE` environment variable if it is set, and only then the saved default device. Set `WENDY_DEVICE` per terminal, or in an AI tool's MCP server `env` block, to give each session its own target without changing the default all sessions share:
+
+```sh
+export WENDY_DEVICE=my-pi.local
+wendy device info                             # my-pi.local
+wendy --device my-mac.local:50051 device info # --device still wins
+```
+
+Commands that connect to a device this way print `Using device <name> from WENDY_DEVICE.` The notice is not printed in `--json` mode, which the CLI also switches to on its own when it runs without an interactive terminal: from an AI tool's MCP server, a script, or a pipe.
 
 ## Automatic update notifications
 
@@ -64,6 +81,7 @@ Its state is persisted in `~/.wendy/config.json`:
 | `WENDY_APPSTORE_API` | Override the Wendy AppStore resolution API base URL used by `wendy app install` / `wendy device apps install`. Takes precedence over the built-in default; the `--api` flag takes precedence over this variable. |
 | `WENDY_BUILD_PROGRESS` | Override the progress format requested from `docker buildx` during image builds. Accepts `plain` or `rawjson` (case-insensitive); any other value is ignored. When unset, the CLI probes the installed buildx version once per run and picks `rawjson` for buildx 0.13 or newer, `plain` otherwise. `rawjson` is what supplies per-step byte counters and download rates, so forcing `plain` reduces build output to step names only. |
 | `WENDY_BUILDKIT_HOST` | Override the BuildKit endpoint used by `--builder buildkit`, for example `unix:///path/to/buildkitd.sock`. It takes precedence over `BUILDKIT_HOST`, Wendy's discovered `<Wendy cache>/runtime/buildkitd.sock`, and buildctl's normal local default. The daemon must use a containerd worker for `wendy build` image-store output. |
+| `WENDY_DEVICE` | Target device for commands run without `--device`; takes precedence over the saved default device. Accepts the same values as `--device`. A blank value is ignored. |
 | `WENDY_STAGEFILE_BACKEND` | Select the Stagefile compiler backend when `--stagefile-backend` is not passed. Accepts `dockerfile` (default) or experimental direct `llb`; the command-line flag takes precedence. |
 | `WENDY_AGENT_SIGNATURE_PATH` | Path to a detached ML-DSA65 signature file for the agent update binary. When set, `wendy device update` includes the signature in the `UpdateAgent` RPC. Has no effect until a verification key is embedded in the agent. |
 | `WENDY_IMAGE_SIGNATURE_PATH` | Path to a detached ML-DSA65 signature file for the OCI image config. When set, `wendy run` includes the signature in `RunContainer` calls. Has no effect until a per-org publisher key is provisioned on the agent. |

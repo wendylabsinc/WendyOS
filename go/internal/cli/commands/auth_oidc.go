@@ -71,6 +71,10 @@ type oidcTokenResponse struct {
 	IDToken      string `json:"id_token"`
 }
 
+// discoverOIDCIssuerFn is indirected so command tests can verify target routing
+// without contacting a live wendy-auth deployment.
+var discoverOIDCIssuerFn = discoverOIDCIssuer
+
 // discoverOIDCIssuer uses wendy-auth's identifier-first API to route an email
 // address to its home realm without exposing or requiring an organization list.
 func discoverOIDCIssuer(ctx context.Context, authBase, email string) (string, error) {

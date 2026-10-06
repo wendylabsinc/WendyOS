@@ -2042,6 +2042,16 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 		return err
 	}
 
+	// SDKs such as librealsense open V4L2 directly, outside the PipeWire
+	// graph. Reuse an owner's fresh JPEG feed before trying another device
+	// open through PipeWire. The hub still owns only this subscriber stream.
+	if shared, sharedErr := s.streamSharedCamera(ctx, send, path, req, sink); shared {
+		return sharedErr
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	serial, ok := s.findCameraSource(ctx, path)
 	if !ok {
 		return err
@@ -2897,6 +2907,23 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 	} else {
 		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 	}
+	return s.runCameraPipeline(ctx, broadcast, path, enc, plan, cmd, sink, nil)
+}
+
+// runCameraPipeline owns both subprocess pipes and an optional app-provided
+// input. Shared HTTP capture uses the same encoding, teardown and timeout path
+// as device capture, without ever opening the busy camera again.
+func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, enc gstEncoderResult, plan gstPipelinePlan, cmd *exec.Cmd, sink rawSink, input io.ReadCloser) (runErr error) {
+	if sink == nil {
+		sink = noRawSink{}
+	}
+	if cmd == nil {
+		cmd = exec.CommandContext(ctx, plan.args[0], plan.args[1:]...)
+	}
+	if input != nil {
+		cmd.Stdin = input
+		defer input.Close() // also close if Start fails
+	}
 	// The busy classifier reads gst's prose. LC_ALL=C is the one value glibc short-circuits
 	// ahead of LANGUAGE, so messages cannot come back translated; exec keeps the last entry.
 	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
@@ -2938,6 +2965,9 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 
 	defer func() {
 		cmd.Process.Kill() //nolint:errcheck
+		if input != nil {
+			_ = input.Close() // unblock exec's stdin copier before Wait
+		}
 		if rawR != nil {
 			rawR.Close() //nolint:errcheck // unblocks pumpRawTap
 		}

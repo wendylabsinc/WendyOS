@@ -61,6 +61,32 @@ For broad hardware inspection, filter the device capability list:
 wendy device hardware list --category camera
 ```
 
+## Share a camera opened by an app
+
+Wendy viewers and snapshots share one capture stream. If an app opens the
+camera directly, for example through the RealSense SDK, Wendy can reuse that
+app's JPEG feed when the device reports that it is busy. The app keeps running
+and retains the camera.
+
+To support automatic sharing, the process holding the camera must serve
+`GET /frame.jpg` on a TCP listener bound to the host's loopback or wildcard
+address. Each successful response must include:
+
+- `Content-Type: image/jpeg`
+- `X-Captured-At-Unix-Ns`: the frame's capture time in Unix nanoseconds
+- A complete JPEG no larger than 8 MiB or 4096×2160 pixels
+
+Wendy accepts frames captured within the last two seconds and polls at up to
+10 frames per second. Omit `--fps` when viewing an app-owned JPEG feed, since
+Wendy cannot reconfigure its capture rate. Repeated capture timestamps do not
+create new frames.
+It checks only listeners belonging to the camera process, does not follow
+redirects, and respects HTTP errors such as a locked feed. A process holding
+multiple color cameras is ambiguous and is not selected automatically.
+Depth and infrared nodes do not inherit the color feed. Private container
+network namespaces and original raw frames are not supported by this JPEG
+fallback.
+
 ## Wendy Lite cameras
 
 Select a Wendy Lite board in the device picker, or use one saved as your default,

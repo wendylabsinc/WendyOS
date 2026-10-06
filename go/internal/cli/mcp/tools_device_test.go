@@ -327,6 +327,40 @@ func TestDeviceList_ScanTrue_IncludesScanResults(t *testing.T) {
 	}
 }
 
+// On Linux a USB-C-tethered device stays invisible until the host's link to
+// it is configured, and only `wendy discover` in a terminal can do that (it
+// needs sudo). An agent must be told why the device is missing and what to ask
+// the user to do.
+func TestDeviceList_WarnsAboutUnconfiguredUSBLink(t *testing.T) {
+	srv := New(&config.Config{}, nil)
+	srv.SetUSBSetupNotice(func() string { return "configure the USB-C link" })
+
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %v", result.Content)
+	}
+	warnings := listPayload(t, result, "warnings")
+	if len(warnings) != 1 || warnings[0]["source"] != "usb" || warnings[0]["message"] != "configure the USB-C link" {
+		t.Fatalf("expected one usb warning, got %v", warnings)
+	}
+}
+
+func TestDeviceList_NoUSBWarningWhenLinkNeedsNoSetup(t *testing.T) {
+	srv := New(&config.Config{}, nil)
+	srv.SetUSBSetupNotice(func() string { return "" })
+
+	result, err := srv.callTool(context.Background(), "device_list", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if warnings := structuredMap(t, result)["warnings"]; warnings != nil {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+}
+
 func TestDeviceList_MaxBytesTruncates(t *testing.T) {
 	srv := New(&config.Config{DefaultDevice: "some-long-device-hostname-for-padding.local:50051"}, nil)
 

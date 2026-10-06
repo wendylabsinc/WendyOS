@@ -1284,6 +1284,10 @@ func pickInitLanguage(target string) (string, error) {
 				Value:       l.key,
 			})
 		}
+		if !isInteractiveTerminal() {
+			printPickerItemsPlainText("Available languages", items)
+			return "", fmt.Errorf("--language is required when running non-interactively (valid: %s, %s)", langSwift, langPython)
+		}
 		return pickFromItems("What language will you use?", items)
 	}
 }
@@ -1313,6 +1317,15 @@ var askEntitlementQuestions = func(target, language string) ([]appconfig.Entitle
 			Description: q.description,
 			Value:       q.entitlement,
 		}
+	}
+
+	// The checklist needs a terminal; without one, say which flags answer it.
+	if !isInteractiveTerminal() {
+		names := make([]string, len(wendyOSEntitlementQuestions))
+		for i, q := range wendyOSEntitlementQuestions {
+			names[i] = q.entitlement
+		}
+		return nil, fmt.Errorf("--entitlement is required when running non-interactively: repeat it (or comma-separate) for each one the app needs (%s), or pass --no-extra-entitlements for network access only", strings.Join(names, ", "))
 	}
 
 	selected, err := tui.RunChecklist("What does your app need access to?", items)
@@ -1869,7 +1882,14 @@ dependencies = []
 
 [project.scripts]
 %s = "%s:main"
-`, appID, pkgName, pkgName)
+
+# A build system makes uv install the package, and with it the script above
+# that the Dockerfile's CMD runs. Without one, uv treats the project as
+# "virtual" and 'uv run %s' fails with "Failed to spawn".
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+`, appID, pkgName, pkgName, pkgName)
 
 		if err := os.WriteFile(pyprojectPath, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("creating pyproject.toml: %w", err)
@@ -1920,15 +1940,21 @@ if __name__ == "__main__":
 
 WORKDIR /app
 
-# Install dependencies first for better caching
+# Install dependencies first for better caching. uv.lock is optional: with a
+# committed lock the build is reproducible (--frozen); without one (a fresh
+# scaffold), uv resolves from pyproject.toml. Run 'uv lock' and commit
+# uv.lock to pin dependency versions.
 COPY pyproject.toml uv.lock* ./
-RUN uv sync --frozen --no-install-project
+RUN if [ -f uv.lock ]; then uv sync --frozen --no-install-project; else uv sync --no-install-project; fi
 
 # Copy application code
 COPY . .
-RUN uv sync --frozen
+RUN if [ -f uv.lock ]; then uv sync --frozen; else uv sync; fi
 
-CMD ["uv", "run", "%s"]
+# --no-sync: the build above already installed the project. Without it, uv
+# re-checks the install on every container start, finds it stale (image
+# layers don't keep file ctimes) and rebuilds it, which needs network access.
+CMD ["uv", "run", "--no-sync", "%s"]
 `, pkgName)
 
 		if err := os.WriteFile(dockerPath, []byte(content), 0o644); err != nil {
@@ -1946,6 +1972,14 @@ func offerAIAssistant(appID, target, language string, entitlements []appconfig.E
 	hasCodex := isCommandAvailable("codex")
 
 	if !hasClaude && !hasCodex {
+		return nil
+	}
+
+	// The picker needs a terminal. Without one (an agent shell, CI, a pipe),
+	// the project is already scaffolded, so skip the offer rather than fail
+	// the whole command — a retry would only hit "wendy.json already exists".
+	if !isInteractiveTerminal() {
+		cliLogln("Not starting an AI assistant (no interactive terminal); pass --assistant claude, codex, or skip to choose explicitly.")
 		return nil
 	}
 

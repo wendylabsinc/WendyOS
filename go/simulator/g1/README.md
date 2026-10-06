@@ -57,7 +57,7 @@ A fresh driving publisher receives control automatically on its first valid
 Twist or native `SetVelocity` request. This replaces the previous app or browser
 owner. SDK discovery queries do not acquire control; the request that acquires
 control is acknowledged without applying motion, and the next request can drive.
-Standalone runtimes still require **Give app control** in the sandbox.
+Standalone runtimes still require **Grant control** in the sandbox.
 
 The learned policy initiates reliably around 0.3 m/s. Small commands from rest
 and turning in place track weakly; use forward walking with yaw for a turn.

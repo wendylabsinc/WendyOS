@@ -5,7 +5,9 @@ It walks forward, follows a left arc, follows a right arc, and stops after
 17 seconds. The simulator's learned policy produces the joint motion.
 
 The app uses the official `LocoClient.SetVelocity` API at 20 Hz with a 200 ms
-command duration. Forward speed is 0.3 m/s and turning speed is 0.2 rad/s.
+command duration. RPC replies have a one-second deadline so VM scheduling
+jitter does not fail the demo after 150 ms. The simulator still expires motion
+after 200 ms without a fresh command. Forward speed is 0.3 m/s and turning speed is 0.2 rad/s.
 Forward arcs suit this simulator's policy better than turning in place.
 Distances and heading changes depend on policy tracking and simulation speed.
 
@@ -28,8 +30,8 @@ From this directory, deploy the demo into that same VM:
 The managed simulator automatically grants the new `sport` publisher control.
 The app sends only zero velocity while waiting, for up to 120 seconds, then
 runs the sequence once. Reset the simulator before starting the app if the robot
-has fallen or is in damping mode. Standalone simulators still require selecting
-the publisher and clicking **Give app control**.
+has fallen or is in damping mode. Standalone simulators still require opening **App control**, selecting
+the publisher and clicking **Grant control**.
 
 This project's `restartPolicy: "no"` keeps the demo stopped after it finishes,
 so another `wendy run` starts a fresh publisher. Older CLIs need `--no-restart`.

@@ -32,6 +32,11 @@ func NewRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// First, before the early returns below, so every command sees one
+			// answer to "which device": --device, else WENDY_DEVICE, else the
+			// saved default.
+			applyDeviceEnv()
+
 			// Skip heavy init for commands that don't need device/cloud setup.
 			// __usb-setup and __t234-write run as root under sudo; skipping init
 			// avoids config/analytics writes (and an update check) as root, and
@@ -60,36 +65,32 @@ func NewRootCmd() *cobra.Command {
 			firstRun = analytics.Init(cfg)
 			premark("  prerun: analytics.Init")
 			if firstRun {
-				cmd.PrintErrln("Attention: The Wendy CLI collects anonymous analytics.")
-				cmd.PrintErrln("They help us understand which commands are used most, identify common errors, and prioritize improvements.")
-				cmd.PrintErrln("Analytics are enabled by default. If you'd like to opt-out, use the following command:")
-				cmd.PrintErrln("  wendy analytics disable")
-				cmd.PrintErrln("Or, set the following environment variable:")
-				cmd.PrintErrln("  WENDY_ANALYTICS=false")
+				showFirstRunNotice(cmd, cfg)
+			}
 
-				cmd.PrintErrln("")
-				cmd.PrintErrln("New to Wendy? Run `wendy tour` for a guided setup.")
-
-				cfg.Analytics = &config.AnalyticsConfig{Enabled: true}
-				if err := config.Save(cfg); err != nil {
-					return err
-				}
+			// Under sudo with the user's HOME (the Thor flash's re-exec, or
+			// `sudo wendy` on macOS), leave the housekeeping below to the
+			// user's own runs: as root it would write their files, and the
+			// update check would leave them a root-owned auth refresh lock.
+			if runsAsForeignUser() {
+				return nil
 			}
 
 			// Refresh MCP config and skills if the CLI was upgraded since the
 			// user last ran `wendy mcp setup`. Runs synchronously here, before
-			// the update-check goroutine below also mutates and saves cfg.
+			// the update-check goroutine below also writes config.json.
 			maybeRefreshMCPSetup(cfg)
 			premark("  prerun: maybeRefreshMCPSetup")
 
 			// Reconcile credentials with the configured storage policy. Runs in
-			// the synchronous zone: the update-check goroutine below saves cfg
-			// too, and its Save must observe an already-migrated on-disk state.
+			// the synchronous zone: the update-check goroutine below rewrites
+			// config.json too, and must find it already migrated.
 			if config.MigrateSecretsIfNeeded(cfg) {
 				cmd.PrintErrln("Moved wendy credentials into ~/.wendy/config.json.")
 			}
 
-			if dueCLIUpdateCheck(cfg) {
+			// mcp serve owns a cancellable periodic checker for its lifetime.
+			if cmd.CommandPath() != "wendy mcp serve" && dueCLIUpdateCheck(cfg) {
 				scheduleCLIUpdateCheck()
 			}
 			premark("  prerun: dueCLIUpdateCheck")
@@ -101,6 +102,12 @@ func NewRootCmd() *cobra.Command {
 			// successful build/run (no-op for other commands and in CI).
 			maybeShowOptimizeTip(cmd)
 			maybeShowNextStep(cmd)
+
+			// Under sudo, don't offer a CLI update or shell completions: either
+			// would install files as root.
+			if runsAsForeignUser() {
+				return nil
+			}
 
 			// Surface any pending CLI-update notice first. If it showed a prompt,
 			// don't stack the completion prompt on top of it this invocation.
@@ -118,7 +125,7 @@ func NewRootCmd() *cobra.Command {
 	// Do not name the hidden --build-host flag here: this description shows in
 	// every command's --help (persistent flag), and the E2E help specs guard
 	// that the unreleased flag never leaks into help output.
-	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device hostname; `wendy run` accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach)")
+	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device hostname; `wendy run` accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach). Defaults to $WENDY_DEVICE, then the saved default device")
 
 	// Render the top-level command groups in the deliberate order below rather
 	// than alphabetically, so e.g. "project" lists before "device".
