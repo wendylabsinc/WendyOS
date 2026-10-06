@@ -770,36 +770,6 @@ func TestStreamCacheLoadErrorTreatedAsEmpty(t *testing.T) {
 	stop() // the session-end flush must not panic without a cache
 }
 
-func TestRunLANStreamClosesProbesDone(t *testing.T) {
-	shrinkDuration(t, &offlineGrace, 50*time.Millisecond)
-
-	path := filepath.Join(t.TempDir(), "devices.json")
-	seedCache(t, path, discoverycache.Entry{ID: "dev-8", DisplayName: "orin", Hostname: "orin.local", IP: "10.0.0.8", Port: 50051})
-
-	fb := newFakeBackend()
-	useStreamSeams(t, fb.fn, cacheLoaderFor(path))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	out := make(chan LANEvent, 8)
-	probesDone := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		defer close(out)
-		runLANStream(ctx, StreamOptions{UseCache: true, Prober: failingProber(errors.New("unreachable"))}, out, probesDone)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-
-	select {
-	case <-probesDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("probesDone must close once every cached entry's initial probe concluded")
-	}
-}
-
 func TestCollectLANSettlesEarly(t *testing.T) {
 	shrinkDuration(t, &collectSettle, 50*time.Millisecond)
 
@@ -924,8 +894,8 @@ func TestStreamHostnamelessSightingNeverEmitsEmptyIdentity(t *testing.T) {
 }
 
 // TestCollectLANWaitsForFirstAnswerOnColdCache pins the batch scan's settle
-// gate: with an empty cache every probe has concluded before the session even
-// begins, so arming settle at that point would conclude an empty scan in
+// gate: with an empty cache there is nothing to probe until mDNS answers,
+// so arming settle at session start would conclude an empty scan in
 // collectSettle — `wendy discover --json` returning nothing on a first run
 // while the answer was still in flight. Settle may only start once something
 // has actually been confirmed.
