@@ -20,6 +20,10 @@ import (
 // overlaps network transfer. The final image record is assembled before return;
 // RunContainer safely repeats all operations through their existing fast paths.
 func (c *Client) PrepareImage(ctx context.Context, imageName string, layers []*agentpb.RunContainerLayerHeader, imageConfig []byte) error {
+	// Marks the chunk store busy from the moment the CLI starts uploading, so
+	// maintenance cannot sweep a staged chunk this preparation will need.
+	defer c.chunkActivity.begin()()
+
 	ctx = c.withNamespace(ctx)
 	cleanupCtx := c.withNamespace(context.Background())
 

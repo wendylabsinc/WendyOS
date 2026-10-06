@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -185,8 +186,16 @@ type imageInfo struct {
 }
 
 func fetchMainManifest() (*mainManifest, error) {
+	return fetchMainManifestContext(context.Background())
+}
+
+func fetchMainManifestContext(ctx context.Context) (*mainManifest, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(gcsBaseURL + "/manifests/master.json")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, gcsBaseURL+"/manifests/master.json", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching main manifest: %w: %w", ErrManifestUnreachable, err)
 	}
@@ -204,9 +213,17 @@ func fetchMainManifest() (*mainManifest, error) {
 }
 
 func fetchDeviceManifest(path string) (*deviceManifest, error) {
+	return fetchDeviceManifestContext(context.Background(), path)
+}
+
+func fetchDeviceManifestContext(ctx context.Context, path string) (*deviceManifest, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	url := gcsBaseURL + "/" + path
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching device manifest: %w: %w", ErrManifestUnreachable, err)
 	}
@@ -419,6 +436,11 @@ func getRootfsOnlyImageInfo(dm *deviceManifest, ver, storage string) (*imageInfo
 		return nil, fmt.Errorf("version %s has no %s rootfs-only artifact", ver, storage)
 	}
 	info := &imageInfo{Version: ver, ImageSize: t.imageSize, Storage: storage}
+	if storage == "nvme" {
+		info.Checksum, info.ZstChecksum = v.NVMERootfsOnlyChecksum, v.NVMERootfsOnlyZstChecksum
+	} else {
+		info.Checksum, info.ZstChecksum = v.SDRootfsOnlyChecksum, v.SDRootfsOnlyZstChecksum
+	}
 	if t.imagePath != "" {
 		info.DownloadURL = gcsBaseURL + "/" + t.imagePath
 	}
@@ -586,12 +608,16 @@ var ErrManifestUnreachable = errors.New("manifest unreachable")
 // version to install: the explicit one, or the latest stable / nightly, or the
 // PR build when pr > 0 (pr/<N>/, written by the wendyos-builder publish-pr job).
 func resolveDeviceArtifact(deviceType, version string, nightly bool, pr int) (*deviceManifest, string, error) {
+	return resolveDeviceArtifactContext(context.Background(), deviceType, version, nightly, pr)
+}
+
+func resolveDeviceArtifactContext(ctx context.Context, deviceType, version string, nightly bool, pr int) (*deviceManifest, string, error) {
 	var main *mainManifest
 	var err error
 	if pr > 0 {
 		main, err = fetchPRMainManifest(pr)
 	} else {
-		main, err = fetchMainManifest()
+		main, err = fetchMainManifestContext(ctx)
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("fetching manifest: %w", err)
@@ -603,7 +629,7 @@ func resolveDeviceArtifact(deviceType, version string, nightly bool, pr int) (*d
 		}
 		return nil, "", fmt.Errorf("%s not found in manifest", deviceType)
 	}
-	dm, err := fetchDeviceManifest(dev.ManifestPath)
+	dm, err := fetchDeviceManifestContext(ctx, dev.ManifestPath)
 	if err != nil {
 		return nil, "", fmt.Errorf("fetching device manifest: %w", err)
 	}

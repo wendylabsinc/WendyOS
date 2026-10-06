@@ -20,7 +20,7 @@ curl -fsSL https://install.wendy.dev/cli.sh | bash
 ```
 
 or follow the
-[CLI installation guide](https://docs.wendy.dev/latest/installation/developer-machine-setup/#cli-installation).
+[CLI installation guide](https://docs.wendy.dev/latest/#1-install-the-wendy-cli).
 
 **EIM**, the ESP-IDF Installation Manager — Espressif's tool for managing the
 ESP-IDF development environment. Follow Espressif's

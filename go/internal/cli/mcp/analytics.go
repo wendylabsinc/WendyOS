@@ -58,8 +58,9 @@ func toolErrorClass(result *mcpgo.CallToolResult, err error) string {
 		code, _ := content["error_code"].(string)
 		switch errorCode(code) {
 		case errCodeNotConnected, errCodeInvalidArgument, errCodeDeviceUnreachable,
-			errCodeEntitlementDenied, errCodeMultipleSessions, errCodeNotFound,
-			errCodeTimeout, errCodeUnsupported, errCodeInternal:
+			errCodeEntitlementDenied, errCodeAuthRequired, errCodeMultipleSessions,
+			errCodeNotFound, errCodeTimeout, errCodeCancelled, errCodeUnsupported,
+			errCodeInternal:
 			return strings.ToLower(code)
 		}
 	}

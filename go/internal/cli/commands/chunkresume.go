@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -80,6 +82,12 @@ func retryableTunnelError(err error) bool {
 // idle-safe keepalive (WDY-2433), so tunnel starvation there is already
 // handled by a different mechanism.
 //
+// A stall (chunkupload.ErrStalled, from cfg's watchdog) is retried even on a
+// LAN connection with no Reconnect closure at all: reconnectAgentAfterRestart
+// handles both cases, the stall is remembered via rememberChunkUploadStall so
+// later pushes to the same device skip straight to gzip, and the retry itself
+// always uses gzip regardless of what cfg started as.
+//
 // Returns the *grpcclient.AgentConnection that performed the returned
 // result — conn itself if the first attempt succeeded (or nothing was
 // retryable), or the last reconnected connection otherwise. The caller must
@@ -91,25 +99,53 @@ func retryableTunnelError(err error) bool {
 // a given client. It is a factory rather than a bare imagePrepareFunc so each
 // retry's PrepareImage call rides the CURRENT (possibly reconnected)
 // connection instead of the one that just dropped.
-func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentConnection, layers []localLayer, prepareFor func(agentpb.WendyContainerServiceClient) imagePrepareFunc) (*grpcclient.AgentConnection, []*agentpb.RunContainerLayerHeader, error) {
+//
+// observe, when non-nil, receives each attempt's final push snapshot; the last
+// call describes the attempt whose result is returned.
+func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentConnection, layers []localLayer, prepareFor func(agentpb.WendyContainerServiceClient) imagePrepareFunc, cfg chunkUploadConfig, observe func(chunkPushSnapshot)) (*grpcclient.AgentConnection, []*agentpb.RunContainerLayerHeader, error) {
 	cur := conn
 	for attempt := 1; attempt <= chunkPushResumeAttempts; attempt++ {
 		var prepare imagePrepareFunc
 		if prepareFor != nil {
 			prepare = prepareFor(cur.ContainerService)
 		}
-		headers, err := pushLayersWithProgress(ctx, cur.ContainerService, layers, prepare)
+		headers, err := pushLayersWithProgress(ctx, cur.ContainerService, layers, prepare, cfg, observe)
 		if err == nil {
 			return cur, headers, nil
 		}
-		if attempt == chunkPushResumeAttempts || cur.Reconnect == nil || !retryableTunnelError(err) {
+		stalled := errors.Is(err, chunkupload.ErrStalled)
+		if stalled {
+			// Best effort: a memory we cannot write only means the next
+			// deploy tries uncompressed again. Remembered unconditionally
+			// here — including on the final attempt, whose exhausted-return
+			// below would otherwise skip it (M7): a stall the CLI is about to
+			// give up on is exactly the one most worth not repeating.
+			_ = rememberChunkUploadStall(cfg.stallKey, time.Now())
+		}
+		if attempt == chunkPushResumeAttempts || !(stalled || (cur.Reconnect != nil && retryableTunnelError(err))) {
 			return cur, nil, err
 		}
 
-		cliNotice("Connection dropped mid-transfer (%v); reconnecting to resume — chunks already staged on the device are skipped (attempt %d/%d)...", err, attempt+1, chunkPushResumeAttempts)
-		next, rerr := cur.Reconnect(ctx)
+		var (
+			next *grpcclient.AgentConnection
+			rerr error
+		)
+		if stalled {
+			cliNotice("No chunk upload progress for %s; reconnecting and resending with gzip — chunks already staged on the device are skipped, and this device stays on gzip for %d days (delete <user cache dir>/wendy/chunk-upload-stalls.json or set WENDY_CHUNK_COMPRESSION=none to reset) (attempt %d/%d)...", cfg.stallTimeout, chunkStallMemoryDays, attempt+1, chunkPushResumeAttempts)
+			cfg = gzipChunkUploadConfig
+			next, rerr = reconnectAgentAfterRestart(ctx, cur)
+		} else {
+			cliNotice("Connection dropped mid-transfer (%v); reconnecting to resume — chunks already staged on the device are skipped (attempt %d/%d)...", err, attempt+1, chunkPushResumeAttempts)
+			next, rerr = cur.Reconnect(ctx)
+		}
 		if rerr != nil {
-			return cur, nil, fmt.Errorf("reconnecting after tunnel drop: %w", rerr)
+			if stalled {
+				// The reconnect failure must not swallow the stall that
+				// triggered it (M3): callers (and errors.Is(err,
+				// chunkupload.ErrStalled) checks) still need to see it.
+				return cur, nil, fmt.Errorf("chunk upload stalled (%w), and reconnecting failed: %v", chunkupload.ErrStalled, rerr)
+			}
+			return cur, nil, fmt.Errorf("reconnecting to resume the chunk push: %w", rerr)
 		}
 		if cur != conn {
 			cur.Close()

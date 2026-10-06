@@ -214,7 +214,9 @@ func newDevicePairCmd() *cobra.Command {
 					discover: discoverSensorSources, orgIDs: cliOrgIDs,
 					name: name, sensors: sensors,
 				},
-				&cameraPairHandler{ctx: pairCtx, client: conn.VideoService},
+				&cameraPairHandler{ctx: pairCtx, client: conn.VideoService, preflight: func(ctx context.Context) error {
+					return cameraServicePreflight(ctx, conn, cameraNetworkManagement)
+				}},
 			)
 			if cmd.Flags().Changed("name") || cmd.Flags().Changed("sensors") {
 				model.active = pairSensorLinkTab

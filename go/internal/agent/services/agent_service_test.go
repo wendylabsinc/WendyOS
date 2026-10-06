@@ -395,11 +395,15 @@ func TestUpdateAgent_LockExclusion(t *testing.T) {
 }
 
 func TestUpdateOS_NonWendyOSFailsBeforeUpdate(t *testing.T) {
+	var installer *AgentInstaller
 	client, cleanup := startAgentServer(t,
 		&mockNetworkManager{},
 		&mockHardwareDiscoverer{},
 		&mockBluetoothManager{},
-		func(svc *AgentService) { svc.isWendyOSHost = func() bool { return false } },
+		func(svc *AgentService) {
+			svc.isWendyOSHost = func() bool { return false }
+			installer = svc.installer
+		},
 	)
 	defer cleanup()
 
@@ -420,6 +424,16 @@ func TestUpdateOS_NonWendyOSFailsBeforeUpdate(t *testing.T) {
 	}
 	if failed.GetErrorMessage() != osUpdateUnsupportedForHostMessage {
 		t.Fatalf("error message = %q, want %q", failed.GetErrorMessage(), osUpdateUnsupportedForHostMessage)
+	}
+
+	// Drain to EOF so the handler has returned before the lock is checked.
+	for {
+		if _, err := stream.Recv(); err != nil {
+			break
+		}
+	}
+	if !installer.TryLock() {
+		t.Fatal("a failed update left the update lock held")
 	}
 }
 
@@ -813,7 +827,7 @@ func TestGetOSUpdateStatusV2_MirrorsRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc := NewOSUpdateService(zap.NewNop())
+	svc := NewOSUpdateService(zap.NewNop(), &AgentInstaller{})
 	svc.stateDir = dir
 
 	resp, err := svc.GetOSUpdateStatus(context.Background(), &agentpbv2.GetOSUpdateStatusRequest{})
@@ -831,7 +845,7 @@ func TestGetOSUpdateStatusV2_MirrorsRecord(t *testing.T) {
 		t.Errorf("Services = %+v", resp.GetServices())
 	}
 
-	empty := NewOSUpdateService(zap.NewNop())
+	empty := NewOSUpdateService(zap.NewNop(), &AgentInstaller{})
 	empty.stateDir = t.TempDir()
 	emptyResp, err := empty.GetOSUpdateStatus(context.Background(), &agentpbv2.GetOSUpdateStatusRequest{})
 	if err != nil {

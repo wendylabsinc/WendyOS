@@ -13,7 +13,12 @@
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
-    "build:wasm": "node scripts/build-wasm.mjs"
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "desktop": "node scripts/desktop.mjs dev",
+    "desktop:build": "node scripts/desktop.mjs build",
+    "desktop:start": "electron .",
+    "desktop:package": "node scripts/desktop.mjs package",
+    "desktop:test": "node --test tests/desktop-*.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -31,6 +36,7 @@
     "lucide-react": "^1.31.0",
     "next": "16.2.6",
     "next-themes": "^0.4.6",
+    "node-pty": "^1.1.0",
     "radix-ui": "^1.6.7",
     "react": "19.2.6",
     "react-day-picker": "^10.0.1",
@@ -46,6 +52,8 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
     "@cloudflare/workers-types": "4.20260515.1",
+    "@electron/packager": "^20.3.0",
+    "@electron/rebuild": "^4.2.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
@@ -53,6 +61,7 @@
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
+    "electron": "^44.4.5",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "fake-indexeddb": "^6.2.5",
@@ -64,5 +73,6 @@
     "vite": "8.0.13",
     "wrangler": "4.92.0"
   },
-  "type": "module"
+  "type": "module",
+  "main": "electron/main.mjs"
 }

@@ -2042,6 +2042,16 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 		return err
 	}
 
+	// SDKs such as librealsense open V4L2 directly, outside the PipeWire
+	// graph. Reuse an owner's fresh JPEG feed before trying another device
+	// open through PipeWire. The hub still owns only this subscriber stream.
+	if shared, sharedErr := s.streamSharedCamera(ctx, send, path, req, sink); shared {
+		return sharedErr
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	serial, ok := s.findCameraSource(ctx, path)
 	if !ok {
 		return err
@@ -2761,6 +2771,7 @@ type limitedBuffer struct {
 const maxStderrBytes = 64 * 1024
 
 func (l *limitedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
 	remaining := l.limit - l.buf.Len()
 	if remaining <= 0 {
 		return len(p), nil
@@ -2768,7 +2779,10 @@ func (l *limitedBuffer) Write(p []byte) (int, error) {
 	if len(p) > remaining {
 		p = p[:remaining]
 	}
-	return l.buf.Write(p)
+	l.buf.Write(p)
+	// Discarding bytes at the limit is intentional, not a short write. Returning
+	// fewer bytes stops exec's stderr copier before the child has finished.
+	return n, nil
 }
 
 // gstFallbackDirs is the list of directories searched for GStreamer binaries
@@ -2893,6 +2907,23 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 	} else {
 		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
 	}
+	return s.runCameraPipeline(ctx, broadcast, path, enc, plan, cmd, sink, nil)
+}
+
+// runCameraPipeline owns both subprocess pipes and an optional app-provided
+// input. Shared HTTP capture uses the same encoding, teardown and timeout path
+// as device capture, without ever opening the busy camera again.
+func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, enc gstEncoderResult, plan gstPipelinePlan, cmd *exec.Cmd, sink rawSink, input io.ReadCloser) (runErr error) {
+	if sink == nil {
+		sink = noRawSink{}
+	}
+	if cmd == nil {
+		cmd = exec.CommandContext(ctx, plan.args[0], plan.args[1:]...)
+	}
+	if input != nil {
+		cmd.Stdin = input
+		defer input.Close() // also close if Start fails
+	}
 	// The busy classifier reads gst's prose. LC_ALL=C is the one value glibc short-circuits
 	// ahead of LANGUAGE, so messages cannot come back translated; exec keeps the last entry.
 	cmd.Env = append(cmd.Environ(), "LC_ALL=C")
@@ -2934,30 +2965,23 @@ func (s *VideoService) streamGStreamer(ctx context.Context, broadcast func([]byt
 
 	defer func() {
 		cmd.Process.Kill() //nolint:errcheck
+		if input != nil {
+			_ = input.Close() // unblock exec's stdin copier before Wait
+		}
 		if rawR != nil {
 			rawR.Close() //nolint:errcheck // unblocks pumpRawTap
 		}
 		io.Copy(io.Discard, stdout) // drain so Wait's internal goroutine can exit
 		waitErr := cmd.Wait()
-		if runErr == nil {
-			// Log stderr internally — do NOT embed in the gRPC response. GStreamer
-			// stderr routinely includes device paths, kernel module names, library
-			// versions, and pipeline topology. Returning it verbatim lets an
-			// authenticated client enumerate the system via deliberate failures.
-			msg := strings.TrimSpace(stderrBuf.buf.String())
-			if msg != "" {
-				s.logger.Error("GStreamer pipeline failed", zap.String("device", path), zap.String("stderr", msg))
-				// Contention is the one cause an operator can act on, and it is only ever
-				// reported as prose on stderr. Gated on the pipeline failing by itself: gst
-				// also prints busy warnings while probing modes it then recovers from.
-				if exitedOnError(waitErr) && isBusyStderr(msg, path) {
-					runErr = errCameraInUse(path)
-				} else {
-					runErr = status.Errorf(codes.Internal, "GStreamer pipeline failed; see agent logs for details")
-				}
-			} else if waitErr != nil {
-				runErr = status.Errorf(codes.Internal, "GStreamer pipeline failed; see agent logs for details")
-			}
+		if ctx.Err() != nil {
+			runErr = ctx.Err()
+			return
+		}
+		msg := strings.TrimSpace(stderrBuf.buf.String())
+		runErr = gstCameraPipelineError(path, enc.element, msg, waitErr, runErr)
+		if runErr != nil {
+			s.logger.Error("GStreamer pipeline failed", zap.String("device", path),
+				zap.String("encoder", enc.element), zap.String("stderr", msg), zap.Error(runErr))
 		}
 	}()
 

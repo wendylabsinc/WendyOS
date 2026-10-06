@@ -3,11 +3,10 @@
   "pages": [
     "---Get started---",
     "index",
-    "get-started",
-    "installation",
     "---Build apps---",
     "...guides",
     "---Hardware---",
+    "installation",
     "...hardware",
     "---Debug & observe---",
     "...remote-debugging",

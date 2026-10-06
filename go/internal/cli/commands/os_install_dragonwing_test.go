@@ -277,7 +277,7 @@ func TestDragonwingBundleFromRejectsAZeroSize(t *testing.T) {
 		t.Errorf("error %q does not name the missing field", err)
 	}
 	// Which matters because the pre-flight it protects is a no-op on a zero size.
-	if err := checkDragonwingDiskSpace(t.TempDir(), dragonwingPlan{
+	if err := checkDragonwingDiskSpace(t.TempDir(), board, dragonwingPlan{
 		info: &dragonwingBundleInfo{SizeBytes: 0}}); err != nil {
 		t.Errorf("the disk-space pre-flight is not skipped on a zero size: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestDragonwingDownloadFailureReportsAnUntouchedBoard(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if gotErr := finishDragonwingFlash(&out, run.collected(), "0.19.3", err, false); gotErr == nil {
+	if gotErr := finishDragonwingFlash(&out, board, run.collected(), "0.19.3", err, false); gotErr == nil {
 		t.Fatal("the failure was swallowed")
 	}
 	for _, want := range []string{"Nothing was written", "DIP switch 3"} {
@@ -783,8 +783,9 @@ func TestFlashDragonwingTagsPreWriteFailures(t *testing.T) {
 func TestFinishDragonwingFlashPrintsWarningsOnBothPaths(t *testing.T) {
 	const caution = "Could not read the chip id"
 	var ok, failed strings.Builder
+	b8275, _ := dragonwingBoardFor("dragonwing-iq-8275")
 
-	if err := finishDragonwingFlash(&ok, []string{caution}, "0.19.3", nil, false); err != nil {
+	if err := finishDragonwingFlash(&ok, b8275, []string{caution}, "0.19.3", nil, false); err != nil {
 		t.Fatalf("a completed flash returned %v", err)
 	}
 	if !strings.Contains(ok.String(), caution) || !strings.Contains(ok.String(), "0.19.3") {
@@ -792,7 +793,7 @@ func TestFinishDragonwingFlashPrintsWarningsOnBothPaths(t *testing.T) {
 	}
 
 	boom := errors.New("programming efi failed")
-	err := finishDragonwingFlash(&failed, []string{caution}, "0.19.3", boom, true)
+	err := finishDragonwingFlash(&failed, b8275, []string{caution}, "0.19.3", boom, true)
 	if !errors.Is(err, boom) {
 		t.Errorf("the failure was swallowed: %v", err)
 	}
@@ -807,7 +808,7 @@ func TestFinishDragonwingFlashPrintsWarningsOnBothPaths(t *testing.T) {
 	}
 
 	// A cancel stays a cancel, so the CLI exits quietly rather than as a fault.
-	if err := finishDragonwingFlash(io.Discard, nil, "0.19.3", tui.ErrCancelled, true); !errors.Is(err, ErrUserCancelled) {
+	if err := finishDragonwingFlash(io.Discard, b8275, nil, "0.19.3", tui.ErrCancelled, true); !errors.Is(err, ErrUserCancelled) {
 		t.Errorf("a cancelled flash returned %v", err)
 	}
 }
@@ -896,10 +897,11 @@ func TestCheckDragonwingDiskSpaceReflectsRealExpansion(t *testing.T) {
 		info:    &dragonwingBundleInfo{SizeBytes: bundleSize},
 	}
 	// The message carries the figure, which is the cheapest way to assert it.
-	err := checkDragonwingDiskSpace("/nonexistent-volume", plan)
+	board, _ := dragonwingBoardFor("dragonwing-iq-8275")
+	err := checkDragonwingDiskSpace("/nonexistent-volume", board, plan)
 	_ = err // a missing volume reports no free space, so this may pass
 
-	needed := int64(float64(bundleSize) * (1 + dragonwingExtractedFactor))
+	needed := int64(float64(bundleSize) * (1 + board.extractedFactor))
 	if needed < 12*gib {
 		t.Errorf("estimate is %d GiB, below the ~12.5 GiB a real bundle needs", needed/gib)
 	}
@@ -960,7 +962,8 @@ func TestReportDragonwingFailureCoversCancellation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var buf bytes.Buffer
-			reportDragonwingFailure(&buf, tc.err, tc.reachedPartitions)
+			b8275, _ := dragonwingBoardFor("dragonwing-iq-8275")
+			reportDragonwingFailure(&buf, b8275, tc.err, tc.reachedPartitions)
 			if !strings.Contains(buf.String(), tc.want) {
 				t.Errorf("output = %q, want it to mention %q", buf.String(), tc.want)
 			}

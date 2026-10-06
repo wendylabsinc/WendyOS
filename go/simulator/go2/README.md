@@ -156,7 +156,7 @@ turn. Space stops the velocity target. The sandbox renders the MuJoCo scene in
 the browser using WebGL: scene geometry is loaded once, then pose state updates
 move the robot and obstacle. Drag to orbit, right-drag or Shift-drag to pan,
 and scroll to zoom. On a touchscreen, use one finger to orbit and two fingers
-to pan or pinch to zoom. **Reset view** centers the current robot position and
+to pan or pinch to zoom. **Reset camera** centers the current robot position and
 restores the default viewing angle and distance.
 Three.js and its controls ship with the runtime and need no external CDN.
 

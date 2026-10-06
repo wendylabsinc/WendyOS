@@ -494,7 +494,7 @@ func TestContainerExecUsesActiveDirectOrCloudConnectionAndExactArgv(t *testing.T
 }
 
 func TestContainerExecPreservesFailureAndExitCodeAfterOutputTruncation(t *testing.T) {
-	for _, ending := range []string{"nonzero", "missing exit", "rpc error"} {
+	for _, ending := range []string{"nonzero", "missing exit", "rpc error", "rpc deadline"} {
 		t.Run(ending, func(t *testing.T) {
 			fake := &fakeContainerServer{exec: func(stream agentpb.WendyContainerService_ExecContainerServer) error {
 				if _, err := stream.Recv(); err != nil {
@@ -511,6 +511,8 @@ func TestContainerExecPreservesFailureAndExitCodeAfterOutputTruncation(t *testin
 					return stream.Send(&agentpb.ExecContainerResponse{ResponseType: &agentpb.ExecContainerResponse_ExitCode{ExitCode: 7}})
 				case "rpc error":
 					return status.Error(codes.NotFound, "container vanished")
+				case "rpc deadline":
+					return status.Error(codes.DeadlineExceeded, "remote exec deadline")
 				default:
 					return nil
 				}
@@ -527,6 +529,9 @@ func TestContainerExecPreservesFailureAndExitCodeAfterOutputTruncation(t *testin
 			}
 			if ending == "rpc error" && (out["error_code"] != "NOT_FOUND" || !strings.Contains(out["message"].(string), "container vanished")) {
 				t.Fatalf("RPC error details were lost: %#v", out)
+			}
+			if ending == "rpc deadline" && out["error_code"] != "TIMEOUT" {
+				t.Fatalf("remote deadline must report timeout before the local timer fires: %#v", out)
 			}
 			if ending == "missing exit" && !strings.Contains(out["message"].(string), "without an exit code") {
 				t.Fatalf("missing exit code should report unknown completion: %#v", out)
@@ -559,6 +564,47 @@ func TestContainerExecTimeoutCancelsRPCAndPreservesOutput(t *testing.T) {
 	case <-canceled:
 	case <-time.After(time.Second):
 		t.Fatal("exec timeout did not release the remote RPC")
+	}
+}
+
+// pendingExecDeadlineContext models a deadline whose local timer callback has
+// not run yet, even though the peer may have already terminated the RPC.
+type pendingExecDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c pendingExecDeadlineContext) Deadline() (time.Time, bool) {
+	return c.deadline, true
+}
+
+func TestContainerExecTimeoutClassification(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	expired, stopExpired := context.WithDeadline(context.Background(), past)
+	defer stopExpired()
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	reset := status.Error(codes.Unavailable, "stream terminated by RST_STREAM with error code: CANCEL")
+	for _, tc := range []struct {
+		name    string
+		ctx     context.Context
+		failure error
+		want    bool
+	}{
+		{"local deadline", expired, reset, true},
+		{"peer deadline", context.Background(), status.Error(codes.DeadlineExceeded, "remote deadline"), true},
+		{"reset before local timer", pendingExecDeadlineContext{context.Background(), past}, reset, true},
+		{"reset before deadline", pendingExecDeadlineContext{context.Background(), future}, reset, false},
+		{"reset without deadline", context.Background(), reset, false},
+		{"canceled before deadline", pendingExecDeadlineContext{canceled, future}, reset, false},
+		{"canceled before elapsed deadline", pendingExecDeadlineContext{canceled, past}, reset, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := containerExecTimedOut(tc.ctx, tc.failure); got != tc.want {
+				t.Fatalf("containerExecTimedOut() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

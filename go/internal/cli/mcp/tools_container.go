@@ -13,6 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
@@ -24,7 +26,7 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("container_list", listOpts...), s.handleContainerList)
 
 	startOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Start a container and stream its output (bounded snapshot). The app runs with the entitlements declared in its wendy.json (e.g. gpu, network, persistence); if the device denies a required entitlement, the start fails (or the container exits) with error_code ENTITLEMENT_DENIED, also visible later as termination_reason in container_list."),
+		mcpgo.WithDescription("Start or restart a container and collect bounded output. May interrupt a running task. Uses declared entitlements; inspect container_list for failures. For passive logs use telemetry_logs."),
 		mcpgo.WithString("app_name",
 			mcpgo.Required(),
 			mcpgo.Description("App name of the container to start"),
@@ -36,7 +38,7 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 			mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)"),
 		),
 	}
-	startOpts = append(startOpts, mutating()...)
+	startOpts = append(startOpts, destructive()...)
 	startOpts = append(startOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("container_start", startOpts...), s.handleContainerStart)
 
@@ -98,7 +100,7 @@ func (s *mcpServer) registerContainerTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("container_attach", attachOpts...), s.handleContainerAttach)
 
 	execOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Run an explicit command inside a running container on the connected device, including a cloud-connected device. Uses the current connection; no separate CLI connection is needed. The command array is passed directly without shell expansion, with no TTY and closed stdin. To run a script, explicitly pass its interpreter and arguments. Returns bounded stdout/stderr and the exit code; nonzero exits and timeouts are errors. This can change files or device state and requires approval."),
+		mcpgo.WithDescription("Execute argv in a running container through the current connection. No shell expansion, TTY, or stdin. Returns bounded output and exit code; nonzero exits fail. Can modify device state."),
 		mcpgo.WithString("app_name", mcpgo.Required(), mcpgo.MinLength(1), mcpgo.MaxLength(256), mcpgo.Description("App/container name from container_list")),
 		mcpgo.WithArray("command", mcpgo.Required(), mcpgo.MinItems(1), mcpgo.MaxItems(128), mcpgo.WithStringItems(mcpgo.MaxLength(16384)), mcpgo.Description("Executable followed by its arguments, e.g. [\"python3\", \"-c\", \"print('hello')\"]. At most 65536 total argument bytes.")),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(300), mcpgo.Description("Maximum time to wait for completion, default 30 seconds")),
@@ -371,7 +373,7 @@ func (s *mcpServer) handleContainerExec(ctx context.Context, req mcpgo.CallToolR
 		}
 		if failure != nil {
 			out["error_code"], out["message"] = string(codeFromGRPC(failure)), grpcErrString(failure)
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if containerExecTimedOut(ctx, failure) {
 				out["error_code"], out["message"] = string(errCodeTimeout), "container exec timed out before completion was observed"
 			}
 		}
@@ -416,4 +418,15 @@ func (s *mcpServer) handleContainerExec(ctx context.Context, req mcpgo.CallToolR
 			return result(&output.ExitCode, nil), nil
 		}
 	}
+}
+
+func containerExecTimedOut(ctx context.Context, failure error) bool {
+	ctxErr := ctx.Err()
+	if errors.Is(ctxErr, context.DeadlineExceeded) || status.Code(failure) == codes.DeadlineExceeded {
+		return true
+	}
+	// The peer can reset the stream at its deadline before the local context's
+	// timer runs. Check the deadline itself while that timer is still pending.
+	deadline, ok := ctx.Deadline()
+	return ctxErr == nil && ok && !time.Now().Before(deadline)
 }

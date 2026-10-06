@@ -1,0 +1,11 @@
+.git
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+tests/
+# Fetched and verified inside the image instead (assets.lock.json).
+drone_formation/static/three/
+models/bitcraze_crazyflie_2/assets/
+models/bitcraze_crazyflie_2/cf2.xml
+models/bitcraze_crazyflie_2/LICENSE

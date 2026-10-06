@@ -1,9 +1,14 @@
-export type DocsInstallCopyTarget = 'unix' | 'windows' | 'agent-linux';
+export type DocsInstallCopyTarget = 'unix' | 'windows' | 'agent-linux' | 'agent-macos';
 export type DocsInstallCopyVariant =
   | 'cli for macOS/linux'
   | 'cli for windows'
-  | 'wendy-agent for Linux';
-export type DocsInstallCopyLabel = 'macOS/Linux CLI' | 'windows CLI' | 'wendy-agent for Linux';
+  | 'wendy-agent for Linux'
+  | 'wendy-agent for Mac';
+export type DocsInstallCopyLabel =
+  | 'macOS/Linux CLI'
+  | 'windows CLI'
+  | 'wendy-agent for Linux'
+  | 'wendy-agent for Mac';
 export type DocsAnalyticsLocation =
   | 'docs_get_started_cli_install_command'
   | 'docs_get_started_agent_install_command'

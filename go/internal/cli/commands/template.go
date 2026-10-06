@@ -53,8 +53,9 @@ type repoMeta struct {
 type repoMetaTemplate struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Targets     []string `json:"targets"`   // optional; empty means all targets
-	Languages   []string `json:"languages"` // optional; empty means discover from repo layout
+	Deployment  string   `json:"deployment,omitempty"` // optional project group; inferred from the name when absent
+	Targets     []string `json:"targets"`              // optional; empty means all targets
+	Languages   []string `json:"languages"`            // optional; empty means discover from repo layout
 }
 
 type repoMetaLanguage struct {

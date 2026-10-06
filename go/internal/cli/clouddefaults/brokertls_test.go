@@ -280,6 +280,7 @@ func TestDialBroker_NoCertificates(t *testing.T) {
 // TLS assembly (pinning vs WebPKI) is correct.
 func TestDialBroker_ReturnsLazyConn(t *testing.T) {
 	certInfo, _ := testCertInfo(t)
+	certInfo.UserID = "test-user"
 	auth := &config.AuthConfig{
 		CloudGRPC:    "localhost:50051",
 		Certificates: []config.CertificateInfo{certInfo},

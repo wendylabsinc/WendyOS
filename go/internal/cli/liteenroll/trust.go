@@ -23,11 +23,14 @@ func ProvisionTrust(cfg *litepb.WendyConfEnrollment, devicePath, tsaPath, httpsP
 	if devicePath == "" && tsaPath == "" && httpsPath == "" {
 		return http.DefaultClient, nil
 	}
-	if devicePath == "" || tsaPath == "" || httpsPath == "" {
-		return nil, fmt.Errorf("USB trust provisioning requires --device-roots, --tsa-roots and --https-roots together")
+	if devicePath == "" || httpsPath == "" || (cfg.TimeUrl != "roughtime" && tsaPath == "") {
+		return nil, fmt.Errorf("USB trust provisioning requires --device-roots and --https-roots; RFC 3161 also requires --tsa-roots")
 	}
 	bundles := make([][]byte, 3)
 	for i, path := range []string{devicePath, tsaPath, httpsPath} {
+		if i == 1 && path == "" && cfg.TimeUrl == "roughtime" {
+			continue
+		}
 		f, err := os.Open(path)
 		if err != nil {
 			return nil, err

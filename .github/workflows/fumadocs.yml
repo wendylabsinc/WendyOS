@@ -358,6 +358,37 @@ jobs:
             grep -q "WendyOS Docs" "${response_file}"
           done <<< "${DEPLOY_PATHS}"
 
+      - name: Publish root llms.txt
+        # Agents look for llms.txt at the site root (https://llmstxt.org), but each
+        # deploy path only has its own copy. Stable releases publish the latest/
+        # copies at the root; nightly releases leave the root unchanged.
+        if: needs.build.outputs.is_release_deploy == 'true'
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          DOCS_BUCKET: wendy-docs-public
+          DEPLOY_PATHS: ${{ needs.build.outputs.deploy_paths }}
+        run: |
+          set -euo pipefail
+
+          if ! grep -qx 'latest' <<< "${DEPLOY_PATHS}"; then
+            echo "Not a stable release deploy; leaving the root llms.txt unchanged."
+            exit 0
+          fi
+
+          for file in llms.txt llms-full.txt; do
+            test -s "out/latest/${file}"
+            gcloud storage cp "out/latest/${file}" "gs://${DOCS_BUCKET}/${file}" \
+              --content-type="text/plain; charset=utf-8" \
+              --cache-control="public, max-age=300" \
+              --quiet \
+              --project="${GCP_PROJECT_ID}"
+          done
+
+          # The query string bypasses a cached 404 from before the first publish.
+          response_file="$(mktemp)"
+          curl -fsS --max-time 30 -o "${response_file}" "https://docs.wendy.dev/llms.txt?deploy=${GITHUB_RUN_ID}"
+          grep -q "https://docs.wendy.dev/latest/" "${response_file}"
+
       - name: Deploy vanity redirects
         if: >-
           needs.build.outputs.is_release_deploy == 'true' ||

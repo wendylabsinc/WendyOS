@@ -20,6 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	DataService_Events_FullMethodName                     = "/wendy.agent.services.v2.DataService/Events"
 	DataService_ExportRecording_FullMethodName            = "/wendy.agent.services.v2.DataService/ExportRecording"
 	DataService_AcknowledgeRecordingExport_FullMethodName = "/wendy.agent.services.v2.DataService/AcknowledgeRecordingExport"
 	DataService_Sources_FullMethodName                    = "/wendy.agent.services.v2.DataService/Sources"
@@ -55,6 +56,9 @@ const (
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceClient interface {
+	// Bounded, durable event inbox. An empty cursor starts at the current tail;
+	// replay=true reads retained history. Expired cursors report a gap explicitly.
+	Events(ctx context.Context, in *DataEventsRequest, opts ...grpc.CallOption) (*DataEventsResponse, error)
 	// Operator-only snapshot of retained durable records, including those
 	// received while no episode was active. Does not delete or acknowledge upload.
 	ExportRecording(ctx context.Context, in *DataRecordingExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[recordingpb.StoredRecord], error)
@@ -79,6 +83,16 @@ type dataServiceClient struct {
 
 func NewDataServiceClient(cc grpc.ClientConnInterface) DataServiceClient {
 	return &dataServiceClient{cc}
+}
+
+func (c *dataServiceClient) Events(ctx context.Context, in *DataEventsRequest, opts ...grpc.CallOption) (*DataEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DataEventsResponse)
+	err := c.cc.Invoke(ctx, DataService_Events_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *dataServiceClient) ExportRecording(ctx context.Context, in *DataRecordingExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[recordingpb.StoredRecord], error) {
@@ -249,6 +263,9 @@ func (c *dataServiceClient) CampaignTrigger(ctx context.Context, in *DataCampaig
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceServer interface {
+	// Bounded, durable event inbox. An empty cursor starts at the current tail;
+	// replay=true reads retained history. Expired cursors report a gap explicitly.
+	Events(context.Context, *DataEventsRequest) (*DataEventsResponse, error)
 	// Operator-only snapshot of retained durable records, including those
 	// received while no episode was active. Does not delete or acknowledge upload.
 	ExportRecording(*DataRecordingExportRequest, grpc.ServerStreamingServer[recordingpb.StoredRecord]) error
@@ -275,6 +292,9 @@ type DataServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDataServiceServer struct{}
 
+func (UnimplementedDataServiceServer) Events(context.Context, *DataEventsRequest) (*DataEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Events not implemented")
+}
 func (UnimplementedDataServiceServer) ExportRecording(*DataRecordingExportRequest, grpc.ServerStreamingServer[recordingpb.StoredRecord]) error {
 	return status.Error(codes.Unimplemented, "method ExportRecording not implemented")
 }
@@ -333,6 +353,24 @@ func RegisterDataServiceServer(s grpc.ServiceRegistrar, srv DataServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&DataService_ServiceDesc, srv)
+}
+
+func _DataService_Events_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DataEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataServiceServer).Events(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataService_Events_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataServiceServer).Events(ctx, req.(*DataEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _DataService_ExportRecording_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -562,6 +600,10 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "wendy.agent.services.v2.DataService",
 	HandlerType: (*DataServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Events",
+			Handler:    _DataService_Events_Handler,
+		},
 		{
 			MethodName: "AcknowledgeRecordingExport",
 			Handler:    _DataService_AcknowledgeRecordingExport_Handler,

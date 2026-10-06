@@ -149,10 +149,14 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(tui.InfoMessage("Opening your browser to sign in..."))
-	fmt.Println("  " + authURL)
-	if openErr := openBrowser(authURL); openErr != nil {
-		fmt.Println(tui.WarningMessage("Could not open a browser automatically; open the URL above manually."))
+	if !humanPresent() {
+		printLoginURLForManualOpen(authURL)
+	} else {
+		fmt.Println(tui.InfoMessage("Opening your browser to sign in..."))
+		fmt.Println("  " + authURL)
+		if openErr := openBrowser(authURL); openErr != nil {
+			fmt.Println(tui.WarningMessage("Could not open a browser automatically; open the URL above manually."))
+		}
 	}
 
 	// Step 5: wait for the redirect.
@@ -161,8 +165,8 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	case result = <-resultCh:
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(5 * time.Minute):
-		return fmt.Errorf("timed out waiting for the browser callback")
+	case <-time.After(browserLoginTimeout):
+		return browserLoginTimeoutError()
 	}
 	if result.Err != nil {
 		return result.Err
@@ -302,6 +306,7 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		return fmt.Errorf("saving OAuth session and certificates: %w", err)
 	}
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
+	fmt.Println(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
 	clitimesync.CacheProof(ctx)
 	return nil
 }
@@ -565,6 +570,9 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 	expiresAt, err = time.Parse(time.RFC3339, auth.OAuthExpiresAt)
 	if err == nil && time.Until(expiresAt) > 90*time.Second {
 		return nil
+	}
+	if auth.ServiceAccount != "" {
+		return remintServiceAccountSession(ctx, auth)
 	}
 	refreshToken, err := auth.OAuthRefreshToken()
 	if err != nil {

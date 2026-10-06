@@ -4,6 +4,8 @@ const svgNS = "http://www.w3.org/2000/svg";
 let state = null;
 let selected = null;
 let busy = false;
+let audioSelected = null;
+let audioEventKey = "";
 const title = (value) => value.replaceAll("_", " ");
 const stamp = (value) =>
   `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(Math.floor(value % 60)).padStart(2, "0")}`;
@@ -86,6 +88,7 @@ function renderRegion() {
 
 function render(data) {
   state = data;
+  renderAudio(data.audio);
   $("connection").textContent = data.error
     ? "Input stopped"
     : data.paused
@@ -217,6 +220,98 @@ function render(data) {
   renderRegion();
 }
 
+function sparkline(values, max, label) {
+  const plot = svg("svg", {viewBox: "0 0 320 60", role: "img", "aria-label": label});
+  plot.append(svg("polyline", {
+    points: values.map((v, i) => `${i / Math.max(1, values.length - 1) * 320},${58 - Math.min(1, Math.max(0, v / max)) * 54}`).join(" "),
+    fill: "none", stroke: "#327657", "stroke-width": 1.5,
+  }));
+  return plot;
+}
+
+function renderAudio(data) {
+  $("audio-panel").hidden = !data?.enabled;
+  if (!data?.enabled) return;
+  $("audio-source").textContent = `${data.source} · ${data.sample_rate} Hz`;
+  $("audio-scenario-control").hidden = !data.demo;
+  if (data.scenario) $("audio-scenario").value = data.scenario;
+  $("audio-pause").textContent = data.paused ? "Resume audio" : "Pause audio";
+  $("audio-error").hidden = !data.error;
+  $("audio-error").textContent = data.error || "";
+  $("audio-clock").textContent = stamp(data.history.at(-1)?.timestamp || 0);
+  const stopped = data.conveyor.stopped;
+  $("audio-stop").classList.toggle("alert", stopped);
+  $("audio-stop").textContent = stopped
+    ? `SIMULATED STOP · event #${data.conveyor.trigger_event_id} · latched until restart`
+    : "Simulated conveyor running";
+  $("conveyor-scene").classList.toggle("stopped", stopped || data.paused || !!data.error);
+  $("audio-channels").replaceChildren();
+  for (const [zone, result] of Object.entries(data.zones)) {
+    const card = document.createElement("article");
+    card.className = "audio-channel";
+    const heading = document.createElement("h3");
+    heading.textContent = `${title(zone)} microphone`;
+    const status = document.createElement("p");
+    status.className = "decision";
+    status.classList.toggle("alert", !!result.active && !data.paused && !data.error);
+    status.textContent = data.error ? "Input stopped; last evidence below" : data.paused ? "Paused" : !result.calibrated
+      ? `${title(result.status)} · ${result.calibration_seconds.toFixed(2)} / ${result.calibration_required_seconds.toFixed(1)} s normal reference`
+      : `${title(result.label)}${result.active ? " · confirmed candidate" : ""}`;
+    const metrics = document.createElement("p");
+    metrics.className = "muted mono";
+    metrics.textContent = `${result.features.rms_dbfs.toFixed(1)} dBFS · deviation ${result.anomaly_score.toFixed(1)} / threshold ${result.threshold.toFixed(1)} · evidence ${result.confirmation_seconds.toFixed(2)} s`;
+    const waveLabel = document.createElement("p");
+    waveLabel.className = "caption";
+    waveLabel.textContent = "PCM peak envelope / 250 ms";
+    const spectrumLabel = document.createElement("p");
+    spectrumLabel.className = "caption";
+    spectrumLabel.textContent = `Spectrum / 0–${result.spectrum_max_hz} Hz / relative dB`;
+    const min = Math.min(...result.spectrum_db);
+    const max = Math.max(...result.spectrum_db);
+    const historyLabel = document.createElement("p");
+    historyLabel.className = "caption";
+    historyLabel.textContent = "Anomaly deviation / last 120 windows";
+    const history = data.history.map(p => p[zone] || 0);
+    card.append(heading, status, metrics, waveLabel,
+      sparkline(result.waveform, 1, `${zone} waveform`), spectrumLabel,
+      sparkline(result.spectrum_db.map(v => v - min), Math.max(1, max - min), `${zone} spectrum`),
+      historyLabel, sparkline(history, Math.max(12, ...history), `${zone} anomaly history`));
+    $("audio-channels").append(card);
+  }
+  const eventKey = data.events.map(e => e.id).join(",");
+  if (eventKey !== audioEventKey || !$("audio-events").childNodes.length) {
+    audioEventKey = eventKey;
+    $("audio-events").replaceChildren();
+    if (!data.events.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "No confirmed audio candidates in this session.";
+      $("audio-events").append(empty);
+    }
+    for (const event of data.events) {
+      const button = document.createElement("button");
+      button.className = "audio-event secondary";
+      button.textContent = `${stamp(event.timestamp)} · ${title(event.channel)} · ${title(event.label)} · deviation ${event.anomaly_score.toFixed(1)} · confirm ${event.confirmation_seconds.toFixed(2)} s · ${event.stop_triggered ? "stop latched" : "already stopped"} · dispatch ${event.stop_latency_ms.toFixed(3)} ms`;
+      button.onclick = () => {
+        audioSelected = event.id;
+        $("audio-player").src = `/api/audio/clip?id=${event.id}`;
+        $("audio-label").value = "";
+        $("audio-export").disabled = true;
+        $("audio-evidence").hidden = false;
+        $("audio-evidence-description").textContent = `Event #${event.id} · ${event.synthetic ? "synthetic" : "captured"} PCM · ${event.clip_start_timestamp.toFixed(2)}–${event.clip_end_timestamp.toFixed(2)} s · ${event.observed_at}`;
+      };
+      $("audio-events").append(button);
+    }
+  }
+  if (audioSelected !== null && !data.events.some(e => e.id === audioSelected)) {
+    audioSelected = null;
+    $("audio-player").pause();
+    $("audio-player").removeAttribute("src");
+    $("audio-player").load();
+    $("audio-evidence").hidden = true;
+  }
+}
+
 async function refresh() {
   const response = await fetch("/api/state", { cache: "no-store" });
   if (!response.ok) throw new Error("Could not read app state");
@@ -241,6 +336,21 @@ $("reset").onclick = () => control("reset", {});
 $("scenario").onchange = () =>
   control("demo", { scenario: $("scenario").value });
 $("label").onchange = renderRegion;
+$("audio-pause").onclick = () => control("audio/pause", {paused: !state?.audio?.paused});
+$("audio-reset").onclick = () => control("audio/reset", {});
+$("audio-scenario").onchange = () => control("audio/demo", {scenario: $("audio-scenario").value});
+$("audio-label").onchange = () => { $("audio-export").disabled = !$("audio-label").value; };
+$("audio-export").onclick = async () => {
+  try {
+    const response = await post("audio/export", {id: audioSelected, label: $("audio-label").value});
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `audio-event-${audioSelected}.zip`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) { showError(error.message); }
+};
 $("export").onclick = async () => {
   try {
     const response = await post("export", {

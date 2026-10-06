@@ -9,7 +9,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteenroll"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -33,9 +32,6 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 		}
 		if orgID != 0 || acmeDirectoryURL != "" {
 			return fmt.Errorf("Wendy Lite uses the selected session's tenant and CSR enrollment; --org and --acme-directory-url do not apply")
-		}
-		if opts.brokerHost == "" {
-			return fmt.Errorf("--broker-host is required for Wendy Lite enrollment")
 		}
 		return runLiteEnrollmentFn(cmd, serialPort, auth, name, opts)
 	}
@@ -90,9 +86,19 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 	if err := liteenroll.CheckTrustSupport(cfg, challenge); err != nil {
 		return err
 	}
-	cfg.SignedTime, err = liteenroll.SignedTime(ctx, timeClient, cfg.TimeUrl, challenge.NonceHex)
-	if err != nil {
-		return err
+	if cfg.TimeUrl == "roughtime" {
+		if !challenge.GetRoughtimeSupported() {
+			return fmt.Errorf("firmware does not support Roughtime; update the board first")
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "Synchronizing the board using verified Roughtime replies...")
+		if _, err := device.SyncTimeChallenge(ctx, challenge.NonceHex); err != nil {
+			return err
+		}
+	} else {
+		cfg.SignedTime, err = liteenroll.SignedTime(ctx, timeClient, cfg.TimeUrl, challenge.NonceHex)
+		if err != nil {
+			return err
+		}
 	}
 	if len(cfg.SignedTime)+len(cfg.DeviceRoots)+len(cfg.TsaRoots)+len(cfg.HttpsRoots) > 65536 {
 		return fmt.Errorf("signed time and trust bundles exceed the firmware's 64 KiB enrollment limit")
@@ -107,7 +113,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 		return err
 	}
 	mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
-	asset, err := liteenroll.Mint(mintCtx, cloudpb.NewDeviceEnrollmentServiceClient(cloud), auth, cfg, name)
+	asset, err := liteenroll.Mint(mintCtx, cloud, auth, cfg, name)
 	cancel()
 	if err != nil {
 		return err

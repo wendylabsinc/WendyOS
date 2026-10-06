@@ -62,7 +62,9 @@ func (s *cancelingStdio) SendRequest(ctx context.Context, request transport.JSON
 }
 
 func (t *Tools) startMCP(ctx context.Context, executable, device string) error {
-	args := []string{"mcp", "serve"}
+	// Chat only executes tools the server lists, and its prompt directs the model
+	// to specialist tools (camera, cloud, ...) outside the default core group.
+	args := []string{"mcp", "serve", "--tool-groups", "all"}
 	if device != "" {
 		args = append(args, "--device", device)
 	}

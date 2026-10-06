@@ -3,12 +3,14 @@ package providers
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -58,10 +60,67 @@ func (p *DockerProvider) CheckRequirements(ctx context.Context) error {
 	return nil
 }
 
+// discoverProbeTimeout bounds each container-runtime probe a DiscoverDevices
+// call shells out to. `docker version` round-trips to the daemon, and a wedged
+// daemon (Docker Desktop mid-update, a dead socket forward) otherwise stalled
+// `wendy discover` for 65-540 s. A runtime that can't answer in time lists no
+// devices and returns a ProbeTimeoutError, so callers can say why it is
+// missing. A var so tests can shrink it; see WithProbeTimeout to extend it.
+var discoverProbeTimeout = 3 * time.Second
+
+// ProbeTimeoutError is DiscoverDevices' error for a container runtime whose
+// probe ran out of time: it may be installed and running but too slow or
+// wedged to answer, which is different from not running (no devices, no
+// error).
+type ProbeTimeoutError struct {
+	Runtime string // display name, e.g. "Docker"
+	After   time.Duration
+}
+
+func (e *ProbeTimeoutError) Error() string {
+	return fmt.Sprintf("%s did not answer within %s", e.Runtime, e.After)
+}
+
+type probeTimeoutKey struct{}
+
+// WithProbeTimeout returns a ctx under which DiscoverDevices waits up to d for
+// a container runtime to answer instead of the default discovery bound. For a
+// runtime the user named (--device docker), where a slow daemon is worth
+// waiting for rather than skipping.
+func WithProbeTimeout(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, probeTimeoutKey{}, d)
+}
+
+// ProbeTimeout is the bound DiscoverDevices applies to a runtime probe under ctx.
+func ProbeTimeout(ctx context.Context) time.Duration {
+	if d, ok := ctx.Value(probeTimeoutKey{}).(time.Duration); ok && d > 0 {
+		return d
+	}
+	return discoverProbeTimeout
+}
+
+// probeTimedOut reports whether probeCtx, derived from ctx, ended because its
+// own deadline passed rather than because the caller gave up.
+func probeTimedOut(ctx, probeCtx context.Context) bool {
+	return ctx.Err() == nil && errors.Is(probeCtx.Err(), context.DeadlineExceeded)
+}
+
+// discoverProbeWaitDelay caps how long a killed probe may keep its output
+// pipe open (a child it spawned can inherit it), so Output() returns promptly
+// after the timeout instead of waiting for that child to exit.
+const discoverProbeWaitDelay = time.Second
+
 func (p *DockerProvider) DiscoverDevices(ctx context.Context) ([]models.ExternalDevice, error) {
-	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{.Server.Version}}")
+	timeout := ProbeTimeout(ctx)
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(probeCtx, "docker", "version", "--format", "{{.Server.Version}}")
+	cmd.WaitDelay = discoverProbeWaitDelay
 	out, err := cmd.Output()
 	if err != nil {
+		if probeTimedOut(ctx, probeCtx) {
+			return nil, &ProbeTimeoutError{Runtime: p.DisplayName(), After: timeout}
+		}
 		return nil, nil // docker not running, no devices
 	}
 	version := strings.TrimSpace(string(out))

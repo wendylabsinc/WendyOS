@@ -35,6 +35,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/buildargs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -1166,17 +1167,94 @@ var (
 	}
 )
 
-// ensureDockerDaemon verifies the Docker daemon is running. On macOS, when
-// running interactively it prompts the user before launching the installed
-// Docker runtime; in non-interactive mode it launches it automatically.
-// Waits up to 60 s for the daemon to become ready before returning an error.
+// dockerVersionProbeTimeout bounds each `docker version` probe that
+// ensureDockerDaemon runs on the `wendy run` / `wendy build` path. The probe
+// round-trips to the daemon, and a wedged one — the socket accepts the
+// connection but nothing answers (Docker Desktop mid-update, its VM stuck
+// after sleep) — used to stall a deploy indefinitely. A healthy daemon answers
+// in well under a second, and even a busy one (a large build in flight, the VM
+// just resumed) within a few, so 10 s leaves ample headroom before calling it
+// unresponsive. A var so tests can shrink it.
+var dockerVersionProbeTimeout = 10 * time.Second
+
+// dockerDaemonPollInterval is how often ensureDockerDaemon re-probes a daemon
+// it is waiting for, and dockerDaemonReadyWait how long it waits at most.
+// Vars so tests can shrink them.
+var (
+	dockerDaemonPollInterval = 2 * time.Second
+	dockerDaemonReadyWait    = 60 * time.Second
+)
+
+// waitForDockerDaemon polls until the daemon answers, for up to
+// dockerDaemonReadyWait: (true, nil) once it does, (false, nil) when the wait
+// ran out, ctx's error when the caller stopped. A probe that times out only
+// means the daemon is still starting, so polling goes on.
+func waitForDockerDaemon(ctx context.Context, name string) (bool, error) {
+	deadline := time.Now().Add(dockerDaemonReadyWait)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(dockerDaemonPollInterval):
+		}
+		if ready, _ := dockerDaemonReady(ctx); ready {
+			fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", name)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// dockerDaemonAnswering is dockerDaemonReady for ensureDockerDaemon's checks
+// of a daemon it has not launched. A daemon that is there but does not answer
+// in time is usually starting (Docker Desktop just opened, resuming from
+// sleep, Resource Saver): with a person at the terminal it is waited for, as
+// before the probe was bounded — without launching anything; with no one
+// there (an agent, CI) that is an error at once.
+func dockerDaemonAnswering(ctx context.Context) (bool, error) {
+	ready, err := dockerDaemonReady(ctx)
+	if ready || err == nil || ctx.Err() != nil || !humanPresent() {
+		return ready, err
+	}
+	fmt.Fprintf(os.Stderr, "[docker] Docker is not responding yet; waiting up to %s for it to start...\n", dockerDaemonReadyWait)
+	if ok, waitErr := waitForDockerDaemon(ctx, "Docker"); ok || waitErr != nil {
+		return ok, waitErr
+	}
+	return false, commandErrorf(errBuilderUnavailable, "docker daemon is not responding (no answer to `docker version` after waiting %s) — restart Docker and try again", dockerDaemonReadyWait)
+}
+
+// dockerDaemonReady probes the daemon once, bounded by
+// dockerVersionProbeTimeout: (true, nil) when it answers, (false, nil) when it
+// is not running (a stopped daemon refuses the connection and fails fast),
+// ctx's error when the caller stopped (Ctrl-C), and a "not responding" error
+// when the probe ran out of time, i.e. a daemon that is there but hung.
+func dockerDaemonReady(ctx context.Context) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, dockerVersionProbeTimeout)
+	defer cancel()
+	if dockerVersionOKFn(probeCtx) {
+		return true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
+		return false, commandErrorf(errBuilderUnavailable, "docker daemon is not responding (no answer to `docker version` within %s) — restart Docker and try again", dockerVersionProbeTimeout)
+	}
+	return false, nil
+}
+
+// ensureDockerDaemon verifies the Docker daemon is running. On macOS, with a
+// person at the terminal (humanPresent) it launches the installed Docker
+// runtime — after a prompt when one can be drawn — and then waits up to 60 s
+// for the daemon to become ready; with no one there (an agent, CI) it never
+// launches the app and returns an error asking the user to start it.
 func ensureDockerDaemon(ctx context.Context) error {
 	return ensureDockerDaemonForHostOS(ctx, dockerHostOS(runtime.GOOS))
 }
 
 func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error {
-	if dockerVersionOKFn(ctx) {
-		return nil
+	if ready, err := dockerDaemonAnswering(ctx); ready || err != nil {
+		return err
 	}
 
 	_, cliErr := dockerLookPathFn("docker")
@@ -1205,8 +1283,8 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 					rt = cliRuntime
 					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
 					cliOnPath = true
-					if dockerVersionOKFn(ctx) {
-						return nil
+					if ready, err := dockerDaemonAnswering(ctx); ready || err != nil {
+						return err
 					}
 				} else {
 					return dockerCLIMissingError(rt)
@@ -1221,6 +1299,13 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 			return dockerCLIMissingError(rt)
 		}
 
+		if !humanPresent() {
+			// No one is there to see a GUI app open, and waiting up to a
+			// minute for it would stall an agent or script. Say what to do.
+			return commandErrorf(errBuilderUnavailable, "docker daemon is not running — start %s and try again (wendy does not open it without an interactive terminal)", rt.name)
+		}
+		// Ask first when a prompt can be drawn; with output piped (e.g.
+		// `wendy run | tee`), open it without asking, as before.
 		if isInteractiveTerminalFn() {
 			if !confirmFn(fmt.Sprintf("Docker daemon is not running or is still starting for %s. Open it now?", rt.name)) {
 				return commandErrorf(errBuilderUnavailable, "docker daemon is not running — please start %s and try again", rt.name)
@@ -1231,19 +1316,10 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 		if err := dockerOpenRuntimeFn(ctx, rt.app); err != nil {
 			return commandErrorf(errBuilderUnavailable, "docker daemon is not running: could not open %s: %w", rt.name, err)
 		}
-		deadline := time.Now().Add(60 * time.Second)
-		for time.Now().Before(deadline) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(2 * time.Second):
-			}
-			if dockerVersionOKFn(ctx) {
-				fmt.Fprintf(os.Stderr, "[docker] %s is ready\n", rt.name)
-				return nil
-			}
+		if ok, err := waitForDockerDaemon(ctx, rt.name); ok || err != nil {
+			return err
 		}
-		return commandErrorf(errBuilderUnavailable, "docker daemon did not become ready within 60 seconds — %s may still be starting; please wait or start it manually", rt.name)
+		return commandErrorf(errBuilderUnavailable, "docker daemon did not become ready within %s — %s may still be starting; please wait or start it manually", dockerDaemonReadyWait, rt.name)
 	}
 
 	if hostOS == dockerHostOSWindows {
@@ -1254,8 +1330,8 @@ func ensureDockerDaemonForHostOS(ctx context.Context, hostOS dockerHostOS) error
 					rt = cliRuntime
 					fmt.Fprintf(os.Stderr, "[docker] docker CLI is not on PATH; using %s's bundled CLI at %s. To avoid this message: %s.\n", rt.name, cliPath, rt.cliLinkHint)
 					cliOnPath = true
-					if dockerVersionOKFn(ctx) {
-						return nil
+					if ready, err := dockerDaemonAnswering(ctx); ready || err != nil {
+						return err
 					}
 				} else {
 					return dockerCLIMissingError(rt)
@@ -2231,6 +2307,18 @@ func buildAndPushImageViaOCILayout(ctx context.Context, dir, registryAddr, repo,
 	return nil
 }
 
+// noteComposeChunkStall remembers a stalled uncompressed compose push, so the
+// device's next deploy uses gzip, and says so in the service's log. Compose
+// has no reconnect-and-retry loop; its existing registry fallback finishes
+// this deploy.
+func noteComposeChunkStall(logOutput io.Writer, chunkErr error, cfg chunkUploadConfig) {
+	if !errors.Is(chunkErr, chunkupload.ErrStalled) {
+		return
+	}
+	_ = rememberChunkUploadStall(cfg.stallKey, time.Now())
+	fmt.Fprintf(logOutput, "[chunks] no upload progress for %s; this device uses gzip for the next %d days\n", cfg.stallTimeout, chunkStallMemoryDays)
+}
+
 // buildAndPrepareComposeImageForAgent is the default Compose image path. It
 // builds into the same persistent OCI layout used by single-service chunk
 // deploys, updates Stagefile app layers natively when dependencies are stable,
@@ -2322,7 +2410,8 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 		})
 		return prepareErr
 	}
-	if _, chunkErr := pushLayersByChunksWithStrictPrepareOutput(ctx, conn.ContainerService, layers, prepare, streamOutput); chunkErr == nil {
+	uploadCfg := chunkUploadConfigFor(ctx, conn)
+	if _, chunkErr := pushLayersByChunksWithStrictPrepareOutput(ctx, conn.ContainerService, layers, prepare, streamOutput, uploadCfg); chunkErr == nil {
 		fmt.Fprintf(logOutput, "[chunks] prepared %s from missing content\n", imageName)
 		return nil
 	} else if ctx.Err() != nil {
@@ -2330,8 +2419,10 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 	} else if blocksChunkPrepareFallback(chunkErr) {
 		return chunkErr
 	} else if !allowRegistryFallback {
+		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
 		return fmt.Errorf("chunk-diff image preparation failed and --chunking=force disables the registry fallback: %w", chunkErr)
 	} else {
+		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
 		fmt.Fprintf(logOutput, "[chunks] prepare unavailable (%v); falling back to registry push of the existing OCI layout\n", chunkErr)
 		if reporter, ok := streamOutput.(interface{ ReportRegistryFallback(error) }); ok {
 			reporter.ReportRegistryFallback(chunkErr)

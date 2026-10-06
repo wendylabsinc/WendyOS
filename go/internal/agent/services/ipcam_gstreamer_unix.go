@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ebitengine/purego"
 )
@@ -24,7 +25,6 @@ const (
 	gstStateChangeFailure  = 0
 	gstMessageEOS          = 1 << 0
 	gstMessageError        = 1 << 1
-	gstClockTimeNone       = ^uint64(0)
 	gstreamerPipelineFDArg = "fd=1"
 )
 
@@ -208,6 +208,7 @@ func runIPCameraGStreamerPipeline(ctx context.Context, args []string, emit func(
 			reader.Close() //nolint:errcheck
 		}
 	}
+	defer closePipe()
 
 	description, hasFD, err := gstreamerPipelineDescription(args, fd)
 	if err != nil {
@@ -239,20 +240,30 @@ func runIPCameraGStreamerPipeline(ctx context.Context, args []string, emit func(
 	}
 
 	terminal := make(chan struct{})
+	pollCtx, cancelPoll := context.WithCancel(ctx)
 	go func() {
-		message := api.busTimedPopFiltered(bus, gstClockTimeNone, gstMessageEOS|gstMessageError)
-		if message != 0 {
-			api.miniObjectUnref(message)
+		defer close(terminal)
+		for pollCtx.Err() == nil {
+			message := api.busTimedPopFiltered(bus, uint64(100*time.Millisecond), gstMessageEOS|gstMessageError)
+			if message != 0 {
+				api.miniObjectUnref(message)
+				return
+			}
 		}
-		close(terminal)
 	}()
+	// Wait for the bounded bus poll to exit before releasing the bus.
+	defer func() { <-terminal }()
 
 	var stopOnce sync.Once
 	stop := func() {
 		stopOnce.Do(func() {
+			cancelPoll()
 			api.elementSetState(pipeline, gstStateNull)
 			api.busSetFlushing(bus, 1)
-			closePipe()
+			// Leave the reader open so buffered output drains before EOF.
+			if writer != nil {
+				writer.Close() //nolint:errcheck
+			}
 		})
 	}
 	stopped := make(chan struct{})

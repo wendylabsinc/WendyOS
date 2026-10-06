@@ -8,7 +8,7 @@ Build a Python app that reads a robot's camera and reports the percentage of edg
 
 ## Before you start
 
-- Install the [Wendy CLI](/docs/installation/developer-machine-setup) on your computer.
+- Install the [Wendy CLI](/docs/#1-install-the-wendy-cli) on your computer.
 - Connect a Linux WendyOS device to the robot's wired network. The device must run an agent with ROS 2 camera bridging and have compatible v4l2loopback 0.15.x support. WendyOS uses 0.15.4; Ubuntu 22.04's packaged 0.12.7 module does not provide the required API.
 - Have a camera topic publishing on that network. This tutorial uses a Unitree Go2's `/frontvideostream`. Standard `sensor_msgs/msg/Image` topics with supported color or grayscale encodings, and JPEG `sensor_msgs/msg/CompressedImage` topics, also work. Float depth images are not supported by this bridge.
 - Have a local container builder available to `wendy run`.

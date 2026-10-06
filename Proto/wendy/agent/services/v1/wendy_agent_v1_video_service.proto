@@ -54,6 +54,10 @@ message VideoDevice {
     // Empty when the device has no /dev/v4l entry -- CSI and network cameras,
     // or a kernel without the udev symlinks.
     string stable_id        = 13; // e.g. "by-id:usb-Acme_Camera_SN123-video-index0"
+    // V4L2 capture FourCCs, including trailing spaces (e.g. "Z16 ").
+    // Empty for older agents, non-V4L2 sources, or an unavailable format query.
+    // These describe the sensor output, not the encoded delivery codec.
+    repeated string pixel_formats = 14;
 }
 
 enum VideoTransport {

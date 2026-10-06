@@ -86,7 +86,7 @@ func (s *mcpServer) handleBluetoothScan(ctx context.Context, req mcpgo.CallToolR
 			return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 		}
 		for _, d := range resp.GetDiscoveredDevices() {
-			seen[d.GetAddress()] = map[string]any{
+			dev := map[string]any{
 				"name":        d.GetName(),
 				"address":     d.GetAddress(),
 				"rssi":        d.GetRssi(),
@@ -95,6 +95,13 @@ func (s *mcpServer) handleBluetoothScan(ctx context.Context, req mcpgo.CallToolR
 				"connected":   d.GetConnected(),
 				"trusted":     d.GetTrusted(),
 			}
+			if d.SupervisionTimeoutMs != nil {
+				dev["supervision_timeout_ms"] = d.GetSupervisionTimeoutMs()
+			}
+			if d.RequestedSupervisionTimeoutMs != nil {
+				dev["requested_supervision_timeout_ms"] = d.GetRequestedSupervisionTimeoutMs()
+			}
+			seen[d.GetAddress()] = dev
 		}
 	}
 

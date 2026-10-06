@@ -111,7 +111,7 @@ This is separate from the hardware UART and does not require any GPIO wiring. It
 screen /dev/ttyACM0 115200
 ```
 
-On Linux, ModemManager may claim `ttyACM0` and block the connection. If `screen` fails to open the device, either stop ModemManager or run `wendy device usb-setup` to install a udev rule that prevents ModemManager from grabbing the gadget.
+On Linux, ModemManager may claim `ttyACM0` and block the connection. If `screen` fails to open the device, stop ModemManager. If the USB-C link hasn't been configured yet, `wendy discover` offers to set it up, and that setup also installs a udev rule that keeps ModemManager off the gadget.
 
 The ACM device provides a shell session (via getty) on the device side at `/dev/ttyGS0`.
 

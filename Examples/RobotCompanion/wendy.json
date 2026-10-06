@@ -1,0 +1,9 @@
+{
+  "appId": "com.wendylabs.robot-companion",
+  "version": "0.1.0",
+  "platform": "linux",
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "mcp", "port": 8091 }
+  ]
+}

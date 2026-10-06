@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -20,16 +21,28 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
+	"google.golang.org/grpc"
 )
 
-// Config resolves endpoints from the selected PKI session. Broker routing is
-// explicit because a Cloud API host does not identify a WendyCom listener.
+// Config resolves PKI endpoints and the agent's device hostname from the selected
+// session. WendyCom uses its own port on that hostname.
 func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost string, brokerPort uint32) (*litepb.WendyConfEnrollment, error) {
 	if auth == nil || len(auth.Certificates) == 0 {
 		return nil, fmt.Errorf("enrollment requires a PKI operator session; run 'wendy cloud login'")
+	}
+	if brokerHost == "" {
+		endpoint, err := cloudrelay.DeviceEndpoint(auth.CloudGRPC, "")
+		if err != nil {
+			return nil, fmt.Errorf("derive WendyCom broker hostname; pass --broker-host: %w", err)
+		}
+		brokerHost, _, err = net.SplitHostPort(endpoint)
+		if err != nil {
+			return nil, fmt.Errorf("derive WendyCom broker hostname; pass --broker-host: %w", err)
+		}
 	}
 	principal, err := certs.ParsePrincipal(auth.Certificates[0].PrincipalURI)
 	if err != nil || principal.EntityType != certs.EntityUser {
@@ -47,13 +60,13 @@ func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost strin
 		csrURL = "https://" + host + "/v1/" + tenant
 	}
 	if timeURL == "" {
-		host := cloudenroll.PKISiblingHost(auth.PKIEndpoint, "codesign")
-		if host == "" {
-			return nil, fmt.Errorf("pass --time-url for this PKI deployment")
-		}
-		timeURL = "https://" + host + "/v1/time"
+		timeURL = "roughtime"
 	}
-	for _, endpoint := range []string{csrURL, timeURL} {
+	endpoints := []string{csrURL}
+	if timeURL != "roughtime" {
+		endpoints = append(endpoints, timeURL)
+	}
+	for _, endpoint := range endpoints {
 		u, err := url.Parse(endpoint)
 		if err != nil || len(endpoint) > 256 || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
 			return nil, fmt.Errorf("enrollment endpoints must be HTTPS URLs without credentials, query or fragment")
@@ -70,12 +83,13 @@ func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost strin
 }
 
 // Mint obtains the single-use credential after Cloud reserves the device asset.
-func Mint(ctx context.Context, client cloudpb.DeviceEnrollmentServiceClient, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string) (string, error) {
+func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string) (string, error) {
 	artifact, err := cloudrequest.EnrollmentRequestForClass(auth, cfg.DeviceId, "C")
 	if err != nil {
 		return "", err
 	}
-	reply, err := client.EnrollDevice(ctx, &cloudpb.EnrollDeviceRequest{DeviceId: cfg.DeviceId, DeviceClass: cloudpb.DeviceClass_DEVICE_CLASS_C, EnrollmentRequestJws: artifact, Name: name})
+	reply := new(cloudpb.EnrollDeviceResponse)
+	err = cloudrequest.Invoke(ctx, conn, auth, cloudpb.DeviceEnrollmentService_EnrollDevice_FullMethodName, &cloudpb.EnrollDeviceRequest{DeviceId: cfg.DeviceId, DeviceClass: cloudpb.DeviceClass_DEVICE_CLASS_C, EnrollmentRequestJws: artifact, Name: name}, reply)
 	if err != nil {
 		return "", fmt.Errorf("creating Tier C enrollment: %w", err)
 	}

@@ -27,8 +27,9 @@ struct `'wendy mcp serve'` {
     }
 
     /**
-     Negotiates an MCP session over newline-delimited stdio and lists Wendy
-     tools without mixing diagnostics into protocol stdout.
+     Negotiates an MCP session over newline-delimited stdio and lists Wendy's
+     core tools without mixing diagnostics into protocol stdout. Specialist
+     groups such as `cloud` stay unlisted until `wendy_tools` enables them.
      */
     @Test
     func `serves MCP tools over stdio`() async throws {
@@ -74,7 +75,55 @@ struct `'wendy mcp serve'` {
                 let toolsResult = try #require(toolsResponse["result"] as? [String: Any])
                 let tools = try #require(toolsResult["tools"] as? [[String: Any]])
                 let names = Set(tools.compactMap { $0["name"] as? String })
+                #expect(names.count == tools.count)
+                #expect(tools.count == 16)
                 #expect(names.contains("wendy_status"))
+                #expect(names.contains("wendy_tools"))
+                #expect(names.contains("auth_login"))
+                #expect(names.contains("device_connect"))
+                #expect(!names.contains("cloud_connect"))
+            }
+        }
+    }
+
+    /**
+     Explicitly enabling the cloud tool group keeps the core tools available
+     and advertises cloud connection tools to MCP clients.
+     */
+    @Test
+    func `serves selected cloud MCP tools over stdio`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            try await cli.sh(
+                posix: """
+                    printf '%s\n' \
+                      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"swift-e2e","version":"1"}}}' \
+                      '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+                      '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+                    | wendy mcp serve --tool-groups cloud
+                    """,
+                power: """
+                    @(
+                      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"swift-e2e","version":"1"}}}',
+                      '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}',
+                      '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+                    ) | wendy mcp serve --tool-groups cloud
+                    exit $LASTEXITCODE
+                    """
+            ) { result in
+                #expect(result.status.isSuccess)
+                #expect(result.stderr == "")
+
+                let lines = result.normalizedStdout.split(separator: "\n")
+                #expect(lines.count == 2)
+                let toolsResponse = try #require(
+                    try JSONSerialization.jsonObject(with: Data(lines[1].utf8))
+                        as? [String: Any]
+                )
+                #expect(toolsResponse["id"] as? Int == 2)
+                let toolsResult = try #require(toolsResponse["result"] as? [String: Any])
+                let tools = try #require(toolsResult["tools"] as? [[String: Any]])
+                let names = Set(tools.compactMap { $0["name"] as? String })
+                #expect(names.contains("wendy_tools"))
                 #expect(names.contains("device_connect"))
                 #expect(names.contains("cloud_connect"))
             }

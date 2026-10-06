@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+
+// SignedRequest is the input of every operator-signed RPC, the ones marked
+// `option (wendy.signed_request) = true` (WDY-3458). The signature travels in
+// the body, not in headers; headers carry only the bearer token and DPoP proof.
+//
+// The server verifies `signature` (a JWS over the exact `payload` bytes),
+// checks that `payload_type` is the fully-qualified name of the method's
+// request message (named in each RPC's comment), then decodes `payload` as
+// that message for the handler. The signed `correlation_id` claim is adopted
+// before any downstream call. Claims and verification rules:
+// conformance/reqsig/README.md.
+//
+// This body envelope is the only accepted form. The cutover is atomic: a
+// signature carried in the `x-wendy-request-signature` header, or a signed
+// method called with its bare request message, is refused.
+//
+// Responses are unchanged: there is no SignedResponse.
+message SignedRequest {
+  // The serialized request message: the exact bytes that were signed.
+  bytes payload = 1;
+  // Fully-qualified name of the payload's message, e.g.
+  // "wendycloud.v2.CreateAssetRequest".
+  string payload_type = 2;
+  // Compact JWS whose claims bind `payload` by body_sha256. Its protected
+  // header names the operator leaf by exactly one of `x5c` (the leaf DER) or
+  // `kid` (base64url, unpadded, of SHA-256 over the leaf DER: the RFC 7515
+  // x5t#S256 value). `kid` is refused, and `x5c` required, on
+  // RegisterOperatorLeaf and on the postbox-relayed methods
+  // (DeploymentService.CreateDeployment, ControlContainer), whose JWS is
+  // forwarded verbatim to devices in PostboxEntry.request_jws.
+  bytes signature = 3;
+  // pki-core tier-3 operations only: the operator's "management-request+jws",
+  // relayed verbatim as the fabric Envelope signed_artifact.
+  optional bytes pki_management_request = 4;
+}
+
+// OperatorSessionService lets a client check its operator leaf once at session
+// start before it signs by `kid` (WDY-3463).
+service OperatorSessionService {
+  // The call is signed with `x5c`; that leaf is the one registered. The broker
+  // validates it with pki-core, caches it under its kid, and returns the kid.
+  // A kid also resolves without this call (the broker asks pki-core on a cache
+  // miss), so registering only moves a rejected leaf's failure to session
+  // start. Gate: the caller is an operator of organization_id's tenant.
+  // Signed; payload_type "wendycloud.v2.RegisterOperatorLeafRequest".
+  rpc RegisterOperatorLeaf(SignedRequest) returns (RegisterOperatorLeafResponse) {
+    option (wendy.signed_request) = true;
+  }
+}
+
+message RegisterOperatorLeafRequest {
+  string organization_id = 1;
+}
+
+message RegisterOperatorLeafResponse {
+  // base64url, unpadded, of SHA-256 over the registered leaf DER.
+  string kid = 1;
+  // The leaf's NotAfter. A revocation ends the kid earlier.
+  google.protobuf.Timestamp expires_at = 2;
+}

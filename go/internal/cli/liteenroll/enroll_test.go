@@ -22,6 +22,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const tenant = "2558fd76-afc7-466e-9613-6b715296a526"
@@ -50,7 +53,7 @@ func TestConfigUsesSelectedPKI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.CsrUrl != "https://csr.dev.pki.wendy.sh/v1/"+tenant || cfg.TimeUrl != "https://codesign.dev.pki.wendy.sh/v1/time" {
+	if cfg.CsrUrl != "https://csr.dev.pki.wendy.sh/v1/"+tenant || cfg.TimeUrl != "roughtime" {
 		t.Fatalf("unexpected endpoint derivation: %v", cfg)
 	}
 	cfg, err = Config(auth, "lite-test", "https://csr.local:8443/v1/"+tenant, "https://tsa.local/time", "broker.local", 9443)
@@ -58,6 +61,32 @@ func TestConfigUsesSelectedPKI(t *testing.T) {
 		t.Fatalf("self-hosted config: %v %v", cfg, err)
 	}
 }
+func TestConfigDefaultsBrokerToAgentHostname(t *testing.T) {
+	auth := authFixture(t)
+	for _, tc := range []struct{ cloud, override, want string }{
+		{"api.dev.wendy.sh:443", "", "devices.dev.wendy.sh"},
+		{"https://api.wendy.sh", "", "devices.wendy.sh"},
+		{"api.wendy.dev:443", "", "devices.wendy.dev"},
+		{"https://cloud.example:9443", "", "cloud.example"},
+		{"", "broker.example", "broker.example"},
+	} {
+		t.Run(tc.cloud+"/"+tc.override, func(t *testing.T) {
+			auth.CloudGRPC = tc.cloud
+			cfg, err := Config(auth, "lite-test", "", "", tc.override, 5055)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.BrokerHost != tc.want || cfg.BrokerPort != 5055 {
+				t.Fatalf("broker = %s:%d, want %s:5055", cfg.BrokerHost, cfg.BrokerPort, tc.want)
+			}
+		})
+	}
+	auth.CloudGRPC = ""
+	if _, err := Config(auth, "lite-test", "", "", "", 5055); err == nil {
+		t.Fatal("accepted missing Cloud endpoint and broker override")
+	}
+}
+
 func TestConfigRejectsUnsafeEndpointsAndIdentity(t *testing.T) {
 	auth := authFixture(t)
 	for _, csr := range []string{"http://csr.local/v1/" + tenant, "https://user@csr.local/v1/" + tenant, "https://csr.local/v1/other", "https://csr.local/v1/" + tenant + "?x=y"} {
@@ -141,14 +170,28 @@ func TestSignedTimeRejectsRedirectOversizeAndBadNonce(t *testing.T) {
 }
 
 type fakeEnrollment struct {
-	cloudpb.DeviceEnrollmentServiceClient
+	grpc.ClientConnInterface
 	reply   *cloudpb.EnrollDeviceResponse
 	request *cloudpb.EnrollDeviceRequest
 }
 
-func (f *fakeEnrollment) EnrollDevice(_ context.Context, r *cloudpb.EnrollDeviceRequest, _ ...grpc.CallOption) (*cloudpb.EnrollDeviceResponse, error) {
-	f.request = r
-	return f.reply, nil
+func (f *fakeEnrollment) Invoke(_ context.Context, method string, args, reply any, _ ...grpc.CallOption) error {
+	if method == cloudpb.OperatorSessionService_RegisterOperatorLeaf_FullMethodName {
+		return status.Error(codes.Unimplemented, "registration unavailable")
+	}
+	if method != cloudpb.DeviceEnrollmentService_EnrollDevice_FullMethodName {
+		return status.Error(codes.Unimplemented, "unexpected method")
+	}
+	signed, ok := args.(*cloudpb.SignedRequest)
+	if !ok || len(signed.GetSignature()) == 0 || signed.GetPayloadType() != "wendycloud.v2.EnrollDeviceRequest" {
+		return status.Error(codes.InvalidArgument, "expected signed enrollment request")
+	}
+	f.request = new(cloudpb.EnrollDeviceRequest)
+	if err := proto.Unmarshal(signed.GetPayload(), f.request); err != nil {
+		return err
+	}
+	proto.Merge(reply.(*cloudpb.EnrollDeviceResponse), f.reply)
+	return nil
 }
 func TestMintTierCCredential(t *testing.T) {
 	auth := authFixture(t)

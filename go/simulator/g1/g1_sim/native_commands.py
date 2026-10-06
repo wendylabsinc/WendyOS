@@ -14,7 +14,7 @@ from rclpy.serialization import deserialize_message
 from unitree_api.msg import Request, Response
 from unitree_hg.msg import LowCmd
 
-from .simulation import COMMAND_TIMEOUT, LOW_LEVEL_TIMEOUT
+from .simulation import COMMAND_TIMEOUT, LOW_LEVEL_TIMEOUT, VELOCITY_MIN, VELOCITY_LIMITS
 from .unitree_crc import low_cmd_crc
 
 
@@ -36,6 +36,20 @@ def fsm_id(sim):
     return 1
 
 
+def velocity_parameters(values):
+    if not isinstance(values, dict) or set(values) != {"velocity", "duration"}:
+        raise ValueError("SetVelocity requires velocity and duration")
+    duration = values["duration"]
+    if type(duration) not in (int, float) or not 0 < duration <= 864000:
+        raise ValueError("duration must be finite in (0,864000] seconds")
+    velocity = values["velocity"]
+    if (not isinstance(velocity, list) or len(velocity) != 3 or
+            any(type(v) not in (int, float) for v in velocity) or
+            any(not low <= v <= high for v, low, high in zip(velocity, VELOCITY_MIN, VELOCITY_LIMITS))):
+        raise ValueError("velocity must contain three finite numbers within simulator limits")
+    return velocity, duration
+
+
 class NativeCommands:
     def __init__(self, node, runtime):
         self.runtime = runtime
@@ -51,6 +65,21 @@ class NativeCommands:
             except queue.Empty:
                 return
             self.publishers[kind].publish(response)
+
+    def can_auto_grant(self, envelope):
+        """Only a valid SetVelocity requests control, never queries or posture."""
+        try:
+            payload = envelope.get("payload_hex")
+            if envelope.get("kind") != "sport" or not isinstance(payload, str) or len(payload) > 3840:
+                return False
+            request = deserialize_message(bytes.fromhex(payload), Request)
+            if (request.header.identity.api_id != 7105 or request.binary or
+                    request.header.lease.id != 0 or request.header.policy.priority != 0):
+                return False
+            velocity_parameters(json.loads(request.parameter))
+            return True
+        except Exception:
+            return False
 
     def receive(self, envelope, *, owned):
         kind = envelope["kind"]
@@ -106,13 +135,8 @@ class NativeCommands:
                 return DENIED, "select this publisher and enable ROS control in the simulator", False
             token = self.runtime.ros_commands.token
             if api == 7105:
-                if set(values) != {"velocity", "duration"}:
-                    raise ValueError("SetVelocity requires velocity and duration")
-                duration = values["duration"]
-                if (isinstance(duration, bool) or not isinstance(duration, (int, float))
-                        or not math.isfinite(duration) or not 0 < duration <= 864000):
-                    raise ValueError("duration must be finite in (0,864000] seconds")
-                self.runtime.command(values["velocity"], token)
+                velocity, duration = velocity_parameters(values)
+                self.runtime.command(velocity, token)
                 # Short requested durations reduce the lease. Long SDK Move
                 # durations never bypass the profile's 200 ms stale stop.
                 sim._last_received = received_ns / 1e9 - max(0.0, COMMAND_TIMEOUT - duration)

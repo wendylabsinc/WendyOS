@@ -95,6 +95,24 @@ At most one output and one input are reconnected automatically. Connect any othe
 
 Playback and capture need the `audio` entitlement, not just `bluetooth`; see [Speaker Access](/docs/hardware/speakers) and [Microphone Access](/docs/hardware/microphone).
 
+## Game Controllers and Other HID Devices
+
+When a Bluetooth LE HID device (a gamepad, keyboard, mouse or RC-style controller) stops responding, the kernel only drops it after the link's **supervision timeout**. Many controllers ask for 3 s, which is 3 s of an app acting on the last input it received. The agent keeps every BLE HID link it is central on at **500 ms**, re-applying it whenever the device asks for more. A dead link then removes the controller's input device in about half a second.
+
+`wendy device bluetooth list` shows the value in force in the **Link timeout** column: `0.5 s` at the agent's value, or `3.0 s (device)` if a device kept restoring its own value and the agent stopped overriding it.
+
+Set a different value, or `0` to leave devices at whatever they ask for, in `/etc/default/wendy-agent` and restart the agent:
+
+```sh
+WENDY_BT_HID_SUPERVISION_TIMEOUT_MS=500
+```
+
+Values from 100 to 32000 ms are accepted. The file lives on the OS partition, so an OS update resets it.
+
+Classic Bluetooth controllers (DualSense, DualShock 4, Switch Pro) are not covered yet.
+
+The agent logs every Bluetooth disconnect with its reason. `connection timeout` means the link was lost; `remote user terminated connection` means the device was switched off.
+
 ## App Configuration
 
 A minimal Bluetooth app uses:

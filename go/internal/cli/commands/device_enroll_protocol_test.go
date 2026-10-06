@@ -88,7 +88,6 @@ func TestEnrollmentDispatchesSelectedProtocol(t *testing.T) {
 		{name: "LAN", provider: "wendy-lite", transport: "LAN", want: "physical USB"},
 		{name: "BLE", provider: "wendy-lite", transport: "BLE", want: "physical USB"},
 		{name: "missing port", provider: "wendy-lite", transport: "USB", want: "no USB serial port"},
-		{name: "missing broker", provider: "wendy-lite", transport: "USB", port: "/dev/ttyUSB0", want: "--broker-host is required"},
 		{name: "legacy org", provider: "wendy-lite", transport: "USB", port: "/dev/ttyUSB0", broker: "broker.example", org: 27, want: "--org and --acme-directory-url do not apply"},
 		{name: "ACME", provider: "wendy-lite", transport: "USB", port: "/dev/ttyUSB0", broker: "broker.example", acme: "https://acme.example/directory", want: "--org and --acme-directory-url do not apply"},
 		{name: "other provider", provider: "android-adb", transport: "USB", port: "/dev/ttyUSB0", want: "does not support this command"},
@@ -103,6 +102,10 @@ func TestEnrollmentDispatchesSelectedProtocol(t *testing.T) {
 				t.Fatal("invalid target or flags reached an enrollment protocol")
 			}
 		})
+	}
+	opts.brokerHost = ""
+	if err := runSelectedDeviceEnrollment(cmd, usb, auth, "desk", 0, "", opts); !errors.Is(err, wantErr) {
+		t.Fatalf("Lite enrollment without a broker override: %v", err)
 	}
 }
 

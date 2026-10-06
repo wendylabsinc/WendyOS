@@ -10,7 +10,6 @@ go build -o ./wendy ./cmd/wendy
 ./wendy cloud enroll-device \
   --device wendy-lite:/dev/cu.usbmodemXXXX \
   --name lite-desk \
-  --broker-host YOUR_WENDYCOM_BROKER_HOST \
   --broker-port 5055 \
   --device-roots device-ca-bundle.pem \
   --tsa-roots tsa-ca-bundle.pem \
@@ -55,8 +54,11 @@ on-device. The CLI reboots the board and waits for certificate installation.
 
 CSR and signed-time URLs derive from the selected session's `PKIEndpoint`.
 Self-hosted deployments can pass `--csr-url https://csr.example/v1/TENANT_UUID`
-and `--time-url https://codesign.example/v1/time`. The broker hostname remains
-explicit. Use `--cloud-grpc` to select a particular Cloud endpoint/session.
+and `--time-url https://time.example/v1/time`. The broker hostname defaults
+to the same devices hostname used by wendy-agent for the selected Cloud session.
+WendyCom uses its own port, defaulting to 5055; that listener must be exposed on
+the devices hostname. Override it with `--broker-host` for a separate broker.
+Use `--cloud-grpc` to select a particular Cloud endpoint/session.
 
 A reserved asset or uploaded configuration is not a successful enrollment.
 Failures report the reserved asset ID; rerunning does not silently recover an

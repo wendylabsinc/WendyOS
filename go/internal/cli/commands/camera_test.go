@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -216,6 +217,129 @@ func TestPlayVideoWithGStreamer_RemoteStreamErrorPrecedesMissingGStreamer(t *tes
 	}
 }
 
+func TestCameraListUnenrolledMacExplainsEnrollment(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"}) // Swift plaintext has no video service.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraListCmd()
+	cmd.SetContext(ctx)
+
+	err := cmd.RunE(cmd, nil)
+	if err == nil {
+		t.Fatal("camera list unexpectedly succeeded without enrollment")
+	}
+	if !strings.Contains(err.Error(), "wendy device enroll") {
+		t.Fatalf("error = %q, want enrollment guidance", err)
+	}
+	if strings.Contains(err.Error(), "beta") || strings.Contains(err.Error(), "updat") {
+		t.Fatalf("error = %q, want the actual enrollment blocker", err)
+	}
+}
+
+type emptyCameraService struct {
+	agentpb.UnimplementedWendyVideoServiceServer
+}
+
+func (emptyCameraService) ListVideoDevices(context.Context, *agentpb.ListVideoDevicesRequest) (*agentpb.ListVideoDevicesResponse, error) {
+	return &agentpb.ListVideoDevicesResponse{}, nil
+}
+
+func TestCameraListPlaintextWendyOSStillWorks(t *testing.T) {
+	startUDSAgentWithOS(t, "linux", func(s *grpc.Server) {
+		agentpb.RegisterWendyVideoServiceServer(s, emptyCameraService{})
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraListCmd()
+	cmd.SetContext(ctx)
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("camera list on plaintext WendyOS: %v", err)
+	}
+}
+
+func TestCameraListPlaintextGoAgentOnDarwinStillWorks(t *testing.T) {
+	startUDSAgentWithOS(t, "darwin", func(s *grpc.Server) {
+		agentpb.RegisterWendyVideoServiceServer(s, emptyCameraService{})
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraListCmd()
+	cmd.SetContext(ctx)
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Fatalf("camera list on plaintext Go agent for Darwin: %v", err)
+	}
+}
+
+func TestCameraTestOnSwiftMacExplainsUnsupportedOperation(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraTestCmd()
+	cmd.SetContext(ctx)
+	err := cmd.RunE(cmd, []string{"1"})
+	if err == nil || !strings.Contains(err.Error(), "not supported") || strings.Contains(err.Error(), "wendy device enroll") {
+		t.Fatalf("camera test error = %v, want unsupported network camera operation", err)
+	}
+}
+
+func TestCameraLoginOnSwiftMacDoesNotPromptForUnsupportedOperation(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	t.Setenv("WENDY_CAMERA_PASSWORD", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraLoginCmd()
+	cmd.SetContext(ctx)
+	err := cmd.RunE(cmd, []string{"1"})
+	if err == nil || !strings.Contains(err.Error(), "not supported") || strings.Contains(err.Error(), "password") {
+		t.Fatalf("camera login error = %v, want unsupported operation before password prompt", err)
+	}
+}
+
+func TestCameraControlsOnSwiftMacExplainsUnsupportedOperation(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := newCameraControlsCmd()
+	cmd.SetContext(ctx)
+	err := cmd.RunE(cmd, []string{"1"})
+	if err == nil || !strings.Contains(err.Error(), "not available on macOS") || strings.Contains(err.Error(), "wendy device enroll") {
+		t.Fatalf("camera controls error = %v, want unsupported V4L2 operation", err)
+	}
+}
+
+func TestCameraPreflightCancellationDoesNotSuggestEnrollment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := cameraServicePreflight(ctx, &grpcclient.AgentConnection{}, cameraCapture)
+	if !errors.Is(err, ErrUserCancelled) {
+		t.Fatalf("cancelled camera preflight = %v, want quiet user cancellation", err)
+	}
+}
+
+func TestCameraViewUnsupportedSwiftOptionsDoNotSuggestEnrollment(t *testing.T) {
+	startUDSAgentWithFeatures(t, "darwin", []string{"native-process"})
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"raw", []string{"--raw", "--stdout", "--id", "1", "--non-interactive"}, "H.264"},
+		{"stable id", []string{"--stable-id", "usb-front", "--stdout", "--non-interactive"}, "Stable V4L2"},
+		{"custom dimensions", []string{"--width", "640", "--id", "1", "--stdout", "--non-interactive"}, "Custom camera dimensions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cmd := newCameraViewCmd()
+			cmd.SetArgs(tc.args)
+			err := cmd.ExecuteContext(ctx)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "wendy device enroll") {
+				t.Fatalf("camera view error = %v, want %q without enrollment advice", err, tc.want)
+			}
+		})
+	}
+}
+
 func firmwareMismatchError(t *testing.T) error {
 	t.Helper()
 	st := status.New(codes.FailedPrecondition, "firmware mismatch")
@@ -242,6 +366,22 @@ func TestCameraFirmwareDiagnosticOnFirstRecv(t *testing.T) {
 	_, err := stream.Recv()
 	if err == nil || !strings.Contains(err.Error(), "full USB recovery") {
 		t.Fatalf("first Recv diagnostic = %v", err)
+	}
+}
+
+func TestCameraViewPreservesRemotePipelineDiagnostic(t *testing.T) {
+	message := "GStreamer pipeline failed for camera /dev/video0 using nvv4l2h264enc: exit status 1: ERROR: Could not initialize encoder"
+	for _, stdout := range []bool{false, true} {
+		stream := &cameraDiagnosticStream{videoStream: &mockVideoStream{err: status.Error(codes.Internal, message)}}
+		var err error
+		if stdout {
+			err = pipeVideoToStdout(stream, io.Discard)
+		} else {
+			err = playVideoWithGStreamer(context.Background(), stream, false)
+		}
+		if err == nil || !strings.Contains(userFacingGRPCError(err), message) {
+			t.Fatalf("stdout=%v: remote diagnostic was lost: %v", stdout, err)
+		}
 	}
 }
 

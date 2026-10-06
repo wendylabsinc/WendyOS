@@ -27,6 +27,7 @@ from g1_sim.unitree_crc import low_cmd_crc, low_cmd_record, low_state_crc, low_s
 # Loading MuJoCo/policy is deliberately outside this interface test's scope.
 constants = ModuleType("g1_sim.simulation")
 constants.COMMAND_TIMEOUT, constants.LOW_LEVEL_TIMEOUT = 0.2, 0.04
+constants.VELOCITY_MIN, constants.VELOCITY_LIMITS = [-0.5, -0.3, -0.2], [1.0, 0.3, 0.2]
 with patch.dict(sys.modules, {"g1_sim.simulation": constants}):
     adapter = importlib.import_module("g1_sim.native_commands")
 
@@ -130,6 +131,36 @@ class NativeTests(unittest.TestCase):
                                   wall_clock=lambda: 200_000_000_000)
         runtime = SimpleNamespace(sim=sim, ros_commands=ingress, command=record("velocity"))
         return adapter.NativeCommands(self.node, runtime), sim
+
+    def test_auto_grant_only_accepts_valid_loco_velocity_requests(self):
+        native, _ = self.commands()
+        def eligible(api, values, *, lease=0, priority=0, binary=None, kind="sport"):
+            request = Request(parameter=json.dumps(values))
+            request.header.identity.api_id = api
+            request.header.lease.id = lease
+            request.header.policy.priority = priority
+            if binary is not None:
+                request.binary = binary
+            return native.can_auto_grant({"kind": kind, "payload_hex": serialize_message(request).hex()})
+        valid = {"velocity": [0., 0., 0.], "duration": .2}
+        self.assertTrue(eligible(7105, valid))
+        self.assertTrue(eligible(7105, {"velocity": [.3, 0., .2], "duration": .2}))
+        for api in (1, 7001, 7101, 1008):
+            self.assertFalse(eligible(api, valid))
+        for values in ({}, {"velocity": [0., 0., 0.], "duration": True},
+                       {"velocity": [0., 0., 0.], "duration": float("nan")},
+                       {"velocity": [0., 0., 0.], "duration": 864001},
+                       {"velocity": [True, 0, 0], "duration": .2},
+                       {"velocity": [1.1, 0, 0], "duration": .2},
+                       {"velocity": [0, .31, 0], "duration": .2},
+                       {"velocity": [0, 0, .21], "duration": .2},
+                       {"velocity": [10**400, 0, 0], "duration": .2}):
+            self.assertFalse(eligible(7105, values), values)
+        self.assertFalse(eligible(7105, valid, lease=1))
+        self.assertFalse(eligible(7105, valid, priority=1))
+        self.assertFalse(eligible(7105, valid, binary=[1]))
+        self.assertFalse(eligible(7105, valid, kind="motion_switcher"))
+        self.assertFalse(native.can_auto_grant({"kind": "sport", "payload_hex": "bad"}))
 
     def test_loco_fsm_velocity_duration_and_explicit_unsupported_operations(self):
         native, sim = self.commands()

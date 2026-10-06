@@ -114,6 +114,12 @@ All `wendy` commands can be run across the globe with [Wendy Cloud](https://clou
 
 With `wendy mcp setup` - you can develop apps, manage fleet deployments and more through your favorite LLM provider.
 
+For ChatGPT Desktop, run `wendy mcp setup chatgpt`, quit and reopen ChatGPT,
+then install **Wendy** from **Plugins → Personal**. The local plugin includes
+the MCP gateway, device workspace, and bundled skills. Follow the
+[ChatGPT setup guide](docs/guides/chatgpt.mdx) to enable devices, simulators,
+and project access.
+
 ```sh
 wendy cloud run # Run apps from anywhere
 wendy cloud device camera view # Remote video

@@ -300,6 +300,17 @@ func TestLoadFlashPlanRejectsTruncatedPayload(t *testing.T) {
 	}
 }
 
+// Every image built to its partition's size is held to it, not only the rootfs.
+func TestLoadFlashPlanRejectsEveryTruncatedImage(t *testing.T) {
+	for _, name := range []string{"efi.bin", "rootfs.img", "gpt_main0.bin", "gpt_backup0.bin"} {
+		dir := realBundle(t)
+		sparse(t, filepath.Join(dir, name), 512)
+		if _, err := LoadFlashPlan(dir); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("truncated %s: want a size-mismatch error naming it, got %v", name, err)
+		}
+	}
+}
+
 func TestParseRawProgramBoundsTheSectorSize(t *testing.T) {
 	// The sector size multiplies descriptor-supplied offsets downstream.
 	for name, size := range map[string]string{
@@ -586,5 +597,78 @@ func TestBlankRefusesUnsafeTargets(t *testing.T) {
 		if err := plan.Blank("data", p); err == nil {
 			t.Errorf("%s (%d bytes): want an error, got nil", name, size)
 		}
+	}
+}
+
+// testdata/uno-q holds qcom-ptool's descriptors for an eMMC layout, whose GPT also
+// carries the boot firmware: firmware may be shorter than its partition, OS images not.
+func TestLoadFlashPlanAcceptsShortFirmwareOnEMMC(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"rawprogram0.xml", "patch0.xml"} {
+		body, err := os.ReadFile(filepath.Join("testdata", "uno-q", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, dir, name, string(body))
+	}
+	f, err := os.Open(filepath.Join(dir, "rawprogram0.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := ParseRawProgram(f)
+	_ = f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A payload shared by several partitions has to fit the smallest of them.
+	smallest := map[string]int64{}
+	for _, e := range entries {
+		if size := int64(e.SizeKB * 1024); e.Filename != "" {
+			if cur, ok := smallest[e.Filename]; !ok || size < cur {
+				smallest[e.Filename] = size
+			}
+		}
+	}
+	firmware := 0
+	for _, e := range entries {
+		if e.Filename == "" {
+			continue
+		}
+		size := int64(e.SizeKB * 1024)
+		if !fillsPartition(e) {
+			size = smallest[e.Filename]/2 + 1 // short, and not a whole number of sectors
+			firmware++
+		}
+		sparse(t, filepath.Join(dir, e.Filename), size)
+	}
+	if firmware == 0 {
+		t.Fatal("the eMMC descriptor lists no firmware payloads")
+	}
+
+	plan, err := LoadFlashPlan(dir)
+	if err != nil {
+		t.Fatalf("LoadFlashPlan on the eMMC descriptors: %v", err)
+	}
+	for _, p := range plan.Programs {
+		if p.SectorSize != 512 || p.Partition != 0 {
+			t.Errorf("%s: %d-byte sectors on partition %d, want 512 on 0", p.Label, p.SectorSize, p.Partition)
+		}
+	}
+	got := labels(plan)
+	if got[0] != "xbl_a" || !slices.Contains(got, "rootfsB") || slices.Contains(got, "config") {
+		t.Errorf("unexpected program order: %v", got)
+	}
+
+	// A host-built config image is held to its declared size like an OS image.
+	seed := filepath.Join(t.TempDir(), "wendy-config.img")
+	sparse(t, seed, 4096)
+	if err := plan.Seed("config", seed); err == nil || !strings.Contains(err.Error(), "descriptor declares") {
+		t.Errorf("a short config seed was accepted: %v", err)
+	}
+
+	// A short OS image is still a truncated one.
+	sparse(t, filepath.Join(dir, "rootfs.img"), 4096)
+	if _, err := LoadFlashPlan(dir); err == nil || !strings.Contains(err.Error(), "rootfs.img") {
+		t.Fatalf("want a size-mismatch error naming rootfs.img, got %v", err)
 	}
 }

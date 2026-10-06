@@ -34,6 +34,9 @@ message StreamLogsRequest {
 
     // Replay last N log batches before going live
     optional int32 last_n = 4;
+
+    // Return after replaying available history instead of following live logs.
+    bool no_follow = 5;
 }
 
 message StreamLogsResponse {

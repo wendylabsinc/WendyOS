@@ -3,6 +3,7 @@ package rcm
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrUSBAccess reports that a Jetson in recovery mode is present but the OS
@@ -12,6 +13,38 @@ import (
 // the gousb-tagged files) so the shared install flow can classify it on every
 // OS, including Windows.
 var ErrUSBAccess = errors.New("USB device access denied")
+
+// ValidChipID excludes Windows-generated location IDs masquerading as serials.
+func ValidChipID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// VerifyChipID reads identity from the handle that will receive boot images.
+// Empty expected identity preserves the terminal installer's existing behavior.
+func VerifyChipID(expected string, read func() (string, error)) error {
+	if expected == "" {
+		return nil
+	}
+	if !ValidChipID(expected) {
+		return fmt.Errorf("invalid expected recovery chip ID")
+	}
+	got, err := read()
+	if err != nil {
+		return fmt.Errorf("reading claimed recovery chip ID: %w", err)
+	}
+	if !ValidChipID(got) || !strings.EqualFold(got, expected) {
+		return fmt.Errorf("recovery chip identity changed: expected %s, observed %s; refusing to send boot images", expected, got)
+	}
+	return nil
+}
 
 // RecoveryDevice identifies a Jetson sitting in USB recovery mode. PathKey is the
 // physical USB location (bus + parent-port chain); it is stable across the

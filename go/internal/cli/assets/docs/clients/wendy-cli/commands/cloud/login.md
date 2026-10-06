@@ -7,6 +7,7 @@ Authenticates the CLI with Wendy Cloud. This is the primary login entry point.
 ```sh
 wendy cloud login --email you@example.com
 wendy cloud login --issuer https://auth.dev.wendy.sh/realms/<realm>
+wendy cloud login --service-account ./wendy-service-account.json
 wendy cloud login --legacy
 ```
 
@@ -21,7 +22,8 @@ pki-core, and stores it with a refreshable Cloud API session. Subsequent command
 use the certificate automatically.
 
 A bare `wendy cloud login` uses legacy login. `--api-key` continues to select
-local authentication.
+local authentication. `--service-account` signs in headlessly as a wendy-auth
+service account (see [`wendy auth login`](../auth/login.md#service-account-login)).
 
 Pass `--legacy` to use the old Wendy Cloud dashboard enrollment callback
 (`cloud.wendy.sh`) instead. It is kept only for the previous cloud.
@@ -36,6 +38,7 @@ for the full flag reference and multi-session behaviour.
 |------|---------|-------------|
 | `--email` | `""` | Email address used to discover your realm and sign in (OIDC flow). |
 | `--issuer` | `""` | Complete realm issuer URL; skips email-based realm discovery. |
+| `--service-account` | `""` | Service-account key file for headless login; `WENDY_SERVICE_ACCOUNT_KEY` may hold its contents instead. |
 | `--legacy` | `false` | Use the old cloud-dashboard enrollment flow (`cloud.wendy.sh`). |
 | `--cloud` | `""` | Dashboard URL of a non-default cloud instance. |
 | `--cloud-grpc` | `""` | gRPC endpoint of a non-default cloud instance. |

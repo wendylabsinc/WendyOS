@@ -1,0 +1,32 @@
+{
+  "allow_simulators": true,
+  "allow_simulator_device_access": true,
+  "robots": [],
+  "workspaces": [
+    {
+      "id": "simulator-app",
+      "name": "Simulator app",
+      "path": "/absolute/path/to/simulator-app",
+      "robots": [],
+      "allow_simulators": true
+    }
+  ],
+  "grants": [
+    {
+      "subject": "local-owner",
+      "robots": [],
+      "workspaces": ["simulator-app"],
+      "scopes": [
+        "robots:read",
+        "simulators:manage",
+        "projects:read",
+        "projects:write",
+        "apps:deploy",
+        "apps:control",
+        "cameras:capture",
+        "apps:tools"
+      ]
+    }
+  ],
+  "local_subject": "local-owner"
+}

@@ -27,7 +27,11 @@ func TestRobotProfileKindsPreserveIndependentDesiredIdentities(t *testing.T) {
 	if g1.Kind != RobotKindG1 || g1.SourceDigest == go2.SourceDigest || g1.PolicyBundle == go2.PolicyBundle {
 		t.Fatalf("G1 reused Go2 identity: %+v", g1)
 	}
-	for _, profile := range []RobotProfile{go2, g1} {
+	r2, err := NewRobotProfile(RobotKindRosmasterR2, "sha256:"+strings.Repeat("c", 64), "r2-ackermann-kinematic-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []RobotProfile{go2, g1, r2} {
 		createTestVM(t, s, profile.Kind, Meta{ImageVersion: "test-image"})
 		if err := s.CreateRobotProfile(profile.Kind, profile); err != nil {
 			t.Fatal(err)

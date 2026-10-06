@@ -23,6 +23,11 @@
       "type": "string",
       "description": "Application version string (e.g. \"0.1.0\")."
     },
+    "restartPolicy": {
+      "type": "string",
+      "enum": ["no", "on-failure", "unless-stopped"],
+      "description": "Default restart policy for wendy run. Explicit restart flags override it. Use no for a finite app that should stay stopped when it finishes."
+    },
     "platform": {
       "type": "string",
       "pattern": "^(linux|wendyos|darwin)(/[A-Za-z0-9._-]+){0,2}$|^wendy-lite$",
@@ -746,12 +751,24 @@
         }
       }
     },
+    "simulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile", "entitlements"],
+      "description": "App-authored backend selected only on a matching managed robot VM. Hardware deployments keep their normal configuration.",
+      "properties": {
+        "profile": { "enum": ["rosmaster-r2", "go2", "g1"] },
+        "entitlements": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/entitlement" } },
+        "env": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "additionalProperties": { "type": "string" } }
+      }
+    },
     "service": {
       "type": "object",
       "additionalProperties": false,
       "description": "A single service within a multi-service app.",
       "properties": {
         "context": { "type": "string", "description": "Build context directory relative to wendy.json." },
+        "simulation": { "$ref": "#/$defs/simulation" },
         "dependsOn": { "type": "array", "items": { "type": "string" }, "description": "Service names this service starts after." },
         "entitlements": { "type": "array", "items": { "$ref": "#/$defs/entitlement" } },
         "frameworks": { "$ref": "#/$defs/frameworks" },

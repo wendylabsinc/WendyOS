@@ -855,6 +855,9 @@ func TestDeviceHub_ProducerErrorPropagated(t *testing.T) {
 
 func TestDeviceHub_GetOrCreateHub_RejectsParamMismatch(t *testing.T) {
 	svc := newTestVideoService(nil, nil)
+	// Keep the first hub alive until its subscriber leaves. A real producer
+	// can fail opening /dev/video0 and evict it before the second request.
+	fp := installFakeProducers(svc)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -875,6 +878,9 @@ func TestDeviceHub_GetOrCreateHub_RejectsParamMismatch(t *testing.T) {
 	st, ok := status.FromError(err)
 	if !ok || st.Code() != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument, got %v", err)
+	}
+	if got := fp.count(); got != 1 {
+		t.Errorf("started %d producers, want 1: a mismatched request must not replace a live hub", got)
 	}
 }
 

@@ -13,13 +13,15 @@ type OSUpdateService struct {
 	logger        *zap.Logger
 	isWendyOSHost func() bool
 	stateDir      string
+	installer     *AgentInstaller
 }
 
-func NewOSUpdateService(logger *zap.Logger) *OSUpdateService {
+func NewOSUpdateService(logger *zap.Logger, installer *AgentInstaller) *OSUpdateService {
 	return &OSUpdateService{
 		logger:        logger,
 		isWendyOSHost: defaultIsWendyOSHost,
 		stateDir:      oshealth.DefaultStateDir,
+		installer:     installer,
 	}
 }
 
@@ -27,9 +29,20 @@ func (s *OSUpdateService) UpdateOS(req *agentpbv2.UpdateOSRequest, stream grpc.S
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
 
+	if !s.installer.TryLock() {
+		s.logger.Warn("UpdateOS rejected: another update is already in progress")
+		return sendOSUpdateFailureV2(stream, updateInProgressMessage)
+	}
+	defer s.installer.Unlock()
+
 	if !s.isWendyOSHost() {
 		s.logger.Warn("UpdateOS rejected: host is not a WendyOS OTA target", zap.String("artifact_url", req.GetArtifactUrl()))
 		return sendOSUpdateFailureV2(stream, osUpdateUnsupportedForHostMessage)
+	}
+
+	if osUpdateStagedThisBoot(s.stateDir) {
+		s.logger.Warn("UpdateOS rejected: an installed OS update is waiting for a reboot")
+		return sendOSUpdateFailureV2(stream, osUpdateAwaitingRebootMessage)
 	}
 
 	// Stop the auto-updater so it can't SIGTERM the in-flight install mid-OTA;

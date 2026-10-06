@@ -95,7 +95,7 @@ func runFleetApps(ctx context.Context, group, cloudGRPC, brokerURL string, lan, 
 		if lan {
 			return fmt.Errorf("no WendyOS devices found on the LAN")
 		}
-		return fmt.Errorf("no enrolled devices found for this org")
+		return errNoCloudDevicesEnrolled
 	}
 
 	rows := gatherFleetApps(ctx, targets)

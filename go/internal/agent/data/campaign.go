@@ -394,6 +394,13 @@ func (c Campaign) planDigestInput() map[string]any {
 			"threshold": i.Threshold, "rate": i.Rate, "event": i.Event,
 			"clear_after": i.ClearAfter, "cooldown": i.Cooldown, "enabled": i.Enabled,
 		}
+		// Preserve revisions of existing Transformers campaigns.
+		if i.Backend != "" {
+			plan["inference"].(map[string]any)["backend"] = i.Backend
+		}
+		if i.ModelFile != "" {
+			plan["inference"].(map[string]any)["model_file"] = i.ModelFile
+		}
 	}
 	return plan
 }

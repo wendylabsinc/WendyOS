@@ -92,8 +92,19 @@ message WendyComEnrollmentChallenge {
     string nonce_hex = 1;
     bool enrolled = 2;
     bool usb_trust_supported = 3; // accepts explicitly provisioned CA bundles
+    bool roughtime_supported = 4; // sync_time verifies device-nonce-bound replies
 }
 
+
+// USB relay of one pinned server's reply to the current device challenge.
+message WendyComSyncTimeParams {
+    uint32 server_index = 1;
+    bytes response = 2;
+}
+message WendyComSyncTimeResult {
+    bool synchronized = 1;
+    int64 unix_seconds = 2;
+}
 
 // Params for WENDY_COM_CMD_CONSOLE_ATTACH — start streaming console output as
 // WendyComConsoleData events carrying the given event_id. A repeated attach
@@ -166,6 +177,7 @@ message WendyComCommand {
         wendy.lite.sensorlink.Subscribe         sensor_link_subscribe    = 17;
         wendy.lite.sensorlink.Unsubscribe       sensor_link_unsubscribe  = 18;
         WendyComEnrollmentChallengeParams enrollment_challenge = 19;
+        WendyComSyncTimeParams sync_time = 20;
     }
 }
 
@@ -189,6 +201,7 @@ message WendyComResponse {
         WendyComDeviceInfo       device_info       = 4;
         wendy.lite.sensorlink.SensorManifest sensor_link_manifest = 5;
         WendyComEnrollmentChallenge enrollment_challenge = 6;
+        WendyComSyncTimeResult sync_time = 7;
     }
 }
 

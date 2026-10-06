@@ -202,6 +202,25 @@ func TestFirstLUNWaitAcceptsUniqueOffPortGadget(t *testing.T) {
 	}
 }
 
+func TestStrictJobHandoffNeverSelectsAnOffPortGadget(t *testing.T) {
+	withFastUMSPoll(t)
+	withUMSScan(t, func() ([]UMSDisk, error) {
+		return []UMSDisk{{DevPath: "/dev/other", Vendor: FlashpkgVendor, PortPath: "1-2", Serial: "f3885343"}}, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	s := Stage2{PortPath: "1-1", StrictPort: true, Out: io.Discard, RunHelper: func(context.Context, HelperRequest, func(int64, int64)) error {
+		t.Fatal("helper touched the off-port gadget")
+		return nil
+	}}
+	if err := s.SendFlashPackage(ctx); err == nil {
+		t.Fatal("strict job accepted off-port gadget")
+	}
+	if s.HandoffStarted {
+		t.Fatal("off-port handoff was marked started")
+	}
+}
+
 func TestFirstLUNWaitPrefersExactPortMatch(t *testing.T) {
 	withUMSScan(t, func() ([]UMSDisk, error) {
 		return []UMSDisk{

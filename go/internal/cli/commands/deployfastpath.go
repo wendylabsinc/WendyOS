@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -210,21 +212,40 @@ func saveDeployFingerprint(appID, deviceKey string, fp deployFingerprint) {
 // .dockerignore'd paths (a superset of what COPY/ADD can pull in), and any
 // .dockerignore pattern we cannot confidently parse is simply not applied (so a
 // file is hashed rather than skipped). This can only cause an unnecessary
-// rebuild, never a missed change.
+// rebuild, never a missed change. The context digest cache (contextdigest.go)
+// keeps that rule: it serves a digest only for a file whose identity has not
+// changed since it was read.
+//
+// Callers that can only use the hash with digest-pinned bases go through
+// pinnedBuildInputHash, which skips the context for an unpinned Dockerfile.
 func computeBuildInputHash(cwd, dockerfile, platform, backend string, buildArgs map[string]string, deployEnv []string) (string, error) {
+	// BuildKit follows a symlinked context root (wendy run --prefix ./link, a
+	// symlinked $PWD or Compose context), but filepath.WalkDir does not
+	// descend into one: it would hash no context files at all. Walk the real
+	// directory, and key the digest cache on it, so a context reached through
+	// a link and directly share one cache.
+	root, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("resolving build context for fingerprint: %w", err)
+	}
+
 	h := sha256.New()
 	// Salt for the deploy fingerprint. Changing this string invalidates every
 	// recorded fingerprint, forcing one honest rebuild per app — do that
 	// whenever the hash inputs below change (as they did when the effective
-	// Stagefile backend was added).
-	io.WriteString(h, "wendy-deploy-fingerprint\n")
+	// Stagefile backend was added, and again when the context became one
+	// line per file, directory and symlink, with mode bits, content digests
+	// and quoted args and env, WDY-3216). Never reuse an earlier salt: v1, v2
+	// and the bare string are taken.
+	io.WriteString(h, "wendy-deploy-fingerprint-v3\n")
 	io.WriteString(h, "platform="+platform+"\n")
 	io.WriteString(h, "backend="+backend+"\n")
 
 	// deployEnv arrives sorted from resolveServiceEnv; --env order is the
-	// user's and is hashed as given.
+	// user's and is hashed as given. Env entries, arg names and arg values
+	// are quoted so a newline or '=' inside one cannot spell another set.
 	for _, kv := range deployEnv {
-		io.WriteString(h, "env "+kv+"\n")
+		fmt.Fprintf(h, "env %q\n", kv)
 	}
 
 	keys := make([]string, 0, len(buildArgs))
@@ -233,13 +254,13 @@ func computeBuildInputHash(cwd, dockerfile, platform, backend string, buildArgs 
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		io.WriteString(h, "arg "+k+"="+buildArgs[k]+"\n")
+		fmt.Fprintf(h, "arg %q=%q\n", k, buildArgs[k])
 	}
 
 	// Resolve and hash the Dockerfile.
-	dfPath := filepath.Join(cwd, "Dockerfile")
+	dfPath := filepath.Join(root, "Dockerfile")
 	if dockerfile != "" {
-		resolved, err := confinedDockerfilePath(cwd, dockerfile)
+		resolved, err := confinedDockerfilePath(root, dockerfile)
 		if err != nil {
 			return "", err
 		}
@@ -256,53 +277,124 @@ func computeBuildInputHash(cwd, dockerfile, platform, backend string, buildArgs 
 	// BuildKit gives <dockerfile>.dockerignore precedence over .dockerignore
 	// (the Stagefile flow derives a deny-all allowlist there), so the walk must
 	// follow the same file or it hashes paths the build can never see.
-	ignore := loadDockerIgnoreForBuild(cwd, dfPath)
-	var files []string
-	err = filepath.WalkDir(cwd, func(p string, d os.DirEntry, walkErr error) error {
+	ignore := loadDockerIgnoreForBuild(root, dfPath)
+	type contextEntry struct {
+		rel    string
+		info   fs.FileInfo
+		target string // a symlink's target
+	}
+	var entries []contextEntry
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		rel, err := filepath.Rel(cwd, p)
+		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if rel == "." {
-			return nil
-		}
 		if d.IsDir() {
-			if ignore.matches(rel + "/") {
+			if rel != "." && ignore.matches(rel+"/") {
 				return filepath.SkipDir
 			}
+		} else if ignore.matches(rel) {
 			return nil
 		}
-		if !d.Type().IsRegular() {
-			return nil
+		info, err := d.Info()
+		if err != nil {
+			return err
 		}
-		if ignore.matches(rel) {
-			return nil
+		e := contextEntry{rel: rel, info: info}
+		switch mode := info.Mode(); {
+		case mode.IsDir(), mode.IsRegular():
+		case mode&fs.ModeSymlink != 0:
+			if e.target, err = os.Readlink(p); err != nil {
+				return err
+			}
+		default:
+			return nil // sockets, pipes and devices: COPY does not recreate them
 		}
-		files = append(files, rel)
+		entries = append(entries, e)
 		return nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("walking build context for fingerprint: %w", err)
 	}
-	sort.Strings(files)
-	for _, rel := range files {
-		f, err := os.Open(filepath.Join(cwd, filepath.FromSlash(rel)))
-		if err != nil {
-			return "", err
+	sort.Slice(entries, func(i, j int) bool { return entries[i].rel < entries[j].rel })
+
+	// Each entry contributes one line with its quoted path, for everything
+	// COPY recreates: a directory (empty ones too) with its mode bits, a
+	// symlink (copied as a link) with its target, and a file with its mode
+	// bits and content digest. A settled file's digest comes from the context
+	// digest cache while its identity is unchanged, so a warm run stats the
+	// context instead of reading it.
+	digests := openContextDigestCache(root, dfPath, contextDigestClock())
+	for _, e := range entries {
+		switch mode := e.info.Mode(); {
+		case mode.IsDir():
+			fmt.Fprintf(h, "dir %q %v\n", e.rel, mode&copiedModeBits)
+		case mode&fs.ModeSymlink != 0:
+			fmt.Fprintf(h, "link %q %q\n", e.rel, e.target)
+		default:
+			digest, err := digests.fileDigest(filepath.Join(root, filepath.FromSlash(e.rel)), e.rel, e.info)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(h, "file %q %v %s\n", e.rel, mode&copiedModeBits, digest)
 		}
-		io.WriteString(h, "file "+rel+"\n")
-		if _, err := io.Copy(h, f); err != nil {
-			f.Close()
-			return "", err
-		}
-		f.Close()
 	}
+	digests.save()
 
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// copiedModeBits are the mode bits COPY keeps: the permissions plus setuid,
+// setgid and sticky. computeBuildInputHash prints them with %v, which never
+// contains a space: 'u', 'g' and 't' for those three (or '-' for none), then
+// the nine permission characters, as in "urwxr-xr-x".
+const copiedModeBits = fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky
+
+// errBasesNotPinned means the Dockerfile builds FROM a mutable tag, so no
+// persistent build skip is possible and its build context is never hashed.
+var errBasesNotPinned = errors.New("persistent build skip requires digest-pinned base images")
+
+// buildInputHasher is computeBuildInputHash. Tests replace it to prove that an
+// unpinned project never reads its build context.
+var buildInputHasher = computeBuildInputHash
+
+// pinnedBuildInputHash returns computeBuildInputHash's result for a Dockerfile
+// whose bases are all content-pinned (see dockerfileBasesContentPinned), and
+// pinned=false without touching the build context otherwise. Every consumer of
+// the hash (the single-service fast path and fingerprint, Compose and
+// multi-service push skips, watch preservation) already requires pinned bases,
+// so checking first changes no decision; it only stops an unpinned project
+// such as FROM python:3.12-slim from reading every context file on each run
+// (~1 s per 2 GB, WDY-3216). A pinned-check error is returned as is.
+func pinnedBuildInputHash(cwd, dockerfile, platform, backend string, buildArgs map[string]string, deployEnv []string) (hash string, pinned bool, err error) {
+	pinned, err = dockerfileBasesContentPinned(cwd, dockerfile)
+	if err != nil || !pinned {
+		return "", false, err
+	}
+	hash, err = buildInputHasher(cwd, dockerfile, platform, backend, buildArgs, deployEnv)
+	if err != nil {
+		return "", true, err
+	}
+	return hash, true, nil
+}
+
+// singleServiceDesiredHash is the fingerprint runWithAgent compares and
+// records: the build-input hash combined with the container's runtime
+// identity. It returns errBasesNotPinned, without hashing the context, for a
+// Dockerfile that builds FROM a mutable tag.
+func singleServiceDesiredHash(cwd, dockerfile, platform, backend string, buildArgs map[string]string, deployEnv []string, appCfg *appconfig.AppConfig, opts runOptions) (string, error) {
+	inputHash, pinned, err := pinnedBuildInputHash(cwd, dockerfile, platform, backend, buildArgs, deployEnv)
+	if err != nil {
+		return "", err
+	}
+	if !pinned {
+		return "", errBasesNotPinned
+	}
+	return computeDeployDesiredHash(inputHash, appCfg, opts.userArgs, deployEnv, resolveRestartPolicy(opts))
 }
 
 // dockerfileBasesContentPinned reports whether rebuilding this Dockerfile is
@@ -544,22 +636,26 @@ func tryDeployFastPath(ctx context.Context, conn *grpcclient.AgentConnection, ap
 		// Detached deploys don't run host-side postStart or block on readiness; see
 		// runPostStartIfReady's doc comment. The container is untouched, so the
 		// agent-side hook cannot re-run either.
-		return true, nil
+		return true, opts.reportDetachedRun(ctx, conn, appCfg.AppID, appCfg)
 	}
 
 	// Present but stopped — start it without rebuilding. Mirror the normal
 	// detached deploy path so the fast path stays a transparent optimization:
 	// attach the agent-side postStart hook to the start RPC (via context
 	// metadata). Detached deploys do not fire the host-side postStart hook.
-	if _, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
+	stream, err := conn.ContainerService.StartContainer(contextWithPostStartAgentHook(ctx, appCfg), &agentpb.StartContainerRequest{
 		AppName:       appCfg.AppID,
 		RestartPolicy: resolveRestartPolicy(opts),
-	}); err != nil {
+	})
+	if err != nil {
 		// Could not start the existing container; fall back to a full deploy.
 		return false, nil
 	}
+	if err := awaitStarted(stream); err != nil {
+		return true, fmt.Errorf("waiting for container start: %w", err)
+	}
 	cliLogln("No changes detected; started existing %s.", containerDisplayName(appCfg))
-	return true, nil
+	return true, opts.reportDetachedRun(ctx, conn, appCfg.AppID, appCfg)
 }
 
 // containerExitDetail returns a short human summary of why appID's container

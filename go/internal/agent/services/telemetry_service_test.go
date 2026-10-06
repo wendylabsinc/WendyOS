@@ -810,6 +810,87 @@ func TestStreamLogs_LastN_FilterBeforeWindow(t *testing.T) {
 	}
 }
 
+func TestStreamLogs_NoFollowReturnsFilteredHistoryAndEOF(t *testing.T) {
+	broadcaster, buf := newChattyQuietBuffer(t)
+	svc := NewTelemetryService(zap.NewNop(), broadcaster, buf)
+	conn := newTelemetryTestConn(t, func(srv *grpc.Server) {
+		agentpb.RegisterWendyTelemetryServiceServer(srv, svc)
+	})
+	client := agentpb.NewWendyTelemetryServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	appName := "quiet"
+	lastN := int32(2)
+	stream, err := client.StreamLogs(ctx, &agentpb.StreamLogsRequest{LastN: &lastN, AppName: &appName, NoFollow: true})
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	for _, want := range []string{"quiet-1", "quiet-2"} {
+		resp, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv(%s): %v", want, err)
+		}
+		if !resp.IsHistory || firstLogBody(resp.GetLogs()) != want {
+			t.Errorf("got history=%v body=%q, want %q", resp.IsHistory, firstLogBody(resp.GetLogs()), want)
+		}
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Errorf("after history Recv() = %v, want clean EOF", err)
+	}
+}
+
+func TestStreamLogs_NoFollowLimitsInMemoryHistoryAfterFiltering(t *testing.T) {
+	broadcaster := NewTelemetryBroadcaster()
+	broadcaster.PublishLogs(makeLogReqForService("quiet", "quiet-0"))
+	broadcaster.PublishLogs(makeLogReqForService("chatty", "chatty-0"))
+	broadcaster.PublishLogs(makeLogReqForService("quiet", "quiet-1"))
+	broadcaster.PublishLogs(makeLogReqForService("quiet", "quiet-2"))
+	svc := NewTelemetryService(zap.NewNop(), broadcaster, nil)
+	conn := newTelemetryTestConn(t, func(srv *grpc.Server) {
+		agentpb.RegisterWendyTelemetryServiceServer(srv, svc)
+	})
+	client := agentpb.NewWendyTelemetryServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	appName := "quiet"
+	lastN := int32(2)
+	stream, err := client.StreamLogs(ctx, &agentpb.StreamLogsRequest{LastN: &lastN, AppName: &appName, NoFollow: true})
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	for _, want := range []string{"quiet-1", "quiet-2"} {
+		resp, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv(%s): %v", want, err)
+		}
+		if !resp.IsHistory || firstLogBody(resp.GetLogs()) != want {
+			t.Errorf("got history=%v body=%q, want %q", resp.IsHistory, firstLogBody(resp.GetLogs()), want)
+		}
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Errorf("after memory history Recv() = %v, want clean EOF", err)
+	}
+}
+
+func TestStreamLogsV2_NoFollowReturnsEOFWithNoHistory(t *testing.T) {
+	svc := NewTelemetryServiceV2(zap.NewNop(), NewTelemetryBroadcaster(), nil)
+	conn := newTelemetryTestConn(t, func(srv *grpc.Server) {
+		agentpbv2.RegisterWendyTelemetryServiceServer(srv, svc)
+	})
+	client := agentpbv2.NewWendyTelemetryServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stream, err := client.StreamLogs(ctx, &agentpbv2.StreamLogsRequest{NoFollow: true})
+	if err != nil {
+		t.Fatalf("StreamLogs: %v", err)
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Errorf("empty history Recv() = %v, want clean EOF", err)
+	}
+}
+
 func TestStreamLogs_LastN_FilterLargerThanHistory(t *testing.T) {
 	broadcaster, buf := newChattyQuietBuffer(t)
 	svc := NewTelemetryService(zap.NewNop(), broadcaster, buf)

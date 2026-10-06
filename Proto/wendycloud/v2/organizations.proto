@@ -3,23 +3,60 @@ syntax = "proto3";
 package wendycloud.v2;
 
 import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
 
 service OrganizationService {
   rpc CreateOrganization(CreateOrganizationRequest) returns (Organization);
   rpc GetOrganization(GetOrganizationRequest) returns (Organization);
-  rpc UpdateOrganization(UpdateOrganizationRequest) returns (Organization);
+  // Signed; payload_type "wendycloud.v2.UpdateOrganizationRequest".
+  rpc UpdateOrganization(SignedRequest) returns (Organization) {
+    option (wendy.signed_request) = true;
+  }
   rpc DeleteOrganization(DeleteOrganizationRequest) returns (DeleteOrganizationResponse);
   rpc ListOrganizations(ListOrganizationsRequest) returns (stream ListOrganizationsResponse);
 
-  rpc AddMember(AddMemberRequest) returns (OrganizationMember);
-  rpc AddMembersByEmails(AddMembersByEmailsRequest) returns (AddMembersByEmailsResponse);
-  rpc UpdateMemberRole(UpdateMemberRoleRequest) returns (OrganizationMember);
-  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+  // Signed; payload_type "wendycloud.v2.AddMemberRequest".
+  rpc AddMember(SignedRequest) returns (OrganizationMember) {
+    option (wendy.signed_request) = true;
+  }
+  // Signed; payload_type "wendycloud.v2.AddMembersByEmailsRequest".
+  rpc AddMembersByEmails(SignedRequest) returns (AddMembersByEmailsResponse) {
+    option (wendy.signed_request) = true;
+  }
+  // Signed; payload_type "wendycloud.v2.UpdateMemberRoleRequest".
+  rpc UpdateMemberRole(SignedRequest) returns (OrganizationMember) {
+    option (wendy.signed_request) = true;
+  }
+  // Signed; payload_type "wendycloud.v2.RemoveMemberRequest".
+  rpc RemoveMember(SignedRequest) returns (RemoveMemberResponse) {
+    option (wendy.signed_request) = true;
+  }
+  // Revokes all of a member's credentials and keeps the membership (WDY-3409):
+  // every live pki-core certificate of the member's operator principal
+  // (PKIAdminService.RevokePrincipalCertificates semantics) and every wendy-auth
+  // session and refresh token in the organization's realm (fabric
+  // ForceSignOut). Gate: `member:revoke-credentials`. Carries cloud's request
+  // signature and the operator's pki-core management request (op
+  // "revoke_principal"); cloud also attests `pki:cert-revoke`. Certificates are
+  // revoked first; on a later failure the call fails and a retry with a fresh
+  // management request completes it.
+  // Signed; payload_type "wendycloud.v2.RevokeAllCredentialsRequest".
+  rpc RevokeAllCredentials(SignedRequest) returns (RevokeAllCredentialsResponse) {
+    option (wendy.signed_request) = true;
+  }
   rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
-  rpc TransferOwnership(TransferOwnershipRequest) returns (TransferOwnershipResponse);
+  // Signed; payload_type "wendycloud.v2.TransferOwnershipRequest".
+  rpc TransferOwnership(SignedRequest) returns (TransferOwnershipResponse) {
+    option (wendy.signed_request) = true;
+  }
 }
 
+// Deprecated: assign roles by role_id (RoleService). Kept until WDY-3351
+// drops the enum.
 enum OrganizationRole {
+  option deprecated = true;
+
   ORGANIZATION_ROLE_UNSPECIFIED = 0;
   ORGANIZATION_ROLE_OWNER = 1;
   ORGANIZATION_ROLE_ADMIN = 2;
@@ -43,9 +80,16 @@ message OrganizationMember {
   string id = 1;
   string organization_id = 2;
   string user_id = 3;
-  OrganizationRole role = 4;
+  // Mirrors role_id for built-in roles; UNSPECIFIED for a tenant role.
+  OrganizationRole role = 4 [deprecated = true];
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 6;
+  // Always set by the server.
+  string role_id = 7;
+  // The member's wendy-auth subject (`sub`) under this organization's realm issuer: the
+  // operator name in the member's SPIFFE ID, which a RevokeAllCredentials request names
+  // (WDY-3442). Empty when the member has no identity, or more than one, under that realm.
+  string subject = 8;
 }
 
 message CreateOrganizationRequest {
@@ -92,13 +136,17 @@ message ListOrganizationsResponse {
 message AddMemberRequest {
   string organization_id = 1;
   string user_id = 2;
-  OrganizationRole role = 3;
+  OrganizationRole role = 3 [deprecated = true];
+  // Wins over role when set.
+  optional string role_id = 4;
 }
 
 message UpdateMemberRoleRequest {
   string user_id = 1;
   string organization_id = 2;
-  OrganizationRole role = 3;
+  OrganizationRole role = 3 [deprecated = true];
+  // Wins over role when set.
+  optional string role_id = 4;
 }
 
 message RemoveMemberRequest {
@@ -110,6 +158,13 @@ message RemoveMemberResponse {
   bool success = 1;
 }
 
+message RevokeAllCredentialsRequest {
+  string organization_id = 1;
+  string user_id = 2;
+}
+
+message RevokeAllCredentialsResponse {}
+
 message ListMembersRequest {
   string organization_id = 1;
 }
@@ -120,7 +175,9 @@ message ListMembersResponse {
 
 message EmailWithRole {
   string email = 1;
-  OrganizationRole role = 2;
+  OrganizationRole role = 2 [deprecated = true];
+  // Wins over role when set.
+  optional string role_id = 3;
 }
 
 message AddMembersByEmailsRequest {

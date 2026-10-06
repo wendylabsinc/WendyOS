@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
@@ -154,13 +158,15 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 	return nil, fmt.Errorf("cloud asset %d in organization %d is offline or unavailable; choose another device with --device or 'wendy device set-default'", selector.AssetID, selector.OrgID)
 }
 
+// saveDefaultDevice records key as the default device ("" clears it), changing
+// only that field of the config as it is on disk now. Under config.Update, so
+// an agent session setting its default cannot revert a login, pin or default
+// another wendy process saved a moment earlier.
 func saveDefaultDevice(key string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading default device: %w", err)
-	}
-	cfg.DefaultDevice = key
-	if err := config.Save(cfg); err != nil {
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.DefaultDevice = key
+		return true, nil
+	}); err != nil {
 		return fmt.Errorf("saving default device: %w", err)
 	}
 	return nil
@@ -213,8 +219,17 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 }
 
 // Used by the MCP connection adapter, which receives the selected identity as
-// an argument rather than through the command's --device flag.
+// an argument rather than through the command's --device flag. Like the CLI's
+// direct path, it refuses an all-digit device (WDY-3126) before the TLS dial —
+// but, like connectToAgentInner's own numeric check, only when
+// WENDY_AGENT_SOCKET is unset: that variable already routes connectWithAutoTLS
+// straight to the local unix socket regardless of device, so device is
+// vestigial in that mode and must not be validated as a hostname.
 func connectMCPDevice(ctx context.Context, device string) (*grpcclient.AgentConnection, error) {
+	// A simulator connection can build and deploy its managed robot runtime.
+	// Reserve stdout for JSON-RPC throughout that work, including warm deploys
+	// that skip the build and only emit an upload heartbeat.
+	ctx = context.WithValue(ctx, detachedJSONRunKey{}, true)
 	if os.Getenv("WENDY_AGENT_SOCKET") == "" {
 		selected, matched, err := connectNamedDeviceSelector(robotRuntimePromptContext(ctx, true), device, true)
 		if err != nil {
@@ -223,6 +238,89 @@ func connectMCPDevice(ctx context.Context, device string) (*grpcclient.AgentConn
 		if matched {
 			return selected.Agent, nil
 		}
+		if err := rejectNumericDeviceName(device); err != nil {
+			return nil, err
+		}
 	}
-	return connectWithAutoTLS(ctx, device)
+	// Dial a bare host as host:port, like the startup default device: that is
+	// the form an mTLS device accepts here, and the target the run tool replays.
+	return connectMCPDirectFn(ctx, mcpStartupAddress(device))
+}
+
+var connectMCPDirectFn = connectWithAutoTLS
+
+// pickDeviceForDefaultFn is a seam so tests can prove the picker is never
+// opened where it cannot work.
+var pickDeviceForDefaultFn = pickDeviceForDefault
+
+// maxSetDefaultCandidates bounds the device list a non-interactive
+// set-default prints.
+const maxSetDefaultCandidates = 10
+
+// vmNamesFn lists the local VMs by name. A seam so tests describe the store.
+var vmNamesFn = func() ([]string, error) {
+	store, err := vm.NewStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.List()
+}
+
+// setDefaultNeedsDeviceError is what `wendy device set-default` returns with no
+// device where the picker cannot run: no terminal (a script, CI, an AI agent's
+// shell) or --json. Bubbletea used to fail there with "could not open a new
+// TTY", which says nothing about what to type instead.
+func setDefaultNeedsDeviceError() error {
+	var b strings.Builder
+	b.WriteString("no device given, and the device picker needs an interactive terminal.\n")
+	b.WriteString("Name the device to save as the default:\n  wendy device set-default <device>\n")
+	if names := setDefaultCandidates(); len(names) > 0 {
+		b.WriteString("Devices this CLI has seen recently:\n")
+		for _, name := range names {
+			fmt.Fprintf(&b, "  %s\n", name)
+		}
+	}
+	b.WriteString("List everything reachable with 'wendy device list' ('wendy cloud discover' for cloud devices).")
+	return commandErrorf(errNoDevice, "%s", b.String())
+}
+
+// setDefaultCandidates lists names set-default accepts, from local state only —
+// the discovery cache and the VM store. It runs on an error path, so it never
+// touches the network and treats any unreadable source as empty.
+//
+// Fresh, not Entries: the error text calls these "devices this CLI has seen
+// recently", and Entries returns every cached entry regardless of age. Fresh
+// bounds the list to the same TTL the picker and discovery use for display
+// (Entries is reserved for the connect fast path, per its own doc comment).
+func setDefaultCandidates() []string {
+	seen := map[string]bool{}
+	var names []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		names = append(names, name)
+	}
+	if cache, err := discoverycache.Load(); err == nil {
+		for _, e := range cache.Fresh(time.Now()) {
+			if e.Hostname != "" {
+				add(e.Hostname)
+			} else {
+				add(e.IP)
+			}
+		}
+	}
+	if vms, err := vmNamesFn(); err == nil {
+		for _, name := range vms {
+			add(vmDeviceIDPrefix + name)
+		}
+	}
+	sort.Strings(names)
+	if len(names) > maxSetDefaultCandidates {
+		names = names[:maxSetDefaultCandidates]
+	}
+	return names
 }

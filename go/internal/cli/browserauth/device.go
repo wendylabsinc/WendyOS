@@ -17,7 +17,6 @@ import (
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	grpcmetadata "google.golang.org/grpc/metadata"
 )
 
 // ConnectDevice keeps tunnel authorization, grant verification and device mTLS
@@ -35,10 +34,10 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 		return nil, err
 	}
 	cert, access, key := s.certificate, s.tokens.Access, s.key
-	auth := &config.AuthConfig{CloudGRPC: "api.dev.wendy.sh:443", OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: s.privatePEM, Certificates: []config.CertificateInfo{cert}}
-	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, "api.dev.wendy.sh:443") }), grpc.WithTransportCredentials(insecure.NewCredentials())}
+	auth := &config.AuthConfig{CloudGRPC: s.settings().CloudGRPC, OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: s.privatePEM, Certificates: []config.CertificateInfo{cert}}
+	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, s.settings().CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
 	opts = append(opts, cloudrequest.DPoPDialOptions(auth, func(context.Context) (string, crypto.Signer, error) { return access, key, nil })...)
-	cloud, err := grpc.NewClient("passthrough:///api.dev.wendy.sh:443", opts...)
+	cloud, err := grpc.NewClient("passthrough:///"+s.settings().CloudGRPC, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -47,15 +46,14 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 		cloud.Close()
 		return nil, err
 	}
-	verifier := &cloudrelay.Verifier{Issuer: "https://api.dev.wendy.sh", HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
+	verifier := &cloudrelay.Verifier{Issuer: s.settings().RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
 		target, err := cloudrelay.BrowserBrokerTarget(endpoint)
 		if err != nil {
 			return nil, err
 		}
 		return grpc.NewClient("passthrough:///"+target, grpc.WithTransportCredentials(insecure.NewCredentials()), clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, target) }))
 	}}
-	authCtx := grpcmetadata.NewOutgoingContext(ctx, grpcmetadata.Pairs("x-wendy-client-cert", "URI="+cert.PrincipalURI, "x-forwarded-client-cert", "URI="+cert.PrincipalURI))
-	record, err := cloudpbv2.NewAssetServiceClient(cloud).GetAsset(authCtx, &cloudpbv2.GetAssetRequest{Id: asset})
+	record, err := cloudpbv2.NewAssetServiceClient(cloud).GetAsset(ctx, &cloudpbv2.GetAssetRequest{Id: asset})
 	if err != nil {
 		cloud.Close()
 		return nil, fmt.Errorf("Looking up device certificate identity: %w", err)
@@ -67,8 +65,7 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 	}
 
 	conn, err := grpcclient.ConnectWithTLSExpecting(ctx, "passthrough:///cloud-device", &cert, nil, expected, clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) {
-		authCtx := grpcmetadata.NewOutgoingContext(c, grpcmetadata.Pairs("x-wendy-client-cert", "URI="+cert.PrincipalURI, "x-forwarded-client-cert", "URI="+cert.PrincipalURI))
-		return cloudrelay.OpenTCP(c, authCtx, cloud, verifier, asset, "wendy-agent", signer)
+		return cloudrelay.OpenTCP(c, c, cloud, verifier, asset, "wendy-agent", signer)
 	}))
 	if err != nil {
 		cloud.Close()
