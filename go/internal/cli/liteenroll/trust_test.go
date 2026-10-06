@@ -72,7 +72,7 @@ func TestProvisionTrust(t *testing.T) {
 	if _, err := ProvisionTrust(legacy, "", "", ""); err != nil || legacy.ProvisionTrust {
 		t.Fatal("legacy configuration changed", err)
 	}
-	if err := CheckTrustSupport(legacy, &litepb.WendyComEnrollmentChallenge{}); err != nil {
+	if err := CheckTrustSupport(legacy, &litepb.WendyComEnrollmentChallenge{BuiltinRootsReady: true, BuiltinTsaRootsReady: true}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -98,5 +98,25 @@ func TestTrustBundleRejectsInvalidInput(t *testing.T) {
 	}
 	if err := validateTrustBundle(append(bytes.Clone(valid), valid...)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTrustPreflightRequiresConfirmedRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		mode               string
+		roots, tsa, wantOK bool
+	}{
+		{"empty", "roughtime", false, false, false},
+		{"roughtime", "roughtime", true, false, true},
+		{"tsa missing", "https://time.example", true, false, false},
+		{"legacy complete", "https://time.example", true, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckTrustSupport(&litepb.WendyConfEnrollment{TimeUrl: tc.mode}, &litepb.WendyComEnrollmentChallenge{BuiltinRootsReady: tc.roots, BuiltinTsaRootsReady: tc.tsa})
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("unexpected result: %v", err)
+			}
+		})
 	}
 }

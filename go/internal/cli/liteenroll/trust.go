@@ -98,6 +98,10 @@ func validateTrustBundle(data []byte) error {
 // CheckTrustSupport runs before minting a credential so older firmware cannot
 // silently ignore the new configuration fields.
 func CheckTrustSupport(cfg *litepb.WendyConfEnrollment, challenge *litepb.WendyComEnrollmentChallenge) error {
+	if !cfg.ProvisionTrust && (!challenge.GetBuiltinRootsReady() ||
+		(cfg.TimeUrl != "roughtime" && !challenge.GetBuiltinTsaRootsReady())) {
+		return fmt.Errorf("firmware has no confirmed built-in CA bundles; supply --device-roots and --https-roots (also --tsa-roots for RFC 3161), or install firmware with pinned roots; no cloud asset was reserved")
+	}
 	if cfg.ProvisionTrust && !challenge.GetUsbTrustSupported() {
 		return fmt.Errorf("firmware does not support USB trust provisioning; update the board first")
 	}

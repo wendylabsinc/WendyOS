@@ -93,6 +93,8 @@ message WendyComEnrollmentChallenge {
     bool enrolled = 2;
     bool usb_trust_supported = 3; // accepts explicitly provisioned CA bundles
     bool roughtime_supported = 4; // sync_time verifies device-nonce-bound replies
+    bool builtin_roots_ready = 5; // device and HTTPS CA bundles configured
+    bool builtin_tsa_roots_ready = 6;
 }
 
 

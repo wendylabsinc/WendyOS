@@ -10,10 +10,7 @@ go build -o ./wendy ./cmd/wendy
 ./wendy cloud enroll-device \
   --device wendy-lite:/dev/cu.usbmodemXXXX \
   --name lite-desk \
-  --broker-port 5055 \
-  --device-roots device-ca-bundle.pem \
-  --tsa-roots tsa-ca-bundle.pem \
-  --https-roots server-ca-bundle.pem
+  --broker-port 5055
 ```
 
 This is the same `cloud enroll-device` command used for WendyOS. The selected
@@ -27,12 +24,19 @@ identity partition. Trust bundles can be provisioned during USB enrollment, so
 the firmware does not need deployment-specific roots. The CLI checks firmware
 support before minting a token.
 
-All three root flags are required together. Supplying them explicitly authorizes
-trust provisioning over the physical USB link. Obtain these files through your
-PKI administration process; a certificate chain returned by an unverified endpoint
-is not a trusted source. Device, timestamp, and HTTPS services may use different
-CA hierarchies. The CLI validates each PEM CA bundle and uses the HTTPS bundle
-when requesting signed time.
+By default, the CLI downloads the selected instance's CA certificates from its
+EST endpoint over HTTPS verified by the computer's trust store. It provisions
+self-issued device CA roots and verified HTTPS trust anchors over USB. Custom
+endpoint layouts can supply `--ca-certs-url https://.../cacerts`; private HTTPS
+CAs must be trusted by the computer. No deployment CA roots need embedding in
+firmware. Discovery rejects unverified TLS, redirects and malformed bundles
+before reserving a cloud asset.
+
+Alternatively, supply `--device-roots device-ca-bundle.pem` and
+`--https-roots server-ca-bundle.pem` together. The HTTPS bundle must cover the
+broker as well as the enrollment endpoints if they use different CAs.
+RFC 3161 time also requires `--tsa-roots tsa-ca-bundle.pem`. Obtain these files
+through your PKI administration process.
 
 The firmware stores bundles with enrollment configuration and uses them after
 reboot. Each bundle supports at most eight CA certificates and 16 KiB. Bundles
@@ -41,18 +45,16 @@ updates preserve enrollment. Replacing or erasing the entire configuration remov
 its bundles; changing an enrolled board's trust through the CLI requires operator
 recovery. This does not introduce remote trust rotation.
 
-Omit all three flags to retain the existing build-pinned trust flow. A device with
-neither provisioned nor embedded roots refuses to connect. Older firmware cannot
-accept these flags; upgrade it first.
-
-The CLI obtains the board's nonce, fetches its signed time seed, and asks Cloud's
-`DeviceEnrollmentService.EnrollDevice` for a Class C credential. Both the Cloud
+The CLI obtains the board's nonce and relays fresh Roughtime replies. The board
+verifies signatures and requires two agreeing pinned servers. The CLI then asks
+Cloud's `DeviceEnrollmentService.EnrollDevice` for a Class C credential. Both the Cloud
 RPC and PKI enrollment artifact are signed with the operator's existing identity.
 Cloud reserves the tenant/device asset in PostgreSQL. The single-use token and
 public setup data go to the board over physical USB; its private key is generated
 on-device. The CLI reboots the board and waits for certificate installation.
 
-CSR and signed-time URLs derive from the selected session's `PKIEndpoint`.
+The CSR URL derives from the selected session's `PKIEndpoint`. Roughtime is the
+default time source.
 Self-hosted deployments can pass `--csr-url https://csr.example/v1/TENANT_UUID`
 and `--time-url https://time.example/v1/time`. The broker hostname defaults
 to the same devices hostname used by wendy-agent for the selected Cloud session.
@@ -69,3 +71,15 @@ This command does not add a CLI tunnel to Lite through Cloud. That connection
 still needs broker-authorized forwarding and end-to-end CLI/device mTLS. The
 existing insecure tinycloud client is not used here. See
 [cloud#638](https://github.com/wendylabsinc/cloud/pull/638) for broker presence.
+
+Read the firmware console with:
+
+```sh
+wendy device logs --device wendy-lite:/dev/cu.usbmodemXXXX
+```
+
+This streams buffered and live output without blocking firmware tasks. Ctrl-C
+detaches; `--json` reports console chunks with `data`, `stderr`, and `gap` fields.
+WendyOS app/service/severity filters, `--tail`, and `--no-follow` are not supported
+by the Lite console. USB was tested on the XIAO ESP32-S3; LAN and BLE use the
+provider's existing authenticated connection paths.

@@ -865,7 +865,8 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().Uint32Var(&liteOptions.brokerPort, "broker-port", 5055, "WendyCom broker TLS port for Wendy Lite")
 	cmd.Flags().StringVar(&liteOptions.csrURL, "csr-url", "", "CSR enrollment base URL override for Wendy Lite on self-hosted PKI")
 	cmd.Flags().StringVar(&liteOptions.timeURL, "time-url", "", "Signed-time endpoint override for Wendy Lite on self-hosted PKI")
-	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over USB (requires all three root bundle flags)")
+	cmd.Flags().StringVar(&liteOptions.caCertsURL, "ca-certs-url", "", "HTTPS CA-discovery URL for Wendy Lite (defaults to the selected PKI instance's EST endpoint)")
+	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over USB (also requires --https-roots)")
 	cmd.Flags().StringVar(&liteOptions.tsaRoots, "tsa-roots", "", "Provision this signed-time PEM CA bundle over USB")
 	cmd.Flags().StringVar(&liteOptions.httpsRoots, "https-roots", "", "Provision this HTTPS/broker PEM CA bundle over USB")
 	return cmd
@@ -1370,8 +1371,10 @@ func newDeviceLogsCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "logs [app]",
-		Short: "Stream logs from containers on the device",
-		Long: "Stream logs from containers on the device.\n\n" +
+		Short: "Stream WendyOS logs or the Wendy Lite firmware console",
+		Long: "Stream logs from containers on WendyOS or the firmware console on Wendy Lite.\n\n" +
+			"Wendy Lite streams buffered and live console output over USB, LAN, or BLE.\n" +
+			"App/service/severity filters, --tail, and --no-follow apply to WendyOS only.\n\n" +
 			"Pass an app name (positionally or with --app) to see only that app's\n" +
 			"logs. Without a filter, logs from every container and the agent itself\n" +
 			"are streamed, which can include agent lifecycle messages.\n\n" +
@@ -1393,11 +1396,22 @@ func newDeviceLogsCmd() *cobra.Command {
 				appName = args[0]
 			}
 
-			conn, err := connectToAgent(ctx, monitoringOptions(readOnly)...)
+			target, err := resolveTarget(ctx, append(monitoringOptions(readOnly), SuppressPickerEnroll())...)
 			if err != nil {
 				if errors.Is(ctx.Err(), context.Canceled) {
 					return nil
 				}
+				return err
+			}
+			if target.External != nil && target.External.ProviderKey == "wendy-lite" {
+				return runLiteDeviceLogs(cmd, target, appName)
+			}
+			cfg := resolveConfig{}
+			for _, option := range monitoringOptions(readOnly) {
+				option(&cfg)
+			}
+			conn, err := connectFromSelectedDevice(target, cfg)
+			if err != nil {
 				return err
 			}
 			defer conn.Close()

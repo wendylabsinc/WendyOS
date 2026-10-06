@@ -15,6 +15,7 @@ import (
 
 type liteEnrollmentOptions struct {
 	csrURL, timeURL, brokerHost       string
+	caCertsURL                        string
 	deviceRoots, tsaRoots, httpsRoots string
 	brokerPort                        uint32
 }
@@ -35,7 +36,7 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 		}
 		return runLiteEnrollmentFn(cmd, serialPort, auth, name, opts)
 	}
-	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" {
+	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" || opts.caCertsURL != "" {
 		return fmt.Errorf("USB trust bundle flags apply only to Wendy Lite devices")
 	}
 	conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: true})
@@ -71,6 +72,9 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 	if err != nil {
 		return err
 	}
+	if opts.caCertsURL != "" && (opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "") {
+		return fmt.Errorf("use either --ca-certs-url or explicit root bundle files")
+	}
 	timeClient, err := liteenroll.ProvisionTrust(cfg, opts.deviceRoots, opts.tsaRoots, opts.httpsRoots)
 	if err != nil {
 		return err
@@ -82,6 +86,16 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 	}
 	if challenge.Enrolled {
 		return fmt.Errorf("this board already has an issued identity; use its existing enrollment or operator recovery")
+	}
+	if !cfg.ProvisionTrust {
+		if !challenge.GetUsbTrustSupported() {
+			return fmt.Errorf("firmware does not support USB trust provisioning; update the board first")
+		}
+		timeClient, err = liteenroll.DiscoverTrust(ctx, cfg, opts.caCertsURL)
+		if err != nil {
+			return err
+		}
+		defer timeClient.CloseIdleConnections()
 	}
 	if err := liteenroll.CheckTrustSupport(cfg, challenge); err != nil {
 		return err

@@ -1014,13 +1014,15 @@ func (x *WendyComEnrollmentChallengeParams) GetStatusOnly() bool {
 }
 
 type WendyComEnrollmentChallenge struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	NonceHex           string                 `protobuf:"bytes,1,opt,name=nonce_hex,json=nonceHex,proto3" json:"nonce_hex,omitempty"`
-	Enrolled           bool                   `protobuf:"varint,2,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
-	UsbTrustSupported  bool                   `protobuf:"varint,3,opt,name=usb_trust_supported,json=usbTrustSupported,proto3" json:"usb_trust_supported,omitempty"`  // accepts explicitly provisioned CA bundles
-	RoughtimeSupported bool                   `protobuf:"varint,4,opt,name=roughtime_supported,json=roughtimeSupported,proto3" json:"roughtime_supported,omitempty"` // sync_time verifies device-nonce-bound replies
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	NonceHex             string                 `protobuf:"bytes,1,opt,name=nonce_hex,json=nonceHex,proto3" json:"nonce_hex,omitempty"`
+	Enrolled             bool                   `protobuf:"varint,2,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
+	UsbTrustSupported    bool                   `protobuf:"varint,3,opt,name=usb_trust_supported,json=usbTrustSupported,proto3" json:"usb_trust_supported,omitempty"`  // accepts explicitly provisioned CA bundles
+	RoughtimeSupported   bool                   `protobuf:"varint,4,opt,name=roughtime_supported,json=roughtimeSupported,proto3" json:"roughtime_supported,omitempty"` // sync_time verifies device-nonce-bound replies
+	BuiltinRootsReady    bool                   `protobuf:"varint,5,opt,name=builtin_roots_ready,json=builtinRootsReady,proto3" json:"builtin_roots_ready,omitempty"`  // device and HTTPS CA bundles configured
+	BuiltinTsaRootsReady bool                   `protobuf:"varint,6,opt,name=builtin_tsa_roots_ready,json=builtinTsaRootsReady,proto3" json:"builtin_tsa_roots_ready,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *WendyComEnrollmentChallenge) Reset() {
@@ -1077,6 +1079,20 @@ func (x *WendyComEnrollmentChallenge) GetUsbTrustSupported() bool {
 func (x *WendyComEnrollmentChallenge) GetRoughtimeSupported() bool {
 	if x != nil {
 		return x.RoughtimeSupported
+	}
+	return false
+}
+
+func (x *WendyComEnrollmentChallenge) GetBuiltinRootsReady() bool {
+	if x != nil {
+		return x.BuiltinRootsReady
+	}
+	return false
+}
+
+func (x *WendyComEnrollmentChallenge) GetBuiltinTsaRootsReady() bool {
+	if x != nil {
+		return x.BuiltinTsaRootsReady
 	}
 	return false
 }
@@ -2724,12 +2740,14 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x1bWendyComGetDeviceInfoParams\"D\n" +
 	"!WendyComEnrollmentChallengeParams\x12\x1f\n" +
 	"\vstatus_only\x18\x01 \x01(\bR\n" +
-	"statusOnly\"\xb7\x01\n" +
+	"statusOnly\"\x9e\x02\n" +
 	"\x1bWendyComEnrollmentChallenge\x12\x1b\n" +
 	"\tnonce_hex\x18\x01 \x01(\tR\bnonceHex\x12\x1a\n" +
 	"\benrolled\x18\x02 \x01(\bR\benrolled\x12.\n" +
 	"\x13usb_trust_supported\x18\x03 \x01(\bR\x11usbTrustSupported\x12/\n" +
-	"\x13roughtime_supported\x18\x04 \x01(\bR\x12roughtimeSupported\"W\n" +
+	"\x13roughtime_supported\x18\x04 \x01(\bR\x12roughtimeSupported\x12.\n" +
+	"\x13builtin_roots_ready\x18\x05 \x01(\bR\x11builtinRootsReady\x125\n" +
+	"\x17builtin_tsa_roots_ready\x18\x06 \x01(\bR\x14builtinTsaRootsReady\"W\n" +
 	"\x16WendyComSyncTimeParams\x12!\n" +
 	"\fserver_index\x18\x01 \x01(\rR\vserverIndex\x12\x1a\n" +
 	"\bresponse\x18\x02 \x01(\fR\bresponse\"_\n" +
