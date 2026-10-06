@@ -23,6 +23,7 @@ func newCloudCmd() *cobra.Command {
 
 	cmd.AddGroup(
 		&cobra.Group{ID: "auth", Title: "Authentication:"},
+		&cobra.Group{ID: "applications", Title: "Applications:"},
 		&cobra.Group{ID: "devices", Title: "Devices:"},
 		&cobra.Group{ID: "connectivity", Title: "Connectivity:"},
 	)
@@ -43,6 +44,7 @@ func newCloudCmd() *cobra.Command {
 		newAuthLogoutCmd(),
 		newAuthStatusCmd(),
 	)
+	addToGroup("applications", newCloudAppSettingsCmd())
 	// Devices: enroll, discover, and operate cloud-connected devices. The
 	// hidden `run` command stays registered (and runnable) but off the help
 	// menu; it is hidden via its own constructor.
