@@ -16,6 +16,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // A submitted transaction must never be retried through another transport:
@@ -111,9 +112,6 @@ func deploymentOutcomeError(result *agentpb.DeploymentResult, requireReady bool)
 	}
 	switch result.GetState() {
 	case agentpb.DeploymentState_READY:
-		if !result.GetReadinessChecked() {
-			return fmt.Errorf("agent reported READY without checking readiness")
-		}
 		return nil
 	case agentpb.DeploymentState_RUNNING:
 		if requireReady {
@@ -125,16 +123,43 @@ func deploymentOutcomeError(result *agentpb.DeploymentResult, requireReady bool)
 	}
 }
 
+// verifiedRequest copies req with verified set and app_config's readiness
+// replaced by the exact probe the agent must run. The agent never infers one.
+func verifiedRequest(cfg *appconfig.AppConfig, req *agentpb.RunContainerLayersRequest, opts runOptions) (*agentpb.RunContainerLayersRequest, error) {
+	var sent appconfig.AppConfig
+	if len(req.GetAppConfig()) > 0 {
+		if err := json.Unmarshal(req.GetAppConfig(), &sent); err != nil {
+			return nil, fmt.Errorf("decoding app config: %w", err)
+		}
+	}
+	sent.Readiness = nil
+	if probe := deploymentReadiness(cfg, opts); probe.HasProbe() {
+		resolved := *probe
+		if opts.readinessTimeout > 0 {
+			resolved.TimeoutSeconds = int(opts.readinessTimeout / time.Second)
+		}
+		sent.Readiness = &resolved
+	}
+	data, err := json.Marshal(&sent)
+	if err != nil {
+		return nil, fmt.Errorf("encoding app config: %w", err)
+	}
+	out := proto.Clone(req).(*agentpb.RunContainerLayersRequest)
+	out.AppConfig = data
+	out.Verified = true
+	return out, nil
+}
+
 func openVerifiedDeployment(ctx context.Context, conn *grpcclient.AgentConnection, cfg *appconfig.AppConfig, req *agentpb.RunContainerLayersRequest, opts runOptions) (containerOutputStream, error) {
-	request := &agentpb.DeployContainerRequest{
-		Container: req, TimeoutSeconds: int32(opts.readinessTimeout / time.Second), RequireReadiness: opts.waitReady,
-		SkipImplicitReadiness: opts.serviceDeployment,
+	request, err := verifiedRequest(cfg, req, opts)
+	if err != nil {
+		return nil, err
 	}
 	rpcCtx := contextWithPostStartAgentHook(ctx, cfg)
 	if !opts.detach && !opts.isWatch() && !opts.serviceDeployment {
-		stream, err := conn.ContainerService.DeployContainerAttached(rpcCtx)
+		stream, err := conn.ContainerService.AttachContainer(rpcCtx)
 		if err == nil {
-			err = stream.Send(&agentpb.DeployContainerInput{Input: &agentpb.DeployContainerInput_Deployment{Deployment: request}})
+			err = stream.Send(&agentpb.AttachContainerRequest{RequestType: &agentpb.AttachContainerRequest_Deploy{Deploy: request}})
 		}
 		if err != nil {
 			return nil, &submittedDeploymentError{fmt.Errorf("submitting attached deployment: %w", err)}
@@ -145,7 +170,7 @@ func openVerifiedDeployment(ctx context.Context, conn *grpcclient.AgentConnectio
 			for {
 				n, readErr := os.Stdin.Read(buf)
 				if n > 0 {
-					if err := stream.Send(&agentpb.DeployContainerInput{Input: &agentpb.DeployContainerInput_StdinData{StdinData: buf[:n]}}); err != nil {
+					if err := stream.Send(&agentpb.AttachContainerRequest{RequestType: &agentpb.AttachContainerRequest_StdinData{StdinData: buf[:n]}}); err != nil {
 						return
 					}
 				}
@@ -156,7 +181,7 @@ func openVerifiedDeployment(ctx context.Context, conn *grpcclient.AgentConnectio
 		}()
 		return stream, nil
 	}
-	stream, err := conn.ContainerService.DeployContainer(rpcCtx, request)
+	stream, err := conn.ContainerService.RunContainer(rpcCtx, request)
 	if err != nil {
 		return nil, &submittedDeploymentError{fmt.Errorf("submitting deployment: %w", err)}
 	}
@@ -179,7 +204,7 @@ func (s *prefetchedContainerStream) Recv() (*agentpb.RunContainerLayersResponse,
 	return s.rest.Recv()
 }
 
-func awaitDeploymentOutcome(stream containerOutputStream, requireReady bool, opts runOptions) (*agentpb.RunContainerLayersResponse, error) {
+func awaitDeploymentOutcome(appName string, stream containerOutputStream, requireReady bool, opts runOptions) (*agentpb.RunContainerLayersResponse, error) {
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
@@ -190,7 +215,7 @@ func awaitDeploymentOutcome(stream containerOutputStream, requireReady bool, opt
 		}
 		if result := resp.GetDeployment(); result != nil {
 			if err := deploymentOutcomeError(result, requireReady); err != nil {
-				emitDeploymentOutcome(result, opts)
+				emitDeploymentOutcome(appName, result, opts)
 				return nil, &submittedDeploymentError{err}
 			}
 			return resp, nil
@@ -247,11 +272,11 @@ func runVerifiedServiceGroup(ctx context.Context, conn *grpcclient.AgentConnecti
 		if err != nil {
 			return fmt.Errorf("service %s: %w", name, err)
 		}
-		outcome, err := awaitDeploymentOutcome(stream, deploymentReadiness(cfg, opts).HasProbe() || opts.waitReady, optionsForService(name))
+		outcome, err := awaitDeploymentOutcome(cfg.ContainerName(), stream, deploymentReadiness(cfg, opts).HasProbe() || opts.waitReady, optionsForService(name))
 		if err != nil {
 			return fmt.Errorf("service %s: %w", name, err)
 		}
-		emitDeploymentOutcome(outcome.GetDeployment(), opts)
+		emitDeploymentOutcome(cfg.ContainerName(), outcome.GetDeployment(), opts)
 		streams[name] = &prefetchedContainerStream{first: outcome, rest: stream}
 	}
 	opts.deploymentOutcomeReported = true
@@ -342,7 +367,7 @@ var deploymentOutputMu sync.Mutex
 
 // JSON output is one object per service outcome (JSON Lines for groups). App
 // output stays on stderr so callers can parse deployment results from stdout.
-func emitDeploymentOutcome(result *agentpb.DeploymentResult, opts runOptions) {
+func emitDeploymentOutcome(appName string, result *agentpb.DeploymentResult, opts runOptions) {
 	if result == nil {
 		return
 	}
@@ -350,11 +375,9 @@ func emitDeploymentOutcome(result *agentpb.DeploymentResult, opts runOptions) {
 	defer deploymentOutputMu.Unlock()
 	if jsonOutput && !opts.suppressDeploymentJSON {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"app_name": result.GetAppName(), "revision": result.GetRevision(),
-			"previous_revision": result.GetPreviousRevision(), "state": result.GetState().String(),
-			"message": result.GetMessage(), "readiness_checked": result.GetReadinessChecked(),
+			"app_name": appName, "state": result.GetState().String(), "message": result.GetMessage(),
 		})
 	} else {
-		cliLogln("Deployment %s: %s (revision %s). %s", result.GetAppName(), result.GetState(), result.GetRevision(), result.GetMessage())
+		cliLogln("Deployment %s: %s. %s", appName, result.GetState(), result.GetMessage())
 	}
 }

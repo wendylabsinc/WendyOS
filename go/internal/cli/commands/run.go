@@ -2963,7 +2963,7 @@ func streamRunContainer(ctx context.Context, conn *grpcclient.AgentConnection, s
 			completed = false
 			if outcome := resp.GetDeployment(); outcome != nil {
 				if !opts.deploymentOutcomeReported {
-					emitDeploymentOutcome(outcome, opts)
+					emitDeploymentOutcome(appCfg.ContainerName(), outcome, opts)
 				}
 				if err := deploymentOutcomeError(outcome, opts.waitReady || deploymentReadiness(appCfg, opts).HasProbe()); err != nil {
 					return &submittedDeploymentError{err}
