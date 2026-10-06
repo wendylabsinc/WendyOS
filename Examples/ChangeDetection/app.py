@@ -12,12 +12,15 @@ from pathlib import Path
 import threading
 import time
 import zipfile
+from urllib.parse import parse_qs, urlsplit
 
 import cv2
 
 from change_detection.classifier import LABELS
 from change_detection.pipeline import Pipeline
 from change_detection.sources import CaptureSource, DemoSource, SCENARIOS
+from change_detection.audio_runtime import AudioRuntime
+from change_detection.audio_sources import AUDIO_SCENARIOS, DemoAudioSource, MicrophoneSource, WavAudioSource
 
 STATIC = Path(__file__).parent / "static"
 
@@ -35,7 +38,7 @@ def image_url(image, extension=".jpg"):
 
 
 class Runtime:
-    def __init__(self, source, pipeline=None, scene_id="session-1"):
+    def __init__(self, source, pipeline=None, scene_id="session-1", audio=None):
         self.source = source
         self.pipeline = pipeline or Pipeline()
         self.scene_id = scene_id
@@ -46,6 +49,7 @@ class Runtime:
         self.latest = None
         self.history = []
         self.thread = None
+        self.audio = audio
 
     def tick(self):
         with self.lock:
@@ -73,20 +77,26 @@ class Runtime:
         self.tick()
         self.thread = threading.Thread(target=self.run, name="capture", daemon=True)
         self.thread.start()
+        if self.audio:
+            self.audio.start()
 
     def close(self):
         self.stop.set()
+        if self.audio:
+            self.audio.close()
         if self.thread:
             self.thread.join(timeout=3)
         if not self.thread or not self.thread.is_alive():
             self.source.close()
 
     def state(self):
+        audio = self.audio.state() if self.audio else {"enabled": False}
         with self.lock:
             result = self.latest
             metadata = {"source": self.source.name, "demo": isinstance(self.source, DemoSource),
                         "scenario": getattr(self.source, "scenario", None), "paused": self.paused,
-                        "error": self.error, "scene_id": self.scene_id, "labels": LABELS}
+                        "error": self.error, "scene_id": self.scene_id, "labels": LABELS,
+                        "audio": audio}
             if result is None:
                 return {**metadata, "status": "starting", "regions": []}
             state = {key: value for key, value in result.items()
@@ -167,8 +177,18 @@ def make_server(runtime, host="127.0.0.1", port=8000):
             if self.path == "/api/state":
                 self.json(200, runtime.state())
             elif self.path == "/health":
-                self.json(503 if runtime.error else 200, {"status": "error" if runtime.error else "ok",
-                                                        "error": runtime.error})
+                audio_error = runtime.audio.state()["error"] if runtime.audio else None
+                failed = runtime.error or audio_error
+                self.json(503 if failed else 200, {"status": "error" if failed else "ok",
+                                                 "error": runtime.error, "audio_error": audio_error})
+            elif urlsplit(self.path).path == "/api/audio/clip":
+                try:
+                    if not runtime.audio:
+                        raise ValueError("Audio is disabled")
+                    event_id = int(parse_qs(urlsplit(self.path).query).get("id", [""])[0])
+                    self.reply(200, "audio/wav", runtime.audio.clip(event_id))
+                except ValueError as error:
+                    self.json(404, {"error": str(error)})
             elif self.path in ("/", "/app.js", "/style.css"):
                 name, mime = {"/": ("index.html", "text/html; charset=utf-8"),
                               "/app.js": ("app.js", "text/javascript"),
@@ -178,7 +198,8 @@ def make_server(runtime, host="127.0.0.1", port=8000):
                 self.json(404, {"error": "Not found"})
 
         def do_POST(self):
-            if self.path not in ("/api/pause", "/api/reset", "/api/demo", "/api/export"):
+            if self.path not in ("/api/pause", "/api/reset", "/api/demo", "/api/export",
+                                 "/api/audio/pause", "/api/audio/reset", "/api/audio/demo", "/api/audio/export"):
                 self.json(404, {"error": "Not found"})
                 return
             # JSON-only same-origin controls prevent a web page elsewhere from
@@ -193,18 +214,22 @@ def make_server(runtime, host="127.0.0.1", port=8000):
                 body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict):
                     raise ValueError("Expected a JSON object")
-                if self.path == "/api/export":
-                    data, name = runtime.export(body)
+                target = runtime.audio if self.path.startswith("/api/audio/") else runtime
+                if target is None:
+                    raise ValueError("Audio is disabled")
+                action = self.path.rsplit("/", 1)[1]
+                if action == "export":
+                    data, name = target.export(body)
                     self.reply(200, "application/zip", data, f"{name}.zip")
                 else:
-                    runtime.control(self.path.rsplit("/", 1)[1], body)
+                    target.control(action, body)
                     self.json(200, {"ok": True})
             except (ValueError, TypeError, KeyError) as error:
                 self.json(400, {"error": str(error)})
             except Exception as error:
                 logging.exception("Control request failed")
-                with runtime.lock:
-                    runtime.error = str(error)
+                with target.lock:
+                    target.error = str(error)
                 self.json(500, {"error": "Input failed; check the app status"})
 
         def log_message(self, *_):
@@ -220,6 +245,14 @@ def main():
     parser.add_argument("--checkpoint", default=os.environ.get("CHECKPOINT"))
     parser.add_argument("--scene-id", default=os.environ.get("SCENE_ID", "session-1"))
     parser.add_argument("--fps", type=float, default=2)
+    parser.add_argument("--audio-source", default=os.environ.get("AUDIO_SOURCE", "off"),
+                        help="off, demo, mic, or a 16-bit PCM WAV path")
+    parser.add_argument("--audio-scenario", choices=AUDIO_SCENARIOS,
+                        default=os.environ.get("AUDIO_SCENARIO", "metal_impact"))
+    parser.add_argument("--audio-zone", choices=("hopper", "conveyor"),
+                        default=os.environ.get("AUDIO_ZONE", "hopper"), help="Zone for mono WAV or microphone")
+    parser.add_argument("--audio-device", default=os.environ.get("AUDIO_DEVICE"),
+                        help="PortAudio input device index or name, only with --audio-source mic")
     parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     args = parser.parse_args()
@@ -230,15 +263,28 @@ def main():
         classifier = SiameseClassifier(args.checkpoint)
     source = DemoSource(args.scenario) if args.source == "demo" else CaptureSource(args.source, args.fps)
     runtime = Runtime(source, Pipeline(classifier), args.scene_id)
-    server = make_server(runtime, args.host, args.port)
+    server = None
     try:
+        if args.audio_source != "off":
+            if args.audio_source == "demo":
+                audio_source = DemoAudioSource(args.audio_scenario)
+            elif args.audio_source == "mic":
+                device = args.audio_device
+                if device and device.isdecimal():
+                    device = int(device)
+                audio_source = MicrophoneSource(device, args.audio_zone)
+            else:
+                audio_source = WavAudioSource(args.audio_source, args.audio_zone)
+            runtime.audio = AudioRuntime(audio_source, args.scene_id)
+        server = make_server(runtime, args.host, args.port)
         runtime.start()
         print(f"Change detection ready at http://{args.host}:{server.server_port}", flush=True)
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        if server:
+            server.server_close()
         runtime.close()
 
 

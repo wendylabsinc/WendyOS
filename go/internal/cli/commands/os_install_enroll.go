@@ -232,7 +232,7 @@ func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preE
 	fmt.Println("Pre-enrolling device with Wendy Cloud...")
 	state, enrollErr := preEnrollACMEFn(ctx, auth, deviceName)
 	if enrollErr == nil {
-		fmt.Println("Device pre-enrolled. It will ACME-enroll from its baked credential on first boot.")
+		fmt.Println("Cloud enrollment reserved; credential staged for first boot. Automatic ACME enrollment requires an image with a compatible agent; device enrollment and Cloud presence are not yet verified.")
 		return state, nil
 	}
 	if !interactive {

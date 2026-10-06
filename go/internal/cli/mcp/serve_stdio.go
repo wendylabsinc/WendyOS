@@ -28,7 +28,7 @@ func serveStdioStreams(ctx context.Context, srv *server.MCPServer, in io.Reader,
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	input := &cancelOnEOF{reader: in, cancel: cancel}
-	err := server.NewStdioServer(srv).Listen(ctx, input, out)
+	err := listenWithSkills(ctx, srv, input, out)
 	if input.closed.Load() && errors.Is(err, context.Canceled) {
 		return nil // the client disconnected
 	}

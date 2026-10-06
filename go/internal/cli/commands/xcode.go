@@ -53,9 +53,7 @@ func runXcodebuildAttempt(ctx context.Context, dir string, allowRecovery bool, a
 	fmt.Fprintf(logFile, "xcodebuild %s\n%s\n\n", strings.Join(args, " "), time.Now().Format(time.RFC3339))
 
 	hintStyle := lipgloss.NewStyle().Foreground(tui.ColorPrimary)
-	fmt.Println()
-	fmt.Println(hintStyle.Render("  tail -f .xcode/xcodebuild.log"))
-	fmt.Println()
+	fmt.Fprintf(runProgressWriter(ctx), "\n%s\n\n", hintStyle.Render("  tail -f .xcode/xcodebuild.log"))
 
 	var stderrBuf strings.Builder
 	cmd := execCommandContext(ctx, "xcodebuild", args...)
@@ -269,7 +267,7 @@ func xcodeSelectGuidance(ctx context.Context) error {
 
 	selectCmd := execCommandContext(ctx, "sudo", "xcode-select", "-s", developerDir)
 	selectCmd.Stdin = os.Stdin
-	selectCmd.Stdout = os.Stdout
+	selectCmd.Stdout = runProgressWriter(ctx)
 	selectCmd.Stderr = os.Stderr
 	if err := selectCmd.Run(); err != nil {
 		return fmt.Errorf("sudo xcode-select -s %s failed: %w", developerDir, err)

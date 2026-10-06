@@ -32,6 +32,13 @@ func TestStart_ServesWhileStartupConnectIsBlocked(t *testing.T) {
 		<-ctx.Done()
 		close(connectCanceled)
 	})
+	checkStarted := make(chan struct{})
+	checkCanceled := make(chan struct{})
+	s.SetCLIUpdateChecker(func(ctx context.Context) {
+		close(checkStarted)
+		<-ctx.Done()
+		close(checkCanceled)
+	})
 
 	done := make(chan error, 1)
 	go func() { done <- s.Start(context.Background()) }()
@@ -55,6 +62,11 @@ func TestStart_ServesWhileStartupConnectIsBlocked(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("startup connection did not begin")
 	}
+	select {
+	case <-checkStarted:
+	case <-time.After(time.Second):
+		t.Fatal("release check did not begin")
+	}
 
 	close(allowServeReturn)
 	select {
@@ -70,6 +82,11 @@ func TestStart_ServesWhileStartupConnectIsBlocked(t *testing.T) {
 	case <-connectCanceled:
 	case <-time.After(time.Second):
 		t.Fatal("startup connection context was not canceled when stdio stopped")
+	}
+	select {
+	case <-checkCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("release check context was not canceled when stdio stopped")
 	}
 }
 

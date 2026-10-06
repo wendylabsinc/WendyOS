@@ -3,12 +3,23 @@ syntax = "proto3";
 package wendycloud.v2;
 
 import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
 
 service AppService {
-  rpc UpsertApp(UpsertAppRequest) returns (App);
+  // Signed; payload_type "wendycloud.v2.UpsertAppRequest".
+  rpc UpsertApp(SignedRequest) returns (App) {
+    option (wendy.signed_request) = true;
+  }
   rpc GetApp(GetAppRequest) returns (App);
-  rpc UpdateApp(UpdateAppRequest) returns (App);
-  rpc DeleteApp(DeleteAppRequest) returns (DeleteAppResponse);
+  // Signed; payload_type "wendycloud.v2.UpdateAppRequest".
+  rpc UpdateApp(SignedRequest) returns (App) {
+    option (wendy.signed_request) = true;
+  }
+  // Signed; payload_type "wendycloud.v2.DeleteAppRequest".
+  rpc DeleteApp(SignedRequest) returns (DeleteAppResponse) {
+    option (wendy.signed_request) = true;
+  }
   rpc ListApps(ListAppsRequest) returns (ListAppsResponse);
 }
 

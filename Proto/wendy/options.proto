@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package wendy;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MethodOptions {
+  // The method is operator-signed (WDY-3458): its input is
+  // wendycloud.v2.SignedRequest and the server verifies the signature before
+  // the handler runs. This option is the one list of signed methods; broker,
+  // console and CLI read it instead of keeping their own copies.
+  bool signed_request = 50001;
+}

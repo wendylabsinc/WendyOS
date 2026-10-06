@@ -14,7 +14,7 @@ import (
 // Groups control discovery, not authorization. All handlers stay registered so
 // existing clients can call known tools. App-provided tools remain discoverable.
 var toolGroups = map[string][]string{
-	"core": {"wendy_status", "wendy_tools", "device_list", "device_connect", "device_disconnect", "device_info", "run",
+	"core": {"wendy_status", "wendy_tools", "auth_login", "device_list", "device_connect", "device_disconnect", "device_info", "run",
 		"container_list", "container_start", "container_stop", "container_delete", "container_stats", "container_exec", "telemetry_logs", "hardware_capabilities"},
 	"setup": {"device_set_default", "project_validate", "os_install_plan", "os_list_drives", "os_install_start", "os_install_status", "os_install_resume", "os_install_verify", "os_update", "os_update_status", "device_update_agent",
 		"cloud_enroll_device", "provisioning_start", "provisioning_status", "wifi_list", "wifi_connect", "wifi_disconnect", "wifi_status", "wifi_known_networks"},

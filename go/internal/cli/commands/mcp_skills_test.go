@@ -65,6 +65,7 @@ func TestHostInstallersUseSameEndUserGroup(t *testing.T) {
 	wantNames := []string{
 		"wendy", "wendy-app-lifecycle", "wendy-device-debug", "wendy-device-install",
 		"wendy-device-ops", "wendy-entitlements", "wendy-install", "wendy-mcp-setup",
+		"wendy-onboarding",
 		"wendy-project-setup", "wendy-robot-deploy", "wendy-template-app",
 	}
 	for i := 0; i < 2; i++ {

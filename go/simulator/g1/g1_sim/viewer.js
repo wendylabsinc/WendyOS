@@ -15,7 +15,16 @@ export class SandboxViewer {
     this.scene.fog = new THREE.Fog('#171e22', 18, 65);
     this.camera = new THREE.PerspectiveCamera(48, 16 / 9, 0.015, 100);
     this.camera.up.set(0, 0, 1);
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    // Retry without multisampling if the browser cannot allocate it. Use the
+    // actual canvas, rather than allocating a second context as a support probe.
+    const context = canvas.getContext('webgl2', { antialias: true }) ||
+      canvas.getContext('webgl2', { antialias: false });
+    if (!context) {
+      const error = Error('The browser could not create a WebGL 2 graphics context.');
+      error.name = 'WebGLUnavailableError';
+      throw error;
+    }
+    this.renderer = new THREE.WebGLRenderer({ canvas, context });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
@@ -58,9 +67,17 @@ export class SandboxViewer {
       this.camera.updateProjectionMatrix();
     });
     this.resize.observe(canvas);
-    canvas.addEventListener('webglcontextlost', () => {
+    canvas.addEventListener('webglcontextlost', event => {
+      event.preventDefault();
       this.contextLost = true;
-      status.textContent = '3D graphics interrupted. Reload this page to restore the view.';
+      this.samples = [];
+      if (this.active) status.textContent = '3D graphics interrupted · waiting for recovery…';
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+      this.samples = [];
+      this.renderer.shadowMap.needsUpdate = true;
+      if (this.active) status.textContent = 'Reconnecting to 3D scene…';
     });
     this.renderer.setAnimationLoop(now => this.draw(now));
     this.poll();
@@ -152,6 +169,7 @@ export class SandboxViewer {
   }
 
   acceptState(state) {
+    if (!this.active || document.hidden || this.contextLost) return;
     const count = this.bodies.length;
     if (state.positions.length !== count * 3 || state.quaternions.length !== count * 4 ||
         !state.positions.every(Number.isFinite) || !state.quaternions.every(Number.isFinite)) {
@@ -195,7 +213,7 @@ export class SandboxViewer {
         delay = Math.max(0, 1000 / 30 - (performance.now() - started));
       }
     } catch (error) {
-      this.status.textContent = 'Connection interrupted · retrying…';
+      if (this.active && !this.contextLost) this.status.textContent = 'Connection interrupted · retrying…';
       this.status.title = error.message;
       delay = 1000;
     }

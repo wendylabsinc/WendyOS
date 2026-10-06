@@ -73,6 +73,15 @@ func (s *fakeListContainersStream) Recv() (*agentpb.ListContainersResponse, erro
 
 type fakeRunContainerStream struct {
 	grpc.ServerStreamingClient[agentpb.RunContainerLayersResponse] // embedded nil
+	started                                                        bool
+}
+
+func (s *fakeRunContainerStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
+	if s.started {
+		return nil, io.EOF
+	}
+	s.started = true
+	return detachedStarted(), nil
 }
 
 // attachedRunStream drives streamRunContainer's attached path: it sends a

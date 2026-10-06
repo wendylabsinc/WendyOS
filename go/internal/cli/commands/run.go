@@ -521,14 +521,17 @@ type runOptions struct {
 	deploy                bool
 	skipCloudRegistration bool
 	detach                bool
-	yes                   bool
-	restartUnlessStopped  bool
-	restartOnFailure      bool
-	noRestart             bool
-	prefix                string
-	product               string
-	service               string
-	keepGoing             bool
+	// detachedOutput enables the ordinary CLI run result. Fleet and internal
+	// provisioning callers own their output and leave this false.
+	detachedOutput       bool
+	yes                  bool
+	restartUnlessStopped bool
+	restartOnFailure     bool
+	noRestart            bool
+	prefix               string
+	product              string
+	service              string
+	keepGoing            bool
 	// maxConcurrency bounds simultaneous service build-and-push jobs for both
 	// standalone multi-service manifests and Compose projects.
 	maxConcurrency int
@@ -641,6 +644,7 @@ func newRunCmd() *cobra.Command {
 					opts.quietBuild = !verbose
 					return watchCommand(runCtx, opts, time.Duration(debounceMS)*time.Millisecond)
 				}
+				opts.detachedOutput = true
 				return runCommand(runCtx, opts)
 			})
 		},
@@ -969,6 +973,10 @@ func runCommand(ctx context.Context, opts runOptions) error {
 		}
 		deviceFlag = primary
 		opts.fleetDevices = extras
+		opts.detachedOutput = false
+	}
+	if opts.detach && opts.detachedOutput && jsonOutput {
+		ctx = context.WithValue(ctx, detachedJSONRunKey{}, true)
 	}
 
 	// --dockerfile implies a docker build; validate the file exists and ensure
@@ -1320,15 +1328,12 @@ func runMacOSNativeContainer(ctx context.Context, conn *grpcclient.AgentConnecti
 		if err != nil {
 			return fmt.Errorf("starting container: %w", err)
 		}
-		resp, err := stream.Recv()
-		if err != nil && err != io.EOF {
+		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
 		}
-		if resp.GetStarted() != nil {
-			opts.reportDeployStarted()
-		}
+		opts.reportDeployStarted()
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
-		return nil
+		return opts.reportDetachedRun(ctx, conn, appCfg.AppID, appCfg)
 	}
 	if opts.isWatch() {
 		// Watch tails the app through its session-level telemetry subscription.
@@ -1462,7 +1467,11 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	defer proxyCleanup()
 
 	cliLogln("Building Swift container image for %s (%s)...", tui.App(product), tui.Value(architecture))
-	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, swiftUseMTLS, opts.debug, &dimWriter{}, os.Stderr); err != nil {
+	var buildOut io.Writer = &dimWriter{}
+	if detachedJSONRun(ctx) {
+		buildOut = os.Stderr
+	}
+	if err := buildSwiftContainerImage(ctx, cwd, product, registryAddr, architecture, swiftUseMTLS, opts.debug, buildOut, os.Stderr); err != nil {
 		// A Mac agent only runs a container registry when it found a Linux
 		// container backend (Docker, OrbStack, or Apple `container`) at startup;
 		// otherwise the registry proxy above never reaches anything and the push
@@ -1558,7 +1567,7 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	cliLogln("Building Swift project locally...")
 	buildCmd := exec.CommandContext(ctx, "swift", "build", "-c", buildConfig)
 	buildCmd.Dir = cwd
-	buildCmd.Stdout = os.Stdout
+	buildCmd.Stdout = runProgressWriter(ctx)
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
 		return commandErrorf(errBuildFailed, "swift build failed: %w", err)
@@ -2642,17 +2651,14 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 		if err != nil {
 			return fmt.Errorf("starting container: %w", err)
 		}
-		resp, err := stream.Recv()
-		if err != nil && err != io.EOF {
+		if err := awaitStarted(stream); err != nil {
 			return fmt.Errorf("waiting for container start: %w", err)
 		}
-		if resp.GetStarted() != nil {
-			opts.reportDeployStarted()
-		}
+		opts.reportDeployStarted()
 		cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
 		// Detached returns as soon as the container is started — see
 		// runPostStartIfReady's doc comment.
-		return nil
+		return opts.reportDetachedRun(ctx, conn, appCfg.AppID, appCfg)
 	}
 
 	if opts.isWatch() {
@@ -3312,7 +3318,7 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 				// readiness (see runPostStartIfReady's doc comment). The container keeps
 				// running independently of this (now-abandoned) output stream.
 				cliLogln("Application %s running in detached mode.", containerDisplayName(appCfg))
-				return nil
+				return opts.reportDetachedRun(ctx, conn, appCfg.AppID, appCfg)
 			}
 			// Attached runs wait for readiness, announce the URL, and fire the
 			// host-side postStart hook before continuing to stream logs.
@@ -3329,7 +3335,12 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 			continue
 		}
 		if out := resp.GetStdoutOutput(); out != nil {
-			_, _ = os.Stdout.Write(out.GetData())
+			if opts.detach && opts.detachedOutput && jsonOutput {
+				// Keep pre-start application logs out of the JSON result.
+				_, _ = os.Stderr.Write(out.GetData())
+			} else {
+				_, _ = os.Stdout.Write(out.GetData())
+			}
 		}
 		if out := resp.GetStderrOutput(); out != nil {
 			_, _ = os.Stderr.Write(out.GetData())

@@ -33,6 +33,13 @@ func TestMain(m *testing.M) {
 			})
 			return mcpgo.NewToolResultText(cwd), nil
 		})
+		srv.AddTool(mcpgo.NewTool("test_args", mcpgo.WithReadOnlyHintAnnotation(true)), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			encoded, err := json.Marshal(os.Args[1:])
+			if err != nil {
+				return nil, err
+			}
+			return mcpgo.NewToolResultText(string(encoded)), nil
+		})
 		srv.AddTool(mcpgo.NewTool("test_write"), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 			return mcpgo.NewToolResultError("test mutation rejected"), nil
 		})
@@ -114,6 +121,41 @@ func TestMCPSubprocessInitializeListCallAndRefresh(t *testing.T) {
 	if err := tools.Close(); err != nil {
 		t.Fatalf("closing again: %v", err)
 	}
+}
+
+// Chat's prompt directs the model to camera, cloud and other specialist tools,
+// and chat only executes tools the server lists, so it must not inherit the
+// server's core-only default.
+func TestNewToolsRequestsEveryMCPToolGroup(t *testing.T) {
+	t.Setenv("WENDY_CHAT_TEST_MCP", "1")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tools, err := NewTools(ctx, executable, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tools.Close()
+	if _, err := tools.ListTools(ctx); err != nil {
+		t.Fatal(err)
+	}
+	output, err := tools.Execute(ctx, ToolCall{Name: "test_args", Arguments: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if err := json.Unmarshal([]byte(output), &args); err != nil {
+		t.Fatalf("MCP child args %q: %v", output, err)
+	}
+	for i := range args {
+		if args[i] == "--tool-groups" && i+1 < len(args) && args[i+1] == "all" {
+			return
+		}
+	}
+	t.Fatalf("MCP child args = %q; want --tool-groups all", args)
 }
 
 func TestNewToolsRejectsMissingExecutableAndWorkspace(t *testing.T) {

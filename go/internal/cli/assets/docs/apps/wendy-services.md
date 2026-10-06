@@ -148,6 +148,12 @@ A top-level `readiness`/`hooks` or `http` entitlement in `wendy.json` acts as an
 
 In attached mode, each service's readiness→postStart sequence fires asynchronously right after that service's start is acknowledged, so a slow or failing probe never delays starting the next service. Ctrl-C cancels any in-flight readiness wait and kills `cli` hook child processes. If the run ends on its own — every service's log stream closes — while a hook (per-service or the app-level fallback) is still waiting on readiness, that hook is suppressed rather than fired, so `wendy run` never opens a browser onto a stack that has already exited. In detached mode none of this runs: no readiness wait, no `App reachable` line, and no host-side `postStart` action. Only the agent-side `postStart.agent` hooks, carried on each start RPC, still run on the device. With `wendy run --watch`, each service's `openURL` and `cli` actions run once per session after its first successful readiness check; later saves do not repeat them, while a failed or canceled check may retry after a later deploy. `--watch --detach` skips these actions. A non-cancellation readiness timeout in attached mode warns but does not fail the command: explicitly configured multi-service `postStart` hooks still run, while `App reachable` and any HTTP-entitlement-synthesized browser open are suppressed. Cancellation suppresses the warning, announcement, and hook.
 
+An ordinary detached agent deployment also reports configured app and service
+HTTP endpoints. With `--json`, it emits one group result with
+`readiness: "not_checked"`; services may have zero or several endpoint entries.
+A partial `--keep-going` deployment returns non-zero without a whole-group
+success result. See [`wendy run` — Detached output](../clients/wendy-cli/commands/run.md#detached-output).
+
 ## How `wendy run` handles multi-service projects
 
 When `wendy.json` defines a `services` map, `wendy run` routes to the multi-service pipeline:

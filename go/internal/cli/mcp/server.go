@@ -40,6 +40,7 @@ type mcpServer struct {
 	cfg                  *config.Config
 	connectFn            ConnectFunc
 	startupConnectFn     func(context.Context)
+	cliUpdateCheckFn     func(context.Context)
 	conn                 *grpcclient.AgentConnection
 	connRevision         uint64
 	connType             string
@@ -48,6 +49,7 @@ type mcpServer struct {
 	tunnelsClosed        bool
 	toolGroups           []string
 	discoverLANFn        func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
+	usbSetupNoticeFn     func() string
 	mu                   sync.RWMutex
 	proxyDiag            []proxyDiagEntry
 	containerMCP         *containerMCPManager
@@ -57,6 +59,9 @@ type mcpServer struct {
 	installation         onboarding.Backend
 	simulators           SimulatorBackend
 	project              ProjectBackend
+	loginMu              sync.Mutex   // guards login and loginStarter
+	login                LoginSession // the latest auth_login session, pending or ended
+	loginStarter         LoginStarter
 }
 
 // SetStartupConnect configures the optional device connection attempted after
@@ -163,6 +168,16 @@ func (s *mcpServer) SetLANDiscoverer(fn func(ctx context.Context, timeout time.D
 	s.discoverLANFn = fn
 }
 
+// SetUSBSetupNotice supplies the check device_list runs for a USB-C-tethered
+// device this host can't reach yet because its link isn't configured (only
+// Linux hosts need that setup). fn returns a message for the user, or "" when
+// there is nothing to report. Without it, device_list never reports one.
+func (s *mcpServer) SetUSBSetupNotice(fn func() string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.usbSetupNoticeFn = fn
+}
+
 // SetConnType records the transport type of the active connection ("direct" or "cloud").
 func (s *mcpServer) SetConnType(t string) {
 	s.mu.Lock()
@@ -244,7 +259,7 @@ func (s *mcpServer) ConnectToOnStartup(ctx context.Context, address string) erro
 	return nil
 }
 
-func (s *mcpServer) newProtocolServer() *server.MCPServer {
+func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 	srv := server.NewMCPServer("wendy", version.Version,
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(true, false),
@@ -252,8 +267,13 @@ func (s *mcpServer) newProtocolServer() *server.MCPServer {
 		server.WithInstructions(serverInstructions),
 		server.WithToolFilter(s.filterTools),
 	)
+	srv.Use(s.cliUpdateMiddleware())
+	if err := registerSkills(srv); err != nil {
+		return nil, err
+	}
 	s.registerToolGroups(srv)
 	s.registerStatusTools(srv)
+	s.registerAuthTools(srv)
 	s.registerGuideResource(srv)
 	s.registerDiagnosticsResource(srv)
 	s.registerPrompts(srv)
@@ -274,18 +294,22 @@ func (s *mcpServer) newProtocolServer() *server.MCPServer {
 	s.registerProjectTools(srv)
 	s.registerCloudTools(srv)
 	registerToolAnalytics(srv)
-	return srv
+	return srv, nil
 }
 
 // Start registers tools and serves MCP over stdio until the client disconnects.
 func (s *mcpServer) Start(ctx context.Context) error {
 	defer s.closeCloudTunnels()
-	srv := s.newProtocolServer()
+	srv, err := s.newProtocolServer()
+	if err != nil {
+		return err
+	}
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	defer cancelStartup()
 	stopContainerMCP := s.startContainerMCP(startupCtx, srv)
 	defer stopContainerMCP()
 	go s.runStartupConnect(startupCtx)
+	go s.runCLIUpdateChecks(startupCtx, time.Hour)
 
 	return serveStdio(srv)
 }

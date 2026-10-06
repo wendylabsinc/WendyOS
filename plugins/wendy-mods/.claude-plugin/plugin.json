@@ -1,0 +1,16 @@
+{
+  "name": "wendy-mods",
+  "version": "0.1.0",
+  "description": "Wendy mods for Claude Code: verifies Wendy deploys and shows the connected device above the prompt.",
+  "author": { "name": "Wendy Labs", "url": "https://github.com/wendylabsinc" },
+  "license": "Apache-2.0",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "server": {
+      "type": "string",
+      "title": "Wendy MCP server",
+      "description": "Name of the Wendy MCP server, as /mcp lists it or as tool names spell it. Leave empty to detect it.",
+      "default": ""
+    }
+  }
+}

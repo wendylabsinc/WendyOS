@@ -135,13 +135,13 @@ off.
 In another terminal:
 
 ```sh
-wendy --device 127.0.0.1:50051 device info
+wendy --device vm:dev device info
 ```
 
-To avoid repeating the address:
+To avoid repeating it:
 
 ```sh
-wendy device set-default 127.0.0.1:50051
+wendy device set-default vm:dev
 wendy run
 ```
 
@@ -231,6 +231,21 @@ loopback address, and readiness checks use it too. This works with background
 VMs and detached applications; forwards last until the VM stops and are
 recreated on the next run.
 
+For an app with a declared [`http` endpoint](../apps/wendy.json.md#http), capture
+the detached result and fetch the reported host URL:
+
+```sh
+wendy --json --device vm:dev run --yes --detach > deploy.json
+url=$(jq -er '.url' deploy.json)
+curl --fail --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 "$url"
+```
+
+`vm:dev` selects the device; it is not a DNS hostname. The result's
+`readiness: "not_checked"` means start was acknowledged, so check the response
+against your app's expected behavior. If `url` is absent, inspect the declared
+HTTP endpoints, forwarding and logs. See the [detached result reference](../clients/wendy-cli/commands/run.md#detached-output)
+for fields and multi-service output.
+
 If another application or VM owns the host port, deployment reports a forwarding
 error. Free that port or choose a different application port. Other ports are
 not automatically exposed. VMs started with an older launcher must be restarted
@@ -246,18 +261,34 @@ processes running as your user (and root) can connect and have full QEMU control
 
 Prefer `--device vm:<name>` (or save it with `wendy device set-default
 vm:<name>`) over a literal loopback address. The alias follows the VM's current
-port and keeps enrolled-device trust pins separate for each VM. A literal
-`127.0.0.1` target retains its existing host-based pin behavior. If you replace
-an enrolled VM intentionally, clear only its pin with `wendy device unpin
-vm:<name>` before connecting to the replacement.
+port and keeps enrolled-device trust pins separate for each VM, so two VMs on
+different ports never share one. While a VM is running, a literal
+`127.0.0.1:<port>` on its forwarded agent port, or on the mTLS port after it,
+is that VM too: it is pinned as `vm:<name>`, and reconnects to the VM by name
+after an agent update.
+
+Every other loopback address (another port, `localhost`, `::1`) shares the pin
+of its bare host (`127.0.0.1`, `localhost` or `::1`), as it always has, whatever
+the port. That includes the VM's own addresses once the VM is stopped. A
+connection to a running VM through its typed `127.0.0.1` address also records
+the VM's identity in the shared `127.0.0.1` pin when that pin is not set yet,
+or names only the VM's organization, so the address stays protected while the
+VM is stopped; it never replaces a `127.0.0.1` pin that names another device.
+
+To replace an enrolled VM intentionally, run `wendy device unpin vm:<name>`
+before connecting to the replacement. It clears only the VM's own pin, never
+the shared `127.0.0.1` pin that other loopback addresses use. That pin is
+cleared by `wendy device unpin 127.0.0.1`.
 
 The agent's port is often already in use on a development machine. Move the
 host side of the forward:
 
 ```sh
 wendy vm start dev --port 50151
-wendy --device 127.0.0.1:50151 device info
+wendy --device vm:dev device info
 ```
+
+The alias follows the VM to its new port.
 
 ## Updating the OS
 
@@ -266,7 +297,7 @@ The VM is partitioned exactly like a device — two rootfs slots plus a growable
 here the same way it works on hardware:
 
 ```sh
-wendy --device 127.0.0.1:50051 os update
+wendy --device vm:dev os update
 ```
 
 The update is written to the slot that is not running, the VM reboots into it,
@@ -278,8 +309,8 @@ one running, and each entry names its partition, so you can watch A on
 `/dev/vda3` hand over to B on `/dev/vda4`:
 
 ```sh
-wendy --device 127.0.0.1:50051 device info
-wendy --device 127.0.0.1:50051 os update-status   # how the last update ended
+wendy --device vm:dev device info
+wendy --device vm:dev os update-status   # how the last update ended
 ```
 
 The agent returns on the same forwarded port after the reboot, so nothing needs

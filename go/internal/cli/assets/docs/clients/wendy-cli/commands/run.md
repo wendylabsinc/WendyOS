@@ -4,7 +4,7 @@ Runs your app on a Wendy-enabled device:
 2. [Queries the platform and architecture](./device/version.md) of this device
 3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](../../../debugging/) if needed
 4. Uploads the artifact(s) for Linux (via the container registry) or macOS
-5. [Starts the app](./device/apps/start.md), then (attached runs only) waits for readiness and prints the reachable URL
+5. [Starts the app](./device/apps/start.md). Attached runs check readiness; ordinary detached agent deployments report configured HTTP endpoints as described in [Detached output](#detached-output).
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
 
 
@@ -15,7 +15,7 @@ Runs your app on a Wendy-enabled device:
 | Flag | Description |
 |------|-------------|
 | `--deploy` | Build and create the container but do not start it. |
-| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. |
+| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. Agent deployments report configured HTTP endpoints; see [Detached output](#detached-output). |
 | `--restart-unless-stopped` | Restart the container unless manually stopped. |
 | `--restart-on-failure` | Restart the container on failure. |
 | `--no-restart` | Do not restart the container on exit. |
@@ -37,9 +37,50 @@ Runs your app on a Wendy-enabled device:
 | `--debounce <ms>` | Watch mode only: quiet period in milliseconds after the last change before redeploying (default `400`). |
 | `--verbose` | Watch mode only: always show build output. By default build output is hidden unless a build fails. |
 
+## Detached output
+
+For an ordinary single-device deployment to a Wendy agent, `--json --detach`
+emits one result on stdout after start is acknowledged (or the unchanged app is
+already running). Build progress and pre-start application output go to stderr:
+
+```sh
+wendy --json --device vm:dev run --yes --detach
+```
+
+```json
+{
+  "status": "started",
+  "app": "com.example.web",
+  "device": "vm:dev",
+  "readiness": "not_checked",
+  "url": "http://127.0.0.1:18880",
+  "endpoints": [
+    { "app": "com.example.web", "url": "http://127.0.0.1:18880" }
+  ]
+}
+```
+
+`readiness: "not_checked"` means no health probe or host `postStart` action ran.
+Verify the HTTP response separately. In text mode, URLs appear as
+`App URL (<app>): <url>` notices.
+
+URLs come from [`http` entitlements](../../../apps/wendy.json.md#http) and
+HTTP(S) `hooks.postStart.openURL` values that contain `WENDY_HOSTNAME`.
+`endpoints` contains distinct reported URLs, each with its app or service
+identifier; a service may have several URLs. `url` is the first entry
+and is omitted when `endpoints` is empty, including when routing cannot be
+determined. A TCP readiness probe alone does not declare an HTTP endpoint.
+
+For user-networked VMs, URLs use the connected VM's live forwarding on host
+loopback. See [VM HTTP verification](../../../installation/wendyos-virtual-machine.mdx#reaching-an-app-you-deployed).
+Multi-service and Compose runs emit one group result after the selected services
+start. A partial deployment returns non-zero without a whole-group success
+result. Fleet runs, `--deploy`, watch mode, and local container providers do not
+produce this result.
+
 ## Reachable app URLs
 
-After the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
+In attached mode, after the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
 
 ```text
 App reachable at http://192.168.123.222:3000

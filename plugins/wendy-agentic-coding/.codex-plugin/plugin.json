@@ -1,6 +1,6 @@
 {
   "name": "wendy-agentic-coding",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "description": "Wendy CLI setup, device installation and first-boot checks, template apps, explicit deployment targets, ROS 2 and robot verification workflows.",
   "author": {
     "name": "Wendy Labs",
@@ -23,6 +23,11 @@
     "templates"
   ],
   "skills": "./skills/",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/wendy-onboarding/SKILL.md"
+    }
+  },
   "interface": {
     "displayName": "Wendy",
     "shortDescription": "Install devices and build, deploy, and debug Wendy apps.",

@@ -14,9 +14,21 @@ wendy run --device my-mac.local:50051
 
 Failing to connect to an explicit device results in a failure.
 
+A value made only of digits, such as `283`, is rejected: it is not a hostname or IP address, and the system resolver would turn it into an unrelated address. If it is a Wendy Cloud asset ID, use its cloud selector (`--device cloud://<cloud-grpc-host:port>/org/<org-id>/asset/283`) or `wendy cloud device <command> --device 283`. The error prints the exact selector when you are logged in.
+
 > **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 
-## 2. Default Device
+## 2. `WENDY_DEVICE`
+
+If `--device` is not given and the `WENDY_DEVICE` environment variable is set, the CLI connects to that device exactly as if it had been passed with `--device`. Use it to give one terminal, script or AI session its own target without changing the saved default that every session shares:
+
+```sh
+WENDY_DEVICE=my-pi.local wendy run
+```
+
+`--device` still takes precedence. A blank value is ignored.
+
+## 3. Default Device
 
 If a Default Device is set using [`wendy device set-default`](./commands/device/set-default.md),
 the CLI attempts to connect to it. The saved value may be a hostname, IP
@@ -36,7 +48,7 @@ that the default is set but unreachable instead of opening a picker.
 
 > **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 
-## 3. Show Picker
+## 4. Show Picker
 
 mDNS and BLE discover nearby [WendyOS](../../wendyos/),
 Wendy-Agent and [Wendy Lite](../../wendy-lite/) devices.

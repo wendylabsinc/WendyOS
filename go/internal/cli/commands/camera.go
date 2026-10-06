@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -41,6 +42,50 @@ func newCameraCmd() *cobra.Command {
 	return cmd
 }
 
+type cameraAction uint8
+
+const (
+	cameraCapture cameraAction = iota
+	cameraRawCapture
+	cameraStableIDCapture
+	cameraCustomCapture
+	cameraNetworkManagement
+	cameraV4L2Controls
+)
+
+// Swift serves camera listing and video after enrollment, but never serves
+// network-camera management or V4L2 controls. Go agents can also report Darwin;
+// their camera service is available on the plaintext listener.
+func cameraServicePreflight(ctx context.Context, conn *grpcclient.AgentConnection, action cameraAction) error {
+	if err := diagnosticContextError(ctx); err != nil {
+		return err
+	}
+	version := diagnosticAgentVersion(ctx, conn)
+	if err := diagnosticContextError(ctx); err != nil {
+		return err
+	}
+	if !isSwiftMacAgent(version) {
+		return nil
+	}
+	switch action {
+	case cameraRawCapture:
+		return fmt.Errorf("Wendy Agent for Mac currently streams H.264 video only")
+	case cameraStableIDCapture:
+		return fmt.Errorf("Stable V4L2 camera identifiers are not available on macOS")
+	case cameraCustomCapture:
+		return fmt.Errorf("Custom camera dimensions and frame rates are not yet supported by Wendy Agent for Mac")
+	case cameraNetworkManagement:
+		return fmt.Errorf("network camera management is not supported by Wendy Agent for macOS")
+	case cameraV4L2Controls:
+		return fmt.Errorf("V4L2 camera controls are not available on macOS")
+	case cameraCapture:
+		if !conn.IsMTLS {
+			return fmt.Errorf("camera access on Wendy Agent for macOS requires enrollment; run 'wendy device enroll'")
+		}
+	}
+	return nil
+}
+
 func newCameraListCmd() *cobra.Command {
 	var refresh bool
 	cmd := &cobra.Command{
@@ -58,6 +103,9 @@ func newCameraListCmd() *cobra.Command {
 			}
 			conn, err := connectFromSelectedDevice(target, resolveConfig{})
 			if err != nil {
+				return err
+			}
+			if err := cameraServicePreflight(ctx, conn, cameraCapture); err != nil {
 				return err
 			}
 
@@ -165,17 +213,19 @@ func newCameraLoginCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			password, err := readCameraPassword(cmd, id)
-			if err != nil {
-				return err
-			}
-
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx)
 			if err != nil {
 				return err
 			}
 			defer conn.Close()
+			if err := cameraServicePreflight(ctx, conn, cameraNetworkManagement); err != nil {
+				return err
+			}
+			password, err := readCameraPassword(cmd, id)
+			if err != nil {
+				return err
+			}
 
 			if _, err := conn.VideoService.SetCameraCredentials(ctx, &agentpb.SetCameraCredentialsRequest{
 				DeviceId: id,
@@ -230,6 +280,9 @@ func newCameraForgetCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
+			if err := cameraServicePreflight(ctx, conn, cameraNetworkManagement); err != nil {
+				return err
+			}
 
 			if _, err := conn.VideoService.ForgetCamera(ctx, &agentpb.ForgetCameraRequest{
 				DeviceId: id,
@@ -270,6 +323,9 @@ func newCameraTestCmd() *cobra.Command {
 				return err
 			}
 			defer conn.Close()
+			if err := cameraServicePreflight(ctx, conn, cameraNetworkManagement); err != nil {
+				return err
+			}
 
 			return runCameraTest(ctx, conn.VideoService, id, cmd.OutOrStdout())
 		},
@@ -375,6 +431,18 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 			}
 			conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: nonInteractive})
 			if err != nil {
+				return err
+			}
+			captureAction := cameraCapture
+			switch {
+			case raw:
+				captureAction = cameraRawCapture
+			case stableID != "":
+				captureAction = cameraStableIDCapture
+			case width != 0 || height != 0 || fps != 0:
+				captureAction = cameraCustomCapture
+			}
+			if err := cameraServicePreflight(ctx, conn, captureAction); err != nil {
 				return err
 			}
 

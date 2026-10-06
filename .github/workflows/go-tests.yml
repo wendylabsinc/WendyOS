@@ -1,6 +1,19 @@
 name: Go Tests
 
 on:
+  # Populate caches on the default branch so new PRs can reuse them.
+  push:
+    branches: [main]
+    paths:
+      - 'go/**'
+      - 'Proto/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/**'
+      - '.github/actions/setup-go-ci/**'
+      - '.github/scripts/**'
+      - 'plugins/**'
+      - 'scripts/sync-agent-skills.py'
   pull_request:
     paths:
       - 'go/**'
@@ -8,42 +21,53 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/**'
+      - '.github/actions/setup-go-ci/**'
       - '.github/scripts/**'
       - 'plugins/**'
       - 'scripts/sync-agent-skills.py'
 
 concurrency:
-  group: go-tests-${{ github.event.pull_request.number }}
+  group: go-tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test
+  unit-tests:
+    name: Race tests
     runs-on: runs-on,runner=2cpu-linux-x64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-ci
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache-name: race
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
 
       - name: Run tests
         working-directory: go
-        # Go 1.26.4 can ICE on the Linux runner while compiling some
-        # dependencies with the race detector and parallel compilation.
-        # Keep race coverage but compile serially.
-        run: go test -p=1 -gcflags=all=-c=1 ./... -race -count=1 -timeout 120s
+        # Keep the compiler's per-package concurrency workaround for race
+        # builds, but let Go build and test packages in parallel. Vet has its
+        # own required job, so do not repeat it in every race build.
+        run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 120s
 
       - name: Check runtime skill packaging
         run: python3 scripts/sync-agent-skills.py --check
+
+  windows:
+    name: Windows CLI
+    runs-on: runs-on,runner=2cpu-linux-x64
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: windows
 
       # Compile the Windows-shipping CLI packages so //go:build windows files
       # (e.g. wifi_scan_windows.go) are at least type-checked in PR CI. The
@@ -56,9 +80,27 @@ jobs:
         env:
           GOOS: windows
           GOARCH: amd64
+          CGO_ENABLED: '0'
         run: |
           go build ./internal/cli/... ./cmd/wendy/
           go test -c -o /dev/null ./internal/cli/commands
+
+  # Preserve the existing required "Test" check after splitting its work.
+  test:
+    name: Test
+    if: ${{ always() }}
+    needs: [unit-tests, windows, vet]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check test results
+        env:
+          RACE_RESULT: ${{ needs.unit-tests.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          VET_RESULT: ${{ needs.vet.result }}
+        run: |
+          test "$RACE_RESULT" = success
+          test "$WINDOWS_RESULT" = success
+          test "$VET_RESULT" = success
 
   vet:
     name: Vet
@@ -67,10 +109,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: ./.github/actions/setup-go-ci
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache-name: vet
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
@@ -89,7 +130,7 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          cache: false
 
       - name: Check formatting
         working-directory: go

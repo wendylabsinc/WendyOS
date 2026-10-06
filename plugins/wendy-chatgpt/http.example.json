@@ -1,0 +1,9 @@
+{
+  "resource_url": "https://robots.example.com/mcp",
+  "oauth": {
+    "issuer": "https://auth.example.com",
+    "introspection_url": "https://auth.example.com/oauth/introspect",
+    "client_id": "wendy-robot-gateway",
+    "client_secret_env": "WENDY_OAUTH_INTROSPECTION_SECRET"
+  }
+}

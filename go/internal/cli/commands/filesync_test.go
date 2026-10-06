@@ -580,7 +580,7 @@ func TestFormatTransferRate(t *testing.T) {
 
 func TestPrintFileSyncProgress_IncludesTransferRate(t *testing.T) {
 	output := captureStdout(t, func() {
-		printFileSyncProgress(false, "a.bin", 1024, 2048, 1536, time.Second, 1, 2)
+		printFileSyncProgress(os.Stdout, false, "a.bin", 1024, 2048, 1536, time.Second, 1, 2)
 	})
 
 	if !strings.Contains(output, "1.5 kB/s") {

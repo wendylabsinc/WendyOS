@@ -59,18 +59,23 @@ In this mode the host receives an address from `10.42.0.2`–`10.42.0.5` and the
 On a Linux host, `wendy discover` auto-detects a USB-C-tethered Wendy device
 whose host link isn't configured and offers to set it up for you. Accept the
 prompt and enter your sudo password; the CLI brings the gadget interface up via
-a NetworkManager "shared" profile (the host serves DHCP `10.42.0.1/24`, matching
-the device's default DHCP-client mode) and installs a udev rule so ModemManager
-stops grabbing the gadget's serial console.
+a link-local NetworkManager profile (IPv4 `169.254.0.0/16` and IPv6 `fe80::/64`,
+no DHCP, matching the device's default link-local mode) and installs a udev rule
+so ModemManager stops grabbing the gadget's serial console. The profile is named
+`wendy-usb-<mac>` and bound to the gadget's MAC address rather than an interface
+name, so it keeps working when you plug the device into another USB port. Each
+device gets its own profile.
 
 To undo it later, remove the profile and rule manually:
 
 ```sh
-sudo nmcli connection delete wendy-usb
+nmcli -f NAME connection show | grep wendy-usb   # find the profile
+sudo nmcli connection delete wendy-usb-<mac>
 sudo rm -f /etc/udev/rules.d/99-wendy-usb.rules
 ```
 
-The manual steps below are equivalent and remain available.
+The CLI setup does not share the host's internet with the device. For that, use
+the manual shared-mode steps below.
 
 ### Mode 1 host setup — NetworkManager shared
 

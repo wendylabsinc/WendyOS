@@ -3,7 +3,16 @@ package commands
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/mldsa"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -13,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -180,8 +190,8 @@ func splitLeafAndChain(bundlePEM string) (leaf, chain string, err error) {
 }
 
 // renewHTTPClientFor builds a client that presents the CURRENT certificate.
-// That handshake is the possession proof pki-core requires; the request body
-// carries no certificate of its own.
+// The handshake proves possession to the renew frontend; the engine behind it
+// checks the body's possession_proof instead (renewalPossessionProof).
 func renewHTTPClientFor(cert config.CertificateInfo) (*http.Client, error) {
 	keyPEM, err := cert.PrivateKeyPEM()
 	if err != nil {
@@ -198,7 +208,106 @@ func renewHTTPClientFor(cert config.CertificateInfo) (*http.Client, error) {
 }
 
 type renewRequestBody struct {
-	CSR string `json:"csr"`
+	CSR             string `json:"csr"`
+	PossessionProof string `json:"possession_proof"`
+}
+
+// renewalPossessionProof proves to pki-core's engine that the caller holds the
+// presented certificate's key (WDY-3437; service-protos
+// RenewCertificateRequest.possession_proof). The mTLS handshake proves it only
+// to the frontend, which the engine does not take on trust. The JWS binds the
+// exact DER the handshake presents and the CSR in the same body; jti is
+// single-use and iat must be fresh, so every request signs a new one.
+func renewalPossessionProof(cert config.CertificateInfo, csrPEM string, now time.Time) (string, error) {
+	keyPEM, err := cert.PrivateKeyPEM()
+	if err != nil {
+		return "", fmt.Errorf("loading current client key: %w", err)
+	}
+	// The same parse renewHTTPClientFor's TLS config does, so the hashed DER
+	// and the signing key are the ones the handshake presents.
+	pair, err := tls.X509KeyPair([]byte(cert.PemCertificate), []byte(keyPEM))
+	if err != nil {
+		return "", fmt.Errorf("loading current certificate: %w", err)
+	}
+	csr, _ := pem.Decode([]byte(csrPEM))
+	if csr == nil || csr.Type != "CERTIFICATE REQUEST" {
+		return "", errors.New("renewal CSR is not a PEM certificate request")
+	}
+	b64sum := func(b []byte) string {
+		sum := sha256.Sum256(b)
+		return base64.RawURLEncoding.EncodeToString(sum[:])
+	}
+	payload, err := json.Marshal(struct {
+		Op         string `json:"op"`
+		CertSHA256 string `json:"cert_sha256"`
+		CSRSHA256  string `json:"csr_sha256"`
+		JTI        string `json:"jti"`
+		IAT        int64  `json:"iat"`
+	}{"renew", b64sum(pair.Certificate[0]), b64sum(csr.Bytes), uuid.NewString(), now.Unix()})
+	if err != nil {
+		return "", err
+	}
+	return signRenewalJWS(pair.PrivateKey, payload)
+}
+
+// signRenewalJWS signs payload as a JWS Compact whose alg is the key's own,
+// from pki-core's set (ML-DSA-44/65/87, ES256, ES384, EdDSA). A key outside
+// that set is refused, never signed with a substitute algorithm.
+func signRenewalJWS(key crypto.PrivateKey, payload []byte) (string, error) {
+	var alg string
+	var sign func([]byte) ([]byte, error)
+	switch k := key.(type) {
+	case *mldsa.PrivateKey:
+		switch k.PublicKey().Parameters() {
+		case mldsa.MLDSA44():
+			alg = "ML-DSA-44"
+		case mldsa.MLDSA65():
+			alg = "ML-DSA-65"
+		case mldsa.MLDSA87():
+			alg = "ML-DSA-87"
+		}
+		// Pure ML-DSA, empty context: what pki-core's reqsig verifies.
+		sign = func(in []byte) ([]byte, error) { return k.Sign(rand.Reader, in, &mldsa.Options{}) }
+	case *ecdsa.PrivateKey:
+		var h crypto.Hash
+		switch k.Curve {
+		case elliptic.P256():
+			alg, h = "ES256", crypto.SHA256
+		case elliptic.P384():
+			alg, h = "ES384", crypto.SHA384
+		}
+		// JWS wants fixed-width r||s, not ASN.1.
+		sign = func(in []byte) ([]byte, error) {
+			d := h.New()
+			d.Write(in)
+			r, s, err := ecdsa.Sign(rand.Reader, k, d.Sum(nil))
+			if err != nil {
+				return nil, err
+			}
+			n := (k.Curve.Params().BitSize + 7) / 8
+			out := make([]byte, 2*n)
+			r.FillBytes(out[:n])
+			s.FillBytes(out[n:])
+			return out, nil
+		}
+	case ed25519.PrivateKey:
+		alg = "EdDSA"
+		sign = func(in []byte) ([]byte, error) { return ed25519.Sign(k, in), nil }
+	}
+	if alg == "" {
+		// Reported, not swallowed by the pre-flight: no later run can fix it.
+		return "", renewUnavailableError{
+			reason:         fmt.Sprintf("this certificate's %T key cannot sign the renewal proof pki-core requires", key),
+			needsFreshCert: true,
+		}
+	}
+	enc := base64.RawURLEncoding.EncodeToString
+	input := enc([]byte(`{"alg":"`+alg+`"}`)) + "." + enc(payload)
+	sig, err := sign([]byte(input))
+	if err != nil {
+		return "", fmt.Errorf("signing renewal proof: %w", err)
+	}
+	return input + "." + enc(sig), nil
 }
 
 type renewSuccessBody struct {
@@ -220,15 +329,48 @@ func renewCSRFor(current config.CertificateInfo) (csrPEM, keyPEM string, err err
 	if err != nil {
 		return "", "", fmt.Errorf("reading current cert CN: %w", err)
 	}
-	newKeyPEM, err := certs.GenerateKeyPair()
+	newKeyPEM, err := renewalKeyLike(current)
 	if err != nil {
-		return "", "", fmt.Errorf("generating key pair: %w", err)
+		return "", "", err
 	}
 	csr, err := certs.GenerateCSR([]byte(newKeyPEM), cn, []string{storedCertIdentityURN(current)})
 	if err != nil {
 		return "", "", fmt.Errorf("generating CSR: %w", err)
 	}
 	return csr, newKeyPEM, nil
+}
+
+// renewalKeyLike mints the new key in the current key's algorithm and
+// parameters. A renewal re-keys, and must never step down: a fixed P-256 here
+// silently turned an ML-DSA-65 operator into an EC one.
+func renewalKeyLike(current config.CertificateInfo) (string, error) {
+	keyPEM, err := current.PrivateKeyPEM()
+	if err != nil {
+		return "", fmt.Errorf("loading current client key: %w", err)
+	}
+	cur, err := certs.ParseSigningPrivateKeyPEM([]byte(keyPEM))
+	if err != nil {
+		return "", fmt.Errorf("parsing current client key: %w", err)
+	}
+	var next crypto.Signer
+	switch k := cur.(type) {
+	case *mldsa.PrivateKey:
+		next, err = mldsa.GenerateKey(k.PublicKey().Parameters())
+	case *ecdsa.PrivateKey:
+		next, err = ecdsa.GenerateKey(k.Curve, rand.Reader)
+	case ed25519.PrivateKey:
+		_, next, err = ed25519.GenerateKey(rand.Reader)
+	default:
+		return "", fmt.Errorf("cannot renew a certificate whose key is %T", cur)
+	}
+	if err != nil {
+		return "", fmt.Errorf("generating key pair: %w", err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(next)
+	if err != nil {
+		return "", fmt.Errorf("marshaling key pair: %w", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})), nil
 }
 
 func renewViaPKICoreImpl(ctx context.Context, endpoint string, auth *config.AuthConfig) (certPEM, chainPEM, keyPEM string, err error) {
@@ -242,7 +384,11 @@ func renewViaPKICoreImpl(ctx context.Context, endpoint string, auth *config.Auth
 		return "", "", "", err
 	}
 
-	body, err := json.Marshal(renewRequestBody{CSR: csrPEM})
+	proof, err := renewalPossessionProof(current, csrPEM, timeNowFn())
+	if err != nil {
+		return "", "", "", err
+	}
+	body, err := json.Marshal(renewRequestBody{CSR: csrPEM, PossessionProof: proof})
 	if err != nil {
 		return "", "", "", fmt.Errorf("encoding renewal request: %w", err)
 	}

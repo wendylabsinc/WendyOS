@@ -72,14 +72,21 @@ func (s *DataService) StartCampaignInference(ctx context.Context, factory infere
 
 func (m *campaignInferenceManager) stopAll() {
 	m.mu.Lock()
-	jobs := m.jobs
-	m.jobs = map[string]*campaignInferenceJob{}
+	jobs := make([]*campaignInferenceJob, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobs = append(jobs, job)
+	}
 	m.mu.Unlock()
 	for _, job := range jobs {
 		job.cancel()
 	}
 	for _, job := range jobs {
 		<-job.done
+		m.mu.Lock()
+		if m.jobs[job.campaign.Name] == job {
+			delete(m.jobs, job.campaign.Name)
+		}
+		m.mu.Unlock()
 	}
 }
 
@@ -104,11 +111,15 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		}
 		job.cancel()
 		retired = append(retired, job)
-		delete(m.jobs, name)
 	}
 	m.mu.Unlock()
 	for _, job := range retired {
 		<-job.done
+		m.mu.Lock()
+		if m.jobs[job.campaign.Name] == job {
+			delete(m.jobs, job.campaign.Name)
+		}
+		m.mu.Unlock()
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,6 +131,23 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		job := &campaignInferenceJob{owner: m, campaign: campaign, cancel: cancel, done: make(chan struct{}), queue: make(chan DetectionNotification, 16), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
 		m.jobs[name] = job
 		go job.supervise(child)
+	}
+}
+
+// Keep retired jobs visible until their process and camera subscriptions exit.
+// Persisting enabled:false only requests shutdown; it does not complete it.
+func (m *campaignInferenceManager) inferenceActive(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	job := m.jobs[name]
+	if job == nil || !job.campaign.Inference.IsEnabled() {
+		return false
+	}
+	select {
+	case <-job.done:
+		return false
+	default:
+		return true
 	}
 }
 
@@ -318,11 +346,7 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			}
 			if j.campaign.Notify != nil && (j.campaign.Notify.On == data.NotifyOnDetection || j.campaign.Notify.On == data.NotifyOnEvent && j.campaign.Notify.Event == record.Name) {
 				request := detectionNotification(j.campaign, result.SourceID, len(detections))
-				select {
-				case j.queue <- request:
-				default:
-					j.notificationError(errors.New("notification queue full; detection notification dropped"))
-				}
+				j.enqueueNotification(request)
 			}
 		}
 	}
@@ -431,7 +455,19 @@ func (p *inferencePresence) observe(detected bool, now time.Time, config *data.C
 }
 
 func detectionNotification(campaign data.Campaign, source string, count int) DetectionNotification {
-	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: count}
+	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: count, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+}
+
+func (j *campaignInferenceJob) enqueueNotification(request DetectionNotification) {
+	if err := j.owner.service.manager.RecordNotification(request); err != nil {
+		j.notificationError(fmt.Errorf("persist notification: %w", err))
+		return
+	}
+	select {
+	case j.queue <- request:
+	default:
+		j.notificationError(errors.New("external notification queue full; notification retained in Wendy Data"))
+	}
 }
 
 func (j *campaignInferenceJob) notificationError(err error) {
@@ -492,7 +528,9 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 	eventNotifications := campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent
 	if campaign.Inference != nil || eventNotifications {
 		campaign.InferenceStatus = &data.InferenceStatus{State: "disabled"}
-		if campaign.Inference.IsEnabled() || eventNotifications {
+		if !campaign.Inference.IsEnabled() && s.inference != nil && s.inference.inferenceActive(campaign.Name) {
+			campaign.InferenceStatus.State = "stopping"
+		} else if campaign.Inference.IsEnabled() || eventNotifications {
 			if s.inference == nil {
 				campaign.InferenceStatus = &data.InferenceStatus{State: "error", Error: "agent campaign runtime is unavailable"}
 			} else {
@@ -535,10 +573,6 @@ func (m *campaignInferenceManager) notifyEvent(campaign data.Campaign, record da
 	if job == nil || job.campaign.Revision != campaign.Revision {
 		return
 	}
-	request := DetectionNotification{ID: uuid.NewString(), Event: record.Name, Campaign: campaign.Name, Model: record.Model}
-	select {
-	case job.queue <- request:
-	default:
-		job.notificationError(errors.New("notification queue full; event notification dropped"))
-	}
+	request := DetectionNotification{ID: uuid.NewString(), Event: record.Name, Campaign: campaign.Name, Model: record.Model, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	job.enqueueNotification(request)
 }

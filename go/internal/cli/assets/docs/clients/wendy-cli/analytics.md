@@ -31,8 +31,31 @@ Every event is an anonymous JSON object. The fields sent are:
 | `os` | string | Operating system (`GOOS`) |
 | `arch` | string | CPU architecture (`GOARCH`) |
 | `is_dev_build` | boolean | `true` when `cli_version` is `"dev"` or has a `-dev` suffix |
+| `properties` | object | Event-specific string values, sent only by events that define them (see [Deploy events](#deploy-events)). At most 32 entries, each truncated to 64 bytes |
 
-> **Privacy note:** Flag values, positional arguments, file paths, hostnames, and error message text are never included in telemetry payloads. Only the fields listed above are sent.
+> **Privacy note:** Flag values, positional arguments, file paths, hostnames, image and app names, and error message text are never included in telemetry payloads. Only the fields in this table are sent, and `properties` holds only the values documented in [Deploy events](#deploy-events).
+
+## Deploy events
+
+`wendy run` and `wendy watch` send one `deploy_completed` event per deploy, in addition to the command's `command_executed` event. It is sent once a deploy path has been chosen; earlier failures, such as an invalid `wendy.json` or an unreachable device, are covered by `command_executed` alone. Managed-robot provisioning builds are never reported.
+
+`duration_ms` and `success` describe the deploy up to the agent's confirmation that the container started, not the log session that follows. Paths without that confirmation (compose, multi-service, fleet builds, and fast-path runs that reuse a running container) cover the whole command.
+
+Its `properties` hold only numbers and fixed values. A phase is reported only once it happened.
+
+| Property | Description |
+|----------|-------------|
+| `deploy_transport` | How the image reached the device: `chunk`, `registry`, `fastpath`, `buildhost`, `multiservice`, `native`, `xcode`, `swiftpm`, `swift`, or `compose` |
+| `deploy_started` | `true` when the agent confirmed the container started |
+| `deploy_fallback` | Why a registry push was used: `unimplemented`, `transport`, or `other` after a failed chunk upload; `darwin_agent`, `deploy_only`, `chunking_off`, or `not_attempted` when no chunk upload was tried |
+| `deploy_target_platform` | Target platform, such as `linux/arm64` or `linux/arm/v7`; unrecognized values are sent as `other` |
+| `deploy_device_type` | Board type reported by the device's OS, such as `jetson-orin-nano` |
+| `deploy_build_ms`, `deploy_push_ms`, `deploy_upload_ms`, `deploy_device_prepare_ms`, `deploy_start_ms` | Chunk deploys: build, whole push, upload, device-side image preparation, and container start times in milliseconds |
+| `deploy_bytes_sent`, `deploy_chunks_sent`, `deploy_chunks_total`, `deploy_layers_total`, `deploy_layers_reused` | Chunk deploys: bytes and chunks uploaded, chunks and layers in the image, and layers the device already had |
+| `deploy_compression` | Chunk deploys: `gzip` or `none` |
+| `deploy_build_push_ms` | Registry deploys: build and push time in milliseconds |
+| `deploy_chunk_attempt_ms` | Time spent on a chunk upload that fell back to a registry push |
+| `deploy_image_bytes` | Image size in bytes |
 
 ## Error categories
 

@@ -34,12 +34,15 @@ func protocolTools(t *testing.T, srv *server.MCPServer) []mcpgo.Tool {
 
 func TestToolGroupsProtocolDiscovery(t *testing.T) {
 	s := New(&config.Config{}, nil)
-	srv := s.newProtocolServer()
+	srv, err := s.newProtocolServer()
+	if err != nil {
+		t.Fatal(err)
+	}
 	initial := protocolTools(t, srv)
 	if !*srv.GetTool("wendy_tools").Tool.Annotations.ReadOnlyHint {
 		t.Fatal("catalog selection should not require device-mutation approval")
 	}
-	if len(initial) != 15 {
+	if len(initial) != 16 {
 		t.Fatalf("default count = %d", len(initial))
 	}
 	encoded, _ := json.Marshal(initial)
@@ -110,7 +113,10 @@ func TestDeviceConnectLegacyArgumentsRemainCallable(t *testing.T) {
 		}
 		return &grpcclient.AgentConnection{Addr: device}, nil
 	})
-	srv := s.newProtocolServer()
+	srv, err := s.newProtocolServer()
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := srv.HandleMessage(context.Background(), []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"device_connect","arguments":{"address":"robot.local:50051"}}}`))
 	encoded, _ := json.Marshal(response)
 	var reply struct {

@@ -4,10 +4,12 @@ import { Terminal, X } from 'lucide-react';
 import { useRef } from 'react';
 import {
   agentCurlCommand,
+  agentMacBrewCommand,
   cliCurlCommand,
   cliWingetCommand,
   InstallCommand,
 } from '@/components/docs/install-command';
+import { withBasePath } from '@/lib/shared';
 
 export function InstallScripts() {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -81,8 +83,7 @@ export function InstallScripts() {
                 Install <code className="font-mono text-[0.95em]">wendy-agent</code>
               </h3>
               <p className="mt-1 text-sm text-fd-muted-foreground">
-                Install this on your Linux machine. You do <strong>not</strong> need to do this for
-                WendyOS — it&apos;s already there!
+                Install this on an existing Mac or Linux target. WendyOS images already include it.
               </p>
               <InstallCommand
                 analyticsEventName="cli_install_copy"
@@ -95,6 +96,23 @@ export function InstallScripts() {
                 label="Linux"
                 command={agentCurlCommand}
               />
+              <InstallCommand
+                analyticsEventName="cli_install_copy"
+                analyticsEventParams={{
+                  install_target: 'agent-macos',
+                  install_variant: 'wendy-agent for Mac',
+                  install_label: 'wendy-agent for Mac',
+                  location: 'docs_install_scripts_dialog',
+                }}
+                label="Mac (beta, Apple Silicon)"
+                command={agentMacBrewCommand}
+              />
+              <a
+                href={withBasePath('/installation/wendy-agent-macos/')}
+                className="mt-2 inline-block text-sm font-medium text-wendy-seafoam underline underline-offset-4 transition-colors hover:text-wendy-seafoam-hover"
+              >
+                Read the Mac installation guide
+              </a>
             </section>
           </div>
         </div>

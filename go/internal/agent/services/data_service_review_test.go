@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -289,7 +290,12 @@ export: {annotation: cvat}
 	for manager.Status() != nil && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
+	// Capture stops before the detached episode finishes sealing on disk.
 	manifest, _, err := manager.Inspect(episode.GetId(), false)
+	for errors.Is(err, os.ErrNotExist) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+		manifest, _, err = manager.Inspect(episode.GetId(), false)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

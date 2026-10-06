@@ -144,7 +144,8 @@ for decoding.
 
 ## Inspect LiDAR in Wendy Chat
 
-Wendy Chat and MCP clients can use the read-only `ros2_lidar_summary` tool for
+Wendy Chat and MCP clients can use the read-only `ros2_lidar_summary` tool
+(MCP clients enable it with `wendy_tools` and `{"groups":["robotics"]}`) for
 `sensor_msgs/msg/PointCloud2` and `sensor_msgs/msg/LaserScan`. It subscribes with
 sensor-compatible QoS and decodes data on the device, returning nearest returns
 by angular sector, bounded XYZ samples, and frame, timestamp, freshness, and

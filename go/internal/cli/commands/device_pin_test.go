@@ -4,16 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
+	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
@@ -239,7 +245,16 @@ func TestSetDefaultClearsPinForHostPortDevice(t *testing.T) {
 	dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
 		return nil, nil, errors.New("device offline in test")
 	}
-	t.Cleanup(func() { osLookupHostFn, lanBrowseFn, dialAgentLadderFn = origLookup, origBrowse, origLadder })
+	// The failed connect also reaches the provisioned-mTLS hint's LAN browse
+	// and the USB-direct fallback, whose real probes outlive this test and
+	// land on later tests' fake dialers.
+	origDiscover, origUSB := discoverLANDevices, usbDirectCandidatesFn
+	discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	t.Cleanup(func() {
+		osLookupHostFn, lanBrowseFn, dialAgentLadderFn = origLookup, origBrowse, origLadder
+		discoverLANDevices, usbDirectCandidatesFn = origDiscover, origUSB
+	})
 
 	cmd := newDeviceSetDefaultCmd()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -780,5 +795,174 @@ func TestEnforceDeviceIdentityRejectsDifferentOrg(t *testing.T) {
 
 	if err := enforceDeviceIdentity("wendy-thor.local", observedDeviceIdentity{mTLS: true, orgID: 7, assetID: "42"}); err == nil {
 		t.Fatal("different org at pinned hostname: want an error, got nil")
+	}
+}
+
+// Parallel agent sessions each connect to a different device for the first
+// time. Unlocked, every first-use pin write saved its own snapshot and most
+// pins were lost — each lost pin is a trust-on-first-use window reopened.
+func TestEnforceDeviceIdentityKeepsConcurrentFirstUsePins(t *testing.T) {
+	stubNonInteractive(t)
+	readPins := writePinTestConfig(t, nil)
+	const devices = 16
+	var wg sync.WaitGroup
+	for i := 0; i < devices; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = enforceDeviceIdentity(fmt.Sprintf("wendy-dev-%d.local", i),
+				observedDeviceIdentity{mTLS: true, orgID: 7, assetID: strconv.Itoa(100 + i)})
+		}(i)
+	}
+	wg.Wait()
+	if got := len(readPins()); got != devices {
+		t.Fatalf("%d of %d devices connected in parallel kept their first-use pin", got, devices)
+	}
+}
+
+// Review Focus 3, first half: a config dir that cannot be written (so the
+// config lock cannot be created) must not turn a verified device away.
+func TestEnforceDeviceIdentityIgnoresAnUnwritableConfigDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file mode bits do not prevent writes")
+	}
+	stubNonInteractive(t)
+	writePinTestConfig(t, nil)
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if err := enforceDeviceIdentity("wendy-thor.local", observedDeviceIdentity{mTLS: true, orgID: 7, assetID: "42"}); err != nil {
+		t.Fatalf("a config dir that cannot be written refused a verified device: %v", err)
+	}
+}
+
+// Review Focus 3, second half: the same unwritable dir must NOT switch the
+// identity check off. Judging a pin needs only a read.
+func TestEnforceDeviceIdentityStillRefusesWhenConfigCannotBeLocked(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file mode bits do not prevent writes")
+	}
+	stubNonInteractive(t)
+	writePinTestConfig(t, map[string]config.DevicePin{
+		"wendy-thor": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"},
+	})
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	err = enforceDeviceIdentity("wendy-thor.local", observedDeviceIdentity{mTLS: true, orgID: 7, assetID: "43"})
+	if !errors.Is(err, errDeviceIdentityRefused) {
+		t.Fatalf("different asset at a pinned hostname with an unlockable config: got %v, want a refusal (fail closed)", err)
+	}
+}
+
+// Fix round 1 (finding I1): when config.Update cannot even open config.lock —
+// a foreign-owned or otherwise unopenable lock file, while the config
+// directory and config.json both remain perfectly writable — no process can
+// possibly be holding a lock nobody could open. That is main's pre-lock world,
+// so the fallback still records the verdict, unlocked, exactly as main did.
+// Losing it here would silently reopen the trust-on-first-use window the lock
+// exists to close.
+func TestEnforceDeviceIdentityRecordsAFirstUsePinWhenTheLockFileCannotBeOpened(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file mode bits do not prevent opening the lock file")
+	}
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file permission bits do not block opening a file the owner created")
+	}
+	stubNonInteractive(t)
+	readPins := writePinTestConfig(t, nil)
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dir, "config.lock")
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(lockPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(lockPath, 0o600) })
+
+	// The directory and config.json are both still writable — only the lock
+	// file itself cannot be opened — so config.Update fails before fn ever
+	// runs, but a plain config.Save (what the fallback does) still succeeds.
+	if err := enforceDeviceIdentity("wendy-thor.local", observedDeviceIdentity{mTLS: true, orgID: 7, assetID: "42"}); err != nil {
+		t.Fatalf("first use with an unopenable config.lock: want nil, got %v", err)
+	}
+	pin, ok := readPins()["wendy-thor"]
+	if !ok {
+		t.Fatal("first use with an unopenable config.lock did not record a pin; the fallback must still write when nothing could possibly be holding the lock")
+	}
+	if pin.OrgID != 7 || pin.AssetID != "42" {
+		t.Errorf("recorded pin = %+v, want org 7 / asset 42", pin)
+	}
+
+	// Same broken lock file, but now the hostname is pinned and a different
+	// asset answers: the refusal must still come back, exactly as it would
+	// under a healthy lock.
+	err = enforceDeviceIdentity("wendy-thor.local", observedDeviceIdentity{mTLS: true, orgID: 7, assetID: "99"})
+	if !errors.Is(err, errDeviceIdentityRefused) {
+		t.Fatalf("mismatch with an unopenable config.lock: got %v, want a refusal (fail closed)", err)
+	}
+	if pin := readPins()["wendy-thor"]; pin.AssetID != "42" {
+		t.Errorf("pin after refusal = %+v, want the original asset 42 intact", pin)
+	}
+}
+
+// TestDecideFallbackAction unit-tests enforceDeviceIdentity's read-only
+// fallback decision directly, rather than through a real lock-timeout wait.
+//
+// Driving the ErrTimeout branch end-to-end would mean either holding
+// config.lock for the real 10s updateLockTimeout (config's own var, unexported
+// and in a different package — not something this package can shorten without
+// adding test-only exported API to config, which the review ruling for this
+// fix explicitly rejected) or introducing a seam that does not otherwise exist
+// in this package. decideFallbackAction is the whole of that decision, pulled
+// out into a pure function precisely so it can be tested without either. The
+// shape of a real timeout error — that it satisfies errors.Is(err,
+// flock.ErrTimeout) — is covered end-to-end by config's own
+// TestUpdateGivesUpWhileAnotherProcessHoldsTheLock (extended by this same fix
+// to assert exactly that). Together the two tests cover what one slow,
+// flaky end-to-end test would have: config produces a properly-wrapped
+// timeout error, and this package's fallback reacts to that wrapping
+// correctly.
+func TestDecideFallbackAction(t *testing.T) {
+	refused := errDeviceIdentityRefused
+	timeout := fmt.Errorf("%w: another wendy process has held config.lock for over 10s; retry once it finishes", flock.ErrTimeout)
+	otherErr := errors.New("locking /home/x/.wendy/config.lock: permission denied")
+
+	tests := []struct {
+		name      string
+		updateErr error
+		changed   bool
+		refusal   error
+		want      fallbackAction
+	}{
+		{"timeout with a pin to record warns instead of writing", timeout, true, nil, fallbackWarnUnrecorded},
+		{"other lock error with a pin to record saves unlocked", otherErr, true, nil, fallbackSaveUnlocked},
+		{"nothing changed: no warning, no save, even on timeout", timeout, false, nil, fallbackNothing},
+		{"nothing changed: no warning, no save, even on another error", otherErr, false, nil, fallbackNothing},
+		{"a refusal on timeout is returned as-is, never recorded", timeout, true, refused, fallbackNothing},
+		{"a refusal on another lock error is returned as-is, never recorded", otherErr, true, refused, fallbackNothing},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := decideFallbackAction(tt.updateErr, tt.changed, tt.refusal); got != tt.want {
+				t.Errorf("decideFallbackAction(%v, %v, %v) = %v, want %v", tt.updateErr, tt.changed, tt.refusal, got, tt.want)
+			}
+		})
 	}
 }

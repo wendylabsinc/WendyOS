@@ -1,6 +1,6 @@
 # WendyOS Networking Overview
 
-WendyOS provides a self-contained networking stack designed for USB-tethered connectivity between a device (Raspberry Pi, Jetson, or other supported hardware) and a host computer. When you plug a WendyOS device into a host via USB-C, the device presents a composite USB gadget that includes both a network interface and a serial console. No drivers, no pairing — the device advertises itself over mDNS and the wendy-agent can discover and connect to it immediately. On Linux hosts, run `wendy device usb-setup` once to configure the USB-C link.
+WendyOS provides a self-contained networking stack designed for USB-tethered connectivity between a device (Raspberry Pi, Jetson, or other supported hardware) and a host computer. When you plug a WendyOS device into a host via USB-C, the device presents a composite USB gadget that includes both a network interface and a serial console. No drivers, no pairing — the device advertises itself over mDNS and the wendy-agent can discover and connect to it immediately. On Linux hosts, `wendy discover` offers to configure the USB-C link the first time it finds the device.
 
 ## Architecture
 

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func peopleCampaign(t *testing.T) []byte {
@@ -16,6 +18,39 @@ func peopleCampaign(t *testing.T) []byte {
 		t.Fatal(err)
 	}
 	return contents
+}
+
+func TestYOLOInferenceValidationAndRevision(t *testing.T) {
+	c, err := ParseCampaign(peopleCampaign(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Inference.Backend = "yolo_onnx"
+	c.Inference.ModelFile = "onnx/model.onnx"
+	raw, _ := yaml.Marshal(c)
+	parsed, err := ParseCampaign(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Inference.ModelFile = "onnx/other.onnx"
+	raw, _ = yaml.Marshal(c)
+	other, err := ParseCampaign(raw)
+	if err != nil || parsed.Revision == other.Revision {
+		t.Fatal("model file did not change immutable campaign revision", err)
+	}
+	for _, file := range []string{"", "../model.onnx", "/model.onnx", "onnx/../model.onnx", "model.pt", "onnx\\model.onnx"} {
+		c.Inference.ModelFile = file
+		raw, _ = yaml.Marshal(c)
+		if _, err := ParseCampaign(raw); err == nil {
+			t.Fatalf("accepted unsafe model file %q", file)
+		}
+	}
+	c.Inference.Backend = "remote_python"
+	c.Inference.ModelFile = "model.onnx"
+	raw, _ = yaml.Marshal(c)
+	if _, err := ParseCampaign(raw); err == nil {
+		t.Fatal("accepted unsupported executable backend")
+	}
 }
 
 func TestInferenceExampleAndModelURL(t *testing.T) {

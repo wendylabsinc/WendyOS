@@ -45,6 +45,9 @@ Run without an id to see which cameras this device has.`,
 				return err
 			}
 			defer conn.Close()
+			if err := cameraServicePreflight(ctx, conn, cameraV4L2Controls); err != nil {
+				return err
+			}
 
 			resp, err := conn.VideoService.GetCameraControls(ctx, &agentpb.GetCameraControlsRequest{DeviceId: id})
 			if err != nil {
@@ -148,6 +151,9 @@ persisting them, and --reset-all does that for every mutable control:
 				return err
 			}
 			defer conn.Close()
+			if err := cameraServicePreflight(ctx, conn, cameraV4L2Controls); err != nil {
+				return err
+			}
 
 			// --reset-all asks the camera which controls it has rather than
 			// keeping a list here, so it covers whatever that hardware exposes.
@@ -265,6 +271,9 @@ func listCamerasForChoice(cmd *cobra.Command, sub string) error {
 		return err
 	}
 	defer conn.Close()
+	if err := cameraServicePreflight(ctx, conn, cameraV4L2Controls); err != nil {
+		return err
+	}
 
 	resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{})
 	if err != nil {
@@ -302,6 +311,9 @@ func listControlsForChoice(cmd *cobra.Command, id uint32) error {
 		return err
 	}
 	defer conn.Close()
+	if err := cameraServicePreflight(ctx, conn, cameraV4L2Controls); err != nil {
+		return err
+	}
 
 	resp, err := conn.VideoService.GetCameraControls(ctx, &agentpb.GetCameraControlsRequest{DeviceId: id})
 	if err != nil {

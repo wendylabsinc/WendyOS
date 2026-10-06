@@ -7,7 +7,7 @@ Search this page by the symptom or error text. These are troubleshooting entries
 
 ## Target not found
 
-Run `wendy discover` on your development machine. Verify that the target is powered on and connected over USB or the same network. On macOS, allow Local Network access when prompted. For USB tethering on Linux, run `sudo wendy device usb-setup` once.
+Run `wendy discover` on your development machine. Verify that the target is powered on and connected over USB or the same network. On macOS, allow Local Network access when prompted. For USB tethering on Linux, run `wendy discover` in a terminal and accept the prompt to configure the USB-C link.
 
 If you know the address, try `wendy device info --device <address>`. If this works, use `wendy run --device <address>` to bypass discovery. See [device discovery](/docs/advanced/clients/wendy-cli/commands/discover).
 

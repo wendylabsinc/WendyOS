@@ -154,3 +154,19 @@ func TestResolveCloudGRPCFlagFallsBackWhenUnset(t *testing.T) {
 		t.Errorf("resolveCloudGRPCFlag(nil) = %q, want the fallback", got)
 	}
 }
+
+func TestImplicitDeviceLinesSayTheTargetCameFromWENDY_DEVICE(t *testing.T) {
+	lines := implicitDeviceLines("thor.local", implicitEnvDevice, true)
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want the device line plus a hint: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "thor.local") || !strings.Contains(lines[0], "WENDY_DEVICE") {
+		t.Errorf("line = %q, want it to name the device and WENDY_DEVICE", lines[0])
+	}
+	if strings.Contains(lines[0], "default") {
+		t.Errorf("line = %q: a WENDY_DEVICE target is not the default device", lines[0])
+	}
+	if !strings.Contains(lines[1], "--device") || !strings.Contains(lines[1], "unset WENDY_DEVICE") {
+		t.Errorf("hint = %q, want --device and 'unset WENDY_DEVICE'", lines[1])
+	}
+}

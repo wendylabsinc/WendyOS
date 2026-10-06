@@ -27,8 +27,9 @@ type cameraPairClient interface {
 }
 
 type cameraPairHandler struct {
-	ctx    context.Context
-	client cameraPairClient
+	ctx       context.Context
+	client    cameraPairClient
+	preflight func(context.Context) error
 }
 
 type cameraPairScanMsg struct {
@@ -44,6 +45,11 @@ type cameraPairOpMsg struct {
 
 func (h *cameraPairHandler) scan() tea.Cmd {
 	return func() tea.Msg {
+		if h.preflight != nil {
+			if err := h.preflight(h.ctx); err != nil {
+				return cameraPairScanMsg{err: err}
+			}
+		}
 		ctx, cancel := context.WithTimeout(h.ctx, 15*time.Second)
 		defer cancel()
 		resp, err := h.client.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{})

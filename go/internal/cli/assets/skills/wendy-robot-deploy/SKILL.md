@@ -8,8 +8,10 @@ description: Build and deploy robot applications with Wendy, ROS 2, Unitree Go2/
 Start with the actual device and tool inventory. Call `wendy_status`, select an
 explicit local, cloud or `vm:<name>` target, then inspect `device_info` and
 `hardware_capabilities`. Compare the running CLI/agent versions and advertised
-features before relying on a tool described by a newer skill. If `ros2_*` or
-`container_exec` is missing, inspect `wendy device ros2 --help` or update and
+features before relying on a tool described by a newer skill. The `ros2_*` tools
+are in the `robotics` group: call `wendy_tools(groups=["robotics"])` to list them.
+If they or `container_exec` are still missing, inspect
+`wendy device ros2 --help` or update and
 restart the MCP server when authorized. Do not invent calls.
 
 ## Establish the robot's interfaces

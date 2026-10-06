@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -17,15 +19,7 @@ import (
 )
 
 // DetectionNotification contains metadata only, never camera images or secrets.
-type DetectionNotification struct {
-	ID       string `json:"id"`
-	Event    string `json:"event"`
-	Campaign string `json:"campaign"`
-	SourceID string `json:"source_id"`
-	Model    string `json:"model"`
-	Revision string `json:"model_revision"`
-	Count    int    `json:"count"`
-}
+type DetectionNotification = data.CampaignNotification
 
 type CampaignNotificationSender interface {
 	Send(context.Context, string, DetectionNotification) error
@@ -52,6 +46,7 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 		"model":          notification.Model,
 		"model_revision": notification.Revision,
 		"count":          notification.Count,
+		"occurred_at":    notification.OccurredAt,
 	})
 	if err != nil {
 		return err

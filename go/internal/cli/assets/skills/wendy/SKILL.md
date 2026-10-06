@@ -1,6 +1,6 @@
 ---
 name: wendy
-description: 'Expert guidance on building and deploying apps to WendyOS edge devices. Use when developers mention: (1) Wendy or WendyOS, (2) wendy CLI commands, (3) wendy.json or entitlements, (4) deploying apps to edge devices, (5) remote debugging Swift on ARM64, (6) NVIDIA Jetson or Raspberry Pi apps, (7) cross-compiling Swift for ARM64.'
+description: 'Guidance on building and deploying apps to robots and edge devices using WendyOS, including NVIDIA Jetson, Raspberry Pi, Qualcomm Dragonwing, and MuJoCo simulation.'
 ---
 
 # WendyOS
@@ -19,9 +19,15 @@ wendy --help
 wendy <command> --help
 ```
 
-Use `--json` for list/status commands that support it. Build, run and flash commands still emit progress text; use exit status and follow-up checks. Supply explicit targets and choices to avoid interactive pickers. (There is no `-j` shorthand.)
+Use `--json` for list/status commands and agent-backed `run --detach`. Detached
+run returns a JSON result with the target, app and available HTTP URLs; progress
+goes to stderr. Build, attached run and flash still emit progress text. Supply
+explicit targets and choices to avoid interactive pickers. (There is no `-j` shorthand.)
 
 ## Common Tasks
+
+For first-time setup, use `wendy-onboarding` to install and verify a physical
+device or start a local simulator while waiting for hardware.
 
 - Run an app: `wendy run`
 - Create a new project: `wendy init`
@@ -43,6 +49,12 @@ scaffolding. When already inside the requested destination, include `--here` so
 The MCP `run` tool uses its explicit `device` or the connected session's target;
 legacy `device_name` selects cloud deployment. Verify the returned target, container
 state, logs and application health separately: detached run skips readiness waits.
+For a local VM, `--device vm:dev` selects the agent; it is not a DNS hostname or
+HTTP URL. With default user networking, fetch the detached result's `url` (for
+example `http://127.0.0.1:18880`), rather than `vm:dev`, `dev`, or the guest's
+`10.0.2.15` address. Declare the app's HTTP port in an `http` entitlement so Wendy
+can forward and report it. `readiness: "not_checked"` means start was acknowledged,
+not that the HTTP endpoint is healthy; verify the expected response separately.
 Wendy Lite uses a separate MCU/WASM workflow; see `wendy-lite` for ESP32.
 
 ### `wendy device wifi connect` — Set Up WiFi
@@ -59,10 +71,12 @@ This sends WiFi SSID and password to the device so it can connect to the local n
 
 Wendy CLI connects to a device over gRPC (TCP) port 50051. If Wendy CLI is not installed yet, run `curl -fsSL https://install.wendy.dev/cli.sh | bash`.
 
-Devices are discovered over USB or LAN. On Linux, USB tethering may need
-`sudo wendy device usb-setup`. An empty scan can also mean a blank board.
+Devices are discovered over USB or LAN. On Linux, USB tethering may need a
+one-time host setup: run `wendy discover` in a terminal and accept its USB-C
+setup prompt (it needs sudo). An empty scan can also mean a blank board.
 Use `wendy-device-install` and `os_install_plan` for initial installation and
-`os_install_verify` for first boot. Full Jetson recovery updates boot firmware;
+`os_install_verify` for first boot; both are in the MCP `setup` tool group, which
+`wendy_tools(groups=["setup"])` enables. Full Jetson recovery updates boot firmware;
 rootfs-only media writes do not. Unitree G1 PC2 keeps vendor Ubuntu and receives
 the Agent, not a generic Jetson image.
 

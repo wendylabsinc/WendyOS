@@ -1,9 +1,12 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
+	"slices"
+	"strconv"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -46,6 +49,7 @@ func (s *mcpServer) registerTelemetryTools(srv *server.MCPServer) {
 		mcpgo.WithString("metric_name_prefix",
 			mcpgo.Description("Filter by metric name prefix (optional)"),
 		),
+		mcpgo.WithInteger("last_n", mcpgo.Min(1), mcpgo.Max(100), mcpgo.Description("Read up to this many recent metric batches, bounded by max_batches. Returns after replay or a short idle gap; compact points retain newest timestamps first when limited.")),
 	}
 	metricsOpts = append(metricsOpts, telemetryOptions()...)
 	metricsOpts = append(metricsOpts, readOnly()...)
@@ -149,12 +153,27 @@ func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallTo
 	if err != nil {
 		return errResult(errCodeInvalidArgument, err.Error()), nil
 	}
+	lastN := 0
+	if _, provided := req.GetArguments()["last_n"]; provided {
+		lastN, err = ros2Int(req, "last_n", 0, 1, 100)
+		if err != nil {
+			return errResult(errCodeInvalidArgument, err.Error()), nil
+		}
+	}
 	conn := s.GetConn()
 	if conn == nil {
 		return errNotConnected(), nil
 	}
 
 	metricsReq := &agentpb.StreamMetricsRequest{}
+	if lastN > 0 {
+		// The agent replays oldest-to-newest within this tail. Request only
+		// what we can collect so a smaller batch budget still gets the newest.
+		lastN = min(lastN, opts.maxBatches)
+		n := int32(lastN)
+		metricsReq.LastN = &n
+		opts.maxBatches = lastN
+	}
 	if v := stringParam(req, "app_name"); v != "" {
 		metricsReq.AppName = &v
 	}
@@ -168,18 +187,64 @@ func (s *mcpServer) handleTelemetryMetrics(ctx context.Context, req mcpgo.CallTo
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	var idle *time.Timer
+	if lastN > 0 {
+		// Older agents have no finite-history flag or replay-complete marker.
+		// Read the immediate replay burst, without waiting for a live sample.
+		idle = time.AfterFunc(3*time.Second, cancel)
+		defer idle.Stop()
+	}
 
 	stream, err := conn.TelemetryService.StreamMetrics(ctx, metricsReq)
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
+	historyBatches := 0
 	result, err := collectProtoStream(ctx, func() (*agentpb.StreamMetricsResponse, error) {
-		return stream.Recv()
+		for {
+			response, err := stream.Recv()
+			if err != nil {
+				return response, err
+			}
+			if response.GetMetrics() == nil {
+				continue
+			}
+			if response.GetIsHistory() {
+				historyBatches++
+			}
+			if idle != nil {
+				idle.Reset(250 * time.Millisecond)
+			}
+			return response, nil
+		}
 	}, maxBatches)
+	cancel()
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
+	if lastN > 0 {
+		return telemetryMetricsHistoryResult(result, opts, lastN, historyBatches), nil
+	}
 	return telemetryResult("metrics", result, opts), nil
+}
+
+func telemetryMetricsHistoryResult(batches []json.RawMessage, opts telemetryOptionsValue, lastN, historyBatches int) *mcpgo.CallToolResult {
+	metadata := map[string]any{"batches_collected": len(batches), "collection_limited": len(batches) >= opts.maxBatches, "last_n": lastN, "history_batches": historyBatches, "newest_first": true}
+	if opts.format == "otlp" {
+		slices.Reverse(batches)
+		return okRowsBounded("batches", batches, metadata, opts.maxBytes, len(batches))
+	}
+	rows, err := compactTelemetryRows("metrics", batches)
+	if err != nil {
+		return errResultf(errCodeInternal, "decoding telemetry: %v", err)
+	}
+	timestamp := func(row map[string]any) uint64 {
+		value, _ := row["timeUnixNano"].(string)
+		nanos, _ := strconv.ParseUint(value, 10, 64)
+		return nanos
+	}
+	slices.SortStableFunc(rows, func(a, b map[string]any) int { return cmp.Compare(timestamp(b), timestamp(a)) })
+	return okRowsBounded("metrics", rows, metadata, opts.maxBytes, opts.maxRecords)
 }
 
 func (s *mcpServer) handleTelemetryTraces(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

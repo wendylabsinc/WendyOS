@@ -38,7 +38,14 @@ nonisolated func compareSystemExtensionVersions(
 final class MeshSystemExtensionInstaller: NSObject {
     static let shared = MeshSystemExtensionInstaller()
 
-    static let extensionID = "sh.wendy.WendyAgentMac.WendyNet"
+    static let extensionID = "sh.wendy.WendyAgentMac.NetProxy"
+
+    static var isBundled: Bool {
+        let extensionURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/SystemExtensions", isDirectory: true)
+            .appendingPathComponent("\(Self.extensionID).systemextension", isDirectory: true)
+        return FileManager.default.fileExists(atPath: extensionURL.path)
+    }
 
     private var operation: Task<SystemExtensionInstallationResult, any Error>?
     private var propertiesContinuation: CheckedContinuation<[InstalledSystemExtension], any Error>?

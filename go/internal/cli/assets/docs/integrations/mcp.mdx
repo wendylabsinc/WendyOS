@@ -3,8 +3,45 @@ title: Wendy MCP tools
 description: Tool groups, device selectors, compact results, and current CLI coverage.
 ---
 
-Wendy starts with 15 core tools for connecting, deploying, inspecting containers,
+Wendy starts with 16 core tools for signing in, connecting, deploying, inspecting containers,
 reading logs, and discovering hardware. Running apps can provide additional tools.
+
+For ChatGPT Desktop, run `wendy mcp setup chatgpt` to add the Wendy plugin to
+your personal marketplace. It includes a scoped local MCP gateway, device
+workspace, and bundled skills. Follow the
+[ChatGPT setup guide](/docs/guides/chatgpt) to install it and enable access.
+The tool groups below describe the broader `wendy mcp serve` developer server.
+
+## Skills and first-time setup
+
+The server also exposes the bundled end-user skills through the MCP skills
+extension. Call `skills/list` with `{}` to get the single `wendy` entry, then
+`skills/get` with its URI. Read instructions and supporting files through
+`resources/read`; each catalog resource includes its SHA-256 digest. These calls
+work offline without a device connection or a local skill installation.
+
+The bundle includes `wendy-onboarding` for installing and verifying a first
+physical device, or setting up a local simulator when hardware is unavailable.
+The ChatGPT plugin's setup entry opens this skill. Native skill installation
+through `wendy mcp setup` remains available for other clients.
+
+OpenAI imports MCP skills as a snapshot during Scan Tools. Restart the MCP
+server after a CLI update, then scan again before submitting updated skills.
+
+## CLI update notices
+
+`wendy_status` includes `cli_version` for the running MCP server and `cli_update`
+for cached update details. When a newer release is known, `cli_update` includes
+`latest_version`, `update_command`, `restart_required`, and a message to relay to
+the user. `last_checked_at` records the last release-check attempt;
+`available=false` does not confirm that the check succeeded or the CLI is current.
+
+`wendy mcp serve` checks the cache at startup and hourly, contacting the release
+API only when the existing 24-hour check interval expires. Development builds
+skip release checks. The next tool result carries a text notice once per release
+per MCP session, including sessions where a terminal already printed the notice.
+The notice preserves the tool's result and error state. Run the supplied update
+command, then restart the Wendy MCP server to load the new version and tools.
 
 ## Enable specialist tools
 
@@ -14,7 +51,7 @@ Omit `groups` to inspect the selection, or pass an empty array to return to core
 
 | Group | Operations |
 | --- | --- |
-| `core` | Session status, group selection, device discovery/connection/info, deployment, container lifecycle/exec/stats, logs, hardware discovery |
+| `core` | Session status and sign-in, group selection, device discovery/connection/info, deployment, container lifecycle/exec/stats, logs, hardware discovery |
 | `setup` | Installation jobs and verification, project validation, agent/OS updates, WiFi, enrollment, default device |
 | `simulator` | Local simulator list, create, stop, delete |
 | `hardware` | Bluetooth, camera discovery/controls/snapshots |
@@ -28,6 +65,21 @@ For clients that cache tools at startup, configure
 `wendy mcp serve --tool-groups core,robotics` or `--tool-groups all`.
 Groups control discovery, not authorization. Known tools remain callable, and
 app-provided tools remain visible. Restart the MCP process after upgrading the CLI.
+
+## Sign in
+
+Most devices need a signed-in Wendy Cloud session. `wendy_status` reports `auth`
+as `logged_in`, `pending`, `expired`, or `logged_out`. Call `auth_login` to sign
+in without a terminal: it returns a link to show the user, opens it in the
+browser on a desktop session, and finishes in the background (up to five
+minutes). Calling it again while a sign-in is pending returns the same link.
+Cloud tools return `AUTH_REQUIRED` until a session exists.
+
+The link must be opened in a browser on the machine running Wendy; from another
+machine, forward the port in the link's `redirect_uri` over SSH first. If the
+user abandons the sign-in or the five minutes pass, `auth` leaves `pending`
+(back to `logged_out` or `expired`) and `wendy_status` shows `auth_login_error`.
+Calling `auth_login` again starts a fresh link.
 
 ## Device selection
 
@@ -108,7 +160,7 @@ remain unknown when disconnected or when the device supplies insufficient data.
 | Audio, live camera streams | Device audio/camera CLI; MCP supports camera snapshots and controls |
 | ROS nodes, services, parameters, actions, lifecycle, graph, bags | `wendy device ros2`; MCP provides topic and LiDAR inspection |
 | Data sources, recording, episodes, campaigns, downloads | `wendy data` |
-| Cloud login/logout and credential-session selection | `wendy cloud` / `wendy auth` |
+| Cloud logout and credential-session selection (sign in with `auth_login`) | `wendy cloud` / `wendy auth` |
 | Agent-only installation and first-boot WiFi/name/enrollment customization | Installation plan instructions or terminal installer; MCP image jobs use Ethernet for first boot |
 
 An agent with shell access can invoke these commands. MCP-only clients do not

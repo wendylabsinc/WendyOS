@@ -163,12 +163,14 @@ func repointDefaultDevice(name string) {
 	if deviceFlag != "" {
 		return
 	}
-	cfg, err := config.Load()
-	if err != nil || !strings.HasSuffix(cfg.DefaultDevice, ".local") {
-		return
-	}
-	cfg.DefaultDevice = name + ".local"
-	if err := config.Save(cfg); err != nil {
+	err := config.Update(func(cfg *config.Config) (bool, error) {
+		if !strings.HasSuffix(cfg.DefaultDevice, ".local") {
+			return false, nil
+		}
+		cfg.DefaultDevice = name + ".local"
+		return true, nil
+	})
+	if err != nil {
 		cliLogln("Warning: renamed device but could not update the default device: %v", err)
 	}
 }

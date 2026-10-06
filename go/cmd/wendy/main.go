@@ -57,6 +57,9 @@ func main() {
 	executed = commandFor(cmd, os.Args[1:], executed, err)
 	trackCommand(executed, err, time.Since(start))
 	analytics.Close()
+	// After Close, whose delivered events can still record milestones: a sudo
+	// run gives what it created in ~/.wendy and the cache back to the user.
+	commands.HandBackSudoFiles()
 
 	exitCode := reportFailure(os.Stderr, err, executed, os.Args[1:])
 	// Windows: when this process owns its console window (UAC-relaunched or

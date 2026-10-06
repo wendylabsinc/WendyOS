@@ -385,7 +385,7 @@ func TestDeployStartSitesReportTheStartedAcknowledgement(t *testing.T) {
 		wantErr    bool
 	}{
 		{"detached", runOptions{detach: true}, &deploymentAckStream{remaining: 1, err: io.EOF}, 1, false},
-		{"detached, stream ends unconfirmed", runOptions{detach: true}, &deploymentAckStream{err: io.EOF}, 0, false},
+		{"detached, stream ends unconfirmed", runOptions{detach: true}, &deploymentAckStream{err: io.EOF}, 0, true},
 		{"watch", runOptions{watchState: &watchDeployState{}}, &deploymentAckStream{remaining: 1, err: io.EOF}, 1, false},
 		{"attached, logs later fail", runOptions{}, &deploymentAckStream{remaining: 1, err: errors.New("tunnel dropped")}, 1, true},
 		{"attached, start fails", runOptions{}, &deploymentAckStream{err: errors.New("start failed")}, 0, true},

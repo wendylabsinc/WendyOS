@@ -216,6 +216,7 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 		if clientCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM)); err != nil {
 			logger.Warn("failed to load device client certificate for broker mTLS; presenting none",
 				zap.String("event", "broker_mtls_client_cert_load_failed"),
+				zap.String("auth_downgrade", "mtls_client_cert->none"),
 				zap.Bool("client_cert_presented", false),
 				zap.Error(err))
 		} else {
@@ -254,6 +255,7 @@ func brokerDialOpts(logger *zap.Logger, orgID, assetID int32, certPEM, keyPEM, c
 		if err != nil {
 			logger.Warn("failed to initialize certificate-bound broker authentication; legacy headers still apply",
 				zap.String("event", "broker_certificate_proof_unavailable"),
+				zap.String("auth_downgrade", "signed_proof->unsigned_headers"),
 				zap.Error(err))
 		}
 	}

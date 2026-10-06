@@ -12,6 +12,8 @@ import cv2
 
 from app import Runtime, make_server
 from change_detection.sources import CaptureSource, DemoSource
+from change_detection.audio_runtime import AudioRuntime
+from change_detection.audio_sources import DemoAudioSource
 
 
 class AppTests(unittest.TestCase):
@@ -79,6 +81,48 @@ class AppTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 503)
         with self.request("/api/state") as response:
             self.assertEqual(json.load(response)["error"], self.runtime.error)
+
+    def test_audio_api_evidence_controls_and_health(self):
+        self.runtime.audio = AudioRuntime(DemoAudioSource("belt_rip"))
+        for _ in range(28):
+            self.runtime.audio.tick()
+        with self.request("/api/state") as response:
+            audio = json.load(response)["audio"]
+        self.assertTrue(audio["conveyor"]["stopped"])
+        event = audio["events"][0]
+        with self.request(f"/api/audio/clip?id={event['id']}") as response:
+            self.assertEqual(response.headers["Content-Type"], "audio/wav")
+            self.assertEqual(response.read()[:4], b"RIFF")
+        with self.request("/api/audio/export", {"id": event["id"], "label": "belt_rip"}) as response:
+            self.assertTrue(zipfile.is_zipfile(io.BytesIO(response.read())))
+        with self.request("/api/audio/pause", {"paused": True}):
+            pass
+        self.assertTrue(self.runtime.audio.paused)
+        self.assertFalse(self.runtime.paused)
+        with self.request("/api/reset", {}):
+            pass
+        self.assertTrue(self.runtime.audio.conveyor.stopped)
+        with self.request("/api/audio/demo", {"scenario": "normal"}):
+            pass
+        self.assertFalse(self.runtime.audio.conveyor.stopped)
+        self.runtime.audio.error = "microphone disconnected"
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/health")
+        self.assertEqual(error.exception.code, 503)
+        self.assertEqual(json.load(error.exception)["audio_error"], "microphone disconnected")
+        for path, body in (("/api/audio/export", {"id": 1, "label": "belt_rip"}),
+                           ("/api/audio/demo", {"scenario": "invalid"}),
+                           ("/api/audio/pause", {"paused": "yes"})):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request(path, body)
+            self.assertEqual(error.exception.code, 400)
+
+    def test_audio_disabled_is_explicit(self):
+        with self.request("/api/state") as response:
+            self.assertFalse(json.load(response)["audio"]["enabled"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.request("/api/audio/reset", {})
+        self.assertEqual(error.exception.code, 400)
 
 
 class VideoTests(unittest.TestCase):

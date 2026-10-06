@@ -370,3 +370,6 @@ func writeImageToDisk(r io.Reader, totalSize int64, d drive, progressFn func(wri
 
 	return nil
 }
+
+// Linux writers already unmount their target; macOS preparation is unnecessary.
+func unmountBeforeWrite(_ drive) error { return nil }

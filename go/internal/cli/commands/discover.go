@@ -8,10 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -125,10 +128,22 @@ func externalDiscoveryProviders(includeLocal bool) []providers.DeviceProvider {
 // discoverExternalDevices queries providers for their devices in one shot. The
 // continuous TUI does not use this — see discoverModel.startExternalStream.
 func discoverExternalDevices(ctx context.Context, includeLocal bool) []models.ExternalDevice {
+	return discoverExternalDevicesReporting(ctx, includeLocal, nil)
+}
+
+// discoverExternalDevicesReporting is discoverExternalDevices that also passes
+// skipped (when non-nil) each runtime left out because it did not answer
+// within the discovery bound (providers.ProbeTimeoutError) — unlike a runtime
+// that is not running, that one may well be there, just slow.
+func discoverExternalDevicesReporting(ctx context.Context, includeLocal bool, skipped func(error)) []models.ExternalDevice {
 	var all []models.ExternalDevice
 	for _, p := range externalDiscoveryProviders(includeLocal) {
 		devices, err := p.DiscoverDevices(ctx)
 		if err != nil {
+			var slow *providers.ProbeTimeoutError
+			if skipped != nil && errors.As(err, &slow) {
+				skipped(err)
+			}
 			continue
 		}
 		all = append(all, devices...)
@@ -150,6 +165,8 @@ func shouldIncludeExternal(opts discovery.DiscoveryOptions) bool {
 }
 
 func discoverJSON(ctx context.Context, opts discovery.DiscoveryOptions) error {
+	var browse lanBrowseErrors
+	opts.LAN.OnBackendError = browse.record
 	collection, err := discoverLocalTargets(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("discovery failed: %w", err)
@@ -160,7 +177,17 @@ func discoverJSON(ctx context.Context, opts discovery.DiscoveryOptions) error {
 
 	if shouldIncludeExternal(opts) {
 		// JSON output always includes local run targets (see newDiscoverCmd).
-		collection.ExternalDevices = discoverExternalDevices(ctx, true)
+		var skipped []error
+		collection.ExternalDevices = discoverExternalDevicesReporting(ctx, true, func(err error) { skipped = append(skipped, err) })
+		warnSkippedRuntimes(os.Stderr, skipped)
+	}
+
+	warning, err := lanBrowseOutcome(collection, browse.first())
+	if err != nil {
+		return err
+	}
+	if warning != "" {
+		fmt.Fprintln(os.Stderr, warning)
 	}
 
 	data, err := json.MarshalIndent(collection, "", "  ")
@@ -171,22 +198,44 @@ func discoverJSON(ctx context.Context, opts discovery.DiscoveryOptions) error {
 	return nil
 }
 
+// warnSkippedRuntimes prints one stderr line per runtime a scan left out
+// because it did not answer in time (see discoverExternalDevicesReporting).
+func warnSkippedRuntimes(w io.Writer, skipped []error) {
+	for _, err := range skipped {
+		fmt.Fprintf(w, "Warning: %v; it is not listed.\n", err)
+	}
+}
+
+// discoverOnceScan is discoverOnce's scan: the collection, plus the runtimes
+// left out because they did not answer in time.
+func discoverOnceScan(ctx context.Context, opts discovery.DiscoveryOptions, includeLocal bool) (*models.DevicesCollection, []error, error) {
+	collection, err := discoverLocalTargets(ctx, opts)
+	if err != nil {
+		return collection, nil, err
+	}
+	annotateLANUSBFromEthernet(collection)
+	sortLANDevicesForDiscover(collection.LANDevices)
+	var skipped []error
+	if shouldIncludeExternal(opts) {
+		collection.ExternalDevices = discoverExternalDevicesReporting(ctx, includeLocal, func(err error) { skipped = append(skipped, err) })
+	}
+	return collection, skipped, nil
+}
+
 // discoverOnce runs a single scan with the given timeout and prints results.
 // includeLocal surfaces local run targets that are hidden by default.
 func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions, includeLocal bool) error {
 	s := tui.NewSpinner("Scanning for WendyOS devices...")
 
-	includeExternal := shouldIncludeExternal(opts)
-
+	// Set by the scan goroutine, read once the TUI is done; p.Run can also
+	// return early (Ctrl-C) while the scan is still running, hence the lock.
+	var skippedMu sync.Mutex
+	var skipped []error
 	work := func() tea.Msg {
-		collection, err := discoverLocalTargets(ctx, opts)
-		if err == nil {
-			annotateLANUSBFromEthernet(collection)
-			sortLANDevicesForDiscover(collection.LANDevices)
-			if includeExternal {
-				collection.ExternalDevices = discoverExternalDevices(ctx, includeLocal)
-			}
-		}
+		collection, skippedByScan, err := discoverOnceScan(ctx, opts, includeLocal)
+		skippedMu.Lock()
+		skipped = skippedByScan
+		skippedMu.Unlock()
 		return tui.SpinnerDoneMsg{Result: collection, Err: err}
 	}
 
@@ -199,6 +248,12 @@ func discoverOnce(ctx context.Context, opts discovery.DiscoveryOptions, includeL
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
+	// After the table (or "No devices found."), like --json's warning.
+	defer func() {
+		skippedMu.Lock()
+		defer skippedMu.Unlock()
+		warnSkippedRuntimes(os.Stderr, skipped)
+	}()
 
 	model := finalModel.(tui.SpinnerModel)
 	result, spinErr := model.Result()
@@ -251,7 +306,7 @@ func discoverContinuous(ctx context.Context, opts discovery.DiscoveryOptions, in
 		switch {
 		case errors.Is(err, errDevicePickerLogin):
 			openOn = devicePickerCloudTab
-			if err := performLogin(ctx, defaultCloudDashboard, defaultCloudGRPC); err != nil {
+			if err := relogin(ctx, cloudAuth); err != nil {
 				return err
 			}
 			cfg, err = config.Load()
@@ -710,10 +765,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cursor := m.table.Cursor()
 			if len(items) > 0 && cursor >= 0 && cursor < len(items) {
 				deviceID := items[cursor].defaultDevice
-				if cfg, err := config.Load(); err == nil {
-					cfg.DefaultDevice = deviceID
-					_ = config.Save(cfg)
-				}
+				_ = saveDefaultDevice(deviceID)
 				m.flashMessage = "Default device set to: " + deviceID
 				m.flashIsError = false
 				m.refreshTable()
@@ -721,10 +773,7 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "x":
-			if cfg, err := config.Load(); err == nil {
-				cfg.DefaultDevice = ""
-				_ = config.Save(cfg)
-			}
+			_ = saveDefaultDevice("")
 			m.flashMessage = "Default device cleared."
 			m.flashIsError = false
 			m.refreshTable()
@@ -1197,6 +1246,7 @@ var deviceTypeNames = map[string]string{
 	"jetson-agx-thor":    "Jetson AGX Thor",
 	"dragonwing-iq-8275": "Dragonwing IQ-8275",
 	"dragonwing-iq-9075": "Dragonwing IQ-9075",
+	"arduino-uno-q":      "Arduino UNO Q",
 	"x86_64":             "x86-64",
 	"vm-arm64":           "ARM64 VM",
 	"vm-x86-64":          "x86-64 VM",

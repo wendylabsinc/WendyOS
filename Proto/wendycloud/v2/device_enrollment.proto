@@ -2,6 +2,9 @@ syntax = "proto3";
 
 package wendycloud.v2;
 
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
+
 // DeviceEnrollmentService turns "add a device" into a device that can actually enroll
 // (WDY-2924, AAA flow 5).
 //
@@ -24,7 +27,7 @@ package wendycloud.v2;
 // grant key, and pki-core's verifier would refuse it.
 //
 // TWO SIGNATURES, DELIBERATELY NOT COLLAPSED. The caller signs the REQUEST (the ordinary
-// x-wendy-request-signature envelope, since this is an authorization-gated mutation) and
+// SignedRequest envelope, WDY-3458, since this is an authorization-gated mutation) and
 // separately signs the enrollment request carried in `enrollment_request_jws`. Same operator,
 // same key, two different scopes: reusing one for the other would either widen the request
 // signature into an enrollment authority or narrow the enrollment artifact into a transport
@@ -36,7 +39,10 @@ package wendycloud.v2;
 // cloud's OWN add-device surface, which no other service participates in.
 service DeviceEnrollmentService {
   // Registers a device and returns its enrollment credential, once.
-  rpc EnrollDevice(EnrollDeviceRequest) returns (EnrollDeviceResponse);
+  // Signed; payload_type "wendycloud.v2.EnrollDeviceRequest".
+  rpc EnrollDevice(SignedRequest) returns (EnrollDeviceResponse) {
+    option (wendy.signed_request) = true;
+  }
 }
 
 // The device tier, which pki-core maps to a credential kind and to whether hardware

@@ -75,6 +75,14 @@ class DemoTests(unittest.TestCase):
             app.run(client, clock, clock=clock)
         self.assertEqual(client.calls[-1][:3], (0, 0, 0))
 
+    @patch("builtins.print")
+    def test_rpc_timeout_aborts_without_retrying_motion(self, _):
+        clock, client = Clock(), Client([0, app.RPC_TIMEOUT_CODE, 0])
+        with self.assertRaisesRegex(RuntimeError, "3104.*RPC reply timed out"):
+            app.run(client, clock, clock=clock)
+        self.assertEqual(len(client.calls), 3)
+        self.assertTrue(all(call[:3] == (0, 0, 0) for call in client.calls))
+
 
 if __name__ == "__main__":
     unittest.main()
