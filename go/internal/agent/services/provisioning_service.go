@@ -101,20 +101,21 @@ type OnUnprovisionedFunc func()
 // ProvisioningService implements agentpb.WendyProvisioningServiceServer.
 type ProvisioningService struct {
 	agentpb.UnimplementedWendyProvisioningServiceServer
-	logger          *zap.Logger
-	configPath      string
-	mu              sync.Mutex
-	enrolled        bool
-	cloudHost       string
-	orgID           int32
-	assetID         int32
-	keyPEM          []byte // stored as []byte so it can be zeroed on rotation/shutdown
-	certPEM         string
-	chainPEM        string
-	principalURI    string
-	CloudDialer     CloudDialer
-	OnProvisioned   OnProvisionedFunc
-	OnUnprovisioned OnUnprovisionedFunc
+	logger           *zap.Logger
+	configPath       string
+	mu               sync.Mutex
+	acmeRevocationMu sync.Mutex
+	enrolled         bool
+	cloudHost        string
+	orgID            int32
+	assetID          int32
+	keyPEM           []byte // stored as []byte so it can be zeroed on rotation/shutdown
+	certPEM          string
+	chainPEM         string
+	principalURI     string
+	CloudDialer      CloudDialer
+	OnProvisioned    OnProvisionedFunc
+	OnUnprovisioned  OnUnprovisionedFunc
 }
 
 func NewProvisioningService(logger *zap.Logger, configPath string) *ProvisioningService {

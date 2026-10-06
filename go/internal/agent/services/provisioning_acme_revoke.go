@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -68,8 +69,19 @@ func (s *ProvisioningServiceV2) CheckACMERevocation(ctx context.Context, req *ag
 
 func (s *ProvisioningServiceV2) acmeRevocation(ctx context.Context, req *agentpbv2.RevokeACMECertificateRequest, checkOnly bool) (*agentpbv2.RevokeACMECertificateResponse, error) {
 	svc := s.v1
+	// Serialize account operations, not unrelated provisioning RPCs.
+	svc.acmeRevocationMu.Lock()
+	defer svc.acmeRevocationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
 	svc.mu.Lock()
-	defer svc.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			svc.mu.Unlock()
+		}
+	}()
 	if err := svc.requirePKIOperator(ctx); err != nil {
 		return nil, err
 	}
@@ -91,20 +103,29 @@ func (s *ProvisioningServiceV2) acmeRevocation(ctx context.Context, req *agentpb
 		return nil, status.Error(codes.FailedPrecondition, "installed ACME certificate binding is invalid; keys retained")
 	}
 	record := acmeRevocationRecord{Principal: principal, Fingerprint: fingerprint, Serial: serial}
-	if checkOnly {
+	if checkOnly || !svc.revocationConfirmedLocked() {
+		certificate := svc.certPEM
+		accountPath := filepath.Join(svc.configPath, "acme-account-key.pem")
+		svc.mu.Unlock()
+		locked = false
 		bounded, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		if err := checkACMERevocationAccount(bounded, cfg, filepath.Join(svc.configPath, "acme-account-key.pem"), svc.certPEM); err != nil {
+		operation := revokeACMECertificate
+		if checkOnly {
+			operation = checkACMERevocationAccount
+		}
+		if err := operation(bounded, cfg, accountPath, certificate); err != nil {
 			return nil, safeACMERevocationStatus(err)
 		}
-		// Do not write an acknowledgement or change certificate/enrollment state.
-		return &agentpbv2.RevokeACMECertificateResponse{PrincipalUri: principal, CertificateSha256: fingerprint, CertificateSerial: serial}, nil
-	}
-	if !svc.revocationConfirmedLocked() {
-		bounded, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-		if err := revokeACMECertificate(bounded, cfg, filepath.Join(svc.configPath, "acme-account-key.pem"), svc.certPEM); err != nil {
-			return nil, safeACMERevocationStatus(err)
+		svc.mu.Lock()
+		locked = true
+		current, err := os.ReadFile(svc.statePath())
+		if err != nil || !svc.enrolled || svc.principalURI != principal || svc.certPEM != certificate || !bytes.Equal(data, current) {
+			return nil, status.Error(codes.FailedPrecondition, "enrollment changed during ACME operation; no acknowledgement written; reconcile before cleanup")
+		}
+		if checkOnly {
+			// Do not write an acknowledgement or change enrollment state.
+			return &agentpbv2.RevokeACMECertificateResponse{PrincipalUri: principal, CertificateSha256: fingerprint, CertificateSerial: serial}, nil
 		}
 		if err := writeACMERevocationRecord(svc.configPath, record); err != nil {
 			return nil, status.Error(codes.Internal, "certificate revoked but durable acknowledgement failed; keys retained; retry reconciliation before cleanup")

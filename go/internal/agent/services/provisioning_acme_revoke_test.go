@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/url"
 	"os"
@@ -221,6 +222,65 @@ func TestACMERevocationProbeNeverWritesAckOrRevokes(t *testing.T) {
 				t.Fatal("probe wrote ack")
 			}
 		})
+	}
+}
+
+func TestACMERevocationNetworkUnlockAndStateRevalidation(t *testing.T) {
+	for _, checkOnly := range []bool{false, true} {
+		for _, change := range []string{"none", "principal", "certificate", "metadata", "reset"} {
+			t.Run(fmt.Sprintf("check=%v/%s", checkOnly, change), func(t *testing.T) {
+				svc, req := revokeTestService(t)
+				operation := func(context.Context, acmeenroll.Config, string, string) error {
+					if !svc.mu.TryLock() {
+						t.Fatal("network operation blocks provisioning mutex")
+					}
+					defer svc.mu.Unlock()
+					if svc.acmeRevocationMu.TryLock() {
+						svc.acmeRevocationMu.Unlock()
+						t.Fatal("account operations are not serialized")
+					}
+					switch change {
+					case "principal":
+						svc.principalURI += "-changed"
+					case "certificate":
+						svc.certPEM, _ = revokeTestCert(t, svc.principalURI, 43)
+					case "metadata":
+						data, err := os.ReadFile(svc.statePath())
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := os.WriteFile(svc.statePath(), append(data, '\n'), 0600); err != nil {
+							t.Fatal(err)
+						}
+					case "reset":
+						svc.enrolled = false
+					}
+					return nil
+				}
+				stubRevoke(t, operation)
+				old := checkACMERevocationAccount
+				checkACMERevocationAccount = operation
+				t.Cleanup(func() { checkACMERevocationAccount = old })
+				ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
+				_, err := NewProvisioningServiceV2(svc).acmeRevocation(ctx, req, checkOnly)
+				if change == "none" {
+					if err != nil {
+						t.Fatal(err)
+					}
+				} else if status.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("changed state accepted: %v", err)
+				}
+				_, statErr := os.Stat(filepath.Join(svc.configPath, acmeRevocationFile))
+				if checkOnly || change != "none" {
+					if !os.IsNotExist(statErr) {
+						t.Fatal("stale/probe acknowledgement written")
+					}
+				} else if statErr != nil {
+					t.Fatal(statErr)
+				}
+				assertRevokeKeysRetained(t, svc)
+			})
+		}
 	}
 }
 
