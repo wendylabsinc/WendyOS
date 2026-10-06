@@ -601,7 +601,7 @@ func validateChunkingMode(mode string) error {
 	case "", chunkingAuto, chunkingForce, chunkingOff:
 		return nil
 	default:
-		return commandErrorf(errConfigInvalid, "invalid --chunking value %q: must be auto, force, or off", mode)
+		return markUsage(commandErrorf(errConfigInvalid, "invalid --chunking value %q: must be auto, force, or off", mode))
 	}
 }
 
@@ -623,7 +623,7 @@ func newRunCmd() *cobra.Command {
 					return err
 				}
 				if cmd.Flags().Changed("hil") && watch {
-					return commandErrorf(errConfigInvalid, "HIL cannot be combined with --watch")
+					return markUsage(commandErrorf(errConfigInvalid, "HIL cannot be combined with --watch"))
 				}
 				if cmd.Flags().Changed("build-host") && strings.TrimSpace(opts.buildHost) == "" {
 					if strings.TrimSpace(opts.builder) != "" {
@@ -940,7 +940,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 	ctx = withStagefileBackend(ctx, opts.stagefileBackend)
 	if opts.maxConcurrency < 0 {
-		return commandErrorf(errConfigInvalid, "--max-concurrency must be >= 0 (0 = default limit of 4)")
+		return markUsage(commandErrorf(errConfigInvalid, "--max-concurrency must be >= 0 (0 = default limit of 4)"))
 	}
 	if err := validateChunkingMode(opts.chunking); err != nil {
 		return err
@@ -951,7 +951,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	}
 	opts.buildHost = buildHost
 	if useLLB && opts.buildHost != "" {
-		return commandErrorf(errConfigInvalid, "--stagefile-backend=llb cannot yet be combined with --build-host: remote build agents currently accept Dockerfile definitions")
+		return markUsage(commandErrorf(errConfigInvalid, "--stagefile-backend=llb cannot yet be combined with --build-host: remote build agents currently accept Dockerfile definitions"))
 	}
 
 	// A comma-separated --device names a fleet. Split it HERE, before anything
@@ -983,7 +983,7 @@ func runCommand(ctx context.Context, opts runOptions) error {
 	// --build-type is compatible.
 	if opts.dockerfile != "" {
 		if opts.buildType != "" && normalizeBuildType(opts.buildType) != "docker" {
-			return commandErrorf(errConfigInvalid, "--dockerfile cannot be used with --build-type=%s", opts.buildType)
+			return markUsage(commandErrorf(errConfigInvalid, "--dockerfile cannot be used with --build-type=%s", opts.buildType))
 		}
 		if err := validateDockerfileName(opts.dockerfile); err != nil {
 			return commandErrorf(errConfigInvalid, "--dockerfile: %w", err)
@@ -1680,7 +1680,7 @@ func resolveRunProjectType(dir, requestedType string) (string, error) {
 
 	buildType := normalizeBuildType(requestedType)
 	if buildType != "docker" && buildType != "swift" && buildType != "python" && buildType != "compose" {
-		return "", commandErrorf(errConfigInvalid, "invalid value %q for --build-type: must be one of docker, swift, python, or compose", requestedType)
+		return "", markUsage(commandErrorf(errConfigInvalid, "invalid value %q for --build-type: must be one of docker, swift, python, or compose", requestedType))
 	}
 
 	switch buildType {
@@ -2518,7 +2518,7 @@ func validateEnvFlag(entries []string) error {
 	for _, kv := range entries {
 		key, _, ok := strings.Cut(kv, "=")
 		if !ok {
-			return commandErrorf(errConfigInvalid, "--env %q must be KEY=VALUE", kv)
+			return markUsage(commandErrorf(errConfigInvalid, "--env %q must be KEY=VALUE", kv))
 		}
 		if err := appconfig.ValidateEnvKey("--env", key); err != nil {
 			return classifyCommandError(errConfigInvalid, err)

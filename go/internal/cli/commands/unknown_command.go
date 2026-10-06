@@ -53,15 +53,22 @@ func UnknownSubcommandError(args []string) error {
 		return nil
 	}
 
-	msg := fmt.Sprintf("unknown command %q for %q", positional[0], target.CommandPath())
+	// The message keeps cobra's own layout for its root-level error; JSON mode
+	// reports the suggestions and the help pointer as next steps.
+	headline := fmt.Sprintf("unknown command %q for %q", positional[0], target.CommandPath())
+	msg := headline
+	var steps []string
 	if suggestions := target.SuggestionsFor(positional[0]); len(suggestions) > 0 {
 		msg += "\n\nDid you mean this?\n"
 		for _, s := range suggestions {
 			msg += fmt.Sprintf("\t%s\n", s)
+			steps = append(steps, fmt.Sprintf("Did you mean '%s %s'?", target.CommandPath(), s))
 		}
 	}
-	msg += fmt.Sprintf("\nRun '%s --help' to see the available commands.", target.CommandPath())
-	return errors.New(msg)
+	help := fmt.Sprintf("Run '%s --help' to see the available commands.", target.CommandPath())
+	msg += "\n" + help
+	steps = append(steps, help)
+	return markUsage(withNextStepsText(errors.New(headline), msg, steps...))
 }
 
 // Inspect only the known global-option prefix. After a command or --, values
@@ -76,11 +83,11 @@ func bundledDeviceArgumentError(args []string) error {
 			i++ // A separate device value can itself contain spaces.
 			continue
 		case strings.HasPrefix(arg, "--device "), strings.HasPrefix(arg, "--device\t"), strings.HasPrefix(arg, "--device\n"):
-			return errors.New("invalid --device argument: the option and its value arrived as one argument\n" +
+			return markUsage(errors.New("invalid --device argument: the option and its value arrived as one argument\n" +
 				"Store only the device selector in DEVICE and pass it separately, for example:\n" +
 				"  wendy --device \"$DEVICE\" device ros2 topics\n" +
 				"In zsh, use an argument array if you need to store both the option and value. " +
-				"This is a command syntax error; retrying the unchanged command will not help.")
+				"This is a command syntax error; retrying the unchanged command will not help."))
 		default:
 			return nil
 		}

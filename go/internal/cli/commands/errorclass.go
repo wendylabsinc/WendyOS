@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/spf13/pflag"
 	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"google.golang.org/grpc/codes"
@@ -34,6 +33,17 @@ func ExecutionErrorClass(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "context_canceled"
 	}
+	// A usage error outranks any category it also carries (an invalid flag
+	// value in wendy run is also config_invalid): the command line is wrong.
+	if IsUsageError(err) {
+		return "cli_usage"
+	}
+	// A failed device dial is classified by what it says about the device
+	// before the generic deadline classes: a dial that timed out means the
+	// device did not answer (device_unreachable), not a slow operation.
+	if class := DeviceDialErrorClass(err); class != "" {
+		return class
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "context_deadline"
 	}
@@ -48,14 +58,6 @@ func ExecutionErrorClass(err error) string {
 	}
 	if class := ErrorClass(err); class != "" {
 		return class
-	}
-	var unknownFlag *pflag.NotExistError
-	var missingValue *pflag.ValueRequiredError
-	var invalidValue *pflag.InvalidValueError
-	var invalidSyntax *pflag.InvalidSyntaxError
-	if errors.As(err, &unknownFlag) || errors.As(err, &missingValue) ||
-		errors.As(err, &invalidValue) || errors.As(err, &invalidSyntax) {
-		return "cli_usage"
 	}
 	// status.FromError returns ok=true only for real gRPC errors (those
 	// produced by the grpc package or implementing GRPCStatus()). For

@@ -210,3 +210,23 @@ func TestResolveHostMDNSFallback(t *testing.T) {
 		t.Fatalf("resolveHostMDNSFallback(non-.local fail) = %q, want empty", got)
 	}
 }
+
+// The text must stay byte-identical to what fmt.Errorf used to build, and the
+// advice must now also be available as structured next steps.
+func TestDefaultDeviceUnreachableErrorCarriesNextSteps(t *testing.T) {
+	cause := errors.New("connection refused")
+	err := defaultDeviceUnreachableError("wendyos-workshop-16.local", cause)
+	confirm := "Confirm it with 'wendy device get-default'; change it with 'wendy device set-default' or clear it with 'wendy device unset-default'."
+	mdns := "Resolving a .local name needs mDNS: ensure avahi-daemon is running and UDP 5353 isn't firewalled (e.g. 'sudo ufw allow 5353/udp'), or connect by IP."
+	want := `default device "wendyos-workshop-16.local" is set but could not be reached: connection refused` +
+		"\n  " + confirm + "\n  " + mdns
+	if err.Error() != want {
+		t.Errorf("Error() = %q, want %q", err.Error(), want)
+	}
+	if got := NextSteps(err); len(got) != 2 || got[0] != confirm || got[1] != mdns {
+		t.Errorf("NextSteps = %q, want [confirm, mdns]", got)
+	}
+	if got := NextSteps(defaultDeviceUnreachableError("192.168.1.50", cause)); len(got) != 1 || got[0] != confirm {
+		t.Errorf("NextSteps for an IP default = %q, want only the confirm step", got)
+	}
+}

@@ -584,11 +584,15 @@ for test_name in "${TESTS[@]}"; do
             "$WENDY" run --device "$HOSTNAME" --prefix "$test_dir" --detach
 
         device_top_snapshot() {
-            local out rc
-            out=$("$WENDY" device top --device "$HOSTNAME" --json 2>&1)
+            # stderr stays out of the jq input: in JSON mode it can carry
+            # notices, progress, or the error envelope.
+            local out err rc errf
+            errf=$(mktemp)
+            out=$("$WENDY" device top --device "$HOSTNAME" --json 2>"$errf")
             rc=$?
+            err=$(cat "$errf"); rm -f "$errf"
             if [[ $rc -ne 0 ]]; then
-                echo "wendy device top --json failed (rc=$rc): $out"
+                echo "wendy device top --json failed (rc=$rc): $err $out"
                 return 1
             fi
             if ! echo "$out" | jq -e '.host.cpuCount > 0 and .host.memTotalBytes > 0' >/dev/null 2>&1; then
@@ -625,16 +629,21 @@ for test_name in "${TESTS[@]}"; do
                 echo "apps start --detach returned non-zero"
                 return 1
             fi
-            local out
+            local out err errf
+            errf=$(mktemp)
             for _ in 1 2 3 4 5; do
-                out=$("$WENDY" device apps list --device "$HOSTNAME" --json 2>&1)
+                # stderr stays out of the jq input (notices, error envelope),
+                # but is kept for the failure message.
+                out=$("$WENDY" device apps list --device "$HOSTNAME" --json 2>"$errf")
                 if echo "$out" | jq -e --arg a "$app_id" \
                     '(.[] | select(.name==$a) | .runningState) == "RUNNING"' >/dev/null 2>&1; then
+                    rm -f "$errf"
                     return 0
                 fi
                 sleep 1
             done
-            echo "app '$app_id' never reached RUNNING after detached start: $out"
+            err=$(cat "$errf"); rm -f "$errf"
+            echo "app '$app_id' never reached RUNNING after detached start: $out $err"
             return 1
         }
         run_test "swift-start-detach (detached start reaches RUNNING)" detach_start_reaches_running

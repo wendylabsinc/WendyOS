@@ -103,20 +103,20 @@ Flags can be provided progressively — omitted values trigger interactive picke
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if rootfsOnly && len(args) > 0 {
-				return fmt.Errorf("--rootfs-only cannot be combined with positional [image] [drive] arguments")
+				return usageErrorf("--rootfs-only cannot be combined with positional [image] [drive] arguments")
 			}
 			if prNumber > 0 {
 				if nightly || versionFlag != "" || len(args) > 0 {
-					return fmt.Errorf("--pr cannot be combined with --nightly, --version, or positional image/drive arguments")
+					return usageErrorf("--pr cannot be combined with --nightly, --version, or positional image/drive arguments")
 				}
 				fmt.Fprintln(cmd.ErrOrStderr(), tui.WarningMessage("PR images are unhardened debug builds (passwordless root, SSH on). Do not use in production."))
 			}
 			// Positional direct-install mode is incompatible with manifest-backed flags.
 			if len(args) > 0 && (deviceType != "" || versionFlag != "" || driveFlag != "" || wifiSSID != "" || wifiPassword != "" || len(wifiEntries) > 0 || noWifi || deviceName != "" || enrollCloudGRPC != "") {
-				return fmt.Errorf("positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --wifi-ssid, --wifi-password, --wifi, --no-wifi, --device-name, or --cloud-grpc")
+				return usageErrorf("positional [image] [drive] arguments cannot be combined with --device-type, --version, --drive, --wifi-ssid, --wifi-password, --wifi, --no-wifi, --device-name, or --cloud-grpc")
 			}
 			if nightly && versionFlag != "" {
-				return fmt.Errorf("--nightly and --version are mutually exclusive")
+				return usageErrorf("--nightly and --version are mutually exclusive")
 			}
 
 			opts := wifiCLIOptions{

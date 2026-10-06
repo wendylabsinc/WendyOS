@@ -518,7 +518,7 @@ func newCameraStreamCmd(use string, hidden bool) *cobra.Command {
 
 	cmd.Flags().Uint32Var(&deviceID, "id", 0, "Camera device ID, or SensorLink channel ID on Wendy Lite")
 	cmd.Flags().StringVar(&stableID, "stable-id", "",
-		"Camera stable ID from `camera list --json` — survives reboots and re-plugging")
+		"Camera stable `id` from 'camera list --json'; survives reboots and re-plugging")
 	cmd.Flags().Uint32Var(&width, "width", 0, "Frame width (0 = device default)")
 	cmd.Flags().Uint32Var(&height, "height", 0, "Frame height (0 = device default)")
 	cmd.Flags().Uint32Var(&fps, "fps", 0, "Framerate (0 = device default)")
