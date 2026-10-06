@@ -71,8 +71,8 @@ func TestAudioListenNonInteractiveDoesNotOpenPicker(t *testing.T) {
 	stubInteractive(t)
 	streamErr := errors.New("test stream unavailable")
 	client := &audioListenCommandClient{err: streamErr}
-	previous := connectAudioListenFn
-	connectAudioListenFn = func(_ context.Context, opts ...resolveOption) (*grpcclient.AgentConnection, error) {
+	previous := resolveAudioTargetFn
+	resolveAudioTargetFn = func(_ context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 		var cfg resolveConfig
 		for _, opt := range opts {
 			opt(&cfg)
@@ -80,9 +80,9 @@ func TestAudioListenNonInteractiveDoesNotOpenPicker(t *testing.T) {
 		if !cfg.nonInteractive || !cfg.suppressUpdateCheck {
 			t.Fatalf("background connection options = %+v", cfg)
 		}
-		return &grpcclient.AgentConnection{AudioService: client}, nil
+		return &SelectedDevice{Agent: &grpcclient.AgentConnection{AudioService: client}}, nil
 	}
-	t.Cleanup(func() { connectAudioListenFn = previous })
+	t.Cleanup(func() { resolveAudioTargetFn = previous })
 	cmd := newAudioListenCmd()
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)

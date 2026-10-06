@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui/bttable"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -209,6 +210,78 @@ func TestSensorPairRowsMergeByIdentity(t *testing.T) {
 		if row.assetID == 42 && (row.name != "Saved camera" || row.source == nil || row.pairing == nil) {
 			t.Fatal("discovered source did not merge with its saved pairing")
 		}
+	}
+}
+
+func TestSensorPairShowsUnenrolledWendyLite(t *testing.T) {
+	// Unenrolled firmware advertises its sensor capability but no asset ID.
+	source := discovery.LANDeviceFromWendyLiteService(discovery.MDNSService{
+		InstanceName: "wendy-4824", Hostname: "wendylt-wendy-4824.local",
+		IPAddress: "192.0.2.24", Port: 5054,
+		TXTRecords: map[string]string{"id": "441bf6804824", "caps": "sensors", "mtls": "false"},
+	})
+	collection := &models.DevicesCollection{LANDevices: []models.LANDevice{source}}
+	client := &pairTestClient{}
+	h := pairTestHandler(client)
+	h.discover = func(context.Context) ([]models.DiscoveredDevice, error) {
+		return collection.MergedDevices(), nil
+	}
+	m := newSensorPairModel(h)
+	updated, _ := m.Update(m.Init()())
+	m = updated.(sensorPairModel)
+	view := m.View()
+	for _, want := range []string{"wendy-4824", "192.0.2.24", "need enrollment", "same organization"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("unenrolled sensor missing %q: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "No SensorLink devices found") {
+		t.Fatalf("discovered sensor reported as absent: %s", view)
+	}
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyEnter}, {Type: tea.KeyRunes, Runes: []rune{'f'}}} {
+		_, cmd := m.Update(key)
+		if cmd != nil {
+			t.Fatal("unenrolled sensor must not dispatch pairing or forgetting")
+		}
+	}
+
+	// Once enrollment completes, a rescan makes the same board pairable.
+	collection.LANDevices[0].AssetID = 42
+	collection.LANDevices[0].OrgID = 7
+	collection.LANDevices[0].IsMTLS = true
+	updated, _ = m.Update(h.scan()())
+	m = updated.(sensorPairModel)
+	if strings.Contains(m.View(), "need enrollment") || len(m.rows) != 1 {
+		t.Fatalf("enrolled sensor did not become pairable: %s", m.View())
+	}
+	_, pair := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if pair == nil {
+		t.Fatal("enrolled sensor has no pairing action")
+	}
+	pair()
+	if client.added == nil || client.added.SourceAssetId != 42 || client.added.Transport != "wendycom" {
+		t.Fatalf("wrong pairing after enrollment: %+v", client.added)
+	}
+}
+
+func TestSensorPairShowsUnenrolledAlongsideSavedPairings(t *testing.T) {
+	m := newSensorPairModel(nil)
+	m.scanning = false
+	m.devices = []models.DiscoveredDevice{
+		{DisplayName: "Sensor B", Sensorlink: true},
+		{DisplayName: "Sensor A\x1b[2J\r\u202e", Sensorlink: true},
+		{DisplayName: "Not a sensor"},
+	}
+	m.pairings = []*agentpbv2.SensorPairing{{SourceAssetId: 99, Name: "Saved camera"}}
+	m.refreshRows()
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"Sensor A", "Sensor B", "Saved camera"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q: %s", want, view)
+		}
+	}
+	if strings.Contains(view, "Not a sensor") || strings.Contains(m.View(), "\x1b[2J") || strings.ContainsAny(view, "\r\u202e") {
+		t.Fatalf("non-sensor or remote controls reached enrollment notice: %s", view)
 	}
 }
 

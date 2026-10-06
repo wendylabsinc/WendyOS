@@ -304,6 +304,14 @@ func (s *Signer) sign(operation, resource, bodyDigest string, byKID bool, correl
 // EnrollmentRequest signs PKI's enrollment authority separately from the Cloud
 // RPC descriptor. PKI verifies this JWS against the tenant's Operator Authority.
 func EnrollmentRequest(auth *config.AuthConfig, deviceID string) ([]byte, error) {
+	return EnrollmentRequestForClass(auth, deviceID, "B")
+}
+
+// EnrollmentRequestForClass binds the operator authorization to a device tier.
+func EnrollmentRequestForClass(auth *config.AuthConfig, deviceID, deviceClass string) ([]byte, error) {
+	if deviceClass != "A" && deviceClass != "B" && deviceClass != "C" {
+		return nil, fmt.Errorf("invalid device class %q", deviceClass)
+	}
 	s, err := newSigner(auth)
 	if err != nil {
 		return nil, err
@@ -313,7 +321,7 @@ func EnrollmentRequest(auth *config.AuthConfig, deviceID string) ([]byte, error)
 	}
 	now := s.now().Unix()
 	payload, err := canonicalJSON(map[string]any{
-		"tenant": s.tenantUUID, "device_id": deviceID, "device_class": "B",
+		"tenant": s.tenantUUID, "device_id": deviceID, "device_class": deviceClass,
 		"iat": now, "exp": now + 300, "jti": uuid.NewString(),
 	})
 	if err != nil {

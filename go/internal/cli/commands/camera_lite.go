@@ -268,10 +268,14 @@ func subscribeLiteCamera(ctx context.Context, client liteCameraClient, ch *senso
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	queueSize := 8
+	if ch.GetVideo().GetCodec() == sensorlinkpb.VideoFormat_MJPEG {
+		queueSize = 1
+	}
 	s := &liteCameraStream{
 		ctx: ctx, client: client, channel: ch.GetChannelId(),
 		h264:   ch.GetVideo().GetCodec() == sensorlinkpb.VideoFormat_H264,
-		frames: make(chan *sensorlink.SensorFrame, 8), stop: make(chan struct{}),
+		frames: make(chan *sensorlink.SensorFrame, queueSize), stop: make(chan struct{}),
 	}
 	s.waitKeyframe = s.h264
 	// The board may send data before acknowledging the subscription.
@@ -304,6 +308,14 @@ func (s *liteCameraStream) deliver(d *sensorlinkpb.SensorData) {
 	s.haveSeq, s.seq = true, f.Seq
 	if s.waitKeyframe && f.Flags&sensorlink.FlagKeyframe == 0 {
 		return
+	}
+	// JPEG frames decode independently. Replace the waiting frame so a slow
+	// viewer resumes at the latest image instead of draining stale images.
+	if !s.h264 {
+		select {
+		case <-s.frames:
+		default:
+		}
 	}
 	select {
 	case s.frames <- f:

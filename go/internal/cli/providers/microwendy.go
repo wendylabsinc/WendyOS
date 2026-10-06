@@ -168,6 +168,7 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 			"ip":       svc.IPAddress,
 			"port":     fmt.Sprintf("%d", svc.Port),
 			"mtls":     fmt.Sprintf("%t", svc.TXTRecords["mtls"] == "true"),
+			"tenantId": svc.TXTRecords["tenant"],
 		},
 		IsWendyDevice: true,
 	}
@@ -919,8 +920,21 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 		}
 		addr := net.JoinHostPort(ip, port)
 		if device.ConnectionInfo["mtls"] == "true" {
-			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool) error {
-				return client.ConnectWithMutualAuthentication(addr, cert, rootCAs)
+			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool, chain string) error {
+				if tenant := device.ConnectionInfo["tenantId"]; tenant != "" {
+					leaf, err := x509.ParseCertificate(cert.Certificate[0])
+					if err != nil {
+						return err
+					}
+					identity, ok, err := certs.IdentityFromCert(leaf)
+					if err != nil {
+						return err
+					}
+					if !ok || identity.TenantUUID != tenant {
+						return fmt.Errorf("client identity does not match advertised PKI tenant; sign in to the board's organization with wendy auth login --email <email>")
+					}
+				}
+				return client.ConnectWithPKIAuthentication(addr, cert, chain, device.ConnectionInfo["deviceId"])
 			}); err != nil {
 				return nil, err
 			}
@@ -939,7 +953,7 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 		psm64, _ := strconv.ParseUint(device.ConnectionInfo["psm"], 10, 16)
 		psm := uint16(psm64)
 		if device.ConnectionInfo["mtls"] == "true" {
-			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool) error {
+			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool, chain string) error {
 				return client.ConnectViaBLEWithMutualAuthentication(address, psm, cert, rootCAs)
 			}); err != nil {
 				return nil, err
@@ -960,7 +974,7 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 // the device's issuer. It reports the failures of every identity it tried:
 // with one certificate per organization, "which one was this device enrolled
 // with" is exactly what the reader needs to see.
-func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.CertPool) error) error {
+func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.CertPool, chain string) error) error {
 	certInfos, err := loadAllCLICerts()
 	if err != nil {
 		return fmt.Errorf("wendy-lite provider: loading mTLS certs: %w", err)
@@ -971,13 +985,13 @@ func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.Ce
 		if err != nil {
 			return fmt.Errorf("wendy-lite provider: loading client key: %w", err)
 		}
-		cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
+		cert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
 		if err != nil {
 			return fmt.Errorf("wendy-lite provider: parsing mTLS cert: %w", err)
 		}
 		rootCAs := x509.NewCertPool()
 		certs.AppendChainToPool(rootCAs, certInfo.PemCertificateChain)
-		if err := connect(cert, *rootCAs); err != nil {
+		if err := connect(cert, *rootCAs, certInfo.PemCertificateChain); err != nil {
 			connectErrs = append(connectErrs, err)
 			continue
 		}

@@ -3479,10 +3479,14 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 	// address — a ".local" mDNS name, hostname, or IP all contain a "." (or
 	// "[" for IPv6) — because provider IDs are short dotless tokens and the
 	// discovery loop here spins up every provider (e.g. the adb server), costing
-	// seconds. A WendyOS agent address falls through to the gRPC connect below.
-	if device != "" && !strings.Contains(device, ".") && !strings.HasPrefix(device, "[") {
-		if sel := findDeviceByID(ctx, device); sel != nil {
+	// seconds. Lite IDs contain serial paths, which can include dots on macOS.
+	// A WendyOS agent address falls through to the gRPC connect below.
+	if device != "" && (strings.HasPrefix(device, "wendy-lite:") || (!strings.Contains(device, ".") && !strings.HasPrefix(device, "["))) {
+		if sel := findDeviceByIDFn(ctx, device); sel != nil {
 			return sel, nil
+		}
+		if strings.HasPrefix(device, "wendy-lite:") {
+			return nil, fmt.Errorf("Wendy Lite device %q was not found; check its connection or use 'wendy discover'", device)
 		}
 	}
 	rt("  ↳ findDeviceByID (provider discovery)")
@@ -3631,6 +3635,8 @@ func explicitProviderDevice(ctx context.Context, p providers.DeviceProvider) (*S
 		Provider: p,
 	}, nil
 }
+
+var findDeviceByIDFn = findDeviceByID
 
 // findDeviceByID searches all available providers for a device whose ID
 // matches the given string (e.g. "adb:emulator-5554").

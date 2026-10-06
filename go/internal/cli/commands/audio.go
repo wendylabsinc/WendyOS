@@ -59,11 +59,18 @@ func newAudioListCmd() *cobra.Command {
 
 func runAudioList(cmd *cobra.Command) error {
 	ctx := cmd.Context()
-	conn, err := connectToAgent(ctx)
+	target, err := resolveAudioTargetFn(ctx, IncludeBluetooth())
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer target.Close()
+	if isLiteCameraTarget(target) {
+		return listLiteAudio(cmd, target)
+	}
+	conn, err := connectFromSelectedDevice(target, resolveConfig{})
+	if err != nil {
+		return err
+	}
 
 	resp, err := conn.AudioService.ListAudioDevices(ctx, &agentpb.ListAudioDevicesRequest{})
 	if err != nil {
@@ -275,7 +282,7 @@ func newAudioMonitorCmd() *cobra.Command {
 	return cmd
 }
 
-var connectAudioListenFn = connectToAgent
+var resolveAudioTargetFn = resolveTarget
 
 func newAudioListenCmd() *cobra.Command {
 	var deviceID uint32
@@ -291,15 +298,27 @@ func newAudioListenCmd() *cobra.Command {
 		Short: "Stream raw audio from a device microphone",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			var opts []resolveOption
+			opts := []resolveOption{DisableSessionBroker(), IncludeBluetooth()}
 			if nonInteractive {
 				opts = append(opts, NonInteractive(), SuppressUpdateCheck(), SuppressProvisioningHint())
 			}
-			conn, err := connectAudioListenFn(ctx, opts...)
+			target, err := resolveAudioTargetFn(ctx, opts...)
 			if err != nil {
 				return err
 			}
-			defer conn.Close()
+			defer target.Close()
+			if isLiteCameraTarget(target) {
+				return listenLiteAudio(cmd, target, liteAudioOptions{
+					id: deviceID, idSet: cmd.Flags().Changed("id"),
+					sampleRate: sampleRate, rateSet: cmd.Flags().Changed("sample-rate"),
+					channels: channels, channelsSet: cmd.Flags().Changed("channels"),
+					stdout: stdout, bufferMs: bufferMs,
+				})
+			}
+			conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: nonInteractive})
+			if err != nil {
+				return err
+			}
 
 			// Resolve the device locally so we always send a concrete ID. The
 			// agent's auto-select (DeviceId == 0) would pick the first ALSA

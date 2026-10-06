@@ -10,12 +10,15 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
@@ -1013,5 +1016,85 @@ func (c *WendyLiteClient) handshake() error {
 	}
 	ver := hs.GetVersion()
 	c.peerProtocolVersion = protocolVersion{Major: ver.GetMajor(), Minor: ver.GetMinor()}
+	return nil
+}
+
+// EnrollmentChallenge is supported only on the physical serial connection.
+// statusOnly observes completion without replacing the bootstrap nonce.
+func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyComEnrollmentChallenge, error) {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_EnrollmentChallenge{
+			EnrollmentChallenge: &wendypb.WendyComEnrollmentChallengeParams{StatusOnly: statusOnly},
+		},
+	}, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return nil, fmt.Errorf("firmware PKI support unavailable: %w", err)
+	}
+	challenge := resp.GetEnrollmentChallenge()
+	if challenge == nil {
+		return nil, fmt.Errorf("device returned no enrollment challenge")
+	}
+	return challenge, nil
+}
+
+// ConnectWithPKIAuthentication verifies ML-DSA certificate chains and sends
+// the operator intermediates needed by a device trusting only tenant roots.
+func (c *WendyLiteClient) ConnectWithPKIAuthentication(address string, cert tls.Certificate, chain, deviceID string) error {
+	if len(cert.Certificate) == 0 {
+		return fmt.Errorf("missing client certificate")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return err
+	}
+	opts := certs.ServerVerifyOpts{ChainPEM: chain}
+	identity, hasIdentity, err := certs.IdentityFromCert(leaf)
+	if err != nil {
+		return err
+	}
+	if !hasIdentity || identity.TenantUUID == "" || !strings.HasPrefix(identity.Principal, "spiffe://wendy.sh/tenant/"+identity.TenantUUID+"/operator/") {
+		return fmt.Errorf("Wendy Lite PKI requires a tenant-scoped operator identity")
+	}
+	if deviceID == "" {
+		return fmt.Errorf("missing Wendy Lite device identity")
+	}
+	deviceID = "lite-" + strings.TrimPrefix(deviceID, "lite-")
+	opts.ExpectedIdentity = &certs.WendyIdentity{
+		EntityType: certs.EntityAsset, EntityID: deviceID, TenantUUID: identity.TenantUUID,
+		Principal: "spiffe://wendy.sh/tenant/" + identity.TenantUUID + "/device/" + deviceID,
+	}
+
+	verify, err := certs.BuildServerVerifyConnection(opts)
+	if err != nil {
+		return err
+	}
+	caCerts, err := certs.ParseCertsFromPEM([]byte(chain))
+	if err != nil {
+		return err
+	}
+	cert.Certificate = [][]byte{cert.Certificate[0]}
+	for _, ca := range caCerts {
+		cert.Certificate = append(cert.Certificate, ca.Raw)
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert},
+		InsecureSkipVerify: true, // Verification and device identity checks are performed below.
+		VerifyConnection:   verify,
+	}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", address, cfg)
+	if err != nil {
+		return fmt.Errorf("connect (mTLS): %w", err)
+	}
+	c.link = newDirectLink(conn)
+	if err := c.handshake(); err != nil {
+		c.link.close()
+		c.link = nil
+		return fmt.Errorf("handshake: %w", err)
+	}
+	c.peerCert = conn.ConnectionState().PeerCertificates[0]
+	c.startReadLoop()
 	return nil
 }
