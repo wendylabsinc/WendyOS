@@ -109,38 +109,41 @@ func TestSignedTimeBindsDeviceNonce(t *testing.T) {
 	for i := range nonce {
 		nonce[i] = byte(i + 1)
 	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Version int
-			Imprint struct {
-				Algorithm pkix.AlgorithmIdentifier
-				Digest    []byte
+	for _, first := range []byte{0x01, 0x00, 0x80, 0xff} {
+		nonce[0] = first
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Version int
+				Imprint struct {
+					Algorithm pkix.AlgorithmIdentifier
+					Digest    []byte
+				}
+				Nonce   *big.Int
+				CertReq bool
 			}
-			Nonce   *big.Int
-			CertReq bool
+			data := make([]byte, r.ContentLength)
+			_, _ = io.ReadFull(r.Body, data)
+			rest, err := asn1.Unmarshal(data, &req)
+			if err != nil || len(rest) != 0 {
+				t.Errorf("malformed request: %v", err)
+				w.WriteHeader(400)
+				return
+			}
+			sum := sha256.Sum256(nonce)
+			if req.Version != 1 || !req.CertReq || !req.Imprint.Algorithm.Algorithm.Equal(asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}) || string(req.Imprint.Digest) != string(sum[:]) || req.Nonce.Cmp(new(big.Int).SetBytes(nonce)) != 0 {
+				t.Errorf("timestamp did not bind device nonce")
+			}
+			w.Write([]byte("signed-response"))
+		}))
+		defer server.Close()
+		body, err := SignedTime(context.Background(), server.Client(), server.URL, hex.EncodeToString(nonce))
+		if err != nil || string(body) != "signed-response" {
+			t.Fatalf("response %q %v", body, err)
 		}
-		data := make([]byte, r.ContentLength)
-		_, _ = io.ReadFull(r.Body, data)
-		rest, err := asn1.Unmarshal(data, &req)
-		if err != nil || len(rest) != 0 {
-			t.Errorf("malformed request: %v", err)
-			w.WriteHeader(400)
-			return
+		// A system-trust client must reject this untrusted HTTPS server.
+		if _, err = SignedTime(context.Background(), http.DefaultClient, server.URL, hex.EncodeToString(nonce)); err == nil {
+			t.Fatal("untrusted TLS accepted")
 		}
-		sum := sha256.Sum256(nonce)
-		if req.Version != 1 || !req.CertReq || !req.Imprint.Algorithm.Algorithm.Equal(asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}) || string(req.Imprint.Digest) != string(sum[:]) || req.Nonce.Cmp(new(big.Int).SetBytes(nonce)) != 0 {
-			t.Errorf("timestamp did not bind device nonce")
-		}
-		w.Write([]byte("signed-response"))
-	}))
-	defer server.Close()
-	body, err := SignedTime(context.Background(), server.Client(), server.URL, hex.EncodeToString(nonce))
-	if err != nil || string(body) != "signed-response" {
-		t.Fatalf("response %q %v", body, err)
-	}
-	// A system-trust client must reject this untrusted HTTPS server.
-	if _, err = SignedTime(context.Background(), http.DefaultClient, server.URL, hex.EncodeToString(nonce)); err == nil {
-		t.Fatal("untrusted TLS accepted")
 	}
 }
 func TestSignedTimeRejectsRedirectOversizeAndBadNonce(t *testing.T) {
@@ -213,7 +216,7 @@ func TestMintTierCCredential(t *testing.T) {
 	}, func() { f.reply.ExpiresAt = time.Now().Add(time.Minute).Format(time.RFC3339); f.reply.TokenValue = "" }} {
 		mutate()
 		cfg.Token = ""
-		if _, err := Mint(context.Background(), f, auth, cfg, "lite-test"); err == nil || cfg.Token != "" {
+		if asset, err := Mint(context.Background(), f, auth, cfg, "lite-test"); err == nil || cfg.Token != "" || asset != "42" {
 			t.Fatal("invalid credential accepted")
 		}
 	}

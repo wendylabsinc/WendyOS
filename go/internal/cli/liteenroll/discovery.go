@@ -135,9 +135,12 @@ func discoveryRoots(body []byte, contentType string) ([]byte, error) {
 		if err != nil || media != "application/pkcs7-mime" {
 			return nil, fmt.Errorf("CA discovery expected PEM or EST certs-only CMS")
 		}
-		der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(body)))
-		if err != nil {
-			return nil, fmt.Errorf("invalid EST base64: %w", err)
+		der := body
+		if len(der) == 0 || der[0] != 0x30 {
+			der, err = base64.StdEncoding.DecodeString(strings.TrimSpace(string(body)))
+			if err != nil {
+				return nil, fmt.Errorf("invalid EST base64: %w", err)
+			}
 		}
 		var ci struct {
 			Type    asn1.ObjectIdentifier

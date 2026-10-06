@@ -95,7 +95,7 @@ func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthC
 	}
 	expires, err := time.Parse(time.RFC3339, reply.GetExpiresAt())
 	if reply.GetCredentialKind() != "enrollment_token" || reply.GetAssetId() == "" || len(reply.GetTokenValue()) == 0 || len(reply.GetTokenValue()) > 512 || strings.ContainsAny(reply.GetTokenValue(), "\r\n") || err != nil || time.Until(expires) < 30*time.Second {
-		return "", fmt.Errorf("Cloud returned an invalid or nearly expired Tier C enrollment credential")
+		return reply.GetAssetId(), fmt.Errorf("Cloud returned an invalid or nearly expired Tier C enrollment credential")
 	}
 	cfg.Token = reply.GetTokenValue()
 	return reply.GetAssetId(), nil
@@ -105,7 +105,7 @@ func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthC
 // device verifies the CMS signature and pinned TSA chain before using the time.
 func SignedTime(ctx context.Context, client *http.Client, endpoint, nonceHex string) ([]byte, error) {
 	nonce, err := hex.DecodeString(nonceHex)
-	if err != nil || len(nonce) != 32 || nonce[0] == 0 || nonce[0]&0x80 != 0 {
+	if err != nil || len(nonce) != 32 {
 		return nil, fmt.Errorf("device returned an invalid time nonce")
 	}
 	sum := sha256.Sum256(nonce)

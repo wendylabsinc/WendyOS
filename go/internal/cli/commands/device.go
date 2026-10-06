@@ -831,10 +831,11 @@ func newDeviceEnrollCmd() *cobra.Command {
 	var liteOptions liteEnrollmentOptions
 
 	cmd := &cobra.Command{
-		Use:    "enroll",
-		Short:  "Enroll this device with Wendy Cloud or a local pki-core",
-		Long:   "Enrolls the selected device using your stored auth session. WendyOS uses agent gRPC provisioning; Wendy Lite uses Class C enrollment over physical USB and reboots to obtain its certificate from pki-core. Run 'wendy auth login' first.",
-		Hidden: true,
+		Use:         "enroll",
+		Annotations: map[string]string{"wendy.local-enrollment": "true"},
+		Short:       "Enroll this device with Wendy Cloud or a local pki-core",
+		Long:        "Enrolls the selected device using your stored auth session. WendyOS uses agent gRPC provisioning; Wendy Lite uses Class C enrollment over physical USB and reboots to obtain its certificate from pki-core. Run 'wendy auth login' first.",
+		Hidden:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 

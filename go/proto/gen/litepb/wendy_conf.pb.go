@@ -299,7 +299,8 @@ type WendyConfEnrollment struct {
 	BrokerPort uint32                 `protobuf:"varint,7,opt,name=broker_port,json=brokerPort,proto3" json:"broker_port,omitempty"`
 	SignedTime []byte                 `protobuf:"bytes,8,opt,name=signed_time,json=signedTime,proto3" json:"signed_time,omitempty"` // nonce-bound RFC 3161 response, verified on-device
 	// Explicit operator trust provisioning over physical USB/UART only.
-	// All three PEM CA bundles are required when provision_trust is true.
+	// Device and HTTPS PEM CA bundles are required when provision_trust is true.
+	// TSA roots are additionally required for RFC 3161, but not Roughtime.
 	DeviceRoots    []byte `protobuf:"bytes,9,opt,name=device_roots,json=deviceRoots,proto3" json:"device_roots,omitempty"`
 	TsaRoots       []byte `protobuf:"bytes,10,opt,name=tsa_roots,json=tsaRoots,proto3" json:"tsa_roots,omitempty"`
 	HttpsRoots     []byte `protobuf:"bytes,11,opt,name=https_roots,json=httpsRoots,proto3" json:"https_roots,omitempty"`

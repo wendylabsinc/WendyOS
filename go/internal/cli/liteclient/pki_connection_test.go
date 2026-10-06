@@ -56,15 +56,24 @@ func TestPKILANTrustAndDeviceIdentity(t *testing.T) {
 	operator, operatorKey := issue(3, "operator", "spiffe://wendy.sh/tenant/"+tenant+"/operator/22222222-2222-4222-8222-222222222222", false, intermediate, intermediateKey)
 	client := tls.Certificate{Certificate: [][]byte{operator.Raw}, PrivateKey: operatorKey}
 	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediate.Raw})) + string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+	for _, uri := range []string{"", "urn:wendy:org:2:user:42", "spiffe://wendy.sh/tenant/" + tenant + "/device/other"} {
+		leaf, key := issue(6, "unscoped", uri, false, root, rootKey)
+		c := NewWendyLiteClient()
+		err := c.ConnectWithPKIAuthentication("invalid:0", tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: key}, chain, "441bf6804ff8")
+		if err == nil || !strings.Contains(err.Error(), "tenant-scoped operator") {
+			t.Fatalf("identity %q must be rejected before dialing: %v", uri, err)
+		}
+	}
 	for _, tc := range []struct {
-		name, principal string
-		trusted         bool
-		wantHandshake   bool
+		name, principal, deviceID string
+		trusted                   bool
+		wantHandshake             bool
 	}{
-		{"matching device", "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804ff8", true, true},
-		{"different device", "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-000000000000", true, false},
-		{"different tenant", "spiffe://wendy.sh/tenant/33333333-3333-4333-8333-333333333333/device/lite-441bf6804ff8", true, false},
-		{"untrusted issuer", "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804ff8", false, false},
+		{"matching device", "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804ff8", "441bf6804ff8", true, true},
+		{"prefixed device ID", "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804ff8", "lite-441bf6804ff8", true, true},
+		{"different device", "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-000000000000", "441bf6804ff8", true, false},
+		{"different tenant", "spiffe://wendy.sh/tenant/33333333-3333-4333-8333-333333333333/device/lite-441bf6804ff8", "441bf6804ff8", true, false},
+		{"untrusted issuer", "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804ff8", "441bf6804ff8", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			issuer, issuerKey := root, rootKey
@@ -92,7 +101,7 @@ func TestPKILANTrustAndDeviceIdentity(t *testing.T) {
 				completed <- conn.Handshake()
 			}()
 			c := NewWendyLiteClient()
-			err = c.ConnectWithPKIAuthentication(listener.Addr().String(), client, chain, "441bf6804ff8")
+			err = c.ConnectWithPKIAuthentication(listener.Addr().String(), client, chain, tc.deviceID)
 			serverErr := <-completed
 			if tc.wantHandshake {
 				// TLS succeeded with only the root on the server, proving the CLI sent

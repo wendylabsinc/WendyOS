@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1055,15 +1056,18 @@ func (c *WendyLiteClient) ConnectWithPKIAuthentication(address string, cert tls.
 	if err != nil {
 		return err
 	}
-	if hasIdentity && identity.TenantUUID != "" {
-		if deviceID == "" {
-			return fmt.Errorf("missing Wendy Lite device identity")
-		}
-		opts.ExpectedIdentity = &certs.WendyIdentity{
-			EntityType: certs.EntityAsset, EntityID: "lite-" + deviceID, TenantUUID: identity.TenantUUID,
-			Principal: "spiffe://wendy.sh/tenant/" + identity.TenantUUID + "/device/lite-" + deviceID,
-		}
+	if !hasIdentity || identity.TenantUUID == "" || !strings.HasPrefix(identity.Principal, "spiffe://wendy.sh/tenant/"+identity.TenantUUID+"/operator/") {
+		return fmt.Errorf("Wendy Lite PKI requires a tenant-scoped operator identity")
 	}
+	if deviceID == "" {
+		return fmt.Errorf("missing Wendy Lite device identity")
+	}
+	deviceID = "lite-" + strings.TrimPrefix(deviceID, "lite-")
+	opts.ExpectedIdentity = &certs.WendyIdentity{
+		EntityType: certs.EntityAsset, EntityID: deviceID, TenantUUID: identity.TenantUUID,
+		Principal: "spiffe://wendy.sh/tenant/" + identity.TenantUUID + "/device/" + deviceID,
+	}
+
 	verify, err := certs.BuildServerVerifyConnection(opts)
 	if err != nil {
 		return err
@@ -1072,6 +1076,7 @@ func (c *WendyLiteClient) ConnectWithPKIAuthentication(address string, cert tls.
 	if err != nil {
 		return err
 	}
+	cert.Certificate = [][]byte{cert.Certificate[0]}
 	for _, ca := range caCerts {
 		cert.Certificate = append(cert.Certificate, ca.Raw)
 	}

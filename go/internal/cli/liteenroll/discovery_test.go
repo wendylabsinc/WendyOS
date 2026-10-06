@@ -40,13 +40,22 @@ func TestDiscoveryCMS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := discoveryRoots([]byte(base64.StdEncoding.EncodeToString(ci)), "application/pkcs7-mime")
-		if err != nil || !bytes.Equal(got, roots) {
-			t.Fatalf("explicit=%v: %v", explicit, err)
+		for _, raw := range []bool{false, true} {
+			encode := func(data []byte) []byte {
+				if raw {
+					return data
+				}
+				return []byte(base64.StdEncoding.EncodeToString(data))
+			}
+			got, err := discoveryRoots(encode(ci), "application/pkcs7-mime")
+			if err != nil || !bytes.Equal(got, roots) {
+				t.Fatalf("explicit=%v raw=%v: %v", explicit, raw, err)
+			}
+			if _, err := discoveryRoots(encode(append(ci, 0)), "application/pkcs7-mime"); err == nil {
+				t.Fatal("accepted trailing DER")
+			}
 		}
-		if _, err := discoveryRoots([]byte(base64.StdEncoding.EncodeToString(append(ci, 0))), "application/pkcs7-mime"); err == nil {
-			t.Fatal("accepted trailing DER")
-		}
+
 	}
 	if _, err := discoveryRoots(testTrustPEM(t, false, time.Now().Add(time.Hour)), "application/x-pem-file"); err == nil {
 		t.Fatal("accepted leaf")

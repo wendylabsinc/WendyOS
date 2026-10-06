@@ -130,6 +130,9 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 	asset, err := liteenroll.Mint(mintCtx, cloud, auth, cfg, name)
 	cancel()
 	if err != nil {
+		if asset != "" {
+			return fmt.Errorf("asset %s was reserved but enrollment could not continue: %w", asset, err)
+		}
 		return err
 	}
 	defer func() { cfg.Token = "" }()

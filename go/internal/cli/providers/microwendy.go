@@ -985,7 +985,7 @@ func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.Ce
 		if err != nil {
 			return fmt.Errorf("wendy-lite provider: loading client key: %w", err)
 		}
-		cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
+		cert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
 		if err != nil {
 			return fmt.Errorf("wendy-lite provider: parsing mTLS cert: %w", err)
 		}
