@@ -70,7 +70,18 @@ func cloneMessages(messages []Message) []Message {
 	return out
 }
 
+// TurnOptions changes how one turn runs.
+type TurnOptions struct {
+	// SkipMemory turns off memory recall and learning for the turn. Use it for
+	// text that is not a statement from the user, such as a watch's report.
+	SkipMemory bool
+}
+
 func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), approve ApproveFunc) error {
+	return e.TurnWithOptions(ctx, prompt, emit, approve, TurnOptions{})
+}
+
+func (e *Engine) TurnWithOptions(ctx context.Context, prompt string, emit func(Event), approve ApproveFunc, opts TurnOptions) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -86,7 +97,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		emit = func(Event) {}
 	}
 	ctx = context.WithValue(ctx, turnRuntimeKey{}, &turnRuntime{approve: approve, emit: emit, memoryEnabled: e.MemoryEnabled})
-	if e.memory != nil {
+	if e.memory != nil && !opts.SkipMemory {
 		e.memory.beginTurn()
 		defer e.learnMemory(ctx, prompt, emit)
 	}
@@ -114,7 +125,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 		if e.memory != nil {
 			messages = e.refreshMemoryHistory(ctx, messages)
 		}
-		if e.MemoryEnabled() {
+		if !opts.SkipMemory && e.MemoryEnabled() {
 			var recallErr error
 			messages, recallErr = e.recallMemory(ctx, prompt, messages)
 			if recallErr != nil && !memoryWarned {
@@ -220,7 +231,7 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 					if toolErr == nil {
 						images, toolErr = validateImages(output.Images)
 					}
-					if e.memory != nil && ctx.Err() == nil {
+					if e.memory != nil && !opts.SkipMemory && ctx.Err() == nil {
 						e.memory.observe(call, output, toolErr)
 					}
 					if toolErr != nil {

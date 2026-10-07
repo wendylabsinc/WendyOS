@@ -214,3 +214,35 @@ func TestEngineBoundedRoundsAndPartialProviderFailure(t *testing.T) {
 		t.Fatalf("partial model response = %+v", last)
 	}
 }
+
+func TestTurnWithSkipMemoryNeitherRecallsNorLearns(t *testing.T) {
+	base := &engineTestExecutor{tools: []Tool{{Name: "device_info", Parameters: json.RawMessage(`{"type":"object"}`)}}}
+	tools, store := memoryTestTools(t, base)
+	if _, err := store.Save(context.Background(), MemoryInput{Scope: "workspace", Kind: "fact", Title: "Front door camera", Content: "The Brio faces the front door", Evidence: "User said so"}); err != nil {
+		t.Fatal(err)
+	}
+	var recalled, learned bool
+	provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+		for _, m := range messages {
+			learned = learned || strings.Contains(m.Content, "Review the completed Wendy task")
+		}
+		recalled = recalled || strings.Contains(messages[0].Content, "Front door camera")
+		if messages[len(messages)-1].Role == "tool" || learned {
+			return Message{Content: "Done."}, nil
+		}
+		return Message{ToolCalls: []ToolCall{{ID: "c1", Name: "device_info", Arguments: json.RawMessage(`{}`)}}}, nil
+	})
+	engine := NewEngine(provider, tools, "Wendy")
+	if err := engine.TurnWithOptions(context.Background(), "front door camera event", nil, nil, TurnOptions{SkipMemory: true}); err != nil {
+		t.Fatal(err)
+	}
+	if recalled || learned {
+		t.Fatalf("an event turn used memory: recalled=%v learned=%v", recalled, learned)
+	}
+	if err := engine.Turn(context.Background(), "front door camera", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !recalled {
+		t.Fatal("an ordinary turn must still recall notes")
+	}
+}

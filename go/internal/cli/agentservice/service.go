@@ -17,6 +17,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/a2a"
+	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
 	"golang.org/x/time/rate"
 )
 
@@ -571,8 +572,5 @@ func (s *Service) Event(event SensorEvent) (EventResult, error) {
 func (s *Service) String() string { return fmt.Sprintf("%s (%s)", s.config.Name, s.config.Profile) }
 
 func sensorEventPrompt(instructions string, event SensorEvent) string {
-	data, _ := json.Marshal(event)
-	// Encode the JSON as a string as well, so payloads cannot close the boundary.
-	escaped, _ := json.Marshal(string(data))
-	return instructions + "\n\n<untrusted_sensor_event_json>\n" + string(escaped) + "\n</untrusted_sensor_event_json>"
+	return instructions + "\n\n" + chat.UntrustedJSONBlock(event)
 }
