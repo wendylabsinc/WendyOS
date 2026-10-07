@@ -52,6 +52,7 @@ type UIState struct {
 	// The TUI's watch state, kept while the same session's watches keep running.
 	watches       map[string]*watchDisplay
 	watchQueue    []WatchNotice
+	watchOmitted  int
 	lastWatchTurn time.Time
 	// turnID keeps the transcript's turn numbers apart from the next Run's.
 	turnID uint64
@@ -69,6 +70,7 @@ func (m *chatModel) saveState(state *UIState) {
 	state.Voice = m.voiceEnabled
 	state.watches = m.watches
 	state.watchQueue = m.watchQueue
+	state.watchOmitted = m.watchOmitted
 	state.lastWatchTurn = m.lastWatchTurn
 	state.turnID = m.turnID
 }
@@ -169,6 +171,7 @@ type chatModel struct {
 	watches       map[string]*watchDisplay
 	watchQueue    []WatchNotice // shown, not yet given to the model
 	lastWatchTurn time.Time
+	watchOmitted  int  // notices dropped from the queue since the last event turn
 	watchPacing   bool // a pacing tick is scheduled
 	turnAssistant int  // transcript index of this turn's streaming reply, or -1
 	now           func() time.Time
@@ -261,6 +264,7 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 			m.watches = opts.State.watches
 		}
 		m.watchQueue = opts.State.watchQueue
+		m.watchOmitted = opts.State.watchOmitted
 		m.lastWatchTurn = opts.State.lastWatchTurn
 		m.turnID = opts.State.turnID
 	}
@@ -513,7 +517,7 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		m.quitting = true
 		return tea.Quit
 	case "/clear":
-		m.watchQueue = nil
+		m.watchQueue, m.watchOmitted = nil, 0
 		m.discardQueuedPrompts()
 		m.clearStoppedVoice = m.clearStoppedVoice || m.voiceEnabled
 		m.stopVoice()

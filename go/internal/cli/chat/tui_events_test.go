@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -146,6 +148,7 @@ func TestUIStateCarriesWatchesAcrossRuns(t *testing.T) {
 	first.watches["w1"].errorTurned = true
 	first.lastWatchTurn = time.Date(2026, 10, 7, 14, 0, 0, 0, time.Local)
 	first.turnID = 3
+	first.watchOmitted = 2
 	cancel()
 	first.workers.Wait()
 	first.saveState(state)
@@ -158,6 +161,9 @@ func TestUIStateCarriesWatchesAcrossRuns(t *testing.T) {
 	d := second.watches["w1"]
 	if d == nil || d.startState != "PREPARING" || !d.errorTurned || second.lastWatchTurn.IsZero() {
 		t.Fatalf("trigger memory lost: %+v", d)
+	}
+	if second.watchOmitted != 2 {
+		t.Fatal("the omitted count was lost across runs")
 	}
 	if second.turnID != 3 {
 		t.Fatalf("turn numbers restart at %d; a restored tool group could join a new turn's", second.turnID)
@@ -262,7 +268,7 @@ func TestUIWatchEventPromptQuotesLabels(t *testing.T) {
 	status := watchStatus("READY", "")
 	status.Label, status.Camera = notice.Label, "Brio\n101"
 	m.watchFor(status)
-	prompt := m.watchEventPrompt([]WatchNotice{notice})
+	prompt := m.watchEventPrompt([]WatchNotice{notice}, 0)
 	header, rest, _ := strings.Cut(prompt, "\n")
 	wantLabel, _ := json.Marshal(notice.Label)
 	wantCamera, _ := json.Marshal("Brio\n101")
@@ -273,7 +279,7 @@ func TestUIWatchEventPromptQuotesLabels(t *testing.T) {
 	if !strings.HasPrefix(rest, "<untrusted_sensor_event_json>\n") || !strings.HasSuffix(prompt, tail) || strings.Count(prompt, "</untrusted_sensor_event_json>") != 1 {
 		t.Fatalf("prompt:\n%s", prompt)
 	}
-	if merged := m.watchEventPrompt([]WatchNotice{notice, status}); !strings.HasPrefix(merged, "Your watches reported:\n") || !strings.HasSuffix(merged, tail) {
+	if merged := m.watchEventPrompt([]WatchNotice{notice, status}, 0); !strings.HasPrefix(merged, "Your watches reported:\n") || !strings.HasSuffix(merged, tail) {
 		t.Fatalf("merged prompt:\n%s", merged)
 	}
 }
@@ -312,6 +318,10 @@ func TestUIWatchTriggers(t *testing.T) {
 	start("READY")
 	if m.watchTriggers(watchStatus("READY", "")) {
 		t.Fatal("READY after a READY start must not start a turn")
+	}
+	start("ENDED")
+	if m.watchTriggers(watchStatus("ENDED", "device changed")) {
+		t.Fatal("an ENDED that watch_start already returned must not start a turn")
 	}
 }
 
@@ -602,5 +612,134 @@ func TestUIWatchLinesKeepTheirSpacingOnScreen(t *testing.T) {
 				t.Fatalf("screen lacks %q:\n%s", want, screen)
 			}
 		}
+	}
+}
+
+// F6: every /watches field comes from the model, the user or the device.
+func TestUIWatchListingSingleLinesItsFields(t *testing.T) {
+	m, control, _ := uiWatchModel(t, nil, &uiExecutor{})
+	control.listed = []WatchInfo{{WatchID: "w1", Label: "front\ndoor", CameraName: "Brio\n101", Classes: []string{"per\nson", "dog"}, State: "ENDED", Reason: "device\nchanged"}}
+	m.Update(m.submit("/watches")())
+	if e := lastEntry(m); e.text != "w1  front door  per son, dog · Brio 101  ENDED: device changed" {
+		t.Fatalf("listing %q", e.text)
+	}
+}
+
+// F7: notices that start no turn are capped; triggers never are.
+func TestUIWatchQueueCapsNoticesThatStartNoTurn(t *testing.T) {
+	var prompts []string
+	m, _, _ := uiWatchModel(t, recordingProvider(&prompts), &uiExecutor{})
+	m.active = true // a turn is running: everything queues
+	deliver(m, watchEntered(0.9))
+	for i := 1; i <= 25; i++ {
+		deliver(m, WatchNotice{Method: watchEventMethod, WatchID: "w1", Label: "front door", Sequence: uint64(i), Kind: "left"})
+	}
+	if len(m.watchQueue) != 21 || m.watchQueue[0].Kind != "entered" || m.watchQueue[1].Sequence != 6 {
+		t.Fatalf("queue of %d, first left %d", len(m.watchQueue), m.watchQueue[1].Sequence)
+	}
+	m.active = false
+	m.maybeStartWatchTurn()
+	uiDrainTurn(t, m)
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "</untrusted_sensor_event_json>\n5 earlier watch report(s) that needed no reply were left out.\nTell the user") {
+		t.Fatalf("prompts %q", prompts)
+	}
+	if m.watchOmitted != 0 {
+		t.Fatal("the omitted count must start again after a turn")
+	}
+	m.watchOmitted = 3
+	m.submit("/clear")
+	if m.watchOmitted != 0 {
+		t.Fatal("/clear must reset the omitted count with the queue")
+	}
+}
+
+// F8: an event turn must not yank a reader who scrolled up to the bottom.
+func TestUIEventTurnKeepsAScrolledUpReaderInPlace(t *testing.T) {
+	m, _, _ := uiWatchModel(t, recordingProvider(new([]string)), &uiExecutor{})
+	for i := 0; i < 40; i++ {
+		m.appendEntry("notice", "Earlier", fmt.Sprintf("line %d", i))
+	}
+	m.viewport.GotoTop()
+	deliver(m, watchEntered(0.9))
+	if !m.active {
+		t.Fatal("an arrival did not start a turn")
+	}
+	uiDrainTurn(t, m)
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("the event turn moved the reader to offset %d", m.viewport.YOffset)
+	}
+}
+
+// F9: an unknown class list or camera is left out of the header.
+func TestUIWatchEventPromptLeavesOutUnknownParts(t *testing.T) {
+	m, _, _ := uiWatchModel(t, nil, &uiExecutor{})
+	m.noteWatchStart(`{"watch_id":"w1","label":"front door","state":"READY"}`)
+	header := func() string {
+		h, _, _ := strings.Cut(m.watchEventPrompt([]WatchNotice{watchEntered(0.9)}, 0), "\n")
+		return h
+	}
+	if got := header(); got != `Your watch "front door" reported:` {
+		t.Fatalf("header %q", got)
+	}
+	m.watches["w1"].classes = []string{"person"}
+	if got := header(); got != `Your watch "front door" (person) reported:` {
+		t.Fatalf("header %q", got)
+	}
+	m.watches["w1"].classes, m.watches["w1"].camera = nil, "Brio 101"
+	if got := header(); got != `Your watch "front door" (camera "Brio 101") reported:` {
+		t.Fatalf("header %q", got)
+	}
+}
+
+// F10: statuses queued while watch_start ran are in its result already.
+func TestUIWatchStartResultDropsTheStatusesItCovers(t *testing.T) {
+	var prompts []string
+	m, _, _ := uiWatchModel(t, recordingProvider(&prompts), &uiExecutor{})
+	m.active = true // watch_start is running
+	other := watchStatus("PREPARING", "")
+	other.WatchID = "w2"
+	deliver(m, watchStatus("PREPARING", ""))
+	deliver(m, watchStatus("PREPARING", "downloading the detector"))
+	deliver(m, other)
+	call := ToolCall{Name: "watch_start"}
+	m.handleEvent(Event{Type: "tool_result", Call: &call, Text: `{"watch_id":"w1","label":"front door","state":"READY"}`})
+	if len(m.watchQueue) != 1 || m.watchQueue[0].WatchID != "w2" {
+		t.Fatalf("queue %+v", m.watchQueue)
+	}
+
+	// A READY the result did not report stays, and still starts a turn.
+	m.watchQueue = nil
+	deliver(m, watchStatus("PREPARING", ""))
+	deliver(m, watchStatus("READY", ""))
+	m.handleEvent(Event{Type: "tool_result", Call: &call, Text: `{"watch_id":"w1","label":"front door","state":"PREPARING"}`})
+	if len(m.watchQueue) != 1 || m.watchQueue[0].State != "READY" || !m.watchTriggers(m.watchQueue[0]) {
+		t.Fatalf("queue %+v", m.watchQueue)
+	}
+
+	// The first arrival after a READY start is the single-watch form.
+	m.watchQueue = nil
+	deliver(m, watchStatus("PREPARING", ""))
+	m.handleEvent(Event{Type: "tool_result", Call: &call, Text: `{"watch_id":"w1","label":"front door","state":"READY"}`})
+	m.active = false
+	deliver(m, watchEntered(0.9))
+	uiDrainTurn(t, m)
+	if len(prompts) != 1 || !strings.HasPrefix(prompts[0], `Your watch "front door" (person, camera "Brio 101") reported:`) {
+		t.Fatalf("prompts %q", prompts)
+	}
+}
+
+// F12: stopping every watch drops their queued reports.
+func TestUIStopAllWatchesEmptiesTheEventQueue(t *testing.T) {
+	m, _, _ := uiWatchModel(t, recordingProvider(new([]string)), &uiExecutor{})
+	m.active = true
+	deliver(m, watchEntered(0.9))
+	m.Update(watchStopMessage{stopped: 0, err: errors.New("watch_list failed")})
+	if len(m.watchQueue) != 1 {
+		t.Fatal("a failed stop-all dropped the queue")
+	}
+	m.Update(m.submit("/watches stop all")())
+	m.active = false
+	if len(m.watchQueue) != 0 || m.maybeStartWatchTurn() != nil || m.active {
+		t.Fatalf("a stopped watch's report still starts a turn: %+v", m.watchQueue)
 	}
 }

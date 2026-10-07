@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,8 +83,33 @@ func (m *chatModel) handleWatchNotice(n WatchNotice) tea.Cmd {
 		m.appendEntry("event", "", fmt.Sprintf("· %d watch notification(s) were missed", missed))
 	}
 	m.appendEntry("event", "", watchNoticeLine(n, d, m.now()))
-	m.watchQueue = append(m.watchQueue, n)
+	m.queueWatchNotice(n)
 	return m.maybeStartWatchTurn()
+}
+
+// At most this many queued notices that start no turn wait for the next one.
+const maxQuietWatchNotices = 20
+
+// queueWatchNotice holds n for the next event turn. Past the cap, the oldest
+// notice that starts no turn is dropped and counted; a trigger never is.
+func (m *chatModel) queueWatchNotice(n WatchNotice) {
+	m.watchQueue = append(m.watchQueue, n)
+	for {
+		oldest, quiet := -1, 0
+		for i, q := range m.watchQueue {
+			if !m.watchTriggers(q) {
+				if oldest < 0 {
+					oldest = i
+				}
+				quiet++
+			}
+		}
+		if quiet <= maxQuietWatchNotices {
+			return
+		}
+		m.watchQueue = slices.Delete(m.watchQueue, oldest, oldest+1)
+		m.watchOmitted++
+	}
 }
 
 // An event turn starts at most this often; later reports merge into it.
@@ -103,7 +129,7 @@ func (m *chatModel) watchTriggers(n WatchNotice) bool {
 	case n.Method == watchEventMethod:
 		return n.Kind == "entered"
 	case n.State == "ENDED":
-		return n.Reason != watchStoppedReason
+		return n.Reason != watchStoppedReason && (d == nil || d.startState != "ENDED")
 	case n.State == "ERROR":
 		return d != nil && !d.errorTurned && d.startState != "ERROR"
 	case n.State == "READY":
@@ -141,38 +167,64 @@ func (m *chatModel) maybeStartWatchTurn() tea.Cmd {
 			d.readyTurned = d.readyTurned || n.State == "READY"
 		}
 	}
+	omitted := m.watchOmitted
+	m.watchOmitted = 0
 	m.lastWatchTurn = m.now()
-	return m.startEventTurn(m.watchEventPrompt(items))
+	return m.startEventTurn(m.watchEventPrompt(items, omitted))
 }
 
 // startEventTurn runs a turn for watch reports. The event lines already in the
 // transcript stand in for a "You" entry, and the turn skips memory: its text is
 // not a statement from the user (design §7.3). It is not an interruption
-// either, so the previous reply keeps speaking.
+// either, so the previous reply keeps speaking, and a reader scrolled up stays
+// where they are: the transcript follows only a view already at the bottom.
 func (m *chatModel) startEventTurn(prompt string) tea.Cmd {
-	cmd := m.beginTurn(prompt, true)
-	m.viewport.GotoBottom()
-	return cmd
+	return m.beginTurn(prompt, true)
 }
 
 // watchEventPrompt is an event turn's prompt (design §7.3). The label and the
 // camera name come from the model, the user or the device, so they are
-// JSON-quoted like the event itself.
-func (m *chatModel) watchEventPrompt(items []WatchNotice) string {
-	const ask = "\nTell the user if this is what they asked to be alerted about.\nTools that need approval are not available in this turn."
+// JSON-quoted like the event itself. omitted counts the queued notices the cap
+// dropped.
+func (m *chatModel) watchEventPrompt(items []WatchNotice, omitted int) string {
+	ask := "\n"
+	if omitted > 0 {
+		ask += fmt.Sprintf("%d earlier watch report(s) that needed no reply were left out.\n", omitted)
+	}
+	ask += "Tell the user if this is what they asked to be alerted about.\nTools that need approval are not available in this turn."
 	if len(items) == 1 {
-		d := m.watches[items[0].WatchID]
-		if d == nil {
-			d = &watchDisplay{label: items[0].Label}
-		}
-		header := "Your watch " + jsonQuote(d.label) + " (" + strings.Join(d.classes, ", ") + ", camera " + jsonQuote(d.camera) + ") reported:\n"
-		return header + UntrustedJSONBlock(watchNoticeData(items[0])) + ask
+		return m.watchPromptHeader(items[0]) + UntrustedJSONBlock(watchNoticeData(items[0])) + ask
 	}
 	payload := make([]map[string]any, 0, len(items))
 	for _, n := range items {
 		payload = append(payload, watchNoticeData(n))
 	}
 	return "Your watches reported:\n" + UntrustedJSONBlock(payload) + ask
+}
+
+// watchPromptHeader names the watch that reported n, leaving out its classes
+// or camera when they are not known: Your watch "front door" (person, camera
+// "Brio 101") reported:
+func (m *chatModel) watchPromptHeader(n WatchNotice) string {
+	d := m.watches[n.WatchID]
+	if d == nil {
+		d = &watchDisplay{label: n.Label}
+	}
+	header := "Your watch"
+	if d.label != "" {
+		header += " " + jsonQuote(d.label)
+	}
+	var about []string
+	if len(d.classes) > 0 {
+		about = append(about, strings.Join(d.classes, ", "))
+	}
+	if d.camera != "" {
+		about = append(about, "camera "+jsonQuote(d.camera))
+	}
+	if len(about) > 0 {
+		header += " (" + strings.Join(about, ", ") + ")"
+	}
+	return header + " reported:\n"
 }
 
 func watchNoticeData(n WatchNotice) map[string]any {
@@ -191,7 +243,9 @@ func jsonQuote(s string) string {
 }
 
 // noteWatchStart records what watch_start returned, from its tool result, so
-// a later READY or ERROR is judged against it.
+// a later READY or ERROR is judged against it. The model has that result, so
+// the statuses queued while watch_start ran that it covers are dropped: the
+// first arrival is then usually reported on its own.
 func (m *chatModel) noteWatchStart(text string) {
 	var result struct {
 		WatchID string `json:"watch_id"`
@@ -207,6 +261,24 @@ func (m *chatModel) noteWatchStart(text string) {
 		m.watches[result.WatchID] = d
 	}
 	d.startState = result.State
+	m.watchQueue = slices.DeleteFunc(m.watchQueue, func(n WatchNotice) bool {
+		return n.WatchID == result.WatchID && n.Method == watchStatusMethod && watchStartCovers(result.State, n.State)
+	})
+}
+
+// watchStartCovers reports whether a watch_start that returned start already
+// told the model what a status with state, queued before that result, says:
+// any PREPARING, the same state, or a READY or ERROR when the watch has ended.
+// A READY or ERROR that differs from a live start may have come after it and
+// stays.
+func watchStartCovers(start, state string) bool {
+	switch state {
+	case "PREPARING":
+		return true
+	case "READY", "ERROR":
+		return state == start || start == "ENDED"
+	}
+	return false
 }
 
 // watchNoticeLine formats a notice: "· 14:02:11  front door  person 0.91 entered".
@@ -283,9 +355,13 @@ func (m *chatModel) showWatchList(msg watchListMessage) {
 	}
 	var lines []string
 	for _, w := range msg.watches {
-		line := fmt.Sprintf("%s  %s  %s · %s  %s", w.WatchID, w.Label, strings.Join(w.Classes, ", "), w.CameraName, w.State)
+		classes := make([]string, 0, len(w.Classes))
+		for _, class := range w.Classes {
+			classes = append(classes, chatSingleLine(class))
+		}
+		line := fmt.Sprintf("%s  %s  %s · %s  %s", chatSingleLine(w.WatchID), chatSingleLine(w.Label), strings.Join(classes, ", "), chatSingleLine(w.CameraName), chatSingleLine(w.State))
 		if w.Reason != "" {
-			line += ": " + w.Reason
+			line += ": " + chatSingleLine(w.Reason)
 		}
 		if t, err := time.Parse(time.RFC3339Nano, w.LastEventAt); err == nil {
 			line += "  last event " + t.Local().Format("15:04:05")
@@ -301,5 +377,7 @@ func (m *chatModel) showWatchStop(msg watchStopMessage) {
 		m.appendEntry("error", "Could not stop every watch", text+" "+msg.err.Error())
 		return
 	}
+	// Every watch has stopped, so its queued reports no longer need a reply.
+	m.watchQueue, m.watchOmitted = nil, 0
 	m.appendEntry("notice", "Watches", text)
 }
