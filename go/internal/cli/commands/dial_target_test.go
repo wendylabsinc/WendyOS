@@ -804,6 +804,11 @@ func deadAgentAddr(t *testing.T) string {
 // their TLS config.
 func selfSignedCLICert(t *testing.T, orgID int) config.CertificateInfo {
 	t.Helper()
+	return selfSignedCLICertUntil(t, orgID, time.Now().Add(time.Hour))
+}
+
+func selfSignedCLICertUntil(t *testing.T, orgID int, until time.Time) config.CertificateInfo {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generating key: %v", err)
@@ -811,8 +816,8 @@ func selfSignedCLICert(t *testing.T, orgID int) config.CertificateInfo {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "wendy/test/cli"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
+		NotBefore:             until.Add(-24 * time.Hour),
+		NotAfter:              until,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,

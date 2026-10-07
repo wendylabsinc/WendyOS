@@ -241,8 +241,8 @@ func formatError(err error) error {
 	// A genuine mTLS rejection carries a TLS-alert / cert-verification marker: the
 	// device rejected our client cert ("remote error: tls: bad certificate"),
 	// required one ("certificate required"), or our client rejected the device's
-	// server cert ("tls: failed to verify certificate: x509: ..."). Only these
-	// indicate a real cert/clock-skew problem worth an ssh timedatectl check.
+	// server cert ("tls: failed to verify certificate: x509: ..."). These
+	// warrant certificate/clock guidance, but do not prove a clock problem.
 	isCertRejection := strings.Contains(msg, "tls:") ||
 		strings.Contains(msg, "bad certificate") ||
 		strings.Contains(msg, "certificate required")
@@ -263,7 +263,7 @@ func formatError(err error) error {
 
 	switch {
 	case strings.Contains(msg, "code = Unavailable") && isCertRejection && !isPKICoreCall && !isCloudCall:
-		return fmt.Errorf("%sTLS handshake rejected by device (possible clock skew or cert mismatch).\n  Check the device clock: ssh wendy@<host> 'timedatectl status'\n  For full TLS details rerun with WENDY_TLS_DEBUG=1", prefix)
+		return fmt.Errorf("%sTLS handshake rejected by device (possible clock skew or cert mismatch).\n  If the device clock may be wrong, run 'wendy device sync-time' on the same LAN, then retry.\n  For full TLS details rerun with WENDY_TLS_DEBUG=1", prefix)
 	case strings.Contains(msg, "code = Unavailable") && isTransportHandshakeDrop && !isPKICoreCall && !isCloudCall:
 		return fmt.Errorf("%sSecure connection dropped during the TLS handshake.\n  The device may be offline or unreachable. If you are connecting through Wendy Cloud, the tunnel broker or the device's link to it may be down.\n  For full TLS details rerun with WENDY_TLS_DEBUG=1", prefix)
 	case strings.Contains(msg, "code = Unavailable") && strings.Contains(msg, "connection refused"):

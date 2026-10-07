@@ -91,14 +91,26 @@ connection fails because of a TLS authentication rejection, a device identity
 refusal, an organization mismatch, or a gRPC `Unauthenticated` or
 `PermissionDenied` response.
 
-For TLS authentication failures, run
-[`wendy auth refresh-certs`](./commands/auth/refresh-certs.md), then retry the
-original command. If it still fails, rerun with `WENDY_TLS_DEBUG=1` to see TLS
-diagnostics.
+A TLS authentication failure can mean a wrong device clock or incompatible
+credentials. If the device clock may be wrong, run `wendy device sync-time`
+on the same LAN, then retry. Refresh certificates when the CLI reports expired
+client credentials, after checking this computer's clock. Use
+`WENDY_TLS_DEBUG=1` for connection details.
 
 Authentication failures omit the simulator's boot-console output. Ordinary
 startup timeouts still include the available boot-console tail to help
 diagnose guest startup problems.
+
+## Automatic connection recovery
+
+After a possible clock-related TLS failure, the CLI attempts to broadcast a
+signed time proof on the LAN and retries the connection. It reports whether
+sending failed and whether the retry connected; sending a proof does not confirm
+that the device received it or changed its clock.
+
+The CLI offers to refresh certificates when it has evidence that the client
+credentials need renewal. A timeout or generic TLS rejection alone does not
+trigger that offer.
 
 ## Local Targets
 

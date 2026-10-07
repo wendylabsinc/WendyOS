@@ -21,7 +21,7 @@ Install both QEMU and its ARM64 firmware. On Debian or Ubuntu, run `sudo apt ins
 
 ## TLS authentication failed
 
-If a command reports `TLS authentication failed. Your certificates may be outdated or incompatible with the device.`, run [`wendy auth refresh-certs`](/docs/advanced/clients/wendy-cli/commands/auth/refresh-certs), then retry the original command. If it still fails, rerun with `WENDY_TLS_DEBUG=1` to see TLS diagnostics.
+Follow the CLI's recovery hint. If the device clock may be wrong, run `wendy device sync-time` on the same LAN, then retry. Refresh certificates when the CLI identifies a client-credential problem; a TLS rejection alone does not establish that refreshing will help. Use `WENDY_TLS_DEBUG=1` for connection details.
 
 Simulator startup stops retrying when authentication is rejected. It reports the authentication error without the boot-console tail. See [simulator startup and authentication failures](/docs/advanced/clients/wendy-cli/device-selection#simulator-startup-and-authentication-failures).
 

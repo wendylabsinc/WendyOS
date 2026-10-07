@@ -538,13 +538,13 @@ func TestFormatError_UnimplementedKeepsUpdateHintForGeneratedStub(t *testing.T) 
 
 // A genuine mTLS rejection by the device (clock skew, stale/mismatched cert)
 // surfaces as a server-sent TLS alert ("remote error: tls: bad certificate").
-// That case must keep the clock-skew / timedatectl remedy — it is accurate.
+// That case should offer supported clock recovery without claiming a diagnosis.
 func TestFormatError_GenuineCertRejectionKeepsClockSkewAdvice(t *testing.T) {
 	err := fmt.Errorf("querying device version: %w", status.Error(codes.Unavailable,
 		`connection error: desc = "transport: authentication handshake failed: remote error: tls: bad certificate"`))
 
 	got := formatError(err).Error()
-	if !strings.Contains(got, "clock skew") || !strings.Contains(got, "timedatectl") {
+	if !strings.Contains(got, "clock skew") || !strings.Contains(got, "wendy device sync-time") || strings.Contains(got, "ssh ") {
 		t.Fatalf("genuine cert rejection should keep clock-skew advice, got %q", got)
 	}
 }
@@ -558,7 +558,7 @@ func TestFormatError_X509VerifyFailureKeepsClockSkewAdvice(t *testing.T) {
 		`connection error: desc = "transport: authentication handshake failed: tls: failed to verify certificate: x509: certificate has expired or is not yet valid"`))
 
 	got := formatError(err).Error()
-	if !strings.Contains(got, "clock skew") || !strings.Contains(got, "timedatectl") {
+	if !strings.Contains(got, "clock skew") || !strings.Contains(got, "wendy device sync-time") || strings.Contains(got, "ssh ") {
 		t.Fatalf("x509 verify failure should keep clock-skew advice, got %q", got)
 	}
 }
