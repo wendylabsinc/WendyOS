@@ -76,6 +76,7 @@ func LoadAgentModels(file string) (map[string]Config, error) {
 type Session struct {
 	Engine *Engine
 	tools  *Tools
+	inbox  *watchInbox
 }
 type SessionOptions struct {
 	SystemInstructions                             string
@@ -104,7 +105,13 @@ func NewSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	tools, err := NewTools(ctx, opts.Executable, opts.Workspace, opts.Device)
+	// Only an interactive or headless session hears from watches; services
+	// never get watch tools (sessionEngine filters them).
+	var inbox *watchInbox
+	if opts.ApprovedTools == nil {
+		inbox = newWatchInbox()
+	}
+	tools, err := newTools(ctx, opts.Executable, opts.Workspace, opts.Device, inbox)
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +123,11 @@ func NewSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 		_ = tools.Close()
 		return nil, err
 	}
-	return &Session{Engine: engine, tools: tools}, nil
+	return &Session{Engine: engine, tools: tools, inbox: inbox}, nil
 }
 func sessionEngine(provider Provider, executor Executor, opts SessionOptions) (*Engine, error) {
 	if opts.ApprovedTools != nil {
-		executor = &serviceTools{base: executor, allowed: opts.ApprovedTools}
+		executor = &serviceTools{base: withoutWatchTools{base: executor}, allowed: opts.ApprovedTools}
 	}
 	store, err := NewProfileMemoryStore(opts.MemoryDirectory, opts.Workspace, opts.Device, opts.Profile)
 	if err != nil {
@@ -139,6 +146,41 @@ func sessionEngine(provider Provider, executor Executor, opts SessionOptions) (*
 	return engine, nil
 }
 func (s *Session) Close() error { return s.tools.Close() }
+
+// WatchNotices delivers the session's watch notifications. It is nil for a
+// session without an inbox.
+func (s *Session) WatchNotices() <-chan WatchNotice {
+	if s.inbox == nil {
+		return nil
+	}
+	return s.inbox.items
+}
+
+func (s *Session) ListWatches(ctx context.Context) ([]WatchInfo, error) {
+	return s.tools.listWatches(ctx)
+}
+
+func (s *Session) StopAllWatches(ctx context.Context) (int, error) {
+	return s.tools.stopAllWatches(ctx)
+}
+
+// ActiveWatchCount is the number of watches that have not ended, or 0 when
+// they cannot be listed.
+func (s *Session) ActiveWatchCount(ctx context.Context) int {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	watches, err := s.ListWatches(ctx)
+	if err != nil {
+		return 0
+	}
+	active := 0
+	for _, w := range watches {
+		if w.State != "ENDED" {
+			active++
+		}
+	}
+	return active
+}
 
 // Service policies apply before tool discovery AND execution. Only listed
 // mutation tools can run unattended; reads and local memory retain defaults.
@@ -271,7 +313,7 @@ func (s *agentSupervisor) child(ctx context.Context, opts SessionOptions, parent
 	}
 	// Serialize mutating calls across children. Continuous motion ownership remains
 	// the local controller's responsibility, not the duration of a tool request.
-	executor := &serializedTools{base: &ProfileTools{Base: tools, Profile: opts.Profile, Parent: parent}, gate: s.gate}
+	executor := &serializedTools{base: withoutWatchTools{base: &ProfileTools{Base: tools, Profile: opts.Profile, Parent: parent}}, gate: s.gate}
 	engine, err := sessionEngine(provider, executor, opts)
 	if err != nil {
 		_ = tools.Close()
