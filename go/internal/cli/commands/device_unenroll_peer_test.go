@@ -13,7 +13,7 @@ import (
 )
 
 func TestUnenrollPeerUsesDirectTLSUUIDIdentity(t *testing.T) {
-	principal, err := certs.ParsePrincipal(testUnenrollJournal().Principal)
+	principal, err := certs.ParsePrincipal(testUnenrollProgress().Principal)
 	if err != nil {
 		t.Fatal(err)
 	}

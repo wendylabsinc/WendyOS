@@ -21,6 +21,10 @@ service AssetService {
     option (wendy.signed_request) = true;
   }
   rpc GetAsset(GetAssetRequest) returns (Asset);
+  // Authorized lifecycle lookup includes deletion evidence, never credentials.
+  // Unknown is not proof of deletion. Empty asset_id resolves by the immutable
+  // tenant/PKI binding; ambiguous bindings fail closed.
+  rpc GetAssetLifecycle(GetAssetLifecycleRequest) returns (GetAssetLifecycleResponse);
   // Signed; payload_type "wendycloud.v2.UpdateAssetRequest".
   rpc UpdateAsset(SignedRequest) returns (Asset) {
     option (wendy.signed_request) = true;
@@ -164,6 +168,30 @@ message UpdateAssetRequest {
 
 message DeleteAssetRequest {
   string id = 1;
+  // Optional compare-and-delete guard for device unenrollment.
+  optional string expected_pki_device_name = 2;
+}
+
+message GetAssetLifecycleRequest {
+  string organization_id = 1;
+  string pki_device_name = 2;
+  optional string asset_id = 3;
+}
+
+message DeletedAsset {
+  string id = 1;
+  string organization_id = 2;
+  string pki_device_name = 3;
+  google.protobuf.Timestamp deleted_at = 4;
+}
+
+message GetAssetLifecycleResponse {
+  oneof state {
+    Asset active = 1;
+    DeletedAsset deleted = 2;
+    // True means no retained evidence; never permission to reset a device.
+    bool unknown = 3;
+  }
 }
 
 message DeleteAssetResponse {

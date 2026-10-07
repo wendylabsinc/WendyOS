@@ -136,7 +136,9 @@ done
 #
 # Pin (WDY-3458 round): wendycloud/v2/*.proto and wendy/options.proto are
 # service-protos master 09097e83 (merged #91); device_enrollment.proto is cloud #741 head
-# 2c0ca481 (cloud-proto/device_enrollment.proto). Re-pin: copy those files from
+# 2c0ca481 (cloud-proto/device_enrollment.proto). assets.proto is service-protos
+# b40cadf (#96): tenant-bound lifecycle evidence and conditional deletion.
+# Re-pin: copy those files from
 # the new heads with `git show <sha>:<path>`, run `make proto`, and update the
 # SHAs here. wendy/options.proto (the signed_request method option) generates
 # into cloudpbv2 too, so the option and SignedRequest live in one Go package.

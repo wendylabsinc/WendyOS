@@ -8,8 +8,9 @@ PKI enrollment and performs these ordered steps:
 2. Revoke the **installed leaf certificate** using the existing device ACME
    account (lookup with `onlyReturnExisting`; no EAB, key generation or account
    registration). The Agent durably acknowledges its exact fingerprint.
-3. Recheck the Cloud binding and send an operator-signed v2 `DeleteAsset` for
-   `asset/<UUID>`.
+3. Recheck the Cloud binding and, if active, send an operator-signed v2
+   `DeleteAsset` for `asset/<UUID>` with the expected PKI binding. Confirm its
+   exact authorized tombstone with `GetAssetLifecycle` before reset.
 4. Request a guarded local reset matching both principal and fingerprint,
    then clear only that principal's local identity pins.
 
@@ -20,8 +21,10 @@ operator login or endpoint does not select a different device enrollment.
 
 ## Compatibility and authority
 
-Deploy an Agent implementing `RevokeACMECertificate` before using this flow.
-An older Agent returns `Unimplemented` before any asset deletion or key reset.
+Deploy Cloud support for `GetAssetLifecycle` and durable deletion tombstones,
+then an Agent implementing `RevokeACMECertificate`, before using this CLI flow.
+An older Cloud or Agent returns `Unimplemented` before any asset deletion or
+key reset. Existing hard-deleted rows cannot be backfilled as deletion proof.
 The new Agent refuses legacy v1 reset of direct PKI identities. Direct PKI v2
 reset now requires expected principal, expected certificate SHA-256 and a
 matching durable revocation acknowledgement; old empty requests fail closed.
@@ -58,15 +61,30 @@ untouched and does not delete the asset. Cloud deletion failures leave local
 keys untouched, but a previously successful revocation cannot be rolled back.
 No numeric-ID fallback or alternate PKI management mutation is attempted.
 
-The Agent stores public principal/fingerprint/serial acknowledgement in
-`acme-revocation.json`. The CLI stores a nonsecret, mode-0600 transaction under
-its config directory's `unenroll/`. Do not remove these records to force a
-retry. A missing asset is accepted on retry only with previously persisted
-revocation progress, followed by the Agent's matching acknowledgement. An
-unexpected binding or certificate change stops cleanup. A reset response
-failure is reported as unconfirmed; inspect supported provisioning status
-before reenrolling. Filesystem failures during destructive reset can leave
-partial local cleanup and require reconciliation.
+The Agent atomically persists public principal/fingerprint/serial revocation
+acknowledgement in its existing `provisioning.json`, syncing the file and parent
+directory before confirming it. It survives restart/failure, is invalidated by
+certificate replacement and is cleared on reset. Matching old development
+`acme-revocation.json` evidence can be read and imported on a revoke retry;
+no new standalone file is created. A read-only check does not import it.
+
+The CLI has **no unenrollment journal**. Historical `unenroll/` and
+`unenroll-v2/` files are left untouched but are not read as authority. Every retry
+reconciles the authenticated Agent's exact leaf acknowledgement with Cloud's
+**Active / Deleted / Unknown** lifecycle. Deleted evidence retains only asset
+UUID, tenant, PKI binding and deletion time for the tenant lifetime; names and
+descriptive metadata are removed, names are reusable, and UUIDs are not reused.
+Tenant deletion or explicit privacy/admin purge removes evidence. Unknown,
+NotFound, a missing tombstone or an unexpected binding/certificate change
+always stops cleanup; absence is never deletion proof. Cloud stores no device
+certificates or keys and its tombstone does not authorize device reset.
+
+JSON progress booleans indicate confirmed operations, not rollback: a false
+field may mean an operation's response was lost. A reset response failure is
+reported as unconfirmed; if the Agent already erased its keys, the old identity
+can no longer authenticate a retry. Inspect supported provisioning status and
+reconcile that completion separately before reenrolling. Filesystem failures
+during destructive reset can leave partial local cleanup.
 
 This revokes **only the installed certificate**, not every historical
 certificate for a principal. Lost account keys, historical issued certificates,

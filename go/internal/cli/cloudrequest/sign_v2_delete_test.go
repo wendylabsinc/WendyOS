@@ -22,14 +22,14 @@ func TestV2DeleteAssetRequiresSignedCanonicalUUID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := &cloudpbv2.DeleteAssetRequest{Id: id}
+	req := &cloudpbv2.DeleteAssetRequest{Id: id, ExpectedPkiDeviceName: proto.String("33333333-3333-4333-8333-333333333333")}
 	signed, err := signer.signRequest(method, req, false, uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}
 	var decoded cloudpbv2.DeleteAssetRequest
 	if signed.GetPayloadType() != "wendycloud.v2.DeleteAssetRequest" || proto.Unmarshal(signed.GetPayload(), &decoded) != nil || !proto.Equal(req, &decoded) {
-		t.Fatal("deletion envelope lost its exact UUID/type")
+		t.Fatal("deletion envelope lost its exact UUID/type/expected PKI binding")
 	}
 	parts := strings.Split(string(signed.GetSignature()), ".")
 	if len(parts) != 3 {
