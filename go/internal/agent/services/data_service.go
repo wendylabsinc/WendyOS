@@ -57,6 +57,9 @@ type DataService struct {
 	inference    *campaignInferenceManager
 	video        inferenceVideo
 	deploymentMu sync.Mutex
+	// leases holds leased campaigns' deadlines. deploymentMu orders every
+	// change to them with the plan files they belong to.
+	leases campaignLeases
 	agentpbv2.UnimplementedDataServiceServer
 	manager   *data.Manager
 	adapterMu sync.RWMutex
@@ -469,9 +472,22 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 		return nil, status.Error(codes.FailedPrecondition, "agent campaign notification runtime is unavailable")
 	}
 
+	// A lease is fixed for a campaign's life: a redeploy must not turn a watch
+	// into a recording campaign, or the reverse.
+	if existing, err := s.manager.Campaign(parsed.Name); err == nil && existing.Leased() != parsed.Leased() {
+		if existing.Leased() {
+			return nil, status.Errorf(codes.FailedPrecondition, "campaign %q is leased; a redeploy cannot remove its lease", parsed.Name)
+		}
+		return nil, status.Errorf(codes.FailedPrecondition, "campaign %q is not leased; a redeploy cannot add a lease", parsed.Name)
+	}
+
 	campaign, err := s.manager.DeployCampaign(req.GetCampaignYaml())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if campaign.Leased() {
+		// Deploying or redeploying starts the lease afresh.
+		s.leases.extend(campaign.Name, campaign.LeaseDuration())
 	}
 	message, err := s.campaignMessage(campaign)
 	if err != nil {
