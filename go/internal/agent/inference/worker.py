@@ -23,12 +23,21 @@ def emit(result):
 output_lock = threading.Lock()
 
 
+# After this many failed frames in a row the detector counts as broken and the
+# worker exits, so the agent restarts it with a fresh process.
+MAX_CONSECUTIVE_DETECTOR_FAILURES = 10
+
+
 def detection_error(exc):
     """A detector failure for one frame, cut to 512 UTF-8 bytes."""
     message = "inference: " + type(exc).__name__
-    if str(exc):
-        message += ": " + str(exc)
-    return message.encode()[:512].decode(errors="ignore")
+    try:
+        text = str(exc)
+    except Exception:
+        text = ""
+    if text:
+        message += ": " + text
+    return message.encode(errors="replace")[:512].decode(errors="ignore")
 
 
 class StreamBytes(io.RawIOBase):
@@ -332,6 +341,7 @@ def run(config, detector):
             stopped.set()
 
     threading.Thread(target=receive, daemon=True).start()
+    failures = 0
     try:
         while not stopped.is_set():
             with lock:
@@ -345,10 +355,17 @@ def run(config, detector):
                 except Exception as exc:
                     # One bad frame costs that frame, not the worker. Before,
                     # the exception ended the process, and the agent lost the
-                    # stderr tail once the model had loaded.
+                    # stderr tail once the model had loaded. A detector that fails
+                    # on every frame is broken, though: the last straw ends the
+                    # process so the agent reports an error and restarts it.
+                    failures += 1
+                    if failures >= MAX_CONSECUTIVE_DETECTOR_FAILURES:
+                        emit({"type": "error", "error": detection_error(exc)})
+                        return
                     emit({"type": "source_error", "source_id": decoder.source_id,
                           "generation": decoder.generation, "error": detection_error(exc)})
                     continue
+                failures = 0
                 with lock:
                     # A source reset while inference ran invalidates the result.
                     if decoders.get(decoder.source_id) is not decoder or decoder.stream.stopped:

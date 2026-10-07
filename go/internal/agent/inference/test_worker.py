@@ -1,4 +1,5 @@
 import threading
+import time
 import unittest
 
 from worker import StreamBytes
@@ -207,6 +208,88 @@ class DetectorFailureTests(unittest.TestCase):
              "error": "inference: ValueError: bad frame"},
             {"type": "prediction", "source_id": "camera", "generation": 1, "detections": []},
         ])
+
+    def run_with_detector(self, detector, frame_count=None, wait=30):
+        """Runs worker.run over one camera that always has a frame ready and
+        returns what it emitted and how long run took."""
+        import json
+        import types
+        from unittest import mock
+        import worker
+
+        emitted = []
+        finished = threading.Event()
+        taken = []
+
+        class FakeDecoder:
+            def __init__(self, source_id, generation, encoding, initialization=b""):
+                self.source_id, self.generation, self.encoding = source_id, generation, encoding
+                self.stream = types.SimpleNamespace(stopped=False, feed=lambda payload: True)
+
+            def take(self, now, interval):
+                if frame_count is not None and len(taken) >= frame_count:
+                    return None
+                taken.append(1)
+                return "frame"
+
+            def stop(self):
+                self.stream.stopped = True
+
+        class Input:
+            lines = [json.dumps({"source_id": "camera", "generation": 1, "encoding": "h264",
+                                 "payload": "eA=="}).encode() + b"\n"]
+
+            def readline(self, limit):
+                if self.lines:
+                    return self.lines.pop(0)
+                finished.wait(wait)
+                return b""
+
+        def emit(result):
+            emitted.append(result)
+
+        started = time.monotonic()
+        with mock.patch.object(worker, "Decoder", FakeDecoder), \
+                mock.patch.object(worker, "emit", emit), \
+                mock.patch.object(worker.sys, "stdin", types.SimpleNamespace(buffer=Input())):
+            worker.run({"rate": 1000}, detector)
+        finished.set()
+        return emitted, time.monotonic() - started
+
+    def test_detector_that_always_fails_ends_the_worker_with_an_error(self):
+        def detector(frame):
+            raise ValueError("broken")
+
+        emitted, elapsed = self.run_with_detector(detector)
+        self.assertLess(elapsed, 10)
+        self.assertEqual([item["type"] for item in emitted], ["source_error"] * 9 + ["error"])
+        self.assertEqual(emitted[-1], {"type": "error", "error": "inference: ValueError: broken"})
+
+    def test_a_success_resets_the_consecutive_failure_count(self):
+        calls = []
+
+        def detector(frame):
+            calls.append(frame)
+            if len(calls) == 10:
+                return []
+            raise ValueError("broken")
+
+        # 9 failures, one success, 9 failures, then no more frames.
+        emitted, _ = self.run_with_detector(detector, frame_count=19, wait=1)
+        self.assertNotIn("error", [item["type"] for item in emitted])
+        self.assertEqual(len([item for item in emitted if item["type"] == "source_error"]), 18)
+
+    def test_detection_error_never_raises(self):
+        from worker import detection_error
+
+        class Unprintable(Exception):
+            def __str__(self):
+                raise RuntimeError("no")
+
+        self.assertEqual(detection_error(Unprintable()), "inference: Unprintable")
+        message = detection_error(ValueError("\udc80" * 400))
+        self.assertLessEqual(len(message.encode()), 512)
+        self.assertTrue(message.startswith("inference: ValueError: "))
 
     def test_detection_error_is_cut_to_512_utf8_bytes(self):
         from worker import detection_error
