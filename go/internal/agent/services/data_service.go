@@ -57,8 +57,9 @@ type DataService struct {
 	inference    *campaignInferenceManager
 	video        inferenceVideo
 	deploymentMu sync.Mutex
-	// leases holds leased campaigns' deadlines. deploymentMu orders every
-	// change to them with the plan files they belong to.
+	// leases holds leased campaigns' deadlines. Deploy, expiry and removal
+	// change them under deploymentMu, together with the plan files they belong
+	// to; renew only extends a live deadline under the table's own lock.
 	leases campaignLeases
 	agentpbv2.UnimplementedDataServiceServer
 	manager   *data.Manager

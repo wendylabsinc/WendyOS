@@ -63,8 +63,10 @@ func (l *campaignLeases) forget(name string) {
 
 // CampaignRenew pushes a leased campaign's deadline to now + lease.
 func (s *DataService) CampaignRenew(_ context.Context, req *agentpbv2.DataCampaignRenewRequest) (*agentpbv2.DataCampaignRenewResponse, error) {
-	s.deploymentMu.Lock()
-	defer s.deploymentMu.Unlock()
+	// No deploymentMu: renew only extends a live deadline under the table's own
+	// lock, and a lapsed lease stays lapsed, so a renew racing expiry or removal
+	// cannot revive a campaign. It must not queue behind a capture startup that
+	// holds deploymentMu, or an on-time renew could find its lease lapsed.
 	campaign, err := s.manager.Campaign(req.GetName())
 	if err != nil {
 		return nil, dataStatusError(err)
