@@ -145,6 +145,7 @@ func TestUIStateCarriesWatchesAcrossRuns(t *testing.T) {
 	first.watches["w1"].startState = "PREPARING"
 	first.watches["w1"].errorTurned = true
 	first.lastWatchTurn = time.Date(2026, 10, 7, 14, 0, 0, 0, time.Local)
+	first.turnID = 3
 	cancel()
 	first.workers.Wait()
 	first.saveState(state)
@@ -157,6 +158,9 @@ func TestUIStateCarriesWatchesAcrossRuns(t *testing.T) {
 	d := second.watches["w1"]
 	if d == nil || d.startState != "PREPARING" || !d.errorTurned || second.lastWatchTurn.IsZero() {
 		t.Fatalf("trigger memory lost: %+v", d)
+	}
+	if second.turnID != 3 {
+		t.Fatalf("turn numbers restart at %d; a restored tool group could join a new turn's", second.turnID)
 	}
 }
 
@@ -546,5 +550,57 @@ func TestUIEventTurnRefusesToolsThatNeedApproval(t *testing.T) {
 				t.Fatalf("the user's turn ran %d tools, want 2 more", executor.executed.Load()-1)
 			}
 		})
+	}
+}
+
+// A notice that lands while a tool runs, such as watch_start's own PREPARING,
+// must not split the call into an unfinished group and a finished one.
+func TestUIWatchLineInsideAToolCallKeepsItsGroupWhole(t *testing.T) {
+	m, _, _ := uiWatchModel(t, nil, &uiExecutor{})
+	m.active, m.turnID = true, 1
+	call := ToolCall{Name: "watch_start"}
+	m.handleEvent(Event{Type: "tool_start", Call: &call})
+	m.Update(watchNoticeMessage{watchStatus("PREPARING", "")})
+	m.handleEvent(Event{Type: "tool_result", Call: &call, Text: `{"watch_id":"w1","label":"front door","state":"PREPARING"}`})
+	m.Update(watchNoticeMessage{watchStatus("PREPARING", "downloading the detector")})
+	content, _ := m.transcriptContent(100)
+	content = ansi.Strip(content)
+	summary := strings.Index(content, "▸ 1 tool · watch start")
+	first := strings.Index(content, "· 14:02:11  front door  preparing\n")
+	second := strings.Index(content, "· 14:02:11  front door  preparing: downloading the detector")
+	if strings.Count(content, "▸") != 1 || summary < 0 || strings.Contains(content, "unfinished") || strings.Contains(content, "running") {
+		t.Fatalf("the call is not one finished group:\n%s", content)
+	}
+	if first < summary || second < first {
+		t.Fatalf("the event lines must follow the group's summary, in order:\n%s", content)
+	}
+
+	// Another turn's activity after only event lines is a group of its own.
+	m.turnID = 2
+	other := ToolCall{Name: "camera_list"}
+	m.handleEvent(Event{Type: "tool_start", Call: &other})
+	m.handleEvent(Event{Type: "tool_result", Call: &other, Text: "[]"})
+	content, _ = m.transcriptContent(100)
+	if content = ansi.Strip(content); strings.Count(content, "▸") != 2 {
+		t.Fatalf("two turns' tools share a group:\n%s", content)
+	}
+}
+
+// Event lines are built from single-lined fields; the screen keeps their
+// double-space separators.
+func TestUIWatchLinesKeepTheirSpacingOnScreen(t *testing.T) {
+	m, _, _ := uiWatchModel(t, recordingProvider(new([]string)), &uiExecutor{})
+	m.active = true // no event turn
+	m.Update(watchNoticeMessage{watchEntered(0.91)})
+	both := watchEntered(0.91)
+	both.Classes = append(both.Classes, WatchClass{Label: "dog", Score: 0.8})
+	m.Update(watchNoticeMessage{both})
+	content, _ := m.transcriptContent(100)
+	for _, screen := range []string{ansi.Strip(content), ansi.Strip(m.View())} {
+		for _, want := range []string{"· 14:02:11  front door  person 0.91 entered", "· 14:02:11  front door  person 0.91, dog 0.80 entered"} {
+			if !strings.Contains(screen, want) {
+				t.Fatalf("screen lacks %q:\n%s", want, screen)
+			}
+		}
 	}
 }

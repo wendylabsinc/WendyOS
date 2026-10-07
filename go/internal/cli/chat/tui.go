@@ -53,6 +53,8 @@ type UIState struct {
 	watches       map[string]*watchDisplay
 	watchQueue    []WatchNotice
 	lastWatchTurn time.Time
+	// turnID keeps the transcript's turn numbers apart from the next Run's.
+	turnID uint64
 }
 
 // AddNotice shows a notice when the next chat UI opens with this state.
@@ -68,6 +70,7 @@ func (m *chatModel) saveState(state *UIState) {
 	state.watches = m.watches
 	state.watchQueue = m.watchQueue
 	state.lastWatchTurn = m.lastWatchTurn
+	state.turnID = m.turnID
 }
 
 // ErrReconfigure asks the command to reopen private connection setup.
@@ -116,6 +119,7 @@ type chatEntry struct {
 	title  string
 	text   string
 	memory *memoryDisplay
+	turn   uint64 // the turn the entry was added in, or the last one
 }
 
 type approvalRequest struct {
@@ -258,6 +262,7 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 		}
 		m.watchQueue = opts.State.watchQueue
 		m.lastWatchTurn = opts.State.lastWatchTurn
+		m.turnID = opts.State.turnID
 	}
 	if opts.Watches != nil {
 		m.watchNotices = opts.Watches.WatchNotices()
@@ -1124,7 +1129,7 @@ func (m *chatModel) handleEvent(event Event) {
 }
 
 func (m *chatModel) appendEntry(kind, title, text string) {
-	m.transcript = append(m.transcript, chatEntry{kind: kind, title: title, text: text})
+	m.transcript = append(m.transcript, chatEntry{kind: kind, title: title, text: text, turn: m.turnID})
 	m.refreshTranscript()
 }
 
@@ -1161,18 +1166,21 @@ func (m *chatModel) transcriptContent(width int) (string, []int) {
 			appendBlock("", plain, false)
 		}
 		if entry.kind == "event" {
-			appendBlock(chatSingleLine(chatSanitize(entry.text)), chatDim, true)
+			appendBlock(eventLine(entry), chatDim, true)
 			continue
 		}
 		if !m.showToolDetails && isActivityEntry(entry) {
-			end := i + 1
-			for end < len(m.transcript) && isActivityEntry(m.transcript[end]) {
-				end++
-			}
-			summary, warnings := compactActivity(m.transcript[i:end], m.active && onlyEventsFrom(m.transcript, end))
+			group, events, end := activityGroup(m.transcript, i)
+			summary, warnings := compactActivity(group, m.active && onlyEventsFrom(m.transcript, end))
 			appendBlock(chatSingleLine(summary), chatDim, true)
 			for _, warning := range warnings {
 				appendBlock(chatSingleLine(warning), chatWarn, true)
+			}
+			for j, event := range events {
+				if j == 0 {
+					appendBlock("", plain, false)
+				}
+				appendBlock(eventLine(event), chatDim, true)
 			}
 			i = end - 1
 			continue
@@ -1497,6 +1505,38 @@ func chatSanitize(s string) string {
 
 func chatSingleLine(s string) string {
 	return strings.Join(strings.Fields(chatSanitize(s)), " ")
+}
+
+// eventLine renders a watch event line. Its fields were single-lined when it
+// was built, so only escapes are stripped: the double spaces between fields
+// stay.
+func eventLine(entry chatEntry) string {
+	return strings.ReplaceAll(chatSanitize(entry.text), "\n", " ")
+}
+
+// activityGroup collects the tool and agent activity that starts at index i
+// for one compact row. Event lines that land inside the activity, followed by
+// more activity of the same turn, do not split it: they are returned to show
+// after the row. end is the index after the group.
+func activityGroup(entries []chatEntry, i int) (group, events []chatEntry, end int) {
+	end = i
+	for end < len(entries) {
+		if isActivityEntry(entries[end]) {
+			group = append(group, entries[end])
+			end++
+			continue
+		}
+		next := end
+		for next < len(entries) && entries[next].kind == "event" {
+			next++
+		}
+		if next == end || next == len(entries) || !isActivityEntry(entries[next]) || entries[next].turn != group[len(group)-1].turn {
+			break
+		}
+		events = append(events, entries[end:next]...)
+		end = next
+	}
+	return group, events, end
 }
 
 // onlyEventsFrom reports whether every entry from index i on is a watch event
