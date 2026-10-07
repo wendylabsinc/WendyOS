@@ -1,6 +1,8 @@
 package data
 
 import (
+	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -115,5 +117,27 @@ func TestLeaseChangesRevisionOnlyWhenSet(t *testing.T) {
 	}
 	if _, ok := people.planDigestInput()["lease"]; ok {
 		t.Fatal("a campaign without a lease hashes a lease key, which would change every deployed revision")
+	}
+}
+
+func TestRemoveCampaignDeletesThePlan(t *testing.T) {
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.DeployCampaign([]byte(leasedCampaignYAML)); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RemoveCampaign("chat-3fa91c0e-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Campaign("chat-3fa91c0e-1"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("plan still readable after removal: %v", err)
+	}
+	if err := manager.RemoveCampaign("chat-3fa91c0e-1"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removing twice: %v, want not-exist", err)
+	}
+	if err := manager.RemoveCampaign("../escape"); !errors.Is(err, ErrInvalidCampaignName) {
+		t.Fatalf("malformed name: %v", err)
 	}
 }

@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"errors"
+	"os"
 	"sync"
 	"time"
 
@@ -61,6 +63,16 @@ func (l *campaignLeases) forget(name string) {
 	delete(l.deadlines, name)
 }
 
+// expired reports whether name's lease has lapsed. A name without a deadline
+// has lapsed: deadlines live in memory, so it is a plan from before the agent
+// restarted.
+func (l *campaignLeases) expired(name string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	deadline, ok := l.deadlines[name]
+	return !ok || !l.clock().Before(deadline)
+}
+
 // CampaignRenew pushes a leased campaign's deadline to now + lease.
 func (s *DataService) CampaignRenew(_ context.Context, req *agentpbv2.DataCampaignRenewRequest) (*agentpbv2.DataCampaignRenewResponse, error) {
 	// No deploymentMu: renew only extends a live deadline under the table's own
@@ -79,4 +91,61 @@ func (s *DataService) CampaignRenew(_ context.Context, req *agentpbv2.DataCampai
 		return nil, status.Errorf(codes.NotFound, "campaign %q lease expired", campaign.Name)
 	}
 	return &agentpbv2.DataCampaignRenewResponse{ExpiresUnixNanos: deadline.UnixNano()}, nil
+}
+
+// expireLeases deletes every leased plan whose lease has lapsed. Reconcile
+// passes call it before reading plans, so the same pass retires the deleted
+// plan's job. The plan goes first: a detection that races the removal finds no
+// current revision and sends nothing.
+func (s *DataService) expireLeases() {
+	s.deploymentMu.Lock()
+	defer s.deploymentMu.Unlock()
+	campaigns, err := s.manager.Campaigns()
+	if err != nil {
+		s.manager.Warnf("reading campaigns to expire leases: %v", err)
+		return
+	}
+	for _, campaign := range campaigns {
+		if !campaign.Leased() || !s.leases.expired(campaign.Name) {
+			continue
+		}
+		if err := s.manager.RemoveCampaign(campaign.Name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.manager.Warnf("removing leased campaign %q after its lease lapsed: %v", campaign.Name, err)
+			continue
+		}
+		s.leases.forget(campaign.Name)
+		s.manager.Warnf("leased campaign %q was removed because its lease lapsed or the agent restarted", campaign.Name)
+	}
+}
+
+// CampaignRemove stops a leased campaign and deletes its plan. It returns once
+// the campaign's model process and camera subscriptions have stopped.
+func (s *DataService) CampaignRemove(_ context.Context, req *agentpbv2.DataCampaignRemoveRequest) (*agentpbv2.DataCampaignRemoveResponse, error) {
+	if err := s.removeLeased(req.GetName()); err != nil {
+		return nil, err
+	}
+	// With the plan gone, a reconcile pass retires the job and waits for it.
+	if s.inference != nil {
+		s.inference.reconcileNow()
+	}
+	return &agentpbv2.DataCampaignRemoveResponse{}, nil
+}
+
+// removeLeased deletes a leased campaign's plan and forgets its deadline. It
+// releases deploymentMu before CampaignRemove waits for the job.
+func (s *DataService) removeLeased(name string) error {
+	s.deploymentMu.Lock()
+	defer s.deploymentMu.Unlock()
+	campaign, err := s.manager.Campaign(name)
+	if err != nil {
+		return dataStatusError(err)
+	}
+	if !campaign.Leased() {
+		return status.Errorf(codes.FailedPrecondition, "campaign %q has no lease; only leased campaigns can be removed", name)
+	}
+	if err := s.manager.RemoveCampaign(name); err != nil {
+		return dataStatusError(err)
+	}
+	s.leases.forget(name)
+	return nil
 }

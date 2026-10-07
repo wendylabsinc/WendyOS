@@ -26,12 +26,20 @@ type inferenceVideo interface {
 const campaignAppPrefix = "sh.wendy.campaign."
 
 type campaignInferenceManager struct {
-	service *DataService
-	factory inference.Factory
-	sender  CampaignNotificationSender
-	wake    chan struct{}
-	mu      sync.Mutex
-	jobs    map[string]*campaignInferenceJob
+	// ctx is the loop's context. reconcileNow passes it on, so a job started
+	// during an RPC outlives that RPC.
+	ctx context.Context
+	// reconcileMu serializes reconcile passes. Without it, a pass that read the
+	// plans before CampaignRemove deleted one could restart the job that
+	// CampaignRemove had just stopped. Lock order: reconcileMu, then
+	// deploymentMu.
+	reconcileMu sync.Mutex
+	service     *DataService
+	factory     inference.Factory
+	sender      CampaignNotificationSender
+	wake        chan struct{}
+	mu          sync.Mutex
+	jobs        map[string]*campaignInferenceJob
 }
 
 type campaignInferenceJob struct {
@@ -51,8 +59,11 @@ type campaignInferenceJob struct {
 // camera subscriptions to exit before the video service is shut down.
 func (s *DataService) StartCampaignInference(ctx context.Context, factory inference.Factory, sender CampaignNotificationSender) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
+	manager := &campaignInferenceManager{ctx: ctx, service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
 	s.inference = manager // Configured once, before registering the RPC server.
+	// Deadlines live in memory, so every leased plan from before a restart has
+	// none and is deleted here, before any job can start for it (spec §5.3).
+	s.expireLeases()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -93,6 +104,9 @@ func (m *campaignInferenceManager) stopAll() {
 }
 
 func (m *campaignInferenceManager) reconcile(ctx context.Context) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+	m.service.expireLeases()
 	campaigns, err := m.service.manager.Campaigns()
 	if err != nil {
 		m.service.manager.Warnf("reading inference campaigns: %v", err)
@@ -135,6 +149,10 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		go job.supervise(child)
 	}
 }
+
+// reconcileNow runs one reconcile pass outside the loop's schedule. It returns
+// after the pass has stopped every job whose plan is gone.
+func (m *campaignInferenceManager) reconcileNow() { m.reconcile(m.ctx) }
 
 // Keep retired jobs visible until their process and camera subscriptions exit.
 // Persisting enabled:false only requests shutdown; it does not complete it.

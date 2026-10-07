@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -188,5 +190,102 @@ func TestLeaseCannotBeAddedOrRemovedByRedeploy(t *testing.T) {
 	}
 	if _, err := lt.service.CampaignDeploy(context.Background(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: leasedTestYAML("people-all-cameras", "15s")}); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("adding a lease by redeploying: %v, want FailedPrecondition", err)
+	}
+}
+
+func TestLeaseExpiryRemovesCampaignAndFreesCamera(t *testing.T) {
+	lt := newLeaseTest(t, nil)
+	deployLeased(t, lt.service, "chat-1", "15s")
+	session := receiveInference(t, lt.factory.sessions)
+	receiveInference(t, session.inputs)
+
+	lt.clock.Advance(14 * time.Second)
+	lt.service.inference.reconcileNow()
+	if _, err := lt.service.manager.Campaign("chat-1"); err != nil {
+		t.Fatalf("removed before its lease lapsed: %v", err)
+	}
+
+	lt.clock.Advance(time.Second)
+	lt.service.inference.reconcileNow()
+	if _, err := lt.service.manager.Campaign("chat-1"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired campaign still deployed: %v", err)
+	}
+	receiveInference(t, session.closed)
+	if id := receiveInference(t, lt.video.closed); id != "v4l2:/dev/video0" {
+		t.Fatalf("closed subscription %q", id)
+	}
+	if _, err := lt.service.CampaignInspect(context.Background(), &agentpbv2.DataCampaignInspectRequest{Name: "chat-1"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("inspect after expiry: %v, want NotFound", err)
+	}
+	if _, err := renew(lt.service, "chat-1"); status.Code(err) != codes.NotFound {
+		t.Fatalf("renew after expiry: %v, want NotFound", err)
+	}
+}
+
+func TestCampaignRemoveStopsJobBeforeReturning(t *testing.T) {
+	lt := newLeaseTest(t, nil)
+	deployLeased(t, lt.service, "chat-1", "60s")
+	session := receiveInference(t, lt.factory.sessions)
+	receiveInference(t, session.inputs)
+
+	if _, err := lt.service.CampaignRemove(context.Background(), &agentpbv2.DataCampaignRemoveRequest{Name: "chat-1"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-session.closed:
+	default:
+		t.Fatal("CampaignRemove returned before the model process stopped")
+	}
+	select {
+	case <-lt.video.closed:
+	default:
+		t.Fatal("CampaignRemove returned before the camera subscription closed")
+	}
+	// No later pass may start the job again once its plan is gone.
+	lt.service.inference.reconcileNow()
+	select {
+	case <-lt.factory.sessions:
+		t.Fatal("a removed campaign's job started again")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := lt.service.CampaignRemove(context.Background(), &agentpbv2.DataCampaignRemoveRequest{Name: "chat-1"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("second remove: %v, want NotFound", err)
+	}
+	if _, err := renew(lt.service, "chat-1"); status.Code(err) != codes.NotFound {
+		t.Fatalf("renew after remove: %v, want NotFound", err)
+	}
+}
+
+func TestRemoveRejectsOrdinaryCampaigns(t *testing.T) {
+	lt := newLeaseTest(t, nil)
+	if _, err := lt.service.CampaignDeploy(context.Background(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: inferenceTestYAML(t)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lt.service.CampaignRemove(context.Background(), &agentpbv2.DataCampaignRemoveRequest{Name: "people-all-cameras"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("removing an ordinary campaign: %v, want FailedPrecondition", err)
+	}
+	if _, err := lt.service.manager.Campaign("people-all-cameras"); err != nil {
+		t.Fatalf("the refused remove deleted the plan: %v", err)
+	}
+	if _, err := lt.service.CampaignRemove(context.Background(), &agentpbv2.DataCampaignRemoveRequest{Name: "missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("removing a missing campaign: %v, want NotFound", err)
+	}
+}
+
+func TestRestartDeletesLeasedPlans(t *testing.T) {
+	lt := newLeaseTest(t, func(manager *data.Manager) {
+		// Plans written by the previous agent run.
+		if _, err := manager.DeployCampaign(leasedTestYAML("chat-1", "60s")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.DeployCampaign(inferenceTestYAML(t)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := lt.service.manager.Campaign("chat-1"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a leased plan survived the restart: %v", err)
+	}
+	if _, err := lt.service.manager.Campaign("people-all-cameras"); err != nil {
+		t.Fatalf("the restart deleted an ordinary plan: %v", err)
 	}
 }

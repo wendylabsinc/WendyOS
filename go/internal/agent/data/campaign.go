@@ -802,6 +802,17 @@ func (m *Manager) Campaigns() ([]Campaign, error) {
 	return campaigns, nil
 }
 
+// RemoveCampaign deletes a campaign's plan. Only leased campaigns are removed
+// today, by expiry, by CampaignRemove and at boot; callers check that.
+func (m *Manager) RemoveCampaign(name string) error {
+	if name == "" || safeName(name) != name {
+		return ErrInvalidCampaignName
+	}
+	m.campaignMu.Lock()
+	defer m.campaignMu.Unlock()
+	return os.Remove(filepath.Join(m.campaignDir(), name+".json"))
+}
+
 // ResolveCampaignSources maps semantic campaign selectors onto the current
 // device source inventory. A ROS 2 topic selector resolves to that topic's own
 // source, so the episode records that topic and nothing else; the requested
