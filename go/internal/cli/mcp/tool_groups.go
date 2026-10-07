@@ -18,7 +18,7 @@ var toolGroups = map[string][]string{
 		"container_list", "container_start", "container_stop", "container_delete", "container_stats", "container_exec", "telemetry_logs", "hardware_capabilities"},
 	"setup": {"device_set_default", "project_validate", "os_install_plan", "os_list_drives", "os_install_start", "os_install_status", "os_install_resume", "os_install_verify", "os_update", "os_update_status", "device_update_agent",
 		"cloud_enroll_device", "provisioning_start", "provisioning_status", "wifi_list", "wifi_connect", "wifi_disconnect", "wifi_status", "wifi_known_networks"},
-	"hardware":      {"bluetooth_scan", "bluetooth_connect", "bluetooth_disconnect", "camera_list", "camera_controls", "camera_set_control", "camera_snapshot"},
+	"hardware":      {"bluetooth_scan", "bluetooth_connect", "bluetooth_disconnect", "camera_list", "camera_controls", "camera_set_control", "camera_snapshot", "watch_sources", "watch_start", "watch_list", "watch_stop", "watch_events"},
 	"robotics":      {"ros2_topics", "ros2_topic_info", "ros2_topic_sample", "ros2_topic_hz", "ros2_lidar_summary"},
 	"observability": {"telemetry_metrics", "telemetry_traces", "app_inspect", "device_os_logs"},
 	"simulator":     {"simulator_list", "simulator_create", "simulator_stop", "simulator_delete"},

@@ -66,6 +66,27 @@ For clients that cache tools at startup, configure
 Groups control discovery, not authorization. Known tools remain callable, and
 app-provided tools remain visible. Restart the MCP process after upgrading the CLI.
 
+## Camera watches
+
+The `hardware` group includes camera watches. A watch runs a detector on the
+connected device's camera and tells the session when a watched class appears,
+for example a person at the door. Nothing is recorded or uploaded, and watches
+end when the MCP session ends or the device connection changes.
+
+| Tool | What it does |
+|---|---|
+| `watch_sources` | Healthy cameras, the detector and its class labels, free slots |
+| `watch_start` | Start a watch: `camera`, `classes` (1–10 labels), `min_confidence` (0.3–0.95, default 0.5), optional `label` |
+| `watch_list` | This session's watches, including recently ended ones |
+| `watch_stop` | Stop a watch and remove its detector from the device |
+| `watch_events` | Buffered events after a sequence number; `wait_seconds` waits for the next |
+
+At most two watches run per session. The server sends events and status changes
+as `notifications/wendy/watch_event` and `notifications/wendy/watch_status`.
+Clients that do not show custom notifications, such as Claude Code and Cursor,
+use `watch_events`. Watches need an agent with leased campaigns; an older agent
+reports `UNSUPPORTED` with the update command.
+
 ## Sign in
 
 Most devices need a signed-in Wendy Cloud session. `wendy_status` reports `auth`
