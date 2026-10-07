@@ -270,18 +270,112 @@ func TestACMERevocationNetworkUnlockAndStateRevalidation(t *testing.T) {
 				} else if status.Code(err) != codes.FailedPrecondition {
 					t.Fatalf("changed state accepted: %v", err)
 				}
-				_, statErr := os.Stat(filepath.Join(svc.configPath, acmeRevocationFile))
+				data, err := os.ReadFile(svc.statePath())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var state provisioningState
+				if err := json.Unmarshal(data, &state); err != nil {
+					t.Fatal(err)
+				}
 				if checkOnly || change != "none" {
-					if !os.IsNotExist(statErr) {
+					if state.ACMERevocation != nil {
 						t.Fatal("stale/probe acknowledgement written")
 					}
-				} else if statErr != nil {
-					t.Fatal(statErr)
+				} else if state.ACMERevocation == nil {
+					t.Fatal("acknowledgement missing from provisioning state")
+				}
+				if _, err := os.Stat(filepath.Join(svc.configPath, acmeRevocationFile)); !os.IsNotExist(err) {
+					t.Fatal("standalone acknowledgement created")
 				}
 				assertRevokeKeysRetained(t, svc)
 			})
 		}
 	}
+}
+
+func TestACMERevocationLegacyAckImportsWithoutMovingEvidence(t *testing.T) {
+	svc, req := revokeTestService(t)
+	record := acmeRevocationRecord{Principal: req.ExpectedPrincipalUri, Fingerprint: req.ExpectedCertificateSha256, Serial: "2a"}
+	legacy, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(svc.configPath, acmeRevocationFile)
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(svc.statePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state provisioningState
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	state.KeyPEM = "legacy-key-migration-fixture"
+	data, err = json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(svc.statePath(), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	stubRevoke(t, func(context.Context, acmeenroll.Config, string, string) error {
+		t.Fatal("re-revoked acknowledged leaf")
+		return nil
+	})
+	ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
+	if _, err := NewProvisioningServiceV2(svc).RevokeACMECertificate(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(svc.statePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = provisioningState{}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.ACMERevocation == nil || state.ACMERevocation.Serial != "2a" || state.KeyPEM != "" {
+		t.Fatal("acknowledgement not embedded or legacy private key re-persisted")
+	}
+	info, err := os.Stat(svc.statePath())
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("state permissions: %v", err)
+	}
+	retained, err := os.ReadFile(path)
+	if err != nil || string(retained) != string(legacy) {
+		t.Fatal("historical evidence moved or changed")
+	}
+	assertRevokeKeysRetained(t, svc)
+}
+
+func TestACMERevocationRejectsMismatchedSerialWithoutStateMutation(t *testing.T) {
+	svc, req := revokeTestService(t)
+	before, err := os.ReadFile(svc.statePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := acmeRevocationRecord{Principal: req.ExpectedPrincipalUri, Fingerprint: req.ExpectedCertificateSha256, Serial: "2b"}
+	if err := writeACMERevocationRecord(svc.configPath, record); err == nil {
+		t.Fatal("wrong serial accepted")
+	}
+	after, err := os.ReadFile(svc.statePath())
+	if err != nil || string(before) != string(after) {
+		t.Fatal("invalid acknowledgement changed state")
+	}
+	legacy, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(svc.configPath, acmeRevocationFile), legacy, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if svc.revocationConfirmedLocked() {
+		t.Fatal("malformed old acknowledgement authorized reset")
+	}
+	assertRevokeKeysRetained(t, svc)
 }
 
 func TestACMERevocationAckDoesNotCoverRotatedCertificate(t *testing.T) {

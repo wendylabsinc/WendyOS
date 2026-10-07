@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -127,9 +128,12 @@ func (s *ProvisioningServiceV2) acmeRevocation(ctx context.Context, req *agentpb
 			// Do not write an acknowledgement or change enrollment state.
 			return &agentpbv2.RevokeACMECertificateResponse{PrincipalUri: principal, CertificateSha256: fingerprint, CertificateSerial: serial}, nil
 		}
-		if err := writeACMERevocationRecord(svc.configPath, record); err != nil {
-			return nil, status.Error(codes.Internal, "certificate revoked but durable acknowledgement failed; keys retained; retry reconciliation before cleanup")
-		}
+	}
+	// Re-sync even a retry's existing acknowledgement before confirming it;
+	// a prior rename may have succeeded while directory sync failed. This also
+	// imports matching legacy development evidence without deleting that file.
+	if err := writeACMERevocationRecord(svc.configPath, record); err != nil {
+		return nil, status.Error(codes.Internal, "certificate revoked but durable acknowledgement failed; keys retained; retry reconciliation before cleanup")
 	}
 	return &agentpbv2.RevokeACMECertificateResponse{PrincipalUri: principal, CertificateSha256: fingerprint, CertificateSerial: serial}, nil
 }
@@ -152,16 +156,34 @@ func (s *ProvisioningService) certificateFingerprintLocked() string {
 }
 
 func (s *ProvisioningService) revocationConfirmedLocked() bool {
-	data, err := os.ReadFile(filepath.Join(s.configPath, acmeRevocationFile))
+	data, err := os.ReadFile(s.statePath())
 	if err != nil {
 		return false
 	}
+	var state provisioningState
+	if json.Unmarshal(data, &state) != nil || state.PrincipalURI != s.principalURI || state.CertPEM != s.certPEM {
+		return false
+	}
 	var record acmeRevocationRecord
-	if json.Unmarshal(data, &record) != nil || record.Principal != s.principalURI {
+	if state.ACMERevocation != nil {
+		record = *state.ACMERevocation
+	} else {
+		// Read-only compatibility with earlier development builds. Never create
+		// another standalone acknowledgement or move/delete existing evidence.
+		data, err = os.ReadFile(filepath.Join(s.configPath, acmeRevocationFile))
+		if err != nil || json.Unmarshal(data, &record) != nil {
+			return false
+		}
+	}
+	if record.Principal != s.principalURI || record.Serial == "" {
 		return false
 	}
 	block, _ := pem.Decode([]byte(s.certPEM))
 	if block == nil {
+		return false
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || record.Serial != leaf.SerialNumber.Text(16) {
 		return false
 	}
 	digest := sha256.Sum256(block.Bytes)
@@ -169,36 +191,32 @@ func (s *ProvisioningService) revocationConfirmedLocked() bool {
 }
 
 func writeACMERevocationRecord(dir string, record acmeRevocationRecord) error {
-	data, err := json.Marshal(record)
+	path := filepath.Join(dir, "provisioning.json")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(dir, ".acme-revocation-*")
+	var state provisioningState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return err
+	}
+	block, _ := pem.Decode([]byte(state.CertPEM))
+	if !state.Enrolled || state.PrincipalURI != record.Principal || block == nil {
+		return errors.New("enrollment changed before acknowledgement")
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		return err
 	}
-	path := file.Name()
-	defer os.Remove(path)
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
+	digest := sha256.Sum256(block.Bytes)
+	if hex.EncodeToString(digest[:]) != record.Fingerprint || record.Serial != leaf.SerialNumber.Text(16) {
+		return errors.New("certificate changed before acknowledgement")
 	}
-	if err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
+	state.ACMERevocation = &record
+	state.KeyPEM = ""
+	data, err = json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err = os.Rename(path, filepath.Join(dir, acmeRevocationFile)); err != nil {
-		return err
-	}
-	parent, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer parent.Close()
-	return parent.Sync()
+	return writeProvisioningState(path, data)
 }

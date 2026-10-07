@@ -31,15 +31,16 @@ import (
 // new writes never populate it — the private key lives exclusively in
 // device-key.pem (mode 0o400) and is never written to provisioning.json.
 type provisioningState struct {
-	Enrolled         bool   `json:"enrolled"`
-	CloudHost        string `json:"cloudHost,omitempty"`
-	OrgID            int32  `json:"orgId,omitempty"`
-	AssetID          int32  `json:"assetId,omitempty"`
-	KeyPEM           string `json:"keyPem,omitempty"` // read-only: migration only; never written
-	CertPEM          string `json:"certPem,omitempty"`
-	ChainPEM         string `json:"chainPem,omitempty"`
-	PrincipalURI     string `json:"principalURI,omitempty"`
-	ACMEDirectoryURL string `json:"acmeDirectoryURL,omitempty"`
+	Enrolled         bool                  `json:"enrolled"`
+	CloudHost        string                `json:"cloudHost,omitempty"`
+	OrgID            int32                 `json:"orgId,omitempty"`
+	AssetID          int32                 `json:"assetId,omitempty"`
+	KeyPEM           string                `json:"keyPem,omitempty"` // read-only: migration only; never written
+	CertPEM          string                `json:"certPem,omitempty"`
+	ChainPEM         string                `json:"chainPem,omitempty"`
+	PrincipalURI     string                `json:"principalURI,omitempty"`
+	ACMEDirectoryURL string                `json:"acmeDirectoryURL,omitempty"`
+	ACMERevocation   *acmeRevocationRecord `json:"acmeRevocation,omitempty"`
 }
 
 type CloudDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error)
@@ -522,6 +523,38 @@ func (s *ProvisioningService) writePEMFiles(keyPEM, certPEM, chainPEM string) er
 	return WritePEMFiles(s.configPath, keyPEM, certPEM, chainPEM)
 }
 
+// writeProvisioningState atomically replaces and syncs the existing state.
+func writeProvisioningState(path string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".provisioning-*")
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	defer os.Remove(tmp)
+	if err = file.Chmod(0600); err == nil {
+		_, err = file.Write(data)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
 // saveState writes provisioning state to disk.
 // The private key (KeyPEM) is never included in provisioning.json; it lives
 // exclusively in device-key.pem so that the JSON file can be shared or
@@ -540,5 +573,5 @@ func (s *ProvisioningService) saveState(state *provisioningState) error {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
 
-	return os.WriteFile(s.statePath(), data, 0o600)
+	return writeProvisioningState(s.statePath(), data)
 }
