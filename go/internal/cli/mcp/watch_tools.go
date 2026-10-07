@@ -26,7 +26,7 @@ func (s *mcpServer) registerWatchTools(srv *server.MCPServer) {
 		mcpgo.WithDescription("List what a camera watch can use: healthy cameras on the connected device (id, name), the detector watches run (id, model, class labels), and free watch slots. Call before watch_start."),
 	}, readOnly()...)...)
 	add("watch_start", s.handleWatchStart, append([]mcpgo.ToolOption{
-		mcpgo.WithDescription("Watch a camera on the connected device for some classes of object, for example a person at the door. A detector runs on the device and this session is notified when a watched class appears; nothing is recorded or uploaded. At most two watches run per session, and they end when the session ends. Returns when the watch is READY or ERROR, or after 30 s while it is still PREPARING: a first watch on a device installs the detector, which takes minutes."),
+		mcpgo.WithDescription("Watch a camera on the connected device for some classes of object, for example a person at the door. A detector runs on the device and this session is notified when a watched class appears; nothing is recorded or uploaded. At most two watches run per session, and they end when the session ends. Returns when the watch is READY, ERROR or ENDED, or after 30 s while it is still PREPARING: a first watch on a device installs the detector, which takes minutes. ENDED means the device connection changed during the start."),
 		mcpgo.WithString("camera", mcpgo.Description("Camera id from watch_sources"), mcpgo.Required()),
 		mcpgo.WithArray("classes", mcpgo.Description(`1-10 class labels from the detector's labels in watch_sources, for example ["person"]`), mcpgo.Required(), mcpgo.WithStringItems(), mcpgo.MinItems(1), mcpgo.MaxItems(10)),
 		mcpgo.WithNumber("min_confidence", mcpgo.Description("Minimum detection score, 0.3 to 0.95; default 0.5"), mcpgo.Min(0.3), mcpgo.Max(0.95)),
@@ -40,9 +40,9 @@ func (s *mcpServer) registerWatchTools(srv *server.MCPServer) {
 		mcpgo.WithString("watch_id", mcpgo.Description("Watch id from watch_start or watch_list"), mcpgo.Required()),
 	}, append(mutating(), idempotent()...)...)...)
 	add("watch_events", s.handleWatchEvents, append([]mcpgo.ToolOption{
-		mcpgo.WithDescription("Read a watch's events after a sequence number from its buffer of the last 100, with its current state. wait_seconds waits for the next event. For clients that do not show this server's watch notifications."),
+		mcpgo.WithDescription("Read a watch's events after a sequence number from its buffer of the last 100, with its current state. Pass the previous result's next_sequence as after_sequence: otherwise every call returns the same buffered events at once instead of waiting. wait_seconds waits for the next event. For clients that do not show this server's watch notifications."),
 		mcpgo.WithString("watch_id", mcpgo.Description("Watch id from watch_start or watch_list"), mcpgo.Required()),
-		mcpgo.WithNumber("after_sequence", mcpgo.Description("Return events after this sequence number; default 0 (all buffered)"), mcpgo.Min(0)),
+		mcpgo.WithNumber("after_sequence", mcpgo.Description("Return events after this sequence number: the previous result's next_sequence; default 0 (all buffered)"), mcpgo.Min(0)),
 		mcpgo.WithNumber("wait_seconds", mcpgo.Description("Wait up to this long for a new event, 0 to 120; default 0"), mcpgo.Min(0), mcpgo.Max(120)),
 	}, readOnly()...)...)
 }
@@ -186,7 +186,7 @@ func (s *mcpServer) handleWatchStart(ctx context.Context, req mcpgo.CallToolRequ
 func watchNextStep(state string) string {
 	switch watchState(state) {
 	case watchReady:
-		return "The watch is running. Events arrive as notifications; a client that does not show them can call watch_events with wait_seconds. Stop it with watch_stop when the user no longer needs it."
+		return "The watch is running. Events arrive as notifications; a client that does not show them can call watch_events with wait_seconds, passing each result's next_sequence back as after_sequence. Stop it with watch_stop when the user no longer needs it."
 	case watchError:
 		return "Tell the user the reason. The device keeps retrying; stop the watch with watch_stop if the user does not want to wait."
 	case watchEnded:

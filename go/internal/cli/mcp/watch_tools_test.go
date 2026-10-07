@@ -10,6 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/cli/assets"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"google.golang.org/grpc/codes"
@@ -65,6 +66,40 @@ func TestWatchToolsAreHardwareToolsWithTheRightAnnotations(t *testing.T) {
 		readOnly := tool.Tool.Annotations.ReadOnlyHint != nil && *tool.Tool.Annotations.ReadOnlyHint
 		if mutating := name == "watch_start" || name == "watch_stop"; readOnly == mutating {
 			t.Fatalf("%s read-only = %v", name, readOnly)
+		}
+	}
+}
+
+// A client that only polls must pass next_sequence back as after_sequence, or
+// every watch_events call returns the same buffered events without waiting.
+// watch_start can return ENDED when the device changes during the start.
+func TestWatchToolDocsExplainPollingAndEndedStarts(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	srv, err := s.newProtocolServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := srv.GetTool("watch_events").Tool.Description
+	if !strings.Contains(events, "next_sequence") || !strings.Contains(events, "after_sequence") {
+		t.Fatalf("watch_events description %q", events)
+	}
+	if start := srv.GetTool("watch_start").Tool.Description; !strings.Contains(start, "READY, ERROR or ENDED") {
+		t.Fatalf("watch_start description %q", start)
+	}
+	_, guide, _ := strings.Cut(guideText, "## Camera watches")
+	guide, _, _ = strings.Cut(guide, "\n## ")
+	for _, want := range []string{"next_sequence", "after_sequence", "ENDED"} {
+		if !strings.Contains(guide, want) {
+			t.Errorf("guide's Camera watches section does not mention %s", want)
+		}
+	}
+	doc, err := assets.FS.ReadFile("docs/integrations/mcp.mdx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(doc), "\n") {
+		if strings.HasPrefix(line, "| `watch_events`") && !strings.Contains(line, "next_sequence") {
+			t.Errorf("mcp.mdx watch_events row %q", line)
 		}
 	}
 }

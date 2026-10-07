@@ -84,14 +84,16 @@ A watch runs a detector on the connected device's camera and tells this
 session when a watched class of object appears, for example a person at the
 door. Nothing is recorded or uploaded. Call watch_sources for healthy cameras,
 the detector's class labels and free slots (at most two watches per session),
-then watch_start with a camera id and classes. It returns READY, ERROR, or
-PREPARING after 30 s; a first watch on a device installs the detector, which
-takes minutes. Events and status changes arrive as the notifications
-notifications/wendy/watch_event and notifications/wendy/watch_status. A client
-that does not show them can call watch_events with wait_seconds. ERROR is not
-final: the device retries. Watches end with watch_stop, when the session ends,
-or when the device connection changes; a watch whose device restarted ends
-with that reason. An agent without leased campaigns reports UNSUPPORTED:
+then watch_start with a camera id and classes. It returns READY, ERROR, ENDED
+(the device connection changed during the start), or PREPARING after 30 s; a
+first watch on a device installs the detector, which takes minutes. Events and
+status changes arrive as the notifications notifications/wendy/watch_event and
+notifications/wendy/watch_status. A client that does not show them can call
+watch_events with wait_seconds, passing the previous result's next_sequence as
+after_sequence; without it, every call returns the same events at once. ERROR
+is not final: the device retries. Watches end with watch_stop, when the session
+ends, or when the device connection changes; a watch whose device restarted
+ends with that reason. An agent without leased campaigns reports UNSUPPORTED:
 update it with ` + "`wendy device update`" + `.
 
 
