@@ -67,7 +67,7 @@ WENDY_SHOW_LOCAL_DEVICES=1 wendy discover
 |------|---------|-------------|
 | `--type` | `all` | Local discovery type: `usb`, `lan`, `bluetooth`, `external`, or `all`. Does not affect the Cloud tab. |
 | `--timeout` | `5s` | Scan local devices once for this duration, print the results, and exit. When omitted, the live tabbed TUI runs until quit. |
-| `--json` | `false` | Output results as a JSON array instead of a table |
+| `--json` | `false` | Output discovery results as JSON instead of a table |
 
 ## Environment variables
 
@@ -137,21 +137,10 @@ confirmed during the current scan.
 | OS | OS version reported by the agent |
 | Provisioned | `Provisioned` or `Unprovisioned` for LAN devices, from the mDNS-advertised mTLS state; blank for transports that don't report it (BLE-only, USB, external providers) |
 
-### No-access hint
+### Connection hints
 
-When the highlighted row is a provisioned LAN device whose agent metadata could
-not be read — the signature of an unprovisioned CLI, or one logged in with
-credentials that don't have access to the device — an amber hint appears below
-the table:
-
-```
-⚠  This device is provisioned and this CLI does not have access, so agent details cannot be read. Run 'wendy auth login' with an account that can access it.
-```
-
-The hint clears automatically once a probe succeeds (for example, after
-`wendy auth login` with an authorized account). If a version is already known
-from an earlier successful probe or another transport, it stays in the table
-and the hint is suppressed.
+If the CLI cannot verify a device's agent, select its row to see what went
+wrong and what to try next.
 
 ### Clipboard JSON
 
@@ -166,24 +155,8 @@ devices as a JSON array. Each object contains:
 | `address` | string | IP address (or hostname) and port |
 | `version` | string | Agent version (omitted when unknown) |
 | `provisioned` | string | `Provisioned` or `Unprovisioned` for LAN devices (omitted for other transports) |
+| `probeFailure` | object (optional) | Details of a failed connection and suggested recovery steps |
 
-## Device verification failures
-
-A device can advertise itself on the LAN even when its agent cannot be reached.
-Select a failed row to see the observed failure and a suggested next step.
-A one-shot text scan prints these hints below the table.
-
-Discovery distinguishes refused connections, timeouts, changed device identities,
-TLS rejection, and missing or expired client credentials. A TLS rejection can
-have several causes, including a wrong device clock; it does not by itself prove
-that logging in or refreshing certificates will help. Identity-change warnings
-require you to verify the device before deliberately clearing a pin.
-
-In `--json` output, a failed `lanDevices` entry includes an optional
-`probeFailure` object with `code`, `message`, and `next_steps`. Clipboard JSON
-includes the same object. Codes are `connection_refused`, `timeout`,
-`device_identity_mismatch`, `device_org_mismatch`, `tls_rejected`,
-`credentials_missing`, `credentials_expired`, `probe_cancelled`, or `probe_failed`
-(for an unclassified failure). The diagnostic clears after a successful probe
-and is not saved in the discovery cache. Its absence alone is not proof of a
-successful probe: a device may still be awaiting verification when a scan ends.
+When provided, `probeFailure` contains a `code` identifying the failure, a
+`message` explaining it, and optional `next_steps` listing suggested actions.
+The same object is included in `--json` output.
