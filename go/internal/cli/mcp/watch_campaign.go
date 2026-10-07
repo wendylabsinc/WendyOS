@@ -375,6 +375,11 @@ func (w *campaignWatch) renew() bool {
 }
 
 // refreshStatus reports a change in the campaign's inference state.
+//
+// After a failure the agent loads the detector again every 5 s, so it reports
+// pending or loading between errors. That retry belongs to ERROR (design
+// §6.3): an ERROR watch stays ERROR, with its last reason, until the detector
+// runs or fails for a different reason.
 func (w *campaignWatch) refreshStatus() bool {
 	ctx, cancel := context.WithTimeout(w.ctx, watchCallTimeout)
 	defer cancel()
@@ -391,6 +396,9 @@ func (w *campaignWatch) refreshStatus() bool {
 		return true
 	}
 	state, reason := watchStateFromInference(*plan.InferenceStatus)
+	if w.lastState == watchError && state == watchPreparing {
+		return true
+	}
 	if state != w.lastState || reason != w.lastReason {
 		w.lastState, w.lastReason = state, reason
 		return w.send(watchUpdate{Status: &watchStatusUpdate{State: state, Reason: reason}})
@@ -415,7 +423,7 @@ func watchStateFromInference(s data.InferenceStatus) (watchState, string) {
 		}
 		return watchError, "the camera is unavailable"
 	case "loading":
-		return watchPreparing, "loading the detector; the first watch on a device installs it first, which takes a few minutes"
+		return watchPreparing, "loading the detector; a first watch on a device also installs it, which takes a few minutes"
 	}
 	return watchPreparing, ""
 }

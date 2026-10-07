@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
@@ -27,6 +28,7 @@ type watchDataClient struct {
 	deployedYAML map[string][]byte               // the raw plan each campaign was sent as
 	inference    map[string]data.InferenceStatus // default: running
 	renews       map[string]int
+	inspects     int // CampaignInspect calls, counted after the state is read
 	removed      []string
 	deployErr    error
 	sourcesErr   error
@@ -95,6 +97,7 @@ func (f *watchDataClient) CampaignInspect(_ context.Context, r *agentpbv2.DataCa
 	if !ok {
 		inference = data.InferenceStatus{State: "running"}
 	}
+	f.inspects++
 	campaign.InferenceStatus = &inference
 	plan, _ := json.Marshal(campaign)
 	return &agentpbv2.DataCampaign{Name: campaign.Name, State: campaign.State, PlanJson: plan}, nil
@@ -185,6 +188,29 @@ func (f *watchDataClient) setInference(campaign string, state data.InferenceStat
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inference[campaign] = state
+}
+
+// setInferenceSeen sets campaign's inference state and waits until an inspect
+// has read it, so a watch polling the device cannot skip it.
+func (f *watchDataClient) setInferenceSeen(t *testing.T, campaign string, state data.InferenceStatus) {
+	t.Helper()
+	f.mu.Lock()
+	f.inference[campaign] = state
+	seen := f.inspects
+	f.mu.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		f.mu.Lock()
+		n := f.inspects
+		f.mu.Unlock()
+		if n > seen {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no inspect read inference state %+v", state)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func (f *watchDataClient) campaign(name string) (data.Campaign, bool) {

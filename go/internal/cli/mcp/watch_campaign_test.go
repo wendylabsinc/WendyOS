@@ -153,6 +153,47 @@ func TestCampaignWatchMapsInferenceStatus(t *testing.T) {
 	}
 }
 
+// The agent retries a failed detector by loading it again every 5 s. The
+// retry belongs to ERROR: a watch must not flap between ERROR and PREPARING.
+func TestCampaignWatchStaysInErrorWhileTheAgentRetries(t *testing.T) {
+	client := newWatchDataClient()
+	name := "chat-0a1b2c3d-1"
+	failed := data.InferenceStatus{State: "error", Error: "model download failed"}
+	client.setInference(name, failed)
+	h, err := fastCampaignBackend().Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec(name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Stop(context.Background())
+	got := []watchStatusUpdate{nextStatus(t, h)}
+	for range 4 {
+		client.setInferenceSeen(t, name, data.InferenceStatus{State: "loading"})
+		client.setInferenceSeen(t, name, failed)
+		client.setInferenceSeen(t, name, data.InferenceStatus{State: "pending"})
+	}
+	client.setInferenceSeen(t, name, data.InferenceStatus{State: "error", Error: "out of memory"})
+	client.setInferenceSeen(t, name, data.InferenceStatus{State: "loading"})
+	client.setInference(name, data.InferenceStatus{State: "running"})
+	for {
+		s := nextStatus(t, h)
+		got = append(got, s)
+		if s.State == watchReady {
+			break
+		}
+	}
+	want := []watchStatusUpdate{{State: watchError, Reason: "model download failed"}, {State: watchError, Reason: "out of memory"}, {State: watchReady}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("statuses %+v, want %+v", got, want)
+	}
+}
+
+func TestWatchStateFromInferenceLoadingReasonFitsAWarmDevice(t *testing.T) {
+	state, reason := watchStateFromInference(data.InferenceStatus{State: "loading"})
+	if state != watchPreparing || reason != "loading the detector; a first watch on a device also installs it, which takes a few minutes" {
+		t.Fatalf("loading -> %s %q", state, reason)
+	}
+}
+
 func TestCampaignWatchRenewsAndEndsWhenTheLeaseIsGone(t *testing.T) {
 	client := newWatchDataClient()
 	h, err := fastCampaignBackend().Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
