@@ -70,6 +70,13 @@ func cloneMessages(messages []Message) []Message {
 	return out
 }
 
+// ToolRefusal is an error an ApproveFunc returns to decline a call without
+// asking anyone. The model gets Reason as the call's result and the turn goes
+// on, as it does after a denial.
+type ToolRefusal struct{ Reason string }
+
+func (r *ToolRefusal) Error() string { return r.Reason }
+
 // TurnOptions changes how one turn runs.
 type TurnOptions struct {
 	// SkipMemory turns off memory recall and learning for the turn. Use it for
@@ -206,9 +213,13 @@ func (e *Engine) TurnWithOptions(ctx context.Context, prompt string, emit func(E
 				result = "Tool error: " + validation[i].Error()
 			default:
 				allowed := !byName[call.Name].RequiresApproval
+				var refusal *ToolRefusal
 				if !allowed && approve != nil {
 					emit(Event{Type: "status", Text: "Waiting for approval…", Call: &call})
 					allowed, turnErr = approve(ctx, call)
+					if errors.As(turnErr, &refusal) {
+						allowed, turnErr = false, nil
+					}
 				}
 				switch {
 				case turnErr != nil:
@@ -216,6 +227,8 @@ func (e *Engine) TurnWithOptions(ctx context.Context, prompt string, emit func(E
 				case ctx.Err() != nil:
 					turnErr = ctx.Err()
 					result = "Tool was not executed because the turn was canceled."
+				case refusal != nil:
+					result = refusal.Reason
 				case !allowed:
 					result = "User denied permission. Tool was not executed; do not retry this action without new user instructions."
 				default:

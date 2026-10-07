@@ -265,8 +265,12 @@ func TestUIWatchEventPromptQuotesLabels(t *testing.T) {
 	if header != "Your watch "+string(wantLabel)+" (person, camera "+string(wantCamera)+") reported:" {
 		t.Fatalf("header %q", header)
 	}
-	if !strings.HasPrefix(rest, "<untrusted_sensor_event_json>\n") || !strings.HasSuffix(prompt, "\nTell the user if this is what they asked to be alerted about.") || strings.Count(prompt, "</untrusted_sensor_event_json>") != 1 {
+	const tail = "</untrusted_sensor_event_json>\nTell the user if this is what they asked to be alerted about.\nTools that need approval are not available in this turn."
+	if !strings.HasPrefix(rest, "<untrusted_sensor_event_json>\n") || !strings.HasSuffix(prompt, tail) || strings.Count(prompt, "</untrusted_sensor_event_json>") != 1 {
 		t.Fatalf("prompt:\n%s", prompt)
+	}
+	if merged := m.watchEventPrompt([]WatchNotice{notice, status}); !strings.HasPrefix(merged, "Your watches reported:\n") || !strings.HasSuffix(merged, tail) {
+		t.Fatalf("merged prompt:\n%s", merged)
 	}
 }
 
@@ -487,4 +491,60 @@ func TestUIEventTurnKeepsThePreviousReplySpeaking(t *testing.T) {
 		t.Fatal("an event turn canceled the previous reply's speech")
 	}
 	uiDrainTurn(t, m)
+}
+
+// A watch report, not the user, starts an event turn. A tool that needs
+// approval is refused at once, even with --yes, and no approval prompt opens
+// over what the user is typing; read-only tools still run.
+func TestUIEventTurnRefusesToolsThatNeedApproval(t *testing.T) {
+	for _, autoApprove := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ask", true: "auto-approve"}[autoApprove], func(t *testing.T) {
+			results := map[string]string{}
+			provider := uiProviderFunc(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+				if messages[len(messages)-1].Role == "tool" {
+					for _, message := range messages {
+						if message.Role == "tool" {
+							results[message.ToolCallID] = message.Content
+						}
+					}
+					return Message{Content: "A person is at the door."}, nil
+				}
+				return Message{ToolCalls: []ToolCall{
+					{ID: "snap", Name: "camera_snapshot", Arguments: json.RawMessage(`{}`)},
+					{ID: "list", Name: "camera_list", Arguments: json.RawMessage(`{}`)},
+				}}, nil
+			})
+			executor := &uiExecutor{tools: []Tool{{Name: "camera_snapshot", RequiresApproval: true}, {Name: "camera_list"}}}
+			m, _, _ := uiWatchModel(t, provider, executor)
+			m.opts.AutoApprove = autoApprove
+			m.composer.SetValue("half a sente")
+			deliver(m, watchEntered(0.9))
+			if !m.active {
+				t.Fatal("an arrival did not start a turn")
+			}
+			for m.active {
+				m.Update(uiNextEvent(t, m))
+				if m.approval != nil {
+					t.Fatal("an event turn opened an approval prompt")
+				}
+			}
+			if results["snap"] != watchTurnRefusal || executor.executed.Load() != 1 || results["list"] != "tool completed" {
+				t.Fatalf("results %q, executed %d", results, executor.executed.Load())
+			}
+			if m.composer.Value() != "half a sente" {
+				t.Fatalf("typing lost: %q", m.composer.Value())
+			}
+
+			// The user's own request still asks, or runs with --yes.
+			m.submit("take a snapshot")
+			if !autoApprove {
+				uiWaitForApproval(t, m)
+				m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+			}
+			uiDrainTurn(t, m)
+			if executor.executed.Load() != 3 {
+				t.Fatalf("the user's turn ran %d tools, want 2 more", executor.executed.Load()-1)
+			}
+		})
+	}
 }

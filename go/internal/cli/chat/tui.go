@@ -671,7 +671,7 @@ func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) t
 		m.turnSpeechCancel()
 	}
 	m.turnSpeechCtx, m.turnSpeechCancel = context.WithCancel(m.ctx)
-	cmd := m.beginTurn(prompt, TurnOptions{})
+	cmd := m.beginTurn(prompt, false)
 	if captionIndex >= 0 && captionIndex < len(m.transcript) && m.transcript[captionIndex].kind == "voice_input" {
 		// This is the same utterance already shown by live transcription, now
 		// accepted as an agent request. Promote it instead of echoing it again.
@@ -685,7 +685,9 @@ func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) t
 }
 
 // beginTurn runs prompt through the engine. The caller shows what started it.
-func (m *chatModel) beginTurn(prompt string, options TurnOptions) tea.Cmd {
+// A turn a watch report started (fromEvent) skips memory and runs no tool that
+// needs approval, so it never opens a prompt over what the user is typing.
+func (m *chatModel) beginTurn(prompt string, fromEvent bool) tea.Cmd {
 	m.delegation = nil
 	m.turnReply = ""
 	m.turnAssistant = -1
@@ -717,6 +719,9 @@ func (m *chatModel) beginTurn(prompt string, options TurnOptions) tea.Cmd {
 			if err := ctx.Err(); err != nil {
 				return false, err
 			}
+			if fromEvent {
+				return false, &ToolRefusal{Reason: watchTurnRefusal}
+			}
 			if autoApprove {
 				return true, nil
 			}
@@ -733,7 +738,7 @@ func (m *chatModel) beginTurn(prompt string, options TurnOptions) tea.Cmd {
 				return false, ctx.Err()
 			}
 		}
-		err := engine.TurnWithOptions(ctx, prompt, emit, approve, options)
+		err := engine.TurnWithOptions(ctx, prompt, emit, approve, TurnOptions{SkipMemory: fromEvent})
 		// Completion uses the session context: canceling a turn must still notify
 		// the UI that it can accept another prompt after the worker has stopped.
 		select {

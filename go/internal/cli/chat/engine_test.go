@@ -246,3 +246,54 @@ func TestTurnWithSkipMemoryNeitherRecallsNorLearns(t *testing.T) {
 		t.Fatal("an ordinary turn must still recall notes")
 	}
 }
+
+// An approver can refuse a call without asking anyone. The model reads the
+// refusal as the call's result and the turn goes on, in delegated children too.
+func TestApprovalRefusalIsTheToolResultInChildrenToo(t *testing.T) {
+	const reason = "Not run: nobody asked for this turn."
+	refuse := func(context.Context, ToolCall) (bool, error) { return false, &ToolRefusal{Reason: reason} }
+	toolResults := func(messages []Message) map[string]string {
+		results := map[string]string{}
+		for _, m := range messages {
+			if m.Role == "tool" {
+				results[m.ToolCallID] = m.Content
+			}
+		}
+		return results
+	}
+	profile, _ := ResolveProfile("general")
+	child := &engineTestExecutor{tools: []Tool{{Name: "write", RequiresApproval: true}}}
+	var childResults map[string]string
+	supervisor := &agentSupervisor{options: SessionOptions{Profile: profile}, gate: make(chan struct{}, 1), factory: func(context.Context, SessionOptions, *Profile) (*Engine, func(), error) {
+		provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+			if messages[len(messages)-1].Role == "tool" {
+				childResults = toolResults(messages)
+				return Message{Content: "child done"}, nil
+			}
+			return Message{ToolCalls: []ToolCall{{ID: "child-write", Name: "write", Arguments: json.RawMessage(`{}`)}}}, nil
+		})
+		return NewEngine(provider, child, "child"), func() {}, nil
+	}}
+	parent := &engineTestExecutor{tools: []Tool{{Name: "write", RequiresApproval: true}}}
+	var results map[string]string
+	provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+		if messages[len(messages)-1].Role == "tool" {
+			results = toolResults(messages)
+			return Message{Content: "Done."}, nil
+		}
+		return Message{ToolCalls: []ToolCall{
+			{ID: "write", Name: "write", Arguments: json.RawMessage(`{}`)},
+			{ID: "delegate", Name: delegateTool.Name, Arguments: json.RawMessage(`{"tasks":[{"profile":"debugger","prompt":"write it"}]}`)},
+		}}, nil
+	})
+	engine := NewEngine(provider, &agentExecutor{base: parent, supervisor: supervisor}, "Wendy")
+	if err := engine.Turn(context.Background(), "go", nil, refuse); err != nil {
+		t.Fatal(err)
+	}
+	if results["write"] != reason || childResults["child-write"] != reason || !strings.Contains(results["delegate"], `"state":"completed"`) {
+		t.Fatalf("parent %q child %q", results, childResults)
+	}
+	if len(parent.calls) != 0 || len(child.calls) != 0 {
+		t.Fatalf("a refused tool ran: parent %d child %d", len(parent.calls), len(child.calls))
+	}
+}

@@ -89,6 +89,11 @@ func (m *chatModel) handleWatchNotice(n WatchNotice) tea.Cmd {
 // An event turn starts at most this often; later reports merge into it.
 const watchTurnSpacing = 10 * time.Second
 
+// watchTurnRefusal is the tool result for a call that needs approval in an
+// event turn. Nobody asked for the turn, so nobody is asked to approve it,
+// and --yes does not cover it (design §7.3).
+const watchTurnRefusal = "Not run: a watch report started this turn, not the user. Tell the user what you would do; they can ask you to."
+
 // watchTriggers reports whether n starts an event turn (design §7.2). Other
 // notices are shown and folded into the next event turn. It is evaluated when
 // a turn could start, after watch_start's own result has been seen.
@@ -145,7 +150,7 @@ func (m *chatModel) maybeStartWatchTurn() tea.Cmd {
 // not a statement from the user (design §7.3). It is not an interruption
 // either, so the previous reply keeps speaking.
 func (m *chatModel) startEventTurn(prompt string) tea.Cmd {
-	cmd := m.beginTurn(prompt, TurnOptions{SkipMemory: true})
+	cmd := m.beginTurn(prompt, true)
 	m.viewport.GotoBottom()
 	return cmd
 }
@@ -154,7 +159,7 @@ func (m *chatModel) startEventTurn(prompt string) tea.Cmd {
 // camera name come from the model, the user or the device, so they are
 // JSON-quoted like the event itself.
 func (m *chatModel) watchEventPrompt(items []WatchNotice) string {
-	const ask = "\nTell the user if this is what they asked to be alerted about."
+	const ask = "\nTell the user if this is what they asked to be alerted about.\nTools that need approval are not available in this turn."
 	if len(items) == 1 {
 		d := m.watches[items[0].WatchID]
 		if d == nil {
