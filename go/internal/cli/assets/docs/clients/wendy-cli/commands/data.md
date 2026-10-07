@@ -156,11 +156,12 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 | `version` | yes | Campaign schema version the author wrote the file against. This release supports version `1`; higher versions are a deploy-time error. |
 | `name` | yes | Unique device-local name using letters, numbers, `.`, `-`, or `_`; maximum 128 characters. |
 | `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device. |
+| `lease` | no | Makes the campaign leased and notify-only; a duration from `15s` through `10m`. See [Leased campaigns](#leased-campaigns). |
 | `sources` | yes | One or more source entries. |
-| `capture` | yes | Buffer, post-trigger duration, and triggers. |
-| `upload` | yes | Upload condition, optional logical destination, and optional rate cap. |
+| `capture` | yes, except leased | Buffer, post-trigger duration, and triggers. |
+| `upload` | yes, except leased | Upload condition, optional logical destination, and optional rate cap. |
 | `retention` | no | Optional on-device storage bounds. |
-| `export` | yes | Annotation integration lifecycle intent. |
+| `export` | yes, except leased | Annotation integration lifecycle intent. |
 | `models` | no | Map of model name to deployed version, copied into Episodes. |
 | `privacy` | no | List of declared transforms with optional revisions. |
 | `inference` | no | Agent-managed Hugging Face object detection; see below. |
@@ -381,6 +382,49 @@ export:
 
 notify:
   on: episode_committed
+```
+
+### Leased campaigns
+
+A campaign with a top-level `lease` is a *leased campaign*: a notify-only
+detector that a client keeps alive by renewing it, for as long as the client
+runs. A leased campaign:
+
+- takes `lease`, a duration from `15s` through `10m`;
+- selects cameras only, with no per-source `capture` or `calibration_revision`;
+- needs an enabled `inference` block and `notify.on: detection`, without
+  `notify.webhook`;
+- takes no `capture`, `upload`, `retention`, `export`, `models` or `privacy`.
+
+It runs inference and, on each arrival, writes a device event and a detection
+notification to the device's notification journal. It records nothing: it opens
+no episodes, its predictions and frames enter no other campaign's episode, and
+nothing is sent to Cloud or a webhook. `wendy data campaign trigger` refuses it.
+
+Deploying a leased campaign starts its lease, and redeploying it restarts the
+lease. A redeploy cannot add or remove a lease. Clients renew and remove leased
+campaigns through the `CampaignRenew` and `CampaignRemove` agent RPCs; there is
+no CLI command for them. Within 5 seconds after a lease lapses, the agent stops
+the campaign's inference, releases its camera and deletes the plan. Deadlines
+are kept in memory, so an agent restart deletes every leased campaign.
+
+```yaml
+version: 1
+name: chat-3fa91c0e-1
+lease: 60s
+sources:
+  - camera: v4l2:/dev/video0
+inference:
+  model: ustc-community/dfine-nano-coco
+  revision: 066438d3d8f0da137a37b38fdf3368fd4afceced
+  labels: [person]
+  threshold: 0.5
+  rate: 2
+  event: chat-3fa91c0e-1.detected
+  clear_after: 5s
+  cooldown: 30s
+notify:
+  on: detection
 ```
 
 ## Playing back camera capture

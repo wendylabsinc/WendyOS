@@ -540,6 +540,9 @@ func (s *DataService) CampaignTrigger(ctx context.Context, req *agentpbv2.DataCa
 	if err != nil {
 		return nil, dataStatusError(err)
 	}
+	if campaign.Leased() {
+		return nil, status.Errorf(codes.FailedPrecondition, "campaign %q is leased and notify-only; it records no episodes", campaign.Name)
+	}
 	reason := strings.TrimSpace(req.GetReason())
 	if reason == "" {
 		reason = "manual"

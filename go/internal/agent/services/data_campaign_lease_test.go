@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -287,5 +288,70 @@ func TestRestartDeletesLeasedPlans(t *testing.T) {
 	}
 	if _, err := lt.service.manager.Campaign("people-all-cameras"); err != nil {
 		t.Fatalf("the restart deleted an ordinary plan: %v", err)
+	}
+}
+
+func TestLeasedDetectionNotifiesThroughJournalOnly(t *testing.T) {
+	lt := newLeaseTest(t, nil)
+	// Another open episode that captures applications, as an ordinary
+	// campaign's would.
+	if _, err := lt.service.Start(context.Background(), &agentpbv2.DataStartRequest{Sources: []string{"applications"}}); err != nil {
+		t.Fatal(err)
+	}
+	deployLeased(t, lt.service, "chat-1", "60s")
+	session := receiveInference(t, lt.factory.sessions)
+	input := receiveInference(t, session.inputs)
+	session.results <- inference.Result{Type: "prediction", SourceID: input.SourceID, Generation: input.Generation, Detections: []inference.Detection{
+		{Label: "person", Score: .91, Box: [4]float64{1, 2, 3, 4}},
+		{Label: "person", Score: .4, Box: [4]float64{5, 6, 7, 8}}, // below the 0.5 threshold
+	}}
+
+	var entries []DetectionNotification
+	deadline := time.Now().Add(8 * time.Second)
+	for len(entries) == 0 {
+		var err error
+		entries, _, _, err = lt.service.manager.Notifications("sh.wendy.campaign.chat-1", "", "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the detection never reached the notification journal")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(entries) != 1 || len(entries[0].Detections) != 1 || entries[0].Detections[0] != (data.NotificationDetection{Label: "person", Score: .91}) {
+		t.Fatalf("journal entries: %+v", entries)
+	}
+	events, _, _, err := lt.service.manager.DeviceEvents("sh.wendy.campaign.chat-1", "", "", true)
+	if err != nil || len(events) != 1 || events[0].Name != "chat-1.detected" {
+		t.Fatalf("device events: %+v %v", events, err)
+	}
+	select {
+	case request := <-lt.sender.requests:
+		t.Fatalf("a leased notification left the device: %+v", request)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if keys := lt.service.manager.ActiveEpisodeKeys(); len(keys) != 1 || keys[0] != data.AdHocEpisodeKey {
+		t.Fatalf("a leased detection opened an episode: %v", keys)
+	}
+	current := lt.service.manager.Status()
+	for _, source := range current.Sources {
+		if source.Source.ID == "applications" && source.Count != 0 {
+			t.Fatalf("the other episode received %d of the leased campaign's records", source.Count)
+		}
+	}
+	if current.ModelIO.SamplesDelivered != 0 || current.ModelIO.Predictions != 0 {
+		t.Fatalf("the other episode's model ledger holds the leased campaign's frames: %+v", current.ModelIO)
+	}
+}
+
+func TestLeasedCampaignCannotBeTriggered(t *testing.T) {
+	lt := newLeaseTest(t, nil)
+	deployLeased(t, lt.service, "chat-1", "60s")
+	if _, err := lt.service.CampaignTrigger(context.Background(), &agentpbv2.DataCampaignTriggerRequest{Name: "chat-1"}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("triggering a leased campaign: %v, want FailedPrecondition", err)
+	}
+	if keys := lt.service.manager.ActiveEpisodeKeys(); len(keys) != 0 {
+		t.Fatalf("an episode opened: %v", keys)
 	}
 }

@@ -141,3 +141,40 @@ func TestRemoveCampaignDeletesThePlan(t *testing.T) {
 		t.Fatalf("malformed name: %v", err)
 	}
 }
+
+// A leased campaign's event goes to the device-event journal only: not into an
+// open episode, and not into the pre-roll ring, from which another campaign's
+// next episode would pick it up.
+func TestRecordDeviceEventSkipsEpisodesAndPreRoll(t *testing.T) {
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Start(StartOptions{Sources: []string{"applications"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = manager.Stop(AdHocEpisodeKey) })
+	record := ApplicationRecord{Version: 1, Type: "event", Name: "chat-1.detected", Model: "PekingU/rtdetr_r18vd"}
+	if err := manager.RecordDeviceEvent("sh.wendy.campaign.chat-1", record); err != nil {
+		t.Fatal(err)
+	}
+	events, _, _, err := manager.DeviceEvents("sh.wendy.campaign.chat-1", "", "", true)
+	if err != nil || len(events) != 1 || events[0].Name != "chat-1.detected" {
+		t.Fatalf("device event not journaled: %+v %v", events, err)
+	}
+	current := manager.Status()
+	if current == nil {
+		t.Fatal("no open episode")
+	}
+	for _, source := range current.Sources {
+		if source.Source.ID == "applications" && source.Count != 0 {
+			t.Fatalf("the open episode received %d application records", source.Count)
+		}
+	}
+	manager.mu.Lock()
+	ring := len(manager.preRoll)
+	manager.mu.Unlock()
+	if ring != 0 {
+		t.Fatalf("the pre-roll ring holds %d records", ring)
+	}
+}
