@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-import "wendy_com_tunnel_msg.proto";
-
-service WendyComTunnelBrokerService {
-    // The client's first message must be open; everything after, in both
-    // directions, is payload. Stream lifetime == channel lifetime.
-    rpc WendyComTunnel(stream WendyComTunnelMessage) returns (stream WendyComTunnelMessage);
-}

@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
+	"google.golang.org/grpc"
 )
 
 const (
@@ -898,9 +899,15 @@ func (p *MicroWendyProvider) ConnectSensorLink(device models.ExternalDevice) (*l
 	return p.connectClient(device)
 }
 
+// CloudRelayDialer opens the Wendy Cloud connection that a "Cloud" device's
+// relay runs over, already set up with the user's Cloud credentials, and the
+// context whose call metadata carries them. The commands package owns Cloud
+// sessions and sets it; this package cannot import commands.
+var CloudRelayDialer func(ctx context.Context, device models.ExternalDevice) (*grpc.ClientConn, context.Context, error)
+
 // connectClient opens a WendyLiteClient connection to the device over serial,
-// LAN or BLE (with mTLS when the device advertises it). The caller must Close
-// the client.
+// LAN or BLE (with mTLS when the device advertises it), or through the Wendy
+// Cloud relay. The caller must Close the client.
 func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
 	client := liteclient.NewWendyLiteClient()
 	switch device.ConnectionInfo["type"] {
@@ -962,6 +969,21 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 			if err := client.ConnectViaBLEInsecure(address, psm); err != nil {
 				return nil, fmt.Errorf("connect to device over BLE: %w", err)
 			}
+		}
+	case "Cloud":
+		assetID := device.ConnectionInfo["assetId"]
+		if assetID == "" {
+			return nil, fmt.Errorf("wendy-lite provider: missing Cloud asset ID in connection info")
+		}
+		if CloudRelayDialer == nil {
+			return nil, fmt.Errorf("wendy-lite provider: Wendy Cloud connections are not available")
+		}
+		cc, ctx, err := CloudRelayDialer(context.Background(), device)
+		if err != nil {
+			return nil, fmt.Errorf("connect to device via Wendy Cloud: %w", err)
+		}
+		if err := client.ConnectViaRelay(ctx, cc, assetID); err != nil {
+			return nil, fmt.Errorf("connect to device via Wendy Cloud: %w", err)
 		}
 	default:
 		return nil, fmt.Errorf("wendy-lite provider: unsupported connection type: %s", device.ConnectionInfo["type"])

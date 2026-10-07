@@ -13,6 +13,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"google.golang.org/grpc"
 )
 
 func TestEspIdfBinaryPath(t *testing.T) {
@@ -463,5 +464,58 @@ func TestConnectClientRejectsBLEWithoutAddress(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "missing BLE address") {
 		t.Errorf("expected a missing-address error, got %v", err)
+	}
+}
+
+// setCloudRelayDialer swaps the Cloud hook for one test.
+func setCloudRelayDialer(t *testing.T, dial func(context.Context, models.ExternalDevice) (*grpc.ClientConn, context.Context, error)) {
+	t.Helper()
+	old := CloudRelayDialer
+	CloudRelayDialer = dial
+	t.Cleanup(func() { CloudRelayDialer = old })
+}
+
+func TestConnectClientRejectsCloudWithoutAssetID(t *testing.T) {
+	setCloudRelayDialer(t, func(context.Context, models.ExternalDevice) (*grpc.ClientConn, context.Context, error) {
+		t.Error("dialled Wendy Cloud for a device without an asset ID")
+		return nil, nil, errors.New("unreachable")
+	})
+	p := &MicroWendyProvider{}
+	_, err := p.connectClient(models.ExternalDevice{
+		ConnectionInfo: map[string]string{"type": "Cloud"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing Cloud asset ID") {
+		t.Errorf("expected a missing-asset error, got %v", err)
+	}
+}
+
+func TestConnectClientRejectsCloudWithoutDialer(t *testing.T) {
+	setCloudRelayDialer(t, nil)
+	p := &MicroWendyProvider{}
+	_, err := p.connectClient(models.ExternalDevice{
+		ConnectionInfo: map[string]string{"type": "Cloud", "assetId": "0b6f7a52-5d1e-4c3b-9a8e-2f4d6c8b1a3e"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Errorf("expected an unavailable-Cloud error, got %v", err)
+	}
+}
+
+func TestConnectClientReportsCloudDialError(t *testing.T) {
+	failure := errors.New("no login for this tenant")
+	var dialled models.ExternalDevice
+	setCloudRelayDialer(t, func(_ context.Context, device models.ExternalDevice) (*grpc.ClientConn, context.Context, error) {
+		dialled = device
+		return nil, nil, failure
+	})
+	p := &MicroWendyProvider{}
+	device := models.ExternalDevice{
+		ConnectionInfo: map[string]string{"type": "Cloud", "assetId": "0b6f7a52-5d1e-4c3b-9a8e-2f4d6c8b1a3e"},
+	}
+	_, err := p.connectClient(device)
+	if !errors.Is(err, failure) {
+		t.Fatalf("expected the dial error, got %v", err)
+	}
+	if dialled.ConnectionInfo["assetId"] != device.ConnectionInfo["assetId"] {
+		t.Errorf("dialer got %+v, want the selected device", dialled)
 	}
 }

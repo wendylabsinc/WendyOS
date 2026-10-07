@@ -135,14 +135,16 @@ Clients (the CLI) do not connect to the device; they connect to the broker over 
 The broker exposes a bidirectional streaming RPC:
 
 ```proto
-service WendyComTunnelBrokerService {
-    rpc WendyComTunnel(stream WendyComTunnelMessage) returns (stream WendyComTunnelMessage);
+service WendyComRelayService {
+    rpc WendyComRelay(stream WendyComRelayMessage) returns (stream WendyComRelayMessage);
 }
 ```
 
-The client's first stream message must be `WendyComTunnelOpen`, which carries the `asset_id` of the target device. Every subsequent message, in both directions, is a `WendyComTunnelPayload` whose `bytes` field contains one protobuf-encoded `WendyComMessage` body — **without** the 8-byte header. Framing and channel numbering are owned entirely by the broker: it prepends the header (with the channel byte) on the way to the device and strips it on the way back.
+The client's first stream message must be `WendyComRelayOpen`, which carries the target device's asset UUID (`string asset_id`). Every subsequent message, in both directions, is a `WendyComRelayPayload` whose `bytes` field contains one protobuf-encoded `WendyComMessage` body — **without** the 8-byte header. Framing and channel numbering are owned entirely by the broker: it prepends the header (with the channel byte) on the way to the device and strips it on the way back.
 
 The lifetime of the gRPC stream is the lifetime of the tunnel: closing the stream closes the channel on the device, and vice versa.
+
+The CLI opens the stream on its signed-in Wendy Cloud connection, the same one its other Cloud calls use, so the broker sees the user's session (DPoP when the token is key-bound, a bearer token otherwise). It does so for a device Cloud lists with OS `wendy-lite`, whether picked from the Cloud tab of the device picker or named by a `cloud://host:port/tenant/<tenant>/asset/<asset>` selector. The broker verifies the device's certificate; there is no end-to-end TLS between the CLI and the device.
 
 ### Channel multiplexing
 
