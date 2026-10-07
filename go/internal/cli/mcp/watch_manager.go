@@ -18,6 +18,9 @@ const (
 	watchEventBufferSize = 100
 	watchEndedRetained   = 10
 	watchStartWait       = 30 * time.Second
+	// watch_stop and a watch the device ended wait this long for the removal;
+	// the lease removes a campaign the device never hears about.
+	watchStopTimeout = 5 * time.Second
 	// The MCP client gives the server 2 s after closing stdin before SIGTERM.
 	watchShutdownTimeout = 1500 * time.Millisecond
 	watchEventMethod     = "notifications/wendy/watch_event"
@@ -79,11 +82,12 @@ type watchRecord struct {
 // while calling the backend or sending a notification, and it is never called
 // with the server's mu held, so it cannot deadlock against connection changes.
 type watchManager struct {
-	backend   watchBackend
-	notify    func(method string, params map[string]any) error
-	revision  func() uint64
-	serverID  string
-	startWait time.Duration
+	backend     watchBackend
+	notify      func(method string, params map[string]any) error
+	revision    func() uint64
+	serverID    string
+	startWait   time.Duration
+	stopTimeout time.Duration
 
 	mu       sync.Mutex
 	next     int
@@ -96,7 +100,7 @@ type watchManager struct {
 func newWatchManager(backend watchBackend, notify func(method string, params map[string]any) error, revision func() uint64) *watchManager {
 	var id [4]byte
 	_, _ = rand.Read(id[:])
-	return &watchManager{backend: backend, notify: notify, revision: revision, serverID: hex.EncodeToString(id[:]), startWait: watchStartWait, watches: map[string]*watchRecord{}}
+	return &watchManager{backend: backend, notify: notify, revision: revision, serverID: hex.EncodeToString(id[:]), startWait: watchStartWait, stopTimeout: watchStopTimeout, watches: map[string]*watchRecord{}}
 }
 
 func (m *watchManager) activeLocked() []*watchRecord {
@@ -156,8 +160,8 @@ func (m *watchManager) start(ctx context.Context, conn *grpcclient.AgentConnecti
 	ended := rec.state == watchEnded
 	m.mu.Unlock()
 	if ended {
-		m.stopHandle(handle, time.Second)
 		m.sendStatus(rec, "")
+		m.stopHandle(handle, time.Second)
 		return m.view(rec), nil
 	}
 	m.sendStatus(rec, "")
@@ -206,8 +210,8 @@ func (m *watchManager) apply(rec *watchRecord, u watchUpdate) {
 		handle := rec.handle
 		m.endLocked(rec, u.Status.Reason)
 		m.mu.Unlock()
-		m.stopHandle(handle, 5*time.Second)
 		m.sendStatus(rec, "")
+		m.stopHandle(handle, m.stopTimeout)
 	case u.Status != nil:
 		changed := rec.state != u.Status.State || rec.reason != u.Status.Reason
 		rec.state, rec.reason = u.Status.State, u.Status.Reason
@@ -263,8 +267,10 @@ func (m *watchManager) stopHandle(handle watchHandle, timeout time.Duration) {
 	_ = handle.Stop(ctx)
 }
 
-// stop ends a watch and removes it from the device. The record is ended first,
-// so no event arrives after watch_stop returns.
+// stop ends a watch and removes it from the device. The record is ended and
+// ENDED sent first, so no event arrives after watch_stop returns and a device
+// that stopped answering cannot delay ENDED. The removal gets stopTimeout; the
+// lease removes a campaign the device never hears about.
 func (m *watchManager) stop(ctx context.Context, id, reason string) (watchView, error) {
 	m.mu.Lock()
 	rec := m.watches[id]
@@ -280,11 +286,13 @@ func (m *watchManager) stop(ctx context.Context, id, reason string) (watchView, 
 	handle := rec.handle
 	m.endLocked(rec, reason)
 	m.mu.Unlock()
+	m.sendStatus(rec, "")
 	var err error
 	if handle != nil {
-		err = handle.Stop(ctx)
+		stopCtx, cancel := context.WithTimeout(ctx, m.stopTimeout)
+		err = handle.Stop(stopCtx)
+		cancel()
 	}
-	m.sendStatus(rec, "")
 	return m.view(rec), err
 }
 

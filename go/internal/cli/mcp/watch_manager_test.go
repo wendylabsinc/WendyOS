@@ -18,20 +18,28 @@ type fakeWatchHandle struct {
 	updates   chan watchUpdate
 	stopped   atomic.Int32
 	stopWait  time.Duration
+	onStop    func() // optional: called as Stop begins
 	closeOnce sync.Once
 }
 
 func (h *fakeWatchHandle) Updates() <-chan watchUpdate { return h.updates }
+
+// Stop takes stopWait, like a slow device, and fails if ctx ends first.
 func (h *fakeWatchHandle) Stop(ctx context.Context) error {
 	h.stopped.Add(1)
+	if h.onStop != nil {
+		h.onStop()
+	}
+	var err error
 	if h.stopWait > 0 {
 		select {
 		case <-time.After(h.stopWait):
 		case <-ctx.Done():
+			err = ctx.Err()
 		}
 	}
 	h.closeOnce.Do(func() { close(h.updates) })
-	return nil
+	return err
 }
 
 type fakeWatchBackend struct {
@@ -84,6 +92,18 @@ func (l *notificationLog) notify(method string, params map[string]any) error {
 	defer l.mu.Unlock()
 	l.sent = append(l.sent, sentNotification{method, params})
 	return nil
+}
+
+// ended reports whether an ENDED status has been sent.
+func (l *notificationLog) ended() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, n := range l.sent {
+		if n.method == watchStatusMethod && n.params["state"] == string(watchEnded) {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *notificationLog) waitFor(t *testing.T, match func(sentNotification) bool) sentNotification {
@@ -280,6 +300,57 @@ func TestWatchManagerEndsWatchesWhenTheBackendEndsThem(t *testing.T) {
 	if v := waitState(t, m, "w1", watchEnded); v.Reason != "the device restarted or the watch expired" || m.freeSlots() != 2 {
 		t.Fatalf("view %+v, free %d", v, m.freeSlots())
 	}
+}
+
+// A device that dropped off the network can hang CampaignRemove for minutes.
+// watch_stop sends ENDED first and gives the removal a bounded time; the lease
+// removes the campaign if the device never hears.
+func TestWatchManagerStopIsBoundedAndSendsEndedFirst(t *testing.T) {
+	backend := &fakeWatchBackend{stopWait: 5 * time.Second}
+	m, log, _ := newTestWatchManager(backend)
+	m.stopTimeout = 100 * time.Millisecond
+	startTestWatch(t, m, "front door")
+	var endedFirst atomic.Bool
+	backend.handle(0).onStop = func() { endedFirst.Store(log.ended()) }
+	began := time.Now()
+	v, err := m.stop(context.Background(), "w1", watchStoppedReason)
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("stop took %s; the removal must be bounded", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || v.State != string(watchEnded) {
+		t.Fatalf("a removal that timed out must be reported: %+v %v", v, err)
+	}
+	if !endedFirst.Load() {
+		t.Fatal("ENDED must be sent before the device removal starts")
+	}
+	// The tool's own cancellation still applies within the bound.
+	m.stopTimeout = time.Minute
+	startTestWatch(t, m, "garage")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	began = time.Now()
+	if _, err := m.stop(ctx, "w2", watchStoppedReason); !errors.Is(err, context.DeadlineExceeded) || time.Since(began) > time.Second {
+		t.Fatalf("stop ignored its caller's deadline: %v after %s", err, time.Since(began))
+	}
+}
+
+func TestWatchManagerSendsEndedBeforeStoppingABackendEndedWatch(t *testing.T) {
+	backend := &fakeWatchBackend{}
+	m, log, _ := newTestWatchManager(backend)
+	startTestWatch(t, m, "front door")
+	h := backend.handle(0)
+	endedFirst := make(chan bool, 1)
+	h.onStop = func() { endedFirst <- log.ended() }
+	h.updates <- watchUpdate{Status: &watchStatusUpdate{State: watchEnded, Reason: watchGoneReason}}
+	select {
+	case first := <-endedFirst:
+		if !first {
+			t.Fatal("ENDED must be sent before the backend watch is stopped")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the ended watch was not stopped")
+	}
+	waitState(t, m, "w1", watchEnded)
 }
 
 func TestWatchManagerEndsStaleWatchesOnConnectionChange(t *testing.T) {

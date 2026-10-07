@@ -104,6 +104,33 @@ func TestCampaignWatchSendsOnlyTheWatchCampaignKeys(t *testing.T) {
 	}
 }
 
+// Start runs under startMu, so a hung deploy would block every other
+// watch_start. It has the same deadline as the backend's other device calls.
+func TestCampaignWatchDeployHasADeadline(t *testing.T) {
+	client := newWatchDataClient()
+	client.deployWait = 5 * time.Second
+	b := fastCampaignBackend()
+	b.callTimeout = 50 * time.Millisecond
+	began := time.Now()
+	h, err := b.Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+	if err == nil {
+		h.Stop(context.Background())
+		t.Fatal("a deploy past its deadline must fail")
+	}
+	if elapsed := time.Since(began); elapsed > time.Second || status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("got %v after %s", err, elapsed)
+	}
+	b.mu.Lock()
+	watches, poller, starting := len(b.watches), b.poller, b.starting
+	b.mu.Unlock()
+	if watches != 0 || poller != nil || starting != 0 {
+		t.Fatalf("a failed start left %d watches, poller %v, %d starts in flight", watches, poller, starting)
+	}
+	if names := client.deployedNames(); len(names) != 0 {
+		t.Fatalf("deployed %v", names)
+	}
+}
+
 func TestCampaignWatchOldAgentRefusesCleanly(t *testing.T) {
 	for name, deployErr := range map[string]error{
 		"unknown lease field": status.Error(codes.InvalidArgument, "parsing campaign YAML: yaml: unmarshal errors:\n  line 3: field lease not found in type data.Campaign"),

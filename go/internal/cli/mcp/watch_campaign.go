@@ -41,6 +41,7 @@ type campaignWatchBackend struct {
 	renewEvery  time.Duration
 	statusEvery time.Duration
 	pollEvery   time.Duration
+	callTimeout time.Duration // each device call's deadline
 
 	mu      sync.Mutex
 	watches map[string]*campaignWatch // by campaign name
@@ -55,7 +56,7 @@ type campaignWatchBackend struct {
 }
 
 func newCampaignWatchBackend(detector watchDetector) *campaignWatchBackend {
-	return &campaignWatchBackend{detector: detector, renewEvery: watchRenewEvery, statusEvery: watchStatusEvery, pollEvery: watchPollEvery, watches: map[string]*campaignWatch{}}
+	return &campaignWatchBackend{detector: detector, renewEvery: watchRenewEvery, statusEvery: watchStatusEvery, pollEvery: watchPollEvery, callTimeout: watchCallTimeout, watches: map[string]*campaignWatch{}}
 }
 
 func (b *campaignWatchBackend) Start(ctx context.Context, conn *grpcclient.AgentConnection, spec watchSpec) (watchHandle, error) {
@@ -82,7 +83,11 @@ func (b *campaignWatchBackend) Start(ctx context.Context, conn *grpcclient.Agent
 		b.detachIfIdle()
 		return nil, err
 	}
-	if _, err := client.CampaignDeploy(ctx, &agentpbv2.DataCampaignDeployRequest{CampaignYaml: plan}); err != nil {
+	// startMu is held: a deploy without a deadline could block every start.
+	deployCtx, cancelDeploy := context.WithTimeout(ctx, b.callTimeout)
+	_, err = client.CampaignDeploy(deployCtx, &agentpbv2.DataCampaignDeployRequest{CampaignYaml: plan})
+	cancelDeploy()
+	if err != nil {
 		finishStart()
 		b.detachIfIdle()
 		return nil, watchDeviceError(err)
@@ -196,7 +201,7 @@ func (b *campaignWatchBackend) attach(ctx context.Context, client agentpbv2.Data
 		old.cancel()
 		<-old.done
 	}
-	callCtx, cancel := context.WithTimeout(ctx, watchCallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, b.callTimeout)
 	defer cancel()
 	response, err := client.Events(callCtx, &agentpbv2.DataEventsRequest{NotificationsOnly: true})
 	if err != nil {
@@ -240,7 +245,7 @@ func (b *campaignWatchBackend) poll(ctx context.Context, p *campaignPoller) {
 			return
 		case <-ticker.C:
 		}
-		callCtx, cancel := context.WithTimeout(ctx, watchCallTimeout)
+		callCtx, cancel := context.WithTimeout(ctx, b.callTimeout)
 		response, err := p.client.Events(callCtx, &agentpbv2.DataEventsRequest{Cursor: p.cursor, Replay: true, NotificationsOnly: true})
 		cancel()
 		if err != nil || !response.GetNotifications() {
@@ -358,7 +363,7 @@ func (w *campaignWatch) run() {
 // renew pushes the lease forward. A transient failure is retried on the next
 // tick. NOT_FOUND means the device restarted or the lease lapsed.
 func (w *campaignWatch) renew() bool {
-	ctx, cancel := context.WithTimeout(w.ctx, watchCallTimeout)
+	ctx, cancel := context.WithTimeout(w.ctx, w.backend.callTimeout)
 	defer cancel()
 	_, err := w.client.CampaignRenew(ctx, &agentpbv2.DataCampaignRenewRequest{Name: w.name})
 	switch status.Code(err) {
@@ -381,7 +386,7 @@ func (w *campaignWatch) renew() bool {
 // §6.3): an ERROR watch stays ERROR, with its last reason, until the detector
 // runs or fails for a different reason.
 func (w *campaignWatch) refreshStatus() bool {
-	ctx, cancel := context.WithTimeout(w.ctx, watchCallTimeout)
+	ctx, cancel := context.WithTimeout(w.ctx, w.backend.callTimeout)
 	defer cancel()
 	campaign, err := w.client.CampaignInspect(ctx, &agentpbv2.DataCampaignInspectRequest{Name: w.name})
 	if status.Code(err) == codes.NotFound {

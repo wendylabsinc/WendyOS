@@ -36,7 +36,7 @@ type watchDataClient struct {
 	inspectErr   error
 	removeErr    error
 	removeWait   time.Duration
-	deployWait   time.Duration // CampaignDeploy sleeps this long before doing anything else
+	deployWait   time.Duration // CampaignDeploy waits this long, or until its ctx ends, before doing anything else
 	journal      []data.CampaignNotification
 	gapOnce      bool
 	oldJournal   bool // Events does not mark the response as the notification journal
@@ -62,11 +62,17 @@ func (f *watchDataClient) callLog() []string {
 	return append([]string(nil), f.calls...)
 }
 
-func (f *watchDataClient) CampaignDeploy(_ context.Context, r *agentpbv2.DataCampaignDeployRequest, _ ...grpc.CallOption) (*agentpbv2.DataCampaign, error) {
+func (f *watchDataClient) CampaignDeploy(ctx context.Context, r *agentpbv2.DataCampaignDeployRequest, _ ...grpc.CallOption) (*agentpbv2.DataCampaign, error) {
 	f.mu.Lock()
 	wait := f.deployWait
 	f.mu.Unlock()
-	time.Sleep(wait)
+	if wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.deployErr != nil {
@@ -124,6 +130,7 @@ func (f *watchDataClient) CampaignRemove(ctx context.Context, r *agentpbv2.DataC
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
+			return nil, status.FromContextError(ctx.Err()).Err()
 		}
 	}
 	f.mu.Lock()

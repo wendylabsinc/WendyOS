@@ -178,6 +178,28 @@ func TestWatchToolsEndToEnd(t *testing.T) {
 	}
 }
 
+func TestWatchStopReportsADeviceThatDoesNotAnswer(t *testing.T) {
+	s, client, log := watchToolServer(t)
+	s.watchManager().stopTimeout = 100 * time.Millisecond
+	if _, isErr := callWatchTool(t, s, "watch_start", map[string]any{"camera": "v4l2:/dev/video0", "classes": []any{"person"}}); isErr {
+		t.Fatal("start failed")
+	}
+	client.mu.Lock()
+	client.removeWait = 5 * time.Second
+	client.mu.Unlock()
+	began := time.Now()
+	stopped, isErr := callWatchTool(t, s, "watch_stop", map[string]any{"watch_id": "w1"})
+	if elapsed := time.Since(began); isErr || elapsed > time.Second {
+		t.Fatalf("watch_stop took %s: %v", elapsed, stopped)
+	}
+	if message, _ := stopped["message"].(string); stopped["state"] != "ENDED" || stopped["removed"] != false || !strings.Contains(message, "stops by itself") {
+		t.Fatalf("stop %v", stopped)
+	}
+	if !log.ended() {
+		t.Fatal("no ENDED status was sent")
+	}
+}
+
 func TestWatchStartOnAnOldAgent(t *testing.T) {
 	s, client, _ := watchToolServer(t)
 	client.deployErr = status.Error(codes.InvalidArgument, "parsing campaign YAML: yaml: unmarshal errors:\n  line 3: field lease not found in type data.Campaign")
