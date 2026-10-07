@@ -116,7 +116,11 @@ type EnrollDeviceRequest struct {
 	// name burns no enrollment credential. A collision is ALREADY_EXISTS.
 	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
 	// Free-text details for the asset row. Cosmetic, and genuinely so.
-	Details       string `protobuf:"bytes,5,opt,name=details,proto3" json:"details,omitempty"`
+	Details string `protobuf:"bytes,5,opt,name=details,proto3" json:"details,omitempty"`
+	// What the device reports about itself, written to the asset row at enrollment (WDY-3544).
+	// Optional as a whole and field by field: an older client sends none of it and the row
+	// simply has no hardware facts, as before.
+	Hardware      *DeviceHardware `protobuf:"bytes,6,opt,name=hardware,proto3" json:"hardware,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -186,6 +190,159 @@ func (x *EnrollDeviceRequest) GetDetails() string {
 	return ""
 }
 
+func (x *EnrollDeviceRequest) GetHardware() *DeviceHardware {
+	if x != nil {
+		return x.Hardware
+	}
+	return nil
+}
+
+// The device's own hardware report, mirroring wendyos GetDeviceInfo. Every field is optional
+// and "absent" means the device could not read it -- never zero, never "unknown".
+//
+// Operator-relayed, so it carries the same trust as an UpdateAsset of the same columns: it
+// describes the device, it authorizes nothing.
+type DeviceHardware struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// /proc/device-tree/model, e.g. "NVIDIA Jetson AGX Thor Developer Kit".
+	BoardModel *string `protobuf:"bytes,1,opt,name=board_model,json=boardModel,proto3,oneof" json:"board_model,omitempty"`
+	// The first /proc/device-tree/compatible entry naming the SoC, e.g. "nvidia,tegra264".
+	SocCompatible *string `protobuf:"bytes,2,opt,name=soc_compatible,json=socCompatible,proto3,oneof" json:"soc_compatible,omitempty"`
+	SerialNumber  *string `protobuf:"bytes,3,opt,name=serial_number,json=serialNumber,proto3,oneof" json:"serial_number,omitempty"`
+	// uname -r.
+	KernelVersion *string `protobuf:"bytes,4,opt,name=kernel_version,json=kernelVersion,proto3,oneof" json:"kernel_version,omitempty"`
+	// NVIDIA L4T release, e.g. "38.2.0". Absent on non-NVIDIA boards.
+	L4TVersion *string `protobuf:"bytes,5,opt,name=l4t_version,json=l4tVersion,proto3,oneof" json:"l4t_version,omitempty"`
+	// Online logical CPUs.
+	CpuCount      *uint32 `protobuf:"varint,6,opt,name=cpu_count,json=cpuCount,proto3,oneof" json:"cpu_count,omitempty"`
+	MemTotalBytes *int64  `protobuf:"varint,7,opt,name=mem_total_bytes,json=memTotalBytes,proto3,oneof" json:"mem_total_bytes,omitempty"`
+	// Root filesystem size.
+	DiskTotalBytes *int64 `protobuf:"varint,8,opt,name=disk_total_bytes,json=diskTotalBytes,proto3,oneof" json:"disk_total_bytes,omitempty"`
+	// e.g. "linux".
+	Os        *string `protobuf:"bytes,9,opt,name=os,proto3,oneof" json:"os,omitempty"`
+	OsVersion *string `protobuf:"bytes,10,opt,name=os_version,json=osVersion,proto3,oneof" json:"os_version,omitempty"`
+	// e.g. "arm64".
+	Architecture *string `protobuf:"bytes,11,opt,name=architecture,proto3,oneof" json:"architecture,omitempty"`
+	// Vendor-specific GPU architecture, e.g. "sm_110".
+	GpuArch       *string `protobuf:"bytes,12,opt,name=gpu_arch,json=gpuArch,proto3,oneof" json:"gpu_arch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeviceHardware) Reset() {
+	*x = DeviceHardware{}
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeviceHardware) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeviceHardware) ProtoMessage() {}
+
+func (x *DeviceHardware) ProtoReflect() protoreflect.Message {
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeviceHardware.ProtoReflect.Descriptor instead.
+func (*DeviceHardware) Descriptor() ([]byte, []int) {
+	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *DeviceHardware) GetBoardModel() string {
+	if x != nil && x.BoardModel != nil {
+		return *x.BoardModel
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetSocCompatible() string {
+	if x != nil && x.SocCompatible != nil {
+		return *x.SocCompatible
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetSerialNumber() string {
+	if x != nil && x.SerialNumber != nil {
+		return *x.SerialNumber
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetKernelVersion() string {
+	if x != nil && x.KernelVersion != nil {
+		return *x.KernelVersion
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetL4TVersion() string {
+	if x != nil && x.L4TVersion != nil {
+		return *x.L4TVersion
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetCpuCount() uint32 {
+	if x != nil && x.CpuCount != nil {
+		return *x.CpuCount
+	}
+	return 0
+}
+
+func (x *DeviceHardware) GetMemTotalBytes() int64 {
+	if x != nil && x.MemTotalBytes != nil {
+		return *x.MemTotalBytes
+	}
+	return 0
+}
+
+func (x *DeviceHardware) GetDiskTotalBytes() int64 {
+	if x != nil && x.DiskTotalBytes != nil {
+		return *x.DiskTotalBytes
+	}
+	return 0
+}
+
+func (x *DeviceHardware) GetOs() string {
+	if x != nil && x.Os != nil {
+		return *x.Os
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetOsVersion() string {
+	if x != nil && x.OsVersion != nil {
+		return *x.OsVersion
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetArchitecture() string {
+	if x != nil && x.Architecture != nil {
+		return *x.Architecture
+	}
+	return ""
+}
+
+func (x *DeviceHardware) GetGpuArch() string {
+	if x != nil && x.GpuArch != nil {
+		return *x.GpuArch
+	}
+	return ""
+}
+
 // The enrollment credential, returned INLINE AND EXACTLY ONCE.
 //
 // There is no second read and no retrieval RPC, because there is nothing to retrieve: cloud
@@ -212,7 +369,7 @@ type EnrollDeviceResponse struct {
 
 func (x *EnrollDeviceResponse) Reset() {
 	*x = EnrollDeviceResponse{}
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -224,7 +381,7 @@ func (x *EnrollDeviceResponse) String() string {
 func (*EnrollDeviceResponse) ProtoMessage() {}
 
 func (x *EnrollDeviceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[1]
+	mi := &file_wendycloud_v2_device_enrollment_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -237,7 +394,7 @@ func (x *EnrollDeviceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnrollDeviceResponse.ProtoReflect.Descriptor instead.
 func (*EnrollDeviceResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{1}
+	return file_wendycloud_v2_device_enrollment_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *EnrollDeviceResponse) GetAssetId() string {
@@ -293,13 +450,45 @@ var File_wendycloud_v2_device_enrollment_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_device_enrollment_proto_rawDesc = "" +
 	"\n" +
-	"%wendycloud/v2/device_enrollment.proto\x12\rwendycloud.v2\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xd5\x01\n" +
+	"%wendycloud/v2/device_enrollment.proto\x12\rwendycloud.v2\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\x90\x02\n" +
 	"\x13EnrollDeviceRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\tR\bdeviceId\x12=\n" +
 	"\fdevice_class\x18\x02 \x01(\x0e2\x1a.wendycloud.v2.DeviceClassR\vdeviceClass\x124\n" +
 	"\x16enrollment_request_jws\x18\x03 \x01(\fR\x14enrollmentRequestJws\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12\x18\n" +
-	"\adetails\x18\x05 \x01(\tR\adetails\"\xf5\x01\n" +
+	"\adetails\x18\x05 \x01(\tR\adetails\x129\n" +
+	"\bhardware\x18\x06 \x01(\v2\x1d.wendycloud.v2.DeviceHardwareR\bhardware\"\xa1\x05\n" +
+	"\x0eDeviceHardware\x12$\n" +
+	"\vboard_model\x18\x01 \x01(\tH\x00R\n" +
+	"boardModel\x88\x01\x01\x12*\n" +
+	"\x0esoc_compatible\x18\x02 \x01(\tH\x01R\rsocCompatible\x88\x01\x01\x12(\n" +
+	"\rserial_number\x18\x03 \x01(\tH\x02R\fserialNumber\x88\x01\x01\x12*\n" +
+	"\x0ekernel_version\x18\x04 \x01(\tH\x03R\rkernelVersion\x88\x01\x01\x12$\n" +
+	"\vl4t_version\x18\x05 \x01(\tH\x04R\n" +
+	"l4tVersion\x88\x01\x01\x12 \n" +
+	"\tcpu_count\x18\x06 \x01(\rH\x05R\bcpuCount\x88\x01\x01\x12+\n" +
+	"\x0fmem_total_bytes\x18\a \x01(\x03H\x06R\rmemTotalBytes\x88\x01\x01\x12-\n" +
+	"\x10disk_total_bytes\x18\b \x01(\x03H\aR\x0ediskTotalBytes\x88\x01\x01\x12\x13\n" +
+	"\x02os\x18\t \x01(\tH\bR\x02os\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"os_version\x18\n" +
+	" \x01(\tH\tR\tosVersion\x88\x01\x01\x12'\n" +
+	"\farchitecture\x18\v \x01(\tH\n" +
+	"R\farchitecture\x88\x01\x01\x12\x1e\n" +
+	"\bgpu_arch\x18\f \x01(\tH\vR\agpuArch\x88\x01\x01B\x0e\n" +
+	"\f_board_modelB\x11\n" +
+	"\x0f_soc_compatibleB\x10\n" +
+	"\x0e_serial_numberB\x11\n" +
+	"\x0f_kernel_versionB\x0e\n" +
+	"\f_l4t_versionB\f\n" +
+	"\n" +
+	"_cpu_countB\x12\n" +
+	"\x10_mem_total_bytesB\x13\n" +
+	"\x11_disk_total_bytesB\x05\n" +
+	"\x03_osB\r\n" +
+	"\v_os_versionB\x0f\n" +
+	"\r_architectureB\v\n" +
+	"\t_gpu_arch\"\xf5\x01\n" +
 	"\x14EnrollDeviceResponse\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12'\n" +
 	"\x0fcredential_kind\x18\x02 \x01(\tR\x0ecredentialKind\x12\x1c\n" +
@@ -333,22 +522,24 @@ func file_wendycloud_v2_device_enrollment_proto_rawDescGZIP() []byte {
 }
 
 var file_wendycloud_v2_device_enrollment_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wendycloud_v2_device_enrollment_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_wendycloud_v2_device_enrollment_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_wendycloud_v2_device_enrollment_proto_goTypes = []any{
 	(DeviceClass)(0),             // 0: wendycloud.v2.DeviceClass
 	(*EnrollDeviceRequest)(nil),  // 1: wendycloud.v2.EnrollDeviceRequest
-	(*EnrollDeviceResponse)(nil), // 2: wendycloud.v2.EnrollDeviceResponse
-	(*SignedRequest)(nil),        // 3: wendycloud.v2.SignedRequest
+	(*DeviceHardware)(nil),       // 2: wendycloud.v2.DeviceHardware
+	(*EnrollDeviceResponse)(nil), // 3: wendycloud.v2.EnrollDeviceResponse
+	(*SignedRequest)(nil),        // 4: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_device_enrollment_proto_depIdxs = []int32{
 	0, // 0: wendycloud.v2.EnrollDeviceRequest.device_class:type_name -> wendycloud.v2.DeviceClass
-	3, // 1: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:input_type -> wendycloud.v2.SignedRequest
-	2, // 2: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:output_type -> wendycloud.v2.EnrollDeviceResponse
-	2, // [2:3] is the sub-list for method output_type
-	1, // [1:2] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	2, // 1: wendycloud.v2.EnrollDeviceRequest.hardware:type_name -> wendycloud.v2.DeviceHardware
+	4, // 2: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:input_type -> wendycloud.v2.SignedRequest
+	3, // 3: wendycloud.v2.DeviceEnrollmentService.EnrollDevice:output_type -> wendycloud.v2.EnrollDeviceResponse
+	3, // [3:4] is the sub-list for method output_type
+	2, // [2:3] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_device_enrollment_proto_init() }
@@ -358,13 +549,14 @@ func file_wendycloud_v2_device_enrollment_proto_init() {
 	}
 	file_wendy_options_proto_init()
 	file_wendycloud_v2_signed_request_proto_init()
+	file_wendycloud_v2_device_enrollment_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_device_enrollment_proto_rawDesc), len(file_wendycloud_v2_device_enrollment_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

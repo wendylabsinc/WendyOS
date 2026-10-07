@@ -183,7 +183,7 @@ func preEnrollDeviceACME(ctx context.Context, auth *config.AuthConfig, deviceNam
 		return nil, err
 	}
 	defer cloudConn.Close()
-	cfg, _, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, deviceName)
+	cfg, _, err = cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, deviceName, nil)
 	if err != nil {
 		return nil, err
 	}

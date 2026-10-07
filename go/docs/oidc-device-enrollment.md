@@ -40,6 +40,12 @@ DNS label; renaming it does not change the certificate identity.
    - `enrollment_request_jws` inside that request, with `tenant`, `device_id`, `device_class: B`,
      `iat`, `exp` and a fresh `jti`. This authorization is valid for five minutes;
      that is not an expiration time for the resulting EAB credential.
+   - `hardware`: the agent's own `GetDeviceInfo` report (board model, SoC,
+     serial, kernel, L4T, CPU/memory/disk totals, OS, architecture, GPU arch),
+     recorded on the asset row. Fields the agent cannot read are left unset; if
+     `GetDeviceInfo` fails the request carries no hardware and enrollment goes
+     on. Cloud releases without the field ignore it. `os install --pre-enroll`
+     has no device to ask and sends none.
 3. Cloud checks `device:enroll` permission, reserves the asset name and relays
    the enrollment JWS unchanged to PKI's private `RelayEnrollment` RPC.
 4. Cloud returns an asset UUID and the once-only EAB credentials. The CLI

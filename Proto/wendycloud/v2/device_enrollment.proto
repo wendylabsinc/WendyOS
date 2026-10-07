@@ -99,6 +99,40 @@ message EnrollDeviceRequest {
 
   // Free-text details for the asset row. Cosmetic, and genuinely so.
   string details = 5;
+
+  // What the device reports about itself, written to the asset row at enrollment (WDY-3544).
+  // Optional as a whole and field by field: an older client sends none of it and the row
+  // simply has no hardware facts, as before.
+  DeviceHardware hardware = 6;
+}
+
+// The device's own hardware report, mirroring wendyos GetDeviceInfo. Every field is optional
+// and "absent" means the device could not read it -- never zero, never "unknown".
+//
+// Operator-relayed, so it carries the same trust as an UpdateAsset of the same columns: it
+// describes the device, it authorizes nothing.
+message DeviceHardware {
+  // /proc/device-tree/model, e.g. "NVIDIA Jetson AGX Thor Developer Kit".
+  optional string board_model = 1;
+  // The first /proc/device-tree/compatible entry naming the SoC, e.g. "nvidia,tegra264".
+  optional string soc_compatible = 2;
+  optional string serial_number = 3;
+  // uname -r.
+  optional string kernel_version = 4;
+  // NVIDIA L4T release, e.g. "38.2.0". Absent on non-NVIDIA boards.
+  optional string l4t_version = 5;
+  // Online logical CPUs.
+  optional uint32 cpu_count = 6;
+  optional int64 mem_total_bytes = 7;
+  // Root filesystem size.
+  optional int64 disk_total_bytes = 8;
+  // e.g. "linux".
+  optional string os = 9;
+  optional string os_version = 10;
+  // e.g. "arm64".
+  optional string architecture = 11;
+  // Vendor-specific GPU architecture, e.g. "sm_110".
+  optional string gpu_arch = 12;
 }
 
 // The enrollment credential, returned INLINE AND EXACTLY ONCE.

@@ -67,8 +67,9 @@ func EnrollmentConfig(auth *config.AuthConfig, deviceID, directoryURL string) (a
 // the cloud connection and its authenticated context, because the CLI and the
 // MCP server dial Cloud differently. No live device is involved: this is
 // exactly what the live enroll does up to the agent step, so it also serves the
-// image pre-enroll bake.
-func MintEAB(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config.AuthConfig, cfg acmeenroll.Config, name string) (acmeenroll.Config, string, error) {
+// image pre-enroll bake. hw is the device's own hardware report (ReadHardware);
+// nil sends none, as the pre-enroll bake must, having no device to ask.
+func MintEAB(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config.AuthConfig, cfg acmeenroll.Config, name string, hw *cloudpbv2.DeviceHardware) (acmeenroll.Config, string, error) {
 	artifact, err := cloudrequest.EnrollmentRequest(auth, cfg.DeviceID)
 	if err != nil {
 		return cfg, "", fmt.Errorf("signing enrollment request: %w", err)
@@ -76,7 +77,7 @@ func MintEAB(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config.
 	credential := &cloudpbv2.EnrollDeviceResponse{}
 	err = cloudrequest.Invoke(tokenCtx, cloudConn, auth, cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName, &cloudpbv2.EnrollDeviceRequest{
 		DeviceId: cfg.DeviceID, DeviceClass: cloudpbv2.DeviceClass_DEVICE_CLASS_B,
-		EnrollmentRequestJws: artifact, Name: name,
+		EnrollmentRequestJws: artifact, Name: name, Hardware: hw,
 	}, credential)
 	switch status.Code(err) {
 	case codes.Unimplemented:
