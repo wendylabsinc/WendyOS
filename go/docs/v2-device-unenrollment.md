@@ -10,7 +10,7 @@ PKI enrollment and performs these ordered steps:
    registration). The Agent durably acknowledges its exact fingerprint.
 3. Recheck the Cloud binding and, if active, send an operator-signed v2
    `DeleteAsset` for `asset/<UUID>` with the expected PKI binding. Confirm its
-   exact authorized tombstone with `GetAssetLifecycle` before reset.
+   exact authorized typed deletion detail from `GetAsset` before reset.
 4. Request a guarded local reset matching both principal and fingerprint,
    then clear only that principal's local identity pins.
 
@@ -21,10 +21,12 @@ operator login or endpoint does not select a different device enrollment.
 
 ## Compatibility and authority
 
-Deploy Cloud support for `GetAssetLifecycle` and durable deletion tombstones,
-then an Agent implementing `RevokeACMECertificate`, before using this CLI flow.
-An older Cloud or Agent returns `Unimplemented` before any asset deletion or
-key reset. Existing hard-deleted rows cannot be backfilled as deletion proof.
+Deploy Cloud support for tenant/PKI-selected `GetAsset`, typed NotFound deletion
+details and durable tombstones, then the updated Agent, before using this flow.
+The CLI always reads by tenant/PKI binding with empty UUID, validating any
+`--asset-id` locally. Older UUID-only Cloud servers reject the empty UUID before
+destructive operations; older Agents return Unimplemented. Previously
+hard-deleted rows cannot be backfilled as deletion proof.
 The new Agent refuses legacy v1 reset of direct PKI identities. Direct PKI v2
 reset now requires expected principal, expected certificate SHA-256 and a
 matching durable revocation acknowledgement; old empty requests fail closed.
@@ -61,12 +63,13 @@ untouched and does not delete the asset. Cloud deletion failures leave local
 keys untouched, but a previously successful revocation cannot be rolled back.
 No numeric-ID fallback or alternate PKI management mutation is attempted.
 
-The Agent atomically persists public principal/fingerprint/serial revocation
-acknowledgement in its existing `provisioning.json`, syncing the file and parent
-directory before confirming it. It survives restart/failure, is invalidated by
-certificate replacement and is cleared on reset. Matching old development
-`acme-revocation.json` evidence can be read and imported on a revoke retry;
-no new standalone file is created. A read-only check does not import it.
+The Agent atomically persists only `revokedCertificateSHA256` in existing
+`provisioning.json`, syncing file and parent directory before confirmation.
+Principal and serial derive from existing state/current certificate; proof must
+match that exact leaf fingerprint. It survives restart/failure, is invalidated
+by certificate replacement and cleared on reset. Unreleased development
+`acme-revocation.json` and nested prototype records are not read or imported;
+historical standalone files remain untouched, including during reset.
 
 The CLI has **no unenrollment journal**. Historical `unenroll/` and
 `unenroll-v2/` files are left untouched but are not read as authority. Every retry
@@ -74,9 +77,12 @@ reconciles the authenticated Agent's exact leaf acknowledgement with Cloud's
 **Active / Deleted / Unknown** lifecycle. Deleted evidence retains only asset
 UUID, tenant, PKI binding and deletion time for the tenant lifetime; names and
 descriptive metadata are removed, names are reusable, and UUIDs are not reused.
-Tenant deletion or explicit privacy/admin purge removes evidence. Unknown,
-NotFound, a missing tombstone or an unexpected binding/certificate change
-always stops cleanup; absence is never deletion proof. Cloud stores no device
+Tenant deletion or explicit privacy/admin purge removes evidence. `GetAsset`
+returns active Asset or NotFound with typed `DeletedAsset` protobuf detail in
+standard gRPC status metadata. Plain NotFound, a missing/malformed detail or
+unexpected binding/certificate change always stops cleanup. Never infer deletion
+from status code or message text alone. Rollback purges tombstones without
+resurrecting assets, losing recovery evidence. Cloud stores no device
 certificates or keys and its tombstone does not authorize device reset.
 
 JSON progress booleans indicate confirmed operations, not rollback: a false

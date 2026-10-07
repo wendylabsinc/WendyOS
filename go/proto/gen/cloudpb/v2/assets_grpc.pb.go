@@ -21,7 +21,6 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	AssetService_CreateAsset_FullMethodName       = "/wendycloud.v2.AssetService/CreateAsset"
 	AssetService_GetAsset_FullMethodName          = "/wendycloud.v2.AssetService/GetAsset"
-	AssetService_GetAssetLifecycle_FullMethodName = "/wendycloud.v2.AssetService/GetAssetLifecycle"
 	AssetService_UpdateAsset_FullMethodName       = "/wendycloud.v2.AssetService/UpdateAsset"
 	AssetService_DeleteAsset_FullMethodName       = "/wendycloud.v2.AssetService/DeleteAsset"
 	AssetService_ListAssets_FullMethodName        = "/wendycloud.v2.AssetService/ListAssets"
@@ -38,10 +37,6 @@ type AssetServiceClient interface {
 	// Signed; payload_type "wendycloud.v2.CreateAssetRequest".
 	CreateAsset(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Asset, error)
 	GetAsset(ctx context.Context, in *GetAssetRequest, opts ...grpc.CallOption) (*Asset, error)
-	// Authorized lifecycle lookup includes deletion evidence, never credentials.
-	// Unknown is not proof of deletion. Empty asset_id resolves by the immutable
-	// tenant/PKI binding; ambiguous bindings fail closed.
-	GetAssetLifecycle(ctx context.Context, in *GetAssetLifecycleRequest, opts ...grpc.CallOption) (*GetAssetLifecycleResponse, error)
 	// Signed; payload_type "wendycloud.v2.UpdateAssetRequest".
 	UpdateAsset(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Asset, error)
 	// Signed; payload_type "wendycloud.v2.DeleteAssetRequest".
@@ -77,16 +72,6 @@ func (c *assetServiceClient) GetAsset(ctx context.Context, in *GetAssetRequest, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Asset)
 	err := c.cc.Invoke(ctx, AssetService_GetAsset_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *assetServiceClient) GetAssetLifecycle(ctx context.Context, in *GetAssetLifecycleRequest, opts ...grpc.CallOption) (*GetAssetLifecycleResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetAssetLifecycleResponse)
-	err := c.cc.Invoke(ctx, AssetService_GetAssetLifecycle_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -206,10 +191,6 @@ type AssetServiceServer interface {
 	// Signed; payload_type "wendycloud.v2.CreateAssetRequest".
 	CreateAsset(context.Context, *SignedRequest) (*Asset, error)
 	GetAsset(context.Context, *GetAssetRequest) (*Asset, error)
-	// Authorized lifecycle lookup includes deletion evidence, never credentials.
-	// Unknown is not proof of deletion. Empty asset_id resolves by the immutable
-	// tenant/PKI binding; ambiguous bindings fail closed.
-	GetAssetLifecycle(context.Context, *GetAssetLifecycleRequest) (*GetAssetLifecycleResponse, error)
 	// Signed; payload_type "wendycloud.v2.UpdateAssetRequest".
 	UpdateAsset(context.Context, *SignedRequest) (*Asset, error)
 	// Signed; payload_type "wendycloud.v2.DeleteAssetRequest".
@@ -236,9 +217,6 @@ func (UnimplementedAssetServiceServer) CreateAsset(context.Context, *SignedReque
 }
 func (UnimplementedAssetServiceServer) GetAsset(context.Context, *GetAssetRequest) (*Asset, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAsset not implemented")
-}
-func (UnimplementedAssetServiceServer) GetAssetLifecycle(context.Context, *GetAssetLifecycleRequest) (*GetAssetLifecycleResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetAssetLifecycle not implemented")
 }
 func (UnimplementedAssetServiceServer) UpdateAsset(context.Context, *SignedRequest) (*Asset, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateAsset not implemented")
@@ -314,24 +292,6 @@ func _AssetService_GetAsset_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(AssetServiceServer).GetAsset(ctx, req.(*GetAssetRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _AssetService_GetAssetLifecycle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetAssetLifecycleRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(AssetServiceServer).GetAssetLifecycle(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: AssetService_GetAssetLifecycle_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AssetServiceServer).GetAssetLifecycle(ctx, req.(*GetAssetLifecycleRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -448,10 +408,6 @@ var AssetService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetAsset",
 			Handler:    _AssetService_GetAsset_Handler,
-		},
-		{
-			MethodName: "GetAssetLifecycle",
-			Handler:    _AssetService_GetAssetLifecycle_Handler,
 		},
 		{
 			MethodName: "UpdateAsset",

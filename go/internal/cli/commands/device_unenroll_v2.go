@@ -14,8 +14,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	grpcpeer "google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 // Output only: durable recovery evidence belongs to Cloud and Agent, not CLI.
@@ -32,8 +34,36 @@ type v2UnenrollProgress struct {
 
 func isLegacyCloudEnrollment(orgID, assetID int32) bool { return orgID > 0 && assetID > 0 }
 
+type v2AssetState struct {
+	Active  *cloudpbv2.Asset
+	Deleted *cloudpbv2.DeletedAsset
+}
+
+// A status code or message alone is never deletion evidence.
+func v2AssetLookupResult(asset *cloudpbv2.Asset, err error) (*v2AssetState, error) {
+	if err == nil {
+		return &v2AssetState{Active: asset}, nil
+	}
+	if status.Code(err) != codes.NotFound {
+		return nil, err
+	}
+	var deleted *cloudpbv2.DeletedAsset
+	for _, detail := range status.Convert(err).Details() {
+		if d, ok := detail.(*cloudpbv2.DeletedAsset); ok {
+			if deleted != nil {
+				return nil, fmt.Errorf("ambiguous Cloud deletion details")
+			}
+			deleted = d
+		}
+	}
+	if deleted == nil {
+		return nil, fmt.Errorf("Cloud asset unknown; no retained deletion proof: %w", err)
+	}
+	return &v2AssetState{Deleted: deleted}, nil
+}
+
 type v2UnenrollOps struct {
-	lookup func(context.Context, string) (*cloudpbv2.GetAssetLifecycleResponse, error)
+	lookup func(context.Context, string) (*v2AssetState, error)
 	revoke func(context.Context, string, string) (*agentpbv2.RevokeACMECertificateResponse, error)
 	delete func(context.Context, string) error
 	reset  func(context.Context, string, string) error
@@ -47,21 +77,21 @@ func checkV2UnenrollBinding(asset *cloudpbv2.Asset, j v2UnenrollProgress) error 
 	return nil
 }
 
-func v2UnenrollLifecycle(reply *cloudpbv2.GetAssetLifecycleResponse, j *v2UnenrollProgress) (bool, error) {
+func v2UnenrollLifecycle(reply *v2AssetState, j *v2UnenrollProgress) (bool, error) {
+	if reply == nil || (reply.Active != nil && reply.Deleted != nil) {
+		return false, fmt.Errorf("invalid Cloud lifecycle evidence")
+	}
 	var asset *cloudpbv2.Asset
 	deleted := false
-	switch state := reply.GetState().(type) {
-	case *cloudpbv2.GetAssetLifecycleResponse_Active:
-		asset = state.Active
-	case *cloudpbv2.GetAssetLifecycleResponse_Deleted:
-		d := state.Deleted
+	if reply.Deleted != nil {
+		d := reply.Deleted
 		if d == nil || d.GetDeletedAt() == nil || d.GetDeletedAt().CheckValid() != nil {
 			return false, fmt.Errorf("invalid Cloud deletion evidence; keys retained")
 		}
 		asset = &cloudpbv2.Asset{Id: d.GetId(), OrganizationId: d.GetOrganizationId(), PkiDeviceName: &d.PkiDeviceName}
 		deleted = true
-	default:
-		return false, fmt.Errorf("Cloud asset lifecycle is unknown; no deletion evidence; keys retained")
+	} else {
+		asset = reply.Active
 	}
 	if asset == nil {
 		return false, fmt.Errorf("missing Cloud lifecycle identity")
@@ -199,12 +229,13 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 	svc := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn)
 	ops := v2UnenrollOps{
-		lookup: func(ctx context.Context, id string) (*cloudpbv2.GetAssetLifecycleResponse, error) {
-			req := &cloudpbv2.GetAssetLifecycleRequest{OrganizationId: principal.TenantUUID, PkiDeviceName: principal.EntityID}
-			if id != "" {
-				req.AssetId = &id
-			}
-			return assets.GetAssetLifecycle(rpcctx, req)
+		lookup: func(ctx context.Context, id string) (*v2AssetState, error) {
+			tenant, device := principal.TenantUUID, principal.EntityID
+			// Always use the binding selector: older UUID-only GetAsset servers
+			// reject empty id before any revocation/deletion, even with --asset-id.
+			// The selected UUID is still enforced by v2UnenrollLifecycle.
+			asset, err := assets.GetAsset(rpcctx, &cloudpbv2.GetAssetRequest{OrganizationId: &tenant, PkiDeviceName: &device})
+			return v2AssetLookupResult(asset, err)
 		},
 		revoke: func(ctx context.Context, p, fp string) (*agentpbv2.RevokeACMECertificateResponse, error) {
 			return svc.RevokeACMECertificate(ctx, &agentpbv2.RevokeACMECertificateRequest{ExpectedPrincipalUri: p, ExpectedCertificateSha256: fp})

@@ -643,10 +643,15 @@ func (x *CreateAssetRequest) GetPkiDeviceName() string {
 }
 
 type GetAssetRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Optional exact tenant/PKI selector; both required when id is empty.
+	// Authorized tombstones return NOT_FOUND with a typed DeletedAsset detail.
+	// Plain NOT_FOUND is never deletion proof.
+	OrganizationId *string `protobuf:"bytes,2,opt,name=organization_id,json=organizationId,proto3,oneof" json:"organization_id,omitempty"`
+	PkiDeviceName  *string `protobuf:"bytes,3,opt,name=pki_device_name,json=pkiDeviceName,proto3,oneof" json:"pki_device_name,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetAssetRequest) Reset() {
@@ -682,6 +687,20 @@ func (*GetAssetRequest) Descriptor() ([]byte, []int) {
 func (x *GetAssetRequest) GetId() string {
 	if x != nil {
 		return x.Id
+	}
+	return ""
+}
+
+func (x *GetAssetRequest) GetOrganizationId() string {
+	if x != nil && x.OrganizationId != nil {
+		return *x.OrganizationId
+	}
+	return ""
+}
+
+func (x *GetAssetRequest) GetPkiDeviceName() string {
+	if x != nil && x.PkiDeviceName != nil {
+		return *x.PkiDeviceName
 	}
 	return ""
 }
@@ -960,66 +979,6 @@ func (x *DeleteAssetRequest) GetExpectedPkiDeviceName() string {
 	return ""
 }
 
-type GetAssetLifecycleRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	OrganizationId string                 `protobuf:"bytes,1,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	PkiDeviceName  string                 `protobuf:"bytes,2,opt,name=pki_device_name,json=pkiDeviceName,proto3" json:"pki_device_name,omitempty"`
-	AssetId        *string                `protobuf:"bytes,3,opt,name=asset_id,json=assetId,proto3,oneof" json:"asset_id,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
-}
-
-func (x *GetAssetLifecycleRequest) Reset() {
-	*x = GetAssetLifecycleRequest{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetAssetLifecycleRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetAssetLifecycleRequest) ProtoMessage() {}
-
-func (x *GetAssetLifecycleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetAssetLifecycleRequest.ProtoReflect.Descriptor instead.
-func (*GetAssetLifecycleRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *GetAssetLifecycleRequest) GetOrganizationId() string {
-	if x != nil {
-		return x.OrganizationId
-	}
-	return ""
-}
-
-func (x *GetAssetLifecycleRequest) GetPkiDeviceName() string {
-	if x != nil {
-		return x.PkiDeviceName
-	}
-	return ""
-}
-
-func (x *GetAssetLifecycleRequest) GetAssetId() string {
-	if x != nil && x.AssetId != nil {
-		return *x.AssetId
-	}
-	return ""
-}
-
 type DeletedAsset struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -1032,7 +991,7 @@ type DeletedAsset struct {
 
 func (x *DeletedAsset) Reset() {
 	*x = DeletedAsset{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[6]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1044,7 +1003,7 @@ func (x *DeletedAsset) String() string {
 func (*DeletedAsset) ProtoMessage() {}
 
 func (x *DeletedAsset) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[6]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1057,7 +1016,7 @@ func (x *DeletedAsset) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletedAsset.ProtoReflect.Descriptor instead.
 func (*DeletedAsset) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{6}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *DeletedAsset) GetId() string {
@@ -1088,105 +1047,6 @@ func (x *DeletedAsset) GetDeletedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-type GetAssetLifecycleResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to State:
-	//
-	//	*GetAssetLifecycleResponse_Active
-	//	*GetAssetLifecycleResponse_Deleted
-	//	*GetAssetLifecycleResponse_Unknown
-	State         isGetAssetLifecycleResponse_State `protobuf_oneof:"state"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetAssetLifecycleResponse) Reset() {
-	*x = GetAssetLifecycleResponse{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetAssetLifecycleResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetAssetLifecycleResponse) ProtoMessage() {}
-
-func (x *GetAssetLifecycleResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetAssetLifecycleResponse.ProtoReflect.Descriptor instead.
-func (*GetAssetLifecycleResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *GetAssetLifecycleResponse) GetState() isGetAssetLifecycleResponse_State {
-	if x != nil {
-		return x.State
-	}
-	return nil
-}
-
-func (x *GetAssetLifecycleResponse) GetActive() *Asset {
-	if x != nil {
-		if x, ok := x.State.(*GetAssetLifecycleResponse_Active); ok {
-			return x.Active
-		}
-	}
-	return nil
-}
-
-func (x *GetAssetLifecycleResponse) GetDeleted() *DeletedAsset {
-	if x != nil {
-		if x, ok := x.State.(*GetAssetLifecycleResponse_Deleted); ok {
-			return x.Deleted
-		}
-	}
-	return nil
-}
-
-func (x *GetAssetLifecycleResponse) GetUnknown() bool {
-	if x != nil {
-		if x, ok := x.State.(*GetAssetLifecycleResponse_Unknown); ok {
-			return x.Unknown
-		}
-	}
-	return false
-}
-
-type isGetAssetLifecycleResponse_State interface {
-	isGetAssetLifecycleResponse_State()
-}
-
-type GetAssetLifecycleResponse_Active struct {
-	Active *Asset `protobuf:"bytes,1,opt,name=active,proto3,oneof"`
-}
-
-type GetAssetLifecycleResponse_Deleted struct {
-	Deleted *DeletedAsset `protobuf:"bytes,2,opt,name=deleted,proto3,oneof"`
-}
-
-type GetAssetLifecycleResponse_Unknown struct {
-	// True means no retained evidence; never permission to reset a device.
-	Unknown bool `protobuf:"varint,3,opt,name=unknown,proto3,oneof"`
-}
-
-func (*GetAssetLifecycleResponse_Active) isGetAssetLifecycleResponse_State() {}
-
-func (*GetAssetLifecycleResponse_Deleted) isGetAssetLifecycleResponse_State() {}
-
-func (*GetAssetLifecycleResponse_Unknown) isGetAssetLifecycleResponse_State() {}
-
 type DeleteAssetResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
@@ -1196,7 +1056,7 @@ type DeleteAssetResponse struct {
 
 func (x *DeleteAssetResponse) Reset() {
 	*x = DeleteAssetResponse{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[8]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1208,7 +1068,7 @@ func (x *DeleteAssetResponse) String() string {
 func (*DeleteAssetResponse) ProtoMessage() {}
 
 func (x *DeleteAssetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[8]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1221,7 +1081,7 @@ func (x *DeleteAssetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAssetResponse.ProtoReflect.Descriptor instead.
 func (*DeleteAssetResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{8}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DeleteAssetResponse) GetSuccess() bool {
@@ -1249,7 +1109,7 @@ type ListAssetsRequest struct {
 
 func (x *ListAssetsRequest) Reset() {
 	*x = ListAssetsRequest{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[9]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1261,7 +1121,7 @@ func (x *ListAssetsRequest) String() string {
 func (*ListAssetsRequest) ProtoMessage() {}
 
 func (x *ListAssetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[9]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1274,7 +1134,7 @@ func (x *ListAssetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetsRequest.ProtoReflect.Descriptor instead.
 func (*ListAssetsRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{9}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListAssetsRequest) GetOrganizationId() string {
@@ -1344,7 +1204,7 @@ type ListAssetsResponse struct {
 
 func (x *ListAssetsResponse) Reset() {
 	*x = ListAssetsResponse{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[10]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1356,7 +1216,7 @@ func (x *ListAssetsResponse) String() string {
 func (*ListAssetsResponse) ProtoMessage() {}
 
 func (x *ListAssetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[10]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1369,7 +1229,7 @@ func (x *ListAssetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetsResponse.ProtoReflect.Descriptor instead.
 func (*ListAssetsResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{10}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListAssetsResponse) GetAsset() *Asset {
@@ -1398,7 +1258,7 @@ type ListAssetChildrenRequest struct {
 
 func (x *ListAssetChildrenRequest) Reset() {
 	*x = ListAssetChildrenRequest{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[11]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1410,7 +1270,7 @@ func (x *ListAssetChildrenRequest) String() string {
 func (*ListAssetChildrenRequest) ProtoMessage() {}
 
 func (x *ListAssetChildrenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[11]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1423,7 +1283,7 @@ func (x *ListAssetChildrenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetChildrenRequest.ProtoReflect.Descriptor instead.
 func (*ListAssetChildrenRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{11}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListAssetChildrenRequest) GetParentAssetId() string {
@@ -1457,7 +1317,7 @@ type ListAssetChildrenResponse struct {
 
 func (x *ListAssetChildrenResponse) Reset() {
 	*x = ListAssetChildrenResponse{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[12]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1469,7 +1329,7 @@ func (x *ListAssetChildrenResponse) String() string {
 func (*ListAssetChildrenResponse) ProtoMessage() {}
 
 func (x *ListAssetChildrenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[12]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1482,7 +1342,7 @@ func (x *ListAssetChildrenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetChildrenResponse.ProtoReflect.Descriptor instead.
 func (*ListAssetChildrenResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{12}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListAssetChildrenResponse) GetAsset() *Asset {
@@ -1508,7 +1368,7 @@ type GetAssetLineageRequest struct {
 
 func (x *GetAssetLineageRequest) Reset() {
 	*x = GetAssetLineageRequest{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[13]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1520,7 +1380,7 @@ func (x *GetAssetLineageRequest) String() string {
 func (*GetAssetLineageRequest) ProtoMessage() {}
 
 func (x *GetAssetLineageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[13]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1533,7 +1393,7 @@ func (x *GetAssetLineageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAssetLineageRequest.ProtoReflect.Descriptor instead.
 func (*GetAssetLineageRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{13}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetAssetLineageRequest) GetAssetId() string {
@@ -1557,7 +1417,7 @@ type GetAssetLineageResponse struct {
 
 func (x *GetAssetLineageResponse) Reset() {
 	*x = GetAssetLineageResponse{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[14]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1569,7 +1429,7 @@ func (x *GetAssetLineageResponse) String() string {
 func (*GetAssetLineageResponse) ProtoMessage() {}
 
 func (x *GetAssetLineageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[14]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1582,7 +1442,7 @@ func (x *GetAssetLineageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAssetLineageResponse.ProtoReflect.Descriptor instead.
 func (*GetAssetLineageResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{14}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GetAssetLineageResponse) GetRootAsset() *Asset {
@@ -1621,7 +1481,7 @@ type ListAssetsByAppRequest struct {
 
 func (x *ListAssetsByAppRequest) Reset() {
 	*x = ListAssetsByAppRequest{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[15]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1633,7 +1493,7 @@ func (x *ListAssetsByAppRequest) String() string {
 func (*ListAssetsByAppRequest) ProtoMessage() {}
 
 func (x *ListAssetsByAppRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[15]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1646,7 +1506,7 @@ func (x *ListAssetsByAppRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetsByAppRequest.ProtoReflect.Descriptor instead.
 func (*ListAssetsByAppRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{15}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListAssetsByAppRequest) GetOrganizationId() string {
@@ -1702,7 +1562,7 @@ type ListAssetsByAppResponse struct {
 
 func (x *ListAssetsByAppResponse) Reset() {
 	*x = ListAssetsByAppResponse{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[16]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1714,7 +1574,7 @@ func (x *ListAssetsByAppResponse) String() string {
 func (*ListAssetsByAppResponse) ProtoMessage() {}
 
 func (x *ListAssetsByAppResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[16]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1727,7 +1587,7 @@ func (x *ListAssetsByAppResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAssetsByAppResponse.ProtoReflect.Descriptor instead.
 func (*ListAssetsByAppResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{16}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListAssetsByAppResponse) GetAsset() *Asset {
@@ -1757,7 +1617,7 @@ type FilterAssetsRequest struct {
 
 func (x *FilterAssetsRequest) Reset() {
 	*x = FilterAssetsRequest{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[17]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1769,7 +1629,7 @@ func (x *FilterAssetsRequest) String() string {
 func (*FilterAssetsRequest) ProtoMessage() {}
 
 func (x *FilterAssetsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[17]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1782,7 +1642,7 @@ func (x *FilterAssetsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilterAssetsRequest.ProtoReflect.Descriptor instead.
 func (*FilterAssetsRequest) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{17}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *FilterAssetsRequest) GetOrganizationId() string {
@@ -1824,7 +1684,7 @@ type FilterAssetsResponse struct {
 
 func (x *FilterAssetsResponse) Reset() {
 	*x = FilterAssetsResponse{}
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[18]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1836,7 +1696,7 @@ func (x *FilterAssetsResponse) String() string {
 func (*FilterAssetsResponse) ProtoMessage() {}
 
 func (x *FilterAssetsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendycloud_v2_assets_proto_msgTypes[18]
+	mi := &file_wendycloud_v2_assets_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1849,7 +1709,7 @@ func (x *FilterAssetsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FilterAssetsResponse.ProtoReflect.Descriptor instead.
 func (*FilterAssetsResponse) Descriptor() ([]byte, []int) {
-	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{18}
+	return file_wendycloud_v2_assets_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *FilterAssetsResponse) GetAsset() *Asset {
@@ -2002,9 +1862,13 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\t_altitudeB\n" +
 	"\n" +
 	"\b_headingB\x12\n" +
-	"\x10_pki_device_name\"!\n" +
+	"\x10_pki_device_name\"\xa4\x01\n" +
 	"\x0fGetAssetRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x92\t\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12,\n" +
+	"\x0forganization_id\x18\x02 \x01(\tH\x00R\x0eorganizationId\x88\x01\x01\x12+\n" +
+	"\x0fpki_device_name\x18\x03 \x01(\tH\x01R\rpkiDeviceName\x88\x01\x01B\x12\n" +
+	"\x10_organization_idB\x12\n" +
+	"\x10_pki_device_name\"\x92\t\n" +
 	"\x12UpdateAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x1d\n" +
@@ -2066,23 +1930,13 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\x12DeleteAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12<\n" +
 	"\x18expected_pki_device_name\x18\x02 \x01(\tH\x00R\x15expectedPkiDeviceName\x88\x01\x01B\x1b\n" +
-	"\x19_expected_pki_device_name\"\x98\x01\n" +
-	"\x18GetAssetLifecycleRequest\x12'\n" +
-	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12&\n" +
-	"\x0fpki_device_name\x18\x02 \x01(\tR\rpkiDeviceName\x12\x1e\n" +
-	"\basset_id\x18\x03 \x01(\tH\x00R\aassetId\x88\x01\x01B\v\n" +
-	"\t_asset_id\"\xaa\x01\n" +
+	"\x19_expected_pki_device_name\"\xaa\x01\n" +
 	"\fDeletedAsset\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12&\n" +
 	"\x0fpki_device_name\x18\x03 \x01(\tR\rpkiDeviceName\x129\n" +
 	"\n" +
-	"deleted_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\"\xa9\x01\n" +
-	"\x19GetAssetLifecycleResponse\x12.\n" +
-	"\x06active\x18\x01 \x01(\v2\x14.wendycloud.v2.AssetH\x00R\x06active\x127\n" +
-	"\adeleted\x18\x02 \x01(\v2\x1b.wendycloud.v2.DeletedAssetH\x00R\adeleted\x12\x1a\n" +
-	"\aunknown\x18\x03 \x01(\bH\x00R\aunknownB\a\n" +
-	"\x05state\"/\n" +
+	"deleted_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\"/\n" +
 	"\x13DeleteAssetResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\"\x8b\x03\n" +
 	"\x11ListAssetsRequest\x12'\n" +
@@ -2154,11 +2008,10 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\x10ASSET_KIND_DRONE\x10\x01\x12\x12\n" +
 	"\x0eASSET_KIND_CAR\x10\x02\x12\x18\n" +
 	"\x14ASSET_KIND_QUADRUPED\x10\x03\x12\x19\n" +
-	"\x15ASSET_KIND_STATIONARY\x10\x042\x81\a\n" +
+	"\x15ASSET_KIND_STATIONARY\x10\x042\x99\x06\n" +
 	"\fAssetService\x12G\n" +
 	"\vCreateAsset\x12\x1c.wendycloud.v2.SignedRequest\x1a\x14.wendycloud.v2.Asset\"\x04\x88\xb5\x18\x01\x12@\n" +
-	"\bGetAsset\x12\x1e.wendycloud.v2.GetAssetRequest\x1a\x14.wendycloud.v2.Asset\x12f\n" +
-	"\x11GetAssetLifecycle\x12'.wendycloud.v2.GetAssetLifecycleRequest\x1a(.wendycloud.v2.GetAssetLifecycleResponse\x12G\n" +
+	"\bGetAsset\x12\x1e.wendycloud.v2.GetAssetRequest\x1a\x14.wendycloud.v2.Asset\x12G\n" +
 	"\vUpdateAsset\x12\x1c.wendycloud.v2.SignedRequest\x1a\x14.wendycloud.v2.Asset\"\x04\x88\xb5\x18\x01\x12U\n" +
 	"\vDeleteAsset\x12\x1c.wendycloud.v2.SignedRequest\x1a\".wendycloud.v2.DeleteAssetResponse\"\x04\x88\xb5\x18\x01\x12S\n" +
 	"\n" +
@@ -2181,7 +2034,7 @@ func file_wendycloud_v2_assets_proto_rawDescGZIP() []byte {
 }
 
 var file_wendycloud_v2_assets_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_wendycloud_v2_assets_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_wendycloud_v2_assets_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_wendycloud_v2_assets_proto_goTypes = []any{
 	(AssetKind)(0),                    // 0: wendycloud.v2.AssetKind
 	(*Asset)(nil),                     // 1: wendycloud.v2.Asset
@@ -2189,66 +2042,60 @@ var file_wendycloud_v2_assets_proto_goTypes = []any{
 	(*GetAssetRequest)(nil),           // 3: wendycloud.v2.GetAssetRequest
 	(*UpdateAssetRequest)(nil),        // 4: wendycloud.v2.UpdateAssetRequest
 	(*DeleteAssetRequest)(nil),        // 5: wendycloud.v2.DeleteAssetRequest
-	(*GetAssetLifecycleRequest)(nil),  // 6: wendycloud.v2.GetAssetLifecycleRequest
-	(*DeletedAsset)(nil),              // 7: wendycloud.v2.DeletedAsset
-	(*GetAssetLifecycleResponse)(nil), // 8: wendycloud.v2.GetAssetLifecycleResponse
-	(*DeleteAssetResponse)(nil),       // 9: wendycloud.v2.DeleteAssetResponse
-	(*ListAssetsRequest)(nil),         // 10: wendycloud.v2.ListAssetsRequest
-	(*ListAssetsResponse)(nil),        // 11: wendycloud.v2.ListAssetsResponse
-	(*ListAssetChildrenRequest)(nil),  // 12: wendycloud.v2.ListAssetChildrenRequest
-	(*ListAssetChildrenResponse)(nil), // 13: wendycloud.v2.ListAssetChildrenResponse
-	(*GetAssetLineageRequest)(nil),    // 14: wendycloud.v2.GetAssetLineageRequest
-	(*GetAssetLineageResponse)(nil),   // 15: wendycloud.v2.GetAssetLineageResponse
-	(*ListAssetsByAppRequest)(nil),    // 16: wendycloud.v2.ListAssetsByAppRequest
-	(*ListAssetsByAppResponse)(nil),   // 17: wendycloud.v2.ListAssetsByAppResponse
-	(*FilterAssetsRequest)(nil),       // 18: wendycloud.v2.FilterAssetsRequest
-	(*FilterAssetsResponse)(nil),      // 19: wendycloud.v2.FilterAssetsResponse
-	(*structpb.Struct)(nil),           // 20: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),     // 21: google.protobuf.Timestamp
-	(*SignedRequest)(nil),             // 22: wendycloud.v2.SignedRequest
+	(*DeletedAsset)(nil),              // 6: wendycloud.v2.DeletedAsset
+	(*DeleteAssetResponse)(nil),       // 7: wendycloud.v2.DeleteAssetResponse
+	(*ListAssetsRequest)(nil),         // 8: wendycloud.v2.ListAssetsRequest
+	(*ListAssetsResponse)(nil),        // 9: wendycloud.v2.ListAssetsResponse
+	(*ListAssetChildrenRequest)(nil),  // 10: wendycloud.v2.ListAssetChildrenRequest
+	(*ListAssetChildrenResponse)(nil), // 11: wendycloud.v2.ListAssetChildrenResponse
+	(*GetAssetLineageRequest)(nil),    // 12: wendycloud.v2.GetAssetLineageRequest
+	(*GetAssetLineageResponse)(nil),   // 13: wendycloud.v2.GetAssetLineageResponse
+	(*ListAssetsByAppRequest)(nil),    // 14: wendycloud.v2.ListAssetsByAppRequest
+	(*ListAssetsByAppResponse)(nil),   // 15: wendycloud.v2.ListAssetsByAppResponse
+	(*FilterAssetsRequest)(nil),       // 16: wendycloud.v2.FilterAssetsRequest
+	(*FilterAssetsResponse)(nil),      // 17: wendycloud.v2.FilterAssetsResponse
+	(*structpb.Struct)(nil),           // 18: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),     // 19: google.protobuf.Timestamp
+	(*SignedRequest)(nil),             // 20: wendycloud.v2.SignedRequest
 }
 var file_wendycloud_v2_assets_proto_depIdxs = []int32{
-	20, // 0: wendycloud.v2.Asset.blob_metadata:type_name -> google.protobuf.Struct
-	21, // 1: wendycloud.v2.Asset.last_heartbeat:type_name -> google.protobuf.Timestamp
+	18, // 0: wendycloud.v2.Asset.blob_metadata:type_name -> google.protobuf.Struct
+	19, // 1: wendycloud.v2.Asset.last_heartbeat:type_name -> google.protobuf.Timestamp
 	0,  // 2: wendycloud.v2.Asset.kind:type_name -> wendycloud.v2.AssetKind
-	21, // 3: wendycloud.v2.Asset.created_at:type_name -> google.protobuf.Timestamp
-	21, // 4: wendycloud.v2.Asset.updated_at:type_name -> google.protobuf.Timestamp
-	20, // 5: wendycloud.v2.CreateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
-	20, // 6: wendycloud.v2.UpdateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
-	21, // 7: wendycloud.v2.DeletedAsset.deleted_at:type_name -> google.protobuf.Timestamp
-	1,  // 8: wendycloud.v2.GetAssetLifecycleResponse.active:type_name -> wendycloud.v2.Asset
-	7,  // 9: wendycloud.v2.GetAssetLifecycleResponse.deleted:type_name -> wendycloud.v2.DeletedAsset
-	1,  // 10: wendycloud.v2.ListAssetsResponse.asset:type_name -> wendycloud.v2.Asset
-	1,  // 11: wendycloud.v2.ListAssetChildrenResponse.asset:type_name -> wendycloud.v2.Asset
-	1,  // 12: wendycloud.v2.GetAssetLineageResponse.root_asset:type_name -> wendycloud.v2.Asset
-	1,  // 13: wendycloud.v2.GetAssetLineageResponse.all_assets:type_name -> wendycloud.v2.Asset
-	1,  // 14: wendycloud.v2.ListAssetsByAppResponse.asset:type_name -> wendycloud.v2.Asset
-	1,  // 15: wendycloud.v2.FilterAssetsResponse.asset:type_name -> wendycloud.v2.Asset
-	22, // 16: wendycloud.v2.AssetService.CreateAsset:input_type -> wendycloud.v2.SignedRequest
-	3,  // 17: wendycloud.v2.AssetService.GetAsset:input_type -> wendycloud.v2.GetAssetRequest
-	6,  // 18: wendycloud.v2.AssetService.GetAssetLifecycle:input_type -> wendycloud.v2.GetAssetLifecycleRequest
-	22, // 19: wendycloud.v2.AssetService.UpdateAsset:input_type -> wendycloud.v2.SignedRequest
-	22, // 20: wendycloud.v2.AssetService.DeleteAsset:input_type -> wendycloud.v2.SignedRequest
-	10, // 21: wendycloud.v2.AssetService.ListAssets:input_type -> wendycloud.v2.ListAssetsRequest
-	16, // 22: wendycloud.v2.AssetService.ListAssetsByApp:input_type -> wendycloud.v2.ListAssetsByAppRequest
-	12, // 23: wendycloud.v2.AssetService.ListAssetChildren:input_type -> wendycloud.v2.ListAssetChildrenRequest
-	14, // 24: wendycloud.v2.AssetService.GetAssetLineage:input_type -> wendycloud.v2.GetAssetLineageRequest
-	18, // 25: wendycloud.v2.AssetService.FilterAssets:input_type -> wendycloud.v2.FilterAssetsRequest
-	1,  // 26: wendycloud.v2.AssetService.CreateAsset:output_type -> wendycloud.v2.Asset
-	1,  // 27: wendycloud.v2.AssetService.GetAsset:output_type -> wendycloud.v2.Asset
-	8,  // 28: wendycloud.v2.AssetService.GetAssetLifecycle:output_type -> wendycloud.v2.GetAssetLifecycleResponse
-	1,  // 29: wendycloud.v2.AssetService.UpdateAsset:output_type -> wendycloud.v2.Asset
-	9,  // 30: wendycloud.v2.AssetService.DeleteAsset:output_type -> wendycloud.v2.DeleteAssetResponse
-	11, // 31: wendycloud.v2.AssetService.ListAssets:output_type -> wendycloud.v2.ListAssetsResponse
-	17, // 32: wendycloud.v2.AssetService.ListAssetsByApp:output_type -> wendycloud.v2.ListAssetsByAppResponse
-	13, // 33: wendycloud.v2.AssetService.ListAssetChildren:output_type -> wendycloud.v2.ListAssetChildrenResponse
-	15, // 34: wendycloud.v2.AssetService.GetAssetLineage:output_type -> wendycloud.v2.GetAssetLineageResponse
-	19, // 35: wendycloud.v2.AssetService.FilterAssets:output_type -> wendycloud.v2.FilterAssetsResponse
-	26, // [26:36] is the sub-list for method output_type
-	16, // [16:26] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	19, // 3: wendycloud.v2.Asset.created_at:type_name -> google.protobuf.Timestamp
+	19, // 4: wendycloud.v2.Asset.updated_at:type_name -> google.protobuf.Timestamp
+	18, // 5: wendycloud.v2.CreateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
+	18, // 6: wendycloud.v2.UpdateAssetRequest.blob_metadata:type_name -> google.protobuf.Struct
+	19, // 7: wendycloud.v2.DeletedAsset.deleted_at:type_name -> google.protobuf.Timestamp
+	1,  // 8: wendycloud.v2.ListAssetsResponse.asset:type_name -> wendycloud.v2.Asset
+	1,  // 9: wendycloud.v2.ListAssetChildrenResponse.asset:type_name -> wendycloud.v2.Asset
+	1,  // 10: wendycloud.v2.GetAssetLineageResponse.root_asset:type_name -> wendycloud.v2.Asset
+	1,  // 11: wendycloud.v2.GetAssetLineageResponse.all_assets:type_name -> wendycloud.v2.Asset
+	1,  // 12: wendycloud.v2.ListAssetsByAppResponse.asset:type_name -> wendycloud.v2.Asset
+	1,  // 13: wendycloud.v2.FilterAssetsResponse.asset:type_name -> wendycloud.v2.Asset
+	20, // 14: wendycloud.v2.AssetService.CreateAsset:input_type -> wendycloud.v2.SignedRequest
+	3,  // 15: wendycloud.v2.AssetService.GetAsset:input_type -> wendycloud.v2.GetAssetRequest
+	20, // 16: wendycloud.v2.AssetService.UpdateAsset:input_type -> wendycloud.v2.SignedRequest
+	20, // 17: wendycloud.v2.AssetService.DeleteAsset:input_type -> wendycloud.v2.SignedRequest
+	8,  // 18: wendycloud.v2.AssetService.ListAssets:input_type -> wendycloud.v2.ListAssetsRequest
+	14, // 19: wendycloud.v2.AssetService.ListAssetsByApp:input_type -> wendycloud.v2.ListAssetsByAppRequest
+	10, // 20: wendycloud.v2.AssetService.ListAssetChildren:input_type -> wendycloud.v2.ListAssetChildrenRequest
+	12, // 21: wendycloud.v2.AssetService.GetAssetLineage:input_type -> wendycloud.v2.GetAssetLineageRequest
+	16, // 22: wendycloud.v2.AssetService.FilterAssets:input_type -> wendycloud.v2.FilterAssetsRequest
+	1,  // 23: wendycloud.v2.AssetService.CreateAsset:output_type -> wendycloud.v2.Asset
+	1,  // 24: wendycloud.v2.AssetService.GetAsset:output_type -> wendycloud.v2.Asset
+	1,  // 25: wendycloud.v2.AssetService.UpdateAsset:output_type -> wendycloud.v2.Asset
+	7,  // 26: wendycloud.v2.AssetService.DeleteAsset:output_type -> wendycloud.v2.DeleteAssetResponse
+	9,  // 27: wendycloud.v2.AssetService.ListAssets:output_type -> wendycloud.v2.ListAssetsResponse
+	15, // 28: wendycloud.v2.AssetService.ListAssetsByApp:output_type -> wendycloud.v2.ListAssetsByAppResponse
+	11, // 29: wendycloud.v2.AssetService.ListAssetChildren:output_type -> wendycloud.v2.ListAssetChildrenResponse
+	13, // 30: wendycloud.v2.AssetService.GetAssetLineage:output_type -> wendycloud.v2.GetAssetLineageResponse
+	17, // 31: wendycloud.v2.AssetService.FilterAssets:output_type -> wendycloud.v2.FilterAssetsResponse
+	23, // [23:32] is the sub-list for method output_type
+	14, // [14:23] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_wendycloud_v2_assets_proto_init() }
@@ -2260,25 +2107,20 @@ func file_wendycloud_v2_assets_proto_init() {
 	file_wendycloud_v2_signed_request_proto_init()
 	file_wendycloud_v2_assets_proto_msgTypes[0].OneofWrappers = []any{}
 	file_wendycloud_v2_assets_proto_msgTypes[1].OneofWrappers = []any{}
+	file_wendycloud_v2_assets_proto_msgTypes[2].OneofWrappers = []any{}
 	file_wendycloud_v2_assets_proto_msgTypes[3].OneofWrappers = []any{}
 	file_wendycloud_v2_assets_proto_msgTypes[4].OneofWrappers = []any{}
-	file_wendycloud_v2_assets_proto_msgTypes[5].OneofWrappers = []any{}
-	file_wendycloud_v2_assets_proto_msgTypes[7].OneofWrappers = []any{
-		(*GetAssetLifecycleResponse_Active)(nil),
-		(*GetAssetLifecycleResponse_Deleted)(nil),
-		(*GetAssetLifecycleResponse_Unknown)(nil),
-	}
+	file_wendycloud_v2_assets_proto_msgTypes[7].OneofWrappers = []any{}
 	file_wendycloud_v2_assets_proto_msgTypes[9].OneofWrappers = []any{}
-	file_wendycloud_v2_assets_proto_msgTypes[11].OneofWrappers = []any{}
+	file_wendycloud_v2_assets_proto_msgTypes[13].OneofWrappers = []any{}
 	file_wendycloud_v2_assets_proto_msgTypes[15].OneofWrappers = []any{}
-	file_wendycloud_v2_assets_proto_msgTypes[17].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendycloud_v2_assets_proto_rawDesc), len(file_wendycloud_v2_assets_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   19,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

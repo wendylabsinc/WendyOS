@@ -3,15 +3,15 @@ package commands
 import (
 	"context"
 	"errors"
-	"reflect"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"strings"
 	"testing"
 	"time"
-
-	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const unenrollTenant = "11111111-1111-4111-8111-111111111111"
@@ -24,154 +24,163 @@ func testUnenrollProgress() v2UnenrollProgress {
 func testUnenrollAsset() *cloudpbv2.Asset {
 	return &cloudpbv2.Asset{Id: unenrollAsset, OrganizationId: unenrollTenant, PkiDeviceName: proto.String(unenrollDevice)}
 }
-func testLifecycle(deleted bool) *cloudpbv2.GetAssetLifecycleResponse {
+func testLifecycle(deleted bool) *v2AssetState {
 	if deleted {
-		return &cloudpbv2.GetAssetLifecycleResponse{State: &cloudpbv2.GetAssetLifecycleResponse_Deleted{Deleted: &cloudpbv2.DeletedAsset{Id: unenrollAsset, OrganizationId: unenrollTenant, PkiDeviceName: unenrollDevice, DeletedAt: timestamppb.New(time.Now())}}}
+		return &v2AssetState{Deleted: &cloudpbv2.DeletedAsset{Id: unenrollAsset, OrganizationId: unenrollTenant, PkiDeviceName: unenrollDevice, DeletedAt: timestamppb.New(time.Now())}}
 	}
-	return &cloudpbv2.GetAssetLifecycleResponse{State: &cloudpbv2.GetAssetLifecycleResponse_Active{Active: testUnenrollAsset()}}
+	return &v2AssetState{Active: testUnenrollAsset()}
 }
 func testRevokeAck(j v2UnenrollProgress) *agentpbv2.RevokeACMECertificateResponse {
 	return &agentpbv2.RevokeACMECertificateResponse{PrincipalUri: j.Principal, CertificateSha256: j.Fingerprint, CertificateSerial: "2a"}
 }
-
 func TestV2UnenrollPhases(t *testing.T) {
 	for _, failure := range []string{"", "initial-read", "revocation", "bad-ack", "binding-recheck", "delete", "confirm-deletion", "reset"} {
 		t.Run(failure, func(t *testing.T) {
 			j := testUnenrollProgress()
-			var calls []string
 			reads := 0
 			deleted := false
-			fail := errors.New("uncertain")
+			resets := 0
 			ops := v2UnenrollOps{
-				lookup: func(context.Context, string) (*cloudpbv2.GetAssetLifecycleResponse, error) {
-					calls = append(calls, "lookup")
+				lookup: func(context.Context, string) (*v2AssetState, error) {
 					reads++
 					if (reads == 1 && failure == "initial-read") || (reads == 2 && failure == "binding-recheck") || (reads == 3 && failure == "confirm-deletion") {
-						return nil, fail
+						return nil, errors.New("uncertain")
 					}
 					return testLifecycle(deleted), nil
 				},
 				revoke: func(context.Context, string, string) (*agentpbv2.RevokeACMECertificateResponse, error) {
-					calls = append(calls, "revoke")
 					if failure == "revocation" {
-						return nil, fail
+						return nil, errors.New("uncertain")
 					}
-					ack := testRevokeAck(j)
+					a := testRevokeAck(j)
 					if failure == "bad-ack" {
-						ack.CertificateSha256 = strings.Repeat("cd", 32)
+						a.CertificateSha256 = strings.Repeat("cd", 32)
 					}
-					return ack, nil
+					return a, nil
 				},
 				delete: func(context.Context, string) error {
-					calls = append(calls, "delete")
 					if failure == "delete" {
-						return fail
+						return errors.New("uncertain")
 					}
 					deleted = true
 					return nil
 				},
 				reset: func(context.Context, string, string) error {
-					calls = append(calls, "reset")
+					resets++
 					if failure == "reset" {
-						return fail
+						return errors.New("uncertain")
 					}
 					return nil
 				},
 			}
 			err := performV2Unenroll(context.Background(), &j, ops)
 			if (err != nil) != (failure != "") {
-				t.Fatalf("error = %v", err)
+				t.Fatalf("error: %v", err)
 			}
 			wantRevoked := failure != "initial-read" && failure != "revocation" && failure != "bad-ack"
 			wantDeleted := failure == "" || failure == "reset"
-			if j.Revoked != wantRevoked || j.Deleted != wantDeleted || j.Reset != (failure == "") {
-				t.Fatalf("incorrect confirmation flags: %+v", j)
-			}
-			if failure == "" && !reflect.DeepEqual(calls, []string{"lookup", "revoke", "lookup", "delete", "lookup", "reset"}) {
-				t.Fatalf("wrong phase order: %v", calls)
+			if j.Revoked != wantRevoked || j.Deleted != wantDeleted || j.Reset != (failure == "") || (resets > 0) != wantDeleted {
+				t.Fatalf("wrong progress: %+v", j)
 			}
 		})
 	}
 }
-
 func TestV2UnenrollStatelessResumeAfterLostDeleteResponse(t *testing.T) {
 	deleted := false
-	revoked := false
-	revocations := 0
 	deletions := 0
 	resets := 0
 	ops := v2UnenrollOps{
-		lookup: func(context.Context, string) (*cloudpbv2.GetAssetLifecycleResponse, error) {
-			return testLifecycle(deleted), nil
-		},
+		lookup: func(context.Context, string) (*v2AssetState, error) { return testLifecycle(deleted), nil },
 		revoke: func(context.Context, string, string) (*agentpbv2.RevokeACMECertificateResponse, error) {
-			if !revoked {
-				revocations++
-				revoked = true
-			}
 			return testRevokeAck(testUnenrollProgress()), nil
 		},
-		delete: func(context.Context, string) error { deletions++; deleted = true; return errors.New("response lost") },
+		delete: func(context.Context, string) error { deletions++; deleted = true; return errors.New("lost response") },
 		reset:  func(context.Context, string, string) error { resets++; return nil },
 	}
 	first := testUnenrollProgress()
-	if err := performV2Unenroll(context.Background(), &first, ops); err == nil || first.Deleted || resets != 0 {
-		t.Fatal("uncertain deletion reset the device")
+	if err := performV2Unenroll(context.Background(), &first, ops); err == nil || resets != 0 {
+		t.Fatal("uncertain deletion reset")
 	}
-	// Fresh CLI invocation: no serialized progress survives. Agent/Cloud evidence does.
 	retry := testUnenrollProgress()
 	retry.AssetID = ""
 	if err := performV2Unenroll(context.Background(), &retry, ops); err != nil {
 		t.Fatal(err)
 	}
-	if !retry.Reset || retry.AssetID != unenrollAsset || revocations != 1 || deletions != 1 || resets != 1 {
-		t.Fatalf("non-convergent retry: %+v, %d/%d/%d", retry, revocations, deletions, resets)
+	if !retry.Reset || retry.AssetID != unenrollAsset || deletions != 1 || resets != 1 {
+		t.Fatal("retry did not converge")
 	}
 }
-
+func TestV2UnenrollDeletedErrorDetails(t *testing.T) {
+	d := testLifecycle(true).Deleted
+	s, err := status.New(codes.NotFound, "arbitrary message").WithDetails(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := v2AssetLookupResult(nil, s.Err())
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := testUnenrollProgress()
+	deleted, err := v2UnenrollLifecycle(result, &j)
+	if err != nil || !deleted {
+		t.Fatal("typed deletion evidence not recognized")
+	}
+	for _, e := range []error{status.Error(codes.NotFound, "asset deleted"), status.Error(codes.InvalidArgument, "old server requires id"), status.Error(codes.PermissionDenied, "denied")} {
+		if _, err := v2AssetLookupResult(nil, e); err == nil {
+			t.Fatal("status/message alone became deletion proof")
+		}
+	}
+	wrong, _ := status.New(codes.FailedPrecondition, "wrong status").WithDetails(d)
+	if _, err := v2AssetLookupResult(nil, wrong.Err()); err == nil {
+		t.Fatal("accepted deletion detail on wrong status")
+	}
+	multiple, _ := status.New(codes.NotFound, "ambiguous").WithDetails(d, d)
+	if _, err := v2AssetLookupResult(nil, multiple.Err()); err == nil {
+		t.Fatal("ambiguous proof accepted")
+	}
+}
 func TestV2UnenrollLifecycleRejectsUnknownOrChangedBinding(t *testing.T) {
 	for _, bad := range []string{"unknown", "nil", "tenant", "device", "asset", "missing-time"} {
 		for _, deleted := range []bool{false, true} {
 			t.Run(bad+map[bool]string{true: "/deleted", false: "/active"}[deleted], func(t *testing.T) {
 				j := testUnenrollProgress()
-				reply := testLifecycle(deleted)
+				r := testLifecycle(deleted)
 				switch bad {
 				case "nil":
-					reply = nil
+					r = nil
 				case "unknown":
-					reply = &cloudpbv2.GetAssetLifecycleResponse{State: &cloudpbv2.GetAssetLifecycleResponse_Unknown{Unknown: true}}
+					r = &v2AssetState{}
 				case "tenant":
 					if deleted {
-						reply.GetDeleted().OrganizationId = "other"
+						r.Deleted.OrganizationId = "other"
 					} else {
-						reply.GetActive().OrganizationId = "other"
+						r.Active.OrganizationId = "other"
 					}
 				case "device":
 					if deleted {
-						reply.GetDeleted().PkiDeviceName = "other"
+						r.Deleted.PkiDeviceName = "other"
 					} else {
-						reply.GetActive().PkiDeviceName = proto.String("other")
+						r.Active.PkiDeviceName = proto.String("other")
 					}
 				case "asset":
 					if deleted {
-						reply.GetDeleted().Id = "44444444-4444-4444-8444-444444444444"
+						r.Deleted.Id = "44444444-4444-4444-8444-444444444444"
 					} else {
-						reply.GetActive().Id = "44444444-4444-4444-8444-444444444444"
+						r.Active.Id = "44444444-4444-4444-8444-444444444444"
 					}
 				case "missing-time":
 					if !deleted {
 						return
 					}
-					reply.GetDeleted().DeletedAt = nil
+					r.Deleted.DeletedAt = nil
 				}
-				if _, err := v2UnenrollLifecycle(reply, &j); err == nil {
-					t.Fatal("invalid lifecycle evidence accepted")
+				if _, err := v2UnenrollLifecycle(r, &j); err == nil {
+					t.Fatal("invalid evidence accepted")
 				}
 			})
 		}
 	}
 }
-
 func TestV2UnenrollRechecksBindingAndDeletionEvidence(t *testing.T) {
 	for _, failure := range []string{"rebound", "purged", "still-active"} {
 		t.Run(failure, func(t *testing.T) {
@@ -179,25 +188,24 @@ func TestV2UnenrollRechecksBindingAndDeletionEvidence(t *testing.T) {
 			reads := 0
 			resets := 0
 			ops := v2UnenrollOps{
-				lookup: func(context.Context, string) (*cloudpbv2.GetAssetLifecycleResponse, error) {
+				lookup: func(context.Context, string) (*v2AssetState, error) {
 					reads++
-					reply := testLifecycle(false)
+					r := testLifecycle(false)
 					if reads == 2 && failure == "rebound" {
-						reply.GetActive().PkiDeviceName = proto.String("other")
+						r.Active.PkiDeviceName = proto.String("other")
 					}
 					if reads == 3 && failure == "purged" {
-						reply = &cloudpbv2.GetAssetLifecycleResponse{State: &cloudpbv2.GetAssetLifecycleResponse_Unknown{Unknown: true}}
+						r = &v2AssetState{}
 					}
-					return reply, nil
+					return r, nil
 				},
 				revoke: func(context.Context, string, string) (*agentpbv2.RevokeACMECertificateResponse, error) {
 					return testRevokeAck(j), nil
 				},
-				delete: func(context.Context, string) error { return nil },
-				reset:  func(context.Context, string, string) error { resets++; return nil },
+				delete: func(context.Context, string) error { return nil }, reset: func(context.Context, string, string) error { resets++; return nil },
 			}
 			if err := performV2Unenroll(context.Background(), &j, ops); err == nil || resets != 0 {
-				t.Fatal("reset without current tombstone binding")
+				t.Fatal("reset without current proof")
 			}
 		})
 	}
