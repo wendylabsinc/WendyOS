@@ -1601,8 +1601,8 @@ lease: 60s
 sources:
   - camera: v4l2:/dev/video0
 inference:
-  model: PekingU/rtdetr_r18vd
-  revision: ac77a11ff0170a41b771c03264987f8ce2b0d753
+  model: ustc-community/dfine-nano-coco
+  revision: 066438d3d8f0da137a37b38fdf3368fd4afceced
   labels: [person]
   threshold: 0.5
   rate: 2
@@ -1795,7 +1795,7 @@ wendy device update --device "$DEV" --binary "$SCRATCH/wendy-agent"
 
 - [ ] **Step 3: Deploy a leased campaign and see one detection**
 
-Write `$SCRATCH/chat-test.yaml` with `leasedTestYAML`'s shape: `name: chat-test-1`, `lease: 60s`, `camera: <the Brio's source id>`, RT-DETR as in the spec. Then:
+Write `$SCRATCH/chat-test.yaml` with `leasedTestYAML`'s shape: `name: chat-test-1`, `lease: 60s`, `camera: <the Brio's source id>`, and the default detector from spec §8 (D-FINE nano). Then:
 
 ```bash
 "$SCRATCH/wendy" data campaign deploy --device "$DEV" --skip-cloud-registration "$SCRATCH/chat-test.yaml"

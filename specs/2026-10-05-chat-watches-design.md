@@ -3,7 +3,7 @@
 **Date:** 2026-10-05
 **Branch:** `ed/chat-watches`, based on `main` at `1d8e8ec6d`
 **Owner:** Ethan (P-WDY-258 "Wendy Chat: Let LLM spawn 'any model'")
-**Status:** approved by Ethan 2026-10-07; PR A plan in `specs/2026-10-07-chat-watches-plan-a-leased-campaigns.md`
+**Status:** approved by Ethan 2026-10-07; D5 revised the same day (D-FINE nano replaces RT-DETR, §13); PR A plan in `specs/2026-10-07-chat-watches-plan-a-leased-campaigns.md`
 **Relation to model watch:** this replaces §8 ("CLI, MCP and chat") of the model watch design for milestone M3. That design lives on branch `ed/model-watch-design` (PR #2063) as `specs/2026-09-25-model-watch-design.md`; its §5 (`WendyModelService`) and §8.3 (chat) are the starting points for the parts reused here.
 
 ## 1. Summary
@@ -27,7 +27,7 @@ This milestone builds the chat half of the observation loop once, against a smal
 | D2 | The device enforces a lease. A watch's campaign ends when its lease lapses, even if chat crashes. |
 | D3 | Chat watches are notify-only: no capture, no episodes, no upload. |
 | D4 | One `watch_*` tool set. The MCP server picks the backend; the LLM never sees which. |
-| D5 | The default detector is a model run as its publisher released it: `PekingU/rtdetr_r18vd` (Apache-2.0), pinned to a commit, on the existing Transformers backend. Wendy exports and hosts nothing. YOLOX with a worker decoder is the fallback if RT-DETR is too slow on a CPU. |
+| D5 | The default detector is a model run as its publisher released it: D-FINE nano, `ustc-community/dfine-nano-coco` (Apache-2.0), pinned to a commit, on the existing Transformers backend. Wendy exports and hosts nothing. It replaced RT-DETR (`PekingU/rtdetr_r18vd`) on 2026-10-07, after RT-DETR measured 0.44 frames per second on the Orin Nano CPU (§13). YOLOX with a worker decoder remains the fallback if D-FINE nano proves too slow on a device. |
 | D6 | Changes to campaign code are built here and reviewed by Joannis (its author), in their own PR that lands before the MCP and chat PR. |
 | D7 | Older agents that cannot lease campaigns refuse with "update the agent". There is no best-effort fallback. |
 | D8 | The ChatGPT gateway's `deploy_yolo_detector` stays as it is. |
@@ -44,7 +44,7 @@ This milestone builds the chat half of the observation loop once, against a smal
 **Success criteria** (measured on device, §11)
 
 - **Alert latency:** a person entering the frame shows as an event line in the transcript within 3 s, over the LAN.
-- **Throughput:** the detector processes at least 2 frames per second per watch on the Jetson Orin Nano CPU. The Pi 5 is measured too; if either misses 2 frames per second, D5's fallback applies.
+- **Throughput:** with two watches running, each processes at least 1.5 frames per second on the Jetson Orin Nano CPU at the worker's default of 2 threads. D-FINE nano measured 1.65–1.74 each, and 1.90 alone, before the agent's own encoding load (§13). The Pi 5 is measured too; if either misses, D5's fallback applies.
 - **Warm start:** with the Python environment and model cached, `watch_start` reaches `READY` within 30 s.
 - **Correctness:** a scripted scene (a person walks in, stands, walks out; twice, more than 30 s apart) produces exactly two event turns.
 - **Cleanup:** after `kill -9` of chat, the campaign is gone from the device within 90 s; after a normal exit, within 5 s.
@@ -57,7 +57,7 @@ This milestone builds the chat half of the observation loop once, against a smal
 - Watches that outlive chat, Companion notifications, and fleet-wide watches.
 - A per-device cap on watches across sessions (the cap is two per session).
 - Moving the gateway's YOLO tools onto watches.
-- Splitting the worker's Python environment. The first watch on a fresh device installs torch and transformers, which takes minutes and several GB.
+- Splitting the worker's Python environment. The first watch on a fresh device installs torch and transformers, which took 74–83 s and 1.2 GB on the Orin Nano over Wi-Fi.
 - Keeping watches across `/setup`, and allowing watch tools in `wendy agent serve`.
 
 ## 4. Architecture
@@ -88,8 +88,8 @@ lease: 60s
 sources:
   - camera: <source id>
 inference:
-  model: PekingU/rtdetr_r18vd
-  revision: ac77a11ff0170a41b771c03264987f8ce2b0d753
+  model: ustc-community/dfine-nano-coco
+  revision: 066438d3d8f0da137a37b38fdf3368fd4afceced
   labels: [person]
   threshold: 0.5
   rate: 2
@@ -289,12 +289,12 @@ The CLI holds one detector entry:
 
 | Field | Value |
 |---|---|
-| `id` | `rtdetr-r18-coco` |
-| `model` | `PekingU/rtdetr_r18vd` (Apache-2.0, published by the RT-DETR authors) |
-| `revision` | `ac77a11ff0170a41b771c03264987f8ce2b0d753` |
+| `id` | `dfine-nano-coco` |
+| `model` | `ustc-community/dfine-nano-coco` (D-FINE nano, Apache-2.0, Transformers weights) |
+| `revision` | `066438d3d8f0da137a37b38fdf3368fd4afceced` |
 | `labels` | the checkpoint's 80 COCO labels, copied from its `config.json` at that commit |
 
-The weights are 81 MB. The agent's Transformers backend downloads and runs them as published. A test checks that the embedded labels match the checkpoint's `config.json` (from a recorded fixture, not the network). Changing the default detector means changing this one entry.
+The weights are 15 MB. Its `person` label is `person` (class 0). The agent's Transformers backend downloads and runs them as published. A test checks that the embedded labels match the checkpoint's `config.json` (from a recorded fixture, not the network). Changing the default detector means changing this one entry.
 
 ## 9. Error handling
 
@@ -351,8 +351,16 @@ Each PR gets its own implementation plan. This document is committed on `ed/chat
 
 ## 13. Risks and open items
 
-- **CPU speed of RT-DETR.** Unmeasured on the Orin Nano and Pi 5 CPUs. If either misses 2 frames per second, the YOLOX fallback (D5) needs a worker decoder and a third-party ONNX upload.
-- **First start.** The worker installs torch and transformers on first use, even for the YOLO path. The first watch on a fresh device takes minutes and several GB of disk.
+- **CPU speed.** Measured 2026-10-07 on the Orin Nano (25 W mode, CPU at 1344 MHz, the worker's 2 threads, without the agent's encoding load):
+
+  | Model | One watch | Two watches, each |
+  |---|---|---|
+  | RT-DETR r18 | 0.44 fps (2.25 s per frame) | 0.41 fps |
+  | D-FINE small | 0.78 fps | — |
+  | D-FINE nano | 1.90 fps (526 ms, of which 499 ms is the model) | 1.65–1.74 fps |
+
+  D-FINE nano finds the same people as RT-DETR on a COCO test image. Two untested ways past 2 frames per second are the fast image processor (`use_fast=True`) and 3 worker threads; both change campaign code for every campaign. The Pi 5 is unmeasured. If D-FINE nano misses there, the YOLOX fallback (D5) needs a worker decoder and a third-party ONNX upload.
+- **First start.** The worker installs torch and transformers on first use, even for the YOLO path: 74–83 s and 1.2 GB on the Orin Nano over Wi-Fi. The runtime goes to `/var/lib/wendy-agent/data/inference`, which on WendyOS is on the 12 GB system partition (4.7 GB free), not `/data`. Whether it survives an A/B OS update is unverified; that is a campaign-inference follow-up outside this milestone.
 - **Campaign code ownership.** PR A changes code Joannis wrote and maintains. His review may change §5.
 - **One unresolved source stops a campaign's inference** (`ResolveCampaignSources` in `data_inference.go`). Chat watches have one camera each, so this only means a missing camera fails the watch.
 - **Model watch §6.1's camera limit** (native H.264 only) still applies to PR C. The campaign backend does not have it.
