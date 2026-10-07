@@ -103,7 +103,12 @@ func (e *Engine) TurnWithOptions(ctx context.Context, prompt string, emit func(E
 	if emit == nil {
 		emit = func(Event) {}
 	}
-	ctx = context.WithValue(ctx, turnRuntimeKey{}, &turnRuntime{approve: approve, emit: emit, memoryEnabled: e.MemoryEnabled})
+	memoryEnabled := e.MemoryEnabled
+	if opts.SkipMemory {
+		// Children delegated in this turn start without memory.
+		memoryEnabled = func() bool { return false }
+	}
+	ctx = context.WithValue(ctx, turnRuntimeKey{}, &turnRuntime{approve: approve, emit: emit, memoryEnabled: memoryEnabled, skipMemory: opts.SkipMemory})
 	if e.memory != nil && !opts.SkipMemory {
 		e.memory.beginTurn()
 		defer e.learnMemory(ctx, prompt, emit)

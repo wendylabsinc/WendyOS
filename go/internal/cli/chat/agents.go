@@ -241,7 +241,10 @@ type turnRuntime struct {
 	approve       ApproveFunc
 	emit          func(Event)
 	memoryEnabled func() bool
-	count         atomic.Int32
+	// skipMemory marks a turn that is not a statement from the user, such as a
+	// watch report: it neither writes notes nor gives its children memory.
+	skipMemory bool
+	count      atomic.Int32
 }
 
 var delegateTool = Tool{Name: "agent_delegate", Description: "Run 1-4 independent specialist tasks concurrently and wait for their structured results. Each has a private conversation and isolated device connection. Children use configured profile models, inherit tool restrictions and approvals, and cannot delegate. Include required context and explicit device identity; assign disjoint edits and device actions.", Parameters: json.RawMessage(`{"type":"object","properties":{"tasks":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"profile":{"type":"string","enum":["general","developer","simulation","debugger","fleet","device-reasoning","device-sensors","device-control"]},"prompt":{"type":"string","minLength":1,"maxLength":16000},"device":{"type":"string","maxLength":256}},"required":["profile","prompt"],"additionalProperties":false}}},"required":["tasks"],"additionalProperties":false}`)}
