@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -34,8 +35,10 @@ type UIOptions struct {
 	AutoApprove   bool
 	Voice         bool
 	VoiceFactory  func(context.Context) (VoiceSession, error)
-	Input         io.Reader
-	Output        io.Writer
+	// Watches is the session's camera watches; nil when it has none.
+	Watches WatchControl
+	Input   io.Reader
+	Output  io.Writer
 }
 
 // UIState keeps the visible transcript in memory when connection setup is
@@ -44,6 +47,27 @@ type UIState struct {
 	transcript []chatEntry
 	composer   string
 	Voice      bool
+	notices    []chatEntry
+
+	// The TUI's watch state, kept while the same session's watches keep running.
+	watches       map[string]*watchDisplay
+	watchQueue    []WatchNotice
+	lastWatchTurn time.Time
+}
+
+// AddNotice shows a notice when the next chat UI opens with this state.
+func (s *UIState) AddNotice(title, text string) {
+	s.notices = append(s.notices, chatEntry{kind: "notice", title: title, text: text})
+}
+
+// saveState hands the model's transcript and watch state to the next Run.
+func (m *chatModel) saveState(state *UIState) {
+	state.transcript = append([]chatEntry(nil), m.transcript...)
+	state.composer = m.composer.Value()
+	state.Voice = m.voiceEnabled
+	state.watches = m.watches
+	state.watchQueue = m.watchQueue
+	state.lastWatchTurn = m.lastWatchTurn
 }
 
 // ErrReconfigure asks the command to reopen private connection setup.
@@ -64,9 +88,7 @@ func Run(ctx context.Context, opts UIOptions) error {
 		cancel()
 		m.workers.Wait()
 		if opts.State != nil {
-			opts.State.transcript = append([]chatEntry(nil), m.transcript...)
-			opts.State.composer = m.composer.Value()
-			opts.State.Voice = m.voiceEnabled
+			m.saveState(opts.State)
 		}
 	}()
 	options := []tea.ProgramOption{tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion()}
@@ -139,6 +161,13 @@ type chatModel struct {
 	status          string
 	queuedPrompts   []string
 
+	watchNotices  <-chan WatchNotice
+	watches       map[string]*watchDisplay
+	watchQueue    []WatchNotice // shown, not yet given to the model
+	lastWatchTurn time.Time
+	watchPacing   bool // a pacing tick is scheduled
+	now           func() time.Time
+
 	turnID            uint64
 	events            <-chan turnMessage
 	cancelTurn        context.CancelFunc
@@ -204,7 +233,8 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	m := &chatModel{
 		ctx: ctx, opts: opts, composer: input, spinner: s,
 		viewport: viewport.New(0, 0), preview: viewport.New(0, 0),
-		status:            "Ready",
+		status: "Ready",
+		now:    time.Now, watches: map[string]*watchDisplay{},
 		voiceInputCaption: -1, voiceInputPending: -1, voiceOutputCaption: -1,
 	}
 	m.viewport.KeyMap = viewport.KeyMap{} // Composer owns ordinary cursor keys.
@@ -218,6 +248,18 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	if opts.State != nil && len(opts.State.transcript) > 0 {
 		m.transcript = append([]chatEntry(nil), opts.State.transcript...)
 		m.composer.SetValue(opts.State.composer)
+	}
+	if opts.State != nil {
+		m.transcript = append(m.transcript, opts.State.notices...)
+		opts.State.notices = nil
+		if opts.State.watches != nil {
+			m.watches = opts.State.watches
+		}
+		m.watchQueue = opts.State.watchQueue
+		m.lastWatchTurn = opts.State.lastWatchTurn
+	}
+	if opts.Watches != nil {
+		m.watchNotices = opts.Watches.WatchNotices()
 	}
 	m.resize(80, 24)
 	if m.removeStandaloneCredential(m.opts.InitialPrompt) {
@@ -233,6 +275,9 @@ func (m *chatModel) Init() tea.Cmd {
 	}
 	if strings.TrimSpace(m.opts.InitialPrompt) != "" {
 		cmds = append(cmds, func() tea.Msg { return initialPromptMessage{} })
+	}
+	if cmd := m.waitForWatchNotice(); cmd != nil {
+		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
 }
@@ -273,6 +318,14 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case voiceMessage:
 		return m, m.handleVoiceMessage(msg)
+	case watchNoticeMessage:
+		return m, tea.Batch(m.handleWatchNotice(msg.notice), m.waitForWatchNotice())
+	case watchListMessage:
+		m.showWatchList(msg)
+		return m, nil
+	case watchStopMessage:
+		m.showWatchStop(msg)
+		return m, nil
 	case turnMessage:
 		if msg.id != m.turnID || !m.active {
 			return m, nil
@@ -477,8 +530,12 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		}
 		return nil
 	case "/help":
-		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Expand or collapse tool and agent activity (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/voice  Toggle voice; /voice setup changes voice credentials privately\n/memory Browse recent notes\n/memory <id>  Read a note and its evidence\n/memory search <words>  Find notes\n/memory on|off  Enable or pause remembering and recall\n/forget <id>  Delete a note using its short ID\n/clear  Clear the conversation and queued messages; keep remembered notes\n/quit   Exit chat\n\nEnter sends a message, or queues it while Wendy is working. Queued messages run in order after the current turn.\nAlt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work, discards queued messages, and stops voice playback. Ctrl+C exits when idle.\nVoice corrections interrupt current work and run before queued typed messages.\nFor tool approvals, review the arguments and press y to allow once or n to deny. Spoken approval is never accepted.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
+		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Expand or collapse tool and agent activity (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/voice  Toggle voice; /voice setup changes voice credentials privately\n/memory Browse recent notes\n/memory <id>  Read a note and its evidence\n/memory search <words>  Find notes\n/memory on|off  Enable or pause remembering and recall\n/watches  List this session's camera watches\n/watches stop all  Stop every watch without asking Wendy\n/forget <id>  Delete a note using its short ID\n/clear  Clear the conversation and queued messages; keep remembered notes\n/quit   Exit chat\n\nEnter sends a message, or queues it while Wendy is working. Queued messages run in order after the current turn.\nAlt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work, discards queued messages, and stops voice playback. Ctrl+C exits when idle.\nVoice corrections interrupt current work and run before queued typed messages.\nFor tool approvals, review the arguments and press y to allow once or n to deny. Spoken approval is never accepted.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
 		return nil
+	case "/watches":
+		return m.listWatches()
+	case "/watches stop all":
+		return m.stopAllWatches()
 	case "/memory":
 		m.showMemoryNotes("")
 		return nil
@@ -518,6 +575,11 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		} else {
 			m.appendEntry("notice", "Note forgotten", "Removed the selected note from memory.")
 		}
+		return nil
+	}
+	if strings.HasPrefix(prompt, "/watches ") {
+		m.composer.SetValue(prompt)
+		m.appendEntry("notice", "Unknown command", "Use /watches to list this session's camera watches, or /watches stop all to stop them.")
 		return nil
 	}
 	if strings.HasPrefix(prompt, "/voice ") || (strings.HasPrefix(prompt, "/") && !strings.ContainsAny(prompt, " \n\t")) {
@@ -1064,8 +1126,12 @@ func (m *chatModel) transcriptContent(width int) (string, []int) {
 	plain := lipgloss.NewStyle()
 	for i := 0; i < len(m.transcript); i++ {
 		entry := m.transcript[i]
-		if i > 0 {
+		if i > 0 && !(entry.kind == "event" && m.transcript[i-1].kind == "event") {
 			appendBlock("", plain, false)
+		}
+		if entry.kind == "event" {
+			appendBlock(chatSingleLine(chatSanitize(entry.text)), chatDim, true)
+			continue
 		}
 		if !m.showToolDetails && isActivityEntry(entry) {
 			end := i + 1
@@ -1296,6 +1362,9 @@ func (m *chatModel) View() string {
 			status = fmt.Sprintf("%d queued · %s", len(m.queuedPrompts), status)
 		}
 		status += " · " + m.voiceStatus()
+		if n := m.activeWatchCount(); n > 0 {
+			status += fmt.Sprintf(" · watching: %d", n)
+		}
 		if m.active {
 			status = m.spinner.View() + " " + status
 		}

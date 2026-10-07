@@ -139,7 +139,7 @@ would otherwise ask a person.`,
 					State:     state,
 					Workspace: workspace, Device: preferredDevice,
 					InitialPrompt: initialPrompt, AutoApprove: autoApprove,
-					Voice: voice, VoiceFactory: voiceFactory,
+					Voice: voice, VoiceFactory: voiceFactory, Watches: session,
 					Input: cmd.InOrStdin(), Output: cmd.OutOrStdout(),
 				})
 				initialPrompt = ""
@@ -167,10 +167,14 @@ would otherwise ask a person.`,
 				if err != nil {
 					return err
 				}
+				ended := session.ActiveWatchCount(ctx)
 				resolved = nextConfig
 				noMemory = !engine.MemoryEnabled()
 				engine = nil
 				state = new(chat.UIState)
+				if ended > 0 {
+					state.AddNotice("Watches ended", fmt.Sprintf("Setup restarts Wendy's device connection, so %d camera watch(es) ended. Ask again if you still want them.", ended))
+				}
 				initialPrompt = ""
 			}
 		},
