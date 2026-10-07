@@ -73,15 +73,15 @@ func (b *campaignWatchBackend) Start(ctx context.Context, conn *grpcclient.Agent
 // campaignYAML builds the leased campaign of design §5.1 and validates it
 // locally, so an invalid plan never reaches the device.
 func (b *campaignWatchBackend) campaignYAML(spec watchSpec) ([]byte, error) {
-	campaign := data.Campaign{
+	campaign := watchCampaignWire{
 		Version: data.CampaignVersion, Name: spec.Name, Lease: watchLease,
-		Sources: []data.CampaignSource{{Camera: spec.CameraID}},
-		Inference: &data.CampaignInference{
+		Sources: []watchSourceWire{{Camera: spec.CameraID}},
+		Inference: watchInferenceWire{
 			Model: b.detector.Model, Revision: b.detector.Revision, Labels: spec.Classes,
 			Threshold: spec.MinConfidence, Rate: watchInferenceRate, Event: spec.Name + ".detected",
 			ClearAfter: "5s", Cooldown: "30s",
 		},
-		Notify: &data.CampaignNotify{On: data.NotifyOnDetection},
+		Notify: watchNotifyWire{On: data.NotifyOnDetection},
 	}
 	plan, err := yaml.Marshal(campaign)
 	if err != nil {
@@ -91,6 +91,38 @@ func (b *campaignWatchBackend) campaignYAML(spec watchSpec) ([]byte, error) {
 		return nil, fmt.Errorf("building the watch campaign: %w", err)
 	}
 	return plan, nil
+}
+
+// The wire structs carry exactly the keys design §5.1 gives a watch's
+// campaign, with the agent parser's YAML names. They are not data.Campaign so
+// that a field later added to its capture, upload or export sections is never
+// sent to agents that predate it.
+type watchCampaignWire struct {
+	Version   int                `yaml:"version"`
+	Name      string             `yaml:"name"`
+	Lease     string             `yaml:"lease"`
+	Sources   []watchSourceWire  `yaml:"sources"`
+	Inference watchInferenceWire `yaml:"inference"`
+	Notify    watchNotifyWire    `yaml:"notify"`
+}
+
+type watchSourceWire struct {
+	Camera string `yaml:"camera"`
+}
+
+type watchInferenceWire struct {
+	Model      string   `yaml:"model"`
+	Revision   string   `yaml:"revision"`
+	Labels     []string `yaml:"labels"`
+	Threshold  float64  `yaml:"threshold"`
+	Rate       float64  `yaml:"rate"`
+	Event      string   `yaml:"event"`
+	ClearAfter string   `yaml:"clear_after"`
+	Cooldown   string   `yaml:"cooldown"`
+}
+
+type watchNotifyWire struct {
+	On string `yaml:"on"`
 }
 
 // watchDeviceError maps a device refusal. An agent that predates leased

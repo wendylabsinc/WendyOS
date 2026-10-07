@@ -21,26 +21,27 @@ import (
 // device operations so tests can check, for example, journal-before-deploy.
 type watchDataClient struct {
 	agentpbv2.DataServiceClient
-	mu         sync.Mutex
-	calls      []string
-	deployed   map[string]data.Campaign
-	inference  map[string]data.InferenceStatus // default: running
-	renews     map[string]int
-	removed    []string
-	deployErr  error
-	renewErr   error
-	inspectErr error
-	removeErr  error
-	removeWait time.Duration
-	journal    []data.CampaignNotification
-	gapOnce    bool
-	oldJournal bool // Events does not mark the response as the notification journal
-	sources    []*agentpbv2.DataSource
+	mu           sync.Mutex
+	calls        []string
+	deployed     map[string]data.Campaign
+	deployedYAML map[string][]byte               // the raw plan each campaign was sent as
+	inference    map[string]data.InferenceStatus // default: running
+	renews       map[string]int
+	removed      []string
+	deployErr    error
+	renewErr     error
+	inspectErr   error
+	removeErr    error
+	removeWait   time.Duration
+	journal      []data.CampaignNotification
+	gapOnce      bool
+	oldJournal   bool // Events does not mark the response as the notification journal
+	sources      []*agentpbv2.DataSource
 }
 
 func newWatchDataClient() *watchDataClient {
 	return &watchDataClient{
-		deployed: map[string]data.Campaign{}, inference: map[string]data.InferenceStatus{}, renews: map[string]int{},
+		deployed: map[string]data.Campaign{}, deployedYAML: map[string][]byte{}, inference: map[string]data.InferenceStatus{}, renews: map[string]int{},
 		sources: []*agentpbv2.DataSource{
 			{Id: "v4l2:/dev/video0", Kind: "camera", Healthy: true, Detail: "Brio 101 VIDEO_TRANSPORT_USB"},
 			{Id: "v4l2:/dev/video2", Kind: "camera", Healthy: false, Detail: "Unplugged VIDEO_TRANSPORT_USB"},
@@ -70,6 +71,7 @@ func (f *watchDataClient) CampaignDeploy(_ context.Context, r *agentpbv2.DataCam
 	}
 	f.record("deploy:" + campaign.Name)
 	f.deployed[campaign.Name] = campaign
+	f.deployedYAML[campaign.Name] = append([]byte(nil), r.GetCampaignYaml()...)
 	return &agentpbv2.DataCampaign{Name: campaign.Name, State: campaign.State, Revision: campaign.Revision}, nil
 }
 

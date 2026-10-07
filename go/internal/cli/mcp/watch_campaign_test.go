@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"errors"
+	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"gopkg.in/yaml.v3"
 )
 
 func fastCampaignBackend() *campaignWatchBackend {
@@ -65,6 +68,37 @@ func TestCampaignWatchDeploysLeasedNotifyOnlyCampaign(t *testing.T) {
 		len(i.Labels) != 2 || i.Labels[0] != "person" || i.Event != "chat-0a1b2c3d-1.detected" || i.ClearAfter != "5s" || i.Cooldown != "30s" ||
 		c.Notify == nil || c.Notify.On != data.NotifyOnDetection || c.Notify.Webhook != "" {
 		t.Fatalf("not the leased notify-only shape: %+v %+v", c, i)
+	}
+}
+
+func TestCampaignWatchSendsOnlyTheWatchCampaignKeys(t *testing.T) {
+	client := newWatchDataClient()
+	h, err := fastCampaignBackend().Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Stop(context.Background())
+	client.mu.Lock()
+	raw := client.deployedYAML["chat-0a1b2c3d-1"]
+	client.mu.Unlock()
+	var plan map[string]any
+	if err := yaml.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	keys := func(m map[string]any) []string {
+		out := make([]string, 0, len(m))
+		for k := range m {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	}
+	if got, want := keys(plan), []string{"inference", "lease", "name", "notify", "sources", "version"}; !slices.Equal(got, want) {
+		t.Fatalf("top-level keys %v, want %v\n%s", got, want, raw)
+	}
+	notify, _ := plan["notify"].(map[string]any)
+	if got := keys(notify); !slices.Equal(got, []string{"on"}) {
+		t.Fatalf("notify keys %v", got)
 	}
 }
 
