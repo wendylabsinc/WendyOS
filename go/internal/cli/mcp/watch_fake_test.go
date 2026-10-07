@@ -29,6 +29,7 @@ type watchDataClient struct {
 	renews       map[string]int
 	removed      []string
 	deployErr    error
+	sourcesErr   error
 	renewErr     error
 	inspectErr   error
 	removeErr    error
@@ -163,6 +164,9 @@ func (f *watchDataClient) Events(_ context.Context, r *agentpbv2.DataEventsReque
 func (f *watchDataClient) Sources(context.Context, *agentpbv2.DataSourcesRequest, ...grpc.CallOption) (*agentpbv2.DataSourcesResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.sourcesErr != nil {
+		return nil, f.sourcesErr
+	}
 	return &agentpbv2.DataSourcesResponse{Sources: f.sources}, nil
 }
 

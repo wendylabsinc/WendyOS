@@ -70,7 +70,7 @@ func watchCameras(ctx context.Context, conn *grpcclient.AgentConnection) ([]watc
 	}
 	response, err := conn.DataService.Sources(ctx, &agentpbv2.DataSourcesRequest{})
 	if err != nil {
-		return nil, err
+		return nil, watchDeviceError(err)
 	}
 	cameras := []watchCamera{}
 	for _, source := range response.GetSources() {

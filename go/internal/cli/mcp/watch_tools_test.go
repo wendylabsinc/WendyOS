@@ -214,3 +214,22 @@ func TestWatchCameraNameDropsTheTransport(t *testing.T) {
 		}
 	}
 }
+
+func TestWatchToolsReportAnAgentWithoutTheDataService(t *testing.T) {
+	s, client, _ := watchToolServer(t)
+	client.mu.Lock()
+	client.sourcesErr = status.Error(codes.Unimplemented, "unknown service wendy.agent.services.v2.DataService")
+	client.mu.Unlock()
+	for name, args := range map[string]map[string]any{
+		"watch_sources": nil,
+		"watch_start":   {"camera": "v4l2:/dev/video0", "classes": []any{"person"}},
+	} {
+		out, isErr := callWatchTool(t, s, name, args)
+		if !isErr || out["error_code"] != "UNSUPPORTED" || !strings.Contains(out["message"].(string), "wendy device update") {
+			t.Fatalf("%s: %v", name, out)
+		}
+	}
+	if names := client.deployedNames(); len(names) != 0 {
+		t.Fatalf("deployed %v", names)
+	}
+}
