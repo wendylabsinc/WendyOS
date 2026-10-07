@@ -162,7 +162,7 @@ class DetectorFailureTests(unittest.TestCase):
         import json
         import types
         from unittest import mock
-        import worker
+        from worker import run
 
         frames = ["bad", "good"]
         emitted = []
@@ -199,10 +199,10 @@ class DetectorFailureTests(unittest.TestCase):
             if len(emitted) == 2:
                 finished.set()
 
-        with mock.patch.object(worker, "Decoder", FakeDecoder), \
-                mock.patch.object(worker, "emit", emit), \
-                mock.patch.object(worker.sys, "stdin", types.SimpleNamespace(buffer=Input())):
-            worker.run({"rate": 1000}, detector)
+        with mock.patch("worker.Decoder", FakeDecoder), \
+                mock.patch("worker.emit", emit), \
+                mock.patch("worker.sys.stdin", types.SimpleNamespace(buffer=Input())):
+            run({"rate": 1000}, detector)
         self.assertEqual(emitted, [
             {"type": "source_error", "source_id": "camera", "generation": 1,
              "error": "inference: ValueError: bad frame"},
@@ -215,7 +215,7 @@ class DetectorFailureTests(unittest.TestCase):
         import json
         import types
         from unittest import mock
-        import worker
+        from worker import run
 
         emitted = []
         finished = threading.Event()
@@ -249,10 +249,10 @@ class DetectorFailureTests(unittest.TestCase):
             emitted.append(result)
 
         started = time.monotonic()
-        with mock.patch.object(worker, "Decoder", FakeDecoder), \
-                mock.patch.object(worker, "emit", emit), \
-                mock.patch.object(worker.sys, "stdin", types.SimpleNamespace(buffer=Input())):
-            worker.run({"rate": 1000}, detector)
+        with mock.patch("worker.Decoder", FakeDecoder), \
+                mock.patch("worker.emit", emit), \
+                mock.patch("worker.sys.stdin", types.SimpleNamespace(buffer=Input())):
+            run({"rate": 1000}, detector)
         finished.set()
         return emitted, time.monotonic() - started
 
