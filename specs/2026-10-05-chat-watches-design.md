@@ -1,9 +1,9 @@
 # Chat watches (P-WDY-258 M3): design
 
 **Date:** 2026-10-05
-**Branch:** `ed/chat-watches`, based on `main` at `fcb372e57`
+**Branch:** `ed/chat-watches`, based on `main` at `1d8e8ec6d`
 **Owner:** Ethan (P-WDY-258 "Wendy Chat: Let LLM spawn 'any model'")
-**Status:** design approved in brainstorming; awaiting review of this document
+**Status:** approved by Ethan 2026-10-07; PR A plan in `specs/2026-10-07-chat-watches-plan-a-leased-campaigns.md`
 **Relation to model watch:** this replaces §8 ("CLI, MCP and chat") of the model watch design for milestone M3. That design lives on branch `ed/model-watch-design` (PR #2063) as `specs/2026-09-25-model-watch-design.md`; its §5 (`WendyModelService`) and §8.3 (chat) are the starting points for the parts reused here.
 
 ## 1. Summary
