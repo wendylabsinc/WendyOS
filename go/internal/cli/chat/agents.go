@@ -105,8 +105,10 @@ func NewSession(ctx context.Context, opts SessionOptions) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Only an interactive or headless session hears from watches; services
-	// never get watch tools (sessionEngine filters them).
+	// The interactive chat reads watch reports from this inbox. A headless
+	// session has one too but never reads it, since it ends after one turn
+	// (HeadlessInstructions); a full inbox only drops notices. Services never
+	// get watch tools (sessionEngine filters them).
 	var inbox *watchInbox
 	if opts.ApprovedTools == nil {
 		inbox = newWatchInbox()

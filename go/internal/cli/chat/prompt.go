@@ -2,6 +2,11 @@ package chat
 
 import "fmt"
 
+// HeadlessInstructions are the extra system instructions for wendy chat
+// --prompt. It exits after one turn, ending its watches, so a report can never
+// arrive later as a message, as the system prompt otherwise says.
+const HeadlessInstructions = "This is a single headless request: no watch reports arrive after this turn, and watches stop when it ends. Start a watch only to wait for it now with watch_events (wait_seconds up to 120, passing each result's next_sequence back as after_sequence), then report what it saw."
+
 // SystemPrompt gives every provider the same Wendy development workflow.
 func SystemPrompt(workspace, device string) string {
 	return fmt.Sprintf(`You are Wendy, an interactive assistant for developing applications and controlling hardware running WendyOS.

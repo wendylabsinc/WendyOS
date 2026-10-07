@@ -245,6 +245,13 @@ type chatHeadlessOptions struct {
 	Setup       bool
 }
 
+// sessionOptions opens the session for one headless request. It ends after
+// its turn, so it is told that no watch report can reach it later.
+func (o chatHeadlessOptions) sessionOptions(resolved chat.Config, executable string) chat.SessionOptions {
+	return chat.SessionOptions{Config: resolved, Profile: o.Profile, Executable: executable, Workspace: o.Workspace, Device: o.Device,
+		NoMemory: o.NoMemory, AgentModels: o.AgentModels, Peers: o.Peers, SystemInstructions: chat.HeadlessInstructions}
+}
+
 // runChatHeadless is wendy chat for a caller that is not a person at a
 // terminal: a script, a CI job, or another agent. It uses the saved setup or
 // the connection flags, never the guided setup screens, and it writes either
@@ -270,8 +277,7 @@ func runChatHeadless(cmd *cobra.Command, opts chatHeadlessOptions) error {
 	}
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
-	session, err := chat.NewSession(ctx, chat.SessionOptions{Config: resolved, Profile: opts.Profile,
-		Executable: executable, Workspace: opts.Workspace, Device: opts.Device, NoMemory: opts.NoMemory, AgentModels: opts.AgentModels, Peers: opts.Peers})
+	session, err := chat.NewSession(ctx, opts.sessionOptions(resolved, executable))
 	if err != nil {
 		return err
 	}
