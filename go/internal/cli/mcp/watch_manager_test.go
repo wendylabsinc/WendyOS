@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -338,5 +339,119 @@ func TestWatchManagerShutdownStopsConcurrently(t *testing.T) {
 	}
 	if _, err := m.start(context.Background(), &grpcclient.AgentConnection{}, 1, watchSpec{Classes: []string{"person"}}); err == nil {
 		t.Fatal("a closed manager must refuse new watches")
+	}
+}
+
+func TestWatchManagerOrdersNotificationsAroundEnd(t *testing.T) {
+	backend := &fakeWatchBackend{}
+	var mu sync.Mutex
+	var order []string
+	blocked, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	notify := func(method string, params map[string]any) error {
+		if method == watchEventMethod {
+			once.Do(func() { close(blocked); <-release })
+		}
+		state, _ := params["state"].(string)
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, method+"/"+state)
+		return nil
+	}
+	m := newWatchManager(backend, notify, func() uint64 { return 1 })
+	m.startWait = 20 * time.Millisecond
+	startTestWatch(t, m, "front door")
+	backend.handle(0).updates <- watchUpdate{Event: &watchEventUpdate{Kind: "entered", OccurredAt: time.Now()}}
+	<-blocked
+	done := make(chan struct{})
+	go func() { _, _ = m.stop(context.Background(), "w1", watchStoppedReason); close(done) }()
+	time.Sleep(30 * time.Millisecond)
+	select {
+	case <-done:
+		t.Fatal("stop returned while an event notification was in flight")
+	default:
+	}
+	close(release)
+	<-done
+	// A late backend event for the ended watch must not be sent.
+	m.apply(m.watches["w1"], watchUpdate{Event: &watchEventUpdate{Kind: "entered", OccurredAt: time.Now()}})
+	m.endStale(2)
+	time.Sleep(30 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	var tail []string
+	for _, o := range order {
+		if strings.HasPrefix(o, watchEventMethod) || strings.HasSuffix(o, "/ENDED") {
+			tail = append(tail, o)
+		}
+	}
+	if len(tail) != 2 || tail[0] != watchEventMethod+"/" || tail[1] != watchStatusMethod+"/ENDED" {
+		t.Fatalf("notifications %v, want one event then exactly one ENDED", order)
+	}
+}
+
+func TestWatchManagerStopDuringStartSendsOneEnded(t *testing.T) {
+	backend := &fakeWatchBackend{started: make(chan struct{})}
+	m, log, _ := newTestWatchManager(backend)
+	done := make(chan watchView, 1)
+	go func() {
+		v, _ := m.start(context.Background(), &grpcclient.AgentConnection{}, 1, watchSpec{Classes: []string{"person"}, Label: "front door"})
+		done <- v
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if _, err := m.stop(context.Background(), "w1", watchStoppedReason); err != nil {
+		t.Fatal(err)
+	}
+	close(backend.started)
+	if v := <-done; v.State != string(watchEnded) {
+		t.Fatalf("view %+v", v)
+	}
+	time.Sleep(30 * time.Millisecond)
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	ended := 0
+	for _, n := range log.sent {
+		if n.params["state"] == "ENDED" {
+			ended++
+		}
+	}
+	if ended != 1 {
+		t.Fatalf("%d ENDED notifications, want 1: %+v", ended, log.sent)
+	}
+	if backend.handle(0).stopped.Load() == 0 {
+		t.Fatal("the deployed backend watch was not stopped")
+	}
+}
+
+func TestWatchManagerRetainsTheMostRecentlyEndedWatches(t *testing.T) {
+	backend := &fakeWatchBackend{}
+	m, _, _ := newTestWatchManager(backend)
+	startTestWatch(t, m, "first") // w1 stays active while others cycle
+	for i := 2; i <= 11; i++ {
+		startTestWatch(t, m, "cycle")
+		if _, err := m.stop(context.Background(), "w"+strconv.Itoa(i), watchStoppedReason); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := m.stop(context.Background(), "w1", "camera unplugged"); err != nil {
+		t.Fatal(err)
+	}
+	var w1 *watchView
+	ids := map[string]bool{}
+	for _, v := range m.list() {
+		v := v
+		ids[v.WatchID] = true
+		if v.WatchID == "w1" {
+			w1 = &v
+		}
+	}
+	if w1 == nil || w1.State != string(watchEnded) || w1.Reason != "camera unplugged" {
+		t.Fatalf("the watch that just ended must be retained: %+v", m.list())
+	}
+	if ids["w2"] || !ids["w3"] || len(ids) != watchEndedRetained {
+		t.Fatalf("the earliest-ended watch (w2) should be the one forgotten: %v", ids)
+	}
+	if _, _, _, err := m.events(context.Background(), "w1", 0, 0); err != nil {
+		t.Fatal(err)
 	}
 }
