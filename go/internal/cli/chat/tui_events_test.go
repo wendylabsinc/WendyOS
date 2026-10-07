@@ -13,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/wendylabsinc/wendy/go/internal/cli/assets"
 )
 
 type fakeWatchControl struct {
@@ -741,5 +742,29 @@ func TestUIStopAllWatchesEmptiesTheEventQueue(t *testing.T) {
 	m.active = false
 	if len(m.watchQueue) != 0 || m.maybeStartWatchTurn() != nil || m.active {
 		t.Fatalf("a stopped watch's report still starts a turn: %+v", m.watchQueue)
+	}
+}
+
+// The chat guide describes how watch replies behave.
+func TestChatGuideDescribesWatchReplies(t *testing.T) {
+	doc, err := assets.FS.ReadFile("docs/guides/chat.mdx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, _ := strings.Cut(string(doc), "## Camera watches")
+	section, _, _ = strings.Cut(section, "\n## ")
+	section = strings.Join(strings.Fields(section), " ")
+	for _, want := range []string{
+		"a watch becoming ready after it was still preparing",
+		"cannot run tools that need approval",
+		"shown, not spoken",
+		"use `/clear` if it grows large",
+		"there are no live reports",
+		"only when you ask it to wait",
+		"`watch_events`",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("the Camera watches section lacks %q", want)
+		}
 	}
 }

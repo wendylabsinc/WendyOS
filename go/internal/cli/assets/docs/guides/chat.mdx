@@ -286,15 +286,24 @@ recorded or uploaded.
 
 Each report shows in the transcript as one line, such as
 `· 14:02:11  front door  person 0.91 entered`. Arrivals, a watch ending
-unexpectedly and a first error start a reply from Wendy by themselves, at most
-one every 10 seconds; other reports join the next one. The status bar shows
-`watching: N` while watches run.
+unexpectedly, a first error, and a watch becoming ready after it was still
+preparing start a reply from Wendy by themselves, at most one every 10 seconds;
+other reports join the next one. The status bar shows `watching: N` while
+watches run. With voice on, these replies are shown, not spoken.
+
+A reply that a report started cannot run tools that need approval, even with
+`--yes`: Wendy says what it would do, and you can ask it to. Each report Wendy
+replies to is added to the conversation, so a long watch adds up; use `/clear`
+if it grows large.
 
 Use `/watches` to list them and `/watches stop all` to stop them without
 asking Wendy. At most two run at once. Watches end when chat exits, when setup
-restarts the connection, or when you switch devices. In `wendy chat --prompt`
-there are no live reports: Wendy can start a watch (with `--yes`) and wait for
-it with `watch_events`, and the watch ends when the command exits.
+restarts the connection, or when you switch devices.
+
+In `wendy chat --prompt` there are no live reports: the command exits after one
+turn and its watches end with it. Wendy starts a watch only when you ask it to
+wait for something, waits with `watch_events`, and reports what it saw.
+Starting a watch needs `--yes`.
 
 ## Run one turn from a script
 
