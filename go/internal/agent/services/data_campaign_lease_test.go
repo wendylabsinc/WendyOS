@@ -386,3 +386,49 @@ func TestShutdownDeletesLeasedPlans(t *testing.T) {
 		t.Fatalf("shutdown deleted an ordinary plan: %v", err)
 	}
 }
+
+func TestRenewDoesNotWaitOnDeploymentLock(t *testing.T) {
+	lt := newLeaseTest(t, nil)
+	deployLeased(t, lt.service, "chat-1", "60s")
+	lt.service.deploymentMu.Lock()
+	defer lt.service.deploymentMu.Unlock()
+	errs := make(chan error, 1)
+	go func() {
+		_, err := renew(lt.service, "chat-1")
+		errs <- err
+	}()
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CampaignRenew waited on deploymentMu")
+	}
+}
+
+func TestLeasedDetectionDoesNotWaitOnDeploymentLock(t *testing.T) {
+	lt := newLeaseTest(t, nil)
+	deployLeased(t, lt.service, "chat-1", "60s")
+	session := receiveInference(t, lt.factory.sessions)
+	input := receiveInference(t, session.inputs)
+	lt.service.deploymentMu.Lock()
+	defer lt.service.deploymentMu.Unlock()
+	session.results <- inference.Result{Type: "prediction", SourceID: input.SourceID, Generation: input.Generation, Detections: []inference.Detection{
+		{Label: "person", Score: .9, Box: [4]float64{1, 2, 3, 4}},
+	}}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entries, _, _, err := lt.service.manager.Notifications("sh.wendy.campaign.chat-1", "", "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the detection waited on deploymentMu")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

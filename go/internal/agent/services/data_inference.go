@@ -621,7 +621,7 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 func (s *DataService) triggerInference(ctx context.Context, campaign data.Campaign, record data.ApplicationRecord) (bool, error) {
 	s.deploymentMu.Lock()
 	defer s.deploymentMu.Unlock()
-	if current, err := s.inferenceCurrentLocked(ctx, campaign); !current {
+	if current, err := s.inferenceCurrent(ctx, campaign); !current {
 		return false, err
 	}
 	if _, err := s.manager.RecordCampaignApplication(campaignAppPrefix+campaign.Name, record); err != nil {
@@ -634,9 +634,11 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	return true, err
 }
 
-// inferenceCurrentLocked reports whether campaign is still the deployed,
-// enabled revision. Callers hold deploymentMu.
-func (s *DataService) inferenceCurrentLocked(ctx context.Context, campaign data.Campaign) (bool, error) {
+// inferenceCurrent reports whether campaign is still the deployed, enabled
+// revision. It only reads the plan file. triggerInference calls it under
+// deploymentMu because it acts on the answer under that lock; a leased
+// detection does not need to.
+func (s *DataService) inferenceCurrent(ctx context.Context, campaign data.Campaign) (bool, error) {
 	current, err := s.manager.Campaign(campaign.Name)
 	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
 		return false, err
@@ -646,10 +648,12 @@ func (s *DataService) inferenceCurrentLocked(ctx context.Context, campaign data.
 
 // detectionAccepted is triggerInference's check without the episode: a leased
 // campaign's detection notifies only while its plan is current (spec §5.4).
+// It does not take deploymentMu, as CampaignRenew does not: triggerInference
+// holds that lock across an ordinary campaign's capture startup, which would
+// delay an alert, and the notification writes that follow are not under the
+// lock anyway. Plan files are written atomically.
 func (s *DataService) detectionAccepted(ctx context.Context, campaign data.Campaign) bool {
-	s.deploymentMu.Lock()
-	defer s.deploymentMu.Unlock()
-	current, _ := s.inferenceCurrentLocked(ctx, campaign)
+	current, _ := s.inferenceCurrent(ctx, campaign)
 	return current
 }
 

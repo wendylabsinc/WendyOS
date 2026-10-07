@@ -103,7 +103,8 @@ func (s *DataService) CampaignRenew(_ context.Context, req *agentpbv2.DataCampai
 // expireLeases deletes every leased plan whose lease has lapsed. Reconcile
 // passes call it before reading plans, so the same pass retires the deleted
 // plan's job. The plan goes first: a detection that races the removal finds no
-// current revision and sends nothing.
+// current revision. One that passed its check just before the removal can
+// still write one last journal entry and device event.
 func (s *DataService) expireLeases() {
 	s.deploymentMu.Lock()
 	defer s.deploymentMu.Unlock()
