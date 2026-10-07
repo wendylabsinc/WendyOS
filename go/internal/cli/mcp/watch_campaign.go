@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +44,14 @@ type campaignWatchBackend struct {
 
 	mu      sync.Mutex
 	watches map[string]*campaignWatch // by campaign name
+	poller  *campaignPoller           // while any watch runs
+
+	// startMu serializes Start, so two concurrent starts never both create a
+	// poller. starting counts Starts in flight (guarded by mu); detachIfIdle
+	// leaves the poller running while one is, since that Start has not yet
+	// registered its watch.
+	startMu  sync.Mutex
+	starting int
 }
 
 func newCampaignWatchBackend(detector watchDetector) *campaignWatchBackend {
@@ -58,13 +67,31 @@ func (b *campaignWatchBackend) Start(ctx context.Context, conn *grpcclient.Agent
 		return nil, err
 	}
 	client := conn.DataService
+	b.startMu.Lock()
+	defer b.startMu.Unlock()
+	b.mu.Lock()
+	b.starting++
+	b.mu.Unlock()
+	finishStart := func() {
+		b.mu.Lock()
+		b.starting--
+		b.mu.Unlock()
+	}
+	if err := b.attach(ctx, client); err != nil {
+		finishStart()
+		b.detachIfIdle()
+		return nil, err
+	}
 	if _, err := client.CampaignDeploy(ctx, &agentpbv2.DataCampaignDeployRequest{CampaignYaml: plan}); err != nil {
+		finishStart()
+		b.detachIfIdle()
 		return nil, watchDeviceError(err)
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())
 	w := &campaignWatch{backend: b, client: client, name: spec.Name, ctx: watchCtx, cancel: cancel, updates: make(chan watchUpdate, 32), done: make(chan struct{})}
 	b.mu.Lock()
 	b.watches[spec.Name] = w
+	b.starting--
 	b.mu.Unlock()
 	go w.run()
 	return w, nil
@@ -143,6 +170,119 @@ func (b *campaignWatchBackend) forget(w *campaignWatch) {
 	}
 }
 
+// campaignPoller reads one device's notification journal for every campaign
+// watch and routes entries by campaign (design §6.3).
+type campaignPoller struct {
+	client agentpbv2.DataServiceClient
+	cursor string
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// attach starts the poller before a watch's campaign is deployed. Its first
+// read, with an empty cursor, returns the journal's tail, so a detection that
+// fires right after the deploy is not missed. A poller for another client
+// belongs to a connection the manager has already ended; it is replaced.
+func (b *campaignWatchBackend) attach(ctx context.Context, client agentpbv2.DataServiceClient) error {
+	b.mu.Lock()
+	if b.poller != nil && b.poller.client == client {
+		b.mu.Unlock()
+		return nil
+	}
+	old := b.poller
+	b.poller = nil
+	b.mu.Unlock()
+	if old != nil {
+		old.cancel()
+		<-old.done
+	}
+	callCtx, cancel := context.WithTimeout(ctx, watchCallTimeout)
+	defer cancel()
+	response, err := client.Events(callCtx, &agentpbv2.DataEventsRequest{NotificationsOnly: true})
+	if err != nil {
+		return watchDeviceError(err)
+	}
+	// An older agent ignores notifications_only and answers from its ordinary
+	// event journal; it does not mark the response.
+	if !response.GetNotifications() {
+		return errWatchAgentTooOld
+	}
+	pollCtx, stop := context.WithCancel(context.Background())
+	p := &campaignPoller{client: client, cursor: response.GetCursor(), cancel: stop, done: make(chan struct{})}
+	b.mu.Lock()
+	b.poller = p
+	b.mu.Unlock()
+	go b.poll(pollCtx, p)
+	return nil
+}
+
+// detachIfIdle stops the poller once no watch is left.
+func (b *campaignWatchBackend) detachIfIdle() {
+	b.mu.Lock()
+	p := b.poller
+	if len(b.watches) > 0 || b.starting > 0 || p == nil {
+		b.mu.Unlock()
+		return
+	}
+	b.poller = nil
+	b.mu.Unlock()
+	p.cancel()
+	<-p.done
+}
+
+func (b *campaignWatchBackend) poll(ctx context.Context, p *campaignPoller) {
+	defer close(p.done)
+	ticker := time.NewTicker(b.pollEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		callCtx, cancel := context.WithTimeout(ctx, watchCallTimeout)
+		response, err := p.client.Events(callCtx, &agentpbv2.DataEventsRequest{Cursor: p.cursor, Replay: true, NotificationsOnly: true})
+		cancel()
+		if err != nil || !response.GetNotifications() {
+			continue // transient; the next read resumes from the same cursor
+		}
+		var entries []data.CampaignNotification
+		if json.Unmarshal(response.GetEventsJson(), &entries) != nil {
+			continue
+		}
+		p.cursor = response.GetCursor()
+		b.route(entries, response.GetGap())
+	}
+}
+
+// route turns journal entries into events for the watches they belong to.
+// Entries for other campaigns are ignored.
+func (b *campaignWatchBackend) route(entries []data.CampaignNotification, gap bool) {
+	b.mu.Lock()
+	watches := maps.Clone(b.watches)
+	b.mu.Unlock()
+	if gap {
+		for _, w := range watches {
+			w.send(watchUpdate{Gap: "some detections may have been missed"})
+		}
+	}
+	for _, entry := range entries {
+		w := watches[entry.Campaign]
+		if w == nil {
+			continue
+		}
+		occurred, err := time.Parse(time.RFC3339Nano, entry.OccurredAt)
+		if err != nil {
+			occurred = time.Now()
+		}
+		classes := make([]watchClass, 0, len(entry.Detections))
+		for _, detection := range entry.Detections {
+			classes = append(classes, watchClass{Label: detection.Label, Score: detection.Score})
+		}
+		w.send(watchUpdate{Event: &watchEventUpdate{Kind: "entered", Classes: classes, OccurredAt: occurred}})
+	}
+}
+
 // campaignWatch renews one campaign's lease and follows its inference state.
 type campaignWatch struct {
 	backend *campaignWatchBackend
@@ -190,6 +330,7 @@ func (w *campaignWatch) closeUpdates() {
 func (w *campaignWatch) run() {
 	defer close(w.done)
 	defer w.closeUpdates()
+	defer w.backend.detachIfIdle()
 	defer w.backend.forget(w)
 	renew := time.NewTicker(w.backend.renewEvery)
 	defer renew.Stop()

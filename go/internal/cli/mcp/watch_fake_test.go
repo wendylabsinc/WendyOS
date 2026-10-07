@@ -33,6 +33,7 @@ type watchDataClient struct {
 	inspectErr   error
 	removeErr    error
 	removeWait   time.Duration
+	deployWait   time.Duration // CampaignDeploy sleeps this long before doing anything else
 	journal      []data.CampaignNotification
 	gapOnce      bool
 	oldJournal   bool // Events does not mark the response as the notification journal
@@ -59,6 +60,10 @@ func (f *watchDataClient) callLog() []string {
 }
 
 func (f *watchDataClient) CampaignDeploy(_ context.Context, r *agentpbv2.DataCampaignDeployRequest, _ ...grpc.CallOption) (*agentpbv2.DataCampaign, error) {
+	f.mu.Lock()
+	wait := f.deployWait
+	f.mu.Unlock()
+	time.Sleep(wait)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.deployErr != nil {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,5 +216,188 @@ func TestCampaignWatchStopRemovesTheCampaign(t *testing.T) {
 	}
 	if err := h2.Stop(context.Background()); !errors.Is(err, errWatchAgentTooOld) {
 		t.Fatalf("an agent without CampaignRemove: %v", err)
+	}
+}
+
+// nextEvent skips statuses until an event or gap arrives.
+func nextEvent(t *testing.T, h watchHandle) watchUpdate {
+	t.Helper()
+	for {
+		if u := nextUpdate(t, h); u.Event != nil || u.Gap != "" {
+			return u
+		}
+	}
+}
+
+func TestCampaignPollerStartsBeforeDeploy(t *testing.T) {
+	client := newWatchDataClient()
+	b := fastCampaignBackend()
+	h, err := b.Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Stop(context.Background())
+	calls := client.callLog()
+	if len(calls) < 2 || calls[0] != "events:" || calls[1] != "deploy:chat-0a1b2c3d-1" {
+		t.Fatalf("the journal tail must be read before the deploy: %v", calls)
+	}
+	client.publish("chat-0a1b2c3d-1", data.NotificationDetection{Label: "person", Score: 0.91})
+	u := nextEvent(t, h)
+	if u.Event == nil || u.Event.Kind != "entered" || len(u.Event.Classes) != 1 || u.Event.Classes[0] != (watchClass{Label: "person", Score: 0.91}) || u.Event.OccurredAt.IsZero() {
+		t.Fatalf("event %+v", u.Event)
+	}
+}
+
+func TestCampaignPollerRoutesByCampaignAndReportsGaps(t *testing.T) {
+	client := newWatchDataClient()
+	b := fastCampaignBackend()
+	conn := &grpcclient.AgentConnection{DataService: client}
+	first, err := b.Start(context.Background(), conn, testWatchSpec("chat-0a1b2c3d-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Stop(context.Background())
+	second, err := b.Start(context.Background(), conn, testWatchSpec("chat-0a1b2c3d-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Stop(context.Background())
+	if n := strings.Count(strings.Join(client.callLog(), " "), "events: "); n != 1 {
+		t.Fatalf("a second watch must reuse the poller, not take a new tail; empty-cursor reads: %d", n)
+	}
+	client.publish("people-all-cameras", data.NotificationDetection{Label: "person", Score: 0.99}) // not a watch
+	client.publish("chat-0a1b2c3d-2", data.NotificationDetection{Label: "dog", Score: 0.8})
+	client.publish("chat-0a1b2c3d-1", data.NotificationDetection{Label: "person", Score: 0.7})
+	if u := nextEvent(t, first); u.Event == nil || u.Event.Classes[0].Label != "person" {
+		t.Fatalf("first watch got %+v", u)
+	}
+	if u := nextEvent(t, second); u.Event == nil || u.Event.Classes[0].Label != "dog" {
+		t.Fatalf("second watch got %+v", u)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !slices.Contains(client.callLog(), "events:epoch:3") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the poller did not advance its cursor past the entries it read: %v", client.callLog())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	client.mu.Lock()
+	client.gapOnce = true
+	client.mu.Unlock()
+	for _, h := range []watchHandle{first, second} {
+		if u := nextEvent(t, h); u.Gap != "some detections may have been missed" {
+			t.Fatalf("gap not reported: %+v", u)
+		}
+	}
+}
+
+func TestCampaignPollerRefusesAnAgentWithoutTheJournal(t *testing.T) {
+	client := newWatchDataClient()
+	client.oldJournal = true
+	_, err := fastCampaignBackend().Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+	if !errors.Is(err, errWatchAgentTooOld) {
+		t.Fatalf("got %v", err)
+	}
+	if slices.ContainsFunc(client.callLog(), func(c string) bool { return strings.HasPrefix(c, "deploy") }) {
+		t.Fatal("a campaign was deployed to an agent without the notification journal")
+	}
+}
+
+func TestCampaignPollerStopsWithTheLastWatch(t *testing.T) {
+	client := newWatchDataClient()
+	b := fastCampaignBackend()
+	h, err := b.Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := len(client.callLog())
+	time.Sleep(60 * time.Millisecond)
+	if after := len(client.callLog()); after != before {
+		t.Fatalf("the poller kept reading after the last watch stopped: %v", client.callLog()[before:])
+	}
+	client.deployErr = status.Error(codes.InvalidArgument, "no healthy camera matches")
+	if _, err := b.Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-2")); err == nil {
+		t.Fatal("expected the deploy to fail")
+	}
+	before = len(client.callLog())
+	time.Sleep(60 * time.Millisecond)
+	if after := len(client.callLog()); after != before {
+		t.Fatal("a failed first deploy left the poller running")
+	}
+}
+
+func TestCampaignPollerConcurrentStartsShareOnePoller(t *testing.T) {
+	client := newWatchDataClient()
+	b := fastCampaignBackend()
+	conn := &grpcclient.AgentConnection{DataService: client}
+	names := []string{"chat-0a1b2c3d-1", "chat-0a1b2c3d-2"}
+	handles := make([]watchHandle, len(names))
+	errs := make([]error, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			handles[i], errs[i] = b.Start(context.Background(), conn, testWatchSpec(name))
+		}()
+	}
+	wg.Wait()
+	for i := range names {
+		if errs[i] != nil {
+			t.Fatal(errs[i])
+		}
+		defer handles[i].Stop(context.Background())
+	}
+	if n := strings.Count(strings.Join(client.callLog(), " "), "events: "); n != 1 {
+		t.Fatalf("concurrent starts must share one poller; empty-cursor reads: %d", n)
+	}
+	client.publish(names[0], data.NotificationDetection{Label: "person", Score: 0.9})
+	if u := nextEvent(t, handles[0]); u.Event == nil {
+		t.Fatalf("got %+v", u)
+	}
+	select {
+	case u := <-handles[0].Updates():
+		if u.Event != nil {
+			t.Fatalf("the entry was routed twice: %+v", u)
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestCampaignPollerKeepsRunningForAStartInFlight(t *testing.T) {
+	client := newWatchDataClient()
+	b := fastCampaignBackend()
+	conn := &grpcclient.AgentConnection{DataService: client}
+	a, err := b.Start(context.Background(), conn, testWatchSpec("chat-0a1b2c3d-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	client.deployWait = 150 * time.Millisecond
+	client.mu.Unlock()
+	type result struct {
+		h   watchHandle
+		err error
+	}
+	started := make(chan result, 1)
+	go func() {
+		h, err := b.Start(context.Background(), conn, testWatchSpec("chat-0a1b2c3d-2"))
+		started <- result{h, err}
+	}()
+	time.Sleep(30 * time.Millisecond) // B is inside its deploy
+	if err := a.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r := <-started
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	defer r.h.Stop(context.Background())
+	client.publish("chat-0a1b2c3d-2", data.NotificationDetection{Label: "dog", Score: 0.8})
+	if u := nextEvent(t, r.h); u.Event == nil || u.Event.Classes[0].Label != "dog" {
+		t.Fatalf("got %+v", u)
 	}
 }
