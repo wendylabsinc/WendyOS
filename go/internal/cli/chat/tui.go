@@ -166,6 +166,7 @@ type chatModel struct {
 	watchQueue    []WatchNotice // shown, not yet given to the model
 	lastWatchTurn time.Time
 	watchPacing   bool // a pacing tick is scheduled
+	turnAssistant int  // transcript index of this turn's streaming reply, or -1
 	now           func() time.Time
 
 	turnID            uint64
@@ -233,8 +234,8 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	m := &chatModel{
 		ctx: ctx, opts: opts, composer: input, spinner: s,
 		viewport: viewport.New(0, 0), preview: viewport.New(0, 0),
-		status: "Ready",
-		now:    time.Now, watches: map[string]*watchDisplay{},
+		status:        "Ready",
+		turnAssistant: -1, now: time.Now, watches: map[string]*watchDisplay{},
 		voiceInputCaption: -1, voiceInputPending: -1, voiceOutputCaption: -1,
 	}
 	m.viewport.KeyMap = viewport.KeyMap{} // Composer owns ordinary cursor keys.
@@ -333,6 +334,7 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.done {
 			canceled := m.canceling || errors.Is(msg.err, context.Canceled)
 			m.active = false
+			m.turnAssistant = -1
 			m.approval = nil
 			m.cancelTurn()
 			m.cancelTurn = nil
@@ -1063,15 +1065,20 @@ func (m *chatModel) handleEvent(event Event) {
 		}
 		m.turnReply += event.Text
 		last := len(m.transcript) - 1
-		if last >= 0 && m.transcript[last].kind == "assistant" {
+		if i := m.turnAssistant; i >= 0 && i <= last && m.transcript[i].kind == "assistant" {
+			m.transcript[i].text += event.Text
+		} else if last >= 0 && m.transcript[last].kind == "assistant" {
 			m.transcript[last].text += event.Text
+			m.turnAssistant = last
 		} else {
 			m.transcript = append(m.transcript, chatEntry{kind: "assistant", title: "Wendy", text: event.Text})
+			m.turnAssistant = len(m.transcript) - 1
 		}
 		m.status = "Responding"
 		m.refreshTranscript()
 	case "tool_start":
 		m.turnReply = ""
+		m.turnAssistant = -1
 		name, arguments := "tool", ""
 		if event.Call != nil {
 			name, arguments = event.Call.Name, prettyArguments(event.Call.Arguments)
@@ -1138,7 +1145,7 @@ func (m *chatModel) transcriptContent(width int) (string, []int) {
 			for end < len(m.transcript) && isActivityEntry(m.transcript[end]) {
 				end++
 			}
-			summary, warnings := compactActivity(m.transcript[i:end], m.active && end == len(m.transcript))
+			summary, warnings := compactActivity(m.transcript[i:end], m.active && onlyEventsFrom(m.transcript, end))
 			appendBlock(chatSingleLine(summary), chatDim, true)
 			for _, warning := range warnings {
 				appendBlock(chatSingleLine(warning), chatWarn, true)
@@ -1466,4 +1473,15 @@ func chatSanitize(s string) string {
 
 func chatSingleLine(s string) string {
 	return strings.Join(strings.Fields(chatSanitize(s)), " ")
+}
+
+// onlyEventsFrom reports whether every entry from index i on is a watch event
+// line, so such lines do not make a running tool group look finished.
+func onlyEventsFrom(entries []chatEntry, i int) bool {
+	for ; i < len(entries); i++ {
+		if entries[i].kind != "event" {
+			return false
+		}
+	}
+	return true
 }

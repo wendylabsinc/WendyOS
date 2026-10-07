@@ -157,3 +157,41 @@ func TestUIStateCarriesWatchesAcrossRuns(t *testing.T) {
 		t.Fatalf("trigger memory lost: %+v", d)
 	}
 }
+
+func TestUIWatchLineDoesNotSplitStreamingReply(t *testing.T) {
+	m, _, _ := uiWatchModel(t, nil, &uiExecutor{})
+	m.active = true
+	m.handleEvent(Event{Type: "text", Text: "The front door camera is "})
+	m.Update(watchNoticeMessage{watchEntered(0.9)})
+	m.handleEvent(Event{Type: "text", Text: "now being watched."})
+	assistants, events := 0, 0
+	for _, e := range m.transcript {
+		switch e.kind {
+		case "assistant":
+			assistants++
+			if e.text != "The front door camera is now being watched." {
+				t.Fatalf("reply text %q", e.text)
+			}
+		case "event":
+			events++
+		}
+	}
+	if assistants != 1 || events != 1 {
+		t.Fatalf("assistants %d events %d: %+v", assistants, events, m.transcript)
+	}
+	if lastEntry(m).kind != "event" {
+		t.Fatal("the event line must stay where it landed")
+	}
+}
+
+func TestUIWatchLineKeepsRunningToolGroupRunning(t *testing.T) {
+	m, _, _ := uiWatchModel(t, nil, &uiExecutor{})
+	m.active = true
+	call := ToolCall{Name: "camera_list"}
+	m.handleEvent(Event{Type: "tool_start", Call: &call})
+	m.Update(watchNoticeMessage{watchEntered(0.9)})
+	content, _ := m.transcriptContent(100)
+	if content = ansi.Strip(content); !strings.Contains(content, "1 running") || strings.Contains(content, "unfinished") {
+		t.Fatalf("tool group not shown as running:\n%s", content)
+	}
+}
