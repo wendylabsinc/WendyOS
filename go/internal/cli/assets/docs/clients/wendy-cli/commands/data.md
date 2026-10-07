@@ -164,8 +164,8 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 | `export` | yes, except leased | Annotation integration lifecycle intent. |
 | `models` | no | Map of model name to deployed version, copied into Episodes. |
 | `privacy` | no | List of declared transforms with optional revisions. |
-| `inference` | no | Agent-managed Hugging Face object detection; see below. |
-| `notify` | no | Episode-commit notification intent or immediate event/detection delivery; see below. |
+| `inference` | no, except leased | Agent-managed Hugging Face object detection; see below. |
+| `notify` | no, except leased | Episode-commit notification intent or immediate event/detection delivery; see below. |
 
 Each `sources` item selects exactly one source:
 
@@ -342,7 +342,9 @@ three attempts, each with a 10-second timeout and the same event UUID.
 
 A `detection` notification carries `detections`: up to five `{label, score}`
 pairs that passed the label and threshold filter, highest score first. It never
-carries boxes or images. Readers that predate the field ignore it.
+carries boxes or images. The field is in the notification journal entry and in
+webhook payloads; Cloud notification metadata does not include it. Readers that
+predate the field ignore it.
 
 Unknown keys inside `notify` are rejected for `event` and `detection`.
 For `episode_committed`, they warn at deployment and are ignored.
@@ -396,17 +398,20 @@ runs. A leased campaign:
   `notify.webhook`;
 - takes no `capture`, `upload`, `retention`, `export`, `models` or `privacy`.
 
-It runs inference and, on each arrival, writes a device event and a detection
-notification to the device's notification journal. It records nothing: it opens
+It runs inference and, on each arrival, writes a device event to the
+device-event journal and a detection notification to the notification journal.
+It records nothing: it opens
 no episodes, its predictions and frames enter no other campaign's episode, and
 nothing is sent to Cloud or a webhook. `wendy data campaign trigger` refuses it.
 
 Deploying a leased campaign starts its lease, and redeploying it restarts the
 lease. A redeploy cannot add or remove a lease. Clients renew and remove leased
 campaigns through the `CampaignRenew` and `CampaignRemove` agent RPCs; there is
-no CLI command for them. Within 5 seconds after a lease lapses, the agent stops
-the campaign's inference, releases its camera and deletes the plan. Deadlines
-are kept in memory, so an agent restart deletes every leased campaign.
+no CLI command for them. At its next reconcile pass after a lease lapses
+(normally within a few seconds), the agent stops the campaign's inference,
+releases its camera and deletes the plan. A leased plan is stored with state
+`leased`. Deadlines are kept in memory, so the agent deletes every leased
+campaign when it stops or restarts.
 
 ```yaml
 version: 1
