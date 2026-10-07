@@ -37,6 +37,27 @@ func TestLeasedCampaignParses(t *testing.T) {
 	if !campaign.Leased() || campaign.LeaseDuration() != 60*time.Second {
 		t.Fatalf("lease not parsed: %q", campaign.Lease)
 	}
+	if campaign.State != "leased" {
+		t.Fatalf("leased plan state %q, want leased", campaign.State)
+	}
+	ordinary, err := ParseCampaign([]byte(strings.Replace(leasedCampaignYAML, "lease: 60s\n", "capture: {buffer: 1s, after_trigger: 1s, triggers: [{event: chat-3fa91c0e-1.detected}]}\nupload: {when: manual}\nexport: {annotation: cvat}\n", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ordinary.State != "armed" {
+		t.Fatalf("ordinary plan state %q, want armed", ordinary.State)
+	}
+	manager, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.DeployCampaign([]byte(leasedCampaignYAML)); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := manager.Campaign(campaign.Name)
+	if err != nil || stored.State != "leased" {
+		t.Fatalf("stored leased plan: state %q, err %v", stored.State, err)
+	}
 	for _, lease := range []string{"15s", "10m"} {
 		raw := strings.Replace(leasedCampaignYAML, "lease: 60s", "lease: "+lease, 1)
 		if _, err := ParseCampaign([]byte(raw)); err != nil {

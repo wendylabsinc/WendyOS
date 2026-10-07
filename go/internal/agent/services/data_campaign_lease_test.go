@@ -83,6 +83,15 @@ type leaseTest struct {
 // inference starts, as an earlier agent run would have.
 func newLeaseTest(t *testing.T, before func(*data.Manager)) *leaseTest {
 	t.Helper()
+	lt, stop := newLeaseTestWithStop(t, before)
+	t.Cleanup(stop)
+	return lt
+}
+
+// newLeaseTestWithStop is newLeaseTest without the stop registered for
+// cleanup: the caller owns the returned stop and must call it exactly once.
+func newLeaseTestWithStop(t *testing.T, before func(*data.Manager)) (*leaseTest, func()) {
+	t.Helper()
 	manager, err := data.NewManager(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -101,13 +110,12 @@ func newLeaseTest(t *testing.T, before func(*data.Manager)) *leaseTest {
 	lt.service.video = lt.video
 	lt.service.leases.now = lt.clock.Now
 	stop := lt.service.StartCampaignInference(context.Background(), lt.factory, lt.sender)
-	t.Cleanup(func() {
+	return lt, func() {
 		stop()
 		for _, key := range manager.ActiveEpisodeKeys() {
 			_, _ = lt.service.stopCapture(context.Background(), key)
 		}
-	})
-	return lt
+	}
 }
 
 func deployLeased(t *testing.T, service *DataService, name, lease string) {
@@ -353,5 +361,28 @@ func TestLeasedCampaignCannotBeTriggered(t *testing.T) {
 	}
 	if keys := lt.service.manager.ActiveEpisodeKeys(); len(keys) != 0 {
 		t.Fatalf("an episode opened: %v", keys)
+	}
+}
+
+func TestShutdownDeletesLeasedPlans(t *testing.T) {
+	lt, stop := newLeaseTestWithStop(t, nil)
+	stopped := false
+	t.Cleanup(func() {
+		if !stopped {
+			stop()
+		}
+	})
+	if _, err := lt.service.CampaignDeploy(context.Background(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: inferenceTestYAML(t)}); err != nil {
+		t.Fatal(err)
+	}
+	deployLeased(t, lt.service, "chat-1", "60s")
+	receiveInference(t, lt.factory.sessions)
+	stopped = true
+	stop()
+	if _, err := lt.service.manager.Campaign("chat-1"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a leased plan survived a clean shutdown: %v", err)
+	}
+	if _, err := lt.service.manager.Campaign("people-all-cameras"); err != nil {
+		t.Fatalf("shutdown deleted an ordinary plan: %v", err)
 	}
 }

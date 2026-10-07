@@ -80,7 +80,16 @@ func (s *DataService) StartCampaignInference(ctx context.Context, factory infere
 			}
 		}
 	}()
-	return func() { cancel(); <-done }
+	return func() {
+		cancel()
+		<-done // stopAll has stopped every job.
+		// Delete the leased plans: a leased plan left on disk is inert on an
+		// agent that predates leases only by its state, and a rollback through
+		// a normal stop should leave nothing behind. With the deadlines
+		// cleared, expireLeases removes every leased plan.
+		s.leases.forgetAll()
+		s.expireLeases()
+	}
 }
 
 func (m *campaignInferenceManager) stopAll() {
@@ -114,7 +123,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 	}
 	wanted := map[string]data.Campaign{}
 	for _, campaign := range campaigns {
-		if campaign.State == "armed" && (campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
+		if (campaign.State == "armed" || campaign.Leased()) && (campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
 			wanted[campaign.Name] = campaign
 		}
 	}

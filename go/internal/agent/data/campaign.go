@@ -292,7 +292,12 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	if err := campaign.validate(); err != nil {
 		return Campaign{}, err
 	}
+	// Agents that predate leases act only on "armed" plans (reconcile, pre-roll
+	// arming, app-event triggers), so a leased plan left on disk is inert on them.
 	campaign.State = "armed"
+	if campaign.Leased() {
+		campaign.State = "leased"
+	}
 	if campaign.Models == nil {
 		campaign.Models = map[string]string{}
 	}

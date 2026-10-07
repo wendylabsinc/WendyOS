@@ -63,6 +63,13 @@ func (l *campaignLeases) forget(name string) {
 	delete(l.deadlines, name)
 }
 
+// forgetAll drops every deadline, which makes every leased plan count as lapsed.
+func (l *campaignLeases) forgetAll() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.deadlines = nil
+}
+
 // expired reports whether name's lease has lapsed. A name without a deadline
 // has lapsed: deadlines live in memory, so it is a plan from before the agent
 // restarted.
