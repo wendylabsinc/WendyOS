@@ -31,16 +31,16 @@ import (
 // new writes never populate it — the private key lives exclusively in
 // device-key.pem (mode 0o400) and is never written to provisioning.json.
 type provisioningState struct {
-	Enrolled         bool                  `json:"enrolled"`
-	CloudHost        string                `json:"cloudHost,omitempty"`
-	OrgID            int32                 `json:"orgId,omitempty"`
-	AssetID          int32                 `json:"assetId,omitempty"`
-	KeyPEM           string                `json:"keyPem,omitempty"` // read-only: migration only; never written
-	CertPEM          string                `json:"certPem,omitempty"`
-	ChainPEM         string                `json:"chainPem,omitempty"`
-	PrincipalURI     string                `json:"principalURI,omitempty"`
-	ACMEDirectoryURL string                `json:"acmeDirectoryURL,omitempty"`
-	ACMERevocation   *acmeRevocationRecord `json:"acmeRevocation,omitempty"`
+	Enrolled                 bool   `json:"enrolled"`
+	CloudHost                string `json:"cloudHost,omitempty"`
+	OrgID                    int32  `json:"orgId,omitempty"`
+	AssetID                  int32  `json:"assetId,omitempty"`
+	KeyPEM                   string `json:"keyPem,omitempty"` // read-only: migration only; never written
+	CertPEM                  string `json:"certPem,omitempty"`
+	ChainPEM                 string `json:"chainPem,omitempty"`
+	PrincipalURI             string `json:"principalURI,omitempty"`
+	ACMEDirectoryURL         string `json:"acmeDirectoryURL,omitempty"`
+	RevokedCertificateSHA256 string `json:"revokedCertificateSHA256,omitempty"`
 }
 
 type CloudDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error)
@@ -418,7 +418,6 @@ func (s *ProvisioningService) clearStateFiles() error {
 		filepath.Join(s.configPath, "ca.pem"),
 		filepath.Join(s.configPath, ".provisioned"),
 		filepath.Join(s.configPath, "acme-account-key.pem"),
-		filepath.Join(s.configPath, acmeRevocationFile),
 	}
 	for _, f := range files {
 		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {

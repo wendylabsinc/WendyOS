@@ -29,6 +29,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const acmeRevocationFile = "acme-revocation.json" // Unreleased historical fixture, never read by Agent.
+
 const revokeTenant = "11111111-1111-4111-8111-111111111111"
 
 func revokeTestCert(t *testing.T, principal string, serial int64) (string, *x509.Certificate) {
@@ -279,10 +281,10 @@ func TestACMERevocationNetworkUnlockAndStateRevalidation(t *testing.T) {
 					t.Fatal(err)
 				}
 				if checkOnly || change != "none" {
-					if state.ACMERevocation != nil {
+					if state.RevokedCertificateSHA256 != "" {
 						t.Fatal("stale/probe acknowledgement written")
 					}
-				} else if state.ACMERevocation == nil {
+				} else if state.RevokedCertificateSHA256 == "" {
 					t.Fatal("acknowledgement missing from provisioning state")
 				}
 				if _, err := os.Stat(filepath.Join(svc.configPath, acmeRevocationFile)); !os.IsNotExist(err) {
@@ -294,7 +296,7 @@ func TestACMERevocationNetworkUnlockAndStateRevalidation(t *testing.T) {
 	}
 }
 
-func TestACMERevocationLegacyAckImportsWithoutMovingEvidence(t *testing.T) {
+func TestACMERevocationIgnoresUnreleasedProofWithoutMovingEvidence(t *testing.T) {
 	svc, req := revokeTestService(t)
 	record := acmeRevocationRecord{Principal: req.ExpectedPrincipalUri, Fingerprint: req.ExpectedCertificateSha256, Serial: "2a"}
 	legacy, err := json.Marshal(record)
@@ -321,8 +323,12 @@ func TestACMERevocationLegacyAckImportsWithoutMovingEvidence(t *testing.T) {
 	if err := os.WriteFile(svc.statePath(), data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	if svc.revocationConfirmedLocked() {
+		t.Fatal("standalone proof authorized reset")
+	}
+	calls := 0
 	stubRevoke(t, func(context.Context, acmeenroll.Config, string, string) error {
-		t.Fatal("re-revoked acknowledged leaf")
+		calls++
 		return nil
 	})
 	ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
@@ -337,7 +343,7 @@ func TestACMERevocationLegacyAckImportsWithoutMovingEvidence(t *testing.T) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.ACMERevocation == nil || state.ACMERevocation.Serial != "2a" || state.KeyPEM != "" {
+	if calls != 1 || state.RevokedCertificateSHA256 != req.ExpectedCertificateSha256 || state.KeyPEM != "" {
 		t.Fatal("acknowledgement not embedded or legacy private key re-persisted")
 	}
 	info, err := os.Stat(svc.statePath())
@@ -349,6 +355,13 @@ func TestACMERevocationLegacyAckImportsWithoutMovingEvidence(t *testing.T) {
 		t.Fatal("historical evidence moved or changed")
 	}
 	assertRevokeKeysRetained(t, svc)
+	if _, err := NewProvisioningServiceV2(svc).Unprovision(ctx, &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: req.ExpectedPrincipalUri, ExpectedCertificateSha256: req.ExpectedCertificateSha256}); err != nil {
+		t.Fatal(err)
+	}
+	retained, err = os.ReadFile(path)
+	if err != nil || string(retained) != string(legacy) {
+		t.Fatal("reset removed historical proof")
+	}
 }
 
 func TestACMERevocationRejectsMismatchedSerialWithoutStateMutation(t *testing.T) {

@@ -24,8 +24,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const acmeRevocationFile = "acme-revocation.json"
-
 type acmeRevocationRecord struct {
 	Principal   string `json:"principal"`
 	Fingerprint string `json:"certificateSHA256"`
@@ -130,8 +128,8 @@ func (s *ProvisioningServiceV2) acmeRevocation(ctx context.Context, req *agentpb
 		}
 	}
 	// Re-sync even a retry's existing acknowledgement before confirming it;
-	// a prior rename may have succeeded while directory sync failed. This also
-	// imports matching legacy development evidence without deleting that file.
+	// a prior rename may have succeeded while directory sync failed.
+	// Never read or import unreleased standalone development records.
 	if err := writeACMERevocationRecord(svc.configPath, record); err != nil {
 		return nil, status.Error(codes.Internal, "certificate revoked but durable acknowledgement failed; keys retained; retry reconciliation before cleanup")
 	}
@@ -164,30 +162,7 @@ func (s *ProvisioningService) revocationConfirmedLocked() bool {
 	if json.Unmarshal(data, &state) != nil || state.PrincipalURI != s.principalURI || state.CertPEM != s.certPEM {
 		return false
 	}
-	var record acmeRevocationRecord
-	if state.ACMERevocation != nil {
-		record = *state.ACMERevocation
-	} else {
-		// Read-only compatibility with earlier development builds. Never create
-		// another standalone acknowledgement or move/delete existing evidence.
-		data, err = os.ReadFile(filepath.Join(s.configPath, acmeRevocationFile))
-		if err != nil || json.Unmarshal(data, &record) != nil {
-			return false
-		}
-	}
-	if record.Principal != s.principalURI || record.Serial == "" {
-		return false
-	}
-	block, _ := pem.Decode([]byte(s.certPEM))
-	if block == nil {
-		return false
-	}
-	leaf, err := x509.ParseCertificate(block.Bytes)
-	if err != nil || record.Serial != leaf.SerialNumber.Text(16) {
-		return false
-	}
-	digest := sha256.Sum256(block.Bytes)
-	return record.Fingerprint == hex.EncodeToString(digest[:])
+	return state.Enrolled && state.RevokedCertificateSHA256 != "" && state.RevokedCertificateSHA256 == s.certificateFingerprintLocked()
 }
 
 func writeACMERevocationRecord(dir string, record acmeRevocationRecord) error {
@@ -212,7 +187,7 @@ func writeACMERevocationRecord(dir string, record acmeRevocationRecord) error {
 	if hex.EncodeToString(digest[:]) != record.Fingerprint || record.Serial != leaf.SerialNumber.Text(16) {
 		return errors.New("certificate changed before acknowledgement")
 	}
-	state.ACMERevocation = &record
+	state.RevokedCertificateSHA256 = record.Fingerprint
 	state.KeyPEM = ""
 	data, err = json.MarshalIndent(state, "", "  ")
 	if err != nil {
