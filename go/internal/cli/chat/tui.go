@@ -280,6 +280,10 @@ func (m *chatModel) Init() tea.Cmd {
 	if cmd := m.waitForWatchNotice(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	if len(m.watchQueue) > 0 {
+		// A queue restored from an earlier Run lost that Run's pacing tick.
+		cmds = append(cmds, m.maybeStartWatchTurn())
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -327,6 +331,9 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case watchStopMessage:
 		m.showWatchStop(msg)
 		return m, nil
+	case watchPaceMessage:
+		m.watchPacing = false
+		return m, m.maybeStartWatchTurn()
 	case turnMessage:
 		if msg.id != m.turnID || !m.active {
 			return m, nil
@@ -351,7 +358,8 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.clearAfterTurn {
 				m.clearConversation()
-				return m, m.composer.Focus()
+				// /clear emptied the queue; a report since then still counts.
+				return m, tea.Batch(m.composer.Focus(), m.maybeStartWatchTurn())
 			}
 			if next := m.pendingDelegation; next != nil {
 				m.pendingDelegation = nil
@@ -382,7 +390,7 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(cmd, m.composer.Focus())
 			}
-			return m, m.composer.Focus()
+			return m, tea.Batch(m.composer.Focus(), m.maybeStartWatchTurn())
 		}
 		if !m.canceling {
 			if msg.event != nil {
@@ -500,6 +508,7 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		m.quitting = true
 		return tea.Quit
 	case "/clear":
+		m.watchQueue = nil
 		m.discardQueuedPrompts()
 		m.clearStoppedVoice = m.clearStoppedVoice || m.voiceEnabled
 		m.stopVoice()
@@ -656,19 +665,13 @@ func (m *chatModel) startTurnWithDisplay(prompt, display string) tea.Cmd {
 }
 
 func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) tea.Cmd {
+	// A request from the user ends the previous reply's speech. An event turn
+	// does not, so this stays out of beginTurn.
 	if m.turnSpeechCancel != nil {
 		m.turnSpeechCancel()
 	}
 	m.turnSpeechCtx, m.turnSpeechCancel = context.WithCancel(m.ctx)
-	m.delegation = nil
-	m.turnReply = ""
-	m.turnID++
-	id := m.turnID
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.cancelTurn = cancel
-	m.active = true
-	m.canceling = false
-	m.status = "Thinking"
+	cmd := m.beginTurn(prompt, TurnOptions{})
 	if captionIndex >= 0 && captionIndex < len(m.transcript) && m.transcript[captionIndex].kind == "voice_input" {
 		// This is the same utterance already shown by live transcription, now
 		// accepted as an agent request. Promote it instead of echoing it again.
@@ -678,6 +681,21 @@ func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) t
 		m.appendEntry("user", "You", display)
 	}
 	m.viewport.GotoBottom()
+	return cmd
+}
+
+// beginTurn runs prompt through the engine. The caller shows what started it.
+func (m *chatModel) beginTurn(prompt string, options TurnOptions) tea.Cmd {
+	m.delegation = nil
+	m.turnReply = ""
+	m.turnAssistant = -1
+	m.turnID++
+	id := m.turnID
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancelTurn = cancel
+	m.active = true
+	m.canceling = false
+	m.status = "Thinking"
 	events := make(chan turnMessage, 64)
 	m.events = events
 	engine, autoApprove, sessionCtx := m.opts.Engine, m.opts.AutoApprove, m.ctx
@@ -715,7 +733,7 @@ func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) t
 				return false, ctx.Err()
 			}
 		}
-		err := engine.Turn(ctx, prompt, emit, approve)
+		err := engine.TurnWithOptions(ctx, prompt, emit, approve, options)
 		// Completion uses the session context: canceling a turn must still notify
 		// the UI that it can accept another prompt after the worker has stopped.
 		select {
@@ -1064,12 +1082,10 @@ func (m *chatModel) handleEvent(event Event) {
 			return
 		}
 		m.turnReply += event.Text
-		last := len(m.transcript) - 1
-		if i := m.turnAssistant; i >= 0 && i <= last && m.transcript[i].kind == "assistant" {
+		// Only this turn's reply is extended: an event turn has no "You" entry
+		// to separate it from the previous turn's reply.
+		if i := m.turnAssistant; i >= 0 && i < len(m.transcript) && m.transcript[i].kind == "assistant" {
 			m.transcript[i].text += event.Text
-		} else if last >= 0 && m.transcript[last].kind == "assistant" {
-			m.transcript[last].text += event.Text
-			m.turnAssistant = last
 		} else {
 			m.transcript = append(m.transcript, chatEntry{kind: "assistant", title: "Wendy", text: event.Text})
 			m.turnAssistant = len(m.transcript) - 1
@@ -1091,6 +1107,9 @@ func (m *chatModel) handleEvent(event Event) {
 			name = event.Call.Name
 		}
 		m.appendEntry("result", "Result · "+name, event.Text)
+		if name == "watch_start" {
+			m.noteWatchStart(event.Text)
+		}
 		m.status = "Thinking"
 	case "status":
 		m.status = event.Text

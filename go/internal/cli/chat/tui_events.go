@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -81,7 +82,126 @@ func (m *chatModel) handleWatchNotice(n WatchNotice) tea.Cmd {
 		m.appendEntry("event", "", fmt.Sprintf("· %d watch notification(s) were missed", missed))
 	}
 	m.appendEntry("event", "", watchNoticeLine(n, d, m.now()))
-	return nil
+	m.watchQueue = append(m.watchQueue, n)
+	return m.maybeStartWatchTurn()
+}
+
+// An event turn starts at most this often; later reports merge into it.
+const watchTurnSpacing = 10 * time.Second
+
+// watchTriggers reports whether n starts an event turn (design §7.2). Other
+// notices are shown and folded into the next event turn. It is evaluated when
+// a turn could start, after watch_start's own result has been seen.
+func (m *chatModel) watchTriggers(n WatchNotice) bool {
+	d := m.watches[n.WatchID]
+	switch {
+	case n.Method == watchEventMethod:
+		return n.Kind == "entered"
+	case n.State == "ENDED":
+		return n.Reason != watchStoppedReason
+	case n.State == "ERROR":
+		return d != nil && !d.errorTurned && d.startState != "ERROR"
+	case n.State == "READY":
+		return d != nil && !d.readyTurned && d.startState == "PREPARING"
+	}
+	return false
+}
+
+// maybeStartWatchTurn starts an event turn when chat is idle, nothing typed is
+// waiting, the queue holds a trigger, and the last event turn was at least
+// watchTurnSpacing ago. Otherwise a pacing tick comes back here later.
+func (m *chatModel) maybeStartWatchTurn() tea.Cmd {
+	if m.active || m.quitting || m.clearAfterTurn || len(m.queuedPrompts) > 0 || m.pendingDelegation != nil {
+		return nil
+	}
+	triggered := false
+	for _, n := range m.watchQueue {
+		triggered = triggered || m.watchTriggers(n)
+	}
+	if !triggered {
+		return nil
+	}
+	if wait := watchTurnSpacing - m.now().Sub(m.lastWatchTurn); wait > 0 {
+		if m.watchPacing {
+			return nil
+		}
+		m.watchPacing = true
+		return tea.Tick(wait, func(time.Time) tea.Msg { return watchPaceMessage{} })
+	}
+	items := m.watchQueue
+	m.watchQueue = nil
+	for _, n := range items {
+		if d := m.watches[n.WatchID]; d != nil {
+			d.errorTurned = d.errorTurned || n.State == "ERROR"
+			d.readyTurned = d.readyTurned || n.State == "READY"
+		}
+	}
+	m.lastWatchTurn = m.now()
+	return m.startEventTurn(m.watchEventPrompt(items))
+}
+
+// startEventTurn runs a turn for watch reports. The event lines already in the
+// transcript stand in for a "You" entry, and the turn skips memory: its text is
+// not a statement from the user (design §7.3). It is not an interruption
+// either, so the previous reply keeps speaking.
+func (m *chatModel) startEventTurn(prompt string) tea.Cmd {
+	cmd := m.beginTurn(prompt, TurnOptions{SkipMemory: true})
+	m.viewport.GotoBottom()
+	return cmd
+}
+
+// watchEventPrompt is an event turn's prompt (design §7.3). The label and the
+// camera name come from the model, the user or the device, so they are
+// JSON-quoted like the event itself.
+func (m *chatModel) watchEventPrompt(items []WatchNotice) string {
+	const ask = "\nTell the user if this is what they asked to be alerted about."
+	if len(items) == 1 {
+		d := m.watches[items[0].WatchID]
+		if d == nil {
+			d = &watchDisplay{label: items[0].Label}
+		}
+		header := "Your watch " + jsonQuote(d.label) + " (" + strings.Join(d.classes, ", ") + ", camera " + jsonQuote(d.camera) + ") reported:\n"
+		return header + UntrustedJSONBlock(watchNoticeData(items[0])) + ask
+	}
+	payload := make([]map[string]any, 0, len(items))
+	for _, n := range items {
+		payload = append(payload, watchNoticeData(n))
+	}
+	return "Your watches reported:\n" + UntrustedJSONBlock(payload) + ask
+}
+
+func watchNoticeData(n WatchNotice) map[string]any {
+	data := map[string]any{"watch_id": n.WatchID, "watch": n.Label}
+	if n.Method == watchEventMethod {
+		data["kind"], data["classes"], data["occurred_at"] = n.Kind, n.Classes, n.OccurredAt
+	} else {
+		data["state"], data["reason"] = n.State, n.Reason
+	}
+	return data
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// noteWatchStart records what watch_start returned, from its tool result, so
+// a later READY or ERROR is judged against it.
+func (m *chatModel) noteWatchStart(text string) {
+	var result struct {
+		WatchID string `json:"watch_id"`
+		Label   string `json:"label"`
+		State   string `json:"state"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(text)), &result) != nil || result.WatchID == "" {
+		return
+	}
+	d := m.watches[result.WatchID]
+	if d == nil {
+		d = &watchDisplay{label: result.Label}
+		m.watches[result.WatchID] = d
+	}
+	d.startState = result.State
 }
 
 // watchNoticeLine formats a notice: "· 14:02:11  front door  person 0.91 entered".
