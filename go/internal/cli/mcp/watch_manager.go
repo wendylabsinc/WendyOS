@@ -296,15 +296,16 @@ func (m *watchManager) stop(ctx context.Context, id, reason string) (watchView, 
 	return m.view(rec), err
 }
 
-// endStale ends every watch started on another connection. That connection is
-// already closed, so nothing reaches the old device: its campaigns lapse within
-// lease + 5 s (design §6.1).
+// endStale ends every watch started on an earlier connection. That connection
+// is already closed, so nothing reaches the old device: its campaigns lapse
+// within lease + 5 s (design §6.1). A late call for an older revision leaves
+// watches started on newer connections alone.
 func (m *watchManager) endStale(revision uint64) {
 	m.mu.Lock()
 	var ended []*watchRecord
 	for _, id := range m.order {
 		rec := m.watches[id]
-		if rec.state != watchEnded && rec.revision != revision && rec.handle != nil {
+		if rec.state != watchEnded && rec.revision < revision && rec.handle != nil {
 			m.endLocked(rec, "device changed")
 			ended = append(ended, rec)
 		}
@@ -444,12 +445,13 @@ func (m *watchManager) sendStatus(rec *watchRecord, reason string) {
 		reason = rec.reason
 	}
 	params := map[string]any{"watch_id": rec.id, "label": rec.spec.Label, "state": string(rec.state), "reason": reason, "camera": rec.spec.CameraName, "watching": rec.spec.Classes}
-	if rec.missed > 0 {
-		params["missed_notifications"] = rec.missed
+	missed := rec.missed
+	if missed > 0 {
+		params["missed_notifications"] = missed
 		rec.missed = 0
 	}
 	m.mu.Unlock()
-	m.deliverLocked(rec, watchStatusMethod, params)
+	m.deliverLocked(rec, watchStatusMethod, params, missed)
 }
 
 // sendEvent sends one event unless the watch has ended; the event stays in the
@@ -463,19 +465,20 @@ func (m *watchManager) sendEvent(rec *watchRecord, event watchEvent) {
 	if ended {
 		return
 	}
-	m.deliverLocked(rec, watchEventMethod, map[string]any{"watch_id": rec.id, "label": rec.spec.Label, "sequence": event.Sequence, "kind": event.Kind, "classes": event.Classes, "occurred_at": event.OccurredAt})
+	m.deliverLocked(rec, watchEventMethod, map[string]any{"watch_id": rec.id, "label": rec.spec.Label, "sequence": event.Sequence, "kind": event.Kind, "classes": event.Classes, "occurred_at": event.OccurredAt}, 0)
 }
 
 // deliverLocked sends one notification with rec.notifyMu held. mcp-go's stdio
 // session queues 100 and fails a send when full, so this never blocks; the
-// failure is reported with the watch's next status.
-func (m *watchManager) deliverLocked(rec *watchRecord, method string, params map[string]any) {
+// failure is reported with the watch's next status. carried is the missed
+// count this notification reports: if it fails, that count is kept too.
+func (m *watchManager) deliverLocked(rec *watchRecord, method string, params map[string]any, carried int) {
 	if m.notify == nil {
 		return
 	}
 	if err := m.notify(method, params); err != nil {
 		m.mu.Lock()
-		rec.missed++
+		rec.missed += carried + 1
 		m.mu.Unlock()
 	}
 }

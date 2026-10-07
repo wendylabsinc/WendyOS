@@ -278,6 +278,25 @@ func TestWatchManagerCountsFailedNotifications(t *testing.T) {
 	}
 }
 
+// A status that carries a missed count can itself fail; the count it carried
+// and the failed status are reported with the next one.
+func TestWatchManagerKeepsTheMissedCountWhenItsStatusFails(t *testing.T) {
+	backend := &fakeWatchBackend{}
+	m, log, _ := newTestWatchManager(backend)
+	startTestWatch(t, m, "front door")
+	h := backend.handle(0)
+	log.fail.Store(4) // three events, then the status that reports them
+	for range 3 {
+		h.updates <- watchUpdate{Event: &watchEventUpdate{Kind: "entered", OccurredAt: time.Now()}}
+	}
+	h.updates <- watchUpdate{Status: &watchStatusUpdate{State: watchReady}}
+	h.updates <- watchUpdate{Status: &watchStatusUpdate{State: watchError, Reason: "the camera is unavailable"}}
+	n := log.waitFor(t, func(n sentNotification) bool { return n.method == watchStatusMethod && n.params["state"] == "ERROR" })
+	if n.params["missed_notifications"] != 4 {
+		t.Fatalf("status %+v must report 3 events and 1 status missed", n.params)
+	}
+}
+
 func TestWatchManagerReportsGapsWithoutChangingState(t *testing.T) {
 	backend := &fakeWatchBackend{}
 	m, log, _ := newTestWatchManager(backend)
@@ -371,6 +390,21 @@ func TestWatchManagerEndsStaleWatchesOnConnectionChange(t *testing.T) {
 	}
 	if backend.handle(0).stopped.Load() == 0 {
 		t.Fatal("the stale watch's renewals were not stopped")
+	}
+}
+
+// endStale runs on its own goroutine after a connection change, so it can run
+// late, after a newer connection has started watches of its own.
+func TestWatchManagerEndStaleKeepsWatchesFromANewerConnection(t *testing.T) {
+	backend := &fakeWatchBackend{}
+	m, _, revision := newTestWatchManager(backend)
+	revision.Store(3)
+	if _, err := m.start(context.Background(), &grpcclient.AgentConnection{}, 3, watchSpec{Classes: []string{"person"}, Label: "front door"}); err != nil {
+		t.Fatal(err)
+	}
+	m.endStale(2)
+	if v := m.list()[0]; v.State == string(watchEnded) || backend.handle(0).stopped.Load() != 0 {
+		t.Fatalf("an older connection's endStale ended a newer watch: %+v", v)
 	}
 }
 
