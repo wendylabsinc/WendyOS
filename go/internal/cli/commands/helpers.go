@@ -1283,7 +1283,7 @@ func connectToAgentInner(ctx context.Context, opts ...resolveOption) (*grpcclien
 		if deviceFlag == "" {
 			noteImplicitDevice(device, implicitDefaultDevice)
 		}
-		return picked.Agent, nil
+		return selectedAgent(picked)
 	}
 	addr, pinKey, isDefault, err := resolveDeviceAddress()
 	if err == nil {
@@ -4287,6 +4287,10 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 			selector, err := cloudDiscoveryDeviceDefault(cloudAuth, cloudDiscoveryDevice{v2: choice.CloudV2})
 			if err != nil {
 				return nil, err
+			}
+			if isLiteCloudAsset(choice.CloudV2) {
+				cliLogln("Connecting to %s via Wendy Cloud relay...", choice.CloudV2.GetName())
+				return cloudLiteSelectedDevice(cloudAuth, choice.CloudV2, selector)
 			}
 			cliLogln("Connecting to %s via cloud tunnel...", choice.CloudV2.GetName())
 			conn, err := connectCloudAssetV2(ctx, cloudAuth, choice.CloudV2, dm.cloud.brokerURL)

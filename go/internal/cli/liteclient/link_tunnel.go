@@ -41,7 +41,16 @@ func dialTunnelLinkInsecure(serverAddr string, assetID string) (*tunnelLink, err
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	return openTunnelLink(context.Background(), cc, assetID)
+}
+
+// openTunnelLink opens a tunnel to the given asset over an already dialed
+// connection, which the link then owns: it is closed with the link, or right
+// away if the tunnel cannot be opened. The stream runs under ctx, so its
+// outgoing metadata (the caller's credentials) reaches the server, and
+// cancelling ctx ends the tunnel.
+func openTunnelLink(ctx context.Context, cc *grpc.ClientConn, assetID string) (*tunnelLink, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	stream, err := wcomrelaypb.NewWendyComRelayServiceClient(cc).WendyComRelay(ctx)
 	if err != nil {
 		cancel()
