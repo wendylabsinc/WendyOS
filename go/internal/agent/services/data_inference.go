@@ -1,10 +1,12 @@
 package services
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -345,7 +347,7 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				j.owner.service.manager.Warnf("campaign %q detection could not start an episode: %v", j.campaign.Name, triggerErr)
 			}
 			if j.campaign.Notify != nil && (j.campaign.Notify.On == data.NotifyOnDetection || j.campaign.Notify.On == data.NotifyOnEvent && j.campaign.Notify.Event == record.Name) {
-				request := detectionNotification(j.campaign, result.SourceID, len(detections))
+				request := detectionNotification(j.campaign, result.SourceID, detections)
 				j.enqueueNotification(request)
 			}
 		}
@@ -454,8 +456,21 @@ func (p *inferencePresence) observe(detected bool, now time.Time, config *data.C
 	return true
 }
 
-func detectionNotification(campaign data.Campaign, source string, count int) DetectionNotification {
-	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: count, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+func detectionNotification(campaign data.Campaign, source string, detections []inference.Detection) DetectionNotification {
+	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: len(detections), Detections: notificationDetections(detections), OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+}
+
+// notificationDetections keeps the five highest-scored detections, which keeps
+// a journal entry well under its 4096-byte limit (spec §5.5).
+func notificationDetections(detections []inference.Detection) []data.NotificationDetection {
+	sorted := slices.Clone(detections)
+	slices.SortStableFunc(sorted, func(a, b inference.Detection) int { return cmp.Compare(b.Score, a.Score) })
+	sorted = sorted[:min(len(sorted), 5)]
+	out := make([]data.NotificationDetection, 0, len(sorted))
+	for _, detection := range sorted {
+		out = append(out, data.NotificationDetection{Label: detection.Label, Score: detection.Score})
+	}
+	return out
 }
 
 func (j *campaignInferenceJob) enqueueNotification(request DetectionNotification) {

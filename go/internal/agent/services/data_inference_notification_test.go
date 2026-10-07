@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,7 +37,7 @@ func TestCampaignWebhookSendsDetectionMetadata(t *testing.T) {
 	if err := (&CampaignCloudSender{}).Send(context.Background(), server.URL, notification); err != nil {
 		t.Fatal(err)
 	}
-	if actual := <-received; actual != notification {
+	if actual := <-received; !reflect.DeepEqual(actual, notification) {
 		t.Fatalf("notification metadata changed: %+v", actual)
 	}
 }
@@ -119,7 +121,7 @@ func TestCampaignCloudAuthorizationFailureIsTerminal(t *testing.T) {
 	cloud := &deniedCampaignCloud{}
 	job := &campaignInferenceJob{owner: &campaignInferenceManager{service: NewDataService(manager), sender: &CampaignCloudSender{Cloud: cloud}}, campaign: campaign}
 	queue := make(chan DetectionNotification, 1)
-	queue <- detectionNotification(campaign, "camera", 1)
+	queue <- detectionNotification(campaign, "camera", []inference.Detection{{Label: "person", Score: .9}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{})

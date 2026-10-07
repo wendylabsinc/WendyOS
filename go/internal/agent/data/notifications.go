@@ -13,6 +13,13 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
 
+// NotificationDetection summarizes one detection for a notification: its label
+// and score, never a box or an image.
+type NotificationDetection struct {
+	Label string  `json:"label"`
+	Score float64 `json:"score"`
+}
+
 // CampaignNotification is an emitted Wendy Data notification, not a raw
 // prediction or a claim that an external notification receiver accepted it.
 // The occurrence UUID and time survive delivery retries and gateway restarts.
@@ -25,7 +32,10 @@ type CampaignNotification struct {
 	Revision   string `json:"model_revision"`
 	Count      int    `json:"count"`
 	OccurredAt string `json:"occurred_at"`
-	Sequence   uint64 `json:"sequence,omitempty"`
+	// Detections holds up to five of the detections behind a detection
+	// notification, highest score first. Older clients ignore it.
+	Detections []NotificationDetection `json:"detections,omitempty"`
+	Sequence   uint64                  `json:"sequence,omitempty"`
 }
 
 type notificationJournal struct {
@@ -61,6 +71,13 @@ func (m *Manager) RecordNotification(notification CampaignNotification) error {
 		return fmt.Errorf("invalid notification occurrence time")
 	}
 	raw, err := json.Marshal(notification)
+	// Detections are a summary: drop the lowest-scored ones, not the
+	// notification, when long labels push an entry past the limit. Cloud and
+	// webhook delivery send the request as it was built.
+	for err == nil && len(raw) > 4096 && len(notification.Detections) > 0 {
+		notification.Detections = notification.Detections[:len(notification.Detections)-1]
+		raw, err = json.Marshal(notification)
+	}
 	if err != nil || len(raw) > 4096 {
 		return fmt.Errorf("notification exceeds limit")
 	}

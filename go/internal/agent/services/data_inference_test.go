@@ -174,6 +174,9 @@ func TestAgentInferenceAllCamerasRecordAndNotify(t *testing.T) {
 	}
 	session.results <- result(first)
 	notification1 := receiveInference(t, sender.requests)
+	if len(notification1.Detections) != 1 || notification1.Detections[0] != (data.NotificationDetection{Label: "person", Score: .99}) {
+		t.Fatalf("detection notification lacks its detections: %+v", notification1.Detections)
+	}
 	session.results <- result(second)
 	notification2 := receiveInference(t, sender.requests)
 	if notification1.ID == notification2.ID {
@@ -441,7 +444,7 @@ func TestAgentInferenceNotificationRetryKeepsIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := &campaignInferenceJob{owner: &campaignInferenceManager{service: NewDataService(manager), sender: sender}, campaign: campaign}
-	request := detectionNotification(campaign, "v4l2:/dev/video0", 1)
+	request := detectionNotification(campaign, "v4l2:/dev/video0", []inference.Detection{{Label: "person", Score: .9}})
 	queue := make(chan DetectionNotification, 1)
 	queue <- request
 	ctx, cancel := context.WithCancel(context.Background())
@@ -588,5 +591,29 @@ func TestModelFreeCampaignInspectIncludesNotificationError(t *testing.T) {
 	}
 	if inspected.InferenceStatus == nil || inspected.InferenceStatus.NotificationError != "delivery failed" || inspected.InferenceStatus.State != "running" {
 		t.Fatalf("missing model-free notification status: %+v", inspected.InferenceStatus)
+	}
+}
+
+func TestDetectionNotificationKeepsTopFiveByScore(t *testing.T) {
+	campaign, err := data.ParseCampaign(inferenceTestYAML(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detections []inference.Detection
+	for _, score := range []float64{.5, .9, .7, .95, .6, .8, .55} {
+		detections = append(detections, inference.Detection{Label: "person", Score: score, Box: [4]float64{1, 2, 3, 4}})
+	}
+	notification := detectionNotification(campaign, "v4l2:/dev/video0", detections)
+	if notification.Count != 7 {
+		t.Fatalf("count = %d, want every accepted detection", notification.Count)
+	}
+	want := []float64{.95, .9, .8, .7, .6}
+	if len(notification.Detections) != len(want) {
+		t.Fatalf("kept %d detections, want 5", len(notification.Detections))
+	}
+	for i, detection := range notification.Detections {
+		if detection.Label != "person" || detection.Score != want[i] {
+			t.Fatalf("detections[%d] = %+v, want person %.2f", i, detection, want[i])
+		}
 	}
 }
