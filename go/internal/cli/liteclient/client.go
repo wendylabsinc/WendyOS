@@ -249,10 +249,10 @@ func (c *WendyLiteClient) ConnectToSerial(device string) error {
 // ConnectViaCloudInsecure reaches a device through a cloud tunnel-broker
 // server (dev server: self-signed cert, verification skipped). The WendyCom
 // handshake runs end-to-end through the broker to the device identified by
-// assetID.
+// assetID, the asset UUID.
 // SECURITY: This should be used in development tools only. Warn if it's not
 // the case.
-func (c *WendyLiteClient) ConnectViaCloudInsecure(serverAddr string, assetID uint32) error {
+func (c *WendyLiteClient) ConnectViaCloudInsecure(serverAddr string, assetID string) error {
 	link, err := dialTunnelLinkInsecure(serverAddr, assetID)
 	if err != nil {
 		return err

@@ -6,21 +6,21 @@ import (
 	"time"
 
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
-	"github.com/wendylabsinc/wendy/go/proto/gen/tunnelpb"
+	"github.com/wendylabsinc/wendy/go/proto/gen/wcomrelaypb"
 	"google.golang.org/protobuf/proto"
 )
 
 // floodStream is a tunnel stream whose Recv always has another payload ready,
 // as a chatty device would. Only Recv is used by recvLoop.
 type floodStream struct {
-	tunnelpb.WendyComTunnelBrokerService_WendyComTunnelClient
+	wcomrelaypb.WendyComRelayService_WendyComRelayClient
 	payload []byte
 }
 
-func (s *floodStream) Recv() (*tunnelpb.WendyComTunnelMessage, error) {
-	return &tunnelpb.WendyComTunnelMessage{
-		Msg: &tunnelpb.WendyComTunnelMessage_Payload{
-			Payload: &tunnelpb.WendyComTunnelPayload{Bytes: s.payload},
+func (s *floodStream) Recv() (*wcomrelaypb.WendyComRelayMessage, error) {
+	return &wcomrelaypb.WendyComRelayMessage{
+		Msg: &wcomrelaypb.WendyComRelayMessage_Payload{
+			Payload: &wcomrelaypb.WendyComRelayPayload{Bytes: s.payload},
 		},
 	}, nil
 }

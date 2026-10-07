@@ -8,19 +8,19 @@ import (
 	"time"
 
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
-	"github.com/wendylabsinc/wendy/go/proto/gen/tunnelpb"
+	"github.com/wendylabsinc/wendy/go/proto/gen/wcomrelaypb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/proto"
 )
 
 // tunnelLink reaches a device through a cloud tunnel: bare
-// protobuf-encoded WendyComMessage bodies travel as WendyComTunnelPayload
-// over a WendyComTunnelBrokerService.WendyComTunnel gRPC stream. No 8-byte header
+// protobuf-encoded WendyComMessage bodies travel as WendyComRelayPayload
+// over a WendyComRelayService.WendyComRelay gRPC stream. No 8-byte header
 // and no channel byte here — the broker owns framing and channels.
 type tunnelLink struct {
 	cc     *grpc.ClientConn
-	stream tunnelpb.WendyComTunnelBrokerService_WendyComTunnelClient
+	stream wcomrelaypb.WendyComRelayService_WendyComRelayClient
 	ctx    context.Context // the stream's; done once close cancels it
 	cancel context.CancelFunc
 	sendMu sync.Mutex
@@ -33,7 +33,7 @@ type tunnelLink struct {
 // cert, verification skipped) and opens a tunnel to the given asset.
 // SECURITY: This should be used in development tools only. Warn if it's not
 // the case. Do not report issue otherwise.
-func dialTunnelLinkInsecure(serverAddr string, assetID uint32) (*tunnelLink, error) {
+func dialTunnelLinkInsecure(serverAddr string, assetID string) (*tunnelLink, error) {
 	cc, err := grpc.NewClient(serverAddr,
 		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 			InsecureSkipVerify: true, //nolint:gosec — dev server uses a self-signed cert
@@ -42,15 +42,15 @@ func dialTunnelLinkInsecure(serverAddr string, assetID uint32) (*tunnelLink, err
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := tunnelpb.NewWendyComTunnelBrokerServiceClient(cc).WendyComTunnel(ctx)
+	stream, err := wcomrelaypb.NewWendyComRelayServiceClient(cc).WendyComRelay(ctx)
 	if err != nil {
 		cancel()
 		cc.Close()
 		return nil, fmt.Errorf("open tunnel: %w", err)
 	}
-	err = stream.Send(&tunnelpb.WendyComTunnelMessage{
-		Msg: &tunnelpb.WendyComTunnelMessage_Open{
-			Open: &tunnelpb.WendyComTunnelOpen{AssetId: assetID},
+	err = stream.Send(&wcomrelaypb.WendyComRelayMessage{
+		Msg: &wcomrelaypb.WendyComRelayMessage_Open{
+			Open: &wcomrelaypb.WendyComRelayOpen{AssetId: assetID},
 		},
 	})
 	if err != nil {
@@ -118,9 +118,9 @@ func (l *tunnelLink) send(req *wendypb.WendyComMessage) error {
 	}
 	l.sendMu.Lock()
 	defer l.sendMu.Unlock()
-	return l.stream.Send(&tunnelpb.WendyComTunnelMessage{
-		Msg: &tunnelpb.WendyComTunnelMessage_Payload{
-			Payload: &tunnelpb.WendyComTunnelPayload{Bytes: body},
+	return l.stream.Send(&wcomrelaypb.WendyComRelayMessage{
+		Msg: &wcomrelaypb.WendyComRelayMessage_Payload{
+			Payload: &wcomrelaypb.WendyComRelayPayload{Bytes: body},
 		},
 	})
 }
