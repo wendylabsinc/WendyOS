@@ -156,5 +156,65 @@ class WebMLateJoinTests(unittest.TestCase):
                 decoder.stop()
 
 
+class DetectorFailureTests(unittest.TestCase):
+    def test_failing_frame_reports_source_error_and_next_frame_is_scored(self):
+        import json
+        import types
+        from unittest import mock
+        import worker
+
+        frames = ["bad", "good"]
+        emitted = []
+        finished = threading.Event()
+
+        class FakeDecoder:
+            def __init__(self, source_id, generation, encoding, initialization=b""):
+                self.source_id, self.generation, self.encoding = source_id, generation, encoding
+                self.stream = types.SimpleNamespace(stopped=False, feed=lambda payload: True)
+
+            def take(self, now, interval):
+                return frames.pop(0) if frames else None
+
+            def stop(self):
+                self.stream.stopped = True
+
+        class Input:
+            lines = [json.dumps({"source_id": "camera", "generation": 1, "encoding": "h264",
+                                 "payload": "eA=="}).encode() + b"\n"]
+
+            def readline(self, limit):
+                if self.lines:
+                    return self.lines.pop(0)
+                finished.wait(5)
+                return b""
+
+        def detector(frame):
+            if frame == "bad":
+                raise ValueError("bad frame")
+            return []
+
+        def emit(result):
+            emitted.append(result)
+            if len(emitted) == 2:
+                finished.set()
+
+        with mock.patch.object(worker, "Decoder", FakeDecoder), \
+                mock.patch.object(worker, "emit", emit), \
+                mock.patch.object(worker.sys, "stdin", types.SimpleNamespace(buffer=Input())):
+            worker.run({"rate": 1000}, detector)
+        self.assertEqual(emitted, [
+            {"type": "source_error", "source_id": "camera", "generation": 1,
+             "error": "inference: ValueError: bad frame"},
+            {"type": "prediction", "source_id": "camera", "generation": 1, "detections": []},
+        ])
+
+    def test_detection_error_is_cut_to_512_utf8_bytes(self):
+        from worker import detection_error
+        message = detection_error(RuntimeError("é" * 600))
+        self.assertLessEqual(len(message.encode()), 512)
+        self.assertTrue(message.startswith("inference: RuntimeError: é"))
+        self.assertEqual(detection_error(KeyError()), "inference: KeyError")
+
+
 if __name__ == "__main__":
     unittest.main()
