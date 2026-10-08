@@ -495,23 +495,20 @@ func TestWatchManagerOrdersNotificationsAroundEnd(t *testing.T) {
 	}
 }
 
-func TestWatchManagerStopDuringStartSendsOneEnded(t *testing.T) {
-	backend := &fakeWatchBackend{started: make(chan struct{})}
-	m, log, _ := newTestWatchManager(backend)
+// startInBackground starts a watch whose backend Start blocks, and returns
+// once the manager holds its record.
+func startInBackground(t *testing.T, m *watchManager) <-chan watchView {
+	t.Helper()
 	done := make(chan watchView, 1)
 	go func() {
 		v, _ := m.start(context.Background(), &grpcclient.AgentConnection{}, 1, watchSpec{Classes: []string{"person"}, Label: "front door"})
 		done <- v
 	}()
-	time.Sleep(20 * time.Millisecond)
-	if _, err := m.stop(context.Background(), "w1", watchStoppedReason); err != nil {
-		t.Fatal(err)
-	}
-	close(backend.started)
-	if v := <-done; v.State != string(watchEnded) {
-		t.Fatalf("view %+v", v)
-	}
-	time.Sleep(30 * time.Millisecond)
+	waitState(t, m, "w1", watchPreparing)
+	return done
+}
+
+func countEnded(log *notificationLog) int {
 	log.mu.Lock()
 	defer log.mu.Unlock()
 	ended := 0
@@ -520,12 +517,80 @@ func TestWatchManagerStopDuringStartSendsOneEnded(t *testing.T) {
 			ended++
 		}
 	}
-	if ended != 1 {
-		t.Fatalf("%d ENDED notifications, want 1: %+v", ended, log.sent)
+	return ended
+}
+
+// A watch stopped while it deploys is removed once the deploy returns, and
+// stop reports that removal rather than returning first.
+func TestWatchManagerStopDuringStartWaitsForTheRemoval(t *testing.T) {
+	backend := &fakeWatchBackend{started: make(chan struct{})}
+	m, log, _ := newTestWatchManager(backend)
+	done := startInBackground(t, m)
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := m.stop(context.Background(), "w1", watchStoppedReason)
+		stopped <- err
+	}()
+	log.waitFor(t, func(n sentNotification) bool { return n.params["state"] == "ENDED" })
+	select {
+	case err := <-stopped:
+		t.Fatalf("stop returned (%v) before the deploy it must remove finished", err)
+	case <-time.After(50 * time.Millisecond):
 	}
-	if backend.handle(0).stopped.Load() == 0 {
-		t.Fatal("the deployed backend watch was not stopped")
+	close(backend.started)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
 	}
+	if n := backend.handle(0).stopped.Load(); n != 1 {
+		t.Fatalf("the deployed backend watch was stopped %d times before stop returned, want 1", n)
+	}
+	if v := <-done; v.State != string(watchEnded) {
+		t.Fatalf("view %+v", v)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if n := backend.handle(0).stopped.Load(); n != 1 {
+		t.Fatalf("the deployed backend watch was stopped %d times, want 1", n)
+	}
+	if n := countEnded(log); n != 1 {
+		t.Fatalf("%d ENDED notifications, want 1: %+v", n, log.sent)
+	}
+}
+
+// A deploy that outlasts stop's bound is reported as such, and the watch is
+// still removed once the deploy returns.
+func TestWatchManagerStopDuringALongStartReportsThePendingRemoval(t *testing.T) {
+	backend := &fakeWatchBackend{started: make(chan struct{})}
+	m, _, _ := newTestWatchManager(backend)
+	m.stopTimeout = 50 * time.Millisecond
+	done := startInBackground(t, m)
+	began := time.Now()
+	v, err := m.stop(context.Background(), "w1", watchStoppedReason)
+	if elapsed := time.Since(began); !errors.Is(err, errWatchStillDeploying) || elapsed > time.Second || v.State != string(watchEnded) {
+		t.Fatalf("got %+v %v after %s", v, err, elapsed)
+	}
+	close(backend.started)
+	<-done
+	if n := backend.handle(0).stopped.Load(); n != 1 {
+		t.Fatalf("the deployed backend watch was stopped %d times, want 1", n)
+	}
+}
+
+// A deploy that fails left nothing to remove.
+func TestWatchManagerStopDuringAFailedStartRemovesNothing(t *testing.T) {
+	backend := &fakeWatchBackend{started: make(chan struct{}), err: errors.New("deploy refused")}
+	m, _, _ := newTestWatchManager(backend)
+	done := startInBackground(t, m)
+	stopped := make(chan error, 1)
+	go func() {
+		_, err := m.stop(context.Background(), "w1", watchStoppedReason)
+		stopped <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	close(backend.started)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	<-done
 }
 
 func TestWatchManagerRetainsTheMostRecentlyEndedWatches(t *testing.T) {

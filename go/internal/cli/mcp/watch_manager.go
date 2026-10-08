@@ -31,6 +31,9 @@ const (
 var (
 	errWatchLimit    = errors.New("two watches are already active; stop one first")
 	errWatchNotFound = errors.New("no watch with that id in this session")
+	// errWatchStillDeploying is a watch_stop whose watch was still deploying
+	// when the stop's bound ran out; start removes it once the deploy returns.
+	errWatchStillDeploying = errors.New("the device was still setting up the watch")
 )
 
 // watchEvent is one buffered event, numbered per watch.
@@ -70,7 +73,12 @@ type watchRecord struct {
 	missed      int // notifications that failed, reported with the next status
 	handle      watchHandle
 	changed     chan struct{} // closed and replaced on every change
-	endSeq      uint64        // order in which watches ended; 0 while active
+	// settled is closed once the deploy has returned and, for a watch that
+	// ended during it, start has removed it. removeErr, the removal's result,
+	// is written before settled closes.
+	settled   chan struct{}
+	removeErr error
+	endSeq    uint64 // order in which watches ended; 0 while active
 
 	// notifyMu serializes this watch's notifications. Lock order is
 	// notifyMu then mu, never the reverse.
@@ -139,7 +147,7 @@ func (m *watchManager) start(ctx context.Context, conn *grpcclient.AgentConnecti
 	m.next++
 	spec.Name = fmt.Sprintf("chat-%s-%d", m.serverID, m.next)
 	// The record holds the slot while the campaign deploys.
-	rec := &watchRecord{id: fmt.Sprintf("w%d", m.next), spec: spec, revision: revision, state: watchPreparing, startedAt: time.Now(), changed: make(chan struct{})}
+	rec := &watchRecord{id: fmt.Sprintf("w%d", m.next), spec: spec, revision: revision, state: watchPreparing, startedAt: time.Now(), changed: make(chan struct{}), settled: make(chan struct{})}
 	m.watches[rec.id] = rec
 	m.order = append(m.order, rec.id)
 	m.mu.Unlock()
@@ -148,6 +156,7 @@ func (m *watchManager) start(ctx context.Context, conn *grpcclient.AgentConnecti
 	m.mu.Lock()
 	if err != nil {
 		m.forgetLocked(rec.id)
+		close(rec.settled)
 		m.mu.Unlock()
 		return watchView{}, err
 	}
@@ -158,10 +167,16 @@ func (m *watchManager) start(ctx context.Context, conn *grpcclient.AgentConnecti
 		m.endLocked(rec, "device changed")
 	}
 	ended := rec.state == watchEnded
+	if !ended {
+		close(rec.settled)
+	}
 	m.mu.Unlock()
 	if ended {
+		// The watch ended during the deploy, by watch_stop, a device change or
+		// shutdown. None of them had the handle, so the removal is done here.
 		m.sendStatus(rec, "")
-		m.stopHandle(handle, time.Second)
+		rec.removeErr = m.stopHandle(handle, m.stopTimeout)
+		close(rec.settled)
 		return m.view(rec), nil
 	}
 	m.sendStatus(rec, "")
@@ -258,19 +273,21 @@ func (m *watchManager) endLocked(rec *watchRecord, reason string) {
 	}
 }
 
-func (m *watchManager) stopHandle(handle watchHandle, timeout time.Duration) {
+func (m *watchManager) stopHandle(handle watchHandle, timeout time.Duration) error {
 	if handle == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	_ = handle.Stop(ctx)
+	return handle.Stop(ctx)
 }
 
 // stop ends a watch and removes it from the device. The record is ended and
 // ENDED sent first, so no event arrives after watch_stop returns and a device
 // that stopped answering cannot delay ENDED. The removal gets stopTimeout; the
-// lease removes a campaign the device never hears about.
+// lease removes a campaign the device never hears about. A watch still
+// deploying is removed by start once the deploy returns, and stop waits for
+// that within the same bound.
 func (m *watchManager) stop(ctx context.Context, id, reason string) (watchView, error) {
 	m.mu.Lock()
 	rec := m.watches[id]
@@ -287,13 +304,17 @@ func (m *watchManager) stop(ctx context.Context, id, reason string) (watchView, 
 	m.endLocked(rec, reason)
 	m.mu.Unlock()
 	m.sendStatus(rec, "")
-	var err error
-	if handle != nil {
-		stopCtx, cancel := context.WithTimeout(ctx, m.stopTimeout)
-		err = handle.Stop(stopCtx)
-		cancel()
+	stopCtx, cancel := context.WithTimeout(ctx, m.stopTimeout)
+	defer cancel()
+	if handle == nil {
+		select {
+		case <-rec.settled:
+			return m.view(rec), rec.removeErr
+		case <-stopCtx.Done():
+			return m.view(rec), errWatchStillDeploying
+		}
 	}
-	return m.view(rec), err
+	return m.view(rec), handle.Stop(stopCtx)
 }
 
 // endStale ends every watch started on an earlier connection. That connection

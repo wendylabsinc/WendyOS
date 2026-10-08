@@ -219,7 +219,10 @@ func (s *mcpServer) handleWatchStop(ctx context.Context, req mcpgo.CallToolReque
 		return watchErrorResult(err), nil
 	}
 	result := map[string]any{"watch_id": view.WatchID, "label": view.Label, "state": view.State, "removed": err == nil}
-	if err != nil {
+	switch {
+	case errors.Is(err, errWatchStillDeploying):
+		result["message"] = "The watch ended here. The device was still setting it up, so its detector is removed once that finishes; otherwise it stops by itself within a minute."
+	case err != nil:
 		result["message"] = "The watch ended here, but removing its detector from the device failed (" + grpcErrString(err) + "); it stops by itself within a minute."
 	}
 	return okResult(result), nil

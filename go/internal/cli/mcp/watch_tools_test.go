@@ -247,6 +247,52 @@ func TestWatchStartOnAnOldAgent(t *testing.T) {
 	}
 }
 
+// startWatchInBackground calls watch_start while the device is slow to deploy
+// and returns once the watch is listed.
+func startWatchInBackground(t *testing.T, s *mcpServer) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = s.handleWatchStart(context.Background(), callToolReq("watch_start", map[string]any{"camera": "v4l2:/dev/video0", "classes": []any{"person"}}))
+	}()
+	waitState(t, s.watchManager(), "w1", watchPreparing)
+	return done
+}
+
+func TestWatchStopDuringADeployRemovesTheWatch(t *testing.T) {
+	s, client, _ := watchToolServer(t)
+	client.deployWait = 200 * time.Millisecond
+	started := startWatchInBackground(t, s)
+	stopped, isErr := callWatchTool(t, s, "watch_stop", map[string]any{"watch_id": "w1"})
+	if isErr || stopped["state"] != "ENDED" || stopped["removed"] != true {
+		t.Fatalf("stop %v", stopped)
+	}
+	if removed := client.callLog(); !slices.ContainsFunc(removed, func(call string) bool { return strings.HasPrefix(call, "remove:") }) {
+		t.Fatalf("watch_stop reported removed before any removal: %v", removed)
+	}
+	if names := client.deployedNames(); len(names) != 0 {
+		t.Fatalf("watch_stop left %v on the device", names)
+	}
+	<-started
+}
+
+func TestWatchStopDuringALongDeployReportsThePendingRemoval(t *testing.T) {
+	s, client, _ := watchToolServer(t)
+	s.watchManager().stopTimeout = 50 * time.Millisecond
+	client.deployWait = 300 * time.Millisecond
+	started := startWatchInBackground(t, s)
+	stopped, isErr := callWatchTool(t, s, "watch_stop", map[string]any{"watch_id": "w1"})
+	message, _ := stopped["message"].(string)
+	if isErr || stopped["state"] != "ENDED" || stopped["removed"] != false || !strings.Contains(message, "still setting it up") {
+		t.Fatalf("stop %v", stopped)
+	}
+	<-started
+	if names := client.deployedNames(); len(names) != 0 {
+		t.Fatalf("the late deploy was left on the device: %v", names)
+	}
+}
+
 func TestWatchStartOnABusyDevice(t *testing.T) {
 	s, client, _ := watchToolServer(t)
 	s.watchManager().backend.(*campaignWatchBackend).deployTimeout = 50 * time.Millisecond
