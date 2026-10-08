@@ -55,6 +55,7 @@ func newCloudCmd() *cobra.Command {
 	// Connectivity: networking helpers that reach a device through the cloud.
 	addToGroup("connectivity",
 		newCloudTunnelCmd(),
+		newCloudMCPCmd(),
 		newCloudPingCmd(),
 	)
 	return cmd

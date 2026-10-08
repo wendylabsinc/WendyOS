@@ -219,10 +219,13 @@ func CheckMTLS(ctx context.Context, logger *zap.Logger, expected certs.Scope, mo
 // UnaryMTLSInterceptor rejects unary calls that do not carry verified mTLS peer
 // credentials or whose client tenant is not permitted under the given mode.
 func UnaryMTLSInterceptor(logger *zap.Logger, expected certs.Scope, mode OrgMode) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (response interface{}, rpcError error) {
 		if err := CheckMTLS(ctx, logger, expected, mode); err != nil {
 			return nil, err
 		}
+		finish := auditTracedRPC(ctx, logger, info.FullMethod)
+		defer func() { finish(rpcError) }()
+		rpcError = status.Error(codes.Unknown, "execution interrupted")
 		return handler(ctx, req)
 	}
 }
@@ -230,10 +233,13 @@ func UnaryMTLSInterceptor(logger *zap.Logger, expected certs.Scope, mode OrgMode
 // StreamMTLSInterceptor rejects streaming calls that do not carry verified mTLS peer
 // credentials or whose client organization is not permitted under the given mode.
 func StreamMTLSInterceptor(logger *zap.Logger, expected certs.Scope, mode OrgMode) grpc.StreamServerInterceptor {
-	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (rpcError error) {
 		if err := CheckMTLS(ss.Context(), logger, expected, mode); err != nil {
 			return err
 		}
+		finish := auditTracedRPC(ss.Context(), logger, info.FullMethod)
+		defer func() { finish(rpcError) }()
+		rpcError = status.Error(codes.Unknown, "execution interrupted")
 		return handler(srv, ss)
 	}
 }

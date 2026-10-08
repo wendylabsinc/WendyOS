@@ -1,0 +1,17 @@
+{
+  "origin": "https://mcp.wendy.dev",
+  "cloud_http": "https://api.wendy.dev",
+  "listen": "[::]:8443",
+  "tls_certificate": "/run/wendy-cloud-mcp/tls.pem",
+  "tls_key": "/run/wendy-cloud-mcp/tls.pem",
+  "services": {
+    "auth_base": "https://auth.wendy.dev",
+    "client_id": "cloud-login",
+    "identity_resource": "https://pki.wendy.sh/identity",
+    "identity_endpoint": "https://identity.pki.wendy.dev/v1/identity/certificate",
+    "cloud_resource": "https://cloud.wendy.dev/api",
+    "cloud_grpc": "api.wendy.dev:443",
+    "relay_issuer": "https://api.wendy.dev"
+  },
+  "machines": []
+}

@@ -17,6 +17,7 @@ import (
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcmetadata "google.golang.org/grpc/metadata"
 )
 
 // ConnectDevice keeps tunnel authorization, grant verification and device mTLS
@@ -35,37 +36,44 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 	}
 	cert, access, key := s.certificate, s.tokens.Access, s.key
 	auth := &config.AuthConfig{CloudGRPC: s.settings().CloudGRPC, OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: s.privatePEM, Certificates: []config.CertificateInfo{cert}}
-	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, s.settings().CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
+	return connectAuthenticatedDevice(ctx, s.settings(), auth, access, key, s.profile.Tenant, asset, dial, httpClient)
+}
+
+func connectAuthenticatedDevice(ctx context.Context, settings Settings, auth *config.AuthConfig, access string, key crypto.Signer, tenant, asset string, dial func(context.Context, string) (net.Conn, error), httpClient *http.Client) (*grpcclient.AgentConnection, error) {
+	cert := auth.Certificates[0]
+	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, settings.CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
 	opts = append(opts, cloudrequest.DPoPDialOptions(auth, func(context.Context) (string, crypto.Signer, error) { return access, key, nil })...)
-	cloud, err := grpc.NewClient("passthrough:///"+s.settings().CloudGRPC, opts...)
+	cloud, err := grpc.NewClient("passthrough:///"+settings.CloudGRPC, opts...)
 	if err != nil {
 		return nil, err
 	}
-	signer, err := cloudrelay.PrincipalSigner(cert.PemCertificate, []byte(s.privatePEM))
+	signer, err := cloudrelay.PrincipalSigner(cert.PemCertificate, []byte(auth.DPoPPrivateKey))
 	if err != nil {
 		cloud.Close()
 		return nil, err
 	}
-	verifier := &cloudrelay.Verifier{Issuer: s.settings().RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
+	verifier := &cloudrelay.Verifier{Issuer: settings.RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
 		target, err := cloudrelay.BrowserBrokerTarget(endpoint)
 		if err != nil {
 			return nil, err
 		}
 		return grpc.NewClient("passthrough:///"+target, grpc.WithTransportCredentials(insecure.NewCredentials()), clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, target) }))
 	}}
-	record, err := cloudpbv2.NewAssetServiceClient(cloud).GetAsset(ctx, &cloudpbv2.GetAssetRequest{Id: asset})
+	authCtx := deviceDiagnosticContext(ctx, ctx, cert.PrincipalURI)
+	record, err := cloudpbv2.NewAssetServiceClient(cloud).GetAsset(authCtx, &cloudpbv2.GetAssetRequest{Id: asset})
 	if err != nil {
 		cloud.Close()
 		return nil, fmt.Errorf("Looking up device certificate identity: %w", err)
 	}
-	expected, err := cloudDeviceIdentity(record, asset, s.profile.Tenant)
+	expected, err := cloudDeviceIdentity(record, asset, tenant)
 	if err != nil {
 		cloud.Close()
 		return nil, err
 	}
 
 	conn, err := grpcclient.ConnectWithTLSExpecting(ctx, "passthrough:///cloud-device", &cert, nil, expected, clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) {
-		return cloudrelay.OpenTCP(c, c, cloud, verifier, asset, "wendy-agent", signer)
+		authCtx := deviceDiagnosticContext(c, ctx, cert.PrincipalURI)
+		return cloudrelay.OpenTCP(c, authCtx, cloud, verifier, asset, "wendy-agent", signer)
 	}))
 	if err != nil {
 		cloud.Close()
@@ -100,4 +108,18 @@ func cloudDeviceIdentity(asset *cloudpbv2.Asset, id, tenant string) (*certs.Wend
 		return nil, err
 	}
 	return &identity, nil
+}
+
+// gRPC dial contexts are not request contexts. Carry only diagnostic metadata
+// from the initiating flow, alongside the existing certificate identity hints.
+// Never copy bearer tokens or other caller headers into the relay request.
+func deviceDiagnosticContext(ctx, source context.Context, principal string) context.Context {
+	md := grpcmetadata.Pairs("x-wendy-client-cert", "URI="+principal, "x-forwarded-client-cert", "URI="+principal)
+	parent, _ := grpcmetadata.FromOutgoingContext(source)
+	for _, key := range []string{"traceparent", "x-correlation-id"} {
+		if values := parent.Get(key); len(values) == 1 {
+			md.Set(key, values[0])
+		}
+	}
+	return grpcmetadata.NewOutgoingContext(ctx, md)
 }
