@@ -118,6 +118,14 @@ func PrincipalSigner(certPEM string, keyPEM []byte) (func([]byte) ([]byte, error
 // broker with an ephemeral caller key. authCtx's identity metadata is used only
 // on Cloud's authorization RPC, and is never forwarded to the relay.
 func OpenTCP(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier *Verifier, assetID, service string, signRequest func([]byte) ([]byte, error)) (net.Conn, error) {
+	return OpenTCPWithRequester(ctx, authCtx, func(c context.Context, r *pb.RequestTunnelRequest) (*pb.RequestTunnelResponse, error) {
+		return pb.NewTunnelAuthorizationServiceClient(cloudConn).RequestTunnel(c, r)
+	}, verifier, assetID, service, signRequest, nil, time.Time{})
+}
+
+// OpenTCPWithRequester preserves D18 verification while allowing a dedicated
+// authenticated admission endpoint for purpose-constrained hosted credentials.
+func OpenTCPWithRequester(ctx, authCtx context.Context, requestTunnel func(context.Context, *pb.RequestTunnelRequest) (*pb.RequestTunnelResponse, error), verifier *Verifier, assetID, service string, signRequest func([]byte) ([]byte, error), mcpBinding map[string]string, validUntil time.Time) (net.Conn, error) {
 	if _, err := uuid.Parse(assetID); err != nil {
 		return nil, fmt.Errorf("invalid Cloud asset UUID")
 	}
@@ -138,7 +146,14 @@ func OpenTCP(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier 
 		return nil, err
 	}
 	now := time.Now().Unix()
-	descriptor, err := canonicalJSON(map[string]any{"aud": "pki-core/tunnel-attestation", "body_sha256": binding(raw), "expiry": now + 60, "iat": now, "nonce": uuid.NewString(), "operation": "create_tunnel", "target": map[string]any{"asset_id": assetID, "service": service}})
+	descriptorValue := map[string]any{"aud": "pki-core/tunnel-attestation", "body_sha256": binding(raw), "expiry": now + 60, "iat": now, "nonce": uuid.NewString(), "operation": "create_tunnel", "target": map[string]any{"asset_id": assetID, "service": service}}
+	if mcpBinding != nil {
+		descriptorValue["mcp"] = mcpBinding
+	}
+	if !validUntil.IsZero() && validUntil.Unix() < now+60 {
+		descriptorValue["expiry"] = validUntil.Unix()
+	}
+	descriptor, err := canonicalJSON(descriptorValue)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +163,7 @@ func OpenTCP(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, verifier 
 	}
 	requestCtx, cancel := context.WithTimeout(authCtx, 30*time.Second)
 	defer cancel()
-	response, err := pb.NewTunnelAuthorizationServiceClient(cloudConn).RequestTunnel(requestCtx, &pb.RequestTunnelRequest{RequestBody: body, PrincipalRequest: &authpb.SignedArtifact{Kind: "tunnel-principal-request+jws", Value: signed}})
+	response, err := requestTunnel(requestCtx, &pb.RequestTunnelRequest{RequestBody: body, PrincipalRequest: &authpb.SignedArtifact{Kind: "tunnel-principal-request+jws", Value: signed}})
 	if err != nil {
 		return nil, fmt.Errorf("authorizing Cloud tunnel (%s): %w", pb.TunnelAuthorizationService_RequestTunnel_FullMethodName, err)
 	}

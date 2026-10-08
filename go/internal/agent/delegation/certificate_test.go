@@ -22,7 +22,7 @@ func stringsDER(values ...string) []asn1.RawValue {
 func fixture(t *testing.T) (*x509.Certificate, wireScope) {
 	t.Helper()
 	u, _ := url.Parse(owner)
-	w := wireScope{1, "22222222-2222-4222-8222-222222222222", owner, stringsDER(device), stringsDER("demo")}
+	w := wireScope{1, "22222222-2222-4222-8222-222222222222", owner, stringsDER(device), stringsDER("demo"), "", "", false}
 	leaf := &x509.Certificate{URIs: []*url.URL{u}}
 	setScope(t, leaf, w)
 	der, _ := asn1.Marshal(stringsDER("entitlement:wendy.agent.services.v2.WendyContainerService:StopContainer:allow"))
@@ -144,5 +144,44 @@ func TestScopeRejectsUnknownSequenceFields(t *testing.T) {
 	leaf.Extensions[0].Value, _ = asn1.Marshal(fields)
 	if _, err := Parse(leaf); err == nil {
 		t.Fatal("unknown trailing sequence field accepted")
+	}
+}
+
+func TestBlanketScopeKeepsDeviceAndOperationBounds(t *testing.T) {
+	leaf, w := fixture(t)
+	w.Version = 3
+	w.AllApps = true
+	w.AppIDs = nil
+	w.Audience = "https://mcp.example/mcp"
+	w.Gateway = "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/service/gateway"
+	setScope(t, leaf, w)
+	scope, err := Parse(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope.Authorize(device, method, "new-app") != nil {
+		t.Fatal("blanket app denied")
+	}
+	for _, tc := range []struct{ device, method, app string }{
+		{device + "-other", method, "new-app"},
+		{device, method, "../escape"},
+		{device, method, ""},
+		{device, "/wendy.agent.services.v2.WendyContainerService/StartContainer", "new-app"},
+	} {
+		if scope.Authorize(tc.device, tc.method, tc.app) == nil {
+			t.Fatal("blanket scope escaped bounds")
+		}
+	}
+	for _, mutate := range []func(*wireScope){
+		func(w *wireScope) { w.Version = 2 },
+		func(w *wireScope) { w.AllApps = false },
+		func(w *wireScope) { w.AppIDs = stringsDER("demo") },
+	} {
+		bad := w
+		mutate(&bad)
+		setScope(t, leaf, bad)
+		if _, err := Parse(leaf); err == nil {
+			t.Fatal("invalid blanket encoding accepted")
+		}
 	}
 }

@@ -12,6 +12,14 @@ workspace, and bundled skills. Follow the
 [ChatGPT setup guide](/docs/guides/chatgpt) to install it and enable access.
 The tool groups below describe the broader `wendy mcp serve` developer server.
 
+## Hosted Cloud connection
+
+The hosted gateway uses OpenAI managed mTLS and a separate, signed per-user
+approval in Cloud Settings. Organization opt-in alone does not grant device
+access. See the [hosted gateway deployment and security guide](https://github.com/wendylabsinc/WendyOS/blob/main/go/docs/hosted-cloud-mcp.md)
+for OAuth policy, exact device/app/RPC approval, key-loss behavior and current
+limitations. This differs from the local CLI MCP setup below.
+
 ## Skills and first-time setup
 
 The server also exposes the bundled end-user skills through the MCP skills

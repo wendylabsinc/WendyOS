@@ -13,5 +13,6 @@
     "cloud_grpc": "api.dev.wendy.sh:443",
     "relay_issuer": "https://api.dev.wendy.sh"
   },
+  "delegation_roots_file": "/run/wendy-cloud-mcp/operator-device-roots.pem",
   "machines": []
 }

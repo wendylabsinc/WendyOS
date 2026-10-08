@@ -96,3 +96,42 @@ func TestBackendCannotFallBackToMachineDeviceAuthority(t *testing.T) {
 		}
 	}
 }
+
+func TestPendingDelegationRetainsKeyAndSeparatesUsers(t *testing.T) {
+	private, err := certs.GenerateMLDSAKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "22222222-2222-4222-8222-222222222222"
+	var requests []map[string]string
+	b := &CloudBackend{keys: map[string]*userDelegatedKey{}, origin: "https://cloud.example", sessions: map[string]machineCredentials{testOrg: testMachine{&config.AuthConfig{APIKey: "machine-token", DPoPPrivateKey: private}}}, client: &http.Client{Transport: backendTransport(func(r *http.Request) (*http.Response, error) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, body)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"id":"` + id + `","pending":true}`)), Header: http.Header{}}, nil
+	})}}
+	a := Access{OrganizationID: testOrg, TenantID: testTenant, UserID: "alice", ServiceSubject: "gateway", OwnerPrincipal: "spiffe://wendy.sh/tenant/" + testTenant + "/operator/alice", bearer: "alice-token"}
+	first, err := b.prepareKey(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.cached = &issuedDelegation{}
+	id = "33333333-3333-4333-8333-333333333333"
+	second, err := b.prepareKey(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second || second.id != id || second.cached != nil || requests[0]["csr"] != requests[1]["csr"] || requests[0]["key_binding"] != requests[1]["key_binding"] {
+		t.Fatal("new consent did not retain the key and discard the old leaf")
+	}
+	a.UserID, a.OwnerPrincipal, a.bearer = "bob", "spiffe://wendy.sh/tenant/"+testTenant+"/operator/bob", "bob-token"
+	other, err := b.prepareKey(context.Background(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == second || requests[2]["key_binding"] == requests[1]["key_binding"] || requests[2]["user_token"] != "bob-token" {
+		t.Fatal("cross-user delegated key reuse")
+	}
+}

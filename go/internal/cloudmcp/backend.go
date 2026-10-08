@@ -3,6 +3,7 @@ package cloudmcp
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/browserauth"
@@ -31,9 +33,15 @@ type machineCredentials interface {
 }
 
 type CloudBackend struct {
-	origin   string
-	sessions map[string]machineCredentials
-	client   *http.Client
+	mu          sync.Mutex
+	keys        map[string]*userDelegatedKey
+	roots       *x509.CertPool
+	rootsPEM    string
+	relayIssuer string
+	mcpOrigin   string
+	origin      string
+	sessions    map[string]machineCredentials
+	client      *http.Client
 }
 
 func NewCloudBackend(origin string, sessions map[string]*browserauth.MachineSession) (*CloudBackend, error) {
@@ -126,7 +134,17 @@ func (b *CloudBackend) Organization(ctx context.Context, org string) (Organizati
 	return value, err
 }
 func (b *CloudBackend) Authorize(ctx context.Context, token, org, device, method string) (Access, error) {
-	data, err := b.request(ctx, org, "authorize", map[string]string{"user_token": token, "device": device, "method": method})
+	if b.roots != nil {
+		return b.authorizeDelegated(ctx, token, org, device, method)
+	}
+	return b.authorize(ctx, token, org, device, method, "")
+}
+func (b *CloudBackend) authorize(ctx context.Context, token, org, device, method, id string) (Access, error) {
+	args := map[string]string{"user_token": token, "device": device, "method": method}
+	if id != "" {
+		args["id"] = id
+	}
+	data, err := b.request(ctx, org, "authorize", args)
 	if errors.Is(err, errDenied) {
 		return Access{}, nil
 	}
@@ -147,11 +165,11 @@ func (b *CloudBackend) Devices(ctx context.Context, access Access) (json.RawMess
 	if !access.permits(access.OrganizationID) || access.bearer == "" {
 		return nil, fmt.Errorf("inventory access denied")
 	}
-	return b.request(ctx, access.OrganizationID, "devices", map[string]string{"user_token": access.bearer})
+	return b.request(ctx, access.OrganizationID, "devices", map[string]string{"user_token": access.bearer, "id": access.DelegationID})
 }
 
 // Connect must not fall back to the machine's unrestricted certificate while
 // delegated issuance and the tunnel principal contract are being integrated.
-func (b *CloudBackend) Connect(context.Context, Access, string) (*grpcclient.AgentConnection, error) {
-	return nil, errUserAuthorityRequired
+func (b *CloudBackend) Connect(ctx context.Context, access Access, device string) (*grpcclient.AgentConnection, error) {
+	return b.connectDelegated(ctx, access, device)
 }

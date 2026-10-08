@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -29,14 +28,18 @@ type machineConfig struct {
 	KeyPEM       string `json:"key_pem"`
 }
 type configuration struct {
-	Origin         string               `json:"origin"`
-	CloudHTTP      string               `json:"cloud_http"`
-	Listen         string               `json:"listen"`
-	TLSCertificate string               `json:"tls_certificate"`
-	TLSKey         string               `json:"tls_key"`
-	TraceEndpoint  string               `json:"trace_endpoint,omitempty"`
-	Services       browserauth.Settings `json:"services"`
-	Machines       []machineConfig      `json:"machines"`
+	Origin              string               `json:"origin"`
+	CloudHTTP           string               `json:"cloud_http"`
+	Listen              string               `json:"listen"`
+	TLSCertificate      string               `json:"tls_certificate"`
+	TLSKey              string               `json:"tls_key"`
+	DelegationRootsFile string               `json:"delegation_roots_file,omitempty"`
+	DelegationRootsPEM  string               `json:"delegation_roots_pem,omitempty"`
+	ConnectorCAFile     string               `json:"connector_ca_file,omitempty"`
+	ConnectorDNSName    string               `json:"connector_dns_name,omitempty"`
+	TraceEndpoint       string               `json:"trace_endpoint,omitempty"`
+	Services            browserauth.Settings `json:"services"`
+	Machines            []machineConfig      `json:"machines"`
 }
 
 func run(ctx context.Context, path string) error {
@@ -88,20 +91,44 @@ func run(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+	if (cfg.DelegationRootsFile == "") == (cfg.DelegationRootsPEM == "") {
+		return fmt.Errorf("configure exactly one delegation roots source")
+	}
+	roots := []byte(cfg.DelegationRootsPEM)
+	if cfg.DelegationRootsFile != "" {
+		roots, err = os.ReadFile(cfg.DelegationRootsFile)
+		if err != nil {
+			return fmt.Errorf("reading delegation roots: %w", err)
+		}
+	}
+	if err = backend.ConfigureDelegations(roots, cfg.Services.RelayIssuer, cfg.Origin); err != nil {
+		return err
+	}
 	handler, err := cloudmcp.New(cfg.Origin, backend, backend)
 	if err != nil {
 		return err
 	}
+	var connectorCA []byte
+	if cfg.ConnectorCAFile != "" {
+		connectorCA, err = os.ReadFile(cfg.ConnectorCAFile)
+		if err != nil {
+			return fmt.Errorf("reading connector CA: %w", err)
+		}
+	}
+	connectorTLS, protectConnector, err := cloudmcp.ClientTransport(connectorCA, cfg.ConnectorDNSName)
+	if err != nil {
+		return err
+	}
 	server := &http.Server{Addr: cfg.Listen, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10,
-		TLSConfig:   &tls.Config{MinVersion: tls.VersionTLS13},
+		TLSConfig:   connectorTLS,
 		BaseContext: func(net.Listener) context.Context { return ctx },
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Handler: protectConnector(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet && r.URL.Path == "/healthz" {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
 			handler.ServeHTTP(w, r)
-		}),
+		})),
 	}
 	go func() {
 		<-ctx.Done()
