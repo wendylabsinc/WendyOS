@@ -31,16 +31,15 @@ import (
 // new writes never populate it — the private key lives exclusively in
 // device-key.pem (mode 0o400) and is never written to provisioning.json.
 type provisioningState struct {
-	Enrolled                 bool   `json:"enrolled"`
-	CloudHost                string `json:"cloudHost,omitempty"`
-	OrgID                    int32  `json:"orgId,omitempty"`
-	AssetID                  int32  `json:"assetId,omitempty"`
-	KeyPEM                   string `json:"keyPem,omitempty"` // read-only: migration only; never written
-	CertPEM                  string `json:"certPem,omitempty"`
-	ChainPEM                 string `json:"chainPem,omitempty"`
-	PrincipalURI             string `json:"principalURI,omitempty"`
-	ACMEDirectoryURL         string `json:"acmeDirectoryURL,omitempty"`
-	RevokedCertificateSHA256 string `json:"revokedCertificateSHA256,omitempty"`
+	Enrolled         bool   `json:"enrolled"`
+	CloudHost        string `json:"cloudHost,omitempty"`
+	OrgID            int32  `json:"orgId,omitempty"`
+	AssetID          int32  `json:"assetId,omitempty"`
+	KeyPEM           string `json:"keyPem,omitempty"` // read-only: migration only; never written
+	CertPEM          string `json:"certPem,omitempty"`
+	ChainPEM         string `json:"chainPem,omitempty"`
+	PrincipalURI     string `json:"principalURI,omitempty"`
+	ACMEDirectoryURL string `json:"acmeDirectoryURL,omitempty"`
 }
 
 type CloudDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error)
@@ -105,8 +104,9 @@ type ProvisioningService struct {
 	logger           *zap.Logger
 	configPath       string
 	mu               sync.Mutex
-	acmeRevocationMu sync.Mutex
+	unenrollmentMu   sync.Mutex
 	enrolled         bool
+	resetRecoveryErr error
 	cloudHost        string
 	orgID            int32
 	assetID          int32
@@ -125,7 +125,10 @@ func NewProvisioningService(logger *zap.Logger, configPath string) *Provisioning
 		configPath:  configPath,
 		CloudDialer: DefaultCloudDialer,
 	}
-	svc.loadState()
+	svc.resetRecoveryErr = svc.recoverCloudReset()
+	if svc.resetRecoveryErr == nil {
+		svc.loadState()
+	}
 	return svc
 }
 
@@ -161,6 +164,9 @@ func (s *ProvisioningService) IsProvisioned(_ context.Context, _ *agentpb.IsProv
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.resetRecoveryErr != nil {
+		return nil, status.Error(codes.Unavailable, "authorized reset recovery incomplete")
+	}
 	if s.enrolled {
 		return &agentpb.IsProvisionedResponse{
 			Response: &agentpb.IsProvisionedResponse_Provisioned{
@@ -190,6 +196,9 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		}
 	}()
 
+	if s.resetRecoveryErr != nil {
+		return nil, status.Error(codes.FailedPrecondition, "authorized reset recovery must finish before enrollment")
+	}
 	if s.enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "agent is already provisioned")
 	}
@@ -360,8 +369,8 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 		if expectedPrincipal == "" || expectedPrincipal != s.principalURI {
 			return nil, status.Error(codes.FailedPrecondition, "direct PKI reset requires the exact expected principal through v2")
 		}
-		if expectedFingerprint == "" || expectedFingerprint != s.certificateFingerprintLocked() || !s.revocationConfirmedLocked() {
-			return nil, status.Error(codes.FailedPrecondition, "revoke the installed ACME certificate before clearing enrollment keys")
+		if expectedFingerprint == "" || expectedFingerprint != s.certificateFingerprintLocked() || !s.cloudResetAuthorizedLocked() {
+			return nil, status.Error(codes.FailedPrecondition, "verify Cloud unenrollment and installed-leaf PKI revocation before clearing enrollment keys")
 		}
 	}
 
@@ -370,7 +379,13 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 		zap.Int32("asset_id", s.assetID),
 	)
 
-	if err := s.clearStateFiles(); err != nil {
+	var cleanupErr error
+	if s.principalURI != "" {
+		cleanupErr = s.finishCloudReset()
+	} else {
+		cleanupErr = s.clearStateFiles()
+	}
+	if err := cleanupErr; err != nil {
 		s.logger.Error("Failed to delete provisioning state files", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "failed to delete provisioning state: %v", err)
 	}

@@ -145,8 +145,10 @@ type NotProvisionedResponse struct {
 	// Absent on older agents; clients must not assume those agents can enroll.
 	// This is not a guarantee of network availability or successful issuance.
 	AcmeEnrollmentSupported *bool `protobuf:"varint,1,opt,name=acme_enrollment_supported,json=acmeEnrollmentSupported,proto3,oneof" json:"acme_enrollment_supported,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Public device-signed completion evidence, only after durable local erasure.
+	UnenrollmentCompletion []byte `protobuf:"bytes,2,opt,name=unenrollment_completion,json=unenrollmentCompletion,proto3" json:"unenrollment_completion,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *NotProvisionedResponse) Reset() {
@@ -186,15 +188,24 @@ func (x *NotProvisionedResponse) GetAcmeEnrollmentSupported() bool {
 	return false
 }
 
+func (x *NotProvisionedResponse) GetUnenrollmentCompletion() []byte {
+	if x != nil {
+		return x.UnenrollmentCompletion
+	}
+	return nil
+}
+
 type ProvisionedResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	CloudHost      string                 `protobuf:"bytes,1,opt,name=cloud_host,json=cloudHost,proto3" json:"cloud_host,omitempty"`
 	OrganizationId int32                  `protobuf:"varint,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	AssetId        int32                  `protobuf:"varint,3,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	// Set for direct PKI enrollment; legacy numeric IDs remain unset.
-	PrincipalUri  string `protobuf:"bytes,4,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PrincipalUri string `protobuf:"bytes,4,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
+	// Absent/false on agents without Cloud-owned guarded reset and recovery.
+	CloudUnenrollmentSupported bool `protobuf:"varint,5,opt,name=cloud_unenrollment_supported,json=cloudUnenrollmentSupported,proto3" json:"cloud_unenrollment_supported,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *ProvisionedResponse) Reset() {
@@ -253,6 +264,13 @@ func (x *ProvisionedResponse) GetPrincipalUri() string {
 		return x.PrincipalUri
 	}
 	return ""
+}
+
+func (x *ProvisionedResponse) GetCloudUnenrollmentSupported() bool {
+	if x != nil {
+		return x.CloudUnenrollmentSupported
+	}
+	return false
 }
 
 type StartProvisioningRequest struct {
@@ -364,8 +382,12 @@ type UnprovisionRequest struct {
 	// Required for direct PKI identities; checked atomically before reset.
 	ExpectedPrincipalUri      string `protobuf:"bytes,1,opt,name=expected_principal_uri,json=expectedPrincipalUri,proto3" json:"expected_principal_uri,omitempty"`
 	ExpectedCertificateSha256 string `protobuf:"bytes,2,opt,name=expected_certificate_sha256,json=expectedCertificateSha256,proto3" json:"expected_certificate_sha256,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// Issuer-signed OCSP revocation evidence for the exact installed leaf.
+	RevocationProof []byte `protobuf:"bytes,3,opt,name=revocation_proof,json=revocationProof,proto3" json:"revocation_proof,omitempty"`
+	// Serialized wendycloud.v2.DeletedAsset; exact tenant/device binding required.
+	CloudDeletion []byte `protobuf:"bytes,4,opt,name=cloud_deletion,json=cloudDeletion,proto3" json:"cloud_deletion,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UnprovisionRequest) Reset() {
@@ -412,10 +434,25 @@ func (x *UnprovisionRequest) GetExpectedCertificateSha256() string {
 	return ""
 }
 
+func (x *UnprovisionRequest) GetRevocationProof() []byte {
+	if x != nil {
+		return x.RevocationProof
+	}
+	return nil
+}
+
+func (x *UnprovisionRequest) GetCloudDeletion() []byte {
+	if x != nil {
+		return x.CloudDeletion
+	}
+	return nil
+}
+
 type UnprovisionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	UnenrollmentCompletion []byte                 `protobuf:"bytes,1,opt,name=unenrollment_completion,json=unenrollmentCompletion,proto3" json:"unenrollment_completion,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *UnprovisionResponse) Reset() {
@@ -446,6 +483,13 @@ func (x *UnprovisionResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use UnprovisionResponse.ProtoReflect.Descriptor instead.
 func (*UnprovisionResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *UnprovisionResponse) GetUnenrollmentCompletion() []byte {
+	if x != nil {
+		return x.UnenrollmentCompletion
+	}
+	return nil
 }
 
 type RevokeACMECertificateRequest struct {
@@ -690,27 +734,32 @@ const file_wendy_agent_services_v2_provisioning_service_proto_rawDesc = "" +
 	"\x15IsProvisionedResponse\x12Z\n" +
 	"\x0fnot_provisioned\x18\x01 \x01(\v2/.wendy.agent.services.v2.NotProvisionedResponseH\x00R\x0enotProvisioned\x12P\n" +
 	"\vprovisioned\x18\x02 \x01(\v2,.wendy.agent.services.v2.ProvisionedResponseH\x00R\vprovisionedB\x0f\n" +
-	"\rresponse_type\"w\n" +
+	"\rresponse_type\"\xb0\x01\n" +
 	"\x16NotProvisionedResponse\x12?\n" +
-	"\x19acme_enrollment_supported\x18\x01 \x01(\bH\x00R\x17acmeEnrollmentSupported\x88\x01\x01B\x1c\n" +
-	"\x1a_acme_enrollment_supported\"\x9d\x01\n" +
+	"\x19acme_enrollment_supported\x18\x01 \x01(\bH\x00R\x17acmeEnrollmentSupported\x88\x01\x01\x127\n" +
+	"\x17unenrollment_completion\x18\x02 \x01(\fR\x16unenrollmentCompletionB\x1c\n" +
+	"\x1a_acme_enrollment_supported\"\xdf\x01\n" +
 	"\x13ProvisionedResponse\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x01 \x01(\tR\tcloudHost\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\x05R\x0eorganizationId\x12\x19\n" +
 	"\basset_id\x18\x03 \x01(\x05R\aassetId\x12#\n" +
-	"\rprincipal_uri\x18\x04 \x01(\tR\fprincipalUri\"\xa8\x01\n" +
+	"\rprincipal_uri\x18\x04 \x01(\tR\fprincipalUri\x12@\n" +
+	"\x1ccloud_unenrollment_supported\x18\x05 \x01(\bR\x1acloudUnenrollmentSupported\"\xa8\x01\n" +
 	"\x18StartProvisioningRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\x05R\x0eorganizationId\x12)\n" +
 	"\x10enrollment_token\x18\x02 \x01(\tR\x0fenrollmentToken\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x03 \x01(\tR\tcloudHost\x12\x19\n" +
 	"\basset_id\x18\x04 \x01(\x05R\aassetId\"\x1b\n" +
-	"\x19StartProvisioningResponse\"\x8a\x01\n" +
+	"\x19StartProvisioningResponse\"\xdc\x01\n" +
 	"\x12UnprovisionRequest\x124\n" +
 	"\x16expected_principal_uri\x18\x01 \x01(\tR\x14expectedPrincipalUri\x12>\n" +
-	"\x1bexpected_certificate_sha256\x18\x02 \x01(\tR\x19expectedCertificateSha256\"\x15\n" +
-	"\x13UnprovisionResponse\"\x94\x01\n" +
+	"\x1bexpected_certificate_sha256\x18\x02 \x01(\tR\x19expectedCertificateSha256\x12)\n" +
+	"\x10revocation_proof\x18\x03 \x01(\fR\x0frevocationProof\x12%\n" +
+	"\x0ecloud_deletion\x18\x04 \x01(\fR\rcloudDeletion\"N\n" +
+	"\x13UnprovisionResponse\x127\n" +
+	"\x17unenrollment_completion\x18\x01 \x01(\fR\x16unenrollmentCompletion\"\x94\x01\n" +
 	"\x1cRevokeACMECertificateRequest\x124\n" +
 	"\x16expected_principal_uri\x18\x01 \x01(\tR\x14expectedPrincipalUri\x12>\n" +
 	"\x1bexpected_certificate_sha256\x18\x02 \x01(\tR\x19expectedCertificateSha256\"\xa2\x01\n" +
@@ -728,14 +777,14 @@ const file_wendy_agent_services_v2_provisioning_service_proto_rawDesc = "" +
 	"\feab_hmac_key\x18\x05 \x01(\tR\n" +
 	"eabHmacKey\"D\n" +
 	"\x1dStartACMEProvisioningResponse\x12#\n" +
-	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri2\x89\x06\n" +
+	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri2\x93\x06\n" +
 	"\x18WendyProvisioningService\x12z\n" +
 	"\x11StartProvisioning\x121.wendy.agent.services.v2.StartProvisioningRequest\x1a2.wendy.agent.services.v2.StartProvisioningResponse\x12\x86\x01\n" +
 	"\x15StartACMEProvisioning\x125.wendy.agent.services.v2.StartACMEProvisioningRequest\x1a6.wendy.agent.services.v2.StartACMEProvisioningResponse\x12n\n" +
 	"\rIsProvisioned\x12-.wendy.agent.services.v2.IsProvisionedRequest\x1a..wendy.agent.services.v2.IsProvisionedResponse\x12h\n" +
-	"\vUnprovision\x12+.wendy.agent.services.v2.UnprovisionRequest\x1a,.wendy.agent.services.v2.UnprovisionResponse\x12\x86\x01\n" +
-	"\x15RevokeACMECertificate\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponse\x12\x84\x01\n" +
-	"\x13CheckACMERevocation\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\vUnprovision\x12+.wendy.agent.services.v2.UnprovisionRequest\x1a,.wendy.agent.services.v2.UnprovisionResponse\x12\x8b\x01\n" +
+	"\x15RevokeACMECertificate\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponse\"\x03\x88\x02\x01\x12\x89\x01\n" +
+	"\x13CheckACMERevocation\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponse\"\x03\x88\x02\x01B>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_provisioning_service_proto_rawDescOnce sync.Once

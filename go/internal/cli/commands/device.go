@@ -1154,15 +1154,19 @@ func newDeviceUnenrollCmd() *cobra.Command {
 		Use:   "unenroll",
 		Short: "Unenroll a device and remove it from Wendy Cloud",
 		Long: "Reverses 'wendy device enroll'. For direct PKI enrollment, verifies the exact Cloud " +
-			"binding, revokes the installed ACME certificate, deletes the signed UUID asset, then " +
+			"binding, invokes Cloud-owned revocation/deletion, then verifies PKI proof and " +
 			"resets local state. Requires an updated Agent and directly verified mTLS connection. " +
 			"Numeric legacy enrollment retains its separate cleanup path.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressUpdateCheck())
 			if err != nil {
-				return err
+				if completionErr := recoverCompletedV2Unenroll(ctx, cloudGRPC, uuidAssetID); completionErr == nil {
+					return nil
+				} else {
+					return fmt.Errorf("%w; prior-reset reconciliation: %v", err, completionErr)
+				}
 			}
 			defer conn.Close()
 
@@ -1174,7 +1178,11 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			}
 			prov := provResp.GetProvisioned()
 			if prov == nil {
-				return fmt.Errorf("device is not provisioned")
+				v2State, readErr := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
+				if readErr == nil && len(v2State.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 {
+					return reconcileCompletedV2Unenroll(ctx, v2State.GetNotProvisioned().GetUnenrollmentCompletion(), cloudGRPC, uuidAssetID)
+				}
+				return fmt.Errorf("device is not provisioned; no authenticated unenrollment completion evidence")
 			}
 			cloudHost := prov.GetCloudHost()
 			orgID := prov.GetOrganizationId()

@@ -9,399 +9,171 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
-	"fmt"
 	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/acmeenroll"
+	"github.com/wendylabsinc/wendy/go/internal/shared/unenrollproof"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/ocsp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const acmeRevocationFile = "acme-revocation.json" // Unreleased historical fixture, never read by Agent.
+const resetTenant = "11111111-1111-4111-8111-111111111111"
+const resetDevice = "22222222-2222-4222-8222-222222222222"
 
-const revokeTenant = "11111111-1111-4111-8111-111111111111"
-
-func revokeTestCert(t *testing.T, principal string, serial int64) (string, *x509.Certificate) {
+func cloudResetFixture(t *testing.T) (*ProvisioningService, *agentpbv2.UnprovisionRequest, context.Context) {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	now := time.Now()
+	key, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if e != nil {
+		t.Fatal(e)
 	}
-	uri, err := url.Parse(principal)
-	if err != nil {
-		t.Fatal(err)
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}
+	der, e := x509.CreateCertificate(rand.Reader, ca, ca, key.Public(), key)
+	if e != nil {
+		t.Fatal(e)
 	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), URIs: []*url.URL{uri}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
-	if err != nil {
-		t.Fatal(err)
+	ca, e = x509.ParseCertificate(der)
+	if e != nil {
+		t.Fatal(e)
 	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
+	leafKey, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if e != nil {
+		t.Fatal(e)
 	}
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), cert
-}
-func revokeTestContext(t *testing.T, principal string) context.Context {
-	_, cert := revokeTestCert(t, principal, 90)
-	return peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}, VerifiedChains: [][]*x509.Certificate{{cert}}, HandshakeComplete: true}}})
-}
-func revokeTestService(t *testing.T) (*ProvisioningService, *agentpbv2.RevokeACMECertificateRequest) {
-	t.Helper()
+	principal := "spiffe://wendy.sh/tenant/" + resetTenant + "/device/" + resetDevice
+	uri, _ := url.Parse(principal)
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(42), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), URIs: []*url.URL{uri}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}}
+	der, e = x509.CreateCertificate(rand.Reader, leaf, ca, leafKey.Public(), key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	leaf, e = x509.ParseCertificate(der)
+	if e != nil {
+		t.Fatal(e)
+	}
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw}))
+	rawKey, e := x509.MarshalPKCS8PrivateKey(leafKey)
+	if e != nil {
+		t.Fatal(e)
+	}
 	dir := t.TempDir()
-	principal := "spiffe://wendy.sh/tenant/" + revokeTenant + "/device/box"
-	certificate, _ := revokeTestCert(t, principal, 42)
-	state := provisioningState{Enrolled: true, CloudHost: "api.example:443", PrincipalURI: principal, CertPEM: certificate, ACMEDirectoryURL: "https://acme.example/" + revokeTenant + "/acme/directory"}
+	state := provisioningState{Enrolled: true, CloudHost: "api.example:443", PrincipalURI: principal, CertPEM: certPEM, ChainPEM: chain}
 	raw, _ := json.Marshal(state)
-	if err := os.WriteFile(filepath.Join(dir, "provisioning.json"), raw, 0600); err != nil {
-		t.Fatal(err)
+	os.WriteFile(filepath.Join(dir, "provisioning.json"), raw, 0600)
+	os.WriteFile(filepath.Join(dir, "device-key.pem"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: rawKey}), 0400)
+	os.WriteFile(filepath.Join(dir, "acme-account-key.pem"), []byte("account-key"), 0400)
+	evidence, e := ocsp.CreateResponse(ca, ca, ocsp.Response{Status: ocsp.Revoked, SerialNumber: leaf.SerialNumber, ThisUpdate: now.Add(-time.Minute), NextUpdate: now.Add(time.Hour), RevokedAt: now.Add(-time.Minute)}, key)
+	if e != nil {
+		t.Fatal(e)
 	}
-	for _, name := range []string{"device-key.pem", "acme-account-key.pem"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("recovery-key"), 0400); err != nil {
-			t.Fatal(err)
-		}
+	deleted := &cloudpbv2.DeletedAsset{Id: "33333333-3333-4333-8333-333333333333", OrganizationId: resetTenant, DeviceId: resetDevice, DeletedAt: timestamppb.New(now.Add(-time.Minute))}
+	binding, e := proto.Marshal(deleted)
+	if e != nil {
+		t.Fatal(e)
 	}
-	svc := NewProvisioningService(zap.NewNop(), dir)
-	return svc, &agentpbv2.RevokeACMECertificateRequest{ExpectedPrincipalUri: principal, ExpectedCertificateSha256: svc.certificateFingerprintLocked()}
+	actorURI, _ := url.Parse("spiffe://wendy.sh/tenant/" + resetTenant + "/operator/op")
+	actor := &x509.Certificate{URIs: []*url.URL{actorURI}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, KeyUsage: x509.KeyUsageDigitalSignature}
+	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{HandshakeComplete: true, PeerCertificates: []*x509.Certificate{actor}, VerifiedChains: [][]*x509.Certificate{{actor}}}}})
+	return NewProvisioningService(zap.NewNop(), dir), &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: principal, ExpectedCertificateSha256: unenrollproof.Fingerprint(leaf), RevocationProof: evidence, CloudDeletion: binding}, ctx
 }
-func stubRevoke(t *testing.T, fn func(context.Context, acmeenroll.Config, string, string) error) {
-	t.Helper()
-	old := revokeACMECertificate
-	revokeACMECertificate = fn
-	t.Cleanup(func() { revokeACMECertificate = old })
-}
-func assertRevokeKeysRetained(t *testing.T, svc *ProvisioningService) {
-	t.Helper()
-	for _, name := range []string{"device-key.pem", "acme-account-key.pem", "provisioning.json"} {
-		if _, err := os.Stat(filepath.Join(svc.configPath, name)); err != nil {
-			t.Fatalf("recovery material removed %s: %v", name, err)
-		}
-	}
-}
-
-func TestACMERevokeRequiresSameTenantOperator(t *testing.T) {
-	for _, principal := range []string{"", "spiffe://wendy.sh/tenant/22222222-2222-4222-8222-222222222222/operator/op", "spiffe://wendy.sh/tenant/" + revokeTenant + "/device/other", "spiffe://wendy.sh/tenant/" + revokeTenant + "/service/svc"} {
-		t.Run(principal, func(t *testing.T) {
-			svc, req := revokeTestService(t)
-			called := false
-			stubRevoke(t, func(context.Context, acmeenroll.Config, string, string) error { called = true; return nil })
-			ctx := context.Background()
-			if principal != "" {
-				ctx = revokeTestContext(t, principal)
-			}
-			if _, err := NewProvisioningServiceV2(svc).RevokeACMECertificate(ctx, req); err == nil || called {
-				t.Fatalf("unauthorized revocation: %v", err)
-			}
-			assertRevokeKeysRetained(t, svc)
-		})
-	}
-}
-func TestACMERevokeBindingAndFailureRetainRecoveryKeys(t *testing.T) {
-	for _, failure := range []string{"principal", "fingerprint", "directory", "network"} {
-		t.Run(failure, func(t *testing.T) {
-			svc, req := revokeTestService(t)
-			calls := 0
-			stubRevoke(t, func(context.Context, acmeenroll.Config, string, string) error {
-				calls++
-				return errors.New("uncertain")
-			})
-			switch failure {
-			case "principal":
-				req.ExpectedPrincipalUri += "-other"
-			case "fingerprint":
-				req.ExpectedCertificateSha256 = strings.Repeat("ab", 32)
-			case "directory":
-				raw, _ := os.ReadFile(svc.statePath())
-				var state provisioningState
-				_ = json.Unmarshal(raw, &state)
-				state.ACMEDirectoryURL = "https://acme.example/22222222-2222-4222-8222-222222222222/acme/directory"
-				raw, _ = json.Marshal(state)
-				_ = os.WriteFile(svc.statePath(), raw, 0600)
-			}
-			ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
-			if _, err := NewProvisioningServiceV2(svc).RevokeACMECertificate(ctx, req); err == nil {
-				t.Fatal("failure accepted")
-			}
-			if (calls > 0) != (failure == "network") {
-				t.Fatalf("unexpected account use: %d", calls)
-			}
-			assertRevokeKeysRetained(t, svc)
-			if svc.revocationConfirmedLocked() {
-				t.Fatal("uncertain revocation acknowledged")
-			}
-		})
-	}
-}
-func TestACMERevokeDurableAckAndGuardedReset(t *testing.T) {
-	svc, req := revokeTestService(t)
-	calls := 0
-	stubRevoke(t, func(_ context.Context, cfg acmeenroll.Config, path, certificate string) error {
-		calls++
-		if cfg.DeviceID != "box" || path != filepath.Join(svc.configPath, "acme-account-key.pem") || certificate != svc.certPEM {
-			t.Fatal("wrong account/certificate")
-		}
-		return nil
-	})
-	ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
+func TestCloudResetRetiredACMEPaths(t *testing.T) {
+	svc, _, ctx := cloudResetFixture(t)
 	v2 := NewProvisioningServiceV2(svc)
-	if _, err := v2.Unprovision(ctx, &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: req.ExpectedPrincipalUri, ExpectedCertificateSha256: req.ExpectedCertificateSha256}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("reset before revocation: %v", err)
+	if _, e := v2.RevokeACMECertificate(ctx, &agentpbv2.RevokeACMECertificateRequest{}); status.Code(e) != codes.Unimplemented {
+		t.Fatal(e)
 	}
-	ack, err := v2.RevokeACMECertificate(ctx, req)
-	if err != nil || ack.GetCertificateSerial() != "2a" {
-		t.Fatalf("revoke: %v", err)
+	if _, e := v2.CheckACMERevocation(ctx, &agentpbv2.RevokeACMECertificateRequest{}); status.Code(e) != codes.Unimplemented {
+		t.Fatal(e)
 	}
-	assertRevokeKeysRetained(t, svc)
-	reloaded := NewProvisioningService(zap.NewNop(), svc.configPath)
-	if !reloaded.revocationConfirmedLocked() {
-		t.Fatal("ack lost on restart")
-	}
-	if _, err := NewProvisioningServiceV2(reloaded).RevokeACMECertificate(ctx, req); err != nil || calls != 1 {
-		t.Fatalf("non-idempotent retry: %v, %d", err, calls)
-	}
-	if _, err := reloaded.Unprovision(ctx, &agentpb.UnprovisionRequest{}); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("legacy bypass: %v", err)
-	}
-	reset := &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: req.ExpectedPrincipalUri, ExpectedCertificateSha256: req.ExpectedCertificateSha256}
-	if _, err := NewProvisioningServiceV2(reloaded).Unprovision(ctx, reset); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"device-key.pem", "acme-account-key.pem", acmeRevocationFile, "provisioning.json"} {
-		if _, err := os.Stat(filepath.Join(svc.configPath, name)); !os.IsNotExist(err) {
-			t.Fatalf("reset retained %s", name)
-		}
+	if _, e := svc.Unprovision(ctx, &agentpb.UnprovisionRequest{}); e == nil {
+		t.Fatal("v1 reset allowed for direct PKI")
 	}
 }
-func TestACMERevocationProbeNeverWritesAckOrRevokes(t *testing.T) {
-	for _, failure := range []bool{false, true} {
-		t.Run(map[bool]string{false: "ready", true: "external-account-required"}[failure], func(t *testing.T) {
-			svc, req := revokeTestService(t)
-			old := checkACMERevocationAccount
-			checkACMERevocationAccount = func(context.Context, acmeenroll.Config, string, string) error {
-				if failure {
-					return &acmeenroll.RevocationError{Phase: "existing_account_lookup", HTTPStatus: 401, ProblemType: "externalAccountRequired"}
+func TestCloudResetFailsClosed(t *testing.T) {
+	for _, failure := range []string{"operator", "fingerprint", "principal", "proof", "deletion"} {
+		t.Run(failure, func(t *testing.T) {
+			svc, req, ctx := cloudResetFixture(t)
+			switch failure {
+			case "operator":
+				ctx = context.Background()
+			case "fingerprint":
+				req.ExpectedCertificateSha256 = "wrong"
+			case "principal":
+				req.ExpectedPrincipalUri = "wrong"
+			case "proof":
+				req.RevocationProof = nil
+			case "deletion":
+				req.CloudDeletion = nil
+			}
+			if _, e := NewProvisioningServiceV2(svc).Unprovision(ctx, req); e == nil {
+				t.Fatal("invalid reset allowed")
+			}
+			for _, name := range []string{"provisioning.json", "device-key.pem", "acme-account-key.pem"} {
+				if _, e := os.Stat(filepath.Join(svc.configPath, name)); e != nil {
+					t.Fatal("keys erased", name, e)
 				}
-				return nil
-			}
-			t.Cleanup(func() { checkACMERevocationAccount = old })
-			stubRevoke(t, func(context.Context, acmeenroll.Config, string, string) error {
-				t.Fatal("probe must not revoke")
-				return nil
-			})
-			ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
-			before, err := os.ReadFile(svc.statePath())
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = NewProvisioningServiceV2(svc).CheckACMERevocation(ctx, req)
-			if (err != nil) != failure {
-				t.Fatalf("probe error: %v", err)
-			}
-			if failure && !strings.Contains(err.Error(), "existing_account_lookup") {
-				t.Fatal("missing safe phase")
-			}
-			after, _ := os.ReadFile(svc.statePath())
-			if string(before) != string(after) {
-				t.Fatal("probe changed enrollment")
-			}
-			assertRevokeKeysRetained(t, svc)
-			if svc.revocationConfirmedLocked() {
-				t.Fatal("probe acknowledged revocation")
-			}
-			if _, err := os.Stat(filepath.Join(svc.configPath, acmeRevocationFile)); !os.IsNotExist(err) {
-				t.Fatal("probe wrote ack")
 			}
 		})
 	}
 }
-
-func TestACMERevocationNetworkUnlockAndStateRevalidation(t *testing.T) {
-	for _, checkOnly := range []bool{false, true} {
-		for _, change := range []string{"none", "principal", "certificate", "metadata", "reset"} {
-			t.Run(fmt.Sprintf("check=%v/%s", checkOnly, change), func(t *testing.T) {
-				svc, req := revokeTestService(t)
-				operation := func(context.Context, acmeenroll.Config, string, string) error {
-					if !svc.mu.TryLock() {
-						t.Fatal("network operation blocks provisioning mutex")
-					}
-					defer svc.mu.Unlock()
-					if svc.acmeRevocationMu.TryLock() {
-						svc.acmeRevocationMu.Unlock()
-						t.Fatal("account operations are not serialized")
-					}
-					switch change {
-					case "principal":
-						svc.principalURI += "-changed"
-					case "certificate":
-						svc.certPEM, _ = revokeTestCert(t, svc.principalURI, 43)
-					case "metadata":
-						data, err := os.ReadFile(svc.statePath())
-						if err != nil {
-							t.Fatal(err)
-						}
-						if err := os.WriteFile(svc.statePath(), append(data, '\n'), 0600); err != nil {
-							t.Fatal(err)
-						}
-					case "reset":
-						svc.enrolled = false
-					}
-					return nil
-				}
-				stubRevoke(t, operation)
-				old := checkACMERevocationAccount
-				checkACMERevocationAccount = operation
-				t.Cleanup(func() { checkACMERevocationAccount = old })
-				ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
-				_, err := NewProvisioningServiceV2(svc).acmeRevocation(ctx, req, checkOnly)
-				if change == "none" {
-					if err != nil {
-						t.Fatal(err)
-					}
-				} else if status.Code(err) != codes.FailedPrecondition {
-					t.Fatalf("changed state accepted: %v", err)
-				}
-				data, err := os.ReadFile(svc.statePath())
-				if err != nil {
+func TestCloudResetDurableCompletionAndCrashResume(t *testing.T) {
+	for _, crash := range []bool{false, true} {
+		t.Run(map[bool]string{false: "reply-lost", true: "erasure-interrupted"}[crash], func(t *testing.T) {
+			svc, req, ctx := cloudResetFixture(t)
+			historical := filepath.Join(svc.configPath, "acme-revocation.json")
+			os.WriteFile(historical, []byte("historical evidence"), 0600)
+			if crash {
+				if err := os.Remove(filepath.Join(svc.configPath, ".provisioned")); err != nil && !os.IsNotExist(err) {
 					t.Fatal(err)
 				}
-				var state provisioningState
-				if err := json.Unmarshal(data, &state); err != nil {
+				if err := os.Mkdir(filepath.Join(svc.configPath, ".provisioned"), 0700); err != nil {
 					t.Fatal(err)
 				}
-				if checkOnly || change != "none" {
-					if state.RevokedCertificateSHA256 != "" {
-						t.Fatal("stale/probe acknowledgement written")
-					}
-				} else if state.RevokedCertificateSHA256 == "" {
-					t.Fatal("acknowledgement missing from provisioning state")
+				os.WriteFile(filepath.Join(svc.configPath, ".provisioned", "obstruction"), []byte("x"), 0600)
+			}
+			reply, e := NewProvisioningServiceV2(svc).Unprovision(ctx, req)
+			if crash {
+				if e == nil {
+					t.Fatal("expected interrupted cleanup")
 				}
-				if _, err := os.Stat(filepath.Join(svc.configPath, acmeRevocationFile)); !os.IsNotExist(err) {
-					t.Fatal("standalone acknowledgement created")
+				if _, e := os.Stat(svc.resetPath(false)); !os.IsNotExist(e) {
+					t.Fatal("completion published before erasure")
 				}
-				assertRevokeKeysRetained(t, svc)
-			})
-		}
+				os.RemoveAll(filepath.Join(svc.configPath, ".provisioned"))
+			} else if e != nil || len(reply.GetUnenrollmentCompletion()) == 0 {
+				t.Fatal(e)
+			}
+			recovered := NewProvisioningService(zap.NewNop(), svc.configPath)
+			state, e := NewProvisioningServiceV2(recovered).IsProvisioned(context.Background(), &agentpbv2.IsProvisionedRequest{})
+			if e != nil || state.GetProvisioned() != nil {
+				t.Fatal("recovery incomplete", e)
+			}
+			receipt, _, e := unenrollproof.ReadCompletion(state.GetNotProvisioned().GetUnenrollmentCompletion())
+			if e != nil || receipt.Principal != req.ExpectedPrincipalUri {
+				t.Fatal("missing authenticated completion", e)
+			}
+			for _, name := range []string{"provisioning.json", "device-key.pem", "acme-account-key.pem"} {
+				if _, e := os.Stat(filepath.Join(svc.configPath, name)); !os.IsNotExist(e) {
+					t.Fatal("key survived", name, e)
+				}
+			}
+			if data, e := os.ReadFile(historical); e != nil || string(data) != "historical evidence" {
+				t.Fatal("historical artifact changed")
+			}
+		})
 	}
-}
-
-func TestACMERevocationIgnoresUnreleasedProofWithoutMovingEvidence(t *testing.T) {
-	svc, req := revokeTestService(t)
-	record := acmeRevocationRecord{Principal: req.ExpectedPrincipalUri, Fingerprint: req.ExpectedCertificateSha256, Serial: "2a"}
-	legacy, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(svc.configPath, acmeRevocationFile)
-	if err := os.WriteFile(path, legacy, 0600); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(svc.statePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state provisioningState
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatal(err)
-	}
-	state.KeyPEM = "legacy-key-migration-fixture"
-	data, err = json.Marshal(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(svc.statePath(), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if svc.revocationConfirmedLocked() {
-		t.Fatal("standalone proof authorized reset")
-	}
-	calls := 0
-	stubRevoke(t, func(context.Context, acmeenroll.Config, string, string) error {
-		calls++
-		return nil
-	})
-	ctx := revokeTestContext(t, "spiffe://wendy.sh/tenant/"+revokeTenant+"/operator/op")
-	if _, err := NewProvisioningServiceV2(svc).RevokeACMECertificate(ctx, req); err != nil {
-		t.Fatal(err)
-	}
-	data, err = os.ReadFile(svc.statePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	state = provisioningState{}
-	if err := json.Unmarshal(data, &state); err != nil {
-		t.Fatal(err)
-	}
-	if calls != 1 || state.RevokedCertificateSHA256 != req.ExpectedCertificateSha256 || state.KeyPEM != "" {
-		t.Fatal("acknowledgement not embedded or legacy private key re-persisted")
-	}
-	info, err := os.Stat(svc.statePath())
-	if err != nil || info.Mode().Perm() != 0600 {
-		t.Fatalf("state permissions: %v", err)
-	}
-	retained, err := os.ReadFile(path)
-	if err != nil || string(retained) != string(legacy) {
-		t.Fatal("historical evidence moved or changed")
-	}
-	assertRevokeKeysRetained(t, svc)
-	if _, err := NewProvisioningServiceV2(svc).Unprovision(ctx, &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: req.ExpectedPrincipalUri, ExpectedCertificateSha256: req.ExpectedCertificateSha256}); err != nil {
-		t.Fatal(err)
-	}
-	retained, err = os.ReadFile(path)
-	if err != nil || string(retained) != string(legacy) {
-		t.Fatal("reset removed historical proof")
-	}
-}
-
-func TestACMERevocationRejectsMismatchedSerialWithoutStateMutation(t *testing.T) {
-	svc, req := revokeTestService(t)
-	before, err := os.ReadFile(svc.statePath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	record := acmeRevocationRecord{Principal: req.ExpectedPrincipalUri, Fingerprint: req.ExpectedCertificateSha256, Serial: "2b"}
-	if err := writeACMERevocationRecord(svc.configPath, record); err == nil {
-		t.Fatal("wrong serial accepted")
-	}
-	after, err := os.ReadFile(svc.statePath())
-	if err != nil || string(before) != string(after) {
-		t.Fatal("invalid acknowledgement changed state")
-	}
-	legacy, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(svc.configPath, acmeRevocationFile), legacy, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if svc.revocationConfirmedLocked() {
-		t.Fatal("malformed old acknowledgement authorized reset")
-	}
-	assertRevokeKeysRetained(t, svc)
-}
-
-func TestACMERevocationAckDoesNotCoverRotatedCertificate(t *testing.T) {
-	svc, req := revokeTestService(t)
-	if err := writeACMERevocationRecord(svc.configPath, acmeRevocationRecord{Principal: req.ExpectedPrincipalUri, Fingerprint: req.ExpectedCertificateSha256, Serial: "2a"}); err != nil {
-		t.Fatal(err)
-	}
-	svc.certPEM, _ = revokeTestCert(t, svc.principalURI, 43)
-	if svc.revocationConfirmedLocked() {
-		t.Fatal("old acknowledgement covers a new leaf")
-	}
-	if _, err := svc.unprovision(req.ExpectedPrincipalUri, req.ExpectedCertificateSha256); status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("rotated leaf reset: %v", err)
-	}
-	assertRevokeKeysRetained(t, svc)
 }

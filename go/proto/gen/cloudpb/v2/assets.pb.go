@@ -697,7 +697,7 @@ type GetAssetRequest struct {
 	// Authorized tombstones return NOT_FOUND with a typed DeletedAsset detail.
 	// Plain NOT_FOUND is never deletion proof.
 	OrganizationId *string `protobuf:"bytes,2,opt,name=organization_id,json=organizationId,proto3,oneof" json:"organization_id,omitempty"`
-	PkiDeviceName  *string `protobuf:"bytes,3,opt,name=pki_device_name,json=pkiDeviceName,proto3,oneof" json:"pki_device_name,omitempty"`
+	DeviceId       *string `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3,oneof" json:"device_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -746,9 +746,9 @@ func (x *GetAssetRequest) GetOrganizationId() string {
 	return ""
 }
 
-func (x *GetAssetRequest) GetPkiDeviceName() string {
-	if x != nil && x.PkiDeviceName != nil {
-		return *x.PkiDeviceName
+func (x *GetAssetRequest) GetDeviceId() string {
+	if x != nil && x.DeviceId != nil {
+		return *x.DeviceId
 	}
 	return ""
 }
@@ -978,9 +978,9 @@ type DeleteAssetRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	// Optional compare-and-delete guard for device unenrollment.
-	ExpectedPkiDeviceName *string `protobuf:"bytes,2,opt,name=expected_pki_device_name,json=expectedPkiDeviceName,proto3,oneof" json:"expected_pki_device_name,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	ExpectedDeviceId *string `protobuf:"bytes,2,opt,name=expected_device_id,json=expectedDeviceId,proto3,oneof" json:"expected_device_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *DeleteAssetRequest) Reset() {
@@ -1020,9 +1020,9 @@ func (x *DeleteAssetRequest) GetId() string {
 	return ""
 }
 
-func (x *DeleteAssetRequest) GetExpectedPkiDeviceName() string {
-	if x != nil && x.ExpectedPkiDeviceName != nil {
-		return *x.ExpectedPkiDeviceName
+func (x *DeleteAssetRequest) GetExpectedDeviceId() string {
+	if x != nil && x.ExpectedDeviceId != nil {
+		return *x.ExpectedDeviceId
 	}
 	return ""
 }
@@ -1031,7 +1031,7 @@ type DeletedAsset struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	OrganizationId string                 `protobuf:"bytes,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
-	PkiDeviceName  string                 `protobuf:"bytes,3,opt,name=pki_device_name,json=pkiDeviceName,proto3" json:"pki_device_name,omitempty"`
+	DeviceId       string                 `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 	DeletedAt      *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=deleted_at,json=deletedAt,proto3" json:"deleted_at,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1081,9 +1081,9 @@ func (x *DeletedAsset) GetOrganizationId() string {
 	return ""
 }
 
-func (x *DeletedAsset) GetPkiDeviceName() string {
+func (x *DeletedAsset) GetDeviceId() string {
 	if x != nil {
-		return x.PkiDeviceName
+		return x.DeviceId
 	}
 	return ""
 }
@@ -1921,13 +1921,14 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\t_altitudeB\n" +
 	"\n" +
 	"\b_headingB\x12\n" +
-	"\x10_pki_device_name\"\xa4\x01\n" +
+	"\x10_pki_device_name\"\x93\x01\n" +
 	"\x0fGetAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12,\n" +
-	"\x0forganization_id\x18\x02 \x01(\tH\x00R\x0eorganizationId\x88\x01\x01\x12+\n" +
-	"\x0fpki_device_name\x18\x03 \x01(\tH\x01R\rpkiDeviceName\x88\x01\x01B\x12\n" +
-	"\x10_organization_idB\x12\n" +
-	"\x10_pki_device_name\"\x92\t\n" +
+	"\x0forganization_id\x18\x02 \x01(\tH\x00R\x0eorganizationId\x88\x01\x01\x12 \n" +
+	"\tdevice_id\x18\x03 \x01(\tH\x01R\bdeviceId\x88\x01\x01B\x12\n" +
+	"\x10_organization_idB\f\n" +
+	"\n" +
+	"_device_id\"\x92\t\n" +
 	"\x12UpdateAssetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12\x1d\n" +
@@ -1985,15 +1986,15 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\v_asset_typeB\n" +
 	"\n" +
 	"\b_headingB\x12\n" +
-	"\x10_pki_device_name\"\x7f\n" +
+	"\x10_pki_device_name\"n\n" +
 	"\x12DeleteAssetRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12<\n" +
-	"\x18expected_pki_device_name\x18\x02 \x01(\tH\x00R\x15expectedPkiDeviceName\x88\x01\x01B\x1b\n" +
-	"\x19_expected_pki_device_name\"\xaa\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x121\n" +
+	"\x12expected_device_id\x18\x02 \x01(\tH\x00R\x10expectedDeviceId\x88\x01\x01B\x15\n" +
+	"\x13_expected_device_id\"\x9f\x01\n" +
 	"\fDeletedAsset\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
-	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12&\n" +
-	"\x0fpki_device_name\x18\x03 \x01(\tR\rpkiDeviceName\x129\n" +
+	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x1b\n" +
+	"\tdevice_id\x18\x03 \x01(\tR\bdeviceId\x129\n" +
 	"\n" +
 	"deleted_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tdeletedAt\"/\n" +
 	"\x13DeleteAssetResponse\x12\x18\n" +

@@ -1,99 +1,36 @@
-# Direct PKI device unenrollment
+# Cloud-owned UUID device unenrollment
 
-`wendy --device <LAN-hostname-or-IP> device unenroll --yes` detects a direct
-PKI enrollment and performs these ordered steps:
+Implements [WDY-3313 — Cloud v2 device enrollment leaves Jetson unprovisioned after reserving an asset](https://linear.app/wendylabsinc/issue/WDY-3313/cloud-v2-device-enrollment-leaves-jetson-unprovisioned-after-reserving) and [WDY-3534 — Preserve deleted Cloud asset bindings for stateless unenrollment recovery](https://linear.app/wendylabsinc/issue/WDY-3534/preserve-deleted-cloud-asset-bindings-for-stateless-unenrollment).
 
-1. Match the Agent's reported principal to its verified mTLS certificate and
-   the exact authenticated Cloud asset's tenant and `pki_device_name`.
-2. Revoke the **installed leaf certificate** using the existing device ACME
-   account (lookup with `onlyReturnExisting`; no EAB, key generation or account
-   registration). The Agent durably acknowledges its exact fingerprint.
-3. Recheck the Cloud binding and, if active, send an operator-signed v2
-   `DeleteAsset` for `asset/<UUID>` with the expected PKI binding. Confirm its
-   exact authorized typed deletion detail from `GetAsset` before reset.
-4. Request a guarded local reset matching both principal and fingerprint,
-   then clear only that principal's local identity pins.
+## One business operation
 
-`--asset-id <canonical-UUID>` selects the Cloud asset explicitly. It is **not**
-its PKI device UUID. Without the flag the CLI requires one unambiguous stored
-Cloud binding. `--cloud-grpc` must match the enrolled Cloud host; switching an
-operator login or endpoint does not select a different device enrollment.
+Cloud owns unenrollment for CLI and console callers. Its signed DeleteAsset path checks device:delete, relays PKI RevokeByPrincipal, then atomically records the tombstone and deletion audit. A relay failure retains the active asset; revocation already completed before an audit/database failure is irreversible and retry finishes deletion. The CLI and Agent do not perform a second ACME revocation. The old prerelease RevokeACMECertificate and CheckACMERevocation RPCs return Unimplemented.
 
-## Compatibility and authority
+The CLI signs the Cloud request and its exact tenant/device revoke_principal management authority with the same operator leaf. Existing kid/x5c behavior is retained, with a fresh PKI replay identity on each retry. Numeric Cloud v1 follows its original reset-first best-effort path; this does not add a numeric fallback for PKI identities.
 
-Deploy Cloud support for tenant/PKI-selected `GetAsset`, typed NotFound deletion
-details and durable tombstones, then the updated Agent, before using this flow.
-The CLI always reads by tenant/PKI binding with empty UUID, validating any
-`--asset-id` locally. Older UUID-only Cloud servers reject the empty UUID before
-destructive operations; older Agents return Unimplemented. Previously
-hard-deleted rows cannot be backfilled as deletion proof.
-The new Agent refuses legacy v1 reset of direct PKI identities. Direct PKI v2
-reset now requires expected principal, expected certificate SHA-256 and a
-matching durable revocation acknowledgement; old empty requests fail closed.
-Numeric Cloud v1 enrollment behavior remains unchanged: it uses the original
-reset-first, best-effort Cloud cleanup path without a v2 capability probe or
-new command timeout. The three-minute timeout applies only to UUID/v2 cleanup.
-The Agent v1 reset refusal above concerns direct PKI/v2 enrollment, not numeric
-Cloud v1 devices.
+## Preconditions and phases
 
-Both new destructive RPC paths require a same-tenant **operator** mTLS peer,
-not a device/service certificate or a plaintext connection. Cloud deletion
-retains its normal membership, permission and operator-signature checks. A
-Cloud-only connection cannot be relied upon after its asset is deleted, so the
-CLI requires a directly verified mTLS connection for this workflow.
+1. Read Agent provisioning through direct verified LAN mTLS. Require CloudUnenrollmentSupported before mutation, exact tenant/operator scope and installed peer principal/fingerprint; reject proxy/plaintext for an active device. Match the enrolled Cloud endpoint.
+2. Read GetAsset using organization_id + device_id and **empty asset UUID**. Older UUID-only servers reject before mutation. Validate any --asset-id locally against the authoritative binding. Active returns Asset; authorized deleted returns NotFound plus one typed DeletedAsset. Plain NotFound, status/message text, wrong status, duplicate details, malformed UUID/time or changed binding are never completion proof.
+3. If active, invoke Cloud DeleteAsset with expected_device_id and the management request. Re-read retained typed deletion evidence after success. Lost responses mean unconfirmed progress, not rollback.
+4. Retrieve issuer-signed OCSP revocation evidence for the exact installed leaf. This is verification, not revocation. Reject good/unknown, stale/future, forged or mismatched issuer/serial evidence; preserve keys on failure. Issuer signatures support native ML-DSA as well as existing certificate algorithms; no signature verification is skipped.
+5. Send existing Agent Unprovision with principal/fingerprint, PKI revocation evidence and exact serialized Cloud deletion binding. The Agent checks same-tenant operator mTLS, current installed certificate, signed revocation and exact Cloud binding before authorizing erasure.
 
-## Read-only diagnosis
+`--check` reads Cloud binding and Agent capability only. It does not revoke, spend EAB, reset, import proof or write a CLI journal. All v2 phases have a three-minute command bound. A false progress flag means unconfirmed, not reversal of a remote mutation.
 
-`device unenroll --check --asset-id <UUID> --json` verifies the Cloud/peer binding
-and calls `CheckACMERevocation` to check the scoped directory and look up the
-existing account with `onlyReturnExisting`. It never sends `revokeCert`,
-registers an account, saves revocation progress, deletes an asset or resets keys.
-Success means account lookup is ready, **not** that a certificate is revoked.
-Errors expose only a fixed phase, HTTP status and allowlisted ACME problem type;
-backend details, URLs, nonces and credentials are not printed. An older Agent
-fails with `Unimplemented`. A PKI endpoint returning `externalAccountRequired`
-for an existing-account-only lookup needs a server-side RFC 8555 correction;
-do not supply a fabricated EAB or burn a new credential to bypass it.
+## Re-entry without CLI workflow state
 
-## Failures and retries
+There is no CLI journal, saved phase, reusable enrollment credential or one-use response token. Historical unenroll/unenroll-v2 journals remain untouched and are not authority.
 
-This is a convergent cleanup workflow, **not a distributed transaction**. A
-revocation failure/uncertain response leaves enrollment/account/device keys
-untouched and does not delete the asset. Cloud deletion failures leave local
-keys untouched, but a previously successful revocation cannot be rolled back.
-No numeric-ID fallback or alternate PKI management mutation is attempted.
+- Active asset: retry the same Cloud operation; already-revoked principal credentials are a no-op.
+- Cloud tombstone with device still provisioned: retrieve fresh PKI evidence and retry guarded erasure.
+- Erasure interrupted: before deleting any key, Agent syncs a public, device-signed pending reset authorization. Startup verifies it and resumes bounded cleanup before loading or serving enrollment. Incomplete recovery fails closed and blocks new enrollment.
+- Reset completed but reply lost: after key removal and directory sync, Agent atomically publishes the signed completion receipt. Its existing IsProvisioned response carries that public receipt. A fresh CLI validates the old certificate's signature and configured trust roots, PKI evidence at authorization time, and the exact current authorized Cloud tombstone. It reports completion of that **prior principal's operation**, not a newly authenticated current device identity. Plaintext transport/mDNS are not identity proof and carry no mutation authority.
 
-The Agent atomically persists only `revokedCertificateSHA256` in existing
-`provisioning.json`, syncing file and parent directory before confirmation.
-Principal and serial derive from existing state/current certificate; proof must
-match that exact leaf fingerprint. It survives restart/failure, is invalidated
-by certificate replacement and cleared on reset. Unreleased development
-`acme-revocation.json` and nested prototype records are not read or imported;
-historical standalone files remain untouched, including during reset.
+The receipt contains only public certificate/chain, principal, Cloud endpoint, asset UUID, installed fingerprint, authorization time, PKI-signed status, typed deletion binding and signature. No private key, ACME account key, EAB secret, bearer token or operator key is written to it. Historical development proof files are ignored and preserved. Active re-enrollment takes precedence over an old completion receipt.
 
-The CLI has **no unenrollment journal**. Historical `unenroll/` and
-`unenroll-v2/` files are left untouched but are not read as authority. Every retry
-reconciles the authenticated Agent's exact leaf acknowledgement with Cloud's
-**Active / Deleted / Unknown** lifecycle. Deleted evidence retains only asset
-UUID, tenant, PKI binding and deletion time for the tenant lifetime; names and
-descriptive metadata are removed, names are reusable, and UUIDs are not reused.
-Tenant deletion or explicit privacy/admin purge removes evidence. `GetAsset`
-returns active Asset or NotFound with typed `DeletedAsset` protobuf detail in
-standard gRPC status metadata. Plain NotFound, a missing/malformed detail or
-unexpected binding/certificate change always stops cleanup. Never infer deletion
-from status code or message text alone. Rollback purges tombstones without
-resurrecting assets, losing recovery evidence. Cloud stores no device
-certificates or keys and its tombstone does not authorize device reset.
+## Rollout and limits
 
-JSON progress booleans indicate confirmed operations, not rollback: a false
-field may mean an operation's response was lost. A reset response failure is
-reported as unconfirmed; if the Agent already erased its keys, the old identity
-can no longer authenticate a retry. Inspect supported provisioning status and
-reconcile that completion separately before reenrolling. Filesystem failures
-during destructive reset can leave partial local cleanup.
+Land [service-protos #96 — Typed deletion evidence through GetAsset](https://github.com/wendylabsinc/service-protos/pull/96), compatible [Cloud #754 — Lifecycle tombstones for safe unenrollment](https://github.com/wendylabsinc/cloud/pull/754) (including Sem's fixes), and an updated Agent before using this consumer. Unreleased development servers/agents are not a compatibility promise. Migration numbers and cumulative landing order must be reconciled before main deployment; source maximum is not a live migration cursor.
 
-This revokes **only the installed certificate**, not every historical
-certificate for a principal. Lost account keys, historical issued certificates,
-already-reset devices, and device-wide PKI inventory/revocation remain separate
-recovery workflows. This change does not deploy a Cloud/PKI server or backfill
-metadata. Never replace a failed revocation with deletion of local keys.
+Cloud-only unenrollment can finish without a reachable device, but cannot erase an offline device's local credentials. Missing/purged Cloud evidence is unknown and fails closed. Missing/unavailable OCSP evidence preserves local keys even after Cloud completes. A receipt proves the earlier operation, not current physical-device identity or reachability. No live acceptance, installation or deployment is implied by source tests; the earlier production user-run acceptance used a different build.
