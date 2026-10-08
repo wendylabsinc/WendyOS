@@ -99,8 +99,14 @@ func (b *campaignWatchBackend) Start(ctx context.Context, conn *grpcclient.Agent
 	if err != nil {
 		finishStart()
 		b.detachIfIdle()
-		if status.Code(err) == codes.DeadlineExceeded && ctx.Err() == nil {
-			return nil, errWatchDeviceBusy
+		switch status.Code(err) {
+		case codes.DeadlineExceeded, codes.Canceled, codes.Unavailable:
+			// The call ended without the device's answer, so the deploy may
+			// still land.
+			if status.Code(err) == codes.DeadlineExceeded && ctx.Err() == nil {
+				err = errWatchDeviceBusy
+			}
+			return nil, watchUnconfirmedError{err}
 		}
 		return nil, watchDeviceError(err)
 	}

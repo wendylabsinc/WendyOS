@@ -156,6 +156,11 @@ func (m *watchManager) start(ctx context.Context, conn *grpcclient.AgentConnecti
 	m.mu.Lock()
 	if err != nil {
 		m.forgetLocked(rec.id)
+		if errors.As(err, new(watchUnconfirmedError)) {
+			// A stop that ended this watch during the deploy must not report
+			// it removed: the device may still create it.
+			rec.removeErr = err
+		}
 		close(rec.settled)
 		m.mu.Unlock()
 		return watchView{}, err

@@ -167,6 +167,51 @@ func TestCampaignWatchDeployCancelledByTheCallerIsNotBusy(t *testing.T) {
 	}
 }
 
+// A deploy that ended without the device's answer may still land; a refusal
+// did not.
+func TestCampaignWatchDeployFailuresSayWhetherTheyMayLand(t *testing.T) {
+	cases := []struct {
+		name      string
+		deployErr error
+		timeout   bool
+		mayLand   bool
+	}{
+		{name: "busy", timeout: true, mayLand: true},
+		{name: "unreachable", deployErr: status.Error(codes.Unavailable, "connection reset"), mayLand: true},
+		{name: "cancelled", deployErr: status.Error(codes.Canceled, "context canceled"), mayLand: true},
+		{name: "refused", deployErr: status.Error(codes.FailedPrecondition, "agent campaign inference runtime is unavailable")},
+		{name: "old agent", deployErr: status.Error(codes.Unimplemented, "unknown method")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newWatchDataClient()
+			client.deployErr = tc.deployErr
+			b := fastCampaignBackend()
+			if tc.timeout {
+				client.deployWait, b.deployTimeout = 5*time.Second, 50*time.Millisecond
+			}
+			h, err := b.Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+			if err == nil {
+				h.Stop(context.Background())
+				t.Fatal("the deploy must fail")
+			}
+			var unconfirmed watchUnconfirmedError
+			if errors.As(err, &unconfirmed) != tc.mayLand {
+				t.Fatalf("%v: may land %v, want %v", err, !tc.mayLand, tc.mayLand)
+			}
+			if tc.timeout && !errors.Is(err, errWatchDeviceBusy) {
+				t.Fatalf("a busy device must still read as busy: %v", err)
+			}
+			if tc.deployErr != nil && status.Code(err) != status.Code(tc.deployErr) && !errors.Is(err, errWatchAgentTooOld) {
+				t.Fatalf("lost the device's code: %v", err)
+			}
+			if tc.mayLand && tc.deployErr != nil && grpcErrString(err) != grpcErrString(tc.deployErr) {
+				t.Fatalf("tools would report %q, not the device's %q", grpcErrString(err), grpcErrString(tc.deployErr))
+			}
+		})
+	}
+}
+
 func TestCampaignWatchOldAgentRefusesCleanly(t *testing.T) {
 	for name, deployErr := range map[string]error{
 		"unknown lease field": status.Error(codes.InvalidArgument, "parsing campaign YAML: yaml: unmarshal errors:\n  line 3: field lease not found in type data.Campaign"),

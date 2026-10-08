@@ -575,22 +575,43 @@ func TestWatchManagerStopDuringALongStartReportsThePendingRemoval(t *testing.T) 
 	}
 }
 
-// A deploy that fails left nothing to remove.
-func TestWatchManagerStopDuringAFailedStartRemovesNothing(t *testing.T) {
-	backend := &fakeWatchBackend{started: make(chan struct{}), err: errors.New("deploy refused")}
-	m, _, _ := newTestWatchManager(backend)
+// stopDuringFailedStart stops a watch while its deploy runs, then fails the
+// deploy with deployErr, and returns stop's error.
+func stopDuringFailedStart(t *testing.T, deployErr error) error {
+	t.Helper()
+	backend := &fakeWatchBackend{started: make(chan struct{}), err: deployErr}
+	m, log, _ := newTestWatchManager(backend)
 	done := startInBackground(t, m)
 	stopped := make(chan error, 1)
 	go func() {
 		_, err := m.stop(context.Background(), "w1", watchStoppedReason)
 		stopped <- err
 	}()
-	time.Sleep(20 * time.Millisecond)
+	log.waitFor(t, func(n sentNotification) bool { return n.params["state"] == "ENDED" })
+	select {
+	case err := <-stopped:
+		t.Fatalf("stop returned (%v) before the deploy finished", err)
+	case <-time.After(50 * time.Millisecond):
+	}
 	close(backend.started)
-	if err := <-stopped; err != nil {
+	<-done
+	return <-stopped
+}
+
+// A deploy the device refused left nothing to remove.
+func TestWatchManagerStopDuringARefusedStartRemovesNothing(t *testing.T) {
+	if err := stopDuringFailedStart(t, errors.New("deploy refused")); err != nil {
 		t.Fatal(err)
 	}
-	<-done
+}
+
+// A deploy that ended without the device's answer may still land, so stop
+// must not report it removed.
+func TestWatchManagerStopDuringAnUnconfirmedStartSaysSo(t *testing.T) {
+	var unconfirmed watchUnconfirmedError
+	if err := stopDuringFailedStart(t, watchUnconfirmedError{errWatchDeviceBusy}); !errors.As(err, &unconfirmed) {
+		t.Fatalf("got %v", err)
+	}
 }
 
 func TestWatchManagerRetainsTheMostRecentlyEndedWatches(t *testing.T) {

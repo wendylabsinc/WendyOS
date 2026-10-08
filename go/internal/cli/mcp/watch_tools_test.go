@@ -293,6 +293,19 @@ func TestWatchStopDuringALongDeployReportsThePendingRemoval(t *testing.T) {
 	}
 }
 
+func TestWatchStopDuringADeployTheDeviceNeverConfirmed(t *testing.T) {
+	s, client, _ := watchToolServer(t)
+	s.watchManager().backend.(*campaignWatchBackend).deployTimeout = 300 * time.Millisecond
+	client.deployWait = 5 * time.Second
+	started := startWatchInBackground(t, s)
+	stopped, isErr := callWatchTool(t, s, "watch_stop", map[string]any{"watch_id": "w1"})
+	message, _ := stopped["message"].(string)
+	if isErr || stopped["state"] != "ENDED" || stopped["removed"] != false || !strings.Contains(message, "did not confirm") || !strings.Contains(message, "stops by itself") {
+		t.Fatalf("stop %v", stopped)
+	}
+	<-started
+}
+
 func TestWatchStartOnABusyDevice(t *testing.T) {
 	s, client, _ := watchToolServer(t)
 	s.watchManager().backend.(*campaignWatchBackend).deployTimeout = 50 * time.Millisecond

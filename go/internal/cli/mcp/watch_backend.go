@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"google.golang.org/grpc/status"
 )
 
 // watchState is a watch's state as clients see it (design §6.3).
@@ -57,9 +58,22 @@ type watchStatusUpdate struct {
 // assigns sequence numbers and owns buffering and notifications (design §6.2).
 type watchBackend interface {
 	// Start creates the watch on the device and returns once it exists there.
-	// Readiness and events arrive on the handle.
+	// Readiness and events arrive on the handle. A failure the device did not
+	// confirm is a watchUnconfirmedError.
 	Start(ctx context.Context, conn *grpcclient.AgentConnection, spec watchSpec) (watchHandle, error)
 }
+
+// watchUnconfirmedError is a Start failure after which the device may still
+// create the watch: the deploy ended without the device's answer. The watch's
+// lease removes it then. It reads as the error it wraps.
+type watchUnconfirmedError struct{ err error }
+
+func (e watchUnconfirmedError) Error() string { return e.err.Error() }
+func (e watchUnconfirmedError) Unwrap() error { return e.err }
+
+// GRPCStatus is the wrapped error's own status, so tools report the device's
+// code and message as they would without the wrapper.
+func (e watchUnconfirmedError) GRPCStatus() *status.Status { return status.Convert(e.err) }
 
 // watchHandle is one running watch. Updates is closed after Stop, or after the
 // backend reports the watch ENDED by itself.
