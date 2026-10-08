@@ -110,14 +110,14 @@ func TestCampaignWatchDeployHasADeadline(t *testing.T) {
 	client := newWatchDataClient()
 	client.deployWait = 5 * time.Second
 	b := fastCampaignBackend()
-	b.callTimeout = 50 * time.Millisecond
+	b.deployTimeout = 50 * time.Millisecond
 	began := time.Now()
 	h, err := b.Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
 	if err == nil {
 		h.Stop(context.Background())
 		t.Fatal("a deploy past its deadline must fail")
 	}
-	if elapsed := time.Since(began); elapsed > time.Second || status.Code(err) != codes.DeadlineExceeded {
+	if elapsed := time.Since(began); elapsed > time.Second || !errors.Is(err, errWatchDeviceBusy) {
 		t.Fatalf("got %v after %s", err, elapsed)
 	}
 	b.mu.Lock()
@@ -128,6 +128,42 @@ func TestCampaignWatchDeployHasADeadline(t *testing.T) {
 	}
 	if names := client.deployedNames(); len(names) != 0 {
 		t.Fatalf("deployed %v", names)
+	}
+}
+
+// The agent deploys under the lock a recording campaign holds while it starts
+// a capture, which can take over 20 s, so a deploy gets longer than the other
+// device calls.
+func TestCampaignWatchDeployOutlastsTheCallTimeout(t *testing.T) {
+	if b := newCampaignWatchBackend(defaultWatchDetector); b.deployTimeout != 30*time.Second || b.callTimeout != 10*time.Second {
+		t.Fatalf("deploy timeout %s, call timeout %s", b.deployTimeout, b.callTimeout)
+	}
+	client := newWatchDataClient()
+	client.deployWait = 150 * time.Millisecond
+	b := fastCampaignBackend()
+	b.callTimeout, b.deployTimeout = 50*time.Millisecond, 2*time.Second
+	h, err := b.Start(context.Background(), &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+	if err != nil {
+		t.Fatalf("a deploy within its own timeout failed: %v", err)
+	}
+	h.Stop(context.Background())
+}
+
+// Only the device running out the deploy's time is "busy"; a caller that gave
+// up gets its own error.
+func TestCampaignWatchDeployCancelledByTheCallerIsNotBusy(t *testing.T) {
+	client := newWatchDataClient()
+	client.deployWait = 5 * time.Second
+	b := fastCampaignBackend()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	h, err := b.Start(ctx, &grpcclient.AgentConnection{DataService: client}, testWatchSpec("chat-0a1b2c3d-1"))
+	if err == nil {
+		h.Stop(context.Background())
+		t.Fatal("a cancelled deploy must fail")
+	}
+	if errors.Is(err, errWatchDeviceBusy) || status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("got %v", err)
 	}
 }
 

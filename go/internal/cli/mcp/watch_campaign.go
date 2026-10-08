@@ -26,6 +26,9 @@ const (
 	watchPollEvery     = time.Second
 	watchInferenceRate = 2
 	watchCallTimeout   = 10 * time.Second
+	// The agent deploys under the lock a recording campaign holds while it
+	// starts a capture, which can take over 20 s.
+	watchDeployTimeout = 30 * time.Second
 	watchGoneReason    = "the device restarted or the watch expired"
 )
 
@@ -34,14 +37,20 @@ const (
 // remove RPCs, so a refused watch leaves nothing on the device (design §5.7).
 var errWatchAgentTooOld = errors.New("This device's agent is too old for watches; update it with `wendy device update`.")
 
+// errWatchDeviceBusy is a deploy the device did not take within
+// watchDeployTimeout. The agent may still apply it once it is free; the lease
+// then removes the campaign, which nothing renews.
+var errWatchDeviceBusy = errors.New("The device did not accept the watch within 30 s; it is busy, for example starting a recording. Try again in a minute. If the device accepts this watch late, it removes itself within a minute.")
+
 // campaignWatchBackend runs each watch as a leased, notify-only Wendy Data
 // campaign (design §6.3).
 type campaignWatchBackend struct {
-	detector    watchDetector
-	renewEvery  time.Duration
-	statusEvery time.Duration
-	pollEvery   time.Duration
-	callTimeout time.Duration // each device call's deadline
+	detector      watchDetector
+	renewEvery    time.Duration
+	statusEvery   time.Duration
+	pollEvery     time.Duration
+	callTimeout   time.Duration // each device call's deadline
+	deployTimeout time.Duration // the deploy's deadline
 
 	mu      sync.Mutex
 	watches map[string]*campaignWatch // by campaign name
@@ -56,7 +65,7 @@ type campaignWatchBackend struct {
 }
 
 func newCampaignWatchBackend(detector watchDetector) *campaignWatchBackend {
-	return &campaignWatchBackend{detector: detector, renewEvery: watchRenewEvery, statusEvery: watchStatusEvery, pollEvery: watchPollEvery, callTimeout: watchCallTimeout, watches: map[string]*campaignWatch{}}
+	return &campaignWatchBackend{detector: detector, renewEvery: watchRenewEvery, statusEvery: watchStatusEvery, pollEvery: watchPollEvery, callTimeout: watchCallTimeout, deployTimeout: watchDeployTimeout, watches: map[string]*campaignWatch{}}
 }
 
 func (b *campaignWatchBackend) Start(ctx context.Context, conn *grpcclient.AgentConnection, spec watchSpec) (watchHandle, error) {
@@ -84,12 +93,15 @@ func (b *campaignWatchBackend) Start(ctx context.Context, conn *grpcclient.Agent
 		return nil, err
 	}
 	// startMu is held: a deploy without a deadline could block every start.
-	deployCtx, cancelDeploy := context.WithTimeout(ctx, b.callTimeout)
+	deployCtx, cancelDeploy := context.WithTimeout(ctx, b.deployTimeout)
 	_, err = client.CampaignDeploy(deployCtx, &agentpbv2.DataCampaignDeployRequest{CampaignYaml: plan})
 	cancelDeploy()
 	if err != nil {
 		finishStart()
 		b.detachIfIdle()
+		if status.Code(err) == codes.DeadlineExceeded && ctx.Err() == nil {
+			return nil, errWatchDeviceBusy
+		}
 		return nil, watchDeviceError(err)
 	}
 	watchCtx, cancel := context.WithCancel(context.Background())

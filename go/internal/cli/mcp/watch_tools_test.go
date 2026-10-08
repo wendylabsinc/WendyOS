@@ -247,6 +247,20 @@ func TestWatchStartOnAnOldAgent(t *testing.T) {
 	}
 }
 
+func TestWatchStartOnABusyDevice(t *testing.T) {
+	s, client, _ := watchToolServer(t)
+	s.watchManager().backend.(*campaignWatchBackend).deployTimeout = 50 * time.Millisecond
+	client.deployWait = 5 * time.Second
+	out, isErr := callWatchTool(t, s, "watch_start", map[string]any{"camera": "v4l2:/dev/video0", "classes": []any{"person"}})
+	message, _ := out["message"].(string)
+	if !isErr || out["error_code"] != "TIMEOUT" || !strings.Contains(message, "busy") || !strings.Contains(message, "removes itself") {
+		t.Fatalf("got %v", out)
+	}
+	if listed, _ := callWatchTool(t, s, "watch_list", nil); len(listed["watches"].([]any)) != 0 || listed["free_slots"] != float64(2) {
+		t.Fatalf("a refused watch must leave nothing: %v", listed)
+	}
+}
+
 func TestWatchesEndWhenTheDeviceChanges(t *testing.T) {
 	s, _, _ := watchToolServer(t)
 	if _, isErr := callWatchTool(t, s, "watch_start", map[string]any{"camera": "v4l2:/dev/video0", "classes": []any{"person"}}); isErr {

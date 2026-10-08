@@ -102,6 +102,8 @@ func watchErrorResult(err error) *mcpgo.CallToolResult {
 		return errResult(errCodeNotFound, err.Error())
 	case errors.Is(err, errWatchLimit):
 		return errResult(errCodeInvalidArgument, err.Error())
+	case errors.Is(err, errWatchDeviceBusy):
+		return errResult(errCodeTimeout, err.Error())
 	}
 	return errResult(codeFromGRPC(err), grpcErrString(err))
 }
