@@ -92,9 +92,9 @@ func RunWriter(opts WriterOptions) error {
 
 // writeBlob writes a single file verbatim at offset 0 (the flashpkg LUN).
 func writeBlob(opts WriterOptions) error {
-	// O_RDWR (not O_WRONLY): prepareRawTarget's SET_DISK_ATTRIBUTES IOCTL needs
-	// read+write access on the handle, and copyFileAt only ever writes.
-	dev, err := os.OpenFile(opts.Device, os.O_RDWR, 0)
+	// Open read/write for Windows disk IOCTLs and filesystem writers. On Linux,
+	// also claim the block device exclusively for the lifetime of the write.
+	dev, err := os.OpenFile(opts.Device, rawWriteFlags, 0)
 	if err != nil {
 		return fmt.Errorf("opening %s (%s): %w", opts.Device, devOpenPrivilege, err)
 	}
@@ -134,7 +134,7 @@ func writePlan(opts WriterOptions) error {
 	if err != nil {
 		return err
 	}
-	dev, err := os.OpenFile(opts.Device, os.O_RDWR, 0)
+	dev, err := os.OpenFile(opts.Device, rawWriteFlags, 0)
 	if err != nil {
 		return fmt.Errorf("opening %s (%s): %w", opts.Device, devOpenPrivilege, err)
 	}

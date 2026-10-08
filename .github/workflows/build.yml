@@ -413,6 +413,8 @@ jobs:
         env:
           DEVELOPER_ID_CERTIFICATE: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
           DEVELOPER_ID_KEY: ${{ secrets.DEVELOPER_ID_KEY }}
+          WENDY_AGENT_MAC_PROVISIONING_PROFILE: ${{ secrets.WENDY_AGENT_MAC_PROVISIONING_PROFILE }}
+          WENDY_AGENT_MAC_NET_PROXY_PROVISIONING_PROFILE: ${{ secrets.WENDY_AGENT_MAC_NET_PROXY_PROVISIONING_PROFILE }}
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
@@ -430,6 +432,8 @@ jobs:
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
           SIGNING_IDENTITY: ${{ steps.signing.outputs.signing_identity }}
           NOTARY_PROFILE: ${{ steps.signing.outputs.notary_profile }}
+          APP_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.app_provisioning_profile_path }}
+          NET_PROXY_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.net_proxy_provisioning_profile_path }}
         shell: bash
         run: bash ./Scripts/Build.sh
 
@@ -454,8 +458,18 @@ jobs:
         shell: bash
         env:
           KEYCHAIN_PATH: ${{ steps.signing.outputs.keychain_path }}
+          APP_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.app_provisioning_profile_path }}
+          NET_PROXY_PROVISIONING_PROFILE_PATH: ${{ steps.signing.outputs.net_proxy_provisioning_profile_path }}
         run: |
           set -euo pipefail
+          for profile_path in \
+            "${APP_PROVISIONING_PROFILE_PATH:-}" \
+            "${NET_PROXY_PROVISIONING_PROFILE_PATH:-}"
+          do
+            if [ -n "$profile_path" ]; then
+              rm -f "$profile_path"
+            fi
+          done
           if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi

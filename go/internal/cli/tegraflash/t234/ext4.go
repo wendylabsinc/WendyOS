@@ -9,11 +9,16 @@ package t234
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"path"
 	"strings"
 )
+
+// ErrExt4FileNotFound lets optional recovery files be distinguished from a
+// corrupt or unsupported filesystem.
+var ErrExt4FileNotFound = errors.New("no such file or directory")
 
 const (
 	ext4SuperOffset  = 1024
@@ -286,7 +291,7 @@ func (fs *ext4FS) lookup(p string) (int64, error) {
 			}
 		}
 		if found == 0 {
-			return 0, fmt.Errorf("%s: no such file or directory", p)
+			return 0, fmt.Errorf("%s: %w", p, ErrExt4FileNotFound)
 		}
 		ino = found
 	}

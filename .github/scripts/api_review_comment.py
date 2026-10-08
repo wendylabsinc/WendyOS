@@ -16,6 +16,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from api_review import illustrative_excerpt
+
 COMMENT_MARKER = "<!-- ai-api-review:v1 -->"
 PART_MARKER_RE = re.compile(r"<!-- ai-api-review:part=(\d+)/(\d+) -->")
 WARNING_START = "<!-- ai-api-review:incomplete -->"
@@ -30,7 +32,11 @@ CATEGORIES = {
     "cli": "CLI layout and behavior",
     "other": "Other durable contracts",
 }
-IMPACTS = {"additive": "Additive", "breaking": "Breaking", "behavioral": "Behavior change"}
+IMPACTS = {
+    "additive": ("🟢", "Additive"),
+    "breaking": ("🔴", "Breaking"),
+    "behavioral": ("🟡", "Behavior change"),
+}
 API_LABEL = {
     "name": "api-review",
     "color": "B60205",
@@ -44,9 +50,22 @@ RISK_LABELS = {
 
 
 def inline(value: str) -> str:
-    """Model prose is plain text; only this renderer supplies Markdown/links."""
-    value = html.escape(" ".join(value.split()), quote=False).replace("@", "&#64;")
-    return re.sub(r"([\\`*_\[\]{}()#!|~])", r"\\\1", value)
+    """Render only balanced model-supplied inline-code spans as Markdown."""
+    value = " ".join(value.split())
+
+    def plain(text: str) -> str:
+        text = html.escape(text, quote=False).replace("@", "&#64;")
+        return re.sub(r"([\\`*_\[\]{}()#!|~])", r"\\\1", text)
+
+    rendered: list[str] = []
+    position = 0
+    for match in re.finditer(r"`([^`]+)`", value):
+        rendered.append(plain(value[position:match.start()]))
+        code = html.escape(match.group(1), quote=False).replace("@", "&#64;")
+        rendered.append(f"`{code}`")
+        position = match.end()
+    rendered.append(plain(value[position:]))
+    return "".join(rendered)
 
 
 def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
@@ -147,20 +166,37 @@ def review_intro(result: dict, repo: str) -> list[str]:
     ]
 
 
-def decision_lines(decision: dict, result: dict, repo: str, accepted: set[str]) -> list[str]:
+def markdown_fence(text: str) -> str:
+    longest = max((len(match.group()) for match in re.finditer(r"`+", text)), default=0)
+    return "`" * max(3, longest + 1)
+
+
+def decision_lines(decision: dict, result: dict, repo: str, accepted: set[str], diff: str = "") -> list[str]:
     identifier = decision_id(decision)
     checked = "x" if identifier in accepted else " "
-    return [
+    impact_symbol, impact_title = IMPACTS[decision["impact"]]
+    lines = [
         f"- [{checked}] Accept **{inline(decision['title'])}** — "
-        f"{IMPACTS[decision['impact']]}. <!-- api-decision:{identifier} -->",
-        f"  - Change: {inline(decision['change'])}",
-        f"  - Compatibility: {inline(decision['compatibility'])}",
-        "  - Code: " + ", ".join(code_link(repo, result, loc) for loc in decision["locations"]),
-        "",
+        f"{impact_symbol} **{impact_title}**. <!-- api-decision:{identifier} -->",
+        f"  - **Change:** {inline(decision['change'])}",
+        f"  - **Compatibility:** {inline(decision['compatibility'])}",
+        "  - **Code:** " + ", ".join(code_link(repo, result, loc) for loc in decision["locations"]),
     ]
+    excerpt = illustrative_excerpt(diff, decision) if diff else None
+    if excerpt is not None:
+        lines.append("")
+        if excerpt["label"]:
+            lines.append(f"  **{excerpt['label']}:**")
+            lines.append("")
+        fence = markdown_fence(excerpt["text"])
+        lines.append(f"  {fence}{excerpt['language']}")
+        lines.extend(f"  {line}" for line in excerpt["text"].splitlines())
+        lines.append(f"  {fence}")
+    lines.append("")
+    return lines
 
 
-def render_comment(result: dict, repo: str, previous: str = "") -> str:
+def render_comment(result: dict, repo: str, previous: str = "", diff: str = "") -> str:
     accepted = accepted_decisions(result, previous)
     lines = review_intro(result, repo)
     if not result["decisions"]:
@@ -172,7 +208,7 @@ def render_comment(result: dict, repo: str, previous: str = "") -> str:
             lines += ["No API decisions changed.", ""]
             continue
         for decision in sorted(decisions, key=lambda item: (item["title"], decision_id(item))):
-            lines += decision_lines(decision, result, repo, accepted)
+            lines += decision_lines(decision, result, repo, accepted, diff)
     lines += [revision_marker(result), COMMENT_MARKER, ""]
     body = "\n".join(lines)
     if len(body.encode()) > MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES:
@@ -192,7 +228,7 @@ def part_index(body: str) -> int:
     return index
 
 
-def render_continuations(result: dict, repo: str, previous: str = "") -> list[str]:
+def render_continuations(result: dict, repo: str, previous: str = "", diff: str = "") -> list[str]:
     """Pack whole decision blocks; never truncate prose, evidence, or checkboxes."""
     accepted = accepted_decisions(result, previous)
     limit = MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES
@@ -215,7 +251,7 @@ def render_continuations(result: dict, repo: str, previous: str = "") -> list[st
         decisions = sorted((item for item in result["decisions"] if item["category"] == category),
                            key=lambda item: (item["title"], decision_id(item)))
         for decision in decisions:
-            block = decision_lines(decision, result, repo, accepted)
+            block = decision_lines(decision, result, repo, accepted, diff)
             heading = [f"## {title}", ""]
             candidate = current + ([] if current_category == category else heading) + block
             # Reserve the maximum possible page-number width before any write.
@@ -304,10 +340,18 @@ class GitHub:
             time.sleep(2**attempt)
 
 
-def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: str, github) -> bool:
+def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: str, diff_bytes: bytes, github) -> bool:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or pr_number <= 0:
         raise ValueError("Invalid repository or PR number")
     validate_result(result, head_sha, base_sha)
+    diff = ""
+    if result["status"] == "complete":
+        if len(diff_bytes) != result["diff_bytes"] or hashlib.sha256(diff_bytes).hexdigest() != result["diff_sha256"]:
+            raise ValueError("API review diff does not match the complete result")
+        try:
+            diff = diff_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("API review diff is not valid UTF-8") from error
     root = f"/repos/{repo}"
     issue = f"{root}/issues/{pr_number}"
     pull_path = f"{root}/pulls/{pr_number}"
@@ -345,9 +389,9 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
             accepted_previous = "\n\n".join(comment["body"] for comment in existing
                                                if revision_marker(result) in comment["body"])
             try:
-                body = render_comment(result, repo, accepted_previous)
+                body = render_comment(result, repo, accepted_previous, diff)
             except ValueError:
-                continuations = render_continuations(result, repo, accepted_previous)
+                continuations = render_continuations(result, repo, accepted_previous, diff)
                 # GitHub comment IDs are bounded integers. Validate the complete
                 # primary with worst-case link lengths before creating any part.
                 body = render_primary(result, repo, pr_number, [10**20 - 1] * len(continuations))
@@ -462,9 +506,15 @@ def main() -> int:
     token = os.environ.get("GH_TOKEN")
     if not token:
         raise ValueError("GH_TOKEN is required to publish API review")
-    result = json.loads(Path(args.result).read_text())
+    result_path = Path(args.result)
+    result = json.loads(result_path.read_text())
+    # SECURITY: Both fixed-name files are created in RUNNER_TEMP by trusted
+    # base-revision automation, with no PR-controlled steps. Keep this interface
+    # unchanged during rollout, then verify the immutable diff fingerprint
+    # before rendering any PR-controlled source text.
+    diff_bytes = result_path.with_name("api-review-pr.diff").read_bytes()
     return 0 if publish(result, args.repo, args.pr_number, args.expected_head_sha,
-                        args.expected_base_sha, GitHub(token)) else 1
+                        args.expected_base_sha, diff_bytes, GitHub(token)) else 1
 
 
 if __name__ == "__main__":

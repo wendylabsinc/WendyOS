@@ -5,7 +5,7 @@ import WendyAgentCore
 import os
 
 private let providerLog = Logger(
-    subsystem: "sh.wendy.WendyAgentMac.WendyNet",
+    subsystem: "sh.wendy.WendyAgentMac.NetProxy",
     category: "ProxyProvider"
 )
 
@@ -31,7 +31,7 @@ final class WendyNetProxyProvider: NETransparentProxyProvider, NEAppProxyUDPFlow
             )
         else {
             let error = NSError(
-                domain: "sh.wendy.WendyAgentMac.WendyNet",
+                domain: "sh.wendy.WendyAgentMac.NetProxy",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "WendyNet configuration is unavailable"]
             )

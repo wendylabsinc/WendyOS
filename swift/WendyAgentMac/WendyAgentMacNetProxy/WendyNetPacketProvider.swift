@@ -4,7 +4,7 @@ import WendyAgentCore
 import os
 
 private let packetLog = Logger(
-    subsystem: "sh.wendy.WendyAgentMac.WendyNet",
+    subsystem: "sh.wendy.WendyAgentMac.NetProxy",
     category: "PacketProvider"
 )
 
@@ -33,7 +33,7 @@ final class WendyNetPacketProvider: NEPacketTunnelProvider, @unchecked Sendable 
         else {
             completionHandler(
                 NSError(
-                    domain: "sh.wendy.WendyAgentMac.WendyNet",
+                    domain: "sh.wendy.WendyAgentMac.NetProxy",
                     code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "WendyNet configuration is unavailable"]
                 )

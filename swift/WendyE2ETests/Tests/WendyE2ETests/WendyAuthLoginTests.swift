@@ -18,13 +18,56 @@ struct `'wendy auth login'` {
             try await cli.sh("wendy auth login --help") { result in
                 let stdout = result.stdout
                 #expect(result.status.isSuccess)
-                #expect(stdout.contains("Signs in to Wendy Cloud"))
+                #expect(stdout.contains("dashboard flow by default"))
                 #expect(stdout.contains("wendy auth login [flags]"))
                 #expect(stdout.contains("--api-key"))
                 #expect(stdout.contains("--cloud"))
                 #expect(stdout.contains("--cloud-grpc"))
                 #expect(stdout.contains("--org"))
+                #expect(!stdout.contains("--production"))
+                #expect(!stdout.contains("--development"))
+                #expect(!stdout.contains("--legacy"))
                 #expect(result.stderr == "")
+            }
+        }
+    }
+
+    /**
+     Production and development Cloud targets start at the realm-less Wendy Auth
+     page. The browser collects email and organization, then returns the selected
+     realm to the CLI. This needs the protected browser/Auth fixture tracked by
+     WDY-1949; an E2E must never open a real browser or use personal credentials.
+     */
+    @Test(
+        .disabled(
+            "WDY-1949: realm-less Cloud login needs a protected browser/Auth fixture and injectable browser."
+        )
+    )
+    func `starts realm-less login for the selected Cloud target`() async throws {
+        // Unit coverage verifies target routing without network or browser access.
+    }
+
+    /**
+     A login can select only one built-in Cloud target. Conflicting target flags
+     fail locally before browser, credential, configuration, or network work.
+     */
+    @Test
+    func `rejects conflicting Cloud targets`() async throws {
+        try await self.scenario.run(authenticated: false) { cli, _ in
+            for flags in [
+                "--production --development",
+                "--production --legacy",
+                "--development --legacy",
+            ] {
+                try await cli.sh("wendy auth login \(flags)") { result in
+                    #expect(result.status.isFailure)
+                    #expect(result.stdout == "")
+                    #expect(
+                        result.stderr.contains(
+                            "--production, --development, and --legacy are mutually exclusive"
+                        )
+                    )
+                }
             }
         }
     }

@@ -26,14 +26,18 @@ final class StatusMenuController: NSObject {
     init(
         wendyAgent: WendyAgent,
         localBuildService: WendyRuntimeVM,
+        localBuildServiceIsAvailable: Bool,
         meshVPN: MeshVPNController,
+        meshVPNIsAvailable: Bool,
         delegate: (any StatusMenuControllerDelegate)? = nil,
         bundle: Bundle = .main
     ) async {
         self.wendyAgent = wendyAgent
         self.localBuildService = localBuildService
+        self.localBuildServiceIsAvailable = localBuildServiceIsAvailable
         self.localBuildServiceState = localBuildService.state
         self.meshVPN = meshVPN
+        self.meshVPNIsAvailable = meshVPNIsAvailable
         self.meshVPNStatus = meshVPN.status
         self.delegate = delegate
         self.bundleDisplayName = AppDisplayName.resolve(from: bundle)
@@ -69,7 +73,9 @@ final class StatusMenuController: NSObject {
 
     private let bundleDisplayName: String
     private let localBuildService: WendyRuntimeVM
+    private let localBuildServiceIsAvailable: Bool
     private let meshVPN: MeshVPNController
+    private let meshVPNIsAvailable: Bool
     private let statusItem: NSStatusItem
     private let menu: NSMenu
     private var currentStatus: WendyAgentStatus
@@ -131,62 +137,70 @@ final class StatusMenuController: NSObject {
 
         self.menu.addItem(.separator())
 
-        let localBuildServiceItem = NSMenuItem(
-            title: self.localBuildServiceState.menuTitle,
-            action: #selector(self.localBuildServiceSelected),
-            keyEquivalent: ""
-        )
-        localBuildServiceItem.target = self
-        localBuildServiceItem.state = self.localBuildServiceState == .running ? .on : .off
-        localBuildServiceItem.isEnabled = self.localBuildServiceCanToggle
-        localBuildServiceItem.image = NSImage(
-            systemSymbolName: self.localBuildServiceState.menuImageName,
-            accessibilityDescription: "Local Build Service"
-        )
-        self.menu.addItem(localBuildServiceItem)
-
-        if let detail = self.localBuildServiceState.failureDetail {
-            self.menu.addItem(self.makeDisabledMenuItem(title: detail))
-        }
-
-        self.menu.addItem(.separator())
-
-        let meshItem = NSMenuItem(
-            title: self.meshMenuTitle,
-            action: #selector(self.meshVPNSelected),
-            keyEquivalent: ""
-        )
-        meshItem.target = self
-        meshItem.state = self.meshVPNStatus == .connected ? .on : .off
-        meshItem.isEnabled = !self.meshVPNIsTransitioning
-        meshItem.image = NSImage(
-            systemSymbolName: self.meshMenuImageName,
-            accessibilityDescription: "Wendy Mesh"
-        )
-        self.menu.addItem(meshItem)
-
-        if case .failed(let detail) = self.meshVPNStatus {
-            self.menu.addItem(self.makeDisabledMenuItem(title: detail))
-        }
-        if self.meshVPNStatus == .needsApproval {
-            let settingsItem = NSMenuItem(
-                title: "Open Network Extension Settings…",
-                action: #selector(self.networkExtensionSettingsSelected),
+        if self.localBuildServiceIsAvailable {
+            let localBuildServiceItem = NSMenuItem(
+                title: self.localBuildServiceState.menuTitle,
+                action: #selector(self.localBuildServiceSelected),
                 keyEquivalent: ""
             )
-            settingsItem.target = self
-            self.menu.addItem(settingsItem)
-
-            let cancelItem = NSMenuItem(
-                title: "Cancel Wendy Mesh",
-                action: #selector(self.cancelMeshVPNSelected),
-                keyEquivalent: ""
+            localBuildServiceItem.target = self
+            localBuildServiceItem.state = self.localBuildServiceState == .running ? .on : .off
+            localBuildServiceItem.isEnabled = self.localBuildServiceCanToggle
+            localBuildServiceItem.image = NSImage(
+                systemSymbolName: self.localBuildServiceState.menuImageName,
+                accessibilityDescription: "Local Build Service"
             )
-            cancelItem.target = self
-            self.menu.addItem(cancelItem)
+            self.menu.addItem(localBuildServiceItem)
+
+            if let detail = self.localBuildServiceState.failureDetail {
+                self.menu.addItem(self.makeDisabledMenuItem(title: detail))
+            }
         }
 
-        self.menu.addItem(.separator())
+        if self.meshVPNIsAvailable {
+            if self.localBuildServiceIsAvailable {
+                self.menu.addItem(.separator())
+            }
+
+            let meshItem = NSMenuItem(
+                title: self.meshMenuTitle,
+                action: #selector(self.meshVPNSelected),
+                keyEquivalent: ""
+            )
+            meshItem.target = self
+            meshItem.state = self.meshVPNStatus == .connected ? .on : .off
+            meshItem.isEnabled = !self.meshVPNIsTransitioning
+            meshItem.image = NSImage(
+                systemSymbolName: self.meshMenuImageName,
+                accessibilityDescription: "Wendy Mesh"
+            )
+            self.menu.addItem(meshItem)
+
+            if case .failed(let detail) = self.meshVPNStatus {
+                self.menu.addItem(self.makeDisabledMenuItem(title: detail))
+            }
+            if self.meshVPNStatus == .needsApproval {
+                let settingsItem = NSMenuItem(
+                    title: "Open Network Extension Settings…",
+                    action: #selector(self.networkExtensionSettingsSelected),
+                    keyEquivalent: ""
+                )
+                settingsItem.target = self
+                self.menu.addItem(settingsItem)
+
+                let cancelItem = NSMenuItem(
+                    title: "Cancel Wendy Mesh",
+                    action: #selector(self.cancelMeshVPNSelected),
+                    keyEquivalent: ""
+                )
+                cancelItem.target = self
+                self.menu.addItem(cancelItem)
+            }
+        }
+
+        if self.localBuildServiceIsAvailable || self.meshVPNIsAvailable {
+            self.menu.addItem(.separator())
+        }
 
         let statusItem = self.makeDisabledMenuItem(title: self.currentStatus.menuTitle)
         statusItem.image = self.makeStatusImage(for: self.currentStatus)
@@ -268,9 +282,13 @@ final class StatusMenuController: NSObject {
         button.title = self.buttonTitle(for: self.currentStatus, image: image)
         button.imagePosition = self.buttonImagePosition(for: self.currentStatus, image: image)
         button.imageScaling = .scaleProportionallyDown
+        let serviceTitles = [
+            self.localBuildServiceIsAvailable ? self.localBuildServiceState.menuTitle : nil,
+            self.meshVPNIsAvailable ? self.meshMenuTitle : nil,
+        ].compactMap { $0 }
         button.toolTip =
-            "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle); "
-            + "\(self.localBuildServiceState.menuTitle); \(self.meshMenuTitle)"
+            "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle)"
+            + (serviceTitles.isEmpty ? "" : "; \(serviceTitles.joined(separator: "; "))")
         button.setAccessibilityTitle(self.bundleDisplayName)
     }
 

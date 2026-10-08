@@ -155,3 +155,5 @@ jobs:
         run: bash .github/scripts/install-scripts_test.sh
       - name: manifest merge tests
         run: bash .github/scripts/install-manifest-merge_test.sh
+      - name: integration device selection tests
+        run: python3 .github/scripts/integration-discover_test.py
