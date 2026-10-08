@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -21,6 +23,8 @@ import (
 type NMCLINetworkManager struct {
 	logger    *zap.Logger
 	nmcliPath string
+	// connectMu serializes ConnectToWiFi; a rollback would otherwise undo a concurrent attempt.
+	connectMu sync.Mutex
 }
 
 func NewNMCLINetworkManager(logger *zap.Logger) *NMCLINetworkManager {
@@ -323,35 +327,38 @@ func addOrUpdateProfile(ctx context.Context, nmcliPath string, c SavedCredential
 }
 
 func existingProfileUUID(ctx context.Context, nmcliPath, ssid string) (string, error) {
-	out, err := nmcli.Command(ctx, nmcliPath, "-t",
-		"-f", "NAME,UUID,TYPE", "connection", "show").Output()
-	if err != nil {
-		return "", fmt.Errorf("nmcli connection show: %w", err)
+	uuids, err := profileUUIDs(ctx, nmcliPath, ssid)
+	if err != nil || len(uuids) == 0 {
+		return "", err
 	}
-	var uuids []string
+	return uuids[0], nil
+}
+
+// profileUUIDs returns every saved WiFi profile for ssid, in nmcli order.
+func profileUUIDs(ctx context.Context, nmcliPath, ssid string) ([]string, error) {
+	out, err := nmcli.Command(ctx, nmcliPath, "-t", "-f", "UUID,TYPE", "connection", "show").Output()
+	if err != nil {
+		return nil, fmt.Errorf("nmcli connection show: %w", err)
+	}
+	var matches []string
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
-		fields := splitNMCLI(scanner.Text(), 3)
-		if len(fields) < 3 || fields[2] != "802-11-wireless" {
+		fields := splitNMCLI(scanner.Text(), 2)
+		if len(fields) < 2 || fields[1] != "802-11-wireless" {
 			continue
 		}
-		uuids = append(uuids, fields[1])
-	}
-	if len(uuids) == 0 {
-		return "", nil
-	}
-	args := append([]string{"-t", "-g", "802-11-wireless.ssid", "connection", "show"}, uuids...)
-	dout, derr := nmcli.Command(ctx, nmcliPath, args...).Output()
-	if derr != nil {
-		return "", fmt.Errorf("nmcli connection show (ssids): %w", derr)
-	}
-	lines := strings.Split(strings.TrimRight(string(dout), "\n"), "\n")
-	for i, uuid := range uuids {
-		if i < len(lines) && unescapeNMCLI(lines[i]) == ssid {
-			return uuid, nil
+		// One profile per call: nmcli does not escape a newline inside an SSID, so
+		// multi-profile output cannot be split safely.
+		got, err := nmcli.Command(ctx, nmcliPath, "--escape", "no", "-g", "802-11-wireless.ssid",
+			"connection", "show", fields[0]).Output()
+		if err != nil {
+			return nil, fmt.Errorf("nmcli connection show %s: %w", fields[0], err)
+		}
+		if strings.TrimSuffix(string(got), "\n") == ssid {
+			matches = append(matches, fields[0])
 		}
 	}
-	return "", nil
+	return matches, scanner.Err()
 }
 
 func addProfile(ctx context.Context, nmcliPath string, c SavedCredential) error {
@@ -466,15 +473,12 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 	hidden := req.GetHidden()
 	secHint := securityHintFromProto(req.GetSecurity())
 
-	// Snapshot whether a saved profile exists *before* we touch nmcli so we
-	// can roll back any profile we (or `nmcli device wifi connect`) created
-	// when activation later fails. Without this, a failed authentication
-	// leaves the SSID with a saved profile, and ListWiFiNetworks then reports
-	// the network as IsKnown — making the UI show ★ for a connection that
-	// never actually succeeded. We deliberately do NOT touch a pre-existing
-	// profile, since that one holds credentials from a previously-working
-	// connection that a single mistyped retry shouldn't destroy.
-	preExistingUUID, err := existingProfileUUID(ctx, n.nmcliPath, ssid)
+	n.connectMu.Lock()
+	defer n.connectMu.Unlock()
+
+	// Both connect paths save the new password into an existing profile before
+	// trying it, so snapshot what a failed attempt has to put back.
+	before, err := takeWiFiSnapshot(ctx, n.nmcliPath, ssid)
 	if err != nil {
 		return fmt.Errorf("checking for existing WiFi profile: %w", err)
 	}
@@ -487,10 +491,11 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 			Security: secHint,
 		}
 		if err := addOrUpdateProfile(ctx, n.nmcliPath, cred); err != nil {
+			n.rollbackFailedConnect(ctx, ssid, before)
 			return fmt.Errorf("preparing WiFi profile: %w", err)
 		}
 		if err := activateProfile(ctx, n.nmcliPath, ssid); err != nil {
-			n.cleanupTransientProfile(ctx, ssid, preExistingUUID)
+			n.rollbackFailedConnect(ctx, ssid, before)
 			return err
 		}
 		n.logger.Info("Connected to WiFi via profile",
@@ -501,31 +506,125 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 	}
 
 	if err := runNMCLIConnect(ctx, n.nmcliPath, ssid, req.GetPassword(), hidden); err != nil {
-		n.cleanupTransientProfile(ctx, ssid, preExistingUUID)
+		n.rollbackFailedConnect(ctx, ssid, before)
 		return err
 	}
 	n.logger.Info("Connected to WiFi", zap.String("ssid", ssid))
 	return nil
 }
 
-// cleanupTransientProfile removes a saved nmcli profile for ssid if and only
-// if it didn't already exist before the connect attempt. preExistingUUID is
-// what existingProfileUUID returned before activation: an empty value means
-// the profile we now see was created during the failed attempt itself, so
-// it's safe to delete. Cleanup is best-effort — if it fails we just log,
-// since the original connect error is what the caller actually needs.
-func (n *NMCLINetworkManager) cleanupTransientProfile(ctx context.Context, ssid, preExistingUUID string) {
-	if preExistingUUID != "" {
+// wifiSnapshot is what a connect attempt can change: the SSID's saved profiles,
+// keyed by UUID, and the active WiFi profile.
+type wifiSnapshot struct {
+	profiles   map[string]wifiSecurity
+	activeUUID string
+}
+
+// wifiSecurity holds the profile settings either connect path may overwrite.
+type wifiSecurity struct{ hidden, keyMgmt, psk string }
+
+func takeWiFiSnapshot(ctx context.Context, nmcliPath, ssid string) (*wifiSnapshot, error) {
+	uuids, err := profileUUIDs(ctx, nmcliPath, ssid)
+	if err != nil {
+		return nil, err
+	}
+	snap := &wifiSnapshot{profiles: make(map[string]wifiSecurity, len(uuids))}
+	for _, uuid := range uuids {
+		if snap.profiles[uuid], err = readWiFiSecurity(ctx, nmcliPath, uuid); err != nil {
+			return nil, err
+		}
+	}
+	if snap.activeUUID, err = activeWiFiUUID(ctx, nmcliPath); err != nil {
+		return nil, err
+	}
+	return snap, nil
+}
+
+// readWiFiSecurity reads the settings verbatim (--escape no keeps ':' and '\' in
+// a password); nmcli omits the security lines of an open network.
+func readWiFiSecurity(ctx context.Context, nmcliPath, uuid string) (wifiSecurity, error) {
+	out, err := nmcli.Command(ctx, nmcliPath, "-s", "--escape", "no", "-g",
+		"802-11-wireless.hidden,802-11-wireless-security.key-mgmt,802-11-wireless-security.psk",
+		"connection", "show", uuid).Output()
+	if err != nil {
+		return wifiSecurity{}, fmt.Errorf("nmcli connection show %s: %w", uuid, err)
+	}
+	f := append(strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"), "", "")
+	return wifiSecurity{hidden: f[0], keyMgmt: f[1], psk: f[2]}, nil
+}
+
+func activeWiFiUUID(ctx context.Context, nmcliPath string) (string, error) {
+	out, err := nmcli.Command(ctx, nmcliPath, "-t", "-f", "UUID,TYPE",
+		"connection", "show", "--active").Output()
+	if err != nil {
+		return "", fmt.Errorf("nmcli connection show --active: %w", err)
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	for scanner.Scan() {
+		fields := splitNMCLI(scanner.Text(), 2)
+		if len(fields) == 2 && fields[1] == "802-11-wireless" {
+			return fields[0], nil
+		}
+	}
+	return "", scanner.Err()
+}
+
+// rollbackTimeout bounds a rollback, which has to outlive a dropped client.
+const rollbackTimeout = 2 * time.Minute
+
+// rollbackFailedConnect deletes profiles the attempt created (they would list the
+// SSID as known), restores the ones it changed and brings back the previous network.
+func (n *NMCLINetworkManager) rollbackFailedConnect(ctx context.Context, ssid string, before *wifiSnapshot) {
+	// Detached, so a cancelled or dropped request still never leaves a wrong password saved.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+
+	after, err := takeWiFiSnapshot(ctx, n.nmcliPath, ssid)
+	if err != nil {
+		n.logger.Warn("WiFi rollback skipped after failed connect", zap.String("ssid", ssid), zap.Error(err))
 		return
 	}
-	uuid, err := existingProfileUUID(ctx, n.nmcliPath, ssid)
-	if err != nil || uuid == "" {
-		return
+	for uuid := range after.profiles {
+		if _, ok := before.profiles[uuid]; !ok {
+			n.runRollbackStep(ctx, ssid, "delete", "connection", "delete", uuid)
+		}
 	}
-	cmd := nmcli.Command(ctx, n.nmcliPath, "connection", "delete", uuid)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		n.logger.Warn("failed to clean up profile after failed connect",
+	restored := map[string]bool{}
+	for uuid, want := range before.profiles {
+		if got, ok := after.profiles[uuid]; ok && got != want {
+			n.runRollbackStep(ctx, ssid, "restore", restoreArgs(uuid, want)...)
+			restored[uuid] = true
+		}
+	}
+	// Bring back the previous network or, with none, re-run an activation still in
+	// flight on rolled-back settings; --wait 0 keeps the reply within BLE timeouts.
+	up := before.activeUUID
+	if up == "" && restored[after.activeUUID] {
+		up = after.activeUUID
+	}
+	if up != "" && (restored[up] || after.activeUUID != up) {
+		n.runRollbackStep(ctx, ssid, "reconnect", "--wait", "0", "connection", "up", up)
+	}
+}
+
+func restoreArgs(uuid string, s wifiSecurity) []string {
+	args := []string{"connection", "modify", uuid, "802-11-wireless.hidden", s.hidden}
+	switch {
+	case s.keyMgmt == "":
+		return append(args, "remove", "802-11-wireless-security")
+	case s.psk == "":
+		// nmcli ignores an empty psk, so a profile that stored none gets back only its key-mgmt.
+		return append(args, "802-11-wireless-security.key-mgmt", s.keyMgmt)
+	}
+	return append(args, "802-11-wireless-security.key-mgmt", s.keyMgmt, "802-11-wireless-security.psk", s.psk)
+}
+
+// runRollbackStep logs nmcli's output but never its arguments, which may hold a password.
+func (n *NMCLINetworkManager) runRollbackStep(ctx context.Context, ssid, step string, args ...string) {
+	if out, err := nmcli.Command(ctx, n.nmcliPath, args...).CombinedOutput(); err != nil {
+		n.logger.Warn("WiFi rollback step failed after failed connect",
 			zap.String("ssid", ssid),
+			zap.String("step", step),
 			zap.String("output", strings.TrimSpace(string(out))),
 			zap.Error(err))
 	}
