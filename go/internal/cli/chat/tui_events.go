@@ -191,7 +191,7 @@ func (m *chatModel) watchEventPrompt(items []WatchNotice, omitted int) string {
 	if omitted > 0 {
 		ask += fmt.Sprintf("%d earlier watch report(s) that needed no reply were left out.\n", omitted)
 	}
-	ask += "Tell the user if this is what they asked to be alerted about.\nTools that need approval are not available in this turn."
+	ask += "Tell the user what happened in one or two sentences, as an alert (for example: \"Someone is at the front door.\" or \"The front door watch has a problem: the camera is unavailable.\").\nTools that need approval are not available in this turn."
 	if len(items) == 1 {
 		return m.watchPromptHeader(items[0]) + UntrustedJSONBlock(watchNoticeData(items[0])) + ask
 	}

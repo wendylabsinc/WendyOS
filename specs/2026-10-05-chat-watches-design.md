@@ -270,8 +270,10 @@ mcp-go's stdio session queues 100 notifications and fails a send when full. A fa
   <untrusted_sensor_event_json>
   "{…escaped event JSON…}"
   </untrusted_sensor_event_json>
-  Tell the user if this is what they asked to be alerted about.
+  Tell the user what happened in one or two sentences, as an alert (for example: "Someone is at the front door." or "The front door watch has a problem: the camera is unavailable.").
   ```
+
+  Asking whether the report is what the user asked for made models answer that question ("Yes, this is what you asked for") before the alert, so the prompt asks for the alert directly.
 
   A merged turn uses one block holding a JSON array of the items.
 - A new helper in `chat`, `untrustedJSONBlock(v any) string`, builds the block. `agentservice.sensorEventPrompt` is rewritten to call it; `agentservice` already imports `chat`, so the helper cannot live in `agentservice`.

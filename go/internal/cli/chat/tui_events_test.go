@@ -276,7 +276,7 @@ func TestUIWatchEventPromptQuotesLabels(t *testing.T) {
 	if header != "Your watch "+string(wantLabel)+" (person, camera "+string(wantCamera)+") reported:" {
 		t.Fatalf("header %q", header)
 	}
-	const tail = "</untrusted_sensor_event_json>\nTell the user if this is what they asked to be alerted about.\nTools that need approval are not available in this turn."
+	const tail = "</untrusted_sensor_event_json>\nTell the user what happened in one or two sentences, as an alert (for example: \"Someone is at the front door.\" or \"The front door watch has a problem: the camera is unavailable.\").\nTools that need approval are not available in this turn."
 	if !strings.HasPrefix(rest, "<untrusted_sensor_event_json>\n") || !strings.HasSuffix(prompt, tail) || strings.Count(prompt, "</untrusted_sensor_event_json>") != 1 {
 		t.Fatalf("prompt:\n%s", prompt)
 	}

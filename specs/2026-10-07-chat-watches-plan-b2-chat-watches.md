@@ -20,7 +20,7 @@
 - Turn triggers: `entered` events; `ENDED` for any reason other than `stopped`; a watch's first `ERROR` unless `watch_start` returned `ERROR`; `READY` after a `watch_start` that returned `PREPARING`. Everything else is shown and folded into the next event turn.
 - Pacing: an event turn starts only when chat is idle and at least 10 s after the last event turn; otherwise items merge into one turn. Typed queued prompts run first. Esc and Ctrl+C leave the event queue alone; `/clear` empties it.
 - Event turns skip memory recall and learning, and show the event lines in place of a "You" entry.
-- Prompt: `Your watch "<label>" (<classes>, camera "<camera>") reported:` + the block + `Tell the user if this is what they asked to be alerted about.` A merged turn uses `Your watches reported:` and one block holding a JSON array. The label and camera are JSON-quoted.
+- Prompt: `Your watch "<label>" (<classes>, camera "<camera>") reported:` + the block + `Tell the user what happened in one or two sentences, as an alert (for example: "Someone is at the front door." or "The front door watch has a problem: the camera is unavailable."). (revised after on-device testing, 2026-10-07)` A merged turn uses `Your watches reported:` and one block holding a JSON array. The label and camera are JSON-quoted.
 - Status bar: `watching: N` while N watches are active.
 - Children and services (`ApprovedTools != nil`, which includes `wendy agent serve`) get neither an inbox nor `watch_*` tools.
 - Run `gofmt -l .` from `go/` before every push. Branch prefix `ed/`. Commits authored as `24462281+EBro912@users.noreply.github.com`.
