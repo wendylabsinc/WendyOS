@@ -943,6 +943,12 @@ func main() {
 			logger.Fatal("Failed to listen on agent port", zap.String("port", agentPort), zap.Error(err))
 		}
 
+		// Avahi's service file survives agent restarts. Reconcile it after
+		// binding the setup listener, including when stored enrollment has
+		// lost its key or certificate. This only changes discovery metadata;
+		// the enrollment record is retained for recovery.
+		configpartition.UpdateAvahiForUnprovisioning(logger, agentPortNum)
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

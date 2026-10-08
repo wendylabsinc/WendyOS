@@ -351,9 +351,19 @@ func applyDeviceName(logger *zap.Logger, name string) error {
 // Use the absolute path: exec.Command resolves binaries from the calling
 // process's PATH, not from cmd.Env, so bare "systemctl" would not be found.
 func restartAvahiDaemon(logger *zap.Logger, env []string) bool {
-	restart := exec.Command("/usr/bin/systemctl", "restart", "avahi-daemon")
+	// Discovery is best-effort: a stuck service manager must not keep the
+	// setup listener from serving or prevent enrollment from completing.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	restart := exec.CommandContext(ctx, "/usr/bin/systemctl", "restart", "avahi-daemon")
 	restart.Env = env
+	// Bound output-pipe cleanup too, in case a child inherits systemctl's
+	// stdout/stderr and survives cancellation of the command itself.
+	restart.WaitDelay = time.Second
 	if out, err := restart.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		logger.Warn("systemctl restart avahi-daemon failed", zap.Error(err), zap.String("output", string(out)))
 		return false
 	}

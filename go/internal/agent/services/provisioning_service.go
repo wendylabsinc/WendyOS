@@ -467,6 +467,16 @@ func (s *ProvisioningService) loadState() {
 			} else {
 				s.logger.Warn("Failed to migrate device key to device-key.pem", zap.Error(writeErr))
 			}
+		} else {
+			if readErr == nil {
+				readErr = fmt.Errorf("device key file is empty")
+			}
+			s.logger.Error("Stored enrollment has no usable private key; authenticated services cannot start",
+				zap.String("path", keyPath), zap.Error(readErr))
+		}
+		if s.certPEM == "" {
+			s.logger.Error("Stored enrollment has no certificate; authenticated services cannot start",
+				zap.String("path", s.statePath()))
 		}
 	}
 
