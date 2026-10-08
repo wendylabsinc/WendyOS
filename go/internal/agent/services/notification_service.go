@@ -660,7 +660,7 @@ func (s *CloudNotificationSender) CreateNotificationV2(
 		s.logger.Warn("app-originated notification delivery failed",
 			zap.String("app_id", request.GetAppId()),
 			zap.String("notification_id", request.GetNotificationId()),
-			zap.Error(err))
+			zap.String("status_code", status.Code(err).String()))
 		return nil, err
 	}
 	return response, nil
@@ -705,7 +705,7 @@ func (s *CloudNotificationSender) createNotificationV2WithACME(
 		s.logger.Warn("app-originated Cloud v2 notification delivery failed",
 			zap.String("app_id", request.GetAppId()),
 			zap.String("notification_id", request.GetNotificationId()),
-			zap.Error(err))
+			zap.String("status_code", status.Code(err).String()))
 		return nil, err
 	}
 	return &cloudpb.CreateNotificationV2Response{NotificationId: response.GetNotificationId()}, nil

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -999,15 +1000,16 @@ func TestNotificationRequestContextHeaderProofOnlyForLegacy(t *testing.T) {
 
 type recordingNotificationCloud struct {
 	cloudpb.UnimplementedNotificationServiceServer
-	mu sync.Mutex
-	md metadata.MD
+	mu  sync.Mutex
+	md  metadata.MD
+	err error
 }
 
 func (c *recordingNotificationCloud) CreateNotificationV2(ctx context.Context, _ *cloudpb.CreateNotificationV2Request) (*cloudpb.CreateNotificationV2Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.md, _ = metadata.FromIncomingContext(ctx)
-	return &cloudpb.CreateNotificationV2Response{}, nil
+	return &cloudpb.CreateNotificationV2Response{}, c.err
 }
 
 type recordingNotificationCloudV2 struct {
@@ -1019,7 +1021,7 @@ func (c *recordingNotificationCloudV2) CreateNotificationV2(ctx context.Context,
 	c.legacy.mu.Lock()
 	defer c.legacy.mu.Unlock()
 	c.legacy.md, _ = metadata.FromIncomingContext(ctx)
-	return &cloudpbv2.CreateNotificationV2Response{NotificationId: req.GetNotificationId()}, nil
+	return &cloudpbv2.CreateNotificationV2Response{NotificationId: req.GetNotificationId()}, c.legacy.err
 }
 
 // Drives CloudNotificationSender end to end over TLS, so the sender's own
@@ -1060,19 +1062,43 @@ func TestCloudNotificationSenderHeaderProofOnlyForLegacy(t *testing.T) {
 		principal     string
 		orgID, asset  int32
 		wantHeaderSet bool
+		fail          bool
 	}{
 		{name: "PKI-enrolled", principal: "spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/device/dev-1"},
 		{name: "legacy", orgID: 7, asset: 9, wantHeaderSet: true},
+		{name: "PKI-failure-log", principal: "spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/device/dev-1", fail: true},
+		{name: "legacy-failure-log", orgID: 7, asset: 9, wantHeaderSet: true, fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provisioning := &ProvisioningService{
 				enrolled: true, cloudHost: lis.Addr().String(), orgID: tc.orgID, assetID: tc.asset,
 				certPEM: certPEM, chainPEM: serverPEM, keyPEM: keyPEM, principalURI: tc.principal,
 			}
-			sender := NewCloudNotificationSender(zap.NewNop(), provisioning)
+			const privateContent = "private notification body and audience user@example.invalid"
+			cloud.mu.Lock()
+			cloud.err = nil
+			if tc.fail {
+				cloud.err = status.Error(codes.PermissionDenied, privateContent)
+			}
+			cloud.mu.Unlock()
+			core, logs := observer.New(zap.WarnLevel)
+			sender := NewCloudNotificationSender(zap.New(core), provisioning)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := sender.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{NotificationId: "00000000-0000-4000-8000-000000000001"}, nil); err != nil {
+			_, err := sender.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{NotificationId: "00000000-0000-4000-8000-000000000001"}, nil)
+			if tc.fail {
+				if status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("delivery error changed: %v", err)
+				}
+				entries := logs.All()
+				if len(entries) != 1 {
+					t.Fatalf("failure logs: %d", len(entries))
+				}
+				fields := entries[0].ContextMap()
+				if len(fields) != 3 || fields["status_code"] != "PermissionDenied" || strings.Contains(fmt.Sprint(fields), privateContent) {
+					t.Fatalf("unsafe failure fields: %v", fields)
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
 			cloud.mu.Lock()
