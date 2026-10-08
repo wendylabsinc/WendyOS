@@ -113,6 +113,22 @@ jobs:
             "$metadata_tmp" > "$RUNNER_TEMP/api-review-pr-meta.json"
           mv "$diff_tmp" "$RUNNER_TEMP/api-review-pr.diff"
 
+      - name: Fetch previous API decision state
+        env:
+          # SECURITY: This isolated step reads only bot-owned comments. Fork PRs are rejected before token use.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          comment_script="review-automation/.github/scripts/api_review_comment.py"
+          if ! grep -q 'add_parser("fetch-state")' "$comment_script"; then
+            echo "::notice::Stateful API review will activate after its trusted automation reaches the base branch."
+            exit 0
+          fi
+          python3 "$comment_script" fetch-state \
+            --repo "$REPO" \
+            --pr-number "$PR_NUMBER" \
+            --output "$RUNNER_TEMP/previous-api-review.json"
+
       - name: Install Anthropic SDK
         run: pip install --quiet anthropic==0.97.0
 
@@ -124,9 +140,15 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
+          set -euo pipefail
+          previous_args=()
+          if [[ -f "$RUNNER_TEMP/previous-api-review.json" ]]; then
+            previous_args=(--previous "$RUNNER_TEMP/previous-api-review.json")
+          fi
           python3 review-automation/.github/scripts/api_review.py review \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
+            "${previous_args[@]}" \
             --repo "$REPO" \
             --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" \

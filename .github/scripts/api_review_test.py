@@ -207,7 +207,7 @@ class PayloadTests(unittest.TestCase):
 class PromptTests(unittest.TestCase):
     def test_prompt_covers_all_requested_contracts_and_semantic_regressions(self):
         prompt = api_review.system_prompt()
-        for term in ("ports", "subnets", "protobuf", "reservations/options", "storage", "persisted", "config", "precedence", "cli", "exit codes", "#1911", "#1918", "comment-only", "not automatically breaking"):
+        for term in ("ports", "subnets", "protobuf", "reservations/options", "storage", "persisted", "config", "precedence", "cli", "exit codes", "#1911", "#1918", "comment-only", "not automatically breaking", "inline-code backticks", "type, method, function"):
             with self.subTest(term=term):
                 self.assertIn(term, prompt)
 
@@ -250,6 +250,29 @@ class EvidenceRenderingTests(unittest.TestCase):
         self.assertIn("- [evidence:1 base:1] café\r\n", numbered)
         self.assertIn("+ [evidence:2 head:1] π\r\n", numbered)
         self.assertTrue(numbered.endswith("\\ No newline at end of file\n"))
+
+
+class IllustrativeExcerptTests(unittest.TestCase):
+    def test_replacement_keeps_unified_diff_markers(self):
+        excerpt = api_review.illustrative_excerpt(diff().decode(), decision())
+        self.assertEqual(excerpt["language"], "diff")
+        self.assertEqual(excerpt["label"], "")
+        self.assertIn("-const AgentPort = 50051", excerpt["text"])
+        self.assertIn("+const AgentPort = 50052", excerpt["text"])
+
+    def test_addition_keeps_unified_diff_marker(self):
+        raw = "diff --git a/new.proto b/new.proto\nnew file mode 100644\n--- /dev/null\n+++ b/new.proto\n@@ -0,0 +1 @@\n+message New {}\n"
+        item = decision(locations=[{"path": "new.proto", "side": "head", "line": 1, "end_line": 1}])
+        self.assertEqual(api_review.illustrative_excerpt(raw, item), {
+            "language": "diff", "label": "", "text": "+message New {}",
+        })
+
+    def test_removal_keeps_unified_diff_marker(self):
+        raw = "diff --git a/old.go b/old.go\ndeleted file mode 100644\n--- a/old.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-const old = true\n"
+        item = decision(locations=[{"path": "old.go", "side": "base", "line": 1, "end_line": 1}])
+        self.assertEqual(api_review.illustrative_excerpt(raw, item), {
+            "language": "diff", "label": "", "text": "-const old = true",
+        })
 
 
 class EvidenceResolutionTests(unittest.TestCase):
@@ -452,6 +475,65 @@ class ModelTests(unittest.TestCase):
         create.assert_called_once()
 
 
+class ReconciliationTests(unittest.TestCase):
+    def prior(self):
+        return {
+            "version": api_review.PRIOR_STATE_VERSION,
+            "decisions": [{
+                "id": "f" * 64, "version": "e" * 64, "state": "pending",
+                "category": "network", "title": "Agent listening port",
+                "change": "The agent port is `50052`.",
+                "compatibility": "Clients use the configured port.",
+                "impact": "behavioral", "paths": ["go/network.go"],
+            }],
+        }
+
+    def test_reconciliation_matches_identity_without_receiving_acceptance(self):
+        response = {"matches": [{
+            "current_index": 0, "prior_ids": ["f" * 64],
+            "relationship": "unchanged", "reason": "",
+        }]}
+        message = types.SimpleNamespace(
+            stop_reason="end_turn",
+            content=[types.SimpleNamespace(type="text", text=json.dumps(response))],
+        )
+        create = unittest.mock.Mock(return_value=message)
+        module = types.SimpleNamespace(Anthropic=lambda: types.SimpleNamespace(
+            messages=types.SimpleNamespace(create=create)))
+        with patch.dict(sys.modules, {"anthropic": module}):
+            reconciled = api_review.reconcile_decisions([decision()], self.prior(), "test-model")
+        self.assertEqual(reconciled[0]["relationship"], "unchanged")
+        prompt = json.loads(create.call_args.kwargs["messages"][0]["content"])
+        self.assertEqual(prompt["prior_decisions"][0]["state"], "pending")
+        self.assertNotIn("accepted", json.dumps(prompt).lower())
+        schema = create.call_args.kwargs["output_config"]["format"]["schema"]
+        fields = schema["properties"]["matches"]["items"]["properties"]
+        self.assertNotIn("accepted", fields)
+        self.assertNotIn("state", fields)
+
+    def test_invalid_or_reused_matches_fail_closed(self):
+        valid = {"current_index": 0, "prior_ids": ["f" * 64],
+                 "relationship": "unchanged", "reason": ""}
+        invalid = [
+            {**valid, "accepted": True},
+            {**valid, "relationship": "changed", "reason": ""},
+            {**valid, "relationship": "new"},
+        ]
+        for match in invalid:
+            with self.subTest(match=match), self.assertRaises(api_review.ReviewError):
+                api_review.validate_reconciliation({"matches": [match]}, 1, {"f" * 64})
+        duplicate = {"matches": [valid, {**valid, "current_index": 1}]}
+        with self.assertRaisesRegex(api_review.ReviewError, "more than once"):
+            api_review.validate_reconciliation(duplicate, 2, {"f" * 64})
+
+    def test_no_prior_state_needs_no_second_model_call(self):
+        prior = {"version": api_review.PRIOR_STATE_VERSION, "decisions": []}
+        self.assertEqual(
+            api_review.reconcile_decisions([decision()], prior, "test-model")[0]["relationship"],
+            "new",
+        )
+
+
 class CommandTests(unittest.TestCase):
     def run_review(self, raw=None, meta=None, payload=None, error=None):
         with tempfile.TemporaryDirectory() as temporary:
@@ -551,7 +633,7 @@ class CommandTests(unittest.TestCase):
     def test_duplicate_decisions_are_retained_only_once(self):
         code, result, _ = self.run_review(payload={"risk": "high", "decisions": [decision(), decision()]})
         self.assertEqual(code, 0)
-        self.assertEqual(result["decisions"], [decision()])
+        self.assertEqual(result["decisions"], [dict(decision(), prior_ids=[], relationship="new", reason="")])
 
     def test_input_failure_writes_incomplete_result_without_model_call(self):
         code, result, model = self.run_review(meta=metadata(additions=2))

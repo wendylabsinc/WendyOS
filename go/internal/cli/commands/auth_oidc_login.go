@@ -298,6 +298,9 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("saving OAuth session and certificates: %w", err)
 	}
+	// Record the org's display name while the access token is fresh, so
+	// pickers and labels show it rather than the tenant UUID.
+	cloudOrganizationName(ctx, &authEntry)
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
 	fmt.Println(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
 	clitimesync.CacheProof(ctx)
@@ -531,9 +534,15 @@ func refreshOIDCCertificate(ctx context.Context, auth *config.AuthConfig) error 
 	return nil
 }
 
-func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error {
+// oauthAccessTokenFreshFor reports whether the stored access token stays valid
+// for longer than d.
+func oauthAccessTokenFreshFor(auth *config.AuthConfig, d time.Duration) bool {
 	expiresAt, err := time.Parse(time.RFC3339, auth.OAuthExpiresAt)
-	if err == nil && time.Until(expiresAt) > 90*time.Second {
+	return err == nil && time.Until(expiresAt) > d
+}
+
+func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error {
+	if oauthAccessTokenFreshFor(auth, 90*time.Second) {
 		return nil
 	}
 	unlock, err := acquireAuthRefreshLock(ctx)
@@ -545,8 +554,7 @@ func ensureOAuthAccessToken(ctx context.Context, auth *config.AuthConfig) error 
 		return err
 	}
 	// The process that held the lock may already have consumed our old token.
-	expiresAt, err = time.Parse(time.RFC3339, auth.OAuthExpiresAt)
-	if err == nil && time.Until(expiresAt) > 90*time.Second {
+	if oauthAccessTokenFreshFor(auth, 90*time.Second) {
 		return nil
 	}
 	if auth.ServiceAccount != "" {
