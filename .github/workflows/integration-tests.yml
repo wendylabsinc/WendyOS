@@ -138,102 +138,22 @@ jobs:
           INPUT_JOBS: ${{ inputs.jobs }}
         run: |
           set -euo pipefail
-          DISCOVER_STDERR=$(mktemp)
-          RESULT=$(./go/bin/wendy discover --json --timeout 10s 2>"$DISCOVER_STDERR" || true)
-          cat "$DISCOVER_STDERR" >&2 || true
-          rm -f "$DISCOVER_STDERR"
-          if [[ -z "$RESULT" ]]; then
-            RESULT='{"lanDevices":[]}'
+          # Use the same SSH login session as the integration jobs for macOS
+          # Local Network permission and the runner's file-backed credentials.
+          args=(python3 "$PWD/.github/scripts/integration-discover.py"
+                --wendy "$PWD/go/bin/wendy")
+          if [[ -z "$INPUT_HOSTNAME" && "$INPUT_JOBS" != discover ]]; then
+            args+=(--require-platforms)
           fi
-          echo "$RESULT" | jq .
-
-          # Allowlist of known CI target devices. Only devices in this list are
-          # included in the test matrix — unexpected devices on the LAN are ignored.
-          EXPECTED=(
-            "wendy-SER9.local"
-            "wendyos-jetson-thor-ci.local"
-            "wendyos-thor.local"
-            "wendyos-dynamic-channel.local"
-          )
-
-          for host in "${EXPECTED[@]}"; do
-            if echo "$RESULT" | jq -e --arg h "$host" \
-              '(.lanDevices // [])[] | select(.hostname == $h)' > /dev/null 2>&1; then
-              echo "FOUND: $host"
-            else
-              echo "MISSING: $host"
-            fi
-          done
-
-          validate_device_hostname() {
-            local value="$1"
-            if [[ -z "$value" || ${#value} -gt 253 ]]; then
-              return 1
-            fi
-            if [[ "$value" == *:* ]]; then
-              [[ "$value" =~ ^[0-9A-Fa-f:.]+$ ]]
-            else
-              [[ "$value" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$ ]]
-            fi
-          }
-
-          DISCOVERED_COUNT=0
-          HOSTS=()
-          while IFS= read -r host; do
-            [[ -z "$host" ]] && continue
-            DISCOVERED_COUNT=$((DISCOVERED_COUNT + 1))
-            if ! validate_device_hostname "$host"; then
-              echo "ERROR: invalid discovered device hostname: $host" >&2
-              exit 1
-            fi
-            # Only include devices that are in the allowlist.
-            IN_EXPECTED=false
-            for expected in "${EXPECTED[@]}"; do
-              [[ "$host" == "$expected" ]] && IN_EXPECTED=true && break
-            done
-            if [[ "$IN_EXPECTED" == true ]]; then
-              HOSTS+=("$host")
-            else
-              echo "SKIPPED (not in allowlist): $host"
-            fi
-          done < <(echo "$RESULT" | jq -r '(.lanDevices // [])[].hostname // empty')
-
-          COUNT=${#HOSTS[@]}
-          if [[ "$COUNT" -gt 10 ]]; then
-            echo "ERROR: refusing to create integration matrix for $COUNT discovered devices (max 10)" >&2
-            exit 1
-          fi
-
-          if [[ "$COUNT" -eq 0 ]]; then
-            MATRIX='[]'
-          else
-            MATRIX=$(jq -cn --args '$ARGS.positional' "${HOSTS[@]}")
-          fi
-          [[ -n "$MATRIX" && "$MATRIX" != "null" ]] || { echo "ERROR: failed to build device matrix" >&2; exit 1; }
+          printf -v remote_command '%q ' env WENDY_SECRET_STORE=file "${args[@]}"
+          MATRIX=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no localhost "$remote_command")
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-
-          echo "Discovered $DISCOVERED_COUNT LAN device(s); selected $COUNT allowlisted device(s)."
           if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
             {
-              echo "### Wendy integration discovery"
+              echo "### Accessible integration devices"
               echo
-              echo "- LAN devices discovered: $DISCOVERED_COUNT"
-              echo "- Allowlisted devices selected: $COUNT"
-              if [[ "$DISCOVERED_COUNT" -gt 0 && "$COUNT" -eq 0 ]]; then
-                echo
-                echo "No discovered LAN devices matched the integration allowlist."
-              fi
+              echo "$MATRIX" | jq -r '.[] | "- " + .'
             } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-          # Counts allowlisted selections, not raw discoveries: non-CI devices are
-          # always present on this LAN, so a nonzero discovery count is no evidence
-          # that any test can run. An empty matrix skips the integration jobs, and
-          # skipped jobs report success.
-          if [[ "$INPUT_HOSTNAME" == '' && "$INPUT_JOBS" != 'discover' && "$COUNT" -eq 0 ]]; then
-            echo "ERROR: no allowlisted CI device found via wendy discover" >&2
-            echo "Expected one of: ${EXPECTED[*]}" >&2
-            exit 1
           fi
 
   integration-test-macos:
