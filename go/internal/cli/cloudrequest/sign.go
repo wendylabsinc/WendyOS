@@ -245,11 +245,49 @@ func (s *Signer) signRequest(method string, req proto.Message, byKID bool, corre
 	if err != nil {
 		return nil, fmt.Errorf("signing Cloud request %s: %w", method, err)
 	}
-	return &cloudpbv2.SignedRequest{
+	signed := &cloudpbv2.SignedRequest{
 		Payload:     payload,
 		PayloadType: string(req.ProtoReflect().Descriptor().FullName()),
 		Signature:   []byte(jws),
-	}, nil
+	}
+	if method == cloudpbv2.AssetService_DeleteAsset_FullMethodName {
+		deletion := req.(*cloudpbv2.DeleteAssetRequest) // checked by signedResources
+		if deletion.ExpectedDeviceId != nil {
+			management, err := s.unenrollManagementRequest(deletion.GetExpectedDeviceId())
+			if err != nil {
+				return nil, err
+			}
+			signed.PkiManagementRequest = management
+		}
+	}
+	return signed, nil
+}
+
+// Cloud's shared unenrollment path relays this operator authority to PKI.
+// The same leaf signs both artifacts; this never calls PKI or revokes locally.
+func (s *Signer) unenrollManagementRequest(deviceID string) ([]byte, error) {
+	device, err := uuid.Parse(deviceID)
+	if err != nil || device.String() != deviceID {
+		return nil, fmt.Errorf("unenrollment requires a canonical device UUID")
+	}
+	tenant, err := uuid.Parse(s.tenantUUID)
+	if err != nil || tenant.String() != s.tenantUUID {
+		return nil, fmt.Errorf("unenrollment requires a canonical operator tenant UUID")
+	}
+	now := s.now().Unix()
+	payload, err := canonicalJSON(map[string]any{
+		"op": "revoke_principal", "tenant": s.tenantUUID,
+		"principal": "spiffe://wendy.sh/tenant/" + s.tenantUUID + "/device/" + deviceID,
+		"iat":       now, "exp": now + int64(signatureTTL/time.Second), "jti": uuid.NewString(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("encoding unenrollment authority: %w", err)
+	}
+	jws, err := s.signPayload(payload, map[string]any{"x5c": s.x5c})
+	if err != nil {
+		return nil, fmt.Errorf("signing unenrollment authority: %w", err)
+	}
+	return []byte(jws), nil
 }
 
 // signedResources maps each operator-signed method the CLI calls to its

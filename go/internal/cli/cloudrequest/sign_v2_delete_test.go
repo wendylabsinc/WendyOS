@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -22,7 +23,7 @@ func TestV2DeleteAssetRequiresSignedCanonicalUUID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := &cloudpbv2.DeleteAssetRequest{Id: id, ExpectedPkiDeviceName: proto.String("33333333-3333-4333-8333-333333333333")}
+	req := &cloudpbv2.DeleteAssetRequest{Id: id, ExpectedDeviceId: proto.String("33333333-3333-4333-8333-333333333333")}
 	signed, err := signer.signRequest(method, req, false, uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
@@ -77,5 +78,72 @@ func TestV2DeleteAssetRequiresSignedCanonicalUUID(t *testing.T) {
 	want := cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName + " x5c\n" + method + " kid"
 	if strings.Join(conn.calls, "\n") != want {
 		t.Fatalf("calls %v, want %s", conn.calls, want)
+	}
+}
+
+func TestV2DeleteCarriesSameOperatorExactPrincipalAuthority(t *testing.T) {
+	auth, key, _ := testAuth(t)
+	signer, err := newSigner(auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer.now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	const device = "33333333-3333-4333-8333-333333333333"
+	request := &cloudpbv2.DeleteAssetRequest{Id: "22222222-2222-4222-8222-222222222222", ExpectedDeviceId: proto.String(device)}
+	seen := make(map[string]bool)
+	for _, byKID := range []bool{false, true, true} {
+		signed, err := signer.signRequest(cloudpbv2.AssetService_DeleteAsset_FullMethodName, request, byKID, uuid.NewString())
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts := strings.Split(string(signed.GetPkiManagementRequest()), ".")
+		if len(parts) != 3 {
+			t.Fatal("missing PKI management authority")
+		}
+		headerBytes, _ := base64.RawURLEncoding.DecodeString(parts[0])
+		var header struct {
+			Algorithm string   `json:"alg"`
+			X5C       []string `json:"x5c"`
+		}
+		if err := json.Unmarshal(headerBytes, &header); err != nil {
+			t.Fatal(err)
+		}
+		if header.Algorithm != "ML-DSA-65" || len(header.X5C) != len(signer.x5c) || strings.Join(header.X5C, ",") != strings.Join(signer.x5c, ",") {
+			t.Fatal("management request must carry the same operator chain")
+		}
+		payload, _ := base64.RawURLEncoding.DecodeString(parts[1])
+		var claims struct {
+			Op        string `json:"op"`
+			Tenant    string `json:"tenant"`
+			Principal string `json:"principal"`
+			Iat       int64  `json:"iat"`
+			Exp       int64  `json:"exp"`
+			JTI       string `json:"jti"`
+		}
+		if err := json.Unmarshal(payload, &claims); err != nil {
+			t.Fatal(err)
+		}
+		if claims.Op != "revoke_principal" || claims.Tenant != testTenant || claims.Principal != "spiffe://wendy.sh/tenant/"+testTenant+"/device/"+device || claims.Iat != signer.now().Unix() || claims.Exp != claims.Iat+30 {
+			t.Fatalf("wrong management authority: %+v", claims)
+		}
+		if _, err := uuid.Parse(claims.JTI); err != nil || seen[claims.JTI] {
+			t.Fatal("management request must have a fresh canonical replay identity")
+		}
+		seen[claims.JTI] = true
+		sig, _ := base64.RawURLEncoding.DecodeString(parts[2])
+		if err := mldsa.Verify(key.Public().(*mldsa.PublicKey), []byte(parts[0]+"."+parts[1]), sig, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request.ExpectedDeviceId = nil
+	plain, err := signer.signRequest(cloudpbv2.AssetService_DeleteAsset_FullMethodName, request, false, uuid.NewString())
+	if err != nil || len(plain.GetPkiManagementRequest()) != 0 {
+		t.Fatal("ordinary unbound asset deletion must not gain revocation authority")
+	}
+	for _, invalid := range []string{"", "../other", "spiffe://wendy.sh/tenant/other/device/other", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"} {
+		request.ExpectedDeviceId = proto.String(invalid)
+		if _, err := signer.signRequest(cloudpbv2.AssetService_DeleteAsset_FullMethodName, request, false, uuid.NewString()); err == nil {
+			t.Fatalf("invalid device identity signed: %q", invalid)
+		}
 	}
 }
