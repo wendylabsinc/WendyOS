@@ -1681,7 +1681,7 @@ func scanLANDevicesCmd() tea.Cmd {
 
 func scanWifiCmd() tea.Cmd {
 	return func() tea.Msg {
-		networks, err := scanLocalWifiNetworks()
+		networks, err := scanLocalWifiNetworks(context.Background())
 		return tourWifiScanDoneMsg{networks: networks, err: err}
 	}
 }

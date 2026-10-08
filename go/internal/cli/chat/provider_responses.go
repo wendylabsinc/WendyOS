@@ -148,6 +148,7 @@ func (p *httpProvider) streamResponses(ctx context.Context, messages []Message, 
 			Arguments   string          `json:"arguments"`
 			Message     string          `json:"message"`
 			Response    struct {
+				Usage             *wireUsage        `json:"usage"`
 				Status            string            `json:"status"`
 				Output            []json.RawMessage `json:"output"`
 				Error             json.RawMessage   `json:"error"`
@@ -162,6 +163,7 @@ func (p *httpProvider) streamResponses(ctx context.Context, messages []Message, 
 		if chunk.Type == "" {
 			chunk.Type = event
 		}
+		recordUsage(ctx, chunk.Response.Usage, false)
 		switch chunk.Type {
 		case "error":
 			return fmt.Errorf("OpenAI Responses stream error: %s", p.safeError(firstValue(chunk.Message, p.errorDetail(data))))

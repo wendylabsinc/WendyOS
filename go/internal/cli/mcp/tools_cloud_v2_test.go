@@ -1,10 +1,30 @@
 package mcp
 
 import (
+	"context"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
+
+func TestDeviceListV2ReturnsReusableSelector(t *testing.T) {
+	const deviceID = "11111111-1111-4111-8111-111111111111"
+	addr := startFakeAssetV2Server(t, &fakeAssetV2Server{online: []*cloudpbv2.Asset{{Id: deviceID, Name: "edge-one", IsComputeDevice: true}}})
+	auth := v2TestAuth(t, addr)
+	s := New(&config.Config{Auth: []config.AuthConfig{*auth}}, nil)
+	want := "cloud://" + addr + "/tenant/" + auth.Certificates[0].TenantUUID() + "/asset/" + deviceID
+	for _, name := range []string{"device_list", "cloud_discover"} {
+		r, err := s.callTool(context.Background(), name, nil)
+		if err != nil || r.IsError {
+			t.Fatalf("%s: %v %v", name, r, err)
+		}
+		rows := listPayload(t, r, "devices")
+		if len(rows) != 1 || rows[0]["device"] != want || rows[0]["device_id"] != deviceID {
+			t.Fatalf("lost v2 identity in %s: %v", name, rows)
+		}
+	}
+}
 
 // cloudAssetV2ToMap must emit the device id (the v2 asset UUID) as device_id,
 // with device_name — never an int32 asset id (sem's "device ID, not asset ID"

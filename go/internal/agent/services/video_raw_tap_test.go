@@ -116,6 +116,7 @@ func TestDeviceHub_ProducerTeardownSkipsAlreadyClosedRawSubscriber(t *testing.T)
 
 func TestGetOrCreateHub_DeviceDefaultRequestJoinsWhateverIsPlaying(t *testing.T) {
 	svc := newTestVideoService(nil, nil)
+	installFakeProducers(svc)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -147,6 +148,7 @@ func TestGetOrCreateHub_DeviceDefaultRequestJoinsWhateverIsPlaying(t *testing.T)
 
 func TestGetOrCreateHub_RawRefusedUpFrontOnceProducerDeclined(t *testing.T) {
 	svc := newTestVideoService(nil, nil)
+	installFakeProducers(svc)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

@@ -124,6 +124,10 @@ func TestPoolSubscriptionReferenceCountingAndDisposal(t *testing.T) {
 	}
 	p.mu.Lock()
 	readers, announces := len(p.subs), len(p.subAnnounce)
+	wantReader := GUID{Prefix: p.prefix}
+	for entity := range p.subs {
+		wantReader.EntityID = entity
+	}
 	p.mu.Unlock()
 	if readers != 1 || announces != 1 {
 		t.Fatalf("readers=%d announces=%d", readers, announces)
@@ -133,6 +137,9 @@ func TestPoolSubscriptionReferenceCountingAndDisposal(t *testing.T) {
 	if _, _, err := peer.ReadFromUDP(buf); err != nil {
 		t.Fatal(err)
 	}
+	// The pool's announcement loop can resend the subscription before disposal.
+	// Queue that traffic explicitly so this test covers either scheduling order.
+	p.announce()
 	a.Unsubscribe(ep.GUID)
 	p.deliverUserData(ep.GUID, 1, []byte("frame"))
 	if len(a.samples) != 0 || len(b.samples) != 1 {
@@ -145,21 +152,36 @@ func TestPoolSubscriptionReferenceCountingAndDisposal(t *testing.T) {
 	if readers != 0 || announces != 0 {
 		t.Fatal("last unsubscribe retained reader announcement")
 	}
-	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
-	n, _, err := peer.ReadFromUDP(buf)
-	if err != nil {
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	msg, err := ParseMessage(buf[:n])
-	if err != nil {
-		t.Fatal(err)
-	}
-	d, err := ParseData(msg.Submessages[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if disposed, guid := discoveryDisposal(d); !disposed || guid.Prefix != p.prefix {
-		t.Fatal("missing SEDP reader disposal")
+	for disposed := false; !disposed; {
+		n, _, err := peer.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatalf("waiting for SEDP reader disposal for %s: %v", wantReader, err)
+		}
+		msg, err := ParseMessage(buf[:n])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg.Prefix != p.prefix {
+			continue
+		}
+		for _, sub := range msg.Submessages {
+			if sub.Kind != subDATA {
+				continue
+			}
+			d, err := ParseData(sub)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d.WriterID != entitySEDPSubWriter {
+				continue
+			}
+			if isDisposal, guid := discoveryDisposal(d); isDisposal && guid == wantReader {
+				disposed = true
+			}
+		}
 	}
 	if len(b.samples) != 0 {
 		t.Fatal("unsubscribed sample remained queued")

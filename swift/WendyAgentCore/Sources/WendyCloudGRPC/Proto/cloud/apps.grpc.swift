@@ -20,16 +20,16 @@ public enum Wendycloud_V1_AppService: Sendable {
     public static let descriptor = GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService")
     /// Namespace for method metadata.
     public enum Method: Sendable {
-        /// Namespace for "CreateApp" metadata.
-        public enum CreateApp: Sendable {
-            /// Request type for "CreateApp".
-            public typealias Input = Wendycloud_V1_CreateAppRequest
-            /// Response type for "CreateApp".
+        /// Namespace for "UpsertApp" metadata.
+        public enum UpsertApp: Sendable {
+            /// Request type for "UpsertApp".
+            public typealias Input = Wendycloud_V1_UpsertAppRequest
+            /// Response type for "UpsertApp".
             public typealias Output = Wendycloud_V1_App
-            /// Descriptor for "CreateApp".
+            /// Descriptor for "UpsertApp".
             public static let descriptor = GRPCCore.MethodDescriptor(
                 service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "CreateApp",
+                method: "UpsertApp",
                 type: .unary
             )
         }
@@ -85,125 +85,13 @@ public enum Wendycloud_V1_AppService: Sendable {
                 type: .unary
             )
         }
-        /// Namespace for "CreateAppVersion" metadata.
-        public enum CreateAppVersion: Sendable {
-            /// Request type for "CreateAppVersion".
-            public typealias Input = Wendycloud_V1_CreateAppVersionRequest
-            /// Response type for "CreateAppVersion".
-            public typealias Output = Wendycloud_V1_AppVersion
-            /// Descriptor for "CreateAppVersion".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "CreateAppVersion",
-                type: .unary
-            )
-        }
-        /// Namespace for "GetAppVersion" metadata.
-        public enum GetAppVersion: Sendable {
-            /// Request type for "GetAppVersion".
-            public typealias Input = Wendycloud_V1_GetAppVersionRequest
-            /// Response type for "GetAppVersion".
-            public typealias Output = Wendycloud_V1_AppVersion
-            /// Descriptor for "GetAppVersion".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "GetAppVersion",
-                type: .unary
-            )
-        }
-        /// Namespace for "ListAppVersions" metadata.
-        public enum ListAppVersions: Sendable {
-            /// Request type for "ListAppVersions".
-            public typealias Input = Wendycloud_V1_ListAppVersionsRequest
-            /// Response type for "ListAppVersions".
-            public typealias Output = Wendycloud_V1_ListAppVersionsResponse
-            /// Descriptor for "ListAppVersions".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "ListAppVersions",
-                type: .unary
-            )
-        }
-        /// Namespace for "CreateAssetContainer" metadata.
-        public enum CreateAssetContainer: Sendable {
-            /// Request type for "CreateAssetContainer".
-            public typealias Input = Wendycloud_V1_CreateAssetContainerRequest
-            /// Response type for "CreateAssetContainer".
-            public typealias Output = Wendycloud_V1_AssetContainer
-            /// Descriptor for "CreateAssetContainer".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "CreateAssetContainer",
-                type: .unary
-            )
-        }
-        /// Namespace for "GetAssetContainer" metadata.
-        public enum GetAssetContainer: Sendable {
-            /// Request type for "GetAssetContainer".
-            public typealias Input = Wendycloud_V1_GetAssetContainerRequest
-            /// Response type for "GetAssetContainer".
-            public typealias Output = Wendycloud_V1_AssetContainer
-            /// Descriptor for "GetAssetContainer".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "GetAssetContainer",
-                type: .unary
-            )
-        }
-        /// Namespace for "UpdateAssetContainer" metadata.
-        public enum UpdateAssetContainer: Sendable {
-            /// Request type for "UpdateAssetContainer".
-            public typealias Input = Wendycloud_V1_UpdateAssetContainerRequest
-            /// Response type for "UpdateAssetContainer".
-            public typealias Output = Wendycloud_V1_AssetContainer
-            /// Descriptor for "UpdateAssetContainer".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "UpdateAssetContainer",
-                type: .unary
-            )
-        }
-        /// Namespace for "ListAssetContainers" metadata.
-        public enum ListAssetContainers: Sendable {
-            /// Request type for "ListAssetContainers".
-            public typealias Input = Wendycloud_V1_ListAssetContainersRequest
-            /// Response type for "ListAssetContainers".
-            public typealias Output = Wendycloud_V1_ListAssetContainersResponse
-            /// Descriptor for "ListAssetContainers".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "ListAssetContainers",
-                type: .unary
-            )
-        }
-        /// Namespace for "ListAssetContainersByApp" metadata.
-        public enum ListAssetContainersByApp: Sendable {
-            /// Request type for "ListAssetContainersByApp".
-            public typealias Input = Wendycloud_V1_ListAssetContainersByAppRequest
-            /// Response type for "ListAssetContainersByApp".
-            public typealias Output = Wendycloud_V1_ListAssetContainersByAppResponse
-            /// Descriptor for "ListAssetContainersByApp".
-            public static let descriptor = GRPCCore.MethodDescriptor(
-                service: GRPCCore.ServiceDescriptor(fullyQualifiedService: "wendycloud.v1.AppService"),
-                method: "ListAssetContainersByApp",
-                type: .unary
-            )
-        }
         /// Descriptors for all methods in the "wendycloud.v1.AppService" service.
         public static let descriptors: [GRPCCore.MethodDescriptor] = [
-            CreateApp.descriptor,
+            UpsertApp.descriptor,
             GetApp.descriptor,
             UpdateApp.descriptor,
             DeleteApp.descriptor,
-            ListApps.descriptor,
-            CreateAppVersion.descriptor,
-            GetAppVersion.descriptor,
-            ListAppVersions.descriptor,
-            CreateAssetContainer.descriptor,
-            GetAssetContainer.descriptor,
-            UpdateAssetContainer.descriptor,
-            ListAssetContainers.descriptor,
-            ListAssetContainersByApp.descriptor
+            ListApps.descriptor
         ]
     }
 }
@@ -223,23 +111,24 @@ extension Wendycloud_V1_AppService {
     /// This protocol is the lowest-level of the service protocols generated for this service
     /// giving you the most flexibility over the implementation of your service. This comes at
     /// the cost of more verbose and less strict APIs. Each RPC requires you to implement it in
-    /// terms of a request stream and response stream. Where only a single request or response
-    /// message is expected, you are responsible for enforcing this invariant is maintained.
+    /// terms of a request stream and response stream. Where the RPC expects only a single
+    /// request or response message, you are responsible for ensuring your implementation
+    /// maintains this invariant.
     ///
     /// Where possible, prefer using the stricter, less-verbose ``ServiceProtocol``
     /// or ``SimpleServiceProtocol`` instead.
     public protocol StreamingServiceProtocol: GRPCCore.RegistrableRPCService {
-        /// Handle the "CreateApp" method.
+        /// Handle the "UpsertApp" method.
         ///
         /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_CreateAppRequest` messages.
+        ///   - request: A streaming request of `Wendycloud_V1_UpsertAppRequest` messages.
         ///   - context: Context providing information about the RPC.
         /// - Throws: Any error which occurred during the processing of the request. Thrown errors
         ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
         ///     to an internal error.
         /// - Returns: A streaming response of `Wendycloud_V1_App` messages.
-        func createApp(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_CreateAppRequest>,
+        func upsertApp(
+            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_UpsertAppRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_App>
 
@@ -298,118 +187,6 @@ extension Wendycloud_V1_AppService {
             request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ListAppsRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_ListAppsResponse>
-
-        /// Handle the "CreateAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_CreateAppVersionRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_AppVersion` messages.
-        func createAppVersion(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_CreateAppVersionRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AppVersion>
-
-        /// Handle the "GetAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_GetAppVersionRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_AppVersion` messages.
-        func getAppVersion(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_GetAppVersionRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AppVersion>
-
-        /// Handle the "ListAppVersions" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_ListAppVersionsRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_ListAppVersionsResponse` messages.
-        func listAppVersions(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ListAppVersionsRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_ListAppVersionsResponse>
-
-        /// Handle the "CreateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_CreateAssetContainerRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_AssetContainer` messages.
-        func createAssetContainer(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_CreateAssetContainerRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AssetContainer>
-
-        /// Handle the "GetAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_GetAssetContainerRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_AssetContainer` messages.
-        func getAssetContainer(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_GetAssetContainerRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AssetContainer>
-
-        /// Handle the "UpdateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_UpdateAssetContainerRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_AssetContainer` messages.
-        func updateAssetContainer(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_UpdateAssetContainerRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AssetContainer>
-
-        /// Handle the "ListAssetContainers" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_ListAssetContainersRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_ListAssetContainersResponse` messages.
-        func listAssetContainers(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ListAssetContainersRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_ListAssetContainersResponse>
-
-        /// Handle the "ListAssetContainersByApp" method.
-        ///
-        /// - Parameters:
-        ///   - request: A streaming request of `Wendycloud_V1_ListAssetContainersByAppRequest` messages.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A streaming response of `Wendycloud_V1_ListAssetContainersByAppResponse` messages.
-        func listAssetContainersByApp(
-            request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ListAssetContainersByAppRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_ListAssetContainersByAppResponse>
     }
 
     /// Service protocol for the "wendycloud.v1.AppService" service.
@@ -420,17 +197,17 @@ extension Wendycloud_V1_AppService {
     /// the ``SimpleServiceProtocol``. If you need fine grained control over your RPCs then
     /// use ``StreamingServiceProtocol``.
     public protocol ServiceProtocol: Wendycloud_V1_AppService.StreamingServiceProtocol {
-        /// Handle the "CreateApp" method.
+        /// Handle the "UpsertApp" method.
         ///
         /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAppRequest` message.
+        ///   - request: A request containing a single `Wendycloud_V1_UpsertAppRequest` message.
         ///   - context: Context providing information about the RPC.
         /// - Throws: Any error which occurred during the processing of the request. Thrown errors
         ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
         ///     to an internal error.
         /// - Returns: A response containing a single `Wendycloud_V1_App` message.
-        func createApp(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_CreateAppRequest>,
+        func upsertApp(
+            request: GRPCCore.ServerRequest<Wendycloud_V1_UpsertAppRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_App>
 
@@ -489,118 +266,6 @@ extension Wendycloud_V1_AppService {
             request: GRPCCore.ServerRequest<Wendycloud_V1_ListAppsRequest>,
             context: GRPCCore.ServerContext
         ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_ListAppsResponse>
-
-        /// Handle the "CreateAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAppVersionRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_AppVersion` message.
-        func createAppVersion(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_CreateAppVersionRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AppVersion>
-
-        /// Handle the "GetAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_GetAppVersionRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_AppVersion` message.
-        func getAppVersion(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_GetAppVersionRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AppVersion>
-
-        /// Handle the "ListAppVersions" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAppVersionsRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_ListAppVersionsResponse` message.
-        func listAppVersions(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_ListAppVersionsRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_ListAppVersionsResponse>
-
-        /// Handle the "CreateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAssetContainerRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_AssetContainer` message.
-        func createAssetContainer(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_CreateAssetContainerRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer>
-
-        /// Handle the "GetAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_GetAssetContainerRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_AssetContainer` message.
-        func getAssetContainer(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_GetAssetContainerRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer>
-
-        /// Handle the "UpdateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_UpdateAssetContainerRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_AssetContainer` message.
-        func updateAssetContainer(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_UpdateAssetContainerRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer>
-
-        /// Handle the "ListAssetContainers" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_ListAssetContainersResponse` message.
-        func listAssetContainers(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_ListAssetContainersRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_ListAssetContainersResponse>
-
-        /// Handle the "ListAssetContainersByApp" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersByAppRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A response containing a single `Wendycloud_V1_ListAssetContainersByAppResponse` message.
-        func listAssetContainersByApp(
-            request: GRPCCore.ServerRequest<Wendycloud_V1_ListAssetContainersByAppRequest>,
-            context: GRPCCore.ServerContext
-        ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_ListAssetContainersByAppResponse>
     }
 
     /// Simple service protocol for the "wendycloud.v1.AppService" service.
@@ -609,17 +274,17 @@ extension Wendycloud_V1_AppService {
     /// doesn't provide access to request or response metadata. If you need access to these
     /// then use ``ServiceProtocol`` instead.
     public protocol SimpleServiceProtocol: Wendycloud_V1_AppService.ServiceProtocol {
-        /// Handle the "CreateApp" method.
+        /// Handle the "UpsertApp" method.
         ///
         /// - Parameters:
-        ///   - request: A `Wendycloud_V1_CreateAppRequest` message.
+        ///   - request: A `Wendycloud_V1_UpsertAppRequest` message.
         ///   - context: Context providing information about the RPC.
         /// - Throws: Any error which occurred during the processing of the request. Thrown errors
         ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
         ///     to an internal error.
         /// - Returns: A `Wendycloud_V1_App` to respond with.
-        func createApp(
-            request: Wendycloud_V1_CreateAppRequest,
+        func upsertApp(
+            request: Wendycloud_V1_UpsertAppRequest,
             context: GRPCCore.ServerContext
         ) async throws -> Wendycloud_V1_App
 
@@ -678,118 +343,6 @@ extension Wendycloud_V1_AppService {
             request: Wendycloud_V1_ListAppsRequest,
             context: GRPCCore.ServerContext
         ) async throws -> Wendycloud_V1_ListAppsResponse
-
-        /// Handle the "CreateAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_CreateAppVersionRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_AppVersion` to respond with.
-        func createAppVersion(
-            request: Wendycloud_V1_CreateAppVersionRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_AppVersion
-
-        /// Handle the "GetAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_GetAppVersionRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_AppVersion` to respond with.
-        func getAppVersion(
-            request: Wendycloud_V1_GetAppVersionRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_AppVersion
-
-        /// Handle the "ListAppVersions" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_ListAppVersionsRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_ListAppVersionsResponse` to respond with.
-        func listAppVersions(
-            request: Wendycloud_V1_ListAppVersionsRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_ListAppVersionsResponse
-
-        /// Handle the "CreateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_CreateAssetContainerRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_AssetContainer` to respond with.
-        func createAssetContainer(
-            request: Wendycloud_V1_CreateAssetContainerRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_AssetContainer
-
-        /// Handle the "GetAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_GetAssetContainerRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_AssetContainer` to respond with.
-        func getAssetContainer(
-            request: Wendycloud_V1_GetAssetContainerRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_AssetContainer
-
-        /// Handle the "UpdateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_UpdateAssetContainerRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_AssetContainer` to respond with.
-        func updateAssetContainer(
-            request: Wendycloud_V1_UpdateAssetContainerRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_AssetContainer
-
-        /// Handle the "ListAssetContainers" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_ListAssetContainersRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_ListAssetContainersResponse` to respond with.
-        func listAssetContainers(
-            request: Wendycloud_V1_ListAssetContainersRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_ListAssetContainersResponse
-
-        /// Handle the "ListAssetContainersByApp" method.
-        ///
-        /// - Parameters:
-        ///   - request: A `Wendycloud_V1_ListAssetContainersByAppRequest` message.
-        ///   - context: Context providing information about the RPC.
-        /// - Throws: Any error which occurred during the processing of the request. Thrown errors
-        ///     of type `RPCError` are mapped to appropriate statuses. All other errors are converted
-        ///     to an internal error.
-        /// - Returns: A `Wendycloud_V1_ListAssetContainersByAppResponse` to respond with.
-        func listAssetContainersByApp(
-            request: Wendycloud_V1_ListAssetContainersByAppRequest,
-            context: GRPCCore.ServerContext
-        ) async throws -> Wendycloud_V1_ListAssetContainersByAppResponse
     }
 }
 
@@ -798,11 +351,11 @@ extension Wendycloud_V1_AppService {
 extension Wendycloud_V1_AppService.StreamingServiceProtocol {
     public func registerMethods<Transport>(with router: inout GRPCCore.RPCRouter<Transport>) where Transport: GRPCCore.ServerTransport {
         router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.CreateApp.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_CreateAppRequest>(),
+            forMethod: Wendycloud_V1_AppService.Method.UpsertApp.descriptor,
+            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_UpsertAppRequest>(),
             serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_App>(),
             handler: { request, context in
-                try await self.createApp(
+                try await self.upsertApp(
                     request: request,
                     context: context
                 )
@@ -852,105 +405,17 @@ extension Wendycloud_V1_AppService.StreamingServiceProtocol {
                 )
             }
         )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.CreateAppVersion.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_CreateAppVersionRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_AppVersion>(),
-            handler: { request, context in
-                try await self.createAppVersion(
-                    request: request,
-                    context: context
-                )
-            }
-        )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.GetAppVersion.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_GetAppVersionRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_AppVersion>(),
-            handler: { request, context in
-                try await self.getAppVersion(
-                    request: request,
-                    context: context
-                )
-            }
-        )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.ListAppVersions.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_ListAppVersionsRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ListAppVersionsResponse>(),
-            handler: { request, context in
-                try await self.listAppVersions(
-                    request: request,
-                    context: context
-                )
-            }
-        )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.CreateAssetContainer.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_CreateAssetContainerRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_AssetContainer>(),
-            handler: { request, context in
-                try await self.createAssetContainer(
-                    request: request,
-                    context: context
-                )
-            }
-        )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.GetAssetContainer.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_GetAssetContainerRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_AssetContainer>(),
-            handler: { request, context in
-                try await self.getAssetContainer(
-                    request: request,
-                    context: context
-                )
-            }
-        )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.UpdateAssetContainer.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_UpdateAssetContainerRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_AssetContainer>(),
-            handler: { request, context in
-                try await self.updateAssetContainer(
-                    request: request,
-                    context: context
-                )
-            }
-        )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.ListAssetContainers.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_ListAssetContainersRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ListAssetContainersResponse>(),
-            handler: { request, context in
-                try await self.listAssetContainers(
-                    request: request,
-                    context: context
-                )
-            }
-        )
-        router.registerHandler(
-            forMethod: Wendycloud_V1_AppService.Method.ListAssetContainersByApp.descriptor,
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_ListAssetContainersByAppRequest>(),
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ListAssetContainersByAppResponse>(),
-            handler: { request, context in
-                try await self.listAssetContainersByApp(
-                    request: request,
-                    context: context
-                )
-            }
-        )
     }
 }
 
 // Default implementation of streaming methods from 'StreamingServiceProtocol'.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
 extension Wendycloud_V1_AppService.ServiceProtocol {
-    public func createApp(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_CreateAppRequest>,
+    public func upsertApp(
+        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_UpsertAppRequest>,
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_App> {
-        let response = try await self.createApp(
+        let response = try await self.upsertApp(
             request: GRPCCore.ServerRequest(stream: request),
             context: context
         )
@@ -1000,105 +465,17 @@ extension Wendycloud_V1_AppService.ServiceProtocol {
         )
         return GRPCCore.StreamingServerResponse(single: response)
     }
-
-    public func createAppVersion(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_CreateAppVersionRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AppVersion> {
-        let response = try await self.createAppVersion(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func getAppVersion(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_GetAppVersionRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AppVersion> {
-        let response = try await self.getAppVersion(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func listAppVersions(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ListAppVersionsRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_ListAppVersionsResponse> {
-        let response = try await self.listAppVersions(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func createAssetContainer(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_CreateAssetContainerRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AssetContainer> {
-        let response = try await self.createAssetContainer(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func getAssetContainer(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_GetAssetContainerRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AssetContainer> {
-        let response = try await self.getAssetContainer(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func updateAssetContainer(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_UpdateAssetContainerRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_AssetContainer> {
-        let response = try await self.updateAssetContainer(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func listAssetContainers(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ListAssetContainersRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_ListAssetContainersResponse> {
-        let response = try await self.listAssetContainers(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
-
-    public func listAssetContainersByApp(
-        request: GRPCCore.StreamingServerRequest<Wendycloud_V1_ListAssetContainersByAppRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.StreamingServerResponse<Wendycloud_V1_ListAssetContainersByAppResponse> {
-        let response = try await self.listAssetContainersByApp(
-            request: GRPCCore.ServerRequest(stream: request),
-            context: context
-        )
-        return GRPCCore.StreamingServerResponse(single: response)
-    }
 }
 
 // Default implementation of methods from 'ServiceProtocol'.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
 extension Wendycloud_V1_AppService.SimpleServiceProtocol {
-    public func createApp(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_CreateAppRequest>,
+    public func upsertApp(
+        request: GRPCCore.ServerRequest<Wendycloud_V1_UpsertAppRequest>,
         context: GRPCCore.ServerContext
     ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_App> {
         return GRPCCore.ServerResponse<Wendycloud_V1_App>(
-            message: try await self.createApp(
+            message: try await self.upsertApp(
                 request: request.message,
                 context: context
             ),
@@ -1157,110 +534,6 @@ extension Wendycloud_V1_AppService.SimpleServiceProtocol {
             metadata: [:]
         )
     }
-
-    public func createAppVersion(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_CreateAppVersionRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AppVersion> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_AppVersion>(
-            message: try await self.createAppVersion(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func getAppVersion(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_GetAppVersionRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AppVersion> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_AppVersion>(
-            message: try await self.getAppVersion(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func listAppVersions(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_ListAppVersionsRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_ListAppVersionsResponse> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_ListAppVersionsResponse>(
-            message: try await self.listAppVersions(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func createAssetContainer(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_CreateAssetContainerRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer>(
-            message: try await self.createAssetContainer(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func getAssetContainer(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_GetAssetContainerRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer>(
-            message: try await self.getAssetContainer(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func updateAssetContainer(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_UpdateAssetContainerRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_AssetContainer>(
-            message: try await self.updateAssetContainer(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func listAssetContainers(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_ListAssetContainersRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_ListAssetContainersResponse> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_ListAssetContainersResponse>(
-            message: try await self.listAssetContainers(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
-
-    public func listAssetContainersByApp(
-        request: GRPCCore.ServerRequest<Wendycloud_V1_ListAssetContainersByAppRequest>,
-        context: GRPCCore.ServerContext
-    ) async throws -> GRPCCore.ServerResponse<Wendycloud_V1_ListAssetContainersByAppResponse> {
-        return GRPCCore.ServerResponse<Wendycloud_V1_ListAssetContainersByAppResponse>(
-            message: try await self.listAssetContainersByApp(
-                request: request.message,
-                context: context
-            ),
-            metadata: [:]
-        )
-    }
 }
 
 // MARK: wendycloud.v1.AppService (client)
@@ -1272,20 +545,20 @@ extension Wendycloud_V1_AppService {
     /// You don't need to implement this protocol directly, use the generated
     /// implementation, ``Client``.
     public protocol ClientProtocol: Sendable {
-        /// Call the "CreateApp" method.
+        /// Call the "UpsertApp" method.
         ///
         /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAppRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_CreateAppRequest` messages.
+        ///   - request: A request containing a single `Wendycloud_V1_UpsertAppRequest` message.
+        ///   - serializer: A serializer for `Wendycloud_V1_UpsertAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
-        func createApp<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAppRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_CreateAppRequest>,
+        func upsertApp<Result>(
+            request: GRPCCore.ClientRequest<Wendycloud_V1_UpsertAppRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_UpsertAppRequest>,
             deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_App>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_App>) async throws -> Result
@@ -1298,9 +571,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_GetAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         func getApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppRequest>,
@@ -1317,9 +590,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_UpdateAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         func updateApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAppRequest>,
@@ -1336,9 +609,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_DeleteAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_DeleteAppResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         func deleteApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_DeleteAppRequest>,
@@ -1355,9 +628,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_ListAppsRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_ListAppsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         func listApps<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppsRequest>,
@@ -1365,158 +638,6 @@ extension Wendycloud_V1_AppService {
             deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_ListAppsResponse>,
             options: GRPCCore.CallOptions,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAppsResponse>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "CreateAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAppVersionRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_CreateAppVersionRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AppVersion` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func createAppVersion<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAppVersionRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_CreateAppVersionRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AppVersion>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "GetAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_GetAppVersionRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_GetAppVersionRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AppVersion` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func getAppVersion<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppVersionRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_GetAppVersionRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AppVersion>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "ListAppVersions" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAppVersionsRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_ListAppVersionsRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_ListAppVersionsResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func listAppVersions<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppVersionsRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ListAppVersionsRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_ListAppVersionsResponse>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAppVersionsResponse>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "CreateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAssetContainerRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_CreateAssetContainerRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AssetContainer` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func createAssetContainer<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAssetContainerRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_CreateAssetContainerRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AssetContainer>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "GetAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_GetAssetContainerRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_GetAssetContainerRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AssetContainer` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func getAssetContainer<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_GetAssetContainerRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_GetAssetContainerRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AssetContainer>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "UpdateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_UpdateAssetContainerRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_UpdateAssetContainerRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AssetContainer` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func updateAssetContainer<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAssetContainerRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_UpdateAssetContainerRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AssetContainer>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "ListAssetContainers" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_ListAssetContainersRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_ListAssetContainersResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func listAssetContainers<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ListAssetContainersRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_ListAssetContainersResponse>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersResponse>) async throws -> Result
-        ) async throws -> Result where Result: Sendable
-
-        /// Call the "ListAssetContainersByApp" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersByAppRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_ListAssetContainersByAppRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_ListAssetContainersByAppResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        func listAssetContainersByApp<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersByAppRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ListAssetContainersByAppRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_ListAssetContainersByAppResponse>,
-            options: GRPCCore.CallOptions,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersByAppResponse>) async throws -> Result
         ) async throws -> Result where Result: Sendable
     }
 
@@ -1536,20 +657,20 @@ extension Wendycloud_V1_AppService {
             self.client = client
         }
 
-        /// Call the "CreateApp" method.
+        /// Call the "UpsertApp" method.
         ///
         /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAppRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_CreateAppRequest` messages.
+        ///   - request: A request containing a single `Wendycloud_V1_UpsertAppRequest` message.
+        ///   - serializer: A serializer for `Wendycloud_V1_UpsertAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
-        public func createApp<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAppRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_CreateAppRequest>,
+        public func upsertApp<Result>(
+            request: GRPCCore.ClientRequest<Wendycloud_V1_UpsertAppRequest>,
+            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_UpsertAppRequest>,
             deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_App>,
             options: GRPCCore.CallOptions = .defaults,
             onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_App>) async throws -> Result = { response in
@@ -1558,7 +679,7 @@ extension Wendycloud_V1_AppService {
         ) async throws -> Result where Result: Sendable {
             try await self.client.unary(
                 request: request,
-                descriptor: Wendycloud_V1_AppService.Method.CreateApp.descriptor,
+                descriptor: Wendycloud_V1_AppService.Method.UpsertApp.descriptor,
                 serializer: serializer,
                 deserializer: deserializer,
                 options: options,
@@ -1573,9 +694,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_GetAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         public func getApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppRequest>,
@@ -1603,9 +724,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_UpdateAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_App` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         public func updateApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAppRequest>,
@@ -1633,9 +754,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_DeleteAppRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_DeleteAppResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         public func deleteApp<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_DeleteAppRequest>,
@@ -1663,9 +784,9 @@ extension Wendycloud_V1_AppService {
         ///   - serializer: A serializer for `Wendycloud_V1_ListAppsRequest` messages.
         ///   - deserializer: A deserializer for `Wendycloud_V1_ListAppsResponse` messages.
         ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
+        ///   - handleResponse: A closure which handles the response and returns its result to
+        ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+        ///       already finished.
         /// - Returns: The result of `handleResponse`.
         public func listApps<Result>(
             request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppsRequest>,
@@ -1685,271 +806,31 @@ extension Wendycloud_V1_AppService {
                 onResponse: handleResponse
             )
         }
-
-        /// Call the "CreateAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAppVersionRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_CreateAppVersionRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AppVersion` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func createAppVersion<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAppVersionRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_CreateAppVersionRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AppVersion>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.CreateAppVersion.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
-
-        /// Call the "GetAppVersion" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_GetAppVersionRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_GetAppVersionRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AppVersion` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func getAppVersion<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppVersionRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_GetAppVersionRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AppVersion>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.GetAppVersion.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
-
-        /// Call the "ListAppVersions" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAppVersionsRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_ListAppVersionsRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_ListAppVersionsResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func listAppVersions<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppVersionsRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ListAppVersionsRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_ListAppVersionsResponse>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAppVersionsResponse>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.ListAppVersions.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
-
-        /// Call the "CreateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_CreateAssetContainerRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_CreateAssetContainerRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AssetContainer` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func createAssetContainer<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAssetContainerRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_CreateAssetContainerRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AssetContainer>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.CreateAssetContainer.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
-
-        /// Call the "GetAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_GetAssetContainerRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_GetAssetContainerRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AssetContainer` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func getAssetContainer<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_GetAssetContainerRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_GetAssetContainerRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AssetContainer>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.GetAssetContainer.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
-
-        /// Call the "UpdateAssetContainer" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_UpdateAssetContainerRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_UpdateAssetContainerRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_AssetContainer` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func updateAssetContainer<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAssetContainerRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_UpdateAssetContainerRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_AssetContainer>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.UpdateAssetContainer.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
-
-        /// Call the "ListAssetContainers" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_ListAssetContainersRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_ListAssetContainersResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func listAssetContainers<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ListAssetContainersRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_ListAssetContainersResponse>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersResponse>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.ListAssetContainers.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
-
-        /// Call the "ListAssetContainersByApp" method.
-        ///
-        /// - Parameters:
-        ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersByAppRequest` message.
-        ///   - serializer: A serializer for `Wendycloud_V1_ListAssetContainersByAppRequest` messages.
-        ///   - deserializer: A deserializer for `Wendycloud_V1_ListAssetContainersByAppResponse` messages.
-        ///   - options: Options to apply to this RPC.
-        ///   - handleResponse: A closure which handles the response, the result of which is
-        ///       returned to the caller. Returning from the closure will cancel the RPC if it
-        ///       hasn't already finished.
-        /// - Returns: The result of `handleResponse`.
-        public func listAssetContainersByApp<Result>(
-            request: GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersByAppRequest>,
-            serializer: some GRPCCore.MessageSerializer<Wendycloud_V1_ListAssetContainersByAppRequest>,
-            deserializer: some GRPCCore.MessageDeserializer<Wendycloud_V1_ListAssetContainersByAppResponse>,
-            options: GRPCCore.CallOptions = .defaults,
-            onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersByAppResponse>) async throws -> Result = { response in
-                try response.message
-            }
-        ) async throws -> Result where Result: Sendable {
-            try await self.client.unary(
-                request: request,
-                descriptor: Wendycloud_V1_AppService.Method.ListAssetContainersByApp.descriptor,
-                serializer: serializer,
-                deserializer: deserializer,
-                options: options,
-                onResponse: handleResponse
-            )
-        }
     }
 }
 
 // Helpers providing default arguments to 'ClientProtocol' methods.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
 extension Wendycloud_V1_AppService.ClientProtocol {
-    /// Call the "CreateApp" method.
+    /// Call the "UpsertApp" method.
     ///
     /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_CreateAppRequest` message.
+    ///   - request: A request containing a single `Wendycloud_V1_UpsertAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
-    public func createApp<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAppRequest>,
+    public func upsertApp<Result>(
+        request: GRPCCore.ClientRequest<Wendycloud_V1_UpsertAppRequest>,
         options: GRPCCore.CallOptions = .defaults,
         onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_App>) async throws -> Result = { response in
             try response.message
         }
     ) async throws -> Result where Result: Sendable {
-        try await self.createApp(
+        try await self.upsertApp(
             request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_CreateAppRequest>(),
+            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_UpsertAppRequest>(),
             deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_App>(),
             options: options,
             onResponse: handleResponse
@@ -1961,9 +842,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_GetAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func getApp<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppRequest>,
@@ -1986,9 +867,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_UpdateAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateApp<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAppRequest>,
@@ -2011,9 +892,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_DeleteAppRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func deleteApp<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_DeleteAppRequest>,
@@ -2036,9 +917,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     /// - Parameters:
     ///   - request: A request containing a single `Wendycloud_V1_ListAppsRequest` message.
     ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func listApps<Result>(
         request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppsRequest>,
@@ -2055,234 +936,34 @@ extension Wendycloud_V1_AppService.ClientProtocol {
             onResponse: handleResponse
         )
     }
-
-    /// Call the "CreateAppVersion" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_CreateAppVersionRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func createAppVersion<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAppVersionRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.createAppVersion(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_CreateAppVersionRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_AppVersion>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "GetAppVersion" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_GetAppVersionRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func getAppVersion<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_GetAppVersionRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.getAppVersion(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_GetAppVersionRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_AppVersion>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "ListAppVersions" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_ListAppVersionsRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func listAppVersions<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_ListAppVersionsRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAppVersionsResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.listAppVersions(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ListAppVersionsRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_ListAppVersionsResponse>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "CreateAssetContainer" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_CreateAssetContainerRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func createAssetContainer<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_CreateAssetContainerRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.createAssetContainer(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_CreateAssetContainerRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_AssetContainer>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "GetAssetContainer" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_GetAssetContainerRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func getAssetContainer<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_GetAssetContainerRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.getAssetContainer(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_GetAssetContainerRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_AssetContainer>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "UpdateAssetContainer" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_UpdateAssetContainerRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func updateAssetContainer<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_UpdateAssetContainerRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.updateAssetContainer(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_UpdateAssetContainerRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_AssetContainer>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "ListAssetContainers" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func listAssetContainers<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.listAssetContainers(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ListAssetContainersRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_ListAssetContainersResponse>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "ListAssetContainersByApp" method.
-    ///
-    /// - Parameters:
-    ///   - request: A request containing a single `Wendycloud_V1_ListAssetContainersByAppRequest` message.
-    ///   - options: Options to apply to this RPC.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func listAssetContainersByApp<Result>(
-        request: GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersByAppRequest>,
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersByAppResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        try await self.listAssetContainersByApp(
-            request: request,
-            serializer: GRPCProtobuf.ProtobufSerializer<Wendycloud_V1_ListAssetContainersByAppRequest>(),
-            deserializer: GRPCProtobuf.ProtobufDeserializer<Wendycloud_V1_ListAssetContainersByAppResponse>(),
-            options: options,
-            onResponse: handleResponse
-        )
-    }
 }
 
 // Helpers providing sugared APIs for 'ClientProtocol' methods.
 @available(macOS 15.0, iOS 18.0, watchOS 11.0, tvOS 18.0, visionOS 2.0, *)
 extension Wendycloud_V1_AppService.ClientProtocol {
-    /// Call the "CreateApp" method.
+    /// Call the "UpsertApp" method.
     ///
     /// - Parameters:
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
-    public func createApp<Result>(
-        _ message: Wendycloud_V1_CreateAppRequest,
+    public func upsertApp<Result>(
+        _ message: Wendycloud_V1_UpsertAppRequest,
         metadata: GRPCCore.Metadata = [:],
         options: GRPCCore.CallOptions = .defaults,
         onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_App>) async throws -> Result = { response in
             try response.message
         }
     ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_CreateAppRequest>(
+        let request = GRPCCore.ClientRequest<Wendycloud_V1_UpsertAppRequest>(
             message: message,
             metadata: metadata
         )
-        return try await self.createApp(
+        return try await self.upsertApp(
             request: request,
             options: options,
             onResponse: handleResponse
@@ -2295,9 +976,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func getApp<Result>(
         _ message: Wendycloud_V1_GetAppRequest,
@@ -2324,9 +1005,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func updateApp<Result>(
         _ message: Wendycloud_V1_UpdateAppRequest,
@@ -2353,9 +1034,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func deleteApp<Result>(
         _ message: Wendycloud_V1_DeleteAppRequest,
@@ -2382,9 +1063,9 @@ extension Wendycloud_V1_AppService.ClientProtocol {
     ///   - message: request message to send.
     ///   - metadata: Additional metadata to send, defaults to empty.
     ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
+    ///   - handleResponse: A closure which handles the response and returns its result to
+    ///       the caller. Returning from the closure will cancel the RPC if it hasn't
+    ///       already finished.
     /// - Returns: The result of `handleResponse`.
     public func listApps<Result>(
         _ message: Wendycloud_V1_ListAppsRequest,
@@ -2399,238 +1080,6 @@ extension Wendycloud_V1_AppService.ClientProtocol {
             metadata: metadata
         )
         return try await self.listApps(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "CreateAppVersion" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func createAppVersion<Result>(
-        _ message: Wendycloud_V1_CreateAppVersionRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_CreateAppVersionRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.createAppVersion(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "GetAppVersion" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func getAppVersion<Result>(
-        _ message: Wendycloud_V1_GetAppVersionRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AppVersion>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_GetAppVersionRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.getAppVersion(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "ListAppVersions" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func listAppVersions<Result>(
-        _ message: Wendycloud_V1_ListAppVersionsRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAppVersionsResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_ListAppVersionsRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.listAppVersions(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "CreateAssetContainer" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func createAssetContainer<Result>(
-        _ message: Wendycloud_V1_CreateAssetContainerRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_CreateAssetContainerRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.createAssetContainer(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "GetAssetContainer" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func getAssetContainer<Result>(
-        _ message: Wendycloud_V1_GetAssetContainerRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_GetAssetContainerRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.getAssetContainer(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "UpdateAssetContainer" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func updateAssetContainer<Result>(
-        _ message: Wendycloud_V1_UpdateAssetContainerRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_AssetContainer>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_UpdateAssetContainerRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.updateAssetContainer(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "ListAssetContainers" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func listAssetContainers<Result>(
-        _ message: Wendycloud_V1_ListAssetContainersRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.listAssetContainers(
-            request: request,
-            options: options,
-            onResponse: handleResponse
-        )
-    }
-
-    /// Call the "ListAssetContainersByApp" method.
-    ///
-    /// - Parameters:
-    ///   - message: request message to send.
-    ///   - metadata: Additional metadata to send, defaults to empty.
-    ///   - options: Options to apply to this RPC, defaults to `.defaults`.
-    ///   - handleResponse: A closure which handles the response, the result of which is
-    ///       returned to the caller. Returning from the closure will cancel the RPC if it
-    ///       hasn't already finished.
-    /// - Returns: The result of `handleResponse`.
-    public func listAssetContainersByApp<Result>(
-        _ message: Wendycloud_V1_ListAssetContainersByAppRequest,
-        metadata: GRPCCore.Metadata = [:],
-        options: GRPCCore.CallOptions = .defaults,
-        onResponse handleResponse: @Sendable @escaping (GRPCCore.ClientResponse<Wendycloud_V1_ListAssetContainersByAppResponse>) async throws -> Result = { response in
-            try response.message
-        }
-    ) async throws -> Result where Result: Sendable {
-        let request = GRPCCore.ClientRequest<Wendycloud_V1_ListAssetContainersByAppRequest>(
-            message: message,
-            metadata: metadata
-        )
-        return try await self.listAssetContainersByApp(
             request: request,
             options: options,
             onResponse: handleResponse

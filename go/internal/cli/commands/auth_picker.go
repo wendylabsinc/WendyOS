@@ -75,7 +75,7 @@ func resolveAuthOrgNames(ctx context.Context, cfg *config.Config) map[string]str
 
 // authPickerItems builds picker rows for every stored session.
 // orgNames is a pre-fetched map of session key -> name; missing entries fall back to
-// "org N". The Name column shows the org name, Description shows the org ID,
+// "org N" for legacy sessions and "(unnamed)" for UUID sessions. The Name column shows the org name, Description shows the org ID,
 // and Type carries the environment (dashboard URL or gRPC endpoint).
 // DedupKey and Value carry the session key so each (endpoint, org) pair is a
 // distinct row even when multiple orgs share the same gRPC endpoint.
@@ -104,7 +104,7 @@ func authPickerItems(cfg *config.Config, orgNames map[string]string) []tui.Picke
 		idStr := ""
 		if len(a.Certificates) > 0 && a.Certificates[0].TenantUUID() != "" {
 			idStr = a.Certificates[0].TenantUUID()
-			name = idStr
+			name = "(unnamed)"
 		} else if len(a.Certificates) > 0 {
 			orgID := int32(a.Certificates[0].OrganizationID)
 			idStr = fmt.Sprintf("%d", orgID)

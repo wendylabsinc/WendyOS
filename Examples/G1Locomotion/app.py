@@ -11,6 +11,8 @@ import time
 PERIOD = 0.05
 LEASE = 0.2
 DENIED = 3205
+RPC_TIMEOUT = 1.0
+RPC_TIMEOUT_CODE = 3104
 
 
 @dataclass(frozen=True)
@@ -34,14 +36,19 @@ STEPS = (
 
 def check(code, operation):
     if code != 0:
-        hint = " Control was revoked; restart the demo and grant it again." if code == DENIED else ""
+        hint = ""
+        if code == DENIED:
+            hint = " Control was revoked; restart the demo and grant it again."
+        elif code == RPC_TIMEOUT_CODE:
+            hint = " RPC reply timed out; check simulator load and DDS connectivity."
         raise RuntimeError(f"{operation} failed with SDK code {code}.{hint}")
 
 
 def run(client, stop, grant_timeout=120.0, *, clock=time.monotonic):
     """Wait for ownership using zero velocity, then stream one finite sequence."""
     try:
-        print("Select this sport publisher in the simulator and click Give app control.", flush=True)
+        print("Waiting for simulator control. Managed G1 grants it automatically; "
+              "for a standalone simulator, open App control, select this sport publisher, and click Grant control.", flush=True)
         deadline = clock() + grant_timeout
         while not stop.is_set():
             code = client.SetVelocity(0.0, 0.0, 0.0, LEASE)
@@ -50,7 +57,8 @@ def run(client, stop, grant_timeout=120.0, *, clock=time.monotonic):
             if code != DENIED:
                 check(code, "Waiting for simulator control")
             if clock() >= deadline:
-                raise RuntimeError("Timed out waiting for Give app control in the simulator.")
+                raise RuntimeError("Timed out waiting for simulator control. Resume or reset the world, "
+                                   "then restart the demo. Standalone simulators require Grant control.")
             stop.wait(PERIOD)
         if stop.is_set():
             return
@@ -101,7 +109,9 @@ def main():
         client.Init()
         code, _ = client.GetFsmId()
         check(code, "Discovering the simulator locomotion service")
-        client.SetTimeout(0.15)
+        # A reply may wait behind ROS observation work or VM scheduling. This
+        # bounds the RPC wait, independently of the 200 ms motion lease.
+        client.SetTimeout(RPC_TIMEOUT)
         run(client, stop)
     except Exception as exc:
         print(f"Demo failed: {exc}", file=sys.stderr)

@@ -76,8 +76,8 @@ for net in networks.sorted(by: { $0.rssiValue > $1.rssiValue }) {
 
 // scanLocalWifiNetworks uses CoreWLAN (via a small Swift script) to perform a
 // fresh on-demand scan of WiFi networks visible to the host machine.
-func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
-	nets, err := runCorewlanScan(corewlanPreamble + corewlanFreshObtain + corewlanPrintLoop)
+func scanLocalWifiNetworks(ctx context.Context) ([]localWifiNetwork, error) {
+	nets, err := runCorewlanScan(ctx, corewlanPreamble+corewlanFreshObtain+corewlanPrintLoop)
 	if err != nil {
 		if errors.Is(err, errNoWifiAdapter) {
 			return nil, err
@@ -91,8 +91,8 @@ func scanLocalWifiNetworks() ([]localWifiNetwork, error) {
 // triggering a fresh scan, so a streaming picker can paint instantly while
 // scanLocalWifiNetworks runs the slower on-demand scan. Best-effort: any
 // failure yields no networks rather than an error.
-func cachedLocalWifiNetworks() []localWifiNetwork {
-	nets, err := runCorewlanScan(corewlanPreamble + corewlanCachedObtain + corewlanPrintLoop)
+func cachedLocalWifiNetworks(ctx context.Context) []localWifiNetwork {
+	nets, err := runCorewlanScan(ctx, corewlanPreamble+corewlanCachedObtain+corewlanPrintLoop)
 	if err != nil {
 		return nil
 	}
@@ -102,8 +102,8 @@ func cachedLocalWifiNetworks() []localWifiNetwork {
 // runCorewlanScan runs the given Swift program and parses its tab-delimited
 // "SSID\tRSSI\tSecurity" output. A "no wifi interface" failure is reported as
 // errNoWifiAdapter; other exec failures pass through (with captured stderr).
-func runCorewlanScan(script string) ([]localWifiNetwork, error) {
-	cmd := exec.Command("/usr/bin/swift", "-")
+func runCorewlanScan(ctx context.Context, script string) ([]localWifiNetwork, error) {
+	cmd := exec.CommandContext(ctx, "/usr/bin/swift", "-")
 	cmd.Stdin = strings.NewReader(script)
 
 	output, err := cmd.Output()

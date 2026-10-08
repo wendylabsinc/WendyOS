@@ -17,7 +17,7 @@ struct `'wendy device camera view'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy device camera view --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Stream H.264 video from a device camera"))
+                #expect(result.stdout.contains("Stream video from a device camera"))
                 #expect(result.stdout.contains("wendy device camera view [flags]"))
                 #expect(result.stdout.contains("--id"))
                 #expect(result.stdout.contains("--width"))

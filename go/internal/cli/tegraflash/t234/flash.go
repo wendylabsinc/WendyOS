@@ -26,7 +26,22 @@ const (
 	flashpkgWait    = 5 * time.Minute
 	rootfsWait      = 15 * time.Minute
 	finalStatusWait = 15 * time.Minute
+)
+
+// disappearWait bounds how long a released LUN may take to go away; the eject
+// is retried ejectAttempts times, ejectRetryDelay apart. Vars so tests can
+// shorten them.
+var (
 	disappearWait   = 45 * time.Second
+	ejectAttempts   = 3
+	ejectRetryDelay = time.Second
+)
+
+// gadgetMissingGrace is how long the session's gadget may be off USB before a
+// LUN wait suggests a replug; the gadget is checked every gadgetCheckInterval.
+var (
+	gadgetMissingGrace  = 2 * time.Minute
+	gadgetCheckInterval = 10 * time.Second
 )
 
 // identityReattachWait bounds how long the identity read waits for a detached
@@ -54,11 +69,18 @@ type Stage2 struct {
 	ImagesDir        string
 	Plan             *Plan
 	PortPath         string
+	// StrictPort rejects a sole gadget on another USB path. Durable jobs require
+	// this; the terminal installer permits the USB-speed topology fallback.
+	StrictPort       bool
 	Session          string
 	StatusPath       string
 	LogsPath         string
 	ExpectedIdentity IdentityExpectation
 	HandoffStarted   bool
+	USBMode          USBMode
+	supportsSingle   bool
+	pollFailed       bool
+	recoveryPort     string       // where the bootROM enumerated, before adoptGadget
 	Out              io.Writer    // verbose log
 	Detail           func(string) // live one-line progress; may be nil
 
@@ -78,13 +100,62 @@ type Stage2 struct {
 
 const DeviceIdentityProtocol = "wendy-t234-recovery-v2"
 
+// RootfsLUNVendor is the export name of the LUN the initrd loads the rootfs
+// device into; it exists, empty, from the first enumeration.
+const RootfsLUNVendor = "rootfs"
+
+// pollingMissing is mediaPollingMissing; a var so tests don't read the host's
+// sysfs.
+var pollingMissing = mediaPollingMissing
+
+// pollMedia enables host media polling for the gadget's LUNs when one still
+// lacks it; the check is unprivileged, so the root helper runs only then.
+func (s *Stage2) pollMedia(ctx context.Context) error {
+	if !pollingMissing(s.Session) {
+		return nil
+	}
+	return s.RunHelper(ctx, HelperRequest{PollMedia: true, Session: s.Session}, nil)
+}
+
+// laterLUN selects a LUN the device exports after the handoff: this session's,
+// on the gadget's port or, unless StrictPort, another one after a replug.
+func (s *Stage2) laterLUN(ctx context.Context, vendor string) LUNSelector {
+	selector := LUNSelector{Vendor: vendor, PortPath: s.PortPath, PortHint: !s.StrictPort, Session: s.Session, RecoveryPort: s.recoveryPort}
+	if s.USBMode == USBModeSingle {
+		selector.Refresh, selector.OnMissing = s.mediaRefresh(ctx), s.replugHint
+	}
+	return selector
+}
+
+// replugHint tells the user how to recover a gadget that dropped off USB.
+func (s *Stage2) replugHint(gone time.Duration) {
+	fmt.Fprintf(s.Out, "  The Jetson has been off USB for %v. Unplug and replug its USB cable in the same port.\n", gone.Round(time.Second))
+	fmt.Fprintln(s.Out, "  The flash keeps waiting; do not reset the Jetson.")
+	s.detail("off USB for %v; replug the USB cable", gone.Round(time.Second))
+}
+
+// mediaRefresh re-applies media polling while waiting, for LUNs that
+// re-enumerated after a replug. After one failure it warns and stops trying.
+func (s *Stage2) mediaRefresh(ctx context.Context) func() {
+	return func() {
+		if s.pollFailed {
+			return
+		}
+		if err := s.pollMedia(ctx); err != nil {
+			s.pollFailed = true
+			fmt.Fprintf(s.Out, "  warning: %v; the host may not notice the device's next disk\n", err)
+		}
+	}
+}
+
 type DeviceIdentity struct {
-	Protocol   string `json:"protocol"`
-	SessionID  string `json:"session_id"`
-	ModuleID   string `json:"module_id"`
-	ModuleSKU  string `json:"module_sku"`
-	CarrierID  string `json:"carrier_id"`
-	CarrierSKU string `json:"carrier_sku"`
+	Protocol     string   `json:"protocol"`
+	SessionID    string   `json:"session_id"`
+	ModuleID     string   `json:"module_id"`
+	ModuleSKU    string   `json:"module_sku"`
+	CarrierID    string   `json:"carrier_id"`
+	CarrierSKU   string   `json:"carrier_sku"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type IdentityExpectation struct {
@@ -107,7 +178,7 @@ func (s *Stage2) SendFlashPackage(ctx context.Context) error {
 	// than the bootROM's recovery device, which moves it to the connector's
 	// other root-hub port (e.g. recovery high-speed at usb 1-1, SuperSpeed
 	// gadget at usb 1-2 — seen live on an Orin Nano on macOS).
-	disk, err := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: FlashpkgVendor, PortPath: s.PortPath, PortHint: true}, flashpkgWait)
+	disk, err := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: FlashpkgVendor, PortPath: s.PortPath, PortHint: !s.StrictPort}, flashpkgWait)
 	if err != nil {
 		return err
 	}
@@ -124,7 +195,24 @@ func (s *Stage2) SendFlashPackage(ctx context.Context) error {
 		return err
 	}
 	s.adoptGadget(disk)
-	s.unmount(ctx, disk)
+	packagePath, mode, err := prepareUSBMode(s.FlashPackagePath, s.TempDir, s.supportsSingle)
+	if err != nil {
+		return fmt.Errorf("selecting recovery USB mode: %w", err)
+	}
+	s.FlashPackagePath, s.USBMode = packagePath, mode
+	fmt.Fprintf(s.Out, "  selected USB mode: %s\n", mode)
+	if mode == USBModeSingle {
+		if err := CheckHostTools(); err != nil {
+			return err
+		}
+		// Before the first eject, so the host sees every later media change.
+		if err := s.pollMedia(ctx); err != nil {
+			return fmt.Errorf("enabling host media polling: %w", err)
+		}
+	}
+	if err := s.unmount(ctx, disk); err != nil {
+		return fmt.Errorf("unmounting flash package before writing: %w", err)
+	}
 	s.detail("sending flash commands + bootloader")
 	s.HandoffStarted = true
 	if err := s.RunHelper(ctx, HelperRequest{Writer: WriterOptions{Device: disk.RawPath, Blob: s.FlashPackagePath}}, nil); err != nil {
@@ -140,8 +228,11 @@ func (s *Stage2) SendFlashPackage(ctx context.Context) error {
 // every later LUN (rootfs export, final status) appears on the gadget's own
 // port with its session id, not on the port the bootROM enumerated at.
 func (s *Stage2) adoptGadget(disk UMSDisk) {
+	if s.recoveryPort == "" {
+		s.recoveryPort = s.PortPath
+	}
 	if disk.PortPath != "" && disk.PortPath != s.PortPath {
-		fmt.Fprintf(s.Out, "  gadget re-enumerated at usb %s (recovery was at usb %s)\n", disk.PortPath, s.PortPath)
+		fmt.Fprintf(s.Out, "  gadget re-enumerated at usb %s (was at usb %s)\n", disk.PortPath, s.PortPath)
 		s.PortPath = disk.PortPath
 	}
 	s.Session = disk.Serial
@@ -184,7 +275,7 @@ func (s *Stage2) verifyDeviceIdentity(ctx context.Context, disk UMSDisk) (UMSDis
 			return UMSDisk{}, ctx.Err()
 		case <-time.After(identityRetryDelay):
 		}
-		re, waitErr := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: disk.Vendor, PortPath: disk.PortPath, PortHint: true, Session: disk.Serial}, identityReattachWait)
+		re, waitErr := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: disk.Vendor, PortPath: disk.PortPath, PortHint: !s.StrictPort, Session: disk.Serial}, identityReattachWait)
 		if waitErr != nil {
 			if ctx.Err() != nil {
 				return UMSDisk{}, ctx.Err()
@@ -219,6 +310,7 @@ func (s *Stage2) verifyDeviceIdentity(ctx context.Context, disk UMSDisk) (UMSDis
 	if err := validateDeviceIdentity(got, disk.Serial, s.ExpectedIdentity); err != nil {
 		return UMSDisk{}, err
 	}
+	s.supportsSingle = hasSingleEnumeration(got.Capabilities)
 	fmt.Fprintf(s.Out, "  identity verified: module P%s-%s, carrier P%s-%s, session %s\n", got.ModuleID, got.ModuleSKU, got.CarrierID, got.CarrierSKU, got.SessionID)
 	return disk, nil
 }
@@ -290,7 +382,18 @@ func (s *Stage2) verifyFlashPackage(ctx context.Context, disk UMSDisk) error {
 		return fmt.Errorf("flash package verification failed: device command_sequence is %q, expected %q",
 			strings.TrimSpace(string(got)), strings.TrimSpace(string(want)))
 	}
-	fmt.Fprintln(s.Out, "  verified flash package on device (command sequence intact)")
+	gotMode, err := readPackageUSBMode(img)
+	if err != nil {
+		return fmt.Errorf("verifying device USB mode: %w", err)
+	}
+	wantMode, err := readPackageUSBMode(local)
+	if err != nil {
+		return fmt.Errorf("reading local USB mode: %w", err)
+	}
+	if gotMode != wantMode {
+		return fmt.Errorf("flash package verification failed: USB mode is %q, expected %q", gotMode, wantMode)
+	}
+	fmt.Fprintf(s.Out, "  verified flash package on device (command sequence and %s USB mode intact)\n", gotMode)
 	return nil
 }
 
@@ -301,31 +404,43 @@ func (s *Stage2) verifyFlashPackage(ctx context.Context, disk UMSDisk) error {
 func (s *Stage2) WriteRootfsDevice(ctx context.Context) error {
 	s.detail("waiting for the %s disk", s.Plan.RootfsDevice)
 	fmt.Fprintf(s.Out, "Waiting for the device to export %s over USB...\n", s.Plan.RootfsDevice)
-	disk, err := waitForUMSDiskConfirmed(ctx, LUNSelector{Vendor: s.Plan.RootfsDevice, PortPath: s.PortPath, Session: s.Session}, rootfsWait)
+	vendor := s.Plan.RootfsDevice
+	if s.USBMode == USBModeSingle {
+		vendor = RootfsLUNVendor
+	}
+	disk, err := waitForUMSDiskConfirmed(ctx, s.laterLUN(ctx, vendor), rootfsWait)
 	if err != nil {
 		if errors.Is(err, errGotFlashpkg) {
 			return ErrDeviceSideFailed
 		}
 		return err
 	}
+	s.adoptGadget(disk)
 	fmt.Fprintf(s.Out, "  %s: %s (%d bytes)\n", s.Plan.RootfsDevice, disk.DevPath, disk.SizeBytes)
+	if disk.USBSpeedMbps > 0 {
+		fmt.Fprintf(s.Out, "  USB link: %d Mb/s\n", disk.USBSpeedMbps)
+	}
 	if min := s.Plan.MinDeviceSectors() * sectorSize; disk.SizeBytes > 0 && disk.SizeBytes < min {
 		return fmt.Errorf("exported %s (%d bytes) is smaller than the flash layout (%d bytes)", s.Plan.RootfsDevice, disk.SizeBytes, min)
 	}
 
-	s.unmount(ctx, disk)
+	if err := s.unmount(ctx, disk); err != nil {
+		return fmt.Errorf("unmounting %s before writing: %w", s.Plan.RootfsDevice, err)
+	}
 	fmt.Fprintf(s.Out, "Writing GPT + %d partitions...\n", len(s.Plan.Partitions))
 	start := time.Now()
+	var written int64
 	err = s.RunHelper(ctx, HelperRequest{Writer: WriterOptions{Device: disk.RawPath, WritePlan: true, LayoutPath: s.LayoutPath, ImagesDir: s.ImagesDir, RootfsDevice: s.Plan.RootfsDevice}},
 		func(done, total int64) {
+			written = done
 			if total > 0 {
-				s.detail("%.1f/%.1f GiB", float64(done)/(1<<30), float64(total)/(1<<30))
+				s.detail("%.1f/%.1f GiB · %.1f MiB/s", float64(done)/(1<<30), float64(total)/(1<<30), float64(done)/(1<<20)/time.Since(start).Seconds())
 			}
 		})
 	if err != nil {
 		return fmt.Errorf("writing %s: %w", s.Plan.RootfsDevice, err)
 	}
-	fmt.Fprintf(s.Out, "  partitions written in %v\n", time.Since(start).Round(time.Second))
+	fmt.Fprintf(s.Out, "  partitions written in %v (%.1f MiB/s)\n", time.Since(start).Round(time.Second), float64(written)/(1<<20)/time.Since(start).Seconds())
 	// macOS re-probes the disk when the writer closes it and may auto-mount
 	// the freshly written FAT config partition; unmount before releasing.
 	s.unmount(ctx, disk)
@@ -345,7 +460,7 @@ type FinalStatus struct {
 func (s *Stage2) AwaitFinalStatus(ctx context.Context) (*FinalStatus, error) {
 	s.detail("waiting for the device's final status")
 	fmt.Fprintln(s.Out, "Waiting for the device to report its final status (QSPI programming can take several minutes)...")
-	disk, err := WaitForUMSDiskAt(ctx, LUNSelector{Vendor: FlashpkgVendor, PortPath: s.PortPath, Session: s.Session}, finalStatusWait)
+	disk, err := WaitForUMSDiskAt(ctx, s.laterLUN(ctx, FlashpkgVendor), finalStatusWait)
 	if err != nil {
 		return nil, err
 	}
@@ -400,61 +515,57 @@ func (s *Stage2) AwaitFinalStatus(ctx context.Context) (*FinalStatus, error) {
 	return res, nil
 }
 
-// unmount locks/unmounts the LUN's volumes, reporting (not failing on) a
-// volume that stayed mounted — the raw write that follows produces the real
-// error, and the warning explains it. Routed through the root helper: umount
+// unmount locks/unmounts the LUN's volumes. Callers must check the result
+// before raw writes, which Linux can permit even on mounted volumes.
+// Routed through the root helper: umount
 // (Linux) and diskutil (macOS) need privilege the unprivileged parent lacks.
-func (s *Stage2) unmount(ctx context.Context, disk UMSDisk) {
+func (s *Stage2) unmount(ctx context.Context, disk UMSDisk) error {
 	if err := s.RunHelper(ctx, HelperRequest{Unmount: true, Writer: WriterOptions{Device: disk.DevPath}}, nil); err != nil {
 		fmt.Fprintf(s.Out, "  warning: %v\n", err)
+		return err
 	}
+	return nil
 }
 
-// release forces the USB-level disconnect the device's initrd waits for,
-// then waits for the disk node to actually go away so the next wait can't
-// match a stale LUN.
+// release ejects the LUN's medium, the "host is done" signal the initrd waits
+// for, then waits for it to go away. A desktop can re-mount a freshly written
+// partition and block the eject, so it is retried after another unmount.
 func (s *Stage2) release(ctx context.Context, disk UMSDisk) error {
+	if s.USBMode != USBModeSingle {
+		return s.releaseLegacy(ctx, disk)
+	}
 	fmt.Fprintf(s.Out, "  releasing %s\n", disk.DevPath)
-	// Primary: a SCSI eject (START STOP UNIT / power-off), matching the vendor
-	// initrd-flash host script. This is the clean per-LUN "host is done" the
-	// device's initrd waits for before finalizing the LUN and moving to its
-	// next command — e.g. exporting the rootfs device. A USB-level disconnect
-	// alone makes the device leave the flashpkg but can be too blunt for it to
-	// then bring up the next LUN. Routed through the root helper: eject
-	// (Linux/macOS) and udisksctl power-off (denied by polkit for a non-root,
-	// seatless SSH session) need privilege the unprivileged parent lacks —
-	// running it here left the LUN unreleased and forced the unbind fallback.
-	if err := s.RunHelper(ctx, HelperRequest{Eject: true, Writer: WriterOptions{Device: disk.DevPath}}, nil); err != nil {
-		fmt.Fprintf(s.Out, "  warning: eject failed (%v); trying a USB disconnect\n", err)
+	var err error
+	for attempt := 1; attempt <= ejectAttempts; attempt++ {
+		if attempt > 1 {
+			fmt.Fprintf(s.Out, "  eject failed (%v); retrying\n", err)
+			s.unmount(ctx, disk)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(ejectRetryDelay):
+			}
+		}
+		if err = s.RunHelper(ctx, HelperRequest{Eject: true, Writer: WriterOptions{Device: disk.DevPath}}, nil); err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("ejecting %s: %w", disk.DevPath, err)
 	}
 	gone, err := s.waitForDiskGone(ctx, disk)
 	if err != nil {
 		return err
 	}
-	if gone {
-		return nil
+	if !gone {
+		return fmt.Errorf("%s still has its medium after the eject", disk.DevPath)
 	}
-
-	// Fallback: force a USB-level disconnect (the initrd also proceeds when the
-	// UDC leaves "configured"). Needed when the eject didn't take — e.g. no
-	// udisks/diskutil or a driver holding the node.
-	fmt.Fprintf(s.Out, "  eject didn't release %s; forcing a USB disconnect\n", disk.DevPath)
-	if err := s.RunHelper(ctx, HelperRequest{Release: true, ReleaseSerial: disk.Serial, ReleasePort: disk.PortPath}, nil); err != nil {
-		return fmt.Errorf("releasing %s: %w", disk.DevPath, err)
-	}
-	gone, err = s.waitForDiskGone(ctx, disk)
-	if err != nil {
-		return err
-	}
-	if gone {
-		return nil
-	}
-	return fmt.Errorf("%s did not disconnect after release", disk.DevPath)
+	return nil
 }
 
-// waitForDiskGone polls until the LUN's device node disappears (up to
-// disappearWait) so the next wait can't match a stale node. Returns (false,
-// nil) on timeout and (false, ctx.Err()) if the context is cancelled.
+// waitForDiskGone polls until the LUN's medium is gone (up to disappearWait).
+// Returns (false, nil) on timeout and (false, ctx.Err()) if the context is
+// cancelled.
 func (s *Stage2) waitForDiskGone(ctx context.Context, disk UMSDisk) (bool, error) {
 	deadline := time.Now().Add(disappearWait)
 	for time.Now().Before(deadline) {
@@ -481,49 +592,45 @@ func (s *Stage2) waitForDiskGone(ctx context.Context, disk UMSDisk) (bool, error
 // instead of the requested LUN" inside waitForUMSDiskConfirmed.
 var errGotFlashpkg = errors.New("got flashpkg instead of the requested LUN")
 
-// waitForUMSDiskConfirmed is WaitForUMSDisk, except a flashpkg sighting is
-// only treated as a device-side failure when it persists across scans (a
+// waitForUMSDiskConfirmed is WaitForUMSDiskAt with a stricter port rule, and a
+// flashpkg sighting only counts as a device-side failure once it persists (a
 // just-released flashpkg node can linger for a moment on the host).
 func waitForUMSDiskConfirmed(ctx context.Context, selector LUNSelector, timeout time.Duration) (UMSDisk, error) {
-	deadline := time.Now().Add(timeout)
 	flashpkgStreak := 0
-	for {
-		disks, err := scanUMSDisks()
-		if err == nil {
-			var matches []UMSDisk
-			sawFlashpkg := false
-			for i, d := range disks {
-				if d.Vendor == selector.Vendor && d.PortPath == selector.PortPath && strings.EqualFold(d.Serial, selector.Session) {
-					matches = append(matches, disks[i])
-				} else if d.Vendor == selector.Vendor && d.PortPath == "" {
-					return UMSDisk{}, fmt.Errorf("USB storage %q appeared as %s without physical-port correlation", selector.Vendor, d.DevPath)
-				}
-				if d.Vendor == FlashpkgVendor && d.PortPath == selector.PortPath && strings.EqualFold(d.Serial, selector.Session) {
-					sawFlashpkg = true
-				}
+	return pollLUNs(ctx, selector, timeout, func(disks []UMSDisk) (UMSDisk, bool, error) {
+		var matches []UMSDisk
+		sawFlashpkg := false
+		for _, d := range disks {
+			if d.Vendor == selector.Vendor && d.PortPath == selector.PortPath && strings.EqualFold(d.Serial, selector.Session) {
+				matches = append(matches, d)
+			} else if d.Vendor == selector.Vendor && d.PortPath == "" {
+				return UMSDisk{}, false, fmt.Errorf("USB storage %q appeared as %s without physical-port correlation", selector.Vendor, d.DevPath)
 			}
-			if len(matches) > 1 {
-				return UMSDisk{}, fmt.Errorf("multiple USB storage LUNs match %q at port %q/session %q", selector.Vendor, selector.PortPath, selector.Session)
-			}
-			if len(matches) == 1 {
-				return matches[0], nil
-			}
-			if sawFlashpkg {
-				flashpkgStreak++
-				if flashpkgStreak >= 5 {
-					return UMSDisk{}, errGotFlashpkg
-				}
-			} else {
-				flashpkgStreak = 0
+			if d.Vendor == FlashpkgVendor && (d.PortPath == selector.PortPath || selector.PortHint) && strings.EqualFold(d.Serial, selector.Session) {
+				sawFlashpkg = true
 			}
 		}
-		if time.Now().After(deadline) {
-			return UMSDisk{}, fmt.Errorf("timed out waiting for USB storage %q from the selected device\n%s", selector.Vendor, observedUMSHint())
+		if len(matches) > 1 {
+			return UMSDisk{}, false, fmt.Errorf("multiple USB storage LUNs match %q at port %q/session %q", selector.Vendor, selector.PortPath, selector.Session)
 		}
-		select {
-		case <-ctx.Done():
-			return UMSDisk{}, ctx.Err()
-		case <-time.After(umsPollInterval):
+		if len(matches) == 1 {
+			return matches[0], true, nil
 		}
-	}
+		if selector.PortHint {
+			if d, ok, err := offPortLUN(disks, selector); ok || err != nil {
+				return d, ok, err
+			}
+		}
+		if sawFlashpkg {
+			flashpkgStreak++
+		} else {
+			flashpkgStreak = 0
+		}
+		if flashpkgStreak >= 5 {
+			return UMSDisk{}, false, errGotFlashpkg
+		}
+		return UMSDisk{}, false, nil
+	}, func(error) error {
+		return fmt.Errorf("timed out waiting for USB storage %q from the selected device\n%s", selector.Vendor, observedUMSHint(selector.Session))
+	})
 }

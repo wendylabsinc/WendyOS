@@ -65,6 +65,9 @@ public nonisolated struct Wendy_Agent_Services_V1_StreamLogsRequest: Sendable {
   /// Clears the value of `lastN`. Subsequent reads from it will return its default value.
   public mutating func clearLastN() {self._lastN = nil}
 
+  /// Return after replaying available history instead of following live logs.
+  public var noFollow: Bool = false
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -269,7 +272,7 @@ fileprivate nonisolated let _protobuf_package = "wendy.agent.services.v1"
 
 nonisolated extension Wendy_Agent_Services_V1_StreamLogsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".StreamLogsRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}service_name\0\u{3}min_severity\0\u{3}app_name\0\u{3}last_n\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}service_name\0\u{3}min_severity\0\u{3}app_name\0\u{3}last_n\0\u{3}no_follow\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -281,6 +284,7 @@ nonisolated extension Wendy_Agent_Services_V1_StreamLogsRequest: SwiftProtobuf.M
       case 2: try { try decoder.decodeSingularInt32Field(value: &self._minSeverity) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self._appName) }()
       case 4: try { try decoder.decodeSingularInt32Field(value: &self._lastN) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self.noFollow) }()
       default: break
       }
     }
@@ -303,6 +307,9 @@ nonisolated extension Wendy_Agent_Services_V1_StreamLogsRequest: SwiftProtobuf.M
     try { if let v = self._lastN {
       try visitor.visitSingularInt32Field(value: v, fieldNumber: 4)
     } }()
+    if self.noFollow != false {
+      try visitor.visitSingularBoolField(value: self.noFollow, fieldNumber: 5)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -311,6 +318,7 @@ nonisolated extension Wendy_Agent_Services_V1_StreamLogsRequest: SwiftProtobuf.M
     if lhs._minSeverity != rhs._minSeverity {return false}
     if lhs._appName != rhs._appName {return false}
     if lhs._lastN != rhs._lastN {return false}
+    if lhs.noFollow != rhs.noFollow {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

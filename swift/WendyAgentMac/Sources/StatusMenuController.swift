@@ -1,9 +1,21 @@
 import AppKit
+import Combine
 import WendyAgentCore
 
 protocol StatusMenuControllerDelegate: AnyObject {
     func statusMenuControllerDidSelectAbout(_ controller: StatusMenuController)
     func statusMenuControllerDidSelectWelcomeAndPermissions(_ controller: StatusMenuController)
+    func statusMenuController(
+        _ controller: StatusMenuController,
+        didSetLocalBuildServiceEnabled enabled: Bool
+    )
+    func statusMenuController(
+        _ controller: StatusMenuController,
+        didSetMeshVPNEnabled enabled: Bool
+    )
+    func statusMenuControllerDidSelectNetworkExtensionSettings(
+        _ controller: StatusMenuController
+    )
     func statusMenuControllerDidSelectQuit(_ controller: StatusMenuController)
 }
 
@@ -13,10 +25,20 @@ final class StatusMenuController: NSObject {
 
     init(
         wendyAgent: WendyAgent,
+        localBuildService: WendyRuntimeVM,
+        localBuildServiceIsAvailable: Bool,
+        meshVPN: MeshVPNController,
+        meshVPNIsAvailable: Bool,
         delegate: (any StatusMenuControllerDelegate)? = nil,
         bundle: Bundle = .main
     ) async {
         self.wendyAgent = wendyAgent
+        self.localBuildService = localBuildService
+        self.localBuildServiceIsAvailable = localBuildServiceIsAvailable
+        self.localBuildServiceState = localBuildService.state
+        self.meshVPN = meshVPN
+        self.meshVPNIsAvailable = meshVPNIsAvailable
+        self.meshVPNStatus = meshVPN.status
         self.delegate = delegate
         self.bundleDisplayName = AppDisplayName.resolve(from: bundle)
         self.currentStatus = await wendyAgent.status
@@ -32,6 +54,13 @@ final class StatusMenuController: NSObject {
         self.appsObservation = await self.wendyAgent.observeApps { @MainActor [weak self] apps in
             self?.update(apps: apps)
         }
+        self.localBuildServiceObservation = localBuildService.$state.sink {
+            @MainActor [weak self] state in
+            self?.update(localBuildServiceState: state)
+        }
+        self.meshVPNObservation = meshVPN.$status.sink { @MainActor [weak self] status in
+            self?.update(meshVPNStatus: status)
+        }
 
         self.menu.autoenablesItems = false
         self.statusItem.menu = self.menu
@@ -43,12 +72,20 @@ final class StatusMenuController: NSObject {
     weak var delegate: (any StatusMenuControllerDelegate)?
 
     private let bundleDisplayName: String
+    private let localBuildService: WendyRuntimeVM
+    private let localBuildServiceIsAvailable: Bool
+    private let meshVPN: MeshVPNController
+    private let meshVPNIsAvailable: Bool
     private let statusItem: NSStatusItem
     private let menu: NSMenu
     private var currentStatus: WendyAgentStatus
     private var currentApps: [WendyAppInfo]
+    private var localBuildServiceState: WendyRuntimeVM.State
+    private var meshVPNStatus: MeshVPNController.Status
     private var statusObservation: WendyObservation?
     private var appsObservation: WendyObservation?
+    private var localBuildServiceObservation: AnyCancellable?
+    private var meshVPNObservation: AnyCancellable?
 
     private var runningApps: [WendyAppInfo] {
         self.currentApps
@@ -64,6 +101,18 @@ final class StatusMenuController: NSObject {
 
     private func update(apps: [WendyAppInfo]) {
         self.currentApps = apps
+        self.rebuildMenu()
+    }
+
+    private func update(localBuildServiceState: WendyRuntimeVM.State) {
+        self.localBuildServiceState = localBuildServiceState
+        self.updateStatusButton()
+        self.rebuildMenu()
+    }
+
+    private func update(meshVPNStatus: MeshVPNController.Status) {
+        self.meshVPNStatus = meshVPNStatus
+        self.updateStatusButton()
         self.rebuildMenu()
     }
 
@@ -87,6 +136,71 @@ final class StatusMenuController: NSObject {
         self.menu.addItem(welcomeItem)
 
         self.menu.addItem(.separator())
+
+        if self.localBuildServiceIsAvailable {
+            let localBuildServiceItem = NSMenuItem(
+                title: self.localBuildServiceState.menuTitle,
+                action: #selector(self.localBuildServiceSelected),
+                keyEquivalent: ""
+            )
+            localBuildServiceItem.target = self
+            localBuildServiceItem.state = self.localBuildServiceState == .running ? .on : .off
+            localBuildServiceItem.isEnabled = self.localBuildServiceCanToggle
+            localBuildServiceItem.image = NSImage(
+                systemSymbolName: self.localBuildServiceState.menuImageName,
+                accessibilityDescription: "Local Build Service"
+            )
+            self.menu.addItem(localBuildServiceItem)
+
+            if let detail = self.localBuildServiceState.failureDetail {
+                self.menu.addItem(self.makeDisabledMenuItem(title: detail))
+            }
+        }
+
+        if self.meshVPNIsAvailable {
+            if self.localBuildServiceIsAvailable {
+                self.menu.addItem(.separator())
+            }
+
+            let meshItem = NSMenuItem(
+                title: self.meshMenuTitle,
+                action: #selector(self.meshVPNSelected),
+                keyEquivalent: ""
+            )
+            meshItem.target = self
+            meshItem.state = self.meshVPNStatus == .connected ? .on : .off
+            meshItem.isEnabled = !self.meshVPNIsTransitioning
+            meshItem.image = NSImage(
+                systemSymbolName: self.meshMenuImageName,
+                accessibilityDescription: "Wendy Mesh"
+            )
+            self.menu.addItem(meshItem)
+
+            if case .failed(let detail) = self.meshVPNStatus {
+                self.menu.addItem(self.makeDisabledMenuItem(title: detail))
+            }
+            if self.meshVPNStatus == .needsApproval {
+                let settingsItem = NSMenuItem(
+                    title: "Open Network Extension Settings…",
+                    action: #selector(self.networkExtensionSettingsSelected),
+                    keyEquivalent: ""
+                )
+                settingsItem.target = self
+                self.menu.addItem(settingsItem)
+
+                let cancelItem = NSMenuItem(
+                    title: "Cancel Wendy Mesh",
+                    action: #selector(self.cancelMeshVPNSelected),
+                    keyEquivalent: ""
+                )
+                cancelItem.target = self
+                self.menu.addItem(cancelItem)
+            }
+        }
+
+        if self.localBuildServiceIsAvailable || self.meshVPNIsAvailable {
+            self.menu.addItem(.separator())
+        }
 
         let statusItem = self.makeDisabledMenuItem(title: self.currentStatus.menuTitle)
         statusItem.image = self.makeStatusImage(for: self.currentStatus)
@@ -168,8 +282,60 @@ final class StatusMenuController: NSObject {
         button.title = self.buttonTitle(for: self.currentStatus, image: image)
         button.imagePosition = self.buttonImagePosition(for: self.currentStatus, image: image)
         button.imageScaling = .scaleProportionallyDown
-        button.toolTip = "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle)"
+        let serviceTitles = [
+            self.localBuildServiceIsAvailable ? self.localBuildServiceState.menuTitle : nil,
+            self.meshVPNIsAvailable ? self.meshMenuTitle : nil,
+        ].compactMap { $0 }
+        button.toolTip =
+            "\(self.bundleDisplayName) — \(self.currentStatus.menuTitle)"
+            + (serviceTitles.isEmpty ? "" : "; \(serviceTitles.joined(separator: "; "))")
         button.setAccessibilityTitle(self.bundleDisplayName)
+    }
+
+    private var localBuildServiceCanToggle: Bool {
+        switch self.localBuildServiceState {
+        case .stopped, .running:
+            true
+        case .starting, .stopping, .unavailable, .failed:
+            false
+        }
+    }
+
+    private var meshMenuTitle: String {
+        switch self.meshVPNStatus {
+        case .disabled:
+            "Wendy Mesh"
+        case .activatingExtension:
+            "Activating Wendy Mesh…"
+        case .needsApproval:
+            "Approve Wendy Mesh in System Settings"
+        case .connecting:
+            "Connecting Wendy Mesh…"
+        case .connected:
+            "Wendy Mesh Connected"
+        case .failed:
+            "Wendy Mesh Failed"
+        }
+    }
+
+    private var meshMenuImageName: String {
+        switch self.meshVPNStatus {
+        case .connected:
+            "network"
+        case .failed:
+            "exclamationmark.triangle"
+        case .disabled, .activatingExtension, .needsApproval, .connecting:
+            "network.slash"
+        }
+    }
+
+    private var meshVPNIsTransitioning: Bool {
+        switch self.meshVPNStatus {
+        case .activatingExtension, .needsApproval, .connecting:
+            true
+        case .disabled, .connected, .failed:
+            false
+        }
     }
 
     private func buttonTitle(for status: WendyAgentStatus, image: NSImage?) -> String {
@@ -231,11 +397,41 @@ final class StatusMenuController: NSObject {
     }
 
     @objc
+    private func localBuildServiceSelected() {
+        self.delegate?.statusMenuController(
+            self,
+            didSetLocalBuildServiceEnabled: self.localBuildServiceState != .running
+        )
+    }
+
+    @objc
+    private func meshVPNSelected() {
+        self.delegate?.statusMenuController(
+            self,
+            didSetMeshVPNEnabled: self.meshVPNStatus != .connected
+        )
+    }
+
+    @objc
+    private func cancelMeshVPNSelected() {
+        self.delegate?.statusMenuController(self, didSetMeshVPNEnabled: false)
+    }
+
+    @objc
+    private func networkExtensionSettingsSelected() {
+        self.delegate?.statusMenuControllerDidSelectNetworkExtensionSettings(self)
+    }
+
+    @objc
     private func quitSelected() {
         self.delegate?.statusMenuControllerDidSelectQuit(self)
     }
 
     private func cancelObservations() async {
+        self.localBuildServiceObservation?.cancel()
+        self.localBuildServiceObservation = nil
+        self.meshVPNObservation?.cancel()
+        self.meshVPNObservation = nil
         await self.cancelStatusObservation()
         await self.cancelAppsObservation()
     }

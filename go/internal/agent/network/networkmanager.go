@@ -575,15 +575,25 @@ func (n *NMCLINetworkManager) GetWiFiStatus(ctx context.Context) (connected bool
 		return false, "", fmt.Errorf("nmcli device status: %w", err)
 	}
 
+	foundWiFi := false
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
 		fields := splitNMCLI(scanner.Text(), 3)
 		if len(fields) < 3 {
 			continue
 		}
+		if fields[0] == "wifi" {
+			foundWiFi = true
+		}
 		if fields[0] == "wifi" && fields[1] == "connected" {
 			return true, fields[2], nil
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return false, "", err
+	}
+	if !foundWiFi {
+		return false, "", fmt.Errorf("no WiFi device found")
 	}
 	return false, "", nil
 }

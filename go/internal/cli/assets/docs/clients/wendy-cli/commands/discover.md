@@ -36,8 +36,10 @@ Local discovery combines these mechanisms and merges their results:
 mDNS discovery works on all platforms. On Linux, the CLI performs an mDNS browse
 that requires UDP port 5353 open on the host firewall (e.g., `sudo ufw allow 5353/udp`).
 On macOS, the CLI browses through mDNSResponder in-process and requires Local Network TCC permission.
-For USB-connected devices on Linux, run `wendy device usb-setup` first to bring up
-the interface.
+For a USB-C-connected device on Linux, `wendy discover` notices when the host's
+link to it isn't configured yet and offers to set it up before scanning (it needs
+sudo). The offer only appears in an interactive terminal; with `--json` or
+without a terminal, `wendy discover` prints a notice on stderr instead.
 
 Headless Mac advertises the same `_wendyos._udp` service. When discovery
 succeeds, Mac agents appear under `lanDevices` in JSON output with
@@ -121,6 +123,10 @@ yet have credentials.
   repeat the flow.
 
 ### Nearby table columns
+
+LAN devices appear after their mDNS service resolves or their agent answers a
+probe. Cached devices are checked in the background and stay hidden until
+confirmed during the current scan.
 
 | Column | Description |
 |--------|-------------|

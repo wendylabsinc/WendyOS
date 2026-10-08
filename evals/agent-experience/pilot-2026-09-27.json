@@ -1,0 +1,130 @@
+{
+  "date": "2026-09-27",
+  "experiment": "20260927-080118-6906cd",
+  "candidate_revision": "7d8bf9eeec6fcc9100df3e99c10f5dc4f4b2b33d",
+  "note": "One deployment attempt per agent and target. Warm caches and configured host context. OpenAI dollars use conservative long-context standard rates; Claude dollars are the client estimate. These are not subscription charges or a provider invoice.",
+  "records": [
+    {
+      "agent": "claude",
+      "target": "cloud-orin",
+      "task": "deploy-http",
+      "success": true,
+      "seconds": 111.475,
+      "input_tokens": 664987,
+      "cached_input_tokens": 629804,
+      "cache_write_tokens": 35151,
+      "output_tokens": 4929,
+      "total_tokens": 669916,
+      "tool_calls": 19,
+      "budget_estimate_usd": 0.790892,
+      "model_requested": "claude-opus-4-8",
+      "models_observed": [
+        "claude-opus-4-8"
+      ],
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "claude",
+      "target": "simulator",
+      "task": "deploy-http",
+      "success": true,
+      "seconds": 52.312,
+      "input_tokens": 306622,
+      "cached_input_tokens": 277634,
+      "cache_write_tokens": 28972,
+      "output_tokens": 2410,
+      "total_tokens": 309032,
+      "tool_calls": 13,
+      "budget_estimate_usd": 0.4899530000000001,
+      "model_requested": "claude-opus-4-8",
+      "models_observed": [
+        "claude-opus-4-8"
+      ],
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "codex",
+      "target": "cloud-orin",
+      "task": "deploy-http",
+      "success": true,
+      "seconds": 164.506,
+      "input_tokens": 594777,
+      "cached_input_tokens": 556800,
+      "cache_write_tokens": 0,
+      "output_tokens": 3064,
+      "total_tokens": 597841,
+      "tool_calls": 22,
+      "budget_estimate_usd": 2.10294,
+      "model_requested": "gpt-6-astra",
+      "models_observed": [],
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "codex",
+      "target": "simulator",
+      "task": "deploy-http",
+      "success": true,
+      "seconds": 104.608,
+      "input_tokens": 440056,
+      "cached_input_tokens": 402432,
+      "cache_write_tokens": 0,
+      "output_tokens": 2312,
+      "total_tokens": 442368,
+      "tool_calls": 21,
+      "budget_estimate_usd": 1.730744,
+      "model_requested": "gpt-6-astra",
+      "models_observed": [],
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "wendy",
+      "target": "cloud-orin",
+      "task": "deploy-http",
+      "success": true,
+      "seconds": 87.686,
+      "input_tokens": 182907,
+      "cached_input_tokens": 162954,
+      "cache_write_tokens": 0,
+      "output_tokens": 2060,
+      "total_tokens": 184967,
+      "tool_calls": 17,
+      "budget_estimate_usd": 0.879468,
+      "model_requested": "gpt-6-astra",
+      "models_observed": [
+        "gpt-6-astra"
+      ],
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "wendy",
+      "target": "simulator",
+      "task": "deploy-http",
+      "success": true,
+      "seconds": 37.135,
+      "input_tokens": 179748,
+      "cached_input_tokens": 156484,
+      "cache_write_tokens": 0,
+      "output_tokens": 1020,
+      "total_tokens": 180768,
+      "tool_calls": 18,
+      "budget_estimate_usd": 0.854748,
+      "model_requested": "gpt-6-astra",
+      "models_observed": [
+        "gpt-6-astra"
+      ],
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    }
+  ]
+}

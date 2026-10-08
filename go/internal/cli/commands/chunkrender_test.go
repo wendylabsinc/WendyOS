@@ -105,3 +105,17 @@ func TestChunkPushUpdateMsgPercentAndDetail(t *testing.T) {
 		})
 	}
 }
+
+// TestChunkPushUpdateMsgTitlesTheDevicePhase: once the upload is done the bar
+// sits full while the device works, so the title says what is being waited
+// on. While chunks are sending, the title is left to the program's own.
+func TestChunkPushUpdateMsgTitlesTheDevicePhase(t *testing.T) {
+	preparing := chunkPushSnapshot{SentBytes: 100, PlannedBytes: 100, Uploaded: true, Preparing: true, DeviceTime: 3 * time.Second}
+	if got, want := chunkPushUpdateMsg(preparing).Title, "Device preparing image..."; got != want {
+		t.Errorf("Title while preparing = %q, want %q", got, want)
+	}
+	sending := chunkPushSnapshot{SentBytes: 50, PlannedBytes: 100}
+	if got := chunkPushUpdateMsg(sending).Title; got != "" {
+		t.Errorf("Title while sending = %q, want empty (keep the program's title)", got)
+	}
+}

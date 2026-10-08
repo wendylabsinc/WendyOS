@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>R2 Explorer</title>
+  <style>
+    :root{font-family:system-ui,sans-serif;color:#e1e8ed;background:#101820;color-scheme:dark}*{box-sizing:border-box}body{margin:0}header{padding:22px 28px;border-bottom:1px solid #30404a;display:flex;justify-content:space-between;align-items:center;gap:20px}h1{font-size:22px;margin:0;font-weight:650}header p{font-size:12px;color:#9cabba;margin:5px 0 0}#badge{font-size:12px;background:#23332f;color:#b2dfc4;border-radius:20px;padding:9px 14px}main{max-width:1440px;margin:auto;padding:24px;display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:22px}.map{position:relative;border:1px solid #344552;border-radius:12px;overflow:hidden;background:#16212b;min-height:470px}canvas{width:100%;height:100%;min-height:470px;display:block}.map-label{position:absolute;top:18px;left:20px;font-size:12px;color:#a9becd;pointer-events:none}.legend{position:absolute;bottom:18px;left:20px;font-size:11px;color:#adbdc9;background:#101820db;padding:9px 12px;border-radius:6px}aside{display:flex;flex-direction:column;gap:18px}.card{background:#192631;border:1px solid #344552;border-radius:12px;padding:20px}h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 16px;color:#b7c9d6}.status{font-size:15px;line-height:1.5;min-height:48px;margin:0 0 18px}button,select{font:inherit;border-radius:7px;padding:12px;border:1px solid #41515e;background:#23333f;color:#e1e8ed}button{cursor:pointer}button:disabled{opacity:.45;cursor:default}button:focus-visible,select:focus-visible{outline:2px solid #f1b660;outline-offset:3px}#start{background:#f1b660;color:#142029;font-weight:650;border-color:#f1b660}#stop{background:#5b3032;color:#ffd5cc;border-color:#975756}.buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}label{font-size:12px;color:#a6b9c7;display:flex;justify-content:space-between;align-items:center}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:22px 12px}.metrics strong{display:block;font-size:25px;font-weight:450;font-variant-numeric:tabular-nums}.metrics span{font-size:11px;color:#9dafbf}.hint{font-size:12px;color:#9dafbf;line-height:1.65;margin:14px 0 0}.cameras{display:grid;grid-template-columns:1fr 1fr;gap:10px;grid-column:1/-1}.cameras figure{margin:0;background:#192631;border:1px solid #344552;border-radius:10px;padding:12px}.cameras img{width:100%;max-height:220px;object-fit:contain;aspect-ratio:4/3;display:block;background:#101820}.cameras figcaption{font-size:11px;color:#adbdc9;margin-top:10px}.note{grid-column:1/-1;font-size:12px;line-height:1.6;color:#8da2b3;margin:0}a{color:#f1b660}@media(max-width:820px){main{grid-template-columns:1fr;padding:14px}.map,canvas{min-height:380px;height:50vh}aside{display:grid;grid-template-columns:1fr 1fr}header{padding:18px}}@media(max-width:540px){aside{display:flex}.cameras{grid-template-columns:1fr}header p{max-width:230px}#badge{padding:8px;font-size:10px}}
+  </style>
+</head>
+<body>
+  <header><div><h1>R2 Explorer</h1><p>Autonomous exploration · Wendy simulator</p></div><span id="badge" role="status">Connecting</span></header>
+  <main>
+    <section class="map" aria-label="Observed map and robot path">
+      <canvas id="map" aria-label="Lidar observations, visited path, robot and current goal"></canvas>
+      <div class="map-label">LIDAR OBSERVATIONS / ODOMETRY</div>
+      <div class="legend">Light: obstacles &nbsp; · &nbsp; Teal: path &nbsp; · &nbsp; Amber: goal</div>
+    </section>
+    <aside>
+      <section class="card"><h2>Explore the room</h2>
+        <p id="message" class="status" role="status">Connecting to the explorer…</p>
+        <label>Run for <select id="duration" aria-label="Exploration duration"><option value="60">1 minute</option><option value="120" selected>2 minutes</option><option value="300">5 minutes</option></select></label>
+        <div class="buttons"><button id="start" disabled>Start exploring</button><button id="stop">Stop</button></div>
+        <p class="hint">Start transfers simulator control to this app. Stop or press Space to park. A run continues until its timer ends, even if you close this page.</p>
+      </section>
+      <section class="card"><h2>This run</h2><div class="metrics">
+        <div><strong id="distance">0.0 m</strong><span>Distance travelled</span></div>
+        <div><strong id="remaining">0 s</strong><span>Time remaining</span></div>
+        <div><strong id="area">0.0 m²</strong><span>Path cells visited</span></div>
+        <div><strong id="depth">—</strong><span>Front depth</span></div>
+      </div><p class="hint">The car favors unvisited destinations, checks curved paths for clearance, and reverses when needed.</p></section>
+    </aside>
+    <section class="cameras" aria-label="Robot cameras">
+      <figure><img id="color" alt="Robot color camera"><figcaption>Color camera</figcaption></figure>
+      <figure><img id="depth-image" alt="Robot depth camera"><figcaption>Depth camera · near to far</figcaption></figure>
+    </section>
+    <p class="note">Sample local exploration with ideal lidar, depth and simulator odometry. The map contains sensor observations. This is not SLAM or a guarantee of complete room coverage. Hardware operation is not enabled.</p>
+  </main>
+  <script>
+    const $=id=>document.getElementById(id);
+    let state=null, pending=false;
+    async function api(path,body){const r=await fetch(path,{...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),signal:AbortSignal.timeout(3000)});const data=await r.json();if(!r.ok)throw new Error(data.error);return data;}
+    function display(data){state=data;$('badge').textContent=data.running?'Exploring':'Parked';$('message').textContent=data.message;$('start').disabled=data.running||pending;$('duration').disabled=data.running;$('distance').textContent=`${data.distance.toFixed(1)} m`;$('remaining').textContent=`${data.remaining} s`;$('area').textContent=`${data.visited_m2.toFixed(1)} m²`;$('depth').textContent=data.depth_front===null?'Beyond range':`${data.depth_front.toFixed(2)} m`;draw();}
+    async function action(path,body={}){pending=true;$('start').disabled=true;try{display(await api(path,body));}catch(e){$('message').textContent=e.message;}finally{pending=false;$('start').disabled=state?.running||false;}}
+    $('start').onclick=()=>action('/api/start',{duration:Number($('duration').value)});
+    $('stop').onclick=()=>action('/api/stop');
+    window.addEventListener('keydown',event=>{if(event.code==='Space'&&event.target.tagName!=='SELECT'){event.preventDefault();if(!event.repeat)action('/api/stop');}});
+    async function poll(){try{display(await api('/api/status'));}catch(e){$('badge').textContent='Connection lost';$('message').textContent=e.message;$('start').disabled=true;}setTimeout(poll,400);}
+    const canvas=$('map'),ctx=canvas.getContext('2d');
+    function draw(){
+      if(!state)return;const dpr=Math.min(devicePixelRatio,2),w=canvas.clientWidth,h=canvas.clientHeight;
+      canvas.width=w*dpr;canvas.height=h*dpr;ctx.scale(dpr,dpr);ctx.fillStyle='#16212b';ctx.fillRect(0,0,w,h);
+      const cells=[...state.free,...state.occupied],cs=state.cell_size;
+      const xs=cells.map(p=>p[0]*cs),ys=cells.map(p=>p[1]*cs);
+      const minX=Math.min(-2,...xs)-.8,maxX=Math.max(2,...xs)+.8,minY=Math.min(-2,...ys)-.8,maxY=Math.max(2,...ys)+.8;
+      const scale=Math.min(w/(maxX-minX),h/(maxY-minY)),cx=(minX+maxX)/2,cy=(minY+maxY)/2;
+      const point=(x,y)=>[w/2+(x-cx)*scale,h/2-(y-cy)*scale];
+      for(const [field,color] of [['free','#263d49'],['occupied','#becbd1']]){ctx.fillStyle=color;for(const [x,y] of state[field]){const [px,py]=point(x*cs,(y+1)*cs);ctx.fillRect(px,py,cs*scale+.5,cs*scale+.5);}}
+      ctx.strokeStyle='#70cbb3';ctx.lineWidth=2;ctx.beginPath();state.trail.forEach(([x,y],i)=>{const p=point(x,y);i?ctx.lineTo(...p):ctx.moveTo(...p);});ctx.stroke();
+      if(state.goal){const p=point(...state.goal);ctx.strokeStyle='#f1b660';ctx.lineWidth=2;ctx.beginPath();ctx.arc(...p,7,0,Math.PI*2);ctx.stroke();}
+      if(state.pose){const p=point(state.pose.x,state.pose.y);ctx.save();ctx.translate(...p);ctx.rotate(-state.pose.yaw);ctx.fillStyle='#f1b660';ctx.beginPath();ctx.moveTo(11,0);ctx.lineTo(-8,-6);ctx.lineTo(-5,0);ctx.lineTo(-8,6);ctx.closePath();ctx.fill();ctx.restore();}
+      if(!cells.length){ctx.fillStyle='#829dab';ctx.font='14px system-ui';ctx.textAlign='center';ctx.fillText('Start exploring to build an observed map',w/2,h/2);}
+    }
+    new ResizeObserver(draw).observe(canvas);
+    async function cameras(){for(const [id,name] of [['color','color'],['depth-image','depth']]){try{const r=await fetch(`/camera/${name}.jpg`,{signal:AbortSignal.timeout(2000)});if(!r.ok)continue;const url=URL.createObjectURL(await r.blob()),image=$(id),previous=image.src;image.src=url;if(previous.startsWith('blob:'))URL.revokeObjectURL(previous);}catch{}}setTimeout(cameras,700);}
+    poll();setTimeout(cameras,500);
+  </script>
+</body>
+</html>

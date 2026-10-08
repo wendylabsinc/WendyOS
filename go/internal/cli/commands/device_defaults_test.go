@@ -2,15 +2,22 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -170,6 +177,41 @@ func TestCloudDefaultsReachBothConnectionPathsAndMCP(t *testing.T) {
 	}
 }
 
+// I1 fix: the MCP connect path (wendy mcp serve --device 283 /
+// WENDY_DEVICE=283 wendy mcp serve, and the device_connect tool) reaches the
+// agent through connectMCPDevice, not connectToAgent/resolveTarget, so it
+// needs its own numeric-name guard before the direct TLS dial.
+func TestConnectMCPDeviceRejectsNumericDeviceBeforeDialling(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	origLadder := dialAgentLadderFn
+	dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
+		t.Error("dialled a numeric device name; it must be rejected before any connection attempt")
+		return nil, nil, errors.New("unreachable in test")
+	}
+	t.Cleanup(func() { dialAgentLadderFn = origLadder })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, bad := range []string{"283", "283:50051"} {
+		if _, err := connectMCPDevice(ctx, bad); !errors.Is(err, errInvalidDeviceName) {
+			t.Errorf("connectMCPDevice(ctx, %q) err = %v, want errInvalidDeviceName", bad, err)
+		}
+	}
+}
+
+// The cloud path treats a bare number as an asset ID; connectMCPDevice's
+// numeric guard must not intercept an actual cloud selector. It is fine for
+// this to fail for another reason (not logged in, here).
+func TestConnectMCPDeviceLeavesCloudSelectorToTheCloudPath(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := connectMCPDevice(ctx, "cloud://grpc.a.sh:443/org/7/asset/283"); errors.Is(err, errInvalidDeviceName) {
+		t.Fatalf("the cloud selector was rejected as a numeric device name: %v", err)
+	}
+}
+
 func TestCloudDeviceSelectorValidationAndMCPAddress(t *testing.T) {
 	for _, value := range []string{"cloud://host/org/0/asset/1", "cloud://host/org/7/asset/-1", "cloud://host/org/7/asset/2147483648",
 		"cloud://user:pass@host/org/1/asset/2", "cloud://host/org/1/asset/2?org=3", "cloud:42", "cloud://host/org/1/asset/2#extra"} {
@@ -184,6 +226,29 @@ func TestCloudDeviceSelectorValidationAndMCPAddress(t *testing.T) {
 	}
 	if mcpStartupAddress("robot.local") != "robot.local:50051" {
 		t.Fatal("LAN default changed")
+	}
+}
+
+// MCP device_connect dials what the startup default dials. A bare mTLS host
+// failed ("no usable client certificate") while host:50051 connects, and
+// the run tool replays the target as host:50051.
+func TestMCPDeviceConnectDialsBareHostsAsHostPort(t *testing.T) {
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	old := connectMCPDirectFn
+	t.Cleanup(func() { connectMCPDirectFn = old })
+	for device, want := range map[string]string{
+		"robot.local":       "robot.local:50051",
+		"fe80::1":           "[fe80::1]:50051",
+		"robot.local:50052": "robot.local:50052",
+	} {
+		var dialed string
+		connectMCPDirectFn = func(_ context.Context, address string) (*grpcclient.AgentConnection, error) {
+			dialed = address
+			return &grpcclient.AgentConnection{Addr: address}, nil
+		}
+		if _, err := connectMCPDevice(context.Background(), device); err != nil || dialed != want {
+			t.Errorf("connectMCPDevice(%q) dialed %q (err %v), want %q", device, dialed, err, want)
+		}
 	}
 }
 
@@ -243,5 +308,201 @@ func TestCloudV2DefaultPreservesTenantAndAssetAcrossRename(t *testing.T) {
 		if _, matched, err := parseCloudDeviceSelector(key); !matched || err == nil {
 			t.Fatalf("invalid UUID selector accepted: %s", key)
 		}
+	}
+}
+
+// Two agent sessions setting defaults while a third process updates another
+// field: without the config lock, saveDefaultDevice writes back the snapshot it
+// loaded and reverts the other writers.
+func TestSaveDefaultDeviceKeepsConcurrentConfigWrites(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	const n = 20
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			_ = saveDefaultDevice(fmt.Sprintf("dev-%d.local", i))
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			_ = config.Update(func(c *config.Config) (bool, error) {
+				if c.OptimizeTipShownAt == nil {
+					c.OptimizeTipShownAt = map[string]string{}
+				}
+				c.OptimizeTipShownAt[fmt.Sprintf("p%d", i)] = "2026-09-28"
+				return true, nil
+			})
+		}(i)
+	}
+	wg.Wait()
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(cfg.OptimizeTipShownAt); got != n {
+		t.Fatalf("%d of %d concurrent config updates survived; saveDefaultDevice overwrote the rest", got, n)
+	}
+	if !strings.HasPrefix(cfg.DefaultDevice, "dev-") {
+		t.Fatalf("DefaultDevice = %q, want one of the saved defaults", cfg.DefaultDevice)
+	}
+}
+
+// stubDefaultPicker makes the set-default picker fail the test if reached.
+// Without this, a failing run of these tests in a developer's terminal would
+// open a real TUI on /dev/tty and hang.
+func stubDefaultPicker(t *testing.T) {
+	t.Helper()
+	orig := pickDeviceForDefaultFn
+	pickDeviceForDefaultFn = func(context.Context) (string, error) {
+		t.Error("set-default opened the device picker without a usable terminal")
+		return "", errors.New("picker not allowed in this test")
+	}
+	t.Cleanup(func() { pickDeviceForDefaultFn = orig })
+}
+
+func TestSetDefaultWithoutATerminalNamesTheCommandAndKnownDevices(t *testing.T) {
+	restoreDeviceGlobals(t)
+	stubNonInteractive(t)
+	stubDefaultPicker(t)
+	setTempConfig(t, &config.Config{DefaultDevice: "kept.local"})
+
+	cache, err := discoverycache.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	cache.Upsert(discoverycache.Entry{ID: "a", DisplayName: "Hopeful Glider", Hostname: "wendyos-hopeful-glider.local"}, now)
+	if err := cache.Flush(now); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "vms", "dev"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newDeviceSetDefaultCmd()
+	cmd.SetContext(context.Background())
+	err = cmd.RunE(cmd, nil)
+	if !errors.Is(err, errNoDevice) {
+		t.Fatalf("err = %v, want errNoDevice", err)
+	}
+	for _, want := range []string{"wendy device set-default <device>", "wendyos-hopeful-glider.local", "vm:dev"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not contain %q:\n%s", want, err)
+		}
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "tty") {
+		t.Errorf("error still talks about a TTY:\n%s", err)
+	}
+	if cfg, _ := config.Load(); cfg.DefaultDevice != "kept.local" {
+		t.Fatalf("the default changed to %q", cfg.DefaultDevice)
+	}
+}
+
+// Review Focus 5: a brand-new machine, a corrupt cache, and a blank argument
+// all still get the usage error — no panic, no picker, no network.
+func TestSetDefaultWithoutATerminalOnAFreshMachine(t *testing.T) {
+	restoreDeviceGlobals(t)
+	stubNonInteractive(t)
+	stubDefaultPicker(t)
+	setTempConfig(t, &config.Config{DefaultDevice: "kept.local"})
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "devices.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{nil, {"   "}} {
+		cmd := newDeviceSetDefaultCmd()
+		cmd.SetContext(context.Background())
+		err := cmd.RunE(cmd, args)
+		if !errors.Is(err, errNoDevice) {
+			t.Fatalf("args %q: err = %v, want errNoDevice", args, err)
+		}
+		for _, want := range []string{"wendy device set-default <device>", "wendy device list"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("args %q: error does not contain %q:\n%s", args, want, err)
+			}
+		}
+	}
+	if cfg, _ := config.Load(); cfg.DefaultDevice != "kept.local" {
+		t.Fatalf("a blank argument changed the default to %q", cfg.DefaultDevice)
+	}
+}
+
+// --json promises machine-readable output; a full-screen picker is never that.
+func TestSetDefaultInJSONModeDoesNotOpenThePicker(t *testing.T) {
+	restoreDeviceGlobals(t)
+	stubDefaultPicker(t)
+	orig := isInteractiveTerminalFn
+	isInteractiveTerminalFn = func() bool { return true }
+	t.Cleanup(func() { isInteractiveTerminalFn = orig })
+	jsonOutput = true
+	setTempConfig(t, &config.Config{})
+	cmd := newDeviceSetDefaultCmd()
+	cmd.SetContext(context.Background())
+	if err := cmd.RunE(cmd, nil); !errors.Is(err, errNoDevice) {
+		t.Fatalf("err = %v, want errNoDevice", err)
+	}
+}
+
+// R11 fix: the error text promises devices "seen recently", so
+// setDefaultCandidates must bound the discovery-cache portion of its list by
+// TTL like every other display surface (Cache.Entries is reserved for the
+// connect fast path; Cache.Fresh is what the picker and discovery use).
+//
+// Cache.Flush prunes entries older than TTL when it writes, so a stale entry
+// cannot be seeded through the normal Upsert+Flush path used elsewhere in
+// this file — Flush would drop it again on write. This test instead writes
+// devices.json directly in the cache's on-disk schema (version 1, a
+// "devices" array of discoverycache.Entry), which is exactly what a real
+// devices.json accumulated over time could contain: entries newer than one
+// scan's Flush call but older than the cache's own TTL.
+func TestSetDefaultCandidatesOnlyListsFreshCacheEntries(t *testing.T) {
+	restoreDeviceGlobals(t)
+	setTempConfig(t, &config.Config{})
+	dir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	onDisk := struct {
+		Version int                    `json:"version"`
+		Devices []discoverycache.Entry `json:"devices"`
+	}{
+		Version: 1,
+		Devices: []discoverycache.Entry{
+			{ID: "fresh", DisplayName: "Fresh Heron", Hostname: "wendyos-fresh-heron.local", LastSeen: now},
+			{ID: "stale", DisplayName: "Stale Heron", Hostname: "wendyos-stale-heron.local", LastSeen: now.Add(-2 * discoverycache.TTL)},
+		},
+	}
+	data, err := json.Marshal(onDisk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "devices.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	names := setDefaultCandidates()
+	var foundFresh, foundStale bool
+	for _, n := range names {
+		switch n {
+		case "wendyos-fresh-heron.local":
+			foundFresh = true
+		case "wendyos-stale-heron.local":
+			foundStale = true
+		}
+	}
+	if !foundFresh {
+		t.Errorf("missing fresh cache entry in %v", names)
+	}
+	if foundStale {
+		t.Errorf("stale cache entry (older than discoverycache.TTL) listed: %v", names)
 	}
 }

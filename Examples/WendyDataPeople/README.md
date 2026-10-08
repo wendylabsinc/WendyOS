@@ -5,6 +5,9 @@ feed wendy-agent knows about**. The agent owns the model runtime, camera
 subscriptions, detection events, episode capture and notifications. Users supply
 only YAML: no application, Python environment or continuously running CLI.
 
+With no file argument, the CLI opens a picker for `.yaml` and `.yml` files in the
+current directory. Scripts and `--json` invocations must pass a file explicitly.
+
 ```sh
 wendy --device <device> data campaign deploy campaign.yaml
 wendy --device <device> data campaign inspect people-all-cameras
@@ -40,6 +43,38 @@ The backend accepts safetensors checkpoints supported by Transformers'
 `post_process_object_detection`. Remote model code is disabled. Labels must
 exist in the checkpoint; a mismatch is reported as a model-loading error.
 
+YOLOv8 and YOLO11 detection exports can use `inference.backend: yolo_onnx`
+and `inference.model_file: path/to/model.onnx` with the same repository and
+commit fields. The ONNX file must embed its class names and use one float32
+`[1, 3, height, width]` input with fixed dimensions of 32 through 1280 pixels.
+The supported output is the raw `[1, 4 + classes, anchors]` detection tensor.
+Exports with embedded NMS, segmentation, pose, dynamic image dimensions or
+external tensor files are not supported. The agent downloads only the pinned
+ONNX file, limited to 512 MiB, and runs it on CPU without loading repository
+Python, custom operators or PyTorch pickle checkpoints.
+
+In the ChatGPT gateway, `deploy_yolo_detector` takes an explicit `robot_id`, a
+detector `name`, and `model_ref` such as `owner/repository` or
+`owner/repository@commit`. The gateway resolves a branch or tag to a commit and
+selects the ONNX file only when the repository contains exactly one; otherwise
+provide `model_file`. It selects a camera only when there is one healthy source;
+otherwise provide its exact Wendy Data `source_id`. Labels default to `person`.
+The caller needs `triggers:write` and `cameras:capture`, and the device policy
+must permit camera access.
+
+The tool deploys `chatgpt-yolo-<name>` with `notify.on: detection`. It retains
+one-second detection episodes locally with manual upload. Its requested 128 MiB
+campaign quota is metadata; only the device-wide storage quota is currently
+enforced.
+Use `inspect_yolo_detector` to check loading and camera state, and
+`stop_yolo_detector` to request that inference stops. Inspect until
+`inference_status.state` is `disabled`; `stopping` means the worker or camera
+subscriptions have not exited yet. Subscribe to the MCP event
+`wendy.data.notification` using the returned `robot_id` and `campaign` filters
+for ChatGPT delivery. This subscription is separate from the Wendy Cloud app
+notification grant described below. An updated Wendy Agent is required; older
+agents reject the new inference fields.
+
 One shared model handles the campaign's cameras in turn, scoring each camera's
 latest decoded frame at up to `rate` frames per second. Throughput depends on
 compute and camera count. Old frames are discarded, so this is sampled detection;
@@ -55,13 +90,45 @@ an existing episode share that recording; immediate webhook mode can send an
 alert for each camera without opening duplicate recordings. A new camera joins subsequent episodes; an episode in progress keeps
 its original source set.
 
-The example uses `notify.on: episode_committed`: the episode manifest carries
-notification intent to Wendy Cloud ingestion, which sends the alert after the
-detection recording is committed and uploaded. This requires the existing cloud
-ingest notification service and a connected/enrolled device; the agent does not
-send an immediate Cloud notification from this setting.
+The example uses `notify.on: event` with `event: person_detected` to send an
+immediate Wendy Cloud notification to organization owners and admins. It uses
+`campaign:people-all-cameras` as its Cloud notification source and the device's
+enrollment credentials. No application container or webhook is required.
 
-For an immediate alert independent of cloud ingestion, use a webhook:
+On a Cloud-enrolled device, `wendy data campaign deploy` registers
+`campaign:people-all-cameras` in Cloud Apps before arming the plan. It uses the
+existing `GetApp`/`UpsertApp` RPCs and leaves an existing entry unchanged.
+It appears in Cloud Apps immediately, without waiting for a detection. Open
+Apps → people-all-cameras → Wendy Notifications and enable notification sending
+as an organization owner or admin. Events emitted while the grant is disabled
+are rejected and are not replayed after enabling it. The grant covers this named
+campaign across assigned devices in the organization. Its first authenticated
+event registers the device assignment without changing an existing grant or
+stopped state; if the grant is already enabled, that first event can deliver.
+
+The CLI uses your saved operator session for the device's enrolled Cloud host
+and organization. Run `wendy auth login` first. Unenrolled devices can deploy
+locally; `--skip-cloud-registration` also allows an explicit offline deployment
+on an enrolled device. Rerun without the flag to register once connected. A failed
+registration stops deployment; a later device failure may leave its registered
+Cloud entry. `wendy run` performs the same registration for ordinary apps using
+their `wendy.json` app ID, including Compose and multi-service deployments. This
+only registers their catalog entries; ordinary app device assignments still come
+from the existing Cloud deployment workflow, and locally uploaded ordinary apps
+need that assignment before notifications are allowed.
+
+Catalog registration uses existing Cloud APIs. Campaign event delivery requires
+the companion Cloud implementation (WDY-2939). Without CLI registration, a first
+signed campaign event can also create a missing app, with sending disabled.
+This agent branch uses the v1 notification API served by Cloud main; Cloud dev's
+v2 API requires an agent with the matching API and enrollment identity contract.
+Cloud failures are visible in logs and `inference_status.notification_error`.
+
+`notify.on: episode_committed` is still available as manifest-carried intent for
+a separate ingestion service. It does not send an immediate notification, and
+Cloud main/dev do not implement an episode-ingestion notification consumer here.
+
+For direct delivery to your own notification service, add a webhook:
 
 ```yaml
 notify:
@@ -86,9 +153,11 @@ receiver should deduplicate that key. Failed attempts and queue overflow are
 visible in agent logs and, for enabled model campaigns,
 `inference_status.notification_error`. Webhook delivery
 has no persistent outbox. Recording failures do not suppress webhook alerts, and
-webhook failures do not stop detection. The direct Cloud notification API is not
-used here because it requires a registered application identity; campaigns do
-not invent an application to bypass that requirement.
+webhook failures do not stop detection.
+
+Cloud delivery uses the same bounded queue and event UUID. Permission failures and
+`ALREADY_EXISTS` stop retries; transient failures retain bounded retries. Cloud
+registration never grants notification permission automatically.
 
 Episodes contain prediction and detection records in `events.jsonl` and the
 model revision in the manifest. The input ledger records the encoded samples

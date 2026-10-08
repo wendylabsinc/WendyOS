@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -254,9 +255,13 @@ var usbDirectConnectFn = connectWithAutoTLS
 // empty hostname (agent predating the field) never matches — connecting to
 // whichever device happens to be plugged in would silently target the wrong
 // machine.
+//
+// Never for a VM's vm:<name> key: a VM is never on USB, and a USB agent that
+// merely reports that name would be judged under a key that consults no
+// loopback pin — the forwarded port the key is trusted for was never touched.
 func usbDirectFallback(ctx context.Context, wantHost string) (*grpcclient.AgentConnection, bool) {
 	want := normalizeMDNSHost(wantHost)
-	if want == "" {
+	if want == "" || strings.HasPrefix(want, vmDeviceIDPrefix) {
 		return nil, false
 	}
 	for _, cand := range usbDirectCandidatesFn() {

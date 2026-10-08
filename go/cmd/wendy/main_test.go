@@ -4,15 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
+	"github.com/wendylabsinc/wendy/go/internal/cli/swifttoolchain"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"google.golang.org/grpc/codes"
@@ -338,20 +345,103 @@ func TestErrorClass_Mapping(t *testing.T) {
 		{"user_cancelled", commands.ErrUserCancelled, "user_cancelled"},
 		{"default_cleared", commands.ErrDefaultCleared, "user_cancelled"},
 		{"user_cancelled_wrapped", fmt.Errorf("aborted: %w", commands.ErrUserCancelled), "user_cancelled"},
+		{"swift_picker_cancelled", fmt.Errorf("product: %w", swifttoolchain.ErrUserCancelled), "user_cancelled"},
+		{"tui_cancelled", tui.ErrCancelled, "user_cancelled"},
+		{"joined_cancellation", errors.Join(errors.New("service failed"), commands.ErrUserCancelled), "user_cancelled"},
 		{"context_canceled", context.Canceled, "context_canceled"},
 		{"context_deadline", context.DeadlineExceeded, "context_deadline"},
+		{"cancellation_before_category", errors.Join(config.ErrNotLoggedIn, context.Canceled), "context_canceled"},
+		{"deadline_before_category", errors.Join(config.ErrNotLoggedIn, context.DeadlineExceeded), "context_deadline"},
+		{"grpc_cancellation_before_category", errors.Join(config.ErrNotLoggedIn, status.Error(codes.Canceled, "cancelled")), "context_canceled"},
+		{"grpc_deadline_before_category", errors.Join(config.ErrNotLoggedIn, status.Error(codes.DeadlineExceeded, "deadline")), "grpc_deadline"},
 		{"grpc_canceled_status", status.Error(codes.Canceled, "client gone"), "context_canceled"},
 		{"grpc_unavailable_status", status.Error(codes.Unavailable, "transport closing"), "grpc_unavailable"},
 		{"grpc_unavailable_wrapped", fmt.Errorf("connecting to cloud: %w", status.Error(codes.Unavailable, "x")), "grpc_unavailable"},
 		{"grpc_deadline_status", status.Error(codes.DeadlineExceeded, "ctx done"), "grpc_deadline"},
 		{"grpc_unimplemented_status", status.Error(codes.Unimplemented, "nope"), "grpc_unimplemented"},
-		{"grpc_internal", status.Error(codes.Internal, "boom"), "grpc_other"},
-		{"grpc_unknown_explicit", status.Error(codes.Unknown, "vague"), "grpc_other"},
+		{"grpc_internal", status.Error(codes.Internal, "boom"), "grpc_internal"},
+		{"grpc_unknown_explicit", status.Error(codes.Unknown, "vague"), "grpc_unknown"},
+		{"auth_required", fmt.Errorf("cloud: %w", config.ErrNotLoggedIn), "auth_required"},
+		{"auth_session_ambiguous", config.ErrMultipleSessions, "auth_session_ambiguous"},
+		{"missing_tool", &exec.Error{Name: "/private/tool", Err: exec.ErrNotFound}, "tool_not_found"},
+		{"dns", &net.DNSError{Name: "secret.local", Err: "no such host"}, "network_dns"},
+		{"timeout", &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}, "network_timeout"},
+		{"refused", &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED}, "network_refused"},
+		{"unreachable", syscall.EHOSTUNREACH, "network_unreachable"},
+		{"reset", syscall.ECONNRESET, "connection_closed"},
+		{"permission", &os.PathError{Op: "open", Path: "/private/project", Err: os.ErrPermission}, "permission_denied"},
+		{"file_missing", &os.PathError{Op: "open", Path: "/private/project", Err: os.ErrNotExist}, "file_not_found"},
+		{"disk_full", syscall.ENOSPC, "disk_full"},
+		{"eof", io.EOF, "unexpected_eof"},
+		{"truncated_stream", fmt.Errorf("upload: %w", io.ErrUnexpectedEOF), "unexpected_eof"},
+		{"subprocess", &exec.ExitError{}, "process_failed"},
+		{"message_is_not_a_category", errors.New("rpc error: code = Unavailable: secret.local build failed"), "other"},
 		{"non_grpc", errors.New("some plain failure"), "other"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := errorClass(tc.err); got != tc.want {
 				t.Errorf("errorClass(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestErrorClassGRPCStatuses(t *testing.T) {
+	for code, want := range map[codes.Code]string{
+		codes.InvalidArgument: "grpc_invalid_argument", codes.NotFound: "grpc_not_found",
+		codes.AlreadyExists: "grpc_already_exists", codes.PermissionDenied: "grpc_permission_denied",
+		codes.ResourceExhausted: "grpc_resource_exhausted", codes.FailedPrecondition: "grpc_failed_precondition",
+		codes.Aborted: "grpc_aborted", codes.OutOfRange: "grpc_out_of_range",
+		codes.DataLoss: "grpc_data_loss", codes.Unauthenticated: "grpc_unauthenticated",
+	} {
+		err := fmt.Errorf("service private-name: %w", status.Error(code, "secret.local /private/project"))
+		if got := errorClass(err); got != want {
+			t.Errorf("code %v = %q, want %q", code, got, want)
+		}
+	}
+}
+
+func TestTrackCommandClassifiedFailureDoesNotLeakCause(t *testing.T) {
+	events := captureAnalytics(t)
+	err := fmt.Errorf("secret.local /private/project: %w", config.ErrNotLoggedIn)
+	trackCommand(newTestRoot(), err, time.Millisecond)
+	if len(*events) != 1 {
+		t.Fatalf("got %d events, want 1", len(*events))
+	}
+	props := (*events)[0].props
+	if props["error_class"] != "auth_required" || props["success"] != "false" {
+		t.Fatalf("unexpected properties: %v", props)
+	}
+	for key, value := range props {
+		if strings.Contains(value, "secret") || strings.Contains(value, "/private") {
+			t.Errorf("%s leaked error content: %q", key, value)
+		}
+	}
+}
+
+func TestTrackCommandFlagErrorClasses(t *testing.T) {
+	for _, args := range [][]string{
+		{"run", "--secret-flag"},
+		{"run", "--device"},
+		{"run", "--help=secret-value"},
+		{"run", "--=secret-value"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			events := captureAnalytics(t)
+			root := newTestRoot()
+			root.SetArgs(args)
+			executed, err := root.ExecuteC()
+			if err == nil {
+				t.Fatal("expected flag parsing failure")
+			}
+			trackCommand(executed, err, time.Millisecond)
+			if len(*events) != 1 || (*events)[0].props["error_class"] != "cli_usage" {
+				t.Fatalf("wrong classification for %v: %+v", err, *events)
+			}
+			for key, value := range (*events)[0].props {
+				if strings.Contains(value, "secret") || strings.Contains(value, "--") {
+					t.Errorf("%s leaked flag content: %q", key, value)
+				}
 			}
 		})
 	}

@@ -19,10 +19,15 @@ func cloudOrganizationName(ctx context.Context, auth *config.AuthConfig) string 
 	}
 	// A background display lookup must not rotate refresh tokens or mutate
 	// the session being used by the picker/device scan. Use the current token;
-	// an expired token simply leaves the last known name in place.
+	// one that would need a refresh leaves the last known name in place. The
+	// issuer stays: it is what keeps a cnf-bound token on DPoP rather than a
+	// Bearer that Cloud rejects (WDY-3524). The margin outlasts the timeout
+	// below, so the in-call freshness check never triggers a refresh.
+	if auth.OAuthIssuer != "" && !oauthAccessTokenFreshFor(auth, 2*time.Minute) {
+		return cached
+	}
 	lookupAuth := *auth
 	lookupAuth.Certificates = append([]config.CertificateInfo(nil), auth.Certificates...)
-	lookupAuth.OAuthIssuer = ""
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	name := fetchCloudOrganizationName(ctx, &lookupAuth)
@@ -241,8 +246,7 @@ func switchCloudOrganizationV2(ctx context.Context, cfg *config.Config, source *
 		return selected, cfg, nil
 	}
 	fmt.Println(tui.InfoMessage(fmt.Sprintf("No credentials are stored for %s (%s). Complete login and select that organization in the browser.", chosen.Name, id)))
-	dashboard, endpoint := loginTargetsForAuth(source)
-	if err := performLoginFn(ctx, dashboard, endpoint); err != nil {
+	if err := relogin(ctx, source); err != nil {
 		return nil, cfg, err
 	}
 	fresh, err := loadCloudOrgConfig()

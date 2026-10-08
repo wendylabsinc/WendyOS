@@ -110,6 +110,24 @@ A "network" type entitlement can have the following values:
 }
 ```
 
+## HTTP
+
+Use `http` to declare a web endpoint for clients to discover. It grants no
+additional network access; combine it with host networking for a container
+server:
+
+```json
+[
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8080 }
+]
+```
+
+Ordinary detached agent deployments include HTTP URLs in their
+[endpoint report](../clients/wendy-cli/commands/run.md#detached-output), without
+checking application health. See the [full `http` reference](../apps/wendy.json.md#http)
+for discovery and attached-run behavior.
+
 ## Input
 
 The input entitlement allows the container to access Linux input devices such as game controllers, barcode scanners, keyboards, and other devices that appear under `/dev/input/`. This is separate from the USB entitlement — USB covers `/dev/bus/usb` (raw USB access), while input covers the higher-level Linux input subsystem.
@@ -160,6 +178,13 @@ Most USB HID devices (scanners, keyboards) should use `input`. You only need `us
 ## USB
 
 The USB entitlement allows the container to access USB devices.
+
+Wendy bind-mounts `/dev/bus/usb` when that directory exists on the host. On a
+host without a USB bus, including a VM, it skips the mount so container startup
+does not fail with `cannot stat /dev/bus/usb`. This grants no virtual USB devices:
+an app that needs a physical camera still needs that camera and its driver, or an
+explicit [simulator backend](../apps/wendy-services.md#simulation-backends).
+If the USB directory appears after deployment, redeploy to mount it.
 
 ## Serial / UART
 

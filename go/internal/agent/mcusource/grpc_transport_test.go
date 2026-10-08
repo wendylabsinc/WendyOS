@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
+	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"google.golang.org/grpc"
@@ -14,19 +15,18 @@ import (
 
 type stubSensorServer struct {
 	agentpbv2.UnimplementedWendySensorServiceServer
-	assetID int32
 }
 
 func (s *stubSensorServer) GetSensorManifest(_ context.Context, _ *agentpbv2.GetSensorManifestRequest) (*sensorlinkpb.SensorManifest, error) {
-	return &sensorlinkpb.SensorManifest{DeviceAssetId: s.assetID, Sensors: []*sensorlinkpb.SensorDescriptor{{
-		ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0",
+	return &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{
+		ChannelId: 1, Name: "cam0",
 		Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_H264, Width: 640, Height: 480, Fps: 30}},
 	}}}, nil
 }
 
 func (s *stubSensorServer) StreamSensors(req *agentpbv2.StreamSensorsRequest, stream agentpbv2.WendySensorService_StreamSensorsServer) error {
 	for i := 0; i < 3; i++ {
-		if err := stream.Send(&sensorlinkpb.SensorFrame{ChannelId: 1, Seq: uint32(i), Flags: 1, Payload: []byte("h264")}); err != nil {
+		if err := stream.Send(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: uint32(i), Flags: sensorlink.FlagKeyframe | sensorlink.FlagLastChunk, Payload: []byte("h264")}); err != nil {
 			return err
 		}
 	}
@@ -38,7 +38,7 @@ func (s *stubSensorServer) StreamSensors(req *agentpbv2.StreamSensorsRequest, st
 func TestGRPCTransportStreamsFromStubServer(t *testing.T) {
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	srv := grpc.NewServer()
-	agentpbv2.RegisterWendySensorServiceServer(srv, &stubSensorServer{assetID: 7})
+	agentpbv2.RegisterWendySensorServiceServer(srv, &stubSensorServer{})
 	go srv.Serve(ln)
 	defer srv.Stop()
 
@@ -49,7 +49,7 @@ func TestGRPCTransportStreamsFromStubServer(t *testing.T) {
 	defer tr.Close()
 	ctx := context.Background()
 	m, err := tr.FetchManifest(ctx)
-	if err != nil || m.GetDeviceAssetId() != 7 {
+	if err != nil || len(m.GetSensors()) != 1 {
 		t.Fatalf("manifest: %v %+v", err, m)
 	}
 	frames, closeFn, err := tr.Stream(ctx, []uint32{1})
@@ -59,7 +59,7 @@ func TestGRPCTransportStreamsFromStubServer(t *testing.T) {
 	defer closeFn()
 	select {
 	case f := <-frames:
-		if f.ChannelId != 1 || string(f.Payload) != "h264" {
+		if f.ChannelID != 1 || string(f.Payload) != "h264" {
 			t.Fatalf("bad frame: %+v", f)
 		}
 	case <-time.After(2 * time.Second):

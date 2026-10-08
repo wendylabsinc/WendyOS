@@ -5,9 +5,11 @@ no camera device access, agent RPC credentials, or notification credentials.
 """
 
 import base64
+import ast
 from collections import deque
 import io
 import json
+import os
 import sys
 import threading
 import time
@@ -148,6 +150,129 @@ class Detector:
                 if self.model.config.id2label[int(label)] in self.labels][:100]
 
 
+class YOLODetector:
+    """YOLOv8/YOLO11 raw detection ONNX, with no repository Python or pickle."""
+
+    def __init__(self, config):
+        import numpy as np
+        import onnx
+        import onnxruntime as ort
+        from huggingface_hub import get_hf_file_metadata, hf_hub_download, hf_hub_url
+
+        options = {"repo_id": config["model"], "filename": config["model_file"],
+                   "revision": config["revision"]}
+        metadata = get_hf_file_metadata(hf_hub_url(**options), token=False)
+        if metadata.size is None or not 0 < metadata.size <= 512 << 20:
+            raise ValueError("ONNX model must be at most 512 MiB")
+        filename = hf_hub_download(**options, token=False)
+        if not 0 < os.path.getsize(filename) <= 512 << 20:
+            raise ValueError("ONNX model must be at most 512 MiB")
+        # Inspect without loading external tensors. Reject references anywhere
+        # in the graph, including attributes, subgraphs and local functions.
+        with open(filename, "rb") as model:
+            model_bytes = model.read((512 << 20) + 1)
+        if len(model_bytes) > 512 << 20:
+            raise ValueError("ONNX model must be at most 512 MiB")
+        def reject_external_tensors(message):
+            if isinstance(message, onnx.TensorProto):
+                if message.data_location == onnx.TensorProto.EXTERNAL or message.external_data:
+                    raise ValueError("YOLO ONNX external tensor files are not supported")
+            for field, value in message.ListFields():
+                if field.message_type is not None:
+                    for child in value if field.is_repeated else [value]:
+                        reject_external_tensors(child)
+        reject_external_tensors(onnx.load_model_from_string(model_bytes))
+        session_options = ort.SessionOptions()
+        session_options.intra_op_num_threads = 2
+        session_options.inter_op_num_threads = 1
+        self.session = ort.InferenceSession(model_bytes, sess_options=session_options,
+                                           providers=["CPUExecutionProvider"])
+        inputs, outputs = self.session.get_inputs(), self.session.get_outputs()
+        if len(inputs) != 1 or inputs[0].type != "tensor(float)":
+            raise ValueError("YOLO ONNX requires one float32 image input")
+        shape = inputs[0].shape
+        if (len(shape) != 4 or shape[:2] != [1, 3]
+                or any(type(n) is not int or not 32 <= n <= 1280 for n in shape[2:])):
+            raise ValueError("YOLO ONNX requires static input [1, 3, height, width], 32..1280 pixels")
+        metadata = self.session.get_modelmeta().custom_metadata_map
+        if metadata.get("task", "detect") != "detect":
+            raise ValueError("YOLO ONNX must be a detection model")
+        raw_names = metadata.get("names", "")
+        if not raw_names or len(raw_names) > 128 << 10:
+            raise ValueError("YOLO ONNX must embed its class names")
+        names = ast.literal_eval(raw_names)
+        if isinstance(names, list):
+            names = dict(enumerate(names))
+        if not isinstance(names, dict) or not 1 <= len(names) <= 1000:
+            raise ValueError("Invalid YOLO class names")
+        self.names = [names.get(n, names.get(str(n))) for n in range(len(names))]
+        if any(not isinstance(n, str) or not n or len(n) > 128 for n in self.names):
+            raise ValueError("YOLO class names must use consecutive class IDs")
+        if len(set(self.names)) != len(self.names):
+            raise ValueError("YOLO class names must be unique")
+        self.labels, self.threshold = set(config["labels"]), config["threshold"]
+        if not self.labels.issubset(set(self.names)):
+            raise ValueError("inference.labels contains labels absent from the model")
+        if (len(outputs) != 1 or len(outputs[0].shape) != 3 or outputs[0].shape[0] != 1
+                or outputs[0].shape[1] != len(self.names) + 4):
+            raise ValueError("Expected raw YOLOv8/YOLO11 detection output [1, 4 + classes, anchors]; export without NMS")
+        self.np, self.input_name = np, inputs[0].name
+        self.height, self.width = shape[2:]
+
+    def __call__(self, frame):
+        from PIL import Image
+        np = self.np
+        image = frame.to_image().convert("RGB")
+        scale = min(self.width / image.width, self.height / image.height)
+        size = max(1, round(image.width * scale)), max(1, round(image.height * scale))
+        dx, dy = (self.width - size[0]) // 2, (self.height - size[1]) // 2
+        canvas = Image.new("RGB", (self.width, self.height), (114, 114, 114))
+        canvas.paste(image.resize(size, Image.Resampling.BILINEAR), (dx, dy))
+        tensor = np.asarray(canvas, dtype=np.float32).transpose(2, 0, 1)[None] / 255.0
+        output = self.session.run(None, {self.input_name: tensor})[0]
+        return yolo_detections(output, self.names, self.labels, self.threshold,
+                               scale, dx, dy, image.width, image.height)
+
+
+def yolo_detections(output, names, labels, threshold, scale, dx, dy, width, height):
+    """Decode raw boxes with class-aware NMS in original-frame coordinates."""
+    import numpy as np
+    if (output.ndim != 3 or output.shape[:2] != (1, len(names) + 4)
+            or output.shape[2] > 100000 or not np.isfinite(output).all()):
+        raise ValueError("Invalid YOLO detection tensor")
+    rows = output[0].T
+    classes = rows[:, 4:].argmax(axis=1)
+    scores = rows[np.arange(len(rows)), classes + 4]
+    keep = ((scores >= threshold) & (scores <= 1)
+            & np.isin(classes, [n for n, name in enumerate(names) if name in labels])
+            & (rows[:, 2] > 0) & (rows[:, 3] > 0))
+    rows, classes, scores = rows[keep], classes[keep], scores[keep]
+    if not len(rows):
+        return []
+    boxes = np.column_stack(((rows[:, 0] - rows[:, 2] / 2 - dx) / scale,
+                             (rows[:, 1] - rows[:, 3] / 2 - dy) / scale,
+                             (rows[:, 0] + rows[:, 2] / 2 - dx) / scale,
+                             (rows[:, 1] + rows[:, 3] / 2 - dy) / scale))
+    boxes[:, (0, 2)] = boxes[:, (0, 2)].clip(0, width)
+    boxes[:, (1, 3)] = boxes[:, (1, 3)].clip(0, height)
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    order = np.argsort(-scores)[:1000]
+    detections = []
+    while len(order) and len(detections) < 100:
+        i, rest = order[0], order[1:]
+        if areas[i] <= 0:
+            order = rest
+            continue
+        detections.append({"label": names[int(classes[i])], "score": float(scores[i]),
+                           "box": boxes[i].tolist()})
+        intersection = np.maximum(0, np.minimum(boxes[i, 2:], boxes[rest, 2:])
+                                  - np.maximum(boxes[i, :2], boxes[rest, :2])).prod(axis=1)
+        union = areas[i] + areas[rest] - intersection
+        iou = np.divide(intersection, union, out=np.zeros_like(intersection), where=union > 0)
+        order = rest[(classes[rest] != classes[i]) | (iou <= 0.45)]
+    return detections
+
+
 def run(config, detector):
     lock = threading.Lock()
     decoders = {}
@@ -223,7 +348,7 @@ def run(config, detector):
 
 def main():
     config = json.loads(sys.stdin.buffer.readline())
-    detector = Detector(config)
+    detector = YOLODetector(config) if config.get("backend") == "yolo_onnx" else Detector(config)
     emit({"type": "ready"})
     run(config, detector)
 

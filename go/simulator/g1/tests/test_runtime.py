@@ -47,6 +47,7 @@ def endpoint():
         finally:
             connection.close()
 
+    request.port = server.server_port
     try:
         wait_until(lambda: request("/api/health")[0] == 200)
         yield runtime, request
@@ -55,6 +56,51 @@ def endpoint():
         serving.join(timeout=2.0)
         runtime.close()
         server.server_close()
+
+
+def test_http_keepalive_delivers_scene_then_status_on_the_same_connection(endpoint):
+    runtime, request = endpoint
+    connection = http.client.HTTPConnection("127.0.0.1", request.port, timeout=5.0)
+    try:
+        connection.request("GET", "/api/scene", headers={"Accept-Encoding": "gzip"})
+        response = connection.getresponse()
+        socket = connection.sock
+        assert response.status == 200 and response.version == 11
+        assert not response.will_close
+        payload = response.read()
+        assert len(payload) == int(response.getheader("Content-Length"))
+        assert payload == runtime.scene.gzip
+        assert json.loads(gzip.decompress(payload))["id"] == runtime.scene.description["id"]
+        connection.request("GET", "/api/status")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read())["simulation"] is True
+        assert connection.sock is socket
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("body,headers,expected", [
+    ("{}", {"Origin": "http://other.example"}, 403),
+    ("x" * 4097, {}, 413),
+    ("0\r\n\r\n", {"Transfer-Encoding": "chunked"}, 400),
+    ("{}", {"Content-Length": "invalid"}, 400),
+])
+def test_http_rejected_unread_body_closes_connection(endpoint, body, headers, expected):
+    _, request = endpoint
+    connection = http.client.HTTPConnection("127.0.0.1", request.port, timeout=5.0)
+    try:
+        connection.request("POST", "/api/arm", body=body, headers=headers)
+        response = connection.getresponse()
+        assert response.status == expected and response.will_close
+        response.read()
+        # The next request reconnects instead of parsing the rejected body as HTTP.
+        connection.request("GET", "/api/status")
+        response = connection.getresponse()
+        assert response.status == 200
+        assert json.loads(response.read())["simulation"] is True
+    finally:
+        connection.close()
 
 
 def test_http_pause_and_reset_revoke_a_continuing_command_publisher(endpoint):

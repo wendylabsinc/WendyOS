@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"os"
 	"os/signal"
 	"strconv"
@@ -14,13 +13,12 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/memguard"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func main() {
@@ -54,6 +52,9 @@ func main() {
 	}
 	trackCommand(executed, err, time.Since(start))
 	analytics.Close()
+	// After Close, whose delivered events can still record milestones: a sudo
+	// run gives what it created in ~/.wendy and the cache back to the user.
+	commands.HandBackSudoFiles()
 
 	exitCode := 0
 	if err != nil && !errors.Is(err, commands.ErrUserCancelled) && !errors.Is(err, commands.ErrDefaultCleared) {
@@ -193,50 +194,9 @@ func milestoneFor(commandPath string, success bool) string {
 	return ""
 }
 
-// errorClass maps an execution error to a bounded enum suitable for analytics.
-// It must never embed the error message, which can contain hostnames, paths,
-// or other user input.
-//
-// User-cancellation sentinels are checked first so an outer wrap never
-// reclassifies them. gRPC errors are extracted via status.FromError, which
-// walks the wrapped chain — substring matching on err.Error() would miss
-// errors wrapped via fmt.Errorf with a custom prefix or any future change to
-// grpc-go's stringification.
-func errorClass(err error) string {
-	if err == nil {
-		return ""
-	}
-	if errors.Is(err, commands.ErrUserCancelled) || errors.Is(err, commands.ErrDefaultCleared) {
-		return "user_cancelled"
-	}
-	// status.FromError returns ok=true only for real gRPC errors (those
-	// produced by the grpc package or implementing GRPCStatus()). For
-	// non-gRPC errors it returns ok=false with a synthesized Unknown code,
-	// which we don't want to claim as a gRPC failure. An explicit
-	// Unknown code from a real gRPC error, however, should still bucket
-	// under grpc_other.
-	if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
-		switch st.Code() {
-		case codes.Canceled:
-			return "context_canceled"
-		case codes.DeadlineExceeded:
-			return "grpc_deadline"
-		case codes.Unavailable:
-			return "grpc_unavailable"
-		case codes.Unimplemented:
-			return "grpc_unimplemented"
-		default:
-			return "grpc_other"
-		}
-	}
-	if errors.Is(err, context.Canceled) {
-		return "context_canceled"
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return "context_deadline"
-	}
-	return "other"
-}
+// errorClass maps an execution error to a bounded enum suitable for analytics;
+// see commands.ExecutionErrorClass, which the deploy_completed event shares.
+func errorClass(err error) string { return commands.ExecutionErrorClass(err) }
 
 // renderError lets actionable errors style their heading separately from the
 // recovery steps. Use errors.As because commands may add context with %w.

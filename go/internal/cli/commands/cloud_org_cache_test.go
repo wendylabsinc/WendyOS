@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -15,7 +16,7 @@ import (
 
 func TestCloudOrganizationNameCacheRefreshAndOffline(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	auth := &config.AuthConfig{CloudGRPC: "prod:443", OAuthIssuer: "https://must-not-refresh.invalid", APIKey: "current-token", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}
+	auth := &config.AuthConfig{CloudGRPC: "prod:443", OAuthIssuer: "https://must-not-refresh.invalid", APIKey: "current-token", OAuthExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), Certificates: []config.CertificateInfo{{OrganizationID: 7}}}
 	dir, err := config.ConfigDir()
 	if err != nil {
 		t.Fatal(err)
@@ -30,8 +31,10 @@ func TestCloudOrganizationNameCacheRefreshAndOffline(t *testing.T) {
 	name := "Robotics"
 	var lookupErr error
 	listOrgsFromCloud = func(_ context.Context, lookup *config.AuthConfig) ([]*pb.Organization, error) {
-		if lookup.OAuthIssuer != "" || lookup.APIKey != "current-token" {
-			t.Fatal("display lookup could rotate credentials or lost its current access token")
+		// The issuer must survive: it is what keeps a cnf-bound token on DPoP
+		// instead of going out as a Bearer that Cloud rejects (WDY-3524).
+		if lookup.OAuthIssuer != auth.OAuthIssuer || lookup.APIKey != "current-token" {
+			t.Fatal("display lookup dropped its DPoP binding or its current access token")
 		}
 		return []*pb.Organization{{Id: 7, Name: name}}, lookupErr
 	}
@@ -54,6 +57,14 @@ func TestCloudOrganizationNameCacheRefreshAndOffline(t *testing.T) {
 	lookupErr, name = nil, ""
 	if got := cloudOrganizationName(ctx, auth); got != "Renamed Robotics" {
 		t.Fatalf("empty response erased cached name: %q", got)
+	}
+	// An access token that would need a refresh is never refreshed by a
+	// display lookup: the last known name stands.
+	stale := *auth
+	stale.OAuthExpiresAt = time.Now().Add(time.Minute).UTC().Format(time.RFC3339)
+	name = "Must not be fetched"
+	if got := cloudOrganizationName(ctx, &stale); got != "Renamed Robotics" {
+		t.Fatalf("stale-token lookup = %q, want cached name", got)
 	}
 	if auth.OAuthIssuer != "https://must-not-refresh.invalid" || auth.APIKey != "current-token" {
 		t.Fatal("lookup mutated caller's auth session")

@@ -99,7 +99,33 @@ type GetDeviceInfoResponse struct {
 	// Runtimes an app can use on the NPU (e.g. "qnn" for the Qualcomm Hexagon
 	// reached over FastRPC). Only populated when has_npu is true; empty when the
 	// vendor's runtime is unrecognized, or on agents predating this field.
-	NpuBackends   []string `protobuf:"bytes,22,rep,name=npu_backends,json=npuBackends,proto3" json:"npu_backends,omitempty"`
+	NpuBackends []string `protobuf:"bytes,22,rep,name=npu_backends,json=npuBackends,proto3" json:"npu_backends,omitempty"`
+	// Board model from /proc/device-tree/model (e.g. "NVIDIA Jetson AGX Orin
+	// Developer Kit"). May be empty: hosts without a device tree (x86, macOS)
+	// and agents predating this field.
+	BoardModel *string `protobuf:"bytes,23,opt,name=board_model,json=boardModel,proto3,oneof" json:"board_model,omitempty"`
+	// Device-tree compatible strings from /proc/device-tree/compatible, most
+	// specific first; the last entry names the SoC (e.g. "nvidia,tegra264" on
+	// Jetson Thor). May be empty, as board_model.
+	SocCompatible []string `protobuf:"bytes,24,rep,name=soc_compatible,json=socCompatible,proto3" json:"soc_compatible,omitempty"`
+	// Board serial number from /proc/device-tree/serial-number. May be empty:
+	// many boards do not publish one.
+	SerialNumber *string `protobuf:"bytes,25,opt,name=serial_number,json=serialNumber,proto3,oneof" json:"serial_number,omitempty"`
+	// Running kernel release, from /proc/sys/kernel/osrelease (uname -r). May
+	// be empty on non-Linux hosts.
+	KernelVersion *string `protobuf:"bytes,26,opt,name=kernel_version,json=kernelVersion,proto3,oneof" json:"kernel_version,omitempty"`
+	// Seconds since boot, from /proc/uptime. May be empty on non-Linux hosts.
+	UptimeSeconds *uint64 `protobuf:"varint,27,opt,name=uptime_seconds,json=uptimeSeconds,proto3,oneof" json:"uptime_seconds,omitempty"`
+	// MAC address (aa:bb:cc:dd:ee:ff) of the first up, non-virtual interface
+	// with a routable address. May be empty when no such interface exists.
+	PrimaryMac *string `protobuf:"bytes,28,opt,name=primary_mac,json=primaryMac,proto3,oneof" json:"primary_mac,omitempty"`
+	// Routable IPv4/IPv6 addresses of every up, non-virtual interface, without
+	// a prefix suffix. May be empty.
+	IpAddresses []string `protobuf:"bytes,29,rep,name=ip_addresses,json=ipAddresses,proto3" json:"ip_addresses,omitempty"`
+	// Raw L4T version ("38.2.1") parsed from /etc/nv_tegra_release, unmapped,
+	// so a reader need not rely on the agent's L4T-to-JetPack table. May be
+	// empty: non-Jetson hosts and L4T releases without that file.
+	L4TVersion    *string `protobuf:"bytes,30,opt,name=l4t_version,json=l4tVersion,proto3,oneof" json:"l4t_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -286,6 +312,62 @@ func (x *GetDeviceInfoResponse) GetNpuBackends() []string {
 		return x.NpuBackends
 	}
 	return nil
+}
+
+func (x *GetDeviceInfoResponse) GetBoardModel() string {
+	if x != nil && x.BoardModel != nil {
+		return *x.BoardModel
+	}
+	return ""
+}
+
+func (x *GetDeviceInfoResponse) GetSocCompatible() []string {
+	if x != nil {
+		return x.SocCompatible
+	}
+	return nil
+}
+
+func (x *GetDeviceInfoResponse) GetSerialNumber() string {
+	if x != nil && x.SerialNumber != nil {
+		return *x.SerialNumber
+	}
+	return ""
+}
+
+func (x *GetDeviceInfoResponse) GetKernelVersion() string {
+	if x != nil && x.KernelVersion != nil {
+		return *x.KernelVersion
+	}
+	return ""
+}
+
+func (x *GetDeviceInfoResponse) GetUptimeSeconds() uint64 {
+	if x != nil && x.UptimeSeconds != nil {
+		return *x.UptimeSeconds
+	}
+	return 0
+}
+
+func (x *GetDeviceInfoResponse) GetPrimaryMac() string {
+	if x != nil && x.PrimaryMac != nil {
+		return *x.PrimaryMac
+	}
+	return ""
+}
+
+func (x *GetDeviceInfoResponse) GetIpAddresses() []string {
+	if x != nil {
+		return x.IpAddresses
+	}
+	return nil
+}
+
+func (x *GetDeviceInfoResponse) GetL4TVersion() string {
+	if x != nil && x.L4TVersion != nil {
+		return *x.L4TVersion
+	}
+	return ""
 }
 
 // Usage information for a single mounted filesystem.
@@ -599,7 +681,7 @@ var File_wendy_agent_services_v2_device_info_service_proto protoreflect.FileDesc
 const file_wendy_agent_services_v2_device_info_service_proto_rawDesc = "" +
 	"\n" +
 	"1wendy/agent/services/v2/device_info_service.proto\x12\x17wendy.agent.services.v2\"\x16\n" +
-	"\x14GetDeviceInfoRequest\"\x84\t\n" +
+	"\x14GetDeviceInfoRequest\"\xaa\f\n" +
 	"\x15GetDeviceInfoResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\"\n" +
 	"\n" +
@@ -633,7 +715,18 @@ const file_wendy_agent_services_v2_device_info_service_proto_rawDesc = "" +
 	"npu_vendor\x18\x13 \x01(\tH\vR\tnpuVendor\x88\x01\x01\x12X\n" +
 	"\x11container_storage\x18\x14 \x01(\v2&.wendy.agent.services.v2.DiskPartitionH\fR\x10containerStorage\x88\x01\x01\x12S\n" +
 	"\x10gpu_capabilities\x18\x15 \x03(\v2(.wendy.agent.services.v2.GpuCapabilitiesR\x0fgpuCapabilities\x12!\n" +
-	"\fnpu_backends\x18\x16 \x03(\tR\vnpuBackendsB\r\n" +
+	"\fnpu_backends\x18\x16 \x03(\tR\vnpuBackends\x12$\n" +
+	"\vboard_model\x18\x17 \x01(\tH\rR\n" +
+	"boardModel\x88\x01\x01\x12%\n" +
+	"\x0esoc_compatible\x18\x18 \x03(\tR\rsocCompatible\x12(\n" +
+	"\rserial_number\x18\x19 \x01(\tH\x0eR\fserialNumber\x88\x01\x01\x12*\n" +
+	"\x0ekernel_version\x18\x1a \x01(\tH\x0fR\rkernelVersion\x88\x01\x01\x12*\n" +
+	"\x0euptime_seconds\x18\x1b \x01(\x04H\x10R\ruptimeSeconds\x88\x01\x01\x12$\n" +
+	"\vprimary_mac\x18\x1c \x01(\tH\x11R\n" +
+	"primaryMac\x88\x01\x01\x12!\n" +
+	"\fip_addresses\x18\x1d \x03(\tR\vipAddresses\x12$\n" +
+	"\vl4t_version\x18\x1e \x01(\tH\x12R\n" +
+	"l4tVersion\x88\x01\x01B\r\n" +
 	"\v_os_versionB\r\n" +
 	"\v_public_keyB\x0e\n" +
 	"\f_device_typeB\n" +
@@ -648,7 +741,13 @@ const file_wendy_agent_services_v2_device_info_service_proto_rawDesc = "" +
 	"\n" +
 	"\b_has_npuB\r\n" +
 	"\v_npu_vendorB\x14\n" +
-	"\x12_container_storage\"\xa7\x01\n" +
+	"\x12_container_storageB\x0e\n" +
+	"\f_board_modelB\x10\n" +
+	"\x0e_serial_numberB\x11\n" +
+	"\x0f_kernel_versionB\x11\n" +
+	"\x0f_uptime_secondsB\x0e\n" +
+	"\f_primary_macB\x0e\n" +
+	"\f_l4t_version\"\xa7\x01\n" +
 	"\rDiskPartition\x12\x1e\n" +
 	"\n" +
 	"mountpoint\x18\x01 \x01(\tR\n" +

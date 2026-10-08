@@ -53,8 +53,11 @@ ready-to-deploy ROS applications.
 Deploy a ROS 2 Humble application with `wendy run --device vm:my-g1`, using the
 branch-built CLI.
 The managed profile uses CycloneDDS, domain zero, and guest loopback networking.
-Start its command publisher, then select that source in the sandbox and click
-**Give app control**. Browser controls and ROS publishers have one exclusive owner.
+A fresh driving publisher receives control automatically on its first valid
+Twist or native `SetVelocity` request. This replaces the previous app or browser
+owner. SDK discovery queries do not acquire control; the request that acquires
+control is acknowledged without applying motion, and the next request can drive.
+Standalone runtimes still require **Grant control** in the sandbox.
 
 The learned policy initiates reliably around 0.3 m/s. Small commands from rest
 and turning in place track weakly; use forward walking with yaw for a turn.
@@ -73,7 +76,8 @@ The browser has an orbitable 3D scene and the robot's sensor camera.
 
 High-level commands expire after 200 ms; low-level commands expire after 40 ms
 and enter damping. Continuously publish motion commands. Reset and pause revoke
-control and require restarting the command publisher before granting it again.
+control and require restarting the command publisher after resuming or resetting.
+A continuing or previously replaced publisher cannot reclaim control automatically.
 This prevents queued or continuing commands from controlling a reset robot.
 
 ## Fidelity and limits

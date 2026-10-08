@@ -21,6 +21,11 @@ import (
 	"golang.org/x/term"
 )
 
+var (
+	resolveWifiTargetFn = resolveTarget
+	pickWifiNetworkFn   = pickWifiNetwork
+)
+
 func newWifiCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "wifi",
@@ -46,19 +51,23 @@ func newWifiCmd() *cobra.Command {
 
 func runWifiInteractive(cmd *cobra.Command) error {
 	ctx := cmd.Context()
-	target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+	target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 	if err != nil {
 		return err
 	}
 	defer target.Close()
 
+	if target.Bluetooth != nil && !target.Bluetooth.IsWendyAgent() {
+		return runWifiConnect(cmd, target, "", "")
+	}
+	if target.Provider != nil && target.External != nil {
+		if _, ok := target.Provider.(providers.WifiManager); ok {
+			return runWifiConnect(cmd, target, "", "")
+		}
+	}
+
 	client, err := newWifiClient(target)
 	if err != nil {
-		if target.Provider != nil && target.External != nil {
-			if _, ok := target.Provider.(providers.WifiManager); ok {
-				return errors.New("selected device does not support full Wi-Fi management; use 'wendy device wifi connect' and 'wendy device wifi disconnect' instead")
-			}
-		}
 		return err
 	}
 	defer client.Close()
@@ -370,67 +379,13 @@ func newWifiConnectCmd() *cobra.Command {
 		Short: "Connect to a WiFi network",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
 			defer target.Close()
 
-			if ssid == "" {
-				picked, pickErr := pickWifiNetwork(ctx, target)
-				if pickErr != nil {
-					return pickErr
-				}
-				ssid = picked
-			}
-
-			if !cmd.Flags().Changed("password") && term.IsTerminal(int(os.Stdin.Fd())) {
-				if supportsKeychainLookup {
-					if confirmFn(fmt.Sprintf("Look up password for '%s' from keychain? (macOS will ask for permission)", ssid)) {
-						if kp, err := lookupKeychainPassword(ssid); err == nil && kp != "" {
-							cliLogln("Using saved password from keychain.")
-							password = kp
-						} else {
-							cliNotice("Password not available from keychain.")
-						}
-					}
-				}
-
-				if password == "" {
-					fmt.Print("Password (leave empty for open networks): ")
-					passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
-					fmt.Println()
-					if readErr != nil {
-						return fmt.Errorf("reading password: %w", readErr)
-					}
-					password = strings.TrimSpace(string(passwordBytes))
-				}
-			}
-
-			if target.Provider != nil && target.External != nil {
-				if wm, ok := target.Provider.(providers.WifiManager); ok {
-					return wm.WifiConnect(ctx, *target.External, ssid, password)
-				}
-			}
-
-			if target.Bluetooth != nil && !target.Bluetooth.IsWendyAgent() {
-				return wifiConnectViaBLELite(target.Bluetooth, ssid, password)
-			}
-
-			client, err := newWifiClient(target)
-			if err != nil {
-				return err
-			}
-			defer client.Close()
-
-			if err := client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
-				Ssid:     ssid,
-				Password: password,
-			}); err != nil {
-				return err
-			}
-			cliSuccess("Connected to %s", ssid)
-			return nil
+			return runWifiConnect(cmd, target, ssid, password)
 		},
 	}
 
@@ -438,6 +393,67 @@ func newWifiConnectCmd() *cobra.Command {
 	cmd.Flags().StringVar(&password, "password", "", "WiFi network password")
 
 	return cmd
+}
+
+// runWifiConnect reuses the selected target for explicit connect commands and
+// the default WiFi command on Wendy Lite.
+func runWifiConnect(cmd *cobra.Command, target *SelectedDevice, ssid, password string) error {
+	ctx := cmd.Context()
+	if ssid == "" {
+		picked, pickErr := pickWifiNetworkFn(ctx, target)
+		if pickErr != nil {
+			return pickErr
+		}
+		ssid = picked
+	}
+
+	if !cmd.Flags().Changed("password") && term.IsTerminal(int(os.Stdin.Fd())) {
+		if supportsKeychainLookup {
+			if confirmFn(fmt.Sprintf("Look up password for '%s' from keychain? (macOS will ask for permission)", ssid)) {
+				if kp, err := lookupKeychainPassword(ssid); err == nil && kp != "" {
+					cliLogln("Using saved password from keychain.")
+					password = kp
+				} else {
+					cliNotice("Password not available from keychain.")
+				}
+			}
+		}
+
+		if password == "" {
+			fmt.Print("Password (leave empty for open networks): ")
+			passwordBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if readErr != nil {
+				return fmt.Errorf("reading password: %w", readErr)
+			}
+			password = strings.TrimSpace(string(passwordBytes))
+		}
+	}
+
+	if target.Provider != nil && target.External != nil {
+		if wm, ok := target.Provider.(providers.WifiManager); ok {
+			return wm.WifiConnect(ctx, *target.External, ssid, password)
+		}
+	}
+
+	if target.Bluetooth != nil && !target.Bluetooth.IsWendyAgent() {
+		return wifiConnectViaBLELite(target.Bluetooth, ssid, password)
+	}
+
+	client, err := newWifiClient(target)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	if err := client.Connect(ctx, &agentpb.ConnectToWiFiRequest{
+		Ssid:     ssid,
+		Password: password,
+	}); err != nil {
+		return err
+	}
+	cliSuccess("Connected to %s", ssid)
+	return nil
 }
 
 func newWifiStatusCmd() *cobra.Command {
@@ -718,7 +734,7 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		// once when the scan completes.
 		go func() {
 			defer p.Send(tui.PickerDoneMsg{})
-			if err := streamLocalWifiScan(func(batch []localWifiNetwork) {
+			if err := streamLocalWifiScan(scanCtx, func(batch []localWifiNetwork) {
 				p.Send(tui.PickerAddMsg{Items: localWifiPickerItems(batch)})
 			}); err != nil {
 				recordScanErr(fmt.Errorf("scanning local WiFi networks: %w", err))
@@ -878,7 +894,7 @@ func wifiDisconnectViaBLEAgent(device *models.BluetoothDevice) error {
 
 func wifiListFromHost() error {
 	cliLogln("Scanning for WiFi networks on this computer...")
-	networks, err := scanLocalWifiNetworks()
+	networks, err := scanLocalWifiNetworks(context.Background())
 	if err != nil {
 		return err
 	}

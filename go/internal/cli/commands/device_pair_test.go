@@ -16,6 +16,12 @@ func TestTransportForDevice(t *testing.T) {
 	if transportForDevice(mcuDev) != "tcp" {
 		t.Fatal("legacy/MCU source should be tcp")
 	}
+	// A Wendy Lite board is always wendycom, regardless of IsMTLS/Caps — it
+	// never speaks gRPC or raw sensorlink TCP.
+	liteDev := models.DiscoveredDevice{WendyLite: true, Sensorlink: true, IsMTLS: true, Caps: []string{"sensors"}, AssetID: 7}
+	if transportForDevice(liteDev) != "wendycom" {
+		t.Fatal("Wendy Lite source should be wendycom")
+	}
 }
 
 func TestOrgAllowedRejectsMismatch(t *testing.T) {

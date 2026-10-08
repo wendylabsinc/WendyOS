@@ -12,15 +12,17 @@ import socket
 import threading
 import time
 
-from .simulation import COMMAND_TIMEOUT
+from .simulation import COMMAND_TIMEOUT, VELOCITY_MIN, VELOCITY_LIMITS
 
 
 class ROSCommands:
-    def __init__(self, runtime, path, *, monotonic_ns=time.monotonic_ns, wall_ns=time.time_ns):
+    def __init__(self, runtime, path, *, auto_control=False,
+                 monotonic_ns=time.monotonic_ns, wall_ns=time.time_ns):
         self.runtime = runtime
         self.path = Path(path)
         self.clock = monotonic_ns
         self.wall_clock = wall_ns
+        self.auto_control = auto_control
         self.sources = {}
         self.blocked = set()
         self.owner = None
@@ -33,6 +35,7 @@ class ROSCommands:
         self.socket = None
         self.thread = None
         self.native_handler = None
+        self.native_auto_grant = None
 
     def start(self):
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -71,6 +74,7 @@ class ROSCommands:
         if kind != "twist" and self.native_handler is None:
             raise ValueError("native Unitree adapter is not enabled")
         self.token = sim.arm(mode="lowlevel" if kind == "lowcmd" else "sport")
+        self.sources[gid]["auto_attempted"] = True
         self.owner = gid
         self.granted_ns = self.clock()
         self.granted_wall_ns = self.wall_clock()
@@ -79,6 +83,7 @@ class ROSCommands:
     def status(self):
         now = self.clock()
         return {
+            "auto_control": self.auto_control,
             "owner": self.owner if self.token == self.runtime.sim.owner else None,
             "accepted": self.accepted, "rejected": self.rejected,
             "last_error": self.last_error,
@@ -87,6 +92,17 @@ class ROSCommands:
                          "requires_restart": gid in self.blocked}
                         for gid, source in self.sources.items()],
         }
+
+    def _auto_grant(self, gid):
+        """A new driving publisher may replace the current sport owner once."""
+        sim = self.runtime.sim
+        if (gid in self.blocked or sim.mode not in {"standing", "moving"}
+                or sim.control_mode != "sport" or getattr(self.runtime, "error", None)):
+            return
+        self.runtime.ensure_running()
+        if sim.owner is not None:
+            sim.release(sim.owner)
+        self.grant(gid)
 
     def admit(self, envelope):
         """Validate a received datagram; caller holds the runtime lock."""
@@ -109,25 +125,43 @@ class ROSCommands:
         source_age = self.wall_clock() - source_time
         if source_age < -50_000_000 or source_age >= int(COMMAND_TIMEOUT * 1e9):
             raise ValueError("expired DDS command")
-        if kind == "twist" and (not isinstance(velocity, list) or len(velocity) != 3 or
-                any(isinstance(v, bool) or not isinstance(v, (int, float)) or
-                    not math.isfinite(v) for v in velocity)):
-            raise ValueError("invalid velocity")
+        if kind == "twist":
+            if (not isinstance(velocity, list) or len(velocity) != 3 or
+                    any(type(v) not in (int, float) for v in velocity)):
+                raise ValueError("invalid velocity")
+            if any(not low <= v <= high for v, low, high in zip(velocity, VELOCITY_MIN, VELOCITY_LIMITS)):
+                raise ValueError("velocity exceeds simulator limits")
+            if any(not math.isfinite(v) for v in velocity):
+                raise ValueError("invalid velocity")
         if gid not in self.sources and len(self.sources) >= 4096:
             raise ValueError("publisher registry full; restart the runtime")
         previous = self.sources.get(gid)
+        if previous and kind != previous["kind"]:
+            raise ValueError("DDS publisher command kind changed")
         if previous and (received <= previous["last_received_ns"] or
                          source_time <= previous["source_timestamp_ns"]):
             self.rejected += 1
             return False
         self.sources[gid] = {"kind": kind, "last_received_ns": received,
-                             "source_timestamp_ns": source_time}
-        owned = (gid == self.owner and gid not in self.blocked and self.token is not None and
+                             "source_timestamp_ns": source_time,
+                             "auto_attempted": bool(previous and previous["auto_attempted"])}
+        eligible = (self.auto_control and not self.sources[gid]["auto_attempted"] and
+                    (kind == "twist" or (kind == "sport" and self.native_auto_grant is not None
+                                        and self.native_auto_grant(envelope))))
+        if eligible:
+            # SDK discovery queries do not consume the attempt. The first valid
+            # velocity request does, even while paused or unhealthy, so resuming
+            # cannot let a continuing publisher acquire control unexpectedly.
+            self.sources[gid]["auto_attempted"] = True
+            self._auto_grant(gid)
+        owned = (not eligible and gid == self.owner and gid not in self.blocked and self.token is not None and
                  self.token == self.runtime.sim.owner and received > self.granted_ns and
                  source_time > self.granted_wall_ns)
         if kind != "twist":
             if self.native_handler is None:
                 raise ValueError("native Unitree adapter is not enabled")
+            # Reply to the discovery request with DENIED instead of dropping it.
+            # It predates the grant; only a subsequent sample may drive the robot.
             applied = self.native_handler(envelope, owned=owned)
             if applied:
                 self.accepted += 1

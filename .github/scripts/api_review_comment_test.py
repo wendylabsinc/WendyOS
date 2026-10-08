@@ -2,6 +2,8 @@
 """State and publication regressions for the API acceptance checklist."""
 
 import copy
+import hashlib
+import json
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -11,17 +13,21 @@ import api_review_comment as review
 HEAD = "a" * 40
 BASE = "b" * 40
 REPO = "wendylabsinc/WendyOS"
+REVIEW_DIFF = b"diff --git a/go/internal/shared/appconfig/appconfig.go b/go/internal/shared/appconfig/appconfig.go\n--- a/go/internal/shared/appconfig/appconfig.go\n+++ b/go/internal/shared/appconfig/appconfig.go\n@@ -9,0 +10,3 @@\n+config.Command = value\n+config.Cwd = cwd\n+config.Enabled = true\n"
 
 
 def result():
     return {
         "status": "complete", "head_sha": HEAD, "base_sha": BASE,
-        "diff_sha256": "c" * 64, "diff_base_sha": BASE, "changed_files": 1, "diff_bytes": 420,
+        "diff_sha256": hashlib.sha256(REVIEW_DIFF).hexdigest(),
+        "prior_state_sha256": review.prior_state_digest({"version": 2, "decisions": []}),
+        "diff_base_sha": BASE,
+        "changed_files": 1, "diff_bytes": len(REVIEW_DIFF),
         "risk": "mid", "decisions": [{
-            "category": "config", "title": "Native launch command",
-            "change": "Add optional run.command and run.cwd to wendy.json.",
-            "compatibility": "Existing manifests keep their launch behavior.",
-            "impact": "additive", "locations": [{
+            "category": "config", "title": "Native `run.command` launch command",
+            "change": "Add optional `run.command` and `run.cwd` to `wendy.json`.",
+            "compatibility": "Existing `wendy.json` manifests keep their launch behavior.",
+            "impact": "additive", "prior_ids": [], "relationship": "new", "reason": "", "locations": [{
                 "path": "go/internal/shared/appconfig/appconfig.go",
                 "side": "head", "line": 10, "end_line": 12,
             }],
@@ -32,7 +38,7 @@ def result():
 def large_result():
     data = result()
     prototype = data["decisions"][0]
-    data.update(review_batches=11, changed_files=181, diff_bytes=900_000, risk="high", decisions=[])
+    data.update(review_batches=11, changed_files=181, risk="high", decisions=[])
     for index in range(93):
         item = copy.deepcopy(prototype)
         item["title"] = f"Contract {index:03}: native launch command"
@@ -110,12 +116,26 @@ class MultipartGitHub(FakeGitHub):
 
 class RenderingTests(unittest.TestCase):
     def test_grouped_linked_unchecked_decisions_and_explicit_empty_categories(self):
-        body = review.render_comment(result(), REPO)
-        self.assertIn("- [ ] Accept **Native launch command** — Additive.", body)
+        body = review.render_comment(result(), REPO, diff=REVIEW_DIFF.decode())
+        self.assertIn("- [ ] Accept **Native `run.command` launch command** — 🟢 **Additive**.", body)
         self.assertIn(f"/blob/{HEAD}/go/internal/shared/appconfig/appconfig.go#L10-L12", body)
         self.assertIn("## Network contracts and constants\n\nNo API decisions changed.", body)
-        self.assertIn("Existing manifests keep their launch behavior.", body)
-        self.assertNotIn("Breaking.", body)
+        self.assertIn("**Change:** Add optional `run.command` and `run.cwd`", body)
+        self.assertIn("**Compatibility:** Existing `wendy.json` manifests keep their launch behavior.", body)
+        self.assertIn("**Code:**", body)
+        self.assertIn("  ```diff\n  +config.Command = value", body)
+        self.assertNotIn("🔴 **Breaking**.", body)
+
+    def test_each_compatibility_class_has_a_text_labeled_color_symbol(self):
+        for impact, rendered in (
+            ("additive", "🟢 **Additive**"),
+            ("behavioral", "🟡 **Behavior change**"),
+            ("breaking", "🔴 **Breaking**"),
+        ):
+            data = result()
+            data["decisions"][0]["impact"] = impact
+            with self.subTest(impact=impact):
+                self.assertIn(rendered, review.render_comment(data, REPO))
 
     def test_acceptance_survives_identical_rerun_but_not_revision_or_decision_changes(self):
         original = result()
@@ -123,7 +143,7 @@ class RenderingTests(unittest.TestCase):
         self.assertIn("- [x]", review.render_comment(original, REPO, checked))
         for field, value in (("head_sha", "d" * 40), ("base_sha", "e" * 40), ("diff_sha256", "f" * 64)):
             changed = {**original, field: value}
-            self.assertNotIn("- [x]", review.render_comment(changed, REPO, checked))
+            self.assertIn("- [x]", review.render_comment(changed, REPO, checked))
         changed = copy.deepcopy(original)
         changed["decisions"][0]["compatibility"] = "Old manifests now fail."
         self.assertNotIn("- [x]", review.render_comment(changed, REPO, checked))
@@ -158,6 +178,33 @@ class RenderingTests(unittest.TestCase):
         self.assertNotIn("<!-- api-decision:fake -->", body)
         self.assertNotIn("[click](https://bad.example)", body)
 
+    def test_balanced_inline_code_is_preserved_without_enabling_other_markdown(self):
+        data = result()
+        data["decisions"][0]["change"] = "Call `Type.method` with `--flag`; not **bold**, @joannis, or [linked](https://bad.example)."
+        body = review.render_comment(data, REPO)
+        self.assertIn("Call `Type.method` with `--flag`; not \\*\\*bold\\*\\*", body)
+        self.assertNotIn("@joannis", body)
+        self.assertNotIn("[linked](https://bad.example)", body)
+        self.assertIn(r"\`unclosed", review.inline("`safe` and `unclosed"))
+
+    def test_excerpt_uses_a_fence_longer_than_pr_controlled_backticks(self):
+        data = result()
+        data["decisions"][0]["locations"] = [{"path": "README.md", "side": "head", "line": 1, "end_line": 1}]
+        raw = "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -0,0 +1,2 @@\n+```\n+[injected](https://bad.example)\n"
+        body = review.render_comment(data, REPO, diff=raw)
+        self.assertIn("  ````diff\n  +```\n  +[injected](https://bad.example)\n  ````", body)
+
+    def test_removal_and_mixed_excerpts_keep_diff_markers(self):
+        data = result()
+        data["decisions"][0]["locations"] = [{"path": "old.go", "side": "base", "line": 1, "end_line": 1}]
+        removed = "diff --git a/old.go b/old.go\n--- a/old.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-const old = true\n"
+        body = review.render_comment(data, REPO, diff=removed)
+        self.assertIn("  ```diff\n  -const old = true\n  ```", body)
+        self.assertNotIn("**Before:**", body)
+        data["decisions"][0]["locations"] = [{"path": "change.go", "side": "head", "line": 1, "end_line": 1}]
+        mixed = "diff --git a/change.go b/change.go\n--- a/change.go\n+++ b/change.go\n@@ -1 +1 @@\n-old\n+new\n"
+        self.assertIn("  ```diff\n  -old\n  +new\n  ```", review.render_comment(data, REPO, diff=mixed))
+
     def test_failure_preserves_prior_checklist_and_recovers_without_losing_acceptance(self):
         original = result()
         checked = review.render_comment(original, REPO).replace("- [ ]", "- [x]")
@@ -177,10 +224,7 @@ class RenderingTests(unittest.TestCase):
 
     def test_success_reserves_room_for_a_failure_notice(self):
         data = result()
-        original_size = len(review.render_comment(data, REPO).encode())
-        data["decisions"][0]["change"] += "x" * (
-            review.MAX_COMMENT_BYTES - review.WARNING_RESERVE_BYTES - original_size
-        )
+        data["decisions"][0]["change"] += "x" * 50_000
         previous = review.render_comment(data, REPO)
         warning = review.render_incomplete({**data, "error": "<" * 1000}, REPO, previous)
         self.assertLessEqual(len(warning.encode()), review.MAX_COMMENT_BYTES)
@@ -204,9 +248,186 @@ class RenderingTests(unittest.TestCase):
                 review.validate_result(data, HEAD, BASE)
 
 
+class DryRunPublicationTests(unittest.TestCase):
+    def test_dry_run_intercepts_all_publication_mutations(self):
+        source = FakeGitHub()
+        github = review.DryRunGitHub(source)
+        self.assertTrue(review.publish(result(), REPO, 1911, HEAD, BASE, REVIEW_DIFF, github))
+        self.assertEqual(source.mutations(), [])
+        self.assertGreater(github.mutations, 0)
+        self.assertIn('"pending": 1', github.summary())
+        self.assertNotIn("Native", github.summary())
+        for method in ("POST", "PATCH", "DELETE"):
+            self.assertIsInstance(github.request(method, "/unreachable", {"secret": "not-forwarded"})["id"], int)
+        self.assertEqual(source.mutations(), [])
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            github.request("PUT", "/unreachable")
+
+    def test_dry_run_incomplete_is_still_failure_and_preserves_acceptance(self):
+        body = review.render_comment(result(), REPO).replace("- [ ] Accept", "- [x] Accept", 1)
+        source = FakeGitHub([bot_comment(body)])
+        github = review.DryRunGitHub(source)
+        failed = {**result(), "status": "incomplete", "error": "Safe failure"}
+        self.assertFalse(review.publish(failed, REPO, 1911, HEAD, BASE, REVIEW_DIFF, github))
+        self.assertEqual(source.mutations(), [])
+        self.assertIn('"accepted": 1', github.summary())
+        self.assertIn(review.WARNING_START, github.bodies[0])
+
+
+class StatefulRenderingTests(unittest.TestCase):
+    def accepted_records(self):
+        body = review.render_comment(result(), REPO).replace("- [ ] Accept", "- [x] Accept", 1)
+        records = review.parse_comment_state([body])
+        self.assertEqual(records[0]["state"], "accepted")
+        return records
+
+    def test_acceptance_follows_unchanged_decision_across_wording_and_line_movement(self):
+        prior = self.accepted_records()
+        data = result()
+        data["head_sha"] = "d" * 40
+        data["diff_sha256"] = "e" * 64
+        item = data["decisions"][0]
+        item["title"] = "Native launch command and working directory"
+        item["locations"][0].update(line=30, end_line=32)
+        item.update(prior_ids=[prior[0]["id"]], relationship="unchanged", reason="")
+        body = review.render_comment(data, REPO, prior)
+        current = review.parse_comment_state([body])
+        self.assertIn("- [x] Accepted (carried forward)", body)
+        self.assertEqual(current[0]["id"], prior[0]["id"])
+        self.assertEqual(current[0]["accepted_version"], prior[0]["version"])
+
+    def test_competing_ambiguous_claims_never_inherit_human_acceptance(self):
+        prior = self.accepted_records()
+        data = result()
+        data["decisions"] = [dict(copy.deepcopy(data["decisions"][0]), title=title,
+                                  prior_ids=[prior[0]["id"]], relationship="ambiguous",
+                                  reason="Competing predecessor claims require re-review.")
+                             for title in ("Split A", "Split B")]
+        review.validate_result(data, HEAD, BASE)
+        body = review.render_comment(data, REPO, prior)
+        records = review.parse_comment_state([body])
+        current = [record for record in records if record["state"] != "withdrawn"]
+        self.assertEqual(len(current), 2)
+        self.assertTrue(all(record["state"] == "needs_re_review" for record in current))
+        self.assertTrue(all(record["accepted_version"] is None for record in current))
+        self.assertEqual(len({record["id"] for record in records}), 3)
+        self.assertNotIn("- [x]", body)
+        historical = next(record for record in records if record["state"] == "withdrawn")
+        self.assertEqual(historical["id"], prior[0]["id"])
+        self.assertEqual(historical["accepted_version"], prior[0]["accepted_version"])
+        for relationships in (("unchanged", "unchanged"), ("unchanged", "ambiguous"), ("ambiguous", "unchanged")):
+            bad = copy.deepcopy(data)
+            for item, relationship in zip(bad["decisions"], relationships):
+                item.update(relationship=relationship, reason="Uncertain" if relationship == "ambiguous" else "")
+            with self.subTest(relationships=relationships), self.assertRaisesRegex(ValueError, "invalid reconciliation"):
+                review.validate_result(bad, HEAD, BASE)
+
+    def test_impact_change_reopens_even_if_model_says_unchanged(self):
+        prior = self.accepted_records()
+        data = result()
+        data["decisions"][0].update(impact="breaking", prior_ids=[prior[0]["id"]],
+                                    relationship="unchanged", reason="")
+        body = review.render_comment(data, REPO, prior)
+        current = review.parse_comment_state([body])
+        self.assertIn("Compatibility impact changed", body)
+        self.assertIn("- [ ] Re-review", body)
+        self.assertEqual(current[0]["state"], "needs_re_review")
+        self.assertIsNone(current[0]["accepted_version"])
+
+    def test_material_change_reopens_and_human_can_accept_new_version(self):
+        prior = self.accepted_records()
+        data = result()
+        item = data["decisions"][0]
+        item["compatibility"] = "Existing manifests must migrate."
+        item.update(prior_ids=[prior[0]["id"]], relationship="changed",
+                    reason="Existing manifests now require migration.")
+        body = review.render_comment(data, REPO, prior)
+        self.assertIn("- [ ] Re-review", body)
+        self.assertIn("Why re-review", body)
+        reopened = review.parse_comment_state([body])
+        self.assertEqual(reopened[0]["state"], "needs_re_review")
+        accepted = review.parse_comment_state([body.replace("- [ ] Re-review", "- [x] Re-review", 1)])
+        self.assertEqual(accepted[0]["state"], "accepted")
+        self.assertEqual(accepted[0]["accepted_version"], accepted[0]["version"])
+
+    def test_withdrawn_decision_is_retained_and_cannot_revive_acceptance(self):
+        prior = self.accepted_records()
+        empty = {**result(), "decisions": []}
+        withdrawn_body = review.render_comment(empty, REPO, prior)
+        self.assertIn("Withdrawn decisions (1)", withdrawn_body)
+        withdrawn = review.parse_comment_state([withdrawn_body])
+        self.assertEqual(withdrawn[0]["state"], "withdrawn")
+        returning = result()
+        returning["decisions"][0].update(
+            prior_ids=[withdrawn[0]["id"]], relationship="unchanged", reason="")
+        body = review.render_comment(returning, REPO, withdrawn)
+        self.assertIn("- [ ] Re-review", body)
+        self.assertNotIn("- [x]", body)
+
+    def test_ambiguous_match_never_carries_acceptance_and_keeps_history(self):
+        prior = self.accepted_records()
+        data = result()
+        data["decisions"][0].update(
+            prior_ids=[prior[0]["id"]], relationship="ambiguous",
+            reason="The generated decision could refer to more than one contract version.")
+        body = review.render_comment(data, REPO, prior)
+        records = review.parse_comment_state([body])
+        self.assertIn("- [ ] Re-review", body)
+        self.assertIn("Withdrawn decisions (1)", body)
+        self.assertCountEqual([record["state"] for record in records], ["needs_re_review", "withdrawn"])
+
+    def test_unchecking_an_accepted_decision_revokes_acceptance(self):
+        accepted = self.accepted_records()
+        body = review.render_comment(result(), REPO, accepted)
+        revoked = review.parse_comment_state([body.replace("- [x] Accepted", "- [ ] Accepted", 1)])
+        self.assertEqual(revoked[0]["state"], "pending")
+        self.assertIsNone(revoked[0]["accepted_version"])
+
+    def test_human_checkbox_changes_do_not_change_model_state_fingerprint(self):
+        pending_body = review.render_comment(result(), REPO)
+        accepted_body = pending_body.replace("- [ ] Accept", "- [x] Accept", 1)
+        pending = review.model_prior_state(review.parse_comment_state([pending_body]))
+        accepted = review.model_prior_state(review.parse_comment_state([accepted_body]))
+        self.assertEqual(review.prior_state_digest(pending), review.prior_state_digest(accepted))
+        self.assertNotIn("accepted", json.dumps(accepted).lower())
+
+    def test_legacy_checked_decision_migrates_without_losing_human_acceptance(self):
+        identifier = "f" * 64
+        body = "\n".join([
+            "# API decisions", "", "## Configuration formats and environment", "",
+            f"- [x] Accept **Legacy command** — 🟢 **Additive**. <!-- api-decision:{identifier} -->",
+            "  - **Change:** Add `run.command`.",
+            "  - **Compatibility:** Existing manifests continue to work.",
+            f"  - **Code:** [config.go:10](https://github.com/{REPO}/blob/{HEAD}/config.go#L10)",
+            "", review.COMMENT_MARKER,
+        ])
+        records = review.parse_comment_state([body])
+        self.assertEqual(records[0]["id"], identifier)
+        self.assertEqual(records[0]["state"], "accepted")
+        self.assertEqual(records[0]["decision"]["category"], "config")
+        self.assertEqual(review.model_prior_state(records)["decisions"][0]["state"], "pending")
+        self.assertEqual(records[0]["version"], review.decision_id(records[0]["decision"]))
+        withdrawn_body = review.render_comment({**result(), "decisions": []}, REPO, records)
+        withdrawn = review.parse_comment_state([withdrawn_body])
+        self.assertEqual(withdrawn[0]["id"], identifier)
+        self.assertEqual(withdrawn[0]["state"], "withdrawn")
+        self.assertEqual(withdrawn[0]["accepted_version"], records[0]["version"])
+
+
 class PublicationTests(unittest.TestCase):
     def publish(self, data, github):
-        return review.publish(data, REPO, 1911, HEAD, BASE, github)
+        data = copy.deepcopy(data)
+        comments = [comment for comment in github.comments if review.COMMENT_MARKER in comment.get("body", "")
+                    and comment.get("user", {}).get("login") == "github-actions[bot]"]
+        data["prior_state_sha256"] = review.prior_state_digest(
+            review.model_prior_state(review.authoritative_records(comments)))
+        return review.publish(data, REPO, 1911, HEAD, BASE, REVIEW_DIFF, github)
+
+    def test_complete_result_rejects_a_mismatched_diff_before_github_reads(self):
+        github = FakeGitHub()
+        with self.assertRaisesRegex(ValueError, "diff does not match"):
+            review.publish(result(), REPO, 1911, HEAD, BASE, b"different", github)
+        self.assertEqual(github.calls, [])
 
     def test_bot_comment_updated_and_human_spoof_ignored(self):
         checked = review.render_comment(result(), REPO).replace("- [ ]", "- [x]")
@@ -282,7 +503,10 @@ class PublicationTests(unittest.TestCase):
 
 class MultipartTests(unittest.TestCase):
     def publish(self, data, github):
-        return review.publish(data, REPO, 1911, HEAD, BASE, github)
+        data = copy.deepcopy(data)
+        data["prior_state_sha256"] = review.prior_state_digest(
+            review.model_prior_state(review.authoritative_records(github.comments)))
+        return review.publish(data, REPO, 1911, HEAD, BASE, REVIEW_DIFF, github)
 
     def previous_comments(self, data):
         pages = review.render_continuations(data, REPO)
@@ -308,8 +532,10 @@ class MultipartTests(unittest.TestCase):
         bodies = "\n".join(page["body"] for page in pages)
         self.assertEqual(bodies.count("- [ ] Accept"), 93)
         for item in data["decisions"]:
-            identifier = f"<!-- api-decision:{review.decision_id(item)} -->"
-            self.assertEqual(bodies.count(identifier), 1)
+            self.assertEqual(sum(
+                marker["decision"]["title"] == item["title"]
+                for marker in (review.decode_state_marker(value) for value in review.STATE_MARKER_RE.findall(bodies))
+            ), 1)
             self.assertIn(review.inline(item["change"]), bodies)
             self.assertIn(review.inline(item["compatibility"]), bodies)
             self.assertIn(review.code_link(REPO, data, item["locations"][0]), bodies)
@@ -338,14 +564,14 @@ class MultipartTests(unittest.TestCase):
                      if method == "DELETE" and "/issues/comments/" in path]
         self.assertGreater(min(deletions), root_write)
 
-    def test_mixed_revision_pages_cannot_revive_stale_acceptance(self):
+    def test_acceptance_is_bound_to_decisions_not_revision_markers(self):
         data = large_result()
         comments = self.previous_comments(data)
         old_revision = review.revision_marker({**data, "head_sha": "d" * 40})
         comments[1]["body"] = comments[1]["body"].replace(review.revision_marker(data), old_revision).replace("- [ ]", "- [x]")
         github = MultipartGitHub(comments)
         self.assertTrue(self.publish(data, github))
-        self.assertEqual(sum(comment["body"].count("- [x] Accept") for comment in github.comments), 0)
+        self.assertGreater(sum(comment["body"].count("- [x] Accepted") for comment in github.comments), 0)
 
     def test_missing_old_page_is_already_clean_but_other_cleanup_errors_fail(self):
         data = large_result()
@@ -356,9 +582,7 @@ class MultipartTests(unittest.TestCase):
 
                 def request(method, path, payload=None):
                     if method == "DELETE" and "/issues/comments/" in path:
-                        error = urllib.error.HTTPError(path, status, "simulated deletion failure", None, None)
-                        error.close()
-                        raise error
+                        raise urllib.error.HTTPError(path, status, "simulated deletion failure", None, None)
                     return original_request(method, path, payload)
 
                 with patch.object(github, "request", side_effect=request):

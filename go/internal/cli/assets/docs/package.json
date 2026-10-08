@@ -14,13 +14,13 @@
     "test:docs": "node --test scripts/*.test.mjs"
   },
   "dependencies": {
-    "@next/third-parties": "16.3.5",
+    "@next/third-parties": "16.3.8",
     "@orama/orama": "3.1.18",
     "fumadocs-core": "16.9.0",
     "fumadocs-mdx": "15.0.7",
     "fumadocs-ui": "16.9.0",
     "lucide-react": "1.16.0",
-    "next": "16.3.5",
+    "next": "16.3.8",
     "react": "19.2.6",
     "react-dom": "19.2.6",
     "tailwind-merge": "3.6.0"
@@ -38,6 +38,6 @@
   },
   "overrides": {
     "postcss": "8.5.28",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   }
 }

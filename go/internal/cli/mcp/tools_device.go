@@ -3,6 +3,9 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -13,18 +16,18 @@ import (
 
 func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	listOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("List configured devices and online cloud-enrolled devices from the selected Wendy Cloud auth session by default. Pass scan=true to also scan the local network (3 s). Connect cloud entries with cloud_connect using name and cloud_grpc. Use cloud_discover for offline devices or cloud-side filters. Cloud failures are returned as warnings alongside local devices."),
+		mcpgo.WithDescription("List configured and online cloud devices; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."),
 		mcpgo.WithBoolean("scan", mcpgo.Description("If true, run a live mDNS scan (3 s) in addition to returning configured devices")),
 		mcpgo.WithString("cloud_grpc", mcpgo.Description("Cloud gRPC endpoint to use (optional when a default auth session is selected via 'wendy auth use')")),
-		mcpgo.WithNumber("max_bytes", mcpgo.Description("Maximum output size in bytes before the result is truncated (default 100000)")),
+		mcpgo.WithInteger("max_bytes", mcpgo.Min(1), mcpgo.Max(1000000), mcpgo.DefaultNumber(16384), mcpgo.Description("JSON byte limit; complete devices retained with omitted count")),
 	}
 	listOpts = append(listOpts, readOnly()...)
 	listOpts = append(listOpts, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("device_list", listOpts...), s.handleDeviceList)
 
 	connectOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Connect to a wendy device by address (host:port)"),
-		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Device address, e.g. mydevice.local:50051 or 192.168.1.10:50051")),
+		mcpgo.WithDescription("Connect to a LAN, simulator, or cloud device using its discovery selector."),
+		mcpgo.WithString("device", mcpgo.Required(), mcpgo.Description("device from device_list, a host:port, or vm:name")),
 	}
 	connectOpts = append(connectOpts, mutating()...)
 	connectOpts = append(connectOpts, idempotent()...)
@@ -37,7 +40,7 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	disconnectOpts = append(disconnectOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("device_disconnect", disconnectOpts...), s.handleDeviceDisconnect)
 
-	infoOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Get agent version, OS, CPU architecture, GPU info, feature set, and battery level of the connected device. Use this for battery percentage, charge state, and estimated seconds until empty (discharging) or full (charging). Battery is omitted when the agent has no reading; seconds_remaining is omitted when no estimate is available. Does not require a running ROS 2 app.")}
+	infoOpts := []mcpgo.ToolOption{mcpgo.WithDescription("Get device versions, hardware, storage, and battery percentage/charge state. Missing battery fields mean unavailable readings or estimates. No ROS app required.")}
 	infoOpts = append(infoOpts, readOnly()...)
 	infoOpts = append(infoOpts, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("device_info", infoOpts...), s.handleDeviceInfo)
@@ -53,6 +56,10 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 }
 
 func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	maxBytes, err := ros2Int(req, "max_bytes", 16384, 1, 1000000)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
 	scan := req.GetBool("scan", false)
 
 	// Run cloud discovery alongside the optional LAN scan, so an unreachable
@@ -70,6 +77,7 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 	var devices []map[string]any
 	if s.cfg.DefaultDevice != "" {
 		devices = append(devices, map[string]any{
+			"device":  s.cfg.DefaultDevice,
 			"address": s.cfg.DefaultDevice,
 			"type":    "default",
 			"source":  "config",
@@ -85,9 +93,10 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 					addr = d.IPAddress
 				}
 				if d.Port > 0 {
-					addr = fmt.Sprintf("%s:%d", addr, d.Port)
+					addr = net.JoinHostPort(addr, strconv.Itoa(d.Port))
 				}
 				entry := map[string]any{
+					"device":  addr,
 					"address": addr,
 					"type":    "lan",
 					"source":  "scan",
@@ -105,18 +114,27 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 
 	cloud := <-cloudResults
 	devices = append(devices, cloud.devices...)
-	out := map[string]any{"devices": listOrEmpty(devices)}
+	out := map[string]any{}
+	var warnings []map[string]any
 	if cloud.err != nil {
-		out["warnings"] = []map[string]any{{
+		warnings = append(warnings, map[string]any{
 			"source":  "cloud",
 			"message": fmt.Sprintf("Cloud discovery unavailable: %s", cloud.err),
-		}}
+		})
 	}
-	return okResultBounded(out, intParam(req, "max_bytes", 100000)), nil
+	if s.usbSetupNoticeFn != nil {
+		if msg := s.usbSetupNoticeFn(); msg != "" {
+			warnings = append(warnings, map[string]any{"source": "usb", "message": msg})
+		}
+	}
+	if len(warnings) > 0 {
+		out["warnings"] = warnings
+	}
+	return okRowsBounded("devices", devices, out, maxBytes, len(devices)), nil
 }
 
 func (s *mcpServer) listCloudDevices(ctx context.Context, cloudGRPC string) ([]map[string]any, error) {
-	if len(s.cfg.Auth) == 0 && cloudGRPC == "" {
+	if len(s.currentConfig().Auth) == 0 && cloudGRPC == "" {
 		return nil, nil // Local-only installations do not require cloud login.
 	}
 	auth, err := s.cloudAuthEntry(cloudGRPC)
@@ -125,26 +143,29 @@ func (s *mcpServer) listCloudDevices(ctx context.Context, cloudGRPC string) ([]m
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	assets, err := mcpListCloudAssets(ctx, auth, "", true)
+	devices, err := discoverCloudDevices(ctx, auth, "", true)
 	if err != nil {
 		return nil, err
 	}
-	devices := make([]map[string]any, 0, len(assets))
-	for _, asset := range assets {
-		entry := cloudAssetToMap(asset)
+	for _, entry := range devices {
 		entry["type"] = "cloud"
 		entry["source"] = "cloud"
 		entry["cloud_grpc"] = auth.CloudGRPC
 		entry["online"] = true // ListAssets requested active tunnel broker presence.
-		devices = append(devices, entry)
 	}
 	return devices, nil
 }
 
 func (s *mcpServer) handleDeviceConnect(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	address := stringParam(req, "address")
-	if address == "" {
-		return errResult(errCodeInvalidArgument, "address is required"), nil
+	device, address := stringParam(req, "device"), stringParam(req, "address")
+	if device != "" && address != "" && device != address {
+		return errResult(errCodeInvalidArgument, "device and legacy address must not conflict"), nil
+	}
+	if device != "" {
+		address = device
+	}
+	if strings.TrimSpace(address) == "" {
+		return errResult(errCodeInvalidArgument, "device is required (legacy address is also accepted)"), nil
 	}
 	if err := s.ConnectTo(ctx, address); err != nil {
 		return errResultf(errCodeDeviceUnreachable, "connecting to %s: %s", address, err.Error()), nil
@@ -255,9 +276,15 @@ func (s *mcpServer) handleDeviceSetDefault(_ context.Context, req mcpgo.CallTool
 	if address == "" {
 		return errResult(errCodeInvalidArgument, "address is required"), nil
 	}
-	s.cfg.DefaultDevice = address
-	if err := config.Save(s.cfg); err != nil {
+	// Change only this field of the config as it is on disk now. Saving the
+	// startup snapshot would undo any login, pin or default another wendy
+	// process wrote since this server started.
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.DefaultDevice = address
+		return true, nil
+	}); err != nil {
 		return errResultf(errCodeInternal, "saving config: %s", err.Error()), nil
 	}
+	s.cfg.DefaultDevice = address
 	return okText(fmt.Sprintf("default device set to %s", address)), nil
 }

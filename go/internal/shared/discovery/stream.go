@@ -50,6 +50,9 @@ type LANEvent struct {
 // LANProber verifies a device by talking to its agent. On success the
 // returned device carries refreshed AgentVersion/DeviceType/OS/OSVersion/
 // CPUArchitecture and IsMTLS reflecting the actual connection.
+// It must bound its connection attempts and return when ctx is cancelled.
+// The stream supplies the session context without an additional timeout:
+// the budget needed for each address and credential belongs to the prober.
 type LANProber func(ctx context.Context, dev models.LANDevice) (models.LANDevice, error)
 
 // StreamOptions configures a streaming LAN discovery scan.
@@ -57,6 +60,18 @@ type StreamOptions struct {
 	UseCache bool      // emit cached entries and persist discoveries
 	Prober   LANProber // nil = no probing (mDNS-only confirmation)
 	Exclude  LANFilter // nil = nothing is excluded
+	// OnBackendError, when non-nil, is called at most once, with the platform
+	// mDNS backend's last error, when the session never listened: the backend
+	// was down as the session ended (every restart failed, or it was waiting
+	// to retry) and no attempt had browsed for backendListenedAfter. A backend
+	// that recovered on a retry (an mDNSResponder restart), or that browsed
+	// for a while before failing late in the session, is not reported: the
+	// scan did see the network. Without it, a browse that can never start —
+	// mDNSResponder unreachable from a sandbox, Local Network permission
+	// denied, no multicast socket — looks exactly like an empty network.
+	// Called on the backend goroutine before the session's results are
+	// complete (CollectLAN has not returned yet); it must not block.
+	OnBackendError func(error)
 }
 
 // LANFilter keeps sightings a consumer never wants as device rows out of a
@@ -87,15 +102,19 @@ type LANFilter interface {
 // before closing its event channel — and it may return a non-nil error at any
 // time to have the session restart it (see runBackend).
 var (
-	lanBackendFn      = mdnsStreamBackend       // per-platform mDNS stream
-	cacheLoadFn       = discoverycache.Load     // recently-seen device cache
-	offlineGrace      = 4 * time.Second         // cached & silent → Offline
-	offlineRetryDelay = 30 * time.Second        // one re-probe after Offline
-	probeTimeout      = 1500 * time.Millisecond // per-probe ctx budget
-	probeWorkers      = 4                       // concurrent probes/resolves
-	cacheFlushDelay   = time.Second             // debounce for cache writes
-	backendRetryDelay = 2 * time.Second         // backend died mid-session
-	backendRetries    = 3                       // ...restart attempts before giving up
+	lanBackendFn      = mdnsStreamBackend   // per-platform mDNS stream
+	cacheLoadFn       = discoverycache.Load // recently-seen device cache
+	offlineGrace      = 4 * time.Second     // cached & silent → Offline
+	offlineRetryDelay = 30 * time.Second    // one re-probe after Offline
+	probeWorkers      = 4                   // concurrent probes/resolves
+	cacheFlushDelay   = time.Second         // debounce for cache writes
+	backendRetryDelay = 2 * time.Second     // backend died mid-session
+	backendRetries    = 3                   // ...restart attempts before giving up
+	// backendListenedAfter is how long one backend attempt must browse before
+	// it counts as having listened (see StreamOptions.OnBackendError). A
+	// browse that can't start (sandbox, no Local Network permission, no
+	// multicast socket) fails at once; one that ran this long saw the network.
+	backendListenedAfter = time.Second
 	// probeRetryInterval bounds how often a live device whose probe failed is
 	// re-probed while it keeps announcing itself. The retry is driven by mDNS
 	// re-sightings (a device mid-boot re-announces, and the hashicorp backend
@@ -132,7 +151,7 @@ func StreamLAN(ctx context.Context, opts StreamOptions) <-chan LANEvent {
 	out := make(chan LANEvent, streamEventBuffer)
 	go func() {
 		defer close(out)
-		runLANStream(ctx, opts, out, nil)
+		runLANStream(ctx, opts, out, false)
 	}()
 	return out
 }
@@ -150,41 +169,35 @@ var collectSettle = 500 * time.Millisecond
 // wins.
 //
 // The scan concludes as soon as it safely can: once at least one device has
-// been confirmed, every cached entry's initial probe has concluded, and
+// been confirmed, every known device's current probe has concluded, and
 // collectSettle has passed with no further confirmation — or once timeout
 // elapses, whichever comes first. Settle is deliberately gated on having
-// confirmed *something*: on a cold cache every probe concludes before the
-// session even starts, and arming settle there would conclude an empty scan
-// in collectSettle, long before mDNS has had a chance to answer.
+// confirmed *something*: arming it on an empty cache would conclude an empty
+// scan long before mDNS has had a chance to answer.
 func CollectLAN(ctx context.Context, opts StreamOptions, timeout time.Duration) ([]models.LANDevice, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	out := make(chan LANEvent, streamEventBuffer)
-	probesDone := make(chan struct{})
 	go func() {
 		defer close(out)
-		runLANStream(sessionCtx, opts, out, probesDone)
+		runLANStream(sessionCtx, opts, out, true)
 	}()
 
 	devices := make(map[string]models.LANDevice)
-	probesDoneCh := probesDone
-	probesDoneClosed := false
-
-	var settleTimer *time.Timer
-	var settleC <-chan time.Time
-	armSettle := func() {
-		if settleTimer != nil {
-			settleTimer.Stop()
+	record := func(ev LANEvent) {
+		// A superseded identity is the same device under a stale cache key.
+		if ev.Supersedes != "" {
+			delete(devices, ev.Supersedes)
 		}
-		settleTimer = time.NewTimer(collectSettle)
-		settleC = settleTimer.C
+		key := discoverycache.Key(ev.Device.ID, ev.Device.DisplayName)
+		switch ev.Kind {
+		case LANRetracted:
+			delete(devices, key)
+		case LANFound, LANUpdated:
+			devices[key] = ev.Device
+		}
 	}
-	defer func() {
-		if settleTimer != nil {
-			settleTimer.Stop()
-		}
-	}()
 
 	overall := time.NewTimer(timeout)
 	defer overall.Stop()
@@ -194,7 +207,11 @@ func CollectLAN(ctx context.Context, opts StreamOptions, timeout time.Duration) 
 	// touching the cache or the seam vars it just used.
 	conclude := func(err error) ([]models.LANDevice, error) {
 		cancel()
-		for range out {
+		for ev := range out {
+			record(ev)
+		}
+		if err == nil {
+			err = ctx.Err()
 		}
 		result := make([]models.LANDevice, 0, len(devices))
 		for _, dev := range devices {
@@ -209,39 +226,7 @@ func CollectLAN(ctx context.Context, opts StreamOptions, timeout time.Duration) 
 			if !ok {
 				return conclude(nil)
 			}
-			// A superseded identity is the same physical device under a stale,
-			// hostname-derived key; keeping it would list the device twice.
-			if ev.Supersedes != "" {
-				delete(devices, ev.Supersedes)
-			}
-			key := discoverycache.Key(ev.Device.ID, ev.Device.DisplayName)
-			switch ev.Kind {
-			case LANRetracted:
-				delete(devices, key)
-				// A rejected sighting cannot justify ending an empty scan.
-				// Wait for a real result (or the overall timeout) as we would
-				// on a cold cache that had never confirmed anything.
-				if len(devices) == 0 && settleTimer != nil {
-					settleTimer.Stop()
-					settleC = nil
-				}
-			case LANFound, LANUpdated:
-				devices[key] = ev.Device
-				if probesDoneClosed {
-					armSettle()
-				}
-			}
-		case <-probesDoneCh:
-			probesDoneClosed = true
-			probesDoneCh = nil
-			// Nothing confirmed yet (the common cold-cache case): there is no
-			// quiet period to measure, so hold out for the timeout cap rather
-			// than concluding an empty scan collectSettle from now.
-			if len(devices) > 0 {
-				armSettle()
-			}
-		case <-settleC:
-			return conclude(nil)
+			record(ev)
 		case <-overall.C:
 			return conclude(nil)
 		case <-ctx.Done():
@@ -277,8 +262,8 @@ type lanDeviceState struct {
 	// persisted is when this identity was last written to the cache, bounding
 	// the LastSeen refresh of an otherwise unchanged device.
 	persisted time.Time
-	// probeGen rises whenever a probe is (re)scheduled; a result carrying an
-	// older generation lost its target and is discarded.
+	// probeGen identifies the latest scheduled probe using a session-wide
+	// generation. A mismatched result lost its target and is discarded.
 	probeGen       int
 	offline        bool
 	retryScheduled bool
@@ -302,6 +287,9 @@ type lanStream struct {
 	states map[string]*lanDeviceState
 	cache  *discoverycache.Cache // nil when unavailable or not requested
 	dirty  bool
+	// Generations must remain unique when a state is removed and recreated
+	// under the same key while its old probe is still running.
+	nextProbeGen int
 	// annotator builds the platform refinement applied to live sightings. It
 	// is lazy (sync.OnceValue) because building it shells out on some
 	// platforms — networksetup on darwin, Get-NetAdapter on windows, 0.5–2s —
@@ -319,35 +307,37 @@ type lanStream struct {
 
 	graceElapsed bool
 
-	// pendingProbes tracks the cached identities whose initial probe has not
-	// concluded yet; probesDone closes when the set empties.
-	pendingProbes    map[string]bool
-	probesDone       chan struct{}
-	probesDoneClosed bool
+	// Batch scans settle only while a confirmed row exists and no current
+	// probe is pending. The engine owns both the timer and probe state, so
+	// a new sighting can suspend settling before its probe is scheduled.
+	batch       bool
+	settleTimer *time.Timer
+	settleC     <-chan time.Time
 }
 
-// runLANStream drives one session. probesDone (may be nil) is closed once
-// every cached entry's initial probe has concluded — Task 4's settle gate.
-func runLANStream(ctx context.Context, opts StreamOptions, out chan<- LANEvent, probesDone chan struct{}) {
+// runLANStream drives one session, ending after a quiet period in batch mode.
+func runLANStream(ctx context.Context, opts StreamOptions, out chan<- LANEvent, batch bool) {
+	ctx, cancel := context.WithCancel(ctx)
 	s := &lanStream{
-		ctx:           ctx,
-		opts:          opts,
-		out:           out,
-		states:        make(map[string]*lanDeviceState),
-		emissions:     make(chan MDNSService),
-		results:       make(chan lanProbeResult),
-		retries:       make(chan string, 1),
-		sem:           make(chan struct{}, probeWorkers),
-		pendingProbes: make(map[string]bool),
-		probesDone:    probesDone,
-		annotator:     sync.OnceValue(func() func(*models.LANDevice) { return newLANAnnotator(ctx) }),
+		ctx:       ctx,
+		opts:      opts,
+		out:       out,
+		states:    make(map[string]*lanDeviceState),
+		emissions: make(chan MDNSService),
+		results:   make(chan lanProbeResult),
+		retries:   make(chan string, 1),
+		sem:       make(chan struct{}, probeWorkers),
+		batch:     batch,
+		annotator: sync.OnceValue(func() func(*models.LANDevice) { return newLANAnnotator(ctx) }),
 	}
-	defer s.finish()
+	defer func() {
+		cancel() // Settling must also stop the backend before finish waits.
+		s.finish()
+	}()
 
 	if opts.UseCache {
 		s.emitCached()
 	}
-	s.closeProbesDoneIfIdle()
 
 	s.wg.Add(1)
 	go func() {
@@ -376,6 +366,8 @@ func runLANStream(ctx context.Context, opts StreamOptions, out chan<- LANEvent, 
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.settleC:
+			return
 		case svc := <-s.emissions:
 			s.handleSighting(svc)
 		case res := <-s.results:
@@ -389,6 +381,7 @@ func runLANStream(ctx context.Context, opts StreamOptions, out chan<- LANEvent, 
 		case <-changedC:
 			s.retractExcluded()
 		}
+		s.updateSettle()
 	}
 }
 
@@ -413,10 +406,8 @@ func (s *lanStream) retract(key string) {
 		s.dirty = true
 	}
 	// A probe still in flight lost its target: its result arrives under a key
-	// nobody holds and handleProbeResult discards it. Retired from the settle
-	// gate here as well, so a retraction between scheduling and result cannot
-	// leave a batch scan waiting on it.
-	s.probeConcluded(key)
+	// nobody holds and handleProbeResult discards it. The deleted state also
+	// stops gating settle, even if that probe is still running.
 	s.emit(LANEvent{Kind: LANRetracted, Device: st.dev})
 }
 
@@ -434,13 +425,12 @@ func (s *lanStream) retractExcluded() {
 // probes are awaited (they all abort on ctx, and waiting keeps the seam vars
 // stable for the next session), and anything learned is persisted once.
 func (s *lanStream) finish() {
+	s.stopSettle()
 	for _, t := range s.timers {
 		t.Stop()
 	}
 	s.wg.Wait()
 	s.flush()
-	s.pendingProbes = nil
-	s.closeProbesDoneIfIdle()
 }
 
 // emitCached loads the device cache and replays every fresh entry, scheduling
@@ -477,7 +467,6 @@ func (s *lanStream) emitCached() {
 		s.states[key] = st
 		s.emit(LANEvent{Kind: LANCached, Device: st.dev})
 		if s.opts.Prober != nil {
-			s.pendingProbes[key] = true
 			s.scheduleProbe(key, st)
 		}
 	}
@@ -494,20 +483,37 @@ func (s *lanStream) runBackend() {
 		case <-s.ctx.Done():
 		}
 	}
+	listened := false // some attempt browsed for backendListenedAfter
 	for attempt := 0; ; attempt++ {
+		start := time.Now()
 		err := lanBackendFn(s.ctx, wendyServiceType, emit)
 		if err == nil || s.ctx.Err() != nil {
-			return
+			return // browsed until the session ended (or stopped cleanly)
+		}
+		if time.Since(start) >= backendListenedAfter {
+			listened = true
 		}
 		if attempt >= backendRetries {
 			log.Printf("discovery: LAN stream backend stopped: %v", err)
+			s.reportNeverListened(listened, err)
 			return
 		}
 		select {
 		case <-time.After(backendRetryDelay):
 		case <-s.ctx.Done():
+			// The session ended with the backend down, waiting to retry.
+			s.reportNeverListened(listened, err)
 			return
 		}
+	}
+}
+
+// reportNeverListened tells the consumer, if it asked, that the session is
+// ending without the mDNS backend ever having browsed — unless it did
+// (listened). See StreamOptions.OnBackendError.
+func (s *lanStream) reportNeverListened(listened bool, err error) {
+	if !listened && s.opts.OnBackendError != nil {
+		s.opts.OnBackendError(err)
 	}
 }
 
@@ -642,11 +648,10 @@ func (s *lanStream) supersedeHostDerived(key string, dev models.LANDevice) strin
 		}
 		if _, exists := s.states[key]; !exists {
 			// Any probe still in flight was booked under oldKey and can no
-			// longer be delivered (handleProbeResult retires it), so this
+			// longer be delivered (handleProbeResult discards it), so this
 			// state is no longer probing; handleSighting schedules a fresh
 			// probe under the new key.
 			st.probing = false
-			st.probeGen++
 			s.states[key] = st
 		}
 		return oldKey
@@ -681,10 +686,8 @@ func (s *lanStream) annotate(dev *models.LANDevice) {
 func (s *lanStream) handleProbeResult(res lanProbeResult) {
 	st, known := s.states[res.key]
 	if !known {
-		// The identity is gone (superseded by the device's real TXT id), so
-		// nothing will ever answer under this key: retire it from the settle
-		// gate or a batch scan would wait out its whole timeout.
-		s.probeConcluded(res.key)
+		// The identity was retracted or superseded. Its former probe no
+		// longer gates settle, and cannot update any current row.
 		return
 	}
 	if res.gen != st.probeGen {
@@ -693,7 +696,6 @@ func (s *lanStream) handleProbeResult(res lanProbeResult) {
 	}
 	st.probing = false
 	st.probeEnded = time.Now()
-	defer s.probeConcluded(res.key)
 
 	if res.err != nil {
 		st.probeFailed = true
@@ -747,8 +749,7 @@ func (s *lanStream) handleGrace() {
 	}
 }
 
-// markOffline emits the offline marker for a cached row and arms its single
-// re-probe. The row stays listed and selectable.
+// markOffline reports a failed cache verification and arms its single re-probe.
 func (s *lanStream) markOffline(key string, st *lanDeviceState) {
 	if st.offline {
 		return
@@ -784,7 +785,8 @@ func (s *lanStream) scheduleProbe(key string, st *lanDeviceState) {
 	if prober == nil {
 		return
 	}
-	st.probeGen++
+	s.nextProbeGen++
+	st.probeGen = s.nextProbeGen
 	st.probing = true
 	gen, dev := st.probeGen, st.dev
 
@@ -801,9 +803,11 @@ func (s *lanStream) scheduleProbe(key string, st *lanDeviceState) {
 		// Marked so the prober's dial path cannot fall back to another mDNS
 		// browse, which would start a fresh discovery session and probe from
 		// there — see WithinProbe.
-		probeCtx, cancel := context.WithTimeout(WithinProbe(s.ctx), probeTimeout)
-		defer cancel()
-		probed, err := prober(probeCtx, dev)
+		// The prober bounds its individual attempts. A fixed outer deadline
+		// here used to cut off slow mTLS handshakes and later addresses or org
+		// credentials before their own budgets elapsed. Session cancellation
+		// (including CollectLAN's overall scan limit) still stops the work.
+		probed, err := prober(WithinProbe(s.ctx), dev)
 
 		select {
 		case s.results <- lanProbeResult{key: key, gen: gen, dev: probed, err: err}:
@@ -812,27 +816,46 @@ func (s *lanStream) scheduleProbe(key string, st *lanDeviceState) {
 	}()
 }
 
-// probeConcluded retires a cached identity's initial probe from the settle
-// gate. Re-probes and probes of newly discovered devices are not tracked:
-// the gate is only about the cache rows the session started with.
-func (s *lanStream) probeConcluded(key string) {
-	if !s.pendingProbes[key] {
+// updateSettle runs after each engine event, using the current probe state
+// (including queued probes and retargets) rather than a one-shot cache gate.
+func (s *lanStream) updateSettle() {
+	if !s.batch {
 		return
 	}
-	delete(s.pendingProbes, key)
-	s.closeProbesDoneIfIdle()
+	confirmed := false
+	for _, st := range s.states {
+		if st.probing {
+			s.stopSettle()
+			return
+		}
+		confirmed = confirmed || st.confirmed
+	}
+	if !confirmed {
+		s.stopSettle()
+		return
+	}
+	if s.settleC == nil {
+		if s.settleTimer == nil {
+			s.settleTimer = time.NewTimer(collectSettle)
+		} else {
+			s.settleTimer.Reset(collectSettle)
+		}
+		s.settleC = s.settleTimer.C
+	}
 }
 
-func (s *lanStream) closeProbesDoneIfIdle() {
-	if s.probesDone == nil || s.probesDoneClosed || len(s.pendingProbes) > 0 {
-		return
+func (s *lanStream) stopSettle() {
+	if s.settleTimer != nil {
+		s.settleTimer.Stop()
 	}
-	close(s.probesDone)
-	s.probesDoneClosed = true
+	s.settleC = nil
 }
 
 // emit hands one event to the consumer, abandoning it if the session is over.
 func (s *lanStream) emit(ev LANEvent) {
+	if ev.Kind == LANFound || ev.Kind == LANUpdated {
+		s.stopSettle() // A confirmation restarts the quiet period.
+	}
 	select {
 	case s.out <- ev:
 	case <-s.ctx.Done():

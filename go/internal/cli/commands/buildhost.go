@@ -588,7 +588,7 @@ func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, a
 	}
 	prov, ok := resp.GetResponse().(*agentpb.IsProvisionedResponse_Provisioned)
 	if !ok {
-		return nil, fmt.Errorf("the target device is not provisioned, so a build host cannot reach its registry; provision it or omit --build-host")
+		return nil, fmt.Errorf("the target device is not enrolled, so a build host cannot reach its registry; run 'wendy device enroll' for the target or omit --build-host")
 	}
 	agentOS, err := targetAgentOS(ctx, target)
 	if err != nil {

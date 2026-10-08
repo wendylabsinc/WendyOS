@@ -16,6 +16,7 @@ const (
 	RobotProfileVersion   = 1
 	RobotKindGo2          = "go2"
 	RobotKindG1           = "g1"
+	RobotKindRosmasterR2  = "rosmaster-r2"
 	RobotSandboxGuestPort = 8890
 	maxRobotProfileBytes  = 64 << 10
 )
@@ -72,7 +73,7 @@ func (p RobotProfile) Validate() error {
 	switch {
 	case p.Version != RobotProfileVersion:
 		return fmt.Errorf("unsupported robot profile version %d", p.Version)
-	case p.Kind != RobotKindGo2 && p.Kind != RobotKindG1:
+	case p.Kind != RobotKindGo2 && p.Kind != RobotKindG1 && p.Kind != RobotKindRosmasterR2:
 		return fmt.Errorf("unsupported robot kind %q", p.Kind)
 	case !robotDigestPattern.MatchString(p.SourceDigest):
 		return fmt.Errorf("robot sourceDigest must be a lowercase sha256 digest")

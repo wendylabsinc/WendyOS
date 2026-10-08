@@ -47,7 +47,7 @@ func newCloudPingCmd() *cobra.Command {
 		Long:  "Measures agent round-trip time through Wendy Cloud. PKI sessions use the agent version RPC over an authorized tunnel; legacy sessions use datagram echoes. A reply proves the device's agent is up and measures true end-to-end round-trip time. No ICMP sockets or privileges are involved.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cloudPingCommand(cmd.Context(), cloudGRPC, deviceName, brokerURL, count, interval)
+			return cloudPingCommandFn(cmd.Context(), cloudGRPC, effectiveDeviceName(deviceName), brokerURL, count, interval)
 		},
 	}
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint (optional when a default session is set via 'wendy auth use')")
@@ -57,6 +57,12 @@ func newCloudPingCmd() *cobra.Command {
 	cmd.Flags().DurationVarP(&interval, "interval", "i", time.Second, "Time between echoes")
 	return cmd
 }
+
+// cloudPingCommandFn is a seam over cloudPingCommand for tests that need to
+// observe the device name `wendy cloud ping`'s RunE resolves — pickAuthEntry
+// and pickCloudDiscoveryDevice below need real config and network access, so a
+// test cannot reach past them without one.
+var cloudPingCommandFn = cloudPingCommand
 
 func cloudPingCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL string, count int, interval time.Duration) error {
 	ctx, cancel := context.WithCancel(ctx)

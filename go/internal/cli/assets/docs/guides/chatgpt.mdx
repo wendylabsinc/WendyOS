@@ -1,0 +1,112 @@
+---
+title: Connect Wendy to ChatGPT
+description: Add Wendy to your personal marketplace, install its local MCP plugin, and use ChatGPT with your devices and simulators.
+---
+
+The Wendy plugin brings device inspection, local simulators, and app development
+into ChatGPT Desktop. It includes the local MCP gateway, the device workspace,
+and Wendy's bundled skills. Local devices and simulators do not require a Wendy
+Cloud account.
+
+## Add Wendy to your marketplace
+
+Install the [Wendy CLI](/docs/#1-install-the-wendy-cli) on the computer where you
+use ChatGPT Desktop, then run:
+
+```sh
+wendy mcp setup chatgpt
+```
+
+This adds Wendy to your personal marketplace. You can start before connecting
+hardware or creating a simulator. Setup preserves your existing marketplace
+entries and previously granted Wendy permissions.
+
+**Finish the installation in ChatGPT:**
+
+1. **Quit and reopen ChatGPT Desktop.** Closing a window is not enough.
+2. **Open Plugins and select Personal**, your personal marketplace.
+3. **Open Wendy and select the plus button to install it.**
+4. **Start a new conversation with Wendy enabled.** Ask:
+
+   > Help me get started with my first device or a simulator.
+
+ChatGPT launches the local MCP gateway when you use the plugin. The setup command
+makes the plugin available in your marketplace; the installation step enables it
+in ChatGPT. This local connection is for Desktop. ChatGPT on the web or mobile
+needs a separately registered hosted connection.
+
+## Connect a device or enable simulators
+
+Default setup enables the device workspace and preferences. Choose the access
+needed for your task, run setup again, then restart the Wendy connection and
+start a new conversation.
+
+For a physical device, find its selector with `wendy discover --json`, then pass
+the selector to setup. For example:
+
+```sh
+wendy mcp setup chatgpt --device workshop.local:50052
+```
+
+Repeat `--device` for multiple devices. Devices added this way allow inspection
+and installed-app listings. Physical-device camera access and app control require
+separate permissions in the gateway policy.
+
+For local simulators:
+
+```sh
+wendy mcp setup chatgpt --simulators
+```
+
+Open Wendy, choose **Simulators**, then select or create a simulator. Use
+**View simulation** to open a supported robot scene. Setup itself does not
+create or boot a simulator. Simulator access permits lifecycle management,
+simulator app control, and camera access; it does not extend those permissions
+to physical devices.
+
+To let ChatGPT read and edit a project and deploy it to permitted simulators:
+
+```sh
+wendy mcp setup chatgpt --simulators --workspace /path/to/project
+```
+
+Use an existing project directory. For deployment to a physical device, include
+its `--device` selector with `--workspace`. Re-run setup with the same workspace
+when adding deployment targets.
+
+## Optional development and installation tools
+
+Use `--host-operations` for local installation planning and jobs:
+
+```sh
+wendy mcp setup chatgpt --host-operations
+```
+
+Disk erases still require authorization for the exact target.
+
+The device workspace already uses the scoped local MCP gateway. Add
+`--developer-tools` only when you also want the broader developer MCP server:
+
+```sh
+wendy mcp setup chatgpt --developer-tools
+```
+
+That additional server has its own target and permissions. It does not inherit
+the workspace's restrictions. Disable it with `--developer-tools=false`.
+
+## If Wendy does not appear
+
+- Check `wendy mcp setup chatgpt --help`. If the command is missing, update to a
+  Wendy CLI version that includes ChatGPT setup.
+- Run setup on the same computer and user account as ChatGPT Desktop.
+- Quit ChatGPT completely and reopen it, then check **Plugins → Personal**.
+- After updating Wendy, restart its MCP connection, refresh its tools, and start
+  a new conversation so ChatGPT loads the current tool catalog and view.
+
+For configuration troubleshooting, setup stores its local policy at
+`~/.wendy/chatgpt/gateway.json`, the plugin at
+`~/.codex/plugins/sources/wendy-robots`, and the personal marketplace entry in
+`~/.agents/plugins/marketplace.json`.
+
+See [OpenAI's plugin installation guide](https://learn.chatgpt.com/docs/plugins)
+for the Plugins Directory and marketplace interface.

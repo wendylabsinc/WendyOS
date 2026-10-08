@@ -8,12 +8,57 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/ipcam"
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 )
+
+const maxCameraErrorDetail = 4096
+
+// gstCameraPipelineError keeps the capture diagnostic available to remote callers.
+// Device paths and element names identify what failed; this local-camera pipeline
+// contains no credentials. Redact URL credentials defensively and keep the status
+// bounded and safe to print in a terminal.
+func gstCameraPipelineError(devicePath, encoder, stderr string, waitErr, runErr error) error {
+	if runErr == nil {
+		if waitErr == nil || !exitedOnError(waitErr) {
+			return nil
+		}
+		if isBusyStderr(stderr, devicePath) {
+			return errCameraInUse(devicePath)
+		}
+		runErr = status.Error(codes.Internal, "GStreamer pipeline failed")
+	}
+
+	msg := fmt.Sprintf("%s for camera %s using %s", status.Convert(runErr).Message(), devicePath, encoder)
+	if exitedOnError(waitErr) {
+		msg += ": " + waitErr.Error()
+	}
+	detail := ipcam.RedactText(stderr)
+	detail = strings.Join(strings.Fields(detail), " ")
+	detail = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, detail)
+	if len(detail) > maxCameraErrorDetail {
+		// Do not cut a UTF-8 character in half in a protobuf string.
+		detail = strings.ToValidUTF8(detail[:maxCameraErrorDetail], "") + "... [truncated]"
+	}
+	if detail != "" {
+		msg += ": " + detail
+	} else {
+		msg += "; GStreamer produced no error output"
+	}
+	msg += ". Run `wendy device logs --tail 50` for agent logs."
+	return status.Error(status.Code(runErr), msg)
+}
 
 // reasonCameraInUse is the ErrorInfo reason for a camera another process holds AND that
 // could not be read through the PipeWire graph either -- reaching it means sharing was

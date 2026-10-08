@@ -130,14 +130,16 @@ var planResolveDockerfile = resolveDockerfile
 
 // maxConcurrentPlans bounds how many services are planned at once. Planning is
 // local work — a build-file resolve (a Stagefile compile, for a Stagefile
-// project) plus a full walk-and-hash of the build context. Its higher limit
-// keeps planning fast without letting a very large group open every context at
-// once.
+// project) plus, for a service with digest-pinned bases, a full walk-and-hash
+// of the build context. Its higher limit keeps planning fast without letting a
+// very large group open every context at once.
 const maxConcurrentPlans = 8
 
 // servicePlan is the per-service work that has to happen before we can decide
 // whether a service's build+push can be skipped: which build file it builds
-// from, and the hash of everything that could change its image.
+// from, and the hash of everything that could change its image. inputHash is
+// empty when contentPinned is false: such a service is never skipped, so its
+// context is not hashed.
 type servicePlan struct {
 	dockerfile    string
 	inputHash     string
@@ -151,7 +153,8 @@ type servicePlan struct {
 // digest resolution, codegen, two file writes) and hashing the build context
 // walks and reads every file in it. Running them one service at a time put that
 // cost on the critical path before the first build even started, and it scaled
-// with the size of the group.
+// with the size of the group. Only a service whose bases are digest-pinned is
+// hashed (see pinnedBuildInputHash).
 //
 // A service whose resolve or hash fails is simply absent from the result — the
 // same outcome the serial loop produced by `continue`ing. Callers read a missing
@@ -174,11 +177,9 @@ func computeServicePlans(cwd, platform, backend, gpuArch string, serviceEnvs map
 			if err != nil {
 				return
 			}
-			hash, err := computeBuildInputHash(contextDir, dockerfile, platform, backend, buildArgs, serviceEnvs[name])
-			if err != nil {
-				return
-			}
-			contentPinned, err := dockerfileBasesContentPinned(contextDir, dockerfile)
+			// An unpinned service keeps its plan (the build reuses its resolved
+			// build file) but is never hashed: it can never be skipped.
+			hash, contentPinned, err := pinnedBuildInputHash(contextDir, dockerfile, platform, backend, buildArgs, serviceEnvs[name])
 			if err != nil {
 				return
 			}
@@ -486,6 +487,9 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 
 	// Build all service images in parallel, then create and start containers.
+	if len(skip) < len(services) {
+		noteEmulatedBuild(platform, false)
+	}
 	failed, preparedContent, buildErr := buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)
 	if buildErr != nil {
 		return buildErr
@@ -598,6 +602,11 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	// namespace join is resolved at container create time against the
 	// primary's running task, so the primary must be started before the
 	// next service is created.
+	// A partial deployment returns non-zero. Do not emit a complete detached
+	// success result for the group after starting only its healthy subset.
+	if partialErr != nil {
+		opts.detachedOutput = false
+	}
 	if err := startAndStreamServices(ctx, conn, appCfg.AppID, ordered, preservedLifecycle, opts, createService, svcCfgs, svcLifecycleCfgs, appLevelCfg); err != nil {
 		return err
 	}
@@ -705,7 +714,7 @@ func buildServicesParallelCore(
 	sem := make(chan struct{}, concurrency)
 
 	var prog *tea.Program
-	if !quietBuild && isInteractiveTerminal() {
+	if !quietBuild && isInteractiveTerminal() && !detachedJSONRun(ctx) {
 		title := fmt.Sprintf("Building %d service(s)...", len(names))
 		m := tui.NewMultiSpinner(title, names)
 		prog = tui.NewProgressProgram(m)
@@ -770,7 +779,7 @@ func buildServicesParallelCore(
 			} else if quietBuild {
 				buildOut = &logBuf
 			} else {
-				buildOut = os.Stdout
+				buildOut = runProgressWriter(ctx)
 			}
 			var logOutW io.Writer = &logBuf
 			if prog == nil && !quietBuild {
@@ -1183,16 +1192,20 @@ func startAndStreamServices(ctx context.Context, conn *grpcclient.AgentConnectio
 			if err != nil {
 				return fmt.Errorf("starting service %s: %w", name, err)
 			}
-			if _, err := stream.Recv(); err != nil && err != io.EOF {
+			if err := awaitStarted(stream); err != nil {
 				return fmt.Errorf("waiting for service %s to start: %w", name, err)
 			}
 		}
 		cliLogln("App group %s running in detached mode.", appID)
-		// No host-side lifecycle work: detached runs do not wait for readiness,
-		// announce the app URL, or fire host postStart hooks — see
+		// Detached runs report endpoints without waiting for readiness
+		// or firing host postStart hooks — see
 		// runPostStartIfReady's doc comment (WDY-2041). The agent-side hooks
 		// attached to the start RPCs above still run on the device.
-		return nil
+		configs := []*appconfig.AppConfig{appLevelCfg}
+		for _, name := range ordered {
+			configs = append(configs, svcLifecycleCfgs[name])
+		}
+		return opts.reportDetachedRun(ctx, conn, appID, configs...)
 	}
 
 	if opts.isWatch() {

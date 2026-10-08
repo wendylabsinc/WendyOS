@@ -70,7 +70,7 @@ done
 
 # sensor_service.proto (v2) imports wendy/lite/sensorlink.proto; map that
 # import to the existing sensorlinkpb package so the v2 service reuses the
-# shared SensorManifest/SensorFrame types instead of duplicating them.
+# shared SensorManifest/SensorData types instead of duplicating them.
 SENSORLINK_PKG="$MODULE/go/proto/gen/sensorlinkpb"
 V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"
 V2_AGENT_M_OPTS="$V2_AGENT_M_OPTS --go-grpc_opt=Mwendy/lite/sensorlink.proto=${SENSORLINK_PKG}"
@@ -133,8 +133,17 @@ done
 # wire contract until the fleet has crossed over (WDY-2824). Paths match
 # service-protos exactly so a re-copy is a plain cp and the imports need no
 # rewriting -- DeviceEnrollmentService included, Cloud-owned though it is.
+#
+# Pin (WDY-3458 round): wendycloud/v2/*.proto and wendy/options.proto are
+# service-protos master 09097e83 (merged #91); device_enrollment.proto is cloud #741 head
+# 2c0ca481 (cloud-proto/device_enrollment.proto). Re-pin: copy those files from
+# the new heads with `git show <sha>:<path>`, run `make proto`, and update the
+# SHAs here. wendy/options.proto (the signed_request method option) generates
+# into cloudpbv2 too, so the option and SignedRequest live in one Go package.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
+    "wendy/options.proto"
+    "wendycloud/v2/signed_request.proto"
     "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/apps.proto"
     "wendycloud/v2/assets.proto"
@@ -225,17 +234,27 @@ protoc \
     --go-grpc_opt=module="$SYSTEM_PKG" \
     ${SYSTEM_PROTOS[@]}
 
+# wendy_com_msg.proto imports sensorlink.proto by bare filename, for the same
+# reason the tunnel protos do: in the wendy-lite project the two sit side by
+# side in one directory, and the file is shared with that project verbatim. So
+# proto_path points inside wendy/lite here too. sensorlink.proto is an input
+# only -- its Go code comes from the sensorlinkpb generation further down,
+# which the agent's v2 sensor service shares. The wendy-lite project generates
+# it into a sensorlinkpb package of its own under the same import path, so the
+# client code shared with that project names these types identically on both
+# sides.
 echo "Generating Wendy Lite protos..."
 LITE_PKG="$MODULE/go/proto/gen/litepb"
 mkdir -p "$GEN_DIR/litepb"
 protoc \
-    --proto_path="$PROTO_DIR" \
+    --proto_path="$PROTO_DIR/wendy/lite" \
     --go_out="$GEN_DIR/litepb" \
     --go_opt=module="$LITE_PKG" \
-    --go_opt=Mwendy/lite/wendy_com_msg.proto="$LITE_PKG" \
-    --go_opt=Mwendy/lite/wendy_conf.proto="$LITE_PKG" \
-    wendy/lite/wendy_com_msg.proto \
-    wendy/lite/wendy_conf.proto
+    --go_opt=Mwendy_com_msg.proto="$LITE_PKG" \
+    --go_opt=Mwendy_conf.proto="$LITE_PKG" \
+    --go_opt=Msensorlink.proto="$SENSORLINK_PKG" \
+    wendy_com_msg.proto \
+    wendy_conf.proto
 
 # The tunnel protos import each other by bare filename so they can be moved
 # to another project as-is; proto_path points inside wendy/lite accordingly.
@@ -262,6 +281,7 @@ protoc \
     --proto_path="$PROTO_DIR" \
     --go_out="$GEN_DIR/sensorlinkpb" \
     --go_opt=module="$SENSORLINK_PKG" \
+    --go_opt=Mwendy/lite/sensorlink.proto="$SENSORLINK_PKG" \
     "$PROTO_DIR/wendy/lite/sensorlink.proto"
 
 echo "Proto generation complete!"

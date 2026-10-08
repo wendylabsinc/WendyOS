@@ -24,6 +24,12 @@ func resolveVMImage(info *imageInfo) (string, func(), error) {
 }
 
 func resolveVMImageIn(dir string, info *imageInfo) (string, func(), error) {
+	return resolveVMImageWith(dir, info, downloadVMImage, verifyVMImage)
+}
+
+// The MCP path supplies cancellable, noninteractive download and verification
+// functions without changing the CLI's process-wide test seams.
+func resolveVMImageWith(dir string, info *imageInfo, download func(*imageInfo) (string, error), verify func(string, string) error) (string, func(), error) {
 	artifact := *info
 	if info.ZstURL != "" {
 		artifact.DownloadURL, artifact.Checksum, artifact.ImageSize = info.ZstURL, info.ZstChecksum, 0
@@ -36,10 +42,10 @@ func resolveVMImageIn(dir string, info *imageInfo) (string, func(), error) {
 		}
 	}
 	cached := filepath.Join(dir, "vm-sha256-"+digest+".image")
-	if digest != "" && verifyVMImage(cached, digest) == nil {
+	if digest != "" && verify(cached, digest) == nil {
 		return cached, func() {}, nil
 	}
-	tmp, err := downloadVMImage(&artifact)
+	tmp, err := download(&artifact)
 	if err != nil {
 		return "", nil, err
 	}
@@ -47,14 +53,14 @@ func resolveVMImageIn(dir string, info *imageInfo) (string, func(), error) {
 	if digest == "" {
 		return tmp, cleanup, nil
 	}
-	if err := verifyVMImage(tmp, digest); err != nil {
+	if err := verify(tmp, digest); err != nil {
 		cleanup()
 		return "", nil, err
 	}
 	// Never remove an old cache file before the new download is verified.
 	// A concurrent writer has the same digest and therefore identical bytes.
 	if err := os.Rename(tmp, cached); err != nil {
-		if verifyVMImage(cached, digest) == nil {
+		if verify(cached, digest) == nil {
 			cleanup()
 			return cached, func() {}, nil
 		}

@@ -441,24 +441,26 @@ func writeTopPlainSnapshot(w io.Writer, prev, cur topSample, containers []*agent
 
 func newTopCmd() *cobra.Command {
 	var interval time.Duration
+	var readOnly bool
 	cmd := &cobra.Command{
 		Use:   "top",
 		Short: "Live CPU, memory, disk, GPU, and temperature for the device and its containers",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			conn, err := connectToAgent(ctx)
+			conn, err := connectToAgent(ctx, monitoringOptions(readOnly)...)
 			if err != nil {
 				return err
 			}
 			defer conn.Close()
 
-			if jsonOutput || !isInteractiveTerminal() {
+			if readOnly || jsonOutput || !isInteractiveTerminal() {
 				return runTopSnapshot(ctx, conn, jsonOutput)
 			}
 			return runTopDashboard(ctx, conn, interval)
 		},
 	}
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "Refresh interval for the live view")
+	cmd.Flags().BoolVar(&readOnly, "read-only", false, "Print a snapshot without starting VMs or managing updates")
 	return cmd
 }
 

@@ -19,8 +19,8 @@ func TestServerSendsManifestThenFrames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	opts := sim.Options{
-		Manifest: &sensorlinkpb.SensorManifest{DeviceAssetId: 99, Sensors: []*sensorlinkpb.SensorDescriptor{{
-			ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0",
+		Manifest: &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{
+			ChannelId: 1, Name: "cam0",
 			Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4, Fps: 10}},
 		}}},
 		Frames:        [][]byte{[]byte("frame-a"), []byte("frame-b")},
@@ -38,7 +38,7 @@ func TestServerSendsManifestThenFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
-	if env.GetManifest().GetDeviceAssetId() != 99 {
+	if len(env.GetManifest().GetSensors()) != 1 {
 		t.Fatalf("bad manifest: %+v", env.GetManifest())
 	}
 	if err := sensorlink.WriteMessage(conn, &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Subscribe{Subscribe: &sensorlinkpb.Subscribe{ChannelId: []uint32{1}}}}); err != nil {
@@ -48,8 +48,9 @@ func TestServerSendsManifestThenFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read frame: %v", err)
 	}
-	if f.GetFrame().ChannelId != 1 || len(f.GetFrame().Payload) == 0 {
-		t.Fatalf("bad frame: %+v", f.GetFrame())
+	d := f.GetData()
+	if d.GetChannelId() != 1 || len(d.GetPayload()) == 0 || d.GetChunkSeq() != 0 || d.GetFlags()&sensorlink.FlagLastChunk == 0 {
+		t.Fatalf("bad frame: %+v", d)
 	}
 }
 
@@ -61,8 +62,8 @@ func TestServerWithEmptyFramesNosPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	opts := sim.Options{
-		Manifest: &sensorlinkpb.SensorManifest{DeviceAssetId: 99, Sensors: []*sensorlinkpb.SensorDescriptor{{
-			ChannelId: 1, Kind: sensorlinkpb.SensorDescriptor_CAMERA, Name: "cam0",
+		Manifest: &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{
+			ChannelId: 1, Name: "cam0",
 			Format: &sensorlinkpb.SensorDescriptor_Video{Video: &sensorlinkpb.VideoFormat{Codec: sensorlinkpb.VideoFormat_MJPEG, Width: 4, Height: 4, Fps: 10}},
 		}}},
 		Frames:        [][]byte{}, // empty frames
@@ -80,7 +81,7 @@ func TestServerWithEmptyFramesNosPanic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
-	if env.GetManifest().GetDeviceAssetId() != 99 {
+	if len(env.GetManifest().GetSensors()) != 1 {
 		t.Fatalf("bad manifest: %+v", env.GetManifest())
 	}
 	if err := sensorlink.WriteMessage(conn, &sensorlinkpb.Envelope{Msg: &sensorlinkpb.Envelope_Subscribe{Subscribe: &sensorlinkpb.Subscribe{ChannelId: []uint32{1}}}}); err != nil {

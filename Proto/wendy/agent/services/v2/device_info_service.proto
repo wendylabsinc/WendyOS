@@ -51,6 +51,32 @@ message GetDeviceInfoResponse {
     // reached over FastRPC). Only populated when has_npu is true; empty when the
     // vendor's runtime is unrecognized, or on agents predating this field.
     repeated string npu_backends = 22;
+    // Board model from /proc/device-tree/model (e.g. "NVIDIA Jetson AGX Orin
+    // Developer Kit"). May be empty: hosts without a device tree (x86, macOS)
+    // and agents predating this field.
+    optional string board_model = 23;
+    // Device-tree compatible strings from /proc/device-tree/compatible, most
+    // specific first; the last entry names the SoC (e.g. "nvidia,tegra264" on
+    // Jetson Thor). May be empty, as board_model.
+    repeated string soc_compatible = 24;
+    // Board serial number from /proc/device-tree/serial-number. May be empty:
+    // many boards do not publish one.
+    optional string serial_number = 25;
+    // Running kernel release, from /proc/sys/kernel/osrelease (uname -r). May
+    // be empty on non-Linux hosts.
+    optional string kernel_version = 26;
+    // Seconds since boot, from /proc/uptime. May be empty on non-Linux hosts.
+    optional uint64 uptime_seconds = 27;
+    // MAC address (aa:bb:cc:dd:ee:ff) of the first up, non-virtual interface
+    // with a routable address. May be empty when no such interface exists.
+    optional string primary_mac = 28;
+    // Routable IPv4/IPv6 addresses of every up, non-virtual interface, without
+    // a prefix suffix. May be empty.
+    repeated string ip_addresses = 29;
+    // Raw L4T version ("38.2.1") parsed from /etc/nv_tegra_release, unmapped,
+    // so a reader need not rely on the agent's L4T-to-JetPack table. May be
+    // empty: non-Jetson hosts and L4T releases without that file.
+    optional string l4t_version = 30;
 }
 
 // Usage information for a single mounted filesystem.

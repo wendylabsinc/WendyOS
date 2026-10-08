@@ -54,7 +54,7 @@ On GPU-capable devices, the following GPU fields are included. Each is omitted f
 | `gpuVendor` | `GPU:` | GPU vendor (e.g. `nvidia`, `qualcomm`); shown as `unknown` in human-readable output when a GPU is present but the vendor is unreported. |
 | `jetpackVersion` | `JetPack:` | JetPack/L4T version string (Jetson only). |
 | `cudaVersion` | `CUDA:` | CUDA toolkit version (e.g. `12.6`). |
-| `gpuArch` | `GPU Arch:` | GPU architecture identifier. Format is vendor-specific (e.g. `sm_87` for NVIDIA, `a623` for a Qualcomm Adreno). |
+| `gpuArch` | `GPU Arch:` | GPU architecture identifier. Format is vendor-specific (e.g. `sm_87` for NVIDIA, `a623` for a Qualcomm Adreno). On a Jetson, which ships no `nvidia-smi`, it comes from the SoC in the device tree: `sm_110` on Thor, `sm_87` on Orin, `sm_72` on Xavier. |
 | `gpuCapabilities[]` | `GPU Compute:` | One entry per detected GPU: `vendor`, `path` (the device node that identified it, e.g. `/dev/dri/card0`), and `computeBackends` (`cuda`, `rocm`, or `metal`). A single GPU prints its backends; several print each one with its vendor and path. The line is omitted when no GPU reports a backend, and no entries at all means an older agent. An on-SoC neural accelerator is not a GPU backend — see `npuBackends`. |
 
 ### NPU output fields

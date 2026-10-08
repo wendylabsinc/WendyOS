@@ -5,12 +5,14 @@ package commands
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // drive represents an external disk suitable for image writing.
@@ -154,9 +156,13 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 			// Parse byte count from e.g. "31.9 GB (31,914,983,424 Bytes)..."
 			if start := strings.Index(info.size, "("); start != -1 {
 				if end := strings.Index(info.size[start:], " Bytes"); end != -1 {
-					rawBytes := info.size[start+1 : start+end]
-					// diskutil may include thousands separators (commas); remove them before parsing.
-					rawBytes = strings.ReplaceAll(rawBytes, ",", "")
+					// Keep digits only: the thousands separator follows the locale.
+					rawBytes := strings.Map(func(r rune) rune {
+						if r >= '0' && r <= '9' {
+							return r
+						}
+						return -1
+					}, info.size[start+1:start+end])
 					fmt.Sscanf(rawBytes, "%d", &info.sizeBytes)
 				}
 			}
@@ -183,18 +189,39 @@ func getDiskInfo(devPath string) (*diskInfo, error) {
 	return info, nil
 }
 
+// unmountTimeout bounds each diskutil unmount: a wedged FAT driver makes
+// diskutil wait forever rather than fail.
+const unmountTimeout = 30 * time.Second
+
 // unmountDisk unmounts all volumes on a disk before writing.
-// Falls back to force-unmount if the normal unmount fails.
+// Falls back to force-unmount if the normal unmount fails or hangs.
 func unmountDisk(devPath string) error {
-	cmd := exec.Command("sudo", "diskutil", "unmountDisk", devPath)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Retry with force unmount.
-		forceCmd := exec.Command("sudo", "diskutil", "unmountDisk", "force", devPath)
-		if forceOut, forceErr := forceCmd.CombinedOutput(); forceErr != nil {
-			return fmt.Errorf("unmounting %s: %s\nClose Finder windows, Disk Utility, or any apps using the disk, then retry", devPath, string(forceOut)+string(out))
-		}
+	return unmountDarwinDisk(devPath, runWithTimeout)
+}
+
+func unmountDarwinDisk(devPath string, run preparationCommand) error {
+	out, err := run(unmountTimeout, "/usr/bin/sudo", "-n", "/usr/sbin/diskutil", "unmountDisk", devPath)
+	if err == nil {
+		return nil
 	}
-	return nil
+	forceOut, forceErr := run(unmountTimeout, "/usr/bin/sudo", "-n", "/usr/sbin/diskutil", "unmountDisk", "force", devPath)
+	if forceErr == nil {
+		return nil
+	}
+	if errors.Is(forceErr, errCommandTimedOut) {
+		return fmt.Errorf("unmounting %s: %w\n%s", devPath, forceErr, "Close apps using the card, remove and reinsert it, then retry.")
+	}
+	return fmt.Errorf("unmounting %s: %s\nClose Finder windows, Disk Utility, or any apps using the disk, then retry", devPath, string(forceOut)+string(out))
+}
+
+// unmountBeforeWrite releases the disk before the progress bar starts, so a
+// hung unmount is reported as one instead of as a write stuck at 0%.
+func unmountBeforeWrite(d drive) error {
+	fmt.Printf("Preparing %s for writing...\n", d.DevicePath)
+	if err := stopTargetIndexing(d.DevicePath, runWithTimeout); err != nil {
+		fmt.Printf("Note: could not stop Spotlight on %s: %v\n", d.DevicePath, err)
+	}
+	return unmountDisk(d.DevicePath)
 }
 
 // writeImageWithBmap flashes the image to d using the block map. It re-execs

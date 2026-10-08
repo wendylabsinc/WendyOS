@@ -1,0 +1,95 @@
+{
+  "candidate_cli_sha256": "3142f99cf467224bf26205804d503e40ba2dad6de17ada5598270d51db143847",
+  "results": [
+    {
+      "task": "create-go2-simulator",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 59.486,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "create-g1-simulator",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 66.217,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "debug-otel-logs",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 30.165,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "debug-otel-metrics",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 28.656,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "debug-otel-traces",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 29.306,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "debug-go2-ros2",
+      "target": "simulator",
+      "passed": false,
+      "model_calls": 0,
+      "seconds": 89.475,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "repair-go2-camera",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 68.365,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "debug-g1-ros2",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 72.608,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "repair-g1-camera",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 69.807,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-093131-calibration-de4240"
+    },
+    {
+      "task": "debug-go2-ros2",
+      "target": "simulator",
+      "passed": true,
+      "model_calls": 0,
+      "seconds": 71.564,
+      "cleanup_ok": true,
+      "evidence_directory": "results/20260927-094148-calibration-406fed"
+    }
+  ]
+}

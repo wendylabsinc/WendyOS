@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oshealth"
@@ -257,8 +258,9 @@ type gpuInfo struct {
 // that question, see hardware.ProbeGPUDriver, which is reported through the gpu
 // capability's driver_status.
 //
-// For NVIDIA, gpuArch comes from an nvidia-smi query. A blank value can mean the
-// tool or query is unavailable; it is not by itself evidence of a driver failure.
+// For NVIDIA, gpuArch comes from an nvidia-smi query, else from the Jetson SoC
+// in the device tree. A blank value can mean neither source is available; it is
+// not by itself evidence of a driver failure.
 //
 // Probe on every call rather than caching. /dev/dri and the DRM sysfs tree are
 // live state: the first RPC can land before udev has settled,
@@ -284,7 +286,8 @@ func detectGPUInfoFrom(devices []gpudiscovery.Device) gpuInfo {
 }
 
 // FastRPC transport nodes; the "-secure" ones are the root-only signed-PD path.
-// Kept in step with the npu entitlement in agent/oci, which grants the same set.
+// The npu entitlement in agent/oci grants every non-secure node, while detection
+// counts only a compute DSP's (isComputeDSPNode).
 // Behind vars so tests can point them at a fixture tree.
 var (
 	fastrpcDeviceGlob   = "/dev/fastrpc-*"
@@ -311,13 +314,20 @@ func detectNPUInfo() npuInfo {
 		return npuInfo{}
 	}
 	for _, node := range nodes {
-		if strings.HasSuffix(node, fastrpcSecureSuffix) {
+		if strings.HasSuffix(node, fastrpcSecureSuffix) || !isComputeDSPNode(node) {
 			continue
 		}
 		vendor := dspVendor()
 		return npuInfo{hasNPU: true, vendor: vendor, backends: npuBackends(vendor)}
 	}
 	return npuInfo{}
+}
+
+// isComputeDSPNode reports whether a FastRPC node belongs to a compute DSP. The
+// audio, modem and sensor DSPs expose FastRPC too, but run no app offload.
+func isComputeDSPNode(node string) bool {
+	name := filepath.Base(node)
+	return strings.HasPrefix(name, "fastrpc-cdsp") || strings.HasPrefix(name, "fastrpc-gdsp")
 }
 
 // npuBackends names the runtime an app can use on a reachable NPU. The vendor
@@ -393,17 +403,31 @@ func detectJetPackVersion() string {
 	return jetPackVersionFromTegraRelease(data)
 }
 
-func jetPackVersionFromTegraRelease(data []byte) string {
+// detectL4TVersion returns the raw L4T version ("36.4.4"), or "" off Jetson.
+func detectL4TVersion() string {
+	data, err := os.ReadFile("/etc/nv_tegra_release")
+	if err != nil {
+		return ""
+	}
+	return l4tVersionFromTegraRelease(data)
+}
+
+func l4tVersionFromTegraRelease(data []byte) string {
 	m := tegraReleaseRe.FindSubmatch(data)
 	if len(m) < 3 {
 		return ""
 	}
-	major := string(m[1])
-	revision := string(m[2]) // e.g. "4.4"
+	return string(m[1]) + "." + string(m[2])
+}
 
+func jetPackVersionFromTegraRelease(data []byte) string {
 	// Some JetPack releases share an L4T major.minor family, so prefer the
 	// complete L4T version before falling back to the family mapping.
-	l4tVersion := major + "." + revision
+	l4tVersion := l4tVersionFromTegraRelease(data)
+	if l4tVersion == "" {
+		return ""
+	}
+	major, revision, _ := strings.Cut(l4tVersion, ".") // revision e.g. "4.4"
 	jetpackExact := map[string]string{
 		"36.4.4": "6.2.1",
 		"36.4.3": "6.2",
@@ -517,7 +541,9 @@ func detectNvidiaGPUArch() string {
 			}
 		}
 	}
-	return ""
+	// L4T ships no nvidia-smi, so on a Jetson the SoC named in the device tree
+	// is the only source.
+	return board.Detect().NvidiaGPUArch()
 }
 
 func detectFeatureset() []string {
@@ -914,6 +940,10 @@ func (s *AgentService) ForgetBluetoothPeripheral(ctx context.Context, req *agent
 
 const osUpdateUnsupportedForHostMessage = "This setup cannot be updated with wendy os update. Use this machine’s normal OS update tools instead. To use WendyOS OTA updates, install WendyOS on supported hardware with wendy os install."
 
+const updateInProgressMessage = "Another update is already in progress on this device. Try again once it has finished."
+
+const osUpdateAwaitingRebootMessage = "An OS update is already installed on this device. Reboot the device to apply it."
+
 // systemctlFn runs systemctl; overridable in tests.
 var systemctlFn = func(ctx context.Context, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, "systemctl", args...).CombinedOutput()
@@ -989,9 +1019,20 @@ func (s *AgentService) UpdateOS(req *agentpb.UpdateOSRequest, stream grpc.Server
 	s.logger.Info("UpdateOS started",
 		zap.String("artifact_url", req.GetArtifactUrl()), zap.String("updater", req.GetUpdaterBackend()))
 
+	if !s.installer.TryLock() {
+		s.logger.Warn("UpdateOS rejected: another update is already in progress")
+		return sendOSUpdateFailure(stream, updateInProgressMessage)
+	}
+	defer s.installer.Unlock()
+
 	if !s.isWendyOSHost() {
 		s.logger.Warn("UpdateOS rejected: host is not a WendyOS OTA target", zap.String("artifact_url", req.GetArtifactUrl()))
 		return sendOSUpdateFailure(stream, osUpdateUnsupportedForHostMessage)
+	}
+
+	if osUpdateStagedThisBoot(s.osUpdateStateDir) {
+		s.logger.Warn("UpdateOS rejected: an installed OS update is waiting for a reboot")
+		return sendOSUpdateFailure(stream, osUpdateAwaitingRebootMessage)
 	}
 
 	// Stop the auto-updater so it can't SIGTERM the in-flight install mid-OTA;

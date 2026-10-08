@@ -17,6 +17,7 @@ message StreamLogsRequest {
     optional int32 min_severity = 2;
     optional string app_name = 3;
     optional int32 last_n = 4;  // replay last N log batches before going live
+    bool no_follow = 5;  // return after replaying available history
 }
 
 message StreamLogsResponse {

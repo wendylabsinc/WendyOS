@@ -2,14 +2,17 @@ package services
 
 import (
 	"context"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/gpudiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -88,6 +91,7 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 	}
 
 	resp.MemTotalBytes, resp.CpuCount = hostMemAndCPUCount()
+	fillHardwareIdentity(resp)
 
 	for _, p := range listDiskPartitions() {
 		resp.Partitions = append(resp.Partitions, &agentpbv2.DiskPartition{
@@ -100,6 +104,46 @@ func (s *DeviceInfoService) GetDeviceInfo(_ context.Context, _ *agentpbv2.GetDev
 	}
 
 	return resp, nil
+}
+
+// fillHardwareIdentity sets the board, kernel and network identity fields.
+// Every source is optional: a missing file or interface leaves its field unset.
+func fillHardwareIdentity(resp *agentpbv2.GetDeviceInfoResponse) {
+	b := board.Detect()
+	if b.Model != "" {
+		resp.BoardModel = &b.Model
+	}
+	resp.SocCompatible = b.Compatible
+	if b.SerialNumber != "" {
+		resp.SerialNumber = &b.SerialNumber
+	}
+	if data, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
+		v := strings.TrimSpace(string(data))
+		resp.KernelVersion = &v
+	}
+	if data, err := os.ReadFile("/proc/uptime"); err == nil {
+		// "12345.67 98765.43": seconds up, then seconds idle.
+		secs, _, _ := strings.Cut(string(data), " ")
+		if f, err := strconv.ParseFloat(secs, 64); err == nil {
+			v := uint64(f)
+			resp.UptimeSeconds = &v
+		}
+	}
+	if v := detectL4TVersion(); v != "" {
+		resp.L4TVersion = &v
+	}
+	ifaces := listNetworkInterfaces()
+	for _, iface := range ifaces {
+		resp.IpAddresses = append(resp.IpAddresses, iface.GetIpAddresses()...)
+	}
+	// ponytail: "primary" = first routable interface in kernel index order, not
+	// the default-route interface; read /proc/net/route if that ever matters.
+	if len(ifaces) > 0 {
+		if iface, err := net.InterfaceByName(ifaces[0].GetName()); err == nil && len(iface.HardwareAddr) > 0 {
+			v := iface.HardwareAddr.String()
+			resp.PrimaryMac = &v
+		}
+	}
 }
 
 // hostMemAndCPUCount reads the device's total RAM and online logical CPU core

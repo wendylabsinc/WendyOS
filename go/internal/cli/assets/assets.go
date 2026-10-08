@@ -17,5 +17,5 @@ import "embed"
 // attributes) that don't degrade to readable plain text the way the
 // reference/guide content does.
 //
-//go:embed docs/Examples docs/apps docs/architecture docs/clients docs/cloud docs/debugging docs/development docs/pki docs/vscode docs/wendy-lite docs/wendy-os-publisher docs/wendyos docs/RELEASES.md docs/device/entitlements.md docs/roadmap.md docs/guides docs/hardware docs/installation docs/integrations docs/remote-debugging docs/security skills
+//go:embed docs/Examples docs/apps docs/architecture docs/clients docs/cloud docs/debugging docs/development docs/pki docs/vscode docs/wendy-lite docs/wendy-os-publisher docs/wendyos docs/RELEASES.md docs/device/entitlements.md docs/roadmap.md docs/guides docs/hardware docs/installation docs/integrations docs/remote-debugging docs/security skills mcp-skills chatgpt-plugin
 var FS embed.FS

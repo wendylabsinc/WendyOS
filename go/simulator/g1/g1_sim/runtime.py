@@ -79,7 +79,9 @@ class Runtime:
         if ros:
             from .commands import ROSCommands
             from .ros import ROSBridge
-            self.ros_commands = ROSCommands(self, os.environ.get("G1_COMMAND_SOCKET", "/run/wendy-g1/commands.sock"))
+            self.ros_commands = ROSCommands(
+                self, os.environ.get("G1_COMMAND_SOCKET", "/run/wendy-g1/commands.sock"),
+                auto_control=bool(os.environ.get("G1_VM_NAME")))
             self.ros_bridge = ROSBridge(self)
 
     @property

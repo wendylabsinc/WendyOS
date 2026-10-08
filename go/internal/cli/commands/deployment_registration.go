@@ -3,179 +3,133 @@ package commands
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
-	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type deploymentEnrollment struct {
-	cloudHost      string
-	organizationID string
+type deploymentProvisioningClient interface {
+	IsProvisioned(context.Context, *agentpb.IsProvisionedRequest, ...grpc.CallOption) (*agentpb.IsProvisionedResponse, error)
 }
 
-type deploymentEnrollmentLookup func(context.Context) (*deploymentEnrollment, error)
-type deploymentAppRegistrar func(context.Context, *config.AuthConfig, *deploymentEnrollment, []string) error
+type cloudAppRegistration func(context.Context, *config.AuthConfig, *agentpb.ProvisionedResponse, []string) error
 
 func registerCloudApps(ctx context.Context, conn *grpcclient.AgentConnection, appIDs []string, skip bool) error {
 	if skip {
+		cliLogln("Cloud app registration skipped (--skip-cloud-registration).")
 		return nil
 	}
-	if conn == nil || conn.Conn == nil {
-		return fmt.Errorf("registering deployment with Cloud: device connection is unavailable; use --skip-cloud-registration only for offline deployments")
-	}
-	lookup := func(ctx context.Context) (*deploymentEnrollment, error) {
-		response, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
-		if status.Code(err) == codes.Unimplemented {
-			legacy, legacyErr := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
-			if legacyErr != nil {
-				return nil, legacyErr
-			}
-			if legacy.GetNotProvisioned() != nil {
-				return nil, nil
-			}
-			if legacy.GetProvisioned() == nil {
-				return nil, status.Error(codes.Internal, "agent returned an invalid provisioning response")
-			}
-			// Legacy Cloud does not expose the v2 app catalog contract. Keep the
-			// existing deployment path unchanged; this registration is for Cloud v2.
-			return nil, nil
-		}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if handled, err := tryRegisterV2Apps(ctx, conn, appIDs); handled {
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("registering deployment with Cloud: %w", err)
 		}
-		if response.GetNotProvisioned() != nil {
-			return nil, nil
-		}
-		provisioned := response.GetProvisioned()
-		if provisioned == nil {
-			return nil, status.Error(codes.Internal, "agent returned an invalid provisioning response")
-		}
-		if principal := provisioned.GetPrincipalUri(); principal != "" {
-			identity, parseErr := certs.ParsePrincipal(principal)
-			if parseErr != nil || identity.EntityType != certs.EntityAsset {
-				return nil, status.Error(codes.FailedPrecondition, "agent reported an invalid device principal")
-			}
-			return &deploymentEnrollment{
-				cloudHost:      provisioned.GetCloudHost(),
-				organizationID: identity.TenantUUID,
-			}, nil
-		}
-		return nil, nil
+		return nil
 	}
-	if err := registerDeviceApps(ctx, lookup, appIDs, config.Load, registerAppsWithCloud); err != nil {
-		return fmt.Errorf("registering deployment with Cloud: %w; use --skip-cloud-registration only for offline deployments", err)
+	if err := registerDeviceApps(ctx, conn.ProvisioningService, appIDs, config.Load, registerAppsWithCloud); err != nil {
+		return fmt.Errorf("registering deployment with Cloud: %w; use --skip-cloud-registration for an offline deployment", err)
 	}
 	return nil
 }
 
-func registerDeviceApps(
-	ctx context.Context,
-	lookup deploymentEnrollmentLookup,
-	appIDs []string,
-	loadConfig func() (*config.Config, error),
-	register deploymentAppRegistrar,
+func registerDeviceApps(ctx context.Context, provisioning deploymentProvisioningClient, appIDs []string,
+	loadConfig func() (*config.Config, error), register cloudAppRegistration,
 ) error {
-	device, err := lookup(ctx)
-	if err != nil {
-		return fmt.Errorf("reading device enrollment: %w", err)
+	if provisioning == nil {
+		return fmt.Errorf("device provisioning service is unavailable")
 	}
+	response, err := provisioning.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+	if err != nil {
+		return fmt.Errorf("checking device enrollment: %w", err)
+	}
+	device := response.GetProvisioned()
 	if device == nil {
+		if response.GetNotProvisioned() == nil {
+			return fmt.Errorf("device returned no enrollment status")
+		}
 		return nil
 	}
 	cfg, err := loadConfig()
 	if err != nil {
-		return fmt.Errorf("loading Cloud credentials: %w", err)
+		return err
 	}
 	auth, err := deploymentAuth(cfg, device)
 	if err != nil {
 		return err
 	}
-	return register(ctx, auth, device, uniqueAppIDs(appIDs))
+	// Compose services can share one app identity. Register it once per device.
+	unique := make([]string, 0, len(appIDs))
+	seen := make(map[string]bool, len(appIDs))
+	for _, id := range appIDs {
+		if !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+	return register(ctx, auth, device, unique)
 }
 
-func deploymentAuth(cfg *config.Config, device *deploymentEnrollment) (*config.AuthConfig, error) {
-	if device.cloudHost == "" || device.organizationID == "" {
-		return nil, fmt.Errorf("device enrollment is incomplete")
+// Only dial an endpoint already trusted by a stored operator session. A device's
+// enrollment response must never choose where we send another session's token.
+func deploymentAuth(cfg *config.Config, device *agentpb.ProvisionedResponse) (*config.AuthConfig, error) {
+	if device.GetCloudHost() == "" || device.GetOrganizationId() <= 0 || device.GetAssetId() <= 0 {
+		return nil, fmt.Errorf("device returned incomplete Cloud enrollment")
 	}
-	for i := range cfg.Auth {
-		candidate := &cfg.Auth[i]
-		if candidate.CloudGRPC != device.cloudHost {
+	for _, entry := range cfg.Auth {
+		if entry.CloudGRPC != device.GetCloudHost() {
 			continue
 		}
-		for _, certificate := range candidate.Certificates {
-			selected := *candidate
-			selected.Certificates = []config.CertificateInfo{certificate}
-			if selected.OrganizationKey() != device.organizationID {
-				continue
+		for _, cert := range entry.Certificates {
+			if cert.OrganizationID == int(device.GetOrganizationId()) && cert.UserID != "" && cert.AssetID == 0 {
+				entry.Certificates = []config.CertificateInfo{cert}
+				return &entry, nil
 			}
-			if certificate.AssetID != 0 {
-				continue
-			}
-			if principal := certificate.PrincipalURI; principal != "" {
-				identity, err := certs.ParsePrincipal(principal)
-				if err != nil || identity.EntityType == certs.EntityAsset {
-					continue
-				}
-			}
-			return &selected, nil
 		}
 	}
-	return nil, fmt.Errorf("no Cloud operator credentials match organization %s on %s", device.organizationID, device.cloudHost)
+	return nil, fmt.Errorf("no operator session for device organization %d at %s; run 'wendy auth login' for that organization", device.GetOrganizationId(), device.GetCloudHost())
 }
 
-func uniqueAppIDs(appIDs []string) []string {
-	unique := make(map[string]struct{}, len(appIDs))
-	for _, id := range appIDs {
-		if id != "" {
-			unique[id] = struct{}{}
-		}
-	}
-	result := make([]string, 0, len(unique))
-	for id := range unique {
-		result = append(result, id)
-	}
-	sort.Strings(result)
-	return result
-}
-
-func registerAppsWithCloud(ctx context.Context, auth *config.AuthConfig, device *deploymentEnrollment, appIDs []string) error {
-	connection, err := dialCloudGRPC(auth)
+func registerAppsWithCloud(ctx context.Context, auth *config.AuthConfig, device *agentpb.ProvisionedResponse, appIDs []string) error {
+	conn, err := dialCloudGRPC(auth)
 	if err != nil {
 		return err
 	}
-	defer connection.Close()
+	defer conn.Close()
 	cloudCtx, err := cloudContext(ctx, auth)
 	if err != nil {
 		return err
 	}
-	client := cloudpbv2.NewAppServiceClient(connection)
+	client := cloudpb.NewAppServiceClient(conn)
 	for _, id := range appIDs {
-		_, err := client.GetApp(cloudCtx, &cloudpbv2.GetAppRequest{Id: id, OrganizationId: device.organizationID})
-		if err == nil {
-			continue
+		// Keep operator-edited metadata and grants on an existing app. UpsertApp
+		// is needed only when the catalog entry does not exist yet.
+		app, err := client.GetApp(cloudCtx, &cloudpb.GetAppRequest{
+			Id: id, OrganizationId: device.GetOrganizationId(),
+		})
+		if status.Code(err) == codes.NotFound {
+			name := strings.TrimPrefix(id, "campaign:")
+			app, err = client.UpsertApp(cloudCtx, &cloudpb.UpsertAppRequest{
+				Id: id, OrganizationId: device.GetOrganizationId(), Name: &name,
+			})
 		}
-		if status.Code(err) != codes.NotFound {
-			return err
+		if err != nil {
+			return fmt.Errorf("registering %s: %w", id, err)
 		}
-		name := deploymentAppName(id)
-		if _, err := client.UpsertApp(cloudCtx, &cloudpbv2.UpsertAppRequest{Id: id, OrganizationId: device.organizationID, Name: &name}); err != nil {
-			return err
+		if app.GetId() != id || app.GetOrganizationId() != device.GetOrganizationId() {
+			return fmt.Errorf("Cloud returned a different app identity for %s", id)
+		}
+		cliLogln("Registered %s in Cloud Apps (organization %d).", id, device.GetOrganizationId())
+		if !app.GetCanSendNotifications() {
+			cliLogln("Notifications for %s are disabled; an owner or admin can enable its grant in the Cloud app settings.", id)
 		}
 	}
 	return nil
-}
-
-func deploymentAppName(id string) string {
-	if name, ok := strings.CutPrefix(id, "campaign:"); ok && name != "" {
-		return name
-	}
-	return id
 }

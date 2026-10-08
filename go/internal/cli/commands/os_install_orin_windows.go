@@ -109,6 +109,10 @@ func ensureOrinDriver(d winusb.Device) error {
 // orinStageOne performs the stage-1 RCM boot over WinUSB with the file chain
 // declared by the flashpack manifest.
 func orinStageOne(fp *flashpack.Flashpack, dev rcm.RecoveryDevice, out io.Writer) error {
+	return orinStageOneVerified(fp, dev, out, "")
+}
+
+func orinStageOneVerified(fp *flashpack.Flashpack, dev rcm.RecoveryDevice, out io.Writer, expectedECID string) error {
 	order, memBCT, blob, err := t234RCMFiles(fp)
 	if err != nil {
 		return err
@@ -121,6 +125,7 @@ func orinStageOne(fp *flashpack.Flashpack, dev rcm.RecoveryDevice, out io.Writer
 		Location:        dev.PathKey,
 		Instance:        dev.Instance,
 		ExpectedProduct: dev.Product,
+		ExpectedECID:    expectedECID,
 		Out:             out,
 	})
 }

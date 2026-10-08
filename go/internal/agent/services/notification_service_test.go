@@ -7,12 +7,14 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -24,6 +26,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -33,6 +36,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	systempb "github.com/wendylabsinc/wendy/go/proto/gen/systempb"
 )
 
@@ -956,4 +960,128 @@ func TestNotificationConnectionNormalizesCertificateChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
+}
+
+// WDY-3464: a PKI-enrolled device (org/asset IDs zero, principal set) sends no
+// x-wendy-device-* header — Cloud identifies it by the mTLS leaf — while a
+// legacy urn:wendy enrollment keeps its header proof unchanged.
+func TestNotificationRequestContextHeaderProofOnlyForLegacy(t *testing.T) {
+	key, keyPEM := deviceProofTestKeyPEM(t)
+	certPEM := deviceProofTestCertificatePEM(t, key, deviceProofTestCertificateSerial)
+	request := &cloudpb.CreateNotificationV2Request{NotificationId: "00000000-0000-4000-8000-000000000001"}
+	headers := []string{deviceProofURIHeader, deviceProofCertificateSerialHeader, deviceProofTimestampHeader, deviceProofSignatureHeader}
+
+	ctx, err := notificationRequestContext(context.Background(), request, "spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/device/dev-1", 0, 0, certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("PKI-enrolled device: %v", err)
+	}
+	md, _ := metadata.FromOutgoingContext(ctx)
+	for _, h := range headers {
+		if len(md.Get(h)) != 0 {
+			t.Errorf("PKI-enrolled device sent %s", h)
+		}
+	}
+
+	ctx, err = notificationRequestContext(context.Background(), request, "", 7, 9, certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("legacy device: %v", err)
+	}
+	md, _ = metadata.FromOutgoingContext(ctx)
+	for _, h := range headers {
+		if len(md.Get(h)) != 1 {
+			t.Errorf("legacy device lost %s", h)
+		}
+	}
+	if got := md.Get(deviceProofURIHeader); len(got) == 1 && got[0] != "urn:wendy:org:7:asset:9" {
+		t.Errorf("legacy device URI = %q", got[0])
+	}
+}
+
+type recordingNotificationCloud struct {
+	cloudpb.UnimplementedNotificationServiceServer
+	mu sync.Mutex
+	md metadata.MD
+}
+
+func (c *recordingNotificationCloud) CreateNotificationV2(ctx context.Context, _ *cloudpb.CreateNotificationV2Request) (*cloudpb.CreateNotificationV2Response, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.md, _ = metadata.FromIncomingContext(ctx)
+	return &cloudpb.CreateNotificationV2Response{}, nil
+}
+
+type recordingNotificationCloudV2 struct {
+	cloudpbv2.UnimplementedNotificationServiceServer
+	legacy *recordingNotificationCloud
+}
+
+func (c *recordingNotificationCloudV2) CreateNotificationV2(ctx context.Context, req *cloudpbv2.CreateNotificationV2Request) (*cloudpbv2.CreateNotificationV2Response, error) {
+	c.legacy.mu.Lock()
+	defer c.legacy.mu.Unlock()
+	c.legacy.md, _ = metadata.FromIncomingContext(ctx)
+	return &cloudpbv2.CreateNotificationV2Response{NotificationId: req.GetNotificationId()}, nil
+}
+
+// Drives CloudNotificationSender end to end over TLS, so the sender's own
+// wiring (which principal it passes) is what decides the headers (WDY-3464).
+func TestCloudNotificationSenderHeaderProofOnlyForLegacy(t *testing.T) {
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, BasicConstraintsValid: true, IsCA: true,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTmpl, serverTmpl, &serverKey.PublicKey, serverKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloud := &recordingNotificationCloud{}
+	srv := grpc.NewServer(grpc.Creds(credentials.NewServerTLSFromCert(&tls.Certificate{Certificate: [][]byte{serverDER}, PrivateKey: serverKey})))
+	cloudpb.RegisterNotificationServiceServer(srv, cloud)
+	cloudpbv2.RegisterNotificationServiceServer(srv, &recordingNotificationCloudV2{legacy: cloud})
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(lis) //nolint:errcheck
+	t.Cleanup(srv.Stop)
+	// The enrollment chain is what the sender adds to its roots, so the test
+	// server's self-signed certificate rides there.
+	serverPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}))
+
+	key, keyPEM := deviceProofTestKeyPEM(t)
+	certPEM := deviceProofTestCertificatePEM(t, key, deviceProofTestCertificateSerial)
+	headers := []string{deviceProofURIHeader, deviceProofCertificateSerialHeader, deviceProofTimestampHeader, deviceProofSignatureHeader}
+	for _, tc := range []struct {
+		name          string
+		principal     string
+		orgID, asset  int32
+		wantHeaderSet bool
+	}{
+		{name: "PKI-enrolled", principal: "spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/device/dev-1"},
+		{name: "legacy", orgID: 7, asset: 9, wantHeaderSet: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provisioning := &ProvisioningService{
+				enrolled: true, cloudHost: lis.Addr().String(), orgID: tc.orgID, assetID: tc.asset,
+				certPEM: certPEM, chainPEM: serverPEM, keyPEM: keyPEM, principalURI: tc.principal,
+			}
+			sender := NewCloudNotificationSender(zap.NewNop(), provisioning)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := sender.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{NotificationId: "00000000-0000-4000-8000-000000000001"}, nil); err != nil {
+				t.Fatal(err)
+			}
+			cloud.mu.Lock()
+			defer cloud.mu.Unlock()
+			for _, h := range headers {
+				if got := len(cloud.md.Get(h)) == 1; got != tc.wantHeaderSet {
+					t.Errorf("%s present = %v, want %v", h, got, tc.wantHeaderSet)
+				}
+			}
+		})
+	}
 }

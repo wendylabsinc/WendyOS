@@ -38,6 +38,8 @@ func enrollLocalPickerDevice(ctx context.Context, item *tui.PickerItem, auth *co
 	if err != nil {
 		return err
 	}
-	promptPickerEnrollmentWifiFn(ctx, conn)
+	if err := promptPickerEnrollmentWifiFn(ctx, conn); err != nil {
+		return err
+	}
 	return runPickerEnrollmentFn(ctx, conn, auth, "", 0)
 }

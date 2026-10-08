@@ -8,7 +8,6 @@ service UserService {
   rpc CreateUser(CreateUserRequest) returns (User);
   rpc GetUser(GetUserRequest) returns (User);
   rpc UpdateUser(UpdateUserRequest) returns (User);
-  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
 }
 
 message User {
@@ -33,15 +32,9 @@ message GetUserRequest {
 message UpdateUserRequest {
   string id = 1;
   optional string name = 2;
-  optional bool is_super_admin = 3;
-}
-
-message ListUsersRequest {
-  int32 page_size = 1;
-  string page_token = 2;
-}
-
-message ListUsersResponse {
-  repeated User users = 1;
-  string next_page_token = 2;
+  // Removed (WDY-3167): is_super_admin was the cross-user admin-promotion vector
+  // and is accepted-and-ignored by the cloud handler. `id` is retained: the
+  // handler uses it for self-update (edit own record when id == caller).
+  reserved 3;
+  reserved "is_super_admin";
 }

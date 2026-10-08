@@ -180,6 +180,7 @@ func (p *httpProvider) streamOpenAI(ctx context.Context, messages []Message, too
 		}})
 	}
 	payload := map[string]any{"model": p.config.Model, "messages": wireMessages, "stream": true}
+	payload["stream_options"] = map[string]any{"include_usage": true}
 	if len(wireTools) > 0 {
 		payload["tools"] = wireTools
 	}
@@ -208,6 +209,7 @@ func (p *httpProvider) streamOpenAI(ctx context.Context, messages []Message, too
 			return errStreamComplete
 		}
 		var chunk struct {
+			Usage   *wireUsage      `json:"usage"`
 			Error   json.RawMessage `json:"error"`
 			Choices []struct {
 				Index int `json:"index"`
@@ -225,6 +227,7 @@ func (p *httpProvider) streamOpenAI(ctx context.Context, messages []Message, too
 		if event == "error" || (len(chunk.Error) > 0 && string(chunk.Error) != "null") {
 			return fmt.Errorf("%s stream error: %s", p.config.Provider, p.errorDetail(data))
 		}
+		recordUsage(ctx, chunk.Usage, false)
 		for _, choice := range chunk.Choices {
 			if choice.Index != 0 {
 				continue

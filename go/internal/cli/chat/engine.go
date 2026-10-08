@@ -126,6 +126,9 @@ func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), appr
 			streamed.WriteString(chunk)
 			emit(Event{Type: "text", Text: chunk})
 		})
+		if message.Usage != nil {
+			emit(Event{Type: "usage", Usage: message.Usage})
+		}
 		if err != nil {
 			// Partial tool calls are never executed or recorded. Retaining only
 			// streamed prose allows the next turn to resume a valid conversation.

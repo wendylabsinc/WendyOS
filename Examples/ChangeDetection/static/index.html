@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f3f2ec" />
+    <title>Change detection · Wendy</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <a class="brand" href="/" aria-label="Wendy home"
+          ><span class="mark" aria-hidden="true">W</span>WENDY</a
+        ><span class="edition">EXAMPLES / VISION + AUDIO</span
+        ><span id="connection" class="pill">Connecting</span>
+      </header>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">Observe the difference</p>
+          <h1>What changed?</h1>
+          <p class="lede">
+            Find a region. Compare it with before. Watch what it does.
+          </p>
+        </div>
+        <div class="source">
+          <span class="caption">INPUT</span
+          ><strong id="source">Waiting for frames</strong
+          ><span id="classifier">Loading classifier</span>
+        </div>
+      </section>
+      <section id="audio-panel" class="audio-panel" aria-label="Audio anomaly detection" hidden>
+        <div class="section-title">
+          <div><p class="eyebrow">Hopper + conveyor / Audio monitoring</p><h2>What sounds different?</h2></div>
+          <span id="audio-source"></span>
+        </div>
+        <div class="toolbar">
+          <label id="audio-scenario-control">Audio scene
+            <select id="audio-scenario">
+              <option value="metal_impact">Metal impact in hopper</option>
+              <option value="belt_rip">Conveyor belt rip</option>
+              <option value="normal">Normal operation</option>
+              <option value="unknown">Unrecognized noise</option>
+              <option value="silence">Signal loss / silence</option>
+              <option value="clipping">Clipped microphone</option>
+            </select>
+          </label>
+          <button id="audio-pause">Pause audio</button>
+          <button id="audio-reset" class="secondary">Restart audio session</button>
+          <span id="audio-clock" class="mono">00:00</span>
+        </div>
+        <p class="note">Restart captures a new normal baseline and clears audio events and the simulated stop.</p>
+        <div id="audio-error" role="alert" hidden></div>
+        <div class="audio-overview">
+          <svg id="conveyor-scene" viewBox="0 0 640 185" role="img" aria-label="Hopper microphone above dump hopper; conveyor microphone above belt. Simulated belt stops after a confirmed audio candidate.">
+            <path d="M35 30 H215 L175 108 H80 Z" fill="#c8d2c5" stroke="#68756d" stroke-width="2"/>
+            <path d="M57 53 H192 L166 95 H88 Z" fill="#967b59"/>
+            <text x="88" y="43">Dump hopper</text>
+            <rect x="105" y="120" width="480" height="25" rx="12" fill="#34483d"/>
+            <g id="belt-motion" stroke="#dce9df" stroke-width="3">
+              <path d="M130 125v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15 m35-15v15"/>
+            </g>
+            <path d="M145 146v20 m385-20v20" stroke="#68756d" stroke-width="8"/>
+            <g fill="#22634e">
+              <circle cx="235" cy="38" r="8"/><circle cx="450" cy="76" r="8"/>
+            </g>
+            <path d="M229 50l-55 25 m270 13l-25 26" stroke="#22634e" stroke-dasharray="4 4"/>
+            <text x="251" y="42">Hopper mic</text><text x="466" y="80">Belt mic</text>
+            <text x="250" y="178">Conveyor · simulated stop only</text>
+          </svg>
+          <div>
+            <div id="audio-stop" class="decision" role="status">Simulated conveyor running</div>
+            <p class="note">Either audio channel can latch the simulated stop. No PLC or physical conveyor is connected.</p>
+            <p class="note">Untrained spectral rules compare sound with the first 3 seconds of normal operation. Scores are deviations, not confidence probabilities.</p>
+          </div>
+        </div>
+        <div id="audio-channels" class="audio-channels"></div>
+        <div class="section-title"><h2>Audio events</h2><span>Click an event to listen and label</span></div>
+        <div id="audio-events"></div>
+        <div id="audio-evidence" hidden>
+          <p id="audio-evidence-description" class="muted"></p>
+          <audio id="audio-player" controls preload="none" aria-label="Selected audio event recording"></audio>
+          <div class="export">
+            <label>Human label <select id="audio-label">
+              <option value="">Choose a label</option>
+              <option value="metal_impact">Metal impact</option><option value="belt_rip">Belt rip</option>
+              <option value="normal">Normal</option><option value="unknown">Unknown</option>
+              <option value="silence">Silence</option><option value="clipping">Clipping</option>
+            </select></label>
+            <button id="audio-export" class="secondary" disabled>Export WAV + metadata</button>
+          </div>
+        </div>
+      </section>
+      <section class="toolbar" aria-label="Playback controls">
+        <label id="scenario-control"
+          >Scene
+          <select id="scenario">
+            <option value="liquid">Growing liquid</option>
+            <option value="shadow">Moving shadow</option>
+            <option value="lighting">Global lighting</option>
+            <option value="object">New object</option>
+            <option value="camera_shift">Camera movement</option>
+            <option value="empty">No change</option>
+          </select></label
+        >
+        <button id="pause">Pause</button
+        ><button id="reset" class="secondary">Reset reference</button
+        ><span id="clock" class="mono">00:00</span>
+      </section>
+      <div id="error" role="alert" hidden></div>
+      <section class="status-row" aria-live="polite">
+        <span class="status-dot"></span><strong id="status">Starting</strong
+        ><span id="count">0 regions</span>
+      </section>
+      <section class="frames" aria-label="Frame comparison">
+        <figure>
+          <figcaption>
+            <span>01 / Reference</span><small>Frozen until reset</small>
+          </figcaption>
+          <div class="frame">
+            <img id="before" alt="Reference frame before the change" />
+          </div>
+        </figure>
+        <figure>
+          <figcaption>
+            <span>02 / Current</span><small>Tracked regions</small>
+          </figcaption>
+          <div class="frame">
+            <img id="current" alt="Current frame" /><svg
+              id="boxes"
+              aria-label="Detected region boundaries"
+            ></svg>
+          </div>
+        </figure>
+        <figure>
+          <figcaption>
+            <span>03 / Residual</span><small>Lighting compensated</small>
+          </figcaption>
+          <div class="frame">
+            <img
+              id="residual"
+              alt="Difference from the reference after global brightness compensation"
+            />
+          </div>
+        </figure>
+      </section>
+      <section class="metrics" aria-label="Frame measurements">
+        <div>
+          <span class="caption">CHANGED AREA</span
+          ><strong id="coverage">0.0<span>%</span></strong>
+        </div>
+        <div>
+          <span class="caption">GLOBAL BRIGHTNESS</span
+          ><strong id="brightness">0.0<span>%</span></strong>
+        </div>
+        <div>
+          <span class="caption">CAMERA SHIFT</span
+          ><strong id="shift">0.0<span>px</span></strong>
+        </div>
+        <div class="trend">
+          <span class="caption">LIQUID SCORE / LAST 120 SAMPLES</span
+          ><svg
+            id="history"
+            viewBox="0 0 280 45"
+            role="img"
+            aria-label="Liquid score history"
+          ></svg>
+        </div>
+      </section>
+      <section class="detail-grid">
+        <article class="inspector">
+          <div class="section-title">
+            <h2>Inspect a change</h2>
+            <span id="region-id" class="mono">No selection</span>
+          </div>
+          <div id="region-tabs" aria-label="Select a region"></div>
+          <p id="empty">
+            Waiting for a local change. The first frame is the reference.
+          </p>
+          <div id="region-detail" hidden>
+            <div class="crops">
+              <figure>
+                <figcaption>Before crop</figcaption>
+                <img id="crop-before" alt="Selected region before the change" />
+              </figure>
+              <figure>
+                <figcaption>Current crop</figcaption>
+                <img id="crop-after" alt="Selected region now" />
+              </figure>
+              <figure>
+                <figcaption>Change mask</figcaption>
+                <img id="crop-mask" alt="Binary mask for the selected change" />
+              </figure>
+            </div>
+            <div class="region-metrics">
+              <div><span>Age</span><strong id="age"></strong></div>
+              <div><span>Area growth</span><strong id="growth"></strong></div>
+              <div><span>Motion</span><strong id="speed"></strong></div>
+            </div>
+            <div class="export">
+              <label
+                >Human label
+                <select id="label"></select></label
+              ><button id="export" class="secondary">Export crop</button
+              ><small id="export-hint">Pause to save a labeled example.</small>
+            </div>
+          </div>
+        </article>
+        <article class="classification">
+          <div class="section-title">
+            <h2>Change type</h2>
+            <span id="score-kind">Heuristic score</span>
+          </div>
+          <div id="scores">
+            <p class="muted">Scores appear when a region is detected.</p>
+          </div>
+          <p class="note" id="model-note">
+            The rule baseline is untrained. Its scores are not probabilities.
+          </p>
+          <div id="decision" class="decision">No liquid candidate</div>
+        </article>
+      </section>
+      <section class="events">
+        <div class="section-title">
+          <h2>Observation log</h2>
+          <span>Persistence + low motion + repeated evidence</span>
+        </div>
+        <div id="events">
+          <p class="muted">No persistent liquid candidates in this session.</p>
+        </div>
+      </section>
+      <footer>
+        <span>Wendy / Change detection</span
+        ><span>Fixed camera · Local processing · Human review</span>
+      </footer>
+    </main>
+  </body>
+</html>

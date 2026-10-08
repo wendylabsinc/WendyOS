@@ -99,6 +99,10 @@ message ListContainerStatsResponse {
 message PruneCacheRequest {
     // Reports what would be released without changing containerd metadata.
     bool dry_run = 1;
+    // Minimum age of a Wendy cache pin before it is released. Absent: the
+    // agent's default grace period (24h). 0: release every pin regardless of
+    // age (`wendy device cache prune --all`). WDY-3127.
+    optional uint64 min_age_seconds = 2;
 }
 
 message PruneCacheResponse {
@@ -113,4 +117,22 @@ message PruneCacheResponse {
     // Newly written cache entries are retained for this many seconds to avoid
     // disrupting an in-flight deployment between layer RPCs.
     uint64 minimum_age_seconds = 5;
+    // Bytes freed on the container-storage filesystem across the synchronous
+    // containerd GC pass the agent forces after releasing pins. Absent on
+    // dry runs and when the agent could not force GC or measure the delta.
+    optional uint64 reclaimed_bytes = 6;
+    // Chunk uploads left staged on the device by earlier deploys and builds
+    // (interrupted deploys, remote build contexts, and every deploy while the
+    // chunk index is disabled) that were (or would be, for dry_run) removed.
+    // The pin age does not apply to them. WDY-3217.
+    uint64 staged_chunks = 7;
+    uint64 staged_bytes = 8;
+    // A deploy or build was using the chunk store (a chunk RPC within the
+    // last minute, or an image preparation or layer assembly in flight), so
+    // the staged chunks were (or would be, for dry_run) left alone.
+    bool staging_in_use = 9;
+    // Layer blobs whose chunk-index entries were dropped because containerd
+    // no longer holds them, counted after the forced GC. Zero on dry runs and
+    // while staging_in_use, when the agent defers this reconcile. WDY-3212.
+    uint64 chunk_index_blobs_dropped = 10;
 }

@@ -45,11 +45,11 @@ func (s *Session) refreshCloudToken(ctx context.Context) error {
 	if time.Until(expiry) >= time.Minute {
 		return nil
 	}
-	refreshed, err := s.exchange(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.tokens.Refresh}, "resource": {CloudResource}})
+	refreshed, err := s.exchange(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.tokens.Refresh}, "resource": {s.settings().CloudResource}})
 	if err != nil {
 		return err
 	}
-	claims, err := s.verifyAccess(ctx, refreshed.Access, CloudResource)
+	claims, err := s.verifyAccess(ctx, refreshed.Access, s.settings().CloudResource)
 	if err != nil {
 		return err
 	}
@@ -75,7 +75,7 @@ func (s *Session) Restore(ctx context.Context) (*Profile, error) {
 		return nil, nil
 	}
 	var saved savedSession
-	if len(raw) > 1<<20 || json.Unmarshal(raw, &saved) != nil || saved.Version != 1 || !validIssuer(saved.Issuer) || saved.Tokens.Refresh == "" || saved.Tokens.Access == "" || !canonicalUUID(saved.Profile.Tenant) || saved.Profile.Subject == "" {
+	if len(raw) > 1<<20 || json.Unmarshal(raw, &saved) != nil || saved.Version != 1 || !s.validIssuer(saved.Issuer) || saved.Tokens.Refresh == "" || saved.Tokens.Access == "" || !canonicalUUID(saved.Profile.Tenant) || saved.Profile.Subject == "" {
 		return nil, errors.New("Saved sign-in is invalid. Sign in again")
 	}
 	key, err := certs.ParseSigningPrivateKeyPEM([]byte(saved.PrivateKey))
@@ -110,11 +110,11 @@ func (s *Session) Restore(ctx context.Context) (*Profile, error) {
 	}
 	// Validate into a temporary session; a failed restore cannot replace an
 	// authenticated in-memory identity. Store is shared to retain token rotation.
-	restored := &Session{Client: s.Client, Store: s.Store, meta: meta, key: key, privatePEM: saved.PrivateKey, certificate: saved.Certificate, tokens: saved.Tokens, profile: saved.Profile}
+	restored := &Session{Settings: s.Settings, Client: s.Client, Store: s.Store, meta: meta, key: key, privatePEM: saved.PrivateKey, certificate: saved.Certificate, tokens: saved.Tokens, profile: saved.Profile}
 	if err = restored.refreshCloudToken(ctx); err != nil {
 		return nil, fmt.Errorf("Could not restore sign-in: %w", err)
 	}
-	claims, err := restored.verifyAccess(ctx, restored.tokens.Access, CloudResource)
+	claims, err := restored.verifyAccess(ctx, restored.tokens.Access, s.settings().CloudResource)
 	if err != nil {
 		return nil, err
 	}

@@ -38,20 +38,10 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return fmt.Errorf("OIDC session has no Cloud gRPC endpoint")
 	}
 
+	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
+		return err
+	}
 	agent := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn)
-	provisioned, err := agent.IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
-	if status.Code(err) == codes.Unimplemented {
-		return fmt.Errorf("this agent does not support direct PKI enrollment; update the agent and retry")
-	}
-	if err != nil {
-		return fmt.Errorf("checking device enrollment: %w", err)
-	}
-	if provisioned.GetProvisioned() != nil {
-		return fmt.Errorf("device is already enrolled; unprovision it before enrolling again")
-	}
-	if provisioned.GetNotProvisioned() == nil {
-		return fmt.Errorf("agent returned an unknown enrollment state")
-	}
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {

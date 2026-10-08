@@ -1,0 +1,288 @@
+package mcp
+
+import (
+	"context"
+	"crypto/subtle"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+)
+
+// Only a declared app HTTP port can be opened, never an arbitrary URL or port
+// from tool input. The local view is private, short-lived, and host-bound.
+func (g *RobotGateway) registerAppWebTool() {
+	g.webSlots = make(chan struct{}, 8)
+	g.protocol.AddTool(gatewayTool("open_robot_app", "Open an installed app's declared web UI on the gateway laptop. Requires a running app and app-tool access. Creates a private loopback view for 30 minutes; does not start the app. Open the returned URL in the user's browser.", mutating(), robotArgument(), mcpgo.WithString("app_name", mcpgo.Required(), mcpgo.MaxLength(256))), g.openRobotApp)
+}
+
+func (g *RobotGateway) openRobotApp(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return g.openRobotAppView(ctx, req, 30*time.Minute)
+}
+
+func (g *RobotGateway) openRobotAppView(ctx context.Context, req mcpgo.CallToolRequest, viewLifetime time.Duration) (*mcpgo.CallToolResult, error) {
+	// Setup must finish even if the MCP host supplies no request deadline.
+	// Only a successfully opened view may outlive this operation.
+	ctx, finishOpen := context.WithTimeout(ctx, 45*time.Second)
+	defer finishOpen()
+	if ctx.Value(gatewayLocalContextKey{}) != true || !g.hasScope(ctx, RobotToolsScope) {
+		return mcpgo.NewToolResultError("App web views require a local gateway with app-tool access."), nil
+	}
+	r, err := g.authorize(ctx, req.GetString("robot_id", ""), RobotReadScope)
+	if err != nil {
+		return gatewayAppOpenError(ctx, err.Error()), nil
+	}
+	if ctx.Err() != nil {
+		return gatewayAppOpenError(ctx, "Could not open this app."), nil
+	}
+	select {
+	case g.webSlots <- struct{}{}:
+	default:
+		return mcpgo.NewToolResultError("Eight app views are already open. Wait for an existing view to expire."), nil
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			<-g.webSlots
+		}
+	}()
+	viewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), viewLifetime)
+	defer func() {
+		if !retained {
+			cancel()
+		}
+	}()
+	connectCtx, connectCancel := context.WithCancel(viewCtx)
+	// Cloud connections retain their establishment context. Follow the caller
+	// during setup, then detach only after the homepage check succeeds.
+	stopOpenCancel := context.AfterFunc(ctx, connectCancel)
+	defer stopOpenCancel()
+	connectTimer := time.AfterFunc(20*time.Second, connectCancel)
+	conn, err := g.connect(connectCtx, r.Device)
+	connectTimer.Stop()
+	// The connection's cloud dialer may use its establishment context, so keep
+	// it alive with the view and bound individual HTTP dials below.
+	if err == nil {
+		err = connectCtx.Err()
+	}
+	if err != nil {
+		connectCancel()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return gatewayAppOpenError(ctx, "Could not connect to this app's device."), nil
+	}
+	defer func() {
+		if !retained {
+			connectCancel()
+			conn.Close()
+		}
+	}()
+	s := New(&config.Config{}, nil)
+	s.SetConn(conn)
+	inspectCtx, finishInspect := context.WithTimeout(ctx, 15*time.Second)
+	defer finishInspect()
+	apps, err := gatewayApps(inspectCtx, r, s)
+	if err != nil {
+		return gatewayAppOpenError(ctx, "Could not inspect this app. Check the device connection and try again."), nil
+	}
+	appName := req.GetString("app_name", "")
+	port := uint32(0)
+	for _, app := range apps {
+		if app["name"] == appName && app["state"] == "RUNNING" {
+			port, _ = app["http_port"].(uint32)
+		}
+	}
+	if port == 0 || port > 65535 {
+		return mcpgo.NewToolResultError("This running app does not advertise a web UI. Declare its HTTP entitlement and redeploy it."), nil
+	}
+	var target string
+	if conn.RegistryDialer == nil {
+		if conn.SimulatorName != "" {
+			target, err = appInspectSimulatorAddress(ctx, conn, int(port))
+		} else {
+			var host string
+			host, _, err = net.SplitHostPort(conn.Addr)
+			target = net.JoinHostPort(host, strconv.Itoa(int(port)))
+		}
+		if err != nil {
+			return gatewayAppOpenError(ctx, "This device has no verified route to its app web UI."), nil
+		}
+	}
+	// Some device apps use a single-threaded HTTP/1.1 server. An idle upstream
+	// connection can prevent every other browser/view from reaching that app.
+	// WebSocket upgrades still retain their connection for the live session.
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		if conn.RegistryDialer != nil {
+			return gatewayAppWebDial(viewCtx, ctx, func(dialCtx context.Context) (net.Conn, error) {
+				return conn.RegistryDialer(dialCtx, int(port))
+			})
+		}
+		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", target)
+	}, ResponseHeaderTimeout: 15 * time.Second, IdleConnTimeout: 30 * time.Second}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if !retained {
+			_ = ln.Close()
+			transport.CloseIdleConnections()
+		}
+	}()
+	token := uuid.NewString()
+	host := ln.Addr().String()
+	if err := gatewayAppHomepage(ctx, transport, host); err != nil {
+		return gatewayAppOpenError(ctx, err.Error()), nil
+	}
+	if !stopOpenCancel() || ctx.Err() != nil || connectCtx.Err() != nil {
+		return gatewayAppOpenError(ctx, "Opening this app was canceled. Try again."), nil
+	}
+	upstream := &url.URL{Scheme: "http", Host: "wendy-app.invalid"}
+	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	proxy.Transport = transport
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+		http.Error(w, "The device app is unavailable. Check its state in Wendy.", http.StatusBadGateway)
+	}
+	server := &http.Server{Handler: gatewayAppWebHandler(host, token, proxy), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second}
+	retained = true
+	go func() {
+		defer func() { <-g.webSlots; cancel(); connectCancel(); conn.Close(); transport.CloseIdleConnections() }()
+		go func() { <-viewCtx.Done(); _ = server.Close() }()
+		_ = server.Serve(ln)
+	}()
+	expiresAt, _ := viewCtx.Deadline()
+	return okResult(map[string]any{"app_name": appName, "robot_id": r.ID, "url": "http://" + host + "/?wendy_view=" + token, "expires_at": expiresAt.UTC().Format(time.RFC3339Nano), "expires_in_seconds": int(time.Until(expiresAt).Seconds()), "scope": "gateway_laptop"}), nil
+}
+
+func gatewayAppOpenError(ctx context.Context, message string) *mcpgo.CallToolResult {
+	switch ctx.Err() {
+	case context.DeadlineExceeded:
+		message = "Opening this app timed out. Check the device connection and try again."
+	case context.Canceled:
+		message = "Opening this app was canceled. Try again."
+	}
+	return mcpgo.NewToolResultError(message)
+}
+
+// An HTTP entitlement can expose an inference API without a browser UI. Check
+// the homepage before asking the host to open it; never follow a redirect to a
+// different service or turn an API response into a claimed working web page.
+func gatewayAppHomepage(ctx context.Context, transport http.RoundTripper, host string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host+"/", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
+	res, err := transport.RoundTrip(req)
+	if err != nil {
+		return fmt.Errorf("The app's web endpoint is not responding. Check its state and try again.")
+	}
+	defer res.Body.Close()
+	switch res.StatusCode {
+	case http.StatusNotFound, http.StatusGone:
+		return fmt.Errorf("This app has no web page at its root address. It may expose an API or use a separate web UI path.")
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// Let the browser show the app's login challenge or sign-in page.
+		return nil
+	}
+	if res.StatusCode >= 400 {
+		return fmt.Errorf("The app's web endpoint returned HTTP %d. Check its logs before opening it.", res.StatusCode)
+	}
+	contentType := strings.ToLower(res.Header.Get("Content-Type"))
+	if res.StatusCode == http.StatusOK && (strings.HasPrefix(contentType, "application/json") || strings.Contains(contentType, "+json")) {
+		return fmt.Errorf("This app exposes an API at its root address, rather than a browser interface.")
+	}
+	return nil
+}
+
+// A cloud dial returns a gRPC-backed connection that keeps using its context.
+// Limit establishment, then retain that context until the connection or view closes.
+func gatewayAppWebDial(viewCtx, requestCtx context.Context, dial func(context.Context) (net.Conn, error)) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(viewCtx)
+	timer := time.AfterFunc(10*time.Second, cancel)
+	stopRequest := context.AfterFunc(requestCtx, cancel)
+	conn, err := dial(ctx)
+	timedOut := !timer.Stop()
+	requestCanceled := !stopRequest()
+	if timedOut || requestCanceled {
+		cancel()
+	}
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		cancel()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return nil, err
+	}
+	return &gatewayAppWebConn{Conn: conn, cancel: cancel}, nil
+}
+
+type gatewayAppWebConn struct {
+	net.Conn
+	cancel context.CancelFunc
+}
+
+func (c *gatewayAppWebConn) Close() error {
+	c.cancel()
+	return c.Conn.Close()
+}
+
+func gatewayAppWebHandler(host, token string, next http.Handler) http.Handler {
+	cookieName := "wendy_view_" + token
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != host {
+			http.Error(w, "Invalid host", http.StatusForbidden)
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+host {
+			http.Error(w, "Invalid origin", http.StatusForbidden)
+			return
+		}
+		if r.Method == http.MethodGet && subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("wendy_view")), []byte(token)) == 1 {
+			// ChatGPT opens this URL from another site. Lax permits the initial
+			// top-level GET redirect; strict cookies would require a manual reload.
+			http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 1800})
+			q := r.URL.Query()
+			q.Del("wendy_view")
+			r.URL.RawQuery = q.Encode()
+			w.Header().Set("Referrer-Policy", "no-referrer")
+			http.Redirect(w, r, r.URL.RequestURI(), http.StatusSeeOther)
+			return
+		}
+		cookie, err := r.Cookie(cookieName)
+		if err != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(token)) != 1 {
+			http.Error(w, "Open this app from Wendy to continue.", http.StatusUnauthorized)
+			return
+		}
+		// Cookies are scoped to a host, not its port. Other open app views on
+		// 127.0.0.1 also send their access cookies here; none belong upstream.
+		cookies := r.Cookies()
+		r.Header.Del("Cookie")
+		for _, c := range cookies {
+			if !strings.HasPrefix(c.Name, "wendy_view_") {
+				r.AddCookie(c)
+			}
+		}
+		r.Header.Del("Forwarded")
+		r.Header.Del("X-Forwarded-Host")
+		r.Header.Del("X-Forwarded-For")
+		r.Header.Del("X-Forwarded-Proto")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}

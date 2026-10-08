@@ -28,10 +28,11 @@ const oidcScopes = "openid email profile groups"
 
 // oidcLoginOptions configures a single login attempt.
 type oidcLoginOptions struct {
-	// Issuer is the realm issuer URL, e.g.
-	// https://auth.wendy.sh/realms/acme — NOT the bare host: every realm is a
-	// separate issuer with its own keys (see wendy-auth's multi-tenancy model).
-	Issuer string
+	// Issuer is an explicitly selected realm issuer URL. When it is empty,
+	// AuthorizationBase starts the realm-less universal browser flow and the
+	// exact realm issuer must arrive in the RFC 9207 callback.
+	Issuer            string
+	AuthorizationBase string
 	// ClientID is the public client registered in that realm. Public + PKCE,
 	// token_endpoint_auth_method=none: a CLI cannot keep a secret.
 	ClientID string
@@ -59,6 +60,7 @@ type oidcProviderMetadata struct {
 	CodeChallengeMethods  []string `json:"code_challenge_methods_supported"`
 	GrantTypes            []string `json:"grant_types_supported"`
 	ScopesSupported       []string `json:"scopes_supported"`
+	RequirePAR            bool     `json:"require_pushed_authorization_requests"`
 }
 
 // oidcTokenResponse is the token endpoint's success payload.
@@ -70,6 +72,10 @@ type oidcTokenResponse struct {
 	Scope        string `json:"scope"`
 	IDToken      string `json:"id_token"`
 }
+
+// discoverOIDCIssuerFn is indirected so command tests can verify target routing
+// without contacting a live wendy-auth deployment.
+var discoverOIDCIssuerFn = discoverOIDCIssuer
 
 // discoverOIDCIssuer uses wendy-auth's identifier-first API to route an email
 // address to its home realm without exposing or requiring an organization list.
@@ -127,22 +133,41 @@ func issuerRealm(issuer string) string {
 	return issuer
 }
 
-// effectiveLoginIssuer picks the realm to exchange the authorization code at,
-// honouring the RFC 9207 issuer (callbackIss) from the authorization response.
-// callbackIss is "" when the server sent none, in which case the requested realm
-// stands. A present issuer on a different origin than requested is refused: an
-// unrelated host must never receive this code (the RFC 9207 mix-up defence). The
-// returned issuer is trailing-slash-trimmed for direct comparison with token
-// `iss` claims.
-func effectiveLoginIssuer(requested, callbackIss string) (string, error) {
+// effectiveLoginIssuer selects and validates the exact realm that may receive
+// the authorization code. Realm-less starts require RFC 9207 `iss`; an explicit
+// realm retains the compatibility fallback for servers that omit it.
+func effectiveLoginIssuer(requested, authorizationBase, callbackIss string) (string, error) {
 	requested = strings.TrimSuffix(requested, "/")
+	authority := requested
+	if authority == "" {
+		authority = strings.TrimSuffix(authorizationBase, "/")
+		if callbackIss == "" {
+			return "", fmt.Errorf("realm-less authorization response did not identify its issuer; refusing to exchange the code")
+		}
+	}
 	if callbackIss == "" {
-		return requested, nil
+		return validateRealmIssuer(requested, requested)
 	}
-	if !sameIssuerOrigin(callbackIss, requested) {
-		return "", fmt.Errorf("authorization response issuer %q is not on the same host as the requested realm %q; refusing to exchange the code", callbackIss, requested)
+	return validateRealmIssuer(authority, callbackIss)
+}
+
+func validateRealmIssuer(authority, issuer string) (string, error) {
+	issuer = strings.TrimSuffix(issuer, "/")
+	if !sameIssuerOrigin(issuer, authority) {
+		return "", fmt.Errorf("authorization response issuer %q is not on the configured authority %q; refusing to exchange the code", issuer, authority)
 	}
-	return strings.TrimSuffix(callbackIss, "/"), nil
+	u, err := url.Parse(issuer)
+	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("authorization response issuer %q is not a canonical realm issuer", issuer)
+	}
+	parts := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
+	if len(parts) != 2 || parts[0] != "realms" || parts[1] == "" || parts[1] == "system" {
+		return "", fmt.Errorf("authorization response issuer %q is not a canonical non-system realm issuer", issuer)
+	}
+	if decoded, err := url.PathUnescape(parts[1]); err != nil || decoded != parts[1] || strings.Contains(decoded, "/") {
+		return "", fmt.Errorf("authorization response issuer %q contains an invalid realm", issuer)
+	}
+	return issuer, nil
 }
 
 // sameIssuerOrigin reports whether two issuer URLs share scheme and host, i.e.
@@ -157,6 +182,21 @@ func sameIssuerOrigin(a, b string) bool {
 		return false
 	}
 	return ua.Scheme == ub.Scheme && ua.Host == ub.Host
+}
+
+func canonicalAuthorizationBase(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSuffix(raw, "/"))
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("invalid wendy-auth authorization base %q", raw)
+	}
+	loopback := u.Hostname() == "localhost"
+	if ip := net.ParseIP(u.Hostname()); ip != nil {
+		loopback = ip.IsLoopback()
+	}
+	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+		return "", fmt.Errorf("invalid wendy-auth authorization base %q: want HTTPS or loopback HTTP", raw)
+	}
+	return u.String(), nil
 }
 
 // discoverOIDC fetches the realm's OIDC metadata.
@@ -193,6 +233,9 @@ func discoverOIDC(ctx context.Context, issuer string) (*oidcProviderMetadata, er
 	}
 	if meta.AuthorizationEndpoint == "" || meta.TokenEndpoint == "" {
 		return nil, fmt.Errorf("discovery document missing authorization_endpoint or token_endpoint")
+	}
+	if meta.RequirePAR {
+		return nil, fmt.Errorf("issuer requires pushed authorization requests, which the realm-less flow does not support")
 	}
 	// PKCE S256 is mandatory on this authorization server; fail loudly rather
 	// than silently downgrading to a flow it will reject anyway.

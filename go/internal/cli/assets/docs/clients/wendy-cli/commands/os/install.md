@@ -129,9 +129,11 @@ New Orin releases default to full USB recovery on macOS, Linux, and Windows. Sup
 - Orin Nano P3767-0005 on P3768-0000, NVMe.
 - AGX Orin P3701-0005 on P3737-0000, NVMe or eMMC.
 
-The CLI RCM-boots a signed recovery initrd, correlates its mass-storage LUNs to the selected physical USB port and session, and reads `device.json` before any persistent write. A module/carrier mismatch aborts before the flash-package handoff. It then writes/ejects the flash package, writes the exported `nvme0n1` or `mmcblk0` according to the signed partition layout, collects device logs, and reports success only when the final status is `SUCCESS`.
+The CLI RCM-boots a signed recovery initrd, correlates its mass-storage LUNs to the selected physical USB port and session, and reads `device.json` before any persistent write. A module/carrier mismatch aborts before the flash-package handoff. It then writes/ejects the flash package, writes the target storage (NVMe or eMMC, exported as a second disk of the same USB device) according to the signed partition layout, collects device logs, and reports success only when the final status is `SUCCESS`. With a recovery initrd that advertises single-enumeration support, the Jetson keeps one USB connection and switches the disks’ media in place. Older recovery packages continue using their existing disconnect/reconnect handoffs.
 
-Full recovery erases QSPI and every partition on the chosen storage, including `/data`. After the handoff, the first Ctrl+C warns that the device may be partially written; a second Ctrl+C confirms the abort. On Windows, the first flash installs a WinUSB driver for the Jetson recovery device and raw disk writes require elevation — expect a single administrator (UAC) prompt as soon as the flash mode is settled for a Jetson Orin target (answered at the interactive flash-mode question, or pinned by `--rootfs-only`/`--storage emmc`/a non-interactive run); accepting it continues the command, including the remaining setup questions, in a new elevated console window. If Windows offers to format one of the Jetson's flashing disks mid-flash, always choose Cancel.
+Full recovery erases QSPI and every partition on the chosen storage, including `/data`. After the handoff, the first Ctrl+C warns that the device may be partially written; a second Ctrl+C confirms the abort. If the Jetson reboots into USB recovery mode mid-flash, the install stops and has to be started again; with single enumeration, the CLI also prints a reconnect hint when the flashing gadget stays off USB. On Windows, the first flash installs a WinUSB driver for the Jetson recovery device and raw disk writes require elevation — expect a single administrator (UAC) prompt as soon as the flash mode is settled for a Jetson Orin target (answered at the interactive flash-mode question, or pinned by `--rootfs-only`/`--storage emmc`/a non-interactive run); accepting it continues the command, including the remaining setup questions, in a new elevated console window. If Windows offers to format one of the Jetson's flashing disks mid-flash, always choose Cancel. On macOS, `wendy` claims the flashing disks so macOS neither mounts them nor reports them as unreadable; if such a prompt still appears, choose Ignore, as Eject interrupts the flash. On Linux, the `eject` tool must be installed (Debian/Ubuntu: `apt install eject`); with an initrd that supports single enumeration, the CLI checks for it before the command handoff and stops the install if it is missing.
+
+Orin recovery retains the schema-v2 flashpack format. Published command packages default to the legacy USB handoff, so existing CLIs can still use them. A newer CLI validates the initrd’s identity and optional capability, then selects single enumeration by adding `conf/usb-mode` through an ext4 library to a private copy; the downloaded cache is preserved. Packages already selecting single enumeration need no editing and require a capable initrd. Unsupported modes are refused before the command handoff.
 
 `--drive`, `--no-bmap`, and `--yes-overwrite-internal` apply only with rootfs-only imaging. eMMC has no rootfs-only mode. Rootfs-only emits a warning because it does not update QSPI. Versions that predate recovery flashpacks fall back to their legacy SD/NVMe image automatically (with a warning; `--rootfs-only=false` turns the fallback into an error); a recovery-capable flash never falls back to raw imaging on failure.
 
@@ -173,6 +175,16 @@ Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wen
 
 Provisioning works as it does on Thor: the bundle ships no config image, so wendy builds one on the host and programs it into the config partition. `--wifi`, `--device-name` and `--pre-enroll` all apply, and a freshly downloaded `wendy-agent` is seeded on every flash.
 
+## Arduino UNO Q path
+
+```sh
+wendy install --device-type arduino-uno-q
+```
+
+The UNO Q is flashed over EDL like the Dragonwing boards, with the same chip-id check, factory reset and provisioning. To enter EDL, unplug the board, short its two EDL pins with a jumper, and plug in the USB-C cable ([Arduino's guide](https://docs.arduino.cc/software/app-lab/configure/flash/) shows the pins); the short can come off once the board is detected. After success, unplug the board, remove the short and plug it back in.
+
+The UNO Q keeps its boot firmware on the same eMMC, so the flash also rewrites it (with Arduino's own ABL and U-Boot) and replaces the Debian image, which Arduino's flasher restores.
+
 ## Linux Desktop / Headless Mac path
 
 Choosing **Linux Desktop** or **Headless Mac** (or `--device-type linux-desktop` / `--device-type headless-mac`) does not write a drive. The command prints the `agent.sh` one-liner from the [Linux installation guide](/docs/installation/linux) (the script auto-detects the target platform). When `--pre-enroll` is supplied and a valid auth session exists, a 1-hour enrollment token is embedded in the command; the agent self-enrolls on first startup without a separate `wendy device enroll` step. Run `wendy discover` afterwards to find the device.
@@ -184,7 +196,7 @@ Thor flashing talks to the board's USB recovery device directly (an in-process l
 `wendy install` handles this for you: when it is not already running as root it re-executes itself under `sudo` **before** the recovery briefing, so you are prompted for your password up front rather than hitting a permission error partway through the flash. The elevated run reuses the already-downloaded flashpack (no re-download) and skips straight to the Thor flow.
 
 - **macOS** — always elevates when not run as root; the OS binds its own driver to the recovery device, so there is no non-root path.
-- **Linux** — if the wendy udev rule (`70-wendy-jetson.rules`, installed by the deb/rpm package or `wendy device usb-setup`) is present, the flash runs as your user with **no prompt**. Otherwise it re-execs under `sudo`.
+- **Linux** — if the wendy udev rule (`70-wendy-jetson.rules`, installed by the deb/rpm package; `wendy install` prints the commands to add it by hand) is present, the flash runs as your user with **no prompt**. Otherwise it re-execs under `sudo`.
 - **Non-interactive** (CI, piped input) — the CLI cannot prompt for a password, so it exits with instructions to re-run under `sudo` (Linux: or install the udev rule) instead of hanging.
 
 ### WiFi pre-configuration
@@ -240,3 +252,31 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--no-bmap` | false | Disable bmap-accelerated flashing even when a block map is available |
 
 > **TODO**: Post-flashing Linux devices still need certificate provisioning and Wendy Cloud enrollment if `--pre-enroll` was not used. See [`wendy device setup`](../device/setup.md), [PKI](../../../../pki/), and [Wendy Cloud](../../../../cloud/).
+## Agent-driven installation
+
+`wendy install plan` and `wendy install verify` also work under the `wendy os install`
+alias. Both emit JSON. Planning is read-only; it resolves a published release and
+returns the installation method, erase scope, requirements and CLI argument array.
+
+```sh
+wendy install plan --device-type raspberry-pi-5 --drive <confirmed-drive>
+wendy install plan --device-type jetson-orin-nano --carrier developer-kit --storage nvme
+wendy install plan --device-type unitree-g1
+wendy install verify --address <expected-device> --expected-os-version <version> --expected-device-type <board>
+```
+
+Planning supports Pi 3/4/5, Orin/Thor developer kits, G1 PC2 and Linux agent installs.
+Jetson planning requires `--carrier developer-kit`; custom carriers need their
+vendor guide. Raw-media plans require a drive from `wendy os list-drives --all --json`
+before returning a write command. `--rootfs-only` leaves Orin QSPI unchanged.
+The write still runs through the regular installer in a terminal.
+
+Verification never selects a default device. Use `--expected-public-key` to pin
+a previously observed identity, `--require-enrollment` when Cloud enrollment was
+requested, and `--timeout` for a deadline of at most one minute (default 15s).
+It exits nonzero for an unreachable target or unmet expectation and reports
+`application: "not_checked"`; application health needs a separate check.
+For agent-only targets, omit WendyOS version/type expectations.
+
+See [agent-assisted setup](/docs/installation/agent-assisted-setup) for the MCP
+tools and the complete sequence from hardware identification to first application.

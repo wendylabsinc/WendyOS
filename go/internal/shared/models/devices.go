@@ -76,16 +76,21 @@ type LANDevice struct {
 	Sensorlink bool `json:"sensorlink,omitempty"`
 	// Caps is the device's advertised capability list from the `caps=`
 	// comma-separated TXT record (e.g. "sensors,foo"); nil when unadvertised.
-	Caps             []string `json:"caps,omitempty"`
-	InterfaceType    string   `json:"interfaceType"`
-	NetworkInterface string   `json:"-"`
-	USB              string   `json:"usb,omitempty"`
-	IsWendyDevice    bool     `json:"isWendyDevice"`
-	AgentVersion     string   `json:"agentVersion,omitempty"`
-	DeviceType       string   `json:"deviceType,omitempty"`
-	OS               string   `json:"os,omitempty"`
-	OSVersion        string   `json:"osVersion,omitempty"`
-	CPUArchitecture  string   `json:"cpuArchitecture,omitempty"`
+	Caps []string `json:"caps,omitempty"`
+	// WendyLite is true when this sighting came from the `_wendy-lite._tcp`
+	// mDNS service (a Wendy Lite/ESP32 board) rather than `_wendyos._udp` (a
+	// WendyOS agent). A WendyLite device with IsMTLS speaks WendyCom, never
+	// the WendyOS agent's gRPC.
+	WendyLite        bool   `json:"wendyLite,omitempty"`
+	InterfaceType    string `json:"interfaceType"`
+	NetworkInterface string `json:"-"`
+	USB              string `json:"usb,omitempty"`
+	IsWendyDevice    bool   `json:"isWendyDevice"`
+	AgentVersion     string `json:"agentVersion,omitempty"`
+	DeviceType       string `json:"deviceType,omitempty"`
+	OS               string `json:"os,omitempty"`
+	OSVersion        string `json:"osVersion,omitempty"`
+	CPUArchitecture  string `json:"cpuArchitecture,omitempty"`
 }
 
 func (d LANDevice) HumanReadable() string {
@@ -200,6 +205,9 @@ type DiscoveredDevice struct {
 	// Caps is copied from LAN.Caps when a LAN sighting is merged in; nil when
 	// the device has no LAN sighting.
 	Caps []string
+	// WendyLite is copied from LAN.WendyLite when a LAN sighting is merged in;
+	// false when the device has no LAN sighting.
+	WendyLite bool
 	// IsMTLS is copied from LAN.IsMTLS when a LAN sighting is merged in; false
 	// when the device has no LAN sighting.
 	IsMTLS bool
@@ -330,6 +338,7 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 			CPUArchitecture: d.CPUArchitecture,
 			Sensorlink:      d.Sensorlink,
 			Caps:            d.Caps,
+			WendyLite:       d.WendyLite,
 			IsMTLS:          d.IsMTLS,
 			AssetID:         d.AssetID,
 			OrgID:           d.OrgID,

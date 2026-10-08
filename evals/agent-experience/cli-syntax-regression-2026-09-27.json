@@ -1,0 +1,18 @@
+{
+  "model_calls": 0,
+  "device_calls": 0,
+  "cases": [
+    {
+      "version": "before",
+      "exit_code": 1,
+      "seconds": 0.112,
+      "stderr": "\u2717 unknown command \"ros2\" for \"wendy\""
+    },
+    {
+      "version": "after",
+      "exit_code": 1,
+      "seconds": 0.038,
+      "stderr": "\u2717 invalid --device argument: the option and its value arrived as one argument                                                                              \nStore only the device selector in DEVICE and pass it separately, for example:                                                                              \n  wendy --device \"$DEVICE\" device ros2 topics                                                                                                              \nIn zsh, use an argument array if you need to store both the option and value. This is a command syntax error; retrying the unchanged command will not help."
+    }
+  ]
+}

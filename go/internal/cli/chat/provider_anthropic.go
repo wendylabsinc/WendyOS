@@ -105,11 +105,15 @@ func (p *httpProvider) streamAnthropic(ctx context.Context, messages []Message, 
 	openBlocks := make(map[int]bool)
 	finished := false
 	stopReason := ""
+	var usage wireUsage
+	finalUsage := false
 	err = readEvents(ctx, resp.Body, func(event string, data []byte) error {
 		var chunk struct {
-			Type         string         `json:"type"`
-			Index        int            `json:"index"`
-			ContentBlock anthropicBlock `json:"content_block"`
+			Message      json.RawMessage `json:"message"`
+			Usage        *wireUsage      `json:"usage"`
+			Type         string          `json:"type"`
+			Index        int             `json:"index"`
+			ContentBlock anthropicBlock  `json:"content_block"`
 			Delta        struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
@@ -124,6 +128,14 @@ func (p *httpProvider) streamAnthropic(ctx context.Context, messages []Message, 
 			chunk.Type = event
 		}
 		switch chunk.Type {
+		case "message_start":
+			var message struct {
+				Usage *wireUsage `json:"usage"`
+			}
+			if json.Unmarshal(chunk.Message, &message) == nil && message.Usage != nil {
+				usage = *message.Usage
+			}
+			recordUsage(ctx, &usage, true)
 		case "error":
 			return fmt.Errorf("anthropic stream error: %s", p.errorDetail(data))
 		case "content_block_start":
@@ -172,10 +184,20 @@ func (p *httpProvider) streamAnthropic(ctx context.Context, messages []Message, 
 			}
 			delete(openBlocks, chunk.Index)
 		case "message_delta":
+			if chunk.Usage != nil && chunk.Usage.Output != nil {
+				usage.Output = chunk.Usage.Output
+				finalUsage = true
+			}
+			recordUsage(ctx, &usage, true)
 			if chunk.Delta.StopReason != "" {
 				stopReason = chunk.Delta.StopReason
 			}
 		case "message_stop":
+			if !finalUsage {
+				if u, _ := ctx.Value(usageKey{}).(*TokenUsage); u != nil {
+					u.Complete = false
+				}
+			}
 			if len(openBlocks) > 0 || stopReason == "" {
 				return fmt.Errorf("Anthropic stream stopped before content was complete")
 			}

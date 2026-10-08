@@ -392,7 +392,8 @@ func (s *TelemetryService) StreamLogs(req *agentpb.StreamLogsRequest, stream grp
 	}
 
 	// Cached batches predate the subscription, so send them before the live
-	// channel with IsHistory set. Apply the request filters to both paths.
+	// channel with IsHistory set. Filter before limiting the tail window.
+	filteredRecent := make([]*collogspb.ExportLogsServiceRequest, 0, len(recent))
 	for _, logs := range recent {
 		if req.AppName != nil || req.ServiceName != nil || req.MinSeverity != nil {
 			logs = filterLogs(logs, req)
@@ -400,9 +401,18 @@ func (s *TelemetryService) StreamLogs(req *agentpb.StreamLogsRequest, stream grp
 				continue
 			}
 		}
+		filteredRecent = append(filteredRecent, logs)
+	}
+	if n := int(req.GetLastN()); n > 0 && len(filteredRecent) > n {
+		filteredRecent = filteredRecent[len(filteredRecent)-n:]
+	}
+	for _, logs := range filteredRecent {
 		if err := stream.Send(&agentpb.StreamLogsResponse{Logs: logs, IsHistory: true}); err != nil {
 			return err
 		}
+	}
+	if req.GetNoFollow() {
+		return nil
 	}
 
 	s.logger.Info("StreamLogs client connected", zap.String("sub_id", id))

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "wendy-robots",
+  "version": "0.4.1",
+  "description": "Guidance on building and deploying apps to robots and edge devices using WendyOS, including NVIDIA Jetson, Raspberry Pi, Qualcomm Dragonwing, and MuJoCo simulation.",
+  "author": { "name": "Wendy Labs", "url": "https://wendy.dev" },
+  "homepage": "https://wendy.dev",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/wendy/references/skills/wendy-onboarding/SKILL.md",
+      "interface": {
+        "displayName": "Wendy",
+        "shortDescription": "Your devices and their apps",
+        "longDescription": "Guidance on building and deploying apps to robots and edge devices using WendyOS, including NVIDIA Jetson, Raspberry Pi, Qualcomm Dragonwing, and MuJoCo simulation. Get help setting up your first robot or edge device, or try a simulator while waiting for hardware. Local use does not require a Cloud account. Browse your fleet, inspect devices, preview cameras, open app web UIs, and control approved apps. With local permissions, create robot simulators, open their live MuJoCo scenes, edit approved project files, and build and deploy apps. Share selected device and camera context with ChatGPT.",
+        "developerName": "Wendy Labs",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://wendy.dev",
+        "logo": "./assets/wendy-icon.png",
+        "composerIcon": "./assets/wendy-icon.png",
+        "brandColor": "#171C23",
+        "defaultPrompt": [
+          "Open Wendy and show my robots.",
+          "Look through my robot's camera and describe the scene.",
+          "Check which apps are running on my robot."
+        ]
+      }
+    }
+  }
+}

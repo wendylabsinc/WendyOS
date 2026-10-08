@@ -1,0 +1,10 @@
+{
+  "appId": "henk-explorer",
+  "version": "0.1.0",
+  "env": {"R2_SIMULATOR_URL": "http://127.0.0.1:8890"},
+  "entitlements": [
+    {"type": "network", "mode": "host"},
+    {"type": "http", "port": 3510}
+  ],
+  "readiness": {"tcpSocket": {"port": 3510}, "timeoutSeconds": 20}
+}

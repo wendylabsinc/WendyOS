@@ -52,11 +52,11 @@ wendy run --device Woof --build-type docker --no-restart
 ```
 
 The supplied manifest selects ROS 2 Humble, CycloneDDS, domain 0 and the Go2 VM's
-native Go2 ROS bus. The Docker image runs `ros_app.py --autostart --ignore-capture-age --allow-scan-gaps`, which starts the
-controller once accepted lidar and odometry arrive. The managed Go2 simulator
+native Go2 ROS bus. The Docker image runs `ros_app.py`, which waits for an explicit
+`/roam/start` request and accepted lidar and odometry. The managed Go2 simulator
 automatically gives its new publisher control, replacing the previous driving
-app or browser controller. Run the command with the world running to start
-exploring. Open the sandbox to watch; no **Give app control** click is needed.
+app or browser controller. Run with the world running, inspect sensor readiness,
+then call Start to explore. Open the sandbox to watch; no **Give app control** click is needed.
 
 In a ROS-enabled shell on the same VM bus, use the Trigger services to control
 the behavior and inspect its status:
@@ -67,7 +67,7 @@ ros2 service call /roam/stop std_srvs/srv/Trigger '{}'
 ros2 topic echo /roam/status std_msgs/msg/String
 ```
 
-Without `--autostart`, `python3 ros_app.py` publishes zero velocity until a
+By default, `python3 ros_app.py` publishes zero velocity until a
 successful `/roam/start` request. A start request needs current observations.
 Status includes the controller state, stop reason, clearance, velocity requests
 and sensor ages. `/roam/stop` immediately requests zero velocity; **Release app
@@ -89,7 +89,8 @@ within 350 ms, checking the new clearance before moving. A longer gap disarms th
 controller and requires a new Start request. Stale or invalid observations and
 explicit stops also remain latched.
 `/roam/status` includes `allow_scan_gaps`, `ignore_capture_age`, `scan_coverage`
-and `capture_age_seconds`. Remove either flag to restore its strict check.
+and `capture_age_seconds`. Both strict checks are enabled by default; compatibility
+flags and `--autostart` require an explicit choice for the intended test.
 The local preview also accepts `app.py --allow-scan-gaps`; its simulator freshness
 checks remain active because they use the simulator's local observation contract.
 

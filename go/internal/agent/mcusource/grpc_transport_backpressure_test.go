@@ -27,7 +27,7 @@ func TestGRPCTransportBackpressure(t *testing.T) {
 		// A stalled consumer must not block the receiver. The first eight
 		// frames are queued; three more are dropped with just one warning.
 		for seq := range uint32(11) {
-			client.frames <- &sensorlinkpb.SensorFrame{ChannelId: 1, Seq: seq}
+			client.frames <- wholeFrame(1, seq)
 		}
 		synctest.Wait()
 		assertDropLogs(t, logs, [][2]uint64{{1, 1}})
@@ -43,7 +43,7 @@ func TestGRPCTransportBackpressure(t *testing.T) {
 		// Continued congestion produces an aggregate warning after five
 		// seconds, including the drops suppressed since the first warning.
 		time.Sleep(5 * time.Second)
-		client.frames <- &sensorlinkpb.SensorFrame{ChannelId: 2, Seq: 11}
+		client.frames <- wholeFrame(2, 11)
 		synctest.Wait()
 		assertDropLogs(t, logs, [][2]uint64{{1, 1}, {3, 4}})
 
@@ -52,7 +52,7 @@ func TestGRPCTransportBackpressure(t *testing.T) {
 				t.Fatalf("queued frame seq = %d, want %d", f.Seq, seq)
 			}
 		}
-		client.frames <- &sensorlinkpb.SensorFrame{ChannelId: 1, Seq: 12}
+		client.frames <- wholeFrame(1, 12)
 		if f := <-frames; f.Seq != 12 {
 			t.Fatalf("stream did not recover: got seq %d", f.Seq)
 		}
@@ -78,7 +78,7 @@ func TestGRPCTransportFlushesDropsOnExit(t *testing.T) {
 				}
 				defer closeStream()
 				for seq := range uint32(12) {
-					client.frames <- &sensorlinkpb.SensorFrame{ChannelId: 1, Seq: seq}
+					client.frames <- wholeFrame(1, seq)
 				}
 				synctest.Wait()
 				assertDropLogs(t, logs, [][2]uint64{{1, 1}})
@@ -119,7 +119,7 @@ func TestGRPCTransportNoDropsNoWarnings(t *testing.T) {
 		}
 		defer closeStream()
 		for seq := range uint32(12) {
-			client.frames <- &sensorlinkpb.SensorFrame{ChannelId: 1, Seq: seq}
+			client.frames <- wholeFrame(1, seq)
 			if f := <-frames; f.Seq != seq {
 				t.Fatalf("frame seq = %d, want %d", f.Seq, seq)
 			}
@@ -139,7 +139,7 @@ func TestGRPCTransportReportsPendingDropsAfterRecovery(t *testing.T) {
 		}
 		defer closeStream()
 		for seq := range uint32(10) {
-			client.frames <- &sensorlinkpb.SensorFrame{ChannelId: 1, Seq: seq}
+			client.frames <- wholeFrame(1, seq)
 		}
 		synctest.Wait()
 		assertDropLogs(t, logs, [][2]uint64{{1, 1}})
@@ -147,7 +147,7 @@ func TestGRPCTransportReportsPendingDropsAfterRecovery(t *testing.T) {
 			<-frames
 		}
 		time.Sleep(5 * time.Second)
-		client.frames <- &sensorlinkpb.SensorFrame{ChannelId: 1, Seq: 10}
+		client.frames <- wholeFrame(1, 10)
 		if f := <-frames; f.Seq != 10 {
 			t.Fatalf("stream did not recover: got seq %d", f.Seq)
 		}
@@ -177,11 +177,11 @@ func assertDropLogs(t *testing.T, logs *observer.ObservedLogs, want [][2]uint64)
 // each burst without relying on network timing or real sleeps.
 type backpressureSensorClient struct {
 	agentpbv2.WendySensorServiceClient
-	frames chan *sensorlinkpb.SensorFrame
+	frames chan *sensorlinkpb.SensorData
 	err    error
 }
 
-func (c *backpressureSensorClient) StreamSensors(ctx context.Context, _ *agentpbv2.StreamSensorsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[sensorlinkpb.SensorFrame], error) {
+func (c *backpressureSensorClient) StreamSensors(ctx context.Context, _ *agentpbv2.StreamSensorsRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[sensorlinkpb.SensorData], error) {
 	return &backpressureSensorStream{ctx: ctx, client: c}, nil
 }
 
@@ -191,7 +191,7 @@ type backpressureSensorStream struct {
 	client *backpressureSensorClient
 }
 
-func (s *backpressureSensorStream) Recv() (*sensorlinkpb.SensorFrame, error) {
+func (s *backpressureSensorStream) Recv() (*sensorlinkpb.SensorData, error) {
 	select {
 	case f, ok := <-s.client.frames:
 		if ok {
@@ -208,7 +208,7 @@ func (s *backpressureSensorStream) Recv() (*sensorlinkpb.SensorFrame, error) {
 
 func newObservedGRPCTransport() (*grpcTransport, *backpressureSensorClient, *observer.ObservedLogs) {
 	core, logs := observer.New(zap.WarnLevel)
-	client := &backpressureSensorClient{frames: make(chan *sensorlinkpb.SensorFrame)}
+	client := &backpressureSensorClient{frames: make(chan *sensorlinkpb.SensorData)}
 	logger := zap.New(core).With(zap.Int32("source", 7), zap.String("addr", "sensor:50052"))
 	return &grpcTransport{logger: logger, client: client}, client, logs
 }

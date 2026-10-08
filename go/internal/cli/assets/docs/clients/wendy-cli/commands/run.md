@@ -4,7 +4,7 @@ Runs your app on a Wendy-enabled device:
 2. [Queries the platform and architecture](./device/version.md) of this device
 3. Invokes a [build](./build.md) using the target triple, and injects a [debugger](../../../debugging/) if needed
 4. Uploads the artifact(s) for Linux (via the container registry) or macOS
-5. [Starts the app](./device/apps/start.md), then (attached runs only) waits for readiness and prints the reachable URL
+5. [Starts the app](./device/apps/start.md). Attached runs check readiness; ordinary detached agent deployments report configured HTTP endpoints as described in [Detached output](#detached-output).
 6. [Attaches the logs](./device/logs.md) if needed (when `--detach` is not provided)
 
 
@@ -15,13 +15,13 @@ Runs your app on a Wendy-enabled device:
 | Flag | Description |
 |------|-------------|
 | `--deploy` | Build and create the container but do not start it. |
-| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. |
+| `--detach` | Start the container and return without streaming logs, waiting for readiness, or opening the app URL. Agent deployments report configured HTTP endpoints; see [Detached output](#detached-output). |
 | `--restart-unless-stopped` | Restart the container unless manually stopped. |
 | `--restart-on-failure` | Restart the container on failure. |
 | `--no-restart` | Do not restart the container on exit. |
 | `--debug` | Enable debug logging and inject debug tooling via `WENDY_DEBUG=true`. For SwiftPM projects (both native macOS and cross-compiled Linux container targets), builds with `-c debug` instead of `-c release`. |
 | `--yes` / `-y` | Accept all device-selection prompts automatically. |
-| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker` or `apple-container`. Cannot be combined with `--build-host`. |
+| `--builder <name>` | Image builder for Dockerfile/Containerfile builds: `docker`, `apple-container`, or `buildkit`. Cannot be combined with `--build-host`. |
 | `--stagefile-backend <name>` | Stagefile compiler backend: `dockerfile` (default) or experimental direct `llb`. Direct LLB requires Docker/BuildKit and cannot be combined with Apple Container or `--build-host`. |
 | `--build-host <device>` | Build the image on another WendyOS device instead of this machine. See [Remote build host](#remote-build-host). |
 | `--build-type <type>` | Override build type detection: `docker`, `swift`, or `python`. |
@@ -38,9 +38,50 @@ Runs your app on a Wendy-enabled device:
 | `--debounce <ms>` | Watch mode only: quiet period in milliseconds after the last change before redeploying (default `400`). |
 | `--verbose` | Watch mode only: always show build output. By default build output is hidden unless a build fails. |
 
+## Detached output
+
+For an ordinary single-device deployment to a Wendy agent, `--json --detach`
+emits one result on stdout after start is acknowledged (or the unchanged app is
+already running). Build progress and pre-start application output go to stderr:
+
+```sh
+wendy --json --device vm:dev run --yes --detach
+```
+
+```json
+{
+  "status": "started",
+  "app": "com.example.web",
+  "device": "vm:dev",
+  "readiness": "not_checked",
+  "url": "http://127.0.0.1:18880",
+  "endpoints": [
+    { "app": "com.example.web", "url": "http://127.0.0.1:18880" }
+  ]
+}
+```
+
+`readiness: "not_checked"` means no health probe or host `postStart` action ran.
+Verify the HTTP response separately. In text mode, URLs appear as
+`App URL (<app>): <url>` notices.
+
+URLs come from [`http` entitlements](../../../apps/wendy.json.md#http) and
+HTTP(S) `hooks.postStart.openURL` values that contain `WENDY_HOSTNAME`.
+`endpoints` contains distinct reported URLs, each with its app or service
+identifier; a service may have several URLs. `url` is the first entry
+and is omitted when `endpoints` is empty, including when routing cannot be
+determined. A TCP readiness probe alone does not declare an HTTP endpoint.
+
+For user-networked VMs, URLs use the connected VM's live forwarding on host
+loopback. See [VM HTTP verification](../../../installation/wendyos-virtual-machine.mdx#reaching-an-app-you-deployed).
+Multi-service and Compose runs emit one group result after the selected services
+start. A partial deployment returns non-zero without a whole-group success
+result. Fleet runs, `--deploy`, watch mode, and local container providers do not
+produce this result.
+
 ## Reachable app URLs
 
-After the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
+In attached mode, after the app starts and its readiness probe passes, `wendy run` prints an `App reachable at <url>` line when it can infer a browser URL from the app configuration:
 
 ```text
 App reachable at http://192.168.123.222:3000
@@ -101,6 +142,14 @@ wendy --device my-wendy.local run
 ```
 
 Wendy automatically checks for the `container` CLI and offers to install it via Homebrew if missing, and starts the `system` and `builder` services if they are not running.
+
+For builds deployed to a WendyOS device, `--builder buildkit` uses buildctl and
+exports an OCI image for Wendy's existing deployment path. If you explicitly
+start the optional Local Build Service from the Wendy menu-bar app, the CLI
+discovers its private socket automatically. `WENDY_BUILDKIT_HOST`,
+`BUILDKIT_HOST`, and buildctl's normal local-daemon default remain supported.
+This service only solves and caches builds; Apple `container` continues to run
+local Mac applications.
 
 If Apple Container reports an empty build context for a project under `/tmp` or
 `/private/tmp`, Wendy returns an error with the known workaround: move the
@@ -182,7 +231,6 @@ Both the macOS-target and Linux-target Swift paths shell out to a host Swift too
 | Linux device | macOS or Linux | swift-container-plugin does not yet ship for Windows. |
 
 On a **Windows host**, `wendy run` returns an actionable error for Swift projects that would require the host toolchain. Providing a `Dockerfile` or `Containerfile` bypasses these restrictions — the build is routed through the image build path, which works on all platforms.
-
 
 ## Remote build host
 
@@ -503,3 +551,16 @@ cloud tunnel logs for the same interval; compare an idle subscription with one
 that emits a new log after ten minutes. Check WiFi roaming, link loss, NAT/proxy
 idle limits, and HTTP/2 GOAWAY/keepalive diagnostics before assigning a cause.
 The original direct-WiFi failure has no confirmed transport root cause.
+
+## Cloud catalog registration
+
+Before deploying to an enrolled device, `wendy run` registers each distinct
+`appId` in Cloud Apps using an operator session matching the device's Cloud
+endpoint and organization. Existing entries retain their metadata and grants.
+Multi-service and Compose deployments register shared app IDs only once.
+Registration does not enable notification permission; an owner or admin must
+grant it in Cloud app settings.
+
+Registration errors stop deployment. Use `--skip-cloud-registration` for an
+offline deployment, then deploy again without it to register later. Unenrolled
+devices skip registration automatically.

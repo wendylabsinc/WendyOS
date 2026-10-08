@@ -1,0 +1,136 @@
+{
+  "experiment": "20260927-094326-93ff50",
+  "candidate_cli_sha256": "3142f99cf467224bf26205804d503e40ba2dad6de17ada5598270d51db143847",
+  "results": [
+    {
+      "agent": "claude",
+      "task": "create-g1-simulator",
+      "model_requested": "claude-opus-4-8",
+      "models_observed": [
+        "claude-opus-4-8"
+      ],
+      "status": "interrupted",
+      "success": false,
+      "outcome_verified": true,
+      "seconds": 954.697,
+      "tokens": null,
+      "total_tokens": null,
+      "usage_complete": false,
+      "estimated_usd": null,
+      "tool_calls": 40,
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "codex",
+      "task": "create-g1-simulator",
+      "model_requested": "gpt-6-astra",
+      "models_observed": [],
+      "status": "passed",
+      "success": true,
+      "outcome_verified": true,
+      "seconds": 227.245,
+      "tokens": {
+        "input_tokens": 1240039,
+        "cached_input_tokens": 1170816,
+        "cache_write_tokens": 0,
+        "output_tokens": 4752,
+        "reasoning_tokens": 877
+      },
+      "total_tokens": 1244791,
+      "usage_complete": true,
+      "estimated_usd": 4.082492,
+      "tool_calls": 33,
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "codex",
+      "task": "create-go2-simulator",
+      "model_requested": "gpt-6-astra",
+      "models_observed": [],
+      "status": "passed",
+      "success": true,
+      "outcome_verified": true,
+      "seconds": 357.891,
+      "tokens": {
+        "input_tokens": 1186724,
+        "cached_input_tokens": 1136128,
+        "cache_write_tokens": 0,
+        "output_tokens": 4882,
+        "reasoning_tokens": 916
+      },
+      "total_tokens": 1191606,
+      "usage_complete": true,
+      "estimated_usd": 3.650326,
+      "tool_calls": 53,
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "wendy",
+      "task": "create-g1-simulator",
+      "model_requested": "gpt-6-astra",
+      "models_observed": [
+        "gpt-6-astra"
+      ],
+      "status": "passed",
+      "success": true,
+      "outcome_verified": true,
+      "seconds": 110.493,
+      "tokens": {
+        "input_tokens": 232121,
+        "cached_input_tokens": 200829,
+        "cache_write_tokens": 0,
+        "output_tokens": 1766,
+        "reasoning_tokens": 30
+      },
+      "total_tokens": 233887,
+      "usage_complete": true,
+      "estimated_usd": 1.159948,
+      "tool_calls": 18,
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    },
+    {
+      "agent": "wendy",
+      "task": "create-go2-simulator",
+      "model_requested": "gpt-6-astra",
+      "models_observed": [
+        "gpt-6-astra"
+      ],
+      "status": "passed",
+      "success": true,
+      "outcome_verified": true,
+      "seconds": 115.10400000000001,
+      "tokens": {
+        "input_tokens": 221293,
+        "cached_input_tokens": 191073,
+        "cache_write_tokens": 0,
+        "output_tokens": 1723,
+        "reasoning_tokens": 60
+      },
+      "total_tokens": 223016,
+      "usage_complete": true,
+      "estimated_usd": 1.115771,
+      "tool_calls": 18,
+      "human_messages_after_start": 0,
+      "human_approvals": 0,
+      "cleanup_ok": true
+    }
+  ],
+  "not_run": [
+    {
+      "agent": "claude",
+      "task": "create-go2-simulator",
+      "reason": "experiment stopped after interrupted attempt with incomplete usage"
+    }
+  ],
+  "known_estimated_usd": 10.008537,
+  "total_estimated_usd": null,
+  "interruption_note": "Operator stopped the non-progressing Claude G1 attempt after 953.457 agent seconds. The configured timeout was 1800 seconds, not the 900 seconds incorrectly reported in progress updates. It is interrupted, not a timeout or an unassisted pass."
+}

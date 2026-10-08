@@ -214,7 +214,11 @@ type VideoDevice struct {
 	//
 	// Empty when the device has no /dev/v4l entry -- CSI and network cameras,
 	// or a kernel without the udev symlinks.
-	StableId      string `protobuf:"bytes,13,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"` // e.g. "by-id:usb-Acme_Camera_SN123-video-index0"
+	StableId string `protobuf:"bytes,13,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"` // e.g. "by-id:usb-Acme_Camera_SN123-video-index0"
+	// V4L2 capture FourCCs, including trailing spaces (e.g. "Z16 ").
+	// Empty for older agents, non-V4L2 sources, or an unavailable format query.
+	// These describe the sensor output, not the encoded delivery codec.
+	PixelFormats  []string `protobuf:"bytes,14,rep,name=pixel_formats,json=pixelFormats,proto3" json:"pixel_formats,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -338,6 +342,13 @@ func (x *VideoDevice) GetStableId() string {
 		return x.StableId
 	}
 	return ""
+}
+
+func (x *VideoDevice) GetPixelFormats() []string {
+	if x != nil {
+		return x.PixelFormats
+	}
+	return nil
 }
 
 type ListVideoDevicesRequest struct {
@@ -1567,7 +1578,7 @@ var File_wendy_agent_services_v1_wendy_agent_v1_video_service_proto protoreflect
 
 const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = "" +
 	"\n" +
-	":wendy/agent/services/v1/wendy_agent_v1_video_service.proto\x12\x17wendy.agent.services.v1\"\xfd\x02\n" +
+	":wendy/agent/services/v1/wendy_agent_v1_video_service.proto\x12\x17wendy.agent.services.v1\"\xa2\x03\n" +
 	"\vVideoDevice\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\rR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -1582,7 +1593,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	" \x01(\bR\x0ehasCredentials\x12\x16\n" +
 	"\x06online\x18\v \x01(\bR\x06online\x12\x14\n" +
 	"\x05topic\x18\f \x01(\tR\x05topic\x12\x1b\n" +
-	"\tstable_id\x18\r \x01(\tR\bstableId\"\x19\n" +
+	"\tstable_id\x18\r \x01(\tR\bstableId\x12#\n" +
+	"\rpixel_formats\x18\x0e \x03(\tR\fpixelFormats\"\x19\n" +
 	"\x17ListVideoDevicesRequest\"Z\n" +
 	"\x18ListVideoDevicesResponse\x12>\n" +
 	"\adevices\x18\x01 \x03(\v2$.wendy.agent.services.v1.VideoDeviceR\adevices\"\xd5\x01\n" +

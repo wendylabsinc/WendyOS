@@ -3,10 +3,12 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // UnknownSubcommandError returns a non-nil error when args name a subcommand
-// that does not exist under a group command, and nil in every other case.
+// that does not exist under a group command, or a bundled --device argument
+// would make Cobra misidentify the command.
 //
 // Cobra does not do this for us. Its legacyArgs check rejects an unknown
 // subcommand only for the root command, because it tests !cmd.HasParent()
@@ -23,6 +25,9 @@ import (
 // --help` never reaches a validator, and that is the spelling people actually
 // type when they are exploring an unfamiliar command.
 func UnknownSubcommandError(args []string) error {
+	if err := bundledDeviceArgumentError(args); err != nil {
+		return err
+	}
 	// Resolution and flag parsing both mutate command state, so probe a
 	// throwaway tree and leave the caller's root untouched.
 	target, remaining, err := NewRootCmd().Find(args)
@@ -57,4 +62,28 @@ func UnknownSubcommandError(args []string) error {
 	}
 	msg += fmt.Sprintf("\nRun '%s --help' to see the available commands.", target.CommandPath())
 	return errors.New(msg)
+}
+
+// Inspect only the known global-option prefix. After a command or --, values
+// and forwarded programs may legitimately contain text such as "--device x".
+func bundledDeviceArgumentError(args []string) error {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--json", strings.HasPrefix(arg, "--json="), strings.HasPrefix(arg, "--device="):
+			continue
+		case arg == "--device":
+			i++ // A separate device value can itself contain spaces.
+			continue
+		case strings.HasPrefix(arg, "--device "), strings.HasPrefix(arg, "--device\t"), strings.HasPrefix(arg, "--device\n"):
+			return errors.New("invalid --device argument: the option and its value arrived as one argument\n" +
+				"Store only the device selector in DEVICE and pass it separately, for example:\n" +
+				"  wendy --device \"$DEVICE\" device ros2 topics\n" +
+				"In zsh, use an argument array if you need to store both the option and value. " +
+				"This is a command syntax error; retrying the unchanged command will not help.")
+		default:
+			return nil
+		}
+	}
+	return nil
 }

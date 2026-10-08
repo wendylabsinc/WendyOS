@@ -24,6 +24,12 @@
 //      TunnelData{session_id} (empty payload) as its first message to claim the session.
 //   4. Broker pairs the two streams by session_id and begins relaying payload data
 //      transparently in both directions. session_id is ignored in all subsequent messages.
+//
+// DATAGRAM sessions follow the same rendezvous (steps 1-4 above), except the
+// agent dials nothing upfront: host/port on the open message are ignored, and
+// the resulting session multiplexes many UDP flows (TunnelDatagram) and ICMP
+// echoes (IcmpEchoRequest/IcmpEchoReply) over the single paired stream pair,
+// keyed by flow_id.
 
 #if canImport(FoundationEssentials)
 public import FoundationEssentials
@@ -40,6 +46,44 @@ public import SwiftProtobuf
 fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobuf.ProtobufAPIVersionCheck {
   struct _2: SwiftProtobuf.ProtobufAPIVersion_2 {}
   typealias Version = _2
+}
+
+/// Transport protocol for a tunnel session. TCP (the zero value) preserves the
+/// original one-stream-per-TCP-connection behavior. DATAGRAM opens a long-lived
+/// multiplexed session carrying UDP datagrams (TunnelDatagram) and ICMP echoes
+/// (IcmpEchoRequest/IcmpEchoReply); host/port on the open message are ignored.
+public nonisolated enum Wendycloud_V1_TunnelProtocol: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case tcp // = 0
+  case datagram // = 1
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .tcp
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .tcp
+    case 1: self = .datagram
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .tcp: return 0
+    case .datagram: return 1
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Wendycloud_V1_TunnelProtocol] = [
+    .tcp,
+    .datagram,
+  ]
+
 }
 
 public nonisolated struct Wendycloud_V1_AgentHeartbeat: Sendable {
@@ -65,6 +109,74 @@ public nonisolated struct Wendycloud_V1_AgentHeartbeat: Sendable {
   fileprivate var _timestamp: SwiftProtobuf.Google_Protobuf_Timestamp? = nil
 }
 
+/// One UDP datagram within a DATAGRAM session. flow_id is client-assigned and
+/// unique within the session; the agent creates a connected loopback UDP socket
+/// per flow_id on first sight and expires it after 2 minutes idle.
+public nonisolated struct Wendycloud_V1_TunnelDatagram: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var flowID: UInt32 = 0
+
+  /// destination port on the device (loopback); set on every frame
+  public var port: UInt32 = 0
+
+  /// exactly one datagram, max 65507 bytes
+  public var payload: Data = Data()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Ping request within a DATAGRAM session. The agent answers immediately with
+/// an IcmpEchoReply — the agent itself is the host being pinged, so a reply is
+/// proof of liveness with a true end-to-end RTT. No ICMP socket is involved.
+public nonisolated struct Wendycloud_V1_IcmpEchoRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var identifier: UInt32 = 0
+
+  public var sequence: UInt32 = 0
+
+  public var payload: Data = Data()
+
+  /// client send time
+  public var originateUnixNs: UInt64 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public nonisolated struct Wendycloud_V1_IcmpEchoReply: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  /// copied from request
+  public var identifier: UInt32 = 0
+
+  /// copied from request
+  public var sequence: UInt32 = 0
+
+  /// echoed verbatim
+  public var payload: Data = Data()
+
+  /// copied from request
+  public var originateUnixNs: UInt64 = 0
+
+  /// agent receive time
+  public var agentUnixNs: UInt64 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 public nonisolated struct Wendycloud_V1_DialRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -77,6 +189,8 @@ public nonisolated struct Wendycloud_V1_DialRequest: Sendable {
   public var host: String = String()
 
   public var port: UInt32 = 0
+
+  public var `protocol`: Wendycloud_V1_TunnelProtocol = .tcp
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -97,9 +211,41 @@ public nonisolated struct Wendycloud_V1_TunnelData: Sendable {
 
   public var halfClose: Bool = false
 
+  /// DATAGRAM sessions only; at most one of 4/5/6 set per frame.
+  public var datagram: Wendycloud_V1_TunnelDatagram {
+    get {_datagram ?? Wendycloud_V1_TunnelDatagram()}
+    set {_datagram = newValue}
+  }
+  /// Returns true if `datagram` has been explicitly set.
+  public var hasDatagram: Bool {self._datagram != nil}
+  /// Clears the value of `datagram`. Subsequent reads from it will return its default value.
+  public mutating func clearDatagram() {self._datagram = nil}
+
+  public var icmpRequest: Wendycloud_V1_IcmpEchoRequest {
+    get {_icmpRequest ?? Wendycloud_V1_IcmpEchoRequest()}
+    set {_icmpRequest = newValue}
+  }
+  /// Returns true if `icmpRequest` has been explicitly set.
+  public var hasIcmpRequest: Bool {self._icmpRequest != nil}
+  /// Clears the value of `icmpRequest`. Subsequent reads from it will return its default value.
+  public mutating func clearIcmpRequest() {self._icmpRequest = nil}
+
+  public var icmpReply: Wendycloud_V1_IcmpEchoReply {
+    get {_icmpReply ?? Wendycloud_V1_IcmpEchoReply()}
+    set {_icmpReply = newValue}
+  }
+  /// Returns true if `icmpReply` has been explicitly set.
+  public var hasIcmpReply: Bool {self._icmpReply != nil}
+  /// Clears the value of `icmpReply`. Subsequent reads from it will return its default value.
+  public mutating func clearIcmpReply() {self._icmpReply = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
+
+  fileprivate var _datagram: Wendycloud_V1_TunnelDatagram? = nil
+  fileprivate var _icmpRequest: Wendycloud_V1_IcmpEchoRequest? = nil
+  fileprivate var _icmpReply: Wendycloud_V1_IcmpEchoReply? = nil
 }
 
 /// Sent by the CLI to request a new tunnel connection. The broker generates a
@@ -115,6 +261,9 @@ public nonisolated struct Wendycloud_V1_ClientTunnelOpen: Sendable {
   public var host: String = String()
 
   public var port: UInt32 = 0
+
+  /// port is ignored when DATAGRAM
+  public var `protocol`: Wendycloud_V1_TunnelProtocol = .tcp
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -157,9 +306,69 @@ public nonisolated struct Wendycloud_V1_ClientTunnelMessage: Sendable {
   public init() {}
 }
 
+/// Sent by the services backend to open a tunnel. Carries the target asset and
+/// endpoint; the broker generates a session and dispatches a DialRequest to the agent.
+public nonisolated struct Wendycloud_V1_ServiceTunnelOpen: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var assetID: Int32 = 0
+
+  public var host: String = String()
+
+  public var port: UInt32 = 0
+
+  public var `protocol`: Wendycloud_V1_TunnelProtocol = .tcp
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Sent by the services backend on a ServiceTunnel stream. The first message must
+/// be `open`; all subsequent messages must be `data`.
+public nonisolated struct Wendycloud_V1_ServiceTunnelMessage: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var content: Wendycloud_V1_ServiceTunnelMessage.OneOf_Content? = nil
+
+  public var `open`: Wendycloud_V1_ServiceTunnelOpen {
+    get {
+      if case .open(let v)? = content {return v}
+      return Wendycloud_V1_ServiceTunnelOpen()
+    }
+    set {content = .open(newValue)}
+  }
+
+  public var data: Wendycloud_V1_TunnelData {
+    get {
+      if case .data(let v)? = content {return v}
+      return Wendycloud_V1_TunnelData()
+    }
+    set {content = .data(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public nonisolated enum OneOf_Content: Equatable, Sendable {
+    case `open`(Wendycloud_V1_ServiceTunnelOpen)
+    case data(Wendycloud_V1_TunnelData)
+
+  }
+
+  public init() {}
+}
+
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "wendycloud.v1"
+
+nonisolated extension Wendycloud_V1_TunnelProtocol: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0TUNNEL_PROTOCOL_TCP\0\u{1}TUNNEL_PROTOCOL_DATAGRAM\0")
+}
 
 nonisolated extension Wendycloud_V1_AgentHeartbeat: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".AgentHeartbeat"
@@ -195,9 +404,144 @@ nonisolated extension Wendycloud_V1_AgentHeartbeat: SwiftProtobuf.Message, Swift
   }
 }
 
+nonisolated extension Wendycloud_V1_TunnelDatagram: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".TunnelDatagram"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}flow_id\0\u{1}port\0\u{1}payload\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.flowID) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.port) }()
+      case 3: try { try decoder.decodeSingularBytesField(value: &self.payload) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.flowID != 0 {
+      try visitor.visitSingularUInt32Field(value: self.flowID, fieldNumber: 1)
+    }
+    if self.port != 0 {
+      try visitor.visitSingularUInt32Field(value: self.port, fieldNumber: 2)
+    }
+    if !self.payload.isEmpty {
+      try visitor.visitSingularBytesField(value: self.payload, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendycloud_V1_TunnelDatagram, rhs: Wendycloud_V1_TunnelDatagram) -> Bool {
+    if lhs.flowID != rhs.flowID {return false}
+    if lhs.port != rhs.port {return false}
+    if lhs.payload != rhs.payload {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendycloud_V1_IcmpEchoRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".IcmpEchoRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}identifier\0\u{1}sequence\0\u{1}payload\0\u{3}originate_unix_ns\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.identifier) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.sequence) }()
+      case 3: try { try decoder.decodeSingularBytesField(value: &self.payload) }()
+      case 4: try { try decoder.decodeSingularUInt64Field(value: &self.originateUnixNs) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.identifier != 0 {
+      try visitor.visitSingularUInt32Field(value: self.identifier, fieldNumber: 1)
+    }
+    if self.sequence != 0 {
+      try visitor.visitSingularUInt32Field(value: self.sequence, fieldNumber: 2)
+    }
+    if !self.payload.isEmpty {
+      try visitor.visitSingularBytesField(value: self.payload, fieldNumber: 3)
+    }
+    if self.originateUnixNs != 0 {
+      try visitor.visitSingularUInt64Field(value: self.originateUnixNs, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendycloud_V1_IcmpEchoRequest, rhs: Wendycloud_V1_IcmpEchoRequest) -> Bool {
+    if lhs.identifier != rhs.identifier {return false}
+    if lhs.sequence != rhs.sequence {return false}
+    if lhs.payload != rhs.payload {return false}
+    if lhs.originateUnixNs != rhs.originateUnixNs {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendycloud_V1_IcmpEchoReply: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".IcmpEchoReply"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}identifier\0\u{1}sequence\0\u{1}payload\0\u{3}originate_unix_ns\0\u{3}agent_unix_ns\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.identifier) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.sequence) }()
+      case 3: try { try decoder.decodeSingularBytesField(value: &self.payload) }()
+      case 4: try { try decoder.decodeSingularUInt64Field(value: &self.originateUnixNs) }()
+      case 5: try { try decoder.decodeSingularUInt64Field(value: &self.agentUnixNs) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.identifier != 0 {
+      try visitor.visitSingularUInt32Field(value: self.identifier, fieldNumber: 1)
+    }
+    if self.sequence != 0 {
+      try visitor.visitSingularUInt32Field(value: self.sequence, fieldNumber: 2)
+    }
+    if !self.payload.isEmpty {
+      try visitor.visitSingularBytesField(value: self.payload, fieldNumber: 3)
+    }
+    if self.originateUnixNs != 0 {
+      try visitor.visitSingularUInt64Field(value: self.originateUnixNs, fieldNumber: 4)
+    }
+    if self.agentUnixNs != 0 {
+      try visitor.visitSingularUInt64Field(value: self.agentUnixNs, fieldNumber: 5)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendycloud_V1_IcmpEchoReply, rhs: Wendycloud_V1_IcmpEchoReply) -> Bool {
+    if lhs.identifier != rhs.identifier {return false}
+    if lhs.sequence != rhs.sequence {return false}
+    if lhs.payload != rhs.payload {return false}
+    if lhs.originateUnixNs != rhs.originateUnixNs {return false}
+    if lhs.agentUnixNs != rhs.agentUnixNs {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 nonisolated extension Wendycloud_V1_DialRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".DialRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}host\0\u{1}port\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}host\0\u{1}port\0\u{1}protocol\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -208,6 +552,7 @@ nonisolated extension Wendycloud_V1_DialRequest: SwiftProtobuf.Message, SwiftPro
       case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.host) }()
       case 3: try { try decoder.decodeSingularUInt32Field(value: &self.port) }()
+      case 4: try { try decoder.decodeSingularEnumField(value: &self.`protocol`) }()
       default: break
       }
     }
@@ -223,6 +568,9 @@ nonisolated extension Wendycloud_V1_DialRequest: SwiftProtobuf.Message, SwiftPro
     if self.port != 0 {
       try visitor.visitSingularUInt32Field(value: self.port, fieldNumber: 3)
     }
+    if self.`protocol` != .tcp {
+      try visitor.visitSingularEnumField(value: self.`protocol`, fieldNumber: 4)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -230,6 +578,7 @@ nonisolated extension Wendycloud_V1_DialRequest: SwiftProtobuf.Message, SwiftPro
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.host != rhs.host {return false}
     if lhs.port != rhs.port {return false}
+    if lhs.`protocol` != rhs.`protocol` {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -237,7 +586,7 @@ nonisolated extension Wendycloud_V1_DialRequest: SwiftProtobuf.Message, SwiftPro
 
 nonisolated extension Wendycloud_V1_TunnelData: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".TunnelData"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}payload\0\u{3}half_close\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}payload\0\u{3}half_close\0\u{1}datagram\0\u{3}icmp_request\0\u{3}icmp_reply\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -248,12 +597,19 @@ nonisolated extension Wendycloud_V1_TunnelData: SwiftProtobuf.Message, SwiftProt
       case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
       case 2: try { try decoder.decodeSingularBytesField(value: &self.payload) }()
       case 3: try { try decoder.decodeSingularBoolField(value: &self.halfClose) }()
+      case 4: try { try decoder.decodeSingularMessageField(value: &self._datagram) }()
+      case 5: try { try decoder.decodeSingularMessageField(value: &self._icmpRequest) }()
+      case 6: try { try decoder.decodeSingularMessageField(value: &self._icmpReply) }()
       default: break
       }
     }
   }
 
   public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.sessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
     }
@@ -263,6 +619,15 @@ nonisolated extension Wendycloud_V1_TunnelData: SwiftProtobuf.Message, SwiftProt
     if self.halfClose != false {
       try visitor.visitSingularBoolField(value: self.halfClose, fieldNumber: 3)
     }
+    try { if let v = self._datagram {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._icmpRequest {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    } }()
+    try { if let v = self._icmpReply {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -270,6 +635,9 @@ nonisolated extension Wendycloud_V1_TunnelData: SwiftProtobuf.Message, SwiftProt
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.payload != rhs.payload {return false}
     if lhs.halfClose != rhs.halfClose {return false}
+    if lhs._datagram != rhs._datagram {return false}
+    if lhs._icmpRequest != rhs._icmpRequest {return false}
+    if lhs._icmpReply != rhs._icmpReply {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -277,7 +645,7 @@ nonisolated extension Wendycloud_V1_TunnelData: SwiftProtobuf.Message, SwiftProt
 
 nonisolated extension Wendycloud_V1_ClientTunnelOpen: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ClientTunnelOpen"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}asset_id\0\u{1}host\0\u{1}port\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}asset_id\0\u{1}host\0\u{1}port\0\u{1}protocol\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -288,6 +656,7 @@ nonisolated extension Wendycloud_V1_ClientTunnelOpen: SwiftProtobuf.Message, Swi
       case 1: try { try decoder.decodeSingularInt32Field(value: &self.assetID) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.host) }()
       case 3: try { try decoder.decodeSingularUInt32Field(value: &self.port) }()
+      case 4: try { try decoder.decodeSingularEnumField(value: &self.`protocol`) }()
       default: break
       }
     }
@@ -303,6 +672,9 @@ nonisolated extension Wendycloud_V1_ClientTunnelOpen: SwiftProtobuf.Message, Swi
     if self.port != 0 {
       try visitor.visitSingularUInt32Field(value: self.port, fieldNumber: 3)
     }
+    if self.`protocol` != .tcp {
+      try visitor.visitSingularEnumField(value: self.`protocol`, fieldNumber: 4)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -310,6 +682,7 @@ nonisolated extension Wendycloud_V1_ClientTunnelOpen: SwiftProtobuf.Message, Swi
     if lhs.assetID != rhs.assetID {return false}
     if lhs.host != rhs.host {return false}
     if lhs.port != rhs.port {return false}
+    if lhs.`protocol` != rhs.`protocol` {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -376,6 +749,118 @@ nonisolated extension Wendycloud_V1_ClientTunnelMessage: SwiftProtobuf.Message, 
   }
 
   public static func ==(lhs: Wendycloud_V1_ClientTunnelMessage, rhs: Wendycloud_V1_ClientTunnelMessage) -> Bool {
+    if lhs.content != rhs.content {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendycloud_V1_ServiceTunnelOpen: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ServiceTunnelOpen"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}asset_id\0\u{1}host\0\u{1}port\0\u{1}protocol\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt32Field(value: &self.assetID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.host) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.port) }()
+      case 4: try { try decoder.decodeSingularEnumField(value: &self.`protocol`) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.assetID != 0 {
+      try visitor.visitSingularInt32Field(value: self.assetID, fieldNumber: 1)
+    }
+    if !self.host.isEmpty {
+      try visitor.visitSingularStringField(value: self.host, fieldNumber: 2)
+    }
+    if self.port != 0 {
+      try visitor.visitSingularUInt32Field(value: self.port, fieldNumber: 3)
+    }
+    if self.`protocol` != .tcp {
+      try visitor.visitSingularEnumField(value: self.`protocol`, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendycloud_V1_ServiceTunnelOpen, rhs: Wendycloud_V1_ServiceTunnelOpen) -> Bool {
+    if lhs.assetID != rhs.assetID {return false}
+    if lhs.host != rhs.host {return false}
+    if lhs.port != rhs.port {return false}
+    if lhs.`protocol` != rhs.`protocol` {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendycloud_V1_ServiceTunnelMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ServiceTunnelMessage"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}open\0\u{1}data\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try {
+        var v: Wendycloud_V1_ServiceTunnelOpen?
+        var hadOneofValue = false
+        if let current = self.content {
+          hadOneofValue = true
+          if case .open(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.content = .open(v)
+        }
+      }()
+      case 2: try {
+        var v: Wendycloud_V1_TunnelData?
+        var hadOneofValue = false
+        if let current = self.content {
+          hadOneofValue = true
+          if case .data(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.content = .data(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    switch self.content {
+    case .open?: try {
+      guard case .open(let v)? = self.content else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    }()
+    case .data?: try {
+      guard case .data(let v)? = self.content else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendycloud_V1_ServiceTunnelMessage, rhs: Wendycloud_V1_ServiceTunnelMessage) -> Bool {
     if lhs.content != rhs.content {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true

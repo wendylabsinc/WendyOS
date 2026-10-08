@@ -122,6 +122,16 @@ func recordPendingOSUpdate(logger *zap.Logger, stateDir, artifactURL, backend st
 	}
 }
 
+// osUpdateStagedThisBoot reports whether an update was installed during this
+// boot and is still waiting for the reboot that applies it.
+func osUpdateStagedThisBoot(stateDir string) bool {
+	marker, found, err := oshealth.ReadPendingMarker(stateDir)
+	if err != nil || !found || marker.BootID == "" {
+		return false
+	}
+	return marker.BootID == oshealth.CurrentBootID()
+}
+
 // redactURLCredentials masks any credentials in a URL before it is persisted or
 // logged; the marker only needs the URL for debugging. It strips the userinfo
 // password and redacts every query-string value, since presigned/OTA artifact

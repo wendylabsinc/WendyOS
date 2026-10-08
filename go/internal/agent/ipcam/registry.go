@@ -19,22 +19,31 @@ import (
 	"time"
 )
 
-// Device IDs for network cameras come from a reserved high band. The kernel's
-// VIDEO_NUM_DEVICES bound is 256, so physical /dev/videoN nodes never reach 200
-// in practice, and the band leaves room for 56 cameras.
+// Wendy-managed virtual cameras are v4l2loopback nodes numbered from one
+// reserved band, split by camera kind:
 //
-// The allocated number is also the v4l2loopback node number a camera will get
-// when container parity lands, so the ID a user learns now does not change.
+//	 96-127  MCU band: cameras mounted from paired sensor sources (mcusource)
+//	128-199  ROS 2 cameras (ros2camera.IDBandStart..IDBandEnd)
+//	200-255  network cameras
+//
+// The band ends where the kernel's device numbers do: VIDEO_NUM_DEVICES is
+// 256, and a node asked for above 255 gets another number instead. Physical
+// /dev/videoN nodes stay well below 96 in practice.
 const (
-	// LoopbackBandStart is the first device number reserved for Wendy-managed
-	// virtual cameras. ROS 2 cameras use 128-199; network cameras retain the
-	// original 200-255 stable-ID band.
-	LoopbackBandStart = 128
-	IDBandStart       = 200
-	IDBandEnd         = 255
-	// MCU / remote-source cameras get their own band above the IP band.
-	MCUBandStart = 256
-	MCUBandEnd   = 319
+	// LoopbackBandStart..LoopbackBandEnd spans every Wendy-managed node. A
+	// plain module load can auto-create loopback nodes below it; those are
+	// swept (see sweepAutoCreatedNodes).
+	LoopbackBandStart = 96
+	LoopbackBandEnd   = 255
+	// MCUBandStart..MCUBandEnd hold cameras mounted from paired sensor sources:
+	// Wendy Lite boards and other agents.
+	MCUBandStart = 96
+	MCUBandEnd   = 127
+	// IDBandStart..IDBandEnd are network camera IDs, room for 56 cameras. An ID
+	// is persisted and is also the camera's loopback node number, so the ID a
+	// user learns does not change.
+	IDBandStart = 200
+	IDBandEnd   = 255
 )
 
 // ErrBandExhausted is returned when every ID in the reserved band is taken.

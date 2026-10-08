@@ -1,0 +1,14 @@
+{
+  "appId": "sh.wendy.examples.changedetection",
+  "version": "0.1.0",
+  "platform": "linux",
+  "language": "python",
+  "python": { "container": { "sourceRoot": "/app" } },
+  "entitlements": [
+    { "type": "network", "mode": "host" },
+    { "type": "http", "port": 8000 },
+    { "type": "camera" },
+    { "type": "audio" }
+  ],
+  "readiness": { "tcpSocket": { "port": 8000 }, "timeoutSeconds": 30 }
+}
